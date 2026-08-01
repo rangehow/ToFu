@@ -1,3 +1,9 @@
+### 2026-08-01(egress 接线补验:容器内全链 E2E 首通 + 设计稿 §11 主备双路径定案) — 承接当日「鉴权层定案」「续·重启三项」两条;epic `pt_4ea6bf05deaa46f0`
+
+- **本批新增（前轮两条已定的不再复述）:** ①第二把等价 key `k_2a687bc6`（egress-bridge-office，agents:bridge，user_id=''）经 `POST /api/v1/keys` 在服务器进程内铸成，明文落 `data/config/.egress_bridge_key`（0600）——与在册 `k_d1adfa20` 等价并存（两把都可用，不清理以免误伤已拷贝者）。②**容器内全链 E2E 首通**：poll 三态（对 key 200 `{"commands":[]}` / 错 key 401 / 无 key 401）；容器内真实 agent `--allow-egress --bridge-secret` 注册上线、`capabilities.egress=true`；`/api/v1/oauth/status` 五态机首查 `unknown`（后台探测）→ 复核 `state=agent` + `verdict=geo_blocked` + agent 在列——**S4 状态面真机首验**。自测 agent 已停（留着会与办公机 agent 构成多在线 → route_request 拒绝）。③`user_id=''` 匹配链显式钉死（open 模式合成 ctx `''` × stream.py:170 硬编码 `''` × `_deliverable` fail-closed 相等——key 带真实租户 id 则命令永不可投递）。④进程外铸 key 不可见坑（`_ensure_loaded` 每进程一次）以 401 实测复现并立档。
+- **设计稿 §11/§11.1 落地（修正版 runbook）:** 主路径=直绑（`BIND_HOST=0.0.0.0 ./restart_15000.sh` shell 重启——UI 重启 execv 注不进 env，实测；办公机直连 `http://10.128.175.30:15000`），备选=端口转发（`ssh -L 15000:127.0.0.1:15000 <codelab>`，**免重启今天就能用**）；两路径同一把 key；`proxy_mode='env'` 读四变量注入办公机客户端代理。MLP 代理路对 tofu 凭证全盲（admin Bearer 实测 401），永久排除。
+- **当前唯一门:** 主路径差 owner 的 shell 重启（或改走备选免重启路）；此后办公机 agent 上线 → Claude 登录 → 流式 → Codex O3 定案。
+
 ### 2026-08-01(续·「已重启+网段通+agent 已起」三项只成立一项:UI 重启给不了 BIND_HOST,execv 保留 09:08 旧环境) — owner 答复后实测:bootId 已换(重启真发生),但进程 env 无 BIND_HOST、ss 仍只听 127.0.0.1、注册表无真实 agent、全天只有我本人的 curl 探测(epic `pt_4ea6bf05deaa46f0`)
 
 - **定案证据链:** ①`bootId` 从 `f2addb06` 变为 `b919d848`——重启真发生过(os.execv 同 pid 换新 bootId,boot_identity 机制);②`/proc/2351494/environ` 只有 `PORT=15000` **无 BIND_HOST**——UI 重启按钮 execv 保留 09:08 旧环境,restart_15000.sh 默认 `BIND_HOST=127.0.0.1`;③`ss` 实测仍只听 `127.0.0.1:15000`;④注册表只有我自己的 verify-probe(已离线),access.log 全天唯一 poll 是我 14:22 的 curl 探测。**owner 口中的「网段通」大概率验的是浏览器(带 SSO cookie 走 MLP 网关),「agent 已起」是进程起了但连不上,在 Connection refused 重试循环。**

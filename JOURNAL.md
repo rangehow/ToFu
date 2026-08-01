@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 批 18:api_v1/auth.py 4 站点清零——全局闸门的拒绝信封) — epic `pt_931e16c4` 切片 18;commit 见下(4 文件);环 **150/150**;NEUTER×2 各咬一支
+
+- **特殊地位:** 这 4 个站点不是路由是**中间件拒绝面**(bridge 401/坏 token 401/无凭证 401/rate 429),被全客户端类(含外部 SDK)消费。形状本带 ok:False+类型信封 ⇒ api_error(dict, status=N) 逐字节等价(+request_id);429 的 `apply_headers(resp, decision)` 后置于信封构建(针头针住)。flask jsonify 导入清除。
+- **纪律:** failing-first 精确 1 红;NEUTER×2(回注 jsonify/摘 apply_headers——针头)各咬 shipped-source;cmp 还原;导入冒烟;环 **150/150**。幽灵连续第十三批零干预。
+- **进度账:** 272→**89 站点 15 文件**(183 已清零,67.3%)。剩余:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、push 3(兄弟)、conv_search 3、chat_queue 3(裸数组族)、swarm 3、paper_folders 3、folders 3、conv_compaction 2、chat_poll_abort 2、endpoint 2、translate 1、_task_routes 1、desktop 1、audio 1。下一批 folders.py + paper_folders.py(3+3 合批,同族)。
+
 ### 2026-08-01(api-contract 批 17:api_v1/browser.py 5 站点清零——body-status 碰撞第三例) — epic `pt_931e16c4` 切片 17;commit 见下(4 文件);环 **148/148**;NEUTER×2 精确
 
 - 桥测试出口的 503/502 body 自带 `'status'` 键(桥状态快照)→ api_payload(shape D 第三例,判例持续收租)。原始扩展长轮询 RPC 维持桥协议 carve-out。failing-first 精确 1 红;NEUTER×2(回注 jsonify/摘 api_payload——paren needle);cmp 还原;导入冒烟。幽灵连续第十二批零干预。

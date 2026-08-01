@@ -49,7 +49,8 @@ probe consumers distinguish zero-tasks from probe-failed)
 array, null-preserving unwrap; poll-404 body-status collision via api_payload)
 and api_v1/oauth.py (5 — provider-keyed status body verified
 consumer-by-name before api_ok)
-, api_v1/motion.py (5) and api_v1/browser.py (5) → 93 sites across 16 files remain.
+, api_v1/motion.py (5) , api_v1/browser.py (5) and api_v1/auth.py (4 — the
+GLOBAL GATE rejection envelopes; 429 keeps post-build apply_headers) → 89 sites across 15 files remain.
 """
 
 from __future__ import annotations
@@ -106,7 +107,6 @@ CARVE_OUT_SITES: dict[str, dict[str, str]] = {
 BASELINE: dict[str, int] = {
     'paper.py': 47,
     'common.py': 14,
-    'api_v1/auth.py': 4,
     'push.py': 3,
     'conversations_search.py': 3,
     'chat_queue.py': 3,

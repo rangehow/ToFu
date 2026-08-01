@@ -661,5 +661,33 @@
   ],
   "_timerTriggered": true,
   "_timerTimerId": "timer-abcdef1234567890"
+ },
+ {
+  "_name": "cmd-done-long-collapsed",
+  "status": "done",
+  "toolName": "run_command",
+  "query": "grep -c 'jsonify(' routes/api_v1/browser.py && python3 - <<'EOF'\nimport pathlib\nprint('baseline tightened')\nEOF",
+  "toolCallId": "call-long-done-1",
+  "results": [
+   {
+    "command": "grep -c 'jsonify(' routes/api_v1/browser.py && python3 - <<'EOF'\nimport pathlib\nprint('baseline tightened')\nEOF",
+    "output": "3\nbaseline tightened",
+    "exitCode": "0",
+    "description": "count sites and run heredoc"
+   }
+  ],
+  "roundNum": 44
+ },
+ {
+  "_name": "cmd-running-long-collapsed",
+  "_isSearching": true,
+  "status": "searching",
+  "toolName": "run_command",
+  "query": "python3 - <<'EOF'\nimport time\ntime.sleep(9)\nEOF",
+  "toolCallId": "call-long-run-1",
+  "toolArgs": "{\"description\":\"sleep via heredoc\"}",
+  "_partialOutput": "line1\nline2",
+  "results": [],
+  "roundNum": 45
  }
 ]

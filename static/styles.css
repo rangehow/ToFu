@@ -8239,11 +8239,35 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   display: block;
 }
 
-/* ── Collapsible command line (done state) ──
- * When a description conveys intent, the `$ command` string is collapsed by
- * default behind a toggle — the user cares about the result, not the exact
- * shell string. Mirrors the output toggle; the code <pre> is hidden until
- * expanded. */
+/* ── Collapsible command body (done + running states) ──
+ * When a description conveys intent AND the command is long enough to be
+ * noise (multi-line or > 100 chars — see _cmdCollapsible in tool_rounds.js),
+ * the `$ command` <pre> starts COLLAPSED and the header description becomes
+ * the toggle: chevron-marked, click to expand in place. The user cares
+ * about what the command DID, not the exact shell string. Short one-liners
+ * and description-less commands never get the class and stay visible. */
+.ptool-cmd-block .ptool-cmd-collapsible {
+  display: none;
+}
+.ptool-cmd-block.cmd-open .ptool-cmd-collapsible {
+  display: block;
+}
+.ptool-cmd-desc-toggle {
+  cursor: pointer;
+}
+.ptool-cmd-desc-toggle:hover {
+  color: var(--accent-hover);
+}
+.ptool-cmd-chev {
+  display: inline-block;
+  margin-right: 3px;
+  font-size: 9px;
+  opacity: 0.5;
+  transition: transform 0.15s ease;
+}
+.ptool-cmd-block.cmd-open .ptool-cmd-chev {
+  transform: rotate(90deg);
+}
 
 /* ── Running: elapsed / timeout-budget readout in the header ── */
 /* When both the elapsed readout and the spinner are present, the elapsed

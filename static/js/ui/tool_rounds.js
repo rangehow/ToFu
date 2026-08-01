@@ -1680,15 +1680,17 @@ function _renderSearchingRow(round, ctx) {
   //   If streaming output has started arriving via tool_progress events,
   //   render it live inside the block so the user can follow along.
   if (round.toolName === "run_command" || round.toolName === "code_exec") {
-    const cmdText = escapeHtml(round.query || "");
+    const cmdRaw = round.query || "";
+    const cmdText = escapeHtml(cmdRaw);
     let _cmdDesc = "";
     try {
       const _a = typeof round.toolArgs === "string" ? JSON.parse(round.toolArgs) : (round.toolArgs || {});
       _cmdDesc = (_a && _a.description) || "";
     } catch (_e) { /* malformed toolArgs — skip description */ }
-    const descInlineHtml = _cmdDesc
-      ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(_cmdDesc)}">${escapeHtml(_cmdDesc)}</span>`
-      : "";
+    const cmdCollapsible = _cmdCollapsible(_cmdDesc, cmdRaw);
+    const cmdKey = cmdCollapsible ? _cmdBodyKey(round) : '';
+    const cmdOpen = cmdCollapsible && cmdKey && _cmdBodyExpanded.has(cmdKey);
+    const descInlineHtml = _cmdDescInline(_cmdDesc, cmdCollapsible);
     const partial = typeof round._partialOutput === "string" ? round._partialOutput : "";
     let liveOutHtml = "";
     if (partial) {
@@ -1709,7 +1711,7 @@ function _renderSearchingRow(round, ctx) {
      * round is in flight the descriptors live on the round itself (there is
      * no `results` entry until tool_result lands). */
     const liveQrHtml = _renderQrStrip(round);
-    return `<div class="ptool-cmd-block ptool-cmd-running">
+    return `<div class="ptool-cmd-block ptool-cmd-running${cmdOpen ? ' cmd-open' : ''}"${cmdCollapsible ? ` data-cmd-key="${escapeHtml(cmdKey)}"` : ''}>
            <div class="ptool-cmd-header">
              <span class="ptool-cmd-icon">${svg}</span>
              ${cmdRootPill}
@@ -1718,7 +1720,7 @@ function _renderSearchingRow(round, ctx) {
              ${_renderCmdTimerChip(round)}${_renderCmdInterruptBtn(round)}
              <span class="ptool-spinner"></span>
            </div>
-           <pre class="ptool-cmd-code"><code>$ ${cmdText}</code></pre>
+           <pre class="ptool-cmd-code${cmdCollapsible ? ' ptool-cmd-collapsible' : ''}"><code>$ ${cmdText}</code></pre>
            ${liveQrHtml}${liveOutHtml}
          </div>`;  }
   // ★ Web search: show orbit animation
@@ -1795,14 +1797,59 @@ function _renderQrStrip(meta) {
          </div>`;
 }
 
+/* ── Collapsible command body (done + running states) ────────────────────
+ * The one-line DESCRIPTION is what users read; the exact shell string is
+ * reference detail. When a description exists AND the command is long enough
+ * to be visual noise (multi-line or > 100 chars), the `$ command` <pre>
+ * starts COLLAPSED and the description itself becomes the toggle (chevron-
+ * marked, expands in place). Short one-liners (npm test) and description-
+ * less commands stay visible: collapsing the first saves nothing, collapsing
+ * the second would anonymize the card. Expansion state lives in
+ * _cmdBodyExpanded keyed by toolCallId, so a mid-run expand survives the
+ * per-progress re-renders and a done card survives a timeline sync. */
+const _cmdBodyExpanded = new Set();
+
+function _cmdBodyKey(round) {
+  return (round && round.toolCallId) ? String(round.toolCallId) : '';
+}
+
+function _cmdCollapsible(desc, cmdRaw) {
+  if (!desc || !cmdRaw) return false;
+  return cmdRaw.length > 100 || cmdRaw.indexOf('\n') !== -1;
+}
+
+function _cmdDescInline(desc, collapsible) {
+  if (!desc) return '';
+  const esc = escapeHtml(desc);
+  if (!collapsible) {
+    return `<span class="ptool-cmd-desc-inline" title="${esc}">${esc}</span>`;
+  }
+  return `<span class="ptool-cmd-desc-inline ptool-cmd-desc-toggle" title="${esc}" onclick="_cmdBodyToggle(this,event)"><span class="ptool-cmd-chev">▸</span>${esc}</span>`;
+}
+
+function _cmdBodyToggle(el, ev) {
+  if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+  const block = el && el.closest ? el.closest('.ptool-cmd-block') : null;
+  if (!block) return;
+  const open = !block.classList.contains('cmd-open');
+  block.classList.toggle('cmd-open', open);
+  const key = block.getAttribute('data-cmd-key') || '';
+  if (key) {
+    if (open) _cmdBodyExpanded.add(key);
+    else _cmdBodyExpanded.delete(key);
+  }
+}
+
 // ★ run_command / code_exec: render as inline terminal block with collapsible output
 function _renderCmdDoneBlock(round, ctx) {
   const { svg, meta, cmdRootPill } = ctx;
   if (!((round.toolName === "run_command" || round.toolName === "code_exec") && (meta.command != null || meta.output != null))) return "";
-  const cmd = escapeHtml(meta.command || round.query || "");
-  const descInlineHtml = meta.description
-    ? `<span class="ptool-cmd-desc-inline" title="${escapeHtml(meta.description)}">${escapeHtml(meta.description)}</span>`
-    : "";
+  const cmdRaw = meta.command || round.query || "";
+  const cmd = escapeHtml(cmdRaw);
+  const cmdCollapsible = _cmdCollapsible(meta.description, cmdRaw);
+  const cmdKey = cmdCollapsible ? _cmdBodyKey(round) : '';
+  const cmdOpen = cmdCollapsible && cmdKey && _cmdBodyExpanded.has(cmdKey);
+  const descInlineHtml = _cmdDescInline(meta.description, cmdCollapsible);
   const output = meta.output || "";
   const exitCode = meta.exitCode ?? "?";
   const timedOut = meta.timedOut || false;
@@ -1849,7 +1896,7 @@ function _renderCmdDoneBlock(round, ctx) {
            <pre class="ptool-cmd-output"><code>${escapeHtml(output)}</code></pre>
          </div>`;
   }
-  return `<div class="ptool-cmd-block ${statusCls}" data-rn="${round.roundNum}">
+  return `<div class="ptool-cmd-block ${statusCls}${cmdOpen ? ' cmd-open' : ''}" data-rn="${round.roundNum}"${cmdCollapsible ? ` data-cmd-key="${escapeHtml(cmdKey)}"` : ''}>
          <div class="ptool-cmd-header">
            <span class="ptool-cmd-icon">${svg}</span>
            ${cmdRootPill}
@@ -1857,7 +1904,7 @@ function _renderCmdDoneBlock(round, ctx) {
            <span class="ptool-cmd-status">${statusLabel}</span>
            ${_rowRightControls(round)}
          </div>
-         <pre class="ptool-cmd-code"><code>$ ${cmd}</code></pre>
+         <pre class="ptool-cmd-code${cmdCollapsible ? ' ptool-cmd-collapsible' : ''}"><code>$ ${cmd}</code></pre>
          ${qrStripHtml}${outputHtml}
        </div>`;
 }

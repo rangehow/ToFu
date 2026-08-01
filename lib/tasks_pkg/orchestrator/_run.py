@@ -171,11 +171,7 @@ def run_task(task: dict[str, Any]) -> None:
     # pooled background thread where req_id() would otherwise be empty, leaving
     # every audit line and swallowed-exception trace un-attributable.
     set_req_id(tid)
-    # ★ Task open (pt_03f4cdf1 slice 35): autopilot kick-from-idle (carrier
-    #   runs ONLY the virtual-user hook → early return), pristine turn-input
-    #   snapshot (auto-retry restore source, once-only, endpoint-managed skip),
-    #   queue_wait timing + ▶ START bracket (FULL task id). Extracted to
-    #   lib.tasks_pkg.orchestrator._task_open.
+    # ★ Task open (slice 35 → _task_open: kick / snapshot / open-log).
     if check_autopilot_kick(task):
         return
     snapshot_turn_input(task)
@@ -183,33 +179,19 @@ def run_task(task: dict[str, Any]) -> None:
     try:
         cfg = task['config']
 
-        # ── Autopilot VU startup attribution (pt_03f4cdf1 slice 37):
-        #   the _vu_subtask gate + closure adapter now bind once in
-        #   _vu_startup.make_vu_phase; call sites keep the closure-style
-        #   single-arg call. Ordinary worker/endpoint turns stay
-        #   byte-identical (no new events).
+        # ── VU phase closure (slice 37 → _vu_startup.make_vu_phase).
         _vu_phase = make_vu_phase(task)
 
-        # ── Turn prelude (pt_03f4cdf1 slice 33): swarm autocontinue reset
-        #    on human turns + capability profile merge (returns the
-        #    rebound cfg) + per-client browser routing. Extracted to
-        #    lib.tasks_pkg.orchestrator._turn_prelude.
+        # ── Turn prelude (slice 33 → _turn_prelude; returns the rebound cfg).
         cfg = run_turn_prelude(task, cfg, tid)
 
-        # ── Provider binding (pt_03f4cdf1 slice 31): hard provider pin
-        #    (multi-tenant isolation, when _pinned_provider_id is set) +
-        #    conversation-sticky routing (UNCONDITIONAL — empty convId
-        #    clears stale pooled-thread affinity). Both thread-local,
-        #    cleared in the finally block. Extracted to
-        #    lib.tasks_pkg.orchestrator._provider_binding.
+        # ── Provider binding: hard pin + conv affinity
+        #    (slice 31 → _provider_binding; cleared in finally).
         bind_provider_and_affinity(task, tid)
 
-        # ── Section 1: Config & Model Resolution ──
-        #   _resolve_model_config + immediate task['model'] seed (the
-        #   floor for first-call dispatch failures — epic
-        #   pt_8f6cbc753855415e). Extracted 2026-07-31 (pt_03f4cdf1
-        #   slice 30) to lib.tasks_pkg.orchestrator._config_resolution.
-        #   The 17-field unpack below stays inline as local binding.
+        # ── Section 1: Config & Model Resolution
+        #    (slice 30 → _config_resolution; the 17-field unpack below
+        #    stays inline as local binding).
         mcfg = resolve_and_seed_model_config(cfg, task)
         model           = mcfg['model']
         thinking_enabled = mcfg['thinking_enabled']
@@ -223,10 +205,7 @@ def run_task(task: dict[str, Any]) -> None:
         fetch_enabled   = mcfg['fetch_enabled']
         project_path    = mcfg['project_path']
         project_enabled = mcfg['project_enabled']
-        # ── One-shot project-scope startup (pt_03f4cdf1 slice 4):
-        #    server-state reconcile + presence announce + external-edit
-        #    probe kick. Gate lives INSIDE the extracted helper so
-        #    non-project turns simply return.
+        # ── One-shot project-scope startup (slice 4 → setup_project_context).
         setup_project_context(task, cfg, project_path, project_enabled)
         code_exec_enabled = mcfg['code_exec_enabled']
         memory_enabled  = mcfg['memory_enabled']
@@ -236,11 +215,8 @@ def run_task(task: dict[str, Any]) -> None:
         image_gen_enabled = mcfg['image_gen_enabled']
         human_guidance_enabled = mcfg.get('human_guidance_enabled', False)
         scheduler_enabled = mcfg.get('scheduler_enabled', False)
-        # ── Memory Prefetch: start loading project and memory contexts in
-        #    background threads while tool assembly runs. Extracted to
-        #    lib.tasks_pkg.orchestrator._prefetch (pt_03f4cdf1 slice 3).
-        #    Owner: this function creates the pool + futures; the finally
-        #    block at end-of-run shuts it down.
+        # ── Memory/project prefetch pool (slice 3 → _prefetch;
+        #    shut down in the context-inject helper).
         _prefetch_executor = start_prefetches(
             task, cfg=cfg, project_path=project_path,
             project_enabled=project_enabled, memory_enabled=memory_enabled)
@@ -253,15 +229,8 @@ def run_task(task: dict[str, Any]) -> None:
                                 code_exec_enabled or image_gen_enabled)
         _pp = project_path if project_enabled else None
 
-        # ── Section 2: Tool Assembly ──
-        #   VU phase line → _assemble_tool_list → pending-swarm
-        #   force-enable guard → task['_tool_schema'] stash. Extracted
-        #   2026-07-31 (pt_03f4cdf1 slice 29) to
-        #   lib.tasks_pkg.orchestrator._tool_assembly_prep — see that
-        #   module's docstring for the force-enable contract (the
-        #   get_agent_result / await_agents rejection-desync root fix)
-        #   and the compaction token-gate stash rationale. All feature
-        #   flags travel via mcfg; vu_phase is the local closure above.
+        # ── Section 2: Tool Assembly (slice 29 → _tool_assembly_prep;
+        #    force-enable guard + _tool_schema stash).
         tool_list, has_real_tools, max_tool_rounds = assemble_round_tools(
             cfg, task, mcfg, vu_phase=_vu_phase)
 
@@ -270,40 +239,25 @@ def run_task(task: dict[str, Any]) -> None:
 
         messages = list(task['messages'])
         original_messages = list(messages)
-        # ── Round-loop cross-iteration state (pt_862771477a86 slice 1):
-        #    the 14 locals that cross the stream-loop iteration boundary
-        #    live on ONE flat carrier (docs/ROUND_STATE_LOCALS_INVENTORY.md).
-        #    round_num / _premature_retry_count stay plain locals
-        #    (chassis-owned at cutover). Pure container swap, byte-identical.
+        # ── Round-loop cross-iteration state (slice 1): the 14 locals
+        #    crossing the stream-loop boundary live on ONE flat carrier
+        #    (docs/ROUND_STATE_LOCALS_INVENTORY.md).
         rs = RoundState(model=model, preset=preset,
                         thinking_enabled=thinking_enabled)
         all_search_results_text = []
 
-        # ── Section 2.5: Server-side tool history restoration ── (pt_03f4cdf1 slice 8)
-        #   Extracted to lib.tasks_pkg.orchestrator._tool_history.
-        #   Rebuilds messages with server-side tool history when
-        #   keepToolHistory=True; returns (messages, original_messages,
-        #   used_store) — caller reassigns its two locals from the tuple.
+        # ── Section 2.5: tool history restoration
+        #    (slice 8 → _tool_history.restore_tool_history).
         _keep_tool_history = cfg.get('keepToolHistory', True)
         _conv_id = task.get('convId', '')
         messages, original_messages, _tool_history_used = restore_tool_history(
             task=task, cfg=cfg, messages=messages, tid=tid, vu_phase=_vu_phase,
         )
 
-        # ── Section 3.5 (SPAWN) ── Memory Prefetch, started EARLY
-        #   Runs on its own thread from HERE so it overlaps Section 3's
-        #   context injection — the FUSE/DB-bound project + memory context
-        #   loads — instead of the microseconds of checkpoint bookkeeping that
-        #   follow it. Joined by await_memory_prefetch() just before the stream
-        #   loop; see _memory_prefetch.py for why starting here is byte-safe
-        #   (every context-inject mutation to the true tail is wrapped in
-        #   <system-reminder>, which the rerank's query builder strips).
-        #
-        #   `injected_tool_calls` is read from cfg['toolHistory'] rather than
-        #   inject_tool_history()'s return value further down: that call is the
-        #   only producer of a non-zero count and it is driven entirely by that
-        #   cfg key, so the eligibility answer is identical and available now.
-        #   A parity test pins the two agreeing.
+        # ── Section 3.5 (SPAWN): memory prefetch started EARLY so it
+        #   overlaps Section 3 (joined by await_memory_prefetch before the
+        #   stream loop). Eligibility reads cfg['toolHistory'] — the drift
+        #   guard below pins it against the actual injected count.
         maybe_run_memory_prefetch(
             task=task, cfg=cfg, messages=messages, tool_list=tool_list,
             project_path=project_path, project_enabled=project_enabled,
@@ -311,12 +265,8 @@ def run_task(task: dict[str, Any]) -> None:
             injected_tool_calls=len(cfg.get('toolHistory') or []),
         )
 
-        # ── Section 3: Context Injection ── (pt_03f4cdf1 slice 7)
-        #   Extracted to lib.tasks_pkg.orchestrator._context_inject.
-        #   The helper does: VU phase → _inject_system_contexts →
-        #   PREFERENCES_APPLIED chip → RELATED_CONVERSATIONS chip →
-        #   prefetch executor shutdown → _t_prep_done timing anchor →
-        #   VU phase (context ready).
+        # ── Section 3: Context Injection → _t_prep_done
+        #    (slice 7 → _context_inject).
         _t_prep_done = inject_context_and_emit_chips(
             task=task, messages=messages, cfg=cfg,
             project_path=project_path, project_enabled=project_enabled,
@@ -344,23 +294,12 @@ def run_task(task: dict[str, Any]) -> None:
         #  last_finish_reason / last_usage / assistant_msg / accumulated_usage
         #  / api_rounds — now live on `rs`, constructed above; slice 1)
 
-        # ★ Continue-toolHistory injection + eligibility drift guard
-        #   (pt_03f4cdf1 slice 36): restores interrupted tool-call context;
-        #   on a non-zero count stamps rs.tool_call_happened + offsets
-        #   rs.tool_round_num; warns when the injected count disagrees
-        #   with cfg['toolHistory'] (the early spawn's eligibility input).
-        #   Extracted to lib.tasks_pkg.orchestrator._tool_history.
+        # ★ Continue-toolHistory injection + drift guard
+        #   (slice 36 → _tool_history.inject_continue_tool_history).
         _injected_tool_calls = inject_continue_tool_history(
             task=task, rs=rs, messages=messages, cfg=cfg, model=model, tid=tid)
 
-        # ── Resume-state hydration ── (pt_03f4cdf1 slice 10)
-        #   Extracted to lib.tasks_pkg.orchestrator._resume_state. Applies
-        #   the three continue-checkpoint sub-blocks: contentPrefix seed
-        #   (bookkeeping only, NEVER re-injected as a trailing assistant
-        #   turn — Anthropic Messages API rejects that shape), the
-        #   capability-gated resumePrefill trailing-assistant append (Claude
-        #   never reaches the append via model_supports_assistant_prefill),
-        #   and the four checkpoint stashes merged by the post-loop finalize.
+        # ── Resume-state hydration (slice 10 → _resume_state).
         apply_resume_state(task=task, cfg=cfg, messages=messages,
                            model=model, tid=tid)
 
@@ -368,15 +307,9 @@ def run_task(task: dict[str, Any]) -> None:
         #   不允许在运行时向 messages 注入任何 [SYSTEM NOTE] 或 [SYSTEM:] 消息来
         #   干扰模型的正常生成。详见 max_tool_rounds 注释。
 
-        # ── Join the background memory prefetch (epic pt_e92d3be4) ──
-        #   Section 3.5 SPAWNS the BM25 + cheap-LLM rerank instead of running
-        #   it inline, so it overlaps the turn prep above rather than adding
-        #   its 800 ms deadline to TTFT. It mutates `messages` in place, so it
-        #   has to land BEFORE the stream loop serializes them — this is the
-        #   last point where that is still true. The wait is BOUNDED: on
-        #   overrun the turn proceeds with no injection, because a late write
-        #   into a body already on the wire is worse than a missing advisory
-        #   memory. No-op when nothing was spawned.
+        # ── Join the background memory prefetch (BOUNDED wait — a late
+        #   write into a body already on the wire is worse than a missing
+        #   advisory memory; no-op when nothing was spawned).
         await_memory_prefetch(task)
 
         _premature_retry_count = 0    # ★ Track retries for PREMATURE STREAM CLOSE
@@ -393,28 +326,17 @@ def run_task(task: dict[str, Any]) -> None:
         #   Original for-loop was: range(max_tool_rounds + 1) = [0..max_tool_rounds].
         while round_num + 1 <= max_tool_rounds + _premature_retry_count:
             round_num += 1
-            # ── Abort-at-round-start gate ──
-            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 23) to
-            #   lib.tasks_pkg.orchestrator._abort_round_start — see that
-            #   module's docstring for the abort-signal-age forensics and
-            #   the no-ROUND_END contract (the round never opened, so
-            #   there is nothing to pair). Returns True → break.
+            # ★ Abort-at-round-start gate (slice 23 → _abort_round_start; True → break).
             if handle_abort_at_round_start(task, rs,
                                            round_num=round_num, tid=tid):
                 break
 
-            # ★ Per-round open (pt_03f4cdf1 slice 32): ROUND_START boundary
-            #   (RENDER_CONTRACT Phase 3 — including prose-only rounds) +
-            #   phase emit ({} anchor on round 0). Extracted to
-            #   lib.tasks_pkg.orchestrator._round_open.
+            # ★ Per-round open: ROUND_START + phase emit
+            #   (slice 32 → _round_open).
             emit_round_open(task, rs, round_num)
 
-            # ★ Per-round message hygiene: two-layer compaction +
-            #   per-turn attachments + legacy search-addendum cleanup.
-            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 18) to
-            #   lib.tasks_pkg.orchestrator._round_message_hygiene — see that
-            #   module's docstring for the step ordering and the advisory
-            #   (never-fatal) attachments contract.
+            # ★ Per-round message hygiene: compaction + attachments + cleanup
+            #   (slice 18 → _round_message_hygiene).
             run_round_message_hygiene(
                 task, messages,
                 round_num=round_num, tid=tid,
@@ -422,27 +344,13 @@ def run_task(task: dict[str, Any]) -> None:
                 search_enabled=search_enabled,
             )
 
-            # ★ Drain swarm inbox (pt_03f4cdf1 slice 11):
-            #   Extracted to lib.tasks_pkg.orchestrator._swarm_inbox.
-            #   Drains async sub-agent completions + peer + human-steer
-            #   lanes and injects them as ONE coalesced user-role message
-            #   just before the next LLM call. Immediate delivery for
-            #   swarm (chip + mark_delivered); DEFERRED confirm-flush for
-            #   peer and steer (never-zero delivery — stashed on task
-            #   sidecars and flushed after the LLM call returns). Guards
-            #   unmatched-tool_call tail internally. Never raises.
+            # ★ Drain swarm inbox — coalesced user-role inject before the
+            #   LLM call (slice 11 → _swarm_inbox; never raises).
             drain_and_inject_inbox(task=task, messages=messages,
                                    round_num=round_num, tid=tid)
 
-            # ★ Round-request preamble: gate the tool list for this
-            #   round → cache-aware tool-result sort → messages-snapshot
-            #   debug event → late-bound facade build_body → attach
-            #   body['_task_id'] (cache-TTL latch). Extracted 2026-07-31
-            #   (pt_03f4cdf1 slice 28) to
-            #   lib.tasks_pkg.orchestrator._round_request_prep — see that
-            #   module's docstring for the step ordering and the
-            #   late-binding contract. Returns (_tools_this_round, body);
-            #   the tool list is still needed by the round checkpoint.
+            # ★ Round-request preamble → (_tools_this_round, body)
+            #   (slice 28 → _round_request_prep).
             _tools_this_round, body = build_round_request(
                 task, rs, messages, tool_list,
                 round_num=round_num, tid=tid,
@@ -451,27 +359,17 @@ def run_task(task: dict[str, Any]) -> None:
                 max_tokens=max_tokens, response_format=response_format,
             )
 
-            # ★ Streaming-accumulator construction (pt_03f4cdf1 slice 32):
-            #   pre-executes read-only tools mid-stream + immediate
-            #   tool_start events. Extracted to _round_open (its project
-            #   path deliberately reads cfg.get('projectPath')).
+            # ★ Streaming-accumulator construction
+            #   (slice 32 → _round_open).
             _stream_acc = build_stream_accumulator(
                 task, rs, cfg, round_num, project_enabled)
 
-            # ★ Per-round DB-connection checkpoint release. Extracted
-            #   2026-07-31 (pt_03f4cdf1 slice 27) to
-            #   lib.tasks_pkg.orchestrator._db_conn_release — see that
-            #   module's docstring for the _conn_semaphore slot-pinning /
-            #   frontend-starvation rationale and the best-effort contract.
+            # ★ Per-round DB-connection checkpoint release
+            #   (slice 27 → _db_conn_release; best-effort).
             release_db_conn_checkpoint(round_num=round_num, tid=tid)
 
-            # ★ LLM call with automatic fallback + deferred-inbox flush +
-            #   early model surface + abort handling. Extracted 2026-07-31
-            #   (pt_03f4cdf1 slice 26) to
-            #   lib.tasks_pkg.orchestrator._llm_round_call — see that
-            #   module's docstring for the writeback / flush / early-model /
-            #   break-action / AbortedError contracts. Returns 'break'
-            #   (fallback-requested break or user abort) → break.
+            # ★ LLM call with fallback + inbox flush + abort handling
+            #   (slice 26 → _llm_round_call; 'break' → break).
             if run_llm_call_with_fallback(
                     task, rs, body, messages, tool_list, _stream_acc,
                     round_num=round_num, tid=tid,
@@ -479,20 +377,9 @@ def run_task(task: dict[str, Any]) -> None:
                     max_tool_rounds=max_tool_rounds) == 'break':
                 break
 
-            # ── Per-round cache accounting (pt_03f4cdf1 slice 13) ──
-            #   Extracted to
-            #   lib.tasks_pkg.orchestrator._cache_round_accounting.
-            #   Detects cross-round prompt-cache breaks, stamps causal
-            #   metadata (cacheBreak / toolCalls / writeBreakdown) onto
-            #   rs.api_rounds[-1] so the frontend cost popover can
-            #   explain WHY cache_read dropped and WHERE next-round
-            #   cache `write` comes from, plus logs the per-round cache
-            #   stats at INFO for production visibility. Guarded by
-            #   ``convId + last_usage`` INTERNALLY — safe to call
-            #   unconditionally. All three stamps are round-match
-            #   protected (api_rounds[-1].round == round_num + 1) and
-            #   individually wrapped in try/except so a stamp bug on
-            #   one field never blocks the other two.
+            # ★ Per-round cache accounting — cacheBreak/toolCalls/
+            #   writeBreakdown stamps (slice 13 → _cache_round_accounting;
+            #   internally guarded, unconditional call).
             stamp_round_cache_accounting(
                 task,
                 round_num=round_num, tid=tid, model=rs.model,
@@ -501,20 +388,12 @@ def run_task(task: dict[str, Any]) -> None:
                 api_rounds=rs.api_rounds, messages=messages,
             )
 
-            # ★ Post-LLM streaming-accumulator settle: reconcile orphan
-            #   early-announced rounds + read back tool_round_num + inject
-            #   pre-computed results into the dedup cache. Extracted
-            #   2026-07-31 (pt_03f4cdf1 slice 24) to
-            #   lib.tasks_pkg.orchestrator._stream_acc_settle — see that
-            #   module's docstring for the orphan-retry / round-readback /
-            #   cache-inject contracts.
+            # ★ Post-LLM streaming-accumulator settle
+            #   (slice 24 → _stream_acc_settle).
             settle_stream_accumulator(_stream_acc, task, rs, tid=tid)
 
-            # ★ Post-stream analysis: premature close / abort / normal
-            #   exit. Extracted 2026-07-31 (pt_03f4cdf1 slice 25) to
-            #   lib.tasks_pkg.orchestrator._stream_decision — see that
-            #   module's docstring for the action taxonomy and the
-            #   chassis-owned premature_retry_count return contract.
+            # ★ Post-stream decision (slice 25 → _stream_decision;
+            #   'break'/'continue' + premature_retry_count rebind).
             _stream_action, _premature_retry_count = apply_stream_decision(
                 task, rs, round_num=round_num, tid=tid,
                 premature_retry_count=_premature_retry_count,
@@ -524,26 +403,15 @@ def run_task(task: dict[str, Any]) -> None:
             if _stream_action == 'continue':
                 continue
 
-            # ── Per-round gates: per-round diagnostic + max_budget_usd
-            #   ceiling + tool-rounds ceiling. Extracted 2026-07-31
-            #   (pt_03f4cdf1 slice 17) to
-            #   lib.tasks_pkg.orchestrator._round_gates.check_round_gates —
-            #   see that module's docstring for the gate ordering and the
-            #   ROUND_END(reason='budget') / error-envelope contracts.
-            #   Returns True when a gate fired (task['error'] stamped,
-            #   rs.exit_reason set, ROUND_END emitted) and the loop must
-            #   break.
+            # ── Per-round gates: budget + tool-rounds ceilings
+            #   (slice 17 → _round_gates; True → break).
             if check_round_gates(task, rs, round_num=round_num, tid=tid,
                                  max_tool_rounds=max_tool_rounds, cfg=cfg):
                 break
 
             rs.tool_call_happened = True
-            # ★ Assemble the live-tail assistant/tool_call message + discard
-            #   pre-tool prose + submit incremental auto-translate. Extracted
-            #   2026-07-31 (pt_03f4cdf1 slice 16) to
-            #   lib.tasks_pkg.orchestrator._tool_call_prelude — see that
-            #   module's docstring for the SINGLE SOURCE / DELTA_RESET /
-            #   best-effort translate contracts.
+            # ★ Live-tail assistant/tool_call message + translate
+            #   (slice 16 → _tool_call_prelude).
             append_assistant_tool_call_message(
                 task, messages,
                 round_num=round_num, tid=tid,
@@ -553,24 +421,14 @@ def run_task(task: dict[str, Any]) -> None:
             #  Tool Execution Pipeline (delegated to tool_dispatch)
             # ══════════════════════════════════════════
 
-            # ── Abort check before tool execution ──
-            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 19) to
-            #   lib.tasks_pkg.orchestrator._abort_before_tools — see that
-            #   module's docstring for the orphaned-tool_use HTTP-400
-            #   rationale and the prose-content re-append contract.
-            #   Returns True (task aborted: trailing tool_calls message
-            #   popped, ROUND_END(reason='aborted') emitted) → break.
+            # ── Abort check before tool execution
+            #   (slice 19 → _abort_before_tools; True → break).
             if handle_abort_before_tools(task, rs, messages,
                                          round_num=round_num, tid=tid):
                 break
 
-            # ── Per-round tool dispatch: parse → sanitize → emit →
-            #   heartbeat → execute → pop live ref. Extracted 2026-07-31
-            #   (pt_03f4cdf1 slice 22) to
-            #   lib.tasks_pkg.orchestrator._tool_dispatch_round — see that
-            #   module's docstring for the early_announced / reaper-
-            #   heartbeat / timeout-flag contracts. Returns the pipeline's
-            #   _tool_timed_out flag for the circuit breaker below.
+            # ── Per-round tool dispatch → _tool_timed_out flag
+            #   (slice 22 → _tool_dispatch_round).
             _tool_timed_out = run_tool_dispatch(
                 task, rs, messages, all_search_results_text,
                 round_num=round_num, tid=tid,
@@ -579,36 +437,22 @@ def run_task(task: dict[str, Any]) -> None:
                 announced_tc_map=_stream_acc.announced_tc_map,
             )
 
-            # ── Phase 4b: Consecutive tool-timeout circuit breaker ──
-            #   Extracted 2026-07-31 (pt_03f4cdf1 slice 21) to
-            #   lib.tasks_pkg.orchestrator._tool_timeout_breaker — see that
-            #   module's docstring for the FORCE-STOP envelope / exit_reason
-            #   / ROUND_END(reason='tool_timeout') contracts. Returns True
-            #   (ceiling reached: task['error'] stamped, ROUND_END emitted)
-            #   → break; False on success (counter reset) or below-ceiling
-            #   timeout (counter incremented, round proceeds).
+            # ── Consecutive tool-timeout circuit breaker
+            #   (slice 21 → _tool_timeout_breaker; True → break).
             if handle_tool_timeout_circuit_breaker(
                     task, rs, round_num=round_num, tid=tid,
                     tool_timed_out=_tool_timed_out,
                     max_consecutive_tool_timeouts=_MAX_CONSECUTIVE_TOOL_TIMEOUTS):
                 break
 
-            # ★ Crash-recovery checkpoint (throttled) + RENDER_CONTRACT
-            #   Phase 3 round close. Extracted 2026-07-31 (pt_03f4cdf1
-            #   slice 20) to
-            #   lib.tasks_pkg.orchestrator._round_checkpoint — see that
-            #   module's docstring for the 5s throttle / non-fatal /
-            #   ROUND_END(reason='tools') contracts.
+            # ★ Crash-recovery checkpoint (throttled) + round close
+            #   (slice 20 → _round_checkpoint).
             run_round_checkpoint_and_close(task, rs,
                                            round_num=round_num, tid=tid)
 
 
 
-        # ── Post-loop success tail (pt_03f4cdf1 slice 6):
-        #    append-final-assistant + write-back-messages + save-to-store
-        #    + finalize-and-emit-done extracted to
-        #    lib.tasks_pkg.orchestrator._post_loop.finalize_after_loop.
-        #    Byte-identical event sequence + task mutations.
+        # ── Post-loop success tail (slice 6 → _post_loop.finalize_after_loop).
         finalize_after_loop(
             task,
             cfg=cfg, tid=tid,
@@ -629,29 +473,16 @@ def run_task(task: dict[str, Any]) -> None:
             abort_detected_phase=rs.abort_phase,
         )
     except Exception as e:
-        # FATAL-path handling extracted to
-        # lib.tasks_pkg.orchestrator._post_loop.handle_task_fatal
-        # (pt_03f4cdf1 slice 6): user-error extraction, endpoint-managed
-        # short-circuit, turn-level auto-retry, recovery-carrier
-        # re-stamp, terminal-DONE + persist. Returns True when the
-        # caller should return early (retry-in-progress or endpoint-
-        # managed handoff), False when the fall-through path already
-        # emitted terminal DONE + persisted.
+        # FATAL-path handling (slice 6 → _post_loop.handle_task_fatal;
+        # True → return early).
         if handle_task_fatal(task, e):
             return
     except BaseException as be:
-        # ── Non-Exception fatal (cancel / kill / interpreter shutdown) —
-        # delegated to _post_loop.handle_task_base_exception (pt_03f4cdf1
-        # slice 34): stamps the internal envelope + terminal DONE + persist
-        # (endpoint-managed skips) so the admission slot + billing settle,
-        # then re-raises `be` itself (cancel/shutdown semantics preserved).
+        # ── Non-Exception fatal (slice 34 → _post_loop
+        #    .handle_task_base_exception; finalizes + re-raises).
         handle_task_base_exception(task, be)
     finally:
-        # 5-step teardown lane extracted to
-        # lib.tasks_pkg.orchestrator._teardown.finalize_task_lane
-        # (pt_03f4cdf1 slice 5): presence.mark_idle + set_req_id('') +
-        # clear_pinned_provider + clear_conv_affinity +
-        # get_conversation_store().release_connection(). Each step is
-        # its own try/except so one failure never blocks the others.
+        # 5-step teardown lane (slice 5 → _teardown.finalize_task_lane;
+        # each step fail-soft).
         finalize_task_lane(task, tid=tid)
 

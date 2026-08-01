@@ -1196,7 +1196,15 @@ function _installViewportHeightGuard() {
     if (convList) convList.innerHTML = '<div style="text-align:center;padding:18px 0;color:#999;font-size:13px">Loading…</div>';
   }
   // ── Startup DB health check — show persistent banner if PG is down ──
-  _checkDbHealth();
+  /* typeof-guarded: _checkDbHealth lives in core/backend_offline_monitor.js.
+   *   An UNGUARDED call here once hit the Epic-E sub-3B deferral window (the
+   *   module was briefly deferred) and the ReferenceError killed the whole
+   *   boot IIFE — initActiveTasks never ran, so neither conversations nor
+   *   folders loaded (the "sidebar folder rail gone" incident, 2026-08-01).
+   *   The guard also keeps boot alive if the file is ever corruption-skipped
+   *   by the bundler (it is not a _CRITICAL_FILES member): losing the DB
+   *   banner degrades, crashing boot destroys. */
+  if (typeof _checkDbHealth === 'function') _checkDbHealth();
 
   // ── Restore PDF/VLM state from sessionStorage (survives page refresh) ──
   if (typeof _vlmRestoreState === 'function') {

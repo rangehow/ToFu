@@ -2077,7 +2077,7 @@ async function _trySSE(convId, taskId, stream, assistantMsg) {
       onChunk() {
         gotData = true;
         clearTimeout(sseTimeout);
-        _streamTimerTouch(convId); // ★ Any bytes (including keepalives) prove server is alive
+        if (typeof _streamTimerTouch === 'function') _streamTimerTouch(convId); // ★ Any bytes (including keepalives) prove server is alive
       },
       onLine(line) {
         return _processSSELine(line);

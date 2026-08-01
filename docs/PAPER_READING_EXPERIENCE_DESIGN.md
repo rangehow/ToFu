@@ -1,6 +1,16 @@
 # 论文阅读体验设计稿(Paper Reading Experience)——从「一份文档」到「一位陪读导师」
 
-> 状态:**v1 设计稿待审**(2026-08-01 落笔;实现未开工,owner 审稿后才动代码)。
+> 状态:**P0–P4 全量落地**(2026-08-01 落笔;owner 2026-08-02 一键批「批准全量 P0-P4」;
+> 2026-08-02 五期全部交付)。
+>
+> | 期 | 状态 | commit | 证据 |
+> |---|---|---|---|
+> | P0 获得感+成本可见 | ✅ | `fe270ce9` | insight 四级链默认 ON + anchor 确定性解析 + secondPasses 进 finish tag + 锚定卡/回收卡;后端 12/12 + 前端 25 检查,回归 61 |
+> | P1 启发 | ✅ | `2df7408f` | provocation→`_paperAskQuestion` 开辩、open_problem→`_startResearchJob` 提案;JSDOM +10 |
+> | P2 易懂 | ✅ | `5b8f97d0` | checkpoint_engine(节锚自测卡)+ 术语类比列 + 零 LLM 速览折叠;后端 9/9 + JSDOM +17 |
+> | P3 深度 | ✅ | `3209c43e` | deepen_engine(qa 机架克隆,三模式)+ `deep:` 缓存槽(section_hash 新鲜度)+ 首个骑通用 poll 工厂的 paper 任务;后端 6/6 + JSDOM +9 |
+> | P4 沉浸 | ✅ | `7865fa34` | paper_notes 表(schema 45)+ CRUD + 页边批注 + 专注模式 + 会话小结 + **xp store 根修**(_reportView 新字面量跨实例丢 payload);后端 3/3 + JSDOM +18 |
+>
 > 触发诉求(owner 原话):「优化阅读模式的报告,通过机制让读者**获得洞见、感到启发、
 > 内容有深度、容易理解、毫不费力地沉浸深思**。前后端怎么设计可以脑暴。」
 > 脑暴轮结论:报告本身的质量不是瓶颈,瓶颈是它是**静态交付物**;五个目标描述的

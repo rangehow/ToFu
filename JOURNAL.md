@@ -1,3 +1,12 @@
+### 2026-08-01(阅读体验 P0-P4 全量落地:教科书 → 陪读导师;epic `pt_08894d6112bf4c68` DONE) — owner 一键批「批准全量 P0-P4」后五期连发:`fe270ce9`/`2df7408f`/`5b8f97d0`/`3209c43e`/`7865fa34`(68 文件净增 ~5.4K 行);新套件 **12+9+6+3 后端 + 前端 JSDOM 76+ 检查**(各含 NEUTER);全邻接回归 **200+ 绿**;feature bundle `27f3cf25` 实测四模块齐备
+
+- **主线=接线而非新建:** insight 引擎(A/B 验证过)从 env-gated OFF 转**四级链默认 ON**(cfg 戳>server_config>env>ON;personal_scope 注册 paperInsightEnabled/paperCheckpointsEnabled,headless fail-closed);ideate 1639 行经 open_problem 卡一键进 `_startResearchJob`;QA 经 provocation 卡一键开辩(`_paperAskQuestion`)。两个新引擎都是克隆已有机架:checkpoint(单发无工具 JSON+修复重问)、deepen(qa 机架,三模式,`deep:<mode>:<sec>:<ui>` 缓存槽+section_hash 新鲜度校验——报告再生即失效)。
+- **owner 钦定第一优先=成本可见:** rubric/合成/termfill/checkpoint/deepen 的 usage 全部落 `meta.secondPasses`(deepen 多次累计),meta-only 重持久化 + `report_meta` 事件热更 finish tag;总量=本体+Σ二遍,徽章 tooltip 分解。NEUTER 判据:摘合并总额精确回落。
+- **锚定分发(设计 §3.2 第三次「prompt 提名代码定址」):** 模型提名节标题,`_anchors` 规范化精确→Jaccard≥0.6→回退文末;anchor_idx 随行持久化;前端连接/挑衅追问卡插到对应节标题后,checkpoint 翻面卡插节末,回收卡收尾。
+- **三个顺手抓的根修:** ①`_append_cached_insight` 幂等判据裸 `'## 💡'` 子串误伤所有含 💡 Method 标题的报告(v1 合并静默吞掉,预存潜伏)——收窄为精确小节标题判据,新套件 v1 红抓出;②**`_reportView()` 每次返回新字面量**,view._xpInsight/_paperNotes/_xpCheckpoints 自定义属性跨实例丢失(live 事件后重渲染卡片即消失)——xp payload 收模块级 store 按 paper+kind+lang 键控(生产级根修,P4 内);③notes.js `_paperHash` 裸引用 ReferenceError(after-render 缝每次渲染都触发)——typeof 守卫。
+- **harness 纪律三教训(同族,已记):** ①再分发后旧 DOM 引用 detached,点击永远到不了 document 委托——断言前重查活节点;②被测函数被 harness 自己的 stub 覆盖(_extractGlossary),stub 前先捕获真函数;③_报告View 跨实例断言必须走 store 读写(_paperXpSet/_paperXpGet),绕视图实例。
+- **新路由纪律:** deepen start + notes CRUD 全 api_ok 原生;`/deepen/poll|abort` 是 paper 家族首个骑 `_task_routes` 通用工厂的任务(drawer 吃事件流,无需引擎特异键);漂移棘轮零惊扰。schema 44→45(paper_notes 新表,Core 单源双端)。
+
 ### 2026-08-02(Epic-E sub-10 收尾:settings/ 整族 403KB 降级落地——生产 core 1,045,274 B,**1.2MB 验收线生产达成**) — epic `pt_3879f00e`;commit `503859b9`(5 文件,联席)+ runbook 52 项 ALL GREEN;ledger 行+判读已更
 
 - **破线数字:** 基线 1,550,424 → 生产 **1,045,274 B**(`bundle-40dde573.js`,农场/生产同 hash),累计 **−505KB 压缩态 / −32.6%**;较 1.2MB(≈1,228,800)余量 ~183KB。feature 1,012,457 B(下一战场,不属本 epic 口径)。十二片流水片片有账(commit/字节/NEUTER/runbook 证据链)。

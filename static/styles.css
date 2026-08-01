@@ -4692,6 +4692,9 @@ input.settings-mono {
 .stg-oauth-note-icon > svg { display: block; }
 .stg-oauth-note-title { font-size: 12px; font-weight: 800; color: var(--s-ink); margin-bottom: 3px; }
 .stg-oauth-note-desc { font-size: 11.5px; line-height: 1.5; color: var(--s-ink-soft); }
+/* Egress line "Get desktop agent" deep-link button (sits next to the
+   unavailable verdict inside the OAuth card). */
+.oauth-egress-agent-btn { margin-left: 8px; white-space: nowrap; vertical-align: baseline; }
 /* Balance badge — colored by remaining amount */
 .stg-badge-balance { font-size: 11px; font-variant-numeric: tabular-nums; }
 @keyframes stg-bal-pulse {
@@ -5713,6 +5716,87 @@ input.settings-mono {
   background: rgba(239, 68, 68, 0.08);
   color: var(--s-blocked);
   border: 1.5px solid rgba(239, 68, 68, 0.25);
+}
+
+/* ══════════════════════════════════════
+   Onboarding wizard (first-run)
+   ── The overlay element is .modal-overlay (the e2e dismiss contract —
+      tests/conftest.py strips `.open` from exactly that selector), NOT
+      .stg-modal-overlay, so the .stg-* design tokens are re-declared on
+      .ob-modal itself: var(--s-*) would otherwise resolve to nothing and
+      the reused .stg-modal shell would render unstyled. ──
+   ══════════════════════════════════════ */
+.ob-modal {
+  --s-white:     #faf8f3;
+  --s-cream:     #f2ecda;
+  --s-skin:      #e4d6bf;
+  --s-board:     #35302a;
+  --s-board-lit: #443c32;
+  --s-gold:      #c9993f;
+  --s-gold-dim:  #a87d2e;
+  --s-gold-glow: rgba(201,153,63,0.18);
+  --s-ink:       #1a1814;
+  --s-ink-soft:  #3d362c;
+  --s-done:      #4ade80;
+  --s-blocked:   #f87171;
+  --s-accent:    #6366f1;
+  --s-shadow:    5px 5px 0 var(--s-ink);
+  --s-shadow-sm: 3px 3px 0 var(--s-ink);
+  --s-shadow-xs: 2px 2px 0 var(--s-ink);
+  --s-border:    2px solid var(--s-ink);
+  --s-border-sm: 1.5px solid var(--s-ink);
+  --s-radius:    0px;
+  width: 560px;
+  font-family: 'Inter', 'SF Pro', -apple-system, system-ui, sans-serif;
+}
+.ob-step-line {
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--s-gold-dim);
+  margin-bottom: 8px;
+}
+.ob-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 4px; }
+.ob-card {
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+  padding: 14px 14px 12px;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+}
+.ob-card:hover, .ob-card:focus-visible {
+  border-color: var(--s-gold);
+  box-shadow: var(--s-shadow-sm);
+  transform: translate(-2px, -2px);
+  outline: none;
+}
+.ob-card-icon { color: var(--s-gold-dim); margin-bottom: 8px; }
+.ob-card-icon > svg { display: block; }
+.ob-card-title { font-size: 13.5px; font-weight: 800; color: var(--s-ink); margin-bottom: 4px; }
+.ob-card-desc { font-size: 11.5px; line-height: 1.55; color: var(--s-ink-soft); }
+.ob-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--s-gold-dim);
+}
+.ob-done { text-align: center; padding: 18px 6px 8px; }
+.ob-done-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px; height: 52px;
+  border: var(--s-border);
+  border-radius: 50%;
+  color: #16a34a;
+  margin-bottom: 12px;
+}
+.ob-done-title { font-size: 16px; font-weight: 900; color: var(--s-ink); margin-bottom: 6px; }
+@media (max-width: 560px) {
+  .ob-cards { grid-template-columns: 1fr; }
 }
 
 /* ── Icon / secondary / primary buttons ── */

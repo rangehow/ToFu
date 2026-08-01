@@ -933,6 +933,12 @@ _BUNDLE_FILES = [
     # _applyDesktopUI / _saveConvToolState, so it MUST come after main.js and
     # main/main_toolbar_ui.js.
     'local-control.js',
+    # First-run setup wizard (API key vs subscription chooser + API probe
+    # path). Drives openSettings / switchSettingsTab / _oauthLogin /
+    # Api.providers.probe / Api.serverConfig.update and is entered from
+    # _maybeAutoOpenSettings — all runtime calls, so it only needs to come
+    # after the settings modules and main/main_toolbar_ui.js.
+    'onboarding.js',
     # Real-time network-latency signal indicator in the topbar. Pure runtime
     # subscriber on push.js's RTT probe (pushOnLatency) + reads t() at render
     # time, so it MUST come after main.js (and after push.js, loaded far above).

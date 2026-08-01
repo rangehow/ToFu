@@ -46,6 +46,7 @@ declare var TofuScene: any;   // static/js/tofu-scene.js
 declare var Voice: any;   // static/js/voice.js
 declare var _CLIENT_LOCAL_ROUND_KEYS: any;   // static/js/ui/stream_reducer.js
 declare var _ROUND_KEY_ORDER: any;   // static/js/ui/stream_reducer.js
+declare var _STALL_THRESHOLD_S: any;   // static/js/ui/stall_watch.js
 declare var _TERMINAL_ROUND_STATUS: any;   // static/js/ui/stream_reducer.js
 declare var __RELAY_BILLING_ENABLED: any;   // static/js/relay-admin.js
 declare var __RELAY_MODEL_ENABLED: any;   // static/js/relay-admin.js
@@ -68,14 +69,21 @@ declare var _connToastState: any;   // static/js/ui/sse_poll_fallback.js
 declare var _contextPolicy: any;   // static/js/main/main_toolbar_ui.js
 declare var _currentUserId: any;   // static/js/core/current_user.js
 declare var _cvOnLanguageChange: any;   // static/js/compaction-viewer.js
+declare var _ensureStallTimer: any;   // static/js/ui/stall_watch.js
+declare var _evClock: any;   // static/js/ui/stall_watch.js
 declare var _evRoundNum: any;   // static/js/ui/stream_reducer.js
 declare var _finalizeProjection: any;   // static/js/ui/stream_reducer.js
 declare var _isBootLoadHeld: any;   // static/js/core/cross_tab_sync.js
 declare var _paperResponsiveOnCrossing: any;   // static/js/paper/pdf_responsive.js
 declare var _pmModelDocCloseBound: any;   // static/js/paper/podcast.js
+declare var _resetStallWatchForTests: any;   // static/js/ui/stall_watch.js
 declare var _resolveContextLimit: any;   // static/js/context-bar.js
 declare var _setOptimizerPanelOpen: any;   // static/js/optimizer.js
 declare var _setTimerPanelOpen: any;   // static/js/timer.js
+declare var _stallTimer: any;   // static/js/ui/stall_watch.js
+declare var _stallWatchPaintCounters: any;   // static/js/ui/stall_watch.js
+declare var _stallWatchTick: any;   // static/js/ui/stall_watch.js
+declare var _stallWatches: any;   // static/js/ui/stall_watch.js
 declare var _stampDeltaReset: any;   // static/js/ui/stream_reducer.js
 declare var _streamRenderNoHighlight: any;   // static/js/ui/streaming_ui.js
 declare var _swReconcileTicker: any;   // static/js/ui/streaming_swarm_panel.js
@@ -136,6 +144,10 @@ declare var relayAdminTopup: any;   // static/js/relay-admin.js
 declare var relayAdminViewPayments: any;   // static/js/relay-admin.js
 declare var renderTurnCtxNote: any;   // static/js/info-rail.js
 declare var runManualCompaction: any;   // static/js/context-bar.js
+declare var stallWatchClear: any;   // static/js/ui/stall_watch.js
+declare var stallWatchFeed: any;   // static/js/ui/stall_watch.js
+declare var stallWatchState: any;   // static/js/ui/stall_watch.js
+declare var stallWatchStop: any;   // static/js/ui/stall_watch.js
 declare var toggleProjectBrain: any;   // static/js/project-brain.js
 declare var toggleVoiceInput: any;   // static/js/voice.js
 declare var updateContextBar: any;   // static/js/context-bar.js
@@ -194,6 +206,7 @@ interface Window {
   __tofuDiagRing: any;
   __translatePushWired: any;
   _acquireBootLoad: any;
+  _adoptTaskPlaceholder: any;
   _applyChatModeUI: any;
   _applyContinueCheckpoint: any;
   _applyHistoryRewrite: any;
@@ -217,6 +230,7 @@ interface Window {
   _cvOnLanguageChange: any;
   _deriveChatModeFromFlags: any;
   _dispatchableQueueCount: any;
+  _ensureStallTimer: any;
   _ephemeralToast: any;
   _flushPendingSyncs: any;
   _frameIsOurs: any;
@@ -237,6 +251,7 @@ interface Window {
   _lcResolveArch: any;
   _lcSetAbout: any;
   _lcUpdateBadge: any;
+  _lightMessageForSync: any;
   _loadFeatureBundle: any;
   _markStreamXlateFinal: any;
   _maskVuMachineTokens: any;
@@ -249,6 +264,10 @@ interface Window {
   _msgContentVersion: any;
   _msgElIndex: any;
   _msgFingerprint: any;
+  _obApiSubmit: any;
+  _obClose: any;
+  _obRender: any;
+  _obStartOAuth: any;
   _onConvSyncPush: any;
   _onFoldersChangedPush: any;
   _onReady: any;
@@ -273,6 +292,7 @@ interface Window {
   _renderMsgInPlace: any;
   _renderPrivateHosts: any;
   _renderStreamingTranslatePreview: any;
+  _resetStallWatchForTests: any;
   _resolveContextLimit: any;
   _revalidateOnResume: any;
   _rollbackContinueShell: any;
@@ -283,6 +303,7 @@ interface Window {
   _setOptimizerPanelOpen: any;
   _setTimerPanelOpen: any;
   _spliceInjectRow: any;
+  _stallWatchTick: any;
   _stampLatestLiveTask: any;
   _startPendingSyncPolling: any;
   _streamRenderNoHighlight: any;
@@ -299,6 +320,7 @@ interface Window {
   _tsScanKeptRounds: any;
   _updateScrollToBottomBtn: any;
   _uploadShrinkPolicy: any;
+  _userStopDuringStartup: any;
   _vlmParseEntry: any;
   _warnModelCapsMissing: any;
   _watchQueuedDispatch: any;
@@ -380,6 +402,7 @@ interface Window {
   markAuthoritativeChannelHealth: any;
   markConvPendingSync: any;
   markIdentityGateReported: any;
+  maybeShowOnboarding: any;
   mobileMediaQuery: any;
   modelGroupBrandNames: any;
   modelGroupKey: any;
@@ -446,6 +469,10 @@ interface Window {
   showLogCleanBanner: any;
   showPrompt: any;
   showToolsetApplyBanner: any;
+  stallWatchClear: any;
+  stallWatchFeed: any;
+  stallWatchState: any;
+  stallWatchStop: any;
   startSyncDriftProbe: any;
   streamHealthGet: any;
   streamHealthSubscribe: any;

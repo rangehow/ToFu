@@ -2158,6 +2158,9 @@
      MUST load after main.js / main_toolbar_ui.js — it drives _applyBrowserUI /
      _applyDesktopUI / _saveConvToolState and reads the toolbar globals. -->
 <script defer src="static/js/local-control.js?v=20260728a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<!-- onboarding.js — first-run setup wizard (registered in lib/js_bundler.py:_BUNDLE_FILES).
+     Entered from _maybeAutoOpenSettings; drives the settings/oauth surfaces at runtime only. -->
+<script defer src="static/js/onboarding.js?v=20260801a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- mobile_panels.js — mobile portaling of timer/optimizer panels + mobile flow picker (registered in lib/js_bundler.py:_BUNDLE_FILES). -->
 <script defer src="static/js/mobile_panels.js?v=20260625a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <!-- presence.js — cross-conversation live-presence strip (registered in lib/js_bundler.py:_BUNDLE_FILES). -->

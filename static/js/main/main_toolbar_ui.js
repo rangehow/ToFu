@@ -523,11 +523,21 @@ function _maybeAutoOpenSettings(serverConfigData) {
     }
     // Open settings after a short delay for the UI to settle
     setTimeout(() => {
+      /* The first-run wizard supersedes the bare "open Settings to the
+       * providers tab" behaviour: it asks the ONE question a new user can
+       * answer (API key vs subscription) and drives the existing surfaces
+       * from there. ?setup=1 forces it past the dismissal flag; the no-keys
+       * trigger respects it so a skipped wizard never re-nags. */
+      if (typeof maybeShowOnboarding === 'function' &&
+          maybeShowOnboarding({ force: fromBootstrap })) {
+        return;
+      }
+      // Wizard module absent (stale bundle) — the old surface still works.
       if (typeof openSettings === 'function') {
         openSettings();
         // Switch to the API/providers tab
         if (typeof switchSettingsTab === 'function') {
-          switchSettingsTab('providers');
+          switchSettingsTab('api');
         }
         // Show a helpful hint
         const hint = document.getElementById('settingsStatusHint');

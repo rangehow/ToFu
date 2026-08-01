@@ -385,7 +385,15 @@ function _renderEgressLine(provider, egress) {
       break;
     case 'unavailable':
       cls += ' oauth-egress-bad';
-      html = '<span class="oauth-egress-bad">' + t('settings.egressUnavailable') + '</span>';
+      /* The ONLY way out of this state is a desktop agent — offer the ONE
+       * next action right where the diagnosis is rendered, deep-linking to
+       * the Local Control modal (the single install surface: backend-chosen
+       * download links + bridge-token connect line) instead of growing a
+       * second install guide here. */
+      html = '<span class="oauth-egress-bad">' + t('settings.egressUnavailable') + '</span>' +
+             ' <button type="button" class="btn-small oauth-egress-agent-btn" id="oauth' + capProvider + 'EgressAgentBtn"' +
+             ' title="' + escapeHtml(t('settings.egressGetAgentTitle')) + '">' +
+             escapeHtml(t('settings.egressGetAgent')) + '</button>';
       break;
     default: // unknown — 探测已在后台触发
       html = '<span class="oauth-egress-pending">' + t('settings.egressProbing') + '</span>';
@@ -401,6 +409,10 @@ function _renderEgressLine(provider, egress) {
   }
   el.className = cls;
   el.innerHTML = html;
+  var agentBtn = document.getElementById('oauth' + capProvider + 'EgressAgentBtn');
+  if (agentBtn) {
+    agentBtn.onclick = function() { _oauthOpenAgentSetup(); };
+  }
   var sel = document.getElementById('oauth' + capProvider + 'EgressPin');
   if (sel) {
     sel.onchange = function() {
@@ -413,6 +425,29 @@ function _renderEgressLine(provider, egress) {
       if (d && d.pinned) sel.value = d.pinned;
     });
   }
+}
+
+// ── Egress unavailable → hand the user the desktop-agent installer ──
+// The Local Control modal is the ONE install surface (its download links are
+// chosen by the backend's setup_state, and it mints the bridge-token connect
+// line) — the egress line deep-links to it rather than re-authoring any of
+// that guidance. While the modal is open we re-poll the (cached) OAuth status
+// so this line flips to "via agent" the moment the agent connects, with one
+// final refresh on close. The status endpoint NEVER probes inline, so the
+// 3 s cadence costs a cache read only.
+var _oauthAgentSetupPoll = null;
+
+function _oauthOpenAgentSetup() {
+  if (typeof openLocalControlModal === 'function') openLocalControlModal();
+  if (_oauthAgentSetupPoll) { clearInterval(_oauthAgentSetupPoll); _oauthAgentSetupPoll = null; }
+  _oauthAgentSetupPoll = setInterval(function() {
+    var m = document.getElementById('localControlModal');
+    if (!m || !m.classList.contains('open')) {
+      clearInterval(_oauthAgentSetupPoll);
+      _oauthAgentSetupPoll = null;
+    }
+    _loadOAuthStatus();
+  }, 3000);
 }
 
 function _updateOAuthCard(provider, status) {

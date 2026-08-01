@@ -1,3 +1,9 @@
+### 2026-08-01(预存红清剿 pt_abb14344:21 条里 20 条是兄弟脏文件,1 条是 reload 污染;以及我自己的一次归因事故) — commit `6ed131a5`(2 测试文件 +59/-12;NEUTER 矩阵四象限全跑;28 套件环 **260/260**)
+
+- **定案两条线:** ①立案时的 5F+16E 中 **4F+16E=20 条是兄弟 ms9ratgpr3y928 当时未提交的 `routes/chat_poll_abort.py` 破损**(IndentationError 污染路由级 fixture)——我上批的「干净 HEAD 逐名一致」对照**只还原了 autopilot.py 一个文件**,兄弟脏文件还在工作区,两次跑的都是脏树,归因被带偏;兄弟修复后 20 条自然转绿。**教训(第三族同型):共享树上「干净 HEAD 对照」必须整树干净,单文件 `git show HEAD:file` 还原不是对照——`git status` 的 M 列表必须先清零再谈 HEAD 原生。** ②剩 1 条真环内污染:`test_disarm_calls_conclude_run_via_module_scope_binding` 的 `importlib.reload(ap_markers)` 不恢复 ⇒ markers 函数 gen-2、门面仍持 gen-1 ⇒ markers_extraction 的 `is` 恒等检查恰好崩在 markers 自定义的三个符号上(conclude_run 属叶子模块 reload 不动,所以永不在失配名单——失配名单就是定义地的指纹)。
+- **完整配方(三步缺一不可,缺一则不红):** 前序套件先导入门面(绑 gen-1)→ functional reload(gen-2)→ extraction 恒等比对。这就是为什么两套件各自独跑全绿、我最初两套件/三套件事故态复现都不红——**环内污染的复现配方必须包含「先导入门面」这一步**,verify→functional→extraction 三套件才精确复现。
+- **修法双侧:** A 污染源 reload 包 try/finally 恢复门面三绑定(已导入才同步,不强制导入);B 受害者身份检查 hermetic 化(fresh_import fixture,对齐 event_forwarding 的 reload_modules 先例——那个套件正是靠这个在同环里幸存)。NEUTER 矩阵:A+B 绿 / A-only 绿 / B-only 绿 / 双摘精确 1 红同名。
+
 ### 2026-08-01(run_command 可中断化:reaper 对命令阻塞任务改发中断而非杀任务 + 前端中断按钮) — owner 截图报 `find . -name 'bundle-*.js'` 跑 1h12m 被 `[STUCK-TASK-REAPER]` 判死(1818s 无进展),三连问:为什么判死/为什么不只掐命令/这机制该去掉,并指令「前端加中断按钮,中断后工具结果带部分输出+中断信息」;epic `pt_232244fb` DONE;新套件后端 **20** + 前端 harness **16 检查**,**NEUTER×3 各咬各的**(还原 cmp 字节级);环 **157 + 81(i18n/typecheck/api 隔离)+ 60** 全绿;预存红 1 定性为**同日设计反转造成的漂移**并修
 
 - **判死机制(回答 owner 第一问):** reaper 双活性钟(`_t_last_event` 真实事件 / `_dispatch_heartbeat` 调度心跳)同时静默 1800s 才开火。`find` 在 FUSE 树上零 stdout ⇒ 无真实 chunk 喂钟——这是 pt_8524e0ec **证据分级**的刻意设计(普通工具心跳打 `_selfTick`,只保传输不冒充活性,防「挂死 grep 看着活 2.5h」重演)。双钟静默 ⇒ 整任务 `stuck_no_progress` 强杀。**设计抓对了「静默」,但把「静默的命令」和「死掉的任务」混为一谈** ——前者可恢复(杀进程树、部分输出回灌模型),后者才需要终态强杀。

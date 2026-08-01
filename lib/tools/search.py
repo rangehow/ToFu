@@ -143,17 +143,20 @@ def build_search_tool() -> dict:
     }
 }
 
-def _build_fetch_url_tool():
+def build_fetch_url_tool() -> dict:
     """Build the fetch_url tool schema.
 
     The single-URL ``reason`` parameter and the content-filter prose are only
-    exposed when the LLM content filter is actually enabled
-    (``FETCH_LLM_FILTER``, default on). With the filter off, ``reason`` is a
-    pure no-op (see lib/fetch/content_filter.py), so advertising it would just
-    invite the model to waste tokens — we omit it entirely instead.
+    exposed when the LLM content filter is actually enabled. The source of
+    truth is the RUNTIME flag ``lib.LLM_CONTENT_FILTER_ENABLED`` — the
+    Settings toggle hot-applied by routes/config.py — NOT the
+    ``FETCH_LLM_FILTER`` env var, which only seeds the flag's default at
+    import time (reading env here left this schema stale after a Settings
+    toggle). Built per call by the consumers for the same reason: a
+    module-level snapshot freezes whatever was set at import.
     """
-    import os
-    filter_on = os.environ.get('FETCH_LLM_FILTER', '1') == '1'
+    import lib as _lib
+    filter_on = bool(getattr(_lib, 'LLM_CONTENT_FILTER_ENABLED', True))
 
     description = (
         "Fetch and read the full content of a remote URL (HTML, PDF, plain text) via HTTP/HTTPS. "
@@ -226,6 +229,8 @@ def _build_fetch_url_tool():
     }
 
 
-FETCH_URL_TOOL = _build_fetch_url_tool()
+# Boot-time snapshot for static capability listing (routes/api_v1/capabilities.py).
+# Per-request consumers must call build_fetch_url_tool() instead — see its docstring.
+FETCH_URL_TOOL = build_fetch_url_tool()
 
-__all__ = ['build_search_tool', 'FETCH_URL_TOOL']
+__all__ = ['build_search_tool', 'build_fetch_url_tool', 'FETCH_URL_TOOL']

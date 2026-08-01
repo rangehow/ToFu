@@ -343,7 +343,13 @@ def sync_search_config():
         skip_domains=set(_lib.SKIP_DOMAINS),
         filter_enabled=filter_enabled,
         filter_min_chars=int(os.environ.get('FETCH_FILTER_MIN_CHARS', '3000')),
-        filter_timeout=int(os.environ.get('FETCH_FILTER_TIMEOUT', '300')),
+        # 45s matches the library default since 0.6.0 (was 300): on timeout the
+        # raw text is served — filtering is an enhancement, never a blocker.
+        filter_timeout=int(os.environ.get('FETCH_FILTER_TIMEOUT', '45')),
+        # tofu-search >=0.6.0: 'gate' (verdict-only, capped input, original text
+        # kept — fast) vs 'rewrite' (pre-0.6 full-page regeneration, 10-60s+/page).
+        # Passed UNCONDITIONALLY like the other knobs → requirements floor 0.6.0.
+        filter_mode=os.environ.get('FETCH_FILTER_MODE', 'gate'),
         proxy_dual_attempt=proxy_dual_attempt,
         prefetch_gate_enabled=prefetch_gate_enabled,
         prefetch_gate_min_query_terms=prefetch_gate_min_query_terms,

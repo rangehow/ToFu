@@ -44,9 +44,12 @@ def _build_search(ctx: ToolContext) -> list[dict]:
 
 
 def _build_fetch(ctx: ToolContext) -> list[dict]:
-    from lib.tools import FETCH_URL_TOOL
+    # Built per call: the schema's ``reason`` param follows the runtime
+    # LLM_CONTENT_FILTER_ENABLED flag — a module-level constant would freeze
+    # whatever the import-time snapshot saw (same rationale as build_search_tool).
+    from lib.tools import build_fetch_url_tool
     if ctx.fetch_enabled or ctx.search_enabled:
-        return [FETCH_URL_TOOL]
+        return [build_fetch_url_tool()]
     return []
 
 

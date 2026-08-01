@@ -6,7 +6,7 @@ the engine module.
 
 from datetime import datetime, timezone
 
-from lib.tools.search import FETCH_URL_TOOL, build_search_tool
+from lib.tools.search import build_fetch_url_tool, build_search_tool
 
 
 def date_anchor_clause(ui_lang: str) -> str:
@@ -479,7 +479,7 @@ class _ReportTools(list):
     """
 
     def _resolve(self):
-        return [build_search_tool(), FETCH_URL_TOOL]
+        return [build_search_tool(), build_fetch_url_tool()]
 
     def __iter__(self):
         return iter(self._resolve())

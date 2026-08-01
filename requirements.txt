@@ -68,7 +68,14 @@ psutil>=5.9
 # older configure() raises TypeError on the unknown kwarg and the server
 # dies at startup. Do not lower this floor without first making the bridge
 # pass the security-posture kwargs defensively.
-tofu-search>=0.5.3
+# >=0.6.0: verdict-only `gate` filter mode + filter result cache — the fix for
+# "LLM filter makes search practically unusable" (step-5 was 30-120s: the
+# pre-0.6 filter regenerated each whole page, min_chars=0 dragged short pages
+# in, timeout was 300s, nothing cached). HARD floor, same shape as 0.5.0: the
+# bridge passes `filter_mode` to configure() UNCONDITIONALLY, so an older
+# configure() raises TypeError at startup. Do not lower this floor without
+# first making the bridge pass filter_mode defensively.
+tofu-search>=0.6.0
 trafilatura>=1.6
 # playwright is optional — powers the JS-rendered fallback in tofu_search.fetch.
 # On Linux, Chromium needs X11/GTK shared libs (libatk, libgbm, libXcomposite, …).

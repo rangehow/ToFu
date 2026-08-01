@@ -6,6 +6,13 @@
 - **方法论记一笔(测试自修两条):** ①fixture 的 cache_dir 是惰性创建,直接往路径写文件先 makedirs;②`'apt-get' in argv_list` 是成员判断不是子串——argv 元素是 `/usr/bin/apt-get`,过滤要用 `any('apt-get' in a for a in r)`。
 - **下一步:** S2 `winbuilder.py` —— git archive HEAD 快照 → wine 下 Windows Python + pip(CI 逐字配方)→ PyInstaller → smoke → payload 按 (git_sha, deps) 缓存;开放实测项:32 位 iscc/python 安装器在新 WoW64 无 preloader 下能否跑(失败则 NSIS 原生接管)。
 
+### 2026-08-01(脑派回我自票:.deb floor 漂移修复——没有实测件就造一个,130MB floor 实测校准良好) — 接 `pt_6d81d2470a5a49b3`;commit `559b1326`(1 文件 +7;floor **6/6**、desktop_dist 27/27、workflow 套件 64/64)
+
+- **修法选择:「锚定观测现实」的套件惯例撞上「.deb 从未被发布过」**——release 链断在 v0.14.2,全网无实测 .deb 字节数。两条懒路(豁免该行 / 拿 tar.gz 尺寸当代理)都是套件 docstring 明文反对的「拍脑袋数」;正路是**用真实 build-deb.sh 在真实 0.16.0 载荷上造一个实测件**:175,975,798 B,与下次 release 打包同载荷同脚本。
+- **超额结论:** 兄弟拍脑袋定的 130MB floor 实测 = 真实尺寸的 **73.9%**,恰好落在套件要求的 60-85% 带内——floor 校准良好,无需回调。
+- **顺手验证:** build-deb.sh 在本机 dpkg 1.18 下端到端真跑成功(--root-owner-group 特性探测分支按设计降级),兄弟「本机已验证打包」的验收声明独立复现成立。
+- **方法论记一笔:** 「实测锚」类守卫遇到「被测物尚不存在」时,守卫的修法和产品的验证可以是一次构建——造出来的 .deb 同时充当了 build-deb.sh 的第三次端到端实证。
+
 ### 2026-08-01(egress epic 按 owner 指示停驻:「稍后手动烟,先挂着」) — epic `pt_4ea6bf05deaa46f0` [human-gated] 无问题停驻,升级冷却;服务器侧就绪账已全部落完,剩余只有 owner 办公机的一个动作
 
 - **owner 决策:** 四选项问题卡答「稍后手动烟,先挂着」——不烟、不关票、纯停驻。板上 reason 已带完整自助烟 runbook(正确启动命令 = VS Code 代理 URL + `--allow-egress`,验收路径,排障取证点位),owner 随时手动烟后可凭板面一键 reopen 即重派。

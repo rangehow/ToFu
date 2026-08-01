@@ -39,7 +39,18 @@ download components (a PyInstaller `--onedir` bundle has no standalone
 `python.exe`, so the old installer `[Run]` step that called
 `_internal\python.exe -m playwright install` was dead code that also silently
 downloaded nothing). Instead, on first launch the **app itself** shows a dialog
-asking which optional components to download:
+asking which optional components to download.
+
+The dialog is the branded **component manager** (`desktop/post_install.py` on
+`desktop/_tk_theme.py`): it follows the OS light/dark mode, speaks English or
+Chinese by OS locale (`TOFU_THEME` / `TOFU_LANG` override), and — critically —
+**stays open during installation with a live per-component status row and an
+overall progress bar**. (The original flow closed the window and downloaded
+~165 MB invisibly on a background thread; failures were only written to a log
+file.) Success and failure messages are shown in the window, and the same
+manager is reachable later from the tray menu. The Windows Inno wizard and the
+macOS DMG window are branded as well (`scripts/gen_desktop_icons.py` emits the
+wizard bitmaps and the DMG window art alongside the icons).
 
 | Component | Size | Default | Purpose |
 |---|---|---|---|
@@ -105,7 +116,9 @@ This runs `.github/workflows/build-desktop.yml` which produces:
 - `Tofu-Setup-<ver>-win64.exe` — Windows installer (Inno Setup)
 - `Tofu-<ver>-macos-arm64.dmg` — macOS disk image, Apple Silicon (built on `macos-14`)
 - `Tofu-<ver>-macos-x86_64.dmg` — macOS disk image, Intel (built on `macos-13`)
-- `Tofu-<ver>-linux-x86_64.tar.gz` — Linux portable archive
+- `Tofu-<ver>-linux-x86_64.tar.gz` — Linux portable archive (includes
+  `install.sh` — per-user, no sudo — which registers an application-menu entry
+  and themed icon; run it once after extracting)
 - `SHA256SUMS` — checksums covering all of the above
 
 The release is **published immediately and promoted to Latest** (`draft: false` +

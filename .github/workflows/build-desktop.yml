@@ -744,6 +744,20 @@ jobs:
             exit 1
           }
 
+      - name: Add Linux desktop integration
+        # The tarball is the WHOLE Linux install UX (no .deb/.AppImage yet —
+        # tracked separately), so it must carry the pieces that register the
+        # app with the desktop environment: install.sh (per-user, no sudo)
+        # and the .desktop template it renders. Verified present before
+        # archiving — a tarball without them is a silent UX regression.
+        run: |
+          set -euo pipefail
+          cp desktop/install-linux.sh dist/Tofu/install.sh
+          chmod +x dist/Tofu/install.sh
+          cp desktop/tofu.desktop dist/Tofu/tofu.desktop
+          test -x dist/Tofu/install.sh
+          test -f dist/Tofu/tofu.desktop
+
       - name: Create archive
         env:
           APP_VERSION: ${{ needs.version.outputs.version }}

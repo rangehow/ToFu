@@ -1493,3 +1493,110 @@ def test_dmg_artwork_arrow_matches_icon_coordinates():
         f'--app-drop-link says {drop.groups()} but the artwork is drawn for '
         f'{mod.DMG_DROP_ICON_POS}'
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Linux desktop integration
+# ══════════════════════════════════════════════════════════════════
+#
+# The Linux artifact was a BARE tar.gz: extract, find the binary, run it
+# from a terminal. No application-menu entry, no icon — the only platform
+# with zero install UX. The tarball now ships install.sh (per-user, no
+# sudo, idempotent) + a .desktop template, and the workflow copies both
+# into the bundle BEFORE archiving. The pins below cover the three places
+# that must agree: the source files, the copy step, and the template the
+# script renders.
+
+_DESKTOP_ENTRY = _ROOT / 'desktop' / 'tofu.desktop'
+_INSTALL_LINUX = _ROOT / 'desktop' / 'install-linux.sh'
+
+
+def test_linux_leg_ships_integration_before_archiving():
+    """Ratchet: the workflow must copy install.sh + tofu.desktop into the
+    bundle, and BEFORE `tar` runs — a tarball without them is a silent UX
+    regression (neuter the step → red)."""
+    text = _WORKFLOW.read_text(encoding='utf-8')
+    assert 'desktop/install-linux.sh dist/Tofu/install.sh' in text, (
+        'install.sh is not copied into the Linux bundle'
+    )
+    assert 'desktop/tofu.desktop dist/Tofu/tofu.desktop' in text, (
+        'tofu.desktop is not copied into the Linux bundle'
+    )
+    copy_at = text.index('desktop/install-linux.sh')
+    tar_at = text.index('tar czf')
+    assert copy_at < tar_at, (
+        'the integration files are copied AFTER the archive step — the '
+        'tarball would not contain them'
+    )
+
+
+def test_desktop_entry_template_valid():
+    """The .desktop template must carry the freedesktop-required keys and
+    the __INSTALL_DIR__ placeholder install.sh substitutes."""
+    text = _DESKTOP_ENTRY.read_text(encoding='utf-8')
+    assert text.startswith('[Desktop Entry]'), 'missing the section header'
+    for needle in ('Type=Application', 'Name=Tofu',
+                   'Exec=__INSTALL_DIR__/Tofu', 'Icon=tofu',
+                   'Terminal=false'):
+        assert needle in text, f'tofu.desktop is missing {needle}'
+
+
+def test_install_linux_script_contract():
+    """install.sh: syntax-clean bash, per-user paths ONLY (a sudo anywhere
+    breaks the no-root contract that matches the Windows per-user install),
+    renders __INSTALL_DIR__, registers icon + menu entry."""
+    text = _INSTALL_LINUX.read_text(encoding='utf-8')
+    # Scan CODE only: the comments legitimately say "no sudo", and a naive
+    # substring check bites them (measured 2026-08-01).
+    code = '\n'.join(ln for ln in text.splitlines()
+                     if not ln.lstrip().startswith('#'))
+    assert 'sudo' not in code, (
+        'install-linux.sh uses sudo — the Linux install is supposed to be '
+        'per-user like the Windows one'
+    )
+    for needle in ('.local/share/applications', 'hicolor',
+                   '__INSTALL_DIR__', 'update-desktop-database'):
+        assert needle in text, f'install-linux.sh is missing {needle}'
+    bash = subprocess.run(['bash', '-n', str(_INSTALL_LINUX)],
+                          capture_output=True, text=True)
+    assert bash.returncode == 0, f'bash syntax check failed: {bash.stderr}'
+
+
+def test_install_linux_script_end_to_end(tmp_path):
+    """Behaviour, not just contract: lay out a SIMULATED bundle (binary +
+    icon + template + install.sh), run the script with HOME redirected to a
+    temp dir, and require the two real outputs — a rendered menu entry whose
+    Exec points at the bundle's absolute path, and the themed icon. This is
+    the test that would catch a broken sed substitution or a wrong relative
+    path even though every content pin above still passes."""
+    pytest.importorskip('PIL.Image', reason='Pillow required')
+    bundle = tmp_path / 'Tofu'
+    (bundle / '_internal' / 'static' / 'icons').mkdir(parents=True)
+    home = tmp_path / 'home'
+    home.mkdir()
+    (bundle / 'Tofu').write_text('#!/bin/sh\n', encoding='utf-8')
+    (bundle / 'Tofu').chmod(0o755)
+    # A real (tiny) PNG stands in for the logo — the script only copies it.
+    import shutil
+    shutil.copy(_ROOT / 'static' / 'icons' / 'logo.png',
+                bundle / '_internal' / 'static' / 'icons' / 'logo.png')
+    shutil.copy(_DESKTOP_ENTRY, bundle / 'tofu.desktop')
+    shutil.copy(_INSTALL_LINUX, bundle / 'install.sh')
+
+    env = dict(os.environ, HOME=str(home))
+    r = subprocess.run(['bash', str(bundle / 'install.sh')],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, f'install.sh failed: {r.stderr}'
+
+    entry = home / '.local' / 'share' / 'applications' / 'tofu.desktop'
+    assert entry.is_file(), 'no application-menu entry was written'
+    body = entry.read_text(encoding='utf-8')
+    assert f'Exec={bundle}/Tofu' in body, (
+        f'__INSTALL_DIR__ was not rendered to the bundle path: {body!r}'
+    )
+    assert '__INSTALL_DIR__' not in body, 'unrendered placeholder survived'
+    icon = (home / '.local' / 'share' / 'icons' / 'hicolor' / '512x512'
+            / 'apps' / 'tofu.png')
+    assert icon.is_file(), 'no themed icon was installed'
+    # Nothing may escape the fake HOME (the per-user contract, enforced).
+    assert not (tmp_path / 'Tofu' / '.local').exists()

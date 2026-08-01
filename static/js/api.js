@@ -1058,10 +1058,15 @@
   // try POST first and let the caller fall back.
   const oauth = {
     status:      ()                 => get('/api/v1/oauth/status', { onError: 'null' }),
-    loginPost:   (provider)         => post('/api/oauth/login', { provider }, { onError: 'null', parse: 'response' }),
-    loginGet:    (provider)         =>
+    loginPost:   (provider, preferConsole) =>
+      post('/api/oauth/login',
+           preferConsole ? { provider, prefer_console: true } : { provider },
+           { onError: 'null', parse: 'response' }),
+    loginGet:    (provider, preferConsole) =>
       request('/api/oauth/login',
-              { method: 'GET', query: { provider }, parse: 'response', onError: 'null' }),
+              { method: 'GET',
+                query: preferConsole ? { provider, prefer_console: '1' } : { provider },
+                parse: 'response', onError: 'null' }),
     logoutPost:  (provider)         => post('/api/oauth/logout', { provider }, { onError: 'null', parse: 'response' }),
     logoutGet:   (provider)         =>
       request('/api/oauth/logout',

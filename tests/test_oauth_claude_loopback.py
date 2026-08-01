@@ -250,5 +250,122 @@ class TestExchangeEchoesAuthorizeRedirect(unittest.TestCase):
         self.assertEqual(post.call_args.kwargs['json']['redirect_uri'], _LOOPBACK)
 
 
+class TestPreferConsoleEscapeHatch(unittest.TestCase):
+    """The user-facing way OUT of a loopback flow.
+
+    Whether Anthropic honours the loopback redirect for this client is an
+    EXTERNAL fact. If it refuses, a desktop user is stranded: the console
+    page is what renders the code, so a loopback flow leaves the manual
+    paste box with nothing to paste. ``prefer_console`` is the product-level
+    escape hatch; ``TOFU_OAUTH_LOOPBACK`` cannot serve that role because a
+    packaged .exe user has nowhere to set an environment variable.
+    """
+
+    def setUp(self):
+        mgr._active_flows.pop('claude', None)
+
+    def test_prefer_console_skips_the_bind_entirely(self):
+        with mock.patch('lib.oauth.manager._flow._loopback_callback_ok',
+                        return_value=True), \
+             mock.patch('lib.oauth.manager._flow._bind_relay') as bind, \
+             mock.patch('threading.Thread') as th:
+            res = mgr.start_oauth_flow('claude', prefer_console=True)
+
+        bind.assert_not_called()
+        self.assertEqual(_redirect_in(res['auth_url']), _CONSOLE)
+        self.assertEqual(mgr._active_flows['claude']['redirect_uri'], _CONSOLE)
+        th.assert_not_called()
+        self.assertEqual(res['redirect_mode'], 'console')
+
+    def test_default_still_takes_the_loopback_on_desktop(self):
+        """Complement: the hatch must not become the new default."""
+        fake_server = mock.MagicMock()
+        with mock.patch('lib.oauth.manager._flow._loopback_callback_ok',
+                        return_value=True), \
+             mock.patch('lib.oauth.manager._flow._bind_relay',
+                        return_value=fake_server), \
+             mock.patch('threading.Thread'):
+            res = mgr.start_oauth_flow('claude')
+        self.assertEqual(_redirect_in(res['auth_url']), _LOOPBACK)
+        self.assertEqual(res['redirect_mode'], 'loopback')
+
+    def test_redirect_mode_is_reported_on_every_claude_flow(self):
+        """The UI describes the flow from this field — it must never be absent."""
+        with mock.patch('lib.oauth.manager._flow._loopback_callback_ok',
+                        return_value=False), \
+             mock.patch('threading.Thread'):
+            res = mgr.start_oauth_flow('claude')
+        self.assertEqual(res['redirect_mode'], 'console')
+
+    def test_prefer_console_is_inert_for_codex(self):
+        """Codex has ONE registered redirect — the flag must not break it."""
+        with mock.patch('threading.Thread') as th:
+            res = mgr.start_oauth_flow('codex', prefer_console=True)
+        th.assert_called_once()
+        self.assertEqual(res['redirect_mode'], 'loopback')
+
+
+class TestLoginRouteCarriesTheFlag(unittest.TestCase):
+    """The flag has to survive BOTH transports the frontend uses.
+
+    The client falls back to GET when a proxy refuses POST to an unknown
+    path — so a flag parsed only out of the JSON body would be silently
+    inert on exactly the deployments that need the fallback most.
+    """
+
+    def _call(self, **kw):
+        import asyncio
+        import server  # noqa: F401 — builds the Quart app + blueprints
+        app = server.app
+        seen = {}
+
+        def _fake_start(provider, prefer_console=False):
+            seen['provider'] = provider
+            seen['prefer_console'] = prefer_console
+            return {'auth_url': 'https://x/', 'status': 'started',
+                    'provider': provider, 'callback_port': 1,
+                    'redirect_mode': 'console', 'exchange': {}}
+
+        async def _go():
+            client = app.test_client()
+            with mock.patch('lib.oauth.manager.start_oauth_flow', _fake_start):
+                return await client.post('/api/oauth/login', json=kw) \
+                    if kw.pop('_post', True) else None
+
+        with mock.patch('lib.oauth.manager.start_oauth_flow', _fake_start):
+            asyncio.run(_go())
+        return seen
+
+    def test_post_body_flag_reaches_the_flow(self):
+        seen = self._call(provider='claude', prefer_console=True)
+        self.assertTrue(seen['prefer_console'])
+
+    def test_post_without_flag_defaults_to_auto(self):
+        seen = self._call(provider='claude')
+        self.assertFalse(seen['prefer_console'])
+
+    def test_get_querystring_flag_reaches_the_flow(self):
+        import asyncio
+        import server  # noqa: F401
+        app = server.app
+        seen = {}
+
+        def _fake_start(provider, prefer_console=False):
+            seen['prefer_console'] = prefer_console
+            return {'auth_url': 'https://x/', 'status': 'started',
+                    'provider': provider, 'callback_port': 1,
+                    'redirect_mode': 'console', 'exchange': {}}
+
+        async def _go():
+            client = app.test_client()
+            await client.get('/api/oauth/login?provider=claude&prefer_console=1')
+
+        with mock.patch('lib.oauth.manager.start_oauth_flow', _fake_start):
+            asyncio.run(_go())
+        self.assertTrue(seen['prefer_console'],
+                        'the GET transport is the proxy fallback — the flag '
+                        'must not be inert there')
+
+
 if __name__ == '__main__':
     unittest.main()

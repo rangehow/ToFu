@@ -21,6 +21,20 @@ logger = get_logger(__name__)
 oauth_bp = Blueprint('oauth', __name__)
 
 
+
+def _truthy(v) -> bool:
+    """Parse a flag that may arrive as a JSON bool or a query string.
+
+    The login route is reached by BOTH transports (the frontend falls back to
+    GET when a proxy refuses POST to an unknown path), so a flag that only
+    parsed one of them would be silently inert on exactly the deployments
+    that need the fallback most.
+    """
+    if isinstance(v, bool):
+        return v
+    return str(v or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 @oauth_bp.route('/api/oauth/login', methods=['GET', 'POST'])
 def oauth_login():
     """Start an OAuth login flow.
@@ -42,14 +56,16 @@ def oauth_login():
         # Support both GET (query params) and POST (JSON body)
         if request.method == 'GET':
             provider = request.args.get('provider', '')
+            prefer_console = _truthy(request.args.get('prefer_console'))
         else:
             data = parse_body(force=True)
             provider = data.get('provider', '')
+            prefer_console = _truthy(data.get('prefer_console'))
 
         if provider not in ('claude', 'codex'):
             return api_error('Invalid provider. Use "claude" or "codex".', status=400)
 
-        result = start_oauth_flow(provider)
+        result = start_oauth_flow(provider, prefer_console=prefer_console)
 
         if 'error' in result:
             return jsonify(result), 400

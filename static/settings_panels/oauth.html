@@ -24,10 +24,14 @@
                 <input type="text" class="oauth-manual-input" id="oauthClaudeAuthUrl" readonly style="color:#888;font-size:12px">
                 <button class="btn-small" onclick="var u=document.getElementById('oauthClaudeAuthUrl');u.select();document.execCommand('copy');this.textContent=t('settings.oauthCopied');setTimeout(function(){this.textContent=t('settings.oauthCopyLink')}.bind(this),1500)" style="white-space:nowrap" data-i18n="settings.oauthCopyLink">复制链接</button>
               </div>
-              <p class="oauth-manual-hint" data-i18n-html="settings.oauthClaudeCodeHint">授权成功后页面显示授权码，复制 <strong>code#state</strong> 粘贴到下方：</p>
-              <div style="display:flex;gap:8px">
+              <p class="oauth-manual-hint" id="oauthClaudeCodeHint" data-i18n-html="settings.oauthClaudeCodeHint">授权成功后页面显示授权码，复制 <strong>code#state</strong> 粘贴到下方：</p>
+              <div style="display:flex;gap:8px" id="oauthClaudePasteRow">
                 <input type="text" class="oauth-manual-input" id="oauthClaudeManualUrl" placeholder="粘贴 code#state（或完整回调 URL）" data-i18n-placeholder="settings.oauthClaudePh">
                 <button class="btn-small btn-primary" onclick="_oauthManualSubmit('claude')" data-i18n="settings.oauthSubmit">提交</button>
+              </div>
+              <p class="oauth-manual-hint" id="oauthClaudeLoopbackNote" style="display:none" data-i18n="settings.oauthLoopbackNote">本机会自动接收授权码，无需复制粘贴。授权完成后本页会自动登录。</p>
+              <div id="oauthClaudeConsoleFallbackRow" style="display:none;margin-top:8px">
+                <button type="button" class="btn-small" id="oauthClaudeConsoleFallbackBtn" data-i18n="settings.oauthUseConsole">登录卡住了？改用手工粘贴</button>
               </div>
             </div>
           </div>

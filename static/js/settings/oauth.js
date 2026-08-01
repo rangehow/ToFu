@@ -511,7 +511,48 @@ function _oauthCancelAndRetry(provider) {
   if (manualDiv) manualDiv.style.display = 'none';
 }
 
-function _oauthLogin(provider) {
+// ── Which callback is this flow actually walking, and how to get out ──
+// Whether Anthropic accepts the loopback redirect for our client is an
+// EXTERNAL fact we cannot verify locally. If it ever refuses, a desktop user
+// lands on an authorization error with NOTHING to paste (the console page is
+// what renders the code, and a loopback flow never reaches it) — and the
+// cancel/retry button re-runs the SAME decision, so the user would loop
+// through the identical broken flow forever. The way out therefore has to be
+// a first-class control in the product, not the TOFU_OAUTH_LOOPBACK env var:
+// a packaged .exe user has nowhere to set one.
+function _oauthApplyRedirectMode(provider, mode) {
+  if (provider !== 'claude') return;   // codex has exactly one registered redirect
+  var loopback = mode === 'loopback';
+  var pasteHint = document.getElementById('oauthClaudeCodeHint');
+  var pasteRow = document.getElementById('oauthClaudePasteRow');
+  var lbNote = document.getElementById('oauthClaudeLoopbackNote');
+  var fbRow = document.getElementById('oauthClaudeConsoleFallbackRow');
+  // The paste instructions are only TRUE on the console flow.
+  if (pasteHint) pasteHint.style.display = loopback ? 'none' : '';
+  if (pasteRow) pasteRow.style.display = loopback ? 'none' : '';
+  // The note + escape hatch are only MEANINGFUL on the loopback flow.
+  if (lbNote) lbNote.style.display = loopback ? '' : 'none';
+  if (fbRow) fbRow.style.display = loopback ? '' : 'none';
+  var btn = document.getElementById('oauthClaudeConsoleFallbackBtn');
+  if (btn) btn.onclick = function() { _oauthUseConsoleFallback('claude'); };
+}
+
+// Restart the flow pinned to the console callback (manual code paste).
+// A fresh flow is required rather than reusing the pending one: the
+// redirect_uri is baked into the authorize URL AND must be echoed at
+// exchange time, so the old flow's PKCE/state pair cannot be reused with a
+// different redirect.
+function _oauthUseConsoleFallback(provider) {
+  var capP = provider === 'codex' ? 'Codex' : 'Claude';
+  // Drop the pending flow so its relay releases the port and its state is
+  // not mistaken for the new one.
+  Api.oauth.logoutPost(provider).catch(function() {});
+  var input = document.getElementById('oauth' + capP + 'ManualUrl');
+  if (input) input.value = '';
+  _oauthLogin(provider, true);
+}
+
+function _oauthLogin(provider, preferConsole) {
   var capProvider = provider === 'codex' ? 'Codex' : 'Claude';
   var loginBtn = document.getElementById('oauth' + capProvider + 'LoginBtn');
   if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = t('settings.oauthPreparing'); }
@@ -522,9 +563,9 @@ function _oauthLogin(provider) {
   function _doLoginRequest(useGet) {
     if (useGet) {
       console.warn('[OAuth] POST failed, retrying as GET for /api/oauth/login');
-      return Api.oauth.loginGet(provider);
+      return Api.oauth.loginGet(provider, preferConsole);
     }
-    return Api.oauth.loginPost(provider);
+    return Api.oauth.loginPost(provider, preferConsole);
   }
   _doLoginRequest(false)
     .then(function(r) {
@@ -579,6 +620,12 @@ function _oauthLogin(provider) {
         var authUrlInput = document.getElementById('oauth' + capProvider + 'AuthUrl');
         if (authUrlInput && data.auth_url) authUrlInput.value = data.auth_url;
       }
+      // Describe the flow the user is ACTUALLY about to walk, and expose the
+      // way out of it. During a loopback flow the paste instructions are
+      // FALSE (the provider redirects to localhost and never renders a
+      // code), so showing them unchanged would hand the user a task that
+      // cannot be completed.
+      _oauthApplyRedirectMode(provider, data.redirect_mode);
 
       // ── Detect popup closed → auto-reset ONLY if manual box not used ──
       if (popup) {

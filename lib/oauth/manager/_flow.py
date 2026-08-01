@@ -55,7 +55,7 @@ def _loopback_callback_ok() -> bool:
     return bool(getattr(sys, 'frozen', False))
 
 
-def start_oauth_flow(provider: str) -> dict:
+def start_oauth_flow(provider: str, prefer_console: bool = False) -> dict:
     """Start an OAuth login flow.
 
     Generates PKCE codes and auth URL, starts relay server on
@@ -64,9 +64,20 @@ def start_oauth_flow(provider: str) -> dict:
 
     Args:
         provider: 'claude' or 'codex'.
+        prefer_console: Force Claude onto the console callback (manual code
+            paste) even when the loopback callback would be available. This
+            is the USER'S escape hatch, not a debug flag: whether Anthropic
+            accepts the loopback redirect for this client is an EXTERNAL
+            fact we cannot verify locally, and a desktop user cannot set an
+            environment variable to get out of a broken flow. Ignored for
+            codex, whose only registered redirect IS the loopback.
 
     Returns:
-        dict with 'auth_url', 'status', 'provider', 'callback_port'.
+        dict with 'auth_url', 'status', 'provider', 'callback_port' and
+        'redirect_mode' ('loopback' | 'console'). ``redirect_mode`` is what
+        lets the UI describe the flow truthfully — the manual-paste
+        instructions are a LIE during a loopback flow, because the provider
+        redirects to localhost instead of rendering a code.
     """
     # ── Claude: bind BEFORE building the URL, because the bind decides it ──
     # Claude accepts either the console callback (user copies code#state back)
@@ -79,7 +90,10 @@ def start_oauth_flow(provider: str) -> dict:
     if provider == 'claude':
         from lib.oauth.claude import CLAUDE_OAUTH_CONFIG
         from lib.oauth.claude import claude_build_auth_url
-        if _loopback_callback_ok():
+        if prefer_console:
+            logger.info('[OAuth] claude flow forced onto the console callback '
+                        'by an explicit caller request')
+        elif _loopback_callback_ok():
             relay_server = _bind_relay('claude',
                                        CLAUDE_OAUTH_CONFIG['callback_port'],
                                        '')
@@ -129,11 +143,18 @@ def start_oauth_flow(provider: str) -> dict:
     else:
         logger.info('[OAuth] Started %s flow — auth URL ready (manual code paste required)',
                      provider)
+    # Which callback the user is actually about to walk. Codex has exactly one
+    # registered redirect (the loopback); Claude's depends on the bind above.
+    redirect_mode = 'loopback'
+    if provider == 'claude':
+        redirect_mode = 'loopback' if relay_server is not None else 'console'
+
     return {
         'auth_url': flow['auth_url'],
         'status': 'started',
         'provider': provider,
         'callback_port': flow['callback_port'],
+        'redirect_mode': redirect_mode,
         # Browser-side exchange params (B1): lets the frontend POST the token
         # exchange from the user's own network when the server is geo-blocked.
         'exchange': flow.get('exchange', {}),

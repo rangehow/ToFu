@@ -3197,6 +3197,8 @@ var _i18n = {
   'settings.oauthCopied': { zh: '✓ 已复制', en: '✓ Copied' },
   'settings.oauthClaudeCodeHint': { zh: '授权成功后页面显示授权码，复制 <strong>code#state</strong> 粘贴到下方：', en: 'After authorization succeeds, the page shows an auth code — copy the <strong>code#state</strong> and paste below:' },
   'settings.oauthCodexCbHint': { zh: '授权成功后，复制浏览器地址栏中的回调 URL 粘贴到下方：', en: 'After authorization, copy the callback URL from the browser address bar and paste below:' },
+  'settings.oauthLoopbackNote': { zh: '本机会自动接收授权码，无需复制粘贴。授权完成后本页会自动登录。', en: 'This machine receives the auth code automatically — no copy/paste needed. This page logs in on its own once you approve.' },
+  'settings.oauthUseConsole': { zh: '登录卡住了？改用手工粘贴', en: 'Login stuck? Switch to manual code paste' },
   'settings.oauthClaudePh': { zh: '粘贴 code#state（或完整回调 URL）', en: 'Paste code#state (or full callback URL)' },
   'settings.oauthCodexPh': { zh: '粘贴回调 URL (http://localhost:1455/auth/callback?code=...)', en: 'Paste callback URL (http://localhost:1455/auth/callback?code=...)' },
   'settings.oauthSubmit': { zh: '提交', en: 'Submit' },

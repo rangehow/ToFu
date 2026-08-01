@@ -154,6 +154,95 @@ def test_run_command_interactive_user_interrupt_live(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# 2b. code_exec (standalone path, pt_0bde0fd8): execute_standalone_command
+#     forwards task= — the subprocess REGISTERS, so the reaper can interrupt
+#     it AND Stop can kill it. Before the passthrough both were dead code
+#     under task=None.
+# ─────────────────────────────────────────────────────────────────────────
+def test_standalone_passthrough_registers_pid_and_interrupts(tmp_path):
+    from lib.project_mod import execute_standalone_command
+    task = {'aborted': False}
+    seen_pid = []
+
+    def _watch():
+        for _ in range(50):
+            if task.get('_subprocess_pid'):
+                seen_pid.append(task['_subprocess_pid'])
+                return
+            time.sleep(0.05)
+    threading.Thread(target=_watch, daemon=True).start()
+    _interrupt_after(task, 0.8, {'source': 'user', 'ts': time.time(), 'note': ''})
+    t0 = time.monotonic()
+    out = execute_standalone_command('run_command',
+                                     {'command': 'echo part1 && sleep 30'},
+                                     working_dir=str(tmp_path), task=task)
+    dt = time.monotonic() - t0
+    assert seen_pid, ('the standalone path must REGISTER _subprocess_pid — '
+                      'without it the reaper cannot interrupt a code_exec')
+    assert dt < 15, f'interrupt must end the call promptly (took {dt:.1f}s)'
+    assert 'part1' in out
+    assert '[Command interrupted by user]' in out
+    assert task.get('aborted') is False
+
+
+def test_standalone_passthrough_stop_kills_subprocess(tmp_path):
+    """The pre-existing hole this passthrough also closes: with task=None the
+    aborted poll was dead code, so even STOP could not kill a code_exec
+    subprocess — it ran to completion no matter what the user pressed."""
+    from lib.project_mod import execute_standalone_command
+    task = {'aborted': False}
+
+    def _stop():
+        time.sleep(0.8)
+        task['aborted'] = True
+    threading.Thread(target=_stop, daemon=True).start()
+    t0 = time.monotonic()
+    out = execute_standalone_command('run_command',
+                                     {'command': 'echo part1 && sleep 30'},
+                                     working_dir=str(tmp_path), task=task)
+    dt = time.monotonic() - t0
+    assert dt < 15, f'Stop must kill the standalone subprocess (took {dt:.1f}s)'
+    assert '[Command aborted by user]' in out
+
+
+def test_code_exec_handler_interrupted_meta(tmp_path, monkeypatch):
+    """_handle_code_exec end-to-end: interrupted command → amber meta
+    (interrupted badge, marker stripped, partial output kept), never the
+    red `exit -1` frame — the task CONTINUED."""
+    import lib.tasks_pkg.handlers.code_exec as ce
+    captured = {}
+    monkeypatch.setattr(ce, '_finalize_tool_round',
+                        lambda task, rn, round_entry, metas: captured.update(
+                            {'metas': metas}))
+    monkeypatch.setattr(ce, 'append_event', lambda *a, **k: None)
+    task = {'id': 'ce-intr-1', 'aborted': False}
+    # Delay the interrupt so 'part1' lands in the pipe FIRST — an upfront
+    # flag is consumed at the loop's first tick, before any output arrives.
+    _interrupt_after(task, 0.6, {'source': 'user', 'ts': time.time(), 'note': ''})
+    round_entry = {'toolCallId': 'tc-ce-1', 'toolName': 'code_exec',
+                   'status': 'searching'}
+    t0 = time.monotonic()
+    # fn_name stays the MODEL's call name ('run_command') — the special
+    # dispatch keys off round_entry['toolName'] == 'code_exec', and
+    # execute_standalone_command only accepts 'run_command'.
+    tc_id, content, _ = ce._handle_code_exec(
+        task, None, 'run_command', 'tc-ce-1',
+        {'command': 'echo part1 && sleep 30'}, 1, round_entry,
+        {}, str(tmp_path), False)
+    dt = time.monotonic() - t0
+    assert dt < 15, f'interrupt must end the handler promptly (took {dt:.1f}s)'
+    assert '[Command interrupted by user]' in content
+    meta = captured['metas'][0]
+    assert meta['interrupted'] is True
+    assert meta['badge'] == 'interrupted'
+    assert meta['exitCode'] == '-1'
+    assert not meta.get('notRun'), 'an interrupted command DID run'
+    assert 'part1' in meta['output']
+    assert '[Command interrupted' not in meta['output']
+    assert task.get('aborted') is False
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # 3. Reaper: interrupt the command, spare the task (escalate only on a
 #    genuinely wedged read loop)
 # ─────────────────────────────────────────────────────────────────────────

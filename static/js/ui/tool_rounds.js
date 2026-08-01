@@ -2328,7 +2328,10 @@ function _renderCmdTimerChip(round) {
  * round has nothing to interrupt) and only when we can name the task — an
  * interrupt that cannot resolve its taskId is worse than no button. */
 function _renderCmdInterruptBtn(round) {
-  if (!round || round.toolName !== 'run_command') return '';
+  /* run_command AND code_exec: since pt_0bde0fd8 the standalone code_exec
+   * path forwards task= into tool_run_command, so the subprocess registers
+   * and the interrupt endpoint works for it identically. */
+  if (!round || (round.toolName !== 'run_command' && round.toolName !== 'code_exec')) return '';
   const taskId = round._taskId || (typeof _riTaskIdForRound === 'function'
     ? _riTaskIdForRound(round) : '');
   if (!taskId) return '';

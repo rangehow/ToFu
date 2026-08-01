@@ -4,6 +4,16 @@
 - **完整配方(三步缺一不可,缺一则不红):** 前序套件先导入门面(绑 gen-1)→ functional reload(gen-2)→ extraction 恒等比对。这就是为什么两套件各自独跑全绿、我最初两套件/三套件事故态复现都不红——**环内污染的复现配方必须包含「先导入门面」这一步**,verify→functional→extraction 三套件才精确复现。
 - **修法双侧:** A 污染源 reload 包 try/finally 恢复门面三绑定(已导入才同步,不强制导入);B 受害者身份检查 hermetic 化(fresh_import fixture,对齐 event_forwarding 的 reload_modules 先例——那个套件正是靠这个在同环里幸存)。NEUTER 矩阵:A+B 绿 / A-only 绿 / B-only 绿 / 双摘精确 1 红同名。
 
+### 2026-08-01(续·code_exec standalone 路径接入中断缝:一个 `task=` 透传同时关上三层洞) — owner 验收 f7257e08 时抓出同缺陷类漏网:`_handle_code_exec` 走 `execute_standalone_command`,后者调 `tool_run_command` **不传 `task=`**;epic `pt_0bde0fd8` DONE;新测试 **+4**(后端 3 + 前端 1 改向,套件 23+1 全绿),**NEUTER×2 各咬各的**(还原 cmp 字节级);相邻环 164 绿,4 红 = 预存(干净 HEAD 实证,立案 `pt_c31cd8f3`)
+
+- **三层洞同根(task=None):** ①`_subprocess_pid` 永不注册 ⇒ 静默 30min 的 code_exec 照样被 reaper **整任务强杀**(无项目会话里 run_command 就翻成 code_exec,与用户当日事故同型);②runner 的 `task and task.get('aborted')` 恒假 ⇒ **连 Stop 都杀不掉 code_exec 子进程**(比本批更早的预存洞);③code_exec 自有 meta 解析不认 `[Command interrupted by …]` ⇒ 标记留 output + 红色 `exit -1` 错帧。
+- **修法同一个缝(不许另起机制):** `execute_standalone_command` 加 `task=` 透传(docstring 载明:headless 沙箱调用方 tool_env.py 省略即旧行为) → `_handle_code_exec` 传入 task(paper 引擎 shim 是 dict,`.get('aborted')` 自然兼容,且 paper 的 Stop 从此也能杀命令) → code_exec meta 认 interrupted(琥珀徽章,与 meta.py 同契约) → `_renderCmdInterruptBtn` 放行 code_exec(端点此时对其同等有效)。
+- **测试方法论记一笔:** ①handler 测试里中断旗**预置**会在循环首拍即被消费(echo 输出还没到),部分输出断言必空——必须延迟 0.6s 种旗,先让 part1 落管;②standalone 双测试钉的是 `execute_standalone_command` 的透传,handler 测试钉的是调用点——NEUTER 分两处摘(摘调用点→handler 测试睡满 30s 红;摘透传→standalone 双测试各睡满 30s 红),**一处 NEUTER 绿不等于另一处承重**,两条缝各要各的 NEUTER。
+- **顺手排掉的假线索:** ①`test_run_command_pty_streaming.py` 的 PTY 路径在产线代码里不存在(测试文件自述 not yet implemented),无第三条执行路径要接;②`fn_name` 在 special 分发里始终是模型的 'run_command',`round_entry['toolName']=='code_exec'` 才是分发键——第一版测试按直觉传 'code_exec' 触发 'Unknown tool',实测纠正。
+- **预存红立案 `pt_c31cd8f3`:** `test_tool_registry_write_partition_ssot` 4 红(`project_charter_commit` spec 已声明但 `_WRITE_TOOLS` 活表缺失),干净 HEAD worktree 逐名一致;`0cc0aee1` 立的 SSOT 棘轮被其后提交打破(`git log -S` 指向 6c28925c charter human-only 批为最大嫌疑),与本批零交集。
+- **验收边界:** 同主批——重启 + bundle 重建生效;此后无项目会话的命令中断/Stop 与项目会话完全同权。
+
+### 2026-08-01(run_command 可中断化:reaper 对命令阻塞任务改发中断而非杀任务 + 前端中断按钮)
 ### 2026-08-01(run_command 可中断化:reaper 对命令阻塞任务改发中断而非杀任务 + 前端中断按钮) — owner 截图报 `find . -name 'bundle-*.js'` 跑 1h12m 被 `[STUCK-TASK-REAPER]` 判死(1818s 无进展),三连问:为什么判死/为什么不只掐命令/这机制该去掉,并指令「前端加中断按钮,中断后工具结果带部分输出+中断信息」;epic `pt_232244fb` DONE;新套件后端 **20** + 前端 harness **16 检查**,**NEUTER×3 各咬各的**(还原 cmp 字节级);环 **157 + 81(i18n/typecheck/api 隔离)+ 60** 全绿;预存红 1 定性为**同日设计反转造成的漂移**并修
 
 - **判死机制(回答 owner 第一问):** reaper 双活性钟(`_t_last_event` 真实事件 / `_dispatch_heartbeat` 调度心跳)同时静默 1800s 才开火。`find` 在 FUSE 树上零 stdout ⇒ 无真实 chunk 喂钟——这是 pt_8524e0ec **证据分级**的刻意设计(普通工具心跳打 `_selfTick`,只保传输不冒充活性,防「挂死 grep 看着活 2.5h」重演)。双钟静默 ⇒ 整任务 `stuck_no_progress` 强杀。**设计抓对了「静默」,但把「静默的命令」和「死掉的任务」混为一谈** ——前者可恢复(杀进程树、部分输出回灌模型),后者才需要终态强杀。

@@ -73,13 +73,16 @@ check('button_onclick', html.includes('_cmdInterruptClick(this,event)'));
 check('button_label', html.includes('>Interrupt</button>'));
 check('button_has_tip', html.includes('task continues with the partial output'));
 
-// ── 2. code_exec row: NO button (the endpoint only interrupts run_command) ──
+// ── 2. code_exec row: button too (pt_0bde0fd8 — the standalone path now
+//    forwards task= into tool_run_command, so the endpoint interrupts it
+//    identically) ──
 const ceRound = {
   status: 'searching', toolName: 'code_exec', query: 'sleep 30',
   roundNum: 4, tStart: Date.now() - 1000, _taskId: 'task-abc123',
 };
 const ceHtml = _renderUnifiedToolLine(ceRound, true);
-check('code_exec_no_button', !ceHtml.includes('ptool-cmd-interrupt'));
+check('code_exec_has_button', ceHtml.includes('ptool-cmd-interrupt'));
+check('code_exec_button_data_task', ceHtml.includes('data-cmd-task="task-abc123"'));
 
 // ── 3. Unresolvable taskId: NO button ──
 const orphanRound = {

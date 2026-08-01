@@ -111,6 +111,11 @@ function _stallWatchTick() {
   }
 }
 
+/* DOM setInterval returns number; under node (the jsdom harnesses) it
+ * returns a Timeout with .unref(), which _ensureStallTimer feature-detects
+ * so a harness run never hangs the process on the metronome. The dual
+ * shape is real, so the handle is typed `any` rather than lying either way. */
+/** @type {any} */
 let _stallTimer = null;
 function _ensureStallTimer() {
   if (_stallTimer || typeof setInterval !== 'function') return;

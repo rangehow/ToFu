@@ -219,6 +219,21 @@ PAPER_LIBRARY = define_table(
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
 )
 
+# paper_notes — reader margin notes (reading-xp P4). One row per note;
+# anchor is a JSON blob {heading_idx, char_offset, quote} — heading_idx+offset
+# addresses the spot, quote is the fuzzy re-anchor fallback after a report
+# regeneration (an unmatchable note degrades to an "orphan", never vanishes).
+PAPER_NOTES = define_table(
+    'paper_notes',
+    sa.Column('id', sa.Text, primary_key=True),
+    sa.Column('paper_hash', sa.Text, nullable=False, server_default=''),
+    sa.Column('lang', sa.Text, nullable=False, server_default=''),
+    sa.Column('anchor', sa.Text, nullable=False, server_default='{}'),
+    sa.Column('note', sa.Text, nullable=False, server_default=''),
+    sa.Column('created_at', bigint_column(), nullable=False),
+    sa.Column('updated_at', bigint_column(), nullable=False),
+)
+
 # paper_translations — Babel-mode whole-paper translation cache; composite PK
 # (paper_hash, lang). created_at is epoch-ms (bigint on PG, integer on SQLite).
 PAPER_TRANSLATIONS = define_table(

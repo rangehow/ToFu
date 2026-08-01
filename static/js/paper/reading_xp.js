@@ -28,6 +28,43 @@
    All state is `var` on window — no top-level let/const (bundle concat).
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── xp payload store ──────────────────────────────────────────────────
+ * `_reportView(kind)` returns a FRESH object literal on every call — only
+ * its getter/setter-backed props (cache/meta/stream/model) share state via
+ * module globals. Ad-hoc props (view._xpInsight / _xpCheckpoints /
+ * _paperNotes) set on one instance are INVISIBLE to the next instance, so
+ * every xp payload lives HERE, keyed by (paper, view-kind, lang): writes go
+ * to the store AND the passed instance (back-compat), reads prefer the
+ * store (cross-instance) and fall back to the instance.
+ */
+var _paperXpStore = {};
+
+function _xpKey(view) {
+  try {
+    var pid = (typeof _activePaperId !== 'undefined') ? (_activePaperId || '') : '';
+    var lk = (view && typeof view.langKey === 'function') ? view.langKey() : '';
+    return pid + '::' + ((view && view.kind) || '') + '::' + lk;
+  } catch (e) {
+    return '';
+  }
+}
+
+function _xpGet(view, name) {
+  var k = _xpKey(view);
+  var s = k && _paperXpStore[k];
+  if (s && s[name] !== undefined) return s[name];
+  return view ? view[name] : undefined;
+}
+
+function _xpSet(view, name, val) {
+  var k = _xpKey(view);
+  if (k) {
+    var s = _paperXpStore[k] || (_paperXpStore[k] = {});
+    s[name] = val;
+  }
+  if (view) view[name] = val;
+}
+
 /** Grounded ref → arXiv link HTML (mirrors lib/paper/insight_engine/_render._ref_md). */
 function _xpRefLink(card) {
   if (!card || !card.arxiv_id) return '';
@@ -90,7 +127,7 @@ function _xpClear(article) {
  *  `view._xpInsight` = {items, markdown}. Safe to call repeatedly. */
 function _paperXpDistribute(article, view) {
   if (!article || !view) return;
-  var payload = view._xpInsight;
+  var payload = _xpGet(view, '_xpInsight');
   var items = payload && payload.items;
   _xpClear(article);
   if (!items || typeof items !== 'object') return;
@@ -227,7 +264,7 @@ function _xpCheckpointCardHtml(item) {
  *  (right before the next h2/h3 — the natural pause point). Idempotent. */
 function _paperXpDistributeCheckpoints(article, view) {
   if (!article || !view) return;
-  var payload = view._xpCheckpoints;
+  var payload = _xpGet(view, '_xpCheckpoints');
   var items = payload && payload.items;
   // Clear only prior flip cards (the insight cards/section are cleared by
   // their own distributor).
@@ -259,7 +296,7 @@ function _paperXpHandleCheckpointsEvent(s, ev, view) {
   if (s._checkpointsApplied) return true;
   s._checkpointsApplied = true;
   s._xpCheckpoints = { items: ev.items };
-  if (view) view._xpCheckpoints = s._xpCheckpoints;
+  _xpSet(view, '_xpCheckpoints', s._xpCheckpoints);
   try {
     var container = view && document.getElementById(view.containerId);
     var article = container && container.querySelector('.paper-report-article');
@@ -343,12 +380,19 @@ function _paperXpSkimReapply(container) {
 /** End-of-render seam: distribute when a payload is attached to the view. */
 function _paperXpAfterRender(article, container, view) {
   try {
-    if (view && view._xpInsight) _paperXpDistribute(article, view);
-    if (view && view._xpCheckpoints) _paperXpDistributeCheckpoints(article, view);
+    if (view && _xpGet(view, '_xpInsight')) _paperXpDistribute(article, view);
+    if (view && _xpGet(view, '_xpCheckpoints')) _paperXpDistributeCheckpoints(article, view);
     // On-demand depth buttons (P3) — deepen.js loads after this file and
     // registers its seam on window; absent → no buttons, no error.
     if (typeof window._paperDeepenAfterRender === 'function') {
       window._paperDeepenAfterRender(article, container, view);
+    }
+    // Margin notes (P4) + focus mode block-list refresh (P4).
+    if (typeof window._paperNotesAfterRender === 'function') {
+      window._paperNotesAfterRender(article, container, view);
+    }
+    if (typeof window._paperFocusAfterRender === 'function') {
+      window._paperFocusAfterRender(article, container, view);
     }
     _paperXpSkimReapply(container);
   } catch (e) {
@@ -366,7 +410,7 @@ function _paperXpHandleInsightEvent(s, ev, view) {
   s._insightApplied = true;
   s.insightText = ev.insight || '';
   s._xpInsight = { items: ev.items, markdown: ev.insight || '' };
-  if (view) view._xpInsight = s._xpInsight;
+  _xpSet(view, '_xpInsight', s._xpInsight);
   try {
     var container = view && document.getElementById(view.containerId);
     var article = container && container.querySelector('.paper-report-article');
@@ -422,7 +466,32 @@ function _paperXpCostBreakdown(meta) {
   return parts.join(' + ');
 }
 
+/** Session wrap-up (P4 沉浸): when a substantial reading session ends,
+ *  a quiet toast — how long, roughly how much, how many notes taken. The
+ *  closing-the-book moment that consolidates the session. */
+function _paperXpSessionSummary(stats, view) {
+  if (!stats || !stats.minutes) return;
+  var zh = (typeof _i18nLang !== 'undefined' && _i18nLang === 'zh');
+  var mins = Math.max(1, Math.round(stats.minutes));
+  var words = Math.max(0, Math.round(stats.words || 0));
+  var _notes = _xpGet(view, '_paperNotes');
+  var noteCount = Array.isArray(_notes) ? _notes.length : 0;
+  var msg = zh
+    ? ('本次阅读约 ' + mins + ' 分钟 · 覆盖约 ' + words + ' 词' +
+       (noteCount ? ' · ' + noteCount + ' 条批注' : ''))
+    : ('~' + mins + ' min read · ~' + words + ' words covered' +
+       (noteCount ? ' · ' + noteCount + ' notes' : ''));
+  if (typeof showToast === 'function') {
+    showToast(msg);
+  } else if (typeof debugLog === 'function') {
+    debugLog(msg, 'info');
+  }
+}
+
 if (typeof window !== 'undefined') {
+  window._paperXpSessionSummary = _paperXpSessionSummary;
+  window._paperXpGet = _xpGet;
+  window._paperXpSet = _xpSet;
   window._paperXpAfterRender = _paperXpAfterRender;
   window._paperXpHandleInsightEvent = _paperXpHandleInsightEvent;
   window._paperXpApplyMetaEvent = _paperXpApplyMetaEvent;

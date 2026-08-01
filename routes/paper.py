@@ -3481,3 +3481,122 @@ async def start_deepen_task():
         'existed': bool(result.get('joined')),
         'mode': mode, 'sectionIdx': section_idx,
     })
+
+
+# ══════════════════════════════════════════════════════
+#  Reader margin notes (reading-xp P4)
+# ══════════════════════════════════════════════════════
+
+def _note_row_to_dict(row):
+    try:
+        anchor = json.loads(row['anchor'] or '{}')
+    except (json.JSONDecodeError, TypeError):
+        anchor = {}
+    return {
+        'id': row['id'],
+        'paper_hash': row['paper_hash'],
+        'lang': row['lang'],
+        'anchor': anchor,
+        'note': row['note'],
+        'created_at': row['created_at'],
+        'updated_at': row['updated_at'],
+    }
+
+
+@api_v1_paper_bp.route('/api/v1/paper/notes', methods=['GET'])
+async def list_paper_notes():
+    """List the reader's margin notes for one paper+language (oldest first)."""
+    phash = (request.args.get('paper_hash') or '').strip()
+    lang = (request.args.get('lang') or '').strip()
+    if not phash:
+        return api_bad_request('No paper_hash provided')
+    try:
+        rows = await async_fetchall(
+            "SELECT id, paper_hash, lang, anchor, note, created_at, updated_at "
+            "FROM paper_notes WHERE paper_hash = ? AND lang = ? ORDER BY created_at ASC",
+            (phash, lang), domain=DOMAIN_CHAT,
+        )
+    except Exception as e:
+        logger.warning('[Paper:Notes] list failed hash=%s: %s', phash, e)
+        return api_internal_error('failed to load notes')
+    return api_ok({'notes': [_note_row_to_dict(r) for r in (rows or [])]})
+
+
+@api_v1_paper_bp.route('/api/v1/paper/notes', methods=['POST'])
+async def create_paper_note():
+    """Create a margin note. Body: {paper_hash, lang, anchor{…}, note}."""
+    import uuid
+    data = await async_parse_body()
+    phash = (data.get('paper_hash') or '').strip()
+    lang = (data.get('lang') or '').strip()
+    note_text = (data.get('note') or '').strip()
+    anchor = data.get('anchor') if isinstance(data.get('anchor'), dict) else {}
+    if not phash:
+        return api_bad_request('No paper_hash provided')
+    if not note_text:
+        return api_bad_request('Empty note')
+    # Bound the anchor payload: only the three addressing fields, quote capped.
+    safe_anchor = {
+        'heading_idx': anchor.get('heading_idx'),
+        'char_offset': anchor.get('char_offset'),
+        'quote': str(anchor.get('quote') or '')[:400],
+    }
+    note_id = f'pn_{uuid.uuid4().hex[:16]}'
+    now = int(time.time())
+    try:
+        from lib.database import async_execute
+        await async_execute(
+            "INSERT INTO paper_notes (id, paper_hash, lang, anchor, note, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (note_id, phash, lang, json.dumps(safe_anchor, ensure_ascii=False),
+             note_text, now, now),
+            domain=DOMAIN_CHAT,
+        )
+    except Exception as e:
+        logger.error('[Paper:Notes] create failed hash=%s: %s', phash, e, exc_info=True)
+        return api_internal_error('failed to save note')
+    logger.info('[Paper:Notes] created %s — hash=%s lang=%s %d chars',
+                note_id, phash, lang, len(note_text))
+    return api_ok({'note': {
+        'id': note_id, 'paper_hash': phash, 'lang': lang,
+        'anchor': safe_anchor, 'note': note_text,
+        'created_at': now, 'updated_at': now,
+    }})
+
+
+@api_v1_paper_bp.route('/api/v1/paper/notes/<note_id>', methods=['PATCH'])
+async def update_paper_note(note_id):
+    """Edit a note's text (the anchor never moves)."""
+    data = await async_parse_body()
+    note_text = (data.get('note') or '').strip()
+    if not note_text:
+        return api_bad_request('Empty note')
+    try:
+        from lib.database import async_execute
+        cur = await async_execute(
+            "UPDATE paper_notes SET note = ?, updated_at = ? WHERE id = ?",
+            (note_text, int(time.time()), note_id),
+            domain=DOMAIN_CHAT,
+        )
+        if getattr(cur, 'rowcount', 0) == 0:
+            return api_not_found('note not found')
+    except Exception as e:
+        logger.error('[Paper:Notes] update failed %s: %s', note_id, e, exc_info=True)
+        return api_internal_error('failed to update note')
+    return api_ok({'id': note_id, 'note': note_text})
+
+
+@api_v1_paper_bp.route('/api/v1/paper/notes/<note_id>', methods=['DELETE'])
+async def delete_paper_note(note_id):
+    """Delete a note (idempotent — deleting a missing id still returns ok)."""
+    try:
+        from lib.database import async_execute
+        await async_execute(
+            "DELETE FROM paper_notes WHERE id = ?", (note_id,),
+            domain=DOMAIN_CHAT,
+        )
+    except Exception as e:
+        logger.error('[Paper:Notes] delete failed %s: %s', note_id, e, exc_info=True)
+        return api_internal_error('failed to delete note')
+    logger.info('[Paper:Notes] deleted %s', note_id)
+    return api_ok({'deleted': note_id})

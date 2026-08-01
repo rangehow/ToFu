@@ -36,6 +36,8 @@ REPORT_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'report.js')
 XP_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'reading_xp.js')
 QA_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'qa.js')
 DEEPEN_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'deepen.js')
+NOTES_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'notes.js')
+FOCUS_JS = os.path.join(ROOT, 'static', 'js', 'paper', 'focus_mode.js')
 
 
 def _node_deps_available() -> bool:
@@ -95,6 +97,8 @@ eval(fs.readFileSync(process.argv[2], 'utf8'));  // real paper/report.js
 eval(fs.readFileSync(process.argv[3], 'utf8'));  // real paper/reading_xp.js
 eval(fs.readFileSync(process.argv[5], 'utf8'));  // real paper/qa.js
 eval(fs.readFileSync(process.argv[6], 'utf8'));  // real paper/deepen.js
+eval(fs.readFileSync(process.argv[7], 'utf8'));  // real paper/notes.js
+eval(fs.readFileSync(process.argv[8], 'utf8'));  // real paper/focus_mode.js
 const _realPaperAskQuestion = _paperAskQuestion;  // qa.js 真入口,§7 覆盖后 §8 恢复
 
 // Capture the REAL glossary helpers before the stub block replaces them —
@@ -159,7 +163,9 @@ const ITEMS = {
   ],
 };
 
-const view = (typeof _reportView === 'function') ? _reportView('report') : { containerId: 'paperReportContent', meta: null };
+const view = (typeof _reportView === 'function') ? _reportView('report')
+  : { kind: 'report', containerId: 'paperReportContent', meta: null,
+      langKey: function () { return 'en'; } };
 view._xpInsight = { items: ITEMS, markdown: '## 💡 Insight & Ideas\n' };
 view.meta = { model: 'm1', costCny: 0.01 };
 
@@ -464,6 +470,88 @@ check('skim_off_restores',
   check('second_click_closes_no_rebill',
         calls.length === 1 && !art3.querySelector('.paper-deepen-drawer'));
 
+  // ── (13) P4: margin notes — decorate + editor flow ──
+  global._paperHash = 'h-notes';
+  const noteCalls = [];
+  global.Api.paper.notesList = async () => ({ ok: true, notes: [] });
+  global.Api.paper.notesCreate = async (body) => { noteCalls.push(['create', body]);
+    return { ok: true, note: { id: 'pn_new1', paper_hash: body.paper_hash, lang: body.lang,
+      anchor: body.anchor, note: body.note, created_at: 1, updated_at: 1 } }; };
+  global.Api.paper.notesUpdate = async (id, text) => { noteCalls.push(['update', id, text]); };
+  global.Api.paper.notesDelete = async (id) => { noteCalls.push(['delete', id]); };
+  // Pre-seed BEFORE the render via the PRODUCTION write path (_paperXpSet
+  // writes the store AND the instance — cross-_reportView-instance, exactly
+  // what the cached-report code paths do) so the seam decorates directly.
+  window._paperXpSet(view, '_paperNotes', [
+    { id: 'pn_a', anchor: { heading_idx: 2, quote: 'The method section.' }, note: 'first note' },
+    { id: 'pn_b', anchor: { heading_idx: 3, quote: 'zzz-no-such-text' }, note: 'chip note' },
+    { id: 'pn_c', anchor: { heading_idx: null, quote: '' }, note: 'orphan note' },
+  ]);
+  _renderFinalReport(c, REPORT, { model: 'm1' }, view);
+  const art4 = c.querySelector('.paper-report-article');
+  const mark = art4.querySelector('.paper-note-mark');
+  check('note_mark_wraps_quote', !!mark && mark.textContent.indexOf('method section') !== -1);
+  check('note_mark_carries_id', !!mark && mark.getAttribute('data-note-id') === 'pn_a');
+  const heads4 = art4.querySelectorAll('h2');
+  const chip = heads4[3] && heads4[3].querySelector('.paper-note-chip');
+  check('note_chip_on_heading', !!chip && chip.getAttribute('data-note-id') === 'pn_b');
+  const tray = art4.querySelector('.paper-note-tray');
+  check('note_orphan_tray', !!tray && tray.textContent.indexOf('orphan note') !== -1);
+  // Idempotent re-decoration (marks unwrapped, not duplicated).
+  _paperNotesDecorate(art4, view);
+  check('note_decorate_idempotent',
+        art4.querySelectorAll('.paper-note-mark').length === 1
+        && art4.querySelectorAll('.paper-note-chip').length === 1);
+  // Editor: open on the chip note, edit, save → notesUpdate + view sync.
+  _paperNoteOpenEditor({ heading_idx: 3 }, view._paperNotes[1], 100, 100);
+  const editor = document.querySelector('.paper-note-editor');
+  check('note_editor_opens', !!editor);
+  const ta = editor.querySelector('.paper-note-editor-input');
+  ta.value = 'edited chip note';
+  editor.querySelector('.paper-note-save').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+  check('note_update_called',
+        noteCalls.some((c2) => c2[0] === 'update' && c2[1] === 'pn_b' && c2[2] === 'edited chip note'));
+  check('note_view_synced', view._paperNotes[1].note === 'edited chip note');
+  check('note_editor_closed', !document.querySelector('.paper-note-editor'));
+  // Create flow: new note from an anchor → notesCreate + view grows.
+  _paperNoteOpenEditor({ heading_idx: 1, quote: 'A fast diffusion LM.' }, null, 100, 100);
+  const ed2 = document.querySelector('.paper-note-editor');
+  ed2.querySelector('.paper-note-editor-input').value = 'brand new note';
+  ed2.querySelector('.paper-note-save').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 20));
+  check('note_create_called',
+        noteCalls.some((c2) => c2[0] === 'create' && c2[1].anchor.quote === 'A fast diffusion LM.'));
+  // The create flow CONCATS → a NEW array replaces the store slot; read the
+  // assertion through the store (the harness instance still points at the
+  // old 3-item array — the very aliasing the store exists to survive).
+  const notesAfterCreate = window._paperXpGet(view, '_paperNotes') || [];
+  check('note_view_grew', notesAfterCreate.length === 4
+        && notesAfterCreate[3].id === 'pn_new1');
+
+  // ── (14) P4: focus mode ──
+  _paperFocusModeToggle();
+  check('focus_on_class', c.classList.contains('paper-focus-on'));
+  check('focus_has_current', !!art4.querySelector('.paper-focus-current'));
+  document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'j', bubbles: true }));
+  const curIdx = (function () {
+    const cur = art4.querySelector('.paper-focus-current');
+    return cur ? Array.prototype.indexOf.call(art4.children, cur) : -1;
+  })();
+  check('focus_j_moves', curIdx > 0);
+  document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check('focus_esc_exits', !c.classList.contains('paper-focus-on'));
+
+  // ── (15) P4: session summary toast ──
+  const toasts = [];
+  global.showToast = win.showToast = (m) => toasts.push(m);
+  window._paperXpSessionSummary({ words: 300, minutes: 2.4 }, view);
+  check('session_summary_fires', toasts.length === 1);
+  check('session_summary_has_minutes', toasts[0].indexOf('2') !== -1);
+  check('session_summary_has_notes', toasts[0].indexOf('4') !== -1);
+  window._paperXpSessionSummary({ words: 0, minutes: 0 }, view);
+  check('session_summary_skips_empty', toasts.length === 1);
+
   console.log(out.join('\n'));
   process.exit(0);
 })();
@@ -480,7 +568,8 @@ def _write_harness() -> str:
 def _run(report_js: str) -> subprocess.CompletedProcess:
     harness = _write_harness()
     try:
-        return subprocess.run(['node', harness, report_js, XP_JS, ROOT, QA_JS, DEEPEN_JS],
+        return subprocess.run(['node', harness, report_js, XP_JS, ROOT, QA_JS,
+                               DEEPEN_JS, NOTES_JS, FOCUS_JS],
                               capture_output=True, text=True, timeout=60)
     finally:
         try:
@@ -497,7 +586,7 @@ def test_reading_xp_distribution_and_events():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{out}'
     fails = [ln for ln in out.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'reading-xp rail failures:\n' + out
-    assert out.count('PASS') >= 58, f'expected >=58 PASS lines, got:\n{out}'
+    assert out.count('PASS') >= 75, f'expected >=75 PASS lines, got:\n{out}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),

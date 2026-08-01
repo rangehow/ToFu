@@ -1555,6 +1555,14 @@
       request(`/api/v1/paper/deepen/poll/${encodeURIComponent(taskId)}`,
               { method: 'GET', query: { cursor }, parse: 'response', onError: 'null' }),
     deepenAbort:    (taskId)              => post(`/api/v1/paper/deepen/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null', parse: 'none' }),
+    // Reader margin notes (reading-xp P4)
+    notesList:      (paperHash, lang)     =>
+      request('/api/v1/paper/notes', { method: 'GET', query: { paper_hash: paperHash, lang }, onError: 'null' }),
+    notesCreate:    (body)                => post('/api/v1/paper/notes', body),
+    notesUpdate:    (noteId, note)        =>
+      request(`/api/v1/paper/notes/${encodeURIComponent(noteId)}`, { method: 'PATCH', body: JSON.stringify({ note }), headers: { 'Content-Type': 'application/json' }, onError: 'null' }),
+    notesDelete:    (noteId)              =>
+      request(`/api/v1/paper/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE', onError: 'null' }),
     // Review Mode reuses ALL the report endpoints above — the report `lang`
     // arg carries the composite cache key ``review:<venue>:<uilang>`` opaquely.
     // Only the venue list needs its own (read-only) endpoint.

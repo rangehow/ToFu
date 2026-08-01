@@ -1400,6 +1400,14 @@ function _teardownReadingTracker(silent) {
       console.debug('[Paper:ReadTime] session: %d words / %.2f min → %d wpm',
                     Math.round(coveredWords), activeMin, Math.round(observedWpm));
     }
+    // Session wrap-up toast (reading-xp P4) — minutes + coverage + notes.
+    if (typeof window._paperXpSessionSummary === 'function') {
+      try {
+        window._paperXpSessionSummary({ words: coveredWords, minutes: activeMin }, tk.view);
+      } catch (e) {
+        console.debug('[Paper] session summary failed (non-fatal): %s', e && e.message);
+      }
+    }
   }
 }
 
@@ -1964,8 +1972,14 @@ async function _generatePaperReport(force, view) {
       view.meta = data.meta || null;
       // v2 insight payload (structured items with anchor_idx) — the
       // reading-xp rail distributes it in _renderFinalReport's after seam.
-      view._xpInsight = data.insight || null;
-      view._xpCheckpoints = data.checkpoints || null;
+      // Write through the xp store (cross-_reportView-instance) when present.
+      if (typeof window._paperXpSet === 'function') {
+        window._paperXpSet(view, '_xpInsight', data.insight || null);
+        window._paperXpSet(view, '_xpCheckpoints', data.checkpoints || null);
+      } else {
+        view._xpInsight = data.insight || null;
+        view._xpCheckpoints = data.checkpoints || null;
+      }
       if (data.paper_hash) _paperHash = data.paper_hash;
       _rememberReportSnapshot(view, data.report, data.meta);
       _persistGeneratedReviewVenue(view, langKey, startPaperId);
@@ -2344,8 +2358,13 @@ async function _loadOrGenerateReport(view) {
     if (cacheData && cacheData.ok && cacheData.report) {
       view.cache = cacheData.report;
       view.meta = cacheData.meta || null;
-      view._xpInsight = cacheData.insight || null;
-      view._xpCheckpoints = cacheData.checkpoints || null;
+      if (typeof window._paperXpSet === 'function') {
+        window._paperXpSet(view, '_xpInsight', cacheData.insight || null);
+        window._paperXpSet(view, '_xpCheckpoints', cacheData.checkpoints || null);
+      } else {
+        view._xpInsight = cacheData.insight || null;
+        view._xpCheckpoints = cacheData.checkpoints || null;
+      }
       if (cacheData.paper_hash) _paperHash = cacheData.paper_hash;
       _rememberReportSnapshot(view, cacheData.report, cacheData.meta);
       _persistGeneratedReviewVenue(view, langKey, startPaperId);
@@ -2381,8 +2400,13 @@ async function _loadOrGenerateReport(view) {
         _syncReportLangToggle(view);
         view.cache = otherData.report;
         view.meta = otherData.meta || null;
-        view._xpInsight = otherData.insight || null;
-        view._xpCheckpoints = otherData.checkpoints || null;
+        if (typeof window._paperXpSet === 'function') {
+          window._paperXpSet(view, '_xpInsight', otherData.insight || null);
+          window._paperXpSet(view, '_xpCheckpoints', otherData.checkpoints || null);
+        } else {
+          view._xpInsight = otherData.insight || null;
+          view._xpCheckpoints = otherData.checkpoints || null;
+        }
         if (otherData.paper_hash) _paperHash = otherData.paper_hash;
         _rememberReportSnapshot(view, otherData.report, otherData.meta);
         _saveActivePaperState();

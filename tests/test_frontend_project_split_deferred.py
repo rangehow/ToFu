@@ -6,7 +6,9 @@ Why a split, not a move (census 2026-08-01, 37 call sites across 12 files
   * BOOT: main.js:1354-1355 calls loadProjectStatus() + _updateAutoApplyUI()
     BARE (the project bar is first paint when the conv has a project),
   * SSE: sse_handlers_tool.js:177 + sse_handlers_misc.js:389 call
-    _applyProjectData BARE on project events,
+    _applyProjectData on project events (typeof-gated, but on the hot
+    streaming path — deferring would pull the whole feature bundle on
+    every project event),
   * CONV LIFECYCLE: main_conv_lifecycle.js calls _restoreConvProject /
     _clearProjectStateLocal; presence.js + project-brain*.js read
     _getConvProjectPath,

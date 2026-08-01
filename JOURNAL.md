@@ -275,7 +275,7 @@
 - **生产实测挂起(非我故障):** runbook 扩 sub-5 六项后实测服务器 curl 000×3——进程活着(42.6% CPU、14.3GB RSS)但事件环停摆(cgroup 95.6% 反复 relief + FUSE 上 8s 慢查询,正是 pt_afbaf3d7/pt_ef42c2a1 两兄弟 epic 在修的「假离线」族)。**绝不重启(本会话自己的 run_task 就在该进程里跑)**;timer 追服务器恢复后自动补跑 runbook 并回写分类账。
 - **累计:** core 1,550,424 → 农场 1,418,722(−132KB 压缩态),距 1.2MB ~219KB;已降级源码 443KB。下一片:myday 面板对(先拆 `_mydayScheduleReminder` load-time 副作用)+ project.js 拆分(37 调用点,比照 tool_rounds「状态子集留 core」)。
 
-### 2026-08-01(Epic-E sub-7:project.js 89KB 拆分——第二个「状态留 core+面板降级」,生产 core 1,351,102 B,差距进 151KB) — commit `a7ae6541`(8 文件);新套件 12 检查 + harness 双文件重指向 ×2;NEUTER×2 精确;环 106/106;runbook **34 项 ALL GREEN**
+### 2026-08-01(Epic-E sub-7:project.js 89KB 拆分——第二个「状态留 core+面板降级」,生产 core 1,351,102 B,差距进 151KB) — commit `fee2bb73`(8 文件);新套件 12 检查 + harness 双文件重指向 ×2;NEUTER×2 精确;环 106/106;runbook **34 项 ALL GREEN**
 
 - **普查定案(37 调用点 / 12 文件):** 整体降级不可能的三类裸调用——boot(main.js:1354-1355 `loadProjectStatus()`+`_updateAutoApplyUI()`)、SSE(sse_handlers_tool:177/misc:389 `_applyProjectData`)、conv 生命周期+bar(`_restoreConvProject`/`_clearProjectStateLocal`/`_getConvProjectPath` ×6/bar 三键)。拆法与 tool_rounds sub-4 同构但方向更宽:**状态子集(24KB)留 core 位于 panel 原槽位**,panel(67KB:文件夹模态/浏览器/recent/apply-code/drop zone/审批stdin HG 提交)降级 + **13 stub**(bar  opener + 全部聊天渲染交互钮,image-gen/myday 先例)。
 - **反向缝只有 3 处,全部装闸:** `_restoreConvProject→saveRecentProject`、`clearProject→closeProjectModal`+`_mpFolders/_mpReadOnly` 复位(模态态在 panel,typeof 未定义即跳过)。`_deriveConvPathsFromState` 这类「藏在目标区间中间的小 helper」逐函数反查后才进迁移清单(第四次同教训:按符号反查,不按行区间归属)。

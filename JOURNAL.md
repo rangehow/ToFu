@@ -1,3 +1,9 @@
+### 2026-08-01(api-contract 批 10:config.py 8 站点清零——裸数组判例第三种形态「三方协调」) — epic `pt_931e16c4` 切片 10;commit 见下(6 文件);环 **131/131**;NEUTER×2 各咬一侧;**142/272=52.2% 过半**
+
+- **裸数组判例完整谱系(本批封版):** ①有第一方消费且 api.js 已解析(orchestrations)→ 双侧:后端包 + seam 解包,调用方零改;②无第一方消费且形状未对外钉死(conversations)→ 后端单方包 + commit 明文公告;③有第一方消费但 api.js 返回的是 **Response 未解析**(config templates)→ **三方**:后端包 + seam 改解析并解包(留 Array.isArray 回落)+ **唯一调用方**(provider_templates.js,其 Array.isArray 守卫恰是现成退化缝)改直消费。谱系三态齐全,契约 §4 从「一条规则」长成「一棵判定树」。
+- **纪律:** failing-first 精确 2 红(coordination + shipped-source);NEUTER×2 各咬一支(还原后端包装→shipped-source;摘 seam unwrap→coordination);cmp 还原;node --check 双 JS 过;导入冒烟;环 **131/131**。幽灵连续第六批零干预。
+- **进度账:** 272→**140 站点 23 文件**(132 已清零,52.2% 过半)。剩余:paper.py 47(拆分路线图)、common.py 14(兄弟 WIP)、chat.py 11、oauth.py 7、translate.py 7、artifacts.py 7、api_v1/oauth 5、motion 5、browser 5、auth 4、六个 ≤3、四个 ≤2。下一批 chat.py(11)。
+
 ### 2026-08-01(续·持久化重建链全验:安装包出炉含修复 + 死锁自愈 + 一条运维警告) — 接 `497454b4` 批
 
 - **安装包落地并上架:** 出世构建完成,`Tofu-Setup-0.16.0-win64.exe`(152,936,260 B,`source=built`)已 record 进 store;Windows UA 实测 `/api/v1/desktop/status` 的 downloads 返回它(`hosted=server`)——用户面板下载按钮现在给的就是含持久化修复的新包。**载荷内容核验方法论:别扫 payload tar 散文件——PyInstaller 把纯 py 模块全打进 PYZ;正确姿势是在 git archive 源层 grep**(实证 `959fd1c9` 源:launcher.py `_persist_cc_state`×3、config.py `load_computer_control` 在)。

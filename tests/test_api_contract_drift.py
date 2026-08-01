@@ -39,8 +39,10 @@ files + 8 protocol-locked sites in 4 carve-out files). Same-day batches
 zeroed api_v1/memory.py (10), api_v1/project.py (38), api_v1/mcp.py (21)
 , api_v1/orchestrations.py (16 — its bare-array list site was MIGRATED
 via the contract §4 coordinated front+back path, the first executed
-instance, not registered as debt) , api_v1/desktop.py (11) , api_v1/skills.py (9) , api_v1/daily_report.py (9) , upload.py (10) and conversations.py (10, incl. TWO
-bare-array list branches — wrapped backend-only, no first-party consumer) → 148 sites across 24 files remain.
+instance, not registered as debt) , api_v1/desktop.py (11) , api_v1/skills.py (9) , api_v1/daily_report.py (9) , upload.py (10) , conversations.py (10, incl. TWO
+bare-array list branches — wrapped backend-only, no first-party consumer)
+and config.py (8 — templates bare-array via THREE-way coordination:
+backend wrap + api.js unwrap + caller consumes directly) → 140 sites across 23 files remain.
 """
 
 from __future__ import annotations
@@ -98,7 +100,6 @@ BASELINE: dict[str, int] = {
     'paper.py': 47,
     'common.py': 14,
     'chat.py': 11,
-    'config.py': 8,
     'oauth.py': 7,
     'api_v1/translate.py': 7,
     'api_v1/artifacts.py': 7,

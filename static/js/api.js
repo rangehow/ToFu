@@ -1058,9 +1058,13 @@
 
   // providers (config-side: probes + templates + balance) -----------
   const providers = {
-    templates:        ()                                =>
-      request('/api/v1/providers/templates',
-              { method: 'GET', parse: 'response', onError: 'null' }),
+    // Coordinated bare-array migration (batch 10): the backend now wraps
+    // as {ok, items}; unwrap with an Array.isArray fallback for skew.
+    templates:        async ()                          => {
+      const d = await get('/api/v1/providers/templates', { onError: 'null' });
+      if (d && Array.isArray(d.items)) return d.items;
+      return Array.isArray(d) ? d : [];
+    },
     probe:            (baseUrl, apiKey, modelsPath)     =>
       post('/api/v1/providers/probe',
            { base_url: baseUrl, api_key: apiKey, models_path: modelsPath },

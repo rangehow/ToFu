@@ -8,7 +8,7 @@ import json
 import os
 import sys
 
-from flask import jsonify, request
+from flask import request
 
 from lib.config_dir import config_path as _config_path
 from lib.log import get_logger
@@ -397,7 +397,7 @@ def get_server_config():
     except Exception as e:
         logger.debug('[ServerConfig] face_refusals unavailable: %s', e)
 
-    return jsonify({
+    return api_ok({
         'providers': providers, 'presets': presets,
         'models': models, 'search': search_info,
         'server_info': server_info,
@@ -441,8 +441,7 @@ def feishu_status():
         _conversations,
     )
     active_users = len(_conversations)
-    return jsonify({
-        'ok': True,
+    return api_ok({
         'enabled': ENABLED,
         'connected': _feishu_is_connected(),
         'app_id_masked': ('***' + APP_ID[-4:]) if len(APP_ID) > 4 else '',
@@ -670,8 +669,7 @@ def update_provider_template():
     if not updated_files:
         return api_error("Template key '%s' not found in any JS file" % tpl_key, status=404)
 
-    return jsonify({
-        'ok': True,
+    return api_ok({
         'updated_files': updated_files,
         'model_count': len(clean_models),
     })
@@ -838,7 +836,7 @@ def probe_provider_endpoint():
         else:
             logger.warning('[Probe] Failed for %s: %s', base_url, result.get('error', '?'))
 
-        return jsonify(result)
+        return api_ok(result)
     except Exception as e:
         logger.error('[Probe] Endpoint failed: %s', e, exc_info=True)
         return api_error('探测出错: %s' % e, status=500)
@@ -889,10 +887,9 @@ def probe_provider_bulk():
 
     # Hard cap — keeps the UI snappy even when a user pastes 200 lines.
     if len(base_urls) > 50:
-        return jsonify({
-            'ok': False,
-            'error': '单次最多探测 50 个端点（收到 %d 个）' % len(base_urls),
-        }), 400
+        return api_error(
+            '单次最多探测 50 个端点（收到 %d 个）' % len(base_urls),
+            status=400)
 
     logger.info('[Probe-Bulk] Probing %d endpoint(s)', len(base_urls))
 
@@ -925,8 +922,7 @@ def probe_provider_bulk():
     n_ok = sum(1 for r in results if r and r.get('ok'))
     logger.info('[Probe-Bulk] Done: %d/%d ok', n_ok, len(base_urls))
 
-    return jsonify({
-        'ok': True,
+    return api_ok({
         'count': len(base_urls),
         'ok_count': n_ok,
         'results': results,
@@ -1145,7 +1141,9 @@ def get_provider_templates():
     )
     result = []
     if not os.path.isdir(templates_dir):
-        return jsonify(result)
+        # Coordinated bare-array migration (batch 10): array moves under
+        # ``items``; Api.providers.templates unwraps (with fallback).
+        return api_ok({'items': result})
     for fname in sorted(os.listdir(templates_dir)):
         if not fname.endswith('.json'):
             continue
@@ -1174,7 +1172,7 @@ def get_provider_templates():
                         fname, len(tpl.get('models', [])))
         except Exception as e:
             logger.warning('[ProviderTemplates] Failed to load %s: %s', fname, e)
-    return jsonify(result)
+    return api_ok({'items': result})
 
 
 def _hot_reload_feishu(feishu_data: dict):

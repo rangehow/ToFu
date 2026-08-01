@@ -1,3 +1,10 @@
+### 2026-08-01(续·死点击第二半:停止级联尾分支空操作——权威集 busy 时请求根本没离开浏览器) — owner 复核 `92055d60` 抓回同症状家族漏网;commit `1dbefc8f`(2 文件 +251;新 JSDOM harness **14 检查**,失败先行 4 红,**NEUTER×2 各咬各的**;前端 harness 家族环 31、bundle 清单/新鲜度环 33 全绿)
+
+- **owner 的证据链(成立):** `updateSendButton` 的 busy 谓词是 convIsBusy 并集(本地流 / activeTaskId / `_authoritativeActiveTaskIds`),但停止级联只有前两支——busy 仅来自权威集时(兄弟设备在此会话生成 / 本标签流句柄丢失)Priority-3 两支全空,处理器**连一个 abort 请求都不发**。`92055d60` 只保证「abort 到达服务器后世界即刻可知」,而这一支是「abort 永远发不出」。
+- **修法(与服务器半成套):** ①权威集分支——遍历 `_authoritativeActiveTaskIds` 逐 tid `Api.chat.abortTask`(服务端幂等;且 `92055d60` 让重复 abort 无条件重播空闲投影 ⇒ **重复点击自动变成 push 掉线时的纠偏重播**);权威集不在本地清除(服务器所有,入帧翻灯)。②全假 else——渲染与点击之间来了终态帧时即时 `updateSendButton()` 调和,不让陈旧的 ■ 亮到下一个外部触发。**规则立档:Stop 形态的按钮绝不允许有一个什么都不发的处理器**(与 7-31「连接中…」死点击同缺陷类)。
+- **harness 形态:** eval 真实 shipped `send_button.js`(非拷贝),A 权威集点击发 abort×2 / B 重复点击重发 / C 空闲不发射且形态即和 / D 本地流路径仍优先 / E activeTaskId 桩路径不变;convIsBusy 桩复刻 computeConvBusy 并集。
+- **生效路径记一笔:** 前端这半走 bundle 按请求重建(无需重启即可到用户);后端广播那半(`92055d60`)必须等进程重启——验收「一下即止」以重启后为准。
+
 ### 2026-08-01(输入框停止按钮「点多次才生效」根修:chat_abort 落了旗却从没发帧——同一广播的第三个发射点补位) — owner 报「暂停按钮每次都很迟钝,要点击多次才生效」;commit `92055d60`(2 文件 +162;lifecycle 套件 6→**10/10**,失败先行精确 3 红,**NEUTER×1** 摘广播→精确 Face 7/8/9 红,还原 cp/cmp;conv-state 家族环 55、import 冒烟+autopilot 守卫 7、delete_conv_aborts 3 全绿)
 
 - **根因链(逐环实测坐实):** ①任务启动时 `chat_dispatch` 的 notify 帧把 tid 投进了**本标签页**的 `conv._authoritativeActiveTaskIds`;②用户点停止 → `chat_abort` 置 `task['aborted']=True`(**但不发任何帧**)→ finishStream 清掉本地句柄(activeStreams + activeTaskId)却**清不动服务器权威集**;③`convIsBusy` 读权威集非空 ⇒ 按钮**一直保持 ■**;④再点 → send_button Priority-3 两支(流句柄/activeTaskId)全空 ⇒ **静默无操作,连日志都没有**;⑤直到 orchestrator 轮间发现 abort 旗、走完 finalize(长工具调用时可拖到几十秒)才由 `notify_terminal_busy_state` 发终态帧灭灯。用户视角=点了没反应、连点多次、最终「生效」——全程每一次点击其实都没有产生任何动作。

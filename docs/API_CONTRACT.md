@@ -137,7 +137,7 @@ legal only if it appears here AND in `tests/test_api_contract_drift.py`'s
 | SSE streams | chat stream, agent-run, translate stream, compat streams | `text/event-stream` framing; use `sse_response()` for the canonical headers, never hand-set them |
 | Binary / raw payloads | artifact raw/view/export, paper PDF serving, image bytes, podcast audio | Typed bytes with `Content-Disposition` / Range; JSON envelope impossible |
 | Multipart uploads | `/api/images/upload`, `/api/paper/upload`, `/api/pdf/parse`, … | FormData in, but the *response* still follows the envelope |
-| Bare-array legacy payloads | e.g. `GET /api/v1/chat/queue/<conv>` returns `[]` | Enveloping an array (`{ok, items}`) changes the top-level type — a coordinated front+back migration, NOT an additive conversion. Frozen in the baseline; new endpoints MUST wrap arrays in `api_ok({'items': …})` |
+| Bare-array legacy payloads | `GET /api/v1/chat/queue/<conv>` returns `[]` (frozen in the drift baseline) | Enveloping an array (`{ok, items}`) changes the top-level type — never additive. The retirement path is the **coordinated front+back migration**, first executed on `GET /api/v1/orchestrations` (2026-08-01): backend `api_ok({'items': …})` + `Api.<domain>.list` unwraps `.items` with an `Array.isArray(d)` fallback for rolling-deploy skew (pinned by `tests/test_api_contract_orchestrations_parity.py`). Sites that cannot migrate yet register in the drift suite's `CARVE_OUT_SITES` with a reason — never a silent baseline remainder. New endpoints MUST wrap arrays in `api_ok({'items': …})` |
 
 Adding a carve-out requires: (1) a row in this table, (2) an entry in the
 drift test with the same reason, (3) a commit message explaining why the

@@ -1,3 +1,11 @@
+### 2026-08-01(api-contract 批 4 收口:orchestrations.py 16 清零 + 首个「协调式裸数组迁移」+ 幽灵共编全审计) — epic `pt_931e16c4`;幽灵 commit `412d8954`(5 文件),我补契约 §4 收尾 commit(见下);HEAD 全环独立复跑 **120/120** + 导入冒烟
+
+- **批 4 内容:** 15 dict 站点→api_ok/api_created;第 16 站点(GET /api/v1/orchestrations 裸数组)未按原计划登记 CARVE_OUT_SITES,而是**直接执行了契约 §4 的协调式退休路径**:后端 `api_ok({'items': _read_all()})` + 前端 `Api.orchestrations.list` 解包 `.items` 并保留 `Array.isArray(d)` 回退(滚动部署偏斜下旧服务端仍可用,三处调用方零改动)——比登记豁免更好的终态,elimination beats preservation。
+- **幽灵共编第三次,且首次暴露破坏性:** ①批 4 整套被抢跑提交(`412d8954`,含它重写的 195 行 parity 套件);②中途它**删掉过 api.js 的 `d.items` 解包行**(裸数组+包装失配=编排列表静默变空的活断),几秒后自愈恢复——我逐行复核时正好抓到缺失态;③它自己的 JOURNAL 条目也自认「会删测试,必须逐行复核」。**审计结论:两处女改进真实且被我采纳**(我 parity 里「ok 必须恒 True」断言是错的——validate 端点的逻辑失败 200 合法携带 ok:False,它改为「ok 跟随 lib result」;shipped-source 针加括号防 import 行骗过)。它的漂移注册表删除理由与我 §7 哲学一致。
+- **我侧残留只有一处失真:** 我未提交的契约 §4 行把 orchestrations 写成「已注册豁免」(过时)——改写为「已执行迁移的范式」。棘轮 `CARVE_OUT_SITES` 机构保留(空注册表,留给 chat_queue 族等未来站点),docstring 计数 197 站点/29 文件。
+- **纪律:** HEAD 全环 **120/120**(我不采用幽灵自报的 117,独立复跑);orchestrations 导入冒烟 ok;parity 三层(dict 站点 ok 跟随 lib result + 前后端协调锚点 + shipped-source 括号针)。
+- **进度:** 272→197。批次序(project 38→mcp 21→orch 16)已全部清零;下一批自排:api_v1/desktop.py(11)→ upload.py(10)→ skills.py(9)——避开 paper.py/chat.py/conversations.py(拆分路线图)与 push.py/common.py(兄弟 WIP)。
+
 ### 2026-08-01(api-contract 批 4:orchestrations.py 16 站点清零 + **契约 §4 裸数组协调迁移首次执行**;与幽灵的正面对峙定案——消除 > 登记) — epic `pt_931e16c4` 切片 4;commit 见下(5 文件);环 **117/117**;NEUTER×2 各咬一侧
 
 - **正面对峙(设计分歧,值得立案的判例):** 幽灵本轮改了策略——它转完 orchestrations 15 个 dict 站点后**故意留下裸数组**,并在漂移套件里发明 `CARVE_OUT_SITES`(站点级注册表,机制本身是好东西,chat_queue 族未来正需要)+ 更新基线,即「冻结债务」路线。我按 owner 指令与契约 §4 原文(「协调前后端迁移,非增量转换」)走了**消除债务**路线:后端 `api_ok({'items': _read_all()})` + api.js `list()` 内解包 `.items` 并留 `Array.isArray(d)` 回落(滚动部署斜率下新老服务器通吃),**调用方零改动**(mobile_panels/studio 拿到的仍是数组)。两路线直接冲突:我的迁移使幽灵注册表条目指向不存在的代码,`test_carve_out_sites_valid` 精确红。定案:移除该条目(机制保留)、头注改述「消除优先于登记」——注册是迁移不能时的退路,不是默认姿势。

@@ -343,10 +343,13 @@ def is_superseded_incomplete_fragment(
     checkpoint writer omits terminal fields on purpose), while the regenerate's
     completed answer lands as a sibling assistant message. The fragment then
     renders in full completed chrome (action row, translate footer, branch
-    button) even though it is a truncated abort partial. The BACKEND source
-    stamp (``_stamp_aborted_fragment_finish_reason``) closes this at write time,
-    but this predicate is the reconcile safety net for fragments already in the
-    DB (or written by a path that had no stable ``_assistantMsgId`` to target).
+    button) even though it is a truncated abort partial. This predicate IS the
+    stamp — it runs inside the terminal sync write of the SUPERSEDING task
+    (``manager._sync_result_to_conversation``'s CAS loop) and on the
+    GET/startup reconcile. (An id-keyed write-time stamp keyed on
+    ``_assistantMsgId`` was drafted 2026-07-31 but never landed; this
+    structural predicate deliberately superseded it — it needs no stable id
+    and also covers fragments written by paths that never had one.)
 
     The verdict is a MARK, not a delete: the caller stamps
     ``finishReason='aborted'`` so the content is PRESERVED but renders as the
@@ -550,8 +553,9 @@ def reconcile_conversation_messages(
     #    that has NO terminal reason but is directly adjacent to a settled
     #    assistant sibling for the same user turn. This is the render-side
     #    safety net for the "truncated abort fragment shown as a finished turn"
-    #    bug (the backend source stamp closes it at write time; this catches
-    #    fragments already in the DB). It is a MARK, never a delete — content is
+    #    bug (the same mark also runs at write time inside the SUPERSEDING
+    #    task's terminal sync CAS loop; this catches fragments already in the
+    #    DB). It is a MARK, never a delete — content is
     #    preserved and now renders as the aborted partial it truthfully is.
     #    No cache-prefix concern: this MUTATES a field in place (no reindex),
     #    so it never shifts prefix bytes.

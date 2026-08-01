@@ -1,3 +1,10 @@
+### 2026-08-01(孤儿套件定案:不是未收尾,是被取代——删草稿 + 修两处说谎的 docstring) — 接自己立的 `pt_58781f06406e4502`;commit 见下(reconcile.py 注释修正 + JOURNAL;草稿移 `.tofu_trash/` 可恢复;碎片/reconcile 家族环 **18/18**)
+
+- **定性(三层证据):** ①孤儿 `tests/test_abort_fragment_finish_reason.py`(未跟踪,07-31 23:09)期望 `_sync._stamp_aborted_fragment_finish_reason(task)`——按 `_assistantMsgId` 定位中止任务自己的碎片并打标;②同一设计的草稿实现躺在 `lib/.project_sessions/90b433e4264a/modifications.json` 里(从未落盘 lib/);③当夜终稿 pt_e736a797(fec6b46b)+ pt_93ff22bdb56146c6(46895774)改走**结构谓词**路线(`reconcile.mark_superseded_incomplete_fragments`,接进 superseding settle 的 CAS 环 + GET/startup reconcile),其 docstring 明写「TWO call sites share this ONE implementation」——id 键草稿是被**有意取代**的,不是忘收尾。
+- **覆盖等价核对(删前必做):** 孤儿五案逐一对照——排序反转案(碎片在答案后)=shipped 邻接谓词主案 ✓;已终态不重打 ✓;空碎片不打(归 ghost-tail 扫描删除域)✓;无 id 跳过=草稿的自限,shipped 谓词不需要 id 反而更宽 ✓;唯一形态差 `[user, 无兄弟碎片]` 由「任务即 latest 时正常终态 sync 自己打 aborted」覆盖 ✓。shipped 套件 test_abort_fragment_two_task_settle 2/2 常绿。
+- **顺手修的说谎引用(比草稿本身更毒):** `reconcile.py` 的谓词 docstring 与 0b 注释都把 `_stamp_aborted_fragment_finish_reason` 当**已存在**引用(「closes this at write time」)——读者会以为写时源戳已在,实际只有 reconcile 网。改成如实描述双层设计的现状。**判据重申:取代旧方案时,引用旧名字的注释/文档必须同批清扫——否则下一个会话会把幻影当契约去「补齐」。**
+- **处置:** 草稿移 `.tofu_trash/test_abort_fragment_finish_reason.py.orphan_20260731`(沿用兄弟的 broken-wip 归档惯例,可恢复),零 git 足迹(本就未跟踪);epic DONE。
+
 ### 2026-08-01(「按客户端元数据服务器自建」可行性终验通过:用户态 Wine 在锁定容器跑起 Windows python.exe——四连陷阱全实测破解) — owner 重申约定(「不从 GitHub 下载,按客户端元数据编译」);epic `pt_ce4261579c1b4c64`(claimed);设计稿 `docs/DESKTOP_CLIENT_BUILD_DESIGN.md`(commit `3f2cea37` + 本批配方更新);**决定性证据:`wine-11.14` + `Python 3.12.10`(Windows python.exe)在 proot guest 内 exit 0**
 
 - **约定考古:** owner 原始指令(ms91b45tva0sym 逐字)就是「built directly on the server… based on the user's client-side metadata」;当时落地留了「诚实边界」(PyInstaller 不能交叉编译 ⇒ Windows/macOS 镜像供给)——只兑现了「下载不经公网」一半,Windows 用户拿到的仍是 CI 泛型 0.14.2。owner 本次纠正成立:镜像不是约定的形态。**macOS 维持镜像并立档为物理不可建(无 Darwin Python,osxcross 也救不了)——这是设计稿 §7 的永久边界。**

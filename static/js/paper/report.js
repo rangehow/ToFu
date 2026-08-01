@@ -438,6 +438,14 @@ function _applyReportEventRaw(s, ev) {
       return true;
 
     case 'insight': {
+      // v2 structured payload (grounded items with resolved anchor_idx) →
+      // the reading-xp rail distributes anchored cards instead of appending
+      // one end-of-report block. Legacy events (no items) fall through to
+      // the markdown-append path below.
+      if (typeof window._paperXpHandleInsightEvent === 'function'
+          && window._paperXpHandleInsightEvent(s, ev, _reportView(s.kind))) {
+        return true;
+      }
       // The insight pass produced a grounded synthesis/transfer section. It is
       // a self-contained Markdown block (## 💡 …) persisted separately under
       // the `insight:<ui>` key; render it live by appending to the report body
@@ -465,6 +473,20 @@ function _applyReportEventRaw(s, ev) {
       // Gate withheld (report already insight-saturated) or nothing produced.
       // No body change; just clear the running hint.
       s._insightRunning = false;
+      return true;
+
+    case 'report_meta':
+      // Second-pass cost landed after `done` (design §3.3) — the reading-xp
+      // rail swaps the finish tag for one carrying the secondPasses breakdown.
+      if (typeof window._paperXpApplyMetaEvent === 'function'
+          && window._paperXpApplyMetaEvent(s, ev, _reportView(s.kind))) {
+        return true;
+      }
+      if (ev.meta) {
+        s.meta = ev.meta;
+        var _vRm = _reportView(s.kind);
+        if (s.paperId === _activePaperId) _vRm.meta = ev.meta;
+      }
       return true;
 
     case 'termfill': {
@@ -1041,16 +1063,28 @@ function _renderReportFinishTag(meta) {
     '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v1a3 3 0 0 0-3 3 3 3 0 0 0 0 6 3 3 0 0 0 3 3v1a3 3 0 0 0 6 0v-1a3 3 0 0 0 3-3 3 3 0 0 0 0-6 3 3 0 0 0-3-3V5a3 3 0 0 0-3-3z"/></svg>' +
     escapeHtml(meta.model) + '</span>');
   // Cost — prefer CNY (matches the rest of the app), fall back to USD.
+  // Cost visibility (design §3.3): when second passes billed extra, the
+  // headline figure is the TOTAL (body + passes) and the tooltip breaks it
+  // down per pass; with no passes the tag is byte-identical to before.
   var costStr = '';
-  if (typeof meta.costCny === 'number' && meta.costCny > 0) {
-    costStr = (typeof formatCny === 'function') ? formatCny(meta.costCny)
-      : ('¥' + meta.costCny.toFixed(4));
-  } else if (typeof meta.costUsd === 'number' && meta.costUsd > 0) {
-    costStr = '$' + meta.costUsd.toFixed(4);
+  var costTitle = t('paper.finishCostTitle');
+  var _hasPasses = meta.secondPasses && typeof meta.totalCostCny === 'number'
+    && meta.totalCostCny > 0;
+  var _effCny = _hasPasses ? meta.totalCostCny : meta.costCny;
+  var _effUsd = _hasPasses ? meta.totalCostUsd : meta.costUsd;
+  if (typeof _effCny === 'number' && _effCny > 0) {
+    costStr = (typeof formatCny === 'function') ? formatCny(_effCny)
+      : ('¥' + _effCny.toFixed(4));
+  } else if (typeof _effUsd === 'number' && _effUsd > 0) {
+    costStr = '$' + _effUsd.toFixed(4);
+  }
+  if (_hasPasses && typeof window._paperXpCostBreakdown === 'function') {
+    var _bd = window._paperXpCostBreakdown(meta);
+    if (_bd) costTitle = _bd;
   }
   if (costStr) {
     parts.push('<span class="paper-finish-cost" title="' +
-      escapeHtml(t('paper.finishCostTitle')) +
+      escapeHtml(costTitle) +
       '">' + escapeHtml(costStr) + '</span>');
   }
   // Tokens (compact) — secondary detail.
@@ -1447,6 +1481,13 @@ function _renderFinalReport(container, text, meta, view) {
   // Restore the pre-repaint reading position (see _captureReadingAnchor).
   _restoreReadingAnchor(container, article, _readAnchor);
   if (readBar) _wireReadingTimeTracking(readBar, container, view);
+  // Reading-experience rail: distribute anchored insight cards + recap
+  // (no-op unless view._xpInsight carries a v2 payload). AFTER tracking is
+  // wired so inserted cards count toward neither the word estimate nor the
+  // anchor math of this paint.
+  if (typeof window._paperXpAfterRender === 'function') {
+    window._paperXpAfterRender(article, container, view);
+  }
 }
 
 /** Snapshot the reader's place in `scroller` as {index, offset}: the index of
@@ -1889,6 +1930,9 @@ async function _generatePaperReport(force, view) {
       view.stream = null;
       view.cache = data.report;
       view.meta = data.meta || null;
+      // v2 insight payload (structured items with anchor_idx) — the
+      // reading-xp rail distributes it in _renderFinalReport's after seam.
+      view._xpInsight = data.insight || null;
       if (data.paper_hash) _paperHash = data.paper_hash;
       _rememberReportSnapshot(view, data.report, data.meta);
       _persistGeneratedReviewVenue(view, langKey, startPaperId);
@@ -2267,6 +2311,7 @@ async function _loadOrGenerateReport(view) {
     if (cacheData && cacheData.ok && cacheData.report) {
       view.cache = cacheData.report;
       view.meta = cacheData.meta || null;
+      view._xpInsight = cacheData.insight || null;
       if (cacheData.paper_hash) _paperHash = cacheData.paper_hash;
       _rememberReportSnapshot(view, cacheData.report, cacheData.meta);
       _persistGeneratedReviewVenue(view, langKey, startPaperId);
@@ -2302,6 +2347,7 @@ async function _loadOrGenerateReport(view) {
         _syncReportLangToggle(view);
         view.cache = otherData.report;
         view.meta = otherData.meta || null;
+        view._xpInsight = otherData.insight || null;
         if (otherData.paper_hash) _paperHash = otherData.paper_hash;
         _rememberReportSnapshot(view, otherData.report, otherData.meta);
         _saveActivePaperState();

@@ -25,6 +25,89 @@ from ..report_runtime import _append_report_event
 logger = get_logger(__name__)
 
 
+def _merge_second_pass(task, phash, name, payload, *, model=None):
+    """Fold a second pass's billed usage into report_meta['secondPasses'].
+
+    Design §3.3 (cost visibility): every post-report pass (insight /
+    termfill / checkpoints) bills REAL tokens the finish tag must account
+    for. This helper:
+
+      1. updates ``task['report_meta']['secondPasses'][name]`` in place
+         (usage + pass-specific verdict fields + computed cost);
+      2. recomputes the meta's TOTAL cost (body + Σ passes) into
+         ``totalCostCny`` / ``totalCostUsd``;
+      3. re-persists ONLY the meta column of the already-written
+         paper_reports row (the body was persisted before the hooks ran —
+         meta predates the passes, so it must be re-written);
+      4. emits a ``report_meta`` event so a live reader's finish tag hot-
+         updates (the ``done`` event's meta predates the passes).
+
+    Best-effort: any failure logs and returns — the passes themselves are
+    already done and their content events already emitted.
+    """
+    meta = task.get('report_meta')
+    if not isinstance(meta, dict):
+        logger.debug('[Paper:SecondPass] no report_meta on task — skip %s merge', name)
+        return
+    entry = {k: v for k, v in (payload or {}).items() if v is not None}
+    usage = entry.get('usage')
+    if isinstance(usage, dict):
+        try:
+            from lib.cost import compute_cost
+            cost = compute_cost(usage, model_id=model or meta.get('model') or '',
+                                provider_id=meta.get('providerId') or None)
+            if cost:
+                entry['costCny'] = cost.get('costCny')
+                entry['costUsd'] = cost.get('costUsd')
+        except Exception as e:
+            logger.warning('[Paper:SecondPass] %s cost computation failed: %s', name, e)
+    passes = meta.setdefault('secondPasses', {})
+    passes[name] = entry
+
+    # Total = body usage + Σ pass usages (token fields), re-costed once.
+    try:
+        keys = ('prompt_tokens', 'completion_tokens', 'cache_read_tokens',
+                'cache_write_tokens', 'reasoning_tokens')
+        total = {k: int(meta.get(_camel(k), 0) or 0) for k in keys}
+        for p in passes.values():
+            u = (p or {}).get('usage') or {}
+            for k in keys:
+                total[k] += int(u.get(k, 0) or 0)
+        from lib.cost import compute_cost
+        tcost = compute_cost(total, model_id=model or meta.get('model') or '',
+                             provider_id=meta.get('providerId') or None)
+        if tcost:
+            meta['totalCostCny'] = tcost.get('costCny')
+            meta['totalCostUsd'] = tcost.get('costUsd')
+        meta['totalUsage'] = total
+    except Exception as e:
+        logger.warning('[Paper:SecondPass] total-cost computation failed: %s', e)
+
+    # Meta-only re-persist (body untouched). The row was written before the
+    # hooks ran; UPDATE the single column rather than re-upserting the body.
+    try:
+        import json as _json
+        from lib.database import get_thread_db
+        db = get_thread_db()
+        db.execute(
+            "UPDATE paper_reports SET meta = ? WHERE paper_hash = ? AND lang = ?",
+            (_json.dumps(meta, ensure_ascii=False), phash, task.get('lang') or ''))
+        logger.info('[Paper:SecondPass] meta re-persisted — hash=%s pass=%s',
+                    phash, name)
+    except Exception as e:
+        logger.warning('[Paper:SecondPass] meta re-persist failed hash=%s pass=%s: %s',
+                       phash, name, e)
+
+    _append_report_event(task, {'type': 'report_meta', 'paperHash': phash,
+                                'meta': meta})
+
+
+def _camel(snake_key):
+    """prompt_tokens → promptTokens (the report meta's camelCase usage keys)."""
+    parts = snake_key.split('_')
+    return parts[0] + ''.join(p.title() for p in parts[1:])
+
+
 def _maybe_run_insight(task, phash, ui_lang, report_md, *, truncated_paper, model):
     """Run the gated insight second-pass after a report completes (best-effort).
 
@@ -44,7 +127,9 @@ def _maybe_run_insight(task, phash, ui_lang, report_md, *, truncated_paper, mode
     from ..insight_engine import insight_enabled, run_report_insight
     from ..review import is_review_family
 
-    if not insight_enabled():
+    # Four-level enable chain (design §3.4): per-request cfg (headless stamp
+    # / opt-in) > server_config user toggle > env fleet seed > default ON.
+    if not insight_enabled(task.get('config')):
         return
     if is_review_family(task.get('lang') or ''):
         return
@@ -76,15 +161,30 @@ def _maybe_run_insight(task, phash, ui_lang, report_md, *, truncated_paper, mode
         abort=_abort, on_tool_event=_on_tool_event,
         allow_personal_context=allow_personal)
 
+    # Cost visibility (design §3.3): fold this pass's billed usage into the
+    # report meta's secondPasses breakdown, re-persist the row's meta, and
+    # notify live readers via a report_meta event — whether or not the gate
+    # fired (a withheld gate still paid for the rubric scoring).
+    _merge_second_pass(task, phash, 'insight', {
+        'fired': result.get('fired', False),
+        'baseline': result.get('baseline'),
+        'usage': result.get('usage'),
+    }, model=model)
+
     if result.get('markdown') and result.get('insight'):
         task['insight_text'] = result['markdown']
         _append_report_event(task, {
             'type': 'insight', 'paperHash': phash,
             'insight': result['markdown'],
+            # v2 structured payload (grounded items with resolved anchor_idx)
+            # — the reader distributes anchored cards from this; the markdown
+            # stays for legacy/plain rendering.
+            'items': result.get('insight'),
             'lang': ui_lang,
             'baseline': result.get('baseline'),
             'grounded': result.get('grounded', 0),
             'selfref': result.get('selfref', 0),
+            'anchors': result.get('anchors'),
         })
         logger.info('[Paper:Insight] Emitted insight — hash=%s fired=%s baseline=%s '
                     '%d chars', phash, result['fired'], result.get('baseline'),
@@ -136,6 +236,10 @@ def _maybe_run_termfill(task, phash, ui_lang, report_md, report_meta, *, model):
                 'gaps=%s', phash, ui_lang, audit.get('counts'))
     result = run_report_termfill(report_md, ui_lang, phash=phash, model=model,
                                  audit=audit)
+    _merge_second_pass(task, phash, 'termfill', {
+        'closed': result.get('closed', False),
+        'usage': result.get('usage'),
+    }, model=model)
     if result.get('markdown') and result.get('closed'):
         task['termfill_text'] = result['markdown']
         _append_report_event(task, {

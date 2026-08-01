@@ -184,6 +184,52 @@ def _parse_report_meta(row):
 
 
 
+def _parse_insight_row_meta(row):
+    """Decode an insight row's meta JSON; None when absent/legacy/malformed."""
+    raw = row.get('meta') if hasattr(row, 'get') else None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.debug('[Paper:Report] Bad insight meta JSON: %s', e)
+        return None
+
+
+async def _load_cached_insight_payload(phash, lang):
+    """Load the STRUCTURED insight payload for a v2 row, else None.
+
+    v2 rows (meta carries grounded ``items`` with resolved ``anchor_idx``) are
+    served as a separate payload so the reader can distribute anchored cards
+    (design §3.2) — their markdown is NOT merged into the report body. v1
+    rows (legacy, meta without items) return None here and keep the merged
+    read path in ``_append_cached_insight``.
+    """
+    if is_review_lang(lang):
+        return None
+    ui_lang = parse_report_lang(lang)['ui_lang']
+    try:
+        from lib.paper.insight_engine import insight_lang_key
+        ins_row = await async_fetchone(
+            "SELECT report, meta FROM paper_reports WHERE paper_hash = ? AND lang = ?",
+            (phash, insight_lang_key(ui_lang)), domain=DOMAIN_CHAT,
+        )
+    except Exception as e:
+        logger.warning('[Paper:Report] Cached-insight payload lookup failed hash=%s: %s',
+                       phash, e)
+        return None
+    if not ins_row or not ins_row['report']:
+        return None
+    meta = _parse_insight_row_meta(ins_row)
+    if not isinstance(meta, dict) or not isinstance(meta.get('items'), dict):
+        return None
+    return {'items': meta['items'],
+            'baseline': meta.get('baseline'),
+            'usage': meta.get('usage'),
+            'markdown': ins_row['report'],
+            'lang': ui_lang}
+
+
 async def _append_cached_insight(body, phash, lang):
     """Merge the sibling persisted ``insight:<ui>`` row into a cached report body.
 
@@ -197,7 +243,10 @@ async def _append_cached_insight(body, phash, lang):
       * skips Review Mode entirely (insight is only produced for plain reports);
       * no-op when no insight row exists / it is empty;
       * never double-appends if ``body`` already contains the section (a cache
-        row that was persisted with the insight baked in, or a re-entry).
+        row that was persisted with the insight baked in, or a re-entry);
+      * v2 rows (structured items in meta) are NOT merged — the reader gets
+        them via ``_load_cached_insight_payload`` and distributes anchored
+        cards client-side.
     """
     if is_review_lang(lang):
         return body
@@ -206,7 +255,7 @@ async def _append_cached_insight(body, phash, lang):
     try:
         from lib.paper.insight_engine import insight_lang_key
         ins_row = await async_fetchone(
-            "SELECT report FROM paper_reports WHERE paper_hash = ? AND lang = ?",
+            "SELECT report, meta FROM paper_reports WHERE paper_hash = ? AND lang = ?",
             (phash, insight_lang_key(ui_lang)), domain=DOMAIN_CHAT,
         )
     except Exception as e:
@@ -214,14 +263,21 @@ async def _append_cached_insight(body, phash, lang):
         return body
     if not ins_row or not ins_row['report']:
         return body
+    # v2 row → served as structured payload, never merged (see above).
+    _meta = _parse_insight_row_meta(ins_row)
+    if isinstance(_meta, dict) and isinstance(_meta.get('items'), dict):
+        return body
     section = ins_row['report'].strip()
     if not section:
         return body
-    # Idempotency: the insight section header is a stable marker. If the body
-    # already carries it (baked-in cache row / prior append), do not duplicate.
-    marker = '## 💡'
+    # Idempotency: if the body already carries the section (baked-in cache row
+    # / prior append), do not duplicate. Match the section's exact HEADER LINE —
+    # NOT a bare '## 💡' substring: real reports legitimately contain '## 💡
+    # Method — How It Works', which the old bare-marker clause mistook for an
+    # already-merged insight section, silently suppressing the merge for any
+    # report with a 💡 Method heading (caught by the P0 suite's v1-merge case).
     header_line = section.splitlines()[0].strip() if section else ''
-    if (header_line and header_line in body) or (marker in body and marker in section):
+    if header_line and header_line in body:
         return body
     logger.info('[Paper:Report] Merged cached insight into reopened report — '
                 'hash=%s key=%s (+%d chars)', phash, insight_lang_key(ui_lang), len(section))
@@ -528,6 +584,9 @@ async def start_report_task():
                     appendix=not is_review_family(lang),
                     allow_images=not is_review_family(lang))
                 enriched = _ensure_title_heading(enriched, phash)
+                # Structured insight payload (v2 rows) — the reader distributes
+                # anchored cards from it. Legacy rows merge into the body below.
+                _insight_payload = await _load_cached_insight_payload(phash, lang)
                 # Merge the sibling persisted insight section so a reopened
                 # paper shows it (read-only; never regenerates).
                 enriched = await _append_cached_insight(enriched, phash, lang)
@@ -548,12 +607,15 @@ async def start_report_task():
                     except Exception as e:
                         logger.warning('[Paper:Report] Cache-path title backfill failed '
                                        'hash=%s: %s', phash, e)
-                return api_ok({
+                _resp = {
                     'cached': True,
                     'report': enriched, 'paper_hash': phash,
                     'meta': _cached_meta,
                     'resolvedTitle': resolved_title,
-                })
+                }
+                if _insight_payload:
+                    _resp['insight'] = _insight_payload
+                return api_ok(_resp)
         except Exception as e:
             logger.warning('[Paper:Report] DB cache lookup failed (will start task): %s', e)
 
@@ -1175,12 +1237,16 @@ async def get_report_cache():
                                                   appendix=not is_review_family(lang),
                                                   allow_images=not is_review_family(lang))
             enriched = _ensure_title_heading(enriched, phash)
+            _insight_payload = await _load_cached_insight_payload(phash, lang)
             enriched = await _append_cached_insight(enriched, phash, lang)
             _cache_meta = _parse_report_meta(row)
             enriched, _cache_meta = await _merge_cached_termfill(
                 enriched, _cache_meta, phash, lang)
-            return api_ok({'report': enriched, 'paper_hash': phash,
-                           'meta': _cache_meta})
+            _resp = {'report': enriched, 'paper_hash': phash,
+                     'meta': _cache_meta}
+            if _insight_payload:
+                _resp['insight'] = _insight_payload
+            return api_ok(_resp)
     except Exception as e:
         logger.warning('[Paper:Report:Cache] Lookup failed: %s', e)
 

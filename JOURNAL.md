@@ -1,3 +1,11 @@
+### 2026-08-03(单字节 Range 探测 500 根修:file_serving 缝统一五路由 + 兄弟四件实测移交全部闭环) — 兄弟 msbwca9y 实测移交;commit `a76340a4`(6 文件);环 **44+54 绿**,NEUTER 实证(裸 quart 路径 bytes=0-0 仍 500);预存红×2 另案 `pt_275e143a92374dec`
+
+- **病灶(库对连环 off-by-one):** quart `_process_range_request` 把 `end - 1` 当 inclusive stop 传给 werkzeug `ContentRange.set`,后者 `is_byte_range_valid` 对 `start >= stop` 一律拒——单字节 Range(bytes=0-0/5-5,**每个下载器的 resume 探测**)触发 `AssertionError: Bad range provided` 逃逸成 500;多字节与 416 与裸 GET 全好。兄弟在线上连测两次实证(200 vs 500)。
+- **修法(一条缝,不五份 try/except):** `lib/file_serving.send_file_conditional`——同步形(server.py 的 _sync_safe shim 语境,async 包装会返回协程对象当响应)、**call-time import**(shim 在 app 构建期换装 quart.send_file,模块级 import 会拿到 pre-shim 快照)、catch 窄化到 `'Bad range provided'`(其它断言绝不吞),命中即落 full-body 200(规范合法:服务器恒可忽略 Range)+ warning 取证。五调用点(desktop 下载/paper image/pdf/motion file/scene file)全换缝。
+- **测试账:** 新缝套件 5 检查(裸 GET/probe 不 500/206 不降级/416 不动/NEUTER 裸路径仍 500);paper_pdf_range 的 NC 重锚(rp.send_file → fs.send_file_conditional,路由已不走旧名);206 的 Content-Range stop 是库自有的又一格 off-by-one(报 0-98 发 100 字节)——钉住缝所拥有的契约(status+body+总长),库 stop 数字不钉,上游修复日自翻。
+- **兄弟四件其余三件:** ①「线上 bundle 无逃生口」=**针选错**——i18n 键按设计抽进 pack 不入 bundle,实测 bundle-2fcd7c3c 含 lcMintBtnSrc、i18n-zh-325c95d7 含 tunnelToggle;②直链 53MB PE 可下(其实证);④22:30 的 authed POST = **我自己的**桥 auth 探针(egress key 实测 200),无第三方。
+- **纪律:** 共享树又现兄弟 stash(pt_871a26c7 代为保管),我的 stash 实验误撞——未动其 stash 分毫,其父提交干净复验预存红后原样还原;motion 资产字体族 2 红证为父提交同红(预存,另案挂板)。
+
 ### 2026-08-02(隧道误判根修落地:local_source 折叠逃生口 + 合并套件明文记例外——兄弟交接收编闭环) — epic `pt_59b62951aad2463e`;commit `c4130943`(5 文件);环 **47/47**(merge 45+agent_download 2);bundle-2fcd7c3c / i18n-zh-325c95d7 重建
 
 - **收编定案(兄弟 msbwca9y 现场定案移交):** owner 经 ssh -L 访问→peer=loopback→`_setup_state` 误 local_source→面板只教「装完整桌面版」→办公机装出第二份 Tofu,bundled server 抢 14963(15000 被隧道占)其 agent 自轮询——服务器侧 agents 恒空的真因。**修法选面不选判:** 隧道对服务端结构性不可见(任何重分类都是猜测,`_setup_state` docstring 记档「此处无物可测」),local_source 加 `<details>` 折叠逃生口「从另一台电脑访问本服务器?(如 ssh 端口转发)」——内嵌受控端下载+铸连接行(id 区分 lcMintBtnSrc),真本地用户零打扰(折叠),隧道用户得生路。

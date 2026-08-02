@@ -164,6 +164,15 @@ behaviour is byte-identical; its suite proves it).
   call shape as today.
 - The preseed write (`_write_preseed`) is already target-agnostic — it
   drops the file next to whatever exe the payload carries.
+- **The agent target DROPS a loopback/unspecified preseed** (loud log,
+  `_agent_safe_preseed_url`; measured 2026-08-02: the first artifact
+  baked `http://127.0.0.1:15000` from a server-local build request — a
+  remote machine would attach to its OWN loopback, never reach the
+  server, and never see the connect dialog because an attachment
+  exists). Baking nothing makes first run ask for the connect line —
+  one paste, always right. The full target keeps loopback preseeds
+  byte-identically: its primary case is the server's own machine
+  (local_source), where loopback is exactly correct.
 - **Boot autostart (owner amendment ①).** The agent's primary scene is
   an UNATTENDED relay/egress machine — one Windows-Update reboot silently
   kills the bridge until someone notices failed traffic. The NSIS
@@ -241,6 +250,20 @@ Each row carries a one-line role gloss — "受控端：只让这台电脑被服
 操作（轻量，无界面，托盘配置）" vs "完整版：这台电脑自己跑 Tofu
 （服务器+界面）" — so the choice needs no filename literacy. i18n keys
 follow the existing `local.desktopDownload*` family.
+
+**Rendering, final form (2026-08-02, owner: minimize cognitive load).**
+The remote branch is a NUMBERED flow (like the browser row's ①②③), not
+a layout the user must infer a sequence from: ① download the agent
+(button-styled link + 服务器直连 chip + size) → ② mint the connect line
+(auto-copied on success, toast) → ③ paste into the agent's first-run
+connect box. The full-app offer collapses into a one-line `<details>`
+secondary (zero JS). Two shapes, chosen by backend facts: the default
+3-step, and a **zero-touch 2-step** when the artifact carries a usable
+preseed AND the bridge needs no token — "install and it connects by
+itself". The payload projects the two raw facts
+(`bridge_token_required`, per-entry `preseed_url`); absent
+`bridge_token_required` reads as REQUIRED (the 3-step flow also works
+on an open bridge — the fail-safe direction).
 
 ## 5. Distribution surfaces — the three owner decisions (2026-08-02)
 

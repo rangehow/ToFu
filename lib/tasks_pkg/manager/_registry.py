@@ -426,6 +426,10 @@ def discard_task(task_id: str, conv_id: str | None = None) -> None:
     logger.info('[Manager] discard_task: task=%s conv=%s popped=%s caller=%s',
                 (task_id or '?')[:8], (conv_id or '')[:8],
                 bool(_popped), _caller)
+    if conv_id:
+        with _conv_latest_task_lock:
+            if _conv_latest_task.get(conv_id) == task_id:
+                del _conv_latest_task[conv_id]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -595,10 +599,7 @@ def make_task_abort_check(task: dict):
         return False
 
     return _check
-    if conv_id:
-        with _conv_latest_task_lock:
-            if _conv_latest_task.get(conv_id) == task_id:
-                del _conv_latest_task[conv_id]
+
 
 def write_carrier_terminal_row(task, status: str) -> None:
     """Persist a terminal ``task_results`` row for a synchronous CARRIER task.

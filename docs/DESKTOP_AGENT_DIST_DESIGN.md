@@ -380,6 +380,18 @@ Alternatives considered and rejected:
   `test_installer_parity.py` extended to both components AND the
   autostart contract + first real
   `TofuAgent-Setup-<ver>-win64.exe` recorded `kind='agent'` in the store.
+  **LANDED 2026-08-02** (`eebbec35` + `c9d51216` + `da4a6c66`):
+  `TofuAgent-Setup-0.16.0-win64.exe` — **53,185,986 B (35% of the full
+  installer)**, `kind='agent'`, preseeded. Two measured lessons, both
+  now pinned: (a) the renderer is a global replace, so a code-valued
+  placeholder named in a COMMENT expanded there and makensis aborted —
+  @-tokens are banned from comments and the parity suite pins the leak
+  signature; (b) the kindless agent artifact SHADOWED the full
+  installer on the shared platform row (same version, same source,
+  newer wrap) — the §4.6 kind filter was pulled forward from A3 into
+  `store.find_for_platform` (default 'full', byte-identical for all
+  current callers) with a regression test, because the shadowing was
+  live the moment the first artifact landed.
 - **A2b** (CI, same change as the gates) — `build-desktop.yml` agent
   legs (windows/macos/linux runners, §5.3, Inno autostart `[Tasks]`
   equivalent) + `AGENT_PLATFORM_ASSETS`

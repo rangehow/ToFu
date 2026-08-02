@@ -1,3 +1,11 @@
+### 2026-08-02(A2 落地:首个 agent 安装包入店 53.2MB(完整版 35%)+ 两枚实测陷阱各钉一根守卫) — epic `pt_59b62951aad2463e`;commits `eebbec35`(参数化+kind 轴)+ `c9d51216`(注释禁 @ 令牌)+ `da4a6c66`(kind 过滤前置);套件 **53+82 绿**;NEUTER×2 精确(剥自启值→2 红/回注 @ 令牌→1 红)
+
+- **A2 四件:** ①NSI 模板全参数化(APP_NAME/APP_EXE/INSTALL_DIR/COMPONENTS_PAGE/INSTALL_REQUIRED/AUTOSTART_SECTION/AUTOSTART_UNINSTALL,完整版渲染行为逐字节等价);②自启组件=components 页默认勾「Start with Windows」写 HKCU Run 键+主段 SectionIn RO+卸载无条件清键——值名与 agent_launcher._RUN_VALUE 同键(parity 跨文件钉);③wrap_payload target 维度(exe 校验/命名/kind 入录,完整版默认参数零变化);④parity 套件改「渲染后断言」重写+自启契约+泄漏签名钉。
+- **首个真 artifact:** `TofuAgent-Setup-0.16.0-win64.exe` **53,185,986 B**(完整安装包 152.9MB 的 ~35%),kind='agent',preseed 隧道址,makensis 真编译 components 页过。
+- **实测陷阱一(渲染器全局替换咬人):** 模板头注释里的 `@AUTOSTART_SECTION@` 文档令牌被全局替换成代码段——WriteRegStr 落到 Section 外,makensis 首次真包装即 abort;parity 套件因只查存在性全程绿。修法=注释永禁 @ 令牌+parity 钉泄漏签名(SectionEnd 带尾文本)。**failing-first 的教训变体:源钉套件查存在性查不出「多余的出现」。**
+- **实测陷阱二(kindless agent 抢行):** agent 包与完整版同 version 同 source 同行,wrap 更新即抢走 find_for_platform 的 windows 行——面板会把 agent 包发给要完整版的用户。§4.6 的 kind 过滤从 A3 前置止血(默认 'full' 全部调用方字节不变)+ 回归测试 + 真店实测双行各归其位。
+- **事故自记(第二次同类):** NEUTER 后 `git checkout --` 把**未提交**的 A2 改动一并冲掉(上次是 insert_content 锚点复制)——先提交再玩 NEUTER,或 NEUTER 用 sed 逆操作恢复;已按此重做一次并各自验证。另:pytest 经 `| tail` 管道退出码被吞致红测试被提交,后 amend 修正——管道收尾必须重跑确认。
+
 ### 2026-08-02(autopilot 搁浅根修第二半:接力闸尸体容忍 + store 镜像尸体清除——与兄弟 `630b4af5` 互补闭环) — owner 截图三连问(信号好/侧栏闲/发送键活,为何 VU 气泡后无 agent 回复);commit `052e3fc5`(7 文件);新套件 **6 检查**(failing-first 精确 4 红)+ 邻接环 **168+43 绿** + 合并树终验(兄弟守卫+接力两族)**20/20**
 
 - **全链定案(三层各自无过,接力面双缺口):** 后端日志+事件流实证——父任务 a0fa289b 完结→VU 载体 d5bf109a 制出回复**已落库**(11:49:29)→载体 discard→`maybe_run_autopilot` 末检 `_successor_already_running` 读到 conv→latest 索引里指向**死载体**的指针,误判「Superseded (a newer task owns conv)」让位收官,follow-up 永不孵化。前端三指标全部**如实**(无一任务在跑=侧栏闲/发送键活;同步链好=信号好)——是后端接力死了,不是显示错了。6.5 分钟后 brain dispatch 碰巧救活(5fd07a96)。

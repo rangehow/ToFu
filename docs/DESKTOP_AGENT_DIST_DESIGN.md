@@ -56,7 +56,7 @@ concrete costs today:
 | Fact | Consequence |
 |---|---|
 | Module-level import sweep of `lib/desktop_agent/`: `requests`, `lib.log` (stdlib-only), `lib.json_store`; `pyautogui` / `pyperclip` / `psutil` / Pillow are **guarded optional** imports (`_gui.py:38-53`, `_exec.py:92-95`). `config.py` adds only `lib.json_store` | The frozen agent needs NONE of Quart/Flask/Hypercorn/psycopg2/playwright/trafilatura/pymupdf/lxml/bs4/mcp — i.e. none of the 152 MB bulk. The size claim is an import-graph fact, not a hope |
-| Full payload measured 152.7 MB / 3316 files (S2 payload, 2026-08-01) | Agent-only onedir estimate ≤ ~45 MB (Python 3.12 runtime + requests + pyautogui stack + pillow + psutil + pystray/pywin32 + tkinter + optional curl_cffi). **Estimate, to be measured in slice A1** — the toolchain is provisioned, weighing is one build |
+| Full payload measured 152.7 MB / 3316 files (S2 payload, 2026-08-01) | **Agent payload MEASURED (A1, 2026-08-02): 84.8 MB / 1904 files onedir, 53.0 MB tarball** — ~55% of full unpacked, ~35% of the full installer compressed. Banned sweep of the real artifact: zero quart/flask/hypercorn/psycopg2/playwright/trafilatura/fitz entries; tkinter present. Build time ~2.6 min vs the full build's half hour |
 | Userspace Wine toolchain + native NSIS are provisioned and proven (`wintoolchain.py` S1–S3, epic `pt_ce4261579c1b4c64`); `installer.nsi.tmpl` + `test_installer_parity.py` exist | The agent build is a SECOND PyInstaller target on the SAME toolchain. Zero new infrastructure; the parity-contract pattern already absorbs "two authorings, one contract", so "two components, one contract" is the same move again |
 | The preseed contract is launch-side: `preseed_server.json` next to the exe, one-shot, non-secret (URL only), never overrides an existing attachment (`launcher.py::_import_preseed`) | Reusing it for the agent costs moving one small function to a shared module |
 | `launcher.py::_prompt_connect_line` + `desktop/_tk_theme.py` are a dependency-light config UI (tkinter — shipped by the python.org Windows Python the payload already embeds); `lib/desktop_agent/config.py::parse_connect_line` owns the connect-line wire format | The agent's entire "configuration capability" (owner's words) already exists as ~100 lines of tkinter. The dialog parses through the same owner of the format, so UI and wire can never drift |
@@ -367,6 +367,13 @@ Alternatives considered and rejected:
   the payload cache-hit logic. Acceptance: a REAL agent payload built on
   the provisioned toolchain, **weighed** (the §2 estimate becomes a
   measurement), smoke exit 0 under wine, import-graph proof green.
+  **LANDED 2026-08-02** (`3e5696f5` + `d773be5e` + `85c88049`):
+  `payload-agent-85c88049dfff-…tar.gz` (53.0 MB), smoke
+  `TOFU_AGENT_SMOKE_OK version=0.16.0 commands=19` under wine. The smoke
+  gate caught a REAL latent defect on first contact: the nuget CPython
+  ships no tkinter (0 tcl files in the nupkg) — the shipped FULL
+  installer's connect dialog was dead in the wild; fixed at the root
+  (python.org tcltk.msi graft into the shared winpy).
 - **A2** — NSIS template parametrization + Half B target support +
   **autostart task (§4.4: components page, default-on HKCU Run value,
   uninstaller cleanup)** + tray autostart toggle + 

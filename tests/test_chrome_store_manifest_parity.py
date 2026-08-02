@@ -404,6 +404,31 @@ def test_the_kit_does_not_sell_edge_as_a_free_pass_on_remote_code():
         'remote code under MV3 — the kit now oversells the Edge route')
 
 
+def test_the_popup_version_badge_is_derived_not_remembered():
+    """The popup badge sat at ``v4.3`` while the manifest moved on — a
+    hardcoded twin nobody bumped (user-reported 2026-08-02: the extension
+    page said 4.5.x, the popup said v4.3, and it read as "did my update
+    not land?"). The badge is now filled from ``chrome.runtime.getManifest``
+    at popup open so it CANNOT drift; these pins keep it derived.
+
+    Same drift family as ``test_store_manifest_version_matches_the_shipped_code``
+    and ``test_no_document_pins_a_stale_extension_version`` — one version
+    fact, one owner, every display derived.
+    """
+    html = (EXT_DIR / 'popup.html').read_text(encoding='utf-8')
+    assert not re.search(r'class="version"[^>]*>\s*v?\d', html), (
+        'popup.html hardcodes a version badge again — it goes stale on the '
+        'very next manifest bump. The badge is derived from the manifest at '
+        'runtime; keep it that way.')
+    assert 'id="versionBadge"' in html, (
+        'popup.html lost the versionBadge anchor popup.js fills')
+    js = (EXT_DIR / 'popup.js').read_text(encoding='utf-8')
+    assert 'versionBadge' in js and 'getManifest().version' in js, (
+        'popup.js no longer fills the badge from chrome.runtime.getManifest()'
+        ' — the badge is static again, which is exactly the drift this guard '
+        'exists to prevent')
+
+
 def test_no_document_pins_a_stale_extension_version():
     """SUBMISSION_CHECKLIST told the submitter to look for a
     ``4.3.0-store.zip`` that ``package_extension.sh`` would never produce

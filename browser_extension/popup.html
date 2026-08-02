@@ -27,7 +27,7 @@
   </style>
 </head>
 <body>
-  <h1>✦ Tofu Browser Bridge <span class="version">v4.3</span></h1>
+  <h1>✦ Tofu Browser Bridge <span class="version" id="versionBadge"></span></h1>
 
   <div class="status-row">
     <div id="statusDot" class="status-dot disconnected"></div>
@@ -45,9 +45,9 @@
     <button id="saveBtn" class="btn-save">Save</button>
   </div>
 
-  <label>Bridge Secret <span style="color:#555">(optional, set if server requires it)</span></label>
+  <label>Bridge Secret <span style="color:#555">(required — an agents:bridge API key, or the server's bridge secret)</span></label>
   <div class="input-row">
-    <input id="bridgeSecret" type="password" placeholder="leave blank if not configured" autocomplete="off">
+    <input id="bridgeSecret" type="password" placeholder="paste an agents:bridge key (tofu_live_…)" autocomplete="off">
     <button id="saveSecretBtn" class="btn-save">Save</button>
   </div>
 

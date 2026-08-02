@@ -1,6 +1,10 @@
-// Tofu Browser Bridge — Popup (v4.3)
+// Tofu Browser Bridge — Popup
 
 document.addEventListener('DOMContentLoaded', () => {
+  // The badge is DERIVED from the manifest — its hardcoded twin sat at
+  // v4.3 through two version bumps and read as "you didn't update".
+  const badge = document.getElementById('versionBadge');
+  if (badge) badge.textContent = 'v' + chrome.runtime.getManifest().version;
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
   const serverInput = document.getElementById('serverUrl');

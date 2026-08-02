@@ -1,3 +1,16 @@
+### 2026-08-02(A3 落地:agent 安装包从「在店」到「够得着」——kind 轴全链 + remote 分支矩阵 + 漂移投影) — epic `pt_59b62951aad2463e`;commit `069776f8`(10 文件);环 **207/207**(dist+builders+parity+前端 harness+bundle/i18n+bridge)
+
+- **后端 kind 轴五节:** release_assets.py 新增 AGENT_PLATFORM_ASSETS(4 行同形,globs TofuAgent- 前缀零碰撞;**刻意不入 REQUIRED**——入 REQUIRED 即触发自愈重建,必须与 A2b 的 CI 腿原子落地,注释写死);platforms/store/mirror 全链 kind 参数(默认 'full' 处处字节不变;mirror 双表迭代录 kind,剪枝救援谓词同 kind 匹配);winbuilder start/build_installer target 穿线。
+- **路由三面:** status 载荷增 `agent_downloads`(与 downloads 同形,条目带 kind)+ agents 经 `_with_drift` 投影 outdated(双版本皆知且不等才 true——versionless legacy 只算 unknown 绝不哭狼);devices 同旗;`/desktop/build` 收 `{"kind":"agent"}`;autobuild 门**按 kind 独立**(built full 不压 agent kick——旧测试的「有 built 即静默」假设更新为 per-kind 契约并补齐四态)。
+- **前端矩阵(§4.7 定案形态):** remote 分支 agent 主推(受控端·轻量+服务器直连 chip+体积+角色注解)+ 完整版一行次级链,逃生口只出现一次;`agent_downloads` 空时**回退历史渲染绝不留空主位**(stale-while-build);local_source 完整版主推零 agent 词。i18n 四键 zh/en;bundle+packs 已重建(bundle-ed1350eb / i18n-zh-66a0f9eb,键实测入包)。
+- **纪律:** JSDOM harness 15 检查+NEUTER(阉 agent 分支→≥3 红);两处锚点重复自伤(insert_content 把锚文本写进 content——本 turn 第三次同类,desktop.py 与 test_desktop_dist.py 各一)逐行修复;`global _AGENT_ASSETS_CACHE` 漏声明 UnboundLocalError 当场抓回。
+- **剩余切片:** A2b(CI 三平台 agent 腿+REQUIRED 合流,workflow+gates 同 PR 原子)+ A4(docs 退役「拷仓库」临时路径);egress 移交验收(真机 OAuth)挂 §10 待人答。
+
+### 2026-08-02(预存红闭环:premature-finish-bar 针串重钉——仅针串漂移,契约意图不变) — 脑派发接我自票 `pt_2d8c58bdaa3a476e` **DONE**;commit `df949f37`(1 文件 +9/−5);邻接环 **120/120**
+
+- **定案:** 针串 `if (!_terminal && isLiveTail) return "";` 被 c6989082 加宽为 `…(isLiveTail || msg.interruptedReason)…`(ms43foj3 冻结条根修,姊妹套件 test_frontend_finish_info_interrupted 已钉新形态)。本测试的宽矩阵契约(preset/effort-only 抑制、undefined-isLiveTail、usage-only 竖条)仍成立——按「原契约意图修、不登记豁免」重钉 sanity 针 + harness double-neuter 针 + docstring。
+- **验证:** 内置 double-neuter 步骤实证新针负重(neuter_patch_applied + neuter_emits_premature_bar 双 PASS);姊妹 interrupted 套件 2/2 不惊扰;含 canned-greeting 批的邻接环从 117/118 收敛到 **120/120 全绿**。
+
 ### 2026-08-02(A2 落地:首个 agent 安装包入店 53.2MB(完整版 35%)+ 两枚实测陷阱各钉一根守卫) — epic `pt_59b62951aad2463e`;commits `eebbec35`(参数化+kind 轴)+ `c9d51216`(注释禁 @ 令牌)+ `da4a6c66`(kind 过滤前置);套件 **53+82 绿**;NEUTER×2 精确(剥自启值→2 红/回注 @ 令牌→1 红)
 
 - **A2 四件:** ①NSI 模板全参数化(APP_NAME/APP_EXE/INSTALL_DIR/COMPONENTS_PAGE/INSTALL_REQUIRED/AUTOSTART_SECTION/AUTOSTART_UNINSTALL,完整版渲染行为逐字节等价);②自启组件=components 页默认勾「Start with Windows」写 HKCU Run 键+主段 SectionIn RO+卸载无条件清键——值名与 agent_launcher._RUN_VALUE 同键(parity 跨文件钉);③wrap_payload target 维度(exe 校验/命名/kind 入录,完整版默认参数零变化);④parity 套件改「渲染后断言」重写+自启契约+泄漏签名钉。

@@ -406,6 +406,16 @@ Alternatives considered and rejected:
   same-HEAD installer"). Parity suite for the `downloads[]` shape (the
   api-contract discipline: shape pinned by test); frontend JSDOM harness
   for the primary/secondary link branches.
+  **LANDED 2026-08-02** (`069776f8`): status payload carries
+  `agent_downloads` (entries with `kind`); `_with_drift` flags outdated
+  agents in status + devices (versionless legacy = unknown, never a
+  false flag); autobuild is per-kind (a built full never suppresses a
+  missing agent build); the remote branch renders the agent installer
+  primary with the full app as one-line secondary plus a
+  stale-while-build fallback; mirror iterates both tables and records
+  kind. `AGENT_PLATFORM_ASSETS` stays OUT of
+  `REQUIRED_PLATFORM_ASSETS` until A2b (the join must be atomic with
+  the CI legs, or every publish fails its own completeness gate).
 - **A4** (docs only) — `desktop/README.md` + `DESKTOP_EGRESS_DESIGN.md`
   §11: retire the "copy the whole repo" stopgap in favour of the agent
   installer; README download table gains the two-component rows.

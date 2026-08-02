@@ -194,3 +194,21 @@ def test_every_placeholder_is_substituted_in_both_renderings():
     for p in wb._NSI_PLACEHOLDERS:
         assert p not in _FULL, f'{p} left unrendered in the full script'
         assert p not in _AGENT, f'{p} left unrendered in the agent script'
+
+
+def test_no_section_commands_leak_into_comments():
+    """The 2026-08-02 collision: the renderer is a global replace, so a
+    code-valued placeholder named in a COMMENT expanded there —
+    WriteRegStr outside any Section, and makensis aborted (measured on
+    the first real agent wrap). Comments must stay comment-only."""
+    for script in (_FULL, _AGENT):
+        for line in script.splitlines():
+            if 'SectionEnd' in line:
+                assert line.strip() == 'SectionEnd', (
+                    f'SectionEnd carrying trailing text: {line!r} — a '
+                    'code-valued placeholder expanded inside a comment '
+                    '(the renderer replaces everywhere; keep @-tokens '
+                    'out of comments)')
+            if line.lstrip().startswith(';'):
+                assert 'WriteRegStr HKCU' not in line
+                assert 'DeleteRegValue HKCU' not in line

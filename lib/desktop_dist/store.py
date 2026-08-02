@@ -198,7 +198,8 @@ def find_for_platform(os_key: str, arch: str = '',
 
     arts = artifacts()
     out = []
-    for _os, _arch, _label, _pat, _min in _platform_rows_for(os_key, arch):
+    for _os, _arch, _label, _pat, _min in _platform_rows_for(os_key, arch,
+                                                             kind):
         cands = [a for a in arts.values()
                  if isinstance(a, dict)
                  and a.get('kind', 'full') == kind

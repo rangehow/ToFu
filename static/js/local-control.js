@@ -454,24 +454,44 @@ function _lcRenderDesktop(d, err) {
       return;
     }
 
-    default:
-      // Remote server — the user's machine is NOT this machine, so this is
-      // the only case that needs a token. Three things must be present or the
-      // instruction is not actionable: WHERE to get the app, HOW to connect
-      // it, and WHAT address to point it at. A bare token would leave the
-      // user holding a secret with nowhere to put it.
+    default: {
+      // Remote server — the machine in front of the user is NOT this
+      // machine, so this is the only case that needs a token. Its role in
+      // this dialog is to be CONTROLLED (the A3 branch matrix): the agent
+      // installer (lightweight, no frontend) is the PRIMARY offer; the
+      // full desktop app is a one-line secondary for "this machine also
+      // runs Tofu". When no agent artifact exists yet (a build is in
+      // flight), the full installer takes the primary slot with the
+      // historical instruction — stale-while-build, never a dead end.
       var dl = (d.download_url || '').trim();
       var srv = (d.server_url || '').trim();
-      setup.innerHTML =
-        '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemote',
-          'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：')) + '</p>' +
-        _lcDownloadLinks(d) +
+      var agentPicks = Array.isArray(d.agent_downloads)
+        ? d.agent_downloads : [];
+      var html;
+      if (agentPicks.length) {
+        html =
+          '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemoteAgent',
+            'Tofu 运行在远程服务器上。在你自己的电脑安装受控端，再用下面这行把它连过来：')) + '</p>' +
+          '<p class="lc-substep">' + _lcEsc(_lcT('local.agentRoleGloss',
+            '受控端：只让这台电脑被服务器操作 —— 轻量、无界面，系统托盘里改配置。')) + '</p>' +
+          _lcDownloadLinks(d, 'agent', true) +
+          '<p class="lc-substep">' + _lcEsc(_lcT('local.fullRoleGloss',
+            '这台电脑也要跑 Tofu 本体（服务器+界面）？选完整桌面版：')) + '</p>' +
+          _lcDownloadLinks(d, 'full');
+      } else {
+        html =
+          '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemote',
+            'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：')) + '</p>' +
+          _lcDownloadLinks(d);
+      }
+      setup.innerHTML = html +
         '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
           _lcEsc(_lcT('local.mintToken', '生成连接命令')) + '</button>' +
         '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>';
       var mint = document.getElementById('lcMintBtn');
       if (mint) mint.onclick = function () { _lcMintToken(srv); };
       return;
+    }
   }
 }
 
@@ -600,9 +620,15 @@ function _lcResolveDlUrl(url) {
  * Always keeps the releases-page link as a secondary "all downloads" escape
  * hatch: it is the only thing that still works for an unrecognised platform, a
  * release missing an asset, or an unreachable GitHub API. */
-function _lcDownloadLinks(d) {
+function _lcDownloadLinks(d, kind, suppressPage) {
+  kind = kind || 'full';
   var page = ((d && d.download_url) || '').trim();
-  var picks = (d && Array.isArray(d.downloads)) ? d.downloads : [];
+  var raw = (kind === 'agent')
+    ? (d && d.agent_downloads) : (d && d.downloads);
+  var picks = Array.isArray(raw) ? raw : [];
+  var labelKey = (kind === 'agent')
+    ? 'local.agentDownloadFor' : 'local.desktopDownloadFor';
+  var labelFb = (kind === 'agent') ? '受控端·轻量' : '下载桌面版';
   var html = '';
   if (picks.length) {
     html += '<p class="lc-dl-row">';
@@ -616,7 +642,7 @@ function _lcDownloadLinks(d) {
         _lcEsc(_lcResolveDlUrl(p.url)) +
         '" target="_blank" rel="noopener noreferrer" title="' +
         _lcEsc(p.filename || '') + '">' +
-        _lcEsc(_lcT('local.desktopDownloadFor', '下载桌面版') + ' · ' +
+        _lcEsc(_lcT(labelKey, labelFb) + ' · ' +
                (p.label || p.arch || '') +
                (p.size ? ' · ' + _lcFmtSize(p.size) : '')) + '</a>' +
         // Provenance: an artifact served by THIS server (not the public
@@ -636,7 +662,7 @@ function _lcDownloadLinks(d) {
         '在「关于本机」里可以看到。')) + '</p>';
     }
   }
-  if (page) {
+  if (page && !suppressPage) {
     html += '<p class="lc-substep"><a class="lc-dl-link" id="lcDesktopDownload" href="' +
       _lcEsc(page) + '" target="_blank" rel="noopener noreferrer">' +
       _lcEsc(picks.length

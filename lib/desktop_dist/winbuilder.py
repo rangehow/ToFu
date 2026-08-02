@@ -850,7 +850,8 @@ _installer_lock = threading.Lock()
 _installer: threading.Thread | None = None
 
 
-def start_installer(reason: str = 'manual', server_url: str = '') -> dict:
+def start_installer(reason: str = 'manual', server_url: str = '',
+                    target: str = 'full') -> dict:
     """Kick build_installer in the background (single-flight).
 
     start() covers the payload half only; the route needs the FULL
@@ -861,19 +862,20 @@ def start_installer(reason: str = 'manual', server_url: str = '') -> dict:
         if _installer and _installer.is_alive():
             return state()
         _installer = threading.Thread(
-            target=lambda: build_installer(reason, server_url),
+            target=lambda: build_installer(reason, server_url, target),
             name='desktop-wininstaller', daemon=True)
         _installer.start()
     return state()
 
 
-def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
+def build_installer(reason: str = 'manual', server_url: str = '',
+                    target: str = 'full') -> dict:
     """Full S2+S3 orchestration: payload (cached when possible) → wrapper.
 
     The wrapper re-runs even when the payload is cached — it is the cheap
     half, and the preseed may differ per client.
     """
-    _run(reason)
+    _run(reason, target)
     st = state()
     if st.get('state') != 'ok':
         return st
@@ -882,7 +884,7 @@ def build_installer(reason: str = 'manual', server_url: str = '') -> dict:
     log_path = os.path.join(_payloads_dir(), 'winbuild.log')
     with open(log_path, 'a', encoding='utf-8') as log_fh:
         dest = wrap_payload(st['payload'], version, sha, log_fh,
-                            server_url=server_url)
+                            server_url=server_url, target=target)
     _set_state(installer=dest, wrapped_at=time.time())
     return state()
 

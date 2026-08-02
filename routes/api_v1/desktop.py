@@ -89,7 +89,8 @@ from lib.desktop_dist import mirror as _dist_mirror
 from lib.desktop_dist import store as _dist_store
 
 
-def _request_platform_downloads(arch_override: str = '') -> list[dict]:
+def _request_platform_downloads(arch_override: str = '',
+                                kind: str = 'full') -> list[dict]:
     """Per-platform direct links for the CURRENT request's visitor.
 
     ── Zero network in the request path ──
@@ -130,31 +131,35 @@ def _request_platform_downloads(arch_override: str = '') -> list[dict]:
     os_key = _detect_os(ua)
     if not os_key:
         return []
-    rows = _dist_store.find_for_platform(os_key, _detect_arch(ua, hint))
+    rows = _dist_store.find_for_platform(os_key, _detect_arch(ua, hint),
+                                         kind=kind)
     # Kick the mirror whether or not the store served: an empty store needs
     # filling, a stale one needs refreshing. Non-blocking and single-flight.
     _dist_mirror.ensure_fresh()
+    import os as _os
     # Opt-in autobuild: a Linux visitor with no locally-BUILT artifact can
     # kick a native build (this server's own platform is the only one it can
     # truly build). Off by default — a build is minutes of CPU, so it happens
     # only where the operator asked for it, never implicitly for everyone.
-    if (os_key == 'linux'
+    if (kind == 'full' and os_key == 'linux'
             and not any(e.get('source') == 'built' for e in rows)):
-        import os as _os
         if _os.environ.get('TOFU_DESKTOP_DIST_AUTOBUILD') == '1':
             from lib.desktop_dist import builder as _dist_builder
             if not _dist_builder.is_running():
                 _dist_builder.start(reason='autobuild')
     # Same opt-in for Windows: no built installer → kick the Wine-toolchain
     # build (payload cached per (git_sha, deps), then the NSIS wrapper).
-    # macOS never gets one — the documented permanent boundary.
+    # macOS never gets one — the documented permanent boundary. The agent
+    # kind kicks the agent target of the same builder: a visitor hitting
+    # the AGENT surface (kind='agent') with no built agent artifact gets
+    # one built (stale-while-build ⇒ the full installer stays the offer).
     if (os_key == 'windows'
             and not any(e.get('source') == 'built' for e in rows)):
-        import os as _os
         if _os.environ.get('TOFU_DESKTOP_DIST_AUTOBUILD') == '1':
             from lib.desktop_dist import winbuilder as _win_builder
             if not _win_builder.is_running():
-                _win_builder.start_installer(reason='autobuild')
+                _win_builder.start_installer(reason='autobuild',
+                                             target=kind)
     base = (request.host_url or '').rstrip('/')
     out = []
     for e in rows:
@@ -170,7 +175,31 @@ def _request_platform_downloads(arch_override: str = '') -> list[dict]:
             'hosted': 'server',
             'size': e.get('size') or 0,
             'source': e.get('source') or 'mirrored',
+            'kind': e.get('kind') or 'full',
         })
+    return out
+
+
+def _with_drift(agents):
+    """Flag agents whose build differs from this server's (owner amendment ②).
+
+    The command protocol evolves WITH the server — a release-line agent
+    against a HEAD server can silently mis-dispatch. ``outdated`` is True
+    only when BOTH versions are known and differ: a legacy agent without
+    the frame field is 'unknown', not 'outdated' (never cry wolf on the
+    devices page).
+    """
+    try:
+        from lib.version import __version__ as sv
+        sv = (sv or '').strip()
+    except Exception:
+        sv = ''
+    out = []
+    for a in agents or []:
+        a = dict(a)
+        av = str(a.get('version') or '').strip()
+        a['outdated'] = bool(sv and av and av != sv)
+        out.append(a)
     return out
 
 
@@ -238,10 +267,12 @@ async def desktop_status():
         'last_poll': _last,
         'secondsAgo': (round(time.time() - _last, 1) if _last else None),
         'pending_commands': pending_commands_count(),
-        'agents': list_agents(user_id=_uid),
+        'agents': _with_drift(list_agents(user_id=_uid)),
         'setup_state': _setup_state(connected),
         'download_url': _desktop_download_url(),
         'downloads': _request_platform_downloads(_arch),
+        'agent_downloads': _request_platform_downloads(_arch,
+                                                       kind='agent'),
         'server_url': _agent_server_url(),
     })
 
@@ -278,8 +309,12 @@ async def desktop_build():
         if os_key == 'windows':
             from lib.desktop_dist import winbuilder as _win_builder
             url = str(body.get('server_url') or '').strip()
-            st = _win_builder.start_installer(reason='api', server_url=url)
-            audit_log('desktop_build_kicked', os='windows',
+            kind = str(body.get('kind') or 'full').strip().lower()
+            if kind not in ('full', 'agent'):
+                kind = 'full'
+            st = _win_builder.start_installer(reason='api', server_url=url,
+                                              target=kind)
+            audit_log('desktop_build_kicked', os='windows', kind=kind,
                       state=st.get('state'), version=st.get('version'))
             return api_payload(st, 202)
         st = _dist_builder.start(reason='api')
@@ -362,7 +397,7 @@ async def desktop_devices():
         and (k.get('user_id') or '') == uid
     ]
     return api_ok({
-        'agents': list_agents(user_id=uid),
+        'agents': _with_drift(list_agents(user_id=uid)),
         'tokens': tokens,
     })
 

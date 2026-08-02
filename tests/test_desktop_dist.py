@@ -203,9 +203,6 @@ def test_an_agent_artifact_never_shadows_the_full_installer(tmp_store):
 # ═══════════════════════════════════════════════════════════════════
 #  mirror
 # ═══════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════
-#  mirror
-# ═══════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.unit
@@ -587,6 +584,68 @@ def test_the_status_endpoint_serves_downloads_with_the_network_hard_down(
 
 
 @pytest.mark.api
+def test_the_status_payload_carries_both_component_downloads(
+        tmp_store, flask_client, monkeypatch):
+    """A3 serving: downloads (full) and agent_downloads (agent) are two
+    independent rows, each entry carrying kind — the UI must be able to
+    offer the agent installer as the PRIMARY action in the remote case."""
+    _seed(tmp_store, 'Tofu-Setup-0.16.0-win64.exe', source='built',
+          version='0.16.0')
+    agent = {'os': 'windows', 'arch': 'x86_64',
+             'label': 'Windows agent installer',
+             'filename': 'TofuAgent-Setup-0.16.0-win64.exe',
+             'size': 2048, 'sha256': 'ab' * 32, 'source': 'built',
+             'version': '0.16.0', 'kind': 'agent',
+             'fetched_at': time.time()}
+    (tmp_store / agent['filename']).write_bytes(b'x' * 2048)
+    from lib.desktop_dist import store as _st
+    _st.record_artifact(agent)
+    monkeypatch.setattr(mirror, 'ensure_fresh', lambda *a, **k: False)
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert [d['filename'] for d in body['downloads']] == [
+        'Tofu-Setup-0.16.0-win64.exe']
+    assert body['downloads'][0]['kind'] == 'full'
+    assert [d['filename'] for d in body['agent_downloads']] == [
+        'TofuAgent-Setup-0.16.0-win64.exe']
+    ad = body['agent_downloads'][0]
+    assert ad['kind'] == 'agent' and ad['hosted'] == 'server'
+    assert ad['size'] == 2048
+    assert '/api/v1/desktop/download/TofuAgent-Setup-0.16.0-win64.exe' \
+        in ad['url']
+
+
+@pytest.mark.api
+def test_the_status_payload_flags_outdated_agents(
+        tmp_store, flask_client, monkeypatch):
+    """Owner amendment ② surfacing: an agent whose frame version differs
+    from the server's is flagged; same-version and legacy (versionless)
+    agents are NOT (never cry wolf)."""
+    from lib.desktop import bridge as db
+    from lib.version import __version__ as sv
+    monkeypatch.setattr(db, '_last_poll', [0.0])
+    with db.command_queue_lock:
+        db._agents.clear()
+    db.register_agent('agent-old', {'name': 'old', 'version': '0.14.2'},
+                      user_id='u-dist')
+    db.register_agent('agent-cur', {'name': 'cur', 'version': sv.strip()},
+                      user_id='u-dist')
+    db.register_agent('agent-legacy', {'name': 'legacy'},
+                      user_id='u-dist')
+    monkeypatch.setattr(mirror, 'ensure_fresh', lambda *a, **k: False)
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.status_code == 200
+    agents = {a['agent_id']: a for a in r.get_json()['agents']}
+    assert agents['agent-old']['outdated'] is True
+    assert agents['agent-cur']['outdated'] is False
+    assert agents['agent-legacy']['outdated'] is False, (
+        'a versionless legacy agent is unknown, not outdated')
+
+
+@pytest.mark.api
 def test_the_download_route_serves_the_artifact(tmp_store, flask_client):
     content = b'INSTALLER-BYTES' * 100
     _seed(tmp_store, 'Tofu-Setup-0.14.2-win64.exe', content=content)
@@ -613,7 +672,9 @@ def test_the_download_route_refuses_anything_but_a_manifest_key(
 @pytest.mark.api
 def test_the_windows_autobuild_gate(tmp_store, flask_client, monkeypatch):
     """The Windows autobuild is env-gated, single-flight, and only kicks
-    when NO built installer exists — the same shape as the Linux gate."""
+    when NO built installer exists — the same shape as the Linux gate.
+    Since A3 the gate is PER-KIND: the full and agent surfaces build
+    independently (a built full never suppresses a missing built agent)."""
     from lib.desktop_dist import winbuilder
     kicks = []
     monkeypatch.setattr(winbuilder, 'start_installer',
@@ -621,14 +682,15 @@ def test_the_windows_autobuild_gate(tmp_store, flask_client, monkeypatch):
                         {'state': 'running'})
     monkeypatch.setattr(winbuilder, 'is_running', lambda: False)
 
-    # No built artifact + gate ON → kicked.
+    # No built artifact + gate ON → BOTH kinds kicked.
     monkeypatch.setenv('TOFU_DESKTOP_DIST_AUTOBUILD', '1')
     r = flask_client.get('/api/v1/desktop/status',
                          headers={**_bearer(), 'User-Agent': _UA_WIN})
     assert r.status_code == 200
-    assert kicks, 'no built artifact + gate on must kick the build'
-    assert kicks[0][1].get('reason') == 'autobuild' or \
-        (kicks[0][0] and kicks[0][0][0] == 'autobuild')
+    targets = {k[1].get('target', 'full') for k in kicks}
+    assert targets == {'full', 'agent'}, (
+        f'an empty store must kick both component builds: {kicks}')
+    assert all(k[1].get('reason') == 'autobuild' for k in kicks)
 
     # Gate OFF → no kick even with an empty store.
     kicks.clear()
@@ -638,14 +700,34 @@ def test_the_windows_autobuild_gate(tmp_store, flask_client, monkeypatch):
     assert r.status_code == 200
     assert not kicks, 'the gate must be opt-in, never implicit'
 
-    # A BUILT artifact present → no kick even with the gate on.
+    # A built FULL artifact suppresses ONLY the full kick — the agent
+    # surface still has nothing built, so its kick fires (per-kind).
     monkeypatch.setenv('TOFU_DESKTOP_DIST_AUTOBUILD', '1')
+    kicks.clear()
     _seed(tmp_store, 'Tofu-Setup-0.16.0-win64.exe', source='built',
           version='0.16.0')
     r = flask_client.get('/api/v1/desktop/status',
                          headers={**_bearer(), 'User-Agent': _UA_WIN})
     assert r.status_code == 200
-    assert not kicks, 'a built artifact already there must not rebuild'
+    assert [k[1].get('target') for k in kicks] == ['agent'], (
+        f'a built full must not rebuild, but the agent surface is still '
+        f'empty: {kicks}')
+
+    # Both kinds built → complete silence.
+    kicks.clear()
+    agent = {'os': 'windows', 'arch': 'x86_64',
+             'label': 'Windows agent installer',
+             'filename': 'TofuAgent-Setup-0.16.0-win64.exe',
+             'size': 1024, 'sha256': 'ab' * 32, 'source': 'built',
+             'version': '0.16.0', 'kind': 'agent',
+             'fetched_at': time.time()}
+    (tmp_store / agent['filename']).write_bytes(b'x' * 1024)
+    from lib.desktop_dist import store as _st
+    _st.record_artifact(agent)
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.status_code == 200
+    assert not kicks, f'both kinds built must not rebuild: {kicks}'
 
 
 @pytest.mark.unit

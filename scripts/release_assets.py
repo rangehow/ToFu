@@ -128,6 +128,28 @@ PLATFORM_ASSETS: tuple[tuple[str, str, str, str, int], ...] = (
     ('linux',   'x86_64', 'Linux .deb installer', 'Tofu-*-linux-x86_64.deb', 130_000_000),
 )
 
+# The AGENT component's assets (docs/DESKTOP_AGENT_DIST_DESIGN.md §5.3):
+# same tuple shape, disjoint globs (TofuAgent- prefix can never collide
+# with the full line). Consumed TODAY by the serving layer
+# (platforms._platform_assets('agent') → store/mirror routing). NOT yet
+# part of REQUIRED_PLATFORM_ASSETS: joining it makes every existing
+# release INCOMPLETE and kicks the self-heal rebuild, so that join lands
+# atomically with the CI agent legs (slice A2b) — never before, or the
+# release job's own completeness gate would fail every publish.
+# Floors: windows measured 53.2 MB (first server-built agent installer,
+# 2026-08-02) → 70%; mac/linux are CI-leg estimates to be re-measured on
+# the first real legs.
+AGENT_PLATFORM_ASSETS: tuple[tuple[str, str, str, str, int], ...] = (
+    ('macos',   'arm64',  'macOS agent arm64 DMG',
+     'TofuAgent-*-macos-arm64.dmg',   15_000_000),
+    ('macos',   'x86_64', 'macOS agent x86_64 DMG',
+     'TofuAgent-*-macos-x86_64.dmg',  15_000_000),
+    ('windows', 'x86_64', 'Windows agent installer',
+     'TofuAgent-Setup-*-win64.exe',   37_000_000),
+    ('linux',   'x86_64', 'Linux agent archive',
+     'TofuAgent-*-linux-x86_64.tar.gz', 15_000_000),
+)
+
 # The (label, glob) view the two release gates consume. DERIVED, never
 # maintained alongside PLATFORM_ASSETS — two hand-kept lists would drift, and
 # both would keep passing on the platforms they still knew about.

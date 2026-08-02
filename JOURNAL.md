@@ -1,9 +1,23 @@
+### 2026-08-02(autopilot 搁浅根修第二半:接力闸尸体容忍 + store 镜像尸体清除——与兄弟 `630b4af5` 互补闭环) — owner 截图三连问(信号好/侧栏闲/发送键活,为何 VU 气泡后无 agent 回复);commit `052e3fc5`(7 文件);新套件 **6 检查**(failing-first 精确 4 红)+ 邻接环 **168+43 绿** + 合并树终验(兄弟守卫+接力两族)**20/20**
+
+- **全链定案(三层各自无过,接力面双缺口):** 后端日志+事件流实证——父任务 a0fa289b 完结→VU 载体 d5bf109a 制出回复**已落库**(11:49:29)→载体 discard→`maybe_run_autopilot` 末检 `_successor_already_running` 读到 conv→latest 索引里指向**死载体**的指针,误判「Superseded (a newer task owns conv)」让位收官,follow-up 永不孵化。前端三指标全部**如实**(无一任务在跑=侧栏闲/发送键活;同步链好=信号好)——是后端接力死了,不是显示错了。6.5 分钟后 brain dispatch 碰巧救活(5fd07a96)。
+- **根因(兄弟会话 `630b4af5` 先于我 14 分钟独立定案并落地):** `85b54bc8`(③-3 tombstone)把 `make_task_abort_check` 插进 discard_task 函数体中部,尾部索引清理块被切到 `return _check` 之后成**不可达死代码**——25 天级每个 VU 轮末检都误杀 follow-up。兄弟把清理块移回函数尾部恢复契约。**方法教训自记:我首轮读 discard_task 只读到 tombstone 段头就收了,没扫到 ~L599 的孤悬清理块——读函数读半截是这次考古多花一小时的根。**
+- **我补的兄弟未覆盖两半:** ①**接力闸尸体容忍**(F1,autopilot_baton)——即使清理再失灵,闸也不该把「指针≠我」当「被接管」:索引可能合法指向本 run 自己的死载体(HB-1 窗口)或任何终态尸体;改判**只有仍活在注册表里的任务才算接管者**(与 `_sync.py` 的 HB-1 豁免、`_live_successor_task_id` 的活性判据对齐——接力闸曾是唯一不做活性判断的读者);真假接管两条路径都留 INFO 取证日志(下一起同类事故不再靠考古)。②**store 镜像尸体**(F2)——`_record_latest_task` 双写的 runtime_state_store 镜像(TTL 1h)此前**无任何删除路径**:discard/maintenance 只清本地 dict,store 优先的 `_latest_task_for_conv` 继续把尸体当主人长达一小时(兄弟的根修不含这一半)。新增 `_state._clear_latest_task`(本地+镜像同清,compare-and-delete 纪律保留)+ 两个 store 后端 `delete_value`,discard_task 与两处 maintenance 剪枝全部改走。
+- **纪律:** failing-first stash 实证精确 4 红(尸体容忍×2/镜像清除/helper 红,稳态×2 绿);共享树三方共舞零冲突(兄弟根修 630b4af5 12:12 → 我的互补 052e3fc5 叠其上,我的 `_registry` diff 精确命中兄弟修复后的清理块原位替换);`test_health_endpoint` 红 stash 复跑仍红=预存不夹修。
+
 ### 2026-08-02(A1 落地:agent-only 构建目标代码全量 + tkinter 潜伏大案被烟雾闸当场擒获) — epic `pt_59b62951aad2463e`;commits `3e5696f5`(A1 主体 9 文件)+ `d773be5e`(注册表 version 持久化)+ `85c88049`(tk 嫁接);新套件 **18 检查**(failing-first 11 红实证)+ 邻接环 **265+27+38 全绿**
 
 - **A1 五件:** ①connect_ui.py 抽取(_prompt_connect_line/_import_preseed **移动非复制**,launcher 留委托壳——测试补丁点零惊扰,契约测试按「符号重锚」先例改钉 connect_ui);②agent_launcher.py(四幕:preseed→连接对话框→deny-all 权限地板→agent 线程+极简托盘;托盘=全部「配置能力」:Server 标签/Connect/权限四档含 egress/Start with Windows/Quit;自启三件套=winreg HKCU Run 键+config 持久化+启动对账);③tofu-agent.spec(agent 闭包+服务器栈全 exclude);④winbuilder target 维度(_TARGETS 表驱动 spec/exe/烟雾阀/载荷名;agent pip 配方**绝不碰 requirements.txt**;full 侧逐字节不变,旧缓存全保);⑤注册帧+注册表双端 version 字段(owner 修订②探测半落地——register_agent 原本**逐字段 cherry-pick 会丢 version**,已补+心跳回退测)。
 - **大案(烟雾闸设计价值的实证):** 首次真机构建 2.5 分钟跑到烟雾步,`TOFU_AGENT_SMOKE` 精确红在 `ModuleNotFoundError: No module named 'tkinter'`——**nuget CPython 全包 0 个 tcl 文件**(nupkg 实测),意味着**当前在店的完整版安装包的连接对话框对真实用户也是死的**(full 烟雾只 import server 从不碰 tkinter,潜伏至今)。根修:python.org 同版本 tcltk.msi(msiextract 本地解)→ 嫁接 DLLs/_tkinter.pyd+tcl86t/tk86t+Lib/tkinter+tcl/ → wine 实测 TkVersion 8.6;_ensure_winpython 幂等接线 + agent 戳含 tk sha(完整版戳不动,下次自然重建顺带治愈,按 owner 潜伏另案规则记账)。
 - **纪律:** failing-first  stash 实证精确 11 红;两枚测试自伤当场修复(断言撞上 docstring 里的文件名/tgt 下标单双引号混排改规范化);pathlib 笔误两连(isfile→is_file);egress 移交验收(真机 OAuth 全链)已入 §10 验收表。
 - **构建耗时实测:** agent 目标到烟雾步仅 ~2.5 分钟(小闭包红利,full 目标同级步骤半小时级)。
+
+### 2026-08-02(canned-greeting 误判三连根修:smalltalk 闸被尾巴注入废掉 + 唯一带正文重试桶无重置) — owner 截图报 deepseek-v4-flash「你好」收三遍问候;commit `6d3ffce3`(7 文件 +278/−4);新测试 4+2(failing-first 精确 5 红);**NEUTER×2 各咬各的**(cmp 字节还原);邻接环 **117/118**
+
+- **病灶定案(双 bug 叠加):** ①`last_user_is_smalltalk` 读的是被 `_refresh_tail_block`(system_context/_reminders.py:88)尾巴注入过的最后一条用户消息——日期块无条件追加(_inject.py:891),「你好」变 blocks 列表,拍平恒超 30 字符,保护闸**在生产线上从未触发过**;13 字符电报式问候恰好穿过 ≤60 字符+问候正则两道闸被误判为上游事故。②canned-greeting 是**唯一带正文重试的桶**(zero-byte/classic/empty-stop 都要求空正文),重试前不清 task['content']/thinking、不发重置事件 → 3 轮(1+2 重试,`_CANNED_GREETING_RETRY_MAX=2`)×13 字符在气泡与 DB 里首尾相接,与截图 3轮/85 tokens/相位文案全对上。
+- **修法:** (a)smalltalk 判定前剥 `<system-reminder>` 块——注入不是用户的话;(b)canned 重试分支重置正文 + 发 `delta_reset(discard:true)`——reducer 冻结守卫(`_stampDeltaReset`)只认工具轮批次,被弃轮无工具调用=无批次可盖章,守卫会永远留着毒文本,discard 信号无条件清空但保留工具轮;(c)events.py DELTA_RESET 契约文档化 discard 字段。
+- **纪律:** failing-first 精确 5 红(分类 3+后端重置 1+前端 discard 1,前端 harness 在 HEAD 上原样复现问候堆叠);NEUTER-A 阉剥离→精确 3 红,NEUTER-B 阉重置+reducer 分支→精确 2 红,均 cmp 字节还原;node --check + AST 闸 + 导入冒烟过;邻接环 117/118,唯一红 test_frontend_premature_finish_bar 证为预存(finish_info.js 零未提交 diff、针串被 c6989082 重构、测试自报 stale),独立立案 `pt_2d8c58bdaa3a476e` 不夹修。
+- **教训记档:** ①凡「读用户消息」的判定闸,都要问一句读的是不是 wire 形态——尾巴注入之后,用户的话≠最后一条 user 消息的全文;②重试桶设计审计:只要被弃轮**可能带正文**,就必须配对「后端重置累加器+前端重置事件」,delta_reset/retry_reset 的选择看是否保工具轮;③检测器的互补闸(complement)必须用**生产形态**的 fixture 测,纯净 fixture 全绿≠线上在保护。教训入记忆库。
 
 ### 2026-08-02(批跑互染根修:wire-parity「清场」fixture 摧毁单模块实例不变量——改恢复式共享助手) — 脑派发接我自票 `pt_788b25a5ce9c47e2` **DONE**;commit `87a54720`(3 文件 +77/−19);最小对 15+28 绿、全批次 **275/275**(原 273+2红);NEUTER 精确(阉恢复→两对精确各 1 红,cmp 字节还原复绿)
 

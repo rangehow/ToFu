@@ -207,6 +207,81 @@ def test_agent_pipeline_uses_the_agent_spec_and_smoke_gate():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  the tcl/tk graft — the nuget python ships NO tkinter (measured)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_winpython_provisioning_includes_the_tk_graft():
+    """The nuget CPython has 0 tcl files (measured in the nupkg) — without
+    the graft every built installer's connect dialog is dead (the agent
+    smoke gate caught exactly this at build time). Pin the call site."""
+    src = inspect.getsource(wb._ensure_winpython)
+    assert '_ensure_winpython_tk' in src, (
+        'the tcl/tk graft fell out of winpython provisioning — every '
+        'installer built from now on has a dead connect dialog')
+
+
+def test_tk_graft_short_circuits_on_a_grafted_python(isolated, monkeypatch,
+                                                     tmp_path):
+    rootfs = tmp_path / 'rootfs'
+    tools = rootfs / 'opt' / 'winpy' / 'tools'
+    (tools / 'DLLs').mkdir(parents=True)
+    (tools / 'DLLs' / '_tkinter.pyd').write_text('x')
+    (tools / 'Lib' / 'tkinter').mkdir(parents=True)
+    (tools / 'tcl').mkdir(parents=True)
+    monkeypatch.setattr(wb.wintoolchain, 'rootfs_dir', lambda: str(rootfs))
+    monkeypatch.setattr(wb.wintoolchain, '_download',
+                        lambda *a: pytest.fail('download on a grafted python'))
+    with _fake_log(isolated) as log:
+        wb._ensure_winpython_tk(log)   # must not download, must not raise
+
+
+def test_tk_graft_copies_the_standard_layout(isolated, monkeypatch, tmp_path):
+    rootfs = tmp_path / 'rootfs'
+    tools = rootfs / 'opt' / 'winpy' / 'tools'
+    (tools / 'DLLs').mkdir(parents=True)
+    cache = tmp_path / 'cache'
+    (cache).mkdir()
+    (cache / 'python-tcltk.msi').write_text('fake-msi')
+    staging = rootfs / 'work' / 'tcltk-graft'
+
+    def _fake_sh(cmd, log_fh, *, shell=False, timeout=9999):
+        # The msiextract fake: materialise the python.org standard layout.
+        for rel in ('DLLs/_tkinter.pyd', 'DLLs/tcl86t.dll',
+                    'DLLs/tk86t.dll', 'DLLs/zlib1.dll'):
+            p = staging / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text('x')
+        for rel in ('Lib/tkinter', 'tcl/tcl8.6', 'tcl/tk8.6'):
+            (staging / rel).mkdir(parents=True, exist_ok=True)
+        return None
+
+    monkeypatch.setattr(wb.wintoolchain, 'rootfs_dir', lambda: str(rootfs))
+    monkeypatch.setattr(wb.wintoolchain, 'cache_dir', lambda: str(cache))
+    monkeypatch.setattr(wb, '_ensure_msiextract',
+                        lambda log: '/fake/msiextract')
+    monkeypatch.setattr(wb, '_sh', _fake_sh)
+    with _fake_log(isolated) as log:
+        wb._ensure_winpython_tk(log)
+    assert (tools / 'DLLs' / '_tkinter.pyd').is_file()
+    assert (tools / 'DLLs' / 'tcl86t.dll').is_file()
+    assert (tools / 'Lib' / 'tkinter').is_dir()
+    assert (tools / 'tcl' / 'tcl8.6').is_dir()
+    # The staging dir is cleaned up after a successful graft.
+    assert not staging.exists()
+
+
+def test_agent_stamp_tracks_the_tk_graft(monkeypatch):
+    a = wb.deps_stamp('agent')
+    monkeypatch.setattr(wb, '_TK_MSI_SHA256', '0' * 64)
+    assert wb.deps_stamp('agent') != a, (
+        'the tk graft is payload content — its identity must invalidate '
+        'the agent payload cache')
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  the agent registration frame carries a version (owner amendment ②)
+# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 #  the agent registration frame carries a version (owner amendment ②)
 # ═══════════════════════════════════════════════════════════════════
 

@@ -70,6 +70,16 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
 _NUPKG_URL = 'https://www.nuget.org/api/v2/package/python/3.12.10'
 _NUPKG_SHA256 = ('0eb85c2dfccccf1b17352de4c397f691'
                  '94035b7d37149eacc16f1147d93de3b8')
+# tcl/tk graft (measured 2026-08-02): the nuget CPython ships NO tkinter
+# (0 tcl files in the nupkg — the slim layout). Both launchers' connect
+# dialog needs it; the agent smoke gate hard-asserts it. python.org
+# publishes the SAME version's tcltk.msi next to the installer;
+# msiextract (conda-forge msitools, native) unpacks it with proper
+# filenames. Graft = the python.org standard layout: DLLs/_tkinter.pyd +
+# tcl86t/tk86t.dll, Lib/tkinter/, tcl/. Verified under wine: TkVersion 8.6.
+_TK_MSI_URL = 'https://www.python.org/ftp/python/3.12.10/amd64/tcltk.msi'
+_TK_MSI_SHA256 = ('55c96ffad69b1c834aa52e11b9ce4163'
+                  '7a178ba6ad6607e83956044834276e2a')
 # The Windows python inside the guest (nuget layout: tools/python.exe).
 _WINPY_GUEST = '/opt/winpy/tools/python.exe'
 _WINPY_Z = 'Z:\\opt\\winpy\\tools\\python.exe'
@@ -178,6 +188,9 @@ def deps_stamp(target: str = 'full') -> str:
         with open(os.path.join(_REPO_ROOT, 'tofu-agent.spec'), 'rb') as f:
             h.update(f.read())
         h.update('\0'.join(_AGENT_PIP).encode())
+        # The tk graft is payload content (the connect dialog ships or
+        # does not) — its identity must invalidate the agent cache.
+        h.update(_TK_MSI_SHA256.encode())
         return h.hexdigest()[:16]
     for name in ('requirements.txt', 'tofu.spec'):
         with open(os.path.join(_REPO_ROOT, name), 'rb') as f:
@@ -521,6 +534,71 @@ def _pip_index_env() -> dict:
 
 # ── Small helpers (mirroring builder.py conventions) ─────────────────
 
+def _ensure_msiextract(log_fh) -> str:
+    """Locate msiextract (conda-forge msitools), provisioning if absent.
+
+    Same shape as _ensure_makensis: native binary, no wine, no display.
+    The tools prefix already exists (nsis made it an env), so the verb
+    is `install` — `create` is only for a not-yet-env prefix.
+    """
+    exe = os.path.join(wintoolchain.cache_dir(), 'tools', 'bin',
+                       'msiextract')
+    if os.path.isfile(exe):
+        return exe
+    conda = shutil.which('mamba') or shutil.which('conda')
+    if not conda:
+        raise RuntimeError('msiextract not provisioned and no conda/mamba '
+                           'to install msitools with')
+    prefix = os.path.join(wintoolchain.cache_dir(), 'tools')
+    _sh(f'{conda} install -y -p {prefix} -c conda-forge msitools', log_fh,
+        timeout=1800)
+    if not os.path.isfile(exe):
+        raise RuntimeError(f'msiextract missing after provision: {exe}')
+    return exe
+
+
+def _ensure_winpython_tk(log_fh) -> None:
+    """Graft tcl/tk into the nuget python (idempotent).
+
+    The nuget CPython ships NO tkinter (measured: 0 tcl files in the
+    nupkg). Without this graft every built installer's connect dialog is
+    dead — the full app's included (latent until the agent smoke gate
+    caught it at BUILD time, 2026-08-02). Only missing files are copied:
+    a re-run is a no-op, and a partial earlier graft completes.
+    """
+    tools = os.path.join(wintoolchain.rootfs_dir(), 'opt', 'winpy',
+                         'tools')
+    markers = (os.path.join(tools, 'DLLs', '_tkinter.pyd'),
+               os.path.join(tools, 'Lib', 'tkinter'),
+               os.path.join(tools, 'tcl'))
+    if all(os.path.exists(m) for m in markers):
+        return
+    msi = os.path.join(wintoolchain.cache_dir(), 'python-tcltk.msi')
+    if not os.path.isfile(msi):
+        wintoolchain._download(_TK_MSI_URL, msi, _TK_MSI_SHA256)
+    staging = os.path.join(wintoolchain.rootfs_dir(), 'work',
+                           'tcltk-graft')
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging, exist_ok=True)
+    msiextract = _ensure_msiextract(log_fh)
+    _sh(f'cd {staging} && {msiextract} {msi}', log_fh, shell=True)
+    for name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll', 'zlib1.dll'):
+        src = os.path.join(staging, 'DLLs', name)
+        dest = os.path.join(tools, 'DLLs', name)
+        if os.path.isfile(src) and not os.path.isfile(dest):
+            shutil.copy2(src, dest)
+    for name in ('Lib/tkinter', 'tcl'):
+        src = os.path.join(staging, name)
+        dest = os.path.join(tools, name)
+        if os.path.isdir(src) and not os.path.isdir(dest):
+            shutil.copytree(src, dest)
+    missing = [m for m in markers if not os.path.exists(m)]
+    if missing:
+        raise RuntimeError(f'tcl/tk graft incomplete: {missing}')
+    shutil.rmtree(staging, ignore_errors=True)
+    logger.info('[WinBuild] tcl/tk grafted into the winpy')
+
+
 def _ensure_winpython(log_fh) -> str:
     """The nuget CPython, extracted into the guest (idempotent)."""
     dest_dir = os.path.join(wintoolchain.rootfs_dir(), 'opt', 'winpy')
@@ -533,6 +611,7 @@ def _ensure_winpython(log_fh) -> str:
         _sh(f'unzip -q -o {nupkg} -d {dest_dir} "tools/*"', log_fh)
     if not os.path.isfile(exe):
         raise RuntimeError(f'nuget python missing after extract: {exe}')
+    _ensure_winpython_tk(log_fh)
     return _WINPY_Z
 
 

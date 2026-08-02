@@ -242,9 +242,28 @@ core rule (exactly ONE next action per detected state):
 | Branch | Primary download | Secondary | Rationale |
 |---|---|---|---|
 | `remote` (controlled machine) | **受控端 · 轻量** (agent, `服务器直连 · built` chip + size) | One line: "这台电脑也要跑 Tofu 本体？下载完整桌面版"; mint connect line unchanged | This branch exists to let the server act on THIS machine — the agent is its exact component |
-| `local_source` | **完整桌面版** (replaces the source run) | none — a source checkout already runs `python -m lib.desktop_agent` | The machine already IS the server; it wants the packaged app |
+| `local_source` | **完整桌面版** (replaces the source run) + **collapsed "从另一台电脑访问本服务器？" escape hatch** (agent download + mint — the tunnel case below) | A source checkout already runs `python -m lib.desktop_agent`; the hatch covers what the backend cannot see | The machine already IS the server; it wants the packaged app |
 | `tray` | none | none | Agent already runs in-process; instruction unchanged |
 | `connected` | none | none | unchanged |
+
+**The tunnel blind spot (measured live 2026-08-02, folded in via
+`c4130943`).** An ssh -L forward makes a REMOTE browser present as
+loopback → `_setup_state` returns `local_source` for a machine that is
+NOT this one, and the branch's primary instruction ("install the full
+app") installed a second Tofu whose bundled server took a fallback port
+and whose agent polled IT — never this server. The server has NO signal
+to detect a tunnel (documented in `_setup_state`: "there is nothing to
+detect"), so the fix is surface-level: the collapsed hatch, with the
+merge suite's one-action contract preserved (hint is `lc-substep`; the
+suite's token test documents the exception: local_source may carry ONE
+mint, only inside the collapsed hatch). Owner redesign of the remote
+branch landed alongside (`1a2cca6b`): numbered ①②③ agent flow, full
+app collapsed into `<details>`, a zero-touch 2-step variant when the
+artifact carries a usable preseed AND the bridge is open, and —
+catching a real defect in A2 — winbuilder now DROPS a loopback/
+unspecified preseed for the agent target (the first wrap baked
+`http://127.0.0.1:15000`, which on the office machine attaches to a
+void AND suppresses the first-run dialog).
 
 Each row carries a one-line role gloss — "受控端：只让这台电脑被服务器
 操作（轻量，无界面，托盘配置）" vs "完整版：这台电脑自己跑 Tofu

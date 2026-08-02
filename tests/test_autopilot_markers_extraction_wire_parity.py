@@ -87,17 +87,16 @@ if pytest is not None:
         modules without restoring (test_autopilot_markers_functional did —
         breaking facade↔markers identity for THIS check). Same hermetic
         pattern as test_autopilot_event_forwarding_wire_parity's
-        reload_modules fixture: drop the cluster from sys.modules on BOTH
-        sides so the identity assertion reads a coherent import surface
-        and later suites re-import fresh.
+        reload_modules fixture: drop the cluster from sys.modules so the
+        identity assertion reads a coherent import surface — then RESTORE
+        the original module objects (tests/_hermetic_import.py). The old
+        delete-and-leave teardown made later suites re-import fresh
+        DUPLICATES, which broke importlib.reload (ImportError) and
+        string-target monkeypatch steering downstream (pt_788b25a5).
         """
-        for name in list(sys.modules):
-            if name.startswith('lib.tasks_pkg.autopilot'):
-                del sys.modules[name]
-        yield
-        for name in list(sys.modules):
-            if name.startswith('lib.tasks_pkg.autopilot'):
-                del sys.modules[name]
+        from tests._hermetic_import import hermetic_import_surface
+        with hermetic_import_surface('lib.tasks_pkg.autopilot'):
+            yield
 
 
 @_unit

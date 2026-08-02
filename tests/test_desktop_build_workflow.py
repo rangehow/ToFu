@@ -462,6 +462,57 @@ def test_the_release_publishes_under_the_version_tag():
     assert with_.get('draft') is False, 'a draft release is invisible to users'
 
 
+def test_agent_legs_build_all_three_platforms():
+    """The agent component ships from the SAME three platform jobs (one
+    change, legs+gates atomically — docs/DESKTOP_AGENT_DIST_DESIGN.md A2b)."""
+    wf_text = _WORKFLOW.read_text(encoding='utf-8')
+    # One PyInstaller agent build per platform job (windows/macos/linux).
+    assert wf_text.count('pyinstaller tofu-agent.spec') == 3, (
+        'each platform job must also build the agent component')
+    # The upload artifact names the release job merges.
+    for artifact in ('windows-agent-installer',
+                     'macos-agent-dmg-${{ matrix.arch }}',
+                     'linux-agent-archive'):
+        assert artifact in wf_text, f'agent artifact {artifact} not uploaded'
+    # Smoke on the two platforms where the full leg smokes (macOS smokes
+    # neither component — same discipline as the full DMG leg).
+    assert wf_text.count('TOFU_AGENT_SMOKE_OK') >= 2, (
+        'windows and linux agent builds must run the smoke gate')
+
+
+def test_agent_windows_inno_carries_the_autostart_contract():
+    """Owner amendment ①, CI side: offered, default ON, HKCU (UAC-free),
+    removed at uninstall — and the SAME value name the tray writes."""
+    wf_text = _WORKFLOW.read_text(encoding='utf-8')
+    assert 'AppName=Tofu Agent' in wf_text
+    assert ('OutputBaseFilename=TofuAgent-Setup-${APP_VERSION}-win64'
+            in wf_text)
+    assert r'{localappdata}\\Programs\\TofuAgent' in wf_text
+    assert r'Software\\Microsoft\\Windows\\CurrentVersion\\Run' in wf_text
+    assert 'ValueName: "TofuAgent"' in wf_text, (
+        'the Run value name must equal agent_launcher._RUN_VALUE')
+    assert 'uninsdeletevalue' in wf_text, (
+        'a removed agent must not leave a dead autorun behind')
+    # Default-ON: the task exists and is never flagged unchecked.
+    assert 'Name: autostart; Description: "Start Tofu Agent with Windows"' \
+        in wf_text
+    import re as _re
+    assert not _re.search(r'autostart[^\n]*unchecked', wf_text, _re.I), (
+        'the autostart task must default to CHECKED — an unattended relay '
+        'that has to be ticked by hand is not unattended')
+
+
+def test_required_assets_cover_both_components():
+    """The gates' required set spans BOTH tables, derived — a release
+    missing an agent asset is as INCOMPLETE as one missing a platform."""
+    mod = _asset_mod()
+    total = len(mod.PLATFORM_ASSETS) + len(mod.AGENT_PLATFORM_ASSETS)
+    assert len(mod.REQUIRED_PLATFORM_ASSETS) == total
+    labels = [l for l, _p in mod.REQUIRED_PLATFORM_ASSETS]
+    assert any('agent' in l.lower() for l in labels), (
+        'the agent component is not in the release gates')
+
+
 def test_release_still_requires_every_platform_leg():
     """The completeness gate must not have been loosened to route around this.
 
@@ -954,7 +1005,7 @@ def test_a_full_release_is_complete():
     assert gaps == [], f'a full asset set must be complete, got missing {gaps!r}'
 
 
-@pytest.mark.parametrize('drop', [0, 1, 2, 3])
+@pytest.mark.parametrize('drop', range(len(_complete_names())))
 def test_dropping_any_single_platform_is_detected(drop):
     """Every platform is load-bearing, not just the one someone tested."""
     mod = _asset_mod()

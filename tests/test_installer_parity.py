@@ -65,7 +65,10 @@ def _code(script: str) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 def test_app_name_and_install_dir_agree():
-    assert 'AppName=Tofu' in _WORKFLOW
+    assert 'AppName=Tofu\n' in _WORKFLOW, (
+        'the full Inno authoring must name the app exactly "Tofu" — '
+        '"AppName=Tofu Agent" satisfies a bare substring check, so this '
+        'assertion is newline-anchored')
     assert '!define APP_NAME      "Tofu"' in _FULL
     # Inno {localappdata}\Programs\Tofu ≡ NSIS $LOCALAPPDATA\Programs\Tofu
     assert r'{localappdata}\\Programs\\Tofu' in _WORKFLOW
@@ -194,6 +197,29 @@ def test_every_placeholder_is_substituted_in_both_renderings():
     for p in wb._NSI_PLACEHOLDERS:
         assert p not in _FULL, f'{p} left unrendered in the full script'
         assert p not in _AGENT, f'{p} left unrendered in the agent script'
+
+
+def test_ci_inno_agent_authoring_matches_the_autostart_contract():
+    """The CI's Inno agent authoring and the server's NSIS render — 2
+    components × 2 tools, ONE contract (design §5.3 + owner amendment ①).
+    The NSIS side is pinned above; this pins the workflow's Inno side."""
+    assert 'AppName=Tofu Agent' in _WORKFLOW
+    assert ('OutputBaseFilename=TofuAgent-Setup-${APP_VERSION}-win64'
+            in _WORKFLOW)
+    assert r'{localappdata}\\Programs\\TofuAgent' in _WORKFLOW
+    run_key = r'Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+    assert f'Subkey: "{run_key}"' in _WORKFLOW
+    assert 'ValueName: "TofuAgent"' in _WORKFLOW, (
+        'CI and server and tray must write ONE Run value name')
+    assert 'uninsdeletevalue' in _WORKFLOW, (
+        'the uninstaller must remove the autorun — same contract as NSIS')
+    # Default-ON, like the NSIS default-selected section: no unchecked flag.
+    assert 'Name: autostart; Description: "Start Tofu Agent with Windows"' \
+        in _WORKFLOW
+    import re as _re
+    assert not _re.search(r'autostart[^\n]*unchecked', _WORKFLOW, _re.I)
+    # Same privilege floor as the full installer (HKCU needs no UAC).
+    assert 'PrivilegesRequired=lowest' in _WORKFLOW
 
 
 def test_no_section_commands_leak_into_comments():

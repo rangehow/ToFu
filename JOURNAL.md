@@ -1,3 +1,10 @@
+### 2026-08-02(分发面三决策落稿:Local Control 显示矩阵 / 完整版导向 / GitHub Releases 内容——设计稿升 v2,commit 见下) — owner 三连问定案,epic `pt_59b62951aad2463e`
+
+- **Q1 面板显示矩阵(守「每状态一个下一步」铁律):** remote 分支(被控场景)主推「受控端·轻量」agent 包+服务器直连 chip,完整版退一行次级链,铸连接行不动;local_source 主推完整版(源码已能跑 agent,不给次链);tray/connected 零下载。每行带一句角色注解(「只让这台电脑被服务器操作」vs「这台电脑自己跑 Tofu」),选择不需要文件名素养。
+- **Q2 完整版导向=原则不变双组件同通道:** ①本服务器商店主推(HEAD 新鲜+preseed+不依赖客户端到 GitHub 的路由);②releases 页仍是逃生口;③mirror 扩展镜像 agent 资产——macOS 双 kind 全靠它(服务器结构性建不了)。
+- **Q3 Releases 加 agent 三平台腿(纯增量,完整版 5 资产不动):** win(Inno,真 Windows runner 无 wine 陷阱;与服务器 NSIS 由 parity 契约绑 2 组件×2 作者权)/macOS 双 DMG(**macOS agent 唯一能存在的来源**)/linux tar.gz(.deb 仍归完整版独占防发布页翻倍)。上传权衡记档:agent 无服务器则无用→命名(TofuAgent- vs Tofu-Setup)+release notes+README 双行下载表化解;不上传的代价更坏(macOS 永无 agent+工具链挂时无备胎)。
+- **关键修正(v1→v2):** ①agent 行入 `AGENT_PLATFORM_ASSETS` 新表(同 5 元组形状零 churn)但**并入 REQUIRED 派生集**——缺 agent 腿=发布不完整,version 闸 build-on-INCOMPLETE 自愈;与 CI 腿同 PR 原子落地(v1 原写「不动 CI parity」被本决策推翻);②mirror 从「永不供 agent」改「CI 产出即镜像」;③切片增 A2b(CI 腿+闸门同改)。文档 278→351 行,九节重编号。
+
 ### 2026-08-02(Agent-only Windows 安装包设计稿落盘:被控端/完整桌面版分发分离——`docs/DESKTOP_AGENT_DIST_DESIGN.md`;epic `pt_59b62951aad2463e` 已认领;实现未开工待 owner 审) — owner 指令「两个可安装组件在设计上揉在一起,应该分离」脑暴定案后成稿
 
 - **定案:融合是分发层事实,不是代码层事实。** `lib/desktop_agent/` 早已是独立净包(模块级依赖=requests+lib.log(stdlib-only)+lib.json_store,pyautogui/pyperclip/psutil/PIL 全 guarded),`python -m lib.desktop_agent` 纯 CLI 可跑——但**没有任何 Windows 分发路径**:要么装 152MB 完整桌面版(tofu.spec 打进整个 Quart 服务器+路由树+Hypercorn+psycopg2+playwright+trafilatura+pymupdf,S2 实测 152.7MB/3316 文件),要么按 egress 设计稿 §11 的「临时路径」拷贝整个仓库跑源码。Local Control 的 remote 分支(唯一需要 token 的场景)只给完整版下载。egress epic(pt_4ea6bf05deaa46f0)的部署目标正是这个无出口的被控端。

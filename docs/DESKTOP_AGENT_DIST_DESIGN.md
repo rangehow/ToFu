@@ -1,6 +1,9 @@
 # Server-Built AGENT-ONLY Installers — Design
 
-> Status: DRAFT v1 (2026-08-02), epic `pt_59b62951aad2463e`.
+> Status: DRAFT v2 (2026-08-02), epic `pt_59b62951aad2463e`.
+> v2 folds in the three distribution-surface decisions (§5): the Local
+> Control display matrix, the full-client direction policy, and the
+> GitHub Releases contents.
 > Splits the fused "one installer, two roles" distribution into TWO
 > components: the controlled-machine **agent** (no frontend, no server
 > stack) and the full desktop app (this machine = server + client).
@@ -175,10 +178,12 @@ build goes red, not the user's machine.
 ### 4.6 Serving — the `kind` axis through the store
 
 - `scripts/release_assets.py`: agent rows live in a NEW
-  `AGENT_PLATFORM_ASSETS` table (`('windows', 'x86_64', 'Windows agent
-  installer', 'TofuAgent-Setup-*-win64.exe', <min_bytes measured in A1>)`)
-  — NOT in `PLATFORM_ASSETS`, so the CI-release parity checks iterating
-  that table (GitHub releases carry only full installers) are untouched.
+  `AGENT_PLATFORM_ASSETS` table — SAME 5-tuple shape as
+  `PLATFORM_ASSETS` (zero churn in tuple consumers), but
+  `REQUIRED_PLATFORM_ASSETS` derives over BOTH tables: once CI ships
+  agent legs (§5.3), a release missing them is INCOMPLETE, and the
+  version gate's build-on-INCOMPLETE rule self-heals the current
+  version into carrying them.
 - `store.find_for_platform(os_key, arch, kind='full')`: candidate filter
   gains `entry.get('kind', 'full') == kind`. Default `'full'` ⇒ every
   current caller behaves byte-identically; absent-`kind` legacy entries
@@ -189,8 +194,10 @@ build goes red, not the user's machine.
   includes the full installer as the secondary option. The download route
   itself is unchanged (manifest-key serving is already
   component-agnostic).
-- The mirror never supplies agent artifacts (GitHub releases have none),
-  and `remove_not_in` already never prunes `source='built'`.
+- Once CI carries agent assets (§5.3), `mirror.py` mirrors them like
+  any other row: every server then serves the macOS agent DMGs (its
+  structural impossibility) and a fallback Windows/Linux agent,
+  same-origin. `remove_not_in` already never prunes `source='built'`.
 - Autobuild: same `TOFU_DESKTOP_DIST_AUTOBUILD` gate, extended — a
   Windows visitor hitting the agent surface with no built agent artifact
   kicks the agent build (stale-while-build ⇒ they get the full installer
@@ -198,14 +205,75 @@ build goes red, not the user's machine.
 
 ### 4.7 Local Control UI (`static/js/local-control.js`)
 
-The remote/egress setup branches render the agent download as the
-PRIMARY link — "受控端 · 轻量 (~size)" with the `服务器直连 · built`
-provenance chip — and the full installer as a one-line secondary:
-"这台电脑也要跑 Tofu 本体？下载完整桌面版". The `local_source` and
-`tray` branches are unchanged (their instruction is already correct).
-The i18n keys follow the existing `local.desktopDownload*` family.
+The display matrix per `setup_state` branch — preserving this file's
+core rule (exactly ONE next action per detected state):
 
-## 5. Security posture
+| Branch | Primary download | Secondary | Rationale |
+|---|---|---|---|
+| `remote` (controlled machine) | **受控端 · 轻量** (agent, `服务器直连 · built` chip + size) | One line: "这台电脑也要跑 Tofu 本体？下载完整桌面版"; mint connect line unchanged | This branch exists to let the server act on THIS machine — the agent is its exact component |
+| `local_source` | **完整桌面版** (replaces the source run) | none — a source checkout already runs `python -m lib.desktop_agent` | The machine already IS the server; it wants the packaged app |
+| `tray` | none | none | Agent already runs in-process; instruction unchanged |
+| `connected` | none | none | unchanged |
+
+Each row carries a one-line role gloss — "受控端：只让这台电脑被服务器
+操作（轻量，无界面，托盘配置）" vs "完整版：这台电脑自己跑 Tofu
+（服务器+界面）" — so the choice needs no filename literacy. i18n keys
+follow the existing `local.desktopDownload*` family.
+
+## 5. Distribution surfaces — the three owner decisions (2026-08-02)
+
+Owner questions: what does Local Control display, where is the full
+client directed, and what goes to GitHub Releases.
+
+### 5.1 Local Control — decided in §4.7 (the branch matrix)
+
+The agent installer is the PRIMARY offer exactly where the branch's
+purpose is "let the server act on this machine" (`remote`); everywhere
+else the surface is unchanged. The full installer is never more than
+one line away.
+
+### 5.2 Where the full client is directed — server-first, unchanged principle
+
+The two components share ONE supply policy, no new channel:
+
+1. **PRIMARY: this server's store** (`/api/v1/desktop/download/<file>`,
+   `服务器直连 · built`) — freshest (HEAD), preseeded, zero dependence
+   on the client's route to GitHub. Windows: server-built full + agent.
+   Linux: server-built native full (agent native build is a cheap
+   follow-on). macOS: mirrored CI assets.
+2. **FALLBACK: the GitHub releases page** (`查看全部下载 ↗`) — for
+   unrecognised platforms, missing assets, an empty store, and visitors
+   arriving from the repo README.
+3. **The mirror bridges what the server cannot build** — macOS of both
+   kinds (structural, §7 of the client-build doc) and an agent fallback
+   when a server's toolchain is unavailable.
+
+### 5.3 GitHub Releases — additive agent legs, full line untouched
+
+CI builds on REAL runners (windows-latest, macos matrix, ubuntu-latest)
+— no wine, no seccomp traps; the agent closure is a strict subset, so
+each agent leg is the corresponding full leg with a smaller spec.
+
+| New asset | Runner | Note |
+|---|---|---|
+| `TofuAgent-Setup-<ver>-win64.exe` | windows-latest | CI uses INNO (native iscc — the wine 32-bit trap does not exist on a real runner); the server uses NSIS. The parity contract binds 2 components × 2 authorings |
+| `TofuAgent-<ver>-macos-arm64.dmg` / `-x86_64.dmg` | macos matrix | **The ONLY macOS agent supply that can ever exist** (server-side macOS builds are structurally impossible) |
+| `TofuAgent-<ver>-linux-x86_64.tar.gz` | ubuntu-latest | tar.gz only — `.deb` stays full-only, keeping the releases page from doubling |
+
+`SHA256SUMS` covers the new assets; `release_assets.py`'s gates require
+them (§4.6), in the SAME change as the CI legs — a release missing an
+agent leg is INCOMPLETE, and the version gate then rebuilds the current
+version into carrying them (build-on-INCOMPLETE is the designed
+self-heal, not an accident).
+
+**Why upload at all (the trade-off, decided):** an agent without a
+server is useless, so a GitHub visitor could pick the wrong asset —
+mitigated by naming (`TofuAgent-` vs `Tofu-Setup`), a release-notes
+section, and a two-row README download table. The cost of NOT uploading
+is worse: no macOS agent ever, and no fallback when a deployment's own
+build toolchain is down. Verdict: upload.
+
+## 6. Security posture
 
 - **Subtraction, not addition.** The agent build adds no new trust
   decision to the controlled machine: no listening port, no DB, no
@@ -223,7 +291,7 @@ The i18n keys follow the existing `local.desktopDownload*` family.
 - Unsigned installer — same SmartScreen note as the full build (signing
   stays the separate, human-credentialed question).
 
-## 6. What stays fused, deliberately
+## 7. What stays fused, deliberately
 
 The full desktop app KEEPS its in-process agent: for the standalone user
 (this machine = server + client), own-machine computer control with zero
@@ -243,7 +311,7 @@ Alternatives considered and rejected:
   byte to every machine. The saving this epic exists for lives in the
   second PAYLOAD, which a checkbox cannot produce.
 
-## 7. Slices
+## 8. Slices
 
 - **A1** — `desktop/connect_ui.py` extraction + `desktop/agent_launcher.py`
   + `tofu-agent.spec` + agent Half A in `winbuilder.py` (`target='agent'`)
@@ -255,16 +323,21 @@ Alternatives considered and rejected:
 - **A2** — NSIS template parametrization + Half B target support +
   `test_installer_parity.py` extended to both components + first real
   `TofuAgent-Setup-<ver>-win64.exe` recorded `kind='agent'` in the store.
-- **A3** — serving + UI: `AGENT_PLATFORM_ASSETS`, `find_for_platform`
-  kind filter, status payload, `_lcRenderDesktop` two-link rendering,
-  autobuild gate. Parity suite for the `downloads[]` shape (the
+- **A2b** (CI, same change as the gates) — `build-desktop.yml` agent
+  legs (windows/macos/linux runners, §5.3) + `AGENT_PLATFORM_ASSETS`
+  joining `REQUIRED_PLATFORM_ASSETS` + `test_desktop_build_workflow.py`
+  extended to the new rows.
+- **A3** — serving + UI: `AGENT_PLATFORM_ASSETS` rows in
+  `_platform_rows_for`, `find_for_platform` kind filter, status payload,
+  `_lcRenderDesktop` branch matrix, autobuild gate, mirror extension to
+  agent assets. Parity suite for the `downloads[]` shape (the
   api-contract discipline: shape pinned by test); frontend JSDOM harness
   for the primary/secondary link branches.
 - **A4** (docs only) — `desktop/README.md` + `DESKTOP_EGRESS_DESIGN.md`
   §11: retire the "copy the whole repo" stopgap in favour of the agent
-  installer.
+  installer; README download table gains the two-component rows.
 
-## 8. Acceptance
+## 9. Acceptance
 
 A Windows visitor to Local Control (remote case) is offered
 `TofuAgent-Setup-<current>-win64.exe` marked `服务器直连 · built` as the

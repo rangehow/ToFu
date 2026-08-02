@@ -175,6 +175,34 @@ def test_the_newer_version_wins_and_ties_go_to_the_build(tmp_store):
     assert rows[0]['filename'] == 'Tofu-0.16.0-linux-x86_64.tar.gz', rows
 
 
+@pytest.mark.unit
+def test_an_agent_artifact_never_shadows_the_full_installer(tmp_store):
+    """The kind axis: a freshly-wrapped agent installer is NEWER than the
+    full build at the same version and same source — without the kind
+    filter it wins the shared platform row and the panel offers the agent
+    to a full-app seeker (the exact regression A2's first artifact
+    introduced the moment it landed)."""
+    _seed(tmp_store, 'Tofu-Setup-0.16.0-win64.exe', source='built',
+          version='0.16.0', fetched_at=time.time() - 100)
+    agent = _entry('TofuAgent-Setup-0.16.0-win64.exe', source='built',
+                   version='0.16.0', label='Windows agent installer')
+    agent['kind'] = 'agent'
+    (tmp_store / agent['filename']).write_bytes(b'x' * 1024)
+    store.record_artifact(agent)
+    rows = store.find_for_platform('windows', 'x86_64')
+    assert [r['filename'] for r in rows] == ['Tofu-Setup-0.16.0-win64.exe'], (
+        'the agent shadowed the full installer on its own row')
+    rows = store.find_for_platform('windows', 'x86_64', kind='agent')
+    assert [r['filename'] for r in rows] == [
+        'TofuAgent-Setup-0.16.0-win64.exe']
+    # Legacy kindless entries read as 'full' — zero manifest migration.
+    e = store.artifacts()['Tofu-Setup-0.16.0-win64.exe']
+    assert 'kind' not in e
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  mirror
+# ═══════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════
 #  mirror
 # ═══════════════════════════════════════════════════════════════════

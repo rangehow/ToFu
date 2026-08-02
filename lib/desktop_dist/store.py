@@ -175,7 +175,8 @@ def remove_not_in(keep_names, *, sources=('mirrored',)) -> list:
     return removed
 
 
-def find_for_platform(os_key: str, arch: str = '') -> list:
+def find_for_platform(os_key: str, arch: str = '',
+                      kind: str = 'full') -> list:
     """The servable artifacts for one visitor, best-first per platform row.
 
     Shares the narrowing rule with the old GitHub-URL matcher
@@ -185,6 +186,13 @@ def find_for_platform(os_key: str, arch: str = '') -> list:
     NEWER version wins — a stale local build must not pin the user below
     the mirrored release; ties go to the built artifact (it matches this
     server's own code).
+
+    ``kind`` separates the two components (docs/DESKTOP_AGENT_DIST_DESIGN
+    .md): entries carry ``kind: 'full' | 'agent'`` (absent ⇒ 'full').
+    The default 'full' keeps every pre-kind caller byte-identical — and
+    an agent artifact can NEVER shadow the full installer just for being
+    newer (both are 'built' at the same version, so without the filter
+    the fresher wrap wins the same row).
     """
     from lib.desktop_dist.platforms import _platform_rows_for
 
@@ -193,6 +201,7 @@ def find_for_platform(os_key: str, arch: str = '') -> list:
     for _os, _arch, _label, _pat, _min in _platform_rows_for(os_key, arch):
         cands = [a for a in arts.values()
                  if isinstance(a, dict)
+                 and a.get('kind', 'full') == kind
                  and a.get('os') == _os and a.get('arch') == _arch
                  and a.get('filename')
                  and os.path.isfile(

@@ -1,3 +1,9 @@
+### 2026-08-02(egress 接线:owner 拍板「改走免重启转发路」——服务器侧预检全绿,agent 待上线;epic `pt_4ea6bf05deaa46f0`)
+
+- **预检(重启后凭证链仍完好):** `data/config/.egress_bridge_key`(0600)在现行进程内实测:带 key POST `/api/desktop/poll` → 长轮询 ~8s 后 **200 `{"commands":[]}`**(-m 5 得 000 是长轮询挂起,非异常);无 key → 立即 401。注册表空且无污染(preflight agent 单轮即过期)。**之前 000 一度疑云,定案=长轮询语义**。
+- **剩余闸门=纯办公机侧:** `ssh -L 15000:127.0.0.1:15000 <codelab-ssh>` + `python -m lib.desktop_agent --server http://127.0.0.1:15000 --allow-egress --bridge-secret <key>`。服务器侧已无事可做。
+- **守候形态:** 板面问题卡(三键) + registry watcher(check_command 出注册表 JSON、poll LLM 读内容判定,不用退出码——沿用 7-31 教训修正形态,JOURNAL L432 有先例)。agent 一上线任一路径触发即继续:能力位 → 状态五态翻转 → Claude 登录 → 流式 → Codex O3。
+
 ### 2026-08-01(阅读体验 P0-P4 全量落地:教科书 → 陪读导师;epic `pt_08894d6112bf4c68` DONE) — owner 一键批「批准全量 P0-P4」后五期连发:`fe270ce9`/`2df7408f`/`5b8f97d0`/`3209c43e`/`7865fa34`(68 文件净增 ~5.4K 行);新套件 **12+9+6+3 后端 + 前端 JSDOM 76+ 检查**(各含 NEUTER);全邻接回归 **200+ 绿**;feature bundle `27f3cf25` 实测四模块齐备
 
 - **主线=接线而非新建:** insight 引擎(A/B 验证过)从 env-gated OFF 转**四级链默认 ON**(cfg 戳>server_config>env>ON;personal_scope 注册 paperInsightEnabled/paperCheckpointsEnabled,headless fail-closed);ideate 1639 行经 open_problem 卡一键进 `_startResearchJob`;QA 经 provocation 卡一键开辩(`_paperAskQuestion`)。两个新引擎都是克隆已有机架:checkpoint(单发无工具 JSON+修复重问)、deepen(qa 机架,三模式,`deep:<mode>:<sec>:<ui>` 缓存槽+section_hash 新鲜度校验——报告再生即失效)。

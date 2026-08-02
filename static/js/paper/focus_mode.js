@@ -44,6 +44,25 @@ function _focusSetContainer(on) {
   }
 }
 
+/** First block still visible below the scroller's top edge — the block the
+ *  reader is actually looking at. Computed from getBoundingClientRect so it
+ *  never guesses WHICH element scrolls (#paperReportContent itself does NOT
+ *  scroll — the inner .paper-report-scroller does; the old scrollTop math
+ *  silently returned 0 and pinned the spotlight on the document title,
+ *  which is why the owner saw "everything turn gray"). */
+function _focusIndexNearViewport(article, blocks) {
+  if (!blocks.length) return -1;
+  var scroller = (article.closest && article.closest('.paper-report-scroller'))
+    || document.getElementById('paperReportContent');
+  var sTop = (scroller && scroller.getBoundingClientRect)
+    ? scroller.getBoundingClientRect().top : 0;
+  for (var i = 0; i < blocks.length; i++) {
+    var r = blocks[i].getBoundingClientRect ? blocks[i].getBoundingClientRect() : null;
+    if (r && r.bottom > sTop + 8) return i;
+  }
+  return 0;
+}
+
 function _paperFocusModeToggle() {
   var container = document.getElementById('paperReportContent');
   var article = container && container.querySelector('.paper-report-article');
@@ -51,14 +70,7 @@ function _paperFocusModeToggle() {
   _paperFocus.on = !_paperFocus.on;
   if (_paperFocus.on) {
     _paperFocus.blocks = _focusBlocks(article);
-    // Start at the block nearest the current scroll position.
-    var top = container.scrollTop;
-    var idx = 0;
-    for (var i = 0; i < _paperFocus.blocks.length; i++) {
-      if (_paperFocus.blocks[i].offsetTop <= top + 40) idx = i;
-      else break;
-    }
-    _paperFocus.current = idx;
+    _paperFocus.current = _focusIndexNearViewport(article, _paperFocus.blocks);
   } else {
     _paperFocus.current = -1;
     for (var j = 0; j < _paperFocus.blocks.length; j++) {

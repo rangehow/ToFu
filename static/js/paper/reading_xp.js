@@ -320,7 +320,7 @@ function _xpSkimApply(article, on) {
   for (var i = 0; i < kids.length; i++) {
     var el = kids[i];
     var tag = el.tagName || '';
-    if (/^H[23]$/.test(tag)) {
+    if (/^H[1-6]$/.test(tag)) {           // headings always stay (incl. the H1 title)
       seenParaInSection = false;
       el.classList.remove('xp-skim-hidden');
       continue;
@@ -340,9 +340,21 @@ function _xpSkimApply(article, on) {
       el.classList.remove('xp-skim-hidden');
       continue;
     }
+    // Skim = "structure-only": it hides LONG-FORM PROSE (2nd+ paragraph of
+    // each section) and keeps everything scannable — the first paragraph,
+    // callouts, TABLES (paper card / glossary / results), LISTS (design
+    // chains), code, figures and math. Hiding structure was the v1 bug the
+    // owner screenshot exposed: for table/list-dense reports it blanked the
+    // chapter entirely.
     var keep = false;
-    if (tag === 'P' && !seenParaInSection) { keep = true; seenParaInSection = true; }
-    else if (tag === 'BLOCKQUOTE') keep = true;
+    if (tag === 'P') {
+      if (!seenParaInSection) { keep = true; seenParaInSection = true; }
+    } else if (/^(BLOCKQUOTE|TABLE|UL|OL|PRE|FIGURE)$/.test(tag)) {
+      keep = true;
+    } else if (tag === 'DIV' && el.querySelector
+               && el.querySelector('img, table, .katex-display')) {
+      keep = true;   // framed figures / display-math wrappers
+    }
     el.classList.toggle('xp-skim-hidden', !keep);
   }
 }

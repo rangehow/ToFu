@@ -400,10 +400,23 @@ while (realFirstP && realFirstP.tagName !== 'P') realFirstP = realFirstP.nextEle
 const extraP = document.createElement('p');
 extraP.textContent = 'second para should hide';
 realFirstP.insertAdjacentElement('afterend', extraP);
+// A table (paper card / glossary / results) and a list (design chains) in
+// the Method section MUST survive skim — the v1 keep-set hid them and
+// blanked table/list-dense chapters (owner-reported bug).
+const tbl = document.createElement('table');
+tbl.innerHTML = '<tbody><tr><td>field</td><td>value</td></tr></tbody>';
+extraP.insertAdjacentElement('afterend', tbl);
+const ul = document.createElement('ul');
+ul.innerHTML = '<li>choice A → because B</li>';
+tbl.insertAdjacentElement('afterend', ul);
 _paperXpSkimToggle();
 check('skim_on_class', c.classList.contains('paper-xp-skim-on'));
 check('skim_hides_second_para', extraP.classList.contains('xp-skim-hidden'));
 check('skim_keeps_blockquote', !bq.classList.contains('xp-skim-hidden'));
+check('skim_keeps_table', !tbl.classList.contains('xp-skim-hidden'));
+check('skim_keeps_list', !ul.classList.contains('xp-skim-hidden'));
+check('skim_keeps_title',
+      !art2.querySelector('h1').classList.contains('xp-skim-hidden'));
 const methodFirstP = methodH.nextElementSibling;
 check('skim_keeps_callout_first',
       methodFirstP === bq || !methodFirstP.classList.contains('xp-skim-hidden'));
@@ -530,9 +543,23 @@ check('skim_off_restores',
         && notesAfterCreate[3].id === 'pn_new1');
 
   // ── (14) P4: focus mode ──
+  // Viewport-anchored spotlight: with the scroller's top at 0 and the first
+  // block scrolled out of view (rect above the edge), the current block must
+  // be the FIRST one still visible — never pinned on the document title
+  // (the old scrollTop=0 math did exactly that → "everything turned gray").
+  const fkids = Array.prototype.slice.call(art4.children);
+  fkids.forEach(function (el, i) {
+    el.getBoundingClientRect = function () {
+      return i === 0 ? { top: -200, bottom: -10 }
+                     : { top: 10 + i * 20, bottom: 30 + i * 20 };
+    };
+  });
   _paperFocusModeToggle();
   check('focus_on_class', c.classList.contains('paper-focus-on'));
-  check('focus_has_current', !!art4.querySelector('.paper-focus-current'));
+  const cur0 = art4.querySelector('.paper-focus-current');
+  check('focus_has_current', !!cur0);
+  check('focus_current_is_viewport_block',
+        !!cur0 && Array.prototype.indexOf.call(art4.children, cur0) === 1);
   document.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'j', bubbles: true }));
   const curIdx = (function () {
     const cur = art4.querySelector('.paper-focus-current');

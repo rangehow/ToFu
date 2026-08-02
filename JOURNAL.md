@@ -1,3 +1,10 @@
+### 2026-08-02(A2b+A4 落地:CI 三平台 agent 腿 + REQUIRED 双组件合流(原子)+ 文档面收官——epic 代码面全齐,仅剩人门验收) — epic `pt_59b62951aad2463e`;commits `894ef397`(A2b)+ A4 docs 批;环 **138/138**;NEUTER×2 精确(Run 值名改名→双套件各 1 红,还原复绿)
+
+- **A2b 形态(切片账的「同 PR 原子」执行):** agent 步骤骑**现有三平台 job**(复用 checkout/venv/icons,agent 唯一新增依赖=curl_cffi)——win:pyinstaller tofu-agent.spec+TOFU_AGENT_SMOKE 闸+Inno 作者权(AppName=Tofu Agent/[Tasks] autostart 默认勾/[Registry] HKCU Run uninsdeletevalue/OutputBaseFilename=TofuAgent-Setup);mac:双 arch TofuAgent DMG(**macOS agent 唯一来源**);linux:TofuAgent tar.gz(.deb 仍完整版独占)。agent 构建失败即整腿失败——「全平台或响亮失败,绝不静默半套」的发布哲学自然延伸到组件维度。REQUIRED_PLATFORM_ASSETS 同 commit 合流双表(缺一即 INCOMPLETE,version 闸下次运行自愈补齐)。**不放行 globs 内联工作流**旧闸零惊扰。
+- **A4 文档面:** 双 README 下载区加双组件表(角色/体积/内容);egress 稿 §11.1 runbook 步骤②「拷仓库+pip install」临时路径正式退役→本地控制装受控端;desktop/README 组件头注+CI 资产清单。
+- **parity 新判据(第三次同类教训):** `AppName=Tofu` 裸子串断言被 `AppName=Tofu Agent` 天然满足——**同一文件出现两个组件后,存在性断言必须锚定边界**(改钉 `'AppName=Tofu\n'` 换行锚)。与「存在性查不出多余出现」同族,记档。
+- **epic 账(A1-A4 全绿):** 设计稿 v1→v3(owner 三修订+egress 移交验收收编);A1 载荷 84.8MB/烟雾闸擒 tkinter 潜伏;A2 安装包 53.2MB+注释 @ 令牌碰撞+kindless 抢行;A3 kind 轴全链+漂移投影;A2b CI 腿+闸门原子;A4 文档。剩余=§10 移交验收(真机 OAuth 全链),纯人门(重启服务器+办公机装包),已挂板待答。
+
 ### 2026-08-02(A3 落地:agent 安装包从「在店」到「够得着」——kind 轴全链 + remote 分支矩阵 + 漂移投影) — epic `pt_59b62951aad2463e`;commit `069776f8`(10 文件);环 **207/207**(dist+builders+parity+前端 harness+bundle/i18n+bridge)
 
 - **后端 kind 轴五节:** release_assets.py 新增 AGENT_PLATFORM_ASSETS(4 行同形,globs TofuAgent- 前缀零碰撞;**刻意不入 REQUIRED**——入 REQUIRED 即触发自愈重建,必须与 A2b 的 CI 腿原子落地,注释写死);platforms/store/mirror 全链 kind 参数(默认 'full' 处处字节不变;mirror 双表迭代录 kind,剪枝救援谓词同 kind 匹配);winbuilder start/build_installer target 穿线。

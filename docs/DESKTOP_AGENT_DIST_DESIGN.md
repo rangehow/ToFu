@@ -397,6 +397,17 @@ Alternatives considered and rejected:
   equivalent) + `AGENT_PLATFORM_ASSETS`
   joining `REQUIRED_PLATFORM_ASSETS` + `test_desktop_build_workflow.py`
   extended to the new rows.
+  **LANDED 2026-08-02** (`894ef397`): agent steps ride the three
+  EXISTING platform jobs (same venv + icons; the agent's only extra dep
+  is curl_cffi) — an agent build failure fails the leg, so a release
+  can never ship missing an agent asset; `REQUIRED_PLATFORM_ASSETS`
+  derives over both tables in the same commit (legs without the join
+  publish hollow, join without the legs fails every publish). The
+  version gate's build-on-INCOMPLETE rule self-heals the current
+  release into carrying agent assets on the next run. Contract pins:
+  the Inno autostart authoring (HKCU / default-ON / uninsdeletevalue /
+  value name == `_RUN_VALUE`) asserted from BOTH test_installer_parity
+  and test_desktop_build_workflow, NEUTER-verified.
 - **A3** — serving + UI: `AGENT_PLATFORM_ASSETS` rows in
   `_platform_rows_for`, `find_for_platform` kind filter, status payload,
   `_lcRenderDesktop` branch matrix, autobuild gate, mirror extension to
@@ -419,6 +430,10 @@ Alternatives considered and rejected:
 - **A4** (docs only) — `desktop/README.md` + `DESKTOP_EGRESS_DESIGN.md`
   §11: retire the "copy the whole repo" stopgap in favour of the agent
   installer; README download table gains the two-component rows.
+  **LANDED 2026-08-02**: both READMEs carry the two-component table
+  (role / size / contents); the egress runbook's step ② now installs
+  the agent from Local Control (the repo-copy path retired), step ③
+  notes the packaged agent needs no manual command line.
 
 ## 10. Acceptance
 

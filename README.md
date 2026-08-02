@@ -58,8 +58,18 @@ Pick the row that matches your OS. Each one ends with a running server on **http
 > **Adding another machine to an existing server?** You don't have to go back to GitHub at all: a running
 > Tofu server hosts the installers itself. Open **Local Control** in the app (the desktop row) and the
 > download button serves the right installer for that machine straight from your server — mirrored from the
-> latest release in the background (Windows/macOS) or built on the server itself (Linux, from the committed
-> tree via `POST /api/v1/desktop/build`). Same file, no dependence on the public GitHub network.
+> latest release in the background (Windows/macOS) or built on the server itself (Linux/Windows, from the
+> committed tree via `POST /api/v1/desktop/build`). Same file, no dependence on the public GitHub network.
+>
+> There are two components — pick by the machine's role:
+>
+> | Component | For | Size | Contents |
+> |---|---|---|---|
+> | **Agent (TofuAgent)** | The server should act on this machine (incl. subscription-traffic egress) | ~53 MB | No UI: tray configures connection + permissions, optional start-with-Windows |
+> | **Full desktop (Tofu)** | This machine also runs Tofu itself (server + client in one) | ~153 MB | Full server + browser UI + tray |
+>
+> Local Control puts the right one first for your situation; the Releases page carries both
+> (`TofuAgent-Setup-*` / `Tofu-Setup-*`).
 
 That's it. Each path handles the runtime, dependencies, the database,
 the browser engine, and starts the server — no flags, no follow-up

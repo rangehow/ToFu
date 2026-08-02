@@ -2,6 +2,13 @@
 
 Standalone installers for Windows, macOS, and Linux — no Python, no conda, no terminal needed.
 
+**Two components (2026-08-02, docs/DESKTOP_AGENT_DIST_DESIGN.md):** this
+directory builds BOTH the full desktop app (`tofu.spec` → `Tofu-Setup-*`,
+server + client + tray, ~153 MB) and the agent-only controlled endpoint
+(`tofu-agent.spec` → `TofuAgent-Setup-*`, no server, no UI, ~53 MB).
+`agent_launcher.py` is the agent's entry; `connect_ui.py` is the shared
+connect-line dialog + preseed import both launchers use.
+
 ## Quick Build (local)
 
 ```bash
@@ -114,8 +121,13 @@ git push origin v0.10.0
 
 This runs `.github/workflows/build-desktop.yml` which produces:
 - `Tofu-Setup-<ver>-win64.exe` — Windows installer (Inno Setup)
-- `Tofu-<ver>-macos-arm64.dmg` — macOS disk image, Apple Silicon (built on `macos-14`)
-- `Tofu-<ver>-macos-x86_64.dmg` — macOS disk image, Intel (built on `macos-13`)
+- `TofuAgent-Setup-<ver>-win64.exe` — Windows **agent** installer (Inno Setup,
+  default-on start-with-Windows task; HKCU, removed at uninstall)
+- `Tofu-<ver>-macos-arm64.dmg` — macOS disk image, Apple Silicon
+- `Tofu-<ver>-macos-x86_64.dmg` — macOS disk image, Intel
+- `TofuAgent-<ver>-macos-{arm64,x86_64}.dmg` — macOS agent disk images
+- `TofuAgent-<ver>-linux-x86_64.tar.gz` — Linux agent archive (tar.gz only;
+  .deb stays full-only)
 - `Tofu-<ver>-linux-x86_64.deb` — **primary Linux installer** (Debian/Ubuntu):
   installs to `/opt/Tofu` with a system-wide menu entry and icon; user data
   lives in `~/.local/share/Tofu` (the app never writes into `/opt`).

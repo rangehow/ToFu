@@ -200,6 +200,19 @@ def test_an_agent_artifact_never_shadows_the_full_installer(tmp_store):
     assert 'kind' not in e
 
 
+@pytest.mark.unit
+def test_is_loopback_url():
+    """The preseed-usability predicate: loopback/unspecified hosts are
+    only reachable from the server's own machine."""
+    for u in ('http://127.0.0.1:15000', 'http://127.0.1.1:15000/',
+              'http://localhost', 'https://localhost:15000/p/',
+              'http://[::1]:15000', 'http://0.0.0.0:15000'):
+        assert store.is_loopback_url(u), u
+    for u in ('https://tofu.example.com', 'http://192.168.1.5:15000',
+              'http://10.0.0.2', '', 'not-a-url'):
+        assert not store.is_loopback_url(u), u
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  mirror
 # ═══════════════════════════════════════════════════════════════════
@@ -615,6 +628,59 @@ def test_the_status_payload_carries_both_component_downloads(
     assert ad['size'] == 2048
     assert '/api/v1/desktop/download/TofuAgent-Setup-0.16.0-win64.exe' \
         in ad['url']
+    # No preseed recorded ⇒ nothing advertised (the panel then renders
+    # the mint-and-paste flow, never a false auto-connect promise).
+    assert ad['preseed_url'] == ''
+
+
+@pytest.mark.api
+def test_the_status_payload_advertises_only_usable_preseeds(
+        tmp_store, flask_client, monkeypatch):
+    """The panel's zero-touch variant keys on preseed_url. A loopback
+    preseed (the measured first agent artifact: http://127.0.0.1:15000)
+    attaches a remote machine to a void AND suppresses the first-run
+    dialog — the payload must advertise '' for it, never the URL."""
+    monkeypatch.setattr(mirror, 'ensure_fresh', lambda *a, **k: False)
+
+    def _seed_agent(name, version, pre_url):
+        agent = {'os': 'windows', 'arch': 'x86_64',
+                 'label': 'Windows agent installer', 'filename': name,
+                 'size': 1024, 'sha256': 'ab' * 32, 'source': 'built',
+                 'version': version, 'kind': 'agent',
+                 'fetched_at': time.time(), 'preseed': {'url': pre_url}}
+        (tmp_store / name).write_bytes(b'x' * 1024)
+        store.record_artifact(agent)
+
+    def _agent_row():
+        r = flask_client.get('/api/v1/desktop/status',
+                             headers={**_bearer(), 'User-Agent': _UA_WIN})
+        assert r.status_code == 200
+        return r.get_json()['agent_downloads'][0]
+
+    _seed_agent('TofuAgent-Setup-0.16.0-win64.exe', '0.16.0',
+                'http://127.0.0.1:15000')
+    assert _agent_row()['preseed_url'] == '', (
+        'a loopback preseed must never be advertised as auto-connect')
+    _seed_agent('TofuAgent-Setup-0.16.1-win64.exe', '0.16.1',
+                'https://tofu.example.com')
+    assert _agent_row()['preseed_url'] == 'https://tofu.example.com'
+
+
+@pytest.mark.api
+def test_the_status_payload_projects_bridge_token_requirement(
+        tmp_store, flask_client, monkeypatch):
+    """bridge_token_required mirrors TOFU_BRIDGE_SECRET: unset ⇒ open
+    bridge (a preseeded agent connects with zero input); set ⇒ the
+    panel must keep the mint-and-paste step."""
+    monkeypatch.delenv('TOFU_BRIDGE_SECRET', raising=False)
+    monkeypatch.setattr(mirror, 'ensure_fresh', lambda *a, **k: False)
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.get_json()['bridge_token_required'] is False
+    monkeypatch.setenv('TOFU_BRIDGE_SECRET', 's3cret')
+    r = flask_client.get('/api/v1/desktop/status',
+                         headers={**_bearer(), 'User-Agent': _UA_WIN})
+    assert r.get_json()['bridge_token_required'] is True
 
 
 @pytest.mark.api

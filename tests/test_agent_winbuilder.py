@@ -253,6 +253,95 @@ def test_agent_wrap_records_a_kind_agent_artifact(isolated, monkeypatch,
     assert pre['url'] == 'https://tofu.example.com'
 
 
+def _wrap_agent_with_fake_makensis(isolated, monkeypatch, tmp_path,
+                                   server_url, out_name):
+    """Drive the REAL wrap half (untar + record) with makensis faked."""
+    payload_dir = tmp_path / 'payload-src'
+    (payload_dir / 'TofuAgent').mkdir(parents=True)
+    (payload_dir / 'TofuAgent' / 'TofuAgent.exe').write_text('exe')
+    payload_tar = tmp_path / 'payload.tar.gz'
+    with tarfile.open(payload_tar, 'w:gz') as tf:
+        tf.add(payload_dir / 'TofuAgent', arcname='TofuAgent')
+
+    def _sh(cmd, log_fh, *, shell=False, timeout=9999):
+        if 'makensis' in cmd:
+            out = isolated / 'wrap' / out_name
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b'NSIS-AGENT-INSTALLER')
+            return None
+        import subprocess as sp
+        return sp.run(cmd if shell else cmd.split(), shell=shell,
+                      capture_output=True, timeout=timeout)
+
+    monkeypatch.setattr(wb, '_sh', _sh)
+    monkeypatch.setattr(wb, '_ensure_makensis', lambda log: '/fake/makensis')
+    with _fake_log(isolated) as log:
+        wb.wrap_payload(str(payload_tar), '0.16.0', 'b' * 40, log,
+                        server_url=server_url,
+                        workdir=str(isolated / 'wrap'), target='agent')
+
+
+def test_agent_wrap_drops_a_loopback_preseed(isolated, monkeypatch,
+                                             tmp_path):
+    """The measured trap (first agent artifact, 2026-08-02): built from a
+    server-local request, it shipped preseed http://127.0.0.1:15000 — the
+    office PC attaches to its OWN loopback, never reaches the server, and
+    the first-run connect dialog never appears (an attachment exists).
+    The agent target drops a loopback preseed so first run always asks."""
+    _wrap_agent_with_fake_makensis(isolated, monkeypatch, tmp_path,
+                                   'http://127.0.0.1:15000',
+                                   'TofuAgent-Setup-0.16.0-win64.exe')
+    e = wb.store.artifacts()['TofuAgent-Setup-0.16.0-win64.exe']
+    assert 'preseed' not in e, (
+        'a loopback preseed must be dropped, not recorded')
+    assert not os.path.exists(
+        os.path.join(str(isolated / 'wrap'), 'payload',
+                     'preseed_server.json')), (
+        'the preseed FILE must not ship either — its presence is what '
+        'suppresses the first-run dialog')
+
+
+def test_agent_wrap_keeps_a_reachable_preseed(isolated, monkeypatch,
+                                              tmp_path):
+    _wrap_agent_with_fake_makensis(isolated, monkeypatch, tmp_path,
+                                   'https://tofu.example.com',
+                                   'TofuAgent-Setup-0.16.0-win64.exe')
+    e = wb.store.artifacts()['TofuAgent-Setup-0.16.0-win64.exe']
+    assert e['preseed']['url'] == 'https://tofu.example.com'
+
+
+def test_full_wrap_keeps_a_loopback_preseed(isolated, monkeypatch,
+                                            tmp_path):
+    """The FULL target is byte-identical discipline: its primary install
+    case is the server's own machine (local_source), where a loopback
+    preseed is exactly right. The drop is agent-only."""
+    payload_dir = tmp_path / 'payload-src'
+    (payload_dir / 'Tofu').mkdir(parents=True)
+    (payload_dir / 'Tofu' / 'Tofu.exe').write_text('exe')
+    payload_tar = tmp_path / 'payload.tar.gz'
+    with tarfile.open(payload_tar, 'w:gz') as tf:
+        tf.add(payload_dir / 'Tofu', arcname='Tofu')
+
+    def _sh(cmd, log_fh, *, shell=False, timeout=9999):
+        if 'makensis' in cmd:
+            out = isolated / 'wrap' / 'Tofu-Setup-0.16.0-win64.exe'
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b'NSIS-FULL-INSTALLER')
+            return None
+        import subprocess as sp
+        return sp.run(cmd if shell else cmd.split(), shell=shell,
+                      capture_output=True, timeout=timeout)
+
+    monkeypatch.setattr(wb, '_sh', _sh)
+    monkeypatch.setattr(wb, '_ensure_makensis', lambda log: '/fake/makensis')
+    with _fake_log(isolated) as log:
+        wb.wrap_payload(str(payload_tar), '0.16.0', 'c' * 40, log,
+                        server_url='http://127.0.0.1:15000',
+                        workdir=str(isolated / 'wrap'))
+    e = wb.store.artifacts()['Tofu-Setup-0.16.0-win64.exe']
+    assert e['preseed']['url'] == 'http://127.0.0.1:15000'
+
+
 def test_full_wrap_record_has_kind_full(isolated, monkeypatch, tmp_path):
     payload_dir = tmp_path / 'payload-src'
     (payload_dir / 'Tofu').mkdir(parents=True)

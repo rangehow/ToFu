@@ -19,6 +19,7 @@ from flask import Blueprint
 from lib.api_response import (
     api_created, api_not_found, api_ok, api_payload,
 )
+from lib.env_compat import getenv_compat
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 
@@ -87,6 +88,24 @@ from lib.desktop_dist.platforms import (  # noqa: F401
 )
 from lib.desktop_dist import mirror as _dist_mirror
 from lib.desktop_dist import store as _dist_store
+
+
+def _entry_preseed_url(entry: dict) -> str:
+    """The preseed URL worth advertising to the panel ('' when unusable).
+
+    A loopback/unspecified preseed works only when the installer lands
+    on the SERVER's own machine; offered to a remote controlled machine
+    it attaches the agent to a void AND suppresses the first-run connect
+    dialog (the measured first agent artifact baked
+    ``http://127.0.0.1:15000``). The panel only ever sees a preseed that
+    can promise a real auto-connect — anything else falls through to the
+    minted-connect-line flow.
+    """
+    url = str(((entry or {}).get('preseed') or {}).get('url') or '')
+    url = url.strip()
+    if not url or _dist_store.is_loopback_url(url):
+        return ''
+    return url
 
 
 def _request_platform_downloads(arch_override: str = '',
@@ -176,6 +195,7 @@ def _request_platform_downloads(arch_override: str = '',
             'size': e.get('size') or 0,
             'source': e.get('source') or 'mirrored',
             'kind': e.get('kind') or 'full',
+            'preseed_url': _entry_preseed_url(e),
         })
     return out
 
@@ -274,6 +294,13 @@ async def desktop_status():
         'agent_downloads': _request_platform_downloads(_arch,
                                                        kind='agent'),
         'server_url': _agent_server_url(),
+        # Whether an attaching agent must present a bridge credential
+        # (TOFU_BRIDGE_SECRET configured → global secret or an
+        # agents:bridge token; unset → open legacy, any/no secret
+        # passes). The panel uses it to skip the mint-and-paste step
+        # when a preseeded installer can connect with zero input.
+        'bridge_token_required': bool(
+            (getenv_compat('TOFU_BRIDGE_SECRET') or '').strip()),
     })
 
 

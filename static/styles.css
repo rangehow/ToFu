@@ -15574,6 +15574,17 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    fast/reliable path, so it gets the success hue, not the accent one. */
 .lc-dl-hosted{display:inline-flex;align-items:center;padding:3px 8px;font-size:10.5px;font-weight:600;border-radius:999px;white-space:nowrap;color:#15803d;border:1px solid rgba(22,163,74,0.35);background:rgba(22,163,74,0.08)}
 [data-theme="light"] .lc-dl-hosted{color:#166534;border-color:rgba(21,128,61,0.4);background:rgba(21,128,61,0.10)}
+/* ── Collapsed secondary download (the full desktop app in the remote
+   branch). The agent is the primary action there; the full installer must
+   stay one line away WITHOUT competing for attention — a zero-JS <details>
+   keeps it discoverable but out of the numbered flow. */
+.lc-details{margin:0 0 8px;font-size:12.5px;color:var(--text-secondary,#9898a8)}
+.lc-details>summary{cursor:pointer;list-style:none;outline:none}
+.lc-details>summary::-webkit-details-marker{display:none}
+.lc-details>summary::before{content:'▸\00a0';color:#a855f7}
+.lc-details[open]>summary::before{content:'▾\00a0'}
+.lc-details>summary:hover{color:var(--text-primary,#e8e8f0)}
+.lc-details[open]>summary{margin-bottom:6px}
 
 [data-theme="light"] .lc-cap{border-color:rgba(0,0,0,0.09);background:rgba(0,0,0,0.012)}
 [data-theme="light"] .lc-cap-icon{background:rgba(126,34,206,0.1);color:#7e22ce}

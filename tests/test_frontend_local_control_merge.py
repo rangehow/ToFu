@@ -680,8 +680,9 @@ def test_NEUTER_rendering_the_server_url_verbatim_is_caught():
 def test_NEUTER_stripping_the_download_link_is_caught():
     """No links helper output → told to install with no way to get the app."""
     out = _run(_shipped(
-        lambda s: s.replace("function _lcDownloadLinks(d) {\n  var page",
-                            "function _lcDownloadLinks(d) {\n  return '';\n  var page")
+        lambda s: s.replace(
+            "function _lcDownloadLinks(d, kind, suppressPage) {\n  kind = kind || 'full';",
+            "function _lcDownloadLinks(d, kind, suppressPage) {\n  return '';\n  kind = kind || 'full';")
     ))["desktop"]
     assert out["remote"]["downloadHref"] == "", (
         "NEUTER did not remove the followable link")

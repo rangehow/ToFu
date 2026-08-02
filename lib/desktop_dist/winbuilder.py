@@ -781,6 +781,31 @@ def _render_nsi(version: str, payload_dir: str, out_file: str,
     return text
 
 
+def _agent_safe_preseed_url(server_url: str, target: str) -> str:
+    """The preseed URL worth baking, or ``''`` to bake none.
+
+    The AGENT component's whole purpose is a REMOTE controlled machine,
+    so a loopback/unspecified preseed is a trap there: the office PC
+    attaches to its own loopback, never reaches the server, AND the
+    first-run connect dialog is suppressed because an attachment exists
+    (measured 2026-08-02: the first agent installer was built from a
+    server-local request and shipped ``preseed http://127.0.0.1:15000``).
+    Baking NOTHING makes the first run ask for the connect line — one
+    paste, always right. The full target is untouched (byte-identical):
+    its primary install case is the server's own machine (local_source),
+    where a loopback preseed is exactly correct.
+    """
+    if target != 'agent' or not server_url:
+        return server_url
+    if store.is_loopback_url(server_url):
+        logger.warning('[WinBuild] dropping loopback preseed %r for the '
+                       'agent target — a remote controlled machine would '
+                       'attach to its own loopback and never ask for a '
+                       'connect line', server_url)
+        return ''
+    return server_url
+
+
 def _write_preseed(payload_dir: str, server_url: str) -> str | None:
     """preseed_server.json next to Tofu.exe — the launcher's first-run
     import contract (desktop/launcher.py). Non-secret: the URL only."""
@@ -815,6 +840,7 @@ def wrap_payload(payload_tar: str, version: str, sha: str, log_fh, *,
         log_fh)
     if not os.path.isfile(os.path.join(payload_dir, tgt['exe'])):
         raise RuntimeError(f'payload has no {tgt["exe"]}: {payload_tar}')
+    server_url = _agent_safe_preseed_url(server_url, target)
     _write_preseed(payload_dir, server_url)
 
     name = f'{nt["setup_prefix"]}-{version}-win64.exe'

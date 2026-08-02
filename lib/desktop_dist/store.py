@@ -218,6 +218,26 @@ def find_for_platform(os_key: str, arch: str = '',
     return out
 
 
+def is_loopback_url(url: str) -> bool:
+    """True when the URL can only ever mean 'this same machine'.
+
+    Used to judge preseed URLs: a loopback preseed works only when the
+    installer lands on the SERVER's own machine — offered to a remote
+    controlled machine it attaches the agent to a void. Unparseable or
+    empty input is NOT loopback (callers treat empty separately).
+    """
+    from urllib.parse import urlparse
+    try:
+        host = (urlparse((url or '').strip()).hostname or '').lower()
+    except Exception as e:
+        logger.debug('[DesktopDist] preseed url %r unparseable: %s', url, e)
+        return False
+    if not host:
+        return False
+    return (host == 'localhost' or host == '0.0.0.0' or host == '::1'
+            or host.startswith('127.'))
+
+
 def _version_key(version) -> tuple:
     """Sort key for a version string ('0.14.2' / 'v0.14.2'); unknown → 0."""
     try:
@@ -262,6 +282,7 @@ def last_error_age_s() -> float | None:
 
 __all__ = [
     '_store_dir', 'load_manifest', 'save_manifest', 'artifacts',
+    'is_loopback_url',
     'resolve_file', 'record_artifact', 'remove_not_in', 'find_for_platform',
     'mark_refresh', 'manifest_age_s', 'last_error_age_s',
 ]

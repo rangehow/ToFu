@@ -456,38 +456,65 @@ function _lcRenderDesktop(d, err) {
 
     default: {
       // Remote server — the machine in front of the user is NOT this
-      // machine, so this is the only case that needs a token. Its role in
-      // this dialog is to be CONTROLLED (the A3 branch matrix): the agent
-      // installer (lightweight, no frontend) is the PRIMARY offer; the
-      // full desktop app is a one-line secondary for "this machine also
-      // runs Tofu". When no agent artifact exists yet (a build is in
-      // flight), the full installer takes the primary slot with the
-      // historical instruction — stale-while-build, never a dead end.
+      // machine, so this is the only case that can need a token. Its role
+      // in this dialog is to be CONTROLLED (the A3 branch matrix): the
+      // agent installer (lightweight, no frontend) is the PRIMARY offer;
+      // the full desktop app is a one-line COLLAPSED secondary. When no
+      // agent artifact exists yet (a build is in flight), the full
+      // installer takes the primary slot with the historical instruction —
+      // stale-while-build, never a dead end.
+      //
+      // The agent flow is numbered like the browser row's (①②③), because
+      // an un-ordered "install … then use the line below" asked the user
+      // to discover the sequence from the layout — and referenced a line
+      // that did not exist yet. Two shapes:
+      //   * 3-step (default): download → mint+auto-copy → paste into the
+      //     agent's first-run connect box;
+      //   * 2-step (zero-touch): the artifact carries a usable preseed
+      //     (backend already filtered loopback) AND the bridge needs no
+      //     token — install and it connects by itself. bridge_token_required
+      //     absent ⇒ treated as REQUIRED: the 3-step flow also works on an
+      //     open bridge, so that is the fail-safe direction.
       var dl = (d.download_url || '').trim();
       var srv = (d.server_url || '').trim();
       var agentPicks = Array.isArray(d.agent_downloads)
         ? d.agent_downloads : [];
       var html;
       if (agentPicks.length) {
+        var autoConnect = (d.bridge_token_required === false) &&
+          agentPicks.some(function (p) { return p && p.preseed_url; });
         html =
           '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemoteAgent',
-            'Tofu 运行在远程服务器上。在你自己的电脑安装受控端，再用下面这行把它连过来：')) + '</p>' +
-          '<p class="lc-substep">' + _lcEsc(_lcT('local.agentRoleGloss',
-            '受控端：只让这台电脑被服务器操作 —— 轻量、无界面，系统托盘里改配置。')) + '</p>' +
+            'Tofu 运行在远程服务器上 —— 让 AI 操作这台电脑：')) + '</p>' +
+          '<p class="lc-step">' + _lcEsc(_lcT('local.agentStep1',
+            '① 下载并安装受控端（只让服务器操作这台电脑 —— 轻量 · 无界面 · 托盘配置）：')) + '</p>' +
           _lcDownloadLinks(d, 'agent', true) +
-          '<p class="lc-substep">' + _lcEsc(_lcT('local.fullRoleGloss',
-            '这台电脑也要跑 Tofu 本体（服务器+界面）？选完整桌面版：')) + '</p>' +
-          _lcDownloadLinks(d, 'full');
+          (autoConnect
+            ? '<p class="lc-step">' + _lcEsc(_lcT('local.agentStepAuto',
+              '② 装完启动即可 —— 安装包已带服务器地址，会自动连上；此处状态变绿就是成功。')) + '</p>'
+            : '<p class="lc-step">' + _lcEsc(_lcT('local.agentStep2',
+              '② 点「生成连接行」（会自动复制），粘贴到受控端首次启动的连接框：')) + '</p>' +
+              '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
+                _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
+              '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>' +
+              '<p class="lc-step">' + _lcEsc(_lcT('local.agentStep3',
+              '③ 连上后此处状态变绿 —— 之后它常驻托盘，无需再操作。')) + '</p>') +
+          '<details class="lc-details"><summary>' +
+            _lcEsc(_lcT('local.fullVersionToggle',
+            '这台电脑也想跑 Tofu 本体（服务器+界面）？下载完整桌面版')) +
+            '</summary>' +
+            _lcDownloadLinks(d, 'full') +
+          '</details>';
       } else {
         html =
           '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemote',
             'Tofu 运行在远程服务器上。在你自己的电脑安装桌面版，再用下面这行把它连过来：')) + '</p>' +
-          _lcDownloadLinks(d);
+          _lcDownloadLinks(d) +
+          '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
+            _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
+          '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>';
       }
-      setup.innerHTML = html +
-        '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
-          _lcEsc(_lcT('local.mintToken', '生成连接命令')) + '</button>' +
-        '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>';
+      setup.innerHTML = html;
       var mint = document.getElementById('lcMintBtn');
       if (mint) mint.onclick = function () { _lcMintToken(srv); };
       return;
@@ -528,6 +555,21 @@ function _lcMintToken(serverUrl) {
         }
       };
       if (btn) btn.style.display = 'none';
+      /* The line exists to be pasted ONCE — don't make the user discover
+       * the click-to-copy affordance. Runs inside the button's click
+       * gesture, so the clipboard is allowed; a refusal falls back to the
+       * visible box, which still copies on click. */
+      if (typeof _safeClipboardWrite === 'function') {
+        _safeClipboardWrite(line)
+          .then(function () {
+            box.classList.add('copied');
+            if (typeof showToast === 'function') {
+              showToast(_lcT('local.mintCopied',
+                '连接行已复制 —— 粘贴到受控端的连接框即可'));
+            }
+          })
+          .catch(function () {});
+      }
     })
     .catch(function () {
       if (btn) btn.disabled = false;

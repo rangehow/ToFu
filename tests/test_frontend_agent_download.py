@@ -3,14 +3,19 @@ download matrix (A3, docs/DESKTOP_AGENT_DIST_DESIGN.md §4.7).
 
 The remote branch of ``_lcRenderDesktop`` must offer the AGENT installer
 as the PRIMARY action (受控端·轻量 — the machine's role in that branch is
-to be controlled) with the full desktop app as the one-line secondary —
-and must degrade to the historical full-installer rendering when no agent
-artifact exists yet (stale-while-build, never a dead end). Pinned:
+to be controlled) inside a NUMBERED three-step flow, with the full desktop
+app collapsed into a one-line <details> secondary — and must degrade to
+the historical full-installer rendering when no agent artifact exists yet
+(stale-while-build, never a dead end). Pinned:
 
-  1. agent artifact present ⇒ agent link first (受控端·轻量 + 服务器直连 +
-     size), role gloss, full link second, mint button, escape hatch once;
+  1. agent artifact present ⇒ numbered steps (①②③), agent link first
+     (受控端·轻量 + 服务器直连 + size), mint button labelled 生成连接行,
+     full link inside a COLLAPSED details, escape hatch once;
+  1b. preseeded artifact + open bridge ⇒ ZERO-TOUCH: no mint button, the
+     auto-connect copy instead; a required bridge token forces the
+     3-step flow back even with a preseed;
   2. no agent_downloads ⇒ historical full-installer rendering, no agent
-     gloss (never an empty primary slot);
+     vocabulary (never an empty primary slot);
   3. local_source ⇒ full primary, no agent mention;
   4. NEUTER (the agent branch severed) ⇒ the primary-agent checks fail —
      the suite discriminates.
@@ -81,7 +86,7 @@ const AGENT = { os: 'windows', arch: 'x86_64',
   url: 'https://h/api/v1/desktop/download/TofuAgent-Setup-0.16.0-win64.exe',
   hosted: 'server', size: 53000000, source: 'built', kind: 'agent' };
 
-// ── 1. remote + agent artifact ⇒ agent PRIMARY, full secondary ──
+// ── 1. remote + agent artifact ⇒ agent PRIMARY in a numbered flow ──
 _lcRenderDesktop({ connected: false, setup_state: 'remote',
   download_url: 'https://github.com/x/y/releases/latest',
   server_url: 'https://tofu.example.com/',
@@ -89,17 +94,44 @@ _lcRenderDesktop({ connected: false, setup_state: 'remote',
 const html1 = document.getElementById('lcDesktopSetup').innerHTML;
 check('remote_agent_link_present', html1.includes('TofuAgent-Setup-0.16.0-win64.exe'));
 check('remote_agent_label', html1.includes('受控端·轻量'));
-check('remote_agent_gloss', html1.includes('受控端：只让这台电脑被服务器操作'));
-check('remote_full_secondary_gloss', html1.includes('完整桌面版'));
+check('remote_step1_numbered', html1.includes('① 下载并安装受控端'));
+check('remote_steps_numbered', html1.includes('②') && html1.includes('③'));
+check('remote_full_secondary_toggle', html1.includes('下载完整桌面版'));
+check('remote_full_collapsed',
+  html1.includes('<details class="lc-details"><summary>') &&
+  !html1.includes('<details class="lc-details" open'));
 check('remote_full_link_present', html1.includes('Tofu-Setup-0.16.0-win64.exe'));
 check('remote_agent_before_full',
   html1.indexOf('TofuAgent-Setup') < html1.indexOf('Tofu-Setup'));
 check('remote_mint_button', html1.includes('lcMintBtn'));
+check('remote_mint_label', html1.includes('生成连接行'));
 check('remote_hosted_chip_twice',
   (html1.match(/服务器直连/g) || []).length === 2);
 check('remote_escape_hatch_once',
   (html1.match(/查看全部下载/g) || []).length === 1);
 check('remote_agent_size_shown', html1.includes('50.5 MB') || html1.includes('50.4 MB'));
+
+// ── 1b. preseeded artifact + open bridge ⇒ ZERO-TOUCH (2 steps) ──
+const AGENT_PRE = Object.assign({}, AGENT,
+  { preseed_url: 'https://tofu.example.com' });
+_lcRenderDesktop({ connected: false, setup_state: 'remote',
+  download_url: 'https://github.com/x/y/releases/latest',
+  server_url: 'https://tofu.example.com/',
+  bridge_token_required: false,
+  downloads: [FULL], agent_downloads: [AGENT_PRE] }, null);
+const html1b = document.getElementById('lcDesktopSetup').innerHTML;
+check('autoconnect_hides_mint', !html1b.includes('lcMintBtn'));
+check('autoconnect_copy', html1b.includes('会自动连上'));
+// …but a REQUIRED bridge token forces the mint-and-paste flow back even
+// with a usable preseed (the agent still needs a credential).
+_lcRenderDesktop({ connected: false, setup_state: 'remote',
+  download_url: 'https://github.com/x/y/releases/latest',
+  server_url: 'https://tofu.example.com/',
+  bridge_token_required: true,
+  downloads: [FULL], agent_downloads: [AGENT_PRE] }, null);
+const html1c = document.getElementById('lcDesktopSetup').innerHTML;
+check('token_required_keeps_mint', html1c.includes('lcMintBtn'));
+check('token_required_no_autoconnect', !html1c.includes('会自动连上'));
 
 // ── 2. remote WITHOUT agent artifact ⇒ historical fallback, no dead end ──
 _lcRenderDesktop({ connected: false, setup_state: 'remote',
@@ -108,7 +140,7 @@ _lcRenderDesktop({ connected: false, setup_state: 'remote',
   downloads: [FULL], agent_downloads: [] }, null);
 const html2 = document.getElementById('lcDesktopSetup').innerHTML;
 check('fallback_full_link_primary', html2.includes('Tofu-Setup-0.16.0-win64.exe'));
-check('fallback_no_agent_gloss', !html2.includes('受控端：只让这台电脑'));
+check('fallback_no_agent_step', !html2.includes('① 下载并安装受控端'));
 check('fallback_historical_text', html2.includes('安装桌面版'));
 check('fallback_mint_kept', html2.includes('lcMintBtn'));
 
@@ -153,7 +185,7 @@ def test_agent_download_matrix():
     output = _run_harness(neuter=False)
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'agent download matrix failures:\n' + output
-    assert output.count('PASS') >= 15, f'expected >=15 PASS lines, got:\n' \
+    assert output.count('PASS') >= 20, f'expected >=20 PASS lines, got:\n' \
                                        f'{output}'
 
 

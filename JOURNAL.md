@@ -1,3 +1,9 @@
+### 2026-08-02(egress epic 关票:owner 判「不要让我手动执行命令」——真机验收定义性移交打包 epic;`pt_4ea6bf05deaa46f0` DONE)
+
+- **owner 指令定盘:** 转发路问题卡三答之一都不是——「不要让我去手动执行命令了,我没这个兴趣」。手动烟死路,产品正解=agent 随安装包自动起(本来就是下游 `pt_59b62951aad2463e` 的形态,msb9kssc 在飞)。
+- **关票证据账(全部实测):** ①egress 全族套件 **180/180 绿**(desktop_egress/stream/bridge_addressing/agent + oauth egress_status/exchange_errors/claude_cloak/outbound + 前端 egress_line);②容器内真实 agent `--allow-egress --bridge-secret` 全链 E2E 早已闭环:注册上线→capabilities.egress=true→`/api/v1/oauth/status` 从 unknown 翻转 state=agent+verdict=geo_blocked;③凭证链重启后复测:带 key poll 200(长轮询 ~8s 语义)/无 key 401。
+- **移交(写进打包 epic 语境):** 真机 OAuth 往返(浏览器登录 claude.ai→token 交换经办公机出口→流式→Codex O3)不删,挂进 `pt_59b62951aad2463e` 的验收表——安装包落地、agent 自动起时顺手验,零手动命令。依赖关系就此解锁。
+
 ### 2026-08-02(分发面三决策落稿:Local Control 显示矩阵 / 完整版导向 / GitHub Releases 内容——设计稿升 v2,commit 见下) — owner 三连问定案,epic `pt_59b62951aad2463e`
 
 - **Q1 面板显示矩阵(守「每状态一个下一步」铁律):** remote 分支(被控场景)主推「受控端·轻量」agent 包+服务器直连 chip,完整版退一行次级链,铸连接行不动;local_source 主推完整版(源码已能跑 agent,不给次链);tray/connected 零下载。每行带一句角色注解(「只让这台电脑被服务器操作」vs「这台电脑自己跑 Tofu」),选择不需要文件名素养。

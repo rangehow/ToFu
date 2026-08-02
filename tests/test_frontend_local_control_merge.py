@@ -249,6 +249,10 @@ HARNESS = textwrap.dedent("""
         steps: el.querySelectorAll('.lc-step').length,
         text: el.textContent.trim(),
         hasMintButton: !!el.querySelector('#lcMintBtn'),
+        // A mint may exist ONLY inside a collapsed escape hatch (the tunnel
+        // case) — never as a top-level action outside the remote state.
+        mintInsideDetails: !!el.querySelector(
+          'details #lcMintBtn, details #lcMintBtnSrc'),
         // A real, clickable link the user can follow — not prose.
         downloadHref: dlA ? dlA.getAttribute('href') : '',
         // The releases-page escape hatch — external, must never be re-based.
@@ -435,7 +439,16 @@ def test_only_the_remote_state_offers_a_token():
         "the remote case is the only one needing a token — it must offer one")
     for st in ("connected", "tray", "local_source"):
         assert out[st]["hasMintButton"] is False, (
-            f"setup_state={st} must NOT ask for a token")
+            f"setup_state={st} must NOT ask for a token as a top-level action")
+    # The documented exception (2026-08-02, measured live): an ssh -L tunnel
+    # makes a remote browser present as loopback → setup_state local_source
+    # for a machine that is NOT this one. local_source may therefore carry
+    # ONE mint — but only inside the collapsed "from another computer?"
+    # escape hatch, never top-level. A true-local user never sees it; a
+    # tunnel user is not sent to install a second Tofu by mistake.
+    assert out["local_source"]["mintInsideDetails"] is True, (
+        "the tunnel escape hatch lost its mint — the office-machine case "
+        "(ssh -L) has no connect flow again")
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")

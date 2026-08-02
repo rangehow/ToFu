@@ -447,10 +447,39 @@ function _lcRenderDesktop(d, err) {
       // way to GET it is a dead sentence, and download_url is already in the
       // payload (derived from the ONE UPDATE_REPO constant), so render the
       // same followable link the remote case offers.
+      //
+      // ── The tunnel blind spot (measured 2026-08-02, owner live) ──
+      // loopback peer ≠ same machine: an ssh -L tunnel makes a REMOTE
+      // machine's browser present as 127.0.0.1, and the server has NO way
+      // to tell (any re-classification would be a guess, so this branch
+      // keeps its primary instruction and offers the escape hatch below
+      // instead). An office machine that followed the primary instruction
+      // installed a SECOND Tofu whose bundled server grabbed a fallback
+      // port and whose agent polled IT — never this server. Tunnel users
+      // need the remote flow; true-local users are unaffected (collapsed).
       var dlSrc = (d.download_url || '').trim();
+      var srvSrc = (d.server_url || '').trim();
+      var agentSrc = Array.isArray(d.agent_downloads)
+        ? d.agent_downloads : [];
       setup.innerHTML = '<p class="lc-step">' + _lcEsc(_lcT('local.desktopSource',
         '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。')) + '</p>' +
-        _lcDownloadLinks(d);
+        _lcDownloadLinks(d) +
+        '<details class="lc-details"><summary>' +
+          _lcEsc(_lcT('local.tunnelToggle',
+            '从另一台电脑访问本服务器？（如 ssh 端口转发）')) + '</summary>' +
+          '<p class="lc-substep">' + _lcEsc(_lcT('local.tunnelHint',
+            '那你面前的不是服务器本机 —— 别装完整版。在那台电脑上装受控端，再点「生成连接行」连过来：')) + '</p>' +
+          (agentSrc.length ? _lcDownloadLinks(d, 'agent', true) : '') +
+          '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtnSrc">' +
+            _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
+          '<code class="lc-copy" id="lcTokenBoxSrc" style="display:none"></code>' +
+        '</details>';
+      var mintSrc = document.getElementById('lcMintBtnSrc');
+      if (mintSrc) {
+        mintSrc.onclick = function () {
+          _lcMintToken(srvSrc, 'lcMintBtnSrc', 'lcTokenBoxSrc');
+        };
+      }
       return;
     }
 
@@ -531,9 +560,9 @@ function _lcRenderDesktop(d, err) {
  * address the user demonstrably reaches this server on), so one copy carries
  * everything. Reuses POST /api/v1/desktop/token — the raw secret is returned
  * exactly once, so it is rendered here and never re-fetched. */
-function _lcMintToken(serverUrl) {
-  var btn = document.getElementById('lcMintBtn');
-  var box = document.getElementById('lcTokenBox');
+function _lcMintToken(serverUrl, btnId, boxId) {
+  var btn = document.getElementById(btnId || 'lcMintBtn');
+  var box = document.getElementById(boxId || 'lcTokenBox');
   if (btn) btn.disabled = true;
   Promise.resolve(Api.desktop.mintToken('local-control'))
     .then(function (r) {

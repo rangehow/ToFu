@@ -58,6 +58,20 @@ def _setup_state(connected: bool) -> str:
     source-run local dev server (frozen=False, peer=loopback) out of the
     ``remote`` bucket — it would otherwise be told to install a second
     copy of an app it is already running.
+
+    ── The tunnel blind spot (measured 2026-08-02, owner live) ──
+    An ssh -L port forward makes a REMOTE machine's browser present as
+    loopback too, and the server has NO signal to tell it apart from a
+    true local dev server — so ``local_source`` is structurally wrong
+    for tunnel users: its primary instruction ("install the full desktop
+    app") installed a second Tofu on the office machine whose bundled
+    server grabbed a fallback port and whose agent polled IT, never this
+    one. The honest fix is NOT re-classification (impossible without a
+    distinguishing signal — a guess would misroute true-local users) but
+    the surface escape hatch: the local_source branch renders a
+    collapsed "从另一台电脑访问本服务器？" details section with the
+    agent download + mint flow (local-control.js). Anyone tempted to
+    "detect the tunnel" here: there is nothing to detect.
     """
     if connected:
         return 'connected'

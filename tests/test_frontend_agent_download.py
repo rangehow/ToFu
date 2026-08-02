@@ -16,7 +16,11 @@ the historical full-installer rendering when no agent artifact exists yet
      3-step flow back even with a preseed;
   2. no agent_downloads ⇒ historical full-installer rendering, no agent
      vocabulary (never an empty primary slot);
-  3. local_source ⇒ full primary, no agent mention;
+  3. local_source ⇒ full primary PLUS a collapsed escape hatch for
+     tunnel users (agent download + mint inside <details>, NOT open) —
+     measured 2026-08-02: an ssh -L tunnel makes a remote browser
+     present as loopback, and the old local_source rendering sent that
+     user to install a second full Tofu on the wrong machine;
   4. NEUTER (the agent branch severed) ⇒ the primary-agent checks fail —
      the suite discriminates.
 
@@ -144,14 +148,21 @@ check('fallback_no_agent_step', !html2.includes('① 下载并安装受控端'))
 check('fallback_historical_text', html2.includes('安装桌面版'));
 check('fallback_mint_kept', html2.includes('lcMintBtn'));
 
-// ── 3. local_source ⇒ full primary, zero agent vocabulary ──
+// ── 3. local_source ⇒ full primary + collapsed tunnel escape hatch ──
 _lcRenderDesktop({ connected: false, setup_state: 'local_source',
   download_url: 'https://github.com/x/y/releases/latest',
+  server_url: 'http://127.0.0.1:15000/',
   downloads: [FULL], agent_downloads: [AGENT] }, null);
 const html3 = document.getElementById('lcDesktopSetup').innerHTML;
 check('local_source_full_link', html3.includes('Tofu-Setup-0.16.0-win64.exe'));
-check('local_source_no_agent_link', !html3.includes('TofuAgent-Setup'));
-check('local_source_no_agent_gloss', !html3.includes('受控端'));
+check('local_source_tunnel_toggle', html3.includes('从另一台电脑访问本服务器'));
+check('local_source_details_collapsed',
+  html3.includes('<details class="lc-details"><summary>') &&
+  !html3.includes('<details class="lc-details" open'));
+check('local_source_agent_in_details',
+  html3.indexOf('从另一台电脑访问本服务器') < html3.indexOf('TofuAgent-Setup'));
+check('local_source_mint_button', html3.includes('lcMintBtnSrc'));
+check('local_source_no_agent_step', !html3.includes('① 下载并安装受控端'));
 
 console.log(out.join('\n'));
 process.exit(0);

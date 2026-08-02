@@ -1,3 +1,9 @@
+### 2026-08-02(批跑互染根修:wire-parity「清场」fixture 摧毁单模块实例不变量——改恢复式共享助手) — 脑派发接我自票 `pt_788b25a5ce9c47e2` **DONE**;commit `87a54720`(3 文件 +77/−19);最小对 15+28 绿、全批次 **275/275**(原 273+2红);NEUTER 精确(阉恢复→两对精确各 1 红,cmp 字节还原复绿)
+
+- **病灶(测试文件间的军备竞赛):** markers_functional 曾用 `importlib.reload` 破坏 facade↔markers 恒等;markers_extraction 的「修法」是在 fixture setup+teardown 双侧 `del sys.modules['lib.tasks_pkg.autopilot*']`(event_forwarding 同型)。清场后**不恢复**:收集期持有原模块对象的下游测试文件与 sys.modules 断连——①markers_functional 的 `importlib.reload(ap_markers)` 找不到条目 → ImportError;②yield_not_destroy 的字符串靶 monkeypatch(`'lib.tasks_pkg.autopilot_run_lifecycle._store_run_record'`)重导入**新副本** L2,补丁打在 L2 上、被测代码跑在收集期原件 L1 上——真 `_store_run_record` 撞真实 DB(conv 不存在)→ None → 提前返回 → 捕获列表为空。最小对复现两路因果:event_forwarding+yield 红、markers_extraction+functional 红。
+- **修法:** 共享助手 `tests/_hermetic_import.py::hermetic_import_surface`——窗口内断言语义零变化(照样全新导入面),teardown 丢弃副本并**恢复原模块对象+父包子属性**(import a.b.c 经属性绑定而非仅 sys.modules,沿用 _nc_harness 的 swap both/restore both 纪律)。两个肇事 fixture 改走助手。
+- **教训记档:** 「hermetic」不能只清不还——测试隔离的完整语义是**借用后归还**;清场类 fixture 的 teardown 必须把会话状态还原到入场前,否则每个「自保」的测试都在给下一个测试埋雷。模式入记忆库。
+
 ### 2026-08-02(autopilot「气泡落库却无 agent 回复」根修:discard_task 清理块孤悬死代码 25 天级误杀 follow-up) — owner 截图报 msb6ohqifdz7yj VU 气泡后对话死寂;commit `630b4af5`(2 文件 +7/−6);守卫测试红→绿,全守卫环 HEAD 5 红→2 红(残余=预存批污染对,已立案 `pt_788b25a5ce9c47e2` 不夹修)
 
 - **病灶定案(纯日志+blame 链):** 11:49:29 `Superseded (a newer task owns conv=msb6ohqi) just before follow-up spawn` ——但此刻根本没有任何新任务。真相:VU carrier(HB-1)把 `_conv_latest_task[conv]` 据为己有后,`discard_task` 的 docstring 承诺「清理它 claim 的索引项」,实现却只剩 registry pop——清理块在 commit `85b54bc8`(8-01 20:05 ③-3 tombstone)被插进函数体中部的 `make_task_abort_check` 切到了 `return _check` 之后,成为不可达死代码(blame 双锚:块归 d480479f、return 归 85b54bc8;`git show 85b54bc8^` 证原形态在 discard_task 尾部)。索引永远指向已死 carrier → 末检 `_successor_already_running` 假阳性 → run 以 reason='superseded' 收官、VU 气泡照落库、follow-up 不 spawn。10:36 重启载入坏代码后,每次 VU 轮必现。

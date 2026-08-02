@@ -6977,7 +6977,8 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    ★ Code Execution Block (inline in chat)
    ═══════════════════════════════════════════ */
 .code-exec-block {
-  margin: 6px 8px 6px 12px;
+  /* Flat content inside the .ptool-turn card — see .ptool-cmd-block. */
+  margin: 0;
   border-radius: 0;
   border: none;
   background: none;
@@ -6989,7 +6990,8 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 2px 0 4px;
+  /* Same horizontal inset as .ptool-line — see .ptool-cmd-header. */
+  padding: 2px 12px 4px 16px;
   border-bottom: none;
   background: none;
 }
@@ -7922,7 +7924,10 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
    ★ run_command inline terminal block
    ═══════════════════════════════════════════ */
 .ptool-cmd-block {
-  margin: 6px 8px 6px 12px;
+  /* Flat content inside the .ptool-turn card — the old 12px/8px side margins
+   * date from the retired nested-card model and pushed the header icon ~12px
+   * right of the .ptool-line icon column above it. */
+  margin: 0;
   border-radius: 0;
   border: none;
   background: none;
@@ -7934,7 +7939,9 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 2px 0 4px;
+  /* Same horizontal inset as .ptool-line so the icon column aligns with
+   * plain tool rows in the same card. */
+  padding: 2px 12px 4px 16px;
   border-bottom: none;
   background: none;
 }
@@ -8309,10 +8316,11 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 /* ── Collapsible command body (done + running states) ──
  * When a description conveys intent AND the command is long enough to be
  * noise (multi-line or > 100 chars — see _cmdCollapsible in tool_rounds.js),
- * the `$ command` <pre> starts COLLAPSED and the header description becomes
- * the toggle: chevron-marked, click to expand in place. The user cares
- * about what the command DID, not the exact shell string. Short one-liners
- * and description-less commands never get the class and stay visible. */
+ * the `$ command` <pre> starts COLLAPSED and the header description itself
+ * is the toggle (click to expand in place — no chevron glyph, owner call
+ * 2026-08-02). The user cares about what the command DID, not the exact
+ * shell string. Short one-liners and description-less commands never get
+ * the class and stay visible. */
 .ptool-cmd-block .ptool-cmd-collapsible {
   display: none;
 }
@@ -8324,16 +8332,6 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 }
 .ptool-cmd-desc-toggle:hover {
   color: var(--accent-hover);
-}
-.ptool-cmd-chev {
-  display: inline-block;
-  margin-right: 3px;
-  font-size: 9px;
-  opacity: 0.5;
-  transition: transform 0.15s ease;
-}
-.ptool-cmd-block.cmd-open .ptool-cmd-chev {
-  transform: rotate(90deg);
 }
 
 /* ── Running: elapsed / timeout-budget readout in the header ── */

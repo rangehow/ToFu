@@ -4,7 +4,8 @@ The render contract (owner directive, 2026-08-01): users read the one-line
 DESCRIPTION, not the exact shell string — so when a command card carries a
 description AND the command is long enough to be visual noise (multi-line or
 > 100 chars), the ``$ command`` <pre> starts COLLAPSED behind the description
-itself (chevron-marked, click to expand in place). Pinned behaviours:
+itself (click to expand in place — no chevron glyph since 2026-08-02).
+Pinned behaviours:
 
   1. Done block: description + long/multi-line command ⇒ collapsed markup
      (``ptool-cmd-collapsible`` pre + ``ptool-cmd-desc-toggle`` header), and
@@ -82,7 +83,7 @@ const html1 = _renderUnifiedToolLine(doneLong, false);
 check('done_long_collapsible_pre', html1.includes('ptool-cmd-collapsible'));
 check('done_long_desc_toggle', html1.includes('ptool-cmd-desc-toggle'));
 check('done_long_toggle_onclick', html1.includes('_cmdBodyToggle(this,event)'));
-check('done_long_chevron', html1.includes('ptool-cmd-chev'));
+check('done_long_no_chevron', !html1.includes('ptool-cmd-chev'));
 check('done_long_cmd_key', html1.includes('data-cmd-key="call-long-1"'));
 check('done_long_not_open', !html1.includes('ptool-cmd-block ptool-cmd-ok cmd-open'));
 check('done_long_cmd_still_in_dom', html1.includes('baseline tightened')); // output AND/OR cmd
@@ -191,7 +192,7 @@ def test_cmd_collapse_css_rules_present():
     css = open(STYLES, encoding='utf-8').read()
     assert '.ptool-cmd-collapsible' in css
     assert '.ptool-cmd-block.cmd-open .ptool-cmd-collapsible' in css
-    assert '.ptool-cmd-chev' in css
+    assert '.ptool-cmd-chev' not in css  # chevron glyph removed (owner call 2026-08-02)
     assert '.ptool-cmd-desc-toggle' in css
 
 

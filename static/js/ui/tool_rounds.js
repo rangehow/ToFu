@@ -1801,8 +1801,9 @@ function _renderQrStrip(meta) {
  * The one-line DESCRIPTION is what users read; the exact shell string is
  * reference detail. When a description exists AND the command is long enough
  * to be visual noise (multi-line or > 100 chars), the `$ command` <pre>
- * starts COLLAPSED and the description itself becomes the toggle (chevron-
- * marked, expands in place). Short one-liners (npm test) and description-
+ * starts COLLAPSED and the description itself becomes the toggle (expands
+ * in place — no chevron glyph, owner call 2026-08-02). Short one-liners
+ * (npm test) and description-
  * less commands stay visible: collapsing the first saves nothing, collapsing
  * the second would anonymize the card. Expansion state lives in
  * _cmdBodyExpanded keyed by toolCallId, so a mid-run expand survives the
@@ -1824,7 +1825,7 @@ function _cmdDescInline(desc, collapsible) {
   if (!collapsible) {
     return `<span class="ptool-cmd-desc-inline" title="${esc}">${esc}</span>`;
   }
-  return `<span class="ptool-cmd-desc-inline ptool-cmd-desc-toggle" title="${esc}" onclick="_cmdBodyToggle(this,event)"><span class="ptool-cmd-chev">▸</span>${esc}</span>`;
+  return `<span class="ptool-cmd-desc-inline ptool-cmd-desc-toggle" title="${esc}" onclick="_cmdBodyToggle(this,event)">${esc}</span>`;
 }
 
 function _cmdBodyToggle(el, ev) {

@@ -294,8 +294,14 @@ _SPECS: tuple[EventSpec, ...] = (
               'content / thinking so this narration does not get concatenated '
               'in front of the terminal round\'s real answer. Unlike '
               '`retry_reset`, it MUST NOT touch tool rounds — the tool calls '
-              'from this turn are legitimate and keep rendering. Non-terminal.',
-              fields={'roundNum': 'the tool-call round number whose prose is dropped'}),
+              'from this turn are legitimate and keep rendering. Non-terminal. '
+              'With `discard: true` (the canned-greeting upstream-artifact '
+              'retry — the ONLY retry bucket whose discarded round HAS '
+              'content) the round issued NO tool calls, so there is no batch '
+              'to stamp the prose onto: the client clears UNCONDITIONALLY '
+              '(still keeping tool rounds).',
+              fields={'roundNum': 'the tool-call round number whose prose is dropped',
+                      'discard': 'optional; true = unconditional clear, no prose-capture'}),
     # ───────────────────────── tool ─────────────────────────
     EventSpec(EventType.TOOL_START, _C.TOOL,
               'A tool call began executing.',

@@ -1062,7 +1062,10 @@ function dispatchSSEEvent(line, ctx) {
        * assistantMsg.content += ev.content). Clear the accumulated
        * content/thinking so the narration isn't concatenated in front of the
        * terminal round's real answer. UNLIKE retry_reset, KEEP toolRounds —
-       * the tool calls from this turn are legitimate and keep rendering. */
+       * the tool calls from this turn are legitimate and keep rendering.
+       * With ev.discard === true (the canned-greeting retry — a discarded
+       * round that issued NO tool calls) the reducer clears unconditionally:
+       * there is no batch to stamp the prose onto. */
       _roundThinkingLen = 0;
       const _drTarget = (_epCriticPhase && _epCriticMsg) ? _epCriticMsg : assistantMsg;
       if (_drTarget) {

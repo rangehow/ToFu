@@ -19,6 +19,7 @@ from lib.tasks_pkg.manager._state import (
     _abort_tombstones_lock,
     _ABORT_TOMBSTONES_CAP,
     _chat_runtime,
+    _clear_latest_task,
     _conv_latest_task,
     _conv_latest_task_lock,
     _record_latest_task,
@@ -427,9 +428,10 @@ def discard_task(task_id: str, conv_id: str | None = None) -> None:
                 (task_id or '?')[:8], (conv_id or '')[:8],
                 bool(_popped), _caller)
     if conv_id:
-        with _conv_latest_task_lock:
-            if _conv_latest_task.get(conv_id) == task_id:
-                del _conv_latest_task[conv_id]
+        # Clears the store mirror too — a local-only delete leaves the
+        # store-backed _latest_task_for_conv returning this corpse for up to
+        # 1h (TTL), which is the msb6ohqi 2026-08-02 stall class.
+        _clear_latest_task(conv_id, expect_task_id=task_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

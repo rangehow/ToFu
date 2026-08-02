@@ -108,6 +108,17 @@ def _successor_already_running(task: dict, conv_id: str) -> bool:
     would (a) abort the queued task via ``abort_running_tasks_for_conv``
     and (b) clobber the user's actual question.  Detect this by looking
     at the latest-task registry.
+
+    A pointer is not an owner. The index is a raw conv→task_id pointer that
+    can legitimately name a DEAD task at recheck time — most notably the
+    run's OWN VU carrier, which claims the index for the HB-1 handoff
+    window and is discarded before this gate re-reads it (msb6ohqi
+    2026-08-02: the gate read the corpse, concluded "superseded", and
+    stranded a delivered VU turn with no follow-up). The conv-sync
+    freshness guard has encoded the matching "own VU carrier = by-design
+    handoff" exception since HB-1 landed (manager/_sync.py); this gate
+    must apply the same judgement: only a task that is still LIVE in the
+    registry is a real successor.
     """
     if not conv_id:
         return False
@@ -115,10 +126,26 @@ def _successor_already_running(task: dict, conv_id: str) -> bool:
         from lib.tasks_pkg.manager import (
             _conv_latest_task,
             _conv_latest_task_lock,
+            tasks,
+            tasks_lock,
         )
         with _conv_latest_task_lock:
             latest = _conv_latest_task.get(conv_id)
-        return bool(latest) and latest != task.get('id')
+        if not latest or latest == task.get('id'):
+            return False
+        with tasks_lock:
+            succ = tasks.get(latest)
+        if succ is None or succ.get('status') in ('done', 'error', 'aborted'):
+            logger.info('[Autopilot] latest-task pointer for conv=%s names a '
+                        'dead task %s (own VU carrier=%s, in-registry=%s) — '
+                        'a pointer is not an owner; NOT superseded',
+                        conv_id[:8], latest[:8],
+                        (task.get('_vu_carrier_id') or '')[:8],
+                        succ is not None)
+            return False
+        logger.info('[Autopilot] conv=%s is owned by live successor task=%s — '
+                    'standing down is correct', conv_id[:8], latest[:8])
+        return True
     except Exception as e:
         logger.debug('[Autopilot] latest-task probe failed (non-fatal): %s', e)
         return False

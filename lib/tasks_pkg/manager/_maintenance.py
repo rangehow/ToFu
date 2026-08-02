@@ -11,6 +11,7 @@ from lib.log import get_logger
 
 from lib.tasks_pkg.manager._state import (
     _chat_runtime,
+    _clear_latest_task,
     _conv_latest_task,
     _conv_latest_task_lock,
     tasks,
@@ -50,12 +51,13 @@ def cleanup_old_tasks():
                     finished_ids.add(tid)
     n = _chat_runtime.cleanup_stale()
     # Clean up _conv_latest_task entries whose tasks were just removed
+    # (mirror-inclusive: a local-only prune strands the store mirror corpse)
     if finished_ids:
         with _conv_latest_task_lock:
             stale_convs = [cid for cid, tid in _conv_latest_task.items()
                            if tid in finished_ids]
-            for cid in stale_convs:
-                del _conv_latest_task[cid]
+        for cid in stale_convs:
+            _clear_latest_task(cid)
     if n:
         logger.debug('[Manager] cleanup_old_tasks removed %d tasks', n)
     # ★ Stuck-task backstop (rides the same tick). cleanup_stale only evicts
@@ -134,9 +136,10 @@ def shed_memory_under_pressure() -> dict:
         evicted = _chat_runtime.cleanup_stale(max_age=0)
         if finished_ids:
             with _conv_latest_task_lock:
-                for cid in [c for c, tid in _conv_latest_task.items()
-                            if tid in finished_ids]:
-                    del _conv_latest_task[cid]
+                stale_convs = [c for c, tid in _conv_latest_task.items()
+                               if tid in finished_ids]
+            for cid in stale_convs:
+                _clear_latest_task(cid)
     except Exception as e:
         logger.warning('[Manager] shed: terminal-task eviction failed: %s', e,
                        exc_info=True)

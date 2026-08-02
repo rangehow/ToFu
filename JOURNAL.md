@@ -1,3 +1,10 @@
+### 2026-08-02(Agent-only Windows 安装包设计稿落盘:被控端/完整桌面版分发分离——`docs/DESKTOP_AGENT_DIST_DESIGN.md`;epic `pt_59b62951aad2463e` 已认领;实现未开工待 owner 审) — owner 指令「两个可安装组件在设计上揉在一起,应该分离」脑暴定案后成稿
+
+- **定案:融合是分发层事实,不是代码层事实。** `lib/desktop_agent/` 早已是独立净包(模块级依赖=requests+lib.log(stdlib-only)+lib.json_store,pyautogui/pyperclip/psutil/PIL 全 guarded),`python -m lib.desktop_agent` 纯 CLI 可跑——但**没有任何 Windows 分发路径**:要么装 152MB 完整桌面版(tofu.spec 打进整个 Quart 服务器+路由树+Hypercorn+psycopg2+playwright+trafilatura+pymupdf,S2 实测 152.7MB/3316 文件),要么按 egress 设计稿 §11 的「临时路径」拷贝整个仓库跑源码。Local Control 的 remote 分支(唯一需要 token 的场景)只给完整版下载。egress epic(pt_4ea6bf05deaa46f0)的部署目标正是这个无出口的被控端。
+- **设计稿要点(全实测约束,同 client-build 稿纪律):** ①体积论是导入图事实而非希望——agent 闭包不含服务器栈任何一件,估 ≤~45MB(A1 实测上秤);②构建零新基建——wine 工具链+NSIS+parity 契约全现成,agent 只是同一工具链上第二个 PyInstaller target(payload 缓存加 target 维度,deps_stamp 只盯 agent 依赖集);③「配置能力就够」已存在:~100 行 tkinter(`_prompt_connect_line`+`_tk_theme`)+ preseed 契约,从 launcher.py **移动**到 desktop/connect_ui.py(不复制——两副本必漂移,parity 哲学的反面);④烟雾闸照抄 TOFU_SMOKE 的「退出码即判决」纪律,加导入图断言(bundle 树无 quart/flask/hypercorn 文件)——未来谁把服务器栈拖进 agent 闭包,红的是构建不是用户机器。
+- **刻意保留的融合:** 完整桌面版的 in-process agent 不动(单机用户零配置控制自己电脑是特性);分离只是分发事实,代码仍一树共享缝(连接对话框/preseed/tk 主题/config 文件/NSIS 模板/parity 契约)。两个被拒备选记档:zip+脚本(NSIS 包装是 ~1 分钟的便宜半边,白拿卸载/快捷方式/parity)与单安装包组件勾选(152MB 是载荷不是包装,勾选救不了字节)。
+- **切片:** A1=connect_ui 抽取+agent_launcher+tofu-agent.spec+Half A target 维度+烟雾闸(测仿管道如 test_winbuilder,NEUTER 钉缓存命中);A2=NSIS 模板参数化(@APP_NAME@/@APP_EXE@/@INSTALL_DIR_NAME@,完整版渲染现值 parity 扩不重写)+首个 TofuAgent-Setup 入店 kind='agent';A3=分发+UI(AGENT_PLATFORM_ASSETS 新表不动 CI parity、find_for_platform kind 过滤默认 'full' 零迁移、downloads[] 带 kind、remote 分支 agent 主链完整版次链、autobuild 门扩展);A4=docs 退役「拷仓库」临时路径。curl_cffi 作 optional hidden import 现在就位,egress epic 落地 TLS 指纹依赖时打包零改动。
+
 ### 2026-08-02(egress 接线:owner 拍板「改走免重启转发路」——服务器侧预检全绿,agent 待上线;epic `pt_4ea6bf05deaa46f0`)
 
 - **预检(重启后凭证链仍完好):** `data/config/.egress_bridge_key`(0600)在现行进程内实测:带 key POST `/api/desktop/poll` → 长轮询 ~8s 后 **200 `{"commands":[]}`**(-m 5 得 000 是长轮询挂起,非异常);无 key → 立即 401。注册表空且无污染(preflight agent 单轮即过期)。**之前 000 一度疑云,定案=长轮询语义**。

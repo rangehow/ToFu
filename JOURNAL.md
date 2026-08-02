@@ -1,3 +1,19 @@
+### 2026-08-02(隧道误判根修落地:local_source 折叠逃生口 + 合并套件明文记例外——兄弟交接收编闭环) — epic `pt_59b62951aad2463e`;commit `c4130943`(5 文件);环 **47/47**(merge 45+agent_download 2);bundle-2fcd7c3c / i18n-zh-325c95d7 重建
+
+- **收编定案(兄弟 msbwca9y 现场定案移交):** owner 经 ssh -L 访问→peer=loopback→`_setup_state` 误 local_source→面板只教「装完整桌面版」→办公机装出第二份 Tofu,bundled server 抢 14963(15000 被隧道占)其 agent 自轮询——服务器侧 agents 恒空的真因。**修法选面不选判:** 隧道对服务端结构性不可见(任何重分类都是猜测,`_setup_state` docstring 记档「此处无物可测」),local_source 加 `<details>` 折叠逃生口「从另一台电脑访问本服务器?(如 ssh 端口转发)」——内嵌受控端下载+铸连接行(id 区分 lcMintBtnSrc),真本地用户零打扰(折叠),隧道用户得生路。
+- **契约和解(merge 套件两针红→绿,意图不稀释):** ①每状态恰好一个 lc-step——逃生口提示**降 lc-substep**(折叠 <details> 内内容按定义次级,lc-step 计数保持 1);②「仅 remote 提供 token」——harness 拆报 mintInsideDetails,token 测试**明文写入隧道例外**(local_source 允许一枚 mint,但只许在折叠舱内,绝不上主位),不是借 id 差异绕绿。
+- **配套:** `_lcMintToken` 参数化元素 id(默认值不动,remote 调用点零变化);i18n 两键 zh/en;agent_download harness 的 local_source 期望同步演进(折叠舱内 agent 链+铸钮+无编号流)。
+- **验证:** failing-first(逃生口前 local_source steps=2 红/merge token 红)→ 修复 → 47/47;NEUTER 语义:mintInsideDetails 断言为 True 型,舱被删即红。
+- **owner 侧创意记档(其 `1a2cca6b`):** 远程分支编号三步流(①装②铸③粘)+ 完整版 <details> 折叠 + zero-touch 双步变体(preseed 可用且开放桥时),并擒获我 A2 wrap 的 loopback preseed 陷阱(办公机无隧道时自指虚空且抑制连接框)——winbuilder 现丢弃 loopback/未指定 preseed(响亮 log)。
+
+### 2026-08-02(本机控制「装好桌面版仍显示未运行」定案:组件错位 + ssh 隧道误判 local_source;手动铸连接行解封 owner) — owner 截图两连问;零产品代码;token `k_d8d6c743` 已交付;面板缺陷移交兄弟 epic `pt_59b62951aad2463e`(折叠逃生口方案被收编);记忆 `local-control-tunnel-misclassification` 入库
+
+- **全链定案(三层叠加):** ①完整桌面版=独立第二份 Tofu,自带 bundled server(launcher `_spawn_server`),无 remote attachment 时 agent 只轮询自己的 bundled 端口——owner 图 2 的空白客户端(127.0.0.1:14963)不是坏了,是它的全新数据目录;14963 本身即旁证:`_find_free_port` 发现 15000 被办公机上的 ssh 隧道占着。②owner 经 ssh -L 访问 → peer=loopback → `_setup_state` 误判 `local_source` → 面板只渲染「装完整桌面版+托盘 Enable Computer Control」,受控端下载+「生成连接行」永不可见——指令前提「人与服务器同机」对隧道用户结构性不成立。③owner 装的是 mirrored(release)包,无 preseed,首启不弹连接框,agent 永远到不了服务器。服务器侧证据:`/api/v1/desktop/status` agents 恒空、`bridge_token_required=false`(开放桥)、mint 路由在线(POST token → 201)。
+- **解封(零重装):** 托盘右键 → Connect to remote Tofu… → 粘贴 `http://127.0.0.1:15000 <agents:bridge token>` → 再勾 Enable Computer Control;已铸 `k_d8d6c743`(office-windows-bridge)交付 owner,探测时误铸的 `k_04aa1a7c` 已自行 revoke 对账清零。连接行格式唯一 owner=`lib/desktop_agent/config.py::parse_connect_line`(url+token 两半必填);开放桥上任意 secret 过 `_resolve_bridge_caller`。
+- **移交与边界:** 兄弟 `msb6ohqifdz7yj` 收编折叠方案(local_source 分支补「从另一台电脑访问本服务器?」`<details>` 复用 remote 流程),声明 local-control.js / api_v1/desktop.py / _lcMintToken 归他,我不碰;隧道不可探测不重分类(尝试不可能=撒谎),docstring 记档。兄弟指认 22:30/22:37 的 last_poll 更新是我的探针——订正:我全是 GET,POST-only 的 poll 路由 GET 进不了 handler,来源更像 22:39 新铸的 browser-bridge-popup token(`k_b8c7747c`)那条浏览器桥线;「办公机 agent 零到达」结论不变。
+- **待办(纯人门):** owner 在办公机执行两个动作(勾 Enable Computer Control、保隧道 15000 在通);注册表 watcher/验收链归兄弟,本会话不重复挂。
+- **教训记档:** ①探测 mint 类路由会真产生副作用——`-o /dev/null` 丢 body 照样入库,探完必须 list 对账 + 清理脚印;②「本机控制不工作」三问定位法:装的哪个组件、setup_state 是什么、agents 注册表空不空——分别对应组件错位/分支误判/未 attach。
+
 ### 2026-08-02(并行调用卡两行图标列对齐 + 展开小三角移除:截图像素级测量定案,cmd 块嵌套时代残留 margin 根修) — owner 截图两指令;commit `14354d05`(4 文件 +26/−26);环 **26/26**(cmd-collapse+wire-parity+tool_rounds render/rich×2+cmd_interrupt+paper_tool_rounds+streaming_ui+dangling);bundle-3de54321 重建实测 0 chev 引用
 
 - **病灶定位(像素考古):** 运行中 run_command 行的红绿灯点比上方 grep 行图标右偏。对截图程序化测量(橄榄点 #CCA858 质心 x=121.9,放大镜 #C4956A 质心 x=97.1,差 **24.8 device px**)——按 DPR=2 折算 =12.4 CSS px,与 CSS 账本精确吻合:`.ptool-cmd-block` 残留嵌套卡片时代的 `margin:6px 8px 6px 12px`(两侧 inset),而现行设计是「.ptool-turn 卡内的扁平内容」(14818 注释自述),margin 把整个 header 推右。非 tofu 主题还有第二半:基础 `.ptool-cmd-header` 左 padding=0(`.ptool-line` 是 16px)。**教训:质心测量 + 服务器 CSS curl 比对(cmp 证实盘上=线上)比目测裁切靠谱——目测估出 21~33px 三个互相矛盾的数,质心法一次定案且反推出 DPR=2。**

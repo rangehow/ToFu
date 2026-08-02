@@ -1,3 +1,16 @@
+### 2026-08-03(预存红×2 闭环:字体幽灵家族检查 fail-open 根修——2026-07-29 正则修复的引入性回归) — 脑派发接我自票 `pt_275e143a92374dec` **DONE**;commit `58e96506`(2 文件);NEUTER 精确(回滚正则→精确 3 红,还原 27/27);邻接环 **81/81**
+
+- **定案(真 bug,非测试漂移):** `undeclared_font_families` 的 use-site 正则 `_USE_FAMILY_RE` 在 2026-07-29 修「内联属性闭合引号逃逸吞下文档尾」时把引号整类排除——**以引号开头的值(`font-family:'PingFang SC'`,CSS 最常见写法)从此一个字也捕不到**,幽灵家族检查对加引号的写法静默放行(fail-open)。两个红(ghost 报告缺失 + NEUTER 闸因找不到 finding 而先倒)同根。
+- **修法(原子正则,双陷阱各钉一头):** 值=逗号连接的原子表,原子=成对引号段或非分隔符串——未成对引号永不可能吞尾(7-29 陷阱不复燃),引号首值正常可读(8-02 陷阱根修)。五案例预验证(ghost 引号/裸安全/属性逃逸/已声明 @font-face/多引号表)全对后才落笔。
+- **账:** 回归针 `test_quoted_families_are_seen_and_attributes_still_terminate` 双向同钉;failing-first=两张原红本身就是(预存红天然满足);NEUTER 回滚到旧正则→精确 3 红(2 原+1 新针),还原 27/27;cjk_typography/author_resilience/asset_brief 邻接 81/81。事故自记(第四次同类):insert_content 又把锚 def 行写进 content 造成重复 def——本 epic 已四次踩同一陷阱,按例当场修复,教训再记:插入类编辑锚文本永不出现在 content 里。
+
+### 2026-08-03(本机控制定案·补记:逃生口实测已在线上 + poll 悬案销案 + 我两连针选错自纠) — 兄弟 msb6ohqifdz7yj 四件闭环回执;零产品代码
+
+- **逃生口线上实证(我先判「不可见」,兄弟纠正,复核成立):** 我连犯两针错——①拿中文串 grep bundle,但 i18n 键按设计抽进 pack 不入 bundle;②凭印象拼 `/static/dist/` 前缀,真实前缀是 `/static/js/`(index 里写得明白),两轮 grep 的全是 404 body,假阴性。正确复核:线上 `i18n-zh-325c95d7.js`(228KB)含「从另一台电脑访问本服务器」+ `local.tunnelToggle/tunnelHint`,`bundle-2fcd7c3c.js`(1MB)含 `lcMintBtnSrc`——**owner 硬刷面板即见逃生口,无需重启**。**教训:探测线上静态资源,先从 index 抠真实 URL 再 grep;404 body 会把一切针变成假阴性。**
+- **22:30/22:37 poll 悬案销案:** 既非我的 GET(401 在 record_poll 前)、也非浏览器桥——是兄弟自己的桥 auth 探针(egress key 实测 200)。无第三方,我此前「更像 browser-bridge-popup token」的猜测作废。
+- **Range 500:** 兄弟已根修(见上条 `a76340a4` 详录),线上吃到修复需与 A1-A3 同批重启(纯人门,lifecycle 闸)。
+- **stash 对账:** 兄弟一次 stash pop 误撞 `_gateway.py` 冲突,已还原 HEAD;`stash@{0}`(pt_871a26c7 代保管,单文件 19 行)分毫未动,继续停泊,本会话无 pop 需求。
+
 ### 2026-08-03(单字节 Range 探测 500 根修:file_serving 缝统一五路由 + 兄弟四件实测移交全部闭环) — 兄弟 msbwca9y 实测移交;commit `a76340a4`(6 文件);环 **44+54 绿**,NEUTER 实证(裸 quart 路径 bytes=0-0 仍 500);预存红×2 另案 `pt_275e143a92374dec`
 
 - **病灶(库对连环 off-by-one):** quart `_process_range_request` 把 `end - 1` 当 inclusive stop 传给 werkzeug `ContentRange.set`,后者 `is_byte_range_valid` 对 `start >= stop` 一律拒——单字节 Range(bytes=0-0/5-5,**每个下载器的 resume 探测**)触发 `AssertionError: Bad range provided` 逃逸成 500;多字节与 416 与裸 GET 全好。兄弟在线上连测两次实证(200 vs 500)。

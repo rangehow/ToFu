@@ -187,7 +187,7 @@ def test_a_full_run_records_the_payload(isolated, monkeypatch):
     """The heavy half is faked; the REAL tar + cache write runs."""
     monkeypatch.setattr(wb, '_git', lambda *a: 'f' * 40 + '\n')
     monkeypatch.setattr(wb, '_pipeline',
-                        lambda workdir, version, sha, log_fh:
+                        lambda workdir, version, sha, log_fh, **_:
                         _fake_dist(workdir))
     wb._run('test')
     st = wb.state()
@@ -205,7 +205,7 @@ def test_a_failed_pipeline_records_the_error_and_caches_nothing(
         isolated, monkeypatch):
     monkeypatch.setattr(wb, '_git', lambda *a: 'e' * 40 + '\n')
 
-    def _boom(workdir, version, sha, log_fh):
+    def _boom(workdir, version, sha, log_fh, **_):
         raise RuntimeError('pyinstaller exploded')
 
     monkeypatch.setattr(wb, '_pipeline', _boom)

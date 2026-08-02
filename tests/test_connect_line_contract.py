@@ -271,16 +271,28 @@ def test_the_launcher_delegates_parsing_rather_than_reimplementing_it():
     """Two parsers would drift; the format has exactly one owner.
 
     AST-asserted (an import node), because a substring check is satisfied by
-    a comment that merely names the function.
+    a comment that merely names the function. The dialog moved to
+    desktop/connect_ui.py (shared with the agent-only build — one
+    authoring, never two): the parser import must live THERE, and the
+    launcher must reach the dialog through delegation, not re-grow a copy.
     """
     import ast
-    imported = set()
-    for node in ast.walk(_launcher_ast()):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            for a in node.names:
-                imported.add(f"{node.module}.{a.name}")
-    assert "lib.desktop_agent.config.parse_connect_line" in imported, (
-        "launcher must import the shared parser, not roll its own split")
+
+    def _imports(path):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        out = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                for a in node.names:
+                    out.add(f"{node.module}.{a.name}")
+        return out
+
+    cui = _imports(ROOT / "desktop" / "connect_ui.py")
+    assert "lib.desktop_agent.config.parse_connect_line" in cui, (
+        "connect_ui must import the shared parser, not roll its own split")
+    lau = _imports(ROOT / "desktop" / "launcher.py")
+    assert "desktop.connect_ui.prompt_connect_line" in lau, (
+        "launcher must delegate to the shared dialog, not re-implement it")
 
 
 # ── NEUTER — both directions, because either side can drift ────────────

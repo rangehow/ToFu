@@ -79,6 +79,39 @@ _WINPY_Z = 'Z:\\opt\\winpy\\tools\\python.exe'
 _BUILD_EXTRAS = ('pyinstaller', 'pystray', 'pillow', 'psycopg2-binary',
                  'pyautogui', 'pyperclip', 'psutil')
 
+# The AGENT target's pip recipe (docs/DESKTOP_AGENT_DIST_DESIGN.md §4.4):
+# the desktop-agent closure only — NO requirements.txt. That file IS the
+# server stack, the 152 MB this target exists to leave behind. curl_cffi
+# rides along for the egress TLS-fingerprint path (small, manylinux/win
+# wheels; the spec hidden-imports it when present).
+_AGENT_PIP = ('pyinstaller', 'requests', 'pystray', 'pillow', 'psutil',
+              'pyautogui', 'pyperclip', 'curl_cffi')
+
+# Per-target build parameters. Every 'full' value is the historical one —
+# payload name, stamp inputs and pipeline shape stay byte-identical, so
+# the existing payload cache remains valid.
+_TARGETS = {
+    'full': {
+        'spec': 'tofu.spec',
+        'app_dir': 'Tofu',
+        'exe': 'Tofu.exe',
+        'smoke_env': 'TOFU_SMOKE',
+        'smoke_sentinel': 'TOFU_SMOKE_OK',
+        'payload_prefix': 'payload',
+        'residues': ('data', 'logs', 'uploads', 'project_sessions'),
+    },
+    'agent': {
+        'spec': 'tofu-agent.spec',
+        'app_dir': 'TofuAgent',
+        'exe': 'TofuAgent.exe',
+        'smoke_env': 'TOFU_AGENT_SMOKE',
+        'smoke_sentinel': 'TOFU_AGENT_SMOKE_OK',
+        'payload_prefix': 'payload-agent',
+        # The smoke run's module-level DATA_DIR mkdir lands next to the exe.
+        'residues': ('data',),
+    },
+}
+
 # Env allowlist for wine steps (trap 2). Everything else — PIP_*,
 # PYTHON*, CONDA*, VIRTUAL_ENV — is host poison for a Windows python.
 _ENV_ALLOW = ('http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY',
@@ -109,21 +142,21 @@ def _set_state(**kw) -> None:
     store.save_manifest(m)
 
 
-def start(reason: str = 'manual') -> dict:
+def start(reason: str = 'manual', target: str = 'full') -> dict:
     """Kick a background payload build (single-flight)."""
     global _worker
     with _worker_lock:
         if _worker and _worker.is_alive():
             return state()
-        _worker = threading.Thread(target=_run_safe, args=(reason,),
+        _worker = threading.Thread(target=_run_safe, args=(reason, target),
                                    name='desktop-winbuilder', daemon=True)
         _worker.start()
     return state()
 
 
-def _run_safe(reason: str) -> None:
+def _run_safe(reason: str, target: str = 'full') -> None:
     try:
-        _run(reason)
+        _run(reason, target)
     except Exception as e:
         logger.error('[WinBuild] build crashed: %s', e, exc_info=True)
         _set_state(state='error', error=f'crash: {e}')
@@ -131,15 +164,21 @@ def _run_safe(reason: str) -> None:
 
 # ── Payload identity + cache ─────────────────────────────────────────
 
-def deps_stamp() -> str:
+def deps_stamp(target: str = 'full') -> str:
     """The dependency half of the payload id.
 
-    requirements.txt + tofu.spec + the build-extras list: anything that
-    changes what the frozen payload contains. A code-only change (same
-    requirements) reuses the cached payload — that is what makes
-    per-client wrapper builds (S3) cheap.
+    'full': requirements.txt + tofu.spec + the build-extras list —
+    unchanged, so existing cached payloads stay valid. 'agent':
+    tofu-agent.spec + the agent pip recipe; the server requirements are
+    deliberately NOT inputs, so a server-only dependency bump never
+    rebuilds the agent payload.
     """
     h = hashlib.sha256()
+    if target == 'agent':
+        with open(os.path.join(_REPO_ROOT, 'tofu-agent.spec'), 'rb') as f:
+            h.update(f.read())
+        h.update('\0'.join(_AGENT_PIP).encode())
+        return h.hexdigest()[:16]
     for name in ('requirements.txt', 'tofu.spec'):
         with open(os.path.join(_REPO_ROOT, name), 'rb') as f:
             h.update(f.read())
@@ -154,36 +193,39 @@ def _payloads_dir() -> str:
     return d
 
 
-def payload_path(sha: str, stamp: str | None = None) -> str:
-    stamp = stamp or deps_stamp()
+def payload_path(sha: str, stamp: str | None = None,
+                 target: str = 'full') -> str:
+    stamp = stamp or deps_stamp(target)
+    prefix = _TARGETS[target]['payload_prefix']
     return os.path.join(_payloads_dir(),
-                        f'payload-{sha[:12]}-{stamp}.tar.gz')
+                        f'{prefix}-{sha[:12]}-{stamp}.tar.gz')
 
 
-def cached_payload(sha: str, stamp: str | None = None) -> str | None:
-    p = payload_path(sha, stamp)
+def cached_payload(sha: str, stamp: str | None = None,
+                   target: str = 'full') -> str | None:
+    p = payload_path(sha, stamp, target)
     return p if os.path.isfile(p) else None
 
 
 # ── The build ─────────────────────────────────────────────────────────
 
-def _run(reason: str) -> None:
+def _run(reason: str, target: str = 'full') -> None:
     version = _read_version()
     sha = _git('rev-parse', 'HEAD').strip()
-    stamp = deps_stamp()
+    stamp = deps_stamp(target)
     t0 = time.time()
-    cached = cached_payload(sha, stamp)
+    cached = cached_payload(sha, stamp, target)
     if cached:
         logger.info('[WinBuild] payload cache hit for %s (%s)',
                     sha[:12], cached)
         _set_state(state='ok', version=version, git_sha=sha,
                    deps_stamp=stamp, reason=reason, cached=True,
-                   payload=cached, started_at=t0,
+                   target=target, payload=cached, started_at=t0,
                    finished_at=time.time(), error=None)
         return
     _set_state(state='running', version=version, git_sha=sha,
                deps_stamp=stamp, reason=reason, cached=False,
-               started_at=t0, finished_at=None, error=None)
+               target=target, started_at=t0, finished_at=None, error=None)
     # The work tree must live INSIDE the guest rootfs — wine only reaches
     # host paths through Z: (= the rootfs), so a workdir outside it is
     # unreadable to the Windows python (guest_z would rightly refuse).
@@ -196,8 +238,8 @@ def _run(reason: str) -> None:
         _set_state(log=log_path)
         try:
             wintoolchain.provision()
-            dist = _pipeline(workdir, version, sha, log_fh)
-            dest = _cache_payload(dist, sha, stamp, log_fh)
+            dist = _pipeline(workdir, version, sha, log_fh, target=target)
+            dest = _cache_payload(dist, sha, stamp, log_fh, target=target)
         except Exception as e:
             logger.error('[WinBuild] build failed (log: %s): %s',
                          log_path, e)
@@ -211,8 +253,10 @@ def _run(reason: str) -> None:
                 time.time() - t0, dest)
 
 
-def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
+def _pipeline(workdir: str, version: str, sha: str, log_fh,
+              target: str = 'full') -> str:
     """The heavy half (fakeable in tests — the recording half stays real)."""
+    tgt = _TARGETS[target]
     src = os.path.join(workdir, 'src')
     os.makedirs(src, exist_ok=True)
     _sh(f'git -C {_REPO_ROOT} archive HEAD | tar -x -C {src}', log_fh,
@@ -221,39 +265,53 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
     winpy = _ensure_winpython(log_fh)
     _ensure_guest_hosts(log_fh)
 
-    # tofu-search FIRST (same exemption as builder.py — the floor is on no
-    # index): sibling checkout → vendor wheel → index name.
-    ts_src = _tofu_search_source(workdir)
     pip_env = _wine_env(_pip_index_env())
-    _wpystep('pip-tofu-search',
-             f'{winpy} -m pip install --no-warn-script-location '
-             f'--no-deps {_z(ts_src)}', log_fh, env=pip_env)
+    if target == 'agent':
+        # The agent closure ONLY. Installing requirements.txt here would
+        # freeze the entire server stack into the component whose whole
+        # point is not carrying it — the smoke gate would catch it, but
+        # not shipping it is faster and quieter.
+        _wpystep('pip-agent-deps',
+                 f'{winpy} -m pip install --no-warn-script-location '
+                 f'{" ".join(_AGENT_PIP)}',
+                 log_fh, cwd=src, env=pip_env, timeout=_BUILD_TIMEOUT_S)
+    else:
+        # tofu-search FIRST (same exemption as builder.py — the floor is on
+        # no index): sibling checkout → vendor wheel → index name.
+        ts_src = _tofu_search_source(workdir)
+        _wpystep('pip-tofu-search',
+                 f'{winpy} -m pip install --no-warn-script-location '
+                 f'--no-deps {_z(ts_src)}', log_fh, env=pip_env)
 
-    from . import builder as _linux_builder
-    build_reqs = _linux_builder._requirements_without_tofu_search(
-        os.path.join(src, 'requirements.txt'), workdir)
-    extras = ' '.join(_BUILD_EXTRAS)
-    _wpystep('pip-requirements',
-             f'{winpy} -m pip install --no-warn-script-location '
-             f'-r {_z(build_reqs)} {extras}',
-             log_fh, cwd=src, env=pip_env, timeout=_BUILD_TIMEOUT_S)
+        from . import builder as _linux_builder
+        build_reqs = _linux_builder._requirements_without_tofu_search(
+            os.path.join(src, 'requirements.txt'), workdir)
+        extras = ' '.join(_BUILD_EXTRAS)
+        _wpystep('pip-requirements',
+                 f'{winpy} -m pip install --no-warn-script-location '
+                 f'-r {_z(build_reqs)} {extras}',
+                 log_fh, cwd=src, env=pip_env, timeout=_BUILD_TIMEOUT_S)
 
     _wpystep('gen-icons', f'{winpy} scripts/gen_desktop_icons.py',
              log_fh, cwd=src)
 
     dist = os.path.join(workdir, 'dist')
     _wpystep('pyinstaller',
-             f'{winpy} -m PyInstaller tofu.spec --distpath {_z(dist)} '
+             f'{winpy} -m PyInstaller {tgt["spec"]} --distpath {_z(dist)} '
              f'--workpath {_z(os.path.join(workdir, "tmp"))} --noconfirm',
              log_fh, cwd=src, timeout=_BUILD_TIMEOUT_S)
 
-    # Boot smoke — the launcher's own marker IS the sentinel (TOFU_SMOKE_OK).
-    # TOFU_DB_PATH + stripped PG_* keep the smoke child off the production
-    # PostgreSQL (builder.py's measured lesson, verbatim).
-    env = _wine_env({'TOFU_SMOKE': '1',
-                     'TOFU_DB_PATH': _z(os.path.join(workdir, 'smoke.db'))})
-    out = _wstep('smoke', f'{_z(os.path.join(dist, "Tofu", "Tofu.exe"))}',
-                 log_fh, sentinel='TOFU_SMOKE_OK', env=env,
+    # Boot smoke — the launcher's own marker IS the sentinel.
+    smoke_extra = {tgt['smoke_env']: '1'}
+    if target == 'full':
+        # TOFU_DB_PATH + stripped PG_* keep the smoke child off the
+        # production PostgreSQL (builder.py's measured lesson, verbatim).
+        smoke_extra['TOFU_DB_PATH'] = _z(os.path.join(workdir,
+                                                      'smoke.db'))
+    env = _wine_env(smoke_extra)
+    out = _wstep('smoke',
+                 f'{_z(os.path.join(dist, tgt["app_dir"], tgt["exe"]))}',
+                 log_fh, sentinel=tgt['smoke_sentinel'], env=env,
                  timeout=600)
     import re as _re
     err = (out.stderr or b'').decode('utf-8', 'replace')
@@ -261,22 +319,24 @@ def _pipeline(workdir: str, version: str, sha: str, log_fh) -> str:
                   r'|ModuleNotFoundError|ImportError', err):
         raise RuntimeError('boot smoke stderr carries a traceback — '
                            'see winbuild.log')
-    for residue in ('data', 'logs', 'uploads', 'project_sessions'):
-        shutil.rmtree(os.path.join(dist, 'Tofu', residue),
+    for residue in tgt['residues']:
+        shutil.rmtree(os.path.join(dist, tgt['app_dir'], residue),
                       ignore_errors=True)
     # Tar from a private staging copy (builder.py's measured lesson:
     # smoke-shutdown writes race tar's traversal on shared storage).
     staging = os.path.join(workdir, 'staging')
-    shutil.copytree(os.path.join(dist, 'Tofu'),
-                    os.path.join(staging, 'Tofu'))
+    shutil.copytree(os.path.join(dist, tgt['app_dir']),
+                    os.path.join(staging, tgt['app_dir']))
     return staging
 
 
-def _cache_payload(staging: str, sha: str, stamp: str, log_fh) -> str:
+def _cache_payload(staging: str, sha: str, stamp: str, log_fh,
+                   target: str = 'full') -> str:
     """Tar the payload into the cache (atomic .part → rename)."""
-    dest = payload_path(sha, stamp)
+    dest = payload_path(sha, stamp, target)
     part = dest + '.part'
-    _sh(f'tar czf {part} -C {staging} Tofu', log_fh)
+    _sh(f'tar czf {part} -C {staging} {_TARGETS[target]["app_dir"]}',
+        log_fh)
     os.replace(part, dest)
     size = os.path.getsize(dest)
     logger.info('[WinBuild] payload cached: %s (%d bytes)', dest, size)

@@ -136,12 +136,30 @@ def _ensure_agent_id():
     return agent_id
 
 
+def _agent_version() -> str:
+    """The agent's own version string ('' when unreadable).
+
+    Carried in every poll's registration frame so the server can see
+    agent↔server drift (the command protocol evolves WITH the server —
+    a release-line agent against a HEAD server can silently
+    mis-dispatch). Never raises: a version read failure must not stop
+    the agent from polling.
+    """
+    try:
+        from lib.version import __version__ as v
+        return (v or '').strip()
+    except Exception as e:
+        logger.debug('[Agent] version unreadable: %s', e)
+        return ''
+
+
 def _build_agent_frame(agent_id, permissions, share_roots=None):
     """Build the v2 registration frame sent with every poll."""
     return {
         'agent_id': agent_id,
         'name': socket.gethostname(),
         'platform': sys.platform,
+        'version': _agent_version(),
         'capabilities': {
             'write': bool(permissions.get('allow_write')),
             'exec': bool(permissions.get('allow_exec')),

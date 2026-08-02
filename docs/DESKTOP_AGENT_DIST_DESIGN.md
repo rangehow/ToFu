@@ -1,9 +1,12 @@
 # Server-Built AGENT-ONLY Installers — Design
 
-> Status: DRAFT v2 (2026-08-02), epic `pt_59b62951aad2463e`.
+> Status: DRAFT v3 (2026-08-02), epic `pt_59b62951aad2463e`.
 > v2 folds in the three distribution-surface decisions (§5): the Local
 > Control display matrix, the full-client direction policy, and the
-> GitHub Releases contents.
+> GitHub Releases contents. v3 folds in the owner's three review
+> amendments: boot autostart for relay machines (§4.4, §6), agent
+> version in the registration frame + drift surfacing (§5.2, §8), and
+> the interactive-session boundary (§6).
 > Splits the fused "one installer, two roles" distribution into TWO
 > components: the controlled-machine **agent** (no frontend, no server
 > stack) and the full desktop app (this machine = server + client).
@@ -59,6 +62,8 @@ concrete costs today:
 | `launcher.py::_prompt_connect_line` + `desktop/_tk_theme.py` are a dependency-light config UI (tkinter — shipped by the python.org Windows Python the payload already embeds); `lib/desktop_agent/config.py::parse_connect_line` owns the connect-line wire format | The agent's entire "configuration capability" (owner's words) already exists as ~100 lines of tkinter. The dialog parses through the same owner of the format, so UI and wire can never drift |
 | `desktop_agent/config.py` persists enabled-state + permission tiers via `save_computer_control` / `load_computer_control`, read identically by the full app's tray | One config floor for BOTH components: a machine that later installs the full app (or replaces it with the agent) inherits the owner's permission choices instead of re-asking |
 | `curl_cffi` is NOT yet imported by `_egress.py` — the egress design lists it as a planned OPTIONAL dependency (TLS fingerprint, §5 note) | The agent spec declares it as an optional hidden import **now**, so the day the egress epic lands the dependency the packaging needs no change |
+| `installer.nsi.tmpl` already runs per-user (`RequestExecutionLevel user`, `InstallDir $LOCALAPPDATA`) — an `HKCU\…\CurrentVersion\Run` value therefore needs NO UAC; Inno's `[Tasks]`+`[Registry]` pair is the CI-side equivalent and both keys uninstall cleanly | Boot autostart for the agent is a free addition in BOTH authorings — the privilege model already permits it (owner amendment ①) |
+| `_build_agent_frame` (`_run.py`) carries `agent_id / name / platform / capabilities / share_roots` — **no `version`** | The server currently CANNOT see agent↔server drift; adding one field makes it observable (owner amendment ②) |
 
 What is deliberately NOT reused from `launcher.py`: the server spawn, the
 browser auto-open, the component manager, the GitHub update check, and the
@@ -106,7 +111,11 @@ the whole of it): `[Server: <url>]` (disabled label — the silence gap the
 full app's tray already fixed), `[Connect to a different Tofu…]`,
 `[Permissions ▸ write / exec / gui / egress]` (live-mutating the shared
 perms dict, persisted on click — the same toggle mechanics as
-`launcher.py`), `[Quit]`. `console=False`, all diagnostics through a
+`launcher.py`), `[Start with Windows]` (owner amendment ① — toggles the
+same HKCU Run value the installer writes, persisted to the agent config
+and reconciled config→registry at every launch, so the choice survives
+both reinstall and a registry edit; Windows-only in v1, hidden elsewhere),
+`[Quit]`. `console=False`, all diagnostics through a
 null-safe `_log` teeing to `<exe>/data/desktop-agent.log` — the
 windowed-build logging discipline is copied verbatim from `launcher.py`
 (its docstring item 1 exists because this exact trap bit before).
@@ -155,6 +164,19 @@ behaviour is byte-identical; its suite proves it).
   call shape as today.
 - The preseed write (`_write_preseed`) is already target-agnostic — it
   drops the file next to whatever exe the payload carries.
+- **Boot autostart (owner amendment ①).** The agent's primary scene is
+  an UNATTENDED relay/egress machine — one Windows-Update reboot silently
+  kills the bridge until someone notices failed traffic. The NSIS
+  template gains a components page with a default-selected "Start with
+  Windows" section writing `HKCU\Software\Microsoft\Windows\CurrentVersion
+  \Run\TofuAgent = "$INSTDIR\TofuAgent.exe"`; the uninstaller deletes the
+  value unconditionally (a removed app must not leave a dead autorun
+  pointing at a missing exe). CI's Inno authoring gets the equivalent
+  `[Tasks] autostart` + `[Registry] … Flags: uninsdeletevalue`, also
+  default-on for the agent component. `test_installer_parity.py` pins
+  the semantic contract for BOTH: agent installer ⇒ autostart offered,
+  default ON, UAC-free (HKCU), removed at uninstall; full installer ⇒
+  unchanged (no autostart — a user-present tray app does not need it).
 
 ### 4.5 Smoke gate — exit code as verdict, same discipline as TOFU_SMOKE
 
@@ -241,6 +263,14 @@ The two components share ONE supply policy, no new channel:
    on the client's route to GitHub. Windows: server-built full + agent.
    Linux: server-built native full (agent native build is a cheap
    follow-on). macOS: mirrored CI assets.
+   For the AGENT kind this preference is stronger than "freshest": the
+   command protocol (egress frames, stream_outbox shape, dispatch
+   table) evolves WITH the server, so an agent built from the same HEAD
+   as the server it polls is the only pairing guaranteed to speak the
+   same protocol — a release-line agent from GitHub can silently
+   mis-dispatch against a HEAD server. Server-built for the agent is a
+   **protocol co-origin** guarantee, not a convenience (owner amendment
+   ②; detection side in §8/A3).
 2. **FALLBACK: the GitHub releases page** (`查看全部下载 ↗`) — for
    unrecognised platforms, missing assets, an empty store, and visitors
    arriving from the repo README.
@@ -273,7 +303,22 @@ section, and a two-row README download table. The cost of NOT uploading
 is worse: no macOS agent ever, and no fallback when a deployment's own
 build toolchain is down. Verdict: upload.
 
-## 6. Security posture
+## 6. The interactive-session boundary (the honest v1 limit)
+
+The tray form factor requires a logged-in interactive session: pystray
+needs a window station, and the autostart mechanism (§4.4) fires at
+user logon. A truly HEADLESS relay (no user ever logs in — a rack
+machine, a VM that only boots) cannot run this component; it needs a
+Windows-SERVICE-packaged agent (Session 0, no tray, no tk dialog,
+service-control recovery). That is a deliberate v1 NON-goal: the full
+app's agent has the same limit today, every current deployment scene
+(office PC, home machine) has an interactive user, and service
+packaging is a different installer shape (SCM registration, its own
+account model) that deserves its own measured design. Recorded here so
+the next "why doesn't the agent start before logon" question has a
+citation instead of a re-investigation.
+
+## 7. Security posture
 
 - **Subtraction, not addition.** The agent build adds no new trust
   decision to the controlled machine: no listening port, no DB, no
@@ -291,7 +336,7 @@ build toolchain is down. Verdict: upload.
 - Unsigned installer — same SmartScreen note as the full build (signing
   stays the separate, human-credentialed question).
 
-## 7. What stays fused, deliberately
+## 8. What stays fused, deliberately
 
 The full desktop app KEEPS its in-process agent: for the standalone user
 (this machine = server + client), own-machine computer control with zero
@@ -311,33 +356,42 @@ Alternatives considered and rejected:
   byte to every machine. The saving this epic exists for lives in the
   second PAYLOAD, which a checkbox cannot produce.
 
-## 8. Slices
+## 9. Slices
 
 - **A1** — `desktop/connect_ui.py` extraction + `desktop/agent_launcher.py`
   + `tofu-agent.spec` + agent Half A in `winbuilder.py` (`target='agent'`)
-  + the §4.5 smoke gate. Tests fake the pipeline exactly like
+  + the §4.5 smoke gate + **`version` in `_build_agent_frame`** (amendment
+  ② detection half: read from `lib.version`, one field, the poll payload
+  already carries the frame). Tests fake the pipeline exactly like
   `test_winbuilder.py` (staged provisioning, faked downloads); NEUTER on
   the payload cache-hit logic. Acceptance: a REAL agent payload built on
   the provisioned toolchain, **weighed** (the §2 estimate becomes a
   measurement), smoke exit 0 under wine, import-graph proof green.
 - **A2** — NSIS template parametrization + Half B target support +
-  `test_installer_parity.py` extended to both components + first real
+  **autostart task (§4.4: components page, default-on HKCU Run value,
+  uninstaller cleanup)** + tray autostart toggle + 
+  `test_installer_parity.py` extended to both components AND the
+  autostart contract + first real
   `TofuAgent-Setup-<ver>-win64.exe` recorded `kind='agent'` in the store.
 - **A2b** (CI, same change as the gates) — `build-desktop.yml` agent
-  legs (windows/macos/linux runners, §5.3) + `AGENT_PLATFORM_ASSETS`
+  legs (windows/macos/linux runners, §5.3, Inno autostart `[Tasks]`
+  equivalent) + `AGENT_PLATFORM_ASSETS`
   joining `REQUIRED_PLATFORM_ASSETS` + `test_desktop_build_workflow.py`
   extended to the new rows.
 - **A3** — serving + UI: `AGENT_PLATFORM_ASSETS` rows in
   `_platform_rows_for`, `find_for_platform` kind filter, status payload,
   `_lcRenderDesktop` branch matrix, autobuild gate, mirror extension to
-  agent assets. Parity suite for the `downloads[]` shape (the
+  agent assets + **drift projection** (amendment ② surfacing half: the
+  devices list / status payload compares each agent's frame `version`
+  to the server's own and flags "agent outdated → download the
+  same-HEAD installer"). Parity suite for the `downloads[]` shape (the
   api-contract discipline: shape pinned by test); frontend JSDOM harness
   for the primary/secondary link branches.
 - **A4** (docs only) — `desktop/README.md` + `DESKTOP_EGRESS_DESIGN.md`
   §11: retire the "copy the whole repo" stopgap in favour of the agent
   installer; README download table gains the two-component rows.
 
-## 9. Acceptance
+## 10. Acceptance
 
 A Windows visitor to Local Control (remote case) is offered
 `TofuAgent-Setup-<current>-win64.exe` marked `服务器直连 · built` as the
@@ -348,3 +402,11 @@ permission tiers, and appears in `/api/v1/desktop/devices` — with no
 Tofu server, no DB, and no browser ever starting on that machine. The
 full installer remains one click away for the "this machine also runs
 Tofu" case, on a byte-identical pipeline to today.
+
+**Transferred from `pt_4ea6bf05deaa46f0` (closed 2026-08-02, owner:
+"不要让我手动执行命令"):** once the installer lands and the agent
+auto-starts with ZERO manual commands, the real-machine OAuth round
+trip is verified on that machine — browser login to claude.ai → token
+exchange egressing via the agent → streaming reply → Codex O3. This is
+the end-to-end proof that the component this epic ships is the product
+form of the egress bridge, not a parallel one.

@@ -1,3 +1,11 @@
+### 2026-08-02(owner 三修订折入设计稿 v3:开机自启 / 版本漂移检测 / 会话边界 + 收编 egress 移交验收——A1 开工) — owner 签字设计阶段后补三硬需求;epic `pt_59b62951aad2463e`
+
+- **① 开机自启(relay 生死项,v1/v2 全漏):** 被控端头号场景=无人值守中继机,Windows Update 半夜重启即静默断桥。NSIS 加 components 页默认勾「Start with Windows」写 HKCU Run 键(模板本就 `RequestExecutionLevel user`,免 UAC),卸载器无条件清键;Inno 侧 `[Tasks]`+`[Registry] uninsdeletevalue` 等价;托盘加开关持久化 config 且每次启动 config→注册表对账;parity 契约钉「agent 默认 ON / 完整版不加」。
+- **② agent↔server 协议同源 + 漂移可观测:** `_build_agent_frame` 实测五字段无 version(§2 新实测行)——A1 加一字段,A3 在 devices/状态载荷投影「agent 落后→下同 HEAD 包」;§5.2 的 server-first 对 agent 从「新鲜」升级为「协议同源」论据(egress 帧/stream_outbox 形状随服务器演进,release 线 agent 对 HEAD 服务器可能静默错派)。
+- **③ 诚实边界(照 client-build 稿 §7 体例):** 托盘形态=交互式登录会话前提,真无头 relay 需 Windows 服务化打包——v1 明确 NON-goal 记档(§6),防下个人重新调研。
+- **收编移交:** egress epic 关票时 owner 判「不要手动执行命令」——真机 OAuth 全链验收(浏览器登录→经 agent 出口→流式→Codex O3)正式挂进本 epic §10 验收表:安装包落地、agent 自启时顺手验,零手动命令。本 epic 对 pt_4ea6bf05deaa46f0 的依赖随之解锁。
+- **文档:** 351→413 行十节;切片账:A1+frame version 字段、A2+自启三件套、A3+漂移投影。A1 随即开工(claim 有效)。
+
 ### 2026-08-02(egress epic 关票:owner 判「不要让我手动执行命令」——真机验收定义性移交打包 epic;`pt_4ea6bf05deaa46f0` DONE)
 
 - **owner 指令定盘:** 转发路问题卡三答之一都不是——「不要让我去手动执行命令了,我没这个兴趣」。手动烟死路,产品正解=agent 随安装包自动起(本来就是下游 `pt_59b62951aad2463e` 的形态,msb9kssc 在飞)。

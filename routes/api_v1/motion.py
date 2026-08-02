@@ -242,7 +242,8 @@ def serve_motion_file(task_id):
     if not path or not os.path.isfile(path):
         return api_not_found('file_not_ready')
     mimetype = 'application/x-subrip' if part == 'srt' else 'video/mp4'
-    return send_file(path, mimetype=mimetype, conditional=True)
+    from lib.file_serving import send_file_conditional
+    return send_file_conditional(path, mimetype=mimetype)
 
 
 def _job_workdir(task) -> str:
@@ -335,7 +336,8 @@ def serve_scene_file(task_id, scene_id):
     path = os.path.join(workdir, 'scenes', scene_id, f'{scene_id}.mp4')
     if not workdir or not os.path.isfile(path):
         return api_not_found('file_not_ready')
-    return send_file(path, mimetype='video/mp4', conditional=True)
+    from lib.file_serving import send_file_conditional
+    return send_file_conditional(path, mimetype='video/mp4')
 
 
 @api_v1_motion_bp.route('/api/v1/motion/videos/<task_id>/scenes/<scene_id>/regen',

@@ -542,7 +542,8 @@ def serve_paper_image(phash, filename):
     if not os.path.isfile(filepath):
         return api_not_found('Image not found')
     mt = 'image/jpeg' if filename.lower().endswith(('.jpg', '.jpeg')) else 'image/png'
-    return send_file(filepath, mimetype=mt, conditional=True)
+    from lib.file_serving import send_file_conditional
+    return send_file_conditional(filepath, mimetype=mt)
 
 
 @api_v1_paper_bp.route('/api/v1/paper/report/start', methods=['POST'])
@@ -2181,7 +2182,8 @@ def serve_paper_pdf(filename):
     # send_file always returns 200 + the whole file (tens of MB); a buffering
     # cloud-IDE proxy can truncate/time-out that single response, which pdf.js
     # surfaces as "Missing PDF" or per-page "failed to render".
-    resp = send_file(filepath, mimetype='application/pdf', conditional=True)
+    from lib.file_serving import send_file_conditional
+    resp = send_file_conditional(filepath, mimetype='application/pdf')
     # Advertise ranged capability on the INITIAL (non-Range) 200 too. pdf.js's
     # validateRangeRequestCapabilities only switches to ranged loading when the
     # FIRST response carries ``Accept-Ranges: bytes`` — Quart's make_conditional

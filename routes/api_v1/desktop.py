@@ -385,13 +385,13 @@ def desktop_download(filename):
     """SYNC on purpose: pure file serving via the sync-safe send_file shim
     (same carve-out as serve_motion_file) — a 135 MB stream must not sit on
     the event loop."""
-    from quart import send_file
     path = _dist_store.resolve_file(filename)
     if path is None:
         return api_not_found('not_found',
                              message='no such artifact')
-    return send_file(path, as_attachment=True,
-                     attachment_filename=filename, conditional=True)
+    from lib.file_serving import send_file_conditional
+    return send_file_conditional(path, as_attachment=True,
+                                 attachment_filename=filename)
 
 
 @api_v1_desktop_bp.route('/api/v1/desktop/streams/<cmd_id>', methods=['GET'])

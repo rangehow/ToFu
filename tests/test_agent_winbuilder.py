@@ -207,6 +207,102 @@ def test_agent_pipeline_uses_the_agent_spec_and_smoke_gate():
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  Half B — the agent wrapper (makensis faked; untar + recording real)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_agent_wrap_records_a_kind_agent_artifact(isolated, monkeypatch,
+                                                  tmp_path):
+    payload_dir = tmp_path / 'payload-src'
+    (payload_dir / 'TofuAgent').mkdir(parents=True)
+    (payload_dir / 'TofuAgent' / 'TofuAgent.exe').write_text('exe')
+    payload_tar = tmp_path / 'payload.tar.gz'
+    with tarfile.open(payload_tar, 'w:gz') as tf:
+        tf.add(payload_dir / 'TofuAgent', arcname='TofuAgent')
+
+    def _sh(cmd, log_fh, *, shell=False, timeout=9999):
+        if 'makensis' in cmd:
+            out = isolated / 'wrap' / 'TofuAgent-Setup-0.16.0-win64.exe'
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b'NSIS-AGENT-INSTALLER')
+            return None
+        import subprocess as sp
+        return sp.run(cmd if shell else cmd.split(), shell=shell,
+                      capture_output=True, timeout=timeout)
+
+    monkeypatch.setattr(wb, '_sh', _sh)
+    monkeypatch.setattr(wb, '_ensure_makensis', lambda log: '/fake/makensis')
+    with _fake_log(isolated) as log:
+        dest = wb.wrap_payload(str(payload_tar), '0.16.0', 'b' * 40, log,
+                               server_url='https://tofu.example.com/',
+                               workdir=str(isolated / 'wrap'),
+                               target='agent')
+    assert os.path.basename(dest) == 'TofuAgent-Setup-0.16.0-win64.exe'
+    e = wb.store.artifacts()['TofuAgent-Setup-0.16.0-win64.exe']
+    assert e['kind'] == 'agent', (
+        'the store must tell the two components apart — a kindless agent '
+        'entry reads as full (absent ⇒ full) and the selector would offer '
+        'it to full-app seekers')
+    assert e['source'] == 'built' and e['os'] == 'windows'
+    assert e['label'] == 'Windows agent installer'
+    # The record keeps the url as passed; the FILE gets the rstripped
+    # form (the launcher's import contract).
+    assert e['preseed']['url'] == 'https://tofu.example.com/'
+    import json
+    pre = json.loads((isolated / 'wrap' / 'payload'
+                      / 'preseed_server.json').read_text())
+    assert pre['url'] == 'https://tofu.example.com'
+
+
+def test_full_wrap_record_has_kind_full(isolated, monkeypatch, tmp_path):
+    payload_dir = tmp_path / 'payload-src'
+    (payload_dir / 'Tofu').mkdir(parents=True)
+    (payload_dir / 'Tofu' / 'Tofu.exe').write_text('exe')
+    payload_tar = tmp_path / 'payload.tar.gz'
+    with tarfile.open(payload_tar, 'w:gz') as tf:
+        tf.add(payload_dir / 'Tofu', arcname='Tofu')
+
+    def _sh(cmd, log_fh, *, shell=False, timeout=9999):
+        if 'makensis' in cmd:
+            out = isolated / 'wrap' / 'Tofu-Setup-0.16.0-win64.exe'
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b'NSIS-FULL-INSTALLER')
+            return None
+        import subprocess as sp
+        return sp.run(cmd if shell else cmd.split(), shell=shell,
+                      capture_output=True, timeout=timeout)
+
+    monkeypatch.setattr(wb, '_sh', _sh)
+    monkeypatch.setattr(wb, '_ensure_makensis', lambda log: '/fake/makensis')
+    with _fake_log(isolated) as log:
+        wb.wrap_payload(str(payload_tar), '0.16.0', 'c' * 40, log,
+                        workdir=str(isolated / 'wrap'))
+    e = wb.store.artifacts()['Tofu-Setup-0.16.0-win64.exe']
+    assert e['kind'] == 'full'
+    assert e['label'] == 'Windows installer'
+
+
+def test_NEUTER_agent_wrap_of_a_full_payload_is_refused(isolated,
+                                                        monkeypatch,
+                                                        tmp_path):
+    """Target/payload mismatch must fail LOUD: wrapping the full payload
+    as 'agent' would produce an installer with no TofuAgent.exe."""
+    payload_dir = tmp_path / 'payload-src'
+    (payload_dir / 'Tofu').mkdir(parents=True)
+    (payload_dir / 'Tofu' / 'Tofu.exe').write_text('exe')
+    payload_tar = tmp_path / 'payload.tar.gz'
+    with tarfile.open(payload_tar, 'w:gz') as tf:
+        tf.add(payload_dir / 'Tofu', arcname='Tofu')
+    monkeypatch.setattr(wb, '_ensure_makensis', lambda log: '/fake/makensis')
+    with _fake_log(isolated) as log:
+        with pytest.raises(RuntimeError, match='no TofuAgent.exe'):
+            wb.wrap_payload(str(payload_tar), '0.16.0', 'd' * 40, log,
+                            workdir=str(isolated / 'wrap'), target='agent')
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  the tcl/tk graft — the nuget python ships NO tkinter (measured)
+# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 #  the tcl/tk graft — the nuget python ships NO tkinter (measured)
 # ═══════════════════════════════════════════════════════════════════
 

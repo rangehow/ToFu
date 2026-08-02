@@ -20,17 +20,26 @@
 ; is the single source of truth.
 ;
 ; Placeholders (rendered by lib/desktop_dist/winbuilder.py::_render_nsi):
-;   @APP_VERSION@   e.g. 0.16.0
-;   @PAYLOAD_DIR@   absolute path of the unpacked payload (contains Tofu.exe
-;                   and, when pre-seeded, preseed_server.json)
-;   @OUT_FILE@      absolute output path for the .exe
-;   @ASSET_DIR@     repo static/icons dir (icon + wizard bitmap)
+;   @APP_VERSION@        e.g. 0.16.0
+;   @PAYLOAD_DIR@        absolute path of the unpacked payload (contains the
+;                        app exe and, when pre-seeded, preseed_server.json)
+;   @OUT_FILE@           absolute output path for the .exe
+;   @ASSET_DIR@          repo static/icons dir (icon + wizard bitmap)
+;   @APP_NAME@           display name (Tofu / Tofu Agent)
+;   @APP_EXE@            payload exe (Tofu.exe / TofuAgent.exe)
+;   @INSTALL_DIR_NAME@   dir under $LOCALAPPDATA\Programs (Tofu / TofuAgent)
+;   @COMPONENTS_PAGE@    '!insertmacro MUI_PAGE_COMPONENTS' or empty
+;   @INSTALL_REQUIRED@   '  SectionIn RO' or empty (main section uncheckable
+;                        when a components page exists)
+;   @AUTOSTART_SECTION@  optional default-ON "Start with Windows" section
+;                        (agent only — HKCU Run value, UAC-free per-user)
+;   @AUTOSTART_UNINSTALL@  matching DeleteRegValue, or empty
 ; ─────────────────────────────────────────────────────────────────────────
 
-!define APP_NAME      "Tofu"
+!define APP_NAME      "@APP_NAME@"
 !define APP_VERSION   "@APP_VERSION@"
 !define PUBLISHER     "Tofu Project"
-!define APP_EXE       "Tofu.exe"
+!define APP_EXE       "@APP_EXE@"
 
 !include "MUI2.nsh"
 
@@ -39,7 +48,7 @@ OutFile "@OUT_FILE@"
 Unicode True
 RequestExecutionLevel user          ; per-user install, no UAC — the Inno
                                     ; authoring's PrivilegesRequired=lowest
-InstallDir "$LOCALAPPDATA\Programs\Tofu"
+InstallDir "$LOCALAPPDATA\Programs\@INSTALL_DIR_NAME@"
 ShowInstDetails show
 
 ; ── Branding (shared assets with the Inno authoring) ──
@@ -51,8 +60,9 @@ ShowInstDetails show
 
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
-!define MUI_FINISHPAGE_RUN_TEXT "Launch Tofu"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch ${APP_NAME}"
 
+@COMPONENTS_PAGE@
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -66,24 +76,28 @@ ShowInstDetails show
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
 Section "Install"
+@INSTALL_REQUIRED@
   SetOutPath "$INSTDIR"
-  ; The whole payload — Tofu.exe, _internal/, and preseed_server.json
+  ; The whole payload — the app exe, _internal/, and preseed_server.json
   ; when the build pre-seeded one (see desktop/launcher.py's first-run
   ; import; the file lives NEXT TO the exe by contract).
   File /r "@PAYLOAD_DIR@/*"
 
   ; Shortcuts — same two the Inno authoring creates.
-  CreateDirectory "$SMPROGRAMS\Tofu"
-  CreateShortcut  "$SMPROGRAMS\Tofu\Tofu.lnk" "$INSTDIR\${APP_EXE}"
-  CreateShortcut  "$DESKTOP\Tofu.lnk"         "$INSTDIR\${APP_EXE}"
+  CreateDirectory "$SMPROGRAMS\${APP_NAME}"
+  CreateShortcut  "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}"
+  CreateShortcut  "$DESKTOP\${APP_NAME}.lnk"                 "$INSTDIR\${APP_EXE}"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 SectionEnd
 
+@AUTOSTART_SECTION@
+
 Section "Uninstall"
-  Delete "$SMPROGRAMS\Tofu\Tofu.lnk"
-  RMDir  "$SMPROGRAMS\Tofu"
-  Delete "$DESKTOP\Tofu.lnk"
+  Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+  RMDir  "$SMPROGRAMS\${APP_NAME}"
+  Delete "$DESKTOP\${APP_NAME}.lnk"
+@AUTOSTART_UNINSTALL@
   ; User data is NOT touched: it lives in ~/.local/share/Tofu per the
   ; runtime_paths read-only-exe-dir contract — same rule as the Inno
   ; authoring and the .deb.

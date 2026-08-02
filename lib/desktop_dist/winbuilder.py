@@ -674,8 +674,40 @@ def _sh(cmd: str, log_fh, *, shell: bool = False,
 # ── Half B: the per-client wrapper (NSIS, native) ─────────────────────
 
 _NSI_TEMPLATE = os.path.join(_REPO_ROOT, 'desktop', 'installer.nsi.tmpl')
+
+# Per-target installer identity. 'full' values are the historical ones —
+# its rendering stays behavior-identical to the pre-parametrization
+# template (same name, dir, shortcuts, NO autostart: a user-present tray
+# app does not need one). 'agent' gains the default-ON autostart section
+# (owner amendment ① — an unattended relay must survive reboots); the
+# Run VALUE NAME must equal desktop/agent_launcher.py's _RUN_VALUE (the
+# tray toggle and the installer write the same key — parity-pinned).
+_NSI_TARGETS = {
+    'full': {
+        'app_name': 'Tofu',
+        'app_exe': 'Tofu.exe',
+        'install_dir': 'Tofu',
+        'setup_prefix': 'Tofu-Setup',
+        'label': 'Windows installer',
+        'kind': 'full',
+        'autostart_value': '',
+    },
+    'agent': {
+        'app_name': 'Tofu Agent',
+        'app_exe': 'TofuAgent.exe',
+        'install_dir': 'TofuAgent',
+        'setup_prefix': 'TofuAgent-Setup',
+        'label': 'Windows agent installer',
+        'kind': 'agent',
+        'autostart_value': 'TofuAgent',
+    },
+}
+
 _NSI_PLACEHOLDERS = ('@APP_VERSION@', '@PAYLOAD_DIR@', '@OUT_FILE@',
-                     '@ASSET_DIR@')
+                     '@ASSET_DIR@', '@APP_NAME@', '@APP_EXE@',
+                     '@INSTALL_DIR_NAME@', '@COMPONENTS_PAGE@',
+                     '@INSTALL_REQUIRED@', '@AUTOSTART_SECTION@',
+                     '@AUTOSTART_UNINSTALL@')
 
 
 def _ensure_makensis(log_fh) -> str:
@@ -705,15 +737,44 @@ def _ensure_makensis(log_fh) -> str:
     return exe
 
 
-def _render_nsi(version: str, payload_dir: str, out_file: str) -> str:
+def _render_nsi(version: str, payload_dir: str, out_file: str,
+                target: str = 'full') -> str:
     """Render the NSIS template; every placeholder MUST be substituted."""
+    t = _NSI_TARGETS[target]
     with open(_NSI_TEMPLATE, encoding='utf-8') as f:
         text = f.read()
+    if t['autostart_value']:
+        # A default-ON optional section (no /o prefix): an unattended
+        # relay machine must come back after a reboot. HKCU ⇒ UAC-free,
+        # matching the per-user install. The quoted-exe data form is the
+        # same one agent_launcher._autostart_apply writes.
+        components_page = '!insertmacro MUI_PAGE_COMPONENTS'
+        install_required = '  SectionIn RO'
+        autostart_section = (
+            'Section "Start with Windows"\n'
+            '  WriteRegStr HKCU '
+            '"Software\\Microsoft\\Windows\\CurrentVersion\\Run" '
+            f'"{t["autostart_value"]}" \'"$INSTDIR\\${{APP_EXE}}"\'\n'
+            'SectionEnd')
+        autostart_uninstall = (
+            '  DeleteRegValue HKCU '
+            '"Software\\Microsoft\\Windows\\CurrentVersion\\Run" '
+            f'"{t["autostart_value"]}"')
+    else:
+        components_page = install_required = ''
+        autostart_section = autostart_uninstall = ''
     asset_dir = os.path.join(_REPO_ROOT, 'static', 'icons')
     text = (text.replace('@APP_VERSION@', version)
                 .replace('@PAYLOAD_DIR@', payload_dir)
                 .replace('@OUT_FILE@', out_file)
-                .replace('@ASSET_DIR@', asset_dir))
+                .replace('@ASSET_DIR@', asset_dir)
+                .replace('@APP_NAME@', t['app_name'])
+                .replace('@APP_EXE@', t['app_exe'])
+                .replace('@INSTALL_DIR_NAME@', t['install_dir'])
+                .replace('@COMPONENTS_PAGE@', components_page)
+                .replace('@INSTALL_REQUIRED@', install_required)
+                .replace('@AUTOSTART_SECTION@', autostart_section)
+                .replace('@AUTOSTART_UNINSTALL@', autostart_uninstall))
     missing = [p for p in _NSI_PLACEHOLDERS if p in text]
     if missing:
         raise RuntimeError(f'NSI placeholders left unrendered: {missing}')
@@ -734,27 +795,31 @@ def _write_preseed(payload_dir: str, server_url: str) -> str | None:
 
 
 def wrap_payload(payload_tar: str, version: str, sha: str, log_fh, *,
-                 server_url: str = '', workdir: str | None = None) -> str:
-    """Half B: payload tarball → Tofu-Setup-<ver>-win64.exe in the store.
+                 server_url: str = '', workdir: str | None = None,
+                 target: str = 'full') -> str:
+    """Half B: payload tarball → <prefix>-<ver>-win64.exe in the store.
 
     Native steps only (untar / makensis) — the whole point of NSIS is
     that this half needs no wine. Recorded as source='built' so the
     selector prefers it over the mirrored release (built wins ties, and
-    our version is newer anyway).
+    our version is newer anyway); ``kind`` separates the two components
+    in the store (absent = 'full' for legacy entries).
     """
+    tgt = _TARGETS[target]
+    nt = _NSI_TARGETS[target]
     workdir = workdir or os.path.join(
         wintoolchain.rootfs_dir(), 'work', f'wrap-{int(time.time())}')
     payload_dir = os.path.join(workdir, 'payload')
     os.makedirs(payload_dir, exist_ok=True)
     _sh(f'tar xzf {payload_tar} -C {payload_dir} --strip-components=1',
         log_fh)
-    if not os.path.isfile(os.path.join(payload_dir, 'Tofu.exe')):
-        raise RuntimeError(f'payload has no Tofu.exe: {payload_tar}')
+    if not os.path.isfile(os.path.join(payload_dir, tgt['exe'])):
+        raise RuntimeError(f'payload has no {tgt["exe"]}: {payload_tar}')
     _write_preseed(payload_dir, server_url)
 
-    name = f'Tofu-Setup-{version}-win64.exe'
+    name = f'{nt["setup_prefix"]}-{version}-win64.exe'
     out_file = os.path.join(workdir, name)
-    nsi = _render_nsi(version, payload_dir, out_file)
+    nsi = _render_nsi(version, payload_dir, out_file, target)
     script = os.path.join(workdir, 'installer.nsi')
     with open(script, 'w', encoding='utf-8') as f:
         f.write(nsi)
@@ -771,9 +836,9 @@ def wrap_payload(payload_tar: str, version: str, sha: str, log_fh, *,
         for chunk in iter(lambda: f.read(1024 * 1024), b''):
             h.update(chunk)
     store.record_artifact({
-        'os': 'windows', 'arch': 'x86_64', 'label': 'Windows installer',
+        'os': 'windows', 'arch': 'x86_64', 'label': nt['label'],
         'filename': name, 'size': size, 'sha256': h.hexdigest(),
-        'source': 'built', 'version': version,
+        'source': 'built', 'version': version, 'kind': nt['kind'],
         'fetched_at': time.time(), 'git_sha': sha,
         **({'preseed': {'url': server_url}} if server_url else {}),
     })

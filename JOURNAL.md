@@ -1,3 +1,11 @@
+### 2026-08-02(autopilot「气泡落库却无 agent 回复」根修:discard_task 清理块孤悬死代码 25 天级误杀 follow-up) — owner 截图报 msb6ohqifdz7yj VU 气泡后对话死寂;commit `630b4af5`(2 文件 +7/−6);守卫测试红→绿,全守卫环 HEAD 5 红→2 红(残余=预存批污染对,已立案 `pt_788b25a5ce9c47e2` 不夹修)
+
+- **病灶定案(纯日志+blame 链):** 11:49:29 `Superseded (a newer task owns conv=msb6ohqi) just before follow-up spawn` ——但此刻根本没有任何新任务。真相:VU carrier(HB-1)把 `_conv_latest_task[conv]` 据为己有后,`discard_task` 的 docstring 承诺「清理它 claim 的索引项」,实现却只剩 registry pop——清理块在 commit `85b54bc8`(8-01 20:05 ③-3 tombstone)被插进函数体中部的 `make_task_abort_check` 切到了 `return _check` 之后,成为不可达死代码(blame 双锚:块归 d480479f、return 归 85b54bc8;`git show 85b54bc8^` 证原形态在 discard_task 尾部)。索引永远指向已死 carrier → 末检 `_successor_already_running` 假阳性 → run 以 reason='superseded' 收官、VU 气泡照落库、follow-up 不 spawn。10:36 重启载入坏代码后,每次 VU 轮必现。
+- **前端一切正常恰是症状的一部分:** 信号 30ms/侧栏无生成中/发送钮激活全部属实——后端已主动收官,没有任何任务可同步;done 帧无 autopilotNextTaskId,客户端正确地显示空闲。用户 11:55:50 手抄 VU 文本当真消息发出(task 5fd07a96)自救。
+- **修法:** 清理块归位 discard_task 尾部(恢复 d480479f 契约),死代码删除;顺带修批 11 裸数组迁移(api_ok 顶层 items)后同文件两测试的解包漂移(TypeError: string indices)。
+- **纪律:** failing-first 3 红(含守卫 test_discard_task_pops_registry_and_latest_index)→ 修复后 273 过;markers/yield 批跑污染对经 HEAD stash 基线批跑证为预存(HEAD 同红、隔离与三文件同跑全绿),独立立案不夹修。教训入记忆库:return 后孤儿块 AST 闸查不出,docstring 副作用必须有行为测试钉住。
+- **注意:** 运行中服务器仍带 bug,重启后生效;该会话 autopilot armed 标记仍在,下次发送/kick 即恢复正常接力。
+
 ### 2026-08-02(owner 三修订折入设计稿 v3:开机自启 / 版本漂移检测 / 会话边界 + 收编 egress 移交验收——A1 开工) — owner 签字设计阶段后补三硬需求;epic `pt_59b62951aad2463e`
 
 - **① 开机自启(relay 生死项,v1/v2 全漏):** 被控端头号场景=无人值守中继机,Windows Update 半夜重启即静默断桥。NSIS 加 components 页默认勾「Start with Windows」写 HKCU Run 键(模板本就 `RequestExecutionLevel user`,免 UAC),卸载器无条件清键;Inno 侧 `[Tasks]`+`[Registry] uninsdeletevalue` 等价;托盘加开关持久化 config 且每次启动 config→注册表对账;parity 契约钉「agent 默认 ON / 完整版不加」。

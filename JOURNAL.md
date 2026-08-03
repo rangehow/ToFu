@@ -1,3 +1,11 @@
+### 2026-08-03(owner 复核三枚全修:①致命——首启隧道 atexit 必死而 saved loopback 永久跳过阶梯,「开机自启」机器第二天必死无自愈;②LAN 响应器纯死代码;③隧道死磕 15000;修复后安装包二次重建) — epic `pt_59b62951aad2463e`;commit `d9b34c71`(6 文件)+ 构建 state=ok(git_sha `d9b34c71`);套件 **30+16+邻接 42 = 88 绿**;agent 烟雾 OK;server.py 编译过
+
+- **① 地雷定性(owner 擒获,我 P3 的假绿):** 首启 `try_ssh_tunnel` 赢的 ssh 子进程挂 `_ACTIVE_TUNNELS`,`_reap_tunnels` 注册在 **atexit**——进程一退隧道必死;但 `save_remote_server` 存的 `http://127.0.0.1:15000` 只有隧道活着才可达,而 `agent_launcher.main` 第二幕只见 url 非空就**整体跳过阶梯**——第二次开机轮询死端口,托盘 Connect 又不重跑阶梯,用户零自愈。安装器默认勾开机自启 ⇒ 验收当天绿、第二天必死。**根修(按 owner 处方):** `resume_attachment` 先探后信——`probe_server(saved)` 活则零动作;死才重跑阶梯;找到服务器**保留原 token**(bearer 凭证与可达地址无关),地址变了才写盘;阶梯也空→原样返回(服务器可能只是没开,轮询继续、托盘 unreachable 诚实呈现,绝不把用户弹回首启对话框)。
+- **② 死代码闭环:** `LanDiscoveryResponder` 全仓只有测试实例化——新增 `lan_ip()`(UDP connect 选路 trick,零流量)+ `maybe_start_responder(port, environ, bind)`(env=1 才启,无 LAN IP 静默),接进 `server.py::_start_background_workers` 尾部(读 `_TOFU_RUNTIME_PORT`,与 motion/research 恢复同族 try/except);随 P4 重启自然上线,off-by-default 不变。
+- **③ 端口候选:** `_tunnel_once` 单端口尝试拆出,`try_ssh_tunnel` 循环 (15000/15100/15200),占用端口先经免费 bind 探针**秒跳**(白嫖 ssh 8s 超时的时代结束)。
+- **测试账:** agent 套件 +12(resume 五态——活=零动作且禁阶梯/死=重指向且 token 不动/同址不重写/阶梯空=附着保留/隧道重建登记;端口三态——忙口跳次候选/全忙净 miss 且不 spawn/早夭逐口杀干净——旧「早夭杀进程」前提被候选循环打破,重钉为「每次尝试必收尸」);server 套件 +4(默认 off/非 '1' 变体全 off/启用即播 LAN URL 且线程活/无 IP 静默)。事故自记:resume 测试草稿误 patch 不存在的 `_pair.save_remote_server`(懒导入在 config)——setattr 不存在的属性直接 AttributeError,当场擒获改 patch 宿主模块。
+- **安装包二次重建(带外同法):** `3bbd60ee` 包带雷,`d9b34c71` 重包入店;PYZ 目录字节命中 `_pair` 同法可验。
+
 ### 2026-08-03(P4 前置就绪:受控端安装包重建入店——带 _pair.py 的 TofuAgent-Setup-0.16.0-win64.exe 53.16MB;API 被长轮询淹没改带外构建) — epic `pt_59b62951aad2463e`;构建 state=ok(git_sha `3bbd60ee`,cached:false,~3min)
 
 - **带外构建(环境挤压的工程解):** `POST /api/v1/desktop/build` 再试仍 20s 超时(1357 条长轮询 ESTABLISHED 的老问题);winbuilder 本是进程内 daemon 线程,唯一常驻路径就是服务器进程——改 `nohup python -c build_installer('p3-pairing','','agent')` 独立进程跑:state 与产物全在共享盘(data/desktop_toolchain + data/desktop_dist),服务器 GET /build 与面板读的是同一份落盘状态,带外与带内等价。单飞风险自知:服务器侧 kick 此刻不可达,无双跑源。

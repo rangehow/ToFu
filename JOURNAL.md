@@ -1,3 +1,10 @@
+### 2026-08-03(P1 落地:配对码 UX——lib/desktop/pairing + 双路由 + 组播发现响应器;设计稿 v4 落盘) — epic `pt_59b62951aad2463e`;commit `b0b42ff9`(5 文件);套件 **9+108 绿**;NEUTER 实证
+
+- **配对码 UX(§11 定案):** lib/desktop/pairing.py(6 位一次性码,300s TTL,单次消耗,3 次尝试锁)+ LanDiscoveryResponder(UDP 15001 广播响应器,opt-in);routes 双端点:`/api/v1/desktop/pair-code`(需认证,面板铸码)+ `/api/desktop/pair`(无需认证——码即凭证,与 `/api/desktop/poll` 同族);消费成功走 `create_key(agents:bridge)` 同铸造流。
+- **设计稿 v4 形态(三硬要求落盘):** ①阶梯式自动发现=loopback→LAN 广播→~/.ssh/config 候选→(全落空才问一次);SSH 自隧道降为阶梯一环。②双层优先级=per-user token-baked installer 为主路径(Phase 2 提前转正)+ 配对码为跨机/未烘焙兜底——配对码不是终点。③扩展中继=实测事实收进对比表(SSH 隧道 always-on+零新协议 vs 扩展中继需浏览器常驻+新中继协议);v1 不押其为唯一路径,P5 实测原型后定。owner 手动三步隧道验收(旧阻塞)在 v1 落地后整体作废,§11.6 明告。
+- **测试账:** 新套件 9 检查(铸造/消费/单次/锁-out/过期/用户域/鉴权/重复消费)+ LAN 响应器 3 检查;过期 NEUTER 钩出 Python 默认参数绑定陷阱(`mint_code(ttl=_CODE_TTL_S)` 在定义时绑定,monkeypatch 无效 → 改调用时读取)。邻接 108 绿。
+- **事故自记:** ①路由错插到 `def desktop_token_mint():` 装饰器与 def 之间,挤出的函数体含模块级 `return` → 整蓝图注册失败 → 404。教训:apply_diff 锚点选 `def X():` 时新内容插在 def 前,永远不在装饰器与 def 之间。②`api_not_found(status=409)` 硬编码 404 吞 status → 改用 `api_conflict`。
+
 ### 2026-08-04(预存红闭环:test_restart_smoke::test_sync_route_runs_under_quart——断言钉的是被 api-contract 批 11 有意迁移的裸数组契约;方向对齐而非代码迁就) — 脑派发接我自票 `pt_225df9a89fb14131` **DONE**;commit 见下(2 文件);restart 族 **28/28**
 
 - **定案(纯测试漂移):** 票面写的「测试 DB 缺 schema_meta/paper_library 表」是**伴随噪音**(测试 env 未建表,ERROR 日志但非致命)——真红的断言是 `isinstance(data, list)`;`/api/v1/chat/active` 在批 11(2026-08-01)已**有意**迁到 `api_ok({'items': …})` 信封(routes/chat.py 迁移注释 + static/js/api.js:921 前端配套解包俱在),返回 200 但载荷是信封,旧断言钉的是被取代的裸数组形状。与 segment_gate/open_conv_scroll_once 两票同族:测试滞后于有意契约迁移。

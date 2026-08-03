@@ -1,3 +1,10 @@
+### 2026-08-03(预存红闭环:test_bundle_manifest_parity——阅读体验 P2-P4 四文件入 deferred 清单但漏 dev-fallback 标签;修法=按清单同序补标签) — 脑派发接我自票 `pt_38989d40003948a2` **DONE**;commit 见下(2 文件);parity+bundle 族 **78/78**
+
+- **定案(纯漏配,非设计):** `paper/reading_xp.js`/`deepen.js`/`notes.js`/`focus_mode.js` 自阅读体验 P2-P4(`fe270ce9`…`7865fa34`)入 `_DEFERRED_FILES` 起就没有 index.html script 标签——bundle 构建成功时无感(strip→feature bundle 重建),但 dev-fallback(bundle 构建失败→按原始标签逐个加载)会静默丢整个 xp 轨(速览/专注/批注/深化四按钮全死)。parity 断言遇首个缺失即报,实测 4 个全缺(脚本复核)。
+- **修法:** 按 `_DEFERRED_FILES` 既有顺序把 4 个标签插回 `report.js` 与 `babel.js` 之间(reading_xp→deepen→notes→focus_mode,与清单同序),带 `onload/_onScriptError` 计数钩子与 `?v=20260803a`。反向边(stripped→必须 rebundled)因四文件本就在清单内天然保绿。
+- **环:** parity 18/18(原红 `test_every_manifest_file_has_dev_fallback_tag` 转绿)+ bundle 族(freshness/coverage/self_heal/corruption/concurrency/nonblocking/artifacts/scan_surface/model_caps)+ `test_frontend_paper_reading_xp` 共 **78/78**。
+
+### 2026-08-03(composer 左缘锁定:输入框对齐 avatar 线——margin 复演 chat-inner 居中数学 + rail 授权值经 RO 镜像 + drawer margin-right 同步;顺手修「发送键滑进固定抽屉底下」旧疾) — owner 截图指令「输入框左移对齐 avatar,turn ctx 列以后专门放别的」;commit 见下(4 文件);几何套件 **3/3**(432 行 19 计数全 0)+ 邻接环 **58/58**;NEUTER×2 各咬各的
 ### 2026-08-03(composer 左缘锁定:输入框对齐 avatar 线——margin 复演 chat-inner 居中数学 + rail 授权值经 RO 镜像 + drawer margin-right 同步;顺手修「发送键滑进固定抽屉底下」旧疾) — owner 截图指令「输入框左移对齐 avatar,turn ctx 列以后专门放别的」;commit 见下(4 文件);几何套件 **3/3**(432 行 19 计数全 0)+ 邻接环 **58/58**;NEUTER×2 各咬各的
 
 - **定案:** composer 自出生就 `margin:0 auto` 居中于整面板,宽面板下左缘在 avatar 线右 ~(band−872)/2(failing-first 实测 372/432 态偏 26–104px)——输入框在会话下方「游泳」,右侧 turn-ctx 列下方空间永远无法利用。根修=让 composer 坐在阅读列上:左缘=avatar 线、右缘=文本列右缘,全态成立。

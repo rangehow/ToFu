@@ -2120,6 +2120,12 @@
 <script defer src="static/js/paper/pdf_viewer.js?v=20260711a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/pdf_responsive.js?v=20260711a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/report.js?v=20260711a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<!-- reading-experience rail (P2–P4): seams INTO report.js → AFTER report.js,
+     BEFORE babel/paper-reader (mirrors _DEFERRED_FILES order). -->
+<script defer src="static/js/paper/reading_xp.js?v=20260803a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/paper/deepen.js?v=20260803a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/paper/notes.js?v=20260803a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
+<script defer src="static/js/paper/focus_mode.js?v=20260803a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/babel.js?v=20260711a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/library.js?v=20260713a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>
 <script defer src="static/js/paper/podcast.js?v=20260725a" onload="_onScriptLoad()" onerror="_onScriptError(event)"></script>

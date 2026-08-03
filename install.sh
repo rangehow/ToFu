@@ -1857,6 +1857,11 @@ fi
 if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
     step "Installing Playwright Chromium"
 
+    # Repo root — chromium_env.py lives there; the verification probes below
+    # import it. Defined unconditionally (set -u): the launch check runs on
+    # every OS, the shared-lib install is Linux-only.
+    _repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
     # On Linux, install Chromium's shared libs from conda-forge so that no
     # sudo / system packages are required. server.py / bootstrap.py export
     # $env_prefix/lib on LD_LIBRARY_PATH at startup (before any re-exec early
@@ -1887,10 +1892,32 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
             font-ttf-ubuntu
         )
         if ! conda install -n "$ENV_NAME" -c conda-forge --override-channels -y "${CHROMIUM_LIBS[@]}"; then
-            warn "Some Chromium shared-lib deps failed to install — browser may not launch"
-            info "You can retry manually: conda install -n ${ENV_NAME} -c conda-forge <packages>"
+            # One unavailable package must not forfeit the whole set. Measured
+            # 2026-08-03: this host had gbm/nss/fonts but NO libatk — an early
+            # group failure (or a list expansion that never re-ran) left the
+            # env permanently short, and every Chromium launch died on
+            # "libatk-1.0.so.0: cannot open shared object file".
+            warn "Group install failed — retrying per-package (best-effort)"
+            _chromium_lib_failures=()
+            for _pkg in "${CHROMIUM_LIBS[@]}"; do
+                if ! conda install -n "$ENV_NAME" -c conda-forge --override-channels -y "$_pkg"; then
+                    _chromium_lib_failures+=("$_pkg")
+                fi
+            done
+            if [[ ${#_chromium_lib_failures[@]} -gt 0 ]]; then
+                warn "Chromium shared-lib deps unavailable on this channel: ${_chromium_lib_failures[*]}"
+                info "You can retry manually: conda install -n ${ENV_NAME} -c conda-forge <packages>"
+            fi
+        fi
+        # Evidence check, not exit-code trust: the install only counts when a
+        # directory carrying the sentinel libs actually exists — the same
+        # probe chromium_env.chromium_lib_dirs() runs at server start.
+        if PYTHONPATH="${_repo_root}" python -c "import chromium_env, sys; sys.exit(0 if chromium_env.chromium_lib_dirs() else 1)" 2>/dev/null; then
+            ok "Chromium shared libs present in the env"
         else
-            ok "Chromium shared libs installed into conda env"
+            warn "No directory carrying Chromium GUI libs (libatk/libnss/libgbm) found in the env — browser will not launch"
+            warn "  Fix rootless: conda install -n ${ENV_NAME} -c conda-forge atk-1.0 at-spi2-atk at-spi2-core alsa-lib xorg-libxcomposite xorg-libxdamage xorg-libxfixes xorg-libxrandr libxkbcommon nspr nss mesa-libgbm-cos7-x86_64 fontconfig font-ttf-dejavu-sans-mono font-ttf-ubuntu"
+            warn "  Fix with root: sudo python -m playwright install-deps chromium"
         fi
     fi
 
@@ -1920,6 +1947,30 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
             ok "Playwright Chromium installed"
         else
             warn "Playwright Chromium install failed (non-critical — fetching still works via requests)"
+        fi
+        # Downloading the browser is not the same as being able to RUN it —
+        # prove it launches AND renders text now, while the message is still
+        # actionable (same check the uv fast path runs).
+        info "Verifying Chromium can actually launch..."
+        if PYTHONPATH="${_repo_root}" python - <<'PYEOF' 2>/dev/null
+import chromium_env
+chromium_env.ensure_chromium_env()
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    b = p.chromium.launch(args=['--no-sandbox'])
+    pg = b.new_page()
+    pg.set_content('<h1>x</h1>')
+    assert pg.evaluate(
+        "(()=>{const c=document.createElement('canvas').getContext('2d');"
+        "c.font='60px sans-serif';return c.measureText('x').width;})()") > 0, 'no fonts'
+    b.close()
+PYEOF
+        then
+            ok "Chromium launches and renders text"
+        else
+            warn "Chromium is installed but cannot launch/render on this host (missing system libs or fonts)."
+            warn "  Browser screenshots + JS-rendered fetch will be unavailable; plain HTTP fetching still works."
+            warn "  Re-run ./install.sh to retry the rootless shared-lib install, or with root: sudo python -m playwright install-deps chromium"
         fi
     fi
 else

@@ -91,11 +91,38 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+// Zero-input pairing: a zip downloaded from the server carries
+// bridge_preseed.json with a freshly-minted agents:bridge key + the server
+// URL the browser used to reach it. Adopt it ONLY into empty slots — a
+// user-configured value always wins, so re-downloading never clobbers a
+// working setup. An absent file (dev-loaded from the repo) is normal: skip.
+function adoptBridgePreseed(storageData) {
+  if (storageData.bridgeSecret && storageData.serverUrl) {
+    return Promise.resolve();
+  }
+  return fetch(chrome.runtime.getURL('bridge_preseed.json'))
+    .then((r) => (r && r.ok ? r.json() : null))
+    .then((pre) => {
+      if (!pre || typeof pre !== 'object') return;
+      if (!storageData.bridgeSecret &&
+          typeof pre.bridgeSecret === 'string' && pre.bridgeSecret) {
+        console.log('[Bridge] Adopting pre-paired bridge secret from the downloaded package');
+        setBridgeSecret(pre.bridgeSecret);
+      }
+      if (!storageData.serverUrl &&
+          typeof pre.serverUrl === 'string' && pre.serverUrl) {
+        console.log('[Bridge] Adopting pre-paired server URL:', pre.serverUrl);
+        chrome.storage.local.set({ serverUrl: pre.serverUrl });
+      }
+    })
+    .catch(() => { /* no preseed in this package — manual pairing still works */ });
+}
+
 function init() {
   // Generate or restore a stable client ID for per-device command routing.
-  // Also load the optional bridge secret (only needed when the server has
-  // TOFU_BRIDGE_SECRET configured for tunnel exposure).
-  chrome.storage.local.get(['clientId', 'bridgeSecret'], (data) => {
+  // Then adopt the download-time preseed (if any) BEFORE server detection,
+  // so a freshly-installed package pairs with zero user input.
+  chrome.storage.local.get(['clientId', 'bridgeSecret', 'serverUrl'], (data) => {
     if (data.clientId) {
       CLIENT_ID = data.clientId;
     } else {
@@ -105,7 +132,7 @@ function init() {
     BRIDGE_SECRET = data.bridgeSecret || '';
     console.log('[Bridge] Client ID:', CLIENT_ID,
                 BRIDGE_SECRET ? '(bridge secret configured)' : '');
-    autoDetectServer();
+    adoptBridgePreseed(data).then(autoDetectServer);
   });
 }
 

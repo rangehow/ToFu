@@ -28,6 +28,14 @@
 - **环:** 几何 3/3(432 行:左缘 0/宽度 0/tw 缺失 0/strip/chrome/gauge/nav 全 0);邻接 58/58(composer_floor+kinship+断点协调+coarse 逃逸+scroll_to_bottom 34;request_inspector_p6+滚动锚定族 19;turn_nav 5);bundle 族 44/45——1 红=`test_bundle_manifest_parity`(reading_xp.js 入 bundle 缺 dev-fallback 标签),**预存**(index.html/js_bundler.py 均未被本批触碰,HEAD 定义级复现),板票 `pt_38989d40003948a2`。
 - **真机验收:** 15999 临时服务器(TOFU_SKIP_LOCK)双宽度截图——1920 侧栏收拢:composer 左缘贴 avatar 线、右缘贴文本列右缘,rail 下方整列留白待用;1366 侧栏开(pane 1034<1056):rail 折叠进消息头,composer 左缘仍锁 avatar 线。
 
+### 2026-08-03(扩展下载即配对:bridge_preseed 烙进 zip,用户零输入 + libatk 走 conda 实测可行并落进安装脚本) — owner 两指令(「别让用户贴只有后端能铸的 key,下载时直接打进扩展」+「libatk 能不能 conda?行就进安装脚本」);commit 见下(chatui 7 文件 + tofu-search 1 文件);新套件 **6/6**(NEUTER 实证 5 红)+ 邻接环 **69/69**(bridge backoff/async_poll/queue_ttl/chromium_env×2/api-contract parity)
+
+- **扩展零输入配对(与桌面 agent preseed 同构):** `GET /api/browser/download` 打包时为**本次下载**现铸一把 `agents:bridge` key(secrets 哈希落盘,旧 key 永远无法再物化,故每次下载铸新 key)+ 以 `request.host_url` 为 serverUrl,注入 `browser_extension/bridge_preseed.json`;铸 key 失败 fail-open 退化为无 preseed 的 zip(弹窗字段留作修复路径,不挡下载)。`background.js` 新增 `adoptBridgePreseed`:**只填空槽**(bridgeSecret/serverUrl 已配置一律不动,重下载不砸好配置),先于 autoDetectServer 执行,无 preseed 文件(repo dev 载入)静默跳过。弹窗文案「required」改「pre-paired by the downloaded package」。
+- **libatk 定案(conda 可行,已实测三层证据):** ldd 实测无头 shell 缺 10 个 .so → 按单抓药 conda 装 tofu env(事务=10 新包+ca-certificates 补丁级,零移除)→ `chromium_env.chromium_lib_dirs()` 哨兵自动发现 → **生产路径点燃**(ensure_chromium_env→launch→渲染)'POOL_PATH_LAUNCH_OK 148.0.7778.96'。**本机已修复**;运行中服务器池 60s 失败冷却(playwright_pool.py:709)后下次启动尝试自愈,**无需重启**。
+- **历史坑形:** env 里 gbm-cos7/nss/部分字体是旧 build,atk/xorg/fontconfig 全缺——Step 8 组装原子失败或清单演化从未回流旧 env(装的机会只有首次 install)。修法(install.sh Step 8):组装失败→**逐包回退**(一个包下架不连坐全组)+ 哨兵证据验证(chromium_lib_dirs 同款探针,不信退出码)+ 下载后**点燃+字体渲染验证**(对齐 uv 路径既有检查);tofu-search install.sh 同步(conda-meta 门控,非 conda env 时指路 install-deps);chromium_env.py 修复提示对齐完整清单。全清单(含 mesa-libgbm-cos7)在本镜像 fresh-create 干跑可解。
+- **部署注记:** preseed 在 routes/browser.py——**重启前**从服务器下载的 zip 仍无 preseed(11:16 启动的旧码)。等重启的修复累计三枚:jsonify `d9f931b6`、429 `80431312`、本批 preseed。
+
+### 2026-08-03(error.log 全量审计 + 桥接 key 重铸:两枚修复卡在重启上,401 垃圾源消停) — owner 指令「查后端日志还有哪些要修」;纯审计批 + 1 枚 key(走服务器 API);curl 实测双绿
 ### 2026-08-03(error.log 全量审计 + 桥接 key 重铸:两枚修复卡在重启上,401 垃圾源消停) — owner 指令「查后端日志还有哪些要修」;纯审计批 + 1 枚 key(走服务器 API);curl 实测双绿
 
 - **审计结论(6.5 万行 error.log 按签名归组):** 无新的未修代码 bug。两枚已修未上线——①`d9f931b6`(15:55,jsonify NameError,blocking 路径 PUT/PATCH conversations 500)②**owner 复核时擒获我漏报的 `80431312`(12:34,429 无限重试「永不打断对话」owner 指令)**——运行中服务器 11:16 启动,两枚都没吃到;13:02 与 15:33–15:50 两轮饱和风暴实测仍是旧行为(120s budget 升级 + TURN AUTO-RETRY 3/3 封顶,全天 58 次轮重试、239 次饱和升级,但 3/3 后均恢复,无硬错误信封打断)。已修已验证:Bad range(a76340a4 后 11:00 起零复发)。环境类不动:cgroup 挤压/PG FUSE 断连(板票 pt_4d321fb8f1c2400c)/Bing 软封改版(20 次)/pymupdf4llm `min() empty`(上游边界,有 raw fallback)。**磁盘卫生:logs/ 已 12G**(app.log.2026-07-27 单日 9.1G、postgresql.log 1.4G 未轮转),owner 暂缓清理。

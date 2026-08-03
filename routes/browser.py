@@ -1,7 +1,9 @@
 """routes/browser.py — Browser Extension Bridge API."""
 
 import io
+import json
 import os
+import time
 import zipfile
 
 from flask import Blueprint, jsonify, request, send_file
@@ -108,12 +110,51 @@ def browser_post_result():
 # here since they're not JSON REST verbs.
 
 
+def _build_bridge_preseed():
+    """Mint a fresh bridge credential for THIS download and return the
+    preseed payload, or ``None`` when minting is impossible.
+
+    Owner directive 2026-08-03: the downloaded extension must pair with ZERO
+    user input — nobody should have to paste a key that only the backend can
+    mint. Same shape as the desktop agent's connection-line preseed: the zip
+    inherits the caller's download-time auth, so baking the credential in is
+    no wider a grant than the download itself.
+
+    A NEW key is minted per download (secrets are stored hashed, so an
+    existing key can never be re-materialised for packaging). Fail-open:
+    any mint failure degrades to a zip WITHOUT the preseed file — the
+    extension stays installable, the popup field remains as the repair path.
+    """
+    try:
+        from routes.api_v1.auth import current_auth
+        from lib.api_keys import create_key
+        from lib.log import audit_log
+        ctx = current_auth()
+        uid = (ctx.user_id if ctx and getattr(ctx, 'user_id', '') else '') or ''
+        row, token = create_key(
+            'browser-ext-preseed-%s' % time.strftime('%Y%m%d'),
+            scopes=['agents:bridge'], user_id=uid)
+        audit_log('browser_extension_preseed_minted',
+                  key_id=row.get('id'), user_id=uid)
+        return {
+            # The URL the user's browser just used to reach us — by
+            # definition the one the extension (same browser) can poll.
+            'serverUrl': request.host_url.rstrip('/'),
+            'bridgeSecret': token,
+        }
+    except Exception as e:
+        logger.warning('[Browser] bridge preseed mint failed (serving zip '
+                       'without it): %s', e)
+        return None
+
+
 @browser_bp.route('/api/browser/download', methods=['GET'])
 def browser_download():
     ext_dir = os.path.join(BASE_DIR, 'browser_extension')
     if not os.path.isdir(ext_dir):
         logger.warning('[Browser] download requested but extension directory not found: %s', ext_dir)
         return api_not_found('Extension directory not found')
+    preseed = _build_bridge_preseed()
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         for root, dirs, files in os.walk(ext_dir):
@@ -121,7 +162,11 @@ def browser_download():
                 fp = os.path.join(root, f)
                 arcname = os.path.join('browser_extension', os.path.relpath(fp, ext_dir))
                 zf.write(fp, arcname)
+        if preseed:
+            zf.writestr('browser_extension/bridge_preseed.json',
+                        json.dumps(preseed))
     buf.seek(0)
-    logger.info('[Browser] extension zip downloaded (%d bytes)', buf.getbuffer().nbytes)
+    logger.info('[Browser] extension zip downloaded (%d bytes, preseed=%s)',
+                buf.getbuffer().nbytes, bool(preseed))
     return send_file(buf, mimetype='application/zip', as_attachment=True,
                      download_name='browser_extension.zip')

@@ -192,11 +192,23 @@ lib/                   — Core business logic
                          → applier → storage. Whitelist auto-apply + ttl_days
                          revert. See routes/api_v1/optimizer.py (REST surface)
                          and lib/optimizer/actions/ for the action registry.
-  browser/             — Browser automation (advanced, playwright pool, queue, handlers)
+  browser/             — Browser BRIDGE to the user's real Chrome (NOT a server-side
+                         playwright pool — the server has NO runtime browser): extension
+                         command queue (queue/), agent tool handlers (handlers/),
+                         fetch_url_via_browser (fetch.py), cookie_capture → auth_sources.
+                         Rides the user's logged-in session via browser_extension/
+                         (27 commands: navigate/execute_js/click/type/wait_for_element…)
+                         over POST /api/browser/poll. Login-walled / risk-controlled
+                         site access is BROWSER-FIRST — see
+                         docs/SITE_KNOWLEDGE_LAYER_DESIGN.md.
   # NOTE: web search + fetch were EXTRACTED to the standalone `tofu_search`
   # package (orchestrator, engines, rerank, dedup, HTTP/HTML/PDF extraction,
   # content filter). They are NO LONGER in-tree; chatui seams via
   # lib/search_bridge.py + lib/tools/search.py / lib/tools/browser.py. See §11.
+  # Login-walled sites (XHS, sankuai): BROWSER-FIRST via BrowserProvider.scrape /
+  # browser fetch (live session beats cookie replay — replay from the server IP is
+  # THE risk-control trigger). auth_sources is evolving into the per-site registry
+  # ('internalize a site = append an entry') — docs/SITE_KNOWLEDGE_LAYER_DESIGN.md.
   mcp/                 — Model Context Protocol client, registry, config
   memory/              — Memory / stored-notes layer (storage, relevance, injection, tools).
                          MODEL-authored experience notes: flat *.md files at

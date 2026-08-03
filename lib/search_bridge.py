@@ -19,6 +19,7 @@ idempotent and degrades gracefully if any sub-system is unavailable.
 
 import os
 import re
+import time
 from urllib.parse import urlparse
 
 import lib as _lib
@@ -231,6 +232,83 @@ class _ChatuiBrowserProvider(tofu_search.BrowserProvider):
         except Exception as e:
             logger.error('[Bridge] browser fetch_html failed: %s', e, exc_info=True)
             return None
+
+
+    def scrape(self, url, *, wait_selector='', extractor_js='[]',
+               timeout=20, scrolls=0):
+        """Open ``url`` in a BACKGROUND tab of the user's real Chrome, wait for
+        the selector, run the extractor JS in-page, and return its JSON result.
+
+        tofu-search 0.7.0's browser-first engines (XHS search) call this to get
+        STRUCTURED data from pages that only render correctly inside the user's
+        live session. Composed entirely from existing bridge commands —
+        create_tab (background by default) → wait_for_element → scroll_page ×N
+        → execute_js → close_tab (always; a leaked tab is a bug on the user's
+        machine). Returns None on ANY path failure so the library falls back;
+        a [] from the page is returned verbatim (a REAL empty, not a failure).
+        """
+        if _is_browser_unrenderable(url):
+            logger.info('[Bridge] browser scrape SKIP (binary/PDF, would download to client) — %s',
+                        url[:100])
+            return None
+        try:
+            from lib.browser import is_extension_connected, send_browser_command
+        except Exception as e:
+            logger.debug('[Bridge] browser scrape import failed: %s', e)
+            return None
+        if not is_extension_connected():
+            return None
+        tab_id = None
+        try:
+            res, err = send_browser_command(
+                'create_tab', {'url': url, 'active': False},
+                timeout=max(timeout, 25))
+            if err or not isinstance(res, dict) or res.get('id') is None:
+                logger.warning('[Bridge] scrape create_tab failed for %s: %s',
+                               url[:80], str(err)[:200])
+                return None
+            tab_id = res['id']
+            if wait_selector:
+                wres, werr = send_browser_command(
+                    'wait_for_element',
+                    {'tabId': tab_id, 'selector': wait_selector,
+                     'timeout': max(timeout, 15) * 1000},
+                    timeout=max(timeout, 15) + 10)
+                if werr or not (isinstance(wres, dict) and wres.get('found')):
+                    # Slow/partial renders may still carry the data — extract anyway.
+                    logger.info('[Bridge] scrape selector %r not confirmed for %s — '
+                                'extracting anyway', wait_selector, url[:80])
+            for _ in range(max(0, int(scrolls))):
+                send_browser_command(
+                    'scroll_page',
+                    {'tabId': tab_id, 'direction': 'bottom', 'pixels': 3000},
+                    timeout=10)
+                time.sleep(1.2)   # human-ish pause; lets the lazy-load fire
+            res, err = send_browser_command(
+                'execute_js', {'tabId': tab_id, 'code': extractor_js},
+                timeout=max(timeout, 15))
+            if err:
+                logger.warning('[Bridge] scrape execute_js failed for %s: %s',
+                               url[:80], str(err)[:200])
+                return None
+            if isinstance(res, dict) and res.get('__error'):
+                logger.warning('[Bridge] scrape extractor raised in-page for %s: %s',
+                               url[:80], str(res.get('message'))[:200])
+                return None
+            logger.info('[Bridge] scrape OK for %s (%s)', url[:80],
+                        '%d items' % len(res) if isinstance(res, list)
+                        else type(res).__name__)
+            return res
+        except Exception as e:
+            logger.error('[Bridge] browser scrape failed: %s', e, exc_info=True)
+            return None
+        finally:
+            if tab_id is not None:
+                try:
+                    send_browser_command('close_tab', {'tabId': tab_id}, timeout=5)
+                except Exception as e:
+                    logger.debug('[Bridge] scrape close_tab failed (tab %s may leak): %s',
+                                 tab_id, e)
 
 
 # ═══════════════════════════════════════════════════════

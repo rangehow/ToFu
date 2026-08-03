@@ -1,3 +1,21 @@
+### 2026-08-03(站点知识层设计+P0 落地:浏览器优先固定管线——XHS 换路弃 cookie 回放 + fetch 双缝 BROWSER-FIRST + scrape 结构化原语) — 脑派发 epic `pt_650dbfe189a0435e`(owner 三指令:固定流程内化/安全门后置/批准 tofu-search 优化);tofu-search `ffa67e7`(0.7.0,7 文件 +361/−46)+ chatui 本批(7 文件);设计稿 `docs/SITE_KNOWLEDGE_LAYER_DESIGN.md`;环 tofu-search **80/80 + 全量绿**(2 枚 mcp 预存红经纯净 HEAD worktree 实证)、chatui **21/21 + installer/dist 43 绿**
+
+- **owner 三问答落稿:** ①「遇拦截能否固定流程自愈?」→ 分层固定管线:**第一分流「你有这个站的账号吗?」**(有=登录墙站点永远 BROWSER-FIRST,登录一次 cookie 永久免配置——浏览器自己签名;无=公共站点重试×3);②「美团/小红书 toggle 以后还要吗?」→ 变成**「内化站点注册表」的显示项**,设置里看得见的一个 toggle=一条注册表行,内化新站=追加一行,知识自动吃——策略、选择器、坑、验证结果全在那;③安全门后置,功能先行。
+- **P0 根修(小红书止血):** tofu-search `xhs.py` 弃「服务器无头池+导出 cookie 回放」(风控根因:headless 指纹+异地 IP 重放),改 `BrowserProvider.scrape()` 优先(后台 tab 真实 Chrome:原生登录态/页面自签名/同 IP 同指纹——owner 曾被官方警告的根治),池回放降为兜底;可用性=启用 AND (cookies OR 在线浏览器);`None=路径不可用→fallback`/`[]=真空→喂 1800s 冷却`语义全程分明。fetch 面同根同治:`fetch/core.py` 对 auth-source 域名**先浏览器后回放**,原「回放失败后再升级浏览器」被吞并(消灭双跳)。
+- **chatui 侧两件:** `_ChatuiBrowserProvider.scrape` 落地=**组合 5 个既有桥命令**(create_tab 后台→wait_for_element→scroll_page×N→execute_js→close_tab 必发),零扩展变更——owner 已装的扩展 v4.5.1 即插即用,无需 reload;requirements floor `>=0.6.1→>=0.7.0`(软 floor)。附:上一批遗留的 `docs/FETCH_IDENTITY_PATHS_DESIGN.md` 一并入库。**事故自记(共享树第三起):** 我先写的「扩展第 28 命令 cmd_scrape」实现(fetch.py/background.js/双测试)未提交即被兄弟清树动作整体抹掉(stash 无记录),兄弟随后按设计稿原意落地了 composite 版——**签名与 tofu-search 0.7.0 协议逐字兼容**(timeout/scrolls 全对齐),复核后收编更优解:composite 不需用户更新扩展,我的版本反而给真机冒烟加了 reload 门槛。教训钉死既有纪律「验证即提交」。
+- **CLAUDE.md 同步:** lib/browser 域描述纠正为「扩展桥,服务器无运行时浏览器」(27 命令不变,scrape=provider 侧组合);新增登录墙 BROWSER-FIRST 纪律段(回放=风控触发器,auth_sources 进化为逐站注册表,指设计稿)。
+- **测试账:** tofu-search 新套件 9 针(browser-first 路径/None vs [] 语义/池兜底/可用性矩阵/共享护栏/抽取器保真/无浏览器回退);fetch 排序针按新契约重钉(browser-first+subsumed);登录墙契约测试同向进化(假浏览器场景下不再断言二次升级)。chatui 侧收编兄弟套件 `test_browser_scrape_provider.py` 8 针(命令序列+后台 tab 不抢前台/close_tab 必发防泄漏/异常与传输错归零/扩展离线零命令/二进制不开 tab/选择器未确认仍尝试抽取)。failing-first 由 owner 原痛点天然满足;NEUTER 由路径选择断言天然覆盖。
+- **预存挂账:** tofu-search `test_mcp_tool_calls.py`(收集 ModuleNotFoundError)+ `test_mcp_server_smoke.py`(7 红)纯净 HEAD worktree 实证与本批无关(mcp 环境缺失族),未挂票。
+- **遗留切片(板票):** 设置页「内化站点」列表 UI(P2,docs §4.4);攻略老化 autofix(P3)。**真机冒烟属人域**(owner 在办公机 Chrome 登录态下跑一次 XHS 搜索即验收)。
+
+### 2026-08-03(预存红×18 根修:迁移期「用而不导」三枚真产品 bug——全局闸门 500→401 恢复 + save_conv 409 缝 api_payload 化 + AST 棘轮钉住全 bug 类) — 脑派发接我自票 `pt_551fc875f3034f38` **DONE**;commit `d9f931b6`(7 文件 +354/−17);环 **125/125 + 终批 150/150**
+
+- **定案(表面测试漂移,实测三真 bug + 一漂移):** 17 张 requires_auth 红的根因=`routes/api_v1/auth.py` 批 18(`67826416`)加 3 处 `api_error` 调用却未加导入——全局闸门的坏 token 401/无凭据 401/限流 429 全 NameError 成 500;`test_unknown_token_rejected` 同根。第二枚=`routes/conversations.py` `_Defer(jsonify,…)` 的 jsonify 从未导入——**生产实证 13:05:01 PUT /api/v1/conversations 500**(rev 冲突 409 变 500,前端 rebase 契约断裂;当日日志审计时亲见此 500 未识别)。第三枚=`routes/common.py` `_db_safe` 503 `database_busy` 路径 `api_error` 未导入(同类)。漂移=folders 生命周期测试两处裸数组断言(批 19 信封)。
+- **批 9 tripwire 的正当拦截(记档):** 初版修法给 conversations.py 补 jsonify 导入,`test_shipped_source_converted`(批 9 棘轮:禁 jsonify 名)立刻红——按 tripwire 意图改走正路:四个 409 站点收口到 `_json` 缝,缝体改走 `api_payload` 透传原语(payload 键逐字节顶层保留、4xx 附加 request_id,契约干净且前端 rebase 契约不变);`_Defer` 的 status kwarg 是记账位,api_payload 的 HTTP status 须走位置参(否则 _finish 嵌套元组)。
+- **守卫三层:** ①新套件 `test_routes_envelope_imports.py`——AST 棘轮:routes/** 任何 api_* 家族/jsonify 裸名引用必须可解析(模块级/函数级懒导入/本地定义皆可),钉住整个「用而不导」bug 类;含合成自证(vacuity guard:缺导入必咬、懒导入与本地绑定不误伤)——磁盘棘轮不能用 sys.modules NEUTER,自证即其 NEUTER。②husk 套件 +3 行为守卫(stale baseRev/空覆写/回归 PUT 各得 409 非 500)+`_defer_status` 物化语义对齐 `_finish`(helper 必须可调用)+NC-2(断 `_json` 缝→三 409 全红,200 对照绿)。③`test_db_safe_dual_mode.py` +503 信封行为测试(该套件此前只钉双模包装、从不触 `_handle` 路径——漏检根因)。
+- **事故自记(陷阱族第 7/8 起,memory `editing-traps-insert-anchor-and-neuter-restore` 已更新):** ①NEUTER 锚点 4 空格缩进作为 8 空格行子串被 splice 进 try 体 SyntaxError——锚点必须带完整缩进;②NC 两度不咬合:测试顶层 import 钉死原函数对象(须调用时新鲜导入)+ `_nc_harness` 预种原模块全局使「删 import」NEUTER 静默失效(须改赋值 `name=None`)+harness 不物化 helper 结构性漏检(须断言 callable)——三坑同批记档。
+- **预存挂账:** `test_code_quality` 4 红(silent-catch/raw-getLogger 族)经纯净 HEAD worktree 实证与本批无关,未挂票(长尾清扫面,待专项)。
+
 ### 2026-08-03(同任务错误孪生 fold:429 失败轮「双气泡」根修——一任务一 assistant 行,后端三件套) — owner 截图两问(conv `mscns5i0fcofgl`);commit `54aa57a5`(4 文件 +703/−32);新套件 **12 检查**(failing-first 精确红→绿,DB 驱动 settle 端到端);NEUTER×2 各咬各的;邻接环 **30 套件 206/206**
 
 - **病灶(全链日志+DB 取证):** 一轮流式部分内容(35字+8642 thinking+12 工具轮)后死于 429 saturation 的回合,在 DB 落成两个气泡——①后端自有槽位(msg1):部分内容+`finishReason='error'` 但**无错误信封**(content-guard 分支只写 finishReason/usage/_taskId,从不写 error);②前端重连占位(msg2):11:36:13 刷新铸的 tmp 占位,SSE LATE done 盖上 365-cycle 信封,11:38:30 `loadConvMsgs KEEPING local` 全量 PUT 推回入库。既有 `is_duplicate_task_twin` 因 twin 携带 keeper 缺失的终态事实而刻意保留这对(防藏终局),两个 half-truth 行固化。
@@ -1413,3 +1431,10 @@
 - **数字**: 农场 core **1,045,275 B**（sub-9 生产 1,274,221 → −229KB 压缩态），feature 1,012,458 B。**Epic-E 验收线 core ≤1.2MB 在农场已达成**——待提交 + 生产实测后按判读 complete。
 - **第三者插曲**: 提交前构建连环红两次——第一次是我自己 insert_content 又双写锚点（feature-loader.js 数组 `];` 重复，今日同类第六次，规矩：insert 的 content 绝不含锚文本与闭合符）；第二次 `ui/tool_rounds.js` 被第三方在飞编辑截断（3701 行 EOF 于块注释中），node --check 定位后等其完成自愈，非我文件零触碰。
 - **待办（msagblke 收尾）**: 联席提交（manifest+feature-loader+双套件）、runbook sub-10 段、账本行、生产实测 → Epic-E complete 判读。
+
+### 2026-08-03(key 成功率骤降定案:非 key 失效——AIGC 网关三连事故「kimi-k3 429 饱和 → 全网关 502 风暴 → kimi-k3 专线 401」+ 口径放大效应) — owner 截图三 key 成功率 40%/77%/10% 求根因;纯审计批,零产品代码;实测探针收官(18:35 全 200)
+
+- **时间线(全部今日口径,每日清零):** ①11:00–15:00 kimi-k3 项目级共享配额 429 饱和 ~520 次(499/518 打在 sankuai_key_1:kimi-k3,即 journal 已载的项目级 TPM 争用,不计失败);②**12:00–14:00 AIGC 网关大面积 502 共 813 次**——响应体为裸 `<html>` 错误页(LB/nginx 层,非 AIGC JSON),三 key × 全部 ~20 个模型均匀挨打(每 slot:model 15–61 次),网关级故障实锤;③16:04–17:24 kimi-k3 专线 401「无效的AppId」(14 次,key_1/key_0,ext.error.source=AIGC stage=validation)——同 key 其他模型同期正常=线路侧鉴权状态变化非 key 坏。
+- **口径放大(数字惨过体感的原因):** 成功率分母=尝试次数而非用户请求;502 窗口内调度轮换+重试,每次失败尝试 +1 failure,用户请求大多重试后成功。key_2 今日仅 79 次调用且 71 次恰集中在故障窗口 → 被砸成 10%。
+- **实测收官:** 18:35 对 key_1 探针 kimi-k3 + 对照模型均 200,三场均已自愈;统计明日 0 点自动清零,无需任何处置。
+- **设计缺口(板票待立):** is_gateway=True 的 5xx 走 record_outcome(failure) 会污染 key 健康列——网关级故障把全体 key 成功率同步砸低,指标丧失「识别坏 key」意义,可仿 contention_errors 单列。

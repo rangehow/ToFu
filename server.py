@@ -2473,6 +2473,19 @@ def _start_background_workers():
         mark_interrupted_podcasts()
     except Exception as e:
         _server_log.warning('[Server] podcast interrupted sweep failed: %s', e)
+    # Desktop-agent LAN discovery responder (design §11.2.1 rung B): opt-in
+    # via TOFU_DESKTOP_LAN_DISCOVERY=1. Without THIS call the responder class
+    # was dead code — only tests ever instantiated it, so the agent's LAN
+    # rung could never get an answer in production (owner review 2026-08-03).
+    try:
+        from lib.desktop.pairing import maybe_start_responder
+        _lan_responder = maybe_start_responder(
+            int(os.environ.get('_TOFU_RUNTIME_PORT') or '15000'))
+        if _lan_responder is not None:
+            _server_log.info('[Server] LAN discovery responder up on UDP '
+                             '15001 (%s)', _lan_responder.url)
+    except Exception as e:
+        _server_log.warning('[Server] LAN discovery responder failed: %s', e)
     return
 
 

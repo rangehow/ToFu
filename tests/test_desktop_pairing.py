@@ -270,3 +270,35 @@ class TestPairIpBudget:
         # …but a DIFFERENT IP exchanges the same code fine.
         assert self._consume(flask_client, code, ip='6.6.6.6') \
             .status_code == 201
+
+
+# ── 10: production wiring (owner review 2026-08-03) ──────────────────
+# The responder class used to be instantiated ONLY by these tests — no
+# caller in the server startup path meant rung B could never answer in
+# production. maybe_start_responder is the wiring; server.py calls it.
+class TestMaybeStartResponder:
+    def test_off_by_default(self):
+        assert pairing_mod.maybe_start_responder(15000, environ={}) is None
+
+    def test_flag_off_variants(self):
+        for v in ('', '0', 'yes', 'true'):
+            assert pairing_mod.maybe_start_responder(
+                15000, environ={'TOFU_DESKTOP_LAN_DISCOVERY': v}) is None
+
+    def test_starts_when_enabled_and_advertises_lan_url(self, monkeypatch):
+        monkeypatch.setattr(pairing_mod, 'lan_ip', lambda: '192.168.1.50')
+        res = pairing_mod.maybe_start_responder(
+            15000, environ={'TOFU_DESKTOP_LAN_DISCOVERY': '1'},
+            bind=('127.0.0.1', 0))
+        assert res is not None
+        try:
+            assert res.url == 'http://192.168.1.50:15000'
+            assert res._thread and res._thread.is_alive()
+        finally:
+            res.stop()
+
+    def test_no_lan_ip_stays_silent(self, monkeypatch):
+        monkeypatch.setattr(pairing_mod, 'lan_ip', lambda: '')
+        assert pairing_mod.maybe_start_responder(
+            15000, environ={'TOFU_DESKTOP_LAN_DISCOVERY': '1'},
+            bind=('127.0.0.1', 0)) is None

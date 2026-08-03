@@ -273,6 +273,59 @@ class LanDiscoveryResponder:
             self._sock = None
 
 
+def lan_ip() -> str:
+    """Best-effort primary LAN IPv4 for this host ('' when indeterminate).
+
+    The UDP "connect" trick sends NO traffic — it only makes the kernel
+    pick the outbound interface, whose address is what LAN peers should
+    use to reach us. TEST-NET-1 (192.0.2.1) is deliberately unroutable.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(('192.0.2.1', 80))
+            return str(s.getsockname()[0] or '')
+        finally:
+            s.close()
+    except OSError as e:
+        logger.debug('[DesktopPairing] LAN IP indeterminate: %s', e)
+        return ''
+
+
+def maybe_start_responder(port: int, environ=None,
+                          bind: tuple | None = None):
+    """Start the LAN discovery responder iff TOFU_DESKTOP_LAN_DISCOVERY=1.
+
+    Returns the running responder, or ``None`` when disabled / impossible.
+    This is THE wiring the class never had (owner review 2026-08-03: the
+    responder was only ever instantiated in tests, so rung B could never
+    answer in production) — server.py calls this from
+    ``_start_background_workers``. ``bind`` exists for tests (ephemeral
+    port); production keeps ``_LAN_BIND``.
+    """
+    env = os.environ if environ is None else environ
+    if (env.get('TOFU_DESKTOP_LAN_DISCOVERY') or '').strip() != '1':
+        return None
+    ip = lan_ip()
+    if not ip:
+        logger.warning('[DesktopPairing] LAN discovery enabled but no LAN '
+                       'IP could be determined — staying silent')
+        return None
+    responder = LanDiscoveryResponder('http://%s:%d' % (ip, int(port)),
+                                      bind=bind or _LAN_BIND)
+    if not responder.start():
+        return None
+    logger.info('[DesktopPairing] LAN discovery responder advertising %s',
+                responder.url)
+    return responder
+
+
+__all__ = ['generate_code', 'mint_code', 'consume_code', 'pending_codes',
+           'LanDiscoveryResponder', 'lan_ip', 'maybe_start_responder',
+           'ip_fail_budget_exceeded', 'record_pair_failure',
+           'record_pair_success',
+           '_CODE_TTL_S', '_MAX_ATTEMPTS', '_LAN_MAGIC', '_LAN_BIND',
+           '_IP_FAIL_BUDGET', '_IP_BLOCK_S']
 __all__ = ['generate_code', 'mint_code', 'consume_code', 'pending_codes',
            'LanDiscoveryResponder',
            'ip_fail_budget_exceeded', 'record_pair_failure',

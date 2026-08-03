@@ -241,12 +241,21 @@ def test_tunnel_probe_failure_kills_process():
 
 
 def test_tunnel_early_death_kills_process():
-    proc = _FakePopen([1])  # exits immediately (auth refused / bind failed)
+    spawned = []
+
+    def dying_popen(cmd, stdout=None, stderr=None):
+        p = _FakePopen([1])  # exits immediately (auth refused / bind failed)
+        spawned.append(p)
+        return p
+
     url = _pair.try_ssh_tunnel('codelab', timeout=2,
-                               _popen=lambda *a, **k: proc,
-                               _probe=lambda url, timeout=0: (True, ''))
+                               _popen=dying_popen,
+                               _probe=lambda url, timeout=0: (True, ''),
+                               _bind=lambda port: None)  # all ports "free"
     assert url == ''
-    assert proc.killed is True
+    assert len(spawned) == 3  # one attempt per candidate port
+    assert all(p.killed for p in spawned)
+    assert not any(p in _pair._ACTIVE_TUNNELS for p in spawned)
 
 
 def test_tunnel_spawn_failure_is_clean_miss():
@@ -336,3 +345,114 @@ def test_attachment_flow_cancel_stays_cancel(monkeypatch):
         cui, 'prompt_connect_line',
         lambda url, log=None: pytest.fail('cancel must not open the line dialog'))
     assert cui.prompt_attachment_flow('', log=None) is None
+
+
+# ── resume_attachment: probe-first resume (owner review landmine) ────────
+
+def test_resume_alive_is_zero_action(monkeypatch):
+    monkeypatch.setattr(_pair, 'probe_server',
+                        lambda url, timeout=0: (True, ''))
+    monkeypatch.setattr(
+        _pair, 'discover',
+        lambda log=None: pytest.fail('live attachment must not re-run the ladder'))
+    # save_remote_server is imported lazily INSIDE resume_attachment, so
+    # patch it at its home module.
+    import lib.desktop_agent.config as cfg
+    monkeypatch.setattr(cfg, 'save_remote_server',
+                        lambda u, s: pytest.fail('live attachment must not be re-written'))
+    assert _pair.resume_attachment('http://srv:15000', 'tok') == (
+        'http://srv:15000', 'tok')
+
+
+def test_resume_dead_repoints_and_keeps_token(monkeypatch):
+    monkeypatch.setattr(_pair, 'probe_server',
+                        lambda url, timeout=0: (False, 'unreachable'))
+    monkeypatch.setattr(_pair, 'discover',
+                        lambda log=None: 'http://10.0.0.9:15000')
+    import lib.desktop_agent.config as cfg
+    saved = []
+    monkeypatch.setattr(cfg, 'save_remote_server',
+                        lambda u, s: saved.append((u, s)) or {'url': u})
+    assert _pair.resume_attachment('http://127.0.0.1:15000', 'tok-keep') == (
+        'http://10.0.0.9:15000', 'tok-keep')
+    assert saved == [('http://10.0.0.9:15000', 'tok-keep')]
+
+
+def test_resume_dead_same_address_is_not_rewritten(monkeypatch):
+    monkeypatch.setattr(_pair, 'probe_server',
+                        lambda url, timeout=0: (False, 'unreachable'))
+    monkeypatch.setattr(_pair, 'discover',
+                        lambda log=None: 'http://127.0.0.1:15000')
+    import lib.desktop_agent.config as cfg
+    monkeypatch.setattr(cfg, 'save_remote_server',
+                        lambda u, s: pytest.fail('same address must not be re-written'))
+    assert _pair.resume_attachment('http://127.0.0.1:15000', 'tok') == (
+        'http://127.0.0.1:15000', 'tok')
+
+
+def test_resume_nothing_found_keeps_attachment(monkeypatch):
+    """A dead saved address with an empty ladder means the server is likely
+    OFF — the attachment (and its token) must survive, the poll loop keeps
+    retrying, and the user is NEVER bounced into a first-run dialog."""
+    monkeypatch.setattr(_pair, 'probe_server',
+                        lambda url, timeout=0: (False, 'unreachable'))
+    monkeypatch.setattr(_pair, 'discover', lambda log=None: '')
+    import lib.desktop_agent.config as cfg
+    monkeypatch.setattr(cfg, 'save_remote_server',
+                        lambda u, s: pytest.fail('no rewrite on a failed ladder'))
+    assert _pair.resume_attachment('http://127.0.0.1:15000', 'tok') == (
+        'http://127.0.0.1:15000', 'tok')
+
+
+def test_resume_triggers_tunnel_rebuild(monkeypatch):
+    """The landmine itself: saved loopback is dead after reboot, the ladder
+    re-runs, and the tunnel that comes back up is registered to stay alive."""
+    monkeypatch.setattr(_pair, 'probe_server',
+                        lambda url, timeout=0: (False, 'unreachable'))
+    proc = _FakePopen([None])
+
+    def fake_discover(log=None):
+        _pair._ACTIVE_TUNNELS.append(proc)  # what try_ssh_tunnel does on a win
+        return 'http://127.0.0.1:15000'
+
+    monkeypatch.setattr(_pair, 'discover', fake_discover)
+    url, secret = _pair.resume_attachment('http://127.0.0.1:15000', 'tok')
+    assert (url, secret) == ('http://127.0.0.1:15000', 'tok')
+    assert proc in _pair._ACTIVE_TUNNELS and proc.killed is False
+    _pair._ACTIVE_TUNNELS.remove(proc)
+
+
+# ── tunnel local-port candidates (owner hardening ③) ─────────────────────
+
+def test_tunnel_skips_busy_local_port():
+    proc = _FakePopen([None, None])
+    holder = {}
+
+    def fake_popen(cmd, stdout=None, stderr=None):
+        holder['cmd'] = cmd
+        return proc
+
+    def fake_bind(port):
+        if port == 15000:
+            raise OSError('address in use')
+
+    url = _pair.try_ssh_tunnel('codelab', timeout=2,
+                               _popen=fake_popen,
+                               _probe=lambda url, timeout=0: (True, ''),
+                               _bind=fake_bind)
+    assert url == 'http://127.0.0.1:15100'
+    assert '15100:127.0.0.1:15000' in holder['cmd']
+    _pair._ACTIVE_TUNNELS.remove(proc)
+
+
+def test_tunnel_all_ports_busy_is_clean_miss():
+    def busy_bind(port):
+        raise OSError('address in use')
+
+    called = []
+    url = _pair.try_ssh_tunnel('codelab', timeout=0.2,
+                               _popen=lambda *a, **k: called.append(1),
+                               _probe=lambda url, timeout=0: (True, ''),
+                               _bind=busy_bind)
+    assert url == ''
+    assert called == []  # ssh never spawned against a port it cannot bind

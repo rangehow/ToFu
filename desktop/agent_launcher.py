@@ -495,6 +495,19 @@ def main():
     except Exception as e:
         _log('Could not read attachment: %s' % e)
         url, secret = '', ''
+    if url:
+        # Resume path (owner review 2026-08-03): a saved address may only be
+        # reachable through an SSH tunnel that died with the last process
+        # (atexit _reap_tunnels) — trusting it blindly polled a dead port on
+        # every boot after the first, and autostart-on-install made that the
+        # NORMAL case. Probe first, trust second: the ladder re-runs only
+        # when the saved address is dead, and the token rides along (bearer,
+        # address-independent).
+        try:
+            from lib.desktop_agent._pair import resume_attachment
+            url, secret = resume_attachment(url, secret, log=_log)
+        except Exception as e:
+            _log('Attachment resume probe skipped: %s' % e)
     if not url:
         # Zero-question ladder (§11.2.1): loopback → LAN broadcast →
         # ~/.ssh/config self-tunnels. Whatever it finds pre-fills the

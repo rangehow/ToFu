@@ -220,17 +220,31 @@ def _reap_tunnels() -> None:
 atexit.register(_reap_tunnels)
 
 
-def try_ssh_tunnel(host: str, local_port: int = _DEFAULT_PORT,
-                   remote_port: int = _DEFAULT_PORT, timeout: float = 8.0,
-                   log=_noop_log, _popen=None, _probe=None) -> str:
-    """Rung C: open ``ssh -N -L <local>:127.0.0.1:<remote> <host>`` in
-    BatchMode (never prompts — a password-gated host simply fails fast)
-    and probe the loopback end for Tofu.
+def _local_port_busy(port: int, _bind=None) -> bool:
+    """Whether 127.0.0.1:<port> is already taken. A bind probe costs
+    nothing, so an occupied candidate is skipped INSTANTLY instead of
+    burning the ssh attempt's whole timeout on ExitOnForwardFailure."""
+    if _bind is not None:
+        try:
+            _bind(port)
+            return False
+        except OSError:
+            return True
+    import socket as _socket
+    s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    try:
+        s.bind(('127.0.0.1', port))
+        return False
+    except OSError:
+        return True
+    finally:
+        s.close()
 
-    On success the process is KEPT (the agent polls through it) and the
-    loopback URL is returned. On any failure the process is killed and ''
-    is returned. ``_popen`` / ``_probe`` inject fakes for tests.
-    """
+
+def _tunnel_once(host: str, local_port: int, remote_port: int,
+                 timeout: float, log, _popen, _probe) -> str:
+    """One ssh -N -L attempt on one local port. Win → process kept, URL
+    returned; any failure → process killed, ''."""
     popen = _popen or subprocess.Popen
     probe = _probe or probe_server
     url = 'http://127.0.0.1:%d' % local_port
@@ -264,6 +278,68 @@ def try_ssh_tunnel(host: str, local_port: int = _DEFAULT_PORT,
     return ''
 
 
+def try_ssh_tunnel(host: str, local_port: int = _DEFAULT_PORT,
+                   remote_port: int = _DEFAULT_PORT, timeout: float = 8.0,
+                   log=_noop_log, _popen=None, _probe=None, _bind=None) -> str:
+    """Rung C: ``ssh -N -L <local>:127.0.0.1:<remote> <host>`` in BatchMode
+    (never prompts — a password-gated host simply fails fast) and probe the
+    loopback end for Tofu.
+
+    The preferred local port is tried first (stable URL across reboots);
+    when it is busy, two alternates are tried — a machine with something
+    already on 15000 must not lose the whole rung (owner review
+    2026-08-03). Busy candidates are skipped by a free bind probe, so only
+    a genuinely attemptable port ever pays the ssh spawn + probe budget."""
+    for port in (local_port, local_port + 100, local_port + 200):
+        if _local_port_busy(port, _bind=_bind):
+            log('local port %d busy for the tunnel — trying next' % port)
+            continue
+        url = _tunnel_once(host, port, remote_port, timeout, log,
+                           _popen, _probe)
+        if url:
+            return url
+    return ''
+
+
+def resume_attachment(url: str, secret: str, log=_noop_log):
+    """Probe-first resume for a SAVED attachment. Returns ``(url, secret)``.
+
+    The landmine this defuses (owner review 2026-08-03): a tunnel that won
+    during first-run discovery was a child of the agent process, and
+    ``_reap_tunnels`` (atexit) kills it — so a saved loopback URL is a dead
+    port on EVERY subsequent boot, while the launcher used to skip the
+    ladder whenever any URL was saved. Autostart-on-install meant the very
+    machine that paired fine on day one came up dead on day two.
+
+    Contract:
+      * saved address answers → return it unchanged (zero action);
+      * saved address dead → re-run the ladder; when it finds the server,
+        KEEP THE TOKEN (a bridge token is a bearer credential — it does not
+        care which address reaches the server) and persist the re-pointed
+        address only when it actually changed;
+      * ladder finds nothing → return the saved pair UNCHANGED. The server
+        may simply be off right now; the poll loop keeps retrying and the
+        tray link line says 'unreachable' honestly. Never bounce the user
+        into a first-run dialog over a transient outage.
+    """
+    ok, _ = probe_server(url, timeout=3.0)
+    if ok:
+        return url, secret
+    log('Saved attachment %s is not answering — re-running discovery' % url)
+    found = discover(log=log)
+    if not found:
+        return url, secret
+    if found != url:
+        try:
+            from lib.desktop_agent.config import save_remote_server
+            save_remote_server(found, secret)
+            log('Attachment re-pointed: %s -> %s (token kept)' % (url, found))
+        except Exception as e:
+            log('Could not persist re-pointed attachment: %s' % e)
+            logger.warning('[Agent] could not persist re-pointed attachment: %s', e)
+    return found, secret
+
+
 def discover(log=_noop_log, lan: bool = True, ssh: bool = True) -> str:
     """Walk the ladder, cheapest rung first. Returns the first reachable
     Tofu base URL, or '' when every rung missed (the caller then asks the
@@ -287,4 +363,4 @@ def discover(log=_noop_log, lan: bool = True, ssh: bool = True) -> str:
 
 __all__ = ['exchange_pair_code', 'loopback_probe', 'lan_probe',
            'ssh_config_hosts', 'try_ssh_tunnel', 'discover',
-           '_ACTIVE_TUNNELS']
+           'resume_attachment', '_ACTIVE_TUNNELS']

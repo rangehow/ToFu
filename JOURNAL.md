@@ -1,3 +1,11 @@
+### 2026-08-03(预存红闭环:test_frontend_rendermessage_segment_gate——断言钉的是被 752927bd 有意废除的「抑制契约」;方向对齐而非代码迁就,我首版重钉亦踩懒加载现实) — 脑派发接我自票 `pt_d2e3c981493849cc` **DONE**;commit 见下(1 文件 +39/−8);本文件 1/1 + 邻接环 **60/60**(segment/thinking 族 12 套件)
+
+- **定案(纯测试漂移,非产品 bug):** 红的 `on_no_duplicate_standalone_thinking`(segments 在场时 standalone thinking 计数必须=0)钉的是旧「timeline 渲染即抑制 msg.thinking」契约;产品 commit `752927bd`(2026-07-23「stop dropping the TERMINAL thinking」)已**有意拆闸**——timeline 刻意跳过一切 terminal 段(tool_rounds.js:3074 `if (s.terminal) continue`),`msg.thinking`=终端轮推理,批后无段,从不内联——旧闸一在,每个多工具回合的终端推理被静默丢弃(conv mrx3tv0ha8ffkc「reasoning_content missing」的复发根因)。新契约由 test_frontend_terminal_thinking_render.py 钉死(NC:回加旧闸→块消失),本套件只是滞后未跟。
+- **修法(先例=「别搞开关,直接改测试」):** case-1 重钉为新契约——standalone 块恰一次(0=752927bd 丢弃回归,2+=真重复);块身份经标签字符元 `(24 chars)`(=msg.thinking.length)钉到 msg.thinking 字段;per-batch 推理在 timeline 内恰一次。「不重复思考」的原始意图以精确现代形态保留,docstring 补漂移史。
+- **我首版重钉亦错(记档):** 先加了「终端文本恰一次」两针即红——实测块体 `.thinking-text` **按设计发空**,文本在 toggle 时经 `_toggleThinking` 懒注水(兄弟套件早写明「that is HOW the terminal reasoning text reaches the DOM on toggle」)——终端字符串无内联出现可计数,改钉标签字符元证块身份。教训:给懒加载渲染面写断言,先看兄弟套件怎么钉同一面。
+- **NEUTER 实证(内存级,不动盘):** eval 源回加 `&& !_segTimelineRendered` → 恰两针新断言红、其余全绿、且旧断言在此产品 bug 下**反而会绿**——漂移实锤(旧断言把 bug 钉成正确)。
+- **环:** 本文件 1/1;邻接 segment/thinking 族 12 套件 60/60(terminal_thinking/segment_timeline/streaming_interleave/failed_turn_actions/trimmed_tail/thinking_swap/thinking_zone/segments_not_echoed/segments_cache_recovery/edit_realigns/paper_review_segments)。
+
 ### 2026-08-03(流式相位文本「✏️ Applying changes」三连根修:emoji 全族退役 + apply_diff 正名 Patching files + tool_exec 相位行只在真有工具在飞时渲染 + 相位标签 i18n 结构化) — owner 截图两问(「这是什么工具,为何只看到 read_files」「工具记录同步延迟也要修;打补丁就写打补丁,别用 emoji」);commit 见下(13 文件 + i18n.js 经兄弟 `88eb3302` 卷入);新套件后端 **6** + 前端 harness **+7**(failing-first 精确 10 红起步);NEUTER×5 各咬各的,并顺手擒 ReferenceError 隐患 1 枚;环 **159/159 + i18n 族 105/105 + 终批 46/46**
 
 - **病灶解剖(三个发射面共用一组标签):** ①`tool_dispatch/_labels.py::_TOOL_EXEC_LABELS` 全族带 emoji,apply_diff 叫「Applying changes」——打补丁不说打补丁;②`emit_tool_exec_phase` 的 tool_exec 相位在「工具全部落定→下一轮相位抵达」窗口期成为**陈旧相位**,前端 `!hasActiveSearch` 门放行渲染——工具已完工相位行仍称「正在修补」,用户对着已落定卡片找不存在的活动工具(「只看到 read_files」的真相);③`_emit_tool_round_phase` 的 toolContext 后缀把**上一轮**工具名以预拼接英文+emoji 字符串直出,中文 UI 里整条「正在分析结果…✏️ Applying changes」读起来像有工具正在跑。

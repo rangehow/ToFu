@@ -363,6 +363,10 @@ def test_live_retry_preserves_task_id(monkeypatch):
         def record_error(self, *a, **k): pass
 
     class _Dispatcher:
+        # ``slots`` mirrors the real LLMDispatcher surface — the dispatch
+        # loop's big-prefix gate counts keys per model off it (single key
+        # here → the gate is a no-op by design).
+        slots = [_Slot()]
         def summarize_slots(self, *a, **k): return 'slot'
         def pick_and_reserve(self, **k): return _Slot()
         def has_capable_slots(self, *a, **k): return True

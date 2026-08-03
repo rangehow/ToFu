@@ -1,3 +1,10 @@
+### 2026-08-03(chromium-libs 双 launcher 不变量闭环:supervisord conf 补 CHROMIUM_EXTRA_LIB_DIRS/fontconfig + parity 守卫钉两边同步;owner 复核擒获的结构性漏洞) — owner 指令三条;commit 见下(3 文件);新套件 **3/3**(NEUTER 精确 2 红)+ restart 族环 **27/28**(1 红=预存,板票 `pt_225df9a89fb14131`)
+
+- **漏洞(owner 擒获):** `deploy/supervisor/tofu.conf` 的 environment= 只有 PORT/BIND_HOST/HOME/LANG——而 restart_15000.sh 在 supervisord 接管时**拒绝运行**(mutex 守卫),一旦切到 supervisor 管理(documented durable 方向),CHROMIUM_EXTRA_LIB_DIRS 无任何路径进服务器,FUSE 修复静默蒸发且所有证据都指向「已修过」。
+- **修法:** conf environment= 补 `CHROMIUM_EXTRA_LIB_DIRS` + `FONTCONFIG_PATH`/`FONTCONFIG_FILE`(注释写明根因与双 launcher 同步义务);新守卫 `test_restart_chromium_libs_parity.py` 三针——restart 脚本导出覆盖值+发现约定、conf environment= 携带三变量、**两边指向同一库目录**($HOME/tofu-browser-libs/lib 约定,防一边改路径一边掉队)。NEUTER:回滚 conf → 恰 conf 两针红、脚本针绿。
+- **预存红(不属本批,已挂票):** `test_restart_smoke::test_sync_route_runs_under_quart`——测试 DB 缺 schema_meta/paper_library 表,stash 本批 conf 后同签名复现,板票 `pt_225df9a89fb14131`。
+
+### 2026-08-03(libatk 真根因改判:FUSE 坏窗口杀 .so 读取,不是缺包——本地盘库目录 + CHROMIUM_EXTRA_LIB_DIRS 启动接线;我上一批「本机已修复」被 owner 证据链推翻) — owner 复核指令四条;commit 见下(chatui 3 文件 + tofu-search 1 文件);验证 **ldd 10/10 干净 + 净环境发射+字体 10/10**
 ### 2026-08-03(libatk 真根因改判:FUSE 坏窗口杀 .so 读取,不是缺包——本地盘库目录 + CHROMIUM_EXTRA_LIB_DIRS 启动接线;我上一批「本机已修复」被 owner 证据链推翻) — owner 复核指令四条;commit 见下(chatui 3 文件 + tofu-search 1 文件);验证 **ldd 10/10 干净 + 净环境发射+字体 10/10**
 
 - **owner 擒获的误判:** 我上一批 conda「装进 env」在 conda-meta/history 里只 link 了 ca-certificates/certifi——atk 等 10 包**早已安装**(文件一直在 env/lib,May 10 是包构建 mtime)。三次「libatk cannot open」(12:41/18:44/22:47)与两次成功发射(12:36/19:03)在恒定进程环境下交替,唯一解释=env/lib 所在 **beegfs-fuse 间歇性读失败**(同 PG FUSE epic `pt_4d321fb8f1c2400c` 一族);我首次 ldd 撞上坏窗口(10 个 FUSE 库集体 not found,系统库全正常=签名)。当时唯一确定性来源是 /tmp 本地盘目录,被我当「清理」删了——本机实际与修复前同样脆弱。

@@ -1,3 +1,10 @@
+### 2026-08-03(本机控制面板两连修:轮询签名闸根治「展开几秒自动收起」+ local_source 双角色可见矩阵——owner 截图两指令) — epic `pt_59b62951aad2463e`;commit `dc19252e`(6 文件);环 **48+95 绿**(merge 45+agent_download 3 / bundle-manifest+i18n 覆盖+devices+dist);NEUTER×2 各咬各的;bundle-d9da6a64 / i18n-zh-90501953 重建入包实测
+
+- **病灶①(自动收起=轮询把整块 DOM 重写):** `_lcRefresh` 每 3s 跑 `_lcRenderDesktop` → 无条件 `setup.innerHTML = …` → 用户展开的 <details> 收起、刚生成的连接行消失。修法=**签名闸**(根因非补丁):渲染输入(setup_state/connected/server_url/双下载指纹/语言)未变则跳过重写,状态点/文字每拍照常更新;模态打开时重置签名。merge 套件 splice 表补 `_lcDesktopSignature`(否则 ReferenceError 全红——splice 按符号表抽函数,新模块级函数必须入册,教训记档)。
+- **病灶②(折叠逃生口被无视+文字墙):** local_source 改**双角色可见矩阵**——受控端块在前(lc-role-primary 高亮:角色名+一句注解+下载+生成连接行),完整桌面版块在后,零折叠;文字从 5 段压到 1 标题+2 注解。stale-while-build:无 agent 资产时铸行钮挂在完整版块上(完整版自带 agent,托盘可 Connect to remote),隧道用户永不落空。
+- **契约和解:** merge 套件 token 例外从「details 内」演进为「agent 角色块内」(owner 裁定覆盖 8-02 的折叠形态,测试明文记档);「每状态一个 lc-step」保持(role 头用 lc-role-head 非 lc-step);孤儿键 local.desktopSource 删除(tunnelToggle/tunnelHint 同批退役为 roleChoose/agentRole*/fullRole*);REQUIRED 派生钉补 AGENT 表(A2b 合流的 test_devices 滞后断言)。
+- **兄弟现场避让:** 图标角红×2=test_desktop_build_workflow.py 兄弟未提交 WIP(gen_desktop_icons.py 同 M,HEAD worktree 实证其测试 HEAD 不存在)——不夹修不动;启动角色 UX epic(兄弟 f16fdbb1)动过 tofu-agent.spec/烟雾闸,与我的 web 面板侧零冲突。
+
 ### 2026-08-03(启动角色 UX S2-S4 全量落地:角色窗双 App 上线 + 本机控制出托盘 + 规格/烟雾/文档收口——epic 关票) — 脑派发回执 owner 答「按稿全量实施 S1-S4」;epic `pt_6956ccfb605e497b` **DONE**;commit `f16fdbb1`(11 文件 +747/−7);环 **12 桌面套件 251 绿** + agent 源码烟雾 `TOFU_AGENT_SMOKE_OK` exit 0
 
 - **S2+S3 形态:** 新模块 `desktop/role_window.py`(connect_ui 单 authoring 模式)——纯构建器 `role_state_full`/`role_state_agent` 承载窗口每个事实(无头可测),门控 `should_show_at_startup` 读 config `show_role_window`(**缺席键=显示**:新装与「窗口前版本升级」长一个样,这两群人恰是窗口的受众;稿上「首启必弹」规则被此语义吸收,设计稿已注记),tk 渲染器懒导入+主题化+双语+单例重入(托盘「控制面板…」靠重入 lift)。**窗口不持状态**:每次 refresh 重拉 state_fn,每次变更委托给托盘同一批 handler(`_cc_state`/perms 活字典/autostart 缝)——是第二视图不是第二状态路,两面永不可能各说各话。完整版宣告「服务器」身份 + **dual_role 行**(同时受控于远程时明说——隧道事故盲区);受控端宣告「受控端」+所连服务器。两 launcher:icon.run() 前门控弹窗 + 托盘「控制面板…」回入口(agent 设为 default 项——它没有 web UI,面板即主面)。

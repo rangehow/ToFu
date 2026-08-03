@@ -379,11 +379,22 @@ html[data-rail] .folder-quickadd{display:none}
   margin:0 auto;
   padding:24px 24px 120px;
 }
-/* The rail column exists only when it fits: 820px measure + 52px row furniture
- * (40px avatar + 12px gap) + 24px gap + 232px rail + 48px padding = 1176px, so
- * a 1368px pane clears it with room to spare; below that the rail folds inline
- * under each message (see .turn-ctx rules) rather than being clipped. */
-@container chatpane (min-width: 1368px){
+/* The rail column exists only when it fits — and the grant threshold is
+ * DERIVED, not tuned. The geometry guard pins a 700px floor on the running
+ * text column (tests/test_turn_ctx_rail_geometry.py::_MIN_MEASURE_PX), so the
+ * smallest pane that can host the rail without starving the prose is
+ *   700 text + 52 row furniture (40px avatar + 12px gap) + 12 text→rail gap
+ *   + 232 rail + 48 padding = 1044px.
+ * The grant is set at 1056px (floor + 12px of rounding slack). At full
+ * comfort the same sum with the 820px measure cap is 1176px — the max-width
+ * above — so panes 1056–1175 get the rail with a 700–820px measure and no
+ * outer margin, and wider panes get the margin back. Below 1056px the rail
+ * folds inline under each message (see .turn-ctx rules) rather than being
+ * clipped. The previous 1368px threshold was full-comfort PLUS a 192px
+ * luxury buffer, which disenfranchised every pane in 1056–1367 — e.g. a
+ * ~1365px pane at 100% zoom lost the rail entirely and only re-gained it at
+ * 80% zoom (the 2026-08-03 report). */
+@container chatpane (min-width: 1056px){
   .chat-inner{ --rail-w:232px; --rail-gap:24px; }
 }
 
@@ -15551,6 +15562,8 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    beside it. One rule is what stops that recurring; .lc-substep differs in
    MARGIN only, so only margin is overridden below. */
 .lc-step,.lc-substep{font-size:12.5px;line-height:1.6;color:var(--text-secondary,#9898a8);margin:0 0 8px}
+.lc-warn{color:#e8a13c;border:1px solid rgba(232,161,60,0.35);border-radius:6px;padding:6px 9px;background:rgba(232,161,60,0.07)}
+.lc-await{color:var(--text-secondary,#9898a8);border-left:2px solid rgba(168,85,247,0.4);padding-left:9px}
 .lc-role{border:1px solid var(--border,rgba(148,148,168,0.18));border-radius:8px;padding:10px 12px;margin:0 0 10px}
 .lc-role-primary{border-color:rgba(168,85,247,0.45);background:rgba(168,85,247,0.05)}
 .lc-role-head{font-size:13px;font-weight:600;color:var(--text-primary,#e6e6ea);margin:0 0 7px}
@@ -20492,7 +20505,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
  * grid item in a zero-width track, so leaving it visible would smear it. */
 .chat-inner{ --rail-shown:0; }
 .turn-ctx{ display:none; }
-@container chatpane (min-width: 1368px){
+@container chatpane (min-width: 1056px){
   .turn-ctx{
     display:flex;
     flex-direction:column;
@@ -20636,7 +20649,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
 /* ── Fold: the rail's content as ONE line under the message header ──
  * Shown exactly when the rail track is absent (narrow pane, or the
  * inspector drawer is open). Guarantees the turn's context is never lost,
- * only compacted. */
+ * only compacted.
+ * DOM HOME: inside `.message-content`, between header and body — in-flow,
+ * the only place this rule's `margin-bottom` means anything. It used to
+ * ship as a direct `.message` grid child, where it auto-placed into the
+ * ZERO-WIDTH rail track and painted nothing (display:flex, width:0)
+ * whenever the rail was hidden — the exact state it exists for. Guarded by
+ * the width-aware fold assertion in tests/test_turn_ctx_rail_geometry.py. */
 .tctx-fold{
   display:flex;
   align-items:center;
@@ -20650,7 +20669,7 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
   text-overflow:ellipsis;
 }
 .tctx-fold .tctx-fold-dot{ width:5px; height:5px; border-radius:50%; background:var(--accent); flex:0 0 auto; opacity:.7; }
-@container chatpane (min-width: 1368px){
+@container chatpane (min-width: 1056px){
   .tctx-fold{ display:none; }
 }
 

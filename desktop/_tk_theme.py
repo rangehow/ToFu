@@ -221,6 +221,17 @@ STRINGS = {
         'en': 'Connect',
         'zh': '连接',
     },
+    'desktop.connect.verifying': {
+        'en': 'Verifying the server address…',
+        'zh': '正在验证服务器地址…',
+    },
+    'desktop.connect.verifyFailed': {
+        'en': 'Cannot reach Tofu there: {reason}. If a proxy/SSO gateway '
+              'intercepted it, use the ssh-tunnel address from the panel. '
+              'Press Connect again to save anyway.',
+        'zh': '连不上服务器：{reason}。若是代理/SSO 拦截，请换面板里用隧道'
+              '地址生成的连接行；再点一次「连接」强制保存。',
+    },
     'desktop.comp.postgresql.name': {
         'en': 'PostgreSQL Database',
         'zh': 'PostgreSQL 数据库',
@@ -314,6 +325,34 @@ STRINGS = {
     'desktop.tray.controlPanel': {
         'en': 'Control panel…',
         'zh': '控制面板…',
+    },
+    'desktop.tray.linkState': {
+        'en': 'Link: {status}',
+        'zh': '链路：{status}',
+    },
+    'desktop.tray.stOk': {
+        'en': 'connected',
+        'zh': '已连上',
+    },
+    'desktop.tray.stAuth': {
+        'en': 'auth failed — the token in the connect line is wrong',
+        'zh': '鉴权失败——连接行里的密钥不对',
+    },
+    'desktop.tray.stProxy': {
+        'en': 'blocked by a proxy/SSO gateway — use the tunnel address',
+        'zh': '地址被代理/SSO 拦截——请换隧道地址',
+    },
+    'desktop.tray.stUnreachable': {
+        'en': 'server unreachable (tunnel down?)',
+        'zh': '连不上服务器（隧道没开？）',
+    },
+    'desktop.tray.stHttp': {
+        'en': 'server answered HTTP {code}',
+        'zh': '服务器返回 HTTP {code}',
+    },
+    'desktop.tray.stStarting': {
+        'en': 'connecting…',
+        'zh': '连接中…',
     },
     # ── Startup role window (desktop/role_window.py) ──
     # Both launchers show this window at startup so the machine's ROLE is

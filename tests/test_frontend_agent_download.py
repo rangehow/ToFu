@@ -193,6 +193,52 @@ _lcRenderDesktop({ connected: true, setup_state: 'connected',
 check('state_change_still_rerenders',
   document.getElementById('lcDesktopSetup').innerHTML === '');
 
+// ── 6. mint-context diagnosis (owner incident 2026-08-03: a proxy-URL
+// connect line polled an SSO wall for hours, panel said nothing) ──
+const PROXIED = { connected: false, setup_state: 'remote',
+  download_url: 'https://github.com/x/y/releases/latest',
+  server_url: 'https://5665bc99-vscode-zw05.mlp.sankuai.com/',
+  server_url_reachability: 'public',
+  downloads: [FULL], agent_downloads: [AGENT] };
+_lcRenderDesktop(PROXIED, null);
+const html6 = document.getElementById('lcDesktopSetup').innerHTML;
+check('proxy_warn_shown_for_public_host', html6.includes('代理地址'));
+check('proxy_warn_names_tunnel', html6.includes('127.0.0.1:15000'));
+check('proxy_warn_before_mint',
+  html6.indexOf('代理地址') < html6.indexOf('lcMintBtn'));
+// loopback/private hosts are fine — no false alarm.
+_lcRenderDesktop({ connected: false, setup_state: 'remote',
+  download_url: '', server_url: 'http://192.168.1.10:15000/',
+  server_url_reachability: 'private',
+  downloads: [FULL], agent_downloads: [AGENT] }, null);
+check('no_proxy_warn_for_private_host',
+  !document.getElementById('lcDesktopSetup').innerHTML.includes('代理地址'));
+// minted-but-nothing-arrived: the failure is downstream of the copy — say so.
+_lcRenderDesktop({ connected: false, setup_state: 'remote',
+  download_url: '', server_url: 'http://192.168.1.10:15000/',
+  server_url_reachability: 'private', bridge_tokens_issued: 2,
+  downloads: [FULL], agent_downloads: [AGENT] }, null);
+const html6b = document.getElementById('lcDesktopSetup').innerHTML;
+check('awaiting_hint_when_tokens_but_no_agent',
+  html6b.includes('等待受控端连入'));
+// …but never cry wolf once connected, or before any token exists.
+_lcRenderDesktop({ connected: true, setup_state: 'connected',
+  bridge_tokens_issued: 2,
+  downloads: [FULL], agent_downloads: [AGENT] }, null);
+check('no_awaiting_hint_when_connected',
+  !document.getElementById('lcDesktopSetup').innerHTML.includes('等待受控端连入'));
+_lcRenderDesktop({ connected: false, setup_state: 'remote',
+  download_url: '', server_url: 'http://192.168.1.10:15000/',
+  server_url_reachability: 'private', bridge_tokens_issued: 0,
+  downloads: [FULL], agent_downloads: [AGENT] }, null);
+check('no_awaiting_hint_without_tokens',
+  !document.getElementById('lcDesktopSetup').innerHTML.includes('等待受控端连入'));
+// absent fields (an older server) must render NO diagnosis at all.
+_lcRenderDesktop(LOCAL_SRC, null);
+check('absent_fields_render_no_diagnosis',
+  !document.getElementById('lcDesktopSetup').innerHTML.includes('代理地址') &&
+  !document.getElementById('lcDesktopSetup').innerHTML.includes('等待受控端连入'));
+
 console.log(out.join('\n'));
 process.exit(0);
 """
@@ -225,7 +271,7 @@ def test_agent_download_matrix():
     output = _run_harness('normal')
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'agent download matrix failures:\n' + output
-    assert output.count('PASS') >= 28, f'expected >=28 PASS lines, got:\n' \
+    assert output.count('PASS') >= 36, f'expected >=36 PASS lines, got:\n' \
                                        f'{output}'
 
 

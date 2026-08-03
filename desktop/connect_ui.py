@@ -80,14 +80,35 @@ def prompt_connect_line(current_url: str = '', log=_noop_log):
                     justify='left')
     err.grid(row=4, column=0, columnspan=2, sticky='w', pady=(8, 0))
 
+    # A connect line that cannot connect is worse than none — the agent
+    # would poll a wall forever and the panel would sit on "not running"
+    # with no explanation (owner incident 2026-08-03: a proxy URL whose
+    # SSO edge 401s every request). Probe before saving; on failure keep
+    # the dialog open with the precise reason and let a SECOND click
+    # force-save (the server may legitimately be mid-restart).
+    probe_state = {'armed_for': None}
+
     def _ok(*_a):
         try:
-            result['value'] = parse_connect_line(entry.get())
+            parsed = parse_connect_line(entry.get())
         except ValueError as ve:
             # Keep the dialog open with a specific reason — silently closing
             # would leave the user unable to tell what was wrong.
             err.config(text=str(ve))
             return
+        raw = entry.get().strip()
+        if probe_state['armed_for'] != raw:
+            from lib.desktop_agent._probe import probe_server
+            err.config(text=theme.t('desktop.connect.verifying', lang))
+            root.update()
+            ok, reason = probe_server(parsed[0])
+            if not ok:
+                err.config(
+                    text=theme.t('desktop.connect.verifyFailed', lang)
+                    .replace('{reason}', reason))
+                probe_state['armed_for'] = raw
+                return
+        result['value'] = parsed
         root.destroy()
 
     def _cancel(*_a):

@@ -249,10 +249,15 @@ def _start_agent(state: dict, perms: dict) -> None:
     state['stop'] = stop
     url, secret = state['url'], state['secret']
 
+    def _on_status(st: dict) -> None:
+        state['last_status'] = st
+        _log('Link status: %s' % st)
+
     def _loop():
         try:
             run_agent(url, perms, poll_interval=1.0,
-                      bridge_secret=secret, stop_event=stop)
+                      bridge_secret=secret, stop_event=stop,
+                      on_status=_on_status)
         except Exception as e:
             _log('Agent loop crashed: %s' % e)
             logger.error('Agent loop crashed: %s', e, exc_info=True)
@@ -274,6 +279,35 @@ def _restart_agent(state: dict, perms: dict) -> None:
     _start_agent(state, perms)
 
 
+def _link_status_text(state: dict) -> str:
+    """The tray link line's ``{status}`` fill — one readable phrase per state.
+
+    States come from run_agent's on_status transitions; anything unknown
+    (including 'error', which carries a free-form detail) renders as the
+    detail itself so the menu never shows a raw code.
+    """
+    from desktop import _tk_theme as theme
+    lang = theme.detect_lang()
+    st = state.get('last_status') or {}
+    code = st.get('state')
+    if not code:
+        return theme.t('desktop.tray.stStarting', lang)
+    if code == 'ok':
+        return theme.t('desktop.tray.stOk', lang)
+    if code == 'auth':
+        return theme.t('desktop.tray.stAuth', lang)
+    if code == 'proxy':
+        return theme.t('desktop.tray.stProxy', lang)
+    if code == 'unreachable':
+        return theme.t('desktop.tray.stUnreachable', lang)
+    if code == 'http':
+        return theme.t('desktop.tray.stHttp', lang).replace(
+            '{code}', str(st.get('code') or '?'))
+    return str(st.get('detail') or code)[:80]
+
+
+def _run_tray(state: dict, perms: dict) -> None:
+    """The minimal tray: the whole configuration surface of this component."""
 def _run_tray(state: dict, perms: dict) -> None:
     """The minimal tray: the whole configuration surface of this component."""
     from desktop.connect_ui import prompt_connect_line
@@ -398,6 +432,14 @@ def _run_tray(state: dict, perms: dict) -> None:
         MenuItem(lambda item: _tt('desktop.tray.serverLabel',
                                   url=state.get('url') or
                                   _tt('desktop.tray.notAttached')),
+                 None, enabled=False),
+        # The link's live verdict — the line that would have told the owner
+        # "the proxy is eating your polls" in five seconds instead of after
+        # a server-side log dig (owner incident 2026-08-03). Transitions
+        # are pushed by run_agent's on_status; the label re-reads state on
+        # every menu open, so it is never more than a poll behind.
+        MenuItem(lambda item: _tt('desktop.tray.linkState',
+                                  status=_link_status_text(state)),
                  None, enabled=False),
         MenuItem(_tt('desktop.tray.connectDifferent'), on_connect),
         pystray.Menu.SEPARATOR,

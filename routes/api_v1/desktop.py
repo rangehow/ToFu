@@ -249,6 +249,55 @@ def _agent_server_url() -> str:
     return (request.host_url or '').rstrip('/')
 
 
+def _host_reachability(host: str) -> str:
+    """Whether an AGENT can use the address this request arrived on.
+
+    The connect line is minted from ``request.host_url`` — an address the
+    BROWSER demonstrably reaches. Under an SSO-fronted gateway (cloud-IDE
+    preview proxies, corporate IdP) the browser sails through on cookies
+    while the agent — which carries only a bridge token — is bounced at
+    the edge and never reaches Tofu. Measured 2026-08-03 (owner live):
+    the codelab preview proxy answered every /api/* with
+    ``401 {"error":"Unauthorized"}`` while access.log showed ZERO agent
+    polls — the owner had pasted a proxy-URL connect line and the agent
+    polled a wall, silently. The panel warns when the address it is about
+    to hand out is of that kind. 'public' is a heuristic (a public host
+    CAN be fine when nothing intercepts it), so the panel warns without
+    blocking the mint.
+    """
+    import ipaddress
+    h = (host or '').split(':')[0].strip().strip('[]').lower()
+    if h in ('', 'localhost', 'localhost.localdomain'):
+        return 'loopback'
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return 'public'
+    if ip.is_loopback:
+        return 'loopback'
+    if ip.is_private:
+        return 'private'
+    return 'public'
+
+
+def _caller_bridge_token_count(uid: str) -> int:
+    """How many agents:bridge tokens the caller has minted (metadata only).
+
+    Feeds the panel's waiting-diagnosis: tokens issued but zero agents
+    arrived ⇒ the line was minted, so the failure is downstream of the
+    copy — almost always the address half (a proxy URL the agent cannot
+    use), which is exactly what server_url_reachability flags.
+    """
+    try:
+        from lib.api_keys import list_keys
+        return sum(1 for k in list_keys()
+                   if _BRIDGE_SCOPE in (k.get('scopes') or [])
+                   and (k.get('user_id') or '') == (uid or ''))
+    except Exception as e:
+        logger.debug('bridge token count unavailable: %s', e)
+        return 0
+
+
 @api_v1_desktop_bp.route('/api/v1/desktop/status', methods=['GET'])
 @require_auth
 @api_meta(
@@ -308,6 +357,17 @@ async def desktop_status():
         'agent_downloads': _request_platform_downloads(_arch,
                                                        kind='agent'),
         'server_url': _agent_server_url(),
+        # Whether the address in server_url is one an AGENT can actually
+        # use — 'loopback' / 'private' are fine, 'public' means the
+        # browser arrived through a hostname that may be an SSO-fronted
+        # gateway (agents carry no SSO cookies and die at the edge). The
+        # panel warns on 'public' instead of silently minting a line the
+        # agent can never use (owner incident 2026-08-03).
+        'server_url_reachability': _host_reachability(request.host),
+        # Minted-but-nothing-arrived diagnosis: >0 with connected=false
+        # means the failure is downstream of the copy — the panel says so
+        # instead of leaving a dead "未运行" with no explanation.
+        'bridge_tokens_issued': _caller_bridge_token_count(_uid),
         # Whether an attaching agent must present a bridge credential
         # (TOFU_BRIDGE_SECRET configured → global secret or an
         # agents:bridge token; unset → open legacy, any/no secret

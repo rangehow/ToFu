@@ -2098,6 +2098,8 @@ var _i18n = {
   'local.agentStepAuto': { zh: '② 装完启动即可 —— 安装包已带服务器地址，会自动连上；此处状态变绿就是成功。', en: '2. Just install and run — the installer already carries this server\'s address and connects by itself; green status here means done.' },
   'local.fullVersionToggle': { zh: '这台电脑也想跑 Tofu 本体（服务器+界面）？下载完整桌面版', en: 'Want Tofu itself on this machine (server + UI)? Get the full desktop app' },
   'local.mintCopied': { zh: '连接行已复制 —— 粘贴到受控端的连接框即可', en: 'Connect line copied — paste it into the agent\'s connect box' },
+  'local.proxyWarn': { zh: '注意：你正通过代理地址访问本面板，受控端无法使用它连接（SSO 会拦截）。请改用 ssh 隧道地址（如 http://127.0.0.1:15000）打开本面板，再生成连接行。', en: 'Heads up: you are browsing through a proxied address — an agent cannot use it (SSO intercepts it). Open this panel via the ssh-tunnel address (e.g. http://127.0.0.1:15000) before generating the connect line.' },
+  'local.awaitingAgent': { zh: '已生成连接行，等待受控端连入……若受控端托盘里的服务器地址是代理域名，它连不进来：在托盘「连接」里换成本面板用隧道地址生成的连接行。', en: 'Connect line generated, waiting for the agent… If the server address in the agent\'s tray is a proxied hostname it cannot get through: replace it (tray → Connect) with a line generated from the tunnel address of this panel.' },
   'local.desktopDownload': { zh: '下载桌面版 ↗', en: 'Download the desktop app ↗' },
   'local.desktopDownloadFor': { zh: '下载桌面版', en: 'Download' },
   'local.desktopHosted': { zh: '服务器直连', en: 'server-hosted' },
@@ -2883,6 +2885,42 @@ var _i18n = {
     zh: '正在分析结果并规划下一步…（第 {round} 轮）',
     en: 'Analyzing results and planning next step… (round {round})',
   },
+  // Tool-exec phase row + round-open tool-context suffix. Composed
+  // client-side from the STRUCTURED tool-name lists the backend ships
+  // (phase.tools / phase.toolContextTools); the backend's English `detail`
+  // / `toolContext` strings remain the headless fallback. No emoji — the
+  // phase row renders its own SVG iconography (owner directive 2026-08-03).
+  'stream.phase.toolExec': {
+    zh: '正在{tool}…',
+    en: '{tool}…',
+  },
+  'stream.phase.toolExecMulti': {
+    zh: '正在执行 {n} 个工具：{tools}…',
+    en: 'Running {n} tools: {tools}…',
+  },
+  'stream.phase.toolContext': {
+    zh: '上轮：{tools}',
+    en: 'prev: {tools}',
+  },
+  // Per-tool labels keyed by raw tool name. An unmapped / future / custom
+  // tool falls back to its raw name (honest, never a raw i18n key).
+  'tool.label.join': { zh: '、', en: ', ' },
+  'tool.label.web_search': { zh: '搜索网络', en: 'Searching the web' },
+  'tool.label.fetch_url': { zh: '抓取网页', en: 'Fetching pages' },
+  'tool.label.read_files': { zh: '读取文件', en: 'Reading files' },
+  'tool.label.list_dir': { zh: '列出目录', en: 'Listing directory' },
+  'tool.label.grep_search': { zh: '搜索代码', en: 'Searching code' },
+  'tool.label.find_files': { zh: '查找文件', en: 'Finding files' },
+  'tool.label.write_file': { zh: '写入文件', en: 'Writing files' },
+  'tool.label.apply_diff': { zh: '修补文件', en: 'Patching files' },
+  'tool.label.apply_diffs': { zh: '修补文件', en: 'Patching files' },
+  'tool.label.insert_content': { zh: '插入内容', en: 'Inserting content' },
+  'tool.label.insert_contents': { zh: '插入内容', en: 'Inserting content' },
+  'tool.label.code_exec': { zh: '运行代码', en: 'Running code' },
+  'tool.label.bash_exec': { zh: '运行命令', en: 'Running command' },
+  'tool.label.create_memory': { zh: '保存记忆', en: 'Saving memory' },
+  'tool.label.activate_skill': { zh: '加载技能', en: 'Loading skill' },
+  'tool.label.ask_human': { zh: '请求你的输入', en: 'Asking for your input' },
   'stream.phase.waitingForModel': {
     zh: '已发送给 {model}，等待开始回复…',
     en: 'Sent to {model}, waiting for it to start replying…',

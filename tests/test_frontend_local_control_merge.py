@@ -138,6 +138,10 @@ _SHIPPED_SYMBOLS = (
     # The poll-signature gate (2026-08-03): _lcRenderDesktop calls it to
     # decide whether a repaint is warranted at all.
     "_lcDesktopSignature",
+    # The mint-context diagnosis pair (2026-08-03, proxy-URL incident):
+    # _lcRenderDesktop prepends their output in both mint-carrying
+    # branches, so the splice needs them or every test goes ReferenceError.
+    "_lcProxyWarnHtml", "_lcAwaitingAgentHtml",
 )
 
 

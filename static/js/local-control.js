@@ -80,7 +80,34 @@ function _lcDesktopSignature(d) {
   var lang = (typeof _i18nLang !== 'undefined') ? _i18nLang : '';
   return [d.setup_state, !!d.connected, d.server_url || '',
           d.bridge_token_required, fp(d.downloads),
-          fp(d.agent_downloads), lang].join('~');
+          fp(d.agent_downloads), lang,
+          d.server_url_reachability || '', d.bridge_tokens_issued || 0
+         ].join('~');
+}
+
+/* The mint-context diagnosis pair (owner incident 2026-08-03).
+ *
+ * The connect line's address half comes from request.host_url — an address
+ * the BROWSER reaches, which under an SSO-fronted gateway (cloud-IDE preview
+ * proxy, corporate IdP) is one an AGENT cannot: it carries no SSO cookies
+ * and is bounced at the edge, so its polls never reach Tofu and the panel
+ * sits on "未运行" forever with the toggle dead. The backend classifies the
+ * host (server_url_reachability); when it says 'public' we say the quiet
+ * part out loud BEFORE the user mints another unusable line. The mint is
+ * NOT blocked — a public host can be fine when nothing intercepts it. */
+function _lcProxyWarnHtml(d) {
+  if (!d || d.server_url_reachability !== 'public') return '';
+  return '<p class="lc-step lc-warn">' + _lcEsc(_lcT('local.proxyWarn',
+    '注意：你正通过代理地址访问本面板，受控端无法使用它连接（SSO 会拦截）。请改用 ssh 隧道地址（如 http://127.0.0.1:15000）打开本面板，再生成连接行。')) + '</p>';
+}
+
+/* Minted-but-nothing-arrived: tokens exist yet no agent polls. The copy
+ * happened, so the failure is the address half — say exactly that instead
+ * of leaving a dead toggle with no explanation. */
+function _lcAwaitingAgentHtml(d) {
+  if (!d || d.connected || !(d.bridge_tokens_issued > 0)) return '';
+  return '<p class="lc-step lc-await">' + _lcEsc(_lcT('local.awaitingAgent',
+    '已生成连接行，等待受控端连入……若受控端托盘里的服务器地址是代理域名，它连不进来：在托盘「连接」里换成本面板用隧道地址生成的连接行。')) + '</p>';
 }
 
 function openLocalControlModal() {
@@ -522,7 +549,7 @@ function _lcRenderDesktop(d, err) {
             mintSrcBtn +
           '</div>';
       }
-      setup.innerHTML = htmlSrc;
+      setup.innerHTML = _lcProxyWarnHtml(d) + _lcAwaitingAgentHtml(d) + htmlSrc;
       var mintSrc = document.getElementById('lcMintBtnSrc');
       if (mintSrc) {
         mintSrc.onclick = function () {
@@ -592,7 +619,7 @@ function _lcRenderDesktop(d, err) {
             _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
           '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>';
       }
-      setup.innerHTML = html;
+      setup.innerHTML = _lcProxyWarnHtml(d) + _lcAwaitingAgentHtml(d) + html;
       var mint = document.getElementById('lcMintBtn');
       if (mint) mint.onclick = function () { _lcMintToken(srv); };
       return;

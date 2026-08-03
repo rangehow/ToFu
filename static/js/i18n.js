@@ -1370,6 +1370,8 @@ var _i18n = {
   'settings.keyStatFailTip': { zh: '真正的调用失败次数（网络/5xx/解析错误等，不含 429）', en: 'Genuine call failures (network/5xx/parse errors, etc.; excluding 429)' },
   'settings.keyStat429': { zh: '限流 {n}', en: 'Limited {n}' },
   'settings.keyStat429Tip': { zh: '今日收到的 429 限流次数（不计入成功率，也不会自动停用）', en: '429 rate-limits today (excluded from success rate; never auto-disables)' },
+  'settings.keyStatGateway': { zh: '网关故障 {n}', en: 'Gateway {n}' },
+  'settings.keyStatGatewayTip': { zh: '今日网关/上游故障次数（502/503/504 等——上游生病而非本 key 失效；不计入成功率，也不会自动停用）', en: 'Gateway/upstream failures today (502/503/504 etc. — the upstream was sick, not this key; excluded from success rate and auto-disable)' },
   'settings.keyStatToggleTip': { zh: '今日启用/禁用此密钥（明日自动重置）', en: 'Enable/disable this key for today (auto-resets tomorrow)' },
   'settings.keyStatClearOverrideTip': { zh: '清除手动设置，恢复自动判定', en: 'Clear the manual override and revert to automatic judgment' },
   'settings.keyStatReset': { zh: '重置', en: 'Reset' },
@@ -1656,6 +1658,8 @@ var _i18n = {
   'settings.mhContention': { zh: '争抢 {n}', en: 'contention {n}' },
   'settings.mhReasonContention': { zh: '项目级争抢', en: 'shared contention' },
   'settings.mhContentionTip': { zh: '项目级共享额度被其他租户打满导致的 429 次数 — 外部争抢，不计入成功率', en: '429s caused by other tenants saturating the shared project quota — external contention, excluded from the success rate' },
+  'settings.mhGateway': { zh: '网关故障 {n}', en: 'gateway {n}' },
+  'settings.mhGatewayTip': { zh: '网关/上游故障次数（502/503/504、上游暂态等）— 上游生病，不计入成功率', en: 'Gateway/upstream failures (502/503/504, upstream transients) — the upstream was sick, excluded from the success rate' },
   'settings.mhRequestsTip': { zh: '本进程累计 {n} 次请求', en: '{n} requests this process' },
   // ── Visibility / model defaults (settings/visibility_defaults.js) ──
   'settings.vdNoIgModels': { zh: '未找到图片生成模型。请在服务商中添加具有 <code>image_gen</code> 能力的模型。', en: 'No image-gen models found. Add a model with the <code>image_gen</code> capability under a provider.' },

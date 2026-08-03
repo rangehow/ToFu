@@ -5461,6 +5461,18 @@ input.settings-mono {
   border: 1px solid #c2410c;
   border-radius: var(--s-radius);
 }
+.stg-keystat-gateway {
+  color: #475569;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  background: rgba(100, 116, 139, 0.12);
+  border: 1px solid #64748b;
+  border-radius: var(--s-radius);
+}
 .stg-keystat-err {
   color: #c0392b;
   font-size: 10px;

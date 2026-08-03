@@ -142,6 +142,13 @@ class Slot:
     # contention 429s crushed the card's success rate to 24% while the
     # genuine failure rate was ~1%).
     contention_errors: int = 0
+    # Gateway-class outages (HTTP 502/503/504, upstream-vendor transients
+    # wrapped in 4xx, mid-stream SSE errors). Counted separately for the
+    # same reason: a gateway storm hits EVERY key on the provider
+    # uniformly, so it says nothing about key health (2026-08-03 sankuai
+    # 502 storm: 813 such failures crushed the daily key-card success
+    # rates to 40%/77%/10% and auto-disabled 2 of 3 healthy keys).
+    gateway_errors: int = 0
     last_error_time: float = 0.0
     last_error_msg: str = ''
 
@@ -352,11 +359,14 @@ class Slot:
                 (2026-07-28 aggregating-gateway contract).
             is_gateway: True when the failure is an UPSTREAM outage class
                 (gateway 502/503/504, or an upstream-vendor transient wrapped
-                in a 4xx) rather than per-key contention. Such errors do not
-                feed the consecutive-429 telemetry streak in key_stats; they
-                are still recorded as ordinary failures via
-                record_outcome so the dead-key safety net (daily failure
-                stats) keeps working.
+                in a 4xx) rather than per-key contention. Such errors feed
+                NEITHER the consecutive-429 telemetry streak NOR the daily
+                failure stats — a gateway storm hits every key uniformly
+                and must never trip the auto-disable gate (2026-08-03
+                incident); they are counted on the separate
+                ``gateway_errors`` channel. The dead-key safety net lives
+                on the unchanged genuine-failure classes (401/403 auth
+                death, endpoint-unreachable).
             is_shared_contention: True when the 429 names a PROJECT-LEVEL
                 limit shared with other tenants of the gateway account
                 (RateLimitError.is_shared_contention). Counted into
@@ -374,6 +384,14 @@ class Slot:
                 # total_requests (record_request already added it) so the
                 # success-rate column reflects genuine outcomes only.
                 self.contention_errors += 1
+                self.total_requests = max(0, self.total_requests - 1)
+            elif is_gateway and not is_quota_exhausted:
+                # Gateway-class outage: the UPSTREAM is sick, not this key.
+                # Same accounting as contention — own counter + compensate
+                # the attempt out of total_requests — so an upstream storm
+                # never crushes the success-rate columns. A quota death
+                # keeps counting as a genuine error (billing is key health).
+                self.gateway_errors += 1
                 self.total_requests = max(0, self.total_requests - 1)
             else:
                 self.total_errors += 1
@@ -434,6 +452,18 @@ class Slot:
             # contention_errors counter above keeps the volume visible on
             # the model card.
             pass
+        elif is_gateway:
+            # Gateway-class outage — own daily counter ONLY. Feeding the
+            # failure stats here is what crushed all three sankuai key
+            # cards and auto-disabled two of them during the 2026-08-03
+            # 502 storm; feeding the 429 streak would equally misattribute
+            # an upstream outage to per-key contention.
+            try:
+                from lib.key_stats import record_gateway_error
+                record_gateway_error(self.provider_id, self.key_name,
+                                     reason=error or 'gateway 5xx')
+            except Exception as e:
+                logger.debug('[Slot] key_stats record_gateway_error failed: %s', e)
         elif is_rate_limit and not is_gateway:
             try:
                 from lib.key_stats import record_rate_limit
@@ -442,11 +472,12 @@ class Slot:
             except Exception as e:
                 logger.debug('[Slot] key_stats record_rate_limit failed: %s', e)
         else:
-            # Generic failure — and, since is_gateway=True also lands here,
-            # UPSTREAM outages too. record_outcome feeds the daily success-rate
-            # column (no auto-exhaust threshold), so the dead-key safety net
-            # keeps working while the consecutive-429 auto-exhaust streak is
-            # reserved for genuine per-key contention.
+            # Generic failure (auth death, endpoint-unreachable, hard 5xx
+            # that is not gateway-class). record_outcome feeds the daily
+            # success-rate column (no auto-exhaust threshold), so the
+            # dead-key safety net keeps working while the consecutive-429
+            # auto-exhaust streak is reserved for genuine per-key
+            # contention.
             try:
                 from lib.key_stats import record_outcome
                 record_outcome(self.provider_id, self.key_name,

@@ -1,3 +1,9 @@
+### 2026-08-03(P4 前置就绪:受控端安装包重建入店——带 _pair.py 的 TofuAgent-Setup-0.16.0-win64.exe 53.16MB;API 被长轮询淹没改带外构建) — epic `pt_59b62951aad2463e`;构建 state=ok(git_sha `3bbd60ee`,cached:false,~3min)
+
+- **带外构建(环境挤压的工程解):** `POST /api/v1/desktop/build` 再试仍 20s 超时(1357 条长轮询 ESTABLISHED 的老问题);winbuilder 本是进程内 daemon 线程,唯一常驻路径就是服务器进程——改 `nohup python -c build_installer('p3-pairing','','agent')` 独立进程跑:state 与产物全在共享盘(data/desktop_toolchain + data/desktop_dist),服务器 GET /build 与面板读的是同一份落盘状态,带外与带内等价。单飞风险自知:服务器侧 kick 此刻不可达,无双跑源。
+- **产物核验:** 店单 entries[0] git_sha=3bbd60ee/source=built/sha256=5989e316(旧 0e1658b2 被替);`_pair.py` 入包证据链=spec `collect_submodules('lib.desktop_agent')` 自动收全包子模块(同目录 _probe.py 同款机制,旧包已实证)+ 构建 boot smoke 过。版本号沿用 0.16.0 不 bump(项目惯例=同号重建,旧 0.16.0 本身就是 1a2cca6b 的重包)。
+- **P4 真机验收前还剩一枚人工:** 配对端点(P1 路由 b0b42ff9)与面板配对按钮(P2)在运行中服务器(11:16 启动)上**未上线**——需 owner 重启(服务器重启属人工闸门,agent 不自行);agent 安装包本身不依赖重启。
+
 ### 2026-08-03(P3 落地:agent 侧配对+阶梯发现——_pair.py(兑换+loopback/LAN/ssh 阶梯+BatchMode 自隧道保活)+ 配对对话框(地址预填可改+精确失败因)+ launcher 首启与托盘统一走 prompt_attachment_flow) — epic `pt_59b62951aad2463e`;新套件 **22 绿** + 邻接 **95+6 绿**;agent 源码烟雾 `TOFU_AGENT_SMOKE_OK commands=19`
 
 - **_pair.py(单模块「找+证+留」):** `exchange_pair_code`(POST /api/desktop/pair,无 bearer——409 invalid_code/429 rate_limited/http_n/transport 分类,代理 401 绝不报成「码错」);`discover()` 阶梯:loopback(1.5s)→ LAN 广播(UDP 15001 magic,响应先过 /api/health 再信——响应器 HMAC 本无共享密钥可验,probe 才是真验证)→ ~/.ssh/config 候选(跳过通配,去重,上限 3 个防首启卡分钟级);`try_ssh_tunnel`(BatchMode+ExitOnForwardFailure,赢则保活在 _ACTIVE_TUNNELS 供轮询走、atexit 收割,输则立杀)。

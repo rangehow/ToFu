@@ -190,10 +190,10 @@ knowledge.detail(P1)——P0 先把「拿不到」变成「拿得到」。
 
 | 期 | 内容 | 状态 |
 |---|---|---|
-| **P0** | scrape 原语 + XHS 搜索换路 + auth fetch browser-first + 设计稿 + CLAUDE.md 纠正 | **本批** |
-| P1 | 注册表泛化(auth_sources → 站点接入:strategy/knowledge/stats 字段 + UI 徽章与段落改名);`knowledge.detail` 结构化笔记提取;`scrolls` 懒加载;RECORD 台账落盘 | 待实施 |
-| P2 | 知识即数据:引擎读注册表 knowledge 而非内置常量,新站点接入零引擎改动;XHS 知识迁出为首个数据条目 | 待实施 |
-| P3 | 攻略作者 workflow(骑 `run_agent_loop` 底盘,charter 铁律):侦察→定策略→写知识→verify→回写注册表;扩展补网络拦截 + toString 伪装 | 待实施 |
+| **P0** | scrape 原语 + XHS 搜索换路 + auth fetch browser-first + 设计稿 + CLAUDE.md 纠正 | ✅(tofu-search `ffa67e7` 0.7.0 + chatui `88bf9c67`) |
+| P1 | 注册表泛化(auth_sources → 站点接入:strategy/knowledge/stats 字段 + UI 徽章与段落改名);`knowledge.detail` 结构化笔记提取;RECORD 台账落盘 | 待实施(板票 `pt_689b73b305fe4810`) |
+| P2 | 知识即数据:引擎读注册表 knowledge 而非内置常量 | **缝已交付**(P3 批提前落地:SiteKnowledgeProvider + lib/site_knowledge 覆盖式存储)。刻意偏离记档:XHS 内置选择器**保留在引擎代码**作保底,store 只放医生验证过的覆盖条目——内置永远是最新版本基线,覆盖条目只在其上生效;「迁出为首个数据条目」因此不做 |
+| **P3** | 攻略老化 autofix:漂移信号(anchors>0 但 0 卡片)→ site_doctor 骑 `run_agent_loop` 重侦察(inspect→try_extractor→**只钉验证过的参数对**;登录墙=give_up)→ 回写 lib/site_knowledge | ✅(tofu-search `ed9f7c2` 0.7.1 + chatui 本批)。**缓办记档**:扩展网络拦截 + toString 伪装——autofix 环不需要(composite 判例:组合既有 27 命令优先),且扩展是部署最慢一层;真正需要页内 hook 的站点出现时再立项 |
 
 ---
 
@@ -210,7 +210,11 @@ owner 2026-08-03 原话:「安全权限不重要,先把完整功能做对」。�
 ## 8. 测试与验收
 
 - tofu-search:`tests/test_xhs_browser_reroute.py`(换路顺序/None vs [] 语义/可用性新判定/护栏共存)
-  + auth browser-first 顺序测试;既有 `test_xhs_guard.py` 全绿(行为兼容)。
-- chatui:`tests/test_browser_scrape_provider.py`(命令组合序列/close_tab 必发/异常归零)。
+  + auth browser-first 顺序测试 + `tests/test_xhs_drift_signal.py`(知识覆盖/内
+  置保底/漂移发射语义/监听器吞异常/漂移仍喂退避/池路径保列表形)。
+- chatui:`tests/test_browser_scrape_provider.py`(命令组合序列/close_tab 必发/异常归零)
+  + `tests/test_site_doctor.py`(存储版本单调/空 extractor 拒钉/触发四闸——
+  env 杀开关/未知站/冷却/单飞/医生环骑 run_agent_loop:验证过才钉、钉错参数拒、
+  give_up 零写、异常永不 raise)。
 - 验收(真机):浏览器扩展在线 + XHS 已登录 → 搜索出卡片;笔记 URL fetch 出正文;
   扩展离线 → 自动回落旧路,日志可见。

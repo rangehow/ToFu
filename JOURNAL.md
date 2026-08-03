@@ -1,3 +1,11 @@
+### 2026-08-03(站点知识层 P3 落地:攻略老化 autofix 闭环——漂移信号→医生重侦察→只钉验证过的选择器,引擎下轮搜索即吃新知识) — 脑派发 epic `pt_7cee7904ffc143ca` **DONE**;tofu-search `ed9f7c2`(0.7.1,5 文件 +402/−9)+ chatui 本批(8 文件);环 tofu-search **30/30 + 全量绿**、chatui **102/102**(新套件 16 + 桥邻接/底盘/installer 86)
+
+- **闭环全链:** ①tofu-search `SiteKnowledgeProvider` 缝(逐站抽取知识=数据:wait_selector/extractor_js/scrolls,未钉则引擎内置常量保底——重钉选择器从此不发版)+ 漂移信号 `register_site_drift_listener`:浏览器路径抽取器包探针 `{items,probe}`,**页面渲染出笔记锚点(anchors>0)却抽到 0 张卡片=选择器漂移**,与真空(anchors==0)/风控墙(不渲染锚点)三分;监听器异常吞掉绝不炸搜索;漂移仍喂 1800s 退避(敲漂移的选择器也是敲账号)。②chatui `lib/site_knowledge.py`(覆盖式存储,json_store 原子写,version 单调,空 extractor 拒钉)+ `lib/site_doctor.py`:**骑 run_agent_loop 底盘**(charter 铁律,scene_author 形制),窄工具四件(inspect_search_page→try_extractor→pin_knowledge→give_up),**pin 闸:只接受与上一次 try_extractor 验证通过的逐字相同的参数对**;登录墙=give_up(重钉救不了账号);触发四闸(env 杀开关/未知站无 brief/3h 冷却/全舰队单飞);全程 audit_log,永不 raise。③`search_bridge` 接线(软 floor:旧库无缝不注册不炸),requirements floor `>=0.7.1`。
+- **刻意偏离设计稿记档(P2 半):** 「XHS 知识迁出为首个数据条目」不做——内置选择器留在引擎代码当**版本基线保底**,store 只放医生验证过的覆盖条目;P2 的「引擎读 knowledge 数据」缝由本批提前交付,剩余=注册表泛化 UI(板票 `pt_689b73b305fe4810` 仍开)。**缓办:** 扩展网络拦截+toString 伪装——autofix 环不需要(composite 判例,memory `bridge-composite-over-new-command`),真有页内 hook 需求再立项。
+- **事故自记(本批两起):** ①`_search_via_browser` 归一化把 scrape 的 `None`(路径不可用)归成 `([],None)`——None-vs-[] 契约反转,池兜底永不触发,reroute 套件既有针当场擒获(契约测试的价值实演);修=None 先透传再归一化,测试补钉。②insert_contents 误把新文本写进 `replace` 字段(content 留空)——插入变空行,读现场发现后 apply_diff 归位;**记档:insert_contents 只认 anchor+content,写前先核字段名。**
+- **测试账:** tofu-search 新套件 9 针(知识覆盖/内置保底/非法知识回落/漂移发射一次/真空不发/legacy 列表无探针不发/监听器炸不误搜索/漂移喂退避/池路径保列表形);chatui 新套件 16 针(存储 5 + 触发四闸 + 医生环 7:happy path 钉库/未验证拒钉/篡改参数拒钉/give_up 零写/环异常不 raise/未知站短路/shape 契约)。failing-first=tofu-search 新套件首跑即红(facade 未导新符号——修 `__init__.py`),两起事故均为红→绿实证。
+- **真机冒烟属人域:** 办公机 Chrome 登录态下,若 XHS 改 DOM 致搜索连续空→app.log 现 `SELECTOR DRIFT suspected`→医生自动重侦察钉新知识(或 give_up 记账)——全程无需人工;`TOFU_SITE_DOCTOR=0` 可整体关停。
+
 ### 2026-08-03(401/403 全池兜底:fallback 模型也死不打断回合——错误仅在全池 key 不可用时才上报) — owner 截图指令「为什么 401 直接打断而不是轮换到有权限的 key?只有所有 key 都不可用才该报错;能自动处理的就别增加用户认知负担」;epic `pt_f16423431ee54979` **DONE**;commit `790a1183`(6 文件 +835/−29);新套件×2 **16 检查**(HEAD worktree 负对照精确 12 红,4 张对照天然绿证无过杀);回归环 **62+41+67+153 绿**
 
 - **事故链(task 7ea8c25f,日志+配置取证):** 主模型失败 → 回退到配置的 fallback 模型 kimi-k3 → kimi-k3 被 `key_access` 钉死在**单把 key**(key_0/key_2 的 kimi-k3 wire id 显式 disabled_ids——「轮换到其他 key」在配置层面物理不存在)→ 唯一的 key_1 对 moonshot vendor 持久 401「无效的AppId」(per-(key,vendor) 权限,key_1 对 yuju-claude/glm/LongCat 同刻 err=0 健康)→ dispatch_stream 内 pair 排除后 `has_capable_slots` 不看 strict_model,池里陌生健康 slot 答 True 吊着循环,每 60s `maybe_reset_exclusions` 复活死 pair 白烧一次硬尝试,第 3 次后 exhausted(~2min)→ `_llm_call_with_fallback` 两跳用完直接打断——**而池内 yuju-claude-opus-5/LongCat-2.0/glm-5.1 等 slot 全部 err=0**。
@@ -1459,3 +1467,11 @@
 - **口径放大(数字惨过体感的原因):** 成功率分母=尝试次数而非用户请求;502 窗口内调度轮换+重试,每次失败尝试 +1 failure,用户请求大多重试后成功。key_2 今日仅 79 次调用且 71 次恰集中在故障窗口 → 被砸成 10%。
 - **实测收官:** 18:35 对 key_1 探针 kimi-k3 + 对照模型均 200,三场均已自愈;统计明日 0 点自动清零,无需任何处置。
 - **设计缺口(板票待立):** is_gateway=True 的 5xx 走 record_outcome(failure) 会污染 key 健康列——网关级故障把全体 key 成功率同步砸低,指标丧失「识别坏 key」意义,可仿 contention_errors 单列。
+
+### 2026-08-03(网关故障单列 gateway_errors:5xx 风暴不再污染 key 健康列——502 风暴曾把三把健康 key 中的两把自动禁用一天) — 脑派发接我自票 `pt_473805ad518b4ac4` **DONE**;commit `8e81fced`(11 文件 +490/−26;dispatcher.py 投影行被兄弟 `790a1183` 顺带提前入库);新套件 **12 检查**(failing-first 精确 6 红 5 错→绿);NEUTER×3 精确(各咬 4/4/2);环 **26+95+37 绿**
+
+- **事故回放(当日诊断批的后续):** sankuai AIGC 网关 12:00–14:00 大面积 502(813 次裸 `<html>` 错误页,三 key × 全部 ~20 模型均匀挨打)。`is_gateway=True` 走 `record_outcome(failure)` 的旧会计把日成功率砸到 40%/77%/10%,**并触发日自动禁用闸(≥5 尝试且 <50%)把 key_0/key_2 两把健康 key 禁用了一天**——「dead-key safety net」的原始理由被实证证伪:网关级故障均匀砸所有 key,日失败统计反成自动禁用扳机。
+- **根修(镜像 contention_errors 前例):** ①`Slot.record_error` is_gateway 且非 quota → 计 `gateway_errors` 不计 `total_errors`,尝试补偿出 `total_requests`,成功率列只反映真实结局;`consecutive_errors` 与 `'upstream'` 冷却不变(轮转仍需要);②key_stats 新通道 `record_gateway_error` 只喂日计数(纯遥测),不碰 failure/consecutive_429/last_error;③quota 优先级保持(计费停=真 key 健康);④全链投影(_query/dispatcher/dispatch_stats)+ 命名空间 fold;⑤前端 key 卡+模型卡「网关故障 N」chip(灰蓝,非 key 之过的语气)+ i18n 四键 + CSS。
+- **safety net 不稀释(契约和解记档):** 死 key 检测改由未动的真死亡类承载——401/403 鉴权死亡(PermissionError_→record_outcome)与 endpoint-unreachable(record_error(is_rate_limit=False))仍记真失败;`test_vendor_transient_dispatch` 两针按新契约重钉,意图句保留。
+- **共享树事故(新变体,已处置):** 兄弟 `790a1183` 用 pathspec 提交其 401/403 全池兜底时,把工作树里我未暂存的 dispatcher.py 投影行**顺带入库**(HEAD 一度处于「投影在、字段未在」半批态——若彼时重启,get_slots_info 必 AttributeError;本批提交后闭环)。我的 i18n.js/styles.css 与兄弟 hunk 同文件混杂,按「hunk 内容过滤 + `git apply --cached`」选择性暂存(2/7 与 1/6 hunk),兄弟改动分毫未动。教训:共享树写集隔离期,自己的改动应尽快暂存/提交,窗口越长被 pathspec 提交顺带卷走的概率越大。
+- **生效账:** 在跑服务器仍是旧码,修复随下次重启生效(人门)。今日已污染的成功率统计明日 0 点自动清零。

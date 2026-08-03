@@ -336,6 +336,32 @@ class _ChatuiAuthSourceProvider(tofu_search.AuthSourceProvider):
 
 
 # ═══════════════════════════════════════════════════════
+#  Site-knowledge seam — lib.site_knowledge (tofu-search >=0.7.1)
+# ═══════════════════════════════════════════════════════
+
+# Soft floor: on tofu-search <0.7.1 the base class does not exist; degrading
+# to `object` keeps this module importable and the provider simply never gets
+# registered (install guards with hasattr).
+_SiteKnowledgeBase = getattr(tofu_search, 'SiteKnowledgeProvider', object)
+
+
+class _ChatuiSiteKnowledgeProvider(_SiteKnowledgeBase):
+    """Routes tofu-search engine knowledge lookups to chatui's per-site store.
+
+    Entries are doctor-pinned OVERRIDES; absent → engine built-ins serve.
+    """
+
+    def get_knowledge(self, domain):
+        try:
+            from lib.site_knowledge import get_knowledge
+            return get_knowledge(domain)
+        except Exception as e:
+            logger.debug('[Bridge] site-knowledge lookup failed for %s: %s',
+                         domain, e)
+            return None
+
+
+# ═══════════════════════════════════════════════════════
 #  Config sync + install
 # ═══════════════════════════════════════════════════════
 
@@ -480,6 +506,16 @@ def install_search_bridge():
     if not _installed:
         tofu_search.register_browser_provider(_ChatuiBrowserProvider())
         tofu_search.register_auth_source_provider(_ChatuiAuthSourceProvider())
+        # tofu-search >=0.7.1: doctor-pinned selector knowledge + the drift
+        # signal that feeds the autofix loop (lib/site_doctor.py). Older
+        # libraries lack both entry points — the hasattr guards keep the
+        # soft-floor contract (feature inert, nothing crashes).
+        if hasattr(tofu_search, 'register_site_knowledge_provider'):
+            tofu_search.register_site_knowledge_provider(
+                _ChatuiSiteKnowledgeProvider())
+        if hasattr(tofu_search, 'register_site_drift_listener'):
+            from lib import site_doctor
+            tofu_search.register_site_drift_listener(site_doctor.on_site_drift)
         _installed = True
         logger.info('[Bridge] tofu-search bridge installed '
                     '(LLM=dispatch_chat, browser=extension, auth=auth_sources)')

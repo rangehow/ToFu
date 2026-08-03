@@ -209,6 +209,14 @@ lib/                   — Core business logic
   # browser fetch (live session beats cookie replay — replay from the server IP is
   # THE risk-control trigger). auth_sources is evolving into the per-site registry
   # ('internalize a site = append an entry') — docs/SITE_KNOWLEDGE_LAYER_DESIGN.md.
+  site_knowledge.py    — Per-site extraction knowledge store (doctor-pinned
+                         selector OVERRIDES; engines read via search_bridge's
+                         SiteKnowledgeProvider, built-ins serve when unpinned)
+  site_doctor.py       — Selector-drift autofix (P3): tofu-search emits drift
+                         (anchors>0 but 0 cards) → bounded run_agent_loop re-con
+                         (inspect → try_extractor → pin only the VERIFIED pair;
+                         auth wall = give_up) → pins lib/site_knowledge.
+                         TOFU_SITE_DOCTOR=0 kills; per-site cooldown 3h.
   mcp/                 — Model Context Protocol client, registry, config
   memory/              — Memory / stored-notes layer (storage, relevance, injection, tools).
                          MODEL-authored experience notes: flat *.md files at

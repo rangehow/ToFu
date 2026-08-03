@@ -1,3 +1,27 @@
+### 2026-08-03(启动角色 UX S2-S4 全量落地:角色窗双 App 上线 + 本机控制出托盘 + 规格/烟雾/文档收口——epic 关票) — 脑派发回执 owner 答「按稿全量实施 S1-S4」;epic `pt_6956ccfb605e497b` **DONE**;commit `f16fdbb1`(11 文件 +747/−7);环 **12 桌面套件 251 绿** + agent 源码烟雾 `TOFU_AGENT_SMOKE_OK` exit 0
+
+- **S2+S3 形态:** 新模块 `desktop/role_window.py`(connect_ui 单 authoring 模式)——纯构建器 `role_state_full`/`role_state_agent` 承载窗口每个事实(无头可测),门控 `should_show_at_startup` 读 config `show_role_window`(**缺席键=显示**:新装与「窗口前版本升级」长一个样,这两群人恰是窗口的受众;稿上「首启必弹」规则被此语义吸收,设计稿已注记),tk 渲染器懒导入+主题化+双语+单例重入(托盘「控制面板…」靠重入 lift)。**窗口不持状态**:每次 refresh 重拉 state_fn,每次变更委托给托盘同一批 handler(`_cc_state`/perms 活字典/autostart 缝)——是第二视图不是第二状态路,两面永不可能各说各话。完整版宣告「服务器」身份 + **dual_role 行**(同时受控于远程时明说——隧道事故盲区);受控端宣告「受控端」+所连服务器。两 launcher:icon.run() 前门控弹窗 + 托盘「控制面板…」回入口(agent 设为 default 项——它没有 web UI,面板即主面)。
+- **规格/烟雾:** tofu-agent.spec 桌面缝行 +tofu.spec 显式登记 `desktop.role_window`(原先靠静态分析,保险登记);agent 烟雾闸新增「控制面板必须随包」断言,源码实测 `TOFU_AGENT_SMOKE_OK version=0.16.0 commands=19`。
+- **S4 文档:** 双 README 组件表「无界面:托盘改连接」过时描述更正 + 角色窗说明段;desktop/README.md 首启体验章节;设计稿状态收尾。
+- **测试账:** 新套件 16 检查(角色句双语/dual_role/门控默认·持久·不压他键/接线棘轮三张);failing-first 16 红;NEUTER×3 精确(dual_role→恰好咬 dual 针、门控翻默认→恰好咬 absent 针、launcher 摘回入口→恰好咬 reentry 针)。**批跑 2 红(test_app_icon_*_transparent_corners)实证为兄弟 logo-redesign 并发生成图标的批跑互染**——套件独立 76/76,图标文件 HEAD 零改动,与本批无关,同类已有「预存批跑污染」板票族。
+- **事故自记(第六次同类):** insert_content 锚文本(quit 条目+闭合 })又写进 content → STRINGS 提前闭合 IndentationError,主题套件 28 红当场切除修复。**该陷阱已六次,记忆 `editing-traps-insert-anchor-and-neuter-restore` 在库仍犯——下次插入类编辑前先默念:content 里永远没有锚文本。**
+- **边界:** 与兄弟 epic pt_59b62951aad2463e(web 本机控制面板/安装包分发)写集零交;板上其余悬案(PG 播种、agent 真机验收)仍纯人门,与本 epic 无关。
+
+### 2026-08-03(调试面板「混入陌生工具」定案:面板无罪,卡片是 autopilot VU 的——_riTaskIdForRound 数值兜底把 VU 轮错配到 worker 任务) — owner 截图报 mscnr9uw32k9ak 调试面板与工具卡不符;commit `d19c0a19`(2 文件 +98/−8);failing-first 精确 2 红;NEUTER×2 各咬各的;环 **37/37**(P6 4 + inspector 前后端 33)
+
+- **定案(三方各自无罪,配对错了):** 会话里有两个任务——worker `2f9e52ac`(11:17-11:21,5 轮 11 工具,已落库)与 **autopilot VU 后续任务** `8d1dddee`(11:21:57-11:36:19,「模拟用户/owner 用工具独立复核 assistant 主张」,8 工具含 web_search,后撞 kimi-k3 429 以 error 收场,气泡按 vu_cancel 设计无痕抹除)。工具卡=VU 的在飞轮(渲染正确);结果状态面板=worker 的真实镜像(数据正确);**错在锚点把 VU 的轮解析到了 worker 的 taskId**——逐字段核对(工具名/id 序号 0-8/输出字节数)实证面板内容与 worker 任务 wire 完全一致。
+- **机制链:** ①VU 气泡 `role:'user'`+`_isVirtualUser`,其轮无 `_taskId`;②锚点 `_renderDebugEntry` 退到 `_riTaskIdForRound`——旧码先按 `role==='assistant'` 跳过 VU 气泡再做身份匹配,必然落空;③数值兜底 `(roundNum,llmRound)` 与 worker 同号轮**孪生碰撞**(双方都从 1/0 起编)→ 返回 worker taskId;④面板 faithfully 渲染 worker 镜像,看上去像「数据串了」。设计契约本是「不可解析→不渲染锚点」,数值兜底把天然不可解析的 VU 轮变成了「自信地错」。
+- **修法(还原契约):** `_riTaskIdForRound` 身份匹配扩到**全角色**——命中即判属主:assistant → 其 `_taskId`;非 assistant(VU)→ `''`(owned-but-not-inspectable,VU 子任务本就不落 snapshot,无可检视);身份全落空才走数值兜底(仅 assistant)。单循环 tail-up,旧 tie-break 语义零漂移。
+- **测试账:** P6 harness 造「尾部 VU 气泡+数值孪生轮」场景,+3 检查(VU 不渲染锚点/解析为空/worker 孪生轮不误伤);failing-first 精确 2 红(其余 15 检查全绿证无过杀);新 NEUTER(还原先跳过非 assistant 的旧行为→VU 检查必翻紅)+ 旧 NEUTER(roundNum 映射)各咬各的;邻接六套件 33/33。
+- **上线账:** bundle **未重建**——兄弟在 tool_rounds.js/styles.css/i18n.js 的未提交改动会被一并打入,待其落地后由下次重建自然收编;修复只在调试面,线上影响=VU 轮暂时仍渲染锚点。**事故自记(第六次同类):** insert_content 又把锚 def 行写进 content 造成重复 def,按例当场切除——插入类编辑锚文本永不出现在 content 里。
+
+### 2026-08-03(「stop 后为何起不来 + socket hang up」全链定案:stop.sh 与看门狗无互斥 + guard 环境缺代理标记拉起 TLS 实例;第一因=旧实例事件循环已冻结 6.5h) — owner 三连问调查;纯审计批,零产品代码;证据=logs/watchdog.log + server_15000.log 双横幅 + app.log 静默带 + pid_max 实测
+
+- **时间线(全部有日志实证):** ①04:40:53 旧实例 2351494(8-01 09:08 由 guard 拉起)在 Range 下载 AssertionError(`a76340a4` 已修的那个 quart/werkzeug off-by-one)后**全进程静默 6.5 小时**(scheduler/DB-reaper/MCP-keepalive 全部消失,下次启动还 prune 到 1 份 faulthandler dump)——事件循环冻结,服务实际已死,这是用户来重启的第一因;②~11:14:0x FUSE 回神后 listener 消失(「Shutting down gracefully」行在 11:15:19 证据块里,归属被 restart 脚本 `>` 截断覆盖不可考);③11:14:41 用户首次 `python server.py` 撞活锁按设计拒绝;④11:14:58 stop.sh SIGTERM→12s→SIGKILL;⑤**11:15:19 `deploy/tofu_guard.sh` 看门狗(cron 保活,15s 间隔)按职责拉起新实例 240685 并占住单实例锁**——用户 11:15:22 第二次启动再撞锁(「LIVE local server pid=240685」),PID 数字反而变小是 pid_max=4194304 回绕的错觉;⑥**240685 启动横幅=HTTPS+自签证书**(guard 环境无 VSCODE_PROXY_URI/CODELAB 等标记,`_detect_reverse_proxy` 失判→auto-TLS),用户经 code-server 代理/plain-HTTP 访问命中 `server.py:2432` 注释逐字描述的坑:「proxy's plain-HTTP request hits our TLS listener and the connection is reset — socket hang up」;guard 自己的 `healthy()` 也讲 http,于是误报「60s 未应答」(实例 11:15:33 已 Ready);⑦11:16:31 `restart_15000.sh` 持 `.restart.lock`(watchdog.log 两次「standing down」实证互斥生效)→ 按 ss 实际监听者杀 240685 → 从用户终端(有 VSCODE_PROXY_URI)拉起 242280=**HTTP 横幅**,14s 健康。
+- **三个「为什么」的答案:** stop 后起不来=**stop.sh 只杀锁文件 PID 且不碰看门狗**,guard 9 秒内抢跑占锁;hang up=**guard 拉起的实例是 TLS**,代理只会讲 plain HTTP;restart 行=它是唯一与 guard 有互斥协议(`.restart.lock`)且按端口实杀、从带代理标记的终端启动的入口。
+- **环境漂移旁证:** 2351494(8-01 guard 拉起)当时是 HTTP(04:40 代理路径正常服务),240685(8-03 guard 拉起)变 TLS——guard 循环多次周转(日志里 3 次 loop started,本调查期间 398315→2007747 又换了一轮),某次从**无标记环境**(cron/旧终端)重启后,其 env 被每个 relaunch 继承。
+- **修复建议(待 owner 拍板,生命周期面按惯例人门):** A. stop.sh 杀前 `touch data/.tofu_guard_disabled` 并响亮提示(或全程持 .restart.lock)——堵「杀完被抢跑」;B. guard relaunch 重放上次启动的协议决策(服务器 boot 时写 data/.last_serve_mode,guard 据此补 TOFU_TLS=0/1)——堵「环境失判→TLS」;C. guard healthy() 按记录协议 curl(-k https)——堵「TLS 实例被误报不答」;D. **serve-task 死亡即进程自杀**(LoopWatch 加 listener 活性检查,无监听且活着→CRITICAL+非零退出)——把「活但不服务」态变成 guard 能处理的干净死亡,6.5h 冻结变 15s 切换;E. restart 脚本 server_15000.log 改 `>>` 保留前世日志;F. guard (b2)「活锁持有者无监听=启动中」无限让路需 TTL/心跳裁决。
+
 ### 2026-08-03(启动角色 UX epic 立案 + S1 托盘 i18n 落地:托盘摘「最后英语面」帽子,AST 棘轮双向钉住) — owner 指令「桌面 App 启动即明身份(服务器端/受控端),客户端功能别全塞托盘,托盘连 i18n 都没有」;epic `pt_6956ccfb605e497b`(已认领);commit `dee57f38`(5 文件 +445/−21);环 **87/87**(tray_i18n+tk_theme+cc_persistence+smoke_gate+cmdtype_parity+install_paths+bundle_extension+agent_cli)
 
 - **格局:** 先稿后码——设计稿 `docs/DESKTOP_STARTUP_ROLE_UX_DESIGN.md` v1 落盘(四切片:S1 托盘 i18n→S2 角色窗+受控端→S3 完整版角色窗+本机控制入窗→S4 文档),已挂问题卡待 owner 三选一(全量/只做 S1+S2/否原生窗)。**S1 不依赖答案**(owner 原话点名「tray doesn't even have i18n support」),先行落地。
@@ -12,6 +36,13 @@
 - **修法(默认值翻转,机制留档):** `TOFU_429_SATURATION_SECS` 默认 `120`→`0`(=关停=逐字节回到升级机制引入前的无限轮转);设正数预算即恢复有界升级。升级机制本身、env 旋钮、gateway 5xx 独立 120s cap(`TOFU_GATEWAY_OUTAGE_BUDGET_S`,与 429 无关)**一律未动**;`is_saturation` 错误通道与 llm_fallback 换模型链路保留,只是默认永不再触发。
 - **代价记档(知情的取舍):** 默认关停即重新接受 2026-08-01 事故形态——strict_model 钉死池在持久饱和墙上会无限循环(429 不计 hard_attempts,reaper 按设计不杀 429 循环),llm_fallback 永不收到饱和信号、不自动换模型。owner 明示「重试零成本」接受此形态;前端重试相位(「限流重试中 · 第 N 次」)持续可见,用户可随时手动停。若日后想要回升级:`TOFU_429_SATURATION_SECS=120`。
 - **测试账:** 套件全部显式 pin env 故零红;新针 `test_default_budget_disables_escalation` 钉住「无 env → 预算 0」;docs/429_SATURATION_CONTROL_PLANE_DESIGN.md §1 默认值描述同步。
+
+### 2026-08-03(「tofu 如何操作任意网站」设计讨论:三层解剖 + 家底盘点——运输/原语层已有,知识层是唯一缺口;XHS 风控根因实锤) — owner 发起设计讨论;三路 swarm 盘点(桥/服务端/tofu-search)完成;记忆 `tofu-browser-bridge-inventory` 入库;未写产品代码,待 owner 拍板
+
+- **盘点惊喜(纠正 CLAUDE.md 过时描述):** `lib/browser/` 不是 playwright pool,是通往用户 Chrome 扩展的桥——扩展 27 命令(navigate/execute_js/click/type/scroll/wait_for_element…)+ `/api/browser/poll` 长轮询 + bridge token 鉴权全部生产在跑;16 个 browser_* agent 工具已接进 agent loop。**OpenCLI 三层模型对照:运输层✅、原语层✅(缺网络拦截)、知识层❌(站点攻略/策略分类/创作工作流——唯一绿地)。**
+- **XHS 风控根因实锤:** tofu-search `xhs.py:263` 走服务器无头 Playwright 池+回放导出 cookie(服务器 IP 与 cookie 签发环境不一致=风控经典信号),且只有搜索卡片路径、无详情页路径(「抓不到正文」的架构原因)。接缝已存在:`search_bridge.py::_ChatuiBrowserProvider` 可路由到用户真实 Chrome——修法是换路不是新建。
+- **三路线呈 owner:** A(桌面 agent 跑 opencli CLI,零建设但不沉淀)/B(现有桥上自建知识层,推荐)/C(服务端池,与 XHS 教训冲突,降级)。建议 B 为主 A 为探针;分期 P0(XHS 换路+详情抓取)→P1(扩展补网络拦截/toString 伪装/后台窗口租约)→P2(.tofu/sites/ 知识层复用 memory 预取+策略六分类)→P3(攻略创作 skill 骑 run_agent_loop)。安全:写操作过 approval.py,全程 audit_log。
+- **待 owner 三答:** ①路线确认 ②P0 可否直接在 tofu-search 开工 ③P1 动 browser_extension 需与桌面域两兄弟 epic 划界。
 
 ### 2026-08-03(OpenCLI 仓库克隆与机制学习:小红书「免 token 免签名」方案定案——让浏览器自己签名,只读渲染结果) — owner 指令拷贝 jackwener/opencli 并学习;仓库落 `INS/ruanjunhao04/opencli`(chatui 同级);三路 swarm 侦察(架构/小红书适配器/adapter  authoring)完成;记忆 `opencli-study-xhs-browser-bridge` 入库
 

@@ -327,6 +327,40 @@ if (document.fonts && document.fonts.ready) {
     }
   });
 }
+/* ★ _mirrorRailGeometry: copy the rail grant (--rail-w/--rail-gap) from
+ * .chat-inner onto .input-inner, so the composer's left-edge lock
+ * (styles.css `.input-inner` margin-left) replays .chat-inner's centering
+ * math with the SAME furniture values. The chatpane container query that
+ * decides the grant only reaches .chat-inner's subtree and CANNOT be
+ * extended to a composer ancestor: container-type:inline-size carries
+ * layout containment, which would re-parent the mobile bottom-sheet
+ * dropdowns' position:fixed (≤768px .preset-dropdown) from the viewport to
+ * the band. The ResizeObserver covers every grant flip (sidebar toggle,
+ * drawer open/close, window resize): a flip only happens when
+ * .chat-container's inline size crosses the threshold, which IS a resize. */
+function _mirrorRailGeometry() {
+  const chatInner = document.querySelector('.chat-inner');
+  const inputInner = document.querySelector('.input-inner');
+  if (!chatInner || !inputInner) return;
+  const cs = getComputedStyle(chatInner);
+  const rw = (cs.getPropertyValue('--rail-w') || '').trim() || '0px';
+  const rg = (cs.getPropertyValue('--rail-gap') || '').trim() || '0px';
+  /* Skip the write when unchanged — a no-op setProperty still invalidates
+   * style, and the RO fires per frame during the drawer/sidebar animation. */
+  if (inputInner.style.getPropertyValue('--rail-w') !== rw)
+    inputInner.style.setProperty('--rail-w', rw);
+  if (inputInner.style.getPropertyValue('--rail-gap') !== rg)
+    inputInner.style.setProperty('--rail-gap', rg);
+}
+function _installRailGeometryMirror() {
+  _mirrorRailGeometry();
+  const cont = document.querySelector('.chat-container');
+  if (cont && typeof ResizeObserver === 'function') {
+    try { new ResizeObserver(_mirrorRailGeometry).observe(cont); }
+    catch (err) { console.warn('rail-geometry mirror ResizeObserver failed:', err); }
+  }
+}
+
 /* --chat-w is NOT synced — chat area uses its own fixed max-width (820px default)
  * independent of toolbar width, per §4.2 decoupled layout. */
 
@@ -863,6 +897,11 @@ function _installViewportHeightGuard() {
   })();
   // Apply stored input-send-mode hint text on load
   try { refreshInputSendHint(); } catch (_) {}
+  /* Composer left-edge lock: mirror the rail grant onto .input-inner now
+   * (first paint) and on every .chat-container resize (sidebar/drawer/
+   * window). Without the boot call the composer renders one frame with the
+   * no-rail defaults and then snaps. */
+  try { _installRailGeometryMirror(); } catch (e) { console.warn('rail mirror install failed:', e); }
   // fetchToggle / fetchBadge removed — fetch is always on
   document
     .getElementById("codeExecToggle")

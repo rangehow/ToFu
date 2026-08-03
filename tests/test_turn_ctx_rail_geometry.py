@@ -77,6 +77,29 @@ edge equality in every state where the composer isn't exactly that width —
 those are the NEUTERs this guards against.
 The complement: both cells are present and non-empty in every state, so
 "hide the chrome everywhere" cannot satisfy the geometry either.
+
+COMPOSER LEFT-EDGE LOCK (third subject, same sweep)
+───────────────────────────────────────────────────
+The composer used to float centred in the pane (`.input-inner{margin:0
+auto}`), which put its left edge ~(band−820)/2 RIGHT of the avatar column
+in every roomy state — the input box visibly "swam" under the message
+column (2026-08-03 owner report), and the zone under the rail could never
+host anything because the composer's right side reached into it. The
+composer now locks its LEFT edge to the message column's left edge (the
+avatar line) in EVERY pane state: `.input-inner`'s margin-left replays
+`.chat-inner`'s own centering math (the same max-width formula, the same
+24px inset), fed by `--rail-w`/`--rail-gap` mirrored from `.chat-inner`
+by main.js (`_mirrorRailGeometry`) — the chatpane container query cannot
+reach the composer band, and cannot be extended to it either
+(`container-type`'s layout containment would re-parent the mobile
+bottom-sheet dropdowns' `position:fixed` from the viewport to the band).
+`.input-area` also takes the same `margin-right` the request-inspector
+drawer imposes on `.chat-container`, so the two bands always share one
+used width — before that, a wide drawer put the composer's right half
+UNDER the fixed drawer (send button unreachable). The invariant is
+asserted as |composer.left − message.left| ≤ 1 in every swept state;
+restoring `margin:0 auto` breaks it in every roomy state — that is the
+NEUTER this guards against.
 """
 from __future__ import annotations
 
@@ -145,6 +168,15 @@ _PROSE = (
 _PLANT = """() => {
     const inner = document.querySelector('.chat-inner');
     if (!inner) return 'no .chat-inner';
+    /* The composer's max-width transition (.4s ease) animates every
+     * pane-driven width change, so a sweep that measures 70ms after each
+     * viewport change would read MID-ANIMATION values and fail on timing,
+     * not geometry. The geometry contract asserts the STATIC value —
+     * disable the transition for the sweep (a visual nicety, not the
+     * geometry under test). */
+    const __noTr = document.createElement('style');
+    __noTr.textContent = '.input-inner{transition:none!important}';
+    document.head.appendChild(__noTr);
     if (typeof renderTurnCtxNote !== 'function') return 'no renderTurnCtxNote';
     document.querySelectorAll('.message.__probe').forEach(n => n.remove());
     const parts = renderTurnCtxNote(%s);
@@ -217,8 +249,11 @@ _PROBE = """() => {
     // The composer: main.js floors its --toolbar-w to --msg-measure (the
     // reading column), so any measure change moves it too. If it desyncs
     // from the message column the input box stops lining up with the text
-    // above it. `.input-box` is the VISIBLE box the strip must sit above;
-    // `.input-inner` is the width track the strip must SHARE.
+    // above it. The band's max-width is 52px + --toolbar-w (avatar track +
+    // reading track), so composerW − measure is exactly 52 in every state —
+    // the ±120 tolerance in assertion #8 catches a REAL desync (e.g. the
+    // floor read going stale). `.input-box` is the VISIBLE box the strip
+    // must sit above; `.input-inner` is the width track the strip SHARES.
     const composer = document.querySelector('.input-inner');
     const inputBox = document.querySelector('.input-box');
     // ── Conversation-status strip (gauge + turn-nav) ──
@@ -260,6 +295,12 @@ _PROBE = """() => {
     const visMsgR = clipToCont(msgR);
     const mdR  = clipToCont(rectOf(md));
     const compR = rectOf(composer);
+    /* The composer's own width driver — main.js sets it inline (floored to
+     * --msg-measure, expanded for a fat toolbar, border-inclusive). The
+     * width contract derives the expected composer width from THIS value:
+     * composerW == min(max(measure, toolbarW) + 52, paneWidth − 48). */
+    const twRaw = composer ? getComputedStyle(composer).getPropertyValue('--toolbar-w') : '';
+    const toolbarW = parseFloat(twRaw) || 0;
     const clippedByVw = (r) => !!r && (r.right > window.innerWidth + 0.5 || r.left < -0.5);
     // The body's CONTENT box — the measure minus the bubble's own inset. The
     // tofu theme pads `.message-content` by 16px a side and draws a 2.5px
@@ -284,6 +325,7 @@ _PROBE = """() => {
         contentBox: contentBox,
         prose: md ? md.getBoundingClientRect().width : 0,
         composerW: composer ? composer.getBoundingClientRect().width : 0,
+        toolbarW: toolbarW,
         railShown: railShown,
         foldShown: shown(fold),
         foldW: foldRect ? foldRect.width : 0,
@@ -296,6 +338,15 @@ _PROBE = """() => {
         bodyHeight: body ? body.getBoundingClientRect().height : 0,
         stripShown: visible(strip),
         stripAboveComposer: !!stripR && !!boxR && stripR.bottom <= boxR.top + 1,
+        /* LEFT-EDGE LOCK: the composer sits ON the message column's left
+         * edge (the avatar line) — msgR.left IS .chat-inner's content-left
+         * (the probe message spans its full grid). A centred composer
+         * (margin:0 auto) drifts ~(band−820)/2 right of it in roomy
+         * states; a missing drawer margin-right on .input-area drifts
+         * ~drawer/2 in wide drawer-open states. */
+        compLeft: compR ? compR.left : null,
+        compRight: compR ? compR.right : null,
+        msgLeft: msgR.left,
         /* SHARED TRACK: the strip must be a CHILD of .input-inner and span
          * it exactly — then gauge-left == composer-left and dots-right ==
          * composer-right by construction. An independent strip max-width
@@ -373,6 +424,15 @@ _MIN_MEASURE_PX = 700
 #: The previous 1368px was full-comfort PLUS a 192px luxury buffer, which hid
 #: the rail from every pane in 1056–1367 for no geometric reason.
 _RAIL_MIN_PANE = 1056
+
+#: Floor under the composer width (the CSS `.input-inner{min-width}`). Below
+#: this the track math would squeeze the band to a useless sliver in hopeless
+#: drawer panes (drawer 780 + wide sidebar on a small window) and the status
+#: strip's gauge/dots would spill out of it. Not a tunable: it is the smallest
+#: width that keeps the textarea usable and the strip cells inside the track,
+#: and it must match the stylesheet or assertion #8 goes red precisely in the
+#: states the floor governs.
+_COMPOSER_FLOOR_PX = 300
 
 
 def _sweep(page):
@@ -487,15 +547,44 @@ def test_rail_never_clipped_in_any_pane_state(page):
                      if r['prose'] > 0 and r['contentBox'] > 0
                      and abs(r['contentBox'] - r['prose']) > 2]
 
-    # ── 8. COMPOSER ALIGNMENT: main.js:282 floors the composer to
-    #      getComputedStyle('.chat-inner').maxWidth, so capping the measure
-    #      moves the input box too. Assert it tracks the message column instead
-    #      of desynchronising — an input box far wider/narrower than the text
-    #      above it is the exact complaint that motivated that code. ──
+    # ── 8. COMPOSER WIDTH TRACK (right edge): the band's width is
+    #      min(max(52px + --toolbar-w, reading track), pane − 48), floored
+    #      at _COMPOSER_FLOOR_PX (the CSS min-width) for HOPELESS panes —
+    #      drawer open beside a wide sidebar can drop the pane below 100px,
+    #      where the track math would squeeze the composer to a useless
+    #      sliver and the strip cells would spill out. Elsewhere the
+    #      formula collapses to min(max(measure, toolbarW) + 52, pane − 48):
+    #      the composer covers avatar track + text column (right edge ON
+    #      the text's right edge), widens only when the toolbar genuinely
+    #      outgrows the measure (growing RIGHT into the empty rail zone),
+    #      and never crosses the pane. Asserted against the composer's OWN
+    #      inline --toolbar-w, so a stale floor read or a furniture desync
+    #      goes red in the exact states it breaks. ──
     composer_off = [r for r in rows
                     if r['composerW'] > 0 and r['measure'] > 0
-                    and not r['drawer'] and r['paneWidth'] >= _RAIL_MIN_PANE
-                    and abs(r['composerW'] - r['measure']) > 120]
+                    and r['toolbarW'] > 0
+                    and abs(r['composerW']
+                            - max(_COMPOSER_FLOOR_PX,
+                                  min(max(r['measure'], r['toolbarW']) + 52,
+                                      r['paneWidth'] - 48))) > 2]
+
+    # ── 8a. COMPLEMENT: every row must carry the composer's inline
+    #      --toolbar-w (the reflow ran) — without it the width contract
+    #      above skips the row and "never floored" stays invisible. ──
+    tw_missing = [r for r in rows if r['toolbarW'] <= 0]
+
+    # ── 8b. COMPOSER LEFT-EDGE LOCK: the composer must sit ON the message
+    #      column's left edge (the avatar line) in EVERY state — a centred
+    #      composer (margin:0 auto) "swims" ~(band−820)/2 right of it in
+    #      roomy states, and a composer band that ignores the drawer
+    #      margin-right swims ~drawer/2 in wide drawer-open states. Scoped
+    #      to panes with a real reading column: below 200px the 24px inset
+    #      floor is the whole story on both sides and the measure is a
+    #      sliver (same scoping logic as the fold assertion). ──
+    composer_left_off = [r for r in rows
+                         if r['compLeft'] is not None
+                         and r['paneWidth'] >= 200
+                         and abs(r['compLeft'] - r['msgLeft']) > 1]
 
     # ── 9. CONVERSATION CHROME (gauge + turn-nav): in-flow in the status
     #      strip directly above the composer, CONTAINED by it, never over a
@@ -552,6 +641,8 @@ def test_rail_never_clipped_in_any_pane_state(page):
                   f'over={_tover} under={_tunder}')
         print(f'  prose/body disagreement   : {len(split_measure)}')
         print(f'  composer desynced         : {len(composer_off)}')
+        print(f'  composer off the avatar line: {len(composer_left_off)}')
+        print(f'  composer toolbar-w missing  : {len(tw_missing)}')
         print(f'  strip missing/misplaced   : {len(strip_missing)}')
         print(f'  strip off composer track  : {len(strip_misaligned)}')
         print(f'  chrome escaped strip      : {len(chrome_escaped)}')
@@ -613,6 +704,29 @@ def test_rail_never_clipped_in_any_pane_state(page):
             % (r['drawer'], r['sidebar'], r['vw'], r['paneWidth'], r['measure'])
             for r in too_wide[:12]))
 
+    assert not tw_missing, (
+        'the composer carries no inline --toolbar-w in %d state(s) — the '
+        'width contract above skips those rows, so a dead _reflowToolbar '
+        'would pass silently:\n  '
+        % len(tw_missing)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'])
+            for r in tw_missing[:12]))
+
+    assert not composer_left_off, (
+        'the composer\'s left edge leaves the message column\'s left edge '
+        '(the avatar line) in %d state(s) — the input box "swims" under the '
+        'conversation instead of aligning with it (2026-08-03 owner report); '
+        'a restored margin:0 auto produces exactly this in every roomy '
+        'state:\n  '
+        % len(composer_left_off)
+        + '\n  '.join(
+            'drawer=%s sidebar=%-14s vw=%-5d paneWidth=%.0f compLeft=%.1f msgLeft=%.1f'
+            % (r['drawer'], r['sidebar'], r['vw'], r['paneWidth'],
+               r['compLeft'], r['msgLeft'])
+            for r in composer_left_off[:12]))
+
     assert not too_narrow, (
         'the running text column is below %dpx in %d roomy state(s) — capping '
         'the measure must not become shrinking it:\n  '
@@ -636,12 +750,18 @@ def test_rail_never_clipped_in_any_pane_state(page):
 
     assert not composer_off, (
         'the composer desynced from the message column in %d state(s) — '
-        'main.js floors it to .chat-inner max-width, so a measure change must '
-        'move both together or the input box stops lining up with the text:\n  '
-        % len(composer_off)
+        'its width must be max(%d, min(max(measure, toolbarW) + 52, '
+        'pane − 48)): the right edge rides the text column\'s right edge, '
+        'only a fat toolbar widens past it, and the %dpx floor keeps '
+        'hopeless drawer panes usable:\n  '
+        % (len(composer_off), _COMPOSER_FLOOR_PX, _COMPOSER_FLOOR_PX)
         + '\n  '.join(
-            'theme=%-5s sidebar=%-14s vw=%-5d composer=%.0f body=%.0f'
-            % (r['theme'], r['sidebar'], r['vw'], r['composerW'], r['measure'])
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d composer=%.0f expected≈%.0f (measure=%.0f tw=%.0f pane=%.0f)'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'], r['composerW'],
+               max(_COMPOSER_FLOOR_PX,
+                   min(max(r['measure'], r['toolbarW']) + 52,
+                       r['paneWidth'] - 48)),
+               r['measure'], r['toolbarW'], r['paneWidth'])
             for r in composer_off[:12]))
 
     assert not strip_missing, (

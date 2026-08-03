@@ -1,3 +1,18 @@
+### 2026-08-03(429 家族退避退役:项目级争用立即重试 + 日志节流——与无限重试默认同日闭环) — owner 指令「项目级 key 争用,跳过指数退避立即重试,防日志膨胀」;commit `92a2dbb1`(5 文件);环 **31/31 + 邻接 dispatch 72/72**
+
+- **退役对象(唯一真·指数退避):** `note_shared_contention`(pt_1a72b708098d446f,2026-07-28)对项目级争用 429 把整个 (provider, model) 家族停进 2s→翻倍→60s 抖动窗口——strict_model 钉池 + 无限重试时代,这就是「请求每分钟干等、窗口还翻倍」的痛点。常规 429 本来就是 0.3s 快轮询+0.5s 槽位引导冷却,无指数成分。
+- **修法:** 该钩子改**纯遥测**——streak 计数(30s 静默重置)+ 节流日志(strike 1-3 + 每 100 条 INFO,余 DEBUG),**永不触碰任何槽位冷却**,返回 0.0;`Slot.record_error` 的 0.5s 'rate_limit' 引导不动(那是立即重试本身的节奏;字面零延迟=热自旋打自家网关,不可取)。metrics 侧(分类器/contention_errors 记账/免 rpm 衰减/key_stats 双不喂)**全部保留**。
+- **日志膨胀闸(点名的另一半):** dispatch_chat/dispatch_stream 的逐周期 429 INFO(旧「降噪」只摘 body 没摘行,~3 行/s、一任务一小时 ~1.1 万行)改前 3 周期+每 100 周期 INFO、其余 DEBUG;async 循环本就无逐周期日志。cooldown-wait 分支本就每 20 周期才一行,不动。
+- **测试账:** backoff 套件整册重写为新契约——不停车 NEUTER 针(25 strike 永不改冷却/恒返回 0)、streak 静默重置、日志节流(100 strike 恰 4 INFO+96 DEBUG)、端到端立即重试、逐周期日志节流(6 周期恰 3 INFO+3 DEBUG,复用饱和套件 fakes);label/rpm 隔离针原样保留。`test_picker_not_steered_away` 防旧套件 flaky 坑(双槽等分抖动 ±5% 会抛硬币,给 other 垫 latency_ema=99999 钉死确定性)。
+- **边界记档:** `retry_i18n` 的 'contention' label 分支与 i18n 键保留(函数契约+翻译键完整),只是 `cooling_cause_summary` 从此不再产出它——HUD 在争用墙期间显示「rate-limited」而非「shared project limit」,诚实(我们确实没在等停车窗口)。
+
+### 2026-08-03(桌面图标「白圈」根修:ico/icns 改走抠底+裁剪画布——wizard/DMG 早已抠白底,app 图标漏走同一条路) — owner 截图指令「白圈太难看」;commit `d62ba6a4`(2 文件 +135/−2);守卫 3 枚 failing-first 实证 2 红;环 **76+13+40 绿**(build_workflow+installer_parity+desktop_agent)
+
+- **定案(生成器漏缝,非素材问题):** 实测盘上 tofu.ico 256px 帧 **0% 透明**、四角 (254,255,255,255)——白画布 100% 不透明烘进每个帧,Windows 桌面把白板整块渲染出来。根因=`scripts/gen_desktop_icons.py` main() 把原始 logo.png(1024²、RGB 全不透明)直接喂 gen_ico/gen_icns;而同文件里 wizard-large.bmp 与 DMG 底图早已走 `_cut_out_background`(四角 flood-fill 抠外部白底)——app 图标是唯一漏走抠底路的产物,故无守卫(测试只钉了 wizard 抠底)。
+- **修法(_icon_canvas 三件套):** ①复用 `_cut_out_background` 抠外部白底;②**透明像素 RGB 消品红**——Pillow 缩放 RGBA 不预乘 alpha,抠底后残留的 flood-fill sentinel 品红会沿 LANCZOS 核染进豆腐深色描边(实测 48px 帧验证 0 品红像素);③按 alpha bbox 裁剪+6% 边距取方——源画布 ~30% 白边,不裁则 16px 托盘帧豆腐过小。wizard/DMG 路径零改动(自带底色,继续全画布抠底)。
+- **守卫(failing-first 2 红→3 绿):** .ico 最大帧四角全透明+中心不透明(NEUTER 靶=回退 raw src);立方体占帧 >45%(钉住裁剪,防「抠底不裁」回缩——裸抠底仅 ~34%);.icns 四角同钉(双平台同源)。`getdata()` 在该 Pillow 版本已弃用,测试改用 histogram。
+- **上线路径:** tofu.ico/icns 是 **gitignore 构建产物**(.gitignore:252-253),真源=脚本+logo.png,CI 图标步骤(build-desktop.yml `gen_desktop_icons.py`)下次构建自动生效;owner 当前装机里的白板图标随下个安装包更新,Windows 图标缓存顽固时 `ie4uinit -show` 刷新。桌面蓝底/16px 托盘模拟图复核:立方体悬浮无白板,占比与可辨识性双升。
+- **事故自记(第五次同类):** insert_content 又把锚 def 行写进 content 造成 `gen_wizard_images` 重复 def+悬空片段,按例当场修复——锚文本永不出现在 content 里。兄弟会话目击我 WIP 期共享树红×2,按「不夹修不动」正确处理,本 commit 即其消解。
 ### 2026-08-03(本机控制面板两连修:轮询签名闸根治「展开几秒自动收起」+ local_source 双角色可见矩阵——owner 截图两指令) — epic `pt_59b62951aad2463e`;commit `dc19252e`(6 文件);环 **48+95 绿**(merge 45+agent_download 3 / bundle-manifest+i18n 覆盖+devices+dist);NEUTER×2 各咬各的;bundle-d9da6a64 / i18n-zh-90501953 重建入包实测
 
 - **病灶①(自动收起=轮询把整块 DOM 重写):** `_lcRefresh` 每 3s 跑 `_lcRenderDesktop` → 无条件 `setup.innerHTML = …` → 用户展开的 <details> 收起、刚生成的连接行消失。修法=**签名闸**(根因非补丁):渲染输入(setup_state/connected/server_url/双下载指纹/语言)未变则跳过重写,状态点/文字每拍照常更新;模态打开时重置签名。merge 套件 splice 表补 `_lcDesktopSignature`(否则 ReferenceError 全红——splice 按符号表抽函数,新模块级函数必须入册,教训记档)。

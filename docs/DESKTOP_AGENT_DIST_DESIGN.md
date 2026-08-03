@@ -1,12 +1,15 @@
 # Server-Built AGENT-ONLY Installers — Design
 
-> Status: DRAFT v3 (2026-08-02), epic `pt_59b62951aad2463e`.
+> Status: DRAFT v4 (2026-08-03), epic `pt_59b62951aad2463e`.
 > v2 folds in the three distribution-surface decisions (§5): the Local
 > Control display matrix, the full-client direction policy, and the
 > GitHub Releases contents. v3 folds in the owner's three review
 > amendments: boot autostart for relay machines (§4.4, §6), agent
 > version in the registration frame + drift surfacing (§5.2, §8), and
-> the interactive-session boundary (§6).
+> the interactive-session boundary (§6). v4 supersedes the pairing UX
+> (§11, owner directive "minimize shell — why doesn't Codex have this
+> problem"): SSH auto-tunnel + one-time pairing code replace the
+> address-carrying connect line as the primary flow.
 > Splits the fused "one installer, two roles" distribution into TWO
 > components: the controlled-machine **agent** (no frontend, no server
 > stack) and the full desktop app (this machine = server + client).
@@ -496,3 +499,165 @@ trip is verified on that machine — browser login to claude.ai → token
 exchange egressing via the agent → streaming reply → Codex O3. This is
 the end-to-end proof that the component this epic ships is the product
 form of the egress bridge, not a parallel one.
+
+## 11. Pairing UX v2 — SSH auto-tunnel + one-time pairing code
+
+### 11.1 The directive and the diagnosis
+
+Owner (2026-08-03, via msdcksqy): "This configuration is too complex —
+minimize scenarios where users write code/shell; users may know
+nothing. Why doesn't Codex have this many issues?"
+
+Diagnosis (code-verified): the connect line = address + token pushes
+network topology onto the user, and in an SSO-proxy world the address
+half is necessarily wrong (`request.host_url` is browser-reachable ≠
+agent-reachable — measured live: the agent polled a codelab proxy URL
+into an SSO 401 wall for hours while the panel showed a dead toggle).
+Codex's answer is centralized identity + pure outbound relay + one
+component. Our agent→server is ALREADY pure outbound (long-poll); the
+only unsolved part is bootstrapping the FIRST credential onto the
+agent. `88eb3302`'s four diagnostic layers made that failure visible
+but still asked the user to understand tunnels. v2 removes the
+disease: the panel never hands the user an address for the agent at
+all.
+
+### 11.2 The target flow — a two-step funnel (endgame first)
+
+**The endgame is a personalized, token-baked installer.** The two
+flow layers in their priority order:
+
+1. **PRIMARY — personalized installers (owner: the real zero-config).
+   Phase 2 from the earlier design lands as the default, not a later
+   phase.** The panel's `downloads[]` carries an artifact baked for
+   THIS user (per-user `agents:bridge` token, per-user artifact
+guarding on the download route). The user downloads it, installs it
+in one click, and it connects — no SSH address, no pairing code, no
+first-run dialog at all. The agent reads its attachment from the
+baked `preseed_server.json` on first launch and runs.
+
+2. **FALLBACK — pairing code (cross-machine / unbaked / re-image).**
+When the panel offers only the GENERIC artifact (a release download,
+a second machine, a machine that arrived before per-user baking
+landed), the pairing-code flow below kicks in. The pairing code is
+NOT the endgame; it is the graceful fallback to the generic
+artifact.
+
+#### 11.2.1 First-launch discovery ladder (zero-question goal)
+
+On first launch the agent runs a **silent auto-discovery ladder** and
+ONLY asks the user when every rung comes back empty — and then only
+once. Rungs in order, each short-circuiting the rest on first hit:
+
+| Rung | Mechanism | Cost to user |
+|---|---|---|
+| A | Probe `http://127.0.0.1:15000/api/health` — the user's OWN tunnel is
+      up, or the user is the server's own machine (local_source) | Zero — silent |
+| B | LAN discovery: the agent broadcasts a UDP query; a server running
+      the opt-in TOFU_DESKTOP_LAN_DISCOVERY=1 responder advertises
+      `http://<lan-ip>:15000`. Best-effort, ~2 s budget, silent when
+      nothing answers. (mDNS is deliberately NOT relied on — corporate
+      networks filter multicast; a plain UDP broadcast with an HMAC'd
+      response is the v1 primitive.) | Zero — silent |
+| C | SSH candidates: parse `~/.ssh/config` first Host, then VS Code
+      Remote `remote.SSH.remotePlatform` / `~/.ssh/known_hosts`. For
+      each, attempt `ssh -N -o BatchMode=yes -o ConnectTimeout=3
+      -o ExitOnForwardFailure=yes -L <free>:127.0.0.1:15000 <host>`;
+      first tunnel whose local port answers Tofu's health wins. | Zero — silent |
+| D | **Ask once** (only if A–C all empty): the first-run dialog
+      requests 「服务器 SSH 地址」(prefilled from the first surviving
+      candidate) + 「配对码」(from the panel). The dialog appears ONCE.
+      A second open reuses the result. | One prompt, then done |
+
+On any hit the agent proceeds to pairing-code exchange (rung A–C
+already hold a working tunnel; rung D spawns one) and then runs.
+
+#### 11.2.2 Panel side (ONE action)
+
+The remote branch collapses to a single primary action: 「配对这台
+电脑」 mints a 6-digit one-time code (5-min TTL), displayed large
+with a copy button and a countdown, plus one sentence: "把这 6 位
+数字填进受控端首次启动". The connect line is demoted to
+`<details>` 高级连接行 (keeping the paste-time probe and the
+tofu-vs-proxy 401 diagnostics for the unbaked/generic case).
+
+#### 11.2.3 Pairing exchange
+
+`POST /api/desktop/pair {code, name, platform}` (no bearer — the code
+IS the credential; peer loopback-checked only as depth-in-depth) →
+agents:bridge token, minted by the SAME machinery as
+`desktop_token_mint` (audit-logged, revocable on the devices page)
+→ agent calls `save_remote_server(url, token)` → runs.
+
+#### 11.2.4 Measured alternative — browser-extension relay
+
+A FACT (verified at the server side 2026-08-03): the browser
+extension polls `/api/browser/poll` THROUGH the SSO proxy while
+carrying the user's SSO session; the bare agent's direct polls get
+401'd by the SSO edge. So an office agent could relay its poll
+frames through the LOCAL browser extension and need NO SSH tunnel at
+all.
+
+| | SSH auto-tunnel | Extension relay |
+|---|---|---|
+| Setup cost | ssh key login once (or once per new machine) | Install + sign-in to the extension once |
+| Prereq on the machine | ssh.exe + a server the user can ssh to | Browser + extension open, live user session |
+| Works headless / pre-logon | Yes | No (needs the browser running) |
+| Always-on | Yes (agent owns the tunnel; reconnect backoff) | No (session-bound) |
+| New wire protocol | No (agent→tunnel→server is the existing poll) | Yes (poll frames forwarded through the browser sandbox — a new relay contract) |
+
+Verdict for v1: **SSH tunnel is the default relay** (always-on, no
+new protocol). Extension relay is a measured ALTERNATIVE for machines
+without SSH access — prototype + comparison as slice P5, not v1.
+
+### 11.3 Security — what the boundary actually is
+
+- The boundary is the CODE: 6 digits (1e6 space), TTL 300 s, one-shot,
+  3-attempt lockout per code. NOT the peer address — an SSO proxy
+  forwards requests that also present loopback, so a loopback check
+  buys nothing (kept only as defense-in-depth; documented as such).
+- Trust model: anyone who can open an SSH channel to the server
+  already has a shell there (this deployment's reality) — the code
+  does not widen that.
+- The exchange mints via the SAME key machinery as the connect-line
+  token (agents:bridge scope, per-user, audit-logged, revocable on
+  the devices page).
+- LAN-discovery responder (rung B) only advertises `http://<ip>:15000`
+  (same info class as the hostname) and HMAC's its response — a
+  minimal new surface, off by default, documented honestly.
+
+### 11.4 What retires, what stays
+
+Retired from the panel: proxyWarn / awaitingAgent (the problem they
+diagnose cannot occur — no address is minted for the agent); the
+connect line as the PRIMARY action. The currently blocked human-gated
+office steps (owner manually running `ssh -L` and pasting a
+proxy-URL connect line) are explicitly OBSOLETE once v1 lands — the
+owner confirmed they will not perform a flow that is about to be
+eliminated, and this design documents that. Kept for the advanced
+path and the tray: paste-time probe (`_probe.py`), tofu-vs-proxy 401
+envelope classification, `run_agent(on_status=)` + the tray link line.
+Honest boundary: SSH-less pure public relay needs a public
+rendezvous service — a different magnitude of infrastructure, out of
+v1.
+
+### 11.5 Slices
+
+- **P1** server: `lib/desktop/pairing.py` (code store) +
+  `POST /api/v1/desktop/pair-code` (mint) + `POST /api/desktop/pair`
+  (exchange) + the LAN-discovery responder + full contract tests
+  (mint/consume/expiry/lockout/one-shot/loopback/envelope/broadcast).
+- **P2** panel: pairing action + big-code display + countdown, connect
+  line into `<details>`, warnings retired, JSDOM harness updated.
+- **P3** agent: `_tunnel.py` (probe-first, hidden spawn, reconnect)
+  + `_pair.py` (exchange) + `_discover.py` (loopback/LAN/ssh-config
+  ladder) + first-launch dialog v2 (SSH address prefilled from
+  `~/.ssh/config` + code, appears only when the ladder is empty) +
+  launcher wiring; fakes + Linux smoke.
+- **P4** acceptance (real machine): install → two fields (or zero,
+  when the ladder finds the server) → connect → the §10 OAuth
+  chain. Supersedes the blocked office steps of the connect-line
+  flow; the board epic transitions to a P4 acceptance gate on real
+  hardware.
+- **P5** (deferred, post-v1): extension-relay prototype + a measured
+  comparison against the SSH tunnel on headless-capability, setup
+  cost, and session-boundedness.

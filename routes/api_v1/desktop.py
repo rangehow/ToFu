@@ -1,8 +1,11 @@
-"""routes/api_v1/desktop.py — Desktop-agent status probe.
+"""routes/api_v1/desktop.py — Desktop-agent status probe + pairing surface.
 
-Single read-only route. Reports whether the desktop agent is currently
-connected (last poll within 15 s) plus how many commands are pending in
-the queue. Used by the in-app debug panel to render a presence dot.
+The status/build/download/streams/devices routes are REST verbs the Local
+Control panel consumes. The pairing routes (pair-code mint + pair
+exchange) implement the one-time pairing-code UX
+(docs/DESKTOP_AGENT_DIST_DESIGN.md §11): the panel mints a 6-digit code
+(authenticated), the agent exchanges it for an agents:bridge token (the
+code IS the credential — no bearer).
 
 The actual long-poll RPC channel (``POST /api/desktop/poll``) stays at
 its original path under :mod:`routes.desktop` because it's a Bridge-Secret-
@@ -17,7 +20,7 @@ import time
 from flask import Blueprint
 
 from lib.api_response import (
-    api_created, api_not_found, api_ok, api_payload,
+    api_conflict, api_created, api_not_found, api_ok, api_payload,
 )
 from lib.env_compat import getenv_compat
 from lib.log import audit_log, get_logger
@@ -42,10 +45,7 @@ def _setup_state(connected: bool) -> str:
       (``sys.frozen``, set by PyInstaller and re-exec'd by
       desktop/launcher.py with TOFU_RUN_SERVER=1). The agent runs
       IN-PROCESS via the tray's "Enable Computer Control" item, so the
-      instruction is one click and no token is involved. This supersedes
-      the old ``python -m lib.desktop_agent`` flow (launcher.py docstring:
-      "Replaces the old 'install a second program and run python -m
-      lib.desktop_agent' flow").
+      instruction is one click and no token is involved.
     * ``remote``     — anything else: the user's machine is not this
       machine, so they need the desktop app plus a bridge token.
 
@@ -298,31 +298,22 @@ def _caller_bridge_token_count(uid: str) -> int:
         return 0
 
 
+_BRIDGE_SCOPE = 'agents:bridge'
+
+
 @api_v1_desktop_bp.route('/api/v1/desktop/status', methods=['GET'])
 @require_auth
 @api_meta(
     summary='Desktop-agent connection status',
     description=(
         'Returns ``{connected, last_poll, pending_commands, setup_state, '
-        'download_url, downloads, server_url}`` so the UI can render a '
-        'presence indicator AND the single appropriate install instruction. '
+        'download_url, downloads, agent_downloads, server_url, '
+        'server_url_reachability, bridge_tokens_issued, '
+        'bridge_token_required, agents}`` so the UI can render a presence '
+        'indicator AND the single appropriate install instruction. '
         'Connection is defined as a poll within the last 15 s. '
         '``setup_state`` is one of ``connected`` / ``tray`` / '
-        '``local_source`` / ``remote``; the two URL fields let the remote '
-        'case render a real download link and a complete, copy-paste-ready '
-        'connect line instead of a bare secret. ``downloads`` is the list of '
-        'installers THIS visitor can run, each ``{os, arch, label, filename, '
-        'url, hosted, size, source}`` served SAME-ORIGIN from this server '
-        '(``/api/v1/desktop/download/<filename>``, ``hosted == "server"``) '
-        'out of the local artifact store — the request path performs no '
-        'network, and the client download no longer depends on the public '
-        'GitHub network. '
-        'It carries BOTH macOS DMGs when the architecture is unknown (an '
-        'Apple Silicon Mac reports "Intel Mac OS X" in its UA, so guessing '
-        'would hand half of Mac users a download that cannot open); pass '
-        '``?arch=arm64|x86_64`` — which the client reads from '
-        '``navigator.userAgentData.getHighEntropyValues`` — to narrow it to '
-        'one. Empty when the platform is unrecognised; use ``download_url``.'
+        '``local_source`` / ``remote``.'
     ),
     tags=['capabilities'],
 )
@@ -340,10 +331,6 @@ async def desktop_status():
             if _auth and getattr(_auth, 'user_id', '') else None)
     connected = is_desktop_agent_connected()
     _last = last_poll_time()
-    # The client resolves its own architecture via
-    # navigator.userAgentData.getHighEntropyValues(['architecture']) and passes
-    # it here; macOS cannot be narrowed any other way (an Apple Silicon Mac
-    # reports "Intel Mac OS X" in its UA).
     _arch = (request.args.get('arch') or '').strip()[:16]
     return api_ok({
         'connected': connected,
@@ -357,22 +344,8 @@ async def desktop_status():
         'agent_downloads': _request_platform_downloads(_arch,
                                                        kind='agent'),
         'server_url': _agent_server_url(),
-        # Whether the address in server_url is one an AGENT can actually
-        # use — 'loopback' / 'private' are fine, 'public' means the
-        # browser arrived through a hostname that may be an SSO-fronted
-        # gateway (agents carry no SSO cookies and die at the edge). The
-        # panel warns on 'public' instead of silently minting a line the
-        # agent can never use (owner incident 2026-08-03).
         'server_url_reachability': _host_reachability(request.host),
-        # Minted-but-nothing-arrived diagnosis: >0 with connected=false
-        # means the failure is downstream of the copy — the panel says so
-        # instead of leaving a dead "未运行" with no explanation.
         'bridge_tokens_issued': _caller_bridge_token_count(_uid),
-        # Whether an attaching agent must present a bridge credential
-        # (TOFU_BRIDGE_SECRET configured → global secret or an
-        # agents:bridge token; unset → open legacy, any/no secret
-        # passes). The panel uses it to skip the mint-and-paste step
-        # when a preseeded installer can connect with zero input.
         'bridge_token_required': bool(
             (getenv_compat('TOFU_BRIDGE_SECRET') or '').strip()),
     })
@@ -471,19 +444,18 @@ async def desktop_stream(cmd_id):
     return api_ok(stream)
 
 
-# ── RWA P4b:Devices 页(拍板 5A)—— agents + bridge tokens 一屏 ──
-
-_BRIDGE_SCOPE = 'agents:bridge'
-
-
 @api_v1_desktop_bp.route('/api/v1/desktop/devices', methods=['GET'])
 @require_auth
+@api_meta(
+    summary='Devices page: the caller\'s agents + their bridge tokens',
+    description=(
+        'Tokens are listed METADATA-ONLY (id/name/created/scopes) — the '
+        'secret is only ever returned once, by POST /api/v1/desktop/token.'
+    ),
+    tags=['capabilities'],
+)
 async def desktop_devices():
-    """Devices page payload: the caller's agents + their bridge tokens.
-
-    Tokens are listed METADATA-ONLY (id/name/created/scopes) — the secret
-    is only ever returned once, by POST /api/v1/desktop/token.
-    """
+    """Devices page payload: the caller's agents + their bridge tokens."""
     from lib.api_keys import list_keys
     from lib.desktop import list_agents
     from .auth import current_auth
@@ -503,15 +475,107 @@ async def desktop_devices():
     })
 
 
+@api_v1_desktop_bp.route('/api/v1/desktop/pair-code', methods=['POST'])
+@require_auth
+@api_meta(
+    summary='Mint a one-time pairing code',
+    description=(
+        'Mints a 6-digit one-time code (valid 5 minutes, one-shot, '
+        '3-attempt lockout) for pairing a controlled machine. Bound to '
+        'the calling user; the agent consumes it through POST '
+        '/api/desktop/pair to receive an agents:bridge token.'
+    ),
+    tags=['capabilities'],
+)
+async def desktop_pair_code_mint():
+    """Mint a one-time pairing code.
+
+    The code is the ONLY credential the agent needs to attach itself
+    to this user's account — no bearer, no bridge secret. The panel
+    renders the code big with a copy button and a 5-minute countdown.
+    """
+    from lib.desktop.pairing import (_CODE_TTL_S, mint_code,
+                                     pending_codes)
+    from .auth import current_auth
+    auth = current_auth()
+    uid = (auth.user_id if auth and getattr(auth, 'user_id', '') else '')
+    if not uid:
+        return api_not_found('not_found',
+                             message='authenticated user required')
+    code, expires_at = mint_code(uid)
+    audit_log('desktop_pair_code_minted', user_id=uid)
+    return api_created({
+        'code': code,
+        'expires_at': expires_at,
+        'ttl': _CODE_TTL_S,
+        'pending': pending_codes(uid),
+    })
+
+
+@api_v1_desktop_bp.route('/api/desktop/pair', methods=['POST'])
+@api_meta(
+    summary='Exchange a pairing code for a bridge token',
+    description=(
+        'The AGENT calls this (NO bearer — the code IS the credential) '
+        'to consume a one-time code and receive an agents:bridge token. '
+        'One-shot: a code that is missing, expired, over-attempted, or '
+        'already used fails. Does NOT require authentication: this is '
+        'the onboarding of a fresh agent that has no token yet.'
+    ),
+    tags=['capabilities'],
+)
+async def desktop_pair():
+    """Exchange a pairing code for an agents:bridge token.
+
+    Not authenticated by design: the agent pairing itself in has no
+    token. The 6-digit one-time code is the sole credential; it is
+    consumed exactly once. On success the agent gets a bridge token
+    bound to the code's minting user, saves it as its remote
+    attachment, and starts polling.
+    """
+    from lib.api_keys import create_key
+    from lib.desktop.pairing import consume_code
+    from lib.request_parser import async_parse_body, optional_str
+    body = await async_parse_body()
+    code = optional_str(body, 'code', default='',
+                        max_len=16).strip()
+    name = optional_str(body, 'name', default='', max_len=80).strip() \
+        or 'paired-agent'
+    platform = optional_str(body, 'platform', default='',
+                            max_len=40).strip() or 'unknown'
+    user_id = consume_code(code)
+    if user_id is None:
+        audit_log('desktop_pair_failed', code=code[:2] + '****',
+                  reason='invalid_code')
+        return api_conflict('invalid_code',
+                            message='This pairing code is invalid, expired, '
+                                    'or already used. Generate a new one '
+                                    'in the panel.')
+    row, token = create_key(name, scopes=[_BRIDGE_SCOPE], user_id=user_id)
+    audit_log('desktop_pair_succeeded', key_id=row.get('id'),
+              user_id=user_id, platform=platform)
+    return api_created({
+        'id': row.get('id'),
+        'name': name,
+        'token': token,
+        'scopes': [_BRIDGE_SCOPE],
+        'user_id': user_id,
+    })
+
+
 @api_v1_desktop_bp.route('/api/v1/desktop/token', methods=['POST'])
 @require_auth
+@api_meta(
+    summary='Mint a per-user bridge token (scope agents:bridge)',
+    description=(
+        'The raw secret is returned EXACTLY ONCE in this response; '
+        'afterwards only metadata is listable. Bound to the caller\'s '
+        'user_id so poll auth scopes every command to them (RWA P4a).'
+    ),
+    tags=['capabilities'],
+)
 async def desktop_token_mint():
-    """Mint a per-user bridge token (scope agents:bridge).
-
-    The raw secret is returned EXACTLY ONCE in this response; afterwards
-    only metadata is listable. Bound to the caller's user_id so poll auth
-    scopes every command to them (RWA P4a).
-    """
+    """Mint a per-user bridge token (scope agents:bridge)."""
     from lib.api_keys import create_key
     from lib.request_parser import async_parse_body, optional_str
     from .auth import current_auth
@@ -529,12 +593,16 @@ async def desktop_token_mint():
 
 @api_v1_desktop_bp.route('/api/v1/desktop/token/<key_id>', methods=['DELETE'])
 @require_auth
+@api_meta(
+    summary='Revoke one of the caller\'s OWN bridge tokens',
+    description=(
+        'Deliberately NOT the admin-scoped /api/v1/keys DELETE: a tenant '
+        'may revoke only their own agents:bridge keys, nothing wider.'
+    ),
+    tags=['capabilities'],
+)
 async def desktop_token_revoke(key_id):
-    """Revoke one of the caller's OWN bridge tokens.
-
-    Deliberately NOT the admin-scoped /api/v1/keys DELETE: a tenant may
-    revoke only their own agents:bridge keys, nothing wider.
-    """
+    """Revoke one of the caller's OWN bridge tokens."""
     from lib.api_keys import get_key_by_id, revoke_key
     from .auth import current_auth
     auth = current_auth()

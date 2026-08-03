@@ -131,6 +131,7 @@ _PUBLIC_EXACT = frozenset({
     '/api/v1/users/login',     # public login
     '/api/v1/users/logout',    # public; idempotent on missing session
     '/api/v1/users/me',        # public probe; returns {user: null} unauthed
+    '/api/desktop/pair',          # pairing exchange: the 6-digit code IS the credential (RWA P4a — code + audit, no bearer)
     '/dashboard',         # customer dashboard HTML; data fetches go through the gate
     '/dashboard/',
     '/login',             # signup/login HTML page

@@ -1,3 +1,10 @@
+### 2026-08-03(P2 落地:面板配对主推——remote 分支②改 6 位配对码(大字+复制+TTL 倒计时),连接行降级高级 details;板面旧三步验收闸门换新) — epic `pt_59b62951aad2463e`;commit `2043d23f`(4 文件 +115/−7);环 **113 绿**(merge+agent-download+devices+probe+pairing)
+
+- **面板形态(§11.2.2 兑现):** remote 受控端流程②由「生成连接行」改「**配对这台电脑**」——`_lcPairCode()` 调 `Api.desktop.mintPairCode()`(新,POST /api/v1/desktop/pair-code),渲染大号等宽 6 位码(.lc-pair-digits 26px/.18em 字距)+复制按钮+每秒倒计时(过期灰显提示重铸,一次性/TTL 诚实不藏)。连接行(lcMintBtn/lcTokenBox)整体降级 `<details>`「高级:连接行(配对码不可用时兜底)」;autoConnect(烘焙安装包)形态不带该兜底(零触控流程保持干净)。
+- **i18n 键账:** `local.agentStep2` 已死(全局唯一引用点被替换)→ 原位换配对键族 8 键双语(agentStepPair/pairBtn/pairHint/pairCopied/pairExpires/pairExpired/connectLineToggle/copied);merge harness 符号表自动纳入 `_lcPairCode`(splice 未漏,环绿实证)。
+- **板面(owner 指令②):** 旧 human-gated 阻塞「owner 办公机三步手动隧道验收」与设计稿 v4 §11.6 直接矛盾(流程即将被消灭,owner 明言不做)→ 换新闸门:「P3 落地后 owner 真机装新受控端,看阶梯发现是否零提问连上」;P3 落地后本对话自带 timer 盯 agent 注册,不依赖心跳冷却。
+- **事故自记:** ①apply_diff 批量调用把 edits 数组与散装 search 参数混传 → 工具报 "File not found:"(空 path),散装参数被静默忽略;教训:apply_diffs 只收 {description, edits[]},多余键不报错也不生效。②i18n.js 遭兄弟会话中途改动触发 freshness 拦截 → 重读冲突区确认目标行未被波及后再改;共享树高频文件(i18n/styles)改前必重读。
+
 ### 2026-08-03(P1 落地:配对码 UX——lib/desktop/pairing + 双路由 + 组播发现响应器;设计稿 v4 落盘) — epic `pt_59b62951aad2463e`;commit `b0b42ff9`(5 文件);套件 **9+108 绿**;NEUTER 实证
 
 - **配对码 UX(§11 定案):** lib/desktop/pairing.py(6 位一次性码,300s TTL,单次消耗,3 次尝试锁)+ LanDiscoveryResponder(UDP 15001 广播响应器,opt-in);routes 双端点:`/api/v1/desktop/pair-code`(需认证,面板铸码)+ `/api/desktop/pair`(无需认证——码即凭证,与 `/api/desktop/poll` 同族);消费成功走 `create_key(agents:bridge)` 同铸造流。

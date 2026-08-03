@@ -135,6 +135,150 @@ def prompt_connect_line(current_url: str = '', log=_noop_log):
     return result['value']
 
 
+# Sentinel returned by prompt_attach when the user picks the advanced
+# connect-line path — the caller then opens prompt_connect_line.
+PREFER_CONNECT_LINE = '__prefer_connect_line__'
+
+
+def prompt_attach(server_url: str = '', log=_noop_log):
+    """The pairing-first attach dialog: server address + 6-digit code.
+
+    This is the agent's half of the pairing-code UX (§11): the panel
+    mints the code, this dialog collects it (plus the address, pre-filled
+    by the discovery ladder and still editable) and exchanges it for a
+    bridge token — no connect line, no SSH command the user has to run
+    themselves. Returns:
+
+      * ``(url, secret)`` — paired and verified;
+      * ``PREFER_CONNECT_LINE`` — the user picked the advanced path
+        (paste a minted connect line instead);
+      * ``None`` — cancelled.
+
+    A failed exchange keeps the dialog open with the precise reason
+    (invalid/expired code vs rate-limited vs unreachable address — three
+    different fixes, so they are three different messages).
+    """
+    from lib.desktop_agent._pair import exchange_pair_code
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+    except ImportError as e:
+        log('Pair dialog unavailable (no tkinter): %s' % e)
+        logger.warning('Pair dialog unavailable (no tkinter): %s', e)
+        return None
+    from desktop import _tk_theme as theme
+
+    lang = theme.detect_lang()
+    result = {'value': None}
+    root = tk.Tk()
+    theme.apply_theme(root)
+    root.title(theme.t('desktop.pair.title', lang))
+    root.resizable(False, False)
+    frame = ttk.Frame(root, style='Tofu.TFrame', padding=20)
+    frame.grid(sticky='nsew')
+
+    header = ttk.Frame(frame, style='Tofu.TFrame')
+    header.grid(row=0, column=0, columnspan=2, sticky='w')
+    photo = theme.load_logo_photo(root, size=40)
+    if photo is not None:
+        ttk.Label(header, image=photo, style='Tofu.TLabel').grid(
+            row=0, column=0, padx=(0, 10))
+    ttk.Label(header, text=theme.t('desktop.pair.heading', lang),
+              style='Tofu.Title.TLabel').grid(row=0, column=1, sticky='w')
+    ttk.Label(frame, wraplength=430, justify='left', style='Tofu.Sub.TLabel',
+              text=theme.t('desktop.pair.instructions', lang)
+              ).grid(row=1, column=0, columnspan=2, sticky='w', pady=(8, 12))
+
+    ttk.Label(frame, style='Tofu.TLabel',
+              text=theme.t('desktop.pair.serverLabel', lang)
+              ).grid(row=2, column=0, sticky='w')
+    addr = ttk.Entry(frame, width=40, style='Tofu.TEntry')
+    addr.grid(row=2, column=1, sticky='we', pady=(0, 6))
+    if server_url:
+        addr.insert(0, server_url)
+
+    ttk.Label(frame, style='Tofu.TLabel',
+              text=theme.t('desktop.pair.codeLabel', lang)
+              ).grid(row=3, column=0, sticky='w')
+    code_entry = ttk.Entry(frame, width=14, style='Tofu.TEntry')
+    code_entry.grid(row=3, column=1, sticky='w')
+
+    err = ttk.Label(frame, style='Tofu.Err.TLabel', wraplength=430,
+                    justify='left')
+    err.grid(row=4, column=0, columnspan=2, sticky='w', pady=(8, 0))
+
+    def _ok(*_a):
+        url = addr.get().strip().rstrip('/')
+        code = code_entry.get().strip()
+        if not url.startswith(('http://', 'https://')):
+            err.config(text=theme.t('desktop.pair.badAddress', lang))
+            return
+        if not (code.isdigit() and 4 <= len(code) <= 8):
+            err.config(text=theme.t('desktop.pair.badCode', lang))
+            return
+        err.config(text=theme.t('desktop.pair.verifying', lang))
+        root.update()
+        ok, val = exchange_pair_code(url, code)
+        if ok:
+            result['value'] = (url, val)
+            root.destroy()
+            return
+        if val == 'invalid_code':
+            err.config(text=theme.t('desktop.pair.invalidCode', lang))
+        elif val == 'rate_limited':
+            err.config(text=theme.t('desktop.pair.rateLimited', lang))
+        else:
+            err.config(text=theme.t('desktop.pair.failed', lang)
+                       .replace('{reason}', val))
+
+    def _use_line(*_a):
+        result['value'] = PREFER_CONNECT_LINE
+        root.destroy()
+
+    def _cancel(*_a):
+        result['value'] = None
+        root.destroy()
+
+    btns = ttk.Frame(frame, style='Tofu.TFrame')
+    btns.grid(row=5, column=0, columnspan=2, sticky='we', pady=(14, 0))
+    ttk.Button(btns, text=theme.t('desktop.pair.useLine', lang),
+               style='Tofu.TButton', command=_use_line).grid(
+        row=0, column=0, sticky='w')
+    ttk.Button(btns, text=theme.t('desktop.pair.cancel', lang),
+               style='Tofu.TButton', command=_cancel).grid(
+        row=0, column=1, sticky='e', padx=(0, 8))
+    ttk.Button(btns, text=theme.t('desktop.pair.connect', lang),
+               style='Tofu.Accent.TButton', command=_ok).grid(
+        row=0, column=2, sticky='e')
+    btns.columnconfigure(0, weight=1)
+    code_entry.bind('<Return>', _ok)
+    root.bind('<Escape>', _cancel)
+    (code_entry if server_url else addr).focus_set()
+
+    try:
+        root.mainloop()
+    except Exception as e:
+        log('Pair dialog failed: %s' % e)
+        logger.warning('Pair dialog failed: %s', e)
+        return None
+    return result['value']
+
+
+def prompt_attachment_flow(current_url: str = '', log=_noop_log):
+    """Pairing-first, connect-line fallback — the ONE attach flow.
+
+    Both first run (agent_launcher.main) and the tray's "Connect to a
+    different Tofu…" call this so the two surfaces can never drift:
+    pairing dialog first; if the user picks the advanced path, the
+    legacy connect-line dialog opens instead. Returns ``(url, secret)``
+    or ``None``.
+    """
+    parsed = prompt_attach(current_url, log=log)
+    if parsed == PREFER_CONNECT_LINE:
+        parsed = prompt_connect_line(current_url, log=log)
+    return parsed
+
+
 def import_preseed(exe_dir: str, log=_noop_log) -> None:
     """Import a server-baked ``preseed_server.json`` into the attachment.
 

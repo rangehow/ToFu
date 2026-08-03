@@ -1,3 +1,10 @@
+### 2026-08-03(P3 落地:agent 侧配对+阶梯发现——_pair.py(兑换+loopback/LAN/ssh 阶梯+BatchMode 自隧道保活)+ 配对对话框(地址预填可改+精确失败因)+ launcher 首启与托盘统一走 prompt_attachment_flow) — epic `pt_59b62951aad2463e`;新套件 **22 绿** + 邻接 **95+6 绿**;agent 源码烟雾 `TOFU_AGENT_SMOKE_OK commands=19`
+
+- **_pair.py(单模块「找+证+留」):** `exchange_pair_code`(POST /api/desktop/pair,无 bearer——409 invalid_code/429 rate_limited/http_n/transport 分类,代理 401 绝不报成「码错」);`discover()` 阶梯:loopback(1.5s)→ LAN 广播(UDP 15001 magic,响应先过 /api/health 再信——响应器 HMAC 本无共享密钥可验,probe 才是真验证)→ ~/.ssh/config 候选(跳过通配,去重,上限 3 个防首启卡分钟级);`try_ssh_tunnel`(BatchMode+ExitOnForwardFailure,赢则保活在 _ACTIVE_TUNNELS 供轮询走、atexit 收割,输则立杀)。
+- **配对对话框(connect_ui.prompt_attach):** 地址栏(阶梯答案预填、可改)+ 6 位码栏,失败给三种不同修法(invalid_code 回面板重铸/rate_limited 等几分钟/其他=地址错);「改用连接行…」哨兵 PREFER_CONNECT_LINE 交给 prompt_connect_line——`prompt_attachment_flow` 统一首启(agent_launcher.main 阶梯后)与托盘重连,两面永不漂移。i18n 键族 desktop.pair.* 双语 14 键。
+- **设计稿切片账:** §11.5 P1(b0b42ff9)/P2(2043d23f)/P3(本批)标 LANDED;原规划 _tunnel.py/_discover.py 合入 _pair.py(一个模块拥有整条路径,免三方漂移),对话框策略从「全落空才出现」改为「有答案就预填」。**P4 前置:在店 0.16.0 无 _pair.py,需重建受控端安装包**。
+- **测试:** 新套件 22 检查——兑换七态(成功/409/429/http_401 代理/unreachable/timeout/bad_response×2/坏输入)+ LAN 探针(magic 出、广播标志、短包丢弃、未过 probe 滤除)+ ssh 解析(通配/默认块/注释/重复)+ 隧道三态(成功保活/probe 败杀/早夭杀/spawn 失败净 miss)+ 阶梯四序(loopback 短路/LAN 压 SSH/首赢即停/全空返回)+ 候选上限 + 附着流哨兵两态(回退连接行/取消不传染)。邻接 95(pairing 服务端+preseed+probe+connect-line 契约+agent_winbuilder)+ 6(tray i18n AST 棘轮)全绿;烟雾实证 _pair 未把服务端栈拖入 agent 闭包。
+
 ### 2026-08-03(P2 落地:面板配对主推——remote 分支②改 6 位配对码(大字+复制+TTL 倒计时),连接行降级高级 details;板面旧三步验收闸门换新) — epic `pt_59b62951aad2463e`;commit `2043d23f`(4 文件 +115/−7);环 **113 绿**(merge+agent-download+devices+probe+pairing)
 
 - **面板形态(§11.2.2 兑现):** remote 受控端流程②由「生成连接行」改「**配对这台电脑**」——`_lcPairCode()` 调 `Api.desktop.mintPairCode()`(新,POST /api/v1/desktop/pair-code),渲染大号等宽 6 位码(.lc-pair-digits 26px/.18em 字距)+复制按钮+每秒倒计时(过期灰显提示重铸,一次性/TTL 诚实不藏)。连接行(lcMintBtn/lcTokenBox)整体降级 `<details>`「高级:连接行(配对码不可用时兜底)」;autoConnect(烘焙安装包)形态不带该兜底(零触控流程保持干净)。

@@ -646,18 +646,30 @@ v1.
   `POST /api/v1/desktop/pair-code` (mint) + `POST /api/desktop/pair`
   (exchange) + the LAN-discovery responder + full contract tests
   (mint/consume/expiry/lockout/one-shot/loopback/envelope/broadcast).
+  **LANDED `b0b42ff9`** (+ per-IP global failure budget on the exchange
+  after owner review: per-code lockout alone leaves 1e6 space
+  brute-forceable via fresh-code guessing).
 - **P2** panel: pairing action + big-code display + countdown, connect
   line into `<details>`, warnings retired, JSDOM harness updated.
-- **P3** agent: `_tunnel.py` (probe-first, hidden spawn, reconnect)
-  + `_pair.py` (exchange) + `_discover.py` (loopback/LAN/ssh-config
-  ladder) + first-launch dialog v2 (SSH address prefilled from
-  `~/.ssh/config` + code, appears only when the ladder is empty) +
-  launcher wiring; fakes + Linux smoke.
+  **LANDED `2043d23f`** ( Api.desktop.mintPairCode + `_lcPairCode`;
+  `local.agentStep2` retired for the pairing key family).
+- **P3** agent: `lib/desktop_agent/_pair.py` (exchange client +
+  loopback/LAN/ssh-config ladder + BatchMode self-tunnel kept alive for
+  the poll loop) + first-launch pairing dialog (address prefilled by
+  the ladder, editable; 6-digit code; precise failure reasons) with the
+  connect line behind "Use a connect line instead…" + launcher wiring
+  (first run AND tray reconnect share `prompt_attachment_flow`);
+  fakes + Linux smoke. **LANDED (this commit)**: the planned
+  `_tunnel.py`/`_discover.py` folded into `_pair.py` — one module owns
+  the whole "find + prove + keep" path, so no three-way drift; the
+  dialog appears with the ladder's answer prefilled whenever it found
+  one, not only on a total miss.
 - **P4** acceptance (real machine): install → two fields (or zero,
   when the ladder finds the server) → connect → the §10 OAuth
   chain. Supersedes the blocked office steps of the connect-line
   flow; the board epic transitions to a P4 acceptance gate on real
-  hardware.
+  hardware. **Needs a rebuilt agent installer** carrying `_pair.py`
+  (the in-store 0.16.0 predates it).
 - **P5** (deferred, post-v1): extension-relay prototype + a measured
   comparison against the SSH tunnel on headless-capability, setup
   cost, and session-boundedness.

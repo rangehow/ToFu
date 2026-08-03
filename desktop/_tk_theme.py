@@ -232,6 +232,70 @@ STRINGS = {
         'zh': '连不上服务器：{reason}。若是代理/SSO 拦截，请换面板里用隧道'
               '地址生成的连接行；再点一次「连接」强制保存。',
     },
+    'desktop.pair.title': {
+        'en': 'Pair this computer',
+        'zh': '配对这台电脑',
+    },
+    'desktop.pair.heading': {
+        'en': 'Pair this computer with Tofu',
+        'zh': '将这台电脑与 Tofu 配对',
+    },
+    'desktop.pair.instructions': {
+        'en': 'In Tofu, open Local Control → This computer and press '
+              '"Pair this computer", then type the 6-digit code below. '
+              'The server address is pre-filled — edit it only if it is '
+              'wrong.',
+        'zh': '在 Tofu 面板「本机控制 → 这台电脑」点「配对这台电脑」，'
+              '把 6 位配对码填到下面。服务器地址已自动填好，不对再改。',
+    },
+    'desktop.pair.serverLabel': {
+        'en': 'Server address',
+        'zh': '服务器地址',
+    },
+    'desktop.pair.codeLabel': {
+        'en': 'Pairing code',
+        'zh': '配对码',
+    },
+    'desktop.pair.connect': {
+        'en': 'Pair and connect',
+        'zh': '配对并连接',
+    },
+    'desktop.pair.useLine': {
+        'en': 'Use a connect line instead…',
+        'zh': '改用连接行…',
+    },
+    'desktop.pair.cancel': {
+        'en': 'Cancel',
+        'zh': '取消',
+    },
+    'desktop.pair.verifying': {
+        'en': 'Pairing…',
+        'zh': '正在配对…',
+    },
+    'desktop.pair.badAddress': {
+        'en': 'The server address must start with http:// or https://.',
+        'zh': '服务器地址必须以 http:// 或 https:// 开头。',
+    },
+    'desktop.pair.badCode': {
+        'en': 'The pairing code is the 6-digit number shown in the panel.',
+        'zh': '配对码是面板生成的 6 位数字。',
+    },
+    'desktop.pair.invalidCode': {
+        'en': 'This code is invalid, expired or already used — mint a '
+              'fresh one in the panel.',
+        'zh': '配对码无效、过期或已被使用——请回面板重新生成。',
+    },
+    'desktop.pair.rateLimited': {
+        'en': 'Too many failed attempts from this address. Wait a few '
+              'minutes and try again with a fresh code.',
+        'zh': '此地址失败次数过多——请等几分钟，用新配对码重试。',
+    },
+    'desktop.pair.failed': {
+        'en': 'Could not pair at that address: {reason}. Check the '
+              'server address (a proxy/SSO gateway cannot be used).',
+        'zh': '无法在该地址完成配对：{reason}。请检查服务器地址'
+              '（代理/SSO 地址不可用）。',
+    },
     'desktop.comp.postgresql.name': {
         'en': 'PostgreSQL Database',
         'zh': 'PostgreSQL 数据库',

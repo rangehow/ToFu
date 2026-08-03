@@ -310,7 +310,7 @@ def _run_tray(state: dict, perms: dict) -> None:
     """The minimal tray: the whole configuration surface of this component."""
 def _run_tray(state: dict, perms: dict) -> None:
     """The minimal tray: the whole configuration surface of this component."""
-    from desktop.connect_ui import prompt_connect_line
+    from desktop.connect_ui import prompt_attachment_flow
     from lib.desktop_agent.config import save_remote_server, \
         save_computer_control
 
@@ -330,7 +330,7 @@ def _run_tray(state: dict, perms: dict) -> None:
         return
 
     def on_connect(icon, item):
-        parsed = prompt_connect_line(state.get('url') or '', log=_log)
+        parsed = prompt_attachment_flow(state.get('url') or '', log=_log)
         if parsed is None:
             return
         url, secret = parsed
@@ -482,13 +482,13 @@ def main():
     _enable_dpi_awareness()
 
     # ── 1. Preseed (installer-baked server address; one-shot, non-secret) ──
-    from desktop.connect_ui import import_preseed, prompt_connect_line
+    from desktop.connect_ui import import_preseed, prompt_attachment_flow
     try:
         import_preseed(_EXE_DIR, _log)
     except Exception as e:
         _log('Preseed import skipped: %s' % e)
 
-    # ── 2. Attachment (asked once, then persisted) ──
+    # ── 2. Attachment (discovery ladder, then asked ONCE, then persisted) ──
     from lib.desktop_agent.config import remote_server, save_remote_server
     try:
         url, secret = remote_server()
@@ -496,7 +496,16 @@ def main():
         _log('Could not read attachment: %s' % e)
         url, secret = '', ''
     if not url:
-        parsed = prompt_connect_line('', log=_log)
+        # Zero-question ladder (§11.2.1): loopback → LAN broadcast →
+        # ~/.ssh/config self-tunnels. Whatever it finds pre-fills the
+        # pairing dialog's address field; a miss just leaves it editable.
+        discovered = ''
+        try:
+            from lib.desktop_agent._pair import discover
+            discovered = discover(log=_log)
+        except Exception as e:
+            _log('Server discovery skipped: %s' % e)
+        parsed = prompt_attachment_flow(discovered, log=_log)
         if parsed is None:
             _log('No server attachment configured — nothing to poll, exiting')
             return

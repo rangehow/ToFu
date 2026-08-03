@@ -242,6 +242,75 @@ STRINGS = {
         'zh': '支持抓取需要 JavaScript 渲染的网页与浏览器自动化，'
               '是 fetch_url 应对重 JS 站点的前提。',
     },
+    # ── System-tray strings (pystray menus of BOTH launchers) ──
+    # The tray was the last English-only surface: every MenuItem literal was
+    # hardcoded. tests/test_desktop_tray_i18n.py AST-ratchets both launchers
+    # so a literal can never come back. Placeholder tokens ({tag}/{url}/
+    # {port}) are filled by the call sites via .replace().
+    'desktop.tray.open': {
+        'en': 'Open Tofu',
+        'zh': '打开 Tofu',
+    },
+    'desktop.tray.downloadUpdate': {
+        'en': 'Download update ({tag})',
+        'zh': '下载更新（{tag}）',
+    },
+    'desktop.tray.enableCC': {
+        'en': 'Enable Computer Control',
+        'zh': '启用电脑控制',
+    },
+    'desktop.tray.permissions': {
+        'en': 'Permissions',
+        'zh': '权限',
+    },
+    'desktop.tray.permWrite': {
+        'en': 'Allow file writes',
+        'zh': '允许写入文件',
+    },
+    'desktop.tray.permExec': {
+        'en': 'Allow run commands / open apps',
+        'zh': '允许运行命令 / 打开应用',
+    },
+    'desktop.tray.permGui': {
+        'en': 'Allow mouse / keyboard / screenshot',
+        'zh': '允许鼠标 / 键盘 / 截图',
+    },
+    'desktop.tray.permEgress': {
+        'en': 'Allow relaying subscription API traffic',
+        'zh': '允许转发订阅 API 流量',
+    },
+    'desktop.tray.connectRemote': {
+        'en': 'Connect to remote Tofu…',
+        'zh': '连接到远程 Tofu…',
+    },
+    'desktop.tray.connectDifferent': {
+        'en': 'Connect to a different Tofu…',
+        'zh': '连接到另一个 Tofu…',
+    },
+    'desktop.tray.installComponents': {
+        'en': 'Install Components...',
+        'zh': '安装组件...',
+    },
+    'desktop.tray.serverLabel': {
+        'en': 'Server: {url}',
+        'zh': '服务器：{url}',
+    },
+    'desktop.tray.serverLocal': {
+        'en': 'this computer (port {port})',
+        'zh': '本机（端口 {port}）',
+    },
+    'desktop.tray.notAttached': {
+        'en': '(not attached)',
+        'zh': '（未连接）',
+    },
+    'desktop.tray.autostart': {
+        'en': 'Start with Windows',
+        'zh': '开机自启',
+    },
+    'desktop.tray.quit': {
+        'en': 'Quit',
+        'zh': '退出',
+    },
 }
 
 

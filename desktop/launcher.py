@@ -539,33 +539,46 @@ def _run_tray(port: int, proc: subprocess.Popen):
         _shutdown()
         os._exit(0)
 
+    # Tray strings are bilingual (desktop.tray.* in _tk_theme) — the AST
+    # ratchet in tests/test_desktop_tray_i18n.py refuses a hardcoded literal.
+    from desktop import _tk_theme as theme
+    _lang = theme.detect_lang()
+
+    def _tt(key: str, **fill) -> str:
+        text = theme.t(key, _lang)
+        for ph, val in fill.items():
+            text = text.replace('{%s}' % ph, str(val))
+        return text
+
     # Dynamic "update available" item: its text is computed at menu-open time
     # and it is hidden entirely until the background check finds a newer tag.
     menu = pystray.Menu(
-        MenuItem('Open Tofu', on_open, default=True),
-        MenuItem(lambda item: f'Download update ({_update["tag"]})',
+        MenuItem(_tt('desktop.tray.open'), on_open, default=True),
+        MenuItem(lambda item: _tt('desktop.tray.downloadUpdate',
+                                  tag=_update['tag']),
                  on_update,
                  visible=lambda item: bool(_update['tag'])),
         pystray.Menu.SEPARATOR,
-        MenuItem('Enable Computer Control', on_toggle_computer_control,
+        MenuItem(_tt('desktop.tray.enableCC'), on_toggle_computer_control,
                  checked=lambda item: bool(_cc_state.get('enabled'))),
-        MenuItem('Permissions', pystray.Menu(
-            MenuItem('Allow file writes', _toggle_perm('allow_write'),
+        MenuItem(_tt('desktop.tray.permissions'), pystray.Menu(
+            MenuItem(_tt('desktop.tray.permWrite'), _toggle_perm('allow_write'),
                      checked=_perm_checked('allow_write'), enabled=_perm_enabled),
-            MenuItem('Allow run commands / open apps', _toggle_perm('allow_exec'),
+            MenuItem(_tt('desktop.tray.permExec'), _toggle_perm('allow_exec'),
                      checked=_perm_checked('allow_exec'), enabled=_perm_enabled),
-            MenuItem('Allow mouse / keyboard / screenshot', _toggle_perm('allow_gui'),
+            MenuItem(_tt('desktop.tray.permGui'), _toggle_perm('allow_gui'),
                      checked=_perm_checked('allow_gui'), enabled=_perm_enabled),
         )),
-        MenuItem('Connect to remote Tofu…', on_connect_remote),
-        MenuItem('Install Components...', on_components),
+        MenuItem(_tt('desktop.tray.connectRemote'), on_connect_remote),
+        MenuItem(_tt('desktop.tray.installComponents'), on_components),
         # Which server the agent talks to. Silence here was a real gap: after
         # pasting a connect line the user had no way to tell it took effect.
-        MenuItem(lambda item: ('Server: %s' % (_attached_url() or
-                                               f'this computer (port {port})')),
+        MenuItem(lambda item: _tt('desktop.tray.serverLabel',
+                                  url=_attached_url() or
+                                  _tt('desktop.tray.serverLocal', port=port)),
                  None, enabled=False),
         pystray.Menu.SEPARATOR,
-        MenuItem('Quit', on_quit),
+        MenuItem(_tt('desktop.tray.quit'), on_quit),
     )
 
     icon = pystray.Icon('tofu', icon_image, 'Tofu', menu)

@@ -347,29 +347,42 @@ def _run_tray(state: dict, perms: dict) -> None:
         icon.stop()
         os._exit(0)
 
+    # Tray strings are bilingual (desktop.tray.* in _tk_theme) — the AST
+    # ratchet in tests/test_desktop_tray_i18n.py refuses a hardcoded literal.
+    from desktop import _tk_theme as theme
+    _lang = theme.detect_lang()
+
+    def _tt(key: str, **fill) -> str:
+        text = theme.t(key, _lang)
+        for ph, val in fill.items():
+            text = text.replace('{%s}' % ph, str(val))
+        return text
+
     menu = pystray.Menu(
         # Which server this machine answers to — the silence gap the full
         # app's tray already fixed; never leave it unverifiable.
-        MenuItem(lambda item: 'Server: %s' % (state.get('url') or '(not attached)'),
+        MenuItem(lambda item: _tt('desktop.tray.serverLabel',
+                                  url=state.get('url') or
+                                  _tt('desktop.tray.notAttached')),
                  None, enabled=False),
-        MenuItem('Connect to a different Tofu…', on_connect),
+        MenuItem(_tt('desktop.tray.connectDifferent'), on_connect),
         pystray.Menu.SEPARATOR,
-        MenuItem('Permissions', pystray.Menu(
-            MenuItem('Allow file writes', _toggle_perm('allow_write'),
+        MenuItem(_tt('desktop.tray.permissions'), pystray.Menu(
+            MenuItem(_tt('desktop.tray.permWrite'), _toggle_perm('allow_write'),
                      checked=_perm_checked('allow_write')),
-            MenuItem('Allow run commands / open apps', _toggle_perm('allow_exec'),
+            MenuItem(_tt('desktop.tray.permExec'), _toggle_perm('allow_exec'),
                      checked=_perm_checked('allow_exec')),
-            MenuItem('Allow mouse / keyboard / screenshot', _toggle_perm('allow_gui'),
+            MenuItem(_tt('desktop.tray.permGui'), _toggle_perm('allow_gui'),
                      checked=_perm_checked('allow_gui')),
-            MenuItem('Allow relaying subscription API traffic',
+            MenuItem(_tt('desktop.tray.permEgress'),
                      _toggle_perm('allow_egress'),
                      checked=_perm_checked('allow_egress')),
         )),
-        MenuItem('Start with Windows', on_toggle_autostart,
+        MenuItem(_tt('desktop.tray.autostart'), on_toggle_autostart,
                  checked=lambda item: _autostart_get(),
                  visible=lambda item: _autostart_supported()),
         pystray.Menu.SEPARATOR,
-        MenuItem('Quit', on_quit),
+        MenuItem(_tt('desktop.tray.quit'), on_quit),
     )
 
     icon = pystray.Icon('tofu-agent', _load_icon(), 'Tofu Agent', menu)

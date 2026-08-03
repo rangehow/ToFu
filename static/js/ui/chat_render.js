@@ -2091,15 +2091,25 @@ function renderMessage(msg, idx) {
   const epWorkerCls = (!isUser && !msg._isEndpointPlanner && !msg._isEndpointReview) ? ' ep-worker-msg' : '';
   const epPlannerCls = msg._isEndpointPlanner ? ' ep-planner-msg' : '';
   const vuCls = msg._isVirtualUser ? ' vu-user-msg' : '';
-  // ── Per-turn context capsule (floats in the RIGHT GUTTER beside the turn) ──
+  // ── Per-turn context note — TWO surfaces with different DOM homes ──
   // Frozen snapshot of the workspace/tools/model active when this turn was
-  // sent (msg._ctx, captured in the send pipeline). Rendered as a direct
-  // child of `.message` — NOT inside `.message-content` (which clips via
-  // overflow:hidden) — so CSS can place it at left:100% out in the gutter,
-  // clear of both the bubble and the hover action-bar. See info-rail.js.
-  let turnCtxHtml = "";
+  // sent (msg._ctx, captured in the send pipeline). The RAIL (`.turn-ctx`)
+  // is a direct child of `.message` — it occupies the third grid track the
+  // pane owns (see info-rail.js / styles.css `.chat-inner`). The FOLD
+  // (`.tctx-fold`, the one-line fallback shown when the pane grants no rail
+  // track) goes INSIDE `.message-content` between header and body: as a
+  // direct `.message` child it auto-placed into the ZERO-WIDTH rail track
+  // and rendered at width 0 (the 2026-08-03 "disappears at 100%" report).
+  let turnCtxFoldHtml = "";
+  let turnCtxRailHtml = "";
   if (msg._ctx && typeof renderTurnCtxNote === "function") {
-    try { turnCtxHtml = renderTurnCtxNote(msg._ctx); }
+    try {
+      const _tctx = renderTurnCtxNote(msg._ctx);
+      if (_tctx && typeof _tctx === "object") {
+        turnCtxFoldHtml = _tctx.fold || "";
+        turnCtxRailHtml = _tctx.rail || "";
+      }
+    }
     catch (e) { console.debug("[turnCtx] renderTurnCtxNote failed:", e); }
   }
   const badgeHtml = plannerBadge || criticBadge || _initBadge;
@@ -2152,5 +2162,5 @@ function renderMessage(msg, idx) {
    * SVG, badgeHtml, body, branchHtml, actionBtns, the class/attr
    * fragments) is already-trusted HTML, marked raw(). */
   const _classAttr = `${isUser ? ' user-msg' : ''}${_pendingQueuedCls}${msg._isEndpointReview ? ' ep-critic-msg' : ''}${epPlannerCls}${epWorkerCls}${vuCls}${_failedCls}`;
-  return String(safeHtml`<div class="message${raw(_classAttr)}"${raw(idAttr)}${raw(msgIdAttr)}${raw(apRunAttr)}${raw(apSummaryAttr)}${raw(mfpAttr)}><div class="message-avatar">${raw(isUser ? userAvatar : avatarContent)}</div><div class="message-content"><div class="message-header"><span class="message-role">${isUser ? userLabel : roleName}</span>${raw(badgeHtml)}${_queuedIndicator}${raw(messageTimeHtml)}</div><div class="message-body">${raw(body)}</div>${raw(branchHtml)}${raw(actionBtns)}</div>${raw(turnCtxHtml)}</div>`);
+  return String(safeHtml`<div class="message${raw(_classAttr)}"${raw(idAttr)}${raw(msgIdAttr)}${raw(apRunAttr)}${raw(apSummaryAttr)}${raw(mfpAttr)}><div class="message-avatar">${raw(isUser ? userAvatar : avatarContent)}</div><div class="message-content"><div class="message-header"><span class="message-role">${isUser ? userLabel : roleName}</span>${raw(badgeHtml)}${_queuedIndicator}${raw(messageTimeHtml)}</div>${raw(turnCtxFoldHtml)}<div class="message-body">${raw(body)}</div>${raw(branchHtml)}${raw(actionBtns)}</div>${raw(turnCtxRailHtml)}</div>`);
 }

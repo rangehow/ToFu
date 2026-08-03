@@ -28,7 +28,8 @@ by exactly 780px).
 
 WHAT THIS ASSERTS (charter: assert the RESULT, not the threshold)
 ────────────────────────────────────────────────────────────────
-1. **The invariant** — in every one of the 64 states, no rail element's right
+1. **The invariant** — in every one of the 72 pane states, no rail element's
+   right
    edge exceeds the pane's right edge, INCLUDING after the "+N" overflow is
    expanded. (A collapsed-only assertion would have passed while the old hover
    panel was still broken in 35 states.)
@@ -39,11 +40,16 @@ WHAT THIS ASSERTS (charter: assert the RESULT, not the threshold)
    rail beyond a fixed multiple of its own content. Not clipping but adding
    100px of whitespace per turn would trade "overflow" for "ugly".
 4. **No context is lost** — where the rail has no track (narrow pane / drawer
-   open), the compact `.tctx-fold` summary is shown instead.
+   open), the compact `.tctx-fold` summary is shown instead — measured by its
+   rendered BOX, not just `display`, after a zero-width fold once passed the
+   display check while painting nothing (2026-08-03).
 
 None of these name a CSS constant or a source literal, so re-tuning the
 breakpoint, the rail width or the clamp keeps them green while a real
-regression turns them red.
+regression turns them red. The ONE width the test does name —
+``_RAIL_MIN_PANE`` — is not a tunable: it is DERIVED from the measure floor
+(``_MIN_MEASURE_PX``) plus the fixed furniture, and the CSS grant threshold
+is derived from the same sum, so the two must move together or not at all.
 
 CONVERSATION-STATUS STRIP (second subject, same sweep)
 ──────────────────────────────────────────────────────
@@ -75,7 +81,12 @@ pytestmark = [pytest.mark.visual, pytest.mark.slow]
 #: full content box. Theme is a real axis of the scanning surface, not a skin.
 _THEMES = ('dark', 'light', 'tofu')
 
-_WIDTHS = (1280, 1366, 1440, 1512, 1600, 1728, 1920, 2560)
+#: 1100 exercises the boundary band directly: with the sidebar collapsed the
+#: pane is ~1100px — just above the derived 1056px rail-grant floor — while
+#: every sidebar-open state at the same viewport falls below it. The rail's
+#: appearance/disappearance at the grant boundary is exactly what the 1368px
+#: luxury-buffer threshold got wrong for a ~1365px pane (2026-08-03 report).
+_WIDTHS = (1100, 1280, 1366, 1440, 1512, 1600, 1728, 1920, 2560)
 
 #: (label, JS that puts the sidebar into that state). Mirrors the four real
 #: widths the sidebar can have — see `.sidebar` / `.has-rail` in styles.css.
@@ -128,16 +139,22 @@ _PLANT = """() => {
     if (!inner) return 'no .chat-inner';
     if (typeof renderTurnCtxNote !== 'function') return 'no renderTurnCtxNote';
     document.querySelectorAll('.message.__probe').forEach(n => n.remove());
-    const html = renderTurnCtxNote(%s);
-    if (!html) return 'renderer returned empty';
+    const parts = renderTurnCtxNote(%s);
+    if (!parts) return 'renderer returned empty';
+    /* Two surfaces, two DOM homes — the SAME structure chat_render.js
+     * assembles: the fold INSIDE .message-content between header and body,
+     * the rail as a direct .message child (its grid track). Splicing the
+     * fold as a direct child is the zero-width bug this sweep must never
+     * re-admit. */
     const d = document.createElement('div');
     d.className = 'message user-msg __probe';
     d.innerHTML = '<div class="message-avatar"></div>'
                 + '<div class="message-content"><div class="message-header">'
                 + '<span class="message-role">You</span></div>'
+                + parts.fold
                 + '<div class="message-body"><div class="md-content user-content">'
                 + %s + '</div></div>'
-                + '</div>' + html;
+                + '</div>' + parts.rail;
     inner.appendChild(d);
     /* Conversation-scoped chrome, through its PRODUCTION builders — never a
      * hand-written copy: the gauge from context-bar.js (rAF-coalesced, the
@@ -166,7 +183,11 @@ _PROBE = """() => {
     const fold  = msg.querySelector('.tctx-fold');
     const shown = (el) => !!el && getComputedStyle(el).display !== 'none';
     const railShown = shown(rail);
-    // Widest right edge among the rail and EVERY descendant it paints.
+    // The fold's VISIBILITY must be width-aware: a fold auto-placed into the
+    // zero-width rail track reports display:flex with the correct text while
+    // painting nothing (the 2026-08-03 bug — the geometry sweep's own
+    // display-only check is how it stayed invisible). Measure its box.
+    const foldRect = fold ? fold.getBoundingClientRect() : null;
     let worst = null, worstSel = '';
     if (railShown) {
         const all = [rail, ...rail.querySelectorAll('*')];
@@ -253,6 +274,7 @@ _PROBE = """() => {
         composerW: composer ? composer.getBoundingClientRect().width : 0,
         railShown: railShown,
         foldShown: shown(fold),
+        foldW: foldRect ? foldRect.width : 0,
         foldText: fold ? (fold.textContent || '').trim() : '',
         railRight: worst,
         worstSel: String(worstSel),
@@ -318,6 +340,19 @@ _MAX_MEASURE_PX = 920
 #: good, otherwise the redesign made reading worse in the name of tidiness.
 _MIN_MEASURE_PX = 700
 
+#: The pane width at which the rail track is granted. DERIVED, not tuned:
+#: the smallest pane that hosts the rail while keeping the measure at or
+#: above its floor is
+#:     700 text + 52 avatar-and-gap + 12 text→rail gap + 232 rail + 48 padding
+#:   = 1044px
+#: granted at 1056px (floor + 12px of rounding/scrollbar slack). This MUST
+#: match the `@container chatpane (min-width: …)` in styles.css (three
+#: queries: the `.chat-inner` track grant, `.turn-ctx` display, `.tctx-fold`
+#: hide) — the CSS comment above the `.chat-inner` rule carries the same sum.
+#: The previous 1368px was full-comfort PLUS a 192px luxury buffer, which hid
+#: the rail from every pane in 1056–1367 for no geometric reason.
+_RAIL_MIN_PANE = 1056
+
 
 def _sweep(page):
     """Return one measurement row per (theme × drawer × sidebar × width) state."""
@@ -352,7 +387,7 @@ def _sweep(page):
 
 
 def test_rail_never_clipped_in_any_pane_state(page):
-    """THE INVARIANT + its complement + the height bound, over 64 states."""
+    """THE INVARIANT + its complement + the height bound, over 72 states."""
     page.wait_for_selector('#userInput', state='visible', timeout=20000)
     page.wait_for_function("typeof renderTurnCtxNote === 'function'", timeout=20000)
     planted = page.evaluate(_PLANT)
@@ -369,10 +404,11 @@ def test_rail_never_clipped_in_any_pane_state(page):
     rows = _sweep(page)
     pane_states = {(r['drawer'], r['sidebar'], r['vw']) for r in rows}
     states = {(r['theme'], r['drawer'], r['sidebar'], r['vw']) for r in rows}
-    assert len(pane_states) == 64, (
-        f'expected 64 pane states, swept {len(pane_states)}')
-    assert len(states) == 64 * len(_THEMES), (
-        f'expected {64 * len(_THEMES)} theme\u00d7pane states, swept {len(states)} '
+    assert len(pane_states) == 72, (
+        f'expected 72 pane states (2 drawers \u00d7 4 sidebars \u00d7 9 widths), '
+        f'swept {len(pane_states)}')
+    assert len(states) == 72 * len(_THEMES), (
+        f'expected {72 * len(_THEMES)} theme\u00d7pane states, swept {len(states)} '
         f'\u2014 the measure cap used to be theme-scoped, so a sweep that misses a '
         f'theme cannot see the very bug this guards')
 
@@ -381,9 +417,10 @@ def test_rail_never_clipped_in_any_pane_state(page):
                if r['railShown'] and r['railRight'] is not None
                and r['railRight'] > r['paneRight'] + 0.5]
 
-    # ── 2. COMPLEMENT: where the pane is roomy the rail must really be there
-    #      and carry content. Without this, hiding it everywhere passes (1). ──
-    roomy = [r for r in rows if r['paneWidth'] >= 1368]
+    # ── 2. COMPLEMENT: wherever the pane clears the derived grant floor the
+    #      rail must really be there and carry content. Without this, hiding
+    #      it everywhere passes (1). ──
+    roomy = [r for r in rows if r['paneWidth'] >= _RAIL_MIN_PANE]
     missing = [r for r in roomy if not r['railShown'] or r['railText'] < 10]
 
     # ── 3. Height bound: a one-line turn must not balloon. Scoped to the
@@ -394,17 +431,31 @@ def test_rail_never_clipped_in_any_pane_state(page):
                 and r['bodyHeight'] > 0
                 and r['msgHeight'] > r['bodyHeight'] * _MAX_HEIGHT_RATIO]
 
-    # ── 4. No context lost: no rail track → the fold summary stands in. ──
+    # ── 4. No context lost: no rail track → the fold summary stands in —
+    #      VISIBLY. display:flex is not enough: the fold once auto-placed
+    #      into the zero-width rail track and painted nothing while every
+    #      display/text check passed, so the assertion demands a real box.
+    #      Scoped to panes that can host a READABLE fold: the fold lives in
+    #      the content column, which is pane − ~100px of furniture − up to
+    #      37px of theme bubble inset, so a 156–196px pane still leaves the
+    #      fold a 10–60px strip (measured: contentBox=10 at pane 156) — the
+    #      same sub-legible sliver class as the 0–62px drawer panes in the
+    #      design's own "as little as 74px" note. 200px is the first width
+    #      with prose (≥5 chars/line) and a ≥20px fold box in every theme. ──
     lost = [r for r in rows
-            if not r['railShown'] and (not r['foldShown'] or len(r['foldText']) < 5)]
+            if not r['railShown'] and r['paneWidth'] >= 200
+            and (not r['foldShown'] or r['foldW'] < 20
+                 or len(r['foldText']) < 5)]
 
     # ── 5. MEASURE CEILING: reclaimed space must become margin, not line
     #      length. Asserted on the RENDERED text box in every state. ──
     too_wide = [r for r in rows if r['measure'] > _MAX_MEASURE_PX]
-    # ── 6. MEASURE FLOOR (complement): capping must not shrink the text.
-    #      Scoped to roomy panes — a 70px pane legitimately has no measure. ──
+    # ── 6. MEASURE FLOOR (complement): granting the rail must not starve the
+    #      text. Scoped to rows where the RAIL IS SHOWN — that is precisely
+    #      the set the grant threshold endangers (a rail-less narrow pane may
+    #      legitimately have any measure, and a 70px drawer pane has none). ──
     too_narrow = [r for r in rows
-                  if r['paneWidth'] >= 1368 and r['measure'] < _MIN_MEASURE_PX]
+                  if r['railShown'] and r['measure'] < _MIN_MEASURE_PX]
 
     # ── 7. ONE MEASURE: prose and non-prose must share it. Choosing option A
     #      means code blocks / tables / tool cards lay out against the SAME
@@ -422,7 +473,7 @@ def test_rail_never_clipped_in_any_pane_state(page):
     #      above it is the exact complaint that motivated that code. ──
     composer_off = [r for r in rows
                     if r['composerW'] > 0 and r['measure'] > 0
-                    and not r['drawer'] and r['paneWidth'] >= 1368
+                    and not r['drawer'] and r['paneWidth'] >= _RAIL_MIN_PANE
                     and abs(r['composerW'] - r['measure']) > 120]
 
     # ── 9. CONVERSATION CHROME (gauge + turn-nav): in-flow in the status
@@ -454,7 +505,7 @@ def test_rail_never_clipped_in_any_pane_state(page):
     print(f'  no rail AND no fold       : {len(lost)}')
     if rows:
         _mw = max(r['measure'] for r in rows)
-        _mn = min((r['measure'] for r in rows if r['paneWidth'] >= 1368),
+        _mn = min((r['measure'] for r in rows if r['railShown']),
                   default=0)
         print(f'  text measure (max / roomy-min): {_mw:.0f}px / {_mn:.0f}px'
               f'  [bounds {_MIN_MEASURE_PX}\u2013{_MAX_MEASURE_PX}]')
@@ -467,7 +518,7 @@ def test_rail_never_clipped_in_any_pane_state(page):
             _tmax = max(r['measure'] for r in _tr)
             _tpr = max(r['prose'] for r in _tr)
             _tover = len([r for r in _tr if r['measure'] > _MAX_MEASURE_PX])
-            _tunder = len([r for r in _tr if r['paneWidth'] >= 1368
+            _tunder = len([r for r in _tr if r['railShown']
                            and r['measure'] < _MIN_MEASURE_PX])
             print(f'    [{_t:<5}] body-max={_tmax:.0f}px prose-max={_tpr:.0f}px '
                   f'over={_tover} under={_tunder}')

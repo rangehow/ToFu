@@ -7,8 +7,12 @@ fallback attempts — while the fallback model was demonstrably healthy.
 (api.py: "429 loops forever"), and `strict_model=True` pinned the slot pool,
 so llm_fallback never got a signal. The escalation raises
 ``RateLimitError(is_saturation=True)`` once every candidate slot has been
-continuously saturated past ``TOFU_429_SATURATION_SECS`` (default 120,
-0 = legacy behaviour).
+continuously saturated past ``TOFU_429_SATURATION_SECS``.
+
+Owner directive 2026-08-03: a 429 wall must never interrupt the turn —
+retrying is free — so the DEFAULT budget is 0 (infinite rotation, the
+pre-escalation legacy behaviour). The bounded escalation is opt-in via
+``TOFU_429_SATURATION_SECS`` > 0; every test below pins the env explicitly.
 """
 
 import threading
@@ -194,6 +198,15 @@ class TestChatSaturationEscalation:
             prefer_model='m1', strict_model=True, log_prefix='[T]')
         assert content == 'ok-text'
         assert clock.now > 120, 'test did not actually pass the budget mark'
+
+
+# ── default (owner directive 2026-08-03) ─────────────────────────────
+
+@pytest.mark.unit
+def test_default_budget_disables_escalation(monkeypatch):
+    """No env → budget 0 → 429 walls rotate forever, never interrupt."""
+    monkeypatch.delenv('TOFU_429_SATURATION_SECS', raising=False)
+    assert api._saturation_budget_secs() == 0
 
 
 # ── llm_fallback composition ─────────────────────────────────────────

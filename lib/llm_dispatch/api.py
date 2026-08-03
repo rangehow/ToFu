@@ -58,14 +58,17 @@ def _saturation_budget_secs() -> float:
     """Bounded-escalation budget (seconds) for continuous all-slot 429
     saturation (pt_a21cd6eb 交付①).
 
-    ``TOFU_429_SATURATION_SECS`` (default 120). 0 disables the escalation
-    and restores the legacy infinite-rotation behaviour byte-for-byte.
+    ``TOFU_429_SATURATION_SECS`` (default 0 = disabled). Owner directive
+    2026-08-03: a 429 wall must NEVER interrupt the turn — keep rotating
+    (retrying is free); the legacy infinite-rotation behaviour is the
+    default. Set a positive budget to re-enable the bounded escalation
+    (RateLimitError(is_saturation=True) → llm_fallback model swap).
     Read per call so tests / ops can toggle without a restart.
     """
     try:
-        return float(os.environ.get('TOFU_429_SATURATION_SECS', '') or '120')
+        return float(os.environ.get('TOFU_429_SATURATION_SECS', '') or '0')
     except (ValueError, TypeError):
-        return 120.0
+        return 0.0
 
 
 def _saturation_escalate(log_prefix, label, *, elapsed_s, budget_s, cycles,
@@ -323,8 +326,10 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     _429_count = 0
     _last_exclusion_reset = time.monotonic()  # ★ track when we last reset hard-error exclusions
     _EXCLUSION_RESET_INTERVAL = 60  # reset exclude_pairs every 60s during 429 cycling
-    # Bounded 429-saturation escalation clock (pt_a21cd6eb) — set on the
-    # first genuine-429 starvation signal, checked at the loop top.
+    # 429-saturation clock (pt_a21cd6eb) — set on the first genuine-429
+    # starvation signal. The bounded escalation is DISABLED by default
+    # (owner directive 2026-08-03: 429 walls retry forever); it only fires
+    # when TOFU_429_SATURATION_SECS > 0.
     _sat_start = None
 
     while hard_attempts < max_retries:
@@ -1275,11 +1280,11 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 'Gateway outage: no slot reachable for %.0fs'
                 % _GATEWAY_OUTAGE_BUDGET_S)
 
-        # ★ Bounded 429-saturation escalation (pt_a21cd6eb 交付①). A real
-        #   per-key/contention 429 rotates forever BY DESIGN — but when EVERY
-        #   slot for the requested model stays saturated past the budget, the
-        #   wait is indistinguishable from quota exhaustion for the user, so
-        #   escalate to the caller (llm_fallback swaps models). 0 disables.
+        # ★ 429-saturation escalation (pt_a21cd6eb 交付①) — DISABLED by
+        #   default (budget 0, owner directive 2026-08-03: a 429 wall keeps
+        #   rotating, retrying is free, never interrupt the turn). When
+        #   TOFU_429_SATURATION_SECS > 0, every-slot saturation past the
+        #   budget escalates to the caller (llm_fallback swaps models).
         _sat_budget = _saturation_budget_secs()
         if state.saturation_exceeded(_sat_budget):
             _saturation_escalate(
@@ -1826,8 +1831,8 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
 
         state.maybe_reset_exclusions(log_prefix, 'async_dispatch_stream')
 
-        # ★ Bounded 429-saturation escalation (lockstep with sync
-        #   dispatch_stream — pt_a21cd6eb 交付①).
+        # ★ 429-saturation escalation (lockstep with sync dispatch_stream
+        #   — pt_a21cd6eb 交付①; disabled by default since 2026-08-03).
         _sat_budget = _saturation_budget_secs()
         if state.saturation_exceeded(_sat_budget):
             _saturation_escalate(

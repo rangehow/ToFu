@@ -52,8 +52,9 @@ reaper **按设计**永远不杀 429 循环任务——两个子系统各自的�
 新增**每次 dispatch 调用粒度的饱和计时器**：
 
 - 当本次 dispatch 内，当前模型的**全部候选 slot 连续 429**（无任何一次
-  attempt 拿到首字节）超过 `TOFU_429_SATURATION_SECS`（默认 **120s**，env 可调，
-  **0 = 关闭 = 现行为逐字节保留**），dispatch 抛出
+  attempt 拿到首字节）超过 `TOFU_429_SATURATION_SECS`（**2026-08-03 起默认 0 =
+  关闭**：owner 指令「429 永不打断对话，重试零成本」——无限轮转为默认行为；
+  设正数预算即恢复本交付的有界升级），dispatch 抛出
   `RateLimitError(is_saturation=True, status_code=429, reason='saturation:<model>:<secs>')`。
 - `RateLimitError` 新增 `is_saturation` 属性（默认 False）。它与 `is_quota`
   **刻意分开**：key 是健康的（只是被挤），**不喂** key_stats 的

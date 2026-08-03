@@ -1,3 +1,11 @@
+### 2026-08-03(libatk 真根因改判:FUSE 坏窗口杀 .so 读取,不是缺包——本地盘库目录 + CHROMIUM_EXTRA_LIB_DIRS 启动接线;我上一批「本机已修复」被 owner 证据链推翻) — owner 复核指令四条;commit 见下(chatui 3 文件 + tofu-search 1 文件);验证 **ldd 10/10 干净 + 净环境发射+字体 10/10**
+
+- **owner 擒获的误判:** 我上一批 conda「装进 env」在 conda-meta/history 里只 link 了 ca-certificates/certifi——atk 等 10 包**早已安装**(文件一直在 env/lib,May 10 是包构建 mtime)。三次「libatk cannot open」(12:41/18:44/22:47)与两次成功发射(12:36/19:03)在恒定进程环境下交替,唯一解释=env/lib 所在 **beegfs-fuse 间歇性读失败**(同 PG FUSE epic `pt_4d321fb8f1c2400c` 一族);我首次 ldd 撞上坏窗口(10 个 FUSE 库集体 not found,系统库全正常=签名)。当时唯一确定性来源是 /tmp 本地盘目录,被我当「清理」删了——本机实际与修复前同样脆弱。
+- **根修(与 FUSE 天气彻底解耦):** ①`/home/hadoop-aipnlp/tofu-browser-libs`(ext4 本地盘)conda create 全套 chromium 库(含 fontconfig+字体,`etc/fonts/fonts.conf` 俱在);②`restart_15000.sh` 启动环境接线 `CHROMIUM_EXTRA_LIB_DIRS`(chromium_env 与 tofu-search standalone fallback 共同的第一优先免过滤钩子,零 Python 改动)+ `FONTCONFIG_PATH/FILE`(env/etc/fonts 同在 FUSE,坏窗口=全字符空渲染);③install.sh Step 8 扩 FUSE 分支(`df -T` 判 env prefix 在 fuse 上→本地盘建/更新库目录,逐包回退,哨兵实证,导出覆盖值供本脚本点燃验证用,指引其他 launcher);tofu-search install.sh 同步同构分支。
+- **验证:** 仅本地目录 LD_LIBRARY_PATH 下 ldd 循环 10/10 零 not-found;`env -i` 净环境(只给 HOME/PATH/本地库/本地 fontconfig)playwright 发射+measureText 循环 **10/10**。install.sh×2 + restart 脚本 bash -n 全过;发现逻辑干跑正确(默认路径 `$HOME/tofu-browser-libs`,`TOFU_BROWSER_LIBS_DIR` 可覆盖)。
+- **重启队列(四枚,重启一次全上线):** jsonify `d9f931b6`、429 无限重试 `80431312`、扩展 preseed `d9a0016b`、**CHROMIUM_EXTRA_LIB_DIRS 启动接线**(本批)。运行中服务器(PID 242280,11:16 启动)环境变量无法外挂,浏览器发射在重启前仍随 FUSE 天气波动——这是环境挤压,非代码缺口。
+
+### 2026-08-03(Autopilot 气泡「推理中 0 字符」根修:VU 通道的 thinking_active 相位从未携带 _thinkingLen——worker 通道一直带;穿插的「已发送给 kimi-k3」=轮次切换的设计内相位,服务端零卡死) — owner 截图两问(conv `msdcksqymtglha`);commit `8b18cbc2`(2 文件 +340/−2);新套件 **7 针**(failing-first 对 HEAD 精确 3 红)+ NEUTER 精确;环 **32 + 48 全绿**
 ### 2026-08-03(Autopilot 气泡「推理中 0 字符」根修:VU 通道的 thinking_active 相位从未携带 _thinkingLen——worker 通道一直带;穿插的「已发送给 kimi-k3」=轮次切换的设计内相位,服务端零卡死) — owner 截图两问(conv `msdcksqymtglha`);commit `8b18cbc2`(2 文件 +340/−2);新套件 **7 针**(failing-first 对 HEAD 精确 3 红)+ NEUTER 精确;环 **32 + 48 全绿**
 
 - **定案(纯前端计数器断线,服务端健康):** app.log 实证——VU 任务 88c1b9bd R1 63s(thinking=6415 chars → 2 工具调用,content=0)、R2 86s(thinking=5221 → 882 字正文),TTFT 11.7s、缓存命中 96-97%,无任何卡死/重试。「卡很久」的观感=两轮长推理 + R1 纯工具调用轮零可见正文,全程唯一可见物就是那行相位。

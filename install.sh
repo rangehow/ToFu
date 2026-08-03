@@ -1919,6 +1919,41 @@ if [[ "$SKIP_PLAYWRIGHT" -eq 0 ]]; then
             warn "  Fix rootless: conda install -n ${ENV_NAME} -c conda-forge atk-1.0 at-spi2-atk at-spi2-core alsa-lib xorg-libxcomposite xorg-libxdamage xorg-libxfixes xorg-libxrandr libxkbcommon nspr nss mesa-libgbm-cos7-x86_64 fontconfig font-ttf-dejavu-sans-mono font-ttf-ubuntu"
             warn "  Fix with root: sudo python -m playwright install-deps chromium"
         fi
+
+        # FUSE-mounted env? Installed is not enough — a FUSE bad window kills
+        # Chromium's .so reads at LAUNCH time (measured 2026-08-03 on
+        # beegfs-fuse: 'libatk cannot open' storms alternating with successful
+        # launches under a CONSTANT process env; the libs were never missing).
+        # The deterministic answer is a local-disk copy + the
+        # CHROMIUM_EXTRA_LIB_DIRS override (honored FIRST and unfiltered by
+        # chromium_env.chromium_lib_dirs(); tofu_search's standalone fallback
+        # reads the same variable).
+        _env_prefix="$(conda run -n "$ENV_NAME" python -c 'import sys; print(sys.prefix)' 2>/dev/null || true)"
+        if [[ -n "$_env_prefix" ]] && df -T "$_env_prefix" 2>/dev/null | awk 'NR==2{print $2}' | grep -qi fuse; then
+            _browser_libs="${TOFU_BROWSER_LIBS_DIR:-${HOME}/tofu-browser-libs}"
+            info "Env prefix is on FUSE (${_env_prefix}) — installing a local-disk Chromium-libs copy at ${_browser_libs}"
+            if [[ -d "${_browser_libs}/conda-meta" ]]; then
+                _local_cmd=(conda install -p "${_browser_libs}" -c conda-forge --override-channels -y)
+            else
+                _local_cmd=(conda create -p "${_browser_libs}" -c conda-forge --override-channels -y)
+            fi
+            if ! "${_local_cmd[@]}" "${CHROMIUM_LIBS[@]}"; then
+                warn "Local-disk group install failed — retrying per-package"
+                for _pkg in "${CHROMIUM_LIBS[@]}"; do
+                    "${_local_cmd[@]}" "$_pkg" || warn "  local chromium lib '$_pkg' unavailable on this channel"
+                done
+            fi
+            if [[ -f "${_browser_libs}/lib/libatk-1.0.so.0" ]]; then
+                ok "Local-disk Chromium libs ready at ${_browser_libs}/lib"
+                # In effect for THIS script's launch verification below;
+                # restart_15000.sh auto-discovers the same default path.
+                export CHROMIUM_EXTRA_LIB_DIRS="${_browser_libs}/lib"
+                info "restart_15000.sh auto-discovers this path (TOFU_BROWSER_LIBS_DIR overrides)."
+                info "For any other launcher: export CHROMIUM_EXTRA_LIB_DIRS=${_browser_libs}/lib"
+            else
+                warn "Local-disk copy incomplete — Chromium will keep resolving libs from the FUSE env (flaky)"
+            fi
+        fi
     fi
 
     # Self-heal: the Chromium download below runs `python -m playwright`, which

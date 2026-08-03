@@ -49,6 +49,27 @@ PY="/mnt/dolphinfs/ssd_pool/docker/user/hadoop-aipnlp/INS/ruanjunhao04/miniforge
 PORT=15000
 LOG="server_${PORT}.log"
 
+# ── Headless-Chromium libs from LOCAL disk, never the FUSE conda env. ──
+# The conda env lives on beegfs-fuse, which intermittently fails .so reads
+# under pressure — measured 2026-08-03: 'libatk-1.0.so.0: cannot open shared
+# object file' launch storms alternating with successful launches under a
+# CONSTANT process env (the libs were never missing; FUSE weather decides).
+# chromium_env.chromium_lib_dirs() honors CHROMIUM_EXTRA_LIB_DIRS FIRST and
+# unfiltered; tofu_search's standalone fallback reads the same variable.
+# The fontconfig half is exported too — env/etc/fonts is on the same FUSE
+# mount, and a bad window there renders every glyph as nothing.
+BROWSER_LIBS_DIR="${TOFU_BROWSER_LIBS_DIR:-${HOME}/tofu-browser-libs}"
+if [ -d "${BROWSER_LIBS_DIR}/lib" ]; then
+  export CHROMIUM_EXTRA_LIB_DIRS="${BROWSER_LIBS_DIR}/lib"
+  if [ -f "${BROWSER_LIBS_DIR}/etc/fonts/fonts.conf" ]; then
+    export FONTCONFIG_PATH="${BROWSER_LIBS_DIR}/etc/fonts"
+    export FONTCONFIG_FILE="${BROWSER_LIBS_DIR}/etc/fonts/fonts.conf"
+  fi
+  echo "      chromium libs: CHROMIUM_EXTRA_LIB_DIRS=${CHROMIUM_EXTRA_LIB_DIRS}"
+else
+  echo "      NOTE: ${BROWSER_LIBS_DIR}/lib absent — Chromium libs resolve from the conda env (FUSE-flaky on this host)"
+fi
+
 echo "════════════════════════════════════════════════════════════════"
 echo "[0/5] restart_15000.sh — reloading Tofu server on :${PORT}"
 echo "      project: ${PROJ}"

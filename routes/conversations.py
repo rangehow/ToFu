@@ -207,28 +207,37 @@ def _conv_row_to_meta_dict(r):
     ],
     responses={
         '200': {'description': (
-            'A JSON array of conversations. By default each element is '
-            'metadata-only (no `messages`); with `?full=1` each element also '
-            'carries its `messages` array.'),
+            'Envelope ``{ok, items}`` — ``items`` is the array of '
+            'conversations (api-contract §4 batch 9: the bare top-level array '
+            'moved under ``items``). By default each element is metadata-only '
+            '(no `messages`); with `?full=1` each element also carries its '
+            '`messages` array.'),
             'content': {'application/json': {'schema': {
-                'type': 'array',
-                'items': {
-                    'type': 'object',
-                    'properties': {
-                        'id': {'type': 'string'},
-                        'title': {'type': 'string'},
-                        'msgCount': {'type': 'integer',
-                                     'description': 'Message count (metadata default).'},
-                        'createdAt': {'type': 'integer'},
-                        'updatedAt': {'type': 'integer'},
-                        'settings': {'type': 'object', 'nullable': True,
-                                     'additionalProperties': True},
-                        'messages': {'type': 'array',
-                                     'description': 'Present only with ?full=1.',
-                                     'items': {'$ref': '#/components/schemas/ChatMessage'}},
-                    },
-                    'required': ['id', 'title'],
-                }}}}},
+                'type': 'object',
+                'properties': {
+                    'ok': {'type': 'boolean'},
+                    'items': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'id': {'type': 'string'},
+                                'title': {'type': 'string'},
+                                'msgCount': {'type': 'integer',
+                                             'description': 'Message count (metadata default).'},
+                                'createdAt': {'type': 'integer'},
+                                'updatedAt': {'type': 'integer'},
+                                'settings': {'type': 'object', 'nullable': True,
+                                             'additionalProperties': True},
+                                'messages': {'type': 'array',
+                                             'description': 'Present only with ?full=1.',
+                                             'items': {'$ref': '#/components/schemas/ChatMessage'}},
+                            },
+                            'required': ['id', 'title'],
+                        }},
+                },
+                'required': ['ok', 'items'],
+            }}}},
     },
 )
 async def list_convs():

@@ -1242,7 +1242,7 @@ class LLMDispatcher:
 
     def has_capable_slots(self, capability: str = 'text',
                           exclude_models=None, exclude_keys=None,
-                          exclude_pairs=None) -> bool:
+                          exclude_pairs=None, prefer_model=None) -> bool:
         """True if at least one slot CAN serve ``capability`` ignoring
         transient cooldown / rpm state.
 
@@ -1257,11 +1257,21 @@ class LLMDispatcher:
 
         Only the durable disqualifiers (capability, hard exclusions,
         chat-compatibility) are checked here; cooldown / inflight / rpm
-        are deliberately ignored."""
+        are deliberately ignored.
+
+        ``prefer_model`` (passed by the dispatch loops ONLY under
+        ``strict_model``) narrows the answer to the preferred model's
+        alias group: a strict-pinned loop can never pick outside that
+        group, so healthy slots of OTHER models must not keep it cycling
+        (2026-08-03 incident: kimi-k3's sole key permission-excluded →
+        the pool's healthy opus/glm slots answered True here, the loop
+        spun ~2min resurrecting the dead pair every 60s instead of
+        failing over to the pool rescue immediately)."""
         self.initialize()
         ex_models = exclude_models or set()
         ex_keys = exclude_keys or set()
         ex_pairs = exclude_pairs or set()
+        alias_set = self._alias_set(prefer_model) if prefer_model else None
         # Respect the thread's hard provider pin (same isolation rule as
         # _pick): a pinned task only "has capable slots" among its own
         # provider's slots, so the retry loop waits for THAT provider to
@@ -1279,6 +1289,8 @@ class LLMDispatcher:
                 if not self._is_chat_compatible(s):
                     continue
                 if _pinned_provider and s.provider_id != _pinned_provider:
+                    continue
+                if alias_set is not None and s.model not in alias_set:
                     continue
                 return True
         return False
@@ -1456,6 +1468,7 @@ class LLMDispatcher:
                 'total_requests': s.total_requests,
                 'total_errors': s.total_errors,
                 'contention_errors': s.contention_errors,
+                'gateway_errors': s.gateway_errors,
                 'requests_5h': s.requests_5h,
                 'provider_id': s.provider_id,
                 'base_url': s.base_url,

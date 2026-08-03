@@ -299,8 +299,12 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
     # remember them so the periodic exclusion-reset during 429 cycling doesn't
     # silently re-introduce a model the caller explicitly banned.
     _initial_exclude_models = set(exclude)
-    exclude_keys = set()      # keys to exclude entirely
-    exclude_pairs = set()     # (key_name, model) pairs to exclude (permission errors)
+    exclude_keys = set()      # keys to exclude entirely (transient classes)
+    exclude_pairs = set()     # (key_name, model) pairs to exclude (transient classes)
+    # Durable counterparts (permission/quota) — survive the 60s reset;
+    # see _StreamRetryState.exclude_*_durable for the rationale.
+    exclude_keys_durable = set()
+    exclude_pairs_durable = set()
     last_err = None
 
     # ★ Pre-exclude stream-only models from non-streaming dispatch.
@@ -373,8 +377,10 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             capability=capability,
             prefer_model=prefer_model,
             exclude_models=_eff_exclude,
-            exclude_keys=exclude_keys if total_attempts > 0 else None,
-            exclude_pairs=exclude_pairs if total_attempts > 0 else None,
+            exclude_keys=(exclude_keys | exclude_keys_durable
+                          if total_attempts > 0 else None),
+            exclude_pairs=(exclude_pairs | exclude_pairs_durable
+                           if total_attempts > 0 else None),
             strict_model=strict_model)
         if slot is None:
             # All slots in cooldown / excluded — wait briefly and retry.
@@ -385,7 +391,9 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             #   capable slot exists at all. (Mirror of dispatch_stream.)
             _slots_exist = dispatcher.has_capable_slots(
                 capability, exclude_models=exclude,
-                exclude_keys=exclude_keys, exclude_pairs=exclude_pairs)
+                exclude_keys=exclude_keys | exclude_keys_durable,
+                exclude_pairs=exclude_pairs | exclude_pairs_durable,
+                prefer_model=prefer_model if strict_model else None)
             if _429_count > 0 or _slots_exist:
                 time.sleep(0.3)
                 _429_count += 1
@@ -479,7 +487,8 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                 # ★ Persistent billing/quota exhaustion (HTTP 402 or
                 #   429+insufficient_quota). Retrying on this key all day
                 #   is pointless — exclude the entire key and move on.
-                exclude_keys.add(slot.key_name)
+                #   Durable: must survive the 60s 429-cycling reset.
+                exclude_keys_durable.add(slot.key_name)
                 hard_attempts += 1
                 logger.warning(
                     '%s Quota exhausted on %s:%s — disabling key for '
@@ -518,16 +527,18 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
             latency = (time.time() - t0) * 1000
             slot.record_error(is_rate_limit=False, error=str(e)[:200])
             last_err = e
-            exclude_pairs.add((slot.key_name, slot.model))
+            # Durable — an auth rejection cannot heal inside this call.
+            exclude_pairs_durable.add((slot.key_name, slot.model))
             hard_attempts += 1
             # ★ If ALL models for this key have been excluded (all got 401),
             #   exclude the entire key to avoid further wasted attempts.
-            _key_pairs = {(kn, m) for kn, m in exclude_pairs if kn == slot.key_name}
+            _key_pairs = {(kn, m) for kn, m in exclude_pairs_durable
+                          if kn == slot.key_name}
             _key_models = {s.model for s in dispatcher.slots
                            if s.key_name == slot.key_name
                            and (not capability or capability in s.capabilities)}
             if _key_models and _key_models <= {m for _, m in _key_pairs}:
-                exclude_keys.add(slot.key_name)
+                exclude_keys_durable.add(slot.key_name)
                 logger.warning(
                     '%s Permission denied on ALL models for key %s — '
                     'excluding entire key',
@@ -978,6 +989,17 @@ class _StreamRetryState:
         self._initial_exclude_models = set(self.exclude)
         self.exclude_keys = set()
         self.exclude_pairs = set()
+        # DURABLE exclusions — permission (401/403) pairs/keys and quota-dead
+        # keys. The transient sets above are cleared every 60s of 429 cycling
+        # (a 502/timeout may be a gateway restart that recovered);
+        # rejection classes cannot heal inside one dispatch call, so
+        # resurrecting them only re-burns a hard attempt on a guaranteed
+        # failure (2026-08-03: a dead kimi-k3 key was re-tried every 60s,
+        # consuming all 3 hard attempts over ~2min). They survive
+        # maybe_reset_exclusions; the NEXT dispatch call still starts fresh,
+        # so a fixed key self-heals between calls.
+        self.exclude_keys_durable = set()
+        self.exclude_pairs_durable = set()
         # Caller-provided avoid set seeds exclude_pairs so the first pick
         # already steers around it; tracked separately so it can be relaxed
         # as a last resort when every other slot is cooled/excluded.
@@ -1038,6 +1060,12 @@ class _StreamRetryState:
                 self.exclude |= self._initial_exclude_models
                 self.exclude_keys.clear()
                 self.exclude_pairs.clear()
+            if self.exclude_keys_durable or self.exclude_pairs_durable:
+                logger.debug(
+                    '%s %s: durable exclusions survive the reset '
+                    '(permission/quota cannot heal mid-call): keys=%s pairs=%s',
+                    log_prefix, label, self.exclude_keys_durable,
+                    self.exclude_pairs_durable)
             self._last_exclusion_reset = time.monotonic()
 
     def eff_exclude_models(self):
@@ -1050,10 +1078,14 @@ class _StreamRetryState:
                                 or self._initial_exclude_models) else None
 
     def eff_exclude_keys(self):
-        return self.exclude_keys if self.total_attempts > 0 else None
+        if self.total_attempts <= 0:
+            return None
+        return self.exclude_keys | self.exclude_keys_durable
 
     def eff_exclude_pairs(self):
-        return self.exclude_pairs if self.total_attempts > 0 else None
+        if self.total_attempts <= 0:
+            return None
+        return self.exclude_pairs | self.exclude_pairs_durable
 
     def relax_avoid_if_exhausted(self):
         """Drop the caller-provided avoid set when every other slot is gone.
@@ -1109,21 +1141,28 @@ class _StreamRetryState:
             self._saturation_start = time.monotonic()
 
     def note_quota_key(self, slot):
-        """Quota-exhausted 429 — disable the key for this dispatch; hard attempt."""
-        self.exclude_keys.add(slot.key_name)
+        """Quota-exhausted 429 — disable the key for this dispatch; hard attempt.
+
+        Durable: a dead balance cannot recover inside one dispatch call, so
+        the periodic 429-cycling reset must not resurrect it."""
+        self.exclude_keys_durable.add(slot.key_name)
         self.hard_attempts += 1
 
     def note_permission_pair(self, slot, dispatcher, capability, log_prefix):
         """Permission denied — exclude the (key, model) PAIR; escalate to a
-        whole-key exclusion only if EVERY model for this key is now excluded."""
-        self.exclude_pairs.add((slot.key_name, slot.model))
+        whole-key exclusion only if EVERY model for this key is now excluded.
+
+        Durable: an auth rejection cannot heal inside one dispatch call (see
+        ``exclude_pairs_durable``)."""
+        self.exclude_pairs_durable.add((slot.key_name, slot.model))
         self.hard_attempts += 1
-        _key_pairs = {(kn, m) for kn, m in self.exclude_pairs if kn == slot.key_name}
+        _key_pairs = {(kn, m) for kn, m in self.exclude_pairs_durable
+                      if kn == slot.key_name}
         _key_models = {s.model for s in dispatcher.slots
                        if s.key_name == slot.key_name
                        and (not capability or capability in s.capabilities)}
         if _key_models and _key_models <= {m for _, m in _key_pairs}:
-            self.exclude_keys.add(slot.key_name)
+            self.exclude_keys_durable.add(slot.key_name)
             logger.warning('%s Permission denied on ALL models for key %s — '
                            'excluding entire key', log_prefix, slot.key_name)
             return True
@@ -1407,7 +1446,9 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
             #   (b) no capable slot exists at all → genuinely unservable.
             _slots_exist = dispatcher.has_capable_slots(
                 capability, exclude_models=state.exclude,
-                exclude_keys=state.exclude_keys, exclude_pairs=state.exclude_pairs)
+                exclude_keys=state.exclude_keys | state.exclude_keys_durable,
+                exclude_pairs=state.exclude_pairs | state.exclude_pairs_durable,
+                prefer_model=prefer_model if strict_model else None)
             if state._429_count > 0 or _slots_exist:
                 time.sleep(0.3)
                 state.note_cooldown_cycle()
@@ -1430,8 +1471,10 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                         _causes = dispatcher.cooling_cause_summary(
                             capability,
                             exclude_models=state.exclude,
-                            exclude_keys=state.exclude_keys,
-                            exclude_pairs=state.exclude_pairs)
+                            exclude_keys=(state.exclude_keys |
+                                          state.exclude_keys_durable),
+                            exclude_pairs=(state.exclude_pairs |
+                                           state.exclude_pairs_durable))
                         from lib.llm_dispatch.retry_i18n import (
                             cooldown_wait_label)
                         _reason, _status = cooldown_wait_label(_causes)
@@ -1857,7 +1900,9 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 continue
             _slots_exist = dispatcher.has_capable_slots(
                 capability, exclude_models=state.exclude,
-                exclude_keys=state.exclude_keys, exclude_pairs=state.exclude_pairs)
+                exclude_keys=state.exclude_keys | state.exclude_keys_durable,
+                exclude_pairs=state.exclude_pairs | state.exclude_pairs_durable,
+                prefer_model=prefer_model if strict_model else None)
             if state._429_count > 0 or _slots_exist:
                 await async_abortable_sleep(0.3, abort_check)
                 state.note_cooldown_cycle()

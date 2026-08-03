@@ -41,7 +41,8 @@ logger = get_logger(__name__)
 # the DB so data survives server crashes even when there are no tool rounds.
 _STREAM_CHECKPOINT_INTERVAL = 5
 
-def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
+def stream_llm_response(task, body, tag='', on_tool_call_ready=None,
+                        *, pool_wide=False, exclude_models=None):
     """Stream an LLM response, wiring deltas into the task's event system.
 
     Delegates all key selection, retry, 429/401/403 failover to the
@@ -52,6 +53,16 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
             call's arguments finish streaming.  The orchestrator uses this
             to start executing read-only tools while the model is still
             generating the next tool call (streaming tool execution).
+        pool_wide: last-resort mode (llm_fallback pool rescue, owner
+            directive 2026-08-03): dispatch NON-strict with no preferred
+            model, so the picker may land on ANY healthy (key, model) in
+            the pool instead of dying when the requested model's keys are
+            all unavailable. ``body['model']`` is still the fallback wire
+            value — ``_adapt_stream_body_for_slot`` rewrites it per slot.
+        exclude_models: models the rescue must NOT re-try (they already
+            failed hard earlier in this fallback chain). Forwarded to
+            ``dispatch_stream`` (caller-provided exclusions are permanent
+            for the dispatch call).
 
     ★ Crash-recovery: periodically checkpoints to DB every ~5s during
     streaming so that even pure-LLM responses (no tool calls) survive
@@ -368,13 +379,17 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
         on_content=_on_content,
         on_tool_call_ready=on_tool_call_ready,
         abort_check=_abort_check,
-        prefer_model=model,
+        prefer_model=None if pool_wide else model,
         log_prefix=pfx,
         # ★ User-facing request: the user explicitly chose this model in
         #   the frontend preset selector.  429 retries must stay within
         #   this model's slots (different keys / alias group) — never
-        #   silently fall back to a cheaper/different model.
-        strict_model=True,
+        #   silently fall back to a cheaper/different model.  The pool-wide
+        #   rescue is the ONE sanctioned exception: the requested model's
+        #   keys are already proven unavailable, so holding the pin would
+        #   mean dying while healthy slots sit idle.
+        strict_model=not pool_wide,
+        exclude_models=exclude_models,
         on_retry=_on_retry,
         avoid_pairs=_avoid_pairs,
         on_attempt_restart=_on_attempt_restart,
@@ -414,7 +429,10 @@ def stream_llm_response(task, body, tag='', on_tool_call_ready=None):
     try:
         from lib.tasks_pkg import floor_retry as _fr
         _conv_for_fr = task.get('convId', '') or ''
-        if (_fr.floor_retry_enabled() and _conv_for_fr
+        # pool_wide rescue: floor-retry resends the identical body to the
+        # SAME model — undefined when the rescue is free to roam models —
+        # so the mitigation stays off for rescue dispatches.
+        if (_fr.floor_retry_enabled() and _conv_for_fr and not pool_wide
                 and _fr.is_floor_collapse(usage)
                 and _fr.wire_prefix_stable(_conv_for_fr, usage)):
             _fr_max = _fr.floor_retry_max()

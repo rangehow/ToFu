@@ -60,13 +60,21 @@ float absolutely over the message flow (gauge `left:18px`, dots `right:8px`,
 both `top:50%` of `.chat-wrapper`): the gauge genuinely overlapped the
 message column below a ~1420px pane, and the dots vanished under a viewport
 media query. Both now live in-flow in `#convStatusStrip` directly above the
-composer, inside `.input-area` (so `--input-area-h` already includes them).
+composer, inside `.input-inner` (so `--input-area-h` already includes them).
 
-The strip invariant is CONTAINMENT + PLACEMENT, not any constant: in every
-state the strip is visible directly above the composer, both cells' rects
-are contained inside the strip's rect, and neither cell overlaps any message
-or is clipped by the viewport. An absolute float restored by a future edit
-escapes containment in EVERY state — that is the NEUTER this guards against.
+The strip invariant is CONTAINMENT + PLACEMENT + SHARED TRACK, not any
+constant: in every state the strip is visible directly above the composer,
+both cells' rects are contained inside the strip's rect, neither cell
+overlaps any message or is clipped by the viewport — AND the strip is a
+child of `.input-inner` with edges exactly equal to the composer's, so the
+gauge and the dots sit on the input box's own width track (`--toolbar-w`).
+The strip previously carried its own `max-width` (--msg-measure + 52px):
+a second width source beside the composer's dynamic one, measurably
+misaligned in every state (26px/side at the 820px floor — the 2026-08-03
+owner report). An absolute float restored by a future edit escapes
+containment in EVERY state; an independent strip width restored breaks the
+edge equality in every state where the composer isn't exactly that width —
+those are the NEUTERs this guards against.
 The complement: both cells are present and non-empty in every state, so
 "hide the chrome everywhere" cannot satisfy the geometry either.
 """
@@ -206,10 +214,13 @@ _PROBE = """() => {
     // Measured on the rendered markdown box, not on any CSS variable, so a
     // future refactor that moves the cap elsewhere still gets policed.
     const md = msg.querySelector('.md-content') || body;
-    // The composer: main.js sizes it from getComputedStyle('.chat-inner').maxWidth,
-    // so any measure change moves it too. If it desyncs from the message
-    // column the input box stops lining up with the text above it.
+    // The composer: main.js floors its --toolbar-w to --msg-measure (the
+    // reading column), so any measure change moves it too. If it desyncs
+    // from the message column the input box stops lining up with the text
+    // above it. `.input-box` is the VISIBLE box the strip must sit above;
+    // `.input-inner` is the width track the strip must SHARE.
     const composer = document.querySelector('.input-inner');
+    const inputBox = document.querySelector('.input-box');
     // ── Conversation-status strip (gauge + turn-nav) ──
     // CONTAINMENT is the invariant: a cell that escapes the strip's rect
     // (e.g. an absolute float restored) is the old bug wearing a new name,
@@ -227,6 +238,7 @@ _PROBE = """() => {
         inn.left >= out.left - 0.5 && inn.right <= out.right + 0.5 &&
         inn.top >= out.top - 0.5 && inn.bottom <= out.bottom + 0.5;
     const stripR = rectOf(strip), gaugeR = rectOf(gauge), navR = rectOf(nav);
+    const boxR = rectOf(inputBox);
     /* Overlap must be judged on the VISIBLE part of the message: a message
      * scrolled out of the container still reports a raw rect (possibly right
      * under the strip), which would fake an overlap. Scroll the probe into
@@ -283,7 +295,16 @@ _PROBE = """() => {
         msgHeight: msg.getBoundingClientRect().height,
         bodyHeight: body ? body.getBoundingClientRect().height : 0,
         stripShown: visible(strip),
-        stripAboveComposer: !!stripR && !!compR && stripR.bottom <= compR.top + 1,
+        stripAboveComposer: !!stripR && !!boxR && stripR.bottom <= boxR.top + 1,
+        /* SHARED TRACK: the strip must be a CHILD of .input-inner and span
+         * it exactly — then gauge-left == composer-left and dots-right ==
+         * composer-right by construction. An independent strip max-width
+         * (the pre-fix 872px) only ever agrees by coincidence: measured
+         * 26px/side of overhang at the 820px floor (2026-08-03 report). */
+        stripInTrack: !!strip && strip.parentElement === composer,
+        stripMatchesComposer: !!stripR && !!compR &&
+            Math.abs(stripR.left - compR.left) <= 1 &&
+            Math.abs(stripR.right - compR.right) <= 1,
         gaugeShown: visible(gauge),
         gaugeInStripRect: within(gaugeR, stripR),
         gaugeOverlapMsg: overlap(gaugeR, visMsgR),
@@ -483,6 +504,13 @@ def test_rail_never_clipped_in_any_pane_state(page):
     #      states where the float happens to hit prose today. ──
     strip_missing = [r for r in rows
                      if not r['stripShown'] or not r['stripAboveComposer']]
+    # ── 9b. SHARED TRACK: the strip rides the composer's own width track
+    #      (child of .input-inner, edges equal) — a restored independent
+    #      strip width (the 872px that motivated this) fails the edge check
+    #      in every state whose composer isn't exactly that wide, and a
+    #      restored DOM move fails the parent check in every state. ──
+    strip_misaligned = [r for r in rows
+                        if not r['stripInTrack'] or not r['stripMatchesComposer']]
     chrome_escaped = [r for r in rows
                       if (r['gaugeShown'] and not r['gaugeInStripRect'])
                       or (r['navShown'] and not r['navInStripRect'])]
@@ -525,6 +553,7 @@ def test_rail_never_clipped_in_any_pane_state(page):
         print(f'  prose/body disagreement   : {len(split_measure)}')
         print(f'  composer desynced         : {len(composer_off)}')
         print(f'  strip missing/misplaced   : {len(strip_missing)}')
+        print(f'  strip off composer track  : {len(strip_misaligned)}')
         print(f'  chrome escaped strip      : {len(chrome_escaped)}')
         print(f'  chrome overlapping msgs   : {len(chrome_overlaps)}')
         print(f'  chrome clipped by viewport: {len(chrome_clipped)}')
@@ -625,6 +654,19 @@ def test_rail_never_clipped_in_any_pane_state(page):
             % (r['theme'], r['drawer'], r['sidebar'], r['vw'],
                r['stripShown'], r['stripAboveComposer'])
             for r in strip_missing[:12]))
+
+    assert not strip_misaligned, (
+        'the conversation-status strip left the composer\'s width track in '
+        '%d state(s) — it must be a child of .input-inner spanning it '
+        'exactly; an independent strip max-width (the pre-fix 872px) only '
+        'agrees with the composer by coincidence (26px/side off at the '
+        '820px floor, 2026-08-03 report):\n  '
+        % len(strip_misaligned)
+        + '\n  '.join(
+            'theme=%-5s drawer=%s sidebar=%-14s vw=%-5d inTrack=%s edgesMatch=%s'
+            % (r['theme'], r['drawer'], r['sidebar'], r['vw'],
+               r['stripInTrack'], r['stripMatchesComposer'])
+            for r in strip_misaligned[:12]))
 
     assert not chrome_escaped, (
         'a conversation-chrome cell ESCAPED the strip rect in %d state(s) — '

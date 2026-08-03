@@ -793,16 +793,20 @@
       </div>
     </div>
     <div class="input-area">
-      <!-- Conversation-status strip: the CONVERSATION-scoped chrome (context
-           gauge + turn-nav dots), in-flow directly above the composer.
-           The gauge is prepended here by context-bar.js (_ensureBar).
-           Being inside .input-area means --input-area-h (main.js) already
-           includes it, so the scroll-to-bottom button stays anchored above
-           the whole band. -->
-      <div class="conv-status-strip" id="convStatusStrip">
-        <div class="turn-nav" id="turnNav"></div>
-      </div>
       <div class="input-inner">
+        <!-- Conversation-status strip: the CONVERSATION-scoped chrome (context
+             gauge + turn-nav dots), in-flow directly above the composer.
+             The gauge is prepended here by context-bar.js (_ensureBar).
+             Living INSIDE .input-inner puts the strip on the composer's own
+             width track (--toolbar-w): the gauge's left edge and the dots'
+             right edge ARE the input box's edges at every viewport — one
+             width source, nothing to drift (2026-08-03 owner report).
+             Still inside .input-area, so --input-area-h (main.js) already
+             includes it and the scroll-to-bottom button stays anchored
+             above the whole band. -->
+        <div class="conv-status-strip" id="convStatusStrip">
+          <div class="turn-nav" id="turnNav"></div>
+        </div>
         <div class="project-bar" id="projectBar" style="display:none">
           <span class="project-bar-icon" onclick="openProjectModal()" style="cursor:pointer" title="Manage folders"></span>
           <span class="project-bar-folders" id="projectBarFolders" onclick="openProjectModal()" style="cursor:pointer" title="Click to manage folders"></span>

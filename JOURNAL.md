@@ -1,3 +1,10 @@
+### 2026-08-03(turn nav「消失」定案 + 状态条错位根修:条带搬进 .input-inner 共享 composer 宽度轨——仪表盘/圆点边缘从此就是输入框边缘) — owner 截图两问(「为什么 turn nav 消失了」+「它们没对齐输入框,难看」);commit 见下(4 文件);几何套件 **3/3**(432 行)+ 邻接环 **20/20**(P6/composer_floor/manual_compaction);NEUTER×2 各咬 432/432
+
+- **Q1 定案(消失=搬家+设计阈值,非回归):** ①圆点自 `4dee9231`(7-28,conversation chrome converges into a status strip)从 `.chat-wrapper` 右缘绝对浮标(right:8px / top:50%)搬进 `#convStatusStrip`(输入框上方条带的右格)——owner 还在旧位置找它;②`buildTurnNav` 在 **<2 个 user 轮**时清空(turn_nav.js:105,阈值老到 `9ded44f5` 已在)——owner 工作流=一任务一会话(近期会话 msgCount=2 占大半,即 1 user 轮),圆点天然几乎不现身;截图会话本就是新会话(0 消息);③渲染无回归:几何套件对**生产构建器**种 5 轮,432/432 状态圆点皆在。
+- **Q2 根修(错位):** 根因=条带与 composer **两条独立宽度源**——条带 `max-width:calc(--msg-measure + 52px)`=872px 定死,composer `.input-inner` 走 `--toolbar-w`(main.js 动态测量:max(工具栏自然宽,820 地板)+边框,钳 vw-48);实测 1365 视口:composer=822 vs 条带=872 → 左悬 **26px**/侧,工具栏更宽时错位任意漂。修法=**结构性共享轨道**(非调常数):条带搬进 `.input-inner` 作首子、删除自有 max-width——宽度只剩 `--toolbar-w` 一个源,任何视口/工具栏内容/主题下边缘天然齐。`_reflowToolbar` 的 9999px 测量 blowout 在同一 JS task 内同步收回,无闪烁(与 .input-inner 自身同理)。
+- **守卫:** 几何套件新增 `stripInTrack`(父子结构)+ `stripMatchesComposer`(边缘 ±1px)双不变量,`stripAboveComposer` 改对可见的 `.input-box` 量(条带入内后 .input-inner 顶=条带顶,旧判据恒假)。**NEUTER×2 实证:** 独立 `max-width:600px` → 432/432 红;条带移出 .input-inner → 432/432 红(inTrack=False)。
+- **真机实证:** :15000 同视口(1365,侧栏开)复测——仪表盘左缘 460→488px,与 composer 左缘精确重合(26px 外悬消除)。p6 静态 pin(strip 必须在 .input-area 内)零改动通过。
+
 ### 2026-08-03(预存红×2 闭环:test_frontend_open_conv_scroll_once——双层漂移:harness 缺符号只是表层,场景钉的「开卷 force-scroll 一次」契约已被 no-autoscroll owner 指令整体取代;套件按 widening 的现代职责重建) — 脑派发接我自票 `pt_7ba8b64906b54fd5` **DONE**;commit 见下(1 文件 +157/−77);本文件 2/2 + 邻接环 **18/18**(scroll/render 族 7 套件)
 
 - **第一层(harness 漂移,票面诊断):** 渲染分解把 `_explicitBottomLatch` 挪进 streaming_render.js,本套件 harness 仍单 eval chat_render.js → ReferenceError。照 bg_refresh_scroll.py:306 的既有解药:`sources_defining` 按符号从 bundle 清单解依赖 + **合并为一次 eval**(let 不出自己的 eval 作用域,分次 eval 照样 ReferenceError)。

@@ -408,11 +408,20 @@ html[data-rail] .folder-quickadd{display:none}
  * below a viewport media query. Both now live in-flow in this strip directly
  * above the composer — they cannot overlap prose by construction, and narrow
  * panes compress (the dots scroll horizontally) instead of disappearing.
- * The strip is a child of .input-area so --input-area-h (main.js:1105,
+ * The strip is a child of .input-inner so --input-area-h (main.js:1105,
  * measured from inputArea.offsetHeight) automatically includes it and the
  * scroll-to-bottom button keeps anchoring above the whole band.
+ *
+ * WIDTH TRACK: the strip carries NO max-width of its own — as a block child
+ * of .input-inner it spans exactly the composer's --toolbar-w track, so the
+ * gauge's left edge IS the input box's left edge and the dots' right edge
+ * IS its right edge, at every viewport and toolbar content. It previously
+ * had its own max-width (--msg-measure + 52px = 872px): a second width
+ * source beside the composer's dynamic --toolbar-w, which could only agree
+ * by coincidence — measured live: a 26px/side overhang at the 820px floor,
+ * and arbitrary mismatch as the toolbar grows (2026-08-03 owner report).
  * Guard: tests/test_turn_ctx_rail_geometry.py (strip invariants). */
-.conv-status-strip{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;max-width:calc(var(--msg-measure) + 52px);margin:0 auto;padding:0 0 8px;min-height:0}
+.conv-status-strip{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:0 0 8px;min-height:0}
 /* When both cells are empty (fresh conversation, <2 turns) the strip takes
  * no vertical space at all — the composer band looks exactly as before. */
 .conv-status-strip:has(.turn-nav:empty):not(:has(.ctx-health-bar)){display:none}

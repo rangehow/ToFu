@@ -15633,6 +15633,13 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .lc-copy::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:8px;font-size:11px;padding:3px 8px;border-radius:5px;background:#1e293b;color:#e2e8f0;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s}
 .lc-copy:hover::after{opacity:1}
 .lc-copy.copied{background:rgba(34,197,94,0.16);color:#22c55e;border-color:rgba(34,197,94,0.4)}
+/* ── Pairing code display (P2) ──
+   The 6-digit code is the panel's primary action, so it gets the biggest
+   type in the dialog: wide-tracked JetBrains Mono digits next to a copy
+   button, inside a purple-tinted card that matches .lc-copy's family. */
+.lc-pair-code{display:flex;align-items:center;gap:12px;margin:2px 0 6px;padding:10px 14px;border-radius:8px;border:1px solid rgba(168,85,247,0.4);background:rgba(168,85,247,0.07)}
+.lc-pair-digits{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;letter-spacing:.18em;color:#c084fc;user-select:all}
+[data-theme="light"] .lc-pair-digits{color:#7e22ce}
 .lc-perm-note{font-size:11.5px;line-height:1.55;color:var(--text-tertiary,#6a6a7a);margin:10px 0 0}
 .lc-substep{margin:0 0 10px}
 .lc-dl-link{font-size:12.5px;color:#a855f7;text-decoration:none;border-bottom:1px solid rgba(168,85,247,0.35);padding-bottom:1px;transition:color .15s ease,border-color .15s ease}

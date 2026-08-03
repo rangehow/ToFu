@@ -1046,6 +1046,11 @@
                               { onError: 'null', query: arch ? { arch: arch } : {} }),
     devices:     () => get('/api/v1/desktop/devices', { onError: 'null' }),
     mintToken:   (name) => post('/api/v1/desktop/token', { name: name || '' }),
+    /* Pairing-code mint (P2, docs/DESKTOP_AGENT_DIST_DESIGN.md §11): a
+     * 6-digit one-time code (300 s TTL, one-shot) the agent exchanges for
+     * a bridge token. The agent needs NO bearer — the code IS the
+     * credential. */
+    mintPairCode: () => post('/api/v1/desktop/pair-code'),
     revokeToken: (keyId) => del(`/api/v1/desktop/token/${encodeURIComponent(keyId)}`),
   };
 

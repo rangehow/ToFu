@@ -597,11 +597,11 @@ function _lcRenderDesktop(d, err) {
           (autoConnect
             ? '<p class="lc-step">' + _lcEsc(_lcT('local.agentStepAuto',
               '② 装完启动即可 —— 安装包已带服务器地址，会自动连上；此处状态变绿就是成功。')) + '</p>'
-            : '<p class="lc-step">' + _lcEsc(_lcT('local.agentStep2',
-              '② 点「生成连接行」（会自动复制），粘贴到受控端首次启动的连接框：')) + '</p>' +
-              '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
-                _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
-              '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>' +
+            : '<p class="lc-step">' + _lcEsc(_lcT('local.agentStepPair',
+              '② 点「配对这台电脑」（6 位码，可复制），填进受控端首次启动：')) + '</p>' +
+              '<button type="button" class="btn btn-primary btn-sm" id="lcPairBtn">' +
+                _lcEsc(_lcT('local.pairBtn', '配对这台电脑')) + '</button>' +
+              '<div id="lcPairBox" style="display:none"></div>' +
               '<p class="lc-step">' + _lcEsc(_lcT('local.agentStep3',
               '③ 连上后此处状态变绿 —— 之后它常驻托盘，无需再操作。')) + '</p>') +
           '<details class="lc-details"><summary>' +
@@ -609,7 +609,15 @@ function _lcRenderDesktop(d, err) {
             '这台电脑也想跑 Tofu 本体（服务器+界面）？下载完整桌面版')) +
             '</summary>' +
             _lcDownloadLinks(d, 'full') +
-          '</details>';
+          '</details>' +
+          (autoConnect ? '' :
+          '<details class="lc-details"><summary>' +
+            _lcEsc(_lcT('local.connectLineToggle', '高级：连接行（配对码不可用时兜底）')) +
+            '</summary>' +
+            '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtn">' +
+              _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
+            '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>' +
+          '</details>');
       } else {
         html =
           '<p class="lc-step">' + _lcEsc(_lcT('local.desktopRemote',
@@ -620,6 +628,8 @@ function _lcRenderDesktop(d, err) {
           '<code class="lc-copy" id="lcTokenBox" style="display:none"></code>';
       }
       setup.innerHTML = _lcProxyWarnHtml(d) + _lcAwaitingAgentHtml(d) + html;
+      var pair = document.getElementById('lcPairBtn');
+      if (pair) pair.onclick = function () { _lcPairCode(); };
       var mint = document.getElementById('lcMintBtn');
       if (mint) mint.onclick = function () { _lcMintToken(srv); };
       return;
@@ -675,6 +685,85 @@ function _lcMintToken(serverUrl, btnId, boxId) {
           })
           .catch(function () {});
       }
+    })
+    .catch(function () {
+      if (btn) btn.disabled = false;
+      if (typeof showToast === 'function') showToast(_lcT('devices.mintFailed', '生成失败'));
+    });
+}
+
+/* Mint a PAIRING CODE (P2, docs/DESKTOP_AGENT_DIST_DESIGN.md §11) and render
+ * it BIG with a copy button + countdown — the ONE primary action of the
+ * remote branch. The user types 6 digits into the agent's first-run dialog;
+ * the agent exchanges the code for a bridge token (no bearer, no address,
+ * no SSH command). This replaces the mint-connect-line flow as the primary
+ * path because the connect line's address half is necessarily wrong under
+ * an SSO proxy (owner incident 2026-08-03); the code carries no address at
+ * all — the agent discovers the server itself (§11.2.1 ladder).
+ *
+ * The code is shown EXACTLY once (it is one-shot + 5-minute TTL); the
+ * countdown keeps the TTL honest so a code that quietly expired is never
+ * pasted. Reuses POST /api/v1/desktop/pair-code. */
+function _lcPairCode(btnId, boxId) {
+  var btn = document.getElementById(btnId || 'lcPairBtn');
+  var box = document.getElementById(boxId || 'lcPairBox');
+  if (btn) btn.disabled = true;
+  Promise.resolve(Api.desktop.mintPairCode())
+    .then(function (r) {
+      if (btn) btn.disabled = false;
+      if (!r || !r.code) {
+        if (typeof showToast === 'function') showToast(_lcT('devices.mintFailed', '生成失败'));
+        return;
+      }
+      if (!box) return;
+      var code = String(r.code);
+      var expiresAt = Number(r.expires_at || 0);
+      box.style.display = '';
+      box.innerHTML =
+        '<div class="lc-pair-code">' +
+          '<span class="lc-pair-digits">' + _lcEsc(code) + '</span>' +
+          '<button type="button" class="btn btn-primary btn-sm" id="lcPairCopy">' +
+            _lcEsc(_lcT('browser.clickToCopy', '点击复制')) + '</button>' +
+        '</div>' +
+        '<p class="lc-substep" id="lcPairCountdown">' +
+          _lcEsc(_lcT('local.pairHint',
+            '把这 6 位数字填进受控端首次启动 —— 它自己找服务器并完成配对（无需地址、无需隧道）。')) +
+        '</p>';
+      var copyBtn = document.getElementById('lcPairCopy');
+      if (copyBtn) {
+        copyBtn.onclick = function () {
+          if (typeof _safeClipboardWrite === 'function') {
+            _safeClipboardWrite(code)
+              .then(function () {
+                copyBtn.textContent = _lcT('local.copied', '已复制');
+                if (typeof showToast === 'function') {
+                  showToast(_lcT('local.pairCopied',
+                    '配对码已复制 —— 粘贴到受控端首次启动'));
+                }
+              })
+              .catch(function () {});
+          }
+        };
+      }
+      // Countdown: keep the TTL honest. Refresh once a second until expiry;
+      // past-zero the box greys out and offers to re-mint (the button
+      // stays — clicking it again just mints a fresh code).
+      var cd = document.getElementById('lcPairCountdown');
+      var started = Date.now();
+      var iv = setInterval(function () {
+        var left = Math.max(0, Math.round(expiresAt - Date.now() / 1000));
+        var m = Math.floor(left / 60), s = left % 60;
+        if (cd) {
+          cd.textContent = _lcT('local.pairExpires',
+            '配对码 {mm}:{ss} 后过期').replace('{mm}', m)
+            .replace('{ss}', (s < 10 ? '0' : '') + s);
+        }
+        if (left <= 0) {
+          clearInterval(iv);
+          if (cd) cd.textContent = _lcT('local.pairExpired',
+            '配对码已过期 —— 再点一次生成新码');
+        }
+      }, 1000);
     })
     .catch(function () {
       if (btn) btn.disabled = false;

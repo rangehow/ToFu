@@ -351,8 +351,11 @@ async function _riSelectRound(taskId, roundNum, el, turn) {
  * _riTaskIdForRound: a tool round does not carry _taskId itself — it lives on
  * the OWNING assistant message. Resolve by scanning the active conversation
  * tail-up for the message whose toolRounds contains this round object (identity
- * first, then roundNum), because tail-up finds the live turn first. Returns ''
- * when unresolvable, and the caller then renders NO anchor (an anchor that
+ * first — ANY role, because a non-assistant owner such as the autopilot VU
+ * bubble means "owned but not inspectable": its sub-task persists no snapshots,
+ * so the round must NOT fall through to the numeric match — then roundNum),
+ * because tail-up finds the live turn first. Returns '' when unresolvable, and
+ * the caller then renders NO anchor (an anchor that
  * cannot resolve is worse than none). */
 function _riTaskIdForRound(round) {
   try {
@@ -362,8 +365,20 @@ function _riTaskIdForRound(round) {
     const msgs = (conv && Array.isArray(conv.messages)) ? conv.messages : [];
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i];
-      if (!m || m.role !== 'assistant' || !Array.isArray(m.toolRounds)) continue;
-      if (m.toolRounds.indexOf(round) !== -1) return m._taskId || '';
+      if (!m || !Array.isArray(m.toolRounds)) continue;
+      if (m.toolRounds.indexOf(round) !== -1) {
+        /* Identity owner found. A NON-assistant owner (the autopilot VU
+         * bubble — role 'user', _isVirtualUser) owns the round but its
+         * sub-task persists NO request/state snapshots: owned yet not
+         * inspectable → '' (the contract: no anchor beats a wrong one).
+         * Falling through to the numeric match here pinned VU rounds on the
+         * WORKER task's same-numbered mirror — the 2026-08-03 incident,
+         * where a VU verification round opened the worker's state and read
+         * as data corruption. */
+        return (m.role === 'assistant' && !m._isVirtualUser)
+          ? (m._taskId || '') : '';
+      }
+      if (m.role !== 'assistant') continue;
       if (round && round.roundNum != null &&
           m.toolRounds.some((r) => r && r.roundNum === round.roundNum &&
                                    r.llmRound === round.llmRound)) {

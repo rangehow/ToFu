@@ -60,6 +60,13 @@ def _clear_state():
     api_keys._cache_loaded = False
 
 
+def _mint(cli, auth):
+    """Mint a pairing code via the panel route; returns the code string."""
+    r = cli.post('/api/v1/desktop/pair-code', headers=auth)
+    assert r.status_code == 201, r.get_data(as_text=True)
+    return r.get_json()['code']
+
+
 # ── 1-7: the code lifecycle via the two routes ────────────────────────
 
 class TestPairingLifecycle:
@@ -83,7 +90,7 @@ class TestPairingLifecycle:
     def test_2_consume_mints_a_bridge_key_for_the_codes_user(self,
                                                               flask_client):
         auth, _, _ = _bearer('u-alice')
-        code = self._mint(flask_client, auth)
+        code = _mint(flask_client, auth)
         r = flask_client.post('/api/desktop/pair', json={
             'code': code, 'name': 'office-pc', 'platform': 'windows'})
         assert r.status_code == 201, r.get_data(as_text=True)
@@ -103,14 +110,14 @@ class TestPairingLifecycle:
 
     def test_3_code_is_one_shot(self, flask_client):
         auth, _, _ = _bearer('u-alice')
-        code = self._mint(flask_client, auth)
+        code = _mint(flask_client, auth)
         assert self._consume(flask_client, code).status_code == 201
         # Second consume of the SAME code fails.
         assert self._consume(flask_client, code).status_code == 409
 
     def test_4_wrong_code_does_not_kill_the_real_one(self, flask_client):
         auth, _, _ = _bearer('u-alice')
-        real_code = self._mint(flask_client, auth)
+        real_code = _mint(flask_client, auth)
         # Three wrong guesses.
         for _ in range(3):
             r = self._consume(flask_client, '000000')
@@ -123,7 +130,7 @@ class TestPairingLifecycle:
         auth, _, _ = _bearer('u-alice')
         # NEUTER the TTL so the minted code is already expired.
         monkeypatch.setattr(pairing_mod, '_CODE_TTL_S', -1)
-        code = self._mint(flask_client, auth)
+        code = _mint(flask_client, auth)
         time.sleep(0.05)
         assert self._consume(flask_client, code).status_code == 409
 
@@ -141,9 +148,7 @@ class TestPairingLifecycle:
     # ── helpers ──────────────────────────────────────────────────────
 
     def _mint(self, cli, auth):
-        r = cli.post('/api/v1/desktop/pair-code', headers=auth)
-        assert r.status_code == 201, r.get_data(as_text=True)
-        return r.get_json()['code']
+        return _mint(cli, auth)
 
     def _consume(self, cli, code):
         return cli.post('/api/desktop/pair', json={'code': code})
@@ -205,3 +210,63 @@ class TestLanDiscovery:
         assert res.start()  # second call is a no-op
         res.stop()
         assert res._sock is None
+
+
+# ── 9: per-IP global failure budget (owner 2026-08-04) ──────────────
+# The per-code 3-attempt lockout does NOT stop an attacker who keeps
+# guessing NEW random codes — each attempt gets a fresh budget. The real
+# boundary is the attacker's ATTEMPT RATE per IP: N failures inside the
+# window → 429 BEFORE the code is even looked up.
+class TestPairIpBudget:
+    def setup_method(self):
+        _clear_state()
+        from lib.desktop.pairing import _IP_BLOCKED, _IP_FAILS, _STORE_LOCK
+        with _STORE_LOCK:
+            _IP_BLOCKED.clear()
+            _IP_FAILS.clear()
+
+    def _consume(self, cli, code, ip='1.2.3.4'):
+        # Quart sets remote_addr from the ASGI scope's client tuple — the
+        # same override the bridge-addressing suite uses.
+        return cli.post('/api/desktop/pair', json={'code': code},
+                        scope_base={'client': (ip, 5555)})
+
+    def test_n_failures_trip_429_before_consume(self, flask_client):
+        ip = '9.9.9.9'
+        for _ in range(pairing_mod._IP_FAIL_BUDGET):
+            r = self._consume(flask_client, '000000', ip=ip)
+            assert r.status_code == 409
+        # The next attempt — even a VALID code — is 429'd before lookup.
+        auth, _, _ = _bearer('u-alice')
+        code = _mint(flask_client, auth)
+        r = self._consume(flask_client, code, ip=ip)
+        assert r.status_code == 429, (
+            f'a blocked IP must 429 before its code is consumed, got '
+            f'{r.status_code}')
+
+    def test_success_resets_the_ip_slate(self, flask_client):
+        ip = '8.8.8.8'
+        for _ in range(3):
+            assert self._consume(flask_client, '000000',
+                                 ip=ip).status_code == 409
+        # One successful exchange clears the slate — a legit agent retrying
+        # after a transient failure is not punished forever.
+        auth, _, _ = _bearer('u-alice')
+        code = _mint(flask_client, auth)
+        assert self._consume(flask_client, code, ip=ip).status_code == 201
+        # After the reset the budget is fresh again: more attempts allowed.
+        for _ in range(3):
+            assert self._consume(flask_client, '000000',
+                                 ip=ip).status_code == 409
+
+    def test_the_budget_is_per_ip_not_global(self, flask_client):
+        for _ in range(pairing_mod._IP_FAIL_BUDGET):
+            self._consume(flask_client, '000000', ip='5.5.5.5')
+        # That IP is blocked…
+        auth, _, _ = _bearer('u-alice')
+        code = _mint(flask_client, auth)
+        assert self._consume(flask_client, code, ip='5.5.5.5') \
+            .status_code == 429
+        # …but a DIFFERENT IP exchanges the same code fine.
+        assert self._consume(flask_client, code, ip='6.6.6.6') \
+            .status_code == 201

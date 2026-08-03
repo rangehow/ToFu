@@ -20,7 +20,7 @@ import time
 from flask import Blueprint
 
 from lib.api_response import (
-    api_conflict, api_created, api_not_found, api_ok, api_payload,
+    api_conflict, api_created, api_error, api_not_found, api_ok, api_payload,
 )
 from lib.env_compat import getenv_compat
 from lib.log import audit_log, get_logger
@@ -533,9 +533,25 @@ async def desktop_pair():
     bound to the code's minting user, saves it as its remote
     attachment, and starts polling.
     """
+    from flask import request
     from lib.api_keys import create_key
-    from lib.desktop.pairing import consume_code
+    from lib.desktop.pairing import (consume_code,
+                                     ip_fail_budget_exceeded,
+                                     record_pair_failure,
+                                     record_pair_success)
     from lib.request_parser import async_parse_body, optional_str
+    # Per-IP global failure budget (owner 2026-08-04): an attacker who
+    # keeps guessing NEW codes gets a fresh per-code budget each time, so
+    # per-code lockout alone leaves 1e6 space brute-forceable. A blocked
+    # IP gets 429 BEFORE its code is even looked up — the rate bound is
+    # the real boundary, not the per-code retry count.
+    client_ip = request.remote_addr or '<unknown>'
+    if ip_fail_budget_exceeded(client_ip):
+        audit_log('desktop_pair_rate_limited', ip=client_ip)
+        return api_error('pair_rate_limited', status=429,
+                         message='Too many failed pairing attempts from '
+                                 'this address. Wait a few minutes and '
+                                 'try again with a fresh code.')
     body = await async_parse_body()
     code = optional_str(body, 'code', default='',
                         max_len=16).strip()
@@ -545,12 +561,14 @@ async def desktop_pair():
                             max_len=40).strip() or 'unknown'
     user_id = consume_code(code)
     if user_id is None:
+        record_pair_failure(client_ip)
         audit_log('desktop_pair_failed', code=code[:2] + '****',
                   reason='invalid_code')
         return api_conflict('invalid_code',
                             message='This pairing code is invalid, expired, '
                                     'or already used. Generate a new one '
                                     'in the panel.')
+    record_pair_success(client_ip)
     row, token = create_key(name, scopes=[_BRIDGE_SCOPE], user_id=user_id)
     audit_log('desktop_pair_succeeded', key_id=row.get('id'),
               user_id=user_id, platform=platform)

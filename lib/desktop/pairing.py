@@ -52,6 +52,25 @@ _LAN_BIND = ('', 15001)  # adjacent to the app; not a privileged port
 _STORE: dict[str, dict] = {}  # code -> {user_id, expires_at, attempts}
 _STORE_LOCK = threading.Lock()
 
+# ── Per-IP global failure budget ──
+# The per-code 3-attempt lockout is BY DESIGN not enough: an attacker who
+# keeps guessing NEW random codes gets a fresh budget on every attempt, so
+# 1e6 codes × unlimited fresh attempts = brute-forceable. The boundary that
+# actually matters is the attacker's ATTEMPT RATE, not a single code's
+# retry count (owner 2026-08-04, verified gap). Per-code lockout stays as
+# defense-in-depth; this per-IP budget is the real boundary.
+# Mechanism: each failed pair-exchange from an IP records a timestamp;
+# N failures inside the window trips a cooldown during which the IP gets
+# 429 BEFORE its code is even looked up. A successful exchange resets the
+# IP's slate (a legit agent retrying after a transient failure is not
+# punished forever).
+_IP_FAIL_WINDOW_S = 60   # sliding window for counting failures
+_IP_FAIL_BUDGET = 10     # failures inside the window that trip the block
+_IP_BLOCK_S = 300        # cooldown once the budget trips
+
+_IP_FAILS: dict[str, list[float]] = {}   # ip -> failure timestamps
+_IP_BLOCKED: dict[str, float] = {}       # ip -> blocked-until epoch
+
 
 def _now() -> float:
     return time.time()
@@ -112,6 +131,48 @@ def consume_code(code: str) -> Optional[str]:
         user_id = str(row['user_id'])
         del _STORE[code]  # ONE-SHOT: never reusable
     return user_id
+
+
+def ip_fail_budget_exceeded(ip: str) -> bool:
+    """True when *ip* is inside a cooldown after exhausting its failure
+    budget. Checked BEFORE the code is consumed — a blocked IP cannot even
+    attempt (that is what makes the rate bound real, not cosmetic)."""
+    ip = ip or '<unknown>'
+    now = _now()
+    with _STORE_LOCK:
+        blocked_until = _IP_BLOCKED.get(ip)
+        if blocked_until is not None:
+            if blocked_until > now:
+                return True
+            del _IP_BLOCKED[ip]  # cooldown expired
+        fails = [t for t in _IP_FAILS.get(ip) or []
+                 if now - t < _IP_FAIL_WINDOW_S]
+        _IP_FAILS[ip] = fails
+        return len(fails) >= _IP_FAIL_BUDGET
+
+
+def record_pair_failure(ip: str) -> None:
+    """Record one failed pair-exchange from *ip*; trip the block at budget."""
+    ip = ip or '<unknown>'
+    now = _now()
+    with _STORE_LOCK:
+        fails = [t for t in _IP_FAILS.get(ip) or []
+                 if now - t < _IP_FAIL_WINDOW_S]
+        fails.append(now)
+        _IP_FAILS[ip] = fails
+        if len(fails) >= _IP_FAIL_BUDGET:
+            _IP_BLOCKED[ip] = now + _IP_BLOCK_S
+            logger.warning('[DesktopPairing] IP %s blocked for %ds after '
+                           '%d pair-exchange failures in %ds',
+                           ip, _IP_BLOCK_S, len(fails), _IP_FAIL_WINDOW_S)
+
+
+def record_pair_success(ip: str) -> None:
+    """A successful exchange clears the IP's failure slate — a legit agent
+    retrying after a transient failure is not punished forever."""
+    ip = ip or '<unknown>'
+    with _STORE_LOCK:
+        _IP_FAILS.pop(ip, None)
 
 
 def pending_codes(user_id: str) -> list[dict]:
@@ -214,4 +275,7 @@ class LanDiscoveryResponder:
 
 __all__ = ['generate_code', 'mint_code', 'consume_code', 'pending_codes',
            'LanDiscoveryResponder',
-           '_CODE_TTL_S', '_MAX_ATTEMPTS', '_LAN_MAGIC', '_LAN_BIND']
+           'ip_fail_budget_exceeded', 'record_pair_failure',
+           'record_pair_success',
+           '_CODE_TTL_S', '_MAX_ATTEMPTS', '_LAN_MAGIC', '_LAN_BIND',
+           '_IP_FAIL_BUDGET', '_IP_BLOCK_S']

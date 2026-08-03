@@ -1,3 +1,11 @@
+### 2026-08-03(订阅登录页重设计:出口不可用改 action-first「安装受控端」callout + 三步流程条 + egress 全家话术改「受控端」;顺手修 parity 半迁移预存红) — owner 截图三指令(①按钮丑 ②只需装受控端就直接提示装 ③界面重设计突出重点);commit 见下(8 文件);环 **42+39 绿**(egress_line/agent_btn/onboarding/panels_parity/mcp_oauth_deferred + i18n 五套件)
+
+- **定案:** ①「获取桌面代理」小按钮 inline 挤在红字旁 → 改为琥珀色 action-first callout:标题「需要安装受控端:服务器无法直接访问外网」+ 副行「在你的电脑上安装轻量受控端并连接后,登录请求就会经你的电脑发出」+ 右侧实心深色「安装受控端」按钮(仍深链 Local Control 单一安装面,点击后 3s 自愈轮询不变);②术语统一「受控端」(与本机控制面板一致)——egress 五状态文案从「出口/桌面代理」改「网络/受控端」;③面板顶部新增三步流程条(点击登录→完成授权→自动完成,Token 过期自动刷新生平第一次可见),中国提示从橙色长文收窄为琥珀横幅,底部「使用说明」四点(与流程条+卡内兜底提示信息重复)整节删除,键 `oauthInstructions`/`oauthNote1-4` 退役。
+- **顺手修预存红:** `.oauth-egress-agent-btn` 规则误置 styles.css(egress epic 批引入),违反 settings_panels_parity 半迁移闸(`.oauth-` 只准住 settings.css)——HEAD 实证红(13 套件中唯一红);随本批归位 settings.css 并升级为 callout 内实心主按钮样式,闸转绿。
+- **契约保留:** 按钮 id/`egressGetAgent(Title)`/`egressUnavailable` 键与 `oauth-egress-bad` 容器类全部保留 → egress_line 套件零改动通过;agent_btn 套件 NEUTER 锚点重钉新 callout markup 并加 sub/callout 双针;onboarding R2 键集补 `egressUnavailSub`。
+- **视觉验收:** browser_preview_page 驱动真实 oauth.js 渲染五状态矩阵(unavailable 双卡/直连/经受控端+pin/未开 egress/检测中)+ 560px 窄视口换行验证,全绿后删预览文件。
+- **共享树处置:** i18n.js/styles.css/JOURNAL.md 含兄弟未提交改动——本批走 blob 级暂存(HEAD+本批 hunks 铸 blob 入索引,staged 仅我 8 文件),与同日 `7c87f379` 记档的 pathspec 整文件吞事故正好对偶:blob 法保证只有自己的 hunks 进场。
+
 ### 2026-08-03(有损回声孪生收敛:无损子集 subsumption + sidecar 嫁接——裁剪窗口回声不再永久双气泡;owner 复验擒获的第三形态) — owner 复验指令;commit `2696f2c1`(2 文件 +338/−6);套件 +6(failing-first 实证契约红);NEUTER×1;邻接环 **20 套件 137/137**;真实数据 fold 8→7 + 生产缝克隆行 compute+persist 全通
 
 - **owner 复验擒获(错误孪生修完后的第三形态):** `mscns5i0fcofgl` msgs 2&3 仍是同任务双气泡(task `b2d4edb9`,重试轮)——content/thinking/segments 逐字节相等,但**前端本地裁剪窗口**使 echo 只带最近 20 轮(keeper 30 轮的严格子集),apiRounds 仅差 keeper 侧 settle 补戳的 `cost` 键,字节相等判定永不收敛(实测 HEAD fold count=0)。三形态谱系自此完整:①字节级回 PUT 回声(原 collapse)、②错误孪生(终态分歧→fold-fill)、③有损回声(裁剪子集→subset+graft)。

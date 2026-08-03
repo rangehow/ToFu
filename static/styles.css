@@ -4759,9 +4759,6 @@ input.settings-mono {
 .stg-oauth-note-icon > svg { display: block; }
 .stg-oauth-note-title { font-size: 12px; font-weight: 800; color: var(--s-ink); margin-bottom: 3px; }
 .stg-oauth-note-desc { font-size: 11.5px; line-height: 1.5; color: var(--s-ink-soft); }
-/* Egress line "Get desktop agent" deep-link button (sits next to the
-   unavailable verdict inside the OAuth card). */
-.oauth-egress-agent-btn { margin-left: 8px; white-space: nowrap; vertical-align: baseline; }
 /* Balance badge — colored by remaining amount */
 .stg-badge-balance { font-size: 11px; font-variant-numeric: tabular-nums; }
 @keyframes stg-bal-pulse {

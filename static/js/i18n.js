@@ -1407,13 +1407,20 @@ var _i18n = {
   'settings.oauthManagedNoteTitle': { zh: '这是 {name} 订阅登录自动生成的服务商', en: 'This provider was auto-created from your {name} subscription login' },
   'settings.oauthManagedNoteDesc': { zh: '它使用你登录的 {name} 订阅额度，令牌每次请求实时获取，无需填写 API Key。要移除它，请点下方「退出登录」——只删这张卡片不会清除登录凭证，下次刷新令牌时它会重新出现。', en: 'It uses your logged-in {name} subscription — the token is fetched live per request, so no API key is needed. To remove it, use “Log out” below: deleting only this card leaves the login token on disk, so it reappears on the next token refresh.' },
   'settings.oauthLogoutRemove': { zh: '退出登录', en: 'Log out' },
-  'settings.egressDirect': { zh: '出口：服务器直连', en: 'Egress: direct from server' },
-  'settings.egressViaAgent': { zh: '出口：经桌面代理（{name}）', en: 'Egress: via desktop agent ({name})' },
-  'settings.egressAgentNoCap': { zh: '桌面代理在线但未开启 --allow-egress，请重启代理并加上该参数', en: 'Desktop agent online but --allow-egress is off — restart the agent with that flag' },
-  'settings.egressUnavailable': { zh: '出口不可用：服务器被封锁且无可用桌面代理', en: 'Egress unavailable: server blocked and no desktop agent online' },
-  'settings.egressProbing': { zh: '出口检测中…', en: 'Probing egress…' },
-  'settings.egressGetAgent': { zh: '获取桌面代理', en: 'Get desktop agent' },
-  'settings.egressGetAgentTitle': { zh: '打开「本机控制」面板：下载受控端并连接后，订阅流量即可经你的电脑出口', en: 'Opens Local Control: install the lightweight agent and connect it so subscription traffic exits via your machine' },
+  'settings.egressDirect': { zh: '网络：服务器直连', en: 'Network: direct from server' },
+  'settings.egressViaAgent': { zh: '网络：经受控端（{name}）', en: 'Network: via agent ({name})' },
+  'settings.egressAgentNoCap': { zh: '受控端在线但未开启 --allow-egress，请重启受控端并加上该参数', en: 'Agent online but --allow-egress is off — restart the agent with that flag' },
+  'settings.egressUnavailable': { zh: '需要安装受控端：服务器无法直接访问外网', en: 'Agent install required — the server cannot reach the internet directly' },
+  'settings.egressUnavailSub': { zh: '在你的电脑上安装轻量受控端并连接后，登录请求就会经你的电脑发出。', en: 'Install the lightweight agent on your computer and connect it — sign-in requests then go out through your computer.' },
+  'settings.egressProbing': { zh: '网络检测中…', en: 'Checking connectivity…' },
+  'settings.egressGetAgent': { zh: '安装受控端', en: 'Install agent' },
+  'settings.egressGetAgentTitle': { zh: '打开「本机控制」面板：下载受控端并用连接行连接后，订阅流量即可经你的电脑出口', en: 'Opens Local Control: download the agent and connect it with the connect line so subscription traffic exits via your machine' },
+  'settings.oauthStep1': { zh: '点击登录', en: 'Click login' },
+  'settings.oauthStep1Sub': { zh: '弹窗打开官方授权页', en: 'A popup opens the official auth page' },
+  'settings.oauthStep2': { zh: '完成授权', en: 'Authorize' },
+  'settings.oauthStep2Sub': { zh: '用订阅账号登录并授权', en: 'Sign in with your subscription and authorize' },
+  'settings.oauthStep3': { zh: '自动完成', en: 'Done automatically' },
+  'settings.oauthStep3Sub': { zh: 'Token 过期自动刷新', en: 'Tokens refresh automatically' },
   // ── First-run onboarding wizard (onboarding.js) ──
   'onboard.title': { zh: '欢迎使用 Tofu', en: 'Welcome to Tofu' },
   'onboard.chooseTitle': { zh: '先用一步向导把模型跑起来 —— 你想用哪种方式？', en: 'One quick step to get a model working — which way do you prefer?' },
@@ -1914,7 +1921,6 @@ var _i18n = {
   'settings.authCodeHint': { zh: '授权成功后页面显示授权码，复制 code#state 粘贴到下方：', en: 'After authorization, copy the code#state from the page and paste below:' },
   'settings.callbackHint': { zh: '授权成功后，复制浏览器地址栏中的回调 URL 粘贴到下方：', en: 'After authorization, copy the callback URL from the browser address bar below:' },
   'settings.submit': { zh: '提交', en: 'Submit' },
-  'settings.oauthInstructions': { zh: '使用说明', en: 'Instructions' },
 
   // ══════════════════════════════════════
   //  Settings — MCP Tab
@@ -3264,7 +3270,7 @@ var _i18n = {
 
   // OAuth extended strings
   'settings.oauthPageDesc': { zh: '使用 ChatGPT Plus / Claude Pro 订阅账号登录，无需 API Key，直接使用订阅额度。', en: 'Log in with ChatGPT Plus / Claude Pro — no API Key needed, use your subscription quota directly.' },
-  'settings.oauthChinaNote': { zh: '⚠️ 中国用户需要全程代理（Clash/VPN），授权弹窗和服务器换 token 都需要能访问外网。建议在<strong>本地浏览器无痕窗口</strong>中完成授权。', en: '⚠️ Users in China need a proxy (Clash/VPN) throughout. Both the auth popup and server-side token exchange require internet access. Use a <strong>local incognito window</strong> to authorize.' },
+  'settings.oauthChinaNote': { zh: '⚠️ 中国用户：授权全程需要代理（Clash/VPN），建议在<strong>本地浏览器无痕窗口</strong>中完成。若服务器无法访问外网，卡片内会提示你安装受控端（装在自己电脑上即可）。', en: '⚠️ Users in China: a proxy (Clash/VPN) is required throughout — use a <strong>local incognito window</strong>. If the server cannot reach the internet, the card will prompt you to install the agent on your own computer.' },
   'settings.oauthPopupBlocked': { zh: '如弹窗无法打开，请复制链接到<strong>开了代理的浏览器无痕窗口</strong>中打开：', en: 'If the popup is blocked, copy the link into a <strong>proxy-enabled incognito browser window</strong>:' },
   'settings.oauthCopyLink': { zh: '复制链接', en: 'Copy Link' },
   'settings.oauthCopied': { zh: '✓ 已复制', en: '✓ Copied' },
@@ -3277,10 +3283,6 @@ var _i18n = {
   'settings.oauthSubmit': { zh: '提交', en: 'Submit' },
   'settings.oauthClaudeDesc': { zh: '登录 Claude 订阅，使用 Sonnet / Opus 等模型，无需 API Key。', en: 'Log in with your Claude subscription to use Sonnet / Opus — no API Key required.' },
   'settings.oauthCodexDesc': { zh: '登录 ChatGPT 订阅，使用 Codex 模型，请求自动转换为 Responses API 格式。', en: 'Log in with your ChatGPT subscription to use Codex — requests auto-converted to Responses API format.' },
-  'settings.oauthNote1': { zh: '点击登录 → 弹窗打开官方授权页 → 用订阅账号登录并授权', en: 'Click Login → popup opens the official auth page → log in with your subscription account and authorize' },
-  'settings.oauthNote2': { zh: '授权后 Claude 显示 <code>code#state</code>、ChatGPT 自动回调，按提示操作即可', en: 'After authorization Claude shows <code>code#state</code>; ChatGPT auto-callbacks — follow the on-screen hints' },
-  'settings.oauthNote3': { zh: '如弹窗被拦截，点击「复制链接」到<strong>本地浏览器无痕窗口</strong>中打开（避免登录态冲突）', en: 'If the popup is blocked, click "Copy Link" and open it in a <strong>local incognito window</strong> (avoids session conflicts)' },
-  'settings.oauthNote4': { zh: 'Token 过期后自动刷新，无需重新登录', en: 'Tokens auto-refresh on expiry — no need to re-login' },
 
   // Network proxy: extended body/hint
   'settings.httpProxyBody': { zh: '配置用于所有出站请求（LLM API、网页搜索、页面抓取）的 HTTP/HTTPS 代理。留空则使用系统环境变量（<code>http_proxy</code> / <code>https_proxy</code>）。修改立即生效，无需重启。', en: 'Configure HTTP/HTTPS proxy for all outbound requests (LLM API, web search, page fetch). Leave empty to use system env vars (<code>http_proxy</code> / <code>https_proxy</code>). Changes take effect immediately.' },

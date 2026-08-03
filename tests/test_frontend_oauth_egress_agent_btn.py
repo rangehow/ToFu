@@ -105,6 +105,8 @@ HARNESS = textwrap.dedent("""
       out.unavailHasBtn = el.innerHTML.includes('oauthClaudeEgressAgentBtn');
       out.unavailBtnKey = el.innerHTML.includes('settings.egressGetAgent');
       out.unavailVerdictKept = el.innerHTML.includes('settings.egressUnavailable');
+      out.unavailSubKey = el.innerHTML.includes('settings.egressUnavailSub');
+      out.unavailIsCallout = el.innerHTML.includes('oauth-egress-callout');
 
       // (2) the other four states render NO button.
       out.directNoBtn = !render({{ state: 'direct' }}).innerHTML.includes('EgressAgentBtn');
@@ -168,6 +170,10 @@ def test_unavailable_renders_the_way_out():
         "installer — the user is told the diagnosis but not the cure")
     assert out["unavailVerdictKept"], (
         "the verdict text was displaced by the button — both must render")
+    assert out["unavailSubKey"] and out["unavailIsCallout"], (
+        "the unavailable verdict lost its action-first callout (title + "
+        "install-the-agent sub-line) — the user is told WHAT to do, not "
+        "just the diagnosis")
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
@@ -210,11 +216,11 @@ def test_NEUTER_button_markup_removed():
     while the sibling states stay clean (the guard bites HERE, not on
     unrelated states)."""
     out = _run(lambda s: s.replace(
-        "      html = '<span class=\"oauth-egress-bad\">' + t('settings.egressUnavailable') + '</span>' +\n"
-        "             ' <button type=\"button\" class=\"btn-small oauth-egress-agent-btn\" id=\"oauth' + capProvider + 'EgressAgentBtn\"' +\n"
-        "             ' title=\"' + escapeHtml(t('settings.egressGetAgentTitle')) + '\">' +\n"
-        "             escapeHtml(t('settings.egressGetAgent')) + '</button>';\n",
-        "      html = '<span class=\"oauth-egress-bad\">' + t('settings.egressUnavailable') + '</span>';\n"))
+        "               '<button type=\"button\" class=\"btn-small oauth-egress-agent-btn\" id=\"oauth' + capProvider + 'EgressAgentBtn\"' +\n"
+        "               ' title=\"' + escapeHtml(t('settings.egressGetAgentTitle')) + '\">' +\n"
+        "               escapeHtml(t('settings.egressGetAgent')) + '</button>' +\n"
+        "             '</div>';\n",
+        "             '</div>';\n"))
     assert not out["unavailHasBtn"], "NEUTER did not remove the button"
     assert out["directNoBtn"] and out["agentNoBtn"], (
         "unrelated states must stay button-free")

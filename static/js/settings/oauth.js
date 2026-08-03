@@ -420,15 +420,21 @@ function _renderEgressLine(provider, egress) {
       break;
     case 'unavailable':
       cls += ' oauth-egress-bad';
-      /* The ONLY way out of this state is a desktop agent — offer the ONE
-       * next action right where the diagnosis is rendered, deep-linking to
+      /* The ONLY way out of this state is installing the desktop agent — so
+       * the prompt LEADS with that action (diagnosis demoted to the sub-line)
+       * and renders the ONE next step as a prominent button deep-linking to
        * the Local Control modal (the single install surface: backend-chosen
        * download links + bridge-token connect line) instead of growing a
        * second install guide here. */
-      html = '<span class="oauth-egress-bad">' + t('settings.egressUnavailable') + '</span>' +
-             ' <button type="button" class="btn-small oauth-egress-agent-btn" id="oauth' + capProvider + 'EgressAgentBtn"' +
-             ' title="' + escapeHtml(t('settings.egressGetAgentTitle')) + '">' +
-             escapeHtml(t('settings.egressGetAgent')) + '</button>';
+      html = '<div class="oauth-egress-callout">' +
+               '<div class="oauth-egress-callout-text">' +
+                 '<span class="oauth-egress-callout-title">' + t('settings.egressUnavailable') + '</span>' +
+                 '<span class="oauth-egress-callout-sub">' + t('settings.egressUnavailSub') + '</span>' +
+               '</div>' +
+               '<button type="button" class="btn-small oauth-egress-agent-btn" id="oauth' + capProvider + 'EgressAgentBtn"' +
+               ' title="' + escapeHtml(t('settings.egressGetAgentTitle')) + '">' +
+               escapeHtml(t('settings.egressGetAgent')) + '</button>' +
+             '</div>';
       break;
     default: // unknown — 探测已在后台触发
       html = '<span class="oauth-egress-pending">' + t('settings.egressProbing') + '</span>';

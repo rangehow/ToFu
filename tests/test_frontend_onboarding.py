@@ -318,7 +318,8 @@ def test_R2_every_wizard_string_is_translated():
     i18n = I18N_JS.read_text(encoding="utf-8")
     keys = set(re.findall(r"onboard\.[A-Za-z]+",
                           ONBOARD_JS.read_text(encoding="utf-8")))
-    keys |= {"settings.egressGetAgent", "settings.egressGetAgentTitle"}
+    keys |= {"settings.egressGetAgent", "settings.egressGetAgentTitle",
+             "settings.egressUnavailSub"}
     assert len(keys) >= 20, f"suspiciously few keys found: {sorted(keys)}"
     for key in sorted(keys):
         assert re.search(r"^\s*'%s':" % re.escape(key), i18n, re.M), (

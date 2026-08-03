@@ -1,3 +1,10 @@
+### 2026-08-04(预存红闭环:test_restart_smoke::test_sync_route_runs_under_quart——断言钉的是被 api-contract 批 11 有意迁移的裸数组契约;方向对齐而非代码迁就) — 脑派发接我自票 `pt_225df9a89fb14131` **DONE**;commit 见下(2 文件);restart 族 **28/28**
+
+- **定案(纯测试漂移):** 票面写的「测试 DB 缺 schema_meta/paper_library 表」是**伴随噪音**(测试 env 未建表,ERROR 日志但非致命)——真红的断言是 `isinstance(data, list)`;`/api/v1/chat/active` 在批 11(2026-08-01)已**有意**迁到 `api_ok({'items': …})` 信封(routes/chat.py 迁移注释 + static/js/api.js:921 前端配套解包俱在),返回 200 但载荷是信封,旧断言钉的是被取代的裸数组形状。与 segment_gate/open_conv_scroll_once 两票同族:测试滞后于有意契约迁移。
+- **修法:** 断言重钉为 `ok is True + items 是 list`(docstring 记漂移史);NEUTER 自明——路由回退裸数组则 `data.get` 当场 AttributeError,针必然咬。信封作为正确形状由同文件 §6 的 404/405 套件交叉钉住。
+- **环:** restart 族 28/28(smoke 24 + lock_race 1 + parity 3)。
+
+### 2026-08-03(chromium-libs 双 launcher 不变量闭环:supervisord conf 补 CHROMIUM_EXTRA_LIB_DIRS/fontconfig + parity 守卫钉两边同步;owner 复核擒获的结构性漏洞) — owner 指令三条;commit 见下(3 文件);新套件 **3/3**(NEUTER 精确 2 红)+ restart 族环 **27/28**(1 红=预存,板票 `pt_225df9a89fb14131`)
 ### 2026-08-03(chromium-libs 双 launcher 不变量闭环:supervisord conf 补 CHROMIUM_EXTRA_LIB_DIRS/fontconfig + parity 守卫钉两边同步;owner 复核擒获的结构性漏洞) — owner 指令三条;commit 见下(3 文件);新套件 **3/3**(NEUTER 精确 2 红)+ restart 族环 **27/28**(1 红=预存,板票 `pt_225df9a89fb14131`)
 
 - **漏洞(owner 擒获):** `deploy/supervisor/tofu.conf` 的 environment= 只有 PORT/BIND_HOST/HOME/LANG——而 restart_15000.sh 在 supervisord 接管时**拒绝运行**(mutex 守卫),一旦切到 supervisor 管理(documented durable 方向),CHROMIUM_EXTRA_LIB_DIRS 无任何路径进服务器,FUSE 修复静默蒸发且所有证据都指向「已修过」。

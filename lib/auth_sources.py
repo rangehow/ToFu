@@ -93,6 +93,7 @@ __all__ = [
     'missing_required_fields',
     'normalize_domain',
     'invalidate_cache',
+    'live_session_status',
     'DEFAULT_SOURCES',
 ]
 
@@ -543,12 +544,18 @@ def get_source(domain: str) -> Optional[dict]:
 
 
 def match_source(url: str) -> Optional[dict]:
-    """Return the enabled, cookie-bearing source governing ``url``'s host.
+    """Return the enabled source governing ``url``'s host.
 
     Matches the host against each source's ``domain`` and ``aliases``
-    (sub-domains included). A source with no cookies is treated as
-    not-configured and never matched, so enabling a site without
-    supplying credentials cannot break its fetch.
+    (sub-domains included). Credential rule (P2 后修订——live session is
+    a first-class credential):
+
+      * stored cookies present → match (any strategy: replay can fire);
+      * no cookies but ``access_strategy == 'browser_first'`` → match:
+        the credential is the user's LIVE browser session, not anything
+        stored here. Requiring a cookie paste for such rows forced users
+        through a devtools copy-paste the browser path never needed.
+      * otherwise (cookies_replay without cookies / public) → no match.
     """
     try:
         host = urlparse(url).netloc.lower().split(':')[0]
@@ -560,7 +567,14 @@ def match_source(url: str) -> Optional[dict]:
     _ensure_loaded()
     with _lock:
         for r in _cache:
-            if not r.get('enabled') or not r.get('cookies'):
+            if not r.get('enabled'):
+                continue
+            strategy = (r.get('access_strategy')
+                        or source_spec(r.get('domain', '')).get('access_strategy')
+                        or 'browser_first')
+            if strategy == 'public':
+                continue          # no identity needed — never matches
+            if not r.get('cookies') and strategy != 'browser_first':
                 continue
             domains = [r.get('domain', '')] + list(r.get('aliases', []))
             if any(d and _host_matches(host, d) for d in domains):
@@ -661,6 +675,68 @@ def set_enabled(domain: str, enabled: bool) -> bool:
                 logger.info('[AuthSrc] toggle domain=%s enabled=%s', dom, bool(enabled))
                 return True
     return False
+
+
+#: Live-session probe cache — asking the bridge costs a command round-trip,
+#: and the Settings panel re-renders on every toggle.
+_LIVE_SESSION_TTL_S = 20.0
+_live_session_cache: dict = {}
+_live_session_lock = threading.Lock()
+
+
+def live_session_status(domain: str, *, refresh: bool = False) -> dict:
+    """Probe the user's REAL browser for a live login on ``domain``.
+
+    The bridge's ``get_cookies`` reads the browser's own jar (never stored
+    here) and we match cookie NAMES against the catalog's declared fields:
+    any ``required``/``recommended`` name present = the user is logged in.
+    Returns ``{extension, live_session, matched, missing_required}``:
+
+      * ``extension`` False — the bridge is offline; detection impossible
+        (the browser-first path is unavailable too);
+      * ``live_session`` True — the user is logged into the site in their
+        browser RIGHT NOW; a browser_first entry works with zero stored
+        cookies (OpenCLI-parity: login once in the daily browser, done).
+    """
+    dom = normalize_domain(domain)
+    if not dom:
+        return {'extension': False, 'live_session': False,
+                'matched': [], 'missing_required': []}
+    now = time.time()
+    with _live_session_lock:
+        hit = _live_session_cache.get(dom)
+        if hit and not refresh and now - hit[0] < _LIVE_SESSION_TTL_S:
+            return dict(hit[1])
+    out = {'extension': False, 'live_session': False,
+           'matched': [], 'missing_required': []}
+    try:
+        from lib.browser import is_extension_connected, send_browser_command
+        if is_extension_connected():
+            out['extension'] = True
+            res, err = send_browser_command('get_cookies', {'domain': dom},
+                                            timeout=10)
+            if err:
+                logger.info('[AuthSrc] live-session probe failed for %s: %s',
+                            dom, str(err)[:120])
+            names = {str(c.get('name', '')) for c in (res or [])
+                     if isinstance(c, dict)}
+            fields = source_fields(dom)
+            wanted = [f['name'] for f in fields
+                      if f.get('importance') in ('required', 'recommended')]
+            matched = [n for n in wanted if n in names]
+            out['matched'] = matched
+            out['missing_required'] = [
+                f['name'] for f in fields
+                if f.get('importance') == 'required' and f['name'] not in names]
+            # Logged-in verdict: any declared session cookie present. For an
+            # unknown domain (no declared fields) ANY cookie on the domain is
+            # the best available signal.
+            out['live_session'] = bool(matched) if wanted else bool(names)
+    except Exception as e:
+        logger.debug('[AuthSrc] live-session probe crashed for %s: %s', dom, e)
+    with _live_session_lock:
+        _live_session_cache[dom] = (now, dict(out))
+    return out
 
 
 def delete_source(domain: str) -> bool:

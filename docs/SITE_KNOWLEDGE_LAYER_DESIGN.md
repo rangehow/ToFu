@@ -108,6 +108,26 @@ owner 指令:「遇到拦截问题就直接走固定流程优化」。固定流�
 
 - **UI(P1)**:设置段落标题从「需要登录的来源」演进为「站点接入」;每条卡片显示
   策略徽章(browser_first/cookies_replay)+ 知识状态(已内化/仅凭据)+ 开关不变。
+
+#### 3.1.1 活会话是一等凭证(owner 第二问 2026-08-03:「为何还要用户配 cookie?」)
+
+定案:**browser_first 条目的凭证是用户浏览器里的活会话,不是本库里的 cookie。**
+OpenCLI 的「免配置」=装扩展+浏览器里登录一次;tofu 完全同构——一次性装桥扩展,
+日常浏览器本就在登录态。此前三道旧闸门强迫粘贴 cookie,全部拆除:
+
+  1. **卡片开关**:`has_cookies` 才准拨 → `browser_first`/`public` 行永远可拨
+     (cookies_replay 无 cookie 仍禁拨——没有可回放的东西);
+  2. **match_source**:无 cookie 不匹配 → browser_first 行无 cookie 也匹配
+     (public 永不匹配);tofu-search `_replay()` 对无 cookie 行短路(匿名池加载
+     登录墙=纯浪费+bot 特征);
+  3. **引导流程**:面板主路径改为「在你的浏览器登录该站 → 检测到会话 → 启用」,
+     cookie 粘贴降级为「离线兜底(可选)」;卡片新增活会话徽标
+     (`GET /api/v1/auth-sources/<domain>/live-session` — 桥 `get_cookies`
+     域级探测,**cookie 值永不离开浏览器**,只比对目录声明的会话 cookie 名;
+     20s TTL,`?refresh=1` 强制重探)。
+
+由此「搜索小红书」的完整配置 = 装扩展(一次性)+ 浏览器里登录小红书(日常已在)
++ 拨开关——与 OpenCLI 完全等价的零粘贴体验。
   **内化一个网站 = 追加一条**,与 owner 的要求逐字对齐。
 - **迁移**:内置两条目(xiaohongshu.com、sankuai.com)自动获得 `access_strategy` 默认值,
   老 `auth_sources.json` 无需任何手工迁移。

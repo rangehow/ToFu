@@ -2045,6 +2045,19 @@
 }
 .auth-src-meta-badge.strategy  { border-color: var(--s-ink); color: var(--s-ink); background: var(--s-cream); }
 .auth-src-meta-badge.knowledge { border-color: var(--s-ink); color: var(--s-ink); background: var(--s-gold); }
+.auth-src-meta-badge.live.on   { border-color: var(--s-ink); color: var(--s-ink); background: var(--s-cream); }
+.auth-src-meta-badge.live.off  { border-style: dashed; }
+.auth-src-live-hint {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-cream);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--s-ink);
+  line-height: 1.55;
+}
 .auth-src-field-badge.required    { background: var(--s-gold); }
 .auth-src-field-badge.recommended { background: var(--s-cream); }
 .auth-src-field-badge.optional    { background: var(--s-white); color: var(--s-ink-soft); border-color: var(--s-ink-soft); }

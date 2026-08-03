@@ -1759,6 +1759,11 @@ var _i18n = {
   'settings.authSrcStrategyPublic': { zh: '公开站', en: 'public' },
   'settings.authSrcKnowledgePinned': { zh: '已内化 v{v}', en: 'internalized v{v}' },
   'settings.authSrcKnowledgeCredentials': { zh: '仅凭据', en: 'credentials only' },
+  'settings.authSrcLiveOn': { zh: '浏览器会话已检测', en: 'browser session detected' },
+  'settings.authSrcLiveNone': { zh: '未检测到浏览器登录', en: 'no browser login detected' },
+  'settings.authSrcLiveOffline': { zh: '扩展离线', en: 'extension offline' },
+  'settings.authSrcBrowserFirstHint': { zh: '通常无需粘贴 Cookie：在你自己的浏览器里登录该站即可——检测到浏览器会话后直接启用，搜索与抓取就走你的活会话。下面粘贴 Cookie 只是浏览器不在线时的离线兜底。', en: 'Usually no cookie pasting needed: just log into the site in YOUR browser — once the live session is detected, enable the toggle and searches/fetches ride it. The cookie fields below are only the offline fallback for when your browser is away.' },
+  'settings.authSrcStep2FieldsFallback': { zh: '（离线兜底，可选）浏览器不在线时才需要：F12 → Application → Cookies，逐个复制 Cookie 值粘贴到下面', en: '(Offline fallback, optional) Only needed when your browser is offline: F12 → Application → Cookies, copy each cookie value into the fields below' },
   'settings.authSourcesEmpty': { zh: '暂无可登录的来源。', en: 'No login-required sources yet.' },
   'settings.authSourcesLoadFail': { zh: '加载失败', en: 'Failed to load' },
 

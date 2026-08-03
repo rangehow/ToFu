@@ -101,6 +101,106 @@ def test_match_source_honours_alias(store):
     assert A.match_source('https://xhslink.com/a/b') is not None
 
 
+# ── live session as a first-class credential ──────────────
+
+def test_match_without_cookies_browser_first(store):
+    """browser_first + enabled + NO cookies → match (live browser session is
+    the credential). This is the OpenCLI-parity gate: no cookie paste."""
+    A, _ = store
+    A.set_enabled('xiaohongshu.com', True)
+    matched = A.match_source('https://www.xiaohongshu.com/explore/abc')
+    assert matched is not None
+    assert matched['access_strategy'] == 'browser_first'
+    assert not matched.get('cookies'), 'no stored cookies — browser path only'
+
+
+def test_match_without_cookies_replay_never_matches(store):
+    """cookies_replay without cookies has NOTHING to send — no match."""
+    A, _ = store
+    A.upsert_source('weibo.com', access_strategy='cookies_replay',
+                    enabled=True)
+    assert A.match_source('https://weibo.com/x') is None
+
+
+def test_match_public_never_matches(store):
+    A, _ = store
+    A.upsert_source('example.com', access_strategy='public', enabled=True,
+                    cookies=[{'name': 'a', 'value': 'b', 'domain': 'example.com',
+                              'path': '/'}])
+    assert A.match_source('https://example.com/x') is None, (
+        'public = the site needs no identity — identity paths stay out')
+
+
+def test_match_disabled_never_matches(store):
+    A, _ = store
+    # default catalog entries ship disabled
+    assert A.match_source('https://www.xiaohongshu.com/explore/abc') is None
+
+
+def _fake_bridge(monkeypatch, *, connected=True, cookies=()):
+    import lib.browser as B
+    monkeypatch.setattr(B, 'is_extension_connected', lambda *a, **k: connected)
+
+    def fake_send(cmd, params=None, timeout=30, client_id=None):
+        assert cmd == 'get_cookies'
+        assert set(params or {}) == {'domain'}, 'probe must be domain-scoped'
+        return [{'name': n} for n in cookies], None
+
+    monkeypatch.setattr(B, 'send_browser_command', fake_send)
+
+
+def test_live_session_detected(store, monkeypatch):
+    A, _ = store
+    A._live_session_cache.clear()
+    _fake_bridge(monkeypatch, connected=True,
+                 cookies=('web_session', 'a1', 'unrelated'))
+    st = A.live_session_status('xiaohongshu.com')
+    assert st['extension'] is True
+    assert st['live_session'] is True
+    assert 'web_session' in st['matched']
+    assert st['missing_required'] == []
+
+
+def test_live_session_absent(store, monkeypatch):
+    A, _ = store
+    A._live_session_cache.clear()
+    _fake_bridge(monkeypatch, connected=True, cookies=('other_cookie',))
+    st = A.live_session_status('xiaohongshu.com')
+    assert st['extension'] is True
+    assert st['live_session'] is False
+    assert 'web_session' in st['missing_required']
+
+
+def test_live_session_extension_offline(store, monkeypatch):
+    A, _ = store
+    A._live_session_cache.clear()
+    _fake_bridge(monkeypatch, connected=False)
+    st = A.live_session_status('xiaohongshu.com')
+    assert st['extension'] is False
+    assert st['live_session'] is False
+
+
+def test_live_session_cached(store, monkeypatch):
+    """The probe rides a bridge round-trip — repeat asks inside the TTL must
+    not re-hit the extension."""
+    A, _ = store
+    A._live_session_cache.clear()
+    calls = []
+    import lib.browser as B
+    monkeypatch.setattr(B, 'is_extension_connected', lambda *a, **k: True)
+
+    def counting(cmd, params=None, timeout=30, client_id=None):
+        calls.append(1)
+        return [{'name': 'web_session'}], None
+
+    monkeypatch.setattr(B, 'send_browser_command', counting)
+    A.live_session_status('xiaohongshu.com')
+    A.live_session_status('xiaohongshu.com')
+    assert len(calls) == 1
+    A.live_session_status('xiaohongshu.com', refresh=True)
+    assert len(calls) == 2, 'refresh=1 forces a re-probe'
+
+
 # ── knowledge badge on the listing ────────────────────────
 
 def test_listing_carries_knowledge_badge(store):

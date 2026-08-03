@@ -22,7 +22,7 @@ cookie-paste path (POST with ``cookie_header``) is the universal fallback.
 
 from __future__ import annotations
 
-from flask import Blueprint
+from flask import Blueprint, request
 
 from lib.api_response import api_bad_request, api_error, api_internal_error, api_ok
 from lib.log import get_logger
@@ -111,6 +111,29 @@ def toggle_auth_source(domain):
     if not set_enabled(domain, enabled):
         return api_error(f'Unknown source: {domain}', status=404)
     return api_ok({'domain': domain, 'enabled': enabled})
+
+
+@api_v1_auth_sources_bp.route('/api/v1/auth-sources/<domain>/live-session',
+                              methods=['GET'])
+@require_auth
+@api_meta(
+    summary='Probe the user\'s real browser for a live login on this domain',
+    description=(
+        'Asks the browser bridge (get_cookies, domain-scoped — the jar never '
+        'leaves the browser) whether the user is currently logged into the '
+        'site. Returns ``{extension, live_session, matched, '
+        'missing_required}``: when ``live_session`` is true, a '
+        '``browser_first`` source works with ZERO stored cookies — the '
+        'devtools cookie copy-paste is only the offline fallback. Result is '
+        'cached 20s server-side; pass ``?refresh=1`` to force a re-probe.'
+    ),
+    tags=['capabilities'],
+)
+def auth_source_live_session(domain):
+    from lib.auth_sources import live_session_status
+
+    refresh = (request.args.get('refresh') or '').strip() in ('1', 'true')
+    return api_ok(live_session_status(domain, refresh=refresh))
 
 
 @api_v1_auth_sources_bp.route('/api/v1/auth-sources/<domain>', methods=['DELETE'])

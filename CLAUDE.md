@@ -214,7 +214,12 @@ lib/                   — Core business logic
                          ORDER is this data), aliases, login_url, fields};
                          get_source/match_source merge catalog spec into the FULL
                          row; listing redacts + carries the knowledge badge.
-                         Internalize a site = append a row.
+                         The user's LIVE BROWSER SESSION is a first-class
+                         credential: browser_first rows match + toggle with ZERO
+                         stored cookies (cookie paste = offline fallback only);
+                         live_session_status() probes the jar via the bridge
+                         (get_cookies, domain-scoped, 20s TTL) — cookie values
+                         never leave the browser. Internalize a site = append a row.
   site_knowledge.py    — Per-site extraction knowledge store (doctor-pinned
                          selector OVERRIDES; engines read via search_bridge's
                          SiteKnowledgeProvider, built-ins serve when unpinned)

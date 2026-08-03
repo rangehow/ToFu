@@ -1,10 +1,17 @@
+### 2026-08-03(活会话晋升一等凭证:拆除强迫粘贴 cookie 的三道旧闸门——owner「OpenCLI 免配置,为何我们还要用户配 cookie?」定案) — owner 指令;chatui 本批(10 文件)+ tofu-search(0.7.3,2 文件);环 chatui **139/139**、tofu-search **41/41**
+
+- **定案(owner 的困惑是对的):** OpenCLI 的「免配置」=装扩展+浏览器里登录一次;tofu P0 换路后本就走同一条路,但**设置页与两道后端闸门还停留在回放时代**——①卡片开关没粘 cookie 禁拨;②`match_source` 无 cookie 不匹配;③面板主路径是「F12 逐个复制 cookie 值」。路通了,沿途闸门还在收旧票。
+- **三闸拆除:** ①开关授权改 `has_cookies || strategy !== 'cookies_replay'`(browser_first/public 永远可拨;replay 无 cookie 仍禁拨——没有可回放的东西);②`match_source` 放宽:browser_first 无 cookie 也匹配、public 永不匹配(初版漏 public 分支,新测试当场擒获);③面板引导重排:主路径「在你的浏览器登录该站→检测到会话→启用」,cookie 粘贴降级「离线兜底(可选)」+ 提示块。
+- **活会话探测(新端点):** `GET /api/v1/auth-sources/<domain>/live-session`——桥 `get_cookies` 域级探测,**cookie 值永不离开浏览器**,只比对目录声明的会话 cookie 名(required/recommended);20s TTL+`?refresh=1` 强制重探;卡片懒加载三态徽标(已检测 ✓/未检测到/扩展离线)。tofu-search `_replay()` 对无 cookie 行短路(匿名池加载登录墙=浪费+bot 特征);floor `>=0.7.3`。
+- **测试账:** chatui 注册表套件 +8(match 三态/探测三态/TTL 缓存与 refresh);tofu-search +1(无凭据回放腿不发射)。红→绿实证:public 匹配分支首版缺失,`test_match_public_never_matches` 精确擒获。
+- **体验对照(与 OpenCLI 完全等价):** 搜索小红书 = 装桥扩展(一次性)+ 浏览器里登录小红书(日常已在)+ 拨开关——零复制粘贴。cookie 粘贴仅在浏览器常离线时才需要。
+
 ### 2026-08-03(预存红闭环:test_bundle_manifest_parity——阅读体验 P2-P4 四文件入 deferred 清单但漏 dev-fallback 标签;修法=按清单同序补标签) — 脑派发接我自票 `pt_38989d40003948a2` **DONE**;commit 见下(2 文件);parity+bundle 族 **78/78**
 
 - **定案(纯漏配,非设计):** `paper/reading_xp.js`/`deepen.js`/`notes.js`/`focus_mode.js` 自阅读体验 P2-P4(`fe270ce9`…`7865fa34`)入 `_DEFERRED_FILES` 起就没有 index.html script 标签——bundle 构建成功时无感(strip→feature bundle 重建),但 dev-fallback(bundle 构建失败→按原始标签逐个加载)会静默丢整个 xp 轨(速览/专注/批注/深化四按钮全死)。parity 断言遇首个缺失即报,实测 4 个全缺(脚本复核)。
 - **修法:** 按 `_DEFERRED_FILES` 既有顺序把 4 个标签插回 `report.js` 与 `babel.js` 之间(reading_xp→deepen→notes→focus_mode,与清单同序),带 `onload/_onScriptError` 计数钩子与 `?v=20260803a`。反向边(stripped→必须 rebundled)因四文件本就在清单内天然保绿。
 - **环:** parity 18/18(原红 `test_every_manifest_file_has_dev_fallback_tag` 转绿)+ bundle 族(freshness/coverage/self_heal/corruption/concurrency/nonblocking/artifacts/scan_surface/model_caps)+ `test_frontend_paper_reading_xp` 共 **78/78**。
 
-### 2026-08-03(composer 左缘锁定:输入框对齐 avatar 线——margin 复演 chat-inner 居中数学 + rail 授权值经 RO 镜像 + drawer margin-right 同步;顺手修「发送键滑进固定抽屉底下」旧疾) — owner 截图指令「输入框左移对齐 avatar,turn ctx 列以后专门放别的」;commit 见下(4 文件);几何套件 **3/3**(432 行 19 计数全 0)+ 邻接环 **58/58**;NEUTER×2 各咬各的
 ### 2026-08-03(composer 左缘锁定:输入框对齐 avatar 线——margin 复演 chat-inner 居中数学 + rail 授权值经 RO 镜像 + drawer margin-right 同步;顺手修「发送键滑进固定抽屉底下」旧疾) — owner 截图指令「输入框左移对齐 avatar,turn ctx 列以后专门放别的」;commit 见下(4 文件);几何套件 **3/3**(432 行 19 计数全 0)+ 邻接环 **58/58**;NEUTER×2 各咬各的
 
 - **定案:** composer 自出生就 `margin:0 auto` 居中于整面板,宽面板下左缘在 avatar 线右 ~(band−872)/2(failing-first 实测 372/432 态偏 26–104px)——输入框在会话下方「游泳」,右侧 turn-ctx 列下方空间永远无法利用。根修=让 composer 坐在阅读列上:左缘=avatar 线、右缘=文本列右缘,全态成立。
@@ -15,6 +22,11 @@
 - **真机验收:** 15999 临时服务器(TOFU_SKIP_LOCK)双宽度截图——1920 侧栏收拢:composer 左缘贴 avatar 线、右缘贴文本列右缘,rail 下方整列留白待用;1366 侧栏开(pane 1034<1056):rail 折叠进消息头,composer 左缘仍锁 avatar 线。
 
 ### 2026-08-03(error.log 全量审计 + 桥接 key 重铸:两枚修复卡在重启上,401 垃圾源消停) — owner 指令「查后端日志还有哪些要修」;纯审计批 + 1 枚 key(走服务器 API);curl 实测双绿
+
+- **审计结论(6.5 万行 error.log 按签名归组):** 无新的未修代码 bug。两枚已修未上线——①`d9f931b6`(15:55,jsonify NameError,blocking 路径 PUT/PATCH conversations 500)②**owner 复核时擒获我漏报的 `80431312`(12:34,429 无限重试「永不打断对话」owner 指令)**——运行中服务器 11:16 启动,两枚都没吃到;13:02 与 15:33–15:50 两轮饱和风暴实测仍是旧行为(120s budget 升级 + TURN AUTO-RETRY 3/3 封顶,全天 58 次轮重试、239 次饱和升级,但 3/3 后均恢复,无硬错误信封打断)。已修已验证:Bad range(a76340a4 后 11:00 起零复发)。环境类不动:cgroup 挤压/PG FUSE 断连(板票 pt_4d321fb8f1c2400c)/Bing 软封改版(20 次)/pymupdf4llm `min() empty`(上游边界,有 raw fallback)。**磁盘卫生:logs/ 已 12G**(app.log.2026-07-27 单日 9.1G、postgresql.log 1.4G 未轮转),owner 暂缓清理。
+- **桥接 401 闭环:** 每 ~5 分钟一次的 `/api/browser/poll` 401 = owner 的 Chrome 扩展(Windows Chrome 150,经隧道,peer=127.0.0.1)`has_header:false` 空手轮询——fail-closed 闸门按设计执法(桥接命令可执行 JS/读 cookie 罐,代理把来源全洗成 loopback,故桥端点永不看 IP)。重铸 `k_d1ea3188`(POST /api/v1/desktop/token,走服务器进程缓存+落盘同生,避开 8-02 侧进程裂脑坑);curl 实测:带 `X-Bridge-Secret` → **200 `{"commands":[]}`**,对照无头 → **401**。待 owner 把 key 贴进扩展弹窗 Bridge Secret 框。
+- **Playwright 定案(不修):** `libatk-1.0.so.0` 缺失是 OS 共享库问题(pip 包与 chromium 二进制俱在),正经修法 `playwright install-deps` 需 sudo;池子自带 60s 失败冷却(playwright_pool.py:709)+ SPA 档降级 HTTP 抓取,搜索照常——接受降级。
+
 ### 2026-08-03(turn nav「消失」定案 + 状态条错位根修:条带搬进 .input-inner 共享 composer 宽度轨——仪表盘/圆点边缘从此就是输入框边缘) — owner 截图两问(「为什么 turn nav 消失了」+「它们没对齐输入框,难看」);commit 见下(4 文件);几何套件 **3/3**(432 行)+ 邻接环 **20/20**(P6/composer_floor/manual_compaction);NEUTER×2 各咬 432/432
 
 - **Q1 定案(消失=搬家+设计阈值,非回归):** ①圆点自 `4dee9231`(7-28,conversation chrome converges into a status strip)从 `.chat-wrapper` 右缘绝对浮标(right:8px / top:50%)搬进 `#convStatusStrip`(输入框上方条带的右格)——owner 还在旧位置找它;②`buildTurnNav` 在 **<2 个 user 轮**时清空(turn_nav.js:105,阈值老到 `9ded44f5` 已在)——owner 工作流=一任务一会话(近期会话 msgCount=2 占大半,即 1 user 轮),圆点天然几乎不现身;截图会话本就是新会话(0 消息);③渲染无回归:几何套件对**生产构建器**种 5 轮,432/432 状态圆点皆在。

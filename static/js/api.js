@@ -1231,6 +1231,9 @@
     remove: (domain)        => del(`/api/v1/auth-sources/${encodeURIComponent(domain)}`, { parse: 'response', onError: 'null' }),
     // Interactive headful login — long-running; no client timeout.
     login:  (domain, timeout) => post(`/api/v1/auth-sources/${encodeURIComponent(domain)}/login`, { timeout: timeout || 180 }, { timeout: 0 }),
+    // Live-session probe: is the user logged into the site in THEIR browser
+    // right now (bridge get_cookies; jar never leaves the browser)?
+    liveSession: (domain, refresh) => get(`/api/v1/auth-sources/${encodeURIComponent(domain)}/live-session${refresh ? '?refresh=1' : ''}`, { onError: 'null' }),
     // Login-wall cookie-capture consent (cookie_capture_consent.js banner).
     cookieConsentPending: () => get('/api/v1/auth-sources/cookie-consent/pending', { onError: 'null' }),
     cookieConsentResolve: (id, approved) => post('/api/v1/auth-sources/cookie-consent/resolve', { id, approved: !!approved }),

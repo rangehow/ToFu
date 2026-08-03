@@ -7,7 +7,6 @@ best-for-model, etc.).
 
 import json
 import os
-import random
 import threading
 import time
 
@@ -1287,46 +1286,41 @@ class LLMDispatcher:
 
     # ── Shared-project contention (external saturation) ──
     # A 429 naming a PROJECT-level limit (RateLimitError.is_shared_contention)
-    # means the gateway account's shared pipe is saturated by OTHER tenants —
-    # rotating our own keys is futile (they all terminate at the same
-    # upstream project; measured 2026-07-28: 3 sankuai keys → 1 Moonshot ak).
-    # Instead of the 0.5s-per-slot spin (one task hit 429 cycle #19 in the
-    # incident), the whole (provider, model) family steps back together for
-    # a jittered, escalating window while OTHER models/providers take over.
-    _CONTENTION_BASE_S = 2.0
-    _CONTENTION_CAP_S = 60.0         # never park a model longer than this
-    _CONTENTION_RESET_GRACE_S = 30.0  # quiet window+grace → strikes reset
+    # means the gateway account's shared pipe is saturated by OTHER tenants.
+    # Owner directive 2026-08-03: a 429 gets NO backoff — the dispatch loop
+    # retries IMMEDIATELY. The escalating 2s→60s family parking introduced
+    # 2026-07-28 (pt_1a72b708098d446f) is RETIRED: it idled requests up to a
+    # minute per strike while the window doubled, and grabbing the rate-limit
+    # window the instant it resets favours aggressive polling. The slot's own
+    # 0.5s steering cooldown (Slot.record_error) is the whole answer. This
+    # hook is now PURE TELEMETRY: a per-(provider, model) streak counter plus
+    # a throttled log line, so a contention storm stays visible in app.log
+    # without per-cycle flooding.
+    _CONTENTION_RESET_GRACE_S = 30.0  # quiet window → streak resets
 
     def note_shared_contention(self, slot) -> float:
-        """Cool ALL slots of *slot*'s (provider_id, model) for a jittered,
-        escalating window (2s → doubling → 60s cap, ±25% jitter). Returns
-        the window seconds.
+        """Record one shared-project contention strike; NEVER parks slots.
 
-        Jitter is the thundering-herd guard: without it every worker parked
-        on the same window wakes in the same second and re-saturates the
-        pipe. Strikes reset after a full quiet window + grace — a healed
-        project must not inherit yesterday's escalation.
+        Always returns 0.0 (no backoff — owner directive 2026-08-03: retry
+        immediately). The streak resets after a quiet window + grace. Log
+        throttle: strikes 1-3 + every 100th at INFO, the rest at DEBUG —
+        a sustained storm costs ~1 line/30s instead of ~3 lines/s.
         """
         key = (slot.provider_id, slot.model)
         now = time.time()
         with self._lock:
-            strikes, until = self._contention_strikes.get(key, (0, 0.0))
+            strikes, last = self._contention_strikes.get(key, (0, 0.0))
             strikes = (strikes + 1
-                       if now < until + self._CONTENTION_RESET_GRACE_S else 1)
-            window = min(self._CONTENTION_CAP_S,
-                         self._CONTENTION_BASE_S * (2 ** (strikes - 1))
-                         * random.uniform(0.75, 1.25))
-            until = now + window
-            self._contention_strikes[key] = (strikes, until)
-            for s in self.slots:
-                if (s.provider_id, s.model) == key:
-                    with s._lock:
-                        s.cooldown_until = until
-                        s.cooldown_reason = 'contention'
-        logger.info('[Dispatch] shared-project contention on %s:%s — family '
-                    'cooled %.1fs (strike %d)',
-                    slot.provider_id, slot.model, window, strikes)
-        return window
+                       if now < last + self._CONTENTION_RESET_GRACE_S else 1)
+            self._contention_strikes[key] = (strikes, now)
+        if strikes <= 3 or strikes % 100 == 0:
+            logger.info('[Dispatch] shared-project contention on %s:%s — '
+                        'retrying immediately, no family backoff (streak %d)',
+                        slot.provider_id, slot.model, strikes)
+        else:
+            logger.debug('[Dispatch] shared-project contention on %s:%s '
+                         '(streak %d)', slot.provider_id, slot.model, strikes)
+        return 0.0
 
     def cooling_cause_summary(self, capability: str = 'text',
                               exclude_models=None, exclude_keys=None,

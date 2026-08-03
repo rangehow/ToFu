@@ -156,10 +156,10 @@ class Slot:
     # for EVERY cooldown wait, so a hard-error 300s backoff masqueraded as
     # 限流排队). One of: '' (none) / 'rate_limit' (per-key 429, 0.5s) /
     # 'upstream' (gateway 5xx, upstream-vendor transient, endpoint
-    # unreachable) / 'error' (consecutive-error backoff) / 'quota' (billing)
-    # / 'contention' (shared project-level TPM saturation by other tenants,
-    # escalated 2s→60s family window — see
-    # LLMDispatcher.note_shared_contention).
+    # unreachable) / 'error' (consecutive-error backoff) / 'quota' (billing).
+    # ('contention' retired 2026-08-03: shared-project 429s no longer park
+    # the family — LLMDispatcher.note_shared_contention is telemetry-only,
+    # owner directive: retry immediately with no backoff.)
     cooldown_reason: str = ''
 
     # ── Cost ──

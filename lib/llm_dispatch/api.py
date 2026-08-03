@@ -499,12 +499,15 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
               # WARNING — only the final exhaustion path (all keys excluded)
               # remains WARNING/ERROR. See CLAUDE.md §10 / audit_log below.
             if _429_count <= 3 or _429_count % 100 == 0:
-                # First few + every 100th kept informative (include body)
+                # First few + every 100th kept informative (include body).
+                # Everything between is DEBUG (2026-08-03 log-bloat guard:
+                # immediate 429 retry = ~3 cycles/s — per-cycle INFO would
+                # write ~11k lines/hour into app.log for one starving task).
                 logger.info(
                     '%s 429 rate-limited on %s:%s (cycle #%d) — body: %s',
                     log_prefix, slot.key_name, slot.model, _429_count, _err_body)
             else:
-                logger.info(
+                logger.debug(
                     '%s 429 rate-limited on %s:%s (cycle #%d)',
                     log_prefix, slot.key_name, slot.model, _429_count)
             time.sleep(0.3)
@@ -1629,7 +1632,9 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                     log_prefix, slot.key_name, slot.model, state._429_count,
                     _err_body)
             else:
-                logger.info(
+                # DEBUG between the sparse INFO beats — same log-bloat
+                # guard as dispatch_chat (immediate 429 retry, 2026-08-03).
+                logger.debug(
                     '%s 429 rate-limited on %s:%s (cycle #%d)',
                     log_prefix, slot.key_name, slot.model, state._429_count)
             if on_retry:

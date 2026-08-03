@@ -91,6 +91,47 @@ def _cut_out_background(src: Image.Image) -> Image.Image:
     return out
 
 
+def _icon_canvas(src: Image.Image) -> Image.Image:
+    """Build the app-icon canvas: the floating cube (white canvas cut out),
+    cropped to the artwork with a small uniform margin.
+
+    Feeding the RAW source to the .ico/.icns writers bakes the opaque white
+    canvas into every frame — the desktop icon then renders as a white plate
+    behind the tofu (owner report 2026-08-03: "white circle around the
+    icon"). Two details matter here:
+
+    * RGB under fully-transparent pixels is replaced with a dark neutral.
+      _cut_out_background leaves the magenta flood-fill sentinel there, and
+      Pillow resizes RGBA WITHOUT premultiplying alpha — so the LANCZOS
+      downscale to each icon frame would bleed a purple fringe into the
+      cube's dark outline. The outline is near-black, so darkening the
+      sub-pixel edge is invisible; magenta is not.
+    * The canvas is cropped to the artwork bbox (+6% margin, squared on the
+      longer side). The source carries ~30% whitespace, which would render
+      the cube needlessly small on the desktop — and illegible in the 16px
+      tray frame.
+    """
+    cut = _cut_out_background(src)
+    alpha = cut.getchannel('A')
+    transparent = alpha.point(lambda a: 255 if a == 0 else 0)
+    rgb = Image.composite(
+        Image.new('RGB', cut.size, (43, 39, 51)), cut.convert('RGB'),
+        transparent)
+    bbox = alpha.getbbox()
+    if bbox:
+        bw, bh = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        side = max(bw, bh) + 2 * round(max(bw, bh) * 0.06)
+        side = min(side, min(src.size))
+        cx, cy = (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
+        left = min(max(cx - side // 2, 0), src.width - side)
+        top = min(max(cy - side // 2, 0), src.height - side)
+        rgb = rgb.crop((left, top, left + side, top + side))
+        alpha = alpha.crop((left, top, left + side, top + side))
+    out = rgb.convert('RGBA')
+    out.putalpha(alpha)
+    return out
+
+
 def gen_wizard_images(src: Image.Image, out_dir: str):
     """Generate the Inno Setup wizard bitmaps from the source logo.
 
@@ -210,12 +251,18 @@ def main():
     src = Image.open(SOURCE_PNG).convert('RGBA')
     print(f'Source: {SOURCE_PNG} ({src.width}×{src.height})')
 
+    # The app icons are built from the cut-out + cropped canvas: the raw
+    # source bakes the opaque white canvas into every frame (the "white
+    # plate" desktop icon). Wizard/DMG art place the logo on their own
+    # backgrounds, so they keep using the full-canvas cutout.
+    icon_src = _icon_canvas(src)
+
     ico_path = os.path.join(ICONS_DIR, 'tofu.ico')
-    gen_ico(src, ico_path)
+    gen_ico(icon_src, ico_path)
 
     icns_path = os.path.join(ICONS_DIR, 'tofu.icns')
     try:
-        gen_icns(src, icns_path)
+        gen_icns(icon_src, icns_path)
     except Exception as e:
         print(f'  ! ICNS generation failed ({e}) — run on macOS or use iconutil')
 

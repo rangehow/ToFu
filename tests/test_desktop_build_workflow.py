@@ -1471,6 +1471,92 @@ def test_wizard_logo_has_real_transparency_cutout():
 
 
 # ══════════════════════════════════════════════════════════════════
+#  App icon (.ico / .icns) — no baked-in white plate
+# ══════════════════════════════════════════════════════════════════
+#
+# The wizard BMPs and the DMG art cut the white canvas out so the cube
+# FLOATS on their gradients — but main() fed the RAW opaque source to
+# gen_ico / gen_icns, so every icon frame shipped the white canvas as an
+# opaque background. Result (owner screenshot 2026-08-03): the desktop
+# icon rendered as a white plate with a tofu on it — measured 100% opaque,
+# corners (254,255,255,255), on the shipped static/icons/tofu.ico. The fix:
+# ico/icns are generated from the same flood-fill cutout, cropped to the
+# cube's bbox with a small margin so the icon fills the frame instead of
+# shrinking into its whitespace. These pins read the REAL generator output
+# into a temp dir, so reverting to the opaque source (or dropping the
+# crop) goes red.
+
+
+def test_app_icon_frames_have_transparent_corners(tmp_path):
+    """The .ico frames must have REAL transparency around the cube —
+    neuter target: gen_ico(src) on the raw opaque canvas makes every
+    corner pixel opaque white (the exact defect the owner reported)."""
+    Image = pytest.importorskip('PIL.Image', reason='Pillow required')
+    mod = _icons_mod()
+    mod.ICONS_DIR = str(tmp_path)  # redirect outputs; SOURCE_PNG stays real
+    mod.main()
+    ico = Image.open(str(tmp_path / 'tofu.ico'))
+    ico.size = max(ico.ico.sizes())
+    ico.load()
+    alpha = ico.convert('RGBA').getchannel('A')
+    w, h = alpha.size
+    for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        assert alpha.getpixel(xy) == 0, (
+            f'corner {xy} is opaque — the white canvas is baked into the '
+            f'icon again (gen_ico must receive the cutout, not raw source)'
+        )
+    # The cube's centre must stay opaque (the cutout removes ONLY the
+    # exterior; an over-eager global threshold would punch the interior).
+    assert alpha.getpixel((w // 2, h // 2)) == 255, (
+        'cube centre went transparent — the cutout leaks into the interior'
+    )
+
+
+def test_app_icon_cube_fills_the_frame(tmp_path):
+    """With the plate removed the cube must still FILL the frame: the
+    generator crops to the artwork bbox with a small margin. A bare
+    cutout-without-crop leaves ~35% empty margin — the tofu renders tiny
+    on the desktop and illegible in the 16px tray."""
+    Image = pytest.importorskip('PIL.Image', reason='Pillow required')
+    mod = _icons_mod()
+    mod.ICONS_DIR = str(tmp_path)
+    mod.main()
+    ico = Image.open(str(tmp_path / 'tofu.ico'))
+    ico.size = max(ico.ico.sizes())
+    ico.load()
+    alpha = ico.convert('RGBA').getchannel('A')
+    w, h = alpha.size
+    hist = alpha.histogram()
+    opaque = sum(hist[129:]) / (w * h)
+    assert opaque > 0.45, (
+        f'cube covers only {opaque:.0%} of the frame — the bbox crop is '
+        f'gone and the icon shrank back into its margins'
+    )
+
+
+def test_app_icns_also_has_transparent_corners(tmp_path):
+    """The macOS .icns shares the same defect path (same raw source in
+    main()) — pin its corners too so a future split of the two generators
+    cannot quietly reintroduce the plate on one platform."""
+    Image = pytest.importorskip('PIL.Image', reason='Pillow required')
+    mod = _icons_mod()
+    mod.ICONS_DIR = str(tmp_path)
+    mod.main()
+    icns = Image.open(str(tmp_path / 'tofu.icns'))
+    rgba = icns.convert('RGBA')
+    alpha = rgba.getchannel('A')
+    w, h = alpha.size
+    for xy in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)):
+        assert alpha.getpixel(xy) == 0, (
+            f'icns corner {xy} is opaque — white canvas baked into the '
+            f'macOS icon again'
+        )
+
+
+# ══════════════════════════════════════════════════════════════════
+#  DMG window branding
+# ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
 #  DMG window branding
 # ══════════════════════════════════════════════════════════════════
 #

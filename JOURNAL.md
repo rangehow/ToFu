@@ -1,3 +1,10 @@
+### 2026-08-03(Autopilot 气泡「推理中 0 字符」根修:VU 通道的 thinking_active 相位从未携带 _thinkingLen——worker 通道一直带;穿插的「已发送给 kimi-k3」=轮次切换的设计内相位,服务端零卡死) — owner 截图两问(conv `msdcksqymtglha`);commit `8b18cbc2`(2 文件 +340/−2);新套件 **7 针**(failing-first 对 HEAD 精确 3 红)+ NEUTER 精确;环 **32 + 48 全绿**
+
+- **定案(纯前端计数器断线,服务端健康):** app.log 实证——VU 任务 88c1b9bd R1 63s(thinking=6415 chars → 2 工具调用,content=0)、R2 86s(thinking=5221 → 882 字正文),TTFT 11.7s、缓存命中 96-97%,无任何卡死/重试。「卡很久」的观感=两轮长推理 + R1 纯工具调用轮零可见正文,全程唯一可见物就是那行相位。
+- **根因(一行缺字段):** worker 通道每个 thinking delta 上送 `{phase:"thinking_active", _thinkingLen}`(sse_pipeline.js:1032),VU 通道(streaming_render.js delta 分支)只上送 `{phase:"thinking_active"}`——相位行绘制读 `phase._thinkingLen || 0`(streaming_ui.js:533)→ Autopilot 气泡整轮焊死「0 字符」。修法=worker 同构:delta 分支累计 `vuMsg._roundThinkingLen` 并随相位上送;phase 分支每个相位事件清零(轮内计数,对齐 sse_pipeline.js:1137)。
+- **「已发送给 kimi-k3」穿插=设计内:** 每轮 LLM 派发前 `_stream.py` 发一次 waiting_model 相位(R1→R2 边界一次),下一轮 thinking delta 抵达即被顶回「推理中」——用户看到的来回跳=轮次切换的诚实活体信号,非故障;待新计数器生效后跳变节奏不变但数字会持续爬升。
+- **测试:** 新 `test_frontend_vu_thinking_counter.py`(jsdom 驾真 `_handleAutopilotVuEvent`+streaming_ui)——7 针:相位携带长度/绘制 3 字符/爬升 8 字符/轮切换清零重计;failing-first 用 `git show HEAD:` 旧文件实证 3 针精确红(注:绘制针在旧码下经 `msg.thinking.length` 兜底反而绿,session 字段针才是真咬);NEUTER 摘除 `, _thinkingLen: vuMsg._roundThinkingLen` → 双针红;外加源码针防回归。环:VU/相位族 9 套件 32 + i18n/线 parity/段族 48 全绿。
+
 ### 2026-08-03(活会话晋升一等凭证:拆除强迫粘贴 cookie 的三道旧闸门——owner「OpenCLI 免配置,为何我们还要用户配 cookie?」定案) — owner 指令;chatui 本批(10 文件)+ tofu-search(0.7.3,2 文件);环 chatui **139/139**、tofu-search **41/41**
 
 - **定案(owner 的困惑是对的):** OpenCLI 的「免配置」=装扩展+浏览器里登录一次;tofu P0 换路后本就走同一条路,但**设置页与两道后端闸门还停留在回放时代**——①卡片开关没粘 cookie 禁拨;②`match_source` 无 cookie 不匹配;③面板主路径是「F12 逐个复制 cookie 值」。路通了,沿途闸门还在收旧票。

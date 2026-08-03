@@ -207,8 +207,14 @@ lib/                   — Core business logic
   # lib/search_bridge.py + lib/tools/search.py / lib/tools/browser.py. See §11.
   # Login-walled sites (XHS, sankuai): BROWSER-FIRST via BrowserProvider.scrape /
   # browser fetch (live session beats cookie replay — replay from the server IP is
-  # THE risk-control trigger). auth_sources is evolving into the per-site registry
-  # ('internalize a site = append an entry') — docs/SITE_KNOWLEDGE_LAYER_DESIGN.md.
+  # THE risk-control trigger) — unless the registry row says cookies_replay/public.
+  auth_sources.py      — The SITE-ACCESS REGISTRY (settings「站点接入」, was「需要
+                         登录的来源」): per-site rows {cookies, access_strategy
+                         (browser_first|cookies_replay|public — tofu-search path
+                         ORDER is this data), aliases, login_url, fields};
+                         get_source/match_source merge catalog spec into the FULL
+                         row; listing redacts + carries the knowledge badge.
+                         Internalize a site = append a row.
   site_knowledge.py    — Per-site extraction knowledge store (doctor-pinned
                          selector OVERRIDES; engines read via search_bridge's
                          SiteKnowledgeProvider, built-ins serve when unpinned)

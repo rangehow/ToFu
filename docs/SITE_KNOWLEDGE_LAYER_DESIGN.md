@@ -191,7 +191,7 @@ knowledge.detail(P1)——P0 先把「拿不到」变成「拿得到」。
 | 期 | 内容 | 状态 |
 |---|---|---|
 | **P0** | scrape 原语 + XHS 搜索换路 + auth fetch browser-first + 设计稿 + CLAUDE.md 纠正 | ✅(tofu-search `ffa67e7` 0.7.0 + chatui `88bf9c67`) |
-| P1 | 注册表泛化(auth_sources → 站点接入:strategy/knowledge/stats 字段 + UI 徽章与段落改名);`knowledge.detail` 结构化笔记提取;RECORD 台账落盘 | 待实施(板票 `pt_689b73b305fe4810`) |
+| P1 | 注册表泛化(auth_sources → 站点接入:strategy 字段 + UI 徽章与段落改名「站点接入」);域名清单数据化(tofu-search 消费 access_strategy + 登录 hints 读注册表 fields) | **前半 ✅**(tofu-search `056a23b` 0.7.2 + chatui 本批,epic `pt_689b73b305fe4810`)。余量:`knowledge.detail` 结构化笔记提取、`stats`/RECORD 台账落盘——另起切片 |
 | P2 | 知识即数据:引擎读注册表 knowledge 而非内置常量 | **缝已交付**(P3 批提前落地:SiteKnowledgeProvider + lib/site_knowledge 覆盖式存储)。刻意偏离记档:XHS 内置选择器**保留在引擎代码**作保底,store 只放医生验证过的覆盖条目——内置永远是最新版本基线,覆盖条目只在其上生效;「迁出为首个数据条目」因此不做 |
 | **P3** | 攻略老化 autofix:漂移信号(anchors>0 但 0 卡片)→ site_doctor 骑 `run_agent_loop` 重侦察(inspect→try_extractor→**只钉验证过的参数对**;登录墙=give_up)→ 回写 lib/site_knowledge | ✅(tofu-search `ed9f7c2` 0.7.1 + chatui 本批)。**缓办记档**:扩展网络拦截 + toString 伪装——autofix 环不需要(composite 判例:组合既有 27 命令优先),且扩展是部署最慢一层;真正需要页内 hook 的站点出现时再立项 |
 

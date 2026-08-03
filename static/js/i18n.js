@@ -1750,15 +1750,21 @@ var _i18n = {
   'settings.blockedDomains': { zh: '屏蔽域名', en: 'Blocked Domains' },
   'settings.blockedDomainsDesc': { zh: '抓取器不会访问的域名，每行一个。', en: 'Domains the fetcher will not visit, one per line.' },
 
-  // Authenticated fetch sources (login-walled: Xiaohongshu, …)
-  'settings.authSources': { zh: '需要登录的来源', en: 'Login-Required Sources' },
-  'settings.authSourcesDesc': { zh: '小红书等需要登录的站点。在你自己的浏览器中登录后粘贴 Cookie 即可连接；之后搜索与抓取链接将使用该会话读取内容。Cookie 仅保存在本地服务器，不会上传。', en: 'Sites that require a login (e.g. Xiaohongshu). Connect by logging in via your OWN browser and pasting the cookie; search and link fetching then use that session. Cookies are stored only on your local server and never uploaded.' },
+  // Site-access registry (was: login-required sources) — each row is one
+  // internalized site: strategy badge + knowledge state + toggle.
+  'settings.authSources': { zh: '站点接入', en: 'Site Access' },
+  'settings.authSourcesDesc': { zh: '每内化一个网站就在这里追加一条：在你自己的浏览器中登录后粘贴 Cookie 即可连接；之后搜索与抓取链接将优先通过你的浏览器会话读取内容（browser_first），不再回放 Cookie 到服务器。Cookie 仅保存在本地服务器，不会上传。', en: 'Internalizing a site = appending a row here. Connect by logging in via your OWN browser and pasting the cookie; search and link fetching then prefer your browser session (browser_first) instead of replaying cookies server-side. Cookies are stored only on your local server and never uploaded.' },
+  'settings.authSrcStrategyBrowserFirst': { zh: '浏览器优先', en: 'browser-first' },
+  'settings.authSrcStrategyCookiesReplay': { zh: '凭据回放', en: 'cookies-replay' },
+  'settings.authSrcStrategyPublic': { zh: '公开站', en: 'public' },
+  'settings.authSrcKnowledgePinned': { zh: '已内化 v{v}', en: 'internalized v{v}' },
+  'settings.authSrcKnowledgeCredentials': { zh: '仅凭据', en: 'credentials only' },
   'settings.authSourcesEmpty': { zh: '暂无可登录的来源。', en: 'No login-required sources yet.' },
   'settings.authSourcesLoadFail': { zh: '加载失败', en: 'Failed to load' },
 
   // Internal-host allowlist (SSRF exemption — reachability, NOT credentials)
   'settings.privateHosts': { zh: '内网主机放行', en: 'Internal Host Allowlist' },
-  'settings.privateHostsDesc': { zh: '默认不允许抓取解析到内网地址的网址（防止 SSRF）。在此填写你确实需要访问的内网主机名，例如 aigc.sankuai.com。填父域名可覆盖其子域。此处只开放“能否访问”，不提供登录凭证；需要登录的站点请在上方“需要登录的来源”连接。', en: 'By default the fetcher refuses URLs whose host resolves to an internal address (SSRF protection). List the internal hostnames you do mean to reach, e.g. aigc.sankuai.com. A parent domain covers its subdomains. This grants REACHABILITY only, never credentials — for sites needing a login, connect them under "Login-Required Sources" above.' },
+  'settings.privateHostsDesc': { zh: '默认不允许抓取解析到内网地址的网址（防止 SSRF）。在此填写你确实需要访问的内网主机名，例如 aigc.sankuai.com。填父域名可覆盖其子域。此处只开放“能否访问”，不提供登录凭证；需要登录的站点请在上方“站点接入”连接。', en: 'By default the fetcher refuses URLs whose host resolves to an internal address (SSRF protection). List the internal hostnames you do mean to reach, e.g. aigc.sankuai.com. A parent domain covers its subdomains. This grants REACHABILITY only, never credentials — for sites needing a login, connect them under "Site Access" above.' },
   'settings.privateHostsEmpty': { zh: '尚未放行任何内网主机。', en: 'No internal hosts allowlisted yet.' },
   'settings.privateHostsLoadFail': { zh: '加载失败', en: 'Failed to load' },
   'settings.privHostAllowed': { zh: '已放行', en: 'Allowed' },

@@ -125,6 +125,7 @@ _cache_mtime = 0.0
 DEFAULT_SOURCES: list[dict] = [
     {'domain': 'xiaohongshu.com', 'label': 'Xiaohongshu / RED',
      'aliases': ['xhslink.com'],
+     'access_strategy': 'browser_first',
      'login_url': 'https://www.xiaohongshu.com/explore',
      # Account-risk note shown in the Settings connect flow. XHS polices
      # automated access aggressively (限流/滑块/封号), and every web search
@@ -147,6 +148,7 @@ DEFAULT_SOURCES: list[dict] = [
     # connecting an account must never silently grant an SSRF exemption.
     {'domain': 'sankuai.com', 'label': 'Meituan internal (SSO)',
      'aliases': [],
+     'access_strategy': 'browser_first',
      'login_url': 'https://aigc.sankuai.com/ml/modelPlaza/modelInfo',
      # Cookie names below are from a MEASURED anonymous run of the SSO chain
      # (Playwright, networkidle) — NOT guessed. What that run proves and what
@@ -177,6 +179,15 @@ DEFAULT_SOURCES: list[dict] = [
 ]
 
 _VALID_IMPORTANCE = ('required', 'recommended', 'optional')
+
+#: Registry field (Site Knowledge Layer P2): WHO opens the door for this
+#: site's identity paths. Consumed by tofu-search's engines + fetch core
+#: (unknown keys pass through the provider row untouched):
+#:   browser_first  — live browser primary, pool replay fallback (default)
+#:   cookies_replay — pool replay primary, browser fallback (risk-tolerant
+#:                    sites / a browser that is usually offline)
+#:   public         — no identity needed; engines/fetch skip identity paths
+_VALID_STRATEGIES = ('browser_first', 'cookies_replay', 'public')
 
 
 def normalize_domain(value: str) -> str:
@@ -436,13 +447,27 @@ def _persist() -> None:
     _cache_mtime = _store_mtime()
 
 
-def _redact(row: dict) -> dict:
-    """Public view: replace cookie list with a count, drop raw values."""
+def _redact(row: dict, knowledge: Optional[dict] = None) -> dict:
+    """Public view: replace cookie list with a count, drop raw values.
+
+    ``knowledge`` is the site_knowledge entry for this domain (or None),
+    injected by list_sources so a 64-row listing costs ONE store read —
+    projected to a small badge ``{pinned, version, verified_at}``.
+    """
     out = dict(row)
     cookies = out.get('cookies') or []
     out['cookie_count'] = len(cookies)
     out['has_cookies'] = bool(cookies)
     out.pop('cookies', None)
+    spec = source_spec(out.get('domain', ''))
+    if not out.get('access_strategy'):
+        out['access_strategy'] = spec.get('access_strategy') or 'browser_first'
+    if knowledge and knowledge.get('extractor_js'):
+        out['knowledge'] = {'pinned': True,
+                            'version': knowledge.get('version'),
+                            'verified_at': knowledge.get('verified_at')}
+    else:
+        out['knowledge'] = {'pinned': False}
     proxy = out.get('proxy') or ''
     out['has_proxy'] = bool(proxy)
     # Show only the proxy host, never embedded credentials.
@@ -457,7 +482,6 @@ def _redact(row: dict) -> dict:
     out.pop('proxy', None)
     # Catalog spec (login URL + the individual cookies that make up the
     # session) travels with the row so the UI never hardcodes a second copy.
-    spec = source_spec(out.get('domain', ''))
     out['login_url'] = spec.get('login_url', '')
     out['fields'] = [dict(f) for f in (spec.get('fields') or [])]
     out['risk_note_key'] = spec.get('risk_note_key', '')
@@ -470,11 +494,43 @@ def list_sources() -> list[dict]:
     with _lock:
         rows = [dict(r) for r in _cache]
     rows.sort(key=lambda r: (not r.get('enabled'), r.get('label', r.get('domain', ''))))
-    return [_redact(r) for r in rows]
+    try:
+        from lib.site_knowledge import list_knowledge
+        knowledge_map = list_knowledge()
+    except Exception as e:
+        logger.debug('[AuthSrc] site-knowledge map unavailable: %s', e)
+        knowledge_map = {}
+    return [_redact(r, knowledge=knowledge_map.get(r.get('domain', '')))
+            for r in rows]
+
+
+def _with_spec(row: dict) -> dict:
+    """Merge catalog spec fields into a FULL row copy (consumer chain).
+
+    tofu-search receives rows via the provider seam — per the registry
+    design (docs/SITE_KNOWLEDGE_LAYER_DESIGN.md §3.1) the row must carry the
+    new registry fields with it: access_strategy (path ORDER is data),
+    login_url, cookie ``fields`` (the login flow's hint source). The stored
+    row's own value wins when present; spec fills the rest;
+    ``browser_first`` is the schema default.
+    """
+    out = dict(row)
+    spec = source_spec(out.get('domain', ''))
+    out.setdefault('aliases', list(spec.get('aliases', [])))
+    if not out.get('access_strategy'):
+        out['access_strategy'] = spec.get('access_strategy') or 'browser_first'
+    if not out.get('login_url'):
+        out['login_url'] = spec.get('login_url', '')
+    if not out.get('fields'):
+        out['fields'] = [dict(f) for f in (spec.get('fields') or [])]
+    if not out.get('risk_note_key'):
+        out['risk_note_key'] = spec.get('risk_note_key', '')
+    return out
 
 
 def get_source(domain: str) -> Optional[dict]:
-    """Internal lookup by exact domain — returns the FULL row (incl. cookies)."""
+    """Internal lookup by exact domain — returns the FULL row (incl. cookies)
+    with catalog spec fields merged in."""
     dom = normalize_domain(domain)
     if not dom:
         return None
@@ -482,7 +538,7 @@ def get_source(domain: str) -> Optional[dict]:
     with _lock:
         for r in _cache:
             if r.get('domain') == dom:
-                return dict(r)
+                return _with_spec(r)
     return None
 
 
@@ -508,7 +564,7 @@ def match_source(url: str) -> Optional[dict]:
                 continue
             domains = [r.get('domain', '')] + list(r.get('aliases', []))
             if any(d and _host_matches(host, d) for d in domains):
-                return dict(r)
+                return _with_spec(r)
     return None
 
 
@@ -518,7 +574,8 @@ def upsert_source(domain: str, *, label: Optional[str] = None,
                   cookie_header: Optional[str] = None,
                   cookie_fields: Optional[dict] = None,
                   proxy: Optional[str] = None,
-                  aliases: Optional[list] = None) -> dict:
+                  aliases: Optional[list] = None,
+                  access_strategy: Optional[str] = None) -> dict:
     """Create or update a source. Returns the redacted row.
 
     Only the fields you pass are touched (None = leave unchanged), except that
@@ -534,6 +591,11 @@ def upsert_source(domain: str, *, label: Optional[str] = None,
     dom = normalize_domain(domain)
     if not dom:
         raise ValueError('domain is required')
+
+    if access_strategy is not None \
+            and access_strategy not in _VALID_STRATEGIES:
+        raise ValueError(
+            f'access_strategy must be one of {_VALID_STRATEGIES}')
 
     if cookie_fields is not None:
         cookies = cookies_from_fields(cookie_fields, dom)
@@ -567,6 +629,8 @@ def upsert_source(domain: str, *, label: Optional[str] = None,
             row['cookies'] = list(cookies)[:_MAX_COOKIES_PER_SOURCE]
         if proxy is not None:
             row['proxy'] = str(proxy).strip()
+        if access_strategy is not None:
+            row['access_strategy'] = access_strategy
         if enabled is not None:
             row['enabled'] = bool(enabled)
         row['updated_at'] = time.time()

@@ -62,7 +62,9 @@ def list_auth_sources():
     summary='Create or update an authenticated-fetch source',
     description=(
         'Body: ``{domain, label?, enabled?, cookie_fields?, cookie_header?, '
-        'proxy?, aliases?}``. ``cookie_fields`` is a ``{cookie_name: value}`` '
+        'proxy?, aliases?, access_strategy?}`` — ``access_strategy`` is one of '
+        '``browser_first`` (default), ``cookies_replay``, ``public``. '
+        '``cookie_fields`` is a ``{cookie_name: value}`` '
         'mapping (the structured path the Settings UI uses — one input per '
         'cookie, no delimiters for the user to mistype); ``cookie_header`` is '
         'a raw devtools ``Cookie:`` string. Either replaces the stored '
@@ -91,6 +93,7 @@ def upsert_auth_source():
             cookie_header=data.get('cookie_header'),
             proxy=data.get('proxy'),
             aliases=data.get('aliases'),
+            access_strategy=data.get('access_strategy'),
         )
     except ValueError as e:
         return api_bad_request(str(e), field='domain')

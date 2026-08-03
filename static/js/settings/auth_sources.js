@@ -79,6 +79,7 @@ function _authSourceCardHtml(src) {
         <div class="auth-src-meta">
           <div class="auth-src-name">${src.label || dom}<span class="auth-src-domain">${dom}</span></div>
           <div class="auth-src-state-text">${stateText}</div>
+          ${raw(_authSourceRegistryBadges(src))}
           ${raw(_authSourceRiskNote(src))}
         </div>
         <label class="auth-src-switch" title="${t('settings.authSrcToggle') || '启用 / 停用'}">
@@ -157,6 +158,29 @@ function _authSourceConnectPanel(src, dom, id) {
         </button>
       </div>
     </div>`;
+}
+
+/** Registry badges (Site Knowledge Layer P2): the access STRATEGY (who
+ *  opens the door — browser_first / cookies_replay / public) and the
+ *  KNOWLEDGE state (a site-doctor-pinned extractor = 已内化 vN, else
+ *  仅凭据). Both are projected server-side on each row; the JS hardcodes
+ *  no per-site facts — internalizing a site is appending a registry row. */
+function _authSourceRegistryBadges(src) {
+  var strategy = (src && src.access_strategy) || 'browser_first';
+  var strategyKey = {
+    browser_first: 'settings.authSrcStrategyBrowserFirst',
+    cookies_replay: 'settings.authSrcStrategyCookiesReplay',
+    'public': 'settings.authSrcStrategyPublic'
+  }[strategy] || 'settings.authSrcStrategyBrowserFirst';
+  var k = (src && src.knowledge) || {};
+  var knowledgeHtml = k.pinned
+    ? safeHtml`<span class="auth-src-meta-badge knowledge">${(t('settings.authSrcKnowledgePinned') || '已内化 v{v}').replace('{v}', String(k.version || '?'))}</span>`
+    : (src.has_cookies
+      ? safeHtml`<span class="auth-src-meta-badge">${t('settings.authSrcKnowledgeCredentials') || '仅凭据'}</span>`
+      : '');
+  return String(safeHtml`<div class="auth-src-badges">
+    <span class="auth-src-meta-badge strategy">${t(strategyKey)}</span>${knowledgeHtml}
+  </div>`);
 }
 
 /** Per-site account-risk note (e.g. XHS 风控). The SITE KNOWLEDGE lives

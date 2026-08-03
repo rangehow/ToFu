@@ -2032,6 +2032,19 @@
   background: var(--s-skin);
   color: var(--s-ink);
 }
+/* ── Registry badges (Site Knowledge Layer P2): strategy + knowledge ── */
+.auth-src-badges { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.auth-src-meta-badge {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: .3px;
+  padding: 1px 6px;
+  border: 1.5px solid var(--s-ink-soft);
+  background: var(--s-white);
+  color: var(--s-ink-soft);
+}
+.auth-src-meta-badge.strategy  { border-color: var(--s-ink); color: var(--s-ink); background: var(--s-cream); }
+.auth-src-meta-badge.knowledge { border-color: var(--s-ink); color: var(--s-ink); background: var(--s-gold); }
 .auth-src-field-badge.required    { background: var(--s-gold); }
 .auth-src-field-badge.recommended { background: var(--s-cream); }
 .auth-src-field-badge.optional    { background: var(--s-white); color: var(--s-ink-soft); border-color: var(--s-ink-soft); }

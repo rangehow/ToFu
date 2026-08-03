@@ -1,3 +1,12 @@
+### 2026-08-03(站点知识层 P2 落地:注册表泛化——设置页「站点接入」徽章化 + access_strategy 成为 tofu-search 路径序数据 + 登录 hints 单源化) — 脑派发 epic `pt_689b73b305fe4810` **DONE**;tofu-search `056a23b`(0.7.2,6 文件 +355/−54)+ chatui 本批(10 文件);环 tofu-search **40/40 + 全量绿**、chatui **55+53+28 全绿**
+
+- **owner 之问的最终兑现:** 「美团/小红书 toggle 以后还要吗?」——设置段题「需要登录的来源」→**「站点接入」**(描述同步改为「每内化一个网站就追加一条」);每张卡片新增两徽章:**策略徽章**(browser_first 浏览器优先/cookies_replay 凭据回放/public 公开站)+**知识徽章**(医生钉过抽取器=「已内化 vN」金章,已连接未钉=「仅凭据」);描述里的 cross-reference(privateHostsDesc)同步改名。
+- **策略是真数据不是装饰:** tofu-search 侧 xhs 引擎 + fetch/core 双消费 `access_strategy`——browser_first=现状(默认/缺省,零迁移),cookies_replay=旧序(池回放主/浏览器兜底,适合风控迟钝或浏览器常离线的站),public=身份路径全关(引擎 skip/fetch 当建议项走匿名管线)。fetch core 重构为 `_browser()`/`_replay()` 闭包共享登录墙判决,browser 腿诊断 reason 随策略命名(auth_source_browser_first|fallback)。登录墙契约测试按闭包形态重钉(意图不稀释:墙检查先于净文本返回 + 成功路必须消费判决闭包)。
+- **域名清单数据化(票面另一半):** interactive_login 的「登录完成」cookie hints 改读注册表行 `fields` spec(与设置 UI 同一单源),模块表降为 standalone 兜底——登录流最后一个逐站硬编码消除;chatui `get_source/match_source` 全行合并目录 spec(login_url/fields/access_strategy),设计稿 §3.1 消费链兑现(library 不认识的键原样透传)。
+- **chatui 注册表(lib/auth_sources.py):** DEFAULT_SOURCES 带 `access_strategy:'browser_first'`(老 auth_sources.json 零迁移);upsert 校验三值并落库;`_redact` 加策略投影 + 知识徽章(list_sources 一次性读 site_knowledge 注入,64 行不逐行读盘);路由 upsert 透传 + api_meta 同步;i18n 五新键双语;settings.css 徽章样式复用 field-badge 形制。
+- **测试账:** tofu-search 新套件 10 针(三路策略×双消费面 + hints 注册表/兜底);chatui 新套件 8 针(默认/校验/持久化/老行缺省/spec 合入全行/别名匹配/徽章注入/redact 不漏 cookie 值)。事故自记(两起,均当场擒):①pytest fixture 里给**函数名**赋值属性而 yield 的是 list——fixture 命名空间对象化;②新套件调了不存在的 `fetch_core.fetch_url`(真名 fetch_page_content)——**记档:写跨包测试先核被测函数真名,grep 一遍胜过猜。**
+- **余量(另起切片,未挂票):** `knowledge.detail` 结构化笔记提取、`stats`/RECORD 台账落盘——设计稿 §6 P1 行已记档。真机验收:设置页段位改名+徽章可见;切换某站 access_strategy 后搜索路径序即时改变(日志 via=pool/browser 可证)。
+
 ### 2026-08-03(turn-ctx 右栏「100% 缩放完全消失」双根修:授予阈值从「舒适+192px 奢侈缓冲」改为按 700px 文本地板推导 + fold 兜底行零宽出生即瞎) — owner 截图指令「80% 能看到,100% 完全消失,重新设计布局」;commit 见下(5 文件);几何视觉套件 **3/3**(216 状态×2=432 行全绿)+ 邻接 **28 套件 111/113**(2 红皆预存,HEAD worktree 实证挂票)
 
 - **根因一(阈值失灵):** 右栏由 `@container chatpane (min-width:1368px)` 授予,1368=满配 1176px(820 文本+52 头像+24 缝+232 栏+48 边距)**外加 192px 奢侈缓冲**——owner 的面板在 100% 缩放恰为 ~1365 CSS px(2048 物理/1.5 DPR,侧栏收拢),**差 3px 够不到**;80% 缩放等效面板 1707px 才过线。修法不是调常数而是改推导:阈值=几何守卫已钉的 700px 文本地板+固定家具=1044px,授予点 1056px(+12px 滚动条/取整 slack)——1056–1175 面板得右栏+零外边距(文本 700–820px),更宽面板自动恢复外边距;CSS 注释与 `_RAIL_MIN_PANE` 携带同一笔账,两者必须同动。

@@ -81,12 +81,11 @@ psutil>=5.9
 # SOFT floor: the caller guards with _register_once() and converts a missing
 # registry into a model-visible error string, so an older tofu-search degrades
 # the preview feature at call time rather than crashing anything at startup.
-# >=0.7.1: SiteKnowledgeProvider + site-drift signal on top of 0.7.0's
-# BrowserProvider.scrape / browser-first XHS (docs/SITE_KNOWLEDGE_LAYER_DESIGN.md).
-# SOFT floor: on an older library the knowledge provider and drift listener are
-# never registered (hasattr-guarded in search_bridge) and the XHS engine keeps
-# its built-in selectors — the feature is inert, nothing crashes.
-tofu-search>=0.7.1
+# >=0.7.2: access_strategy consumed (xhs engine + fetch core path ORDER is
+# registry data) on top of 0.7.1's knowledge seam / drift signal.
+# SOFT floor: on an older library the registry's access_strategy key is simply
+# unread (providers default to browser-first everywhere) — inert, no crash.
+tofu-search>=0.7.2
 trafilatura>=1.6
 # playwright is optional — powers the JS-rendered fallback in tofu_search.fetch.
 # On Linux, Chromium needs X11/GTK shared libs (libatk, libgbm, libXcomposite, …).

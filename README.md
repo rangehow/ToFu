@@ -65,11 +65,17 @@ Pick the row that matches your OS. Each one ends with a running server on **http
 >
 > | Component | For | Size | Contents |
 > |---|---|---|---|
-> | **Agent (TofuAgent)** | The server should act on this machine (incl. subscription-traffic egress) | ~53 MB | No UI: tray configures connection + permissions, optional start-with-Windows |
-> | **Full desktop (Tofu)** | This machine also runs Tofu itself (server + client in one) | ~153 MB | Full server + browser UI + tray |
+> | **Agent (TofuAgent)** | The server should act on this machine (incl. subscription-traffic egress) | ~53 MB | Role window + control panel (bilingual zh/en); tray mirrors it; optional start-with-Windows |
+> | **Full desktop (Tofu)** | This machine also runs Tofu itself (server + client in one) | ~153 MB | Full server + browser UI + role window + tray |
 >
 > Local Control puts the right one first for your situation; the Releases page carries both
 > (`TofuAgent-Setup-*` / `Tofu-Setup-*`).
+>
+> Both components open a small **role window** at launch — the full app says "this computer runs your Tofu
+> server", the agent says "this computer is controlled by a Tofu server" — which doubles as the control
+> panel (permissions, connect line, start-with-Windows), so nothing important hides in the tray anymore.
+> Uncheck "Show this window at startup" to go straight to the tray; the tray keeps a **Control panel…**
+> item to reopen it.
 
 That's it. Each path handles the runtime, dependencies, the database,
 the browser engine, and starts the server — no flags, no follow-up

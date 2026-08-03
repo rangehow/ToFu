@@ -311,6 +311,68 @@ STRINGS = {
         'en': 'Quit',
         'zh': '退出',
     },
+    'desktop.tray.controlPanel': {
+        'en': 'Control panel…',
+        'zh': '控制面板…',
+    },
+    # ── Startup role window (desktop/role_window.py) ──
+    # Both launchers show this window at startup so the machine's ROLE is
+    # never implicit again; it doubles as the control panel that used to
+    # be tray-only.
+    'desktop.role.serverTitle': {
+        'en': 'This computer runs your Tofu server',
+        'zh': '这台电脑是 Tofu 服务器',
+    },
+    'desktop.role.serverSub': {
+        'en': 'Tofu is running locally. The web app opens in your '
+              'browser automatically.',
+        'zh': 'Tofu 正在本机运行，网页版会自动在浏览器中打开。',
+    },
+    'desktop.role.alsoClient': {
+        'en': 'Also controlled by: {url}',
+        'zh': '同时受控于：{url}',
+    },
+    'desktop.role.agentTitle': {
+        'en': 'This computer is controlled by a Tofu server',
+        'zh': '这台电脑是 Tofu 受控端',
+    },
+    'desktop.role.agentSub': {
+        'en': 'It answers to the server below. You can change '
+              'permissions or re-attach at any time.',
+        'zh': '它听命于下方服务器，你可以随时修改权限或重新连接。',
+    },
+    'desktop.role.ccTitle': {
+        'en': 'Computer control',
+        'zh': '电脑控制',
+    },
+    'desktop.role.ccOn': {
+        'en': 'Enabled — remote control is ON',
+        'zh': '已启用——远程控制开启中',
+    },
+    'desktop.role.ccOff': {
+        'en': 'Disabled — this computer cannot be controlled',
+        'zh': '未启用——这台电脑不可被控制',
+    },
+    'desktop.role.enable': {
+        'en': 'Enable',
+        'zh': '启用',
+    },
+    'desktop.role.disable': {
+        'en': 'Disable',
+        'zh': '停用',
+    },
+    'desktop.role.permHint': {
+        'en': 'Permission tiers apply on the next command poll.',
+        'zh': '权限档位在下一次指令轮询时生效。',
+    },
+    'desktop.role.showAtStartup': {
+        'en': 'Show this window at startup',
+        'zh': '启动时显示此窗口',
+    },
+    'desktop.role.minimize': {
+        'en': 'Minimize to tray',
+        'zh': '最小化到托盘',
+    },
 }
 
 

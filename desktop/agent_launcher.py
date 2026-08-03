@@ -229,6 +229,7 @@ def _smoke_main() -> None:
                         'server-stack payload in the agent bundle: %s'
                         % banned)
         import tkinter  # noqa: F401 — the connect dialog's toolkit must ship
+        import desktop.role_window  # noqa: F401 — the control panel must ship
         sys.stdout.write('TOFU_AGENT_SMOKE_OK version=%s commands=%d\n'
                          % (_agent_version() or 'unknown', n))
         sys.stdout.flush()
@@ -358,7 +359,40 @@ def _run_tray(state: dict, perms: dict) -> None:
             text = text.replace('{%s}' % ph, str(val))
         return text
 
+    # ── Role window / control panel (desktop/role_window.py) ──
+    # The window delegates every mutation to the SAME handlers the tray
+    # uses, so the two surfaces can never disagree about what a click
+    # does. Tray callbacks expect an icon with update_menu(); window-
+    # driven actions have no tray to refresh, hence the null shim.
+    class _NullIcon:
+        @staticmethod
+        def update_menu():
+            pass
+
+    _NULL_ICON = _NullIcon()
+
+    def _role_state_fn():
+        from desktop import role_window
+        autostart = (_autostart_get() if _autostart_supported() else None)
+        return role_window.role_state_agent(
+            state.get('url') or '', perms, autostart,
+            show_flag=role_window.should_show_at_startup())
+
+    _role_actions = {
+        'toggle_perm': lambda key: _toggle_perm(key)(_NULL_ICON, None),
+        'connect': lambda: on_connect(_NULL_ICON, None),
+        'toggle_autostart': lambda: on_toggle_autostart(_NULL_ICON, None),
+    }
+
+    def on_control_panel(icon, item):
+        from desktop import role_window
+        role_window.show_role_window('agent', _role_state_fn,
+                                     _role_actions, log=_log)
+
     menu = pystray.Menu(
+        MenuItem(_tt('desktop.tray.controlPanel'), on_control_panel,
+                 default=True),
+        pystray.Menu.SEPARATOR,
         # Which server this machine answers to — the silence gap the full
         # app's tray already fixed; never leave it unverifiable.
         MenuItem(lambda item: _tt('desktop.tray.serverLabel',
@@ -386,6 +420,15 @@ def _run_tray(state: dict, perms: dict) -> None:
     )
 
     icon = pystray.Icon('tofu-agent', _load_icon(), 'Tofu Agent', menu)
+
+    # Startup role declaration (owner directive 2026-08-03): the window
+    # says 「受控端」 out loud and IS the control panel; the tray starts
+    # when the user dismisses it (or immediately when they unchecked
+    # "show at startup").
+    from desktop import role_window
+    if role_window.should_show_at_startup():
+        role_window.show_role_window('agent', _role_state_fn,
+                                     _role_actions, log=_log)
     icon.run()
 
 

@@ -44,7 +44,8 @@ hidden_imports += ['lib.log', 'lib.json_store', 'lib.version',
                    'lib.runtime_paths']
 
 # The desktop package seams the launcher uses.
-hidden_imports += ['desktop.connect_ui', 'desktop._tk_theme']
+hidden_imports += ['desktop.connect_ui', 'desktop._tk_theme',
+                   'desktop.role_window']
 
 # Third-party agent deps.
 hidden_imports += [

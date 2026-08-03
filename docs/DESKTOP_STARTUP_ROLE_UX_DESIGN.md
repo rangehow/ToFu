@@ -1,6 +1,11 @@
 # Desktop Startup Role UX — Design
 
-> Status: DRAFT v1 (2026-08-03), awaiting owner review. Implementation not started.
+> Status: APPROVED by owner 2026-08-03 (「按稿全量实施 S1-S4」); S1-S4 all
+> landed same day — see the epic pt_6956ccfb605e497b journal entry for the
+> per-slice test/NEUTER ledger. One simplification vs the draft: the
+> "first launch always shows" rule is subsumed by the config gate (absent
+> `show_role_window` key — which is exactly what both a fresh install AND
+> an upgrade from a pre-window build look like — defaults to SHOW).
 > Related: docs/DESKTOP_AGENT_DIST_DESIGN.md (component separation, shipped),
 > epic pt_59b62951aad2463e (agent dist — owns the WEB panel surface; this doc
 > owns the NATIVE surface of both packaged apps, disjoint write set).

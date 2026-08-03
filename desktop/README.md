@@ -36,10 +36,24 @@ The installer bundles:
 - SQLite as automatic fallback when PG is unavailable
 - Playwright Python package (browser binary downloaded separately)
 - Frontend (HTML/CSS/JS — no build step)
-- System tray icon with Open/Quit/Install Components controls
+- Startup **role window** (bilingual zh/en): declares "this computer runs your Tofu
+  server" — and doubles as the computer-control panel (enable toggle, permission
+  tiers, connect-to-remote), the controls that used to be tray-only
+- Bilingual system tray with Open/Control panel/Computer Control/Quit controls
 - Auto-opens browser on startup
 
 ## First-Launch Experience
+
+Every launch (full app and agent alike) opens the **role window**
+(`desktop/role_window.py`, themed by `_tk_theme`, bilingual zh/en): the full
+app declares "this computer runs your Tofu server" — and admits it when the
+machine is ALSO attached to a remote Tofu as a controlled endpoint — while the
+agent declares "this computer is controlled by a Tofu server" with the server
+address it answers to. The window IS the control panel: computer-control
+toggle, permission tiers, connect-to-remote, start-with-Windows, all the
+controls that used to be tray-only. Unchecking "Show this window at startup"
+sends future launches straight to the tray, which keeps a **Control panel…**
+item as the way back. Design: `docs/DESKTOP_STARTUP_ROLE_UX_DESIGN.md`.
 
 The **installer only ships files and launches the app** — it never shells out to
 download components (a PyInstaller `--onedir` bundle has no standalone

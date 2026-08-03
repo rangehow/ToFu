@@ -550,10 +550,42 @@ def _run_tray(port: int, proc: subprocess.Popen):
             text = text.replace('{%s}' % ph, str(val))
         return text
 
+    # ── Role window / control panel (desktop/role_window.py) ──
+    # The window delegates every mutation to the SAME handlers the tray
+    # uses (a second VIEW over _cc_state, not a new state path), so the
+    # two surfaces can never disagree. Tray callbacks expect an icon
+    # with update_menu(); window-driven actions have no tray to
+    # refresh, hence the null shim.
+    class _NullIcon:
+        @staticmethod
+        def update_menu():
+            pass
+
+    _NULL_ICON = _NullIcon()
+
+    def _role_state_fn():
+        from desktop import role_window
+        return role_window.role_state_full(
+            port, _cc_state, _attached_url(),
+            show_flag=role_window.should_show_at_startup())
+
+    _role_actions = {
+        'open': lambda: webbrowser.open(url),
+        'toggle_cc': lambda: on_toggle_computer_control(_NULL_ICON, None),
+        'toggle_perm': lambda key: _toggle_perm(key)(_NULL_ICON, None),
+        'connect': lambda: on_connect_remote(_NULL_ICON, None),
+    }
+
+    def on_control_panel(icon, item):
+        from desktop import role_window
+        role_window.show_role_window('full', _role_state_fn,
+                                     _role_actions, log=_log)
+
     # Dynamic "update available" item: its text is computed at menu-open time
     # and it is hidden entirely until the background check finds a newer tag.
     menu = pystray.Menu(
         MenuItem(_tt('desktop.tray.open'), on_open, default=True),
+        MenuItem(_tt('desktop.tray.controlPanel'), on_control_panel),
         MenuItem(lambda item: _tt('desktop.tray.downloadUpdate',
                                   tag=_update['tag']),
                  on_update,
@@ -582,6 +614,16 @@ def _run_tray(port: int, proc: subprocess.Popen):
     )
 
     icon = pystray.Icon('tofu', icon_image, 'Tofu', menu)
+
+    # Startup role declaration (owner directive 2026-08-03): the window
+    # says 「服务器」 out loud — and admits it when this machine is ALSO
+    # a controlled endpoint of a remote Tofu (the tunnel-incident blind
+    # spot). The tray starts when the user dismisses it (or immediately
+    # when they unchecked "show at startup").
+    from desktop import role_window
+    if role_window.should_show_at_startup():
+        role_window.show_role_window('full', _role_state_fn,
+                                     _role_actions, log=_log)
 
     # Kick off the update check off the main thread so it never delays the
     # tray appearing. When it finds a newer version it flips the holder and

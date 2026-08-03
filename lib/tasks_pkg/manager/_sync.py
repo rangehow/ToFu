@@ -1193,7 +1193,9 @@ def _sync_result_to_conversation(task, meta):
                 try:
                     from lib.tasks_pkg.cache_tracking import get_cache_prefix_count
                     _fold_prefix_n = get_cache_prefix_count(conv_id)
-                except Exception:
+                except Exception as _fp_e2:
+                    logger.debug('%s conv=%s get_cache_prefix_count failed (CAS loop): %s',
+                                 pfx, conv_id[:8], _fp_e2)
                     _fold_prefix_n = 0
                 messages, _twins_folded = fold_duplicate_task_twins(messages, _fold_prefix_n)
                 if _twins_folded:

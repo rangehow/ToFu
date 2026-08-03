@@ -15542,6 +15542,10 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    beside it. One rule is what stops that recurring; .lc-substep differs in
    MARGIN only, so only margin is overridden below. */
 .lc-step,.lc-substep{font-size:12.5px;line-height:1.6;color:var(--text-secondary,#9898a8);margin:0 0 8px}
+.lc-role{border:1px solid var(--border,rgba(148,148,168,0.18));border-radius:8px;padding:10px 12px;margin:0 0 10px}
+.lc-role-primary{border-color:rgba(168,85,247,0.45);background:rgba(168,85,247,0.05)}
+.lc-role-head{font-size:13px;font-weight:600;color:var(--text-primary,#e6e6ea);margin:0 0 7px}
+.lc-role-note{font-weight:400;font-size:12.5px;color:var(--text-secondary,#9898a8);line-height:1.6}
 .lc-copy{position:relative;display:block;padding:8px 10px;border-radius:6px;word-break:break-all;font-size:12px;font-family:'JetBrains Mono',monospace;color:#a855f7;cursor:pointer;border:1px dashed rgba(168,85,247,0.4);background:rgba(168,85,247,0.06);transition:background-color .2s ease,box-shadow .2s ease}
 .lc-copy:hover{background:rgba(168,85,247,0.14);box-shadow:0 0 0 2px rgba(168,85,247,0.18)}
 .lc-copy::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 6px);left:8px;font-size:11px;padding:3px 8px;border-radius:5px;background:#1e293b;color:#e2e8f0;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s}

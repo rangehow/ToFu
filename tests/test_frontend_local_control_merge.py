@@ -135,6 +135,9 @@ _SHIPPED_SYMBOLS = (
     # (cloud-IDE proxy prefix) — _lcDownloadLinks calls it, so the splice
     # needs it or every test here goes red on ReferenceError.
     "_lcResolveDlUrl",
+    # The poll-signature gate (2026-08-03): _lcRenderDesktop calls it to
+    # decide whether a repaint is warranted at all.
+    "_lcDesktopSignature",
 )
 
 
@@ -249,10 +252,10 @@ HARNESS = textwrap.dedent("""
         steps: el.querySelectorAll('.lc-step').length,
         text: el.textContent.trim(),
         hasMintButton: !!el.querySelector('#lcMintBtn'),
-        // A mint may exist ONLY inside a collapsed escape hatch (the tunnel
-        // case) — never as a top-level action outside the remote state.
-        mintInsideDetails: !!el.querySelector(
-          'details #lcMintBtn, details #lcMintBtnSrc'),
+        // local_source's mint lives inside the AGENT role block (the tunnel
+        // case, made visible by owner decree 2026-08-03) — never as a
+        // top-level action in tray/connected.
+        mintInAgentRole: !!el.querySelector('.lc-role #lcMintBtnSrc'),
         // A real, clickable link the user can follow — not prose.
         downloadHref: dlA ? dlA.getAttribute('href') : '',
         // The releases-page escape hatch — external, must never be re-based.
@@ -440,14 +443,14 @@ def test_only_the_remote_state_offers_a_token():
     for st in ("connected", "tray", "local_source"):
         assert out[st]["hasMintButton"] is False, (
             f"setup_state={st} must NOT ask for a token as a top-level action")
-    # The documented exception (2026-08-02, measured live): an ssh -L tunnel
-    # makes a remote browser present as loopback → setup_state local_source
-    # for a machine that is NOT this one. local_source may therefore carry
-    # ONE mint — but only inside the collapsed "from another computer?"
-    # escape hatch, never top-level. A true-local user never sees it; a
-    # tunnel user is not sent to install a second Tofu by mistake.
-    assert out["local_source"]["mintInsideDetails"] is True, (
-        "the tunnel escape hatch lost its mint — the office-machine case "
+    # The documented exception (owner decree 2026-08-03, superseding the
+    # 2026-08-02 collapsed-hatch form): an ssh -L tunnel makes a remote
+    # browser present as loopback → setup_state local_source for a machine
+    # that is NOT this one. local_source therefore carries ONE mint —
+    # inside the visible agent role block (a collapsed hatch was measured
+    # to be missed entirely; the connect action must stand out).
+    assert out["local_source"]["mintInAgentRole"] is True, (
+        "the agent role block lost its mint — the office-machine case "
         "(ssh -L) has no connect flow again")
 
 

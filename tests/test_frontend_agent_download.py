@@ -16,13 +16,15 @@ the historical full-installer rendering when no agent artifact exists yet
      3-step flow back even with a preseed;
   2. no agent_downloads ⇒ historical full-installer rendering, no agent
      vocabulary (never an empty primary slot);
-  3. local_source ⇒ full primary PLUS a collapsed escape hatch for
-     tunnel users (agent download + mint inside <details>, NOT open) —
-     measured 2026-08-02: an ssh -L tunnel makes a remote browser
-     present as loopback, and the old local_source rendering sent that
-     user to install a second full Tofu on the wrong machine;
-  4. NEUTER (the agent branch severed) ⇒ the primary-agent checks fail —
-     the suite discriminates.
+  3. local_source ⇒ BOTH installs visible, role-labeled, nothing
+     collapsed (owner 2026-08-03: the collapsed tunnel hatch was missed;
+     the key action must stand out): agent block FIRST with the mint
+     button, full desktop second, exactly one lc-step heading;
+  4. an unchanged poll beat PRESERVES user interaction state (the minted
+     connect line, an expanded section) — the 3s repaint must not blow
+     the DOM away; a changed payload still re-renders;
+  5. NEUTER ×2: severing the agent branch fails the remote checks;
+     severing the signature gate fails the preservation check.
 
 Loads the REAL shipped local-control.js under jsdom; skips when
 node+jsdom are absent (same convention as test_frontend_cmd_collapse.py).
@@ -53,7 +55,7 @@ _HARNESS = r"""
 const fs = require('fs');
 const path = require('path');
 const ROOT = process.argv[3];
-const NEUTER = process.argv[4] === 'neuter';
+const MODE = process.argv[4] || 'normal';
 const { JSDOM } = require(path.join(ROOT, 'node_modules', 'jsdom'));
 const dom = new JSDOM('<!DOCTYPE html><body>'
   + '<div id="lcDesktopStatus"><span class="browser-status-dot"></span>'
@@ -70,10 +72,16 @@ global.t = (k) => k;   // fall back to the literal fallback strings
 global.browserEnabled = false; global.desktopEnabled = false;
 
 let src = fs.readFileSync(process.argv[2], 'utf8');
-if (NEUTER) {
+if (MODE === 'neuter') {
   const before = src;
   src = src.replace('if (agentPicks.length) {', 'if (false) {');
   if (src === before) { console.log('NEUTER_NOMUT'); process.exit(2); }
+}
+if (MODE === 'neuter-gate') {
+  const before = src;
+  src = src.replace('if (sig === _lcDesktopSigLast) return;',
+                    'if (false) {}');
+  if (src === before) { console.log('NEUTER_GATE_NOMUT'); process.exit(2); }
 }
 eval(src);
 
@@ -148,28 +156,49 @@ check('fallback_no_agent_step', !html2.includes('① 下载并安装受控端'))
 check('fallback_historical_text', html2.includes('安装桌面版'));
 check('fallback_mint_kept', html2.includes('lcMintBtn'));
 
-// ── 3. local_source ⇒ full primary + collapsed tunnel escape hatch ──
-_lcRenderDesktop({ connected: false, setup_state: 'local_source',
+// ── 3. local_source ⇒ BOTH installs visible, role-labeled, no collapse ──
+const LOCAL_SRC = { connected: false, setup_state: 'local_source',
   download_url: 'https://github.com/x/y/releases/latest',
   server_url: 'http://127.0.0.1:15000/',
-  downloads: [FULL], agent_downloads: [AGENT] }, null);
+  downloads: [FULL], agent_downloads: [AGENT] };
+_lcRenderDesktop(LOCAL_SRC, null);
 const html3 = document.getElementById('lcDesktopSetup').innerHTML;
 check('local_source_full_link', html3.includes('Tofu-Setup-0.16.0-win64.exe'));
-check('local_source_tunnel_toggle', html3.includes('从另一台电脑访问本服务器'));
-check('local_source_details_collapsed',
-  html3.includes('<details class="lc-details"><summary>') &&
-  !html3.includes('<details class="lc-details" open'));
-check('local_source_agent_in_details',
-  html3.indexOf('从另一台电脑访问本服务器') < html3.indexOf('TofuAgent-Setup'));
+check('local_source_agent_link', html3.includes('TofuAgent-Setup-0.16.0-win64.exe'));
+check('local_source_no_details', !html3.includes('<details'));
+check('local_source_agent_first',
+  html3.indexOf('TofuAgent-Setup') < html3.indexOf('Tofu-Setup'));
+check('local_source_primary_accent', html3.includes('lc-role-primary'));
+check('local_source_role_notes',
+  html3.includes('另一台电脑访问') && html3.includes('服务器本机'));
 check('local_source_mint_button', html3.includes('lcMintBtnSrc'));
+check('local_source_one_step',
+  (html3.match(/lc-step/g) || []).length === 1);
 check('local_source_no_agent_step', !html3.includes('① 下载并安装受控端'));
+
+// ── 4. unchanged poll beat PRESERVES user interaction state ──
+// (The 2026-08-03 auto-collapse: every 3s repaint rewrote innerHTML,
+// collapsing an opened details and vanishing a minted connect line.)
+const box = document.getElementById('lcTokenBoxSrc');
+box.style.display = 'block';
+box.textContent = 'http://127.0.0.1:15000 k_test';
+_lcRenderDesktop(LOCAL_SRC, null);   // identical payload — a poll beat
+const box2 = document.getElementById('lcTokenBoxSrc');
+check('rerender_preserves_token_box',
+  !!box2 && box2.textContent === 'http://127.0.0.1:15000 k_test' &&
+  box2.style.display === 'block');
+// …but a CHANGED payload still re-renders (the poll's whole point).
+_lcRenderDesktop({ connected: true, setup_state: 'connected',
+  downloads: [FULL], agent_downloads: [AGENT] }, null);
+check('state_change_still_rerenders',
+  document.getElementById('lcDesktopSetup').innerHTML === '');
 
 console.log(out.join('\n'));
 process.exit(0);
 """
 
 
-def _run_harness(neuter: bool) -> str:
+def _run_harness(mode: str = 'normal') -> str:
     harness = os.path.join(HERE, '_agent_download_harness.js')
     with open(harness, 'w') as f:
         f.write(_HARNESS)
@@ -178,7 +207,7 @@ def _run_harness(neuter: bool) -> str:
             ['node', harness,
              os.path.join(JS_DIR, 'local-control.js'),       # argv[2]
              ROOT,                                           # argv[3]
-             'neuter' if neuter else 'normal'],              # argv[4]
+             mode],                                          # argv[4]
             capture_output=True, text=True, timeout=60,
         )
     finally:
@@ -193,19 +222,33 @@ def _run_harness(neuter: bool) -> str:
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_agent_download_matrix():
-    output = _run_harness(neuter=False)
+    output = _run_harness('normal')
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'agent download matrix failures:\n' + output
-    assert output.count('PASS') >= 20, f'expected >=20 PASS lines, got:\n' \
+    assert output.count('PASS') >= 28, f'expected >=28 PASS lines, got:\n' \
                                        f'{output}'
 
 
 @pytest.mark.skipif(not _node_deps_available(),
                     reason='node + jsdom dev-deps not installed (run npm install)')
 def test_NEUTER_severing_the_agent_branch_is_caught():
-    output = _run_harness(neuter=True)
+    output = _run_harness('neuter')
     fails = [ln for ln in output.splitlines()
              if ln.startswith('FAIL remote_agent')]
     assert len(fails) >= 3, (
         'the agent-branch neuter should fail the primary-agent checks — '
         'the suite cannot tell the matrix from the fallback:\n' + output)
+
+
+@pytest.mark.skipif(not _node_deps_available(),
+                    reason='node + jsdom dev-deps not installed (run npm install)')
+def test_NEUTER_severing_the_signature_gate_is_caught():
+    """Without the signature gate every 3s poll rewrites the setup DOM —
+    the auto-collapse the owner measured. Sever it and the preservation
+    check must go red."""
+    output = _run_harness('neuter-gate')
+    fails = [ln for ln in output.splitlines()
+             if ln.startswith('FAIL rerender_preserves')]
+    assert fails, (
+        'the gate neuter should fail the preservation check — without the '
+        'gate the poll blows the DOM away again:\n' + output)

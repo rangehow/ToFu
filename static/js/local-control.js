@@ -63,10 +63,31 @@ var _lcPollTimer = null;
  * by the badge. */
 var _lcReach = { browser: null, desktop: null };
 
+/* Signature of the last desktop-setup render (see the gate in
+ * _lcRenderDesktop). `null` forces a render; openLocalControlModal resets
+ * it so a reopened modal never inherits a stale skip. */
+var _lcDesktopSigLast = null;
+
+/* The render inputs that justify a setup-box rewrite. Anything NOT in here
+ * changing is not a reason to touch the DOM the user is interacting with. */
+function _lcDesktopSignature(d) {
+  function fp(rows) {
+    return (Array.isArray(rows) ? rows : []).map(function (p) {
+      return [(p && p.filename) || '', (p && p.size) || 0,
+              (p && p.preseed_url) || ''].join(':');
+    }).join('|');
+  }
+  var lang = (typeof _i18nLang !== 'undefined') ? _i18nLang : '';
+  return [d.setup_state, !!d.connected, d.server_url || '',
+          d.bridge_token_required, fp(d.downloads),
+          fp(d.agent_downloads), lang].join('~');
+}
+
 function openLocalControlModal() {
   var el = document.getElementById('localControlModal');
   if (!el) return;
   el.classList.add('open');
+  _lcDesktopSigLast = null;
   _lcPaintFloor();
   _lcRefresh();
   if (_lcPollTimer) clearInterval(_lcPollTimer);
@@ -426,6 +447,17 @@ function _lcRenderDesktop(d, err) {
 
   if (!setup) return;
 
+  /* ── Poll-signature gate (owner-measured 2026-08-03) ──
+   * _lcRefresh repaints every 3s so a freshly-connected agent flips the
+   * dot — but rewriting setup.innerHTML on every beat also blew away the
+   * USER's interaction state: an expanded <details> collapsed seconds
+   * after opening, a minted connect line vanished mid-copy. Rewrite only
+   * when the render INPUTS changed; the dot/text/switch above still
+   * update every beat, so a connecting agent is never delayed. */
+  var sig = _lcDesktopSignature(d);
+  if (sig === _lcDesktopSigLast) return;
+  _lcDesktopSigLast = sig;
+
   // The backend chose the state — see routes/api_v1/desktop.py::_setup_state.
   // Reading it (rather than re-deriving from the URL) is what keeps the
   // packaged-app case distinguishable from a reverse-proxied remote one.
@@ -442,38 +474,55 @@ function _lcRenderDesktop(d, err) {
       return;
 
     case 'local_source': {
-      // Tofu is running from source on this same machine. The desktop app is
-      // still the one-click tray path — but "install the desktop app" with no
-      // way to GET it is a dead sentence, and download_url is already in the
-      // payload (derived from the ONE UPDATE_REPO constant), so render the
-      // same followable link the remote case offers.
-      //
-      // ── The tunnel blind spot (measured 2026-08-02, owner live) ──
-      // loopback peer ≠ same machine: an ssh -L tunnel makes a REMOTE
-      // machine's browser present as 127.0.0.1, and the server has NO way
-      // to tell (any re-classification would be a guess, so this branch
-      // keeps its primary instruction and offers the escape hatch below
-      // instead). An office machine that followed the primary instruction
-      // installed a SECOND Tofu whose bundled server grabbed a fallback
-      // port and whose agent polled IT — never this server. Tunnel users
-      // need the remote flow; true-local users are unaffected (collapsed).
-      var dlSrc = (d.download_url || '').trim();
+      // Tofu runs from source on this machine. Two audiences land here and
+      // the server CANNOT tell them apart (a same-host proxy and an ssh -L
+      // tunnel both present as loopback — see _setup_state's docstring), so
+      // BOTH installs are shown, role-labeled, nothing collapsed
+      // (owner 2026-08-03: the collapsed tunnel hatch was missed entirely,
+      // and the prose wall made the one needed action unfindable). The
+      // agent block renders only when a built artifact exists; without one
+      // the full desktop app is the sole — and sufficient — offer.
       var srvSrc = (d.server_url || '').trim();
       var agentSrc = Array.isArray(d.agent_downloads)
         ? d.agent_downloads : [];
-      setup.innerHTML = '<p class="lc-step">' + _lcEsc(_lcT('local.desktopSource',
-        '当前 Tofu 以源码方式运行。安装桌面版后即可在系统托盘一键开启「Enable Computer Control」。')) + '</p>' +
-        _lcDownloadLinks(d) +
-        '<details class="lc-details"><summary>' +
-          _lcEsc(_lcT('local.tunnelToggle',
-            '从另一台电脑访问本服务器？（如 ssh 端口转发）')) + '</summary>' +
-          '<p class="lc-substep">' + _lcEsc(_lcT('local.tunnelHint',
-            '那你面前的不是服务器本机 —— 别装完整版。在那台电脑上装受控端，再点「生成连接行」连过来：')) + '</p>' +
-          (agentSrc.length ? _lcDownloadLinks(d, 'agent', true) : '') +
-          '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtnSrc">' +
-            _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
-          '<code class="lc-copy" id="lcTokenBoxSrc" style="display:none"></code>' +
-        '</details>';
+      var mintSrcBtn =
+        '<button type="button" class="btn btn-primary btn-sm" id="lcMintBtnSrc">' +
+          _lcEsc(_lcT('local.mintToken', '生成连接行')) + '</button>' +
+        '<code class="lc-copy" id="lcTokenBoxSrc" style="display:none"></code>';
+      var htmlSrc = '<p class="lc-step">' + _lcEsc(_lcT('local.roleChoose',
+          '当前 Tofu 以源码方式运行 —— 按这台电脑的角色选装：')) + '</p>';
+      if (agentSrc.length) {
+        htmlSrc +=
+          '<div class="lc-role lc-role-primary">' +
+            '<p class="lc-role-head">' +
+              _lcEsc(_lcT('local.agentRoleHead', '受控端 · 轻量')) +
+              '<span class="lc-role-note">' + _lcEsc(_lcT('local.agentRoleNote',
+                '—— 从另一台电脑访问（如 ssh 转发）选它：只让服务器操作那台电脑')) + '</span></p>' +
+            _lcDownloadLinks(d, 'agent', true) +
+            mintSrcBtn +
+          '</div>' +
+          '<div class="lc-role">' +
+            '<p class="lc-role-head">' +
+              _lcEsc(_lcT('local.fullRoleHead', '完整桌面版')) +
+              '<span class="lc-role-note">' + _lcEsc(_lcT('local.fullRoleNote',
+                '—— 这台电脑就是服务器本机：装它，托盘一键开启')) + '</span></p>' +
+            _lcDownloadLinks(d, 'full') +
+          '</div>';
+      } else {
+        // Stale-while-build: no agent artifact yet — the full installer
+        // doubles as the controlled endpoint (tray → Connect to remote),
+        // so the mint must stay reachable, not vanish with the agent block.
+        htmlSrc +=
+          '<div class="lc-role">' +
+            '<p class="lc-role-head">' +
+              _lcEsc(_lcT('local.fullRoleHead', '完整桌面版')) +
+              '<span class="lc-role-note">' + _lcEsc(_lcT('local.fullRoleNote',
+                '—— 这台电脑就是服务器本机：装它，托盘一键开启')) + '</span></p>' +
+            _lcDownloadLinks(d, 'full') +
+            mintSrcBtn +
+          '</div>';
+      }
+      setup.innerHTML = htmlSrc;
       var mintSrc = document.getElementById('lcMintBtnSrc');
       if (mintSrc) {
         mintSrc.onclick = function () {

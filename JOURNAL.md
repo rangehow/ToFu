@@ -1,3 +1,16 @@
+### 2026-08-03(429 有界升级默认关停:无限重试成为默认行为——「429 永不打断对话,重试零成本」) — owner 截图报 kimi-k3 上「429 saturation (budget 120s, 364 cycles)」硬错误信封打断会话并下指令;commit `80431312`(3 文件);环 **7/7 + 邻接 dispatch 58/58**
+
+- **定案:** pt_a21cd6eb(2026-08-01 事故)交付的「全 slot 连续 429 超 120s → RateLimitError(is_saturation=True) → llm_fallback 换模型」在**回退模型也饱和**时把硬错误信封(`⚠️ API 请求已达限频（429）`,context=on-fallback-model)拍给用户——owner 判这是「自己打断自己」,指令:429 面墙只许持续重试,永不打断。
+- **修法(默认值翻转,机制留档):** `TOFU_429_SATURATION_SECS` 默认 `120`→`0`(=关停=逐字节回到升级机制引入前的无限轮转);设正数预算即恢复有界升级。升级机制本身、env 旋钮、gateway 5xx 独立 120s cap(`TOFU_GATEWAY_OUTAGE_BUDGET_S`,与 429 无关)**一律未动**;`is_saturation` 错误通道与 llm_fallback 换模型链路保留,只是默认永不再触发。
+- **代价记档(知情的取舍):** 默认关停即重新接受 2026-08-01 事故形态——strict_model 钉死池在持久饱和墙上会无限循环(429 不计 hard_attempts,reaper 按设计不杀 429 循环),llm_fallback 永不收到饱和信号、不自动换模型。owner 明示「重试零成本」接受此形态;前端重试相位(「限流重试中 · 第 N 次」)持续可见,用户可随时手动停。若日后想要回升级:`TOFU_429_SATURATION_SECS=120`。
+- **测试账:** 套件全部显式 pin env 故零红;新针 `test_default_budget_disables_escalation` 钉住「无 env → 预算 0」;docs/429_SATURATION_CONTROL_PLANE_DESIGN.md §1 默认值描述同步。
+
+### 2026-08-03(OpenCLI 仓库克隆与机制学习:小红书「免 token 免签名」方案定案——让浏览器自己签名,只读渲染结果) — owner 指令拷贝 jackwener/opencli 并学习;仓库落 `INS/ruanjunhao04/opencli`(chatui 同级);三路 swarm 侦察(架构/小红书适配器/adapter  authoring)完成;记忆 `opencli-study-xhs-browser-bridge` 入库
+
+- **痛点对照:** 此前 tofu 做小红书=手动抠 cookie 直调 API,需自算 x-s/x-t 签名→触发风控被官方警告+笔记正文抓不到。OpenCLI 的答案:**永不自己签名**——CLI→daemon(localhost:19825)→WebSocket→MV3 扩展→chrome.debugger CDP→真实登录的 Chrome,页面自己的 JS 完成签名,适配器只读渲染后的 DOM/Pinia/`__INITIAL_STATE__`/拦截响应。
+- **小红书三件套:** search=纯 DOM 抓 `section.note-item`+动态滚动凑 limit(note ID 是 ObjectID,前 8 hex 反推发布日期);note=必须带 xsec_token 的完整 URL(从 search/feed 链接透传,裸 ID 报错),goto 后随机等 2-5s 再抽 `#detail-title/#detail-desc`,识别 300017/300031 安全页抛 SECURITY_BLOCK;auth=只查浏览器 `web_session` cookie,页内 fetch credentials:'include' 自动带签名,全程零 cookie 导出。
+- **可借鉴(tofu 已有自建 browser bridge):** 拦截器 `Function.prototype.toString` 伪装 `[native code]`(src/interceptor.ts)、双层租约仲裁+409 session_busy、WS 心跳保活 MV3 service worker、站点记忆缓存「没记忆→用 skill→产生记忆→下次 5 分钟」(~/.opencli/sites/)、adapter DSL 策略六选一按契约稳定性选(实测 PAGE_FETCH/INTERCEPT 修复频率是 PUBLIC_API 的 7-8 倍)。
+
 ### 2026-08-03(预存红×2 闭环:字体幽灵家族检查 fail-open 根修——2026-07-29 正则修复的引入性回归) — 脑派发接我自票 `pt_275e143a92374dec` **DONE**;commit `58e96506`(2 文件);NEUTER 精确(回滚正则→精确 3 红,还原 27/27);邻接环 **81/81**
 
 - **定案(真 bug,非测试漂移):** `undeclared_font_families` 的 use-site 正则 `_USE_FAMILY_RE` 在 2026-07-29 修「内联属性闭合引号逃逸吞下文档尾」时把引号整类排除——**以引号开头的值(`font-family:'PingFang SC'`,CSS 最常见写法)从此一个字也捕不到**,幽灵家族检查对加引号的写法静默放行(fail-open)。两个红(ghost 报告缺失 + NEUTER 闸因找不到 finding 而先倒)同根。

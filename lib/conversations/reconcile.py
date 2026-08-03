@@ -252,8 +252,15 @@ def _twin_subsumed_by(keeper: dict[str, Any], twin: dict[str, Any]) -> bool:
         tv = twin.get(field)
         if not tv:
             continue  # empty / absent — nothing to lose
-        if _twin_key(tv) != _twin_key(keeper.get(field)):
-            return False
+        kv = keeper.get(field)
+        if _twin_key(tv) == _twin_key(kv):
+            continue
+        # Lossless-subset shape (the trimmed echo): list payload fields only;
+        # terminal fields stay strict byte-equality.
+        if field in ('toolRounds', 'apiRounds') \
+                and _twin_payload_list_subsumed(field, kv, tv):
+            continue
+        return False
     return True
 
 
@@ -268,19 +275,180 @@ _TWIN_FOLD_FIELDS = ('finishReason', 'usage', 'error')
 _TWIN_CLEAN_FINISH_REASONS = frozenset({'stop', 'end_turn', 'stop_sequence'})
 
 
+# Round-level additive/sidecar keys a frontend echo may carry that the
+# server-settled rounds legitimately lack (measured on conv mscns5i0fcofgl):
+# approvalId/approvalMeta/guidanceId are the reducer's settle-time NULL
+# scaffolding; _swarm:false is its default scaffolding; receivedAt is the
+# CLIENT-local ingress clock the server can never mint; emittedAt rides the
+# wire event, not the persisted round. Truthy values are GRAFTED onto the
+# keeper's matching round at fold time (never dropped).
+_TWIN_ROUND_SIDE_KEYS = ('approvalId', 'approvalMeta', 'guidanceId',
+                         '_swarm', 'receivedAt', 'emittedAt')
+
+# Message-level additive keys worth the same fill-absent graft (measured:
+# the settled sync never writes thinkingDepth, so only the frontend echo
+# carries it).
+_TWIN_MSG_ADDITIVE_FIELDS = ('thinkingDepth',)
+
+
+def _twin_round_canon(r: Any) -> Any:
+    """Normalize a tool/api round for twin comparison: transient diagnostics,
+    null scaffolding and the ``_swarm: false`` default stripped — exactly the
+    set the frontend's own ``_canonRound`` (stream_reducer.js) drops, so the
+    two sides compare on information, not on stream-layer residue."""
+    if not isinstance(r, dict):
+        return r
+    out = {}
+    for k, v in r.items():
+        if k in _TWIN_TRANSIENT_KEYS:
+            continue
+        if v is None:
+            continue
+        if k == '_swarm' and v is False:
+            continue
+        out[k] = _twin_normalize(v)
+    return out
+
+
+def _twin_rounds_subsumed(keeper_rounds: Any, twin_rounds: Any) -> bool:
+    """True when every twin tool round is LOSSLESSLY present in the keeper's.
+
+    The trimmed-echo shape (measured: 30 ⊃ 20, a frontend local-trim window):
+    the twin's rounds are a strict subset of the keeper's by ``toolCallId``,
+    common fields byte-equal after ``_twin_round_canon``, and any twin-side-
+    only field is one of the graftable side keys (``_TWIN_ROUND_SIDE_KEYS``).
+    Anything else — an id the keeper lacks, a common field that differs, an
+    unknown twin-side truthy field — is REAL divergence: keep both (the
+    measured 64-group data-loss guard).
+    """
+    if not isinstance(keeper_rounds, list) or not isinstance(twin_rounds, list):
+        return False
+    k_by_id = {r.get('toolCallId'): r for r in keeper_rounds
+               if isinstance(r, dict) and r.get('toolCallId')}
+    for tr in twin_rounds:
+        if not isinstance(tr, dict):
+            return False
+        kr = k_by_id.get(tr.get('toolCallId')) if tr.get('toolCallId') else None
+        if kr is None:
+            # id-less twin round: lossless only when it byte-matches SOME
+            # keeper round under the same normalization.
+            tkey = _twin_key(_twin_round_canon(tr))
+            if not any(tkey == _twin_key(_twin_round_canon(c))
+                       for c in keeper_rounds):
+                return False
+            continue
+        tn = _twin_round_canon(tr)
+        kn = _twin_round_canon(kr)
+        for k, v in tn.items():
+            if k not in kn:
+                if k in _TWIN_ROUND_SIDE_KEYS:
+                    continue
+                return False
+            elif _twin_key(v) != _twin_key(kn[k]):
+                return False
+    return True
+
+
+def _twin_api_rounds_subsumed(keeper_api: Any, twin_api: Any) -> bool:
+    """True when every twin apiRounds entry is losslessly present in keeper's.
+
+    apiRounds entries carry no ids, so match by field-wise inclusion: each
+    twin entry must have SOME keeper entry whose every shared key byte-equals
+    (the keeper's settle-time additions like ``cost`` are keeper-side and
+    fine). A twin entry carrying a truthy key no keeper entry has is REAL
+    divergence — keep both.
+    """
+    if not isinstance(keeper_api, list) or not isinstance(twin_api, list):
+        return False
+    kn_list = [_twin_round_canon(a) for a in keeper_api]
+    for ta in twin_api:
+        tn = _twin_round_canon(ta)
+        if not isinstance(tn, dict):
+            if not any(_twin_key(tn) == _twin_key(ka) for ka in kn_list):
+                return False
+            continue
+        found = False
+        for ka in kn_list:
+            if not isinstance(ka, dict):
+                continue
+            if all(k in ka and _twin_key(v) == _twin_key(ka[k])
+                   for k, v in tn.items()):
+                found = True
+                break
+        if not found:
+            return False
+    return True
+
+
+def _twin_payload_list_subsumed(field: str, keeper_val: Any, twin_val: Any) -> bool:
+    """Dispatch the lossless-subset comparison for list payload fields."""
+    if field == 'toolRounds':
+        return _twin_rounds_subsumed(keeper_val, twin_val)
+    if field == 'apiRounds':
+        return _twin_api_rounds_subsumed(keeper_val, twin_val)
+    return False
+
+
 def _twin_payload_subsumed_by(keeper: dict[str, Any], twin: dict[str, Any]) -> bool:
     """True when dropping ``twin`` loses no PAYLOAD the keeper does not hold.
 
     ``_twin_subsumed_by`` restricted to the payload fields — terminal-verdict
-    fields are the fold's domain, not subsumption's.
+    fields are the fold's domain, not subsumption's. List payload fields
+    (toolRounds / apiRounds) additionally accept the lossless-subset shape
+    (the trimmed echo) via ``_twin_payload_list_subsumed``.
     """
     for field in _TWIN_PAYLOAD_FIELDS:
         tv = twin.get(field)
         if not tv:
             continue
-        if _twin_key(tv) != _twin_key(keeper.get(field)):
-            return False
+        kv = keeper.get(field)
+        if _twin_key(tv) == _twin_key(kv):
+            continue
+        if _twin_payload_list_subsumed(field, kv, tv):
+            continue
+        return False
     return True
+
+
+def _twin_graft_payload(keeper: dict[str, Any], twin: dict[str, Any]) -> dict[str, Any]:
+    """Return a COPY of ``keeper`` with the twin's graftable data merged in.
+
+    Two fill-absent, never-overwrite enrichments applied right before a twin
+    is dropped, so the fold is provably lossless:
+
+      * round-level side keys (``_TWIN_ROUND_SIDE_KEYS``) — only TRUTHY twin
+        values, only onto the keeper's same-``toolCallId`` round, only when
+        the keeper's round lacks the key. Null/false scaffolding is never
+        grafted (it carries no information).
+      * message-level additive fields (``_TWIN_MSG_ADDITIVE_FIELDS``).
+    """
+    out = dict(keeper)
+    for field in _TWIN_MSG_ADDITIVE_FIELDS:
+        tv = twin.get(field)
+        if tv and not out.get(field):
+            out[field] = tv
+    k_rounds = out.get('toolRounds')
+    t_rounds = twin.get('toolRounds')
+    if isinstance(k_rounds, list) and isinstance(t_rounds, list):
+        t_by_id = {r.get('toolCallId'): r for r in t_rounds
+                   if isinstance(r, dict) and r.get('toolCallId')}
+        if t_by_id:
+            new_rounds = None
+            for i, kr in enumerate(k_rounds):
+                if not isinstance(kr, dict):
+                    continue
+                tr = t_by_id.get(kr.get('toolCallId'))
+                if not isinstance(tr, dict):
+                    continue
+                add = {k: tr[k] for k in _TWIN_ROUND_SIDE_KEYS
+                       if tr.get(k) and kr.get(k) is None}
+                if add:
+                    if new_rounds is None:
+                        new_rounds = list(k_rounds)
+                    new_rounds[i] = {**kr, **add}
+            if new_rounds is not None:
+                out['toolRounds'] = new_rounds
+    return out
 
 
 def _twin_terminal_diverges(keeper: dict[str, Any], twin: dict[str, Any]) -> bool:
@@ -390,6 +558,13 @@ def fold_duplicate_task_twins(
     folded = 0
     for i, m in enumerate(messages):
         if is_duplicate_task_twin(messages, i, cache_prefix_count=guard):
+            # Fully-subsumed echo: nothing terminal to move, but the twin's
+            # graftable round/message side data still merges into the keeper
+            # before the row goes away (provably lossless).
+            j = _twin_keeper_index(messages, i, guard)
+            if j is not None:
+                pos = kept_src.index(j)
+                kept[pos] = _twin_graft_payload(kept[pos], m)
             folded += 1
             continue
         j = _twin_keeper_index(messages, i, guard)
@@ -397,7 +572,7 @@ def fold_duplicate_task_twins(
                 and _twin_payload_subsumed_by(messages[j], m)
                 and _twin_terminal_diverges(messages[j], m)):
             pos = kept_src.index(j)
-            kept[pos] = _twin_fold_into(kept[pos], m)
+            kept[pos] = _twin_graft_payload(_twin_fold_into(kept[pos], m), m)
             folded += 1
             continue
         kept.append(m)

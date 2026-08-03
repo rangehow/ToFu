@@ -281,6 +281,163 @@ def test_NC_neutered_fold_restores_the_duplicate(monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# A2. The trimmed-echo class (measured live on conv mscns5i0fcofgl msgs 2&3,
+#     task b2d4edb9): the frontend's LOCAL TRIM window keeps only the most
+#     recent tool rounds, so its pushed-back echo carries a strict SUBSET of
+#     the settled row's rounds. Byte-equality can never converge that pair;
+#     the lossless-subset check + sidecar graft must.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _mk_round(i, **kw):
+    r = {'roundNum': i, 'toolName': 'read_files',
+         'toolCallId': f'read_files_{i}', 'status': 'done',
+         'toolContent': f'content {i}'}
+    r.update(kw)
+    return r
+
+
+def _mk_api_round(i, **kw):
+    r = {'round': i, 'model': 'kimi-k3',
+         'usage': {'input_tokens': 100 + i, 'output_tokens': 10 + i}}
+    r.update(kw)
+    return r
+
+
+def _trimmed_pair():
+    """keeper = server-settled row (30 rounds, cost-stamped apiRounds,
+    usage/cost/preset); twin = frontend trimmed echo (last 20 rounds,
+    cost-less apiRounds, truthy ingress clocks, null/false scaffolding,
+    thinkingDepth). Mirrors msgs 2&3 of mscns5i0fcofgl byte-for-byte in shape."""
+    keeper_rounds = [_mk_round(i) for i in range(30)]
+    twin_rounds = []
+    for i in range(10, 30):
+        twin_rounds.append(_mk_round(
+            i, approvalId=None, approvalMeta=None, guidanceId=None,
+            _swarm=False, receivedAt=1000 + i, emittedAt=2000 + i))
+    keeper = _asst('task-A', 'ANSWER', _msgId='srv-1', finishReason='stop',
+                   thinking='T', usage={'output_tokens': 42},
+                   cost={'costCny': 0.01}, preset='default',
+                   toolRounds=keeper_rounds,
+                   apiRounds=[_mk_api_round(i, cost={'costCny': 0.001})
+                              for i in range(17)],
+                   segments=[{'type': 'text', 'text': 'ANSWER'}])
+    twin = _asst('task-A', 'ANSWER', _msgId='tmp_echo', finishReason='stop',
+                 thinking='T', thinkingDepth='max',
+                 toolRounds=twin_rounds,
+                 apiRounds=[_mk_api_round(i) for i in range(17)],
+                 segments=[{'type': 'text', 'text': 'ANSWER'}])
+    return [_user(_msgId='u1'), keeper, twin]
+
+
+def test_trimmed_echo_twin_folds_losslessly():
+    """★ THE INVARIANT for the trimmed-echo class: ONE row survives — the
+    server-settled keeper — enriched (never overwritten) by the twin's
+    truthy side data. Null/false scaffolding is never grafted."""
+    out, changed = _rc(_trimmed_pair())
+    assert changed, 'the trimmed echo twin was not folded'
+    assert len(out) == 2, (
+        f'expected [user, one assistant], got '
+        f'{[(m["role"], m.get("_msgId")) for m in out]}')
+    kept = out[-1]
+    assert kept['_msgId'] == 'srv-1', 'the server-settled row must win'
+    assert kept['finishReason'] == 'stop'
+    assert kept['usage'] == {'output_tokens': 42}
+    assert kept['cost'] == {'costCny': 0.01}
+    # message-level additive graft
+    assert kept['thinkingDepth'] == 'max', (
+        'the twin\'s thinkingDepth must graft onto the keeper (fill-absent)')
+    # round-level truthy clocks grafted; scaffolding never grafted
+    by_id = {r['toolCallId']: r for r in kept['toolRounds']}
+    assert len(kept['toolRounds']) == 30, 'keeper rounds must stay complete'
+    r15 = by_id['read_files_15']
+    assert r15['receivedAt'] == 1000 + 15
+    assert r15['emittedAt'] == 2000 + 15
+    assert 'approvalId' not in r15, 'null scaffolding must NOT be grafted'
+    assert '_swarm' not in r15, 'false scaffolding must NOT be grafted'
+    assert 'guidanceId' not in r15
+    # the keeper-only leading rounds are untouched
+    assert 'receivedAt' not in by_id['read_files_0']
+
+
+def test_trimmed_echo_graft_never_overwrites_keeper_values():
+    """The graft is fill-absent at BOTH levels: a keeper value is never
+    clobbered by the twin's. (A keeper-vs-twin VALUE CONFLICT on a shared
+    round key correctly blocks the fold entirely — that is the divergence
+    guard, pinned separately by
+    test_trimmed_echo_with_divergent_common_field_is_kept — so the only
+    place never-overwrite can be exercised is the graft itself, and the
+    message-level additive fill.)"""
+    from lib.conversations.reconcile import _twin_graft_payload
+    keeper = {'role': 'assistant', 'content': 'A',
+              'thinkingDepth': 'low',
+              'toolRounds': [{'toolCallId': 'tc1', 'status': 'done',
+                              'receivedAt': 999999}]}
+    twin = {'role': 'assistant', 'content': 'A',
+            'thinkingDepth': 'max',
+            'toolRounds': [{'toolCallId': 'tc1', 'status': 'done',
+                            'receivedAt': 1015, 'emittedAt': 2020}]}
+    out = _twin_graft_payload(keeper, twin)
+    assert out['toolRounds'][0]['receivedAt'] == 999999, (
+        'the graft overwrote the keeper\'s own round value')
+    assert out['toolRounds'][0]['emittedAt'] == 2020, (
+        'the graft skipped a key the keeper genuinely lacks')
+    assert out['thinkingDepth'] == 'low', (
+        'the keeper\'s own thinkingDepth must win (fill-absent)')
+    assert keeper['thinkingDepth'] == 'low' and 'emittedAt' not in keeper['toolRounds'][0], (
+        'the graft must not mutate the caller\'s dicts')
+
+
+def test_trimmed_echo_with_unknown_twin_side_key_is_kept():
+    """A twin round carrying a truthy key that is NOT a graftable side key
+    and NOT on the keeper's round = REAL divergence — both rows survive
+    (the measured data-loss guard is not diluted)."""
+    msgs = _trimmed_pair()
+    for r in msgs[2]['toolRounds']:
+        if r['toolCallId'] == 'read_files_15':
+            r['searchDiag'] = {'engine': 'bing'}   # unknown twin-side payload
+    out, changed = _rc(msgs)
+    assert len(out) == 3, (
+        'a twin with unknown twin-side payload was folded — that destroys '
+        'data the keeper never held')
+
+
+def test_trimmed_echo_with_divergent_common_field_is_kept():
+    """A shared-id round whose COMMON field differs (twin says the tool
+    returned something else) = REAL divergence — keep both."""
+    msgs = _trimmed_pair()
+    for r in msgs[2]['toolRounds']:
+        if r['toolCallId'] == 'read_files_15':
+            r['toolContent'] = 'DIFFERENT content'
+    out, _ = _rc(msgs)
+    assert len(out) == 3
+
+
+def test_trimmed_echo_with_divergent_api_rounds_is_kept():
+    msgs = _trimmed_pair()
+    msgs[2]['apiRounds'][3]['usage']['output_tokens'] = 99999
+    out, _ = _rc(msgs)
+    assert len(out) == 3, (
+        'apiRounds entries with genuinely different numbers must not fold')
+
+
+def test_NC_neutered_subset_check_leaves_trimmed_echo(monkeypatch):
+    """NEUTER: force the rounds-subset check to always diverge — the trimmed
+    echo pair must survive, proving the subset semantics is load-bearing."""
+    import lib.conversations.reconcile as rec
+    monkeypatch.setattr(rec, '_twin_rounds_subsumed',
+                        lambda keeper_rounds, twin_rounds: False,
+                        raising=True)
+    out, _ = _rc(_trimmed_pair())
+    assert len(out) == 3, (
+        'with the subset check neutered the trimmed echo must reappear — '
+        'otherwise this suite is not exercising the guard it claims to')
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# B. terminal-sync level (DB-driven): error settles on the OWN slot and
+#    the twin is folded away in the same settle write.
+# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
 # B. terminal-sync level (DB-driven): error settles on the OWN slot and
 #    the twin is folded away in the same settle write.
 # ═══════════════════════════════════════════════════════════════════════

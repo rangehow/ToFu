@@ -53,6 +53,9 @@ from lib.browser.handlers._page import (  # noqa: E402,F401
     _handle_summarize_page,
     _handle_get_app_state,
 )
+from lib.browser.handlers._preview import (  # noqa: E402,F401
+    _handle_preview_page,
+)
 
 __all__ = [
     '_handle_list_tabs', '_handle_read_tab', '_handle_execute_js',
@@ -60,5 +63,5 @@ __all__ = [
     '_handle_create_tab', '_handle_close_tab', '_handle_navigate',
     '_handle_get_interactive_elements', '_handle_click', '_handle_keyboard',
     '_handle_hover', '_handle_wait', '_handle_summarize_page',
-    '_handle_get_app_state',
+    '_handle_get_app_state', '_handle_preview_page',
 ]

@@ -1,3 +1,16 @@
+### 2026-08-03(浏览器桥 CDP 化收编落地:owner 亲验全绿后令落地——可信输入 + browser_preview_page 双交付) — epic `pt_388be9f265fa44aa` **DONE**;原作者=会话 mscnzimu 后续工作(未提交弃置),本批=我逐 hunk 复核 + 补 requirements floor + 提交;tofu-search `d2ee3d9`(0.6.1,3 文件)+97;chatui 见本批(19 文件);环 **90/90**(trusted_input+page_preview+parity 25+tooling_fixes 14+queue_ttl+async_poll)+ tofu-search 池 **10/10**(owner 亲跑复核)
+
+- **收编账(先验后修判例执行):** 逐 hunk 复核全部 361+97 行——扩展可信输入节(CDP-first + 合成兜底 + `trusted:false/fallbackReason` 注解,旧扩展无注解时 `_trusted_suffix` 静默不画蛇添足)、`browser_preview_page`(虚拟源 `tofu-preview.invalid` route-fulfill:相对资产/ES module 可跑、外网 abort 计数防 SSRF、`_safe_path`+realpath 双闸防逃逸、`__screenshot__`+`_text_fallback` 载 console/pageerror/missing/blocked 报告)、池注册表(内建 kind 保护 + 同 handler 冪等/异 handler 拒注册)、接线七件(dispatch/display/facade/registry 末位插 spec 保缓存前缀/tool_set 注入 _projectPath/图标/徽章)。
+- **我补的唯一洞:** 兄弟升了 tofu-search 0.6.1 却没提 chatui floor——`requirements.txt` `>=0.6.0`→`>=0.6.1`(SOFT floor 注释:`_register_once` 对旧库降级为模型可见错误串,不炸启动)。
+- **gate 定案(兄弟选择,复核认可):** 预览 spec 门=`project_ready` 而非 browser toggle——主路径是渲染项目文件,且不随扩展连接状态隐现;池不可用由 handler 在调用期报错串,schema 构建期绝不拉起 Chromium。
+
+### 2026-08-03(浏览器桥 CDP 化 epic 挂起:共享树惊现同题完整 WIP——认领后先验树再动工的判例第三起) — owner 指令「可以用 CDP 优化 + agent 看自己写的页面 + 可信输入也优化」;epic `pt_388be9f265fa44aa` 已挂 [sibling];**零产品代码**
+
+- **事件线:** owner 批了 CDP 优化两件(扩展内可信输入 + 服务端页面预览工具),我探查完代码、挂板认领、设计定稿——动工前最后一道 `git status` 发现工作树里已躺着**同题全覆盖的未提交实现**:background.js +224 行可信输入节(`_cdpRun/_cdpClick/_cdpHover/_cdpKeyDescriptor/_cdpKeyboard`,Ctrl+S 不产 text 的微妙处都处理了)、manifest 双清单 4.6.0、`lib/browser/preview.py` + `handlers/_preview.py`、双测试套件、tofu-search 池注册表三件套——且作者会话**此刻正在跑验证**(我的 run_command 串线收到其 tofu-search pytest 10 绿输出)。
+- **处置(按断连环票判例):** 一行产品代码不写,原地让位。epic 挂 [sibling] + 全路径清单,附收编指南:若作者收官后树仍脏,按「先验后修」逐 hunk 复核(设计已核对一致:CDP-first+合成兜底+trusted 注解;预览走虚拟源 route-fulfill 而非 file://,与我定稿同构)→ 跑四个套件 → 显式 pathspec 提交关票。
+- **设计沉淀(供收编者核对):** ①可信输入=chrome.debugger `Input.dispatch*`(isTrusted=true、真 CSS :hover),失败落回合成事件并注 `trusted:false+fallbackReason`;②预览工具 `browser_preview_page` 骑 tofu-search Playwright 池,池加 `register_task_kind` 注册表(比硬编码第 4 个分支更具扩展性);③文件模式**不用 file://**(ES module/相对 fetch 被 CORS 掐死),用 `http://tofu-preview.invalid/` 伪源 + route 从磁盘 fulfill,零网络出口防 SSRF,外网默认 abort;④结果走 `__screenshot__` 协议 + `_text_fallback` 载 console/pageerror 报告(文本模型降级仍有错误摘要)。
+- **环境教训(已存记忆):** 共享 shell 通道会串线兄弟会话的命令输出——**每条 run_command 结果先核对 `$` 行命令回显再采信**;本次靠哨兵串 + md5sum + mtime 三角定位才识穿「文件在三个时间点的三个版本间跳变」不是 FUSE 缓存而是活作者在写。动工前最后一道 git status 写集检查,在脑派发时代是硬纪律。
+
 ### 2026-08-03(429 家族退避退役:项目级争用立即重试 + 日志节流——与无限重试默认同日闭环) — owner 指令「项目级 key 争用,跳过指数退避立即重试,防日志膨胀」;commit `92a2dbb1`(5 文件);环 **31/31 + 邻接 dispatch 72/72**
 
 - **退役对象(唯一真·指数退避):** `note_shared_contention`(pt_1a72b708098d446f,2026-07-28)对项目级争用 429 把整个 (provider, model) 家族停进 2s→翻倍→60s 抖动窗口——strict_model 钉池 + 无限重试时代,这就是「请求每分钟干等、窗口还翻倍」的痛点。常规 429 本来就是 0.3s 快轮询+0.5s 槽位引导冷却,无指数成分。

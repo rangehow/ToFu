@@ -25,6 +25,22 @@ def send_browser_command(*args, **kwargs):
     return _facade().send_browser_command(*args, **kwargs)
 
 
+def _trusted_suffix(result):
+    """Annotate how an input was delivered (extension >= 4.6.0 reports it).
+
+    Trusted CDP events pass isTrusted checks (and real CSS :hover); the
+    synthetic fallback does not — the model needs to know which happened
+    when a click "did nothing".
+    """
+    trusted = result.get('trusted')
+    if trusted is True:
+        return ' [trusted CDP input]'
+    if trusted is False:
+        reason = result.get('fallbackReason') or 'CDP unavailable'
+        return f' [synthetic fallback: {reason}]'
+    return ''  # pre-4.6.0 extension — no annotation on the wire
+
+
 def _handle_get_interactive_elements(fn_args):
     tab_id = fn_args.get('tabId')
     if tab_id is None:
@@ -91,7 +107,8 @@ def _handle_click(fn_args):
         tag = result.get('tag', '?')
         text = result.get('text', '')
         text_display = f' "{text[:60]}"' if text else ''
-        return f'{click_type} <{tag}>{text_display} (selector: {selector})'
+        return (f'{click_type} <{tag}>{text_display} (selector: {selector})'
+                f'{_trusted_suffix(result)}')
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -115,7 +132,7 @@ def _handle_keyboard(fn_args):
         if result.get('success'):
             target = result.get('target', '')
             target_display = f' on <{target}>' if target else ''
-            return f'Sent keys "{keys}"{target_display}'
+            return f'Sent keys "{keys}"{target_display}{_trusted_suffix(result)}'
         return f'Keyboard input failed: {result.get("error", "unknown error")}'
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -139,7 +156,8 @@ def _handle_hover(fn_args):
             tag = result.get('tag', '?')
             text = result.get('text', '')
             text_display = f' "{text[:60]}"' if text else ''
-            return f'Hovered <{tag}>{text_display} (selector: {selector})'
+            return (f'Hovered <{tag}>{text_display} (selector: {selector})'
+                    f'{_trusted_suffix(result)}')
         return f'Hover failed: {result.get("error", "unknown error")}'
     return json.dumps(result, ensure_ascii=False, indent=2)
 

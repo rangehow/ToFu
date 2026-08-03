@@ -50,6 +50,7 @@ function _isRoundBrowser(round) {
     "browser_create_tab",
     "browser_close_tab",
     "browser_navigate",
+    "browser_preview_page",
   ].includes(round.toolName);
 }
 function _isRoundImageGen(round) {
@@ -158,6 +159,7 @@ function _getRoundIcon(round) {
       browser_create_tab: "newtab",
       browser_close_tab: "close",
       browser_navigate: "navigate",
+      browser_preview_page: "screenshot",
     };
     return m[round.toolName] || "tabs";
   }

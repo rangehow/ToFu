@@ -15,6 +15,7 @@ from lib.browser.handlers import (
     _handle_keyboard,
     _handle_list_tabs,
     _handle_navigate,
+    _handle_preview_page,
     _handle_read_tab,
     _handle_screenshot,
     _handle_summarize_page,
@@ -44,6 +45,7 @@ _SNAKE_TO_CAMEL = {
     'right_click': 'rightClick',
     'scroll_to': 'scrollTo',
     'wait_for_load': 'waitForLoad',
+    'wait_ms': 'waitMs',
 }
 
 
@@ -129,6 +131,9 @@ BROWSER_HANDLERS = {
     'browser_wait':                   _handle_wait,
     'browser_summarize_page':         _handle_summarize_page,
     'browser_get_app_state':          _handle_get_app_state,
+    # Server-side render — does NOT go through the extension queue
+    # (lib/browser/preview.py, shared Playwright pool).
+    'browser_preview_page':           _handle_preview_page,
     # Advanced browser tools use a lambda wrapper to pass fn_name through
     'browser_right_click_menu':       lambda fn_args: _handle_advanced_tool('browser_right_click_menu', fn_args),
     'browser_hover_and_click':        lambda fn_args: _handle_advanced_tool('browser_hover_and_click', fn_args),

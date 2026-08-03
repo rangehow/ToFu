@@ -167,6 +167,21 @@ def _build_produce(ctx: ToolContext) -> list[dict]:
     return [PRODUCE_VIDEO_TOOL, PRODUCE_REPORT_TOOL, PRODUCE_RESEARCH_TOOL]
 
 
+def _build_page_preview(ctx: ToolContext) -> list[dict]:
+    # Server-side rendered page preview (browser_preview_page). Gated on a
+    # project being attached — the primary mode renders a project file —
+    # and deliberately NOT on browser_enabled / the extension: the render
+    # runs in the shared server-side Playwright pool. Pool unavailability
+    # is reported by the handler at call time, never here (schema build
+    # must not launch Chromium).
+    if not ctx.project_ready:
+        return []
+    from lib.tools import BROWSER_TOOL_PREVIEW_PAGE
+    logger.debug('[Task %s] Page-preview tool enabled (server-side render)',
+                 ctx.tid)
+    return [BROWSER_TOOL_PREVIEW_PAGE]
+
+
 def _build_conv_ref(ctx: ToolContext) -> list[dict]:
     # CONV_REF_TOOLS = [list_conversations, get_conversation] — BOTH are
     # read-only (discover siblings + open one). Register them in two cases:
@@ -443,6 +458,12 @@ def _register_builtins() -> None:
                                      'produce_research'}),
                  category='video',
                  description='High-level topic → finished video / report / research'),
+        # End of base phase: appending HERE keeps every earlier prefix
+        # byte-stable for the prompt cache (the produce note above).
+        ToolSpec('page_preview', _build_page_preview, phase='base',
+                 provides=frozenset({'browser_preview_page'}),
+                 category='browser',
+                 description='Server-side rendered page preview'),
         ToolSpec('conv_ref', _build_conv_ref, phase='base',
                  provides=frozenset({'list_conversations', 'get_conversation',
                                      'project_charter_read', 'project_charter_propose',

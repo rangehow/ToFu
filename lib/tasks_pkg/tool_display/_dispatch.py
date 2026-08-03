@@ -24,6 +24,7 @@ from lib.tools import (
     CONV_REF_TOOL_NAMES,
     IMAGE_EDIT_TOOL_NAMES,
     IMAGE_GEN_TOOL_NAMES,
+    PAGE_PREVIEW_TOOL_NAMES,
     PEER_TOOL_NAMES,
     PROJECT_TOOL_NAMES,
 )
@@ -89,6 +90,10 @@ def _build_display_dispatch_table():
     for name in BROWSER_TOOL_NAMES:
         table[name] = _tool_display_browser
     for name in ADVANCED_BROWSER_TOOL_NAMES:
+        table[name] = _tool_display_browser
+    # Server-side page preview — not in BROWSER_TOOL_NAMES (not an extension
+    # tool) but shares the browser-family display.
+    for name in PAGE_PREVIEW_TOOL_NAMES:
         table[name] = _tool_display_browser
 
     # Memory tools

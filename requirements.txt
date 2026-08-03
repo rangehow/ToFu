@@ -75,7 +75,13 @@ psutil>=5.9
 # bridge passes `filter_mode` to configure() UNCONDITIONALLY, so an older
 # configure() raises TypeError at startup. Do not lower this floor without
 # first making the bridge pass filter_mode defensively.
-tofu-search>=0.6.0
+# >=0.6.1: PlaywrightPool.register_task_kind — the generic task-kind registry on
+# the shared pool worker. chatui's browser_preview_page (lib/browser/preview.py)
+# renders page previews THROUGH the pool instead of launching a second Chromium.
+# SOFT floor: the caller guards with _register_once() and converts a missing
+# registry into a model-visible error string, so an older tofu-search degrades
+# the preview feature at call time rather than crashing anything at startup.
+tofu-search>=0.6.1
 trafilatura>=1.6
 # playwright is optional — powers the JS-rendered fallback in tofu_search.fetch.
 # On Linux, Chromium needs X11/GTK shared libs (libatk, libgbm, libXcomposite, …).

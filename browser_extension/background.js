@@ -1298,6 +1298,190 @@ function _getAppState(深度) {
 }
 
 // ══════════════════════════════════════════
+//  Trusted Input (CDP)
+// ══════════════════════════════════════════
+// Synthetic JS events (el.dispatchEvent) carry isTrusted=false — some sites
+// ignore them, and CSS :hover never fires at all. chrome.debugger's
+// Input.dispatch* events are REAL input as far as the page is concerned.
+// Same attach/detach pattern as the screenshot path: the "debugging" banner
+// flashes only for the duration of the command, and every failure falls
+// back to the synthetic path (e.g. DevTools already attached to the tab).
+
+async function _cdpRun(tabId, fn) {
+  const target = { tabId };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, '1.3');
+    attached = true;
+    return await fn(target);
+  } finally {
+    if (attached) {
+      try { await chrome.debugger.detach(target); } catch (_) {}
+    }
+  }
+}
+
+// MAIN-world locator: scroll + element-center viewport coords + label bits.
+// Shared by the CDP click/hover paths. An {error} result means the element
+// is absent — the synthetic path would fail identically, so callers return
+// it directly instead of falling back.
+function _locateElement(selector, scrollTo) {
+  const el = document.querySelector(selector);
+  if (!el) return { error: `Element not found: ${selector}` };
+  if (scrollTo) {
+    el.scrollIntoView({ behavior: 'instant', block: 'center' });
+  }
+  const rect = el.getBoundingClientRect();
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+    tag: el.tagName.toLowerCase(),
+    text: (el.innerText || '').trim().substring(0, 100),
+  };
+}
+
+async function _cdpLocate(tabId, selector, scrollTo) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: _locateElement,
+    args: [selector, scrollTo],
+  });
+  const loc = results && results[0] && results[0].result;
+  if (!loc) throw new Error('No result from locator script');
+  return loc;
+}
+
+async function _cdpClick(tabId, selector, rightClick, scrollTo) {
+  const loc = await _cdpLocate(tabId, selector, scrollTo);
+  if (loc.error) return { clicked: false, error: loc.error };
+  const button = rightClick ? 'right' : 'left';
+  const buttons = rightClick ? 2 : 1;
+  await _cdpRun(tabId, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x: loc.x, y: loc.y });
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent',
+      { type: 'mousePressed', x: loc.x, y: loc.y, button, buttons, clickCount: 1 });
+    await new Promise(r => setTimeout(r, 40));
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent',
+      { type: 'mouseReleased', x: loc.x, y: loc.y, button, buttons, clickCount: 1 });
+  });
+  return {
+    clicked: true, rightClick: !!rightClick, trusted: true,
+    tag: loc.tag, text: loc.text,
+    position: { x: Math.round(loc.x), y: Math.round(loc.y) },
+  };
+}
+
+async function _cdpHover(tabId, selector) {
+  const loc = await _cdpLocate(tabId, selector, true);
+  if (loc.error) return { hovered: false, error: loc.error };
+  // A trusted mouseMoved sets CSS :hover — the synthetic event sequence
+  // (mouseenter/mouseover/mousemove) provably cannot.
+  await _cdpRun(tabId, (target) =>
+    chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x: loc.x, y: loc.y }));
+  return {
+    hovered: true, trusted: true,
+    tag: loc.tag, text: loc.text,
+    position: { x: Math.round(loc.x), y: Math.round(loc.y) },
+  };
+}
+
+// CDP modifier bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+const _CDP_MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+
+// Named (non-printable) keys → [code, windowsVirtualKeyCode, text?].
+const _CDP_NAMED_KEYS = {
+  Enter: ['Enter', 13, '\r'], Escape: ['Escape', 27], Tab: ['Tab', 9],
+  Backspace: ['Backspace', 8], Delete: ['Delete', 46],
+  ArrowUp: ['ArrowUp', 38], ArrowDown: ['ArrowDown', 40],
+  ArrowLeft: ['ArrowLeft', 37], ArrowRight: ['ArrowRight', 39],
+  Home: ['Home', 36], End: ['End', 35],
+  PageUp: ['PageUp', 33], PageDown: ['PageDown', 34],
+  F1: ['F1', 112], F2: ['F2', 113], F3: ['F3', 114], F4: ['F4', 115],
+  F5: ['F5', 116], F6: ['F6', 117], F7: ['F7', 118], F8: ['F8', 119],
+  F9: ['F9', 120], F10: ['F10', 121], F11: ['F11', 122], F12: ['F12', 123],
+  ' ': ['Space', 32, ' '],
+};
+
+// Parse "Ctrl+Shift+P" / "Enter" / "a" into a CDP key descriptor + bitmask.
+function _cdpKeyDescriptor(keys) {
+  const parts = String(keys).split('+');
+  let mainKey = parts.pop();
+  const aliases = { Return: 'Enter', Esc: 'Escape', Space: ' ' };
+  mainKey = aliases[mainKey] || mainKey;
+
+  let modifiers = 0;
+  for (const part of parts) {
+    if (/^(ctrl|control)$/i.test(part)) modifiers |= _CDP_MODIFIER_BITS.Control;
+    else if (/^alt$/i.test(part)) modifiers |= _CDP_MODIFIER_BITS.Alt;
+    else if (/^shift$/i.test(part)) modifiers |= _CDP_MODIFIER_BITS.Shift;
+    else if (/^(meta|cmd|command)$/i.test(part)) modifiers |= _CDP_MODIFIER_BITS.Meta;
+  }
+
+  let descriptor;
+  if (mainKey.length === 1) {
+    const upper = mainKey.toUpperCase();
+    const isLetter = upper >= 'A' && upper <= 'Z';
+    const isDigit = mainKey >= '0' && mainKey <= '9';
+    descriptor = {
+      key: mainKey,
+      code: isLetter ? 'Key' + upper : (isDigit ? 'Digit' + mainKey : ''),
+      vk: (isLetter || isDigit) ? upper.charCodeAt(0) : 0,
+      text: (modifiers & _CDP_MODIFIER_BITS.Shift) && isLetter ? upper : mainKey,
+    };
+  } else if (_CDP_NAMED_KEYS[mainKey]) {
+    const [code, vk, text] = _CDP_NAMED_KEYS[mainKey];
+    descriptor = { key: mainKey, code, vk, text };
+  } else {
+    descriptor = { key: mainKey, code: '', vk: 0, text: undefined };
+  }
+  // A text payload is only a character when no command modifier rides along —
+  // Ctrl+S must NOT type "s" into the page.
+  if (modifiers & (_CDP_MODIFIER_BITS.Alt | _CDP_MODIFIER_BITS.Control | _CDP_MODIFIER_BITS.Meta)) {
+    descriptor.text = undefined;
+  }
+  return { descriptor, modifiers };
+}
+
+async function _cdpKeyboard(tabId, keys, selector) {
+  if (selector) {
+    // Trusted key events go to the focused element — focus the target first.
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN',
+      func: (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return { error: `Element not found: ${sel}` };
+        el.focus();
+        return { ok: true, tag: el.tagName.toLowerCase() };
+      },
+      args: [selector],
+    });
+    const r = results && results[0] && results[0].result;
+    if (!r) throw new Error('No result from focus script');
+    if (r.error) return { success: false, error: r.error };
+  }
+  const { descriptor, modifiers } = _cdpKeyDescriptor(keys);
+  await _cdpRun(tabId, async (target) => {
+    const base = {
+      key: descriptor.key,
+      code: descriptor.code,
+      windowsVirtualKeyCode: descriptor.vk,
+      modifiers,
+    };
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent',
+      descriptor.text !== undefined
+        ? { type: 'keyDown', text: descriptor.text, ...base }
+        : { type: 'rawKeyDown', ...base });
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent',
+      { type: 'keyUp', ...base });
+  });
+  return { success: true, keys, trusted: true, target: selector || 'activeElement' };
+}
+
+// ══════════════════════════════════════════
 //  Click Element
 // ══════════════════════════════════════════
 
@@ -1317,6 +1501,14 @@ async function cmdClickElement(params) {
     throw new Error(`Cannot interact with protected page: ${tab.url}`);
   }
 
+  try {
+    return await _cdpClick(tabId, params.selector,
+                           params.rightClick || false, params.scrollTo !== false);
+  } catch (err) {
+    console.warn('[Bridge] CDP click failed, falling back to synthetic events:',
+                 err && err.message);
+  }
+
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
@@ -1325,7 +1517,12 @@ async function cmdClickElement(params) {
   });
 
   if (results && results[0] && results[0].result) {
-    return results[0].result;
+    const r = results[0].result;
+    if (r.clicked) {
+      r.trusted = false;
+      r.fallbackReason = 'CDP attach/dispatch failed — synthetic events';
+    }
+    return r;
   }
   return { clicked: false, error: 'No result from script' };
 }
@@ -1398,6 +1595,13 @@ async function cmdHoverElement(params) {
     throw new Error(`Cannot interact with protected page: ${tab.url}`);
   }
 
+  try {
+    return await _cdpHover(tabId, params.selector);
+  } catch (err) {
+    console.warn('[Bridge] CDP hover failed, falling back to synthetic events:',
+                 err && err.message);
+  }
+
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
@@ -1406,7 +1610,12 @@ async function cmdHoverElement(params) {
   });
 
   if (results && results[0] && results[0].result) {
-    return results[0].result;
+    const r = results[0].result;
+    if (r.hovered) {
+      r.trusted = false;
+      r.fallbackReason = 'CDP attach/dispatch failed — synthetic events (CSS :hover NOT set)';
+    }
+    return r;
   }
   return { hovered: false, error: 'No result from script' };
 }
@@ -1457,6 +1666,13 @@ async function cmdKeyboardInput(params) {
     throw new Error(`Cannot interact with protected page: ${tab.url}`);
   }
 
+  try {
+    return await _cdpKeyboard(tabId, params.keys, params.selector || null);
+  } catch (err) {
+    console.warn('[Bridge] CDP keyboard failed, falling back to synthetic events:',
+                 err && err.message);
+  }
+
   const results = await chrome.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
@@ -1465,7 +1681,12 @@ async function cmdKeyboardInput(params) {
   });
 
   if (results && results[0] && results[0].result) {
-    return results[0].result;
+    const r = results[0].result;
+    if (r.success) {
+      r.trusted = false;
+      r.fallbackReason = 'CDP attach/dispatch failed — synthetic events';
+    }
+    return r;
   }
   return { success: false, error: 'No result from script' };
 }

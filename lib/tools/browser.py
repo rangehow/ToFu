@@ -490,6 +490,56 @@ BROWSER_TOOL_GET_APP_STATE = {
     }
 }
 
+BROWSER_TOOL_PREVIEW_PAGE = {
+    "type": "function",
+    "function": {
+        "name": "browser_preview_page",
+        "description": (
+            "Render a web page in a headless browser ON THE SERVER and return a real "
+            "screenshot you can SEE, plus console messages, uncaught JS errors and failed "
+            "requests. This is how you check what a page YOU wrote looks like when it runs.\n"
+            "Two modes:\n"
+            "1) path: a project-relative .html file — served to the browser from the project "
+            "root (relative assets and ES modules work; external network requests are blocked "
+            "and reported).\n"
+            "2) url: an http(s) URL, e.g. a dev server you or the user started.\n"
+            "Use after writing/editing front-end code to verify layout visually and catch "
+            "runtime JS errors. NOT for reading text content (use fetch_url / browser_read_tab) "
+            "and NOT tied to the user's browser extension — it runs fully server-side."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Project-relative HTML file to render (e.g. 'dist/index.html'). Mutually exclusive with url."
+                },
+                "url": {
+                    "type": "string",
+                    "description": "http(s) URL to render (e.g. 'http://127.0.0.1:8080/'). Mutually exclusive with path."
+                },
+                "width": {"type": "integer", "description": "Viewport width px (default 1280)"},
+                "height": {"type": "integer", "description": "Viewport height px (default 800)"},
+                "full_page": {
+                    "type": "boolean",
+                    "description": "Capture the entire scrollable page instead of just the viewport (default false)"
+                },
+                "wait_ms": {
+                    "type": "integer",
+                    "description": "Extra settle time in ms after the DOM loads before screenshotting (default 1500, max 15000) — raise it for pages with async rendering"
+                }
+            },
+            "required": []
+        }
+    }
+}
+
+#: The preview tool is part of the browser FAMILY for dispatch/display, but
+#: deliberately NOT in BROWSER_TOOLS: those ship only when the user's browser
+#: extension is connected, while the preview renders server-side in the
+#: shared Playwright pool (its own ToolSpec gate in tools/registry/_build.py).
+PAGE_PREVIEW_TOOL_NAMES = frozenset({'browser_preview_page'})
+
 BROWSER_TOOLS = [
     BROWSER_TOOL_LIST_TABS,
     BROWSER_TOOL_READ_TAB,
@@ -518,11 +568,12 @@ BROWSER_TOOL_NAMES = {
 }
 
 __all__ = [
-    'BROWSER_TOOL_LIST_TABS', 'BROWSER_TOOL_READ_TAB', 'BROWSER_TOOL_EXECUTE_JS',
+    'BROWSER_TOOL_LIST_TABS','BROWSER_TOOL_READ_TAB', 'BROWSER_TOOL_EXECUTE_JS',
     'BROWSER_TOOL_SCREENSHOT', 'BROWSER_TOOL_GET_INTERACTIVE_ELEMENTS', 'BROWSER_TOOL_CLICK',
     'BROWSER_TOOL_HOVER', 'BROWSER_TOOL_KEYBOARD', 'BROWSER_TOOL_WAIT',
     'BROWSER_TOOL_SUMMARIZE_PAGE', 'BROWSER_TOOL_GET_APP_STATE',
     'BROWSER_TOOL_GET_COOKIES', 'BROWSER_TOOL_GET_HISTORY',
     'BROWSER_TOOL_CREATE_TAB', 'BROWSER_TOOL_CLOSE_TAB', 'BROWSER_TOOL_NAVIGATE',
+    'BROWSER_TOOL_PREVIEW_PAGE', 'PAGE_PREVIEW_TOOL_NAMES',
     'BROWSER_TOOLS', 'BROWSER_TOOL_NAMES',
 ]

@@ -153,6 +153,9 @@ _DISPLAY_HANDLERS = {
     'browser_right_click_menu': lambda fn_args: f'Right-click menu ({_tab_label(fn_args.get("tabId"))}): {fn_args.get("menu_item_text", "")}',
     'browser_hover_and_click': lambda fn_args: f'Hover & click ({_tab_label(fn_args.get("tabId"))})',
     'browser_fill_form': lambda fn_args: f'Fill form ({_tab_label(fn_args.get("tabId"))}), {len(fn_args.get("fields", []))} fields)',
+    'browser_preview_page': lambda fn_args: (
+        f'Render page preview: {fn_args.get("path") or fn_args.get("url", "")}'
+    ),
 }
 
 

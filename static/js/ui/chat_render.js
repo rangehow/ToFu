@@ -1922,9 +1922,29 @@ function renderMessage(msg, idx) {
     const _tsVerdict = (typeof computeTurnSettlement === 'function')
       ? computeTurnSettlement(msg, msg.model || (typeof serverModel !== 'undefined' ? serverModel : null))
       : null;
-    const _tsBtn = (typeof continueButtonForSettlement === 'function')
+    let _tsBtn = (typeof continueButtonForSettlement === 'function')
       ? continueButtonForSettlement(_tsVerdict)
       : { show: false };
+    /* ★ Trimmed-window upgrade: a windowed first-open strips toolRounds for
+     * transport (msg._trimmed + the SERVER-stamped _trimmedToolRoundCount),
+     * so the verdict scans the LOCAL copy, sees 0 rounds, and fail-closes to
+     * 'regenerate' — the "only Regenerate, no Continue" lie for a turn whose
+     * checkpoint provably exists in the DB. The count is a server fact, not
+     * uncertainty (fail-closed philosophy intact), and the click re-verifies
+     * via /api/chat/continue's authoritative rescan (scan_continue_checkpoint)
+     * — so the checkpoint Continue is the honest label. Kept HERE at the gate
+     * (never inside computeTurnSettlement, which is byte-locked to the Python
+     * port by the equivalence suite). A clean finish (show:false) is never
+     * touched; hydrateFullConversation clears _trimmed on refill, after which
+     * the verdict computes the real keptRounds itself. */
+    if (_tsBtn.show && _tsBtn.kind === 'regenerate'
+        && msg._trimmed && (msg._trimmedToolRoundCount || 0) > 0) {
+      _tsBtn = {
+        show: true, kind: 'continue', lossless: false,
+        keptRounds: msg._trimmedToolRoundCount,
+        labelKey: 'msgAction.continue', titleKey: 'msgAction.continueFromRoundTitle',
+      };
+    }
     let continueH = "";
     if (isLastAssistant && _tsBtn.show) {
       if (_tsBtn.kind === 'regenerate') {

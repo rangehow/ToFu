@@ -90,6 +90,73 @@ function _getStreamZones() {
   }
   return _streamZoneCache;
 }
+
+/* ── Tool-label composition for the phase rows (owner directive 2026-08-03) ──
+ * The backend ships STRUCTURED raw tool names on the phase events
+ * (`phase.tools` for tool_exec, `phase.toolContextTools` for the round-open
+ * llm_thinking suffix) so the client composes the label in the UI language;
+ * the pre-joined English `detail` / `toolContext` strings remain the
+ * headless / legacy fallback. No emoji anywhere — this row renders its own
+ * SVG iconography, an emoji in the label is a second inconsistent source. */
+function _toolLabelText(name) {
+  if (!name) return '';
+  /* MCP namespaced tool: mcp__server__tool → server/tool (mirrors the
+   * backend tool_label fallback, minus the retired 🔌 prefix). */
+  if (name.slice(0, 5) === 'mcp__') {
+    const parts = name.split('__');
+    if (parts.length >= 3) return parts[1] + '/' + parts.slice(2).join('__');
+  }
+  if (typeof t === 'function') {
+    /* Inline literal prefix (NEVER an intermediate variable): the boot-key
+     * static scan (lib/i18n_boot_keys.py T_CALL_DYNAMIC_PREFIX_RE) only
+     * discovers a dynamic call written INLINE like the one below —
+     * t(identifier) is invisible and would drop the whole tool.label.*
+     * namespace from the boot pack. */
+    const v = t('tool.label.' + name);
+    /* t() falls back to the key itself for an unmapped tool — then the raw
+     * tool name is the honest label (future / custom tools). */
+    if (v && v !== 'tool.label.' + name) return v;
+  }
+  return name;
+}
+function _toolLabelJoin() {
+  return (typeof t === 'function') ? t('tool.label.join') : ', ';
+}
+/* The tool_exec phase row text: N counted over the CALLS (phase.tools keeps
+ * duplicates), labels deduped + localized. Falls back to the legacy English
+ * `detail` when no structured list is present (VU forward / old replay).
+ * NOTE: the fallback is deliberately SELF-CONTAINED (p.detail) — the
+ * i18n-resolving _phaseDetailText is nested inside updateStreamingUI and
+ * is NOT reachable from this module-level helper (a blind call here is a
+ * ReferenceError on exactly the rare VU-forwarded frame it meant to serve). */
+function _toolExecPhaseText(p) {
+  const names = (p && Array.isArray(p.tools)) ? p.tools.filter(Boolean) : [];
+  if (!names.length || typeof t !== 'function') return (p && p.detail) || '';
+  const seen = {};
+  const labels = [];
+  for (const nm of names) {
+    if (seen[nm]) continue;
+    seen[nm] = 1;
+    labels.push(_toolLabelText(nm));
+  }
+  if (names.length === 1) return t('stream.phase.toolExec', { tool: labels[0] });
+  return t('stream.phase.toolExecMulti', { n: names.length, tools: labels.join(_toolLabelJoin()) });
+}
+/* The round-open llm_thinking suffix: the PREVIOUS round's tools, composed
+ * from toolContextTools when the backend shipped them (localized), else the
+ * raw English toolContext string verbatim (legacy fallback). */
+function _toolContextPhaseText(p) {
+  const names = (p && Array.isArray(p.toolContextTools)) ? p.toolContextTools.filter(Boolean) : [];
+  if (!names.length || typeof t !== 'function') return (p && p.toolContext) || '';
+  const seen = {};
+  const labels = [];
+  for (const nm of names) {
+    if (seen[nm]) continue;
+    seen[nm] = 1;
+    labels.push(_toolLabelText(nm));
+  }
+  return t('stream.phase.toolContext', { tools: labels.join(_toolLabelJoin()) });
+}
 function updateStreamingUI(msg) {
   const zones = _getStreamZones();
   if (!zones) return;
@@ -117,6 +184,22 @@ function updateStreamingUI(msg) {
   }
   const rounds = msg.toolRounds || [];
   const hasActiveSearch = rounds.some((r) => r.status === "searching");
+  /* ★ In-flight tool verdict for the tool_exec phase row (owner report
+   *   2026-08-03 — the "✏️ Applying changes…" stale-phase desync). The row
+   *   is only truthful while a round is genuinely IN-FLIGHT; the moment
+   *   every round settles, the phase is a stale leftover of the dispatch
+   *   announcement (it is retired only by the NEXT phase/content event),
+   *   and rendering it claims a tool is running when none is — the user
+   *   then hunts for a tool card that isn't there. 'searching' alone
+   *   under-covers: an approval / human-input / stdin wait is still
+   *   in-flight (and is exactly when no OTHER UI announces the tool at the
+   *   phase-row position), so those count too. Terminal verdicts mirror
+   *   stream_reducer.js _TERMINAL_ROUND_STATUS — kept as a local literal
+   *   because the deferred-bundle load order can't guarantee that const
+   *   is visible here. */
+  const _TOOL_INFLIGHT_STATUS = { searching: 1, executing: 1, submitted: 1,
+    pending_approval: 1, awaiting_human: 1, awaiting_stdin: 1 };
+  const hasInFlightTool = rounds.some((r) => _TOOL_INFLIGHT_STATUS[r.status] === 1);
   _syncToolRoundsDOM(toolZone, rounds);
   /* ★ Async swarm: render inbox-inject chips above the tool zone so the
    *   user sees "received N async swarm updates" the moment they land. */
@@ -455,8 +538,9 @@ function updateStreamingUI(msg) {
     const icon = _phaseIcons[phase.phase];
     const _txt = _phaseDetailText(phase);
     _phaseKey = "think:" + (phase.detailKey || phase.detail) + (phase.toolContext || "");
-    const ctx = phase.toolContext
-      ? `<span class="stream-phase-ctx">${escapeHtml(phase.toolContext)}</span>`
+    const _ctxTxt = _toolContextPhaseText(phase);
+    const ctx = _ctxTxt
+      ? `<span class="stream-phase-ctx">${escapeHtml(_ctxTxt)}</span>`
       : "";
     _phaseHtml = `<div class="stream-phase"><span class="stream-phase-icon">${icon}</span><span class="stream-phase-text">${escapeHtml(_txt)}${ctx}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "waiting_model" && !hasActiveSearch) {
@@ -491,9 +575,23 @@ function updateStreamingUI(msg) {
      *   keep distinct identity. */
     _phaseKey = "retry:" + (phase.attempt || 0) + ":" + _txt;
     _phaseHtml = `<div class="stream-phase stream-phase-retrying"><span class="stream-phase-icon">${Icon('refresh', 14)}</span><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
-  } else if (phase && phase.phase === "tool_exec" && !hasActiveSearch) {
-    const _txt = _phaseDetailText(phase);
-    _phaseKey = "exec:" + (phase.detailKey || phase.detail);
+  } else if (phase && phase.phase === "tool_exec" && !hasActiveSearch && hasInFlightTool) {
+    /* ★ Gate (owner report 2026-08-03): render ONLY while a tool round is
+     *   genuinely in-flight — a settled-everything tool_exec phase is the
+     *   stale window between the last tool_result and the next round's
+     *   phase, where the row claims a tool is running when none is (the
+     *   "phase says Applying changes but only settled cards are visible"
+     *   desync). With no in-flight tool we fall THROUGH to the content-
+     *   based branches, which honestly show waiting / reasoning / none.
+     *   `hasActiveSearch` stays in the gate: while a round is searching
+     *   the tool CARDS own the running display (the 'search' branch
+     *   blanks this row) — the phase row's unique value is the
+     *   approval / human-wait window the cards can't headline. */
+    const _txt = _toolExecPhaseText(phase);
+    /* Key on the RESOLVED text (same ruling as the retrying branch): the
+     *   status zone repaints only when the key changes, and the resolved
+     *   label is what the user can actually perceive. */
+    _phaseKey = "exec:" + _txt;
     _phaseHtml = `<div class="stream-phase"><span class="stream-phase-text">${escapeHtml(_txt)}</span><span class="stream-phase-dots"><span>.</span><span>.</span><span>.</span></span></div>`;
   } else if (phase && phase.phase === "working" && (phase.detailKey || phase.detail)) {
     /* Generic "working" phase from external backends (e.g. "Initializing Claude Code...") */

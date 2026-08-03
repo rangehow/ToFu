@@ -233,7 +233,18 @@ _SPECS: tuple[EventSpec, ...] = (
                                    'absent',
                       'detailArgs': '(optional) interpolation args for `detailKey` '
                                     '(e.g. {"round": 3, "model": "claude-4"})',
-                      'roundNum': 'round number'}),
+                      'roundNum': 'round number',
+                      'tools': '(optional, tool_exec phase) raw tool-name list '
+                               'of this dispatch — the i18n client composes '
+                               'its localized label from these; `detail` is '
+                               'the English fallback',
+                      'toolContext': '(optional, llm_thinking round-open phase) '
+                                     'pre-joined English label string of the '
+                                     'PREVIOUS round\'s tools (headless fallback)',
+                      'toolContextTools': '(optional) the structured raw tool '
+                                          'names behind `toolContext` — compose '
+                                          'the suffix in the UI language from '
+                                          'THESE when present'}),
     EventSpec(EventType.ROUND_START, _C.LIFECYCLE,
               'Explicit start boundary of an LLM round (the orchestrator loop '
               'index). Emitted at the TOP of every round the model actually '

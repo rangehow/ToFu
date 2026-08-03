@@ -542,6 +542,7 @@ function _handleAutopilotVuEvent(convId, ev) {
         detailArgs: inner.detailArgs || null,
         tools: inner.tools || [],
         toolContext: inner.toolContext || "",
+        toolContextTools: inner.toolContextTools || null,
         round: inner.round || 0,
         attempt: inner.attempt || 0,
         statusCode: inner.statusCode || 0,

@@ -1172,6 +1172,10 @@ function dispatchSSEEvent(line, ctx) {
         attempt: ev.attempt || 0,
         tools: ev.tools || [],
         toolContext: ev.toolContext || "",
+        /* Structured raw tool names behind toolContext — the renderer
+         * composes the localized suffix from THESE when present (the
+         * English toolContext string stays the headless fallback). */
+        toolContextTools: ev.toolContextTools || null,
         round: ev.roundNum || 0,
       });
       if (typeof twUpdate === 'function') twUpdate(convId);

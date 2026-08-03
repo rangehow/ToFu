@@ -244,6 +244,8 @@ def append_event(task, event):
         if event.get('detailArgs'):
             p['detailArgs'] = event['detailArgs']
         if event.get('toolContext'): p['toolContext'] = event['toolContext']
+        if event.get('toolContextTools'):
+            p['toolContextTools'] = event['toolContextTools']
         if event.get('tools'): p['tools'] = event['tools']
         # The PHASE wire event now carries the unified canonical `roundNum`
         # (Phase 3 §5); the poll-fallback phase dict keeps its local `round`

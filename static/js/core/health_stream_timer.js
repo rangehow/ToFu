@@ -128,8 +128,26 @@ function _streamPhaseLabel(buf) {
     return p.detail ? String(p.detail) : '';
   })();
   switch (p.phase) {
-    case 'tool_exec':
+    case 'tool_exec': {
+      /* Localize from the structured tools list when the backend shipped
+       * it (phase.tools) — same source the phase row composes from. The
+       * raw `detail` stays the English fallback for headless events.
+       * typeof-guarded: the helper lives in ui/streaming_ui.js (main
+       * bundle), this module is deferred — a degenerate load order falls
+       * back to the detail string rather than throwing. */
+      const _tnames = (p && Array.isArray(p.tools)) ? p.tools.filter(Boolean) : [];
+      if (_tnames.length && typeof _toolLabelText === 'function' && typeof t === 'function') {
+        const _seen = {};
+        const _labels = [];
+        for (const _nm of _tnames) {
+          if (_seen[_nm]) continue;
+          _seen[_nm] = 1;
+          _labels.push(_toolLabelText(_nm));
+        }
+        return _labels.join(t('tool.label.join'));
+      }
       return _resolvedDetail || _connT('conn.phaseTools');
+    }
     case 'llm_thinking':
       return _resolvedDetail || _connT('conn.phaseThinking');
     case 'thinking_active':

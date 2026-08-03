@@ -302,6 +302,10 @@ def _emit_tool_round_phase(task, assistant_msg, round_num):
             detailKey='stream.phase.analyzingRound',
             detailArgs={'round': round_num + 1},
             toolContext=summary,
+            # Structured raw tool NAMES so an i18n client composes the
+            # suffix in the UI language (toolContext stays the English
+            # fallback for headless / non-i18n clients).
+            toolContextTools=unique_names,
             roundNum=round_num + 1,
         ))
 

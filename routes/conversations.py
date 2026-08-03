@@ -1272,6 +1272,27 @@ async def save_conv(conv_id):
 def _save_conv_blocking(db, conv_id, data):
     title = data.get('title', 'Untitled')
     raw_messages = data.get('messages', [])
+    # Durable one-time heal for send-race duplicate user rows (consecutive
+    # user rows sharing one ``timestamp`` → keep the LAST, the server-built
+    # copy). The send route guards via ``append_user_msg_idempotent``, but
+    # THIS full-conv PUT is the bypass seam that can re-plant the pair —
+    # heal here (mirroring the ghost-husk sweep precedent below) so the DB
+    # never holds it and the rebuild-side dedup stays a no-op. Never raises:
+    # a heal failure must not break the write path.
+    try:
+        from lib.tasks_pkg.conv_message_builder._dedup import _dedup_duplicate_user_messages
+        _healed = _dedup_duplicate_user_messages(raw_messages)
+        if len(_healed) != len(raw_messages):
+            logger.warning('[save_conv] Healed %d duplicate same-timestamp '
+                           'user row(s) on incoming PUT conv=%s — durable '
+                           'one-time fix (race-planted copies)',
+                           len(raw_messages) - len(_healed), conv_id[:12])
+            audit_log('conv_user_dup_healed', conv_id=conv_id,
+                      dropped=len(raw_messages) - len(_healed), seam='save_conv_put')
+        raw_messages = _healed
+    except Exception as _de:
+        logger.warning('[save_conv] user-dup heal failed conv=%s: %s '
+                       '(continuing unhealed)', conv_id[:12], _de)
     msg_count = len(raw_messages)
     # Backfill stable per-message IDs.  Once present, _msgId carries
     # forward in subsequent loads/syncs.  Index-free addressing depends

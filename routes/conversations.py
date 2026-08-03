@@ -15,7 +15,10 @@ from lib.database import (
     run_pooled,
 )
 from lib.log import audit_log, get_logger
-from lib.api_response import api_bad_request, api_error, api_internal_error, api_not_found, api_ok
+from lib.api_response import (
+    api_bad_request, api_error, api_internal_error, api_not_found, api_ok,
+    api_payload,
+)
 from lib.openapi import api_meta
 from lib.request_parser import async_parse_body, parse_body  # noqa: F401
 from lib.utils import safe_json as _safe_json
@@ -96,7 +99,11 @@ def _ie(*a, **k):
 
 
 def _json(payload, status=None):
-    return _Defer(jsonify, payload, status=status)
+    # api_payload = the passthrough primitive (contract-clean superset:
+    # payload keys byte-identical top-level, additive request_id on 4xx).
+    # Positional status arg — _Defer swallows a status= kwarg for its own
+    # bookkeeping, which would break the tuple _finish returns.
+    return _Defer(api_payload, payload, status or 200)
 
 
 def _prefetch_reconciled_dict(db, conv_id, r):
@@ -1446,9 +1453,9 @@ def _save_conv_blocking(db, conv_id, data):
                         'client baseRev=%d but server rev=%d (concurrent write '
                         'from another tab/device/server). Client must rebase + retry.',
                         conv_id[:12], base_rev_int, server_rev)
-            return _Defer(jsonify, {'ok': False, 'error': 'blocked_rev_conflict',
-                            'serverRev': server_rev,
-                            'serverMsgCount': existing_count}, status=409)
+            return _json({'ok': False, 'error': 'blocked_rev_conflict',
+                          'serverRev': server_rev,
+                          'serverMsgCount': existing_count}, status=409)
 
     if msg_count == 0 and existing_count > 0:
         # 2026-05-05: this guard fires during NORMAL concurrent syncs
@@ -1458,8 +1465,8 @@ def _save_conv_blocking(db, conv_id, data):
                     'server has %d msgs but client sent 0 '
                     '(benign: stale concurrent sync).',
                     conv_id[:12], existing_count)
-        return _Defer(jsonify, {'ok': False, 'error': 'blocked_empty_overwrite',
-                        'serverMsgCount': existing_count}, status=409)
+        return _json({'ok': False, 'error': 'blocked_empty_overwrite',
+                      'serverMsgCount': existing_count}, status=409)
 
     if msg_count > 0 and msg_count < _existing_effective_count and not allow_truncate:
         # 2026-05-05: this guard fires during NORMAL concurrent syncs
@@ -1472,9 +1479,9 @@ def _save_conv_blocking(db, conv_id, data):
                     'intentional truncation (regen/edit).',
                     conv_id[:12], existing_count, msg_count,
                     existing_count - msg_count)
-        return _Defer(jsonify, {'ok': False, 'error': 'blocked_msg_regression',
-                        'serverMsgCount': existing_count,
-                        'clientMsgCount': msg_count}, status=409)
+        return _json({'ok': False, 'error': 'blocked_msg_regression',
+                      'serverMsgCount': existing_count,
+                      'clientMsgCount': msg_count}, status=409)
 
     # ── Guard: prevent stale streaming checkpoint from overwriting completed result ──
     # Root cause: VS Code port forwarding can reload the page at the exact moment
@@ -1512,7 +1519,7 @@ def _save_conv_blocking(db, conv_id, data):
                                 conv_id[:12], existing_fr,
                                 len(existing_last.get('content') or ''),
                                 len(incoming_last.get('content') or ''))
-                            return _Defer(jsonify, {
+                            return _json({
                                 'ok': False,
                                 'error': 'blocked_stale_checkpoint',
                                 'serverMsgCount': existing_count,

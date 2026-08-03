@@ -80,7 +80,7 @@ from quart import Response, g
 from lib.api_keys import (
     AuthContext, local_admin_context, touch_key, validate_token,
 )
-from lib.api_response import api_forbidden, api_unauthorized
+from lib.api_response import api_error, api_forbidden, api_unauthorized
 from lib.auth_mode import requires_credential as _mode_requires_credential
 from lib.log import audit_log, get_logger
 from lib.rate_limit_api import RateDecision, apply_headers, check_request

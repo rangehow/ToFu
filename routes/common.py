@@ -30,7 +30,9 @@ from lib.js_bundler import (
     get_i18n_pack_urls as _get_i18n_pack_urls,
 )
 from lib.log import get_logger
-from lib.api_response import api_bad_request, api_internal_error, api_ok
+from lib.api_response import (
+    api_bad_request, api_error, api_internal_error, api_ok,
+)
 from lib.request_parser import parse_body
 
 logger = get_logger(__name__)

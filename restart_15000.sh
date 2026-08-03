@@ -372,7 +372,7 @@ fi
 #   goes to ${LOG}, NEVER to this VS Code terminal, with or without nohup. And
 #   because stdout is already a file (not a tty), nohup never creates a stray
 #   `nohup.out`. (Both facts verified empirically 2026-07-16.)
-echo "[3/5] Relaunching (detached via setsid nohup): PORT=${PORT} setsid nohup ${PY} server.py > ${LOG} 2>&1 &"
+echo "[3/5] Relaunching (detached via setsid nohup): PORT=${PORT} setsid nohup ${PY} server.py >> ${LOG} 2>&1 &"
 #   9>&- (pt_2a05e161b9814bc2): fd 9 holds the [pre/5b] restart serialization
 #   flock. Without this close the relaunched server INHERITS fd 9 and keeps the
 #   flock alive for its WHOLE lifetime (measured: a relaunched pid held
@@ -386,14 +386,27 @@ echo "[3/5] Relaunching (detached via setsid nohup): PORT=${PORT} setsid nohup $
 #   launch that dies with the lock signature in its log gets up to 3 attempts
 #   with a 10s cooldown. Any OTHER death fails fast exactly as before — the
 #   retry is for the lock race only, never a universal mask.
+#   APPEND (2026-08-03): the relaunch used to TRUNCATE ${LOG} (`>`),
+#   destroying the previous life's final lines — the wedged server's
+#   last words were unrecoverable in the 11:14 incident. `>>` keeps
+#   every life, with a demarcation banner between them. Consequence:
+#   every "did THIS boot say X" probe below must be scoped to lines
+#   written after THIS launch (LOG_MARK line offset / LAUNCH_STAMP
+#   timestamp) — a stale line from a prior life must never count.
 BASE="http://127.0.0.1:${PORT}"
 launch_ok=0
+{
+  echo ""
+  echo "════════════════ $(date '+%F %T') — launched by restart_15000.sh ════════════════"
+} >> "${LOG}" 2>/dev/null
 for attempt in 1 2 3; do
   if [ "${attempt}" -gt 1 ]; then
     echo "[3/5] Retry attempt ${attempt}/3 (lock-conflict backoff) ..."
     sleep 10
   fi
-  PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid nohup "${PY}" server.py > "${LOG}" 2>&1 9>&- &
+  LAUNCH_STAMP="$(date '+%F %T')"
+  LOG_MARK="$(wc -l < "${LOG}" 2>/dev/null || echo 0)"
+  PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid nohup "${PY}" server.py >> "${LOG}" 2>&1 9>&- &
   NEWPID=$!
   echo "      Launched pid ${NEWPID}; logging to ${LOG}"
 
@@ -407,9 +420,11 @@ for attempt in 1 2 3; do
       break
     fi
     # If the launched process already died, distinguish the lock race
-    # (retryable) from every other startup death (fail fast).
+    # (retryable) from every other startup death (fail fast). With
+    # append-mode logs the signature must be found ONLY in lines written
+    # after THIS launch — a prior life's lock death must not count.
     if ! kill -0 "${NEWPID}" 2>/dev/null; then
-      if grep -q "instance lock held by a LIVE local server\|Another server instance is already running" "${LOG}" 2>/dev/null; then
+      if tail -n +$((LOG_MARK + 1)) "${LOG}" 2>/dev/null | grep -q "instance lock held by a LIVE local server\|Another server instance is already running"; then
         lock_death=1
       fi
       break
@@ -519,17 +534,27 @@ fi
 
 # (b) RUNTIME — the new _serve guard code must have run this boot. Match the
 #     shared "Loop blocking-guard" prefix so BOTH the default "OFF" line and the
-#     opt-in "armed" line count as proof the new path executed. The line is
-#     emitted early in _serve; poll briefly in case health came up first.
+#     opt-in "armed" line count as proof the new path executed.
+#     STREAM FIX (2026-08-03): the proof line is emitted at INFO level, and
+#     the stdout stream captured in ${LOG} carries WARNING+ ONLY (measured:
+#     0 INFO lines vs 990 WARNING+ lines) — grepping ${LOG} can never match
+#     and false-FATALed a healthy boot. Read the stream that actually
+#     carries INFO — logs/app.log — and scope it to THIS launch by
+#     timestamp (app.log is append-only across lives; LAUNCH_STAMP is
+#     captured per attempt above). String timestamps sort chronologically.
 guard_ok=0
+APPLOG="${PROJ}/logs/app.log"
 for i in $(seq 1 10); do
-  if grep -q "Loop blocking-guard" "${LOG}" 2>/dev/null; then guard_ok=1; break; fi
+  if [ -f "${APPLOG}" ] \
+     && awk -v s="${LAUNCH_STAMP}" 'substr($0,1,19) >= s && /Loop blocking-guard/ {ok=1} END{exit !ok}' "${APPLOG}"; then
+    guard_ok=1; break
+  fi
   sleep 1
 done
 if [ "${guard_ok}" = "1" ]; then
-  echo "✅ (b) NEW _serve CODE RAN: '$(grep -m1 "Loop blocking-guard" "${LOG}" | sed 's/^[^[]*//')'"
+  echo "✅ (b) NEW _serve CODE RAN: '$(awk -v s="${LAUNCH_STAMP}" 'substr($0,1,19) >= s && /Loop blocking-guard/ {print; exit}' "${APPLOG}" | sed 's/^[^[]*//')'"
 else
-  echo "❌ (b) NEW _serve CODE DID NOT RUN: no 'Loop blocking-guard' line in ${LOG}."
+  echo "❌ (b) NEW _serve CODE DID NOT RUN: no 'Loop blocking-guard' line in ${APPLOG} since launch (${LAUNCH_STAMP})."
   echo "       The running process is NOT executing the new _serve code —"
   echo "       git HEAD likely predates the fix, or the wrong file booted."
   probe_fail=1

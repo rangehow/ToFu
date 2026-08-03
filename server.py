@@ -235,6 +235,31 @@ def _heartbeat_stale_threshold():
     return max(30.0, bump * 3.0)
 
 
+_SERVE_MODE_FILE = '.last_serve_mode'
+
+def _serve_mode_path():
+    """Absolute path of the serve-mode sidecar (data/.last_serve_mode)."""
+    return os.path.join(_tofu_data_root(), _SERVE_MODE_FILE)
+
+
+def _record_serve_mode(mode, path=None):
+    """Persist the protocol we are ACTUALLY serving ('http'|'https') so the
+    watchdog (deploy/tofu_guard.sh) can (a) probe /api/health with the right
+    scheme and (b) replay the same TLS decision on auto-relaunch — a
+    cron-env relaunch re-runs _detect_reverse_proxy blind and came up TLS
+    behind a plain-HTTP proxy (the 2026-08-03 'socket hang up' incident).
+    Best-effort: a write failure must never block startup."""
+    if mode not in ('http', 'https'):
+        raise ValueError('serve mode must be http|https, got %r' % (mode,))
+    path = path or _serve_mode_path()
+    try:
+        from lib.json_store import write_text_atomic
+        write_text_atomic(path, mode + '\n')
+    except Exception as e:
+        logging.getLogger('server').warning(
+            '[TLS] could not record serve mode to %s: %s', path, e)
+
+
 def _holder_wedge_age(pid, now=None, path=None):
     """Return the heartbeat AGE (seconds) iff the sidecar PROVES *pid*'s event
     loop is wedged, else None.
@@ -426,6 +451,36 @@ def _loop_stall_decide(age, threshold, already_dumped):
     if already_dumped:
         return (False, True)             # still stalled, already captured
     return (True, True)                  # stalled and not yet captured → dump
+
+
+def _port_bound(port, host='127.0.0.1', timeout=0.5):
+    """True iff a TCP connection to host:port succeeds (listener present).
+    Scheme-agnostic: works for TLS and plain-HTTP listeners alike."""
+    import socket as _s
+    try:
+        with _s.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _listener_death_decide(was_bound, bound, misses, k):
+    """Pure decision for the serve-listener watch (second layer after the
+    loop heartbeat). Returns ``(was_bound, misses, should_exit)``.
+
+    Arms only after the listener was seen bound at least once (the pre-serve
+    startup window is not our watch); counts CONSECUTIVE misses from there;
+    a single recovery resets the streak. The serve task dying while the
+    loop stays alive (the 2026-08-03 11:14 state: no listener, live lock,
+    FRESH heartbeat) is invisible to every external probe — the watchdog
+    sees a live pid and yields forever — so the process must die loudly
+    itself and hand the watchdog a clean, handleable death."""
+    if bound:
+        return (True, 0, False)
+    if not was_bound:
+        return (False, 0, False)
+    misses += 1
+    return (True, misses, misses >= k)
 
 
 def _extract_loop_top_frame(frame, project_root=None):
@@ -2819,6 +2874,10 @@ if __name__ == '__main__':
     else:
         _tls_cert, _tls_key = _ensure_tls_certs(args.certfile, args.keyfile)
 
+    # Persist the protocol we are ACTUALLY serving (after the certs are
+    # settled, so a cert-generation failure records 'http' correctly).
+    _record_serve_mode('https' if (_tls_cert and _tls_key) else 'http')
+
     # ── Init DB + validate imports in app context ──
     async def _startup():
         async with app.app_context():
@@ -3367,6 +3426,10 @@ if __name__ == '__main__':
         _arm_ctimer = _should_arm_ctimer(_stall_threshold, _fault_shm_log)
 
         _loop_heartbeat = {'ts': time.monotonic()}
+        _listen_state = {'was_bound': False, 'misses': 0}
+        _LISTENER_LOSS_K = 5   # consecutive 1s-bump misses ⇒ serve death
+        # Probe the bind host; a wildcard bind answers on loopback too.
+        _listen_probe_host = host if host not in ('0.0.0.0', '::', '') else '127.0.0.1'
 
         async def _loop_heartbeat_task():
             # Pet path (A): re-arm the GIL-independent C-timer on every bump.
@@ -3377,6 +3440,33 @@ if __name__ == '__main__':
                 # wedge (FUSE syscall) stops these bumps → the file ages → the
                 # lock-reclaim path treats us as wedged and can take over.
                 _write_heartbeat()
+                # Serve-listener liveness (second layer): a Hypercorn
+                # serve-task death with a LIVE loop is invisible to every
+                # external probe — the watchdog sees a live pid + fresh
+                # heartbeat and yields forever (the 2026-08-03 11:14 state).
+                # Die loudly instead so the watchdog gets a clean death it
+                # can relaunch from. A broken probe never kills the server.
+                try:
+                    _bound = await asyncio.to_thread(
+                        _port_bound, port, _listen_probe_host)
+                except Exception:
+                    _bound = True
+                _was, _miss, _serve_dead = _listener_death_decide(
+                    _listen_state['was_bound'], _bound,
+                    _listen_state['misses'], _LISTENER_LOSS_K)
+                _listen_state['was_bound'], _listen_state['misses'] = _was, _miss
+                if _serve_dead:
+                    _server_log.critical(
+                        '[LoopWatch] serve listener on :%d lost for %d consecutive '
+                        'checks while the loop is alive — serve task is dead; '
+                        'exiting so the watchdog relaunches', port, _miss)
+                    try:
+                        from lib.log import audit_log as _audit
+                        _audit('serve_listener_death', port=port, misses=_miss,
+                               pid=os.getpid())
+                    except Exception:
+                        pass
+                    os._exit(1)
                 if _arm_ctimer:
                     try:
                         faulthandler.cancel_dump_traceback_later()

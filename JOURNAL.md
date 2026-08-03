@@ -1,3 +1,11 @@
+### 2026-08-03(启动角色 UX epic 立案 + S1 托盘 i18n 落地:托盘摘「最后英语面」帽子,AST 棘轮双向钉住) — owner 指令「桌面 App 启动即明身份(服务器端/受控端),客户端功能别全塞托盘,托盘连 i18n 都没有」;epic `pt_6956ccfb605e497b`(已认领);commit `dee57f38`(5 文件 +445/−21);环 **87/87**(tray_i18n+tk_theme+cc_persistence+smoke_gate+cmdtype_parity+install_paths+bundle_extension+agent_cli)
+
+- **格局:** 先稿后码——设计稿 `docs/DESKTOP_STARTUP_ROLE_UX_DESIGN.md` v1 落盘(四切片:S1 托盘 i18n→S2 角色窗+受控端→S3 完整版角色窗+本机控制入窗→S4 文档),已挂问题卡待 owner 三选一(全量/只做 S1+S2/否原生窗)。**S1 不依赖答案**(owner 原话点名「tray doesn't even have i18n support」),先行落地。
+- **S1 账(英文下行为零变化):** `_tk_theme.STRINGS` +16 个 `desktop.tray.*` 键(zh+en,占位符 {tag}/{url}/{port} 双语同构);`launcher.py`/`agent_launcher.py` 全部 pystray MenuItem 字面量经 `_tt()` 走 `t()`(动态项含 Server 标签/更新项一并);新套件 `test_desktop_tray_i18n.py` 三闸:AST 棘轮拒任何 MenuItem 字符串字面量(两 launcher 逐张钉)+ 引用键必存在双语 + zh≠en 防假 i18n + 占位符双语对齐。failing-first 精确 3 红(2 AST+1 引用计数);NEUTER×2 各咬各的(一侧还原文本→恰好该侧 AST 针红)。
+- **事故自记(第五次同类):** insert_content 锚文本含了「chromium.desc 条目+闭合 }」并原样写进 content → STRINGS 提前闭合+条目重复,IndentationError 炸出主题套件 28 红,当场按重复块切除修复。**再记:插入类编辑锚文本永不出现在 content 里。**
+- **事故自记(新类):** NEUTER 后用 `git checkout -- desktop/launcher.py` 恢复——在脏工作区上这是**整文件回滚到 HEAD**,把我未提交的 4 处接线一并抹掉;靠 apply_diffs 重放恢复。**记档:脏共享树上 NEUTER 恢复只用 cp 备份还原,永不 git checkout 单文件。**
+- **剩余切片(待人答):** S2 角色窗 `desktop/role_window.py`(纯构建器+tk 渲染分离,connect_ui 单 authoring 模式)+ 受控端接线;S3 完整版窗口+本机控制面板入窗(复用 _cc_state 同缝,托盘留镜像+「控制面板…」回入口);S4 文档。与兄弟 epic pt_59b62951aad2463e(web 本机控制面板)写集不相交:那边是 local-control.js/api_v1/desktop.py,这边是 desktop/ 原生面。
+
 ### 2026-08-03(429 有界升级默认关停:无限重试成为默认行为——「429 永不打断对话,重试零成本」) — owner 截图报 kimi-k3 上「429 saturation (budget 120s, 364 cycles)」硬错误信封打断会话并下指令;commit `80431312`(3 文件);环 **7/7 + 邻接 dispatch 58/58**
 
 - **定案:** pt_a21cd6eb(2026-08-01 事故)交付的「全 slot 连续 429 超 120s → RateLimitError(is_saturation=True) → llm_fallback 换模型」在**回退模型也饱和**时把硬错误信封(`⚠️ API 请求已达限频（429）`,context=on-fallback-model)拍给用户——owner 判这是「自己打断自己」,指令:429 面墙只许持续重试,永不打断。

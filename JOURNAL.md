@@ -1,3 +1,12 @@
+### 2026-08-04(停滞横幅分制:工具执行中(心跳流动)不再弹「已停滞」——「仅心跳」在构造上≡「工具在执行」;横幅保留给连心跳都没有的真冻结) — owner 截图指令「执行命令时没必要提示,这不是正常的吗」;commit `906e721d`(6 文件 +272/−67);套件 **15/15** + 邻接环 **54 绿**(1 预存红挂票 `pt_eab154ae989f456c`)
+
+- **定案(机制根因):** 后端心跳 ticker `_start_tool_heartbeat` 只在工具阻塞期间运行,所以「仅心跳自 tick、无新产出」在构造上就**等价于**「有工具正在执行」——旧的 300s 横幅只在健康命令执行中误报(FUSE 上 find/grep 动辄 5 分钟零输出,journal 实测 294s;工具行本有「Running command… (Ns)」活计时;真挂死由后端收割器 30 分钟无输出显式报错兜底,pt_8524e0ec)。7/31 建卡时的 2.5h 挂死事故如今已被收割器有界化,前端 5 分钟预警属重复告警。
+- **修法(stall_watch.js):** watch 记录新增 `lastTick`,自 tick 到达即盖章;新增 `_ticksFlowing` 闸(窗口 60s=4× 心跳间隔,`window._STALL_WATCH_TICK_WINDOW_S` 测试缝,0=闸拆)——流动中不举旗;横幅保留给「连心跳帧都未到达」的真冻结(分发器死/流静断);心跳恢复即自愈,与真实输出同一路。i18n 文案同步改「期间连心跳帧都未到达,疑似卡死」(旧文案「仅有心跳」在新语义下是谎话)。零后端改动。
+- **测试账:** W 套件分制重钉(执行中 500s 静默不报警/无帧冻结才报警/重放旧 tick 给流动宽限且不丢 emittedAt 静默底座);W2 NEUTER 闸(窗口=0 时同样喂料必须报警——证明抑制来自闸门而非探测器死亡,F5 底座针也迁此);R 渲染缝两制各一针;新增 `_flow_gate_present_in_detector` 棘轮防未来「简化」把闸拆掉。failing-first 论证:旧代码下 W 的 `tool_executing_no_banner` 与 R 的执行中针必红。
+- **顺手擒获(预存红):** `globals.generated.d.ts` 相对 HEAD **已提交**源(tool_rounds_rich.js/paper-deepen 等)滞后——某批提交源文件漏重生成;重生成一并修正,守卫复绿(非兄弟 WIP,源已落库)。
+- **预存红挂票 `pt_eab154ae989f456c`:** `test_frontend_sse_assistantmsg_invariant` 锚点窗口漂移(某批在 `role: "assistant"` 与 `conv.messages.push` 之间插了 `_ensureMsgId` 行,push 被挤出断言窗口);扫的 sse_pipeline.js 工作树==HEAD,同签名复现,与本批无关。
+- **上线面:** 前端走 bundle mtime 自愈重建,最迟随下次重启上线。
+- **事故自记:** write_file 新测试文件时把 C 风格 `/* */` 注释写进 Python 层 + 末尾游离 `"""`——7/31 同款事故再犯;py_compile 冒烟当场擒获。教训重申:**任何写文件后先语法冒烟再测试**。
 ### 2026-08-04(预存红闭环:census 套件本机恒红两枚——feature-* 构建产物跳过表收编 + 后端普查改 git 索引枚举(294s→0.2s);首版并行读误诊被实测推翻) — 脑派发接我自票 `pt_759f78bdafa2430a` **DONE**;commit `4fdef290`(1 文件 +80/−23,纯测试基建);套件 **4/4 in 1.46s**(原 302s 超时红)
 
 - **① 前端普查假阳(命名漂移):** `_js_call_sites` 跳过表只认 `bundle-` 前缀,Epic E 后产物是 `feature-<8hex>.js`——扫描到产物里拼接的 `Api.chat.active(` 源码,误判「未申报消费者」。修法=跳过形状与 js_bundler 陈旧清理器同源的哈希锚定正则 `^(bundle|feature)-[0-9a-f]{8}\.js$`(源文件 `feature-loader.js` 不误伤),形状针四断言钉住。

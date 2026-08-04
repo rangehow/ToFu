@@ -1,3 +1,10 @@
+### 2026-08-04(travel 续刀:vertical auto 路径富 items 直通前端紫卡——owner 复核擒获的集成缺口;孤儿测试文件收编) — owner 复验指令;commit `2619e3ef`(3 文件 +219/−9);环 **39+42=81 绿**
+
+- **缺口(owner 擒获):** auto-detect 是用户命中 travel 的默认路径,而 `resolve_vertical` auto 分支返回 type-level 记录(有 items 无 sources)——`_vertical_to_sse_payload` 的直通条件是「items AND sources 同在」,type-level 落 legacy 分支被压成 content 首行合成的一行,航班 10 条可预订条目在前端紫卡全丢(LLM 文本不受影响)。explicit `vertical='travel'` 域路径无此病。
+- **修法(根修):** legacy 分支优先直通记录自带 items(逐条 setdefault type/source,对齐 `registry._structured_items_from_record` 语义,复制不别名),无 items 才回退首行合成;新套件 `test_vertical_sse_payload.py` 5 针(直通/默认值/回退/域路径/空记录)。顺带按 0.8.0 新语义重写 `test_search_tool_schema.py` 两枚前提失效测试(免 key 全量→无警告;逐调用重建改由 FlyAI 锁存驱动),并重钉部分可用缺口警告机制(monkeypatch 单类型下线)。
+- **事故自记(孤儿收编):** `test_search_tool_schema.py` 此前**零 git 历史**(7/31 travel 建造者留下的未跟踪 WIP,钉的是旧部分可用语义)——我 apply_diff 改写后随批提交,`git show --stat` 显示 create mode 才察觉。判:内容是现行正确语义且套件绿,收编优于留雷(孤儿钉旧语义=未来预存红);教训重申:提交前 `git status --porcelain`(不滤 ??)核对 create/modify 清单。工作树 JOURNAL.md 一度显示 M 但 diff 为空(racily clean),`git status` 刷新后净。
+- **上线面:** chatui 本批(_display.py)+ tofu-search 0.8.0 同骑既有重启队列;`test_release_chain_tofu_search` 的 0.5.3 floor 钉行与本机 0.6.0 metadata 漂移是另一枚预存红(板上已有票),与本批无关。
+
 ### 2026-08-04(预存红×2 闭环:_adoptTailGrowthFromServer 抽取撞 drift 两套件——方向对齐 d3f9078e;顺手擒获 census 族第三红另票) — 脑派发接我自票 `pt_ef4ae7206b674e67` **DONE**;commit `c79e4f76`(2 文件 +23/−7,纯测试侧零产品代码);两套件 **9/9** + cross_tab 消费面环 35 绿
 
 - **① merge_active_task NEUTER 锚点漂移:** 锚点钉的是抽取前内联形状(6 空格缩进、在 `_verifyActiveConvFromServer` Case 2 里);d3f9078e 把尾部采用抽成 `_adoptTailGrowthFromServer`(legacy Case 2 与 windowed 锚点对共享),调用本体缩进变 2 空格。重锚到函数内新形状,docstring 记「neuter 跟随 helper 而非调用点」。

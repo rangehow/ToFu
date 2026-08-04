@@ -2349,7 +2349,13 @@ var _loadBearingCaps = [
   { fn: 't', label: 'translations (i18n.js)' },
   { fn: 'apiUrl', label: 'core runtime (core.js)' },
   { fn: 'pushSubscribe', label: 'live updates & notifications (push.js)' },
-  { fn: 'loadConversation', label: 'app boot (main.js)' }
+  { fn: 'loadConversation', label: 'app boot (main.js)' },
+  /* 2026-08-04 incident: chat_render.js failed to parse, yet every guard
+     passed — scripts "loaded", main.js booted, all four caps present — and
+     the user got a SILENT cripple: sidebar painted, clicks threw
+     "renderMessage is not defined". Message rendering is as load-bearing as
+     the four above; its absence must raise the banner, not dead clicks. */
+  { fn: 'renderMessage', label: 'message rendering (chat_render.js)' }
 ];
 var _capabilityChecks = 0;
 function _capabilityCheck() {

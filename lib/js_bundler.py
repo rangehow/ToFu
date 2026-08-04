@@ -275,6 +275,40 @@ def _node_syntax_ok(bundle_path):
     return False, detail
 
 
+def _find_syntax_broken_sources(names):
+    """Per-file ``node --check`` over the given bundle-relative source files.
+
+    This is the ATTRIBUTION pass for a failure class ``_scan_source_corruption``
+    structurally cannot see: a file that is scanner-clean (no conflict markers,
+    no NUL bytes) yet does not parse — the 2026-08-04 sidebar incident, where an
+    interrupted agent edit left a duplicated ``function renderMessage(`` line in
+    chat_render.js (brace imbalance → EOF mid-construct). It runs ONLY after the
+    whole-bundle gate failed, so healthy builds pay nothing for it.
+
+    Best-effort, mirroring ``_node_syntax_ok``: no node → ``[]`` (the gate that
+    would have triggered this pass is equally vacuous then). Returns the ordered
+    list of names that fail to parse; ``[]`` means the failure is a cross-file
+    gluing bug, not attributable to any single source.
+    """
+    node = shutil.which('node')
+    if not node:
+        return []
+    broken = []
+    for name in names:
+        path = os.path.join(JS_DIR, name)
+        try:
+            proc = subprocess.run(
+                [node, '--check', path],
+                capture_output=True, text=True, timeout=30,
+            )
+        except Exception as e:
+            logger.debug('[Bundle] node --check unavailable for %s: %s', name, e)
+            continue
+        if proc.returncode != 0:
+            broken.append(name)
+    return broken
+
+
 def _resolve_esbuild():
     """Locate an ``esbuild`` binary, preferring the project's local install.
 
@@ -1459,9 +1493,14 @@ def _assemble_bundle(files, prefix, critical):
     Returns:
         ``(filename, total_minified_bytes)`` on success, or ``(None, 0)`` on
         failure / empty. A syntactically-broken result is deleted + None so a
-        broken bundle is never served.
+        broken bundle is never served — with ONE refinement: when the
+        whole-bundle gate fails, ``_find_syntax_broken_sources`` attributes
+        the breakage per-file and the bundle is re-assembled WITHOUT the
+        broken NON-critical sources (degrade to "module absent", the same
+        contract as the corruption scan). None is returned only when a
+        CRITICAL file is broken or the re-assembled bundle still fails.
     """
-    parts = []
+    chunks = []
     total_size = 0
     missing = []
     corrupt = []
@@ -1508,15 +1547,15 @@ def _assemble_bundle(files, prefix, critical):
             logger.warning('[Bundle] minify failed for %s, using raw: %s', name, e)
             emit = content
 
-        # Wrap each file in a comment header + newline separator
-        # This helps with debugging stack traces.
-        parts.append(f'// ═══ {name} ═══\n')
-        parts.append(emit)
+        # Wrap each file in a comment header + newline separator (helps
+        # debugging stack traces). Kept as (name, chunk) pairs — NOT a flat
+        # string list — so the syntax-bisect retry below can re-assemble the
+        # bundle WITHOUT the broken file(s) at file granularity.
         # Boundary guard: a leading newline ensures a trailing line-comment
         # in `content` can't swallow the next file's header, and the `;`
         # terminates any statement whose file forgot a trailing semicolon so
         # adjacent files can never glue into one broken expression.
-        parts.append('\n;\n')
+        chunks.append((name, f'// ═══ {name} ═══\n' + emit + '\n;\n'))
         total_size += len(emit)
         included += 1
 
@@ -1541,90 +1580,130 @@ def _assemble_bundle(files, prefix, critical):
             logger.info('[Bundle] Deferred bundle is empty — nothing to defer')
         return None, 0
 
-    bundle_content = ''.join(parts)
+    # ── Publish loop: at most ONE syntax-bisect retry ──
+    # Round 1 assembles every scanner-clean file. If the whole-bundle node gate
+    # STILL fails, the breakage is a class _scan_source_corruption cannot see —
+    # e.g. a brace-unbalanced file left by an interrupted agent edit (2026-08-04:
+    # a duplicated `function renderMessage(` line in chat_render.js killed every
+    # user's conversation-opening because the whole-bundle refusal pushed ALL
+    # traffic onto the dev-fallback, where the same broken file was served raw).
+    # The bisect (node --check per source) attributes the failure to its file(s);
+    # round 2 re-assembles WITHOUT them so one broken module degrades to "module
+    # absent" — the same contract the corruption scanner already keeps for
+    # conflict markers / NUL bytes. A broken CRITICAL file stays fatal (the
+    # dev-fallback's load guard surfaces it); a gate that still fails after
+    # exclusion means a cross-file gluing bug and also refuses.
+    for _attempt in (1, 2):
+        bundle_content = ''.join(chunk for _, chunk in chunks)
 
-    # Optional stronger minification via esbuild (mangle locals + shrink syntax)
-    # when a node toolchain is present. Fail-open: absent/broken → keep the
-    # dependency-free _minify_js output. Hashing the RESULT below means the
-    # content-hash (cache-buster) always reflects the bytes actually served.
-    enhanced = _esbuild_minify(bundle_content)
-    if enhanced is not None:
-        bundle_content = enhanced
+        # Optional stronger minification via esbuild (mangle locals + shrink
+        # syntax) when a node toolchain is present. Fail-open: absent/broken →
+        # keep the dependency-free _minify_js output. Hashing the RESULT below
+        # means the content-hash (cache-buster) always reflects the bytes
+        # actually served.
+        enhanced = _esbuild_minify(bundle_content)
+        if enhanced is not None:
+            bundle_content = enhanced
 
-    content_hash = hashlib.sha256(bundle_content.encode('utf-8')).hexdigest()[:8]
-    filename = f'{prefix}{content_hash}.js'
-    bundle_path = os.path.join(JS_DIR, filename)
+        content_hash = hashlib.sha256(bundle_content.encode('utf-8')).hexdigest()[:8]
+        filename = f'{prefix}{content_hash}.js'
+        bundle_path = os.path.join(JS_DIR, filename)
 
-    # Short-circuit: a bundle of THIS content-hash already sits on disk (built
-    # by us earlier or by a concurrent builder that won the flock). The hash is
-    # over the exact bytes served, so an existing file is byte-identical — no
-    # rebuild, no node-gate, no write. This makes concurrent builders converge
-    # on the same artifact instead of racing to (re)create it.
-    if os.path.exists(bundle_path):
-        return filename, total_size
-
-    # Atomic publish: write to a UNIQUE temp file in the SAME dir, gate THAT,
-    # and only os.rename() it into the hash path on success. os.rename within a
-    # dir is atomic, so a reader (node --check on a sibling worker, or a browser
-    # fetch) never observes a partial write, and a failed gate deletes only the
-    # private temp — never a hash path another process may be using. This kills
-    # both the truncated-read SyntaxError and the MODULE_NOT_FOUND deletion race.
-    tmp_fd = None
-    tmp_path = None
-    try:
-        # Suffix MUST be .js: the node --check gate infers the module type from
-        # the extension and hard-errors (ERR_UNKNOWN_FILE_EXTENSION) on .tmp.
-        # The leading dot + random stem keep it private and out of the served
-        # bundle set (_BUILT_BUNDLE_RE only matches bundle-/feature-<hash>.js).
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            prefix=f'.{prefix}{content_hash}.', suffix='.js', dir=JS_DIR)
-        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
-            tmp_fd = None  # fdopen took ownership; don't double-close below
-            f.write(bundle_content)
-    except OSError as e:
-        logger.error('[Bundle] Failed to write temp bundle for %s: %s', filename, e)
-        if tmp_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(tmp_fd)
-        if tmp_path:
-            with contextlib.suppress(OSError):
-                os.remove(tmp_path)
-        return None, 0
-
-    # Final syntax gate on the TEMP file (best-effort — no-op when node is
-    # absent). A broken bundle white-screens (core) / breaks the feature
-    # (deferred) with no recovery, so DON'T publish it: drop the temp + None.
-    ok, detail = _node_syntax_ok(tmp_path)
-    if not ok:
-        logger.critical('[Bundle] Built bundle %s FAILED syntax check — refusing to '
-                        'serve it. Detail: %.500s', filename, detail)
-        with contextlib.suppress(OSError):
-            os.remove(tmp_path)
-        return None, 0
-
-    # Another builder may have published the identical hash between our
-    # existence check and now (they'd have written byte-identical content).
-    # If so, adopt theirs and drop our temp — never rename over a file a peer
-    # may already be serving.
-    if os.path.exists(bundle_path):
-        with contextlib.suppress(OSError):
-            os.remove(tmp_path)
-        return filename, total_size
-
-    try:
-        os.rename(tmp_path, bundle_path)
-    except OSError as e:
-        # Lost the publish race (peer renamed first) → their file is identical.
+        # Short-circuit: a bundle of THIS content-hash already sits on disk
+        # (built by us earlier or by a concurrent builder that won the flock).
+        # The hash is over the exact bytes served, so an existing file is
+        # byte-identical — no rebuild, no node-gate, no write. This makes
+        # concurrent builders converge on the same artifact instead of racing
+        # to (re)create it.
         if os.path.exists(bundle_path):
-            with contextlib.suppress(OSError):
-                os.remove(tmp_path)
             return filename, total_size
-        logger.error('[Bundle] Failed to publish bundle %s: %s', filename, e)
+
+        # Atomic publish: write to a UNIQUE temp file in the SAME dir, gate
+        # THAT, and only os.rename() it into the hash path on success.
+        # os.rename within a dir is atomic, so a reader (node --check on a
+        # sibling worker, or a browser fetch) never observes a partial write,
+        # and a failed gate deletes only the private temp — never a hash path
+        # another process may be using. This kills both the truncated-read
+        # SyntaxError and the MODULE_NOT_FOUND deletion race.
+        tmp_fd = None
+        tmp_path = None
+        try:
+            # Suffix MUST be .js: the node --check gate infers the module type
+            # from the extension and hard-errors (ERR_UNKNOWN_FILE_EXTENSION)
+            # on .tmp. The leading dot + random stem keep it private and out
+            # of the served bundle set (_BUILT_BUNDLE_RE only matches
+            # bundle-/feature-<hash>.js).
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                prefix=f'.{prefix}{content_hash}.', suffix='.js', dir=JS_DIR)
+            with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:
+                tmp_fd = None  # fdopen took ownership; don't double-close below
+                f.write(bundle_content)
+        except OSError as e:
+            logger.error('[Bundle] Failed to write temp bundle for %s: %s', filename, e)
+            if tmp_fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(tmp_fd)
+            if tmp_path:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+            return None, 0
+
+        # Final syntax gate on the TEMP file (best-effort — no-op when node is
+        # absent). A broken bundle white-screens (core) / breaks the feature
+        # (deferred) with no recovery, so DON'T publish it: drop the temp.
+        ok, detail = _node_syntax_ok(tmp_path)
+        if ok:
+            # Another builder may have published the identical hash between our
+            # existence check and now (byte-identical content). If so, adopt
+            # theirs and drop our temp — never rename over a file a peer may
+            # already be serving.
+            if os.path.exists(bundle_path):
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+                return filename, total_size
+            try:
+                os.rename(tmp_path, bundle_path)
+            except OSError as e:
+                # Lost the publish race (peer renamed first) → identical.
+                if os.path.exists(bundle_path):
+                    with contextlib.suppress(OSError):
+                        os.remove(tmp_path)
+                    return filename, total_size
+                logger.error('[Bundle] Failed to publish bundle %s: %s', filename, e)
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+                return None, 0
+            return filename, total_size
+
+        # ── Gate FAILED — the concatenation does not parse. ──
         with contextlib.suppress(OSError):
             os.remove(tmp_path)
-        return None, 0
+        logger.critical('[Bundle] Built bundle %s FAILED syntax check. Detail: %.500s',
+                        filename, detail)
+        if _attempt == 2:
+            logger.critical('[Bundle] %s still fails after excluding the broken '
+                            'source(s) — a cross-file gluing bug, not a bad module; '
+                            'refusing to serve it', filename)
+            return None, 0
+        broken = _find_syntax_broken_sources([name for name, _ in chunks])
+        if not broken:
+            logger.critical('[Bundle] %s fails as a bundle but every source parses '
+                            'individually — a cross-file gluing bug; refusing to '
+                            'serve it', filename)
+            return None, 0
+        crit_bad = [b for b in broken if critical and b in _CRITICAL_FILES]
+        if crit_bad:
+            logger.critical('[Bundle] CRITICAL source file(s) %s are syntactically '
+                            'broken — refusing to ship a crippled bundle; falling '
+                            'back to individual <script> tags', crit_bad)
+            return None, 0
+        logger.critical('[Bundle] Excluding %d syntactically-broken source file(s) '
+                        'from %s and rebuilding WITHOUT them: %s — those modules '
+                        'will be absent, the rest of the app stays bundled',
+                        len(broken), prefix.rstrip('-'), ', '.join(broken))
+        chunks = [(n, c) for n, c in chunks if n not in set(broken)]
 
-    return filename, total_size
+    return None, 0  # unreachable: every attempt path above returns explicitly
 
 
 # Cross-process build lock. Serializes concurrent `build_bundle()` calls (many

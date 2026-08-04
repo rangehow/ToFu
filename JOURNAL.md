@@ -1,3 +1,9 @@
+### 2026-08-04(预存红×2 闭环:_adoptTailGrowthFromServer 抽取撞 drift 两套件——方向对齐 d3f9078e;顺手擒获 census 族第三红另票) — 脑派发接我自票 `pt_ef4ae7206b674e67` **DONE**;commit `c79e4f76`(2 文件 +23/−7,纯测试侧零产品代码);两套件 **9/9** + cross_tab 消费面环 35 绿
+
+- **① merge_active_task NEUTER 锚点漂移:** 锚点钉的是抽取前内联形状(6 空格缩进、在 `_verifyActiveConvFromServer` Case 2 里);d3f9078e 把尾部采用抽成 `_adoptTailGrowthFromServer`(legacy Case 2 与 windowed 锚点对共享),调用本体缩进变 2 空格。重锚到函数内新形状,docstring 记「neuter 跟随 helper 而非调用点」。
+- **② poll_open_conv_grow 拼接闭包缺员(隐蔽失败模式):** 独立抽取 `_verifyActiveConvFromServer` 的 harness 只拼了双 reducer;d3f9078e 新增 `_adoptVerifiedServerConv`/`_adoptTailGrowthFromServer` 调用,bare-name ReferenceError 被轮询路的韧性 try/catch **吞成静默 no-adopt**(adoptedGrow=False 而非崩溃)——drift 表面像产品回归,排查成本高。补齐拼接闭包 + 注释记此失败模式(`convWindowParam` 有 typeof 守卫,场景走 legacy 全量路,`_verifyAdoptWindowedTail` 永不求值故无需拼)。
+- **顺手擒获(异族第三红,另票 `pt_759f78bdafa2430a`):** 扩环普查 cross_tab 全部 8 套件时 `test_chat_active_consumer_census` 两枚红——①前端普查把 `feature-*.js` **构建产物**(js_bundler 哈希命名)当未申报 `Api.chat.active()` 消费者,跳过表只有 `bundle-` 前缀(Epic E 命名漂移;本机有产物恒红、干净 checkout 绿);②后端普查 os.walk lib/+routes/ 在 FUSE 上逼近 300s pytest-timeout 偶发超时。与本票无关,按惯例另案。
+- **验证:** 两修套件 9/9;cross_tab 消费面(deferrable/p6_verdict/boot_load_lease/conn_transient/apply_settings_extracted)35 绿无连带。
 ### 2026-08-04(travel vertical 复活:tofu-search 0.8.0 provider 链——RollingGo(带key) → FlyAI(飞猪内置试用凭证,免配置);酒店类型史上首次免 key 可用) — owner 指令「方案 A 绕过不接受,目标是 tofu-search 自己拥有这个 vertical」;tofu-search commit `23e648b`(11 文件 +919/−85);环 **536 绿**(2 枚 mcp-extra 收集错误=mcp 2.0 删 fastmcp 的环境预存,无关本批);**无 key 实测 flight/hotel 端到端双通**
 
 - **起因复盘:** owner 问「当年想让 tofu-search 查机票酒店(类 RollingGo MCP、免 API 配置),现在是不是没成」。核查:travel vertical 早已建成(7/31 `a6dadf2`),但 ①RollingGo 航班端点 8/4 起对匿名调用稳定 401(error.log 实证),匿名时代终结;②酒店端点从来要 key;③进程内「需凭证」锁存翻转后 travel 域从 web_search 枚举自动摘除(诚实广告设计按预期工作)。结论:不是没建成,是上游关门+自我隐藏。

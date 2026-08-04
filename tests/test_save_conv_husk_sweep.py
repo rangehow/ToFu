@@ -228,8 +228,9 @@ def test_live_task_placeholder_not_swept():
         try:
             from lib.runtime_state_store import get_store
             get_store().set_value('latest', conv_id, None, 1)
-        except Exception:
-            pass
+        except Exception as _e:
+            # teardown best-effort — visible, never a bare pass
+            print(f'  (runtime-state cleanup best-effort failed: {_e})')
         _cleanup(db, conv_id)
     _ok('★ live-task empty placeholder is NOT swept by the PUT (gate 1)')
 

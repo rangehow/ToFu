@@ -71,8 +71,10 @@ class TestOnOpenNarrationBackfillWiring:
             'reconcile-fail). A merge or refactor likely dropped a call site.')
 
     def test_drainer_symbols_still_exported(self):
-        from lib.translate.segment_backfill import (  # noqa: F401
+        from lib.translate.segment_backfill import (
             backfill_conv_narration_segments, conv_has_backfill_candidates)
+        assert callable(backfill_conv_narration_segments)
+        assert callable(conv_has_backfill_candidates)
 
 
 @pytest.mark.api

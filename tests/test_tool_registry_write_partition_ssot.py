@@ -303,6 +303,12 @@ class TestApprovalMetaCoverage:
         """Enrichers run on model-supplied args — a missing key must not raise
         inside the approval path (that would abort the gate itself)."""
         from lib.tasks_pkg.tool_dispatch._approval import _APPROVAL_META_ENRICHERS
+        completed = []
         for tool in ('browser_execute_js', 'schedule_create',
                      'project_charter_commit'):
             _APPROVAL_META_ENRICHERS[tool]({}, {})
+            completed.append(tool)
+        # An enricher raising on missing args would abort the loop — the
+        # completion list is the no-exception contract made assertable.
+        assert completed == ['browser_execute_js', 'schedule_create',
+                             'project_charter_commit']

@@ -124,10 +124,13 @@ def test_enabled_tool_passes_the_disabled_gate():
     )
     try:
         b.call_tool('mcp__srv__keep_tool', {})
-    except ValueError as e:
-        assert 'disabled by user' not in str(e)
-    except Exception:
-        pass  # fake session cannot serve a real call; any other error is OK
+    except Exception as e:
+        # The disabled-gate refusal must NOT fire for an enabled tool — in
+        # ANY exception class. The old ValueError-only check + bare-pass let a
+        # misfire of any other class sail through unobserved. Any other error
+        # (the fake session cannot serve a real call) is fine.
+        assert 'disabled by user' not in str(e), (
+            f'the disabled gate fired on an ENABLED tool: {e}')
 
 
 # ── 3. hot update ─────────────────────────────────────────────────────

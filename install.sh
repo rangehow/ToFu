@@ -1211,13 +1211,20 @@ _CONDA_PKGS_BEFORE_PURGE="$(conda list -n "$ENV_NAME" 2>/dev/null || true)"
 conda remove -n "$ENV_NAME" -y --force "${CONDA_CONFLICT_PKGS[@]}" >/dev/null 2>&1 || true
 ok "Conflict-prone packages cleared (will reinstall below)"
 
+# Snapshot AGAIN after the purge: the gate below must diff BEFORE vs AFTER to
+# tell "the purge removed it" from "it was there all along". Judging only
+# the BEFORE list is backwards — presence-beforehand is the steady state of
+# every healthy env (the packages are purged precisely because the solve
+# installs them), so that gate fired --force-reinstall on EVERY run.
+_CONDA_PKGS_AFTER_PURGE="$(conda list -n "$ENV_NAME" 2>/dev/null || true)"
+
 # Did the purge ACTUALLY remove anything? `conda remove` above is best-effort
 # and silently succeeds on a clean env where none of those packages are
 # present — which is the common re-run case.
 _PURGED_SOMETHING=0
 for _p in "${CONDA_CONFLICT_PKGS[@]}"; do
-    if [[ -n "${_CONDA_PKGS_BEFORE_PURGE:-}" ]] && \
-       grep -qE "^${_p}[[:space:]]" <<< "${_CONDA_PKGS_BEFORE_PURGE}"; then
+    if grep -qE "^${_p}[[:space:]]" <<< "${_CONDA_PKGS_BEFORE_PURGE}" && \
+       ! grep -qE "^${_p}[[:space:]]" <<< "${_CONDA_PKGS_AFTER_PURGE}"; then
         _PURGED_SOMETHING=1
         break
     fi
@@ -1251,6 +1258,11 @@ _install_main_deps() {
 
 if ! _install_main_deps; then
     warn "First solve failed — doing a deeper reset of the conflicting packages and retrying"
+    # The gate above only applies to the happy path. This branch runs ONLY
+    # after the first solve already FAILED — the env is genuinely broken, so
+    # it keeps its unconditional --force-reinstall (narrowing it would trade
+    # a rare slow path for a rare unrepairable one).
+    _FORCE_REINSTALL="--force-reinstall"
     # Deeper reset: also strip libs that often pin icu/libxml2, then retry.
     conda remove -n "$ENV_NAME" -y --force \
         postgresql psycopg2 libpq \

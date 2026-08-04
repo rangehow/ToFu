@@ -124,7 +124,8 @@ class TestOAuth401RefreshRetry:
         assert calls['n'] == 2, 'no same-slot retry when refresh fails'
         # Normal failover bookkeeping applied to the 401 slot:
         assert slot1.consecutive_errors == 1
-        assert ('k1', slot1.model) in disp.__dict__.get('_dummy', set()) or True
+        # (Removed a vacuous `... or True` line — it could never fail; the
+        # failover bookkeeping contract is covered by the two asserts above.)
 
     def test_non_oauth_slot_never_refreshes(self, monkeypatch):
         """Guard: plain API-key slots keep today's behavior — immediate pair

@@ -25,6 +25,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('TRADING_ENABLED', '0')
 
+if __name__ == '__main__':
+    # The engine import below freezes the DB backend from the ambient env —
+    # the standalone guard must run FIRST (under pytest this branch never
+    # fires, so the session DB is untouched).
+    from tests._standalone_guard import guard_standalone_db
+    guard_standalone_db('test_paper_checkpoints.standalone')
+
 import lib.paper.checkpoint_engine as ce  # noqa: E402
 
 

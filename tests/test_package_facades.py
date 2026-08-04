@@ -15,8 +15,11 @@ import pytest
 @pytest.mark.unit
 class TestSearchFacade:
     def test_package_import(self):
-        import tofu_search  # noqa: F401
-        import tofu_search.search  # noqa: F401
+        import tofu_search
+        import tofu_search.search
+        assert tofu_search.__name__ == 'tofu_search'
+        assert callable(getattr(tofu_search, 'perform_web_search', None)), (
+            'facade must export perform_web_search')
 
     def test_public_api(self):
         from tofu_search import perform_web_search

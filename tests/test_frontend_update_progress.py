@@ -268,8 +268,11 @@ def test_update_stepper_progress_rendering():
                 for r in rows:
                     print(f'    {r["frame"]:<28} fetch={r["fetch"]:<9} '
                           f'pull={r["pull"]:<6} deps={r["deps"]}')
-            except Exception:
-                pass
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                # best-effort reporting only — but the skip must be VISIBLE:
+                # a silently-swallowed parse error hides a malformed harness
+                # timeline line (the audit's bare-except:pass finding).
+                print(f'  (timeline print skipped: {e})')
 
     fails = [l for l in output.splitlines() if l.startswith('FAIL')]
     assert not fails, 'update progress-render failures:\n' + output

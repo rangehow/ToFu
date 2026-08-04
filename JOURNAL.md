@@ -1,3 +1,12 @@
+### 2026-08-05(测试基建残留漂移票五子项全闭环:install.sh 门根修/legacy carve-out×2/db_guard×4/suite_health A-A2-B 回落/inbox NC 重锚过滤器链;发布票 human-gated 挂起等凭证) — 脑派发两票:`pt_da91d3e6b3c343f9` **DONE**;`pt_ccab5c8de3fe4254` 阻塞带三选项问题(自推/agent 带凭证推/挂起);commit 见下(17 文件);环 **6+2+60+131+7+4+6 全绿** + ruff/bash -n 干净
+
+- **① install.sh force-reinstall 门(产品真 bug,测试即规格):** 门判 BEFORE 列表=健康环境恒触发(稳态 10/10 全在)——补 `_CONDA_PKGS_AFTER_PURGE` 快照改 **BEFORE∩¬AFTER diff**(健康重跑不再重铺 ~30 包);retry 分支显式 `_FORCE_REINSTALL="--force-reinstall"`(继承空闸=坏环境不可修);6/6 绿 + `bash -n` 过。
+- **② legacy carve-out×2(裁决:登记非迁移):** `/api/desktop/pair`——**已发货 TofuAgent-Setup-0.16.0 内嵌该路径**,迁移=断在役 agent(桥接先例同族);`/api/videos/<filename>`——静态字节伺服(同 /api/images 族);ALLOWED_NON_V1 + docs/legacy_api_migration.md §1 双登记,穷举针双向过。
+- **③ db_guard×4:** 三 paper 套件引擎在模块顶导入(后端冻结早于 main)→ 守卫置于引擎导入前的 `if __name__ == '__main__'` 分支(pytest 下不触发,会话 DB 零影响);liveness 走 unittest 块首行;deepen 裸跑实战验证 6/6。
+- **④ suite_health A/A2/B 全回落(四类=基线):** A+6 修六处断言形态(allow 半契约 None 断言/callable 断言/完成清单断言);B+1 删 `or True` 剧场行;A2+2 两处裸 except 收窄+留痕(TIMELINE 打印/husk teardown);F 早前 `_p` 拆段已回落。**suite_health 4/4 绿。**
+- **⑤ inbox NC 剧场根修(重锚非删除):** 旧 NC 只失效 `is_synthetic_inbox_round`,但 `_is_reconstructable_round` 结构性兜底同形状行→「守卫看似冗余」;探针实证**双谓词链失效→重建器 KeyError 实爆**——NC 重锚到过滤器链(链失效→KeyError/线发散),防御价值保住(松 `_is_reconstructable_round` 即红)。6/6 绿。
+- **发布票(就绪清单全备,只缺凭证):** ①drift=3 文件×2 仓,export 转换链恒等钉绿=本地即所发;②tofu-search 0.8.0(pyproject)在 HEAD 23e648b,主体套件 rc=0(仅 mcp 两模块缺 mcp 依赖),PyPI 现最新 0.5.3,地板 >=0.7.3 勿降;本机无 gh/git-credentials/.pypirc/GitHub SSH——阻塞带三选项问题挂板等 owner。
+
 ### 2026-08-05(测试环境就绪验收 + 157 红三态分诊全链闭环:make 车道根修 + 真 bug×7 + 方向对齐 60+ + 兄弟违规挂票×3 + 孤儿规格套件复活并落地横幅特性) — owner 指令「先备环境再开跑,挂了的先分测试错还是真 bug」;commits `8dbcff5d`(环境+api 对齐)/`7dec14b3`(真 bug×4)/`62136505`(边界+守卫)/`248811f0`(横幅特性)/`c1a3ff67`(46 套件对齐)/`37acf110`(artifacts 幂等);终验 **845 绿/31 红**(22 挂票+2 flake+7 当时未修后已修)
 
 - **环境层(两枚真实缺口,均根修):** ①`make test-unit` 裸跑启动即崩——不是 napari 一颗雷,是**两颗**:pytest-timeout 入口点(name=timeout)与 pyproject addopts `-p pytest_timeout`(模块名)重注册 ValueError;`PYTEST_BASE` 补 `-p no:timeout`(屏蔽入口点,addopts 显式加载成唯一注册),A/B 实证 `-p no:napari` 单屏蔽必崩、双屏蔽 36 枚干净收集;②ffmpeg 缺席判为 ENV 注记(motion_video 红与 ffmpeg 无关,实证)。node v24/jsdom/tsc/playwright chromium 探测全绿;e2e 主干道 12/12 复验。

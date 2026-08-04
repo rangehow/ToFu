@@ -54,8 +54,10 @@ class AbsPathGuardTest(unittest.TestCase):
     def test_restricted_allows_within_root(self):
         tok = g.set_restricted(True)
         try:
-            g.enforce_abs_read(self._inside)
-            g.enforce_abs_write(self._inside)
+            # The allow half of the allow/deny contract: inside-root calls are
+            # silent no-ops (return None, raise nothing).
+            assert g.enforce_abs_read(self._inside) is None
+            assert g.enforce_abs_write(self._inside) is None
         finally:
             g.reset_restricted(tok)
 

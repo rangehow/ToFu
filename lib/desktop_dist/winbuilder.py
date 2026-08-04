@@ -704,9 +704,9 @@ _NSI_TARGETS = {
 }
 
 _NSI_PLACEHOLDERS = ('@APP_VERSION@', '@PAYLOAD_DIR@', '@OUT_FILE@',
-                     '@ASSET_DIR@', '@APP_NAME@', '@APP_EXE@',
-                     '@INSTALL_DIR_NAME@', '@COMPONENTS_PAGE@',
-                     '@INSTALL_REQUIRED@', '@AUTOSTART_SECTION@',
+                     '@ASSET_DIR@', '@ART_DIR@', '@APP_NAME@', '@APP_EXE@',
+                     '@INSTALL_DIR_NAME@', '@AUTOSTART_DECL@',
+                     '@AUTOSTART_PAGE@', '@AUTOSTART_INSTALL@',
                      '@AUTOSTART_UNINSTALL@')
 
 
@@ -738,42 +738,56 @@ def _ensure_makensis(log_fh) -> str:
 
 
 def _render_nsi(version: str, payload_dir: str, out_file: str,
-                target: str = 'full') -> str:
+                target: str = 'full', art_dir: str = '') -> str:
     """Render the NSIS template; every placeholder MUST be substituted."""
     t = _NSI_TARGETS[target]
     with open(_NSI_TEMPLATE, encoding='utf-8') as f:
         text = f.read()
     if t['autostart_value']:
-        # A default-ON optional section (no /o prefix): an unattended
-        # relay machine must come back after a reboot. HKCU ⇒ UAC-free,
-        # matching the per-user install. The quoted-exe data form is the
-        # same one agent_launcher._autostart_apply writes.
-        components_page = '!insertmacro MUI_PAGE_COMPONENTS'
-        install_required = '  SectionIn RO'
-        autostart_section = (
-            'Section "Start with Windows"\n'
-            '  WriteRegStr HKCU '
-            '"Software\\Microsoft\\Windows\\CurrentVersion\\Run" '
+        # Start-with-Windows (owner amendment ① — an unattended relay
+        # must survive reboots): a default-CHECKED checkbox on the
+        # directory page. HKCU ⇒ UAC-free, matching the per-user
+        # install. The Run VALUE NAME must equal
+        # desktop/agent_launcher.py's _RUN_VALUE (the tray toggle and
+        # the installer write the same key — parity-pinned). Silent
+        # installs keep the old default-ON section's contract: the
+        # checkbox never exists then, and an empty handle means ON.
+        run_key = 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+        autostart_decl = 'Var ChkAutoStart'
+        autostart_page = (
+            '  ${NSD_CreateCheckBox} 20u 113u 226u 10u '
+            '"$(TOFU_CHK_AUTOSTART)"\n'
+            '  Pop $ChkAutoStart\n'
+            '  SendMessage $ChkAutoStart ${WM_SETFONT} $FontBody 1\n'
+            '  ${NSD_Check} $ChkAutoStart')
+        autostart_install = (
+            '  ${If} $ChkAutoStart == ""\n'
+            '    StrCpy $0 ${BST_CHECKED}\n'
+            '  ${Else}\n'
+            '    ${NSD_GetState} $ChkAutoStart $0\n'
+            '  ${EndIf}\n'
+            '  ${If} $0 == ${BST_CHECKED}\n'
+            f'    WriteRegStr HKCU "{run_key}" '
             f'"{t["autostart_value"]}" \'"$INSTDIR\\${{APP_EXE}}"\'\n'
-            'SectionEnd')
+            '  ${EndIf}')
         autostart_uninstall = (
-            '  DeleteRegValue HKCU '
-            '"Software\\Microsoft\\Windows\\CurrentVersion\\Run" '
+            f'  DeleteRegValue HKCU "{run_key}" '
             f'"{t["autostart_value"]}"')
     else:
-        components_page = install_required = ''
-        autostart_section = autostart_uninstall = ''
+        autostart_decl = autostart_page = autostart_install = ''
+        autostart_uninstall = ''
     asset_dir = os.path.join(_REPO_ROOT, 'static', 'icons')
     text = (text.replace('@APP_VERSION@', version)
                 .replace('@PAYLOAD_DIR@', payload_dir)
                 .replace('@OUT_FILE@', out_file)
                 .replace('@ASSET_DIR@', asset_dir)
+                .replace('@ART_DIR@', art_dir)
                 .replace('@APP_NAME@', t['app_name'])
                 .replace('@APP_EXE@', t['app_exe'])
                 .replace('@INSTALL_DIR_NAME@', t['install_dir'])
-                .replace('@COMPONENTS_PAGE@', components_page)
-                .replace('@INSTALL_REQUIRED@', install_required)
-                .replace('@AUTOSTART_SECTION@', autostart_section)
+                .replace('@AUTOSTART_DECL@', autostart_decl)
+                .replace('@AUTOSTART_PAGE@', autostart_page)
+                .replace('@AUTOSTART_INSTALL@', autostart_install)
                 .replace('@AUTOSTART_UNINSTALL@', autostart_uninstall))
     missing = [p for p in _NSI_PLACEHOLDERS if p in text]
     if missing:
@@ -843,9 +857,17 @@ def wrap_payload(payload_tar: str, version: str, sha: str, log_fh, *,
     server_url = _agent_safe_preseed_url(server_url, target)
     _write_preseed(payload_dir, server_url)
 
+    # The custom wizard's page art is rendered at wrap time (carries the
+    # target's name + version; see installer_art.py for why baked bitmaps).
+    from . import installer_art
+    art_dir = os.path.join(workdir, 'art')
+    installer_art.render(art_dir, nt['app_name'], version,
+                         autostart=bool(nt['autostart_value']))
+
     name = f'{nt["setup_prefix"]}-{version}-win64.exe'
     out_file = os.path.join(workdir, name)
-    nsi = _render_nsi(version, payload_dir, out_file, target)
+    nsi = _render_nsi(version, payload_dir, out_file, target,
+                      art_dir=art_dir)
     script = os.path.join(workdir, 'installer.nsi')
     with open(script, 'w', encoding='utf-8') as f:
         f.write(nsi)

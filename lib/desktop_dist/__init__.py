@@ -34,6 +34,11 @@ This package makes the SERVER the download origin:
               traps (wine swallows exit codes → sentinel protocol; host
               python env is poison → scrubbed allowlist) are pinned by
               tests/test_winbuilder.py.
+  installer_art — wrap-time renderer of the custom NSIS wizard's page
+              bitmaps (the 2026-08-04 modern redesign): full-page art
+              carrying the target's name + version, cards at exact
+              COLOR_3DFACE for the no-control-coloring nsDialogs
+              constraint. Pinned by tests/test_installer_art.py.
 
 The request path performs ZERO network: it reads the store. All network
 happens in the mirror's single-flight background thread.

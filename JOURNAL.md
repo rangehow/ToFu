@@ -1,3 +1,13 @@
+### 2026-08-04(安装向导现代化:经典 MUI2 灰向导退役——自绘 nsDialogs 扁平向导(整页烘焙位图+真标签坐 3DFACE 卡片) + /SOLID lzma;受控端 53.2→45.2MB、桌面端 ~153→120MB) — owner 指令「受控端和桌面端安装风格像 2000s,速度也要优化」;epic `pt_0a8543c795e34698` **DONE**;commit 见下(8 文件);新套件×2 + 重写 parity=**31 针全绿**;NEUTER 精确;环 **58+31 绿**;collect-only **15633 零错**
+
+- **风格根修(架构决策,实测驱动):** 2000s 观感本体=经典 MUI2 向导(灰侧栏+MS Shell Dlg 8+逐文件日志面板)。conda nsDialogs **无控件着色能力**(无 SetCtlColors 插件/无 WM_CTLCOLOR 回调,strings 实证),32 位应用在本机 wine 必挂(SIGSYS 实测 probe.exe core dump)——运行时验证不可行,故选**零运行时机关**方案:每页=一张 wrap 期烘焙的整页位图(PIL,`lib/desktop_dist/installer_art.py`,承载产品名+版本,文字仅品牌短词)+ 真 LangString 标签坐在位图里 #F0F0F0(=COLOR_3DFACE 精确值)的卡片上,du 坐标两侧同源——DPI/CJK 对话框字制度量差异下位图拉伸与控件摆放**同比例**,永不错位(CJK 拉伸陷阱的结构性免疫)。标签字体 Segoe UI/雅黑按 $LANGUAGE 切换+DPI MulDiv;ManifestDPIAware。
+- **速度两果(全部实测):** ①`SetCompressor /SOLID lzma` dict32——受控端 53.17→**45.17MB**(−15%)、桌面端 ~153→**120.1MB**(−21%),solid 单流解压安装也快;构建 8s→29s/119s(构建侧代价);②3316 文件逐条刷日志面板废除→marquee 进度条+状态短句。
+- **顺手补两枚契约缺口:** ARP 注册表(Inno 白送、NSIS 旧模板从没写过——「应用和功能」里查无 Tofu)+ 运行中守卫第三插入点(DirPageLeave,用户改指到另一个在跑安装)。**/S 静默安装/卸载保住**(安装体抽 DoInstall,页面跳过时可直调);agent 自启契约平移:目录页默认勾选项(UI)+ silent 空句柄=ON(旧默认 ON section 语义),值名与托盘共享 parity 钉。
+- **事故自记×2:** ①IntOp 单运算语义(`* 13 / 72` 编译炸)——makensis 编译闸当场擒获;②「无 Section 不给编译」——隐藏桩区段 `Section -hidden`/`-un.hidden`(warning 8000 即设计本身)。
+- **测试账:** parity 重写 22 针(语义契约演进:MUI_FINISHPAGE_RUN→finish 页勾选+Exec;组件页→默认勾选+silent ON;美术契约改「Inno 经典位图 vs NSIS wrap 期整页图」)+ art/几何套件 7 针(**卡片-控件包含棘轮**:模板 du 矩形必须落在卡片内,NEUTER 移出即红)+ makensis 编译闸 2 针(双 target 真美术真渲染真编译,无 makensis 则 skip);collect-only 15633 零错。
+- **验证边界(诚实账):** 像素级真机首验挂在 owner 验收链(pt_59b62951aad2463e 同闸)——本机 wine 32 位必挂,已尽编译闸+美术像素断言+PIL 布局仿真(四页合成预览)三层;商店工件**未动**(owner 面板点重建即吃新模板,payload 缓存使命中时 wrap ~30s)。CI Inno 侧保持经典向导=**有意的工具分叉**,parity 文档化。
+
+### 2026-08-04(测试体系战略落地 P0-1+P0-2
 ### 2026-08-04(测试体系战略落地 P0-1+P0-2:skip 响亮哨兵 + jsdom 结构化断言地板——owner 拍板 docs/TESTING_STRATEGY.md;TOFU_REQUIRE_FRONTEND 三缝接线;expect_pass 棘轮基线 78 只降不升) — epic `pt_2f2c847ff8524e5e`;owner 复核拍板并两处修正;commit 见下(13 文件);新套件×2 **33 针**;哨兵 e2e 双路实证;回归抽样 **56 绿** + collect-only **15616 零错**
 
 - **owner 两处修正(已纳入设计稿):** ①CI 已有 node 专用车道(ci.yml setup-node 注释早已自知静默 skip)——P0-1 从「CI 装 node」改为「skip 必须响亮」哨兵制;②审计挖出却漏计划的洞——run_harness 默认 min_pass=1 且 `output.count('PASS')` 子串计数(BYPASS/PASSword 都算 PASS),102 文件只 60 个显式申报,断言地板是虚的——列入 P0-2 结构化改造。

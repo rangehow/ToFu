@@ -82,9 +82,17 @@ Chinese by OS locale (`TOFU_THEME` / `TOFU_LANG` override), and — critically �
 overall progress bar**. (The original flow closed the window and downloaded
 ~165 MB invisibly on a background thread; failures were only written to a log
 file.) Success and failure messages are shown in the window, and the same
-manager is reachable later from the tray menu. The Windows Inno wizard and the
-macOS DMG window are branded as well (`scripts/gen_desktop_icons.py` emits the
-wizard bitmaps and the DMG window art alongside the icons).
+manager is reachable later from the tray menu. The Windows wizard itself
+(2026-08-04 redesign, `desktop/installer.nsi.tmpl`) is a fully custom
+nsDialogs wizard — flat brand-purple band with the tofu cube and version,
+one #F0F0F0 card per step, Segoe UI / Microsoft YaHei labels, a marquee
+progress bar (no 3316-line log pane), `/SOLID lzma` (agent 53→45 MB, full
+~153→120 MB), DPI-aware chrome, bilingual en/zh, `/S` silent installs, and
+Add/Remove-Programs registration. Its page art is rendered at wrap time by
+`lib/desktop_dist/installer_art.py`; the CI's Inno authoring keeps the
+classic wizard with the branded sidebar bitmap, and the macOS DMG window
+is branded as well (`scripts/gen_desktop_icons.py` emits the wizard
+bitmaps and the DMG window art alongside the icons).
 
 | Component | Size | Default | Purpose |
 |---|---|---|---|

@@ -14,10 +14,22 @@ are also TWO COMPONENTS (full app / agent, docs/DESKTOP_AGENT_DIST_DESIGN
 pretending there is one file — it is pinning the SEMANTIC CONTRACT they
 must all honour, asserted on the RENDERED scripts (winbuilder._render_nsi),
 not on the raw template: app name, install dir, privilege level, the two
-shortcuts, launch-after-install, output naming, wizard assets, payload
-shape, and — for the agent — the boot-autostart contract (owner
-amendment ①: default-ON, HKCU, removed at uninstall, value name shared
-with the tray toggle).
+shortcuts, launch-after-install, output naming, wizard branding, payload
+shape, Add/Remove-Programs registration, and — for the agent — the boot-
+autostart contract (owner amendment ①: default-ON, HKCU, removed at
+uninstall, value name shared with the tray toggle).
+
+2026-08-04 MODERNIZATION (owner: "the installer looks 2000s")
+-------------------------------------------------------------
+The NSIS side dropped MUI2 for a fully custom nsDialogs wizard (baked
+page art + LangString labels on #F0F0F0 cards, marquee progress, /SOLID
+lzma, ManifestDPIAware). The Inno side keeps the classic wizard — the CI
+heredoc cannot be runtime-tested from this box, so the VISUAL divergence
+is deliberate and documented here: the shared contract is SEMANTIC
+(branding present, same install result), not pixel identity. The
+ratchets for the new authoring live at the bottom of this file; the
+makensis compile gate is tests/test_installer_nsi_compile.py; the
+art↔template geometry contract is tests/test_installer_art.py.
 
 Run:  pytest tests/test_installer_parity.py -q
 """
@@ -40,8 +52,10 @@ _NSI = (_ROOT / 'desktop' / 'installer.nsi.tmpl') \
 
 # The rendered scripts are the contract surface — placeholders are the
 # mechanism, the rendering is what makensis compiles.
-_FULL = wb._render_nsi('0.16.0', '/payload', '/out.exe', 'full')
-_AGENT = wb._render_nsi('0.16.0', '/payload', '/out.exe', 'agent')
+_FULL = wb._render_nsi('0.16.0', '/payload', '/out.exe', 'full',
+                       art_dir='/art')
+_AGENT = wb._render_nsi('0.16.0', '/payload', '/out.exe', 'agent',
+                        art_dir='/art')
 
 
 def _expand(script: str, target: str) -> str:
@@ -55,7 +69,7 @@ def _expand(script: str, target: str) -> str:
 
 def _code(script: str) -> str:
     """Drop NSIS comment lines — the template's own documentation names
-    the autostart machinery, and absence assertions must target CODE."""
+    the machinery, and absence assertions must target CODE."""
     return '\n'.join(l for l in script.splitlines()
                      if not l.lstrip().startswith(';'))
 
@@ -90,11 +104,15 @@ def test_shortcuts_and_launch_after_install_agree():
     # Desktop shortcut
     assert r'{autodesktop}\\Tofu' in _WORKFLOW
     assert r'$DESKTOP\Tofu.lnk' in _expand(_FULL, 'full')
-    # Launch after install
+    # Launch after install: Inno Flags + the custom wizard's finish-page
+    # checkbox (default checked) whose leave handler Execs the app — the
+    # semantic equivalent of the old MUI_FINISHPAGE_RUN define.
     assert 'Flags: nowait postinstall' in _WORKFLOW
-    assert 'MUI_FINISHPAGE_RUN' in _FULL
-    # Uninstall path exists in both (Inno generates one; NSIS needs a section)
-    assert 'WriteUninstaller' in _FULL and 'Section "Uninstall"' in _FULL
+    assert '${NSD_Check} $ChkLaunch' in _FULL
+    assert "Exec '\"$INSTDIR\\${APP_EXE}\"'" in _FULL
+    # Uninstall path exists in both (Inno generates one; NSIS writes one)
+    assert 'WriteUninstaller' in _FULL
+    assert 'Function un.DoUninstall' in _FULL
 
 
 def test_output_name_pattern_agrees():
@@ -110,25 +128,31 @@ def test_output_name_pattern_agrees():
         'apart by design')
 
 
-def test_wizard_assets_are_the_same_files():
-    """One icon set, two renderers — a rebrand must land in both."""
+def test_wizard_branding_on_both_sides():
+    """One brand, two renderers — a rebrand must land in both. Inno keeps
+    the classic sidebar bitmap; the custom NSIS wizard renders full-page
+    art at wrap time (lib/desktop_dist/installer_art.py)."""
+    # ── Inno side (CI): unchanged classic assets ──
     for asset in (r'static\\icons\\tofu.ico',
                   r'static\\icons\\installer\\wizard-large.bmp'):
         assert asset in _WORKFLOW, f'{asset} missing from the Inno authoring'
-    # The .nsi template is compiled by the NATIVE linux makensis: POSIX
-    # separators are the only correct form there (a backslash is not a
-    # path separator on linux — the glob would match nothing and ship an
-    # EMPTY installer; the posix form is proven by the real server build
-    # of 2026-08-01, 152 MB / 3316 files). Match by filename, not style.
-    for asset in ('tofu.ico', 'wizard-large.bmp'):
-        assert asset in _NSI, f'{asset} missing from the NSIS authoring'
+    # ── NSIS side: the app icon + the four wrap-time pages ──
+    assert 'tofu.ico' in _NSI, 'the wizard lost the tofu app icon'
+    for page in ('welcome', 'directory', 'progress', 'finish'):
+        assert f'@ART_DIR@/{page}.bmp' in _NSI, (
+            f'the template no longer ships the {page} page art')
+    import inspect
+    src = inspect.getsource(wb.wrap_payload)
+    assert 'installer_art.render' in src, (
+        'wrap_payload stopped rendering the wizard art — makensis would '
+        'fail on missing bitmap files')
 
 
 def test_payload_shape_agrees():
     """Both pack the PyInstaller output tree with the app exe at its root."""
     assert r'dist\\Tofu\\*' in _WORKFLOW
-    # POSIX glob in the .nsi — see the wizard-assets note for why
-    # backslashes are wrong for the native linux makensis.
+    # POSIX glob in the .nsi — the native linux makensis treats a
+    # backslash as a literal, not a separator.
     assert '@PAYLOAD_DIR@/*' in _NSI
     # The preseed contract: the file rides INSIDE the payload, next to the
     # exe, and the launchers import it on first run. Three pieces that
@@ -139,6 +163,21 @@ def test_payload_shape_agrees():
     assert 'preseed_server.json' in connect_ui, (
         'connect_ui lost the preseed import — the .nsi ships a file '
         'nothing reads')
+
+
+def test_add_remove_programs_registration():
+    """Inno registers ARP automatically; the NSIS authoring must write the
+    key by hand (2026-08-04 gap closed — the classic template silently
+    never registered, so "Apps & features" had no Tofu entry)."""
+    key = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\Tofu'
+    expanded = _expand(_FULL, 'full')
+    for value in ('DisplayName', 'DisplayVersion', 'Publisher',
+                  'UninstallString', 'DisplayIcon'):
+        assert f'"{value}"' in expanded and key in expanded, (
+            f'ARP value {value} missing from the NSIS authoring')
+    # The uninstaller deletes exactly that key.
+    assert f'DeleteRegKey HKCU \\\n    "{key}"' in expanded or \
+        f'DeleteRegKey HKCU "{key}"' in expanded
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -158,19 +197,25 @@ def test_agent_rendering_has_its_own_identity():
 def test_full_rendering_has_no_autostart():
     """A user-present tray app must NOT grow a Run key (owner: agent only)."""
     code = _code(_FULL)
-    assert 'MUI_PAGE_COMPONENTS' not in code
-    assert 'WriteRegStr' not in code
-    assert 'DeleteRegValue' not in code
+    # The LangString DEFINITIONS ship in every rendering (unused strings
+    # are inert) — what must be absent is every USE of the machinery.
+    assert 'ChkAutoStart' not in code
+    run_key = r'Software\Microsoft\Windows\CurrentVersion\Run'
+    assert run_key not in code, (
+        'the full installer must not write a boot-autostart Run value')
 
 
-def test_agent_autostart_is_default_on_uac_free_and_uninstalled():
-    # A components page offers the choice; the main section becomes
-    # uncheckable so "uncheck everything" cannot install nothing.
-    assert '!insertmacro MUI_PAGE_COMPONENTS' in _AGENT
-    assert 'SectionIn RO' in _AGENT
-    # Default-ON: the section exists and is NOT prefixed with /o.
-    assert 'Section "Start with Windows"' in _AGENT
-    assert 'Section /o "Start with Windows"' not in _AGENT
+def test_agent_autostart_default_on_uac_free_and_uninstalled():
+    """The old default-ON section's contract, carried by the custom wizard:
+    a default-CHECKED checkbox on the directory page (UI path) and a
+    silent-mode default of ON (the checkbox never exists then — an empty
+    handle means "not asked" = ON, so /S keeps the old semantics)."""
+    # UI path: checkbox exists and is default-checked.
+    assert '${NSD_CreateCheckBox} 20u 113u 226u 10u ' \
+        '"$(TOFU_CHK_AUTOSTART)"' in _AGENT
+    assert '${NSD_Check} $ChkAutoStart' in _AGENT
+    # Silent path: empty handle → treated as checked.
+    assert '${If} $ChkAutoStart == ""' in _AGENT
     # HKCU Run value (UAC-free), quoted-exe data, matching the tray's form.
     run_key = r'Software\Microsoft\Windows\CurrentVersion\Run'
     assert f'WriteRegStr HKCU "{run_key}" "TofuAgent"' in _AGENT
@@ -199,27 +244,13 @@ def test_every_placeholder_is_substituted_in_both_renderings():
         assert p not in _AGENT, f'{p} left unrendered in the agent script'
 
 
-def test_ci_inno_agent_authoring_matches_the_autostart_contract():
-    """The CI's Inno agent authoring and the server's NSIS render — 2
-    components × 2 tools, ONE contract (design §5.3 + owner amendment ①).
-    The NSIS side is pinned above; this pins the workflow's Inno side."""
-    assert 'AppName=Tofu Agent' in _WORKFLOW
-    assert ('OutputBaseFilename=TofuAgent-Setup-${APP_VERSION}-win64'
-            in _WORKFLOW)
-    assert r'{localappdata}\\Programs\\TofuAgent' in _WORKFLOW
-    run_key = r'Software\\Microsoft\\Windows\\CurrentVersion\\Run'
-    assert f'Subkey: "{run_key}"' in _WORKFLOW
-    assert 'ValueName: "TofuAgent"' in _WORKFLOW, (
-        'CI and server and tray must write ONE Run value name')
-    assert 'uninsdeletevalue' in _WORKFLOW, (
-        'the uninstaller must remove the autorun — same contract as NSIS')
-    # Default-ON, like the NSIS default-selected section: no unchecked flag.
-    assert 'Name: autostart; Description: "Start Tofu Agent with Windows"' \
-        in _WORKFLOW
-    import re as _re
-    assert not _re.search(r'autostart[^\n]*unchecked', _WORKFLOW, _re.I)
-    # Same privilege floor as the full installer (HKCU needs no UAC).
-    assert 'PrivilegesRequired=lowest' in _WORKFLOW
+def test_no_at_tokens_survive_anywhere():
+    """The renderer is a GLOBAL string replace: an @-delimited token named
+    in a comment expands there too (the 2026-08-02 makensis abort). After
+    rendering, no '@' may remain in CODE (comments are prose and keep
+    their explanatory @-mentions by design)."""
+    assert '@' not in _code(_FULL)
+    assert '@' not in _code(_AGENT)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -238,10 +269,13 @@ def test_running_app_is_closed_gracefully_in_both_authorings():
     for script, target, exe in ((_FULL, 'full', 'Tofu.exe'),
                                 (_AGENT, 'agent', 'TofuAgent.exe')):
         expanded = _expand(script, target)
-        assert expanded.count('!insertmacro TOFU_CLOSE_RUNNING_APP') == 2, (
-            'the guard must run in BOTH .onInit (upgrade-over-running) and '
-            'un.onInit (uninstall-while-running)')
+        # Three insertion points: .onInit (default dir), the directory-
+        # page leave (user retargeted another existing install), and
+        # un.onInit (uninstall-while-running).
+        assert expanded.count('!insertmacro TOFU_CLOSE_RUNNING_APP') == 3, (
+            'the guard must run in .onInit, DirPageLeave and un.onInit')
         assert 'Function .onInit' in script
+        assert 'Function DirPageLeave' in script
         assert 'Function un.onInit' in script
         assert f'FileOpen $0 "$INSTDIR\\{exe}" a' in expanded, (
             'the lock probe must target the payload exe')
@@ -258,19 +292,82 @@ def test_running_app_is_closed_gracefully_in_both_authorings():
     assert _WORKFLOW.count('RestartApplications=no') == 2
 
 
-def test_no_section_commands_leak_into_comments():
-    """The 2026-08-02 collision: the renderer is a global replace, so a
-    code-valued placeholder named in a COMMENT expanded there —
-    WriteRegStr outside any Section, and makensis aborted (measured on
-    the first real agent wrap). Comments must stay comment-only."""
-    for script in (_FULL, _AGENT):
-        for line in script.splitlines():
-            if 'SectionEnd' in line:
-                assert line.strip() == 'SectionEnd', (
-                    f'SectionEnd carrying trailing text: {line!r} — a '
-                    'code-valued placeholder expanded inside a comment '
-                    '(the renderer replaces everywhere; keep @-tokens '
-                    'out of comments)')
-            if line.lstrip().startswith(';'):
-                assert 'WriteRegStr HKCU' not in line
-                assert 'DeleteRegValue HKCU' not in line
+# ═══════════════════════════════════════════════════════════════════
+#  The 2026-08-04 modernization ratchets (custom nsDialogs wizard)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_no_mui_remains():
+    """The classic MUI2 wizard is gone — a reintroduction means someone
+    reverted the redesign without reading this contract."""
+    assert 'MUI2.nsh' not in _NSI
+    assert 'MUI_' not in _code(_NSI), (
+        'MUI defines/pages found in the custom-UI template — the whole '
+        'point of the 2026-08-04 rewrite is that MUI is gone')
+
+
+def test_solid_lzma_is_the_compressor():
+    """Speed contract (measured 2026-08-04): /SOLID lzma takes the agent
+    installer 53.2 → 45.2 MB and the full one ~153 → 120 MB, and solid-
+    block decompression beats 3316 per-file zlib streams at install time."""
+    assert 'SetCompressor /SOLID lzma' in _NSI
+
+
+def test_dpi_awareness_is_declared():
+    """HiDPI contract: blurry 200% text is the other half of "looks 2000s"."""
+    assert 'ManifestDPIAware true' in _NSI
+
+
+def test_bilingual_without_mui():
+    """MUI_LANGUAGE is gone; the languages must still be declared so the
+    wizard auto-picks the OS language and the NLF buttons localize."""
+    assert r'Language files\English.nlf' in _NSI
+    assert r'Language files\SimpChinese.nlf' in _NSI
+    # Every LangString exists in BOTH languages (1033 en, 2052 zh) — a
+    # zh-only or en-only string is how a Chinese user gets raw English.
+    import re as _re
+    en = set(_re.findall(r'LangString (TOFU_\w+) 1033', _NSI))
+    zh = set(_re.findall(r'LangString (TOFU_\w+) 2052', _NSI))
+    assert en and en == zh, (
+        f'LangString language asymmetry: en-only={en - zh}, zh-only={zh - en}')
+
+
+def test_silent_mode_still_installs_and_uninstalls():
+    """Automation contract: the classic authoring supported /S. Pages are
+    skipped when silent, so the bodies must be callable without UI."""
+    on_init = _FULL.split('Function .onInit')[1].split('FunctionEnd')[0]
+    assert '${If} ${Silent}' in on_init and 'Call DoInstall' in on_init
+    un_init = _FULL.split('Function un.onInit')[1].split('FunctionEnd')[0]
+    assert '${If} ${Silent}' in un_init
+    assert 'Call un.DoUninstall' in un_init
+
+
+def test_page_flow_order():
+    code = _code(_FULL)
+    flow = [l for l in code.splitlines()
+            if l.startswith(('Page custom', 'UninstPage custom'))]
+    assert flow == [
+        'Page custom WelcomePageCreate',
+        'Page custom DirPageCreate DirPageLeave',
+        'Page custom ProgressPageCreate',
+        'Page custom FinishPageCreate FinishPageLeave',
+        'UninstPage custom un.ConfirmPageCreate',
+        'UninstPage custom un.ProgressPageCreate',
+        'UninstPage custom un.FinishPageCreate',
+    ], f'wizard page flow drifted: {flow}'
+
+
+def test_no_per_file_log_pane_and_marquee_progress():
+    """Speed contract: the classic details list repainted once per file
+    (3316 repaints during File /r). It must stay gone — a marquee bar is
+    the progress signal now."""
+    assert 'ShowInstDetails nevershow' in _NSI
+    assert 'PBM_SETMARQUEE' in _code(_NSI)
+
+
+def test_modern_font_stack_for_labels():
+    """The 2000s look was half typography (MS Shell Dlg 8 serif-ish). Our
+    labels must use the 2020s stack, chosen per UI language."""
+    assert '"Segoe UI"' in _NSI
+    assert '"Microsoft YaHei UI"' in _NSI
+    assert '${LANG_SIMPCHINESE}' in _NSI, (
+        'the font family must switch on the UI language')

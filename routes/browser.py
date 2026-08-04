@@ -5,6 +5,7 @@ import json
 import os
 import time
 import zipfile
+from urllib.parse import urlparse
 
 from flask import Blueprint, jsonify, request, send_file
 
@@ -124,6 +125,61 @@ def browser_post_result():
 # here since they're not JSON REST verbs.
 
 
+def _external_base_url():
+    """The address the DOWNLOADING browser can poll us on again later.
+
+    ``request.host_url`` alone is NOT that address under a path-prefixed,
+    TLS-terminating cloud-IDE gateway (e.g. ``…/proxy/15000/``): the scheme
+    downgrades to http (TLS ends at the edge; ProxyFix deliberately
+    unwired) and the prefix is stripped before forwarding, so a preseed
+    baked from it points the extension at the gateway's DEFAULT route —
+    whose app answers ``POST /api/browser/poll`` with 405 and never
+    forwards (owner incident 2026-08-04: extension parked on "HTTP 405",
+    zero polls in access.log).
+
+    Priority:
+      1. ``?base=`` — the panel's own ``location.origin + BASE_PATH``, the
+         address this browser demonstrably reaches us on. Pinned to the
+         request's Host so a crafted link can never steer a freshly-minted
+         bridge key toward a foreign host.
+      2. ``VSCODE_PROXY_URI`` with ``{{port}}`` filled from the socket the
+         request arrived on — the platform's canonical external-URL
+         template, covering downloads that bypass the panel.
+      3. ``request.host_url`` — correct on direct (unproxied) connections.
+    """
+    base = (request.args.get('base') or '').strip().rstrip('/')
+    if base:
+        try:
+            parsed = urlparse(base)
+        except ValueError:
+            parsed = None
+        if (parsed is not None
+                and parsed.scheme in ('http', 'https')
+                and parsed.netloc.lower() == (request.host or '').lower()
+                and not parsed.query and not parsed.fragment):
+            return base
+        logger.warning('[Browser] download base= rejected (want host %r): %r',
+                       request.host, base[:120])
+    tmpl = os.environ.get('VSCODE_PROXY_URI', '')
+    if '{{port}}' in tmpl:
+        # The internal listen port the proxy maps its /proxy/<port>/ to.
+        # Host header first (direct connections carry it); the ASGI
+        # scope's server tuple behind a gateway (whose Host is external
+        # and portless). urlparse().port raises ValueError on garbage.
+        port = ''
+        try:
+            _p = urlparse('//' + (request.host or '')).port
+            port = str(_p) if _p else ''
+        except ValueError:
+            port = ''
+        if not port:
+            server = getattr(request, 'scope', {}).get('server') or ()
+            port = str(server[1]) if len(server) == 2 and server[1] else ''
+        if port:
+            return tmpl.replace('{{port}}', port).rstrip('/')
+    return request.host_url.rstrip('/')
+
+
 def _build_bridge_preseed():
     """Mint a fresh bridge credential for THIS download and return the
     preseed payload, or ``None`` when minting is impossible.
@@ -153,7 +209,9 @@ def _build_bridge_preseed():
         return {
             # The URL the user's browser just used to reach us — by
             # definition the one the extension (same browser) can poll.
-            'serverUrl': request.host_url.rstrip('/'),
+            # NOT bare request.host_url: that loses the external scheme +
+            # proxy path prefix behind a cloud-IDE gateway (405 incident).
+            'serverUrl': _external_base_url(),
             'bridgeSecret': token,
         }
     except Exception as e:

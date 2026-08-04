@@ -50,7 +50,7 @@ def _isolated_key_store(tmp_path):
         api_keys._cache_loaded = False
 
 
-def _get_zip():
+def _get_zip(path='/api/browser/download', headers=None):
     """Run the real download handler in a bare Quart app (no auth gate).
 
     Returns ``(status_code, body_bytes)`` — Quart's test client defers the
@@ -65,7 +65,7 @@ def _get_zip():
 
     async def _get():
         client = app.test_client()
-        resp = await client.get('/api/browser/download')
+        resp = await client.get(path, headers=headers or {})
         return resp.status_code, await resp.get_data()
 
     loop = asyncio.new_event_loop()
@@ -112,6 +112,59 @@ class TestDownloadPreseed:
         assert 'browser_extension/bridge_preseed.json' not in zf.namelist()
         # The extension itself is still fully served.
         assert 'browser_extension/background.js' in zf.namelist()
+
+
+class TestExternalBaseUrl:
+    """The preseed's serverUrl must be an address the DOWNLOADING browser
+    can poll again later. Bare ``request.host_url`` fails that under a
+    path-prefixed TLS-terminating cloud-IDE gateway (…/proxy/15000/): http
+    scheme + dropped prefix → the extension polls the gateway's DEFAULT
+    route, whose app answers 405 and never forwards (owner incident
+    2026-08-04 — extension parked on "HTTP 405", zero polls in access.log).
+    """
+
+    @staticmethod
+    def _preseed_from(body):
+        zf = zipfile.ZipFile(io.BytesIO(body))
+        return json.loads(zf.read('browser_extension/bridge_preseed.json'))
+
+    def test_panel_base_param_wins(self, _isolated_key_store):
+        # The panel passes location.origin + BASE_PATH; the Quart test
+        # client's host is 'localhost', so a same-host base is adopted
+        # verbatim — https scheme AND proxy prefix survive.
+        status, body = _get_zip(
+            '/api/browser/download?base=https://localhost/proxy/15000')
+        assert status == 200
+        pre = self._preseed_from(body)
+        assert pre['serverUrl'] == 'https://localhost/proxy/15000'
+
+    def test_foreign_host_base_is_rejected(self, _isolated_key_store):
+        # Security pin: the zip carries a FRESH agents:bridge key, so a
+        # crafted download link must never steer it to an attacker's host.
+        status, body = _get_zip(
+            '/api/browser/download?base=https://evil.example.com/proxy/15000')
+        assert status == 200
+        pre = self._preseed_from(body)
+        assert 'evil.example.com' not in pre['serverUrl']
+        assert pre['serverUrl'] == 'http://localhost'  # host_url fallback
+
+    def test_vscode_proxy_uri_fallback(self, _isolated_key_store,
+                                       monkeypatch):
+        # Downloads that bypass the panel (no ?base=) still get the
+        # canonical external URL when the platform publishes its template.
+        monkeypatch.setenv(
+            'VSCODE_PROXY_URI', 'https://ide.example/proxy/{{port}}/')
+        status, body = _get_zip(headers={'Host': 'localhost:15000'})
+        assert status == 200
+        pre = self._preseed_from(body)
+        assert pre['serverUrl'] == 'https://ide.example/proxy/15000'
+
+    def test_frontend_download_link_carries_live_base(self):
+        # Wiring pin: the panel's download entry must hand its live
+        # origin+BASE_PATH to the backend (see _external_base_url).
+        src = _src('static/js/main/main_toolbar_ui.js')
+        assert 'download?base=' in src
+        assert 'window.location.origin + BASE_PATH' in src
 
 
 class TestExtensionAdoption:

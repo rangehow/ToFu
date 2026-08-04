@@ -761,7 +761,15 @@ function toggleBrowser() {
   _saveConvToolState();
 }
 function downloadBrowserExtension() {
-  window.open(apiUrl("/api/browser/download"), "_blank");
+  // Carry the browser's OWN base (origin + live BASE_PATH, e.g. /proxy/15000
+  // behind a cloud-IDE gateway) so the zip's bridge_preseed pairs the
+  // extension with an address this browser demonstrably reaches — a
+  // server-side request.host_url loses BOTH the external https scheme and
+  // the proxy prefix there, pointing the extension at the gateway's default
+  // route (the 2026-08-04 "HTTP 405" incident). The backend pins the param
+  // to the request's Host, so only scheme/path are ever adopted from it.
+  const base = encodeURIComponent(window.location.origin + BASE_PATH);
+  window.open(apiUrl("/api/browser/download?base=" + base), "_blank");
 }
 
 /* ★ Chrome 142+ ships "Local Network Access" prompts on by default, which fire

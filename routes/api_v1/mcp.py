@@ -107,6 +107,8 @@ def list_servers_v1():
         # stored session cookie/token no longer authenticates (a second health
         # axis the transport ping cannot see). None when never probed.
         cred_health = bridge.get_cred_health(name)
+        disabled_tools = [t for t in (srv_cfg.get('disabled_tools') or [])
+                          if isinstance(t, str)]
         servers.append({
             'name': name,
             'config': redact_config(srv_cfg),
@@ -116,6 +118,8 @@ def list_servers_v1():
             'connected': is_connected,
             'tools_count': tools_count,
             'tool_names': tool_names,
+            'disabled_tools': disabled_tools,
+            'enabled_tools_count': max(0, tools_count - len(disabled_tools)),
             'server_version': server_version,
             'server_impl_name': server_impl_name,
             'breaker': breaker,
@@ -289,12 +293,21 @@ def disconnect_servers_v1():
     tags=['mcp'],
 )
 def list_tools_v1():
+    from flask import request
+
     from lib.mcp import get_bridge
+    from lib.mcp.config import load_mcp_config
     from lib.mcp.types import make_namespaced_name
 
     bridge = get_bridge()
+    only_server = (request.args.get('server') or '').strip()
+    config = load_mcp_config()
     tools = []
     for server_info in bridge.list_servers():
+        if only_server and server_info['name'] != only_server:
+            continue
+        disabled = set((config.get(server_info['name'], {}) or {})
+                       .get('disabled_tools') or [])
         for tool_name in server_info['tool_names']:
             ns_name = make_namespaced_name(server_info['name'], tool_name)
             info = bridge.get_tool_info(ns_name)
@@ -304,12 +317,50 @@ def list_tools_v1():
                 'namespaced_name': ns_name,
                 'description': info['description'] if info else '',
                 'input_schema': info['input_schema'] if info else {},
+                'enabled': tool_name not in disabled,
             })
     return api_ok({
         'tools': tools,
         'total': len(tools),
         'servers_connected': bridge.server_count,
     })
+
+
+@api_v1_mcp_bp.route('/api/v1/mcp/servers/<name>/tools', methods=['PUT'])
+@require_auth
+@api_meta(
+    summary='Set per-tool enable/disable on a server',
+    description=(
+        'Body: ``{disabled_tools: [tool_name, ...]}`` — the FULL replacement '
+        'list of disabled (upstream, non-namespaced) tool names for this '
+        'server. Disabled tools are hidden from the model\'s tool list and '
+        'refused at call time. Persists into the server config row and '
+        'hot-applies to the running bridge (no reconnect).'
+    ),
+    tags=['mcp'],
+)
+def set_server_tools_v1(name):
+    from lib.mcp import get_bridge
+    from lib.mcp.config import load_mcp_config, upsert_server as cfg_upsert
+
+    data = parse_body()
+    disabled = data.get('disabled_tools', [])
+    if not isinstance(disabled, list) or not all(
+            isinstance(t, str) and t.strip() for t in disabled):
+        return api_bad_request(
+            'disabled_tools must be a list of tool names',
+            field='disabled_tools')
+    config = load_mcp_config()
+    if name not in config:
+        return api_not_found(f'Server "{name}" not in config')
+    srv_cfg = dict(config[name])
+    srv_cfg['disabled_tools'] = sorted(set(disabled))
+    cfg_upsert(name, srv_cfg)
+    get_bridge().set_disabled_tools(name, srv_cfg['disabled_tools'])
+    logger.info('[MCP.v1] tool filter set: %s → %d disabled tool(s)',
+                name, len(srv_cfg['disabled_tools']))
+    _invalidate_tool_latches(f'tool filter {name}')
+    return api_ok({'server': name, 'disabled_tools': srv_cfg['disabled_tools']})
 
 
 # ── Catalog (App-Store) ─────────────────────────────────────────────
@@ -364,6 +415,8 @@ def get_catalog_v1():
             'installed': installed,
             'connected': connected,
             'tools_count': tools_count,
+            'disabled_tools': [t for t in ((config.get(sid, {}) or {}).get('disabled_tools') or [])
+                               if isinstance(t, str)],
             'server_version': server_version,
             'server_impl_name': server_impl_name,
             'stored_env_keys': stored_env_keys,
@@ -407,6 +460,8 @@ def get_catalog_v1():
             'installed': True,
             'connected': connected,
             'tools_count': tools_count,
+            'disabled_tools': [t for t in (srv_cfg.get('disabled_tools') or [])
+                               if isinstance(t, str)],
             'server_version': server_version,
             'server_impl_name': server_impl_name,
             'stored_env_keys': stored_env_keys,

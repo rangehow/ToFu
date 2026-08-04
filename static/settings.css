@@ -871,6 +871,50 @@
   opacity: 0.7;
   line-height: 1;
 }
+/* Per-tool toggle (pt_53065dbe86bb4286): the tools badge is a BUTTON that
+ * expands the per-tool checkbox panel — reset button chrome, keep the badge
+ * look, signal clickability on hover. */
+.mcp-tools-toggle {
+  border: 1px solid transparent;
+  background: none;
+  padding: 2px 4px;
+  border-radius: var(--s-radius);
+  cursor: pointer;
+}
+.mcp-tools-toggle:hover {
+  opacity: 1;
+  border-color: rgba(26, 24, 20, 0.18);
+  background: rgba(201, 153, 63, 0.08);
+}
+.mcp-tool-panel {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px dashed rgba(26, 24, 20, 0.18);
+  border-radius: var(--s-radius);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mcp-tool-panel-head {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--s-ink-soft);
+  margin-bottom: 2px;
+}
+.mcp-tool-loading { font-size: 11px; color: var(--s-ink-soft); padding: 6px 2px; }
+.mcp-tool-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.mcp-tool-row input { margin: 0; accent-color: #c9993f; }
+.mcp-tool-name { font-family: 'JetBrains Mono', monospace; font-size: 10.5px; }
 /* Version badge: server-reported upstream version (InitializeResult.serverInfo.version) */
 .mcp-app-version {
   font-size: 10px;

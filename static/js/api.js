@@ -1193,6 +1193,16 @@
     toolsList:        ()                           =>
       request('/api/v1/mcp/tools',
               { method: 'GET', parse: 'response', onError: 'null' }),
+    // Per-server tool list (with per-tool `enabled` flags) — backs the
+    // Settings → MCP card's per-tool toggle list.
+    toolsListForServer: (server)                   =>
+      request('/api/v1/mcp/tools',
+              { method: 'GET', query: { server }, parse: 'response', onError: 'null' }),
+    // Replace a server's disabled_tools list (full-replacement semantics).
+    serverToolsSet: (server, disabledTools)        =>
+      request(`/api/v1/mcp/servers/${encodeURIComponent(server)}/tools`,
+              { method: 'PUT', json: { disabled_tools: disabledTools || [] },
+                parse: 'response', onError: 'null' }),
     // NOTE: no onError:'null' here — a failed connect returns HTTP 500
     // with a rich {error, stderr_tail} body; we want that to throw an
     // ApiError (carrying .body) so the UI can show the real reason

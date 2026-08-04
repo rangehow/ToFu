@@ -2123,14 +2123,15 @@ function _renderSearchRows(round, ctx) {
   return "";
 }
 
-// ★ read_files / inspect_image image(s): render inline thumbnails when the
-//   backend attached data URIs (meta.imageDataUris). Each descriptor carries
-//   a full data: URL the browser can render directly. inspect_image is the
-//   zoom/rotate/crop viewer — it gets a distinct accent + an "ops" chip
-//   describing the transform (e.g. "crop, 2×").
+// ★ read_files / inspect_image / browser screenshot+preview image(s): render
+//   inline thumbnails when the backend attached data URIs (meta.imageDataUris).
+//   Each descriptor carries a full data: URL the browser can render directly.
+//   inspect_image is the zoom/rotate/crop viewer — it gets a distinct accent +
+//   an "ops" chip describing the transform (e.g. "crop, 2×").
 function _renderReadImagesBlock(round, ctx) {
   const { svg, q, meta } = ctx;
-  if (!((round.toolName === "read_files" || round.toolName === "inspect_image" || round.toolName === "browser_screenshot") &&
+  if (!((round.toolName === "read_files" || round.toolName === "inspect_image" ||
+        round.toolName === "browser_screenshot" || round.toolName === "browser_preview_page") &&
       Array.isArray(meta.imageDataUris) && meta.imageDataUris.length)) return "";
   const imgs = meta.imageDataUris.filter((d) => d && d.uri);
   if (!imgs.length) return "";

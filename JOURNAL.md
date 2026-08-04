@@ -5,6 +5,8 @@
 - **两枚顺手擒获:** ①飞书 logo 是 fill 型 SVG,全局 `stroke:currentColor` 会给品牌 logo 描边染色——加 `tab-logo` 类豁免(旧代码就有此隐患,奶油底上更显);②移动端横条覆写钉的是旧激活态(金底边+`::after`  shimmer,均已删)——同步为白块硬阴影并隐藏分组标签。面板 88vh→90vh 为分组标签腾纵向空间。
 - **验证:** 预览 harness(实时抓真 index.html 标记+真 CSS)双视口截图——桌面 1280×950 全 14 项+4 组免滚动、移动端 390×844 横条图标态正常;harness 用后即删。环:devices/mcp_oauth_deferred/onboarding/i18n_coverage/bundle_parity 52 + settings 三套件 29 = **81 绿**。与兄弟 msdzvqi5(搜索页内容重设计)边界互认:它碰 settings_panels/search.html + styles.css 搜索组件区,侧栏段零交叠。
 
+- **事故自记(当日晚补):** 整文件 `git add i18n.js` 把兄弟 msdzs82c **三枚** local.* hunk(desktopRemote 改写 + proxyWarn 删除 + awaitingAgent 改写)卷入本批 `8e4ac0d7`——owner 复核先擒一枚,兄弟核验补全三枚(我首查只看 diff 前 40 行漏报)。处置=不回滚(内容正确)+通知兄弟勿重提交+memory `shared-head-staged-diff-review`。次生形态:兄弟把工作树里 msdzvqi5 的 settings.search* 键(20+/3−)误记在我名下要「留给我提交」——已 DECLINE 更正归属;异己 WIP 绝不代提交,i18n.js 留给 msdzvqi5 自己收。
+
 ### 2026-08-03(owner 复核三枚全修:①致命——首启隧道 atexit 必死而 saved loopback 永久跳过阶梯,「开机自启」机器第二天必死无自愈;②LAN 响应器纯死代码;③隧道死磕 15000;修复后安装包二次重建) — epic `pt_59b62951aad2463e`;commit `d9b34c71`(6 文件)+ 构建 state=ok(git_sha `d9b34c71`);套件 **30+16+邻接 42 = 88 绿**;agent 烟雾 OK;server.py 编译过
 
 - **① 地雷定性(owner 擒获,我 P3 的假绿):** 首启 `try_ssh_tunnel` 赢的 ssh 子进程挂 `_ACTIVE_TUNNELS`,`_reap_tunnels` 注册在 **atexit**——进程一退隧道必死;但 `save_remote_server` 存的 `http://127.0.0.1:15000` 只有隧道活着才可达,而 `agent_launcher.main` 第二幕只见 url 非空就**整体跳过阶梯**——第二次开机轮询死端口,托盘 Connect 又不重跑阶梯,用户零自愈。安装器默认勾开机自启 ⇒ 验收当天绿、第二天必死。**根修(按 owner 处方):** `resume_attachment` 先探后信——`probe_server(saved)` 活则零动作;死才重跑阶梯;找到服务器**保留原 token**(bearer 凭证与可达地址无关),地址变了才写盘;阶梯也空→原样返回(服务器可能只是没开,轮询继续、托盘 unreachable 诚实呈现,绝不把用户弹回首启对话框)。

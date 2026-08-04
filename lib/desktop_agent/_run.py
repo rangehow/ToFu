@@ -224,6 +224,12 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
     agent_frame = _build_agent_frame(
         agent_id, permissions, load_config().get('share_roots'))
 
+    if permissions.get('allow_egress'):
+        # E4: a previously-ensured CLIProxyAPI sidecar resumes with the
+        # agent — the subscription path must survive an agent reboot.
+        from lib.desktop_agent._adapter import maybe_resume_adapter
+        maybe_resume_adapter()
+
     logger.info('Desktop Agent starting...')
     logger.info('   Server: %s', server_url)
     logger.info('   Agent: %s (%s, %s)', agent_frame['name'],

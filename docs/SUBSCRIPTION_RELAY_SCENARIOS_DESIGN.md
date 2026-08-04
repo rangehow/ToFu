@@ -142,6 +142,16 @@ token_store 多记录化 + dispatcher 集成 + (account×model) 冷却账本 =
 
 ### 4.4 G3-B / 方案 B：CLIProxyAPI sidecar——「订阅适配器」provider（推荐立项）
 
+> **✅ 已落地（2026-08-04，E4 批）**：agent 看护器 `lib/desktop_agent/_adapter.py`
+> （首启下载+checksums.txt SHA-256 校验+周检更新+崩溃看护+resume）；loopback
+> 中继类 `target='loopback'`（双端白名单=agent 自身策略端口）；服务器层
+> `lib/desktop/adapter.py`（策略库/relay/ensure 编排/managed provider）+
+> 路由 `/api/v1/adapter/*`；传输链 adapter 标记镜像 oauth 全链（slot→api→
+> stream/astream/chat/probe）；设置页 OAuth 区订阅适配器卡片。真机冒烟实证：
+> v7.2.116 下载校验→spawn→健康→/v1/models 200、错误 key 401。唯一偏差：
+> api-key/mgmt secret 由**服务器**铸（provider 调用必须持有，agent 侧铸钥
+> 只会多一条上传道）——满足 owner「随机、按 agent 存、不裸奔」三要件。
+
 **思路**：伪装层整个外包。在能联网的本地机上跑 CLIProxyAPI，tofu 把它当
 一个普通的 OpenAI/Anthropic 兼容上游。订阅 token 从不到服务器——**本机既是
 网络出口，也是凭证边界**，比 egress 中继（token 在服务器、裸奔过 bridge）

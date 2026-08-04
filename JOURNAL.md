@@ -1,3 +1,31 @@
+### 2026-08-04(E4 订阅适配器 sidecar 全链落地:CLIProxyAPI 看护器+loopback 中继+adapter provider+传输链+设置页卡片;真机冒烟 v7.2.116 下载→启动→/v1/models 200、错 key 401;epic `pt_728134281fb841c3` **DONE**) — 脑派发接我自票;commit 见下(19 文件);环 **102 绿** + failing-first 干净 HEAD 实证 17 红 2 err
+
+- **三分工:** 安全主干自做(agent 看护器/egress loopback 管线/服务器适配器层/路由),传输链与前端卡片两子代理并行(接口契约先冻结,零文件交叠)。
+- **agent 侧 `lib/desktop_agent/_adapter.py`(519 行):** 首启从 GitHub Releases 下载(版本钉/`checksums.txt` SHA-256 校验,不符绝不换二进制)+ `host:127.0.0.1`+随机 api-key+管理端点 secret 的 config.yaml+崩溃看护(指数退避)+周检更新(防边缘重演漂移,owner 硬要件)+agent 重启 resume(policy.json);`target='loopback'` 白名单类=**agent 自身策略端口**(被攻陷的服务器也无法把中继指向任意本地服务)。**真机冒烟擒获真 bug**:tar 内二进制名是 `cli-proxy-api`(连字符),startswith('cliproxyapi') 提取失败——修复并钉针(实证优先于文件快照判例再添一枚)。冒烟全绿:下载校验→spawn→health→对 key 200/错 key **401**(攻击面要求活体验证)。
+- **服务器侧:** `lib/desktop/adapter.py`(策略库——api-key/mgmt secret **服务器铸**(provider 调用必须持有,满足「随机/按 agent 存/不裸奔」)、relay_http/relay_stream(pin 单 agent,**绝不走 fallback 链**——别机即别钥)、ensure 后台编排 600s TTL、managed provider `adapter_<id>` 供应/撤销)+ 路由 `/api/v1/adapter/{status,ensure,stop}`(charter#0 信封,BadRequest 先捕防 500 吞 400);egress.py 双端 `_check_target` 管线。
+- **传输链(子代理):** adapter 标记镜像 oauth 全链——dispatcher:356/612 读卡→Slot.adapter→api.py 四处传递→stream/astream/chat 分支(astream 全支委托 asyncio.to_thread,不冻事件循环;EgressUnavailable→EndpointUnreachableError 走模型回退)+ provider_probe 探测。14 新检。
+- **前端卡片(子代理):** OAuth 区订阅适配器卡(状态徽章/启动停止/ensuring 加速轮询/ready 成功行/16 i18n 键);**i18n.js 被兄弟 a135e73a 扫入其提交**(共享 HEAD 惯例,内容逐字一致,证后收编)。62 检。
+- **测试账:** 环=agent 17+server 15+transport 14+egress 34+前端卡 3+egress_line+i18n 覆盖+契约棘轮 6=**102 绿**;failing-first 干净 HEAD worktree 17 红 2 err(模块/缝缺席=正确理由)。
+- **验收边界:** 端到端「登录→聊天」需真订阅账号在本机浏览器登录适配器(结构性人门);本批已实证到「适配器在线、API 鉴权正确、provider 可供应」。
+
+### 2026-08-04(peer 注入行 UX 四修:来源气泡可点击跳转到来源对话 + 单发送者去重(头/体不再重复同枚气泡)+ 标题加宽 220→420px 全题可读 + 主体缩进 30→16px) — owner 截图四指令(来源重复/标题不全/不支持跳转/左边距大);commit `a135e73a`(5 文件 +134/−15);套件 **20/20 绿**(peer-inject 4 + conv_reducers/auto_translate/dup-bubble 邻接 16);预存红 17 枚实证无关并挂票 `pt_9ef7b2ff38d24fea`
+
+- **定案(owner 截图四问):** ①来源对话重复——header 气泡与 body 卡片头是同枚气泡,单发送者注入(常态)重复渲染;②标题省略号——气泡 max-width 220px 且 tooltip 只有「conv id」毫无信息;③不支持跳转——气泡是纯展示 span;④主体左边距 30px 偏大。
+- **修法:** `_peerFromBubble` 改 `<button data-conv-jump>`——委托点击处理器(tool_rounds.js 既有 ptool-turn-head 同档)经新增 `convFullIdById`(conv_reducers.js,与 convTitleById 共享 `_convFindById` 全等+唯一前缀匹配)解析全 id → `loadConversation` 跳转,解析不到给 toast;tooltip=完整标题+conv id+跳转提示,头部帽加宽至 420px,hover 态+↗ 跳转箭头传达可点。`_renderPeerInjectRow` 去重:distinct sender>1 才保留逐卡气泡。`.sw-inbox-row-body` 缩进 30→16px 对齐 header 图标列(swarm inbox/steer/stall 同族共享此规则,一并受益)。light/tofu 主题补气泡配色(原为 dark-only #82aaff)。i18n 三键(peer.jumpToConv/convNotFoundTitle/convNotFound)。
+- **测试账:** peer_inject_row_layout 套件钉:跳转按钮形态(data-conv-jump+<button>)、tooltip 全标题+提示、单发送者 body 无重复气泡、多发送者 body 保留逐卡气泡、PASS 棘轮 13→15、source guard 扩三针;NEUTER 原三针全保绿。node --check×3 过;collect-only 15585+1 flake(test_jsdom_runner_structured 独跑 27 枚正常收集,判例内 flake)。browser_preview_page 双截图实证:tofu 主题下全题显示、body 无重复气泡、缩进收紧。
+- **预存红挂票:** test_frontend_brain_tool_render 17 红——NC 锚点钉 tool_rounds.js,但 `_renderPeerDelivery` 已在 fcddc420(2026-08-01 Epic-E 拆分)迁至 tool_rounds_rich.js;stash 我全部文件后同 17 红实证与批无关,票 `pt_9ef7b2ff38d24fea`(方向对齐测试侧)。
+- **生效面:** 前端走 bundle mtime 自愈重建,刷新即生效。
+### 2026-08-04(侧栏事故根因层加固落地:语法二分降级——闸失败不再全包拒服,按文件归因后排除坏源重建;renderMessage 进能力断言名单,静默残废从此有红横幅;三枚静态棘轮进 CI) — owner 复核指令「不能只修实例,补上这一层」;commit `b280b157`(4 文件 +380/−102);环 **12 套件 86/86 绿** + 真实树构建冒烟过
+
+- **定案(owner 擒获的结构性缺口):** 既有 `test_bundle_corruption_guard.py` 的设计承诺是「一个源文件损坏 → 该模块缺席,不是整页死;bundle 拒服后降级逐文件加载=更慢但能用的页面」——本次事故证明承诺对「语法级损坏」不成立:`_scan_source_corruption` 只认 git 冲突标记/NUL 字节,认不出中断编辑留下的括号失衡;于是整包闸拒服 → 全员跌入 dev-fallback → 同一个坏源文件被原始服务 → 两条路全死。
+- **修法(js_bundler):** 新增 `_find_syntax_broken_sources`——按文件 `node --check` 归因,**只在整包闸失败时运行**(健康构建零成本);`_assemble_bundle` 尾部重写为两轮发布循环:闸失败 → 二分归因 → 排除坏的**非关键**源文件重组装重闸(降级契约与扫描器对冲突标记的既有契约同构);critical 文件语法坏/排除后仍失败(跨文件胶合 bug)维持拒服走 fallback。esbuild 失败路径自然收编(本就 fail-open 到 _minify_js,闸是唯一收口点)。
+- **修法(index.html):** `_loadBearingCaps` 补 `renderMessage`——本次事故的「静默」半边根因:脚本全 load、main.js 正常 boot、四能力全在,守卫全程绿灯,而渲染函数缺席让每次点击抛错。此改动读盘即生效(无需重启)。
+- **棘轮(新 tests/test_bundle_source_syntax_ratchet.py):** ①全部 ship 源文件(_BUNDLE_FILES+_DEFERRED_FILES ~160 枚)过 node --check(8 线程池 ~2s,node 缺席 skipif 与既有哲学一致);②index.html script src 唯一(忽略 query——经典脚本二次加载顶层 const 必死,fallback 专用地雷);③能力断言名单钉住 renderMessage(未来 defer/改名即红)。
+- **既有套件方向对齐:** `test_node_gate_rejects_broken_bundle`(钉旧契约「语法坏→全包拒服」)按 owner 新契约改写为「非关键→排除重建」;新增 critical 坏→致命、NEUTER(二分被阉→退回致命,证明降级确实由二分带来)、排除后仍失败→拒服三针。temp-tree harness 复用,esbuild 强制关闭保持确定性。
+- **生效边界(诚实账):** js_bundler.py 的加固需服务器重启才在线生效(当前生产 bundle 本已健康,无 urgency);index.html 能力断言即刷即生效;棘轮即进 CI。
+- **验证账:** collect-only 18 枚零错;目标双套件 18/18;bundle 家族环(manifest parity/freshness/concurrency/nonblocking/stale-self-heal/loadguard-deferred/js-coverage 等 12 件)86/86;真实树 `build_bundle()` 冒烟产出 bundle-83e95b3b.js 且 node 闸过(esbuild 路径实证)。
+
+### 2026-08-04(设置页模型卡「乱序」根修:排序键=卡片实际渲染的裸 model_id
 ### 2026-08-04(设置页模型卡「乱序」根修:排序键=卡片实际渲染的裸 model_id,不再是 pricing 注册表的隐形友好名——claude-fable-5 被 "Fable 5" 拖到 Doubao 与 gemini 之间,机器字母序、读者乱序) — owner 截图问「为什么模板没按模型名字母序排?claude-fable-5 为何在 d 下面?」;commit 见下(2 文件 +JOURNAL);套件 **11/11** + 守卫环 13 绿,failing-first 实证,api_contract 红实证预存
 
 - **定案(证据链闭合):** 设置页 `_renderModelCard` 渲染的是裸 `m.model_id`,而 `_compareModelEntries`(core_panel.js)把冷排序/二分插入委托给了 `_compareModelsByDisplayName`——其排序键 `_modelShortName` 优先取 pricing 注册表名字:`lib/pricing/_tables.py:37` 给 `claude-fable-5` 起名 **"Fable 5"**($9.94/$49.72 与截图价格吻合)。排序结果 deepseek < doubao < "fable 5" < gemini——与截图逐像素吻合。列表其实排了序,只是按一个卡片上根本不显示的字符串排。

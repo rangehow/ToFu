@@ -71,6 +71,8 @@ class Slot:
         # Defensive copy — prevent shared-reference bugs when
         # multiple Slots are built from the same caps set.
         self.capabilities = set(self.capabilities)
+        # Defensive copy — the marker is per-provider config state.
+        self.adapter = dict(self.adapter or {})
         # Reject typos at construction. We deliberately do NOT silently
         # coerce — a typo'd dialect would otherwise degrade to
         # auto-detect with zero feedback (the bug that motivated this
@@ -106,6 +108,15 @@ class Slot:
                                     # 'claude' / 'codex' = resolve a live token +
                                     # client-identity headers at request time
                                     # (see lib/oauth/outbound.py)
+    adapter: dict = field(default_factory=dict)
+                                    # subscription-ADAPTER marker for this slot:
+                                    # {} = normal provider reached directly (default)
+                                    # {'agent_id': …, 'port': …} = a CLIProxyAPI
+                                    # sidecar on the user's desktop agent — its
+                                    # base_url is loopback-ON-THE-AGENT, so the
+                                    # transport must ride lib.desktop.adapter's
+                                    # bridge relay (never route_request, never
+                                    # direct).
     stream_only: bool = False       # True if model only supports stream=True (e.g. qwq-plus, deepseek-reasoner)
 
     # ── Rate limiting ──

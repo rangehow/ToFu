@@ -45,6 +45,12 @@ _ALLOWED_HOSTS = frozenset({
     'api.openai.com',
 })
 
+#: Loopback target class (E4 subscription adapter): only THIS machine's
+#: loopback, and only the port the agent's OWN adapter policy occupies —
+#: a compromised server cannot aim the relay at an arbitrary local service
+#: (design §4.4: whitelist is the agent's adapter port, not a server claim).
+_LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
+
 _MAX_BODY_BYTES = 2 * 1024 * 1024       # request body cap (design §7.3)
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # non-stream response cap
 
@@ -56,11 +62,23 @@ except Exception:  # pragma: no cover - compat shim always present in-app
     _IS_MACOS = _sys.platform == 'darwin'
 
 
-def _host_allowed(url: str) -> bool:
+def _host_allowed(url: str, target: str = 'subscription') -> bool:
     try:
-        return (urlparse(url).hostname or '').lower() in _ALLOWED_HOSTS
+        parsed = urlparse(url)
+        host = (parsed.hostname or '').lower()
     except Exception:
         return False
+    if target == 'loopback':
+        if host not in _LOOPBACK_HOSTS:
+            return False
+        try:
+            from lib.desktop_agent._adapter import adapter_loopback_port
+            allowed_port = adapter_loopback_port()
+        except Exception as e:
+            logger.debug('[Egress] adapter port unreadable: %s', e)
+            return False
+        return bool(allowed_port) and (parsed.port or 0) == allowed_port
+    return host in _ALLOWED_HOSTS
 
 
 def _windows_proxy_url() -> str:
@@ -214,6 +232,7 @@ def start_egress_stream(params: dict, on_chunk, on_exit):
     """
     url = str((params or {}).get('url') or '')
     stream_id = str(params.get('stream_id') or '')
+    target = str((params or {}).get('target') or 'subscription')
     seq = [0]
 
     def _seq():
@@ -224,7 +243,7 @@ def start_egress_stream(params: dict, on_chunk, on_exit):
         logger.warning('[Egress] stream refused: %s', msg[:120])
         on_exit({'error': msg})
 
-    if not _host_allowed(url):
+    if not _host_allowed(url, target):
         return _refuse('egress host not in agent whitelist')
     if not stream_id:
         return _refuse('missing stream_id')
@@ -325,9 +344,10 @@ def cmd_egress_http(params: dict) -> dict:
     result dict; network failures come back as ``status: 0`` + ``error``.
     """
     url = str((params or {}).get('url') or '')
-    if not _host_allowed(url):
-        logger.warning('[Egress] REFUSED non-whitelisted host: %s',
-                       (urlparse(url).hostname or url)[:80])
+    target = str((params or {}).get('target') or 'subscription')
+    if not _host_allowed(url, target):
+        logger.warning('[Egress] REFUSED non-whitelisted host: %s (target=%s)',
+                       (urlparse(url).hostname or url)[:80], target)
         return {'error': 'egress host not in agent whitelist'}
     method = str(params.get('method') or 'POST').upper()
     if method not in ('GET', 'POST'):

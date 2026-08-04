@@ -101,6 +101,37 @@ def host_allowed(url: str) -> bool:
     return host in ALLOWED_EGRESS_HOSTS
 
 
+#: Loopback target class (E4 subscription adapter): the relay may aim at
+#: the AGENT's own loopback only, on the declared adapter port — never at
+#: arbitrary local services. The agent re-checks against ITS OWN policy
+#: port (lib/desktop_agent/_egress.py), so a spoofed loopback_port here
+#: just fails closed on the far side.
+_LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
+
+
+def _loopback_allowed(url: str, port: int) -> bool:
+    try:
+        parsed = urlparse(url)
+        host = (parsed.hostname or '').lower()
+    except Exception as e:
+        logger.debug('[Egress] loopback url parse failed for %r: %s', url, e)
+        return False
+    return (host in _LOOPBACK_HOSTS and int(port or 0) > 0
+            and (parsed.port or 0) == int(port))
+
+
+def _check_target(url: str, target: str, loopback_port: int) -> None:
+    """Raise EgressUnavailable when *url* fails its target-class whitelist."""
+    if target == 'loopback':
+        if not _loopback_allowed(url, loopback_port):
+            raise EgressUnavailable(
+                f'loopback relay target not allowed: {url!r} '
+                f'(declared adapter port {loopback_port})')
+    elif not host_allowed(url):
+        raise EgressUnavailable(
+            f'egress host not in whitelist: {urlparse(url).hostname or url!r}')
+
+
 def _probe_host(url: str) -> str:
     """Classify direct reachability of the URL's host.
 
@@ -369,7 +400,8 @@ class EgressStreamReader:
 
 def open_stream(url: str, *, method: str = 'POST', headers: dict = None,
                 body: bytes = b'', agent_id: str = None, user_id: str = '',
-                log_prefix: str = '') -> EgressStreamReader:
+                log_prefix: str = '', target: str = 'subscription',
+                loopback_port: int = 0) -> EgressStreamReader:
     """Open a streamed request through the caller's desktop agent.
 
     Enqueues ``egress_http_stream`` (TTL 1800s) and waits for the agent's
@@ -380,9 +412,7 @@ def open_stream(url: str, *, method: str = 'POST', headers: dict = None,
         EgressUnavailable: host not whitelisted / no agent / no meta frame
             within the connect window.
     """
-    if not host_allowed(url):
-        raise EgressUnavailable(
-            f'egress host not in whitelist: {urlparse(url).hostname or url!r}')
+    _check_target(url, target, loopback_port)
     candidates = ([agent_id] if agent_id is not None
                   else route_candidates(url, user_id=user_id))
     from lib.desktop import enqueue_desktop_command
@@ -399,6 +429,7 @@ def open_stream(url: str, *, method: str = 'POST', headers: dict = None,
             'timeout_ms': _EGRESS_STREAM_TTL_S * 1000,
             'proxy_mode': 'env',
             'stream_id': cmd_id,
+            'target': target,
         }
         enq_id, err = enqueue_desktop_command(
             'egress_http_stream', params,
@@ -516,19 +547,23 @@ def egress_status(host: str, *, user_id: str = '') -> dict:
 
 def egress_http(url: str, *, method: str = 'POST', headers: dict = None,
                 body: bytes = b'', timeout: float = 30,
-                user_id: str = '') -> EgressResponse:
+                user_id: str = '', agent_id: str = None,
+                target: str = 'subscription',
+                loopback_port: int = 0) -> EgressResponse:
     """Execute one HTTP request through the caller's desktop agent.
 
     Whitelist → agent selection → bridge command (TTL 120s) → adapt the
-    agent result into :class:`EgressResponse`.
+    agent result into :class:`EgressResponse`. ``agent_id`` pins a single
+    candidate (loopback adapter relays MUST pin — a different machine
+    hosts a different adapter with different credentials). ``target``
+    selects the whitelist class (``subscription`` public hosts vs
+    ``loopback`` agent-local adapter port); the agent re-enforces it.
 
     Raises:
         EgressUnavailable: host not whitelisted, no agent, agent offline /
             timed out, or the agent hit a network error.
     """
-    if not host_allowed(url):
-        raise EgressUnavailable(
-            f'egress host not in whitelist: {urlparse(url).hostname or url!r}')
+    _check_target(url, target, loopback_port)
     from lib.desktop import send_desktop_command
     params = {
         'url': url,
@@ -537,9 +572,12 @@ def egress_http(url: str, *, method: str = 'POST', headers: dict = None,
         'body_b64': base64.b64encode(body or b'').decode('ascii'),
         'timeout_ms': int(min(max(timeout, 1), 60) * 1000),
         'proxy_mode': 'env',
+        'target': target,
     }
     last_err = None
-    for agent_id in route_candidates(url, user_id=user_id):
+    candidates = ([agent_id] if agent_id is not None
+                  else route_candidates(url, user_id=user_id))
+    for agent_id in candidates:
         if agent_id == 'direct':
             break  # caller's transport handles direct; egress_http is the detour
         logger.info('[Egress] routing %s %s via agent %s (user=%s)',

@@ -349,7 +349,10 @@ function _handleOAuthCode(provider, code, state) {
 }
 
 function _loadOAuthStatus(fromRepoll) {
-  if (!fromRepoll) _egressRepollAttempts = 0;  // fresh load → fresh budget
+  if (!fromRepoll) {
+    _egressRepollAttempts = 0;  // fresh load → fresh budget
+    _adapterStartPolling();     // settings just opened — start the adapter card chain
+  }
   Api.oauth.status()
     .then(function(data) {
       if (!data) return;
@@ -841,6 +844,194 @@ function _autoConfigureOAuthProvider(provider, status) {
   if (typeof _loadServerConfig === 'function') {
     try { _loadServerConfig(); } catch (e) { /* best-effort UI refresh */ }
   }
+}
+
+
+// ══════════════════════════════════════════════════════
+//  订阅适配器 (CLIProxyAPI) — subscription-adapter card
+//
+//  The backend manages a CLIProxyAPI sidecar on the user's desktop agent
+//  and projects it as a provider (`订阅适配器 · <agent name>`, id
+//  `adapter_<agent8>`) once bring-up reaches 'ready'. This card is the
+//  settings-surface for that lifecycle: it renders BELOW the OAuth cards
+//  (built in JS because the oauth.html panel ships before the bundler —
+//  touching the panel file is outside this module's ownership).
+//
+//  Polling follows the same contract as the egress re-poll above: a
+//  single setTimeout chain, alive ONLY while the settings modal is open
+//  AND the OAuth tab is active; the cadence tightens while any agent is
+//  mid-bring-up (first run downloads ~20MB, minutes) and relaxes once
+//  every task is settled. Stop = the chain simply never re-arms.
+// ══════════════════════════════════════════════════════
+
+var _adapterPollTimer = null;
+var _adapterCardBuilt = false;
+var _ADAPTER_POLL_IDLE_MS = 5000;   // steady state
+var _ADAPTER_POLL_BUSY_MS = 2000;   // while any ensure task is in flight
+var _adapterLastBusy = false;       // exposed for tests / diagnostics
+
+function _adapterPanelVisible() {
+  var modal = document.getElementById('settingsModal');
+  var panel = document.getElementById('settingsTab_oauth');
+  return !!(modal && modal.classList.contains('open') &&
+            panel && panel.classList.contains('active'));
+}
+
+// Build the card DOM once, appended after the OAuth provider cards.
+function _adapterEnsureCard() {
+  if (_adapterCardBuilt) return;
+  var panel = document.getElementById('settingsTab_oauth');
+  if (!panel) return;
+  if (document.getElementById('adapterCard')) { _adapterCardBuilt = true; return; }
+  var card = document.createElement('div');
+  card.className = 'oauth-provider-card';
+  card.id = 'adapterCard';
+  card.innerHTML =
+    '<div class="oauth-provider-header">' +
+      '<span class="oauth-provider-name">' + escapeHtml(t('settings.adapterTitle')) + '</span>' +
+    '</div>' +
+    '<p class="oauth-provider-desc">' + escapeHtml(t('settings.adapterDesc')) + '</p>' +
+    '<div id="adapterRows"></div>' +
+    '<div class="adapter-empty" id="adapterEmpty" style="display:none">' +
+      escapeHtml(t('settings.adapterEmpty')) +
+    '</div>' +
+    '<p class="adapter-info-line">' + escapeHtml(t('settings.adapterInfoLine')) + '</p>';
+  panel.appendChild(card);
+  _adapterCardBuilt = true;
+}
+
+// One status payload → full re-render of the per-agent rows.
+function _renderAdapterRows(data) {
+  _adapterEnsureCard();
+  var rows = document.getElementById('adapterRows');
+  var empty = document.getElementById('adapterEmpty');
+  if (!rows || !empty) return;
+  var agents = (data && Array.isArray(data.agents)) ? data.agents : [];
+  var tasks = (data && data.ensure_tasks) || {};
+  var online = [];
+  for (var i = 0; i < agents.length; i++) {
+    if (agents[i] && agents[i].online) online.push(agents[i]);
+  }
+  if (!online.length) {
+    rows.innerHTML = '';
+    empty.style.display = '';
+    _adapterLastBusy = false;
+    return;
+  }
+  empty.style.display = 'none';
+  var html = '';
+  var busy = false;
+  for (var j = 0; j < online.length; j++) {
+    var a = online[j];
+    var task = tasks[a.agent_id] || null;
+    var ad = a.adapter || {};
+    var state;   // 'ensuring' | 'running' | 'error' | 'installed' | 'not_installed'
+    if (task && task.state === 'ensuring') state = 'ensuring';
+    else if ((task && task.state === 'error') || ad.error) state = 'error';
+    else if (ad.running) state = 'running';
+    else if (ad.installed) state = 'installed';
+    else state = 'not_installed';
+    if (state === 'ensuring') busy = true;
+
+    var badgeCls = 'oauth-status-badge';
+    var badgeTxt;
+    if (state === 'ensuring') {
+      badgeCls += ' pending'; badgeTxt = t('settings.adapterBadgeInstalling');
+    } else if (state === 'running') {
+      badgeCls += ' authenticated';
+      badgeTxt = t('settings.adapterBadgeRunning', {
+        version: ad.version || '?', port: ad.port || (a.policy && a.policy.port) || 8317 });
+    } else if (state === 'error') {
+      badgeCls += ' error'; badgeTxt = t('settings.adapterBadgeError');
+    } else if (state === 'installed') {
+      badgeTxt = t('settings.adapterBadgeInstalled');
+    } else {
+      badgeTxt = t('settings.adapterBadgeNotInstalled');
+    }
+
+    html += '<div class="adapter-agent-row" data-agent="' + escapeHtml(a.agent_id) + '">' +
+      '<div class="adapter-agent-head">' +
+        '<span class="adapter-agent-name">' + escapeHtml(a.name || a.agent_id) + '</span>' +
+        '<span class="' + badgeCls + '">' + escapeHtml(badgeTxt) + '</span>' +
+      '</div>';
+
+    var n = Array.isArray(ad.accounts) ? ad.accounts.length
+          : (typeof ad.accounts === 'number' ? ad.accounts : 0);
+    html += '<div class="adapter-agent-meta">' +
+      escapeHtml(t('settings.adapterAccounts', { n: n })) + '</div>';
+
+    if (state === 'ensuring') {
+      html += '<div class="adapter-progress">' +
+        '<span class="adapter-spinner"></span>' +
+        escapeHtml(t('settings.adapterEnsuring')) + '</div>';
+    } else if (task && task.state === 'ready') {
+      html += '<div class="adapter-ready-line">' +
+        escapeHtml(t('settings.adapterReady', { name: a.name || a.agent_id })) + '</div>';
+    } else if (state === 'error') {
+      var detail = (task && task.detail) || ad.error || '';
+      html += '<div class="adapter-error-line">' + escapeHtml(detail) + '</div>';
+    }
+
+    html += '<div class="oauth-provider-actions">';
+    if (state === 'running') {
+      html += '<button class="btn-small btn-danger adapter-stop-btn" data-agent="' +
+        escapeHtml(a.agent_id) + '">' + escapeHtml(t('settings.adapterStop')) + '</button>';
+    } else if (state === 'ensuring') {
+      html += '<button class="btn-small btn-primary" disabled>' +
+        escapeHtml(t('settings.adapterStart')) + '</button>';
+    } else if (state === 'error') {
+      html += '<button class="btn-small btn-primary adapter-start-btn" data-agent="' +
+        escapeHtml(a.agent_id) + '">' + escapeHtml(t('settings.adapterRetry')) + '</button>';
+    } else {
+      html += '<button class="btn-small btn-primary adapter-start-btn" data-agent="' +
+        escapeHtml(a.agent_id) + '">' + escapeHtml(t('settings.adapterStart')) + '</button>';
+    }
+    html += '</div></div>';
+  }
+  rows.innerHTML = html;
+  _adapterLastBusy = busy;
+
+  rows.querySelectorAll('.adapter-start-btn').forEach(function(btn) {
+    btn.onclick = function() { _adapterEnsure(this.getAttribute('data-agent')); };
+  });
+  rows.querySelectorAll('.adapter-stop-btn').forEach(function(btn) {
+    btn.onclick = function() { _adapterStop(this.getAttribute('data-agent')); };
+  });
+}
+
+function _adapterEnsure(agentId) {
+  if (!agentId) return;
+  Api.post('/api/v1/adapter/ensure', { agent_id: agentId }, { onError: 'null' })
+    .then(function() { _adapterTick(true); });
+}
+
+function _adapterStop(agentId) {
+  if (!agentId) return;
+  Api.post('/api/v1/adapter/stop', { agent_id: agentId }, { onError: 'null' })
+    .then(function() { _adapterTick(true); });
+}
+
+function _adapterTick(force) {
+  if (_adapterPollTimer) { clearTimeout(_adapterPollTimer); _adapterPollTimer = null; }
+  if (!force && !_adapterPanelVisible()) return;
+  Api.get('/api/v1/adapter/status', { onError: 'null' })
+    .then(function(data) { if (data) _renderAdapterRows(data); })
+    .catch(function() {})
+    .then(function() {
+      if (!_adapterPanelVisible()) return;   // hidden → chain dies here
+      _adapterPollTimer = setTimeout(function() {
+        _adapterPollTimer = null;
+        _adapterTick(false);
+      }, _adapterLastBusy ? _ADAPTER_POLL_BUSY_MS : _ADAPTER_POLL_IDLE_MS);
+    });
+}
+
+// Kick the chain (idempotent). Wired into _loadOAuthStatus, which
+// openSettings() calls on every settings open.
+function _adapterStartPolling() {
+  _adapterEnsureCard();
+  if (_adapterPollTimer) return;
+  _adapterTick(false);
 }
 
 

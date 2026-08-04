@@ -54,7 +54,7 @@ logger = get_logger(__name__)
 
 
 def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
-                   protocol='openai', oauth=''):
+                   protocol='openai', oauth='', adapter=None):
     """Send a minimal completion to test one (key, model) pair.
 
     Returns one of: 'ok', 'rate_limited', 'unauthorized', 'not_found',
@@ -83,6 +83,48 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
     recommend-disable.
     """
     from lib.http_client import http_post
+
+    # ── Subscription-ADAPTER providers (E4) ─────────────────────────────
+    # The provider IS a CLIProxyAPI sidecar on the user's desktop agent;
+    # its base_url is loopback-ON-THE-AGENT. Probe the cell through the
+    # bridge relay with the provider's api_key (the adapter key, minted
+    # server-side) and classify the status exactly like a direct probe.
+    if adapter:
+        import json as _json
+        from urllib.parse import urlparse as _urlparse
+        from lib.desktop import adapter as _ad
+        from lib.desktop.egress import EgressUnavailable as _EU
+        url = base_url.rstrip('/') + '/chat/completions'
+        _pu = _urlparse(url)
+        path = _pu.path + (('?' + _pu.query) if _pu.query else '')
+        headers = {'Authorization': 'Bearer %s' % api_key} if api_key else {}
+        if extra_headers:
+            headers.update(extra_headers)
+        payload = {
+            'model': model_id,
+            'messages': [{'role': 'user', 'content': 'hi'}],
+            'max_tokens': 1,
+            'stream': False,
+        }
+        try:
+            resp = _ad.relay_http(
+                adapter.get('agent_id', ''), int(adapter.get('port') or 0),
+                path, method='POST', headers=headers,
+                body=_json.dumps(payload).encode(), timeout=timeout)
+        except _EU as e:
+            return 'unavailable', str(e)[:160]
+        except Exception as e:
+            logger.warning('[CellProbe] %s @ %s adapter relay error: %s',
+                           model_id, base_url, e)
+            return 'unavailable', 'network: %s' % str(e)[:120]
+        code = resp.status_code
+        try:
+            body = resp.text[:400]
+        except (UnicodeDecodeError, ValueError, OSError, AttributeError) as e:
+            logger.debug('[CellProbe] %s @ %s: could not read response body: %s',
+                         model_id, base_url, e)
+            body = ''
+        return _classify_status(code, body)
 
     # ── Subscription (OAuth) providers ──────────────────────────────────
     if oauth:
@@ -539,7 +581,7 @@ _PROBE_DEFINITIVE = {'unauthorized', 'not_found'}
 
 def probe_cell_multi(base_url, api_key, model_id, extra_headers, timeout,
                      attempts=3, retry_delay=0.8, protocol='openai',
-                     probe_fn=None, oauth=''):
+                     probe_fn=None, oauth='', adapter=None):
     """Probe a cell up to ``attempts`` times to filter out FALSE 429s.
 
     ``probe_fn`` defaults to :func:`probe_one_cell` (chat surface); the
@@ -554,7 +596,8 @@ def probe_cell_multi(base_url, api_key, model_id, extra_headers, timeout,
         # Call through the module global so tests can patch probe_one_cell.
         if probe_fn is None:
             status, detail = fn(base_url, api_key, model_id, extra_headers,
-                                timeout, protocol, oauth=oauth)
+                                timeout, protocol, oauth=oauth,
+                                **({'adapter': adapter} if adapter else {}))
         else:
             status, detail = fn(base_url, api_key, model_id, extra_headers,
                                 timeout, protocol)
@@ -695,6 +738,20 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
     extra_headers = task['_extra_headers']
     protocol = task.get('_protocol', 'openai')
     oauth = task.get('_oauth', '')
+    adapter = task.get('_adapter') or {}
+    if not adapter:
+        # Fallback: derive the marker from the stored provider card (the
+        # probe route predates the marker and only threads '_oauth').
+        try:
+            from lib import _load_server_config
+            from lib.desktop.adapter import is_adapter_provider
+            for _p in (_load_server_config().get('providers') or []):
+                if _p.get('id') == provider_id:
+                    adapter = is_adapter_provider(_p)
+                    break
+        except Exception as _ae:
+            logger.debug('[CellProbe] adapter marker lookup failed: %s', _ae)
+            adapter = {}
     attempts = task.get('attempts', 3)
     if task['cells']:
         _recount_summary(task)
@@ -743,7 +800,8 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                                           extra_headers,
                                           cell_timeout, attempts=cell_attempts,
                                           protocol=cell_protocol, probe_fn=probe_fn,
-                                          oauth=oauth)
+                                          oauth=oauth,
+                                          **({'adapter': adapter} if adapter else {}))
         return {
             'key_idx': key_idx,
             'model_id': mid,

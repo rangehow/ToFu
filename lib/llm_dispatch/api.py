@@ -479,6 +479,7 @@ def dispatch_chat(messages, *, max_tokens=4096, temperature=0,
                 provider_id=slot.provider_id or '',
                 api_protocol=slot.protocol or 'openai',
                 oauth=slot.oauth or '',
+                adapter=slot.adapter or None,
             )
             latency = (time.time() - t0) * 1000
             _out_tokens = 0
@@ -1687,6 +1688,7 @@ def dispatch_stream(body_or_messages, *, on_thinking=None, on_content=None,
                 base_url=slot.base_url or None,
                 extra_headers=slot.extra_headers or None,
                 oauth=slot.oauth or '',
+                adapter=slot.adapter or None,
                 on_thinking=on_thinking,
                 on_content=_on_content_wrapper,
                 on_tool_call_ready=on_tool_call_ready,
@@ -2108,6 +2110,7 @@ async def async_dispatch_stream(body_or_messages, *, on_thinking=None,
                 base_url=slot.base_url or None,
                 extra_headers=slot.extra_headers or None,
                 oauth=slot.oauth or '',
+                adapter=slot.adapter or None,
                 on_thinking=on_thinking,
                 on_content=_on_content_wrapper,
                 on_tool_call_ready=on_tool_call_ready,
@@ -2349,6 +2352,7 @@ def dispatch_fastest(messages, *, max_tokens=4096, temperature=0,
                 provider_id=slot.provider_id or '',
                 api_protocol=slot.protocol or 'openai',
                 oauth=slot.oauth or '',
+                adapter=slot.adapter or None,
             )
             latency = (time.time() - t0) * 1000
             _out_tokens = 0

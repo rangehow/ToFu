@@ -51,6 +51,7 @@ from .skills import api_v1_skills_bp
 from .mcp import api_v1_mcp_bp
 from .daily_report import api_v1_daily_report_bp
 from .oauth import api_v1_oauth_bp
+from .adapter import api_v1_adapter_bp
 from .project import api_v1_project_bp
 from .translate import api_v1_translate_bp
 from .artifacts import api_v1_artifacts_bp
@@ -98,6 +99,7 @@ ALL_V1_BLUEPRINTS = [
     api_v1_mcp_bp,
     api_v1_daily_report_bp,
     api_v1_oauth_bp,
+    api_v1_adapter_bp,
     api_v1_project_bp,
     api_v1_translate_bp,
     api_v1_artifacts_bp,

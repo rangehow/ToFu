@@ -353,6 +353,11 @@ class LLMDispatcher:
             prov_extra_headers = provider.get('extra_headers') or {}
             prov_thinking_format = provider.get('thinking_format', '')
             prov_oauth = provider.get('oauth', '')
+            # Subscription-adapter marker (CLIProxyAPI sidecar on the user's
+            # desktop agent). Mirrors lib.desktop.adapter.is_adapter_provider
+            # without importing the desktop layer here.
+            _raw_adapter = provider.get('adapter')
+            prov_adapter = dict(_raw_adapter) if isinstance(_raw_adapter, dict) else {}
 
             # A subscription backend's wire protocol is a fact of the
             # backend, not a user setting: the Codex backend speaks ONLY
@@ -608,6 +613,7 @@ class LLMDispatcher:
                                 thinking_format=prov_thinking_format,
                                 protocol=face.protocol,
                                 oauth=prov_oauth,
+                                adapter=dict(prov_adapter),
                                 rpm_limit=slot_rpm,
                                 latency_ema=slot_lat,
                                 cost_per_1k_tokens=slot_cost,

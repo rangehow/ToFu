@@ -1,3 +1,16 @@
+### 2026-08-04(视频 epic 关票:P2 问题 owner 裁定「不做厂商专属」——视觉解说词接力落为模型无关答案:管线期一次批量视觉调用把帧条讲成 storyboard,纯文本聊天模型也能读视频) — epic `pt_6aca988757cb4019` **DONE**;commit `7384aa31`(11 文件 +304/−20);套件 **41/41** + 守卫环 **97 绿**
+
+- **owner 答问定案:** P2 挂板提问「Gemini 原生直通怎么做」,owner 答「一定要用 gemini 吗?用户有什么模型用什么模型不可以么?」——裁定**不做厂商专属原生路径**。审视 P1 后擒获真缺口:帧通道只服务视觉聊天模型,**无视觉聊天模型丢整个视觉信道**(哪怕槽位池里有视觉模型)。
+- **修法(VideoAgent 分解,零新依赖):** `lib/video_analysis/_caption.py`——管线期(非发送期)一次批量视觉调用 `dispatch_chat(capability='vision')` 把稀疏化帧条讲成「逐帧 `[MM:SS] 画面内容 + Overall 弧线」文本 storyboard,存进耐用净载;发送期 transform 二选一:视觉模型→原始帧(storyboard 抑制,NEUTER 针实证),纯文本模型→storyboard+转录。管线期生成=storyboard 是(视频×视觉池)的属性而非聊天模型的属性——多轮/预览/compaction 永不重复烧钱,发送零延迟零成本。
+- **小重构:** `_thin_frames`/`_fmt_video_ts` 移入 `_frames.py` 单一定义(`_transform` 再导出保兼容);turn_builder 白名单收 storyboard/storyboard_model(status 属登记处元数据,针住不入净载);杀开关 `TOFU_VIDEO_STORYBOARD=0`。
+- **测试账:** +8 检(env 杀开关/无帧/无视觉槽/消息形状[帧图+时间戳对、指令殿后、预算稀疏]/派发失败降级/transform 接力/NEUTER 抑制/净化键);e2e 管线更新(fake storyboard 防真网络);环=装配+契约+音频+server_async 97 绿。
+### 2026-08-04(Opus 5 全链定案+探测假绿根修:AIGC 网关 400 说中文「不支持的模型类型」,`_classify_status` 的 200/400→ok 阶梯抢在体嗅探前面——vertex./aws. 死路由全显绿,诱导 owner 禁掉唯二能用的裸 ID+yuju) — owner 两连问(会话 mse7x3fr 为何 400 / 探测为何显绿);commit `04f1706a`(2 文件 +34/−2);探测环 **53 绿**;活网关复测实证死路由翻 not_found
+
+- **事故全链(实测定案):** ①网关只认 `claude-opus-5` 裸 ID 与 `yuju-…-evaDaily`(探针 429=路由存在),`vertex./aws.claude-opus-5` 是确定性 400「不支持的模型类型」;②13:29 设置页探测把死路由全标 ok(detail 就是「HTTP 400」),yuju 反被 429 标 recommend_disable;③13:30:05 配置保存:3 key 全禁用裸 ID+yuju,只剩两条死路由;④13:30:23 会话 59e5a896 三 slot 全 400 → fallback kimi-k3(用户看到「我是 Kimi」)。
+- **假绿根因(lib/provider_probe.py):** `_classify_status` 先判 `code==200|400→ok` 再嗅体,且 not_found 嗅探只认英文三词(model_not_found/does not exist/no such model)——AIGC 用 400+中文报死路由,双保险全落空。同病还有 `LongCat-Flash-Omni-2603`(key2,ok/HTTP 400)。
+- **根修:** `_ROUTE_MISSING_MARKERS`(英文三词 + unsupported model/unsupported_model/model not supported + 不支持的模型类型)提到状态阶梯之前——任何状态码带死路由体即 not_found;plain 400 仍 ok(既有针保);顺带愈「200 带 model_not_found 体」潜例。probe_one_cell docstring 同步。
+- **测试账:** test_probe_cells +2(事故原文体 400→not_found / 英文 unsupported model→not_found);环=probe_cells+scoped+nonchat_skip+oauth **53 绿**。活网关实证:vertex./aws.claude-opus-5 经修复分类器 → not_found。
+- **遗留(owner 决策):** server_config.json 里 opus-5 的 key_access 禁用仍未翻转(等 owner 拍板是否有意);探测缓存盘上假绿格要下次设置页重探才刷新;fable-5 同款「裸 ID 全 key 禁用」形状待 owner 顺手核。
 ### 2026-08-04(收官抛光:最高频失败文案双语撞动词根修——`reason.unreachable` 改「服务器无响应 / no answer from the server」,shell/reason 缝不再复读;compose 断言钉成类防回潮) — owner 复核末项指令;commit 见下(3 文件);套件 **24/24**(ComposedCopy +3),NEUTER 一针精确,环 **213 绿**
 
 - **定案(owner compose 验收擒获):** `unreachable` 是探测/配对失败的主力 token(服务器没开/端口错/隧道死),其拼合文案是产品里被读次数最多的错误句,而清扫批选的短语与外壳动词撞车——en「Cannot reach Tofu there: **the address cannot be reached**.」/ zh「连不上服务器:**无法连接到该地址**。」,verifyFailed 与 pair.failed 双壳双语四句全拗口。根修=一处:`desktop.reason.unreachable` 改不重复外壳动词的说法(en `no answer from the server` / zh「服务器无响应」)——拼完四句全通顺(Cannot reach Tofu there: no answer from the server. / 连不上服务器:服务器无响应。)。

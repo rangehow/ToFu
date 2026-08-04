@@ -104,7 +104,7 @@ test-e2e: ## Run the hermetic E2E smoke test (real app + real browser + stub LLM
 
 test-frontend: ## Run frontend tests (jsdom harnesses + tsc ratchet — needs `npm install`)
 	@if [ ! -d node_modules/jsdom ]; then echo '⚠️  Run `npm install` first (installs jsdom + typescript dev-deps)'; exit 1; fi
-	python -m pytest $(PYTEST_BASE) tests/test_frontend_*.py $(PYTEST_PARALLEL) --timeout=180 -ra --tb=short -q
+	TOFU_REQUIRE_FRONTEND=1 python -m pytest $(PYTEST_BASE) tests/test_frontend_*.py $(PYTEST_PARALLEL) --timeout=180 -ra --tb=short -q
 
 test-all: ## Run all tests (unit + api + visual)
 	python -m pytest $(PYTEST_BASE) --tb=short -q

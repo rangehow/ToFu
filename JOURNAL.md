@@ -1,3 +1,19 @@
+### 2026-08-04(测试体系战略落地 P0-1+P0-2:skip 响亮哨兵 + jsdom 结构化断言地板——owner 拍板 docs/TESTING_STRATEGY.md;TOFU_REQUIRE_FRONTEND 三缝接线;expect_pass 棘轮基线 78 只降不升) — epic `pt_2f2c847ff8524e5e`;owner 复核拍板并两处修正;commit 见下(13 文件);新套件×2 **33 针**;哨兵 e2e 双路实证;回归抽样 **56 绿** + collect-only **15616 零错**
+
+- **owner 两处修正(已纳入设计稿):** ①CI 已有 node 专用车道(ci.yml setup-node 注释早已自知静默 skip)——P0-1 从「CI 装 node」改为「skip 必须响亮」哨兵制;②审计挖出却漏计划的洞——run_harness 默认 min_pass=1 且 `output.count('PASS')` 子串计数(BYPASS/PASSword 都算 PASS),102 文件只 60 个显式申报,断言地板是虚的——列入 P0-2 结构化改造。
+- **P0-1 skip 响亮:** `tests/_jsdom.py` 新增 frontend_required(TOFU_REQUIRE_FRONTEND=1/true/yes/on)/skip_or_fail/frontend_module_guard(收编 4 个 scene 文件的 module-level 手写门卫);conftest 新增 pytest_runtest_logreport+pytest_sessionfinish 哨兵——前端套件以 node/jsdom/npm/tsc 理由 skip 时,REQUIRE 车道全场 exitstatus=1(分类器 is_frontend_dep_skip 纯逻辑,数据条件 skip 不误伤);Makefile test-frontend 与 ci.yml frontend job 双缝注入环境变量。e2e 实证:合成探针 skip 在 REQUIRE=1 下「1 skipped」但 **EXIT=1**,无标记车道 EXIT=0 遗留行为不变。
+- **P0-2 结构化断言地板:** `_jsdom_harness.js` report() 追加权威尾行 `__JSDOM_RESULT__ {"pass":N,"fail":M}`;run_harness 改 parse_harness_result(尾行优先,无尾行走 PASS 行锚定计数,子串计数废除)+ 新 kwarg `expect_pass` 精确语义(多报少报都红);棘轮 `test_frontend_harness_expect_ratchet` AST 扫描调用点,**基线 78(53 文件)只降不升**,新套件必须申报。failing-first 实证:新针首跑 collection error 红→实现后 33 绿;NEUTER×4(虚报多/虚报少/抹 FAIL 行/子串膨胀)全精确红。
+- **本机怪癖(预存,非本批):** 无 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 时 pytest 启动即崩——pyproject addopts `-p pytest_timeout` 与 entrypoint 重注册(ValueError: Plugin already registered: timeout),Makefile 的 `-p no:napari` 路径在本机已失效;计时测量改走 DISABLE + `-p xdist` 显式加载。
+- **预存红×2 挂票 `pt_d42f32511279432a`(均实证与本批无关):** ①test_frontend_backend_contract——api.js:1251 live-session 路径含两个插值,提取器在第二个 `${` 内的 `?` 截断留下 `live-session${refresh` 半插值,normaliser 不识→假 MISS(HEAD 三文件全干净实证);②ruff E401 test_frontend_scene_time_of_day.py:342 `import colorsys, statistics`(HEAD 预存,本地 ruff 0.15.15 擒获)。
+- **共享树判例:** 我的战略调研 JOURNAL 条目未提交期间被兄弟 E4 提交(2383ae9a)顺走——内容无损,但「写完条目尽快提交」再添一例。
+- **待办:** P0-3 浏览器主干道巡检(10-20 条关键旅程,test_e2e_smoke 为母版,接 release 闸);make test-unit 全量墙钟时间测量中(决定选择运行与否);P1 字段级契约;P2 棘轮殡葬/flake SLA。
+
+### 2026-08-04(预存红闭环:test_frontend_brain_tool_render 17 红——方向对齐 Epic-E 拆分(测试侧):harness 改 eval core+rich 双真源(拼接单次 eval 复现浏览器共享全局词法作用域),_nc 双 neuter 自动定位锚点所在文件) — 脑派发接我自票 `pt_9ef7b2ff38d24fea` **DONE**;commit `bc20e0d3`(1 文件 +56/−23,纯测试侧);套件 **17/17 绿** + 邻接环 7 绿
+
+- **定案(测试漂移,与 restart_smoke/health_endpoint 同族):** 套件钉的是 2026-08-01 前的单文件布局——fcddc420(Epic-E sub-4)把全部 conv-meta 结构化渲染器迁至 DEFERRED `tool_rounds_rich.js`,core 只剩 dispatch + `_CONV_META_TOOLS` + `_webToolSvg`,NC 锚点全数落空报「anchor not found」。stash 实证纯净 HEAD 同 17 红,与 peer-row 批无关。
+- **修法(零产品代码):** ①harness argv[2] 改 JSON 源列表,core 先 rich 后(bundle 序)拼接成**单次 eval**——关键坑:逐文件 eval 会把 core 的顶层 `const _CONV_META_TOOLS` 困在随 eval 结束即弃的词法环境里,rich 调用期读不到;拼接单次 eval 精确复现浏览器两 script 共享全局词法作用域的语义;②`_nc` 自动定位锚点所在文件(NC 锚点横跨 core/rich 两侧——glyph/_CONV_META_TOOLS 在 core,渲染器/折叠策略在 rich),patch 副本替换运行,断言两份船载文件字节不变。
+- **测试账:** 主测试(103 针 PASS 断言)+ 16 NC 全绿(64s);邻接环 peer_inject_row_layout + conv_reducers_extracted 7/7;collect 21 枚零错。
+
 ### 2026-08-04(E4 订阅适配器 sidecar 全链落地:CLIProxyAPI 看护器+loopback 中继+adapter provider+传输链+设置页卡片;真机冒烟 v7.2.116 下载→启动→/v1/models 200、错 key 401;epic `pt_728134281fb841c3` **DONE**) — 脑派发接我自票;commit 见下(19 文件);环 **102 绿** + failing-first 干净 HEAD 实证 17 红 2 err
 
 - **三分工:** 安全主干自做(agent 看护器/egress loopback 管线/服务器适配器层/路由),传输链与前端卡片两子代理并行(接口契约先冻结,零文件交叠)。

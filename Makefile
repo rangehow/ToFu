@@ -82,13 +82,20 @@ suite-health: ## Gate: test-suite health must not regress (one-way ratchet)
 JOBS ?= auto
 PYTEST_PARALLEL = $(if $(filter 0,$(JOBS)),,-n $(JOBS) --dist worksteal)
 
-# PYTEST_BASE — flags every Python test target needs in THIS env. `-p no:napari`
-# disables the stray napari pytest plugin whose import chain
-# (napari→vispy→OpenGL) crashes collection at pytest_cmdline_parse with
-# `OSError: GL ES 2.0 library not found` on a headless box. Surgical (kills only
-# the one broken plugin) rather than PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, which
-# would also drop xdist/timeout/anyio and force us to re-add each by hand.
-PYTEST_BASE = -p no:napari
+# PYTEST_BASE — flags every Python test target needs in THIS env. TWO entrypoint
+# landmines, both empirically reproduced 2026-08-04:
+#   `-p no:napari`  — the stray napari plugin whose import chain
+#                     (napari→vispy→OpenGL) crashes collection with
+#                     `OSError: GL ES 2.0 library not found` on a headless box.
+#   `-p no:timeout` — pytest-timeout's entrypoint registers under the name
+#                     'timeout', then pyproject addopts `-p pytest_timeout`
+#                     registers the same module under its module name →
+#                     `ValueError: Plugin already registered under a different
+#                     name: timeout`. Blocking the ENTRYPOINT leaves addopts'
+#                     explicit load as the single registration.
+# Surgical rather than PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, which would also drop
+# xdist/anyio and force us to re-add each by hand.
+PYTEST_BASE = -p no:napari -p no:timeout
 
 test-unit: ## Run unit tests (parallel; override JOBS=N, JOBS=0 for serial)
 	python -m pytest $(PYTEST_BASE) -m unit $(PYTEST_PARALLEL) --timeout=300 --tb=short -q

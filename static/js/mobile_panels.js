@@ -144,17 +144,20 @@
       } else {
         _openPortaledPanel(panelId,
           typeof window[refreshName] === "function" ? window[refreshName] : null);
+        // @ts-expect-error -- string-keyed dynamic window wrap (typeof-guarded above)
         if (typeof window[setOpenName] === "function") window[setOpenName](true);
         // Pre-land: the panel module is still deferred — kick the load and
         // fill the open sheet once it lands (never an empty dead-end).
         if (typeof window[refreshName] !== "function" && typeof _loadFeatureBundle === "function") {
           _loadFeatureBundle().then(function () {
+            // @ts-expect-error -- string-keyed dynamic window wrap (typeof-guarded)
             if (typeof window[refreshName] === "function") window[refreshName]();
           });
         }
       }
     };
     _installedWrap[name] = wrapped;
+    // @ts-expect-error -- intentional string-keyed window global install
     window[name] = wrapped;
   }
 

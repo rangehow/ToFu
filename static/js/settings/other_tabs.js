@@ -88,8 +88,8 @@ function _refreshSearchPipelinePreview() {
 
 function _wireSearchPipelinePreview() {
   _refreshSearchPipelinePreview();
-  if (_wireSearchPipelinePreview._done) return;
-  _wireSearchPipelinePreview._done = true;
+  if (/** @type {any} */ (_wireSearchPipelinePreview)._done) return;
+  /** @type {any} */ (_wireSearchPipelinePreview)._done = true;
   ['settingFetchTopN', 'settingFetchTimeout', 'settingMaxCharsSearch',
    'settingLlmContentFilter'].forEach(function (id) {
     var el = document.getElementById(id);

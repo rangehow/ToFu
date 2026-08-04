@@ -109,7 +109,7 @@ if (typeof window !== 'undefined') {
       // Never hijack typing.
       var t = ev.target;
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '')) return;
-      if (t && t.isContentEditable) return;
+      if (t && /** @type {HTMLElement} */ (t).isContentEditable) return;
       if (ev.key === 'j' || ev.key === 'ArrowDown') { _focusStep(1); ev.preventDefault(); }
       else if (ev.key === 'k' || ev.key === 'ArrowUp') { _focusStep(-1); ev.preventDefault(); }
       else if (ev.key === 'Escape') { _paperFocusModeToggle(); }

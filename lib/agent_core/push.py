@@ -471,7 +471,7 @@ def build_conv_state_snapshot(user_id='') -> dict:
                      'sending empty snapshot', _e)
         raw = {}
     try:
-        from lib.conversations.meta_cache import _running_task_ids_rev
+        from lib.agent_core.rev_clock import _running_task_ids_rev
     except Exception as _ie:
         logger.debug('[Push] _running_task_ids_rev import failed (%s); '
                      'sending snapshot without per-conv rev', _ie)

@@ -260,7 +260,13 @@ def status_payload() -> dict:
         })
     except Exception as e:
         logger.warning('[SearchSettings] tofu-search status unavailable: %s', e)
-        payload['error'] = str(e)
+        # error_transparency ratchet: error fields are envelope-produced,
+        # never a bare str(e) (loses kind/severity/hint). The status strip
+        # reads a STRING, so take the envelope's classified message.
+        from lib.error_envelope import from_exception
+        payload['error'] = from_exception(
+            e, context='status-probe', source='search-settings').get(
+                'message', str(e))
     try:
         from lib.browser import is_extension_connected
         payload['extension_connected'] = bool(is_extension_connected())

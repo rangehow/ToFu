@@ -142,5 +142,5 @@ jobs:
           pip install playwright
       - name: Install Chromium + system deps
         run: python -m playwright install --with-deps chromium
-      - name: Run E2E smoke test
-        run: pytest tests/test_e2e_smoke.py -m visual -ra
+      - name: Run E2E smoke + critical journeys
+        run: pytest tests/test_e2e_smoke.py tests/test_e2e_journeys.py -m visual -ra

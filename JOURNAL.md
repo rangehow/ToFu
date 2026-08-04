@@ -1,3 +1,11 @@
+### 2026-08-04(测试体系 P0-3 落地:浏览器主干道巡检 12 条——中止/会话恢复/侧栏/多轮/键盘/新会话/主题持久化/设置弹窗/上传 chip 九旅程入 e2e hermetic 车道,Makefile+CI 双缝收编) — epic `pt_2f2c847ff8524e5e` P0 全量收口;commit 见下(4 文件);旅程 **9+3 全绿**;collect-only **15642 零错**
+
+- **形态(对齐业界 10-50 条关键旅程守闸惯例):** 骑 test_e2e_smoke 母版的 hermetic 合约(真 app+真 Chromium+stub LLM,session fixture 直接 import 复用零重复),每条=一个真实用户旅程打在 live DOM 上;全部 LLM 路径断言 stub 哨兵递进(patch-miss 即红,绝不拿真模型输出充数)。
+- **abort 旅程的支撑件:** stub 新增 `__e2e_slow__` 慢流分支(60 词×50ms,逐词查 task['aborted'])——中止点击确定性落在流中段;断言按钮弹回发送态+已流出部分保留+流不回生长(failing-first 实证:无分支时 wait slow03 超时红)。
+- **事故自纠(多轮等待误配):** 首版 `_send_and_wait_done` 用 `.some()` 等「任一 stub 回复」,第二轮被第一轮的回复瞬间满足→哨兵断言抢跑(`assert 1 > 1` 被擒);改 `expect_assistant=N` 按第 N 条助手消息等,跨轮误配结构性消除。
+- **附带发现(不捎修):** 主题选择器是无渲染元素的死 UI——`.theme-option` 只有 CSS 与两处 sync 代码,无任何元素创建点,cycleTheme 仅挂在 window 白名单;主题旅程改走真实持久化环(cycleTheme→localStorage→reload 启动还原)。
+- **P0 全量收口,epic 分解关票:** P0-1 哨兵/P0-2 结构化断言地板(8f3204f7)/P0-3 本批全部落地;P1(字段级契约 top-N)/P2(棘轮殡葬+flake SLA+按路径选择运行——unit 层 20min 实测已立项有据)拆为独立子票,母票 DONE。
+
 ### 2026-08-04(向导现代化最后一公里:商店工件换新——受控端 45,171,747B built d9b34c71 / 桌面端 120,152,343B built 959fd1c9(mirrored→built 翻转),选择器/盘面/哈希三点核对全过) — owner 复核指令;纯工件操作+JOURNAL,零产品代码
 
 - **owner 复核擒获:** 模板现代化≠安装体验现代化——面板下载的商店工件仍是旧 MUI 向导(agent built 53,166,091B;full 甚至是 mirrored 的 CI Inno 117,946,479B)。用缓存 payload 直 wrap 入店:agent 走 payload-d9b34c71(=验收 epic `pt_59b62951aad2463e` 验证过的那份,30s),full 走 git 最新 payload-959fd1c9(116s)。**验收链注意:P4 现在下载到的是同一 d9b34c71 payload 的新向导版(45.17MB),验收步骤不变。**

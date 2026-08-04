@@ -99,8 +99,8 @@ test-api: ## Run API integration tests (Flask test client + mock LLM)
 test-visual: ## Run Playwright visual E2E tests (needs chromium)
 	python -m pytest $(PYTEST_BASE) -m visual --tb=short -q
 
-test-e2e: ## Run the hermetic E2E smoke test (real app + real browser + stub LLM, no API key)
-	python -m pytest $(PYTEST_BASE) tests/test_e2e_smoke.py -m visual -ra --tb=short -q
+test-e2e: ## Run hermetic E2E journeys — real app + real browser + stub LLM (P0-3 主干道巡检)
+	python -m pytest $(PYTEST_BASE) tests/test_e2e_smoke.py tests/test_e2e_journeys.py -m visual -ra --tb=short -q
 
 test-frontend: ## Run frontend tests (jsdom harnesses + tsc ratchet — needs `npm install`)
 	@if [ ! -d node_modules/jsdom ]; then echo '⚠️  Run `npm install` first (installs jsdom + typescript dev-deps)'; exit 1; fi

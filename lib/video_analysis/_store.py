@@ -25,7 +25,7 @@ from lib.video_analysis._config import RECORD_TTL_S
 logger = get_logger(__name__)
 
 #: Processing phases, in order — the frontend progress chip renders these.
-PHASES = ('probe', 'persist', 'frames', 'audio', 'done')
+PHASES = ('probe', 'persist', 'frames', 'storyboard', 'audio', 'done')
 
 
 def _registry_path() -> str:

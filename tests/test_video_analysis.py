@@ -405,6 +405,10 @@ def test_pipeline_end_to_end(tmp_path, monkeypatch):
     monkeypatch.setattr(pipe, 'transcribe_track',
                         lambda *a, **k: {'text': 'fake words', 'status': 'ok',
                                          'model': 'whisper-1'})
+    import lib.video_analysis._caption as cap
+    monkeypatch.setattr(cap, 'storyboard_for_frames',
+                        lambda *a, **k: {'text': '- [00:00] red screen\nOverall: demo',
+                                         'status': 'ok', 'model': 'vl-test'})
 
     video = _make_video(tmp_path / 'job' / 'upload.mp4', seconds=2.0,
                         with_audio=True)
@@ -418,6 +422,9 @@ def test_pipeline_end_to_end(tmp_path, monkeypatch):
     assert rec['frame_count'] >= 8
     assert rec['transcript'] == 'fake words'
     assert rec['transcript_status'] == 'ok'
+    assert rec['storyboard_status'] == 'ok'
+    assert 'Overall: demo' in rec['storyboard']
+    assert rec['storyboard_model'] == 'vl-test'
     assert rec['video_url'].startswith('/api/videos/')
     # Frames persisted under the (tmp) uploads store with durable URLs.
     for fr in rec['frames']:
@@ -551,6 +558,103 @@ def test_status_route_404(client, tmp_path, monkeypatch):
     _run_async(go())
 
 
+# ──────────────────────────────────────────────────────────────
+#  Visual storyboard (model-agnostic vision relay)
+# ──────────────────────────────────────────────────────────────
+
+def test_storyboard_disabled_by_env(monkeypatch):
+    monkeypatch.setenv('TOFU_VIDEO_STORYBOARD', '0')
+    from lib.video_analysis._caption import storyboard_for_frames
+    res = storyboard_for_frames([{'url': '/api/images/a.jpg', 't': 0, 'bytes': 1}])
+    assert res['status'] == 'disabled' and res['text'] == ''
+
+
+def test_storyboard_no_frames():
+    from lib.video_analysis._caption import storyboard_for_frames
+    assert storyboard_for_frames([])['status'] == 'no_frames'
+
+
+def test_storyboard_no_vision_slot(monkeypatch):
+    import lib.video_analysis._caption as cap
+    monkeypatch.setattr(cap, '_vision_slot_models', lambda: [])
+    res = cap.storyboard_for_frames([{'url': '/api/images/a.jpg', 't': 0, 'bytes': 1}])
+    assert res['status'] == 'no_vision_slot'
+
+
+def test_storyboard_happy_message_shape(monkeypatch):
+    """One batched vision call: per-frame image+timestamp pairs, instruction
+    LAST (media-before-question convention), frame set thinned to budget."""
+    import lib.video_analysis._caption as cap
+    monkeypatch.setattr(cap, '_vision_slot_models', lambda: ['vl-test'])
+    monkeypatch.setattr(cap, 'video_frame_budget', lambda m, **k: 2)
+    captured = {}
+
+    def _fake_dispatch(messages, *, capability, temperature, max_tokens, log_prefix):
+        captured['messages'] = messages
+        captured['capability'] = capability
+        return ('- [00:00] a red screen\nOverall: a demo', {'_dispatch': {'model': 'vl-test'}})
+    import lib.llm_dispatch as disp
+    monkeypatch.setattr(disp, 'dispatch_chat', _fake_dispatch)
+
+    frames = [{'url': f'/api/images/f{i}.jpg', 't': float(i) * 3, 'bytes': 100}
+              for i in range(6)]
+    res = cap.storyboard_for_frames(frames, name='demo.mp4', duration_s=15.0)
+    assert res['status'] == 'ok'
+    assert res['model'] == 'vl-test'
+    assert 'Overall: a demo' in res['text']
+    assert captured['capability'] == 'vision'
+    blocks = captured['messages'][0]['content']
+    imgs = [b for b in blocks if b.get('type') == 'image_url']
+    assert len(imgs) == 2  # thinned 6 → 2
+    assert blocks[-1]['type'] == 'text' and 'visual storyboard' in blocks[-1]['text']
+    assert any(b.get('text') == '[frame at 00:00]' for b in blocks)
+
+
+def test_storyboard_dispatch_failure_degrades(monkeypatch):
+    import lib.video_analysis._caption as cap
+    monkeypatch.setattr(cap, '_vision_slot_models', lambda: ['vl-test'])
+    import lib.llm_dispatch as disp
+    def _boom(*a, **k):
+        raise RuntimeError('all slots down')
+    monkeypatch.setattr(disp, 'dispatch_chat', _boom)
+    res = cap.storyboard_for_frames([{'url': '/api/images/a.jpg', 't': 0, 'bytes': 1}])
+    assert res['status'] == 'failed' and res['text'] == ''
+
+
+def test_transform_storyboard_serves_text_only_model(monkeypatch):
+    """Chat model without vision: no image blocks, the storyboard carries the
+    visual channel (plus transcript); header says who narrated."""
+    import lib.model_info as mi
+    monkeypatch.setattr(mi, 'video_frame_budget', lambda m, **k: 0)
+    from lib.tasks_pkg.conv_message_builder._transform import _build_user_message
+    msg = _video_msg()
+    msg['videos'][0]['storyboard'] = '- [00:00] red\nOverall: demo arc'
+    msg['videos'][0]['storyboard_model'] = 'vl-test'
+    out = _build_user_message(msg, model='text-only-model')
+    blocks = out['content']
+    assert not any(b.get('type') == 'image_url' for b in blocks)
+    assert 'visual storyboard' in blocks[0]['text'] and 'vl-test' in blocks[0]['text']
+    sb = [b for b in blocks if b.get('type') == 'text'
+          and b['text'].startswith('[Video 1 visual storyboard]')]
+    assert sb and 'Overall: demo arc' in sb[0]['text']
+    assert any('hello transcript' in b.get('text', '') for b in blocks)
+
+
+def test_transform_storyboard_unused_when_model_has_vision(monkeypatch):
+    """NEUTER (reverse): a vision chat model gets raw frames and the storyboard
+    must NOT ride — proves the suppression branch is load-bearing."""
+    import lib.model_info as mi
+    monkeypatch.setattr(mi, 'video_frame_budget', lambda m, **k: 6)
+    from lib.tasks_pkg.conv_message_builder._transform import _build_user_message
+    msg = _video_msg()
+    msg['videos'][0]['storyboard'] = '- [00:00] red\nOverall: demo arc'
+    out = _build_user_message(msg, model='gpt-4o')
+    blocks = out['content']
+    assert sum(1 for b in blocks if b.get('type') == 'image_url') == 6
+    assert not any(b.get('text', '').startswith('[Video 1 visual storyboard]')
+                   for b in blocks if b.get('type') == 'text')
+
+
 def test_turn_builder_videos_sanitize_and_passthrough():
     """build_user_msg_from_payload carries videos[] with a strict whitelist:
     unknown keys dropped, frame URLs must be local durable /api/images/ URLs."""
@@ -568,6 +672,18 @@ def test_turn_builder_videos_sanitize_and_passthrough():
     assert vids[0]['video_id'] == 'v1'
     assert 'evil_extra' not in vids[0]
     assert vids[0]['frames'] == [{'url': '/api/images/x.jpg', 't': 1.0, 'bytes': 100}]
+
+
+def test_turn_builder_storyboard_keys_survive():
+    from lib.chat.turn_builder import build_user_msg_from_payload
+    payload = {'text': 'hi', 'videos': [
+        {'name': 'a.mp4', 'storyboard': 'arc text', 'storyboard_model': 'vl-test',
+         'storyboard_status': 'internal-only'},
+    ]}
+    msg = build_user_msg_from_payload(payload, {'autoTranslate': False})
+    v = msg['videos'][0]
+    assert v['storyboard'] == 'arc text' and v['storyboard_model'] == 'vl-test'
+    assert 'storyboard_status' not in v  # status is registry metadata, not payload
 
 
 def test_turn_builder_no_videos_key_when_empty():

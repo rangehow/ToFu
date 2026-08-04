@@ -120,6 +120,16 @@ def _process(video_id: str, scratch_path: str, original_name: str) -> None:
     avg_frame_bytes = int(sum(f['bytes'] for f in persisted) / len(persisted))
     _store.update_record(video_id, frame_count=len(persisted))
 
+    # ── visual storyboard (owner ruling 2026-08-04: model-agnostic — narrate
+    #    the frames once via the pool's vision slot so a TEXT-ONLY chat model
+    #    still gets the visual channel; unused when the chat model has vision)
+    _store.set_phase(video_id, 'storyboard')
+    from lib.video_analysis._caption import storyboard_for_frames
+    sb = storyboard_for_frames(persisted, name=original_name, duration_s=duration_s)
+    storyboard = sb['text']
+    if len(storyboard) > TRANSCRIPT_CHAR_CAP:
+        storyboard = storyboard[:TRANSCRIPT_CHAR_CAP] + '\n[storyboard truncated]'
+
     # ── audio transcript (optional, degrades to a status) ──
     _store.set_phase(video_id, 'audio')
     if probe.get('has_audio'):
@@ -146,6 +156,9 @@ def _process(video_id: str, scratch_path: str, original_name: str) -> None:
         transcript=transcript,
         transcript_status=tr['status'],
         transcript_model=tr['model'],
+        storyboard=storyboard,
+        storyboard_status=sb['status'],
+        storyboard_model=sb['model'],
     )
     logger.info('[VideoPipeline] %s ready: %.1fs %sx%s, %d frames (~%dB each), '
                 'transcript=%s(%d chars)',

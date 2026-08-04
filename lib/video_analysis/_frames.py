@@ -114,6 +114,27 @@ def _extract_single(ffmpeg: str, video_path: str, t: float, out_dir: str,
     return {'path': out, 't': round(t, 2)} if os.path.isfile(out) else None
 
 
+def _fmt_video_ts(seconds: float) -> str:
+    """Format a frame timestamp as MM:SS (H:MM:SS past the hour)."""
+    s = max(0, int(seconds))
+    if s >= 3600:
+        return f'{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}'
+    return f'{s // 60:02d}:{s % 60:02d}'
+
+
+def _thin_frames(frames: list, n: int) -> list:
+    """Uniformly thin ``frames`` to at most ``n`` entries, keeping the first
+    and last — temporal coverage beats recency for video understanding."""
+    if n <= 0:
+        return []
+    if len(frames) <= n:
+        return frames
+    if n == 1:
+        return frames[:1]
+    idx = sorted({round(i * (len(frames) - 1) / (n - 1)) for i in range(n)})
+    return [frames[i] for i in idx]
+
+
 def _merge_scene_extras(uniform_ts: list[float], cut_times: list[float],
                         budget: int) -> list[float]:
     """Pick scene-cut times that ADD information over the uniform layer.

@@ -210,6 +210,7 @@ cd clients/typescript && npm install
 - **格式** —— mp4 / mov / webm / mkv / avi，上限 **512 MB / 15 分钟**
 - **模型感知的帧预算** —— 实际发送的帧数随所选模型的视觉能力、上下文窗口和单请求图片上限自适应（例如 Claude 的 100 图上限会跨整个会话记账）
 - **没配转录模型？** 视频照用 —— 模型只分析画面帧
+- **聊天模型不支持视觉？** 只要配置里有任意视觉模型，Tofu 会在上传时把画面帧讲成文字解说词，纯文本模型也能回答视频相关问题
 - 点击已发送消息上的视频卡片可回放原文件
 
 可选环境变量：`TOFU_VIDEO_MAX_BYTES`（默认 512 MB）、`TOFU_VIDEO_MAX_DURATION_S`（默认 900 秒）、`TOFU_VIDEO_ANALYSIS=0` 可整体关闭。抽帧使用内置 ffmpeg（缺失时通过 `imageio-ffmpeg` 自动安装）。

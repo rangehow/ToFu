@@ -147,25 +147,10 @@ def _count_image_blocks(msg: dict) -> int:
                if isinstance(b, dict) and b.get('type') == 'image_url')
 
 
-def _fmt_video_ts(seconds: float) -> str:
-    """Format a frame timestamp as MM:SS (H:MM:SS past the hour)."""
-    s = max(0, int(seconds))
-    if s >= 3600:
-        return f'{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}'
-    return f'{s // 60:02d}:{s % 60:02d}'
-
-
-def _thin_frames(frames: list, n: int) -> list:
-    """Uniformly thin ``frames`` to at most ``n`` entries, keeping the first
-    and last — temporal coverage beats recency for video understanding."""
-    if n <= 0:
-        return []
-    if len(frames) <= n:
-        return frames
-    if n == 1:
-        return frames[:1]
-    idx = sorted({round(i * (len(frames) - 1) / (n - 1)) for i in range(n)})
-    return [frames[i] for i in idx]
+# Single definition lives in lib.video_analysis._frames (the storyboard
+# generator uses the same thinning/timestamp rules); re-exported here so
+# existing imports (tests included) keep working.
+from lib.video_analysis._frames import _fmt_video_ts, _thin_frames  # noqa: E402,F401
 
 
 def _append_video_blocks(content_blocks: list, videos: list, *, model: str,
@@ -191,6 +176,7 @@ def _append_video_blocks(content_blocks: list, videos: list, *, model: str,
         name = vid.get('name') or 'video'
         duration = vid.get('duration_s') or 0
         transcript = (vid.get('transcript') or '').strip()
+        storyboard = (vid.get('storyboard') or '').strip()
 
         from lib.model_info import video_frame_budget
         budget = video_frame_budget(
@@ -205,6 +191,10 @@ def _append_video_blocks(content_blocks: list, videos: list, *, model: str,
             header += (f', {len(kept)} frames sampled'
                        + (f' (of {len(frames)} extracted)'
                           if len(kept) < len(frames) else ''))
+        elif frames and budget == 0 and storyboard:
+            header += (', frames narrated as a visual storyboard by '
+                       + (vid.get('storyboard_model') or 'a vision model')
+                       + ' (chat model has no vision)')
         elif frames:
             header += (', frames omitted (model has no vision capability)'
                        if budget == 0
@@ -224,6 +214,14 @@ def _append_video_blocks(content_blocks: list, videos: list, *, model: str,
                 'text': f'[Video {vi} frame at {_fmt_video_ts(fr.get("t") or 0)}]',
             })
             added += 1
+        # Storyboard only rides when the raw frames were suppressed by the
+        # vision gate — a vision-capable chat model gets the frames directly
+        # and the storyboard would be redundant noise.
+        if storyboard and frames and not kept:
+            content_blocks.append({
+                'type': 'text',
+                'text': (f'[Video {vi} visual storyboard]\n{storyboard}'),
+            })
         if transcript:
             content_blocks.append({
                 'type': 'text',

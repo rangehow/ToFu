@@ -223,6 +223,7 @@ Drop a video into the input box (or pick one via 📎) and ask questions about i
 - **Formats** — mp4 / mov / webm / mkv / avi, up to **512 MB / 15 minutes**
 - **Model-aware frame budget** — the number of frames sent adapts to the selected model's vision capability, context window and per-request image limits (e.g. Claude's 100-images cap is accounted across the whole conversation)
 - **No transcription model configured?** The video still works — the model analyzes the frames alone
+- **Chat model has no vision?** If ANY vision-capable model is configured, Tofu narrates the frames into a text storyboard at upload time, so even a text-only model can answer questions about the video
 - Click the video card on a sent message to replay the original file
 
 Optional env tuning: `TOFU_VIDEO_MAX_BYTES` (default 512 MB), `TOFU_VIDEO_MAX_DURATION_S` (default 900 s), `TOFU_VIDEO_ANALYSIS=0` to disable the feature entirely. Frames are extracted with the built-in ffmpeg (auto-installed via `imageio-ffmpeg` if absent).

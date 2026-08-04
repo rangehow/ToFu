@@ -619,6 +619,8 @@ async function _pollVideoReady(vObj) {
       vObj.transcript = rec.transcript || '';
       vObj.transcript_status = rec.transcript_status || 'none';
       vObj.transcript_model = rec.transcript_model || '';
+      vObj.storyboard = rec.storyboard || '';
+      vObj.storyboard_model = rec.storyboard_model || '';
       delete vObj._status;
       delete vObj._phase;
       renderImagePreviews();
@@ -662,6 +664,8 @@ function _videoPayloadForSend(v) {
     transcript: v.transcript || '',
     transcript_status: v.transcript_status || 'none',
     transcript_model: v.transcript_model || '',
+    storyboard: v.storyboard || '',
+    storyboard_model: v.storyboard_model || '',
   };
 }
 

@@ -415,6 +415,7 @@ _VIDEO_ATTACHMENT_KEYS = (
     'video_id', 'name', 'video_url', 'poster', 'duration_s', 'width', 'height',
     'fps', 'frame_count', 'avg_frame_bytes',
     'transcript', 'transcript_status', 'transcript_model',
+    'storyboard', 'storyboard_model',
 )
 
 

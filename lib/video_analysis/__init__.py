@@ -50,6 +50,10 @@ from lib.video_analysis._frames import (  # noqa: E402,F401
     persist_frames,
 )
 from lib.video_analysis._audio import transcribe_track  # noqa: E402,F401
+from lib.video_analysis._caption import (  # noqa: E402,F401
+    storyboard_enabled,
+    storyboard_for_frames,
+)
 from lib.video_analysis._pipeline import (  # noqa: E402,F401
     start_processing,
     videos_dir,
@@ -63,5 +67,6 @@ __all__ = [
     'create_record', 'get_record', 'update_record', 'set_phase',
     'complete_record', 'fail_record',
     'extract_frames', 'persist_frames', 'transcribe_track',
+    'storyboard_enabled', 'storyboard_for_frames',
     'start_processing', 'videos_dir',
 ]

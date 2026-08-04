@@ -107,6 +107,7 @@ def _start_egress_stream_streamed(cmd_id, cmd_params, permissions,
     try:
         start_egress_stream(cmd_params, on_chunk, on_exit)
     except Exception as e:
+        logger.warning('[Agent] egress stream failed: %s', e)
         err = f'{type(e).__name__}: {e}'
     if err:
         logger.warning('     ❌ egress_http_stream failed to start: %s', err)
@@ -278,7 +279,8 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                 from lib.desktop_agent._probe import is_tofu_error_envelope
                 try:
                     tofu_refusal = is_tofu_error_envelope(resp.json())
-                except ValueError:
+                except ValueError as e:
+                    logger.debug('[Agent] poll response not JSON: %s', e)
                     tofu_refusal = False
                 if tofu_refusal:
                     _emit('auth')

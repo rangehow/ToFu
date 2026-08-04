@@ -151,7 +151,9 @@ def _external_base_url():
     if base:
         try:
             parsed = urlparse(base)
-        except ValueError:
+        except ValueError as e:
+            logger.debug('[Browser] unparseable base= rejected: %r (%s)',
+                         base[:120], e)
             parsed = None
         if (parsed is not None
                 and parsed.scheme in ('http', 'https')
@@ -170,7 +172,8 @@ def _external_base_url():
         try:
             _p = urlparse('//' + (request.host or '')).port
             port = str(_p) if _p else ''
-        except ValueError:
+        except ValueError as e:
+            logger.debug('[Browser] host port parse failed: %s', e)
             port = ''
         if not port:
             server = getattr(request, 'scope', {}).get('server') or ()

@@ -107,7 +107,8 @@ def _font_path() -> str | None:
                 path = out.stdout.strip()
                 if out.returncode == 0 and path and os.path.isfile(path):
                     return path
-            except Exception:
+            except Exception as e:
+                logger.debug('[InstallerArt] fc-match %r failed: %s', fam, e)
                 continue
     try:  # matplotlib bundles DejaVuSans-Bold.ttf in mpl-data
         import matplotlib
@@ -116,8 +117,8 @@ def _font_path() -> str | None:
                             'DejaVuSans-Bold.ttf')
         if os.path.isfile(path):
             return path
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug('[InstallerArt] matplotlib font probe failed: %s', e)
     return None
 
 
@@ -135,8 +136,9 @@ def _find_font(size: int) -> ImageFont.FreeTypeFont:
     if path:
         try:
             return ImageFont.truetype(path, size)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug('[InstallerArt] truetype load of %s failed: %s',
+                         path, e)
     logger.warning('[InstallerArt] no truetype font found; brand name '
                    'falls back to PIL bitmap font')
     return ImageFont.load_default()

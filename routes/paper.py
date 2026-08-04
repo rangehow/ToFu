@@ -47,7 +47,7 @@ import time
 from urllib.parse import unquote
 
 import requests as _requests
-from flask import Blueprint, Response, request, send_file
+from flask import Blueprint, Response, request
 
 from lib.api_response import (
     api_bad_request,
@@ -408,7 +408,7 @@ async def openreview_autofill():
         silent success) when the bridge is not connected, the tab is not an
         OpenReview page, or no review exists yet.
     """
-    from lib.browser import is_extension_connected, send_browser_command as _send_cmd
+    from lib.browser import is_extension_connected
     from lib.browser.queue import _get_active_client
     from lib.paper import (autofill_openreview_review, extract_review_values,
                            make_review_lang)
@@ -3449,7 +3449,9 @@ async def start_deepen_task():
     model = (data.get('model') or '').strip() or None
     try:
         section_idx = int(data.get('section_idx'))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Paper] bad section_idx %r — defaulting to -1: %s',
+                     data.get('section_idx'), e)
         section_idx = -1
     if not phash:
         return api_bad_request('No paper_hash provided')
@@ -3492,7 +3494,8 @@ async def start_deepen_task():
 def _note_row_to_dict(row):
     try:
         anchor = json.loads(row['anchor'] or '{}')
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.debug('[Paper] note anchor JSON unreadable, using {}: %s', e)
         anchor = {}
     return {
         'id': row['id'],

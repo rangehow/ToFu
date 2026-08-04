@@ -270,7 +270,8 @@ def reap_stuck_running_tasks() -> int:
                     issued_at = pending.get('ts', now)
                     try:
                         issued_at = float(issued_at)
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError) as e:
+                        logger.debug('[Manager] bad _cmd_interrupt ts (%s) — treating as fresh', e)
                         issued_at = now
                     if now - issued_at < _cmd_interrupt_grace_secs():
                         # Interrupt already issued; the read loop polls every

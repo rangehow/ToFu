@@ -1358,7 +1358,9 @@ def _extract_manifest_from_source(path):
 
 try:
     _manifest_source_mtime = os.path.getmtime(__file__)
-except OSError:  # module file unreadable at import — refresh keeps retrying
+except OSError as e:  # module file unreadable at import — refresh keeps retrying
+    logger.debug('[Bundle] cannot stat %s at import (%s) — refresh will retry',
+                 __file__, e)
     _manifest_source_mtime = 0.0
 
 
@@ -1468,7 +1470,8 @@ def _clean_old_bundles(keep_core, keep_feature, keep_packs=()):
             try:
                 if now - os.path.getmtime(path) < _BUILT_ARTIFACT_GRACE_S:
                     continue  # another process may have just published + be serving this
-            except OSError:
+            except OSError as e:
+                logger.debug('[Bundle] cannot stat %s during reap (%s) — skipping', f, e)
                 continue
             try:
                 os.remove(path)

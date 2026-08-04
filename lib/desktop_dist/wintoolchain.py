@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import stat
 import subprocess
 import threading
@@ -267,7 +266,8 @@ def _apt_key_patched() -> bool:
     try:
         with open(path, encoding='utf-8') as f:
             return _APT_KEY_MARKER in f.read()
-    except OSError:
+    except OSError as e:
+        logger.debug('[WinTC] apt-key unreadable (%s) — treating as unpatched', e)
         return False
 
 

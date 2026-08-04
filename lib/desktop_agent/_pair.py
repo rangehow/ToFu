@@ -85,7 +85,8 @@ def exchange_pair_code(url: str, code: str, name: str = '',
     if not name:
         try:
             name = _socket.gethostname()
-        except Exception:
+        except Exception as e:
+            logger.debug('[Agent] hostname unavailable: %s', e)
             name = ''
     payload = {'code': code,
                'name': name or 'paired-agent',
@@ -94,9 +95,11 @@ def exchange_pair_code(url: str, code: str, name: str = '',
         resp = requests.post(base + '/api/desktop/pair', json=payload,
                              timeout=timeout,
                              proxies={'no_proxy': '*'})
-    except requests.exceptions.ConnectTimeout:
+    except requests.exceptions.ConnectTimeout as e:
+        logger.debug('[Agent] pair exchange timed out: %s', e)
         return False, 'timeout'
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as e:
+        logger.debug('[Agent] pair exchange unreachable: %s', e)
         return False, 'unreachable'
     except requests.RequestException as e:
         logger.debug('[Agent] pair exchange failed: %s', e)
@@ -109,7 +112,8 @@ def exchange_pair_code(url: str, code: str, name: str = '',
         return False, 'http_%d' % resp.status_code
     try:
         body = resp.json()
-    except ValueError:
+    except ValueError as e:
+        logger.debug('[Agent] pair response not JSON: %s', e)
         return False, 'bad_response'
     token = (body.get('token') or '') if isinstance(body, dict) else ''
     if not token:
@@ -158,15 +162,18 @@ def lan_probe(timeout: float = 1.5, _factory=None) -> list:
         while time.time() < deadline:
             try:
                 data, _addr = s.recvfrom(1024)
-            except _socket.timeout:
+            except _socket.timeout as e:
+                logger.debug('[Agent] LAN discovery recv timeout: %s', e)
                 continue
-            except OSError:
+            except OSError as e:
+                logger.debug('[Agent] LAN discovery recv failed: %s', e)
                 break
             if len(data) <= 16:
                 continue
             try:
                 url = data[16:].decode('utf-8', 'replace').strip()
-            except Exception:
+            except Exception as e:
+                logger.debug('[Agent] LAN discovery response undecodable: %s', e)
                 continue
             if not url.startswith(('http://', 'https://')) or url in seen:
                 continue
@@ -177,8 +184,8 @@ def lan_probe(timeout: float = 1.5, _factory=None) -> list:
     finally:
         try:
             s.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug('[Agent] LAN discovery socket close failed: %s', e)
     return urls
 
 
@@ -203,7 +210,8 @@ def ssh_config_hosts(path: str = '') -> list:
                         continue
                     if alias not in hosts:
                         hosts.append(alias)
-    except OSError:
+    except OSError as e:
+        logger.debug('[Agent] ssh config unreadable: %s', e)
         return []
     return hosts
 
@@ -212,8 +220,8 @@ def _reap_tunnels() -> None:
     for proc in list(_ACTIVE_TUNNELS):
         try:
             proc.kill()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug('[Agent] tunnel reap failed: %s', e)
     _ACTIVE_TUNNELS.clear()
 
 
@@ -264,14 +272,16 @@ def _local_port_busy(port: int, _bind=None) -> bool:
         try:
             _bind(port)
             return False
-        except OSError:
+        except OSError as e:
+            logger.debug('[Agent] port %d busy: %s', port, e)
             return True
     import socket as _socket
     s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
     try:
         s.bind(('127.0.0.1', port))
         return False
-    except OSError:
+    except OSError as e:
+        logger.debug('[Agent] port %d busy: %s', port, e)
         return True
     finally:
         s.close()
@@ -311,8 +321,8 @@ def _tunnel_once(host: str, local_port: int, remote_port: int,
         time.sleep(0.4)
     try:
         proc.kill()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug('[Agent] losing tunnel kill failed: %s', e)
     return ''
 
 

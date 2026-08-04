@@ -66,7 +66,8 @@ def _host_allowed(url: str, target: str = 'subscription') -> bool:
     try:
         parsed = urlparse(url)
         host = (parsed.hostname or '').lower()
-    except Exception:
+    except Exception as e:
+        logger.debug('[Egress] url parse failed: %s', e)
         return False
     if target == 'loopback':
         if host not in _LOOPBACK_HOSTS:
@@ -253,6 +254,7 @@ def start_egress_stream(params: dict, on_chunk, on_exit):
     try:
         body = base64.b64decode(params.get('body_b64') or '')
     except Exception as e:
+        logger.debug('[Egress] bad body_b64: %s', e)
         return _refuse(f'bad body_b64: {e}')
     if len(body) > _MAX_BODY_BYTES:
         return _refuse(f'request body too large ({len(body)} bytes)')
@@ -355,6 +357,7 @@ def cmd_egress_http(params: dict) -> dict:
     try:
         body = base64.b64decode(params.get('body_b64') or '')
     except Exception as e:
+        logger.debug('[Egress] bad body_b64: %s', e)
         return {'error': f'bad body_b64: {e}'}
     if len(body) > _MAX_BODY_BYTES:
         return {'error': f'request body too large ({len(body)} bytes)'}

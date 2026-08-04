@@ -22,7 +22,6 @@ is gated on ``--allow-egress``. Download URLs are host-pinned to GitHub.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import random
 import shutil
@@ -95,7 +94,8 @@ def _installed_version() -> str:
     try:
         with open(_version_file()) as f:
             return f.read().strip()
-    except OSError:
+    except OSError as e:
+        logger.debug('[Adapter] version file unreadable: %s', e)
         return ''
 
 
@@ -103,7 +103,8 @@ def adapter_loopback_port() -> int:
     """The port the loopback egress whitelist accepts (0 = no adapter)."""
     try:
         return int(_read_policy().get('port') or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Adapter] policy port unparsable: %s', e)
         return 0
 
 
@@ -307,8 +308,8 @@ def _healthy(port: int, api_key: str, timeout_s: float = _HEALTH_TIMEOUT_S) -> b
                 headers={'Authorization': f'Bearer {api_key}'}, timeout=3)
             if resp.status_code == 200:
                 return True
-        except requests.RequestException:
-            pass
+        except requests.RequestException as e:
+            logger.debug('[Adapter] health probe failed: %s', e)
         if not _is_running():
             return False
         time.sleep(0.5)
@@ -418,7 +419,8 @@ def _status_dict() -> dict:
     try:
         accounts = len([f for f in os.listdir(auth_dir)
                         if f.endswith('.json')]) if os.path.isdir(auth_dir) else 0
-    except OSError:
+    except OSError as e:
+        logger.debug('[Adapter] auth dir unreadable: %s', e)
         accounts = 0
     return {
         'installed': os.path.isfile(_binary_path()),
@@ -456,6 +458,7 @@ def cmd_adapter_ensure(params: dict) -> dict:
         policy['port'] = _pick_port(policy['port']) if not _is_running() \
             else policy['port']
     except ValueError as e:
+        logger.warning('[Adapter] invalid policy: %s', e)
         return {'error': str(e)}
     _write_policy(policy)
 

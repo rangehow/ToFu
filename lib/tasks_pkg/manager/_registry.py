@@ -20,8 +20,6 @@ from lib.tasks_pkg.manager._state import (
     _ABORT_TOMBSTONES_CAP,
     _chat_runtime,
     _clear_latest_task,
-    _conv_latest_task,
-    _conv_latest_task_lock,
     _record_latest_task,
     tasks,
     tasks_lock,
@@ -420,7 +418,8 @@ def discard_task(task_id: str, conv_id: str | None = None) -> None:
     try:
         import sys as _sys
         _caller = _sys._getframe(1).f_code.co_name
-    except Exception:
+    except Exception as e:
+        logger.debug('[Manager] discard_task: caller-frame read failed: %s', e)
         _caller = '?'
     with tasks_lock:
         _popped = tasks.pop(task_id, None)
@@ -483,7 +482,8 @@ def _write_abort_tombstone_row(task_id: str, source: str) -> bool:
             return False
         try:
             meta = json.loads(row['metadata'] or '{}')
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.debug('[Manager] abort tombstone: unreadable metadata (%s) — starting fresh', e)
             meta = {}
         meta['_abort_requested'] = int(time.time() * 1000)
         meta['_abort_source'] = source

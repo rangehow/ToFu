@@ -604,6 +604,8 @@ def egress_http(url: str, *, method: str = 'POST', headers: dict = None,
             content = base64.b64decode(result.get('body_b64') or '')
         except Exception as e:
             last_err = f'undecodable body: {e}'
+            logger.info('[Egress] agent %s undecodable body (%s) — trying '
+                        'next candidate', agent_id[:8], e)
             continue
         _note_success(agent_id)
         return EgressResponse(

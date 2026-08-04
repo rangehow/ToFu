@@ -30,7 +30,6 @@ import hmac
 import os
 import secrets
 import socket
-import struct
 import threading
 import time
 from typing import Optional
@@ -230,16 +229,21 @@ class LanDiscoveryResponder:
                 (self._secret + self.url).encode()).digest()[:16]
             try:
                 self._sock.sendto(mac + payload, addr)
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug('[DesktopPairing] discovery reply to %s '
+                             'failed: %s', addr, e)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
                 data, addr = self._sock.recvfrom(1024)
             except socket.timeout:
+                logger.debug('[DesktopPairing] discovery recv timed out; '
+                             'polling again')
                 continue
-            except OSError:
+            except OSError as e:
+                logger.debug('[DesktopPairing] discovery socket closed — '
+                             'responder loop exiting: %s', e)
                 return
             else:
                 self._handle(data, addr)
@@ -270,8 +274,8 @@ class LanDiscoveryResponder:
         if self._sock is not None:
             try:
                 self._sock.close()
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug('[DesktopPairing] socket close failed: %s', e)
             self._sock = None
 
 

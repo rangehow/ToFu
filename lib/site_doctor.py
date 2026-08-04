@@ -60,7 +60,9 @@ def _doctor_enabled() -> bool:
 def _cooldown_s() -> int:
     try:
         return int(os.environ.get('TOFU_SITE_DOCTOR_COOLDOWN_S', '10800'))
-    except ValueError:
+    except ValueError as e:
+        logger.debug('[SiteDoctor] TOFU_SITE_DOCTOR_COOLDOWN_S parse failed, '
+                     'using default: %s', e)
         return 10800
 
 
@@ -393,7 +395,8 @@ def run_doctor(site: str, url: str, evidence: dict | None = None,
             js = str(args.get('extractor_js') or '')
             try:
                 scrolls = int(args.get('scrolls') or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                logger.debug('[SiteDoctor] bad scrolls value (%s) — using 0', e)
                 scrolls = 0
             if not js.strip() or len(js) > _MAX_EXTRACTOR_CHARS:
                 _reply(tc_id, f'Rejected: extractor_js empty or over '

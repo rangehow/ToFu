@@ -20,7 +20,8 @@ def _handle_preview_page(fn_args):
     wait_ms = fn_args.get('waitMs', fn_args.get('wait_ms', 1500))
     try:
         wait_ms = int(wait_ms)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('[Preview] bad waitMs value (%s) — using default 1500', e)
         wait_ms = 1500
     return render_page_preview(
         project_path=project_path,

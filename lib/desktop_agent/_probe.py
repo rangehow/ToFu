@@ -39,9 +39,11 @@ def probe_server(url: str, timeout: float = 4.0) -> tuple[bool, str]:
         return False, 'unreachable'
     try:
         resp = requests.get(base + '/api/health', timeout=timeout)
-    except requests.exceptions.ConnectTimeout:
+    except requests.exceptions.ConnectTimeout as e:
+        logger.debug('[Agent] server probe timed out: %s', e)
         return False, 'timeout'
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as e:
+        logger.debug('[Agent] server probe unreachable: %s', e)
         return False, 'unreachable'
     except requests.RequestException as e:
         logger.debug('[Agent] server probe failed: %s', e)
@@ -52,7 +54,8 @@ def probe_server(url: str, timeout: float = 4.0) -> tuple[bool, str]:
         return False, 'http_%d' % resp.status_code
     try:
         body = resp.json()
-    except ValueError:
+    except ValueError as e:
+        logger.debug('[Agent] server probe response not JSON: %s', e)
         return False, 'not_tofu'
     if not isinstance(body, dict) or not body.get('bootId'):
         return False, 'not_tofu'

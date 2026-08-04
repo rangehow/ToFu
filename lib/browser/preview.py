@@ -200,7 +200,8 @@ def _do_page_preview(browser, payload):
                 logger.debug('[Preview] settle wait failed: %s', e)
         try:
             title = page.title()
-        except Exception:
+        except Exception as e:
+            logger.debug('[Preview] title read failed: %s', e)
             title = ''
         shot = page.screenshot(type='jpeg', quality=80, full_page=full_page)
         result = {
@@ -344,6 +345,7 @@ def render_page_preview(*, project_path=None, path=None, url=None,
         try:
             abs_path = _safe_path(project_path, path)
         except ValueError as e:
+            logger.debug('[Preview] path rejected by _safe_path: %s', e)
             return f'Error: {e}'
         # _safe_path guards the lexical path; the realpath pass below guards
         # the symlink case (root itself, or a symlink inside it, resolving
@@ -388,6 +390,7 @@ def render_page_preview(*, project_path=None, path=None, url=None,
     try:
         from tofu_search.fetch.playwright_pool import _pw_pool
     except Exception as e:
+        logger.warning('[Preview] Playwright pool import failed: %s', e)
         return f'Error: Playwright pool unavailable: {e}'
 
     if not _pw_pool._ensure_thread():

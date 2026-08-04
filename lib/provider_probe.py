@@ -112,6 +112,8 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                 path, method='POST', headers=headers,
                 body=_json.dumps(payload).encode(), timeout=timeout)
         except _EU as e:
+            logger.debug('[CellProbe] %s @ %s desktop egress unavailable: %s',
+                         model_id, base_url, e)
             return 'unavailable', str(e)[:160]
         except Exception as e:
             logger.warning('[CellProbe] %s @ %s adapter relay error: %s',
@@ -170,7 +172,9 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                     code = resp.status_code
                     try:
                         resp_body = resp.text[:400]
-                    except (UnicodeDecodeError, ValueError, OSError):
+                    except (UnicodeDecodeError, ValueError, OSError) as e:
+                        logger.debug('[CellProbe] codex %s: could not read response body: %s',
+                                     model_id, e)
                         resp_body = ''
                 else:
                     reader = _eg.open_stream(url, method='POST', headers=hdrs,
@@ -179,6 +183,8 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                     code = reader.status_code
                     resp_body = reader.read_all_text()[:400]
             except _eg.EgressUnavailable as e:
+                logger.debug('[CellProbe] codex %s desktop egress unavailable: %s',
+                             model_id, e)
                 return 'unavailable', str(e)[:160]
             except Exception as e:
                 logger.warning('[CellProbe] codex %s network error: %s',
@@ -215,6 +221,8 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
         try:
             route = _eg.route_request(url, user_id='')
         except _eg.EgressUnavailable as e:
+            logger.debug('[CellProbe] %s @ %s egress route unavailable: %s',
+                         model_id, base_url, e)
             return 'unavailable', str(e)[:160]
         try:
             if route == 'direct':
@@ -225,6 +233,8 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                                        body=_json.dumps(payload).encode(),
                                        timeout=timeout, user_id='')
         except _eg.EgressUnavailable as e:
+            logger.debug('[CellProbe] %s @ %s desktop egress unavailable: %s',
+                         model_id, base_url, e)
             return 'unavailable', str(e)[:160]
         except Exception as e:
             logger.warning('[CellProbe] %s @ %s network error: %s',

@@ -367,7 +367,10 @@ def _store_mtime() -> float:
     """Store file mtime, or 0.0 when it does not exist / cannot be stat'ed."""
     try:
         return os.path.getmtime(_STORE_PATH)
-    except OSError:
+    except OSError as e:
+        # Expected on first run (store not yet written) — debug, not warning.
+        logger.debug('[AuthSrc] store mtime stat failed for %s: %s',
+                     _STORE_PATH, e)
         return 0.0
 
 

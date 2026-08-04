@@ -157,7 +157,8 @@ def _request_platform_downloads(arch_override: str = '',
     from flask import request
     try:
         ua = request.user_agent.string or ''
-    except Exception:
+    except Exception as e:
+        logger.debug('[Desktop] user-agent parse failed: %s', e)
         ua = ''
     hint = (arch_override or '').strip() \
         or request.headers.get('Sec-CH-UA-Arch', '')
@@ -226,7 +227,8 @@ def _with_drift(agents):
     try:
         from lib.version import __version__ as sv
         sv = (sv or '').strip()
-    except Exception:
+    except Exception as e:
+        logger.debug('[Desktop] server version read failed: %s', e)
         sv = ''
     out = []
     for a in agents or []:
@@ -271,7 +273,9 @@ def _host_reachability(host: str) -> str:
         return 'loopback'
     try:
         ip = ipaddress.ip_address(h)
-    except ValueError:
+    except ValueError as e:
+        logger.debug('[Desktop] host %r is not an IP literal — treating '
+                     'as public: %s', h, e)
         return 'public'
     if ip.is_loopback:
         return 'loopback'

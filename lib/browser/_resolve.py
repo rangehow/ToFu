@@ -69,7 +69,9 @@ def forget_work_tab(tab_id):
     """Drop the remembered tab if it is the one being closed."""
     try:
         tab_id = int(tab_id)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as e:
+        logger.debug('Non-numeric work tab id ignored on forget: %s (%s)',
+                     tab_id, e)
         return
     with _work_tab_lock:
         if _work_tab['id'] == tab_id:
@@ -87,7 +89,9 @@ def resolve_work_tab(fn_args, send=None):
     if explicit is not None:
         try:
             tab_id = int(explicit)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('Non-numeric explicit tabId ignored: %s (%s)',
+                         explicit, e)
             return None
         remember_work_tab(tab_id)
         return tab_id

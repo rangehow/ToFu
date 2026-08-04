@@ -480,7 +480,9 @@ def _ensure_guest_hosts(log_fh) -> None:
     try:
         with open(hosts_path, encoding='utf-8') as f:
             content = f.read()
-    except OSError:
+    except OSError as e:
+        logger.debug('[WinBuild] cannot read guest hosts %s (%s) — starting fresh',
+                     hosts_path, e)
         content = ''
     import re as _re
     content = _re.sub(

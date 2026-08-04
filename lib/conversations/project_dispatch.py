@@ -517,7 +517,9 @@ def _convs_holding_undrained_kickoffs(project_path: str, board: dict) -> set:
                 continue
             try:
                 cfg = _json.loads(r['config'] or '{}')
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as e:
+                logger.debug('[Dispatch] skipping queue row with unparsable '
+                             'config conv=%s: %s', cid, e)
                 continue
             row_proj = cfg.get('projectPath') or ''
             if row_proj and normalize_project_path(row_proj) == want:

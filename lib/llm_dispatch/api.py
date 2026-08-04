@@ -71,7 +71,9 @@ def _saturation_budget_secs() -> float:
     """
     try:
         return float(os.environ.get('TOFU_429_SATURATION_SECS', '') or '0')
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        logger.debug('[Dispatch] TOFU_429_SATURATION_SECS parse failed, '
+                     'using default: %s', e)
         return 0.0
 
 

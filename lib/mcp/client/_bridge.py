@@ -1425,7 +1425,9 @@ class MCPBridge:
             return False
         try:
             sig = inspect.signature(fn)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as e:
+            logger.debug('[MCP] cannot introspect %s.%s (%s) — accepting callable',
+                         type(session).__name__, meth, e)
             return True
         for p in sig.parameters.values():
             if p.name == 'self':

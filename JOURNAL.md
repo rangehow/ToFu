@@ -1,3 +1,8 @@
+### 2026-08-04(预存红闭环:test_the_053_floor_carries_its_rationale——钉字面 0.5.3 pin 行,而 floor 已两迁至 0.7.3;守卫改 floor 无关,钉「纪律」不钉「版本」) — 脑派发接我自票 `pt_6b0e8573e26043ec` **DONE**;commit 见下(2 文件);套件 **8/8** + NEUTER×3 精确
+
+- **定案(测试漂移的第二形态——钉了版本字面而非纪律):** requirements.txt 的 tofu-search floor 已两次上移(0.5.3 allow_private_hosts → 0.6.0 filter_mode → 0.7.3 replay no-op,每段理由注释俱在),旧守卫的 `^tofu-search>=0\.5\.3$` 字面正则失配——纪律本身从未失守,是守卫把「当前版本号」当成了「必须文档化」的代理。修法=floor 无关化:从 pin 行读出版本号,钉该版本必须配 `# >=<floor>:` 理由段 + 显式 HARD/SOFT 标记 + 非 stub(≥80 字符);守卫更名为 `test_the_floor_pin_carries_its_rationale`,模块头/节注释的 0.5.3 化石行同步改 floor 无关。
+- **NEUTER×3 全精确:** 删理由段→「no rationale paragraph」红;删 HARD/SOFT 标记→「not marked HARD/SOFT」红;**升版无文档场景**(pin 改 0.9.9 无段)→红——最后一针证明守卫从今往后会在每次未文档化的 floor 上移时当场咬人,这正是它的存在意义。requirements.txt 全程零净改动(还原后字节一致)。
+- **出票范围说明:** 同文件姊妹套件 `test_requirements_public_resolvable.py[tofu-search]` 亦红,但属**有意红**(模块头注明「RED until the publish」——tofu-search 上 PyPI 是 human-gated 在办事项),不在本票;其 docstring 里「本机装 0.5.2」亦为化石,同样不属本票。
 ### 2026-08-04(图片工具缩略图「重开即消失」全族根修:_serverHasImagesLocalLacks 第四析取——IDB 剥 uri 的缓存不再被误判 FRESH;附 browser_preview_page 白名单漏登记) — owner 截图两问(「这工具是新的吗?为何前端没有可展开预览?」)+ owner 复核擒获「历史轮也会补图」误称;commits `48448ce2`(2 文件)+ `9fce96b0`(4 文件);环 **25+17 绿**(2 预存红挂票 `pt_ef4ae7206b674e67`)
 
 - **问 1 定案(是新工具):** `browser_preview_page` 前一日随 `69de1a5a`(浏览器桥 CDP 批)落地——服务端无头 Chromium 真渲染项目 HTML/URL,回传截图+console/报错报告。

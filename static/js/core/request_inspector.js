@@ -298,17 +298,49 @@ function _riSharedPrefix(prevMsgs, curMsgs) {
  * the shared leading prefix is conversation history the user did NOT click
  * for. The jump-button panel shows only the increment (owner, 2026-07-28:
  * "records only for this round of tool calls are sufficient"). Round 1,
- * a missing/expired previous payload, or a zero shared prefix all degrade
- * to the full payload. */
+ * a missing/expired previous payload, or a zero shared prefix all return
+ * null — the caller then falls back to the state mirror's TAIL slice, never
+ * the full system-prompt dump (owner, 2026-08-04). */
 async function _riRoundScopedMessages(taskId, roundNum, kind, messages) {
   const num = parseInt(roundNum, 10);
-  if (!Number.isFinite(num) || num <= 1 || !Array.isArray(messages)) return messages;
+  if (!Number.isFinite(num) || num <= 1 || !Array.isArray(messages)) return null;
   const prev = await _riFetchPayload(taskId, num - 1, '',
     kind === 'state' ? 'state' : 'request');
   if (!prev || !Array.isArray(prev.messages) || !prev.messages.length)
-    return messages;
+    return null;
   const k = _riSharedPrefix(prev.messages, messages);
-  return k > 0 ? messages.slice(k) : messages;
+  return k > 0 ? messages.slice(k) : null;
+}
+
+/* Degraded fallback for the state axis when no exact increment exists
+ * (round 1, a missing previous payload, a diverged prefix): the post-tool
+ * mirror's TAIL is still exactly this round — the assistant message carrying
+ * the tool_calls, plus the tool results appended after it. Anything older
+ * (system prompt, conversation history) is noise in a panel that exists to
+ * answer ONE round (owner, 2026-08-04: "just the tool call and the result,
+ * no system prompt"). */
+function _riTailSlice(messages) {
+  if (!Array.isArray(messages)) return [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m && m.role === 'assistant' &&
+        Array.isArray(m.tool_calls) && m.tool_calls.length)
+      return messages.slice(i);
+  }
+  /* No tool call in the mirror (final-answer round): the increment boundary
+   * is the last user message — still never the system prompt or older
+   * history. */
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i] && messages[i].role === 'user') {
+      const tail = messages.slice(i + 1);
+      if (tail.length) return tail;
+      break;
+    }
+  }
+  /* The mirror holds nothing past its last user message (e.g. a lone-user
+   * mirror): show the non-system messages — an EMPTY panel is never the
+   * right answer, and the system prompt is still never shown. */
+  return messages.filter((m) => m && m.role !== 'system');
 }
 
 async function _riSelectRound(taskId, roundNum, el, turn) {
@@ -565,12 +597,18 @@ async function _riRenderToolPanel(panel, taskId, roundNum) {
       ? 'ri.stateKindTip' : 'ri.requestKindTip');
   }
   /* Round-scoped: only what THIS round appended (see the section header).
-   * An empty increment is degenerate — fall back to the full payload. */
+   * When no exact increment exists, a state mirror degrades to its TAIL
+   * slice (the tool call + its results) — never the full payload, whose
+   * system prompt + history is precisely what this panel must not dump.
+   * The request axis (the mirror-less fallback) keeps the full payload: it
+   * has no post-tool tail to slice. */
   const scoped = await _riRoundScopedMessages(taskId, roundNum, view.kind,
     payload.messages);
   if (!panel.isConnected) return;
   const shown = (Array.isArray(scoped) && scoped.length)
-    ? scoped : payload.messages;
+    ? scoped
+    : (view.kind === 'state'
+      ? _riTailSlice(payload.messages) : payload.messages);
   if (titleEl) titleEl.textContent =
     (payload.label || ('R' + roundNum)) + ' · +' + shown.length + ' msgs';
   if (body) {

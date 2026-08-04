@@ -19,35 +19,35 @@
 | 文件 | NEUTER | epic | commit | 事故 | JOURNAL |
 |---|---|---|---|---|---|
 | `tests/test_abs_path_guard.py` |  | ✓ | ✓ | ✓ |  |
-| `tests/test_agent_loop_adoption_guard.py` | ✓ |  |  |  |  |
-| `tests/test_api_contract_artifacts_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_auth_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_browser_v1_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_chat_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_common_push_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_config_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_conversations_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_daily_report_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_desktop_parity.py` |  |  |  |  |  |
+| `tests/test_agent_loop_adoption_guard.py` | ✓ | ✓ |  |  |  |
+| `tests/test_api_contract_artifacts_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_auth_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_browser_v1_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_chat_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_common_push_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_config_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_conversations_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_daily_report_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_desktop_parity.py` |  | ✓ |  |  |  |
 | `tests/test_api_contract_drift.py` |  |  |  |  |  |
-| `tests/test_api_contract_folders_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_mcp_parity.py` |  |  |  |  |  |
+| `tests/test_api_contract_folders_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_mcp_parity.py` |  | ✓ |  |  |  |
 | `tests/test_api_contract_memory_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_motion_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_oauth_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_oauth_v1_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_orchestrations_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_paper_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_project_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_skills_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_small_sweep_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_translate_parity.py` |  |  |  |  |  |
-| `tests/test_api_contract_upload_parity.py` |  |  |  |  |  |
+| `tests/test_api_contract_motion_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_oauth_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_oauth_v1_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_orchestrations_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_paper_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_project_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_skills_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_small_sweep_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_translate_parity.py` |  | ✓ |  |  |  |
+| `tests/test_api_contract_upload_parity.py` |  | ✓ |  |  |  |
 | `tests/test_assistant_message_build_parity.py` | ✓ |  |  |  |  |
 | `tests/test_autopilot_baton_extraction_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_autopilot_budget_guard.py` | ✓ |  |  |  |  |
 | `tests/test_autopilot_empty_vu_guard.py` |  | ✓ |  | ✓ |  |
-| `tests/test_autopilot_event_forwarding_wire_parity.py` | ✓ |  |  |  |  |
+| `tests/test_autopilot_event_forwarding_wire_parity.py` | ✓ | ✓ |  |  |  |
 | `tests/test_autopilot_markers_extraction_wire_parity.py` |  | ✓ |  |  |  |
 | `tests/test_autopilot_state_extraction_wire_parity.py` |  | ✓ |  |  |  |
 | `tests/test_binary_blob_text_stream_guard.py` |  |  |  | ✓ |  |
@@ -64,7 +64,7 @@
 | `tests/test_cache_turn_boundary_freeze.py` | ✓ | ✓ |  |  | ✓ |
 | `tests/test_capabilities_agents_drift.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_capability_taxonomy_parity.py` | ✓ |  |  |  |  |
-| `tests/test_carrier_conv_sync_guard.py` | ✓ |  |  |  |  |
+| `tests/test_carrier_conv_sync_guard.py` | ✓ | ✓ |  |  |  |
 | `tests/test_cgroup_guard.py` | ✓ |  |  |  | ✓ |
 | `tests/test_chat_mode_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_chrome_store_manifest_parity.py` |  | ✓ | ✓ | ✓ |  |
@@ -97,9 +97,9 @@
 | `tests/test_frontend_reconnect_keeplonger_invariant.py` | ✓ | ✓ |  |  |  |
 | `tests/test_frontend_reconnect_parity_anchor.py` | ✓ |  |  |  |  |
 | `tests/test_frontend_reducer_parity.py` | ✓ |  |  | ✓ |  |
-| `tests/test_frontend_send_inflight_guard.py` | ✓ |  |  |  |  |
+| `tests/test_frontend_send_inflight_guard.py` | ✓ | ✓ |  |  |  |
 | `tests/test_frontend_sse_assistantmsg_invariant.py` |  | ✓ |  |  |  |
-| `tests/test_frontend_sync_allowtruncate_guard.py` | ✓ |  |  |  |  |
+| `tests/test_frontend_sync_allowtruncate_guard.py` | ✓ | ✓ |  |  |  |
 | `tests/test_frontend_sync_drift_probe.py` | ✓ |  |  |  |  |
 | `tests/test_frontend_tool_rounds_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_frontend_translate_guard.py` |  | ✓ | ✓ | ✓ |  |
@@ -108,7 +108,7 @@
 | `tests/test_lib_orchestrator_abort_before_tools_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_lib_orchestrator_abort_round_start_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_lib_orchestrator_base_exception_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
-| `tests/test_lib_orchestrator_cache_round_accounting_wire_parity.py` | ✓ |  |  |  |  |
+| `tests/test_lib_orchestrator_cache_round_accounting_wire_parity.py` | ✓ | ✓ |  |  |  |
 | `tests/test_lib_orchestrator_config_resolution_wire_parity.py` |  | ✓ |  |  |  |
 | `tests/test_lib_orchestrator_context_inject_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_lib_orchestrator_continue_tool_history_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
@@ -124,8 +124,8 @@
 | `tests/test_lib_orchestrator_round_message_hygiene_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_lib_orchestrator_round_open_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_lib_orchestrator_round_request_prep_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
-| `tests/test_lib_orchestrator_round_state_wire_parity.py` | ✓ |  |  |  |  |
-| `tests/test_lib_orchestrator_sanitize_malformed_args_wire_parity.py` | ✓ |  |  |  |  |
+| `tests/test_lib_orchestrator_round_state_wire_parity.py` | ✓ | ✓ |  |  |  |
+| `tests/test_lib_orchestrator_sanitize_malformed_args_wire_parity.py` | ✓ | ✓ |  |  |  |
 | `tests/test_lib_orchestrator_stream_acc_settle_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_lib_orchestrator_stream_decision_wire_parity.py` |  | ✓ | ✓ | ✓ |  |
 | `tests/test_lib_orchestrator_swarm_inbox_wire_parity.py` |  | ✓ | ✓ | ✓ |  |

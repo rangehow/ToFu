@@ -51,6 +51,11 @@ class TestClassifierNeuter:
     def test_epic_id_anchors(self):
         assert ra.is_anchored(ra.classify_source('# epic pt_2f2c847ff8524e5e'))
 
+    def test_legacy_short_epic_id_anchors(self):
+        # 老 epic 是 8 位 hex(pt_03f4cdf1,orchestrator 拆分族)——漏识会把整族
+        # 误判为无锚候选。
+        assert ra.is_anchored(ra.classify_source('# epic pt_03f4cdf1 slice 8'))
+
     def test_commit_ref_anchors(self):
         assert ra.is_anchored(ra.classify_source('# fix: see commit 8f3204f7'))
 

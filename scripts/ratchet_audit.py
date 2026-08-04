@@ -34,7 +34,9 @@ TESTS_DIR = os.path.join(ROOT, 'tests')
 
 GUARD_FAMILY_RE = re.compile(
     r'(_parity|_drift|_guard|_invariant|_freeze|_ratchet)(_|\.py$)')
-_EPIC_RE = re.compile(r'pt_[0-9a-f]{16}')
+# Epic ids come in two lengths: 16 hex (current board) and 8 hex (early
+# epics, e.g. pt_03f4cdf1 — the orchestrator-extraction family).
+_EPIC_RE = re.compile(r'pt_[0-9a-f]{8,16}\b')
 _COMMIT_RE = re.compile(r'\bcommit\s+`?[0-9a-f]{7,40}\b')
 _INCIDENT_WORD_RE = re.compile(r'事故|incident', re.IGNORECASE)
 _NEUTER_RE = re.compile(r'NEUTER')

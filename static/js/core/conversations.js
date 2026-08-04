@@ -987,8 +987,21 @@ async function loadConversationMessages(convId) {
      *   at :data.rev), never by comparing clocks that can skew or be inflated by
      *   an optimistic push. Genuine local work is still protected by the two
      *   real signals above; a merely newer-looking timestamp is not. */
+    /* ★ Send-window race (root cause class of the mse9r2ir7ql0v4 incident,
+     *   2026-08-05): a Phase-2 fetch that STARTED after the optimistic user
+     *   push (the VLM-parse / POST window — seconds long for an image send)
+     *   cannot see the fresh local activity: grew=false (preFetch already
+     *   counts the push), tsMoved can't fire (the newest local ts IS the
+     *   preFetch newest), taskAppeared=false (activeTaskId lands only after
+     *   the POST). All three real signals are blind in that window, so the
+     *   OVERWRITE branch would adopt the pre-send server list and wipe the
+     *   user's just-sent message — which only reappeared on manual refresh.
+     *   `conv._sendInFlight` is held from the optimistic push through
+     *   connectToTask (cleared in the send pipeline's finally), exactly
+     *   covering the blind window — treat it as un-synced local work. */
     const localHasUnsynced =
       _hasFreshLocalActivity ||
+      !!conv._sendInFlight ||
       _localHasPendingSync;
 
     /* ── One-line reconciliation snapshot ──
@@ -1074,6 +1087,7 @@ async function loadConversationMessages(convId) {
       conv._needsLoad = false;
       conv._serverMsgCount = Math.max(serverMsgs.length, conv.messages.length);
     } else if (conv.activeTaskId && hasLocalData
+               && !conv._sendInFlight
                && !activeStreams.has(convId) && serverMsgs.length < conv.messages.length
                && _openConvMayHoldOrphanGhost(conv, convId)) {
       /* ★ Adopt a SHORTER authoritative list FIRST — before the checkpoint

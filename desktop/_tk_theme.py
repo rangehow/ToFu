@@ -401,8 +401,9 @@ STRINGS = {
         'zh': '已连上',
     },
     'desktop.tray.stAuth': {
-        'en': 'auth failed — the token in the connect line is wrong',
-        'zh': '鉴权失败——连接行里的密钥不对',
+        'en': 'auth failed — the credential is dead; re-pair via '
+              '"Connect to a different Tofu…"',
+        'zh': '鉴权失败——密钥已失效；用托盘「连接到另一个 Tofu…」重新配对即可',
     },
     'desktop.tray.stProxy': {
         'en': 'blocked by a proxy/SSO gateway — re-discovering the route '

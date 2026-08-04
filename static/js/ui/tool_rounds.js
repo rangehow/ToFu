@@ -43,6 +43,7 @@ function _isRoundBrowser(round) {
   return [
     "browser_list_tabs",
     "browser_read_tab",
+    "browser_read_page",
     "browser_execute_js",
     "browser_screenshot",
     "browser_get_cookies",
@@ -152,6 +153,7 @@ function _getRoundIcon(round) {
     const m = {
       browser_list_tabs: "tabs",
       browser_read_tab: "read",
+      browser_read_page: "read",
       browser_execute_js: "js",
       browser_screenshot: "screenshot",
       browser_get_cookies: "cookie",

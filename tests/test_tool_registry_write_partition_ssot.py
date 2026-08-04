@@ -76,15 +76,16 @@ def _memory_names():
 #: approval-eligible + serially dispatched. Each entry names the mutation so a
 #: future reader can judge the classification rather than trusting the list.
 STATE_CHANGING_EXPECTATIONS = {
-    # browser — drives the user's real browser session
+    # browser — drives the user's real browser session (v2 surface,
+    # pt_869e5648403e4745; the retired names are gone from provides/write_tools
+    # entirely, so they cannot be listed here without contradicting the merge)
     'browser_execute_js':   'runs arbitrary JS in the user page',
-    'browser_navigate':     'changes what page the user is on',
+    'browser_navigate':     'changes what page the user is on (incl. new_tab)',
     'browser_click':        'activates page controls (may submit/purchase)',
+    'browser_type':         'types into the user page',
+    'browser_press_key':    'synthetic keystrokes into the user page',
+    'browser_menu_click':   'activates menu/context-menu actions',
     'browser_fill_form':    'types into the user page',
-    'browser_keyboard':     'synthetic keystrokes into the user page',
-    'browser_hover_and_click': 'activates page controls',
-    'browser_right_click_menu': 'activates context-menu actions',
-    'browser_create_tab':   'opens a tab in the user browser',
     'browser_close_tab':    'closes a tab (can discard user work)',
     # scheduler — persists background jobs that outlive the turn
     'schedule_create':      'persists a recurring background job',
@@ -108,10 +109,8 @@ STATE_CHANGING_EXPECTATIONS = {
 #: Read-only counterparts that must NOT be dragged into the write partition —
 #: partitioning them would serialize + prompt on harmless reads.
 MUST_STAY_READ_ONLY = {
-    'browser_read_tab', 'browser_list_tabs', 'browser_screenshot',
-    'browser_get_cookies', 'browser_get_history', 'browser_get_app_state',
-    'browser_get_interactive_elements', 'browser_summarize_page',
-    'browser_wait', 'browser_hover',
+    'browser_read_page', 'browser_list_tabs', 'browser_screenshot',
+    'browser_get_cookies', 'browser_get_history',
     'schedule_list', 'await_task',
     'search_memories',
     'project_charter_read', 'project_board_read', 'project_peer_status',
@@ -275,6 +274,7 @@ class TestApprovalMetaCoverage:
 
     @pytest.mark.parametrize('tool', [
         'browser_execute_js', 'browser_navigate', 'browser_fill_form',
+        'browser_type', 'browser_press_key', 'browser_menu_click',
         'schedule_create', 'schedule_manage', 'timer_create',
         'project_charter_commit',
     ])

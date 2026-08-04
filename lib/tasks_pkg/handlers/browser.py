@@ -51,10 +51,14 @@ def _badge_regex_count(pattern, unit, fallback='done'):
 _BROWSER_BADGE_DISPATCH = {
     'browser_list_tabs':                _badge_list_tabs,
     'browser_read_tab':                 _badge_read_tab,
+    'browser_read_page':                _badge_read_tab,
     'browser_execute_js':               _badge_ok_or_error('ok', 'error'),
     'browser_screenshot':               _badge_screenshot,
     'browser_get_interactive_elements': _badge_regex_count(r'(\d+) shown', 'elements'),
     'browser_click':                    _badge_ok_or_error('clicked', 'failed'),
+    'browser_type':                     _badge_ok_or_error('typed', 'failed'),
+    'browser_press_key':                _badge_ok_or_error('sent', 'failed'),
+    'browser_menu_click':               _badge_ok_or_error('clicked', 'failed'),
     'browser_get_cookies':              _badge_regex_count(r'(\d+) cookies?', 'cookies'),
     'browser_get_history':              _badge_regex_count(r'(\d+) results?', 'results'),
     'browser_create_tab':               _badge_ok_or_error('opened', 'failed'),
@@ -86,8 +90,12 @@ def _handle_browser_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     else:
         display_text = tool_content if isinstance(tool_content, str) else json.dumps(tool_content, ensure_ascii=False)
 
-    # browser_read_tab: apply LLM content filter
-    is_read_tab = (fn_name == 'browser_read_tab'
+    # browser_read_tab / browser_read_page (text-bearing modes): apply the
+    # LLM content filter. elements/app_state modes return structured lists,
+    # not page prose — filtering those would mangle them.
+    is_read_tab = ((fn_name == 'browser_read_tab'
+                    or (fn_name == 'browser_read_page'
+                        and (fn_args or {}).get('mode', 'auto') in ('auto', 'text')))
                    and isinstance(tool_content, str)
                    and not tool_content.startswith('Error'))
     if is_read_tab and len(display_text) > 1500:

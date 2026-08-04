@@ -389,21 +389,18 @@ def _register_builtins() -> None:
                  }),
                  category='project', description='Project file tools / code exec'),
         ToolSpec('browser', _build_browser, phase='base',
-                 # 19 names = BROWSER_TOOLS (16) + ADVANCED_BROWSER_TOOLS (3).
-                 # Declared so the registry stays the single source of truth
-                 # for "what tools exist" — an undeclared handler is invisible
-                 # to the partition tables and to the custom-tool collision
-                 # check in lib/tools/tool_env.py.
+                 # 13 names = BROWSER_TOOLS (11) + ADVANCED_BROWSER_TOOLS (2).
+                 # v2 (pt_869e5648403e4745): the ten retired names are NOT
+                 # declared — their tool_registry registration shrank with
+                 # BROWSER_TOOL_NAMES, so there is no handler left to declare
+                 # (their display formatters remain for history rendering).
                  provides=frozenset({
-                     'browser_navigate', 'browser_read_tab', 'browser_list_tabs',
-                     'browser_create_tab', 'browser_close_tab',
-                     'browser_click', 'browser_hover', 'browser_keyboard',
-                     'browser_execute_js', 'browser_screenshot',
-                     'browser_get_cookies', 'browser_get_history',
-                     'browser_get_app_state', 'browser_summarize_page',
-                     'browser_get_interactive_elements', 'browser_wait',
-                     'browser_fill_form', 'browser_hover_and_click',
-                     'browser_right_click_menu',
+                     'browser_navigate', 'browser_read_page', 'browser_list_tabs',
+                     'browser_close_tab', 'browser_click', 'browser_type',
+                     'browser_press_key', 'browser_execute_js',
+                     'browser_screenshot', 'browser_get_cookies',
+                     'browser_get_history', 'browser_fill_form',
+                     'browser_menu_click',
                  }),
                  # These DRIVE the user's real browser session, so they belong
                  # in the serial write partition + behind the Manual approval
@@ -413,16 +410,16 @@ def _register_builtins() -> None:
                  # NOTE: this makes them SERIAL — a deliberate behaviour change;
                  # concurrent clicks on one page were never actually safe.
                  write_tools=frozenset({
-                     'browser_navigate', 'browser_click', 'browser_keyboard',
-                     'browser_execute_js', 'browser_fill_form',
-                     'browser_hover_and_click', 'browser_right_click_menu',
-                     'browser_create_tab', 'browser_close_tab',
+                     'browser_navigate', 'browser_click', 'browser_type',
+                     'browser_press_key', 'browser_execute_js',
+                     'browser_fill_form', 'browser_menu_click',
+                     'browser_close_tab',
                  }),
                  # Read-only observers stay parallel-safe AND cacheable within
-                 # a task. browser_read_tab/screenshot are deliberately NOT
+                 # a task. browser_read_page/screenshot are deliberately NOT
                  # idempotent — the page changes under us between calls.
                  idempotent_tools=frozenset({
-                     'browser_list_tabs', 'browser_get_app_state',
+                     'browser_list_tabs',
                  }),
                  category='browser', description='Browser automation tools'),
         ToolSpec('desktop', _build_desktop, phase='base',

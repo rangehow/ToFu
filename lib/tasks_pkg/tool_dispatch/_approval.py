@@ -397,6 +397,47 @@ def _approval_meta_browser_keyboard(approval_meta, fn_args):
     )
 
 
+def _approval_meta_browser_type(approval_meta, fn_args):
+    """``browser_type`` — the VALUE typed into the user's page is the risk."""
+    target = fn_args.get('text') or fn_args.get('selector', '') or ''
+    approval_meta['path'] = target
+    _risk(
+        approval_meta,
+        ('Text to type', fn_args.get('value') or None),
+        ('Into field', target or None),
+        ('Tab', fn_args.get('tab_id') or None),
+        note='Type text into a field in your browser page',
+    )
+
+
+def _approval_meta_browser_press_key(approval_meta, fn_args):
+    """``browser_press_key`` — keystrokes can submit forms / fire shortcuts."""
+    keys = fn_args.get('keys', '') or ''
+    _risk(
+        approval_meta,
+        ('Keys to send', keys),
+        ('Focus element', fn_args.get('selector') or None),
+        ('Tab', fn_args.get('tab_id') or None),
+        note='Send synthetic keystrokes to your browser page',
+    )
+
+
+def _approval_meta_browser_menu_click(approval_meta, fn_args):
+    """``browser_menu_click`` — which menu item gets activated."""
+    item = fn_args.get('item_text', '') or ''
+    target = fn_args.get('target_text') or fn_args.get('target_selector', '') or ''
+    approval_meta['path'] = item
+    _risk(
+        approval_meta,
+        ('Menu item to activate', item),
+        ('Menu opened on', target or None),
+        ('Via', fn_args.get('via') or None),
+        ('Submenu item', fn_args.get('submenu_text') or None),
+        ('Tab', fn_args.get('tab_id') or None),
+        note='Open a menu and activate an item in your browser',
+    )
+
+
 def _approval_meta_browser_create_tab(approval_meta, fn_args):
     """``browser_create_tab`` — the URL that will be opened."""
     url = fn_args.get('url', '') or ''
@@ -657,6 +698,10 @@ _APPROVAL_META_ENRICHERS = {
     'browser_keyboard':         _approval_meta_browser_keyboard,
     'browser_create_tab':       _approval_meta_browser_create_tab,
     'browser_close_tab':        _approval_meta_browser_close_tab,
+    # ── v2 surface (pt_869e5648403e4745) ──
+    'browser_type':             _approval_meta_browser_type,
+    'browser_press_key':        _approval_meta_browser_press_key,
+    'browser_menu_click':       _approval_meta_browser_menu_click,
     # ── desktop: runs on the user's own machine ──
     'desktop_run_command':      _approval_meta_desktop_run_command,
     'desktop_write_file':       _approval_meta_desktop_write_file,

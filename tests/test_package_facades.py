@@ -102,7 +102,9 @@ class TestBrowserFacade:
     def test_advanced(self):
         from lib.browser import ADVANCED_BROWSER_TOOL_NAMES, ADVANCED_BROWSER_TOOLS
         assert isinstance(ADVANCED_BROWSER_TOOLS, list)
-        assert len(ADVANCED_BROWSER_TOOLS) == 3
+        # v2 (pt_869e5648403e4745): hover_and_click + right_click_menu merged
+        # into browser_menu_click → shipped set is menu_click + fill_form.
+        assert len(ADVANCED_BROWSER_TOOLS) == 2
         assert isinstance(ADVANCED_BROWSER_TOOL_NAMES, set)
 
     def test_all_completeness(self):

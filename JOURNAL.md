@@ -1,3 +1,9 @@
+### 2026-08-04(预存红闭环:test_frontend_sse_assistantmsg_invariant——固定 1200 字符断言窗被 _ensureMsgId 加固挤爆;改守卫块作用域锚定,方向对齐而非代码迁就) — 脑派发接我自票 `pt_eab154ae989f456c` **DONE**;commit `c5d3977b`(1 文件 +7/−3,纯测试侧);套件 **2/2** + NEUTER 精确
+
+- **定案(纯测试漂移,代码无罪):** `connectToTask` 的非空守卫(sse_pipeline.js:384)完整无缺——构造新 assistant 消息/`_ensureMsgId` 赋 ID/push 俱在,「dispatch 前非空」不变量成立。漂移源:某批给守卫块加 `_ensureMsgId` 硬化后块长 ~1370 字符,断言的固定 1200 字符窗把 `conv.messages.push(assistantMsg)` 挤出界外(失败输出正好截在 `conv.messages.pus`)。
+- **修法(形状稳健化):** 断言窗口从固定字符数改为**守卫块自身作用域**——`src[idx:src.index('\n  }\n', idx)]`,钉到守卫的 2 空格闭括号(内层 if/对象字面量全在 4+ 空格闭合,不会误配)。块内再加日志/注释/硬化永远不会再挤爆窗口;真删 push/role 照样红。
+- **NEUTER 实证:** 临时删守卫内 push 行 → 精确红(「no longer establishes a fresh assistant message」);`git checkout` 字节级还原(该文件工作树==HEAD 无兄弟占用)→ 2/2 绿。
+- **同类判例再+1:** 与 segment_gate/open_conv_scroll_once/charter_tools 诸票同族——棘轮钉「字面窗口」而非「契约形状」时,任何块内正当增长都会引爆假红;块作用域锚定是该族的通解。
 ### 2026-08-04(run_command 文件系 grep 拦截闸:建议数月不敌一记实测——`grep -n … | head; grep -rn … | head` 在 FUSE 坏窗口空跑 17m04s 零输出;新闸拒执行并给 grep_search 翻译,流过滤/ rg / git grep / timeout 包裹全合法) — owner 截图指令「run command 仍频繁执行 grep,很慢,我们有专用 grep 工具,想办法拦截」;commit 见下(6 文件 +330/−7);新套件 **42 检**(failing 实证)+ 守卫环 **280 绿**(1 预存红见下)
 
 - **定案(建议不是强制):** run_command 工具描述数月来一直写「Do NOT use run_command for grep——grep_search 5x+ 快」,模型照跑不误;截图实证 `grep -n 'cream\|…' static/styles.css | head -30; echo ---; grep -rn 'cream' static/*.css 2>/dev/null | head -20` 挂 RUNNING 17m04s(无 timeout 可终结)。修法案=骑既有闸层(catastrophic-delete / unbounded-scan 同款模式):分类器 `_grep_filesystem_segment` 进 command_analysis.py,tool_run_command 在 scan 闸后新增拒执点,杀开关 `TOFU_RUN_GREP_GUARD=0`。

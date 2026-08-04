@@ -1,3 +1,11 @@
+### 2026-08-04(受控端安装体验双修:运行中安装→双语提示自动关闭(不再裸撞文件锁);SSH 隧道黑窗全灭——CREATE_NO_WINDOW 收进唯一真实 spawn 缝) — owner 两指令(「已运行时安装被中断,应提示或给关闭按钮」+「装完反复弹黑壳窗,后台隧道要更优雅」);commit `a139dff6`(5 文件 +209/−3);环 **47/47 + 261 绿**;真 makensis 双组件编译实证
+
+- **根因①(安装中断):** NSIS 模板对运行中的 app 零防护——`File /r` 撞上写锁定的 TofuAgent.exe 镜像,Windows 拒写,安装器裸抛 file-in-use Abort/Retry/Ignore。修法=前置探测而非事后报错:对 `$INSTDIR\${APP_EXE}` 做 append 模式 FileOpen(运行中镜像必拒写),锁则弹**双语**(英/中)Yes/No 提示——Yes 走 `nsExec::Exec taskkill /IM /T /F` 代关(nsExec 藏控制台,/T 连树杀故 ssh 隧道子进程同灭,/F 无文档可失),1.2s 后复探循环,No 则干净 Abort。钩子进 `.onInit`+`un.onInit` 双闸(卸载时运行同样半删目录),full/agent 共享模板一次全愈。CI Inno 侧补钉 `CloseApplications=yes`+`RestartApplications=no`(原是未断言的默认值,默认翻转会静默上线)。
+- **根因②(黑窗连弹):** agent 是 windowed exe(tofu-agent.spec `console=False`),而 `_pair._tunnel_once` 裸 `subprocess.Popen(['ssh',...])`——Windows 给每个控制台子进程配新黑窗;发现阶梯最坏 3 主机×3 端口=9 连弹,且每次开机 resume 重跑。修法=`_spawn_tunnel` 唯一真实 spawn 缝,Windows 下带 `CREATE_NO_WINDOW`+隐藏 STARTUPINFO(全 getattr 守卫,Linux 可导入可测);注入 `_popen` 的测试面签名零改动。
+- **测试账:** pair 套件 +4(posix 空 kwargs/win32 表面模拟/spawn 缝 kwargs 路由/无注入路径接线钉——回归裸 Popen 即红,且 Popen 补丁防破线时真 spawn ssh);parity +1(宏在/.onInit+un.onInit 双插/探针指 payload exe/nsExec 隐藏杀树/双语 LangString/Inno 双侧 count==2)。failing-first 对 HEAD 五针全红(NSIS 宏/onInit/Inno 钉/两 helper 皆无)。
+- **验证(超测试的真闸):** 双组件渲染脚本过真 makensis 3.11 编译——nsExec.dll 链接进包、两条 LangString(1033/2052)入编、.onInit+un.onInit 双函数在列,agent.exe/full.exe 均产出。
+- **生效面:** 模板修复属 wrap 半(NSIS),`_pair.py` 修复属 payload 半(冻结 exe)——在店 TofuAgent-Setup 需随 `pt_59b62951aad2463e` 验收链重建 payload+重 wrap 才到用户;CI 下次发版自然携带。真机验收清单应补两条:①agent 运行中双击新安装包→双语提示→Yes 后秒装;②装完首启+开机自启全程零黑窗。
+
 ### 2026-08-04(扩展 popup 全量重设计:暗黑紫孤岛退役——豆腐块语言(奶油头/墨边/金 CTA) + 状态英雄卡层级 + emoji 全族清零;新增 Paused 状态不再伪装 Disconnected) — owner 截图指令「信息层级不清、emoji 滥用,UI/UX 都要改」;commit 见下(3 文件);新套件 **9 检** + 扩展环 **60 绿**;三状态截图实证
 
 - **定案(与侧栏/技能页同族判例):** popup 是最后一面暗黑紫(#1a1a2e/#a78bfa)孤岛——全 app 面板已豆腐化,扩展还停在旧时代;且层级扁平(罕见的 Pause 键与主操作同重)、emoji 充图标(✦🆔⏸▶✓✗📤⏳ 八枚)。重设计全部骑既有豆腐语言零新发明:奶油头+金锔钉线(对齐 settings-header)/墨底金字版本徽标(对齐 .mcp-app-status.on)/金左镶条状态英雄卡(inset 4px gold,对齐 .stg- 卡)/金 CTA(btn-gold)/墨边偏移影(3px/2px)/方角。

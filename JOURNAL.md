@@ -1,3 +1,9 @@
+### 2026-08-04(测试体系 P1 落地:字段级契约——top-N 端点消费者驱动形状钉,响应多出字段不破钉;checker 自带 NEUTER 咬合自证) — 脑派发 epic `pt_adf0ac6c15d44f28` **DONE**;commit 见下(2 文件);套件 **11/11**(6 咬合自证+5 端点钉)
+
+- **形态(Pact-lite,不上 Pact):** `tests/test_api_field_contract.py`(api 层)——`assert_shape` 迷你 DSL(类型/并集/嵌套 dict/逐 item list),**消费者驱动**:只钉 api.js 真读的字段,extra keys 放行——刻意的加法变更永不破钉,删/改名/改型必红且报点路径(防快照剧场=负优化)。钉五端点:chat send(taskId/convId/userMessage…)/conversations list({ok,items[]}+种子会话必在)/conversation get(messages[]…)/server-config 模型选择器(providers[].models[].model_id+capabilities)/images upload({ok,filename})。形状全部实测于活 app(探针 dump 三轮),非手撰文档。
+- **咬合自证(NEUTER 纪律):** 检查器自身 6 针——缺字段报名/错型报名/bool≠int/逐 item 定位/并集叶/extra 放行;检查器不能红=所有钉都是剧场。
+- **勘探账:** chat send 对 `model: probe-model` 不校验供应方直接 200(任务后台才撞 LLM)——响应形状钉与 LLM 可用性解耦,恰好满足 hermetic;上传走 base64 JSON 缝(镜像 test_upload_filename_collision);flask_client 同步夹具通吃全部目标端点。
+
 ### 2026-08-04(预存红×2 闭环:test_frontend_backend_contract 悬空插值假 MISS 根修 + ruff E401 拆行——脑派发接我自票) — epic `pt_d42f32511279432a` **DONE**;commit 见下(2 文件);契约套件 **4/4** + ruff 清零
 
 - **① 契约红根修(normaliser 侧,非 api.js 侧):** api.js:1251 `…/live-session${refresh ? '?refresh=1' : ''}` 含两个插值;提取器字符类在第二个插值**内部**的 `?` 截断,留下 `live-session${refresh` 悬空半插值——`_DYNAMIC_SEG_RE` 要求闭合 `}` 不识→段保持字面→对注册路由 `<domain>/live-session` 报假 MISS。定案:悬空 `${`(其后无 `}`)只可能产出查询串或空,**route 段在它之前结束**——`_normalise` 截断悬空处(段空则弃),完整插值/混合段/Werkzeug 转换器三语义钉针不动。NEUTER 级回归针四形态(事故原形/段首悬空/完整插值/混合段)。

@@ -63,6 +63,8 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
     A 200 OR an HTTP 400 both count as ``ok`` — a 400 means the gateway
     accepted the (key, model) routing and only rejected the (deliberately
     tiny) request shape, which still proves the pair is reachable.
+    Exception: a body carrying a routing-rejection marker (see
+    ``_ROUTE_MISSING_MARKERS``) is ``not_found`` on ANY status.
 
     ``protocol='anthropic'`` probes the Anthropic Messages API
     (``POST /v1/messages`` with ``x-api-key`` + ``anthropic-version``)
@@ -249,21 +251,37 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
     return _classify_status(code, body)
 
 
+# Body markers that mean "this gateway has NO route for the model" — as
+# opposed to "route exists but the tiny probe shape was rejected". They ride
+# any status: the Meituan AIGC gateway answers a missing route with HTTP 400
+# stage=validation and a CHINESE message ("不支持的模型类型(model=…)"), which
+# the status ladder alone misreads as reachable (2026-08-04 opus-5 incident —
+# vertex./aws. cells showed green while every real chat call 400'd).
+_ROUTE_MISSING_MARKERS = (
+    'model_not_found', 'does not exist', 'no such model',
+    'unsupported model', 'unsupported_model', 'model not supported',
+    '不支持的模型类型',
+)
+
+
 def _classify_status(code: int, body: str):
     """Map an HTTP status (+body excerpt) to a (verdict, detail) pair.
 
     A 200 OR a 400 both count as ``ok`` — a 400 means the gateway accepted
     the (key, model) routing and only rejected the (deliberately tiny)
-    request shape, which still proves the pair is reachable.
+    request shape, which still proves the pair is reachable. The routing-
+    rejection body sniff runs FIRST: a missing route must never read as ok.
     """
     lower = body.lower()
+    if any(m in lower for m in _ROUTE_MISSING_MARKERS):
+        return 'not_found', 'HTTP %d %.120s' % (code, body)
     if code == 200 or code == 400:
         return 'ok', 'HTTP %d' % code
     if code == 429 or code == 402:
         return 'rate_limited', 'HTTP %d %.120s' % (code, body)
     if code in (401, 403):
         return 'unauthorized', 'HTTP %d %.120s' % (code, body)
-    if code == 404 or 'model_not_found' in lower or 'does not exist' in lower or 'no such model' in lower:
+    if code == 404:
         return 'not_found', 'HTTP %d %.120s' % (code, body)
     if code in (500, 502, 503, 504, 529):
         return 'unavailable', 'HTTP %d %.120s' % (code, body)

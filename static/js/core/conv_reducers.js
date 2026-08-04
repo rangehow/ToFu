@@ -165,9 +165,8 @@ if (typeof window !== 'undefined') window.pollWriteWouldClobberSettledTail = pol
    `conversations` list only (no fetch), so it degrades to the fallback label
    when the conversation isn't loaded rather than blocking on the network.
    ═══════════════════════════════════════════════════════════════════ */
-function convTitleById(cid) {
-  const _t = (typeof t === 'function') ? t : (k => k);
-  if (!cid) return '';
+function _convFindById(cid) {
+  if (!cid) return null;
   try {
     if (typeof conversations !== 'undefined' && Array.isArray(conversations)) {
       let hit = conversations.find(c => c && c.id === cid);
@@ -177,12 +176,31 @@ function convTitleById(cid) {
         const pre = conversations.filter(c => c && c.id && c.id.indexOf(cid) === 0);
         if (pre.length === 1) hit = pre[0];
       }
-      if (hit && hit.title && String(hit.title).trim()) return String(hit.title).trim();
+      if (hit) return hit;
     }
-  } catch (e) { if (typeof console !== 'undefined') console.debug('[convTitleById] lookup failed', e); }
+  } catch (e) { if (typeof console !== 'undefined') console.debug('[convFindById] lookup failed', e); }
+  return null;
+}
+function convTitleById(cid) {
+  const _t = (typeof t === 'function') ? t : (k => k);
+  if (!cid) return '';
+  const hit = _convFindById(cid);
+  if (hit && hit.title && String(hit.title).trim()) return String(hit.title).trim();
   return _t('toast.untitledConv');
 }
 if (typeof window !== 'undefined') window.convTitleById = convTitleById;
+
+/* convFullIdById(cid) — resolve a (possibly truncated 8-char display-form)
+ * conversation id to the FULL id of the loaded conversation, so click-to-jump
+ * surfaces (the peer-inject sender bubble) can call loadConversation with the
+ * canonical id. Same full-then-unique-prefix matching as convTitleById (the
+ * shared _convFindById seam); returns '' when unresolved (conversation not in
+ * the loaded sidebar list) — callers must treat '' as "cannot jump". */
+function convFullIdById(cid) {
+  const hit = _convFindById(cid);
+  return (hit && hit.id) ? String(hit.id) : '';
+}
+if (typeof window !== 'undefined') window.convFullIdById = convFullIdById;
 
 /* ═══════════════════════════════════════════════════════════════════
    convAutoTranslateEffective(conv) — resolver for the ON-OPEN / ON-ACTIVATE

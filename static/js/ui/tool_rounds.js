@@ -683,16 +683,22 @@ function _peerFromBubbleGroup(previews, max) {
 
 /* A small "who sent this" bubble: resolves a sibling conversation id to its
  * human-readable TITLE via the shared `convTitleById` seam (never a bare id —
- * falls back to a localized label), with the raw id in the tooltip. Used in the
- * peer-inject row header so the user sees a conversation title, not `mrnaj25i`. */
+ * falls back to a localized label). Rendered as a BUTTON carrying
+ * `data-conv-jump` — clicking jumps to the source conversation (delegated
+ * handler below resolves the full id via `convFullIdById` and calls
+ * `loadConversation`). The tooltip carries the FULL title (the visible label
+ * ellipsizes) + the raw id + the jump hint. */
 function _peerFromBubble(cid) {
   const id = String(cid || "");
   if (!id) return "";
+  const _t = (typeof t === "function") ? t : (k, d) => d;
   const title = (typeof convTitleById === "function")
     ? (convTitleById(id) || id)
     : id;
   const icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:1em;height:1em"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
-  return `<span class="sw-peer-from-bubble" title="conv ${escapeHtml(id)}">${icon}<span>${escapeHtml(title)}</span></span>`;
+  const jumpIcon = '<svg class="sw-peer-jump" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:.85em;height:.85em"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg>';
+  const tip = title + " · conv " + id + " — " + _t("peer.jumpToConv", "Open conversation");
+  return `<button type="button" class="sw-peer-from-bubble" data-conv-jump="${escapeHtml(id)}" title="${escapeHtml(tip)}">${icon}<span>${escapeHtml(title)}</span>${jumpIcon}</button>`;
 }
 
 function _renderInboxInjectRow(round) {
@@ -754,13 +760,21 @@ function _renderPeerInjectRow(round) {
   const label = typeof t === "function" ? t("peer.injectRowLabel") : "Received";
   const badge = typeof t === "function" ? t("peer.injectRowBadge") : "injected → context";
   const _t = (typeof t === "function") ? t : (k, d) => d;
+  /* Sender attribution dedup: the row header ALREADY carries one title bubble
+   * per distinct sender, so when every preview came from the SAME conversation
+   * (the common case) the body cards must NOT repeat the identical bubble —
+   * that repetition read as a rendering bug. Per-card attribution is kept only
+   * for a genuinely multi-sender injection. */
+  const _distinctSenders = new Set(
+    previews.map(p => (p && p.fromConv) ? String(p.fromConv) : "").filter(Boolean));
+  const _perCardAttribution = _distinctSenders.size > 1;
   const bodyHtml = previews.length
     ? previews.map(p => {
         const text = String(p.text == null ? "" : p.text);
         // Attribution reads as a conversation-title bubble (via convTitleById),
         // NOT a raw id — users care who sent it. Peer messages are plain prose,
         // rendered as Markdown for the human view.
-        const fromBubble = p.fromConv ? _peerFromBubble(p.fromConv) : "";
+        const fromBubble = (_perCardAttribution && p.fromConv) ? _peerFromBubble(p.fromConv) : "";
         const bodyMd = text.trim()
           ? `<div class="sw-card-preview md-content">${(typeof renderMarkdown === "function") ? renderMarkdown(text) : escapeHtml(text)}</div>`
           : "";
@@ -3178,6 +3192,31 @@ document.addEventListener("click", function (e) {
   const collapsed = turn.classList.toggle("collapsed");
   const chev = head.querySelector(".ptool-turn-chev");
   if (chev) chev.textContent = collapsed ? "▸" : "▾";
+});
+
+/* Peer-sender bubble → jump to the source conversation. Delegated at the
+ * document level so it survives re-renders; preventDefault/stopPropagation
+ * keep the surrounding <details>/<summary> from toggling on the same click.
+ * The id may be the 8-char display form — resolved to the full id through the
+ * shared convFullIdById seam; an unresolved id (conversation not in the loaded
+ * sidebar list) gets a toast instead of a silent no-op. */
+document.addEventListener("click", function (e) {
+  const bubble = e.target.closest(".sw-peer-from-bubble[data-conv-jump]");
+  if (!bubble) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const cid = bubble.getAttribute("data-conv-jump") || "";
+  if (!cid) return;
+  const fullId = (typeof convFullIdById === "function") ? convFullIdById(cid) : "";
+  if (fullId && typeof loadConversation === "function") {
+    loadConversation(fullId);
+    return;
+  }
+  if (typeof showToast === "function") {
+    const _t = (typeof t === "function") ? t : (k, d) => d;
+    showToast("", _t("peer.convNotFoundTitle", "Conversation not found"),
+              _t("peer.convNotFound", "It may have been deleted, or it is not in the current list."), 4000);
+  }
 });
 
 // ★ Timer-id chip → copy the full timer id to the clipboard. Delegated at the

@@ -1428,6 +1428,22 @@ var _i18n = {
   'settings.egressProbing': { zh: '网络检测中…', en: 'Checking connectivity…' },
   'settings.egressGetAgent': { zh: '安装受控端', en: 'Install agent' },
   'settings.egressGetAgentTitle': { zh: '打开「本机控制」面板：下载受控端后点「配对这台电脑」，把 6 位配对码填进受控端首次启动即连上（无需地址、无需隧道），订阅流量即可经你的电脑出口', en: 'Opens Local Control: download the agent, click "Pair this computer" and type the 6-digit code into the agent\'s first-run dialog — no address, no tunnel — and subscription traffic exits via your machine' },
+  // ── Subscription adapter card (CLIProxyAPI sidecar, settings/oauth.js) ──
+  'settings.adapterTitle': { zh: '订阅适配器 (CLIProxyAPI)', en: 'Subscription adapter (CLIProxyAPI)' },
+  'settings.adapterDesc': { zh: '在你的电脑受控端上运行 CLIProxyAPI 侧车，把第三方订阅账号接入为本地模型服务。', en: 'Runs the CLIProxyAPI sidecar on your desktop agent, exposing third-party subscription accounts as a local model service.' },
+  'settings.adapterEmpty': { zh: '没有在线的可转发订阅流量的受控端——请先在你的电脑上安装并启用受控端，并授予「订阅转发」权限。', en: 'No egress-capable agent is online — install and enable the desktop agent on your computer first, with the subscription-relay permission granted.' },
+  'settings.adapterBadgeNotInstalled': { zh: '未安装', en: 'Not installed' },
+  'settings.adapterBadgeInstalling': { zh: '安装中…', en: 'Installing…' },
+  'settings.adapterBadgeRunning': { zh: '运行中 v{version} · 端口 {port}', en: 'Running v{version} · port {port}' },
+  'settings.adapterBadgeInstalled': { zh: '已安装（未运行）', en: 'Installed (stopped)' },
+  'settings.adapterBadgeError': { zh: '错误', en: 'Error' },
+  'settings.adapterAccounts': { zh: '已配置 {n} 个订阅账号', en: '{n} subscription account(s) configured' },
+  'settings.adapterStart': { zh: '启动适配器', en: 'Start adapter' },
+  'settings.adapterStop': { zh: '停止', en: 'Stop' },
+  'settings.adapterRetry': { zh: '重试', en: 'Retry' },
+  'settings.adapterEnsuring': { zh: '正在安装/启动适配器——首次运行需下载约 20MB，可能需要几分钟…', en: 'Installing/starting the adapter — the first run downloads ~20MB and can take a few minutes…' },
+  'settings.adapterReady': { zh: 'provider 订阅适配器 · {name} 已加入模型列表', en: 'Provider 订阅适配器 · {name} has joined the model list' },
+  'settings.adapterInfoLine': { zh: '登录在本机浏览器完成，订阅 token 不出本机；适配器由上游社区维护伪装层。', en: 'Sign-in completes in your local browser — subscription tokens never leave this machine; the adapter is a cloaking layer maintained by the upstream community.' },
   'settings.oauthStep1': { zh: '点击登录', en: 'Click login' },
   'settings.oauthStep1Sub': { zh: '弹窗打开官方授权页', en: 'A popup opens the official auth page' },
   'settings.oauthStep2': { zh: '完成授权', en: 'Authorize' },
@@ -3218,6 +3234,11 @@ var _i18n = {
   'peer.injectRowOne': { zh: '条对话消息', en: 'peer message' },
   'peer.injectRowMany': { zh: '条对话消息', en: 'peer messages' },
   'peer.injectRowBadge': { zh: '已注入上下文', en: 'injected → context' },
+  // Sender-bubble jump affordance (tool_rounds.js _peerFromBubble — clicking
+  // the conversation-title bubble opens that conversation).
+  'peer.jumpToConv': { zh: '点击打开来源对话', en: 'Click to open the conversation' },
+  'peer.convNotFoundTitle': { zh: '找不到该对话', en: 'Conversation not found' },
+  'peer.convNotFound': { zh: '它可能已被删除，或不在当前列表中。', en: 'It may have been deleted, or it is not in the current list.' },
 
   // Post-send inject-mode chooser (main_send_pipeline.js _promptInjectMode) —
   // shown ONLY when a turn is already generating for this conversation. Two

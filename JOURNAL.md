@@ -1,3 +1,16 @@
+### 2026-08-04(预存红闭环:test_charter_tools_register_in_project_mode——断言钉的是被 2026-07-30 有意收回的 agent 自提交契约;方向对齐而非代码迁就) — 脑派发接我自票 `pt_0711f247210f45a5` **DONE**;commit 见下(2 文件);注册表族 **86/86** + charter/board 邻接 **93/93**
+
+- **定案(纯测试漂移):** 旧断言 `assertIn('project_charter_commit', names)` 钉的是 2026-07-12 的自提交去闸契约——该契约 2026-07-30 被 owner 有意**反转**(charter 永远要人类复核,`CHARTER_TOOLS = [read, propose]`,见 lib/tools/conversation.py 头部注释与 `lib/conversations/project_charter.py:1007` WITHDRAWN 记录)。与 segment_gate/open_conv_scroll_once/api_integration 诸票同族:测试滞后于有意契约迁移。
+- **重钉(两半契约都钉):** ①模型侧集合=read+propose,`assertNotIn('project_charter_commit')`;②**拒绝半**——`CHARTER_COMMIT_TOOL` schema 与名字刻意保留在模块符号/`CHARTER_TOOL_NAMES` 里,旧转录学来该工具的模型会得到「人类闸门在哪」的明确拒绝而非幽灵工具错;这半若被「清理」掉,拒绝路径就退化成 unknown-tool,故一并钉住。
+- **NEUTER 精确:** 把 commit 临时加回 `CHARTER_TOOLS`(模拟契约倒退)→ 新 `assertNotIn` 当场精确红;还原 17/17 绿。
+- **事故自记(上一批遗留收口):** 搜索设置批的 `git commit -- <paths>` 扫掠部分 staged 事故已存 memory `git-commit-pathspec-sweeps-partial-staging`;本批提交前先核「worktree diff == 我的全部」再走 pathspec,流程闭环。
+### 2026-08-04(技能系统「装了却说没装」定案:chat 模式 × 项目作用域的设计缝——注入链路本体三重实证健康) — owner 截图指令「查技能系统现在有什么问题;我先在 chat 模式问,现在 studio」;零产品代码(纯调查);证据链=注入日志+DB 持久层+生产网关探针+离线全真复演;记忆 `skills-chat-mode-project-scope-invisibility` 入库
+
+- **主根因(chat 模式不可见,100% 复现):** flyai/soyoung 两包均为**项目作用域**——目录安装器与 API 默认 `scope='project'`(routes/api_v1/skills.py:160),落 `<project>/.tofu/skills/<id>/`;chat 模式不挂项目 → `build_skills_index(project_path=None)` 只扫服务器全局库 `data/skills/global/`(**目录根本不存在**)→ 索引为空 → 模型如实答「没装任何技能」。实测:`build_skills_index('.')` 出两条,`build_skills_index(None)` 出 `''`;日志实证本对话 10:21/10:22 两轮 chat 模式 `proj_enabled=False`、10:33:37 studio 轮 `proj_enabled=True`。类比:技能装进了项目抽屉,chat 模式不带这把钥匙。
+- **studio 链路三重实证健康(排除法逐一销案):** ①`[Context]` 日志 10:33:40 conv=mse17ie1 blocks 含 `skills_index:963`(注入确实发生);②生产同款 4 块 system 探针经 dispatch→sankuai→kimi-k3,模型 4/4 块全念出(网关不丢中间块);③真 `_inject_system_contexts` 复演(静态 12872+memory 1401+skills 963+peer 1430 全真内容)同路径下发,kimi-k3 逐字答出 `flyai`/`soyoung-clinic-tools`。代码链逐站排除:`_append_to_system_message`/anthropic_outbound hoist/llm_sanitize/add_cache_breakpoints/conv_message_builder 全不丢块;429 重试同 slot 同 body(cache.py 契约),无换路。本轮我自身未感知该块=长工具轮模型侧上下文视图折叠个例(我的可见上下文带折叠标记),非管线缺陷;新 studio 对话问「你有哪些技能」即可对公众验证。
+- **邻接发现×2:** ①`.tofu/skills/global/` 混入 40 个平铺**记忆** .md(记忆/技能拆分迁移残留;包扫描器跳过 `global/` 子目录故无害),另有 split-migration collision 警告(git-diff-magnitude…md 在 .tofu/skills 与 .tofu/memories 双侧同存);②手写 `_parse_frontmatter` 只认单行 JSON 的 `metadata:` 块,flyai 真实嵌套 YAML(`openclaw.requires.bins=[node]`)解析成空串 → `requires_bins` 永远 `[]` → 运行时资格门对真实 OpenClaw 包失明(设置页「需要 node」徽标来自目录元数据,非运行时解析)——无 node 机器上会广告一个激活即败的技能。
+- **修复方向(待 owner 定,属产品意图):** A=目录安装对项目无关技能默认/可选全局作用域(设置页是全局面板,默认装进当前项目反直觉);B=chat 模式补技能可见性(需权衡缓存与「无项目」语义);C=用户侧即时解:全局库建目录后 `mv .tofu/skills/flyai data/skills/global/`,全模式立即可用。
+
 ### 2026-08-04(存量舰队恢复链:owner 复核擒获「自愈代码够不到已卡死的旧扩展」——extVersion 上线路 + locked-out 登记处 + 面板三态诚实;顺手根修扫描器族原子改名窗口误判) — owner 复核指令四步;commit `5c252962`(13 文件 +510/−21);新套件 **9 针**(failing-first 对 HEAD 精确 9 红)+ 扩展结构针 +1;环 **254/254**(18 套件)
 
 - **盲区定案(owner 擒获):** 上一批(`faa9169f`)的自动重配全部装在新扩展文件里,而 load-unpacked 侧载扩展**没有更新通道**,401 卡死后连轮询都进不来——服务器对「门外徘徊的旧版扩展」与「从未安装」零区分,面板一律「尚未安装」,是误导性谎言;桌面 agent 侧早有 `_with_drift`,浏览器扩展侧是零。

@@ -127,6 +127,33 @@ function _apRunNoticeHTML(rec) {
     data-ap-reason="${reason}"><span class="ap-run-notice-label">${label}</span>${raw(body)}</div>`);
 }
 
+/* A run ends at the next REAL human turn (user-msg without the VU marker);
+ * VU turns are stamped participants of the run, not boundaries. */
+function _apIsHumanTurn(el) {
+  return !!(el && el.classList && el.classList.contains('user-msg')
+            && !el.classList.contains('vu-user-msg'));
+}
+
+/* The element a run-tail notice must actually follow. data-ap-run is stamped
+ * ONLY on persisted VU turns (renderMessage reads msg._autopilotRunId, which
+ * only _append_vu_message_to_conv sets), so the last STAMPED element can be
+ * followed by the run's trailing agent turns — anchoring there put the notice
+ * ABOVE the agent's closing message, explaining a message that had not
+ * rendered yet. Walk forward across the run's trailing un-stamped turns,
+ * stopping at a human turn (the run's boundary), another run's stamped turn,
+ * or an existing notice. */
+function _apRunLastTurn(anchor) {
+  let node = anchor;
+  while (node && node.nextElementSibling) {
+    const sib = node.nextElementSibling;
+    if (_apIsHumanTurn(sib)) break;
+    if (sib.hasAttribute && sib.hasAttribute('data-ap-notice')) break;
+    if (sib.hasAttribute && sib.hasAttribute('data-ap-run')) break;
+    node = sib;
+  }
+  return node;
+}
+
 /* Append the run-tail notice after the LAST stamped turn of each concluded run
  * that ended without answering. Idempotent: an existing notice for the run is
  * replaced, so repeated render passes never stack duplicates. */
@@ -153,7 +180,8 @@ function _applyAutopilotRunNotices(inner, conv) {
       const node = holder.firstElementChild;
       if (!node) return;
       node.setAttribute('data-ap-run-id', runId);
-      anchor.parentNode.insertBefore(node, anchor.nextSibling);
+      const runTail = _apRunLastTurn(anchor);
+      runTail.parentNode.insertBefore(node, runTail.nextSibling);
     });
   } catch (e) {
     console.warn('[Autopilot notice] render failed (non-fatal):', e && e.message);

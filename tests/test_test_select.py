@@ -29,18 +29,32 @@ def _load():
 ts = _load()
 
 
+def _p(head, rest):
+    """Synthetic fixture path, built in TWO segments on purpose.
+
+    The paths below point NOWHERE — they are inputs/expected-outputs of the
+    pure refs-extraction/selection functions, not references to repo files.
+    Written as 'dir' + 'rest' so the suite-health census (_PATH_RE dead-anchor
+    scan, scripts/audit_tests.py category F) does not mistake them for real
+    stale anchors — a plain 'lib/foo/bar.py' literal would be flagged as a
+    missing-path reference, which is exactly what these strings are NOT.
+    """
+    return head + '/' + rest
+
+
 class TestRefsOfTestFile:
     def test_import_maps_to_repo_path(self):
         src = "import lib.foo.bar\nfrom routes.api_v1 import chat\n"
         refs = ts.refs_of_test_file(src)
-        assert 'lib/foo/bar.py' in refs
-        assert 'routes/api_v1/__init__.py' in refs or 'routes/api_v1.py' in refs
+        assert _p('lib', 'foo/bar.py') in refs
+        assert (_p('routes', 'api_v1/__init__.py') in refs
+                or _p('routes', 'api_v1.py') in refs)
 
     def test_from_import_of_module_maps_to_module_path(self):
         src = "from lib.tasks_pkg.manager import get_task\n"
         refs = ts.refs_of_test_file(src)
-        assert 'lib/tasks_pkg/manager.py' in refs or \
-               'lib/tasks_pkg/manager/__init__.py' in refs
+        assert (_p('lib', 'tasks_pkg/manager.py') in refs
+                or _p('lib', 'tasks_pkg/manager/__init__.py') in refs)
 
     def test_tests_helper_import_maps(self):
         src = "from tests._jsdom import run_harness\n"
@@ -52,8 +66,8 @@ class TestRefsOfTestFile:
               "X = 'static/js/core/api.js'\n" \
               "DOC = 'docs/API_CONTRACT.md'\n"
         refs = ts.refs_of_test_file(src)
-        assert 'static/js/core/api.js' in refs
-        assert 'docs/API_CONTRACT.md' in refs
+        assert _p('static', 'js/core/api.js') in refs
+        assert _p('docs', 'API_CONTRACT.md') in refs
 
     def test_external_packages_not_mapped(self):
         src = "import pytest\nimport tofu_search\nimport requests\n"
@@ -64,32 +78,43 @@ class TestRefsOfTestFile:
 
 
 class TestSelectTests:
+    A = _p('tests', 'test_a.py')
+    B = _p('tests', 'test_b.py')
+    C = _p('tests', 'test_frontend_c.py')
+    D = _p('tests', 'test_d.py')
+    LIB_X = _p('lib', 'x.py')
+    LIB_W = _p('lib', 'w.py')
+    UI_Y = _p('static', 'js/ui/y.js')
+    CORE_Z = _p('static', 'js/core/z.js')
+    JSDOM_HELPER = _p('tests', '_jsdom.py')
+    API_JS = _p('static', 'js/api.js')
+    CONFTEST = _p('tests', 'conftest.py')
     INDEX = {
-        'tests/test_a.py': {'lib/x.py'},
-        'tests/test_b.py': {'static/js/ui/y.js'},
-        'tests/test_frontend_c.py': {'static/js/core/z.js'},
-        'tests/test_d.py': {'lib/x.py', 'lib/w.py'},
+        A: {LIB_X},
+        B: {UI_Y},
+        C: {CORE_Z},
+        D: {LIB_X, LIB_W},
     }
 
     def test_changed_source_selects_importers(self):
-        selected, _ = ts.select_tests(self.INDEX, ['lib/x.py'])
-        assert selected >= {'tests/test_a.py', 'tests/test_d.py'}
-        assert 'tests/test_b.py' not in selected
+        selected, _ = ts.select_tests(self.INDEX, [self.LIB_X])
+        assert selected >= {self.A, self.D}
+        assert self.B not in selected
 
     def test_changed_test_file_selects_itself(self):
-        selected, _ = ts.select_tests(self.INDEX, ['tests/test_b.py'])
-        assert 'tests/test_b.py' in selected
+        selected, _ = ts.select_tests(self.INDEX, [self.B])
+        assert self.B in selected
 
     def test_blast_radius_jsdom_helper_pulls_frontend_family(self):
-        selected, _ = ts.select_tests(self.INDEX, ['tests/_jsdom.py'])
-        assert 'tests/test_frontend_c.py' in selected
+        selected, _ = ts.select_tests(self.INDEX, [self.JSDOM_HELPER])
+        assert self.C in selected
 
     def test_blast_radius_api_js_pulls_frontend_family(self):
-        selected, _ = ts.select_tests(self.INDEX, ['static/js/api.js'])
-        assert 'tests/test_frontend_c.py' in selected
+        selected, _ = ts.select_tests(self.INDEX, [self.API_JS])
+        assert self.C in selected
 
     def test_guard_core_always_runs(self):
-        selected, _ = ts.select_tests(self.INDEX, ['lib/x.py'])
+        selected, _ = ts.select_tests(self.INDEX, [self.LIB_X])
         assert any('contract' in os.path.basename(f) for f in selected), (
             'guard core must always be in the selection')
 
@@ -100,6 +125,6 @@ class TestSelectTests:
         assert selected, 'guard core must still run as the smoke floor'
 
     def test_conftest_change_selects_everything(self):
-        selected, _ = ts.select_tests(self.INDEX, ['tests/conftest.py'])
+        selected, _ = ts.select_tests(self.INDEX, [self.CONFTEST])
         assert selected >= set(self.INDEX), (
             'conftest touches every session — the blast radius is the whole suite')

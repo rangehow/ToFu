@@ -215,10 +215,14 @@ def test_settings_modal_opens_and_closes(page):
     _wait_app_ready(page)
     page.locator('button[onclick="openSettings()"]').first.click()
     page.wait_for_selector('#settingsModal.open', timeout=10000)
+    assert page.locator('#settingsModal.open').count() == 1, (
+        'settings modal did not render in open state')
     page.locator('.settings-close-btn').first.click()
     page.wait_for_function(
         "!document.getElementById('settingsModal').classList.contains('open')",
         timeout=5000)
+    assert page.locator('#settingsModal.open').count() == 0, (
+        'settings modal still open after the close button')
 
 
 # ─── 主干道 9: 上传附件 chip ───────────────────────────────────────────
@@ -230,3 +234,5 @@ def test_upload_image_chip_renders(page, tmp_path):
     png.write_bytes(_TINY_PNG)
     page.set_input_files('#fileInput', str(png))
     page.wait_for_selector('.img-preview', state='attached', timeout=10000)
+    assert page.locator('.img-preview').count() >= 1, (
+        'no attachment preview chip rendered after file selection')

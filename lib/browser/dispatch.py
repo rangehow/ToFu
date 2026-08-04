@@ -24,7 +24,7 @@ from lib.browser.handlers import (
     _handle_type,
     _handle_wait,
 )
-from lib.browser.queue import _set_active_client
+from lib.browser.queue import _set_active_client, send_browser_command
 from lib.log import get_logger
 
 logger = get_logger(__name__)

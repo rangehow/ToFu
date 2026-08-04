@@ -642,6 +642,25 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
             'detail': (f'⚠️ 模型 {original_model} 请求失败（{_fb_kind}）：'
                        f'{_fb_detail[:120]} — 已自动回退到 {_FALLBACK_MODEL} 继续生成…'),
         })
+        # ★ EARLY notification, at the DECISION MOMENT — before the fallback
+        #   stream starts. A fallback generation can run for minutes; the
+        #   transient phase line is cleared the moment fallback content
+        #   starts streaming, so without a STRUCTURED event + early task
+        #   stamps the user has no indication the model changed for the
+        #   whole generation, and a cold reload mid-fallback cannot repaint
+        #   the banner (build_fresh_state_snapshot reads these fields).
+        #   Cleared again below if the fallback itself fails.
+        append_event(task, {
+            'type': 'model_fallback',
+            'fallbackModel': _FALLBACK_MODEL,
+            'fallbackFrom': original_model,
+            'fallbackKind': _fb_kind,
+            'fallbackReason': _fb_reason[:300],
+        })
+        task['_fallback_model'] = _FALLBACK_MODEL
+        task['_fallback_from'] = original_model
+        task['_fallback_reason'] = _fb_reason[:300]
+        task['_fallback_kind'] = _fb_kind
         # A model fallback is a significant state change — record it in the
         # audit trail so the optimizer/operator can see WHICH model failed,
         # how often, and why (the analyzer already mines 'model_fallback').
@@ -693,10 +712,8 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                                tid, round_num, _FALLBACK_MODEL, finish_reason,
                                _fb_trace, _fb_elapsed / 1000)
 
-            task['_fallback_model'] = _FALLBACK_MODEL
-            task['_fallback_from'] = original_model
-            task['_fallback_reason'] = _fb_reason[:300]
-            task['_fallback_kind'] = _fb_kind
+            # (fallback fields were stamped at the DECISION moment, before
+            # the stream started — see above; nothing to re-stamp here.)
             if usage:
                 for k, v in usage.items():
                     if isinstance(v, (int, float)):
@@ -761,6 +778,13 @@ def _llm_call_with_fallback(task, body, model, round_num, max_tokens,
                     on_tool_call_ready=on_tool_call_ready)
                 if _rescue is not None:
                     return _rescue
+            # The configured fallback produced NOTHING — clear the
+            # decision-time stamp. done/persist read these fields to claim a
+            # fallback happened; claiming one that failed is a lie. (A
+            # successful pool-rescue above re-stamps with its own values.)
+            for _fk in ('_fallback_model', '_fallback_from',
+                        '_fallback_reason', '_fallback_kind'):
+                task.pop(_fk, None)
             if tool_call_happened:
                 _user_err = format_llm_error_for_user(
                     e2, model=_FALLBACK_MODEL,

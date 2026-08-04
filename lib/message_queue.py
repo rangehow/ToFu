@@ -1419,6 +1419,10 @@ def dispatch_next_queued(conv_id: str, *, _wait: float | None = None) -> str | N
                 stamp_initiator(user_msg, INITIATOR_BRAIN)
                 if payload.get('boardTaskId'):
                     user_msg['_boardTaskId'] = payload.get('boardTaskId')
+                # Provenance card data (creator conv/title, dispatch seam,
+                # routing reason) — display-only, stamped by dispatch_epic.
+                if payload.get('_brainEpic'):
+                    user_msg['_brainEpic'] = payload['_brainEpic']
             conv_ref_texts = payload.get('convRefTexts')
             if not conv_ref_texts and payload.get('convRefs'):
                 try:

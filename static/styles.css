@@ -16581,6 +16581,63 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .peer-msg-banner.peer-msg-banner-operator .peer-msg-icon,
 .peer-msg-banner.peer-msg-banner-operator .peer-msg-from{color:#7ee787}
 
+/* ── Brain-dispatch provenance card (chat_render.js _renderBrainDispatchCard)
+   A Project-Brain kickoff turn: the card carries WHICH epic / WHO posted it /
+   HOW+WHY it was routed here, so the raw English instruction wall can stay
+   collapsed behind .brain-kickoff-raw. Brain-purple accent (same family as
+   the conv-ref badge) — distinct from the peer banner's blue. */
+.brain-dispatch-card{
+  margin:0 0 10px 0;padding:10px 14px 11px;
+  border:1px solid rgba(199,146,234,.35);
+  background:linear-gradient(135deg, rgba(199,146,234,.10), rgba(130,170,255,.05));
+  border-radius:10px;font-size:12.5px;line-height:1.5;
+  color:var(--text-secondary, #9aa4b2);
+}
+.brain-dispatch-card .bdc-head{
+  display:flex;align-items:center;gap:6px;margin-bottom:4px;
+  font-size:11.5px;font-weight:600;letter-spacing:.03em;color:#c792ea;
+}
+.brain-dispatch-card .bdc-icon{display:inline-flex}
+.brain-dispatch-card .bdc-epic-id{
+  margin-left:auto;font-family:var(--font-mono, ui-monospace, monospace);
+  font-size:11px;font-weight:400;color:var(--text-tertiary, #6b7280);
+}
+.brain-dispatch-card .bdc-answered{
+  display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;
+  background:rgba(126,231,135,.12);border:1px solid rgba(126,231,135,.35);
+  color:#7ee787;font-size:11px;font-weight:600;letter-spacing:0;
+}
+.brain-dispatch-card .bdc-epic-title{
+  font-size:13px;font-weight:600;color:var(--text-primary, #e6e9ee);
+  cursor:pointer;line-height:1.4;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+}
+.brain-dispatch-card .bdc-epic-title:hover{color:#c792ea;text-decoration:underline}
+.brain-dispatch-card .bdc-meta{
+  display:flex;flex-wrap:wrap;gap:3px 16px;margin-top:7px;font-size:12px;
+}
+.brain-dispatch-card .bdc-meta-label{
+  color:var(--text-tertiary, #6b7280);margin-right:5px;
+}
+.brain-dispatch-card .bdc-conv-link{
+  color:#82aaff;font-weight:600;text-decoration:none;
+}
+.brain-dispatch-card .bdc-conv-link:hover{text-decoration:underline}
+.brain-dispatch-card .bdc-this{font-weight:600;color:var(--text-primary, #e6e9ee)}
+/* The raw engine kickoff text — collapsed by default; the card above is the
+   human-facing summary. Dashed frame reads as "machinery, not prose". */
+.brain-kickoff-raw{
+  margin:0 0 8px 0;padding:5px 12px;
+  border:1px dashed var(--border, #333);border-radius:8px;
+}
+.brain-kickoff-raw>summary{
+  cursor:pointer;padding:2px 0;user-select:none;
+  font-size:12px;color:var(--text-tertiary, #6b7280);
+}
+.brain-kickoff-raw>summary:hover{color:var(--text-secondary, #9aa4b2)}
+.brain-kickoff-raw[open]>summary{margin-bottom:6px}
+.brain-kickoff-raw .user-content{font-size:12px;opacity:.85;white-space:pre-wrap}
+
 /* ── Conversation Reference Picker Popover ── */
 .conv-ref-picker{
   position:fixed;z-index:10000;

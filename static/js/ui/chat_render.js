@@ -1288,6 +1288,64 @@ function buildCompactionCardHtml(msg) {
   </div>`;
 }
 
+/* Build the Project-Brain dispatch provenance card (owner ask 2026-08-04).
+ * A brain kickoff arrives as a role=user turn whose content is a wall of
+ * English engine instructions; the human's actual questions — WHICH epic,
+ * WHO posted it, HOW/WHY it landed here — were nowhere on screen. The
+ * backend stamps the display-only `_brainEpic` record (creator conv + title,
+ * dispatch seam, routing reason) in project_dispatch._brain_meta; this pure
+ * render turns it into a compact card. Returns '' for legacy messages (no
+ * `_brainEpic`), which keep the old plain-bubble look. Standalone fn so the
+ * jsdom-less harness can drive it without the whole renderMessage graph. */
+function _renderBrainDispatchCard(msg) {
+  const meta = msg && msg._brainEpic;
+  if (!meta || typeof meta !== 'object') return '';
+  const _tOr = (k, fb) => (typeof t === 'function' && t(k) !== k) ? t(k) : fb;
+  const _glyph = (typeof _INIT_GLYPH_BRAIN !== 'undefined') ? _INIT_GLYPH_BRAIN : '';
+  const epicTitle = String(meta.epicTitle || '');
+  const epicId = String(meta.epicId || '');
+  const originConv = String(meta.originatorConv || '');
+  const originTitle = String(meta.originatorTitle || '').trim();
+  // Creator chip: "本对话" (plain text) when the epic was posted HERE; else a
+  // clickable title that opens the originator conversation.
+  const _isSelf = !!originConv && (typeof activeConvId !== 'undefined')
+                  && originConv === activeConvId;
+  let fromHtml = '';
+  if (originConv) {
+    fromHtml = _isSelf
+      ? `<span class="bdc-this">${escapeHtml(_tOr('brain.thisConv', 'this conversation'))}</span>`
+      : `<a class="bdc-conv-link" href="#" title="${escapeHtml(originConv)}" onclick="event.stopPropagation();try{loadConversation('${originConv.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}')}catch(e){};return false;">${escapeHtml(originTitle || _tOr('brain.untitledConv', 'Untitled conversation'))}</a>`;
+  }
+  const methodLbl = meta.method
+    ? _tOr('brain.method.' + meta.method, String(meta.method)) : '';
+  const routeLbl = meta.route
+    ? _tOr('brain.reason.' + meta.route, String(meta.route)) : '';
+  const answeredChip = meta.answered
+    ? `<span class="bdc-answered">${escapeHtml(_tOr('brain.answeredChip', 'carries a human answer'))}</span>` : '';
+  const metaItems = [];
+  if (fromHtml) {
+    metaItems.push(`<span class="bdc-meta-item"><span class="bdc-meta-label">${escapeHtml(_tOr('brain.fromLabel', 'From'))}</span>${fromHtml}</span>`);
+  }
+  if (methodLbl) {
+    metaItems.push(`<span class="bdc-meta-item"><span class="bdc-meta-label">${escapeHtml(_tOr('brain.methodLabel', 'Method'))}</span>${escapeHtml(methodLbl)}</span>`);
+  }
+  if (routeLbl) {
+    metaItems.push(`<span class="bdc-meta-item"><span class="bdc-meta-label">${escapeHtml(_tOr('brain.reasonLabel', 'Why me'))}</span>${escapeHtml(routeLbl)}</span>`);
+  }
+  const openTip = _tOr('brain.openBoard', 'View in the Project Brain panel');
+  return `<div class="brain-dispatch-card">`
+    + `<div class="bdc-head"><span class="bdc-icon">${_glyph}</span>`
+    + `<span class="bdc-title-label">${escapeHtml(_tOr('brain.dispatchTitle', 'Brain dispatch'))}</span>`
+    + answeredChip
+    + (epicId ? `<span class="bdc-epic-id">${escapeHtml(epicId)}</span>` : '')
+    + `</div>`
+    + (epicTitle
+       ? `<div class="bdc-epic-title" title="${escapeHtml(openTip)}" onclick="event.stopPropagation();if(window.openProjectBrain)openProjectBrain();">${escapeHtml(epicTitle)}</div>`
+       : '')
+    + (metaItems.length ? `<div class="bdc-meta">${metaItems.join('')}</div>` : '')
+    + `</div>`;
+}
+
 function renderMessage(msg, idx) {
   /* Belt: drop an orphaned empty-assistant placeholder (see
    * _isOrphanEmptyAssistant). Returning '' produces no DOM node — the surgical
@@ -1425,6 +1483,14 @@ function renderMessage(msg, idx) {
       body += `<div class="peer-msg-banner${_isHuman ? " peer-msg-banner-operator" : ""}" title="${escapeHtml(msg._fromConv || "")}">`
             + `<span class="peer-msg-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>`
             + `<span class="peer-msg-text">${_pmLabel} <span class="peer-msg-from">conv ${_fromShort}</span></span></div>`;
+    }
+    // ── Brain-dispatch provenance card ──
+    // A Project-Brain kickoff turn: show WHICH epic, WHO posted it (clickable
+    // title) and HOW/WHY it was routed here — the human-facing facts the raw
+    // English instruction wall never carried. Legacy kickoffs (no _brainEpic)
+    // render nothing extra and keep the old look.
+    if (msg._brainDispatch) {
+      body += _renderBrainDispatchCard(msg);
     }
   }
   // NOTE: the autopilot run summary is NO LONGER a message — it's a human-only
@@ -1747,11 +1813,22 @@ function renderMessage(msg, idx) {
         mdHtml = r.html;
         _inlinedBranches = r.inlinedSet;
       }
-      /* ★ FLATTENED (owner directive 2026-07-07): the VU reply renders as a
+      /* ★ FLATTENED (owner directive 2026-07-07): the VU reply renders as
        * plain md-content body, identical to an agent turn — no "Sent to the
        * agent" green handoff zone. DATA-layer provenance is unchanged (only
        * `content` reaches the next agent; see conv_message_builder). */
-      body += `<div class="md-content${isUser ? " user-content" : ""}">${mdHtml}</div>`;
+      /* ★ Brain-dispatch kickoff: the raw engine instructions are for the
+       * AGENT; the provenance card above already answers the human's questions.
+       * Collapse the wall of text behind a <details> so the card dominates —
+       * full fidelity stays one click away, and the model's copy (msg.content)
+       * is untouched. */
+      if (isUser && msg._brainDispatch) {
+        const _rawLbl = (typeof t === 'function' && t('brain.rawKickoff') !== 'brain.rawKickoff')
+          ? t('brain.rawKickoff') : 'Dispatch instructions';
+        body += `<details class="brain-kickoff-raw"><summary>${escapeHtml(_rawLbl)}</summary><div class="md-content${isUser ? " user-content" : ""}">${mdHtml}</div></details>`;
+      } else {
+        body += `<div class="md-content${isUser ? " user-content" : ""}">${mdHtml}</div>`;
+      }
     } catch (e) {
   // ── Compaction markers — render inline chips for each archived snapshot ──
   // Each marker becomes a clickable chip that opens the Compaction Viewer

@@ -3171,6 +3171,28 @@ var _i18n = {
   'initiator.timer': { zh: '定时器', en: 'Timer' },
   'initiator.brain': { zh: '项目大脑', en: 'Project Brain' },
   'initiator.swarm': { zh: '自动续跑', en: 'Auto-continued' },
+  // ── Brain-dispatch provenance card (chat_render.js _renderBrainDispatchCard)
+  // The card on a Project-Brain kickoff turn: which epic, who posted it
+  // (clickable title), which seam dispatched it, and why THIS conversation
+  // was picked. method.* / reason.* keys are resolved dynamically from the
+  // backend _brainEpic tokens (lib/conversations/project_dispatch.py).
+  'brain.dispatchTitle': { zh: '项目大脑派发', en: 'Brain dispatch' },
+  'brain.fromLabel': { zh: '来自', en: 'From' },
+  'brain.methodLabel': { zh: '方式', en: 'Method' },
+  'brain.reasonLabel': { zh: '原因', en: 'Why me' },
+  'brain.method.heartbeat': { zh: '心跳巡视自动拉起', en: 'Heartbeat sweep auto-start' },
+  'brain.method.dependency_done': { zh: '依赖 Epic 完成后触发', en: 'A dependency just completed' },
+  'brain.method.posted': { zh: 'Epic 发布时立即派发', en: 'Dispatched when the epic was posted' },
+  'brain.method.conv_idle': { zh: '本对话空闲时立即派发', en: 'This conversation just went idle' },
+  'brain.method.answered': { zh: '人工答复后立即重派', en: 'Re-dispatched right after the human answered' },
+  'brain.reason.creator': { zh: '本对话是该 Epic 的创建者', en: 'This conversation created the epic' },
+  'brain.reason.migrated': { zh: '原目标会话空闲卡死，自动迁移到本对话', en: 'Migrated here — the original target was idle-stranded' },
+  'brain.reason.fallback': { zh: '创建者未知，派给刚完成依赖的会话', en: 'Originator unknown — routed to the completing conversation' },
+  'brain.answeredChip': { zh: '含人工答复', en: 'Human answer inside' },
+  'brain.rawKickoff': { zh: '派发指令原文', en: 'Raw dispatch instructions' },
+  'brain.thisConv': { zh: '本对话', en: 'this conversation' },
+  'brain.untitledConv': { zh: '未命名会话', en: 'Untitled conversation' },
+  'brain.openBoard': { zh: '在项目大脑面板中查看', en: 'View in the Project Brain panel' },
   // In-timeline chip (tool_rounds.js _renderStallNudgeRow) marking an
   // intent-stall nudge: the loop re-drove a model that said what it would do
   // and then stopped. System-authored, so the copy must read as a SYSTEM

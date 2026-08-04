@@ -18,6 +18,23 @@ document.addEventListener('DOMContentLoaded', () => {
   const repairBtn = document.getElementById('repairBtn');
   const clientIdChip = document.getElementById('clientIdText');
 
+  // A poll refresh must never fight the user's keyboard: an auto-refreshed
+  // field is written ONLY when it is neither focused nor dirty. The dirty
+  // latch is set by the user's first keystroke and cleared when the value
+  // is committed (save) — the popup always opens clean. EVERY field the
+  // 2s poll ever refreshes must go through this gate.
+  function guardedField(input) {
+    input.addEventListener('input', () => { input.dataset.dirty = '1'; });
+    return {
+      refresh(value) {
+        if (document.activeElement === input || input.dataset.dirty === '1') return;
+        input.value = value;
+      },
+      commit() { delete input.dataset.dirty; },
+    };
+  }
+  const serverField = guardedField(serverInput);
+
   // Load current secret state (we never echo the actual value into the
   // popup — only show whether one is set, like a password reset flow).
   chrome.storage.local.get(['bridgeSecret'], (data) => {
@@ -81,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (resp.serverUrl && serverInput) {
-        serverInput.value = resp.serverUrl;
+        serverField.refresh(resp.serverUrl);
       }
 
       toggleBtn.textContent = resp.pollActive ? 'Pause' : 'Resume';
@@ -108,6 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
   saveBtn.addEventListener('click', () => {
     const url = serverInput.value.trim();
     if (!url) return;
+    serverField.commit();
     chrome.runtime.sendMessage({ type: 'setServer', url }, () => {
       flashSaved(saveBtn);
       setTimeout(updateStatus, 500);

@@ -1,3 +1,11 @@
+### 2026-08-04(popup 重设计复核擒获根修:2s 轮询每 tick 无条件覆写 serverInput——用户输入中的 URL 每 2 秒被冲掉;focus/dirty 双闸 guardedField 收编全部自动刷新字段) — owner 复核指令;commit 见下(3 文件);设计套件 +2(环 **62 绿**);打字跨 tick 截图实证
+
+- **定案(owner 复核擒获的继承性旧疾):** 重设计原样继承了旧行为——`setInterval(updateStatus, 2000)` 每 tick `serverInput.value = resp.serverUrl` 无条件覆写,用户正在键入的新地址每 2 秒被冲回服务器值;我的三状态截图天然不可见此病(canned 桩值==键入值),owner 一句点破。
+- **修法(根修,可复用而非一次性内联):** `guardedField(input)` 双闸——focused(`document.activeElement`)或 dirty(用户首个 keystroke 置位 `dataset.dirty`)则跳过覆写;Save 提交时 `commit()` 清闩(popup 打开天然干净)。注释+守卫共同钉死:全部未来自动刷新字段必须骑同一闸,杜绝「下一个字段又内联裸写」。
+- **测试账:** 设计套件 +2——①无条件赋值棘轮(正则 `serverInput.value =` 禁现)+ 闸体四钉(activeElement/dirty 闩/input 监听器/guardedField 本体);②NEUTER 第 3 针(回换直接赋值→棘轮精确红)。环 = 设计 11 + auto_repair 16 + preseed 10 + parity 25 = **62 绿**。
+- **实测(打字跨 tick 截图):** preview harness 桩每次 getStatus 递增 commandsExecuted——3.73s 截图 Executed=130(证明 ≥2 次 tick 已跑过)而 Server 字段仍显示 `http://typed-by-user:9999`:统计在刷新、键入在存活,同帧两证,harness 用后即删。
+- **事故自记:** apply_diff 连续两次 search==replace 空操作(工具仍报 "3 lines changed",实为同文本重写),且一次误替换把 `__main__` runner 吞进上一枚测试体内——read_files 复核 tail 后一次修对;教训重申:编辑文件尾部结构后必读回确认,空操作不报错。
+
 ### 2026-08-04(受控端安装体验双修:运行中安装→双语提示自动关闭(不再裸撞文件锁);SSH 隧道黑窗全灭——CREATE_NO_WINDOW 收进唯一真实 spawn 缝) — owner 两指令(「已运行时安装被中断,应提示或给关闭按钮」+「装完反复弹黑壳窗,后台隧道要更优雅」);commit `a139dff6`(5 文件 +209/−3);环 **47/47 + 261 绿**;真 makensis 双组件编译实证
 
 - **根因①(安装中断):** NSIS 模板对运行中的 app 零防护——`File /r` 撞上写锁定的 TofuAgent.exe 镜像,Windows 拒写,安装器裸抛 file-in-use Abort/Retry/Ignore。修法=前置探测而非事后报错:对 `$INSTDIR\${APP_EXE}` 做 append 模式 FileOpen(运行中镜像必拒写),锁则弹**双语**(英/中)Yes/No 提示——Yes 走 `nsExec::Exec taskkill /IM /T /F` 代关(nsExec 藏控制台,/T 连树杀故 ssh 隧道子进程同灭,/F 无文档可失),1.2s 后复探循环,No 则干净 Abort。钩子进 `.onInit`+`un.onInit` 双闸(卸载时运行同样半删目录),full/agent 共享模板一次全愈。CI Inno 侧补钉 `CloseApplications=yes`+`RestartApplications=no`(原是未断言的默认值,默认翻转会静默上线)。

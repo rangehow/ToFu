@@ -17,7 +17,10 @@ four stat glyphs). The redesign pins:
   3. HIERARCHY — DOM order is the reading order: status hero → repair
      remedy → server field → advanced → stats → footer controls;
   4. STRUCTURE — every id popup.js wires against exists in popup.html
-     (the drift class where JS updates an element that was renamed).
+     (the drift class where JS updates an element that was renamed);
+  5. NO KEYBOARD FIGHTS — the 2s poll refresh writes an input only
+     through the focus/dirty-guarded writer (owner review 2026-08-04:
+     an unconditional write clobbered a URL being typed every tick).
 
 The repair-row / details / version-badge pins live in
 test_browser_bridge_auto_repair.py and
@@ -136,7 +139,30 @@ def test_stats_render_as_numbered_tiles_not_glyph_lines():
         'glyph-prefixed lines were the emoji defect')
 
 
-# ── 5. NEUTER — prove the pins bite ───────────────────────────────────
+# ── 5. The poll never fights the user's keyboard ─────────────────────
+
+def test_poll_refresh_never_overwrites_an_edited_field():
+    """Owner review 2026-08-04: the 2s ``setInterval`` refresh wrote
+    ``serverInput.value = resp.serverUrl`` unconditionally — a user typing
+    a new server URL was clobbered every tick. Auto-refreshed fields go
+    through a focus/dirty-guarded writer, and every future refreshed
+    field must ride the same gate."""
+    js = _src('browser_extension/popup.js')
+    assert not re.search(r'serverInput\.value\s*=[^=]', js), (
+        'the poll writes the server URL field unconditionally again — '
+        'a user edit in progress is overwritten every 2s tick')
+    assert 'activeElement' in js and 'dirty' in js, (
+        'the focus/dirty gate is gone — the poll can overwrite an edit '
+        'in progress')
+    assert "addEventListener('input'" in js, (
+        'the dirty latch must be set by the user’s first keystroke — '
+        'without it only focus protects the field, and a blur re-exposes it')
+    assert 'guardedField(' in js, (
+        'the guarded writer is the reusable embodiment of the rule — a '
+        'one-off inline check will not be copied to the next refreshed field')
+
+
+# ── 6. NEUTER — prove the pins bite ───────────────────────────────────
 
 def test_NEUTER_dropping_a_tofu_token_is_caught():
     html = _src('browser_extension/popup.html')
@@ -153,6 +179,15 @@ def test_NEUTER_an_emoji_sneaking_back_is_caught():
         'removed (pause symbol)')
     assert _EMOJI_RE.search('✓ Saved'), (
         'sanity: the emoji scanner must match the old Saved glyph')
+
+
+def test_NEUTER_unconditional_field_write_is_caught():
+    js = _src('browser_extension/popup.js')
+    neutered = js.replace('serverField.refresh(resp.serverUrl)',
+                          'serverInput.value = resp.serverUrl')
+    assert neutered != js, 'NEUTER did not restore the unconditional write'
+    assert re.search(r'serverInput\.value\s*=[^=]', neutered), (
+        'sanity: the poll-vs-keyboard pin above goes red on the old shape')
 
 
 if __name__ == '__main__':

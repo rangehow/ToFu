@@ -215,6 +215,21 @@ def test_popup_js_wires_the_repair_row():
         'the repair button must trigger the ladder’s user-gesture variant')
 
 
+def test_poll_reports_the_extension_version():
+    """The stranded-fleet telemetry (2026-08-04): without a version on the
+    wire, the server cannot tell 'installed but outdated' from 'current',
+    and a 401-parked old install is indistinguishable from 'never
+    installed'."""
+    src = _src()
+    body = _poll_body(src)
+    assert 'extVersion: EXT_VERSION' in body, (
+        'the poll body must carry the extension’s own version')
+    assert 'chrome.runtime.getManifest()' in src, (
+        'the reported version must come from the manifest itself — a '
+        'hardcoded twin reads as "you didn’t update" (measured drift, '
+        'the v4.3 badge incident)')
+
+
 # ── 4. Version contract ────────────────────────────────────────────────
 
 def test_manifests_moved_to_470_together():

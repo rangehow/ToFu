@@ -52,7 +52,10 @@ def _find_defining_file(symbol: str) -> Path:
     """
     needle = f"function {symbol}("
     hits = [p for p in sorted(JS_DIR.rglob("*.js"))
-            if not p.name.startswith(("bundle-", "feature-", "i18n-"))
+            # Dotfiles: the bundler's atomic-rename temp files
+            # (`.bundle-<hash>.<rand>.js`) are half-written copies —
+            # scanning one mid-build is a false red (2026-08-04).
+            if not p.name.startswith((".", "bundle-", "feature-", "i18n-"))
             and needle in p.read_text(encoding="utf-8")]
     if not hits:
         raise AssertionError(

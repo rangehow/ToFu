@@ -365,6 +365,24 @@ function _lcRenderBrowser(d, err) {
   }
 
   var clients = d.clients || [];
+  /* Fleet tri-state (2026-08-04, stranded-fleet fix): the server reports
+   * the version a fresh download would carry (servedExtVersion) and the
+   * clients whose polls DIED at the bridge gate (lockedOutClients). A
+   * stale-but-connected extension still works — the dot stays green and
+   * the upgrade is a one-click nudge. A locked-out extension cannot poll
+   * at all, so calling it "尚未安装" would be a lie: it is installed,
+   * broken, and unable to heal itself — the row must say so and offer
+   * the preseeded re-download (zero-config cure). */
+  var servedVer = ((d && d.servedExtVersion) || '').trim();
+  var staleFrom = '';
+  if (connected && servedVer) {
+    for (var _ci = 0; _ci < clients.length; _ci++) {
+      var _cv = ((clients[_ci] && clients[_ci].ext_version) || '').trim();
+      if (_cv && _cv !== servedVer) { staleFrom = _cv; break; }
+    }
+  }
+  var lockedOut = (!connected && d && Array.isArray(d.lockedOutClients))
+    ? d.lockedOutClients : [];
   if (connected) {
     var ago = (d.secondsAgo != null) ? d.secondsAgo + 's' : '';
     if (clients.length > 0) {
@@ -376,7 +394,10 @@ function _lcRenderBrowser(d, err) {
         : _lcT('local.connected', '已连接') + (ago ? ' · ' + ago : ''));
   } else {
     window._browserClientId = null;
-    _lcSetStatus('lcBrowserStatus', false, _lcT('local.notInstalled', '尚未安装'));
+    _lcSetStatus('lcBrowserStatus', false,
+      lockedOut.length
+        ? _lcT('local.extDead', '已安装但凭证已失效')
+        : _lcT('local.notInstalled', '尚未安装'));
   }
 
   _lcReach.browser = connected;
@@ -393,7 +414,34 @@ function _lcRenderBrowser(d, err) {
 
   if (!setup) return;
   var state = _lcBrowserSetupState(d);
-  if (state === 'connected') { setup.innerHTML = ''; return; }
+  if (state === 'connected') {
+    if (staleFrom) {
+      // Outdated but WORKING: nothing is broken, so this is a nudge, not
+      // an alarm — one click on the preseeded zip upgrades in place.
+      setup.innerHTML =
+        '<p class="lc-step">' + _lcEsc(_lcT('local.browserExtOutdated',
+          '扩展有新版本（{old} → {new}）——重新下载 ZIP 覆盖加载即可升级（已自动配对，零配置）：')
+          .replace('{old}', staleFrom).replace('{new}', servedVer)) + '</p>' +
+        _lcExtDownloadAction();
+      _lcWireExtDownload();
+    } else {
+      setup.innerHTML = '';
+    }
+    return;
+  }
+
+  if (lockedOut.length) {
+    // Stranded: an installed extension is knocking with a dead credential.
+    // This takes precedence over the load_unpacked/download guidance —
+    // the user's problem is not getting the folder, it is replacing a
+    // broken install with the self-pairing one.
+    setup.innerHTML =
+      '<p class="lc-step">' + _lcEsc(_lcT('local.browserExtStranded',
+        '检测到旧版扩展因凭证失效连不上（它自己无法恢复）——重新下载扩展 ZIP（已自动配对、零配置），加载即恢复：')) + '</p>' +
+      _lcExtDownloadAction();
+    _lcWireExtDownload();
+    return;
+  }
 
   if (state === 'load_unpacked') {
     // Tofu runs on this machine, this machine HAS a browser we can drive, and
@@ -455,20 +503,31 @@ function _lcRenderBrowser(d, err) {
  * floor, a failed status call, and the detected `download` state. It needs no
  * payload (downloadBrowserExtension is a pure frontend call), which is exactly
  * what makes it usable as the floor. */
-function _lcBrowserDownload() {
-  var setup = document.getElementById('lcBrowserSetup');
-  if (!setup) return;
-  setup.innerHTML =
-    '<p class="lc-step">' + _lcEsc(_lcT('local.browserDownload',
-      '下载扩展并解压，然后在 Chrome / Edge 里打开扩展管理页 → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。')) + '</p>' +
-    '<button type="button" class="btn btn-primary btn-sm" id="lcExtDownloadBtn">' +
-      _lcEsc(_lcT('browser.stepDownloadBtn', '下载扩展 ZIP')) + '</button>';
+/* The download BUTTON — authored once, shared by the plain install
+ * instruction, the upgrade nudge and the stranded-rescue branch (three
+ * copies of a button would drift; a drifted button is a dead one). */
+function _lcExtDownloadAction() {
+  return '<button type="button" class="btn btn-primary btn-sm" id="lcExtDownloadBtn">' +
+    _lcEsc(_lcT('browser.stepDownloadBtn', '下载扩展 ZIP')) + '</button>';
+}
+
+function _lcWireExtDownload() {
   var btn = document.getElementById('lcExtDownloadBtn');
   if (btn) {
     btn.onclick = function () {
       if (typeof downloadBrowserExtension === 'function') downloadBrowserExtension();
     };
   }
+}
+
+function _lcBrowserDownload() {
+  var setup = document.getElementById('lcBrowserSetup');
+  if (!setup) return;
+  setup.innerHTML =
+    '<p class="lc-step">' + _lcEsc(_lcT('local.browserDownload',
+      '下载扩展并解压，然后在 Chrome / Edge 里打开扩展管理页 → 开启「开发者模式」→「加载已解压的扩展程序」→ 选择解压出的文件夹。')) + '</p>' +
+    _lcExtDownloadAction();
+  _lcWireExtDownload();
 }
 
 // ══════════════════════════════════════════════════════

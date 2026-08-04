@@ -65,6 +65,16 @@ try {
   if (_cm) CHROME_MAJOR = parseInt(_cm[1], 10);
 } catch (e) { /* navigator.userAgent unavailable in this context */ }
 
+// Our OWN version, reported on every poll. The server compares it against
+// the version it would serve in a fresh zip, which is what lets the panel
+// tell "installed and healthy" from "installed but outdated" — and, when a
+// poll dies at the bridge gate, "installed but locked out" from "never
+// installed" (the stranded-fleet fix, 2026-08-04). Side-loaded extensions
+// have no update channel, so this telemetry is the only way the panel can
+// point a stale install at its one-click cure.
+let EXT_VERSION = '';
+try { EXT_VERSION = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) { /* */ }
+
 // Result-nudge: track the in-flight poll so a freshly-completed command can
 // abort the idle long-poll and be delivered immediately (see executeAndReport).
 let _activePollController = null;
@@ -372,7 +382,7 @@ async function poll() {
       // cross-origin extension fetch. This is what lets the bridge work
       // through such proxies with zero configuration.
       credentials: 'include',
-      body: JSON.stringify({ results: resultsToSend, clientId: CLIENT_ID, chromeMajor: CHROME_MAJOR }),
+      body: JSON.stringify({ results: resultsToSend, clientId: CLIENT_ID, chromeMajor: CHROME_MAJOR, extVersion: EXT_VERSION }),
     });
     clearTimeout(timeoutId);
     _activePollController = null;

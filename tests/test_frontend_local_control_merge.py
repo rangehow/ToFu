@@ -83,8 +83,11 @@ def _find_defining_file(symbol: str) -> Path:
     """
     needle = f"function {symbol}("
     hits = [p for p in sorted(JS_DIR.rglob("*.js"))
-            if not p.name.startswith("bundle-")
-            and not p.name.startswith("feature-")
+            # Dotfiles too: the bundler's atomic-rename temp files are
+            # `.bundle-<hash>.<rand>.js` — visible mid-build, and scanning
+            # one reads a HALF-WRITTEN copy of every symbol (false red,
+            # measured 2026-08-04 on a live bundle rebuild).
+            if not p.name.startswith((".", "bundle-", "feature-"))
             and needle in p.read_text(encoding="utf-8")]
     if not hits:
         raise AssertionError(
@@ -146,6 +149,10 @@ _SHIPPED_SYMBOLS = (
     # user to open a tunnel by hand.)
     "_lcAwaitingAgentHtml", "_lcPairBlockHtml", "_lcConnectDetailsHtml",
     "_lcWireAttach", "_lcPairCode",
+    # The download button is authored once and shared by the install /
+    # upgrade-nudge / stranded-rescue branches (2026-08-04 fleet tri-state);
+    # the browser renderer calls both, so the splice needs them.
+    "_lcExtDownloadAction", "_lcWireExtDownload",
 )
 
 
@@ -311,6 +318,15 @@ HARNESS = textwrap.dedent("""
                         localBrowser: {{ family:'chrome', name:'Chrome',
                                         extensionsUrl:'chrome://extensions' }} }},
       download:      {{ connected: false, localBrowser: null }},
+      // Fleet tri-state (2026-08-04): a stale-but-working install gets the
+      // upgrade nudge; a locked-out install (dead credential, cannot poll)
+      // must never render as 'not installed'.
+      outdated:      {{ connected: true, secondsAgo: 2,
+                        clients: [{{client_id:'abcdef123', ext_version:'4.6.0'}}],
+                        servedExtVersion: '4.7.0' }},
+      stranded:      {{ connected: false, localBrowser: null,
+                        lockedOutClients: [{{client_id:'dead1',
+                          ext_version:'4.3.0', seconds_ago: 42}}] }},
     }};
     for (const k of Object.keys(bcases)) {{
       document.getElementById('lcBrowserSetup').innerHTML = '';
@@ -325,6 +341,9 @@ HARNESS = textwrap.dedent("""
         hasOpenBtn: !!el.querySelector('#lcExtOpenBtn'),
         switchUsable: !bsw.disabled,
         about: document.getElementById('lcBrowserAbout').textContent.trim(),
+        statusText: (document.querySelector(
+          '#lcBrowserStatus .lc-status-text') || {{textContent: ''}})
+          .textContent.trim(),
       }};
     }}
 
@@ -521,6 +540,35 @@ def test_browser_row_picks_the_actionable_instruction():
     assert out["download"]["steps"] == 1
     assert out["download"]["hasDownloadBtn"] is True
     assert out["download"]["hasPath"] is False
+
+
+@pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
+def test_browser_row_distinguishes_the_install_states():
+    """2026-08-04 stranded-fleet fix: 'never installed' / 'installed &
+    current' / 'installed but outdated' / 'installed but LOCKED OUT' are
+    four different situations and the row must say which. The locked-out
+    case is load-bearing: a side-loaded extension with a dead credential
+    cannot heal itself (no update channel, cannot poll), so the ONLY cure
+    is the preseeded re-download — rendering it as 尚未安装 sends the user
+    down an entirely wrong path."""
+    out = _run(_shipped())["browser"]
+    # Healthy + current: no nudge, no setup content.
+    assert out["connected"]["steps"] == 0
+    assert out["connected"]["hasDownloadBtn"] is False
+    # Outdated but working: dot stays green, setup carries the upgrade.
+    assert out["outdated"]["hasDownloadBtn"] is True, (
+        "an outdated-but-working extension must get the one-click upgrade")
+    assert "4.6.0" in out["outdated"]["text"] and "4.7.0" in out["outdated"]["text"], (
+        "the nudge must name BOTH versions so the user can see what changes")
+    # Locked out: the status must not claim 'not installed'.
+    assert "失效" in out["stranded"]["statusText"], (
+        f"a locked-out extension rendered as "
+        f"{out['stranded']['statusText']!r} — the lie of omission this fix "
+        f"exists to kill")
+    assert out["stranded"]["hasDownloadBtn"] is True, (
+        "the stranded state must offer the preseeded re-download")
+    # Plain never-installed keeps the honest 'not installed'.
+    assert "尚未安装" in out["download"]["statusText"]
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
@@ -1129,7 +1177,8 @@ def test_no_orphaned_local_control_strings():
     html = INDEX_HTML.read_text(encoding="utf-8")
     js_sources = "\n".join(
         p.read_text(encoding="utf-8") for p in sorted(JS_DIR.rglob("*.js"))
-        if "i18n" not in p.name and not p.name.startswith(("bundle-", "feature-")))
+        if "i18n" not in p.name
+        and not p.name.startswith((".", "bundle-", "feature-")))
     declared = set(re.findall(r"^\s*'((?:local|browser)\.[A-Za-z0-9_]+)':",
                               i18n, re.M))
     assert declared, "scan surface empty — the regex stopped matching"

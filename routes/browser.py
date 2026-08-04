@@ -37,6 +37,19 @@ async def browser_poll():
         return '', 204
     _auth_ok, _bridge_user, _bridge_key = _resolve_bridge_caller('browser')
     if not _auth_ok:
+        # A 401 answered BY THIS GATE (a proxy's 401 never reaches this
+        # process) means an installed extension holding a stale/revoked
+        # credential — the stranded fleet, which cannot heal itself (no
+        # update channel, and a parked 401 client cannot poll). Record who
+        # knocked so the panel can tell "installed but locked out" from
+        # "never installed" and offer the one-click preseeded re-download.
+        try:
+            from lib.browser import mark_locked_out
+            _rej = await async_parse_body()
+            mark_locked_out((_rej or {}).get('clientId') or None,
+                            ext_version=str((_rej or {}).get('extVersion') or '')[:32])
+        except Exception as e:
+            logger.debug('[Browser] locked-out mark failed: %s', e)
         return _bridge_unauthorized()
     from lib.browser import mark_poll, resolve_batch, wait_for_commands_async
     data = await async_parse_body()
@@ -47,7 +60,8 @@ async def browser_poll():
         logger.debug('[Browser] non-numeric chromeMajor from client=%s: %s',
                      (client_id or 'anon')[:12], e)
         chrome_major = 0
-    mark_poll(client_id, chrome_major=chrome_major, user_id=_bridge_user)
+    mark_poll(client_id, chrome_major=chrome_major, user_id=_bridge_user,
+              ext_version=str(data.get('extVersion') or '')[:32])
     results = data.get('results', [])
     if results:
         logger.info('[Browser] poll received %d result(s) from client=%s: cmd_ids=%s',

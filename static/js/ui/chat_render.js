@@ -456,6 +456,7 @@ function _msgFingerprint(msg) {
     (_cmFp ? "cm" + _cmFp : "") + ":" +
     (msg.images ? msg.images.length : 0) + ":" +
     (msg.pdfTexts ? msg.pdfTexts.length : 0) + ":" +
+    (msg.videos ? msg.videos.length : 0) + ":" +
     (msg._autopilotRunId || "") + ":" +
     (msg._isAutopilotSummary ? "S" : "") + ":" +
     /* Queued-pending token: a cross-device queued user message lands in the
@@ -1329,6 +1330,23 @@ function renderMessage(msg, idx) {
         return `<div class="msg-img-thumb${isPdf ? " pdf-page" : ""}" ${tip ? `title="${tip}"` : ""} onclick="openImagePreview('${src.replace(/'/g, "\\'")}')"><img src="${src}" alt="uploaded">${srcLabel ? `<div class="msg-img-badge">${srcLabel}</div>` : ""}<div class="msg-img-size">${label}</div></div>`;
       return `<div class="msg-img-thumb placeholder"><span class="msg-img-placeholder-icon"></span><div class="msg-img-size">${img.sizeKB || "?"}KB</div></div>`;
     }).join("");
+    body += '</div>';
+  }
+  // ── Video attachments (analysis pipeline): poster card → opens the stored
+  //    original in a new tab. Frames/transcript went to the model server-side;
+  //    the bubble shows the compact provenance card.
+  if (isUser && msg.videos?.length > 0) {
+    body += '<div class="msg-video-list">';
+    body += msg.videos.map((v) => {
+      const dur = v.duration_s ? _fmtVideoDur(v.duration_s) : '';
+      const nFrames = v.frame_count || (v.frames ? v.frames.length : 0) || 0;
+      const meta = `${dur} · ${nFrames} ${t('upload.videoFrames')}${v.transcript ? ' · ' + t('upload.videoTranscript') : ''}`;
+      const thumb = v.poster
+        ? `<img src="${apiUrl(v.poster)}" alt="video" loading="lazy">` : '';
+      const url = String(v.video_url || '').replace(/'/g, "\\'");
+      const name = escapeHtml(v.name || 'video');
+      return `<div class="msg-video-card" title="${name}" onclick="openVideoUrl('${url}')"><div class="msg-video-thumb">${thumb}<span class="msg-video-play">▶</span></div><div class="msg-video-info"><div class="msg-video-name">${name}</div><div class="msg-video-meta">${escapeHtml(meta)}</div></div></div>`;
+    }).join('');
     body += '</div>';
   }
   if (isUser && msg.pdfTexts?.length > 0) {

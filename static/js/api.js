@@ -1744,6 +1744,16 @@
     capabilities: ()         => get('/api/v1/audio/capabilities', { onError: 'null' }),
   };
 
+  // videos (upload + upload-time analysis status) ----------------------
+  // upload: multipart video → { ok, video_id, status:'processing', poll }.
+  //   timeout:0 because a 512MB upload over a slow link is slow.
+  // status: poll the processing record; when 'ready' it carries the full
+  //   self-contained payload (durable frame URLs + transcript + metadata).
+  const videos = {
+    upload: (formData) => request('/api/v1/videos/upload', { method: 'POST', body: formData, timeout: 0 }),
+    status: (videoId)  => get(`/api/v1/videos/${encodeURIComponent(videoId)}`, { onError: 'null' }),
+  };
+
   // artifacts (panel + library + version chain) ---------------------
   // v1 metadata routes are JSON; raw / view / export are intentional
   // carve-outs that ship typed binary or sandboxed HTML — we expose
@@ -1791,7 +1801,7 @@
     pageRequestId,    // the correlation prefix every request of this page shares
     // domains
     folders, paperFolders, orchestrations, memory, skills, profile, timer, scheduler, optimizer, compactions,
-    conversations, text, translate, chat, images, pdf, doc, audio, artifacts,
+    conversations, text, translate, chat, images, pdf, doc, audio, videos, artifacts,
     health, pricing, clientError, serverConfig, browser, project, daily, paper,
     desktop,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,

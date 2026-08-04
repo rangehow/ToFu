@@ -1553,7 +1553,37 @@ def _load_or_create_flask_secret_key():
 
 
 app.secret_key = _load_or_create_flask_secret_key()
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+# MAX_CONTENT_LENGTH is APP-GLOBAL, so it must fit the LARGEST legitimate
+# body any route accepts — the video upload cap (512 MiB, TOFU_VIDEO_MAX_BYTES)
+# plus multipart slack. Every OTHER route keeps the legacy 50 MiB ceiling via
+# the per-route guard below — raising the global must not silently open
+# big-body uploads on the whole API surface (owner ruling 2026-08-04).
+app.config['MAX_CONTENT_LENGTH'] = 520 * 1024 * 1024
+
+# Per-route request-body caps: first matching path prefix wins.
+_ROUTE_BODY_CAPS = (
+    ('/api/v1/videos/upload', 512 * 1024 * 1024),
+)
+_DEFAULT_BODY_CAP = 50 * 1024 * 1024
+
+
+@app.before_request
+async def _enforce_route_body_caps():
+    cl = request.content_length or 0
+    if cl <= 0:
+        return None
+    cap = _DEFAULT_BODY_CAP
+    for _prefix, _cap in _ROUTE_BODY_CAPS:
+        if request.path.startswith(_prefix):
+            cap = _cap
+            break
+    if cl > cap:
+        from lib.api_response import api_payload_too_large
+        logging.getLogger('server').warning(
+            '[BodyCap] %s %s rejected: Content-Length=%d > cap=%d',
+            request.method, request.path, cl, cap)
+        return api_payload_too_large(cap)
+    return None
 # ── Disable response/body timeouts for long-lived SSE streams ──
 # Quart's defaults (60s) silently kill /api/chat/stream connections during
 # long LLM responses, causing the UI to "stop updating without refresh".

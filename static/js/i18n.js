@@ -500,6 +500,14 @@ var _i18n = {
   //    still compressing/uploading (upload.js::renderImagePreviews). Missing
   //    this key made t() return the literal "upload.processing" on the chip.
   'upload.processing': { zh: '处理中…', en: 'Processing…' },
+  // ── Video upload chip + message card (upload.js / chat_render.js) ──
+  'upload.videoUploading': { zh: '视频上传中…', en: 'Uploading video…' },
+  'upload.videoProcessing': { zh: '视频解析中…', en: 'Analyzing video…' },
+  'upload.videoFailed': { zh: '视频解析失败', en: 'Video analysis failed' },
+  'upload.videoTooLarge': { zh: '视频超过 512MB 上限', en: 'Video exceeds the 512MB limit' },
+  'upload.videoFrames': { zh: '帧', en: 'frames' },
+  'upload.videoTranscript': { zh: '含转录', en: 'transcript' },
+  'upload.videoSkipped': { zh: '有视频未解析完成，已跳过（可重新添加）', en: 'Some videos were not ready and were skipped' },
   'tool.noContent': { zh: '无返回内容。', en: 'No content returned.' },
   // ── Sub-agent (swarm) update card ──
   'swarmCard.received': { zh: '收到', en: 'Received' },

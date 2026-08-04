@@ -214,6 +214,21 @@ Optional env tuning: `TOFU_AUDIO_MAX_BYTES` (default 25 MB), `TOFU_AUDIO_MAX_DUR
 
 ---
 
+### 🎬 Video Upload & Analysis
+
+Drop a video into the input box (or pick one via 📎) and ask questions about it — “what does the presenter say about X?”, “summarize this clip”, “find the moment the graph appears”.
+
+**How it works:** the moment you attach a video, Tofu processes it in the background — it samples the video into a strip of timestamped frames (uniform coverage plus scene-cut detection) and, if the video has an audio track, transcribes it through your configured speech-to-text model (the same chain as voice input). When you hit send, the frames + transcript ride the message to any vision-capable model — no special video model required. The processing chip on the attachment shows progress; sending waits for it automatically.
+
+- **Formats** — mp4 / mov / webm / mkv / avi, up to **512 MB / 15 minutes**
+- **Model-aware frame budget** — the number of frames sent adapts to the selected model's vision capability, context window and per-request image limits (e.g. Claude's 100-images cap is accounted across the whole conversation)
+- **No transcription model configured?** The video still works — the model analyzes the frames alone
+- Click the video card on a sent message to replay the original file
+
+Optional env tuning: `TOFU_VIDEO_MAX_BYTES` (default 512 MB), `TOFU_VIDEO_MAX_DURATION_S` (default 900 s), `TOFU_VIDEO_ANALYSIS=0` to disable the feature entirely. Frames are extracted with the built-in ffmpeg (auto-installed via `imageio-ffmpeg` if absent).
+
+---
+
 ### 🔍 Web Search & Content Fetching
 
 When the assistant needs current information — today's news, documentation updates, API references — it can search the web and read pages.

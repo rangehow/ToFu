@@ -1,3 +1,12 @@
+### 2026-08-04(视频上传+分析 P1 落地:抽帧+转录骑既有图片通道——模型感知帧预算/聚合图像账/本地盘 scratch/上传时异步处理;owner 四决策+四补充全纳入) — epic `pt_6aca988757cb4019`;commit 见下(18 文件);新套件 **33 检全绿**(真 ffmpeg 合成片集成)+ 守卫环 **141 绿**(2 预存红各挂票,均实证与本批无关)
+
+- **形态(owner 定案 P1):** 视频上传即后台处理(ffprobe→原件持久化→均匀+场景检测抽帧→音轨骑 `lib/transcription` 既有 whisper 槽位链),产出自包含净载(耐用 `/api/images/` 帧 URL+转录+元数据)嵌进消息 `videos[]`——重载/断流恢复/多轮追问零额外机制。P2(Gemini 原生直通)留 epic 后半,依赖网关能力核查。
+- **模型感知钳制(owner 决策①):** `lib/model_info/_video.py video_frame_budget` 四钳取最小——视觉门控(无视觉→0 帧仅转录)/家族帽(Claude 40,API 硬限 100 留余量)/上下文份额(30%×学习型 context_limit,实测 claude-sonnet-4-5→25 帧)/线字节帽(8MiB÷实测帧均字节,防网关 413)。**聚合账**在 `_transform_messages`:全请求图像块计数,Claude 90 上限跨视频记账(测试实证 40+40+10)。帧抽取 16/32/64 按时长档,发送时 `_thin_frames` 均匀稀疏化保首尾。
+- **关键复用(全部实测):** ffmpeg/ffprobe 走 `motion_video._env`(imageio 内置 v7.0.2);probe 骑 `_gates.probe_video`;转录骑 `lib/transcription`(owner 擒获的错误假设纠正——**零新依赖**,禁 faster-whisper);帧压缩在抽取时一次到位(1568px/q4,对齐 `_CLAUDE_IMAGE_MAX_PX` 无 churn 哲学);原件存 `uploads/videos/` 走 `file_serving.send_file_conditional`(Range 安全)。
+- **新闸(server.py):** 全局 MAX_CONTENT_LENGTH 50→520MiB(视频帽+slack),新增 before_request 分路 body 帽——仅 `/api/v1/videos/upload` 512MiB,其余全表面守 50MiB(owner 决策②,防抬高全局敞开所有路由)。
+- **事故自纠:** ①`_append_video_blocks` header 引入 `if False` 死分支脏代码,同轮复核清除;②场景合并逻辑首版内联不可测且测试设计撞「均匀层±1s 去重」(短片上场景帧数学上必被吞)——抽 `_merge_scene_extras` 纯函数 + 探测器/单帧抽取分测,注释钉「场景层只在均匀间距>2s 的长视频上提供信息位」的设计边界。
+- **预存红×2 挂票(均实证无关):** `pt_a1b4d3ec829c43c2`(test_frontend_api_contract 钉 auth-sources 模板串,HEAD 上单文件 stash 复现)+ test_server_async health_endpoint(envelope vs 裸 list,与已关票 restart_smoke 同族,GET 不过 body 帽构造上 exonerated)。
+- **生效面:** 后端即重启即生效;前端走 bundle mtime 自愈重建;ffmpeg 零运维(缺则自动 pip imageio-ffmpeg)。
 ### 2026-08-04(角色窗三宗罪根修:tray-first tk host——最小化不再吞窗口(托盘先于窗口存在);detect_lang 中文 Windows 显示名 locale 根修(全英文→真双语);字体栈收编衬线宋体) — owner 截图三指令(「界面太丑重新设计」+「i18n 要全量落实」+「点最小化窗口直接消失、没进托盘」);epic `pt_1013577081ab4eeb`;commit 见下(14 文件);新套件 17 针 + 扩展 21 针,环 **84+311+76 绿**,NEUTER×7 全精确,agent 冒烟闸过(0.16.0/19 命令)
 
 - **罪①定案(最小化吞窗=结构性,非补丁可修):** 旧编排 `show_role_window`(阻塞 mainloop)→ `icon.run()`——**窗口整个首生命周期内托盘根本不存在**,标题栏「_」iconify 到任务栏(通用 tk 羽毛图标无人识),「最小化到托盘」在结构上不可能兑现。根修=线程拓扑翻转:**主线程 pystray 从零秒占有;专职 tk host 线程(新 `desktop/_tk_host.py`)拥有全部窗口**(隐藏 root + queue + after 泵);托盘回调经 `post`(角色窗,fire-and-forget)/`call`(配对等返回值对话框,阻塞=今日行为)marshal;host 线程内调用短路内联防自死锁;`icon.update_menu` 留在托盘线程(pystray win32 `_update_menu` 毁建 HMENU,跨线程=与打开中菜单竞态)。标题栏「_」经 `<Unmap>`→state=='iconic'→withdraw 拦截,与窗内按钮同义进真托盘。非 win32(macOS 两框架都要主线程)host.start() 返回 False,全部入口内联=旧序列零改动。
@@ -5,6 +14,28 @@
 - **罪③定案(丑=字体为主,布局为辅):** `('', 10)` 空族名在中文 Windows 落到**宋体**(衬线),拉丁字母全衬线渲染;另复选框贴卡片边、窗口不居中、任务栏 tk 羽毛图标、egress 档位天书。根修=`pick_font_family` 按平台栈运行时解析(win: Segoe UI/雅黑;zh 优先雅黑;mac: Helvetica Neue/苹方;linux: Noto/文泉驿),`center_on_screen`(光学中心 0.38),`set_window_icon`(iconphoto+iconbitmap 双轨),角色窗重排(eyebrow 卡标+档位一行说明×4+开机自启说明+发丝线+统一 12px 槽距),logo 锚定改列表(64px 图标照不再被 40px 标题照 GC)。
 - **测试账:** 新 `test_desktop_tk_host.py` 17 针——平台闸/start 失败形/队列语义(stub root 驱动 `_drain_once`:结果落盒、异常捕获不炸泵、done 事件、after 重臂)/host 线程自调用短路(防自死锁,注毒即 AttributeError 红)/端到端 marshal(真实 drainer 线程对拍 fn 执行线程)/异常回抛调用方/超时不挂死/头less 导入棘轮(AST 顶层无 tkinter)/tray-first 接线棘轮(host 先于 icon.run——**被我自己注释里的字面 `icon.run()` 坑过一次**,改语句锚定正则)。tk_theme 套件 +21(Windows 显示名×4/字体栈×7/居中几何×2/字体解析棘轮——钉 `base_font = _f(10)` 且禁 `('', 10)` 回潮)。role_window 套件 +3(居中+图标锚/档位说明键双语全/双 App 档位键覆盖)。Unmap 棘轮首版子串检查被注释残留骗绿,升级 AST 级(bind 调用+withdraw 调用)——与 progress_callback 判例同族教训。
 - **顺手擒获:** agent_launcher `_run_tray` 双重 def(合并残渣,前者死代码)收编;`test_both_launchers_import_role_window` 等旧棘轮全保绿。
+- **验证边界(诚实账):** 本机无显示无 Xvfb,tk 渲染路径(字体实际落族/布局像素/托盘真实出现)未经真机实证——行为契约全部由 17 针队列语义+AST 棘轮钉住,像素面留待 owner 真机验收(受控端安装包需随 `pt_59b62951aad2463e` 链重建 payload 后到用户)。
+### 2026-08-04(浏览器工具面 v2 认知减负:19→13 意图级合并——read_page 四合一/click+type 支持 text= 模糊定位/自动等待+动作回执/工作tab记忆;代码接管模型曾经的手工路由) — owner 指令「插件和浏览器控制工具要对齐大模型直觉,消除冗余,能用代码做的别让模型推理」;脑派发接我自票 `pt_869e5648403e4745` **DONE**(MCP per-tool 开关拆后续票);commit `55259a3c`(23 文件 +1517/−400);新套件 30 针 + 邻接环 **319 绿**;预存红×1 挂票 `pt_eb0251bb1cbe4a27`
+
+- **审计定案(全部实测):** 内置 88 工具 + 本部署 ~190 MCP;仅浏览器族 schema=18,651 字符(~4.7k token/请求);台账自报 6 工具描述无法自区分(create_tab vs navigate 首句重合 0.57);感知层 4 工具互相在描述里教模型「何时别用我」=把渲染方式诊断外包给模型;wait/tab_id/CSS selector 是代码该管的细节全甩给模型。
+- **v2 面(13 工具,纯表示层重构,扩展 27 命令零改动):** ①`browser_read_page` 四合一(read_tab/summarize/app_state/elements),auto 模式乐观读文本、稀疏(<400 字符)自动附结构摘要——渲染方式诊断收进代码;②`browser_click`/`browser_type` 支持 `text=`(服务端枚举元素+模糊排序:exact>prefix>substring,角色/标签加权,歧义回传前 5 候选让下轮必中);③keyboard 拆 `browser_type`(clear-first 打字)+`browser_press_key`(特殊键);④create_tab 并入 `browser_navigate(new_tab=true)` 且默认等加载(根治「读太早」);⑤hover_and_click+right_click_menu 并 `browser_menu_click`(via=hover|right_click);⑥`browser_wait` 从模型面退役(动作内部自动等待);⑦tab_id 全可选——服务端工作tab记忆(显式>记忆>活动tab播种,close 遗忘)。
+- **速度账:** 动作回执(click/type/navigate 后一次轻量 list_tabs 对比标题/URL 增量)=验证不再花整轮 LLM;schema 18,651→13,589 字符(−27%);表单类任务从 ~6 轮到 1~2 轮。
+- **legacy 连续性(关键设计):** 退役 10 名的 dispatch handler 全保留(直调 execute_browser_tool 可用)+ display 格式器全保留(历史工具卡照常渲染);tool_registry 注册面随 BROWSER_TOOL_NAMES 收缩自动摘除——无 provides/棘轮债(全覆 ratchet 无需豁免)。`LEGACY_BROWSER_TOOL_NAMES` 单源记录退役集,tool_display 分派与前端图标表据此保渲染。
+- **新模块 `lib/browser/_resolve.py`:** 工作tab记忆/元素模糊解析/建议性自动等待(永不阻塞动作)/动作回执,全部 send 可注入——handlers 走门面代理(monkeypatch 契约不破),advanced 走模块级名,测试直注 fake。
+- **测试账:** 新 `test_browser_v2_surface.py` 30 针(合并面钉死/schema<15000 棘轮/tab_id 可选/退役不 ship/legacy dispatch+display 连续/解析器四态/工作tab三态/回执三态/read_page auto 双态+模式委托/registry 声明/审批 enricher 覆盖/menu_click 双态);既有 4 套件对齐(tooling_fixes 两测试换名/facades 3→2/write-partition SSOT 期望表/approval CASES 去 4 加 3);台账重生成(88→84 内置,更新工具数+补 update_search_settings 行)。
+- **顺手擒获(预存红挂票 `pt_eb0251bb1cbe4a27`):** `update_search_settings`(eb315d4b 搜索设置批)是写工具却无审批 enricher——TestApprovalEnricherRatchet + approval CASES 覆盖双红,纯净 HEAD worktree 同签名复现,与本批无关,按惯例另票(修法=一枚 enricher+一行 CASES)。
+- **生效面:** 即重启即生效(模型下轮即见 13 工具新面);历史会话工具卡渲染不变;旧会话若从转录学来旧名,unknown-tool 错误即提示其恢复(新 schema 名单自明)。
+- **MCP per-tool 开关:** epic 标题第三半拆为后续票(lib/mcp 无任何 allowlist 机制,需设置页 UI+桥过滤双半,独立成票)。
+
+### 2026-08-04(CLIProxyAPI 深度对标 + 订阅中继场景增强设计稿:四路深读实测漂移×4——伪装层快照 4 天即过期;推荐「漂移警报 + sidecar 订阅适配器」分层方案;设计稿 docs/SUBSCRIPTION_RELAY_SCENARIOS_DESIGN.md) — owner 指令「克隆并仔细分析 CLIProxyAPI 如何包装订阅,增强我们的方案应对各种场景(服务器断网→经本地有网机路由)」;零产品代码(设计阶段,待 owner 拍板)
+
+- **仓库**:../CLIProxyAPI 已在同级目录(7/31 克隆),git pull 至 a63da8a;四路并行深读(架构/Claude/Codex/凭证车队),全结论带 file:line,细节入库设计稿 §1-2。
+- **解剖一句话**:CLIProxyAPI=「翻译官+化妆师+车队调度」——按各家 CLI 原生端点仿真(~20+ 协议翻译对)、伪装层跟 2026 军备竞赛、auths/ 多账号车队带 (auth×model) 冷却账本。
+- **拓扑对反的实测结论**:它的 cluster(CLIProxyAPIHome)是「凭证集中+中心执行」,服务器断网场景帮不上;我们的 bridge(agent 长轮询、执行下沉边缘)是该场景唯一正确方向——**egress 已建成不是缺口,是反超**。owner 点名的场景(断网服务器→本地机路由)正是已建成的 egress 全链,待真机验收(pt_59b62951aad2463e P4)。
+- **漂移实测(tofu vs 它,4 天快照已漂移 4 处)**:Claude 版本 2.1.63 vs 2.1.220(outbound.py:59);token 端点 console.anthropic.com vs platform.claude.com;Codex Originator codex_cli_rs vs codex-tui(outbound.py:78,UA 格式也变了);beta 列表缺新 flag。持平:计费头算法+cch=00000(新版仍在,另增 entrypoint/workload 变体)、PKCE、plan_type、singleflight。缺口:uTLS、多账号、resets_at 配额解析。
+- **定案方向(设计稿 §4)**:①E1 漂移警报守卫——对拍 ../CLIProxyAPI 常量,把军备竞赛变成自动报警(便宜必做);②E4 sidecar「订阅适配器」provider——本地机跑 CLIProxyAPI:8317,bridge 新增 loopback 中继类型(不复用域名白名单),伪装层外包给上游社区、token 永不出本机、多账号车队与 Gemini/Kimi 等订阅源免费得;与内建 egress 是分层非替代;③顺手果实:usage_limit_reached→resets_at 定时冷却、401 先刷一次再判死、请求级错误不进冷却账本。开放问题:二进制分发渠道(倾向首启下载+钉版本+哈希)、多用户端口分配、uTLS 兜底实测定案。
+- **记忆刷新**:`cliproxyapi_订阅机制与_tofu_oauth_失败根因` 已更新至 2026-08-04 版机制(platform.claude.com/codex-tui/2.1.220/cluster 拓扑)。
+
 ### 2026-08-04(绑定默认值收敛:0.0.0.0 全接口 + LAN 发现默认开——`python server.py` 是最后一个 loopback 孤岛;顺手根修批跑互染预存红 TestBridgeTTL) — owner 指令「BIND_HOST=0.0.0.0 TOFU_DESKTOP_LAN_DISCOVERY=1 以后设为默认,用户总是 python server.py 启动」;commit `6a70adb6`(14 文件 +224/−57);环 **79 绿**
 
 - **定案(本就该统一的孤岛):** 排查发现默认值早已四分五裂——bootstrap.py(`os.environ.get('BIND_HOST','0.0.0.0')`)、Dockerfile、docker-compose、install.sh、`.env.example` 注释全是 0.0.0.0;只有 server.py argparse、restart_15000.sh、tofu_guard.sh、supervisor tofu.conf 还钉 127.0.0.1,而本部署恰好走这条路。owner 拍板全接口为默认,loopback 改为显式 opt-in(`--host 127.0.0.1`/`BIND_HOST=127.0.0.1`)。
@@ -15,6 +46,13 @@
 - **生效面:** 代码即重启即生效;从此 `./restart_15000.sh` 裸跑即全接口+LAN 发现,epic `pt_59b62951aad2463e` 的 P4 验收不再需要 env 前缀。文档面 CLAUDE.md/README×2/.env.example/两设计稿同步。
 
 ### 2026-08-04(受控端安装体验双修:运行中安装→双语提示自动关闭(不再裸撞文件锁);SSH 隧道黑窗全灭——CREATE_NO_WINDOW 收进唯一真实 spawn 缝) — owner 两指令(「已运行时安装被中断,应提示或给关闭按钮」+「装完反复弹黑壳窗,后台隧道要更优雅」);commit `a139dff6`(5 文件 +209/−3);环 **47/47 + 261 绿**;真 makensis 双组件编译实证
+
+- **根因①(安装中断):** NSIS 模板对运行中的 app 零防护——`File /r` 撞上写锁定的 TofuAgent.exe 镜像,Windows 拒写,安装器裸抛 file-in-use Abort/Retry/Ignore。修法=前置探测而非事后报错:对 `$INSTDIR\${APP_EXE}` 做 append 模式 FileOpen(运行中镜像必拒写),锁则弹**双语**(英/中)Yes/No 提示——Yes 走 `nsExec::Exec taskkill /IM /T /F` 代关(nsExec 藏控制台,/T 连树杀故 ssh 隧道子进程同灭,/F 无文档可失),1.2s 后复探循环,No 则干净 Abort。钩子进 `.onInit`+`un.onInit` 双闸(卸载时运行同样半删目录),full/agent 共享模板一次全愈。CI Inno 侧补钉 `CloseApplications=yes`+`RestartApplications=no`(原是未断言的默认值,默认翻转会静默上线)。
+- **根因②(黑窗连弹):** agent 是 windowed exe(tofu-agent.spec `console=False`),而 `_pair._tunnel_once` 裸 `subprocess.Popen(['ssh',...])`——Windows 给每个控制台子进程配新黑窗;发现阶梯最坏 3 主机×3 端口=9 连弹,且每次开机 resume 重跑。修法=`_spawn_tunnel` 唯一真实 spawn 缝,Windows 下带 `CREATE_NO_WINDOW`+隐藏 STARTUPINFO(全 getattr 守卫,Linux 可导入可测);注入 `_popen` 的测试面签名零改动。
+- **测试账:** pair 套件 +4(posix 空 kwargs/win32 表面模拟/spawn 缝 kwargs 路由/无注入路径接线钉——回归裸 Popen 即红,且 Popen 补丁防破线时真 spawn ssh);parity +1(宏在/.onInit+un.onInit 双插/探针指 payload exe/nsExec 隐藏杀树/双语 LangString/Inno 双侧 count==2)。failing-first 对 HEAD 五针全红(NSIS 宏/onInit/Inno 钉/两 helper 皆无)。
+- **验证(超测试的真闸):** 双组件渲染脚本过真 makensis 3.11 编译——nsExec.dll 链接进包、两条 LangString(1033/2052)入编、.onInit+un.onInit 双函数在列,agent.exe/full.exe 均产出。
+- **生效面:** 模板修复属 wrap 半(NSIS),`_pair.py` 修复属 payload 半(冻结 exe)——在店 TofuAgent-Setup 需随 `pt_59b62951aad2463e` 验收链重建 payload+重 wrap 才到用户;CI 下次发版自然携带。真机验收清单应补两条:①agent 运行中双击新安装包→双语提示→Yes 后秒装;②装完首启+开机自启全程零黑窗。
+
 ### 2026-08-04(popup 重设计复核擒获根修:2s 轮询每 tick 无条件覆写 serverInput——用户输入中的 URL 每 2 秒被冲掉;focus/dirty 双闸 guardedField 收编全部自动刷新字段) — owner 复核指令;commit 见下(3 文件);设计套件 +2(环 **62 绿**);打字跨 tick 截图实证
 
 - **定案(owner 复核擒获的继承性旧疾):** 重设计原样继承了旧行为——`setInterval(updateStatus, 2000)` 每 tick `serverInput.value = resp.serverUrl` 无条件覆写,用户正在键入的新地址每 2 秒被冲回服务器值;我的三状态截图天然不可见此病(canned 桩值==键入值),owner 一句点破。
@@ -22,14 +60,6 @@
 - **测试账:** 设计套件 +2——①无条件赋值棘轮(正则 `serverInput.value =` 禁现)+ 闸体四钉(activeElement/dirty 闩/input 监听器/guardedField 本体);②NEUTER 第 3 针(回换直接赋值→棘轮精确红)。环 = 设计 11 + auto_repair 16 + preseed 10 + parity 25 = **62 绿**。
 - **实测(打字跨 tick 截图):** preview harness 桩每次 getStatus 递增 commandsExecuted——3.73s 截图 Executed=130(证明 ≥2 次 tick 已跑过)而 Server 字段仍显示 `http://typed-by-user:9999`:统计在刷新、键入在存活,同帧两证,harness 用后即删。
 - **事故自记:** apply_diff 连续两次 search==replace 空操作(工具仍报 "3 lines changed",实为同文本重写),且一次误替换把 `__main__` runner 吞进上一枚测试体内——read_files 复核 tail 后一次修对;教训重申:编辑文件尾部结构后必读回确认,空操作不报错。
-
-### 2026-08-04(受控端安装体验双修:运行中安装→双语提示自动关闭(不再裸撞文件锁);SSH 隧道黑窗全灭——CREATE_NO_WINDOW 收进唯一真实 spawn 缝) — owner 两指令(「已运行时安装被中断,应提示或给关闭按钮」+「装完反复弹黑壳窗,后台隧道要更优雅」);commit `a139dff6`(5 文件 +209/−3);环 **47/47 + 261 绿**;真 makensis 双组件编译实证
-
-- **根因①(安装中断):** NSIS 模板对运行中的 app 零防护——`File /r` 撞上写锁定的 TofuAgent.exe 镜像,Windows 拒写,安装器裸抛 file-in-use Abort/Retry/Ignore。修法=前置探测而非事后报错:对 `$INSTDIR\${APP_EXE}` 做 append 模式 FileOpen(运行中镜像必拒写),锁则弹**双语**(英/中)Yes/No 提示——Yes 走 `nsExec::Exec taskkill /IM /T /F` 代关(nsExec 藏控制台,/T 连树杀故 ssh 隧道子进程同灭,/F 无文档可失),1.2s 后复探循环,No 则干净 Abort。钩子进 `.onInit`+`un.onInit` 双闸(卸载时运行同样半删目录),full/agent 共享模板一次全愈。CI Inno 侧补钉 `CloseApplications=yes`+`RestartApplications=no`(原是未断言的默认值,默认翻转会静默上线)。
-- **根因②(黑窗连弹):** agent 是 windowed exe(tofu-agent.spec `console=False`),而 `_pair._tunnel_once` 裸 `subprocess.Popen(['ssh',...])`——Windows 给每个控制台子进程配新黑窗;发现阶梯最坏 3 主机×3 端口=9 连弹,且每次开机 resume 重跑。修法=`_spawn_tunnel` 唯一真实 spawn 缝,Windows 下带 `CREATE_NO_WINDOW`+隐藏 STARTUPINFO(全 getattr 守卫,Linux 可导入可测);注入 `_popen` 的测试面签名零改动。
-- **测试账:** pair 套件 +4(posix 空 kwargs/win32 表面模拟/spawn 缝 kwargs 路由/无注入路径接线钉——回归裸 Popen 即红,且 Popen 补丁防破线时真 spawn ssh);parity +1(宏在/.onInit+un.onInit 双插/探针指 payload exe/nsExec 隐藏杀树/双语 LangString/Inno 双侧 count==2)。failing-first 对 HEAD 五针全红(NSIS 宏/onInit/Inno 钉/两 helper 皆无)。
-- **验证(超测试的真闸):** 双组件渲染脚本过真 makensis 3.11 编译——nsExec.dll 链接进包、两条 LangString(1033/2052)入编、.onInit+un.onInit 双函数在列,agent.exe/full.exe 均产出。
-- **生效面:** 模板修复属 wrap 半(NSIS),`_pair.py` 修复属 payload 半(冻结 exe)——在店 TofuAgent-Setup 需随 `pt_59b62951aad2463e` 验收链重建 payload+重 wrap 才到用户;CI 下次发版自然携带。真机验收清单应补两条:①agent 运行中双击新安装包→双语提示→Yes 后秒装;②装完首启+开机自启全程零黑窗。
 
 ### 2026-08-04(扩展 popup 全量重设计:暗黑紫孤岛退役——豆腐块语言(奶油头/墨边/金 CTA) + 状态英雄卡层级 + emoji 全族清零;新增 Paused 状态不再伪装 Disconnected) — owner 截图指令「信息层级不清、emoji 滥用,UI/UX 都要改」;commit 见下(3 文件);新套件 **9 检** + 扩展环 **60 绿**;三状态截图实证
 
@@ -42,6 +72,10 @@
 - **生效面:** 纯扩展静态资源——用户重载扩展/下次打包下载即得;`scripts/package_extension.sh` 拷贝清单不变(popup.html/popup.js 原位)。
 
 ### 2026-08-04(视频上传+分析调研定案:两路线全景 + Tofu 接入点地图——「连环画+台词本」走现有图片通道,LLM 层零改动;video cap 早已预留) — owner 指令「调研开源系统如何让大模型处理视频,让输入框支持视频上传分析」;三路 swarm(开源模型/商用API+开源前端/本库链路);零产品代码;记忆 `video-upload-analysis-design` 入库
+
+- **业界两路线定案:** A. 抽帧+转录(模型无关)——ffmpeg 场景检测 `select='gt(scene,0.3)'`+均匀兜底、逐帧文本时间戳、音轨 Whisper 转录,产出 N 张 JPEG+台词本走图片通道(OpenAI cookbook 官方模式;短视频 8-16 帧、分钟级 32-64 帧封顶);B. 原生直通仅 Gemini(默认 1fps、~300 token/s 默认档、含音轨、File API 2GB/48h、1M 上下文≈1-3h)。**开源前端几乎无人自实现 A**——LobeChat 直接委托 Gemini Files API;Open WebUI/Dify/FastGPT 不支持视频。
+- **本库接入点(实测):** ffmpeg 可用(`lib/motion_video/_env.py:109`,imageio_ffmpeg v7.0.2 可自动装);`capability_taxonomy.py:95` **已预留 'video' 能力位零消费者**;拒收点=upload.py 图片白名单+magic bytes+`_shrink_upload_image` 强制 Pillow+`server.py:1556` 50MB;图片真实注入链=`conv_message_builder/_transform.py:233` → `llm/body/_images.py`(attachments.py 是文本 reminder 不是图片)。
+- **落地分相(待 owner 拍板):** P1 模型无关底盘——新端点 `/api/v1/videos/upload`(不动图片白名单)→ ffprobe → 场景检测抽帧 16-64 帧自适应 → 帧走 `_shrink` 同款 → faster-whisper 转录 → 复用图片注入链;P2 Gemini 原生通道(dispatch 层识别 slot 直传 Files API,token 省 70%+);P3 长视频 agent 化选帧。待拍板项:帧预算/时长上限/STT 选择/P2 是否做。
 ### 2026-08-04(预存红闭环:test_frontend_sse_assistantmsg_invariant——固定 1200 字符断言窗被 _ensureMsgId 加固挤爆;改守卫块作用域锚定,方向对齐而非代码迁就) — 脑派发接我自票 `pt_eab154ae989f456c` **DONE**;commit `c5d3977b`(1 文件 +7/−3,纯测试侧);套件 **2/2** + NEUTER 精确
 
 - **定案(纯测试漂移,代码无罪):** `connectToTask` 的非空守卫(sse_pipeline.js:384)完整无缺——构造新 assistant 消息/`_ensureMsgId` 赋 ID/push 俱在,「dispatch 前非空」不变量成立。漂移源:某批给守卫块加 `_ensureMsgId` 硬化后块长 ~1370 字符,断言的固定 1200 字符窗把 `conv.messages.push(assistantMsg)` 挤出界外(失败输出正好截在 `conv.messages.pus`)。

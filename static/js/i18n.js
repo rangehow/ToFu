@@ -431,7 +431,7 @@ var _i18n = {
   'toolbar.desktopControlDesc': { zh: '操作本地应用与文件', en: 'Operate local apps and files' },
   'toolbar.scheduledTasks': { zh: '定时任务', en: 'Scheduled Tasks' },
   'toolbar.scheduledTasksDesc': { zh: '计划任务与 Cron', en: 'Task scheduling & Cron' },
-  'toolbar.attachFiles': { zh: '附加文件（图片 / PDF / 文档）', en: 'Attach files (images, PDF, docs)' },
+  'toolbar.attachFiles': { zh: '附加文件（图片 / 视频 / PDF / 文档）', en: 'Attach files (images, videos, PDF, docs)' },
   'toolbar.creativeMode': { zh: '创作模式', en: 'Creative Mode' },
   'toolbar.creativeModeDesc': { zh: '切换到图像创作画布', en: 'Switch to the image canvas' },
   'toolbar.aiDrawing': { zh: 'AI 绘图', en: 'AI Drawing' },

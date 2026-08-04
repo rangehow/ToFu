@@ -138,10 +138,14 @@ _SHIPPED_SYMBOLS = (
     # The poll-signature gate (2026-08-03): _lcRenderDesktop calls it to
     # decide whether a repaint is warranted at all.
     "_lcDesktopSignature",
-    # The mint-context diagnosis pair (2026-08-03, proxy-URL incident):
-    # _lcRenderDesktop prepends their output in both mint-carrying
-    # branches, so the splice needs them or every test goes ReferenceError.
-    "_lcProxyWarnHtml", "_lcAwaitingAgentHtml",
+    # The awaiting-agent hint is prepended in both attach branches, and
+    # the pair block / connect-line details / wiring are authored once and
+    # reached from both — the splice needs all of them or every test goes
+    # ReferenceError. (2026-08-04 owner decree: the proxy-SSH warning was
+    # DELETED — pairing codes are address-free, so no branch may send the
+    # user to open a tunnel by hand.)
+    "_lcAwaitingAgentHtml", "_lcPairBlockHtml", "_lcConnectDetailsHtml",
+    "_lcWireAttach", "_lcPairCode",
 )
 
 
@@ -256,10 +260,16 @@ HARNESS = textwrap.dedent("""
         steps: el.querySelectorAll('.lc-step').length,
         text: el.textContent.trim(),
         hasMintButton: !!el.querySelector('#lcMintBtn'),
-        // local_source's mint lives inside the AGENT role block (the tunnel
-        // case, made visible by owner decree 2026-08-03) — never as a
-        // top-level action in tray/connected.
-        mintInAgentRole: !!el.querySelector('.lc-role #lcMintBtnSrc'),
+        // The connect line survives ONLY inside the collapsed advanced
+        // details — never as a top-level action (2026-08-04 decree).
+        mintInsideDetails: !!el.querySelector('.lc-details #lcMintBtn'),
+        // Pairing is the ONE primary attach action in every branch that
+        // attaches anything; the ids are branch-unique (lcPairBtn).
+        hasPairButton: !!el.querySelector('#lcPairBtn'),
+        pairInAgentRole: !!el.querySelector('.lc-role #lcPairBtn'),
+        // Owner decree 2026-08-04: no surface may send the user to open an
+        // ssh tunnel by hand.
+        mentionsManualTunnel: /隧道地址|ssh 隧道|ssh-tunnel/i.test(el.textContent),
         // A real, clickable link the user can follow — not prose.
         downloadHref: dlA ? dlA.getAttribute('href') : '',
         // The releases-page escape hatch — external, must never be re-based.
@@ -439,23 +449,33 @@ def test_the_three_states_give_three_different_instructions():
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")
-def test_only_the_remote_state_offers_a_token():
-    """A token is meaningless unless the user's machine is not this machine."""
+def test_pairing_is_the_primary_attach_in_every_branch():
+    """2026-08-04 owner decree: the pairing code is the ONE primary attach
+    action wherever a machine can be attached — it carries NO address, so
+    it works from every reachability class (the agent discovers the route
+    itself, building its own tunnel when needed). The minted connect line
+    is demoted to the collapsed advanced details, and NO branch may send
+    the user to open an ssh tunnel by hand."""
     out = _run(_shipped())["desktop"]
-    assert out["remote"]["hasMintButton"] is True, (
-        "the remote case is the only one needing a token — it must offer one")
-    for st in ("connected", "tray", "local_source"):
-        assert out[st]["hasMintButton"] is False, (
-            f"setup_state={st} must NOT ask for a token as a top-level action")
-    # The documented exception (owner decree 2026-08-03, superseding the
-    # 2026-08-02 collapsed-hatch form): an ssh -L tunnel makes a remote
-    # browser present as loopback → setup_state local_source for a machine
-    # that is NOT this one. local_source therefore carries ONE mint —
-    # inside the visible agent role block (a collapsed hatch was measured
-    # to be missed entirely; the connect action must stand out).
-    assert out["local_source"]["mintInAgentRole"] is True, (
-        "the agent role block lost its mint — the office-machine case "
-        "(ssh -L) has no connect flow again")
+    for st in ("local_source", "remote"):
+        assert out[st]["hasPairButton"] is True, (
+            f"setup_state={st} lost its pairing button — the only "
+            f"address-free attach path")
+        assert out[st]["mintInsideDetails"] is True, (
+            f"setup_state={st}: the connect line must live inside the "
+            f"collapsed advanced details, never as a top-level action")
+    for st in ("connected", "tray"):
+        assert out[st]["hasPairButton"] is False, (
+            f"setup_state={st} attaches nothing — no pair button allowed")
+    # The documented tunnel blind spot (ssh -L presents as loopback):
+    # local_source's AGENT role block carries the pair action visibly.
+    assert out["local_source"]["pairInAgentRole"] is True, (
+        "the agent role block lost its pairing button — the office-machine "
+        "case has no connect flow again")
+    for st in ("tray", "local_source", "remote"):
+        assert out[st]["mentionsManualTunnel"] is False, (
+            f"setup_state={st} still instructs a manual ssh tunnel — the "
+            f"2026-08-04 decree forbids it on every surface")
 
 
 @pytest.mark.skipif(not _has_jsdom(), reason="jsdom not installed")

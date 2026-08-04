@@ -45,11 +45,18 @@
     <button id="saveBtn" class="btn-save">Save</button>
   </div>
 
-  <label>Bridge Secret <span style="color:#555">(pre-paired by the downloaded package — only needed for re-pairing)</span></label>
-  <div class="input-row">
-    <input id="bridgeSecret" type="password" placeholder="paste an agents:bridge key (tofu_live_…)" autocomplete="off">
-    <button id="saveSecretBtn" class="btn-save">Save</button>
+  <div id="repairRow" style="display:none; margin-bottom:12px; padding:10px; background:#2b2418; border:1px solid #57503a; border-radius:8px;">
+    <div style="font-size:12px; margin-bottom:8px; color:#e8c07a;">The bridge re-pairs itself — no secret to paste. Keep any Tofu tab open and it finishes on its own.</div>
+    <button id="repairBtn" class="btn-save" style="width:100%">Re-pair now</button>
   </div>
+
+  <details style="margin-bottom:12px;">
+    <summary style="font-size:11px; color:#666; cursor:pointer;">Advanced — set a bridge key by hand (never needed in normal use)</summary>
+    <div class="input-row" style="margin-top:8px;">
+      <input id="bridgeSecret" type="password" placeholder="paste an agents:bridge key (tofu_live_…)" autocomplete="off">
+      <button id="saveSecretBtn" class="btn-save">Save</button>
+    </div>
+  </details>
 
   <button id="toggleBtn" class="btn-toggle">⏸ Pause</button>
 

@@ -13,6 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const saveSecretBtn = document.getElementById('saveSecretBtn');
   const toggleBtn = document.getElementById('toggleBtn');
   const statsDiv = document.getElementById('stats');
+  const repairRow = document.getElementById('repairRow');
+  const repairBtn = document.getElementById('repairBtn');
 
   // Load current secret state (we never echo the actual value into the
   // popup — only show whether one is set, like a password reset flow).
@@ -32,6 +34,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
       statusDot.className = resp.connected ? 'status-dot connected' : 'status-dot disconnected';
       statusText.textContent = resp.connected ? 'Connected' : (resp.lastError || 'Disconnected');
+
+      // The repair row appears exactly when the background has declared the
+      // credential dead — and disappears the moment the silent ladder heals
+      // it. It never asks for a secret: the button runs the same automatic
+      // ladder, only allowed to open a foreground Tofu tab (user gesture).
+      if (repairRow) {
+        repairRow.style.display = (!resp.connected && resp.needsRepair) ? '' : 'none';
+        if (repairBtn && resp.repairBusy) {
+          repairBtn.disabled = true;
+          repairBtn.textContent = 'Re-pairing…';
+        } else if (repairBtn && repairBtn.textContent === 'Re-pairing…') {
+          repairBtn.disabled = false;
+          repairBtn.textContent = 'Re-pair now';
+        }
+      }
 
       if (resp.serverUrl && serverInput) {
         serverInput.value = resp.serverUrl;
@@ -77,6 +94,18 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(updateStatus, 500);
     });
   });
+
+  if (repairBtn) {
+    repairBtn.addEventListener('click', () => {
+      repairBtn.disabled = true;
+      repairBtn.textContent = 'Re-pairing…';
+      chrome.runtime.sendMessage({ type: 'repairNow' }, (resp) => {
+        repairBtn.disabled = false;
+        repairBtn.textContent = (resp && resp.ok) ? '✓ Re-paired' : 'Re-pair now';
+        setTimeout(updateStatus, 500);
+      });
+    });
+  }
 
   toggleBtn.addEventListener('click', () => {
     chrome.runtime.sendMessage({ type: 'toggle' }, () => {

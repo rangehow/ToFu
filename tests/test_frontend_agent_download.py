@@ -9,21 +9,26 @@ the historical full-installer rendering when no agent artifact exists yet
 (stale-while-build, never a dead end). Pinned:
 
   1. agent artifact present ⇒ numbered steps (①②③), agent link first
-     (受控端·轻量 + 服务器直连 + size), mint button labelled 生成连接行,
-     full link inside a COLLAPSED details, escape hatch once;
+     (受控端·轻量 + 服务器直连 + size), the PAIRING button as primary
+     attach action (2026-08-04 decree) with the connect line demoted to
+     a collapsed details, full link inside a COLLAPSED details, escape
+     hatch once;
   1b. preseeded artifact + open bridge ⇒ ZERO-TOUCH: no mint button, the
      auto-connect copy instead; a required bridge token forces the
      3-step flow back even with a preseed;
-  2. no agent_downloads ⇒ historical full-installer rendering, no agent
-     vocabulary (never an empty primary slot);
-  3. local_source ⇒ BOTH installs visible, role-labeled, nothing
-     collapsed (owner 2026-08-03: the collapsed tunnel hatch was missed;
-     the key action must stand out): agent block FIRST with the mint
-     button, full desktop second, exactly one lc-step heading;
+  2. no agent_downloads ⇒ full-installer fallback with the SAME pairing
+     block, no agent vocabulary (never an empty primary slot);
+  3. local_source ⇒ BOTH installs visible, role-labeled, agent block
+     FIRST with the pairing button, connect line only inside the
+     advanced details, exactly one lc-step heading;
   4. an unchanged poll beat PRESERVES user interaction state (the minted
      connect line, an expanded section) — the 3s repaint must not blow
      the DOM away; a changed payload still re-renders;
-  5. NEUTER ×2: severing the agent branch fails the remote checks;
+  6. public host ⇒ the connect line VANISHES (its address half is a
+     measured SSO dead end) and pairing carries everything; NO surface
+     instructs a manual ssh tunnel (2026-08-04 owner decree, superseding
+     the 2026-08-03 proxy warning);
+  7. NEUTER ×2: severing the agent branch fails the remote checks;
      severing the signature gate fails the preservation check.
 
 Loads the REAL shipped local-control.js under jsdom; skips when
@@ -115,8 +120,10 @@ check('remote_full_collapsed',
 check('remote_full_link_present', html1.includes('Tofu-Setup-0.16.0-win64.exe'));
 check('remote_agent_before_full',
   html1.indexOf('TofuAgent-Setup') < html1.indexOf('Tofu-Setup'));
+check('remote_pair_button_primary', html1.includes('lcPairBtn'));
 check('remote_mint_button', html1.includes('lcMintBtn'));
 check('remote_mint_label', html1.includes('生成连接行'));
+check('remote_mint_demoted_to_details', html1.includes('高级：连接行')); 
 check('remote_hosted_chip_twice',
   (html1.match(/服务器直连/g) || []).length === 2);
 check('remote_escape_hatch_once',
@@ -154,7 +161,8 @@ const html2 = document.getElementById('lcDesktopSetup').innerHTML;
 check('fallback_full_link_primary', html2.includes('Tofu-Setup-0.16.0-win64.exe'));
 check('fallback_no_agent_step', !html2.includes('① 下载并安装受控端'));
 check('fallback_historical_text', html2.includes('安装桌面版'));
-check('fallback_mint_kept', html2.includes('lcMintBtn'));
+check('fallback_pair_kept', html2.includes('lcPairBtn'));
+check('fallback_mint_in_details', html2.includes('lcMintBtn') && html2.includes('高级：连接行'));
 
 // ── 3. local_source ⇒ BOTH installs visible, role-labeled, no collapse ──
 const LOCAL_SRC = { connected: false, setup_state: 'local_source',
@@ -165,13 +173,14 @@ _lcRenderDesktop(LOCAL_SRC, null);
 const html3 = document.getElementById('lcDesktopSetup').innerHTML;
 check('local_source_full_link', html3.includes('Tofu-Setup-0.16.0-win64.exe'));
 check('local_source_agent_link', html3.includes('TofuAgent-Setup-0.16.0-win64.exe'));
-check('local_source_no_details', !html3.includes('<details'));
+check('local_source_pair_button', html3.includes('lcPairBtn'));
+check('local_source_connect_line_in_details',
+  html3.includes('lcMintBtn') && html3.includes('高级：连接行'));
 check('local_source_agent_first',
   html3.indexOf('TofuAgent-Setup') < html3.indexOf('Tofu-Setup'));
 check('local_source_primary_accent', html3.includes('lc-role-primary'));
 check('local_source_role_notes',
   html3.includes('另一台电脑访问') && html3.includes('服务器本机'));
-check('local_source_mint_button', html3.includes('lcMintBtnSrc'));
 check('local_source_one_step',
   (html3.match(/lc-step/g) || []).length === 1);
 check('local_source_no_agent_step', !html3.includes('① 下载并安装受控端'));
@@ -179,11 +188,11 @@ check('local_source_no_agent_step', !html3.includes('① 下载并安装受控�
 // ── 4. unchanged poll beat PRESERVES user interaction state ──
 // (The 2026-08-03 auto-collapse: every 3s repaint rewrote innerHTML,
 // collapsing an opened details and vanishing a minted connect line.)
-const box = document.getElementById('lcTokenBoxSrc');
+const box = document.getElementById('lcTokenBox');
 box.style.display = 'block';
 box.textContent = 'http://127.0.0.1:15000 k_test';
 _lcRenderDesktop(LOCAL_SRC, null);   // identical payload — a poll beat
-const box2 = document.getElementById('lcTokenBoxSrc');
+const box2 = document.getElementById('lcTokenBox');
 check('rerender_preserves_token_box',
   !!box2 && box2.textContent === 'http://127.0.0.1:15000 k_test' &&
   box2.style.display === 'block');
@@ -193,8 +202,13 @@ _lcRenderDesktop({ connected: true, setup_state: 'connected',
 check('state_change_still_rerenders',
   document.getElementById('lcDesktopSetup').innerHTML === '');
 
-// ── 6. mint-context diagnosis (owner incident 2026-08-03: a proxy-URL
-// connect line polled an SSO wall for hours, panel said nothing) ──
+// ── 6. public host ⇒ connect line VANISHES, pairing carries all ──
+// (2026-08-04 owner decree, superseding the 2026-08-03 proxy warning:
+// that warning sent the user to reopen this panel via an ssh-tunnel
+// address — a MANUAL tunnel instruction, now forbidden on every surface.
+// The pairing code is address-free — the agent discovers the route
+// itself — so a public host leans on pairing entirely and stops offering
+// the measured-dead-end line.)
 const PROXIED = { connected: false, setup_state: 'remote',
   download_url: 'https://github.com/x/y/releases/latest',
   server_url: 'https://5665bc99-vscode-zw05.mlp.sankuai.com/',
@@ -202,18 +216,19 @@ const PROXIED = { connected: false, setup_state: 'remote',
   downloads: [FULL], agent_downloads: [AGENT] };
 _lcRenderDesktop(PROXIED, null);
 const html6 = document.getElementById('lcDesktopSetup').innerHTML;
-check('proxy_warn_shown_for_public_host', html6.includes('代理地址'));
-check('proxy_warn_names_tunnel', html6.includes('127.0.0.1:15000'));
-check('proxy_warn_before_mint',
-  html6.indexOf('代理地址') < html6.indexOf('lcMintBtn'));
-// loopback/private hosts are fine — no false alarm.
+check('public_host_keeps_pairing', html6.includes('lcPairBtn'));
+check('public_host_hides_connect_line', !html6.includes('lcMintBtn'));
+check('public_host_never_teaches_manual_tunnel',
+  !/隧道地址|ssh 隧道|ssh-tunnel/.test(html6));
+// private/loopback hosts keep the demoted connect-line fallback.
 _lcRenderDesktop({ connected: false, setup_state: 'remote',
   download_url: '', server_url: 'http://192.168.1.10:15000/',
   server_url_reachability: 'private',
   downloads: [FULL], agent_downloads: [AGENT] }, null);
-check('no_proxy_warn_for_private_host',
-  !document.getElementById('lcDesktopSetup').innerHTML.includes('代理地址'));
-// minted-but-nothing-arrived: the failure is downstream of the copy — say so.
+const html6p = document.getElementById('lcDesktopSetup').innerHTML;
+check('private_host_keeps_connect_line_in_details',
+  html6p.includes('lcMintBtn') && html6p.includes('高级：连接行'));
+// paired-but-nothing-arrived: self-heal semantics, never manual ssh.
 _lcRenderDesktop({ connected: false, setup_state: 'remote',
   download_url: '', server_url: 'http://192.168.1.10:15000/',
   server_url_reachability: 'private', bridge_tokens_issued: 2,
@@ -221,6 +236,8 @@ _lcRenderDesktop({ connected: false, setup_state: 'remote',
 const html6b = document.getElementById('lcDesktopSetup').innerHTML;
 check('awaiting_hint_when_tokens_but_no_agent',
   html6b.includes('等待受控端连入'));
+check('awaiting_hint_is_self_heal_not_manual_ssh',
+  html6b.includes('自动') && !/隧道地址|换.*隧道/.test(html6b));
 // …but never cry wolf once connected, or before any token exists.
 _lcRenderDesktop({ connected: true, setup_state: 'connected',
   bridge_tokens_issued: 2,
@@ -233,11 +250,10 @@ _lcRenderDesktop({ connected: false, setup_state: 'remote',
   downloads: [FULL], agent_downloads: [AGENT] }, null);
 check('no_awaiting_hint_without_tokens',
   !document.getElementById('lcDesktopSetup').innerHTML.includes('等待受控端连入'));
-// absent fields (an older server) must render NO diagnosis at all.
+// absent fields (an older server) render NO awaiting hint at all.
 _lcRenderDesktop(LOCAL_SRC, null);
-check('absent_fields_render_no_diagnosis',
-  !document.getElementById('lcDesktopSetup').innerHTML.includes('代理地址') &&
-  !document.getElementById('lcDesktopSetup').innerHTML.includes('等待受控端连入'));
+check('absent_fields_render_no_awaiting_hint',
+  !document.getElementById('lcDesktopSetup').innerHTML.includes('等待受控端连入')); 
 
 console.log(out.join('\n'));
 process.exit(0);

@@ -205,9 +205,10 @@ STRINGS = {
     },
     'desktop.connect.instructions': {
         'en': 'In Tofu, open Local Control → This computer and press '
-              '"Generate connect line". Paste the whole line here.',
-        'zh': '在 Tofu 中打开「本机控制 → 这台电脑」，点击「生成连接命令」，'
-              '将整行粘贴到这里。',
+              '"Pair this computer" — the 6-digit code needs no address. '
+              'This line is the advanced fallback: paste it whole.',
+        'zh': '在 Tofu 中打开「本机控制 → 这台电脑」，优先点「配对这台电脑」'
+              '用 6 位码配对（无需地址）。连接行是高级兜底：将整行粘贴到这里。',
     },
     'desktop.connect.current': {
         'en': 'Currently attached to: {url}',
@@ -226,11 +227,12 @@ STRINGS = {
         'zh': '正在验证服务器地址…',
     },
     'desktop.connect.verifyFailed': {
-        'en': 'Cannot reach Tofu there: {reason}. If a proxy/SSO gateway '
-              'intercepted it, use the ssh-tunnel address from the panel. '
-              'Press Connect again to save anyway.',
-        'zh': '连不上服务器：{reason}。若是代理/SSO 拦截，请换面板里用隧道'
-              '地址生成的连接行；再点一次「连接」强制保存。',
+        'en': 'Cannot reach Tofu there: {reason}. An agent cannot use a '
+              'proxy/SSO address — prefer the pairing code (the agent '
+              'discovers the route itself). Press Connect again to save '
+              'anyway.',
+        'zh': '连不上服务器：{reason}。代理/SSO 地址受控端用不了——建议改用'
+              '配对码（通路由受控端自己发现）；再点一次「连接」强制保存。',
     },
     'desktop.pair.title': {
         'en': 'Pair this computer',
@@ -403,12 +405,14 @@ STRINGS = {
         'zh': '鉴权失败——连接行里的密钥不对',
     },
     'desktop.tray.stProxy': {
-        'en': 'blocked by a proxy/SSO gateway — use the tunnel address',
-        'zh': '地址被代理/SSO 拦截——请换隧道地址',
+        'en': 'blocked by a proxy/SSO gateway — re-discovering the route '
+              '(auto-tunnel included)',
+        'zh': '地址被代理/SSO 拦截——正在自动重找通路（含自动隧道）',
     },
     'desktop.tray.stUnreachable': {
-        'en': 'server unreachable (tunnel down?)',
-        'zh': '连不上服务器（隧道没开？）',
+        'en': 'server unreachable — retrying and re-discovering the route '
+              'by itself',
+        'zh': '连不上服务器——正在自动重试并重找通路',
     },
     'desktop.tray.stHttp': {
         'en': 'server answered HTTP {code}',

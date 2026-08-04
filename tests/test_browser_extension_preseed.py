@@ -138,4 +138,8 @@ class TestExtensionAdoption:
     def test_popup_no_longer_marks_secret_user_required(self):
         html = _src('browser_extension/popup.html')
         assert 'required — an agents:bridge' not in html
-        assert 'pre-paired' in html
+        # 2026-08-04: the field moved inside a collapsed "Advanced" details
+        # whose summary says so explicitly — the visible remedy is the
+        # automatic re-pair row, never a secret to paste (the structural
+        # details pin lives in test_browser_bridge_auto_repair.py).
+        assert 'never needed in normal use' in html

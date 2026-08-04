@@ -13,8 +13,9 @@ log spam on BOTH ends. The fix:
     a 5-minute probe (self-healing if the secret is fixed server-side),
   * any success resets the backoff,
   * every next-poll schedule rides ONE cancelable timer
-    (``_scheduleNextPoll``) so a user fixing the secret in the popup
-    reconnects instantly instead of waiting out a parked probe,
+    (``_scheduleNextPoll``) so an adopted key (the auto-repair ladder, or
+    the advanced popup field) reconnects instantly instead of waiting out
+    a parked probe,
   * the state is exposed via getStatus (authFailures / needsRepair).
 
 JS cannot run under pytest, so behavior is pinned by structural analysis
@@ -56,10 +57,22 @@ def _poll_body(src):
     return _extract_fn_body(src, 'async function poll(')
 
 
+def _401_branch(body):
+    """Slice the WHOLE 401 branch, anchored on its structural end.
+
+    A fixed-width window (i401 + N chars) broke the moment the branch grew
+    (2026-08-04: the auto-repair classification added ~600 chars and the
+    backoff formula slid past the window) — anchor on the terminal
+    `_scheduleNextPoll(delay);` instead, so the slice tracks the branch
+    however long it gets."""
+    i401 = body.index('resp.status === 401')
+    i_end = body.index('_scheduleNextPoll(delay);', i401)
+    return body[i401:i_end + len('_scheduleNextPoll(delay);')]
+
+
 def test_401_backs_off_exponentially_with_cap():
     body = _poll_body(_src())
-    i401 = body.index('resp.status === 401')
-    branch = body[i401:i401 + 1600]
+    branch = _401_branch(body)
     assert re.search(
         r'Math\.min\(\s*AUTH_RETRY_BASE_DELAY\s*\*\s*\(2\s*\*\*\s*\(authFailures\s*-\s*1\)\)\s*,\s*AUTH_RETRY_MAX_DELAY\)',
         branch), ('the 401 branch must back off exponentially per consecutive '
@@ -70,15 +83,16 @@ def test_401_backs_off_exponentially_with_cap():
 
 def test_needs_repair_state_after_give_up_threshold():
     body = _poll_body(_src())
-    i401 = body.index('resp.status === 401')
-    branch = body[i401:i401 + 1600]
+    branch = _401_branch(body)
     assert 'authFailures >= AUTH_GIVE_UP_AFTER' in branch, (
         'after N consecutive 401s the bridge must declare needs-repair '
         '(parked probe), not keep retrying eagerly')
     assert "updateBadge(needsRepair ? 'repair' : 'error')" in branch, (
         'needs-repair must surface on the badge (KEY), not just in logs')
     assert 're-pair' in branch, (
-        'the error text must tell the user to re-pair the secret')
+        'the error text must speak of re-pairing (2026-08-04: the ladder '
+        'does it automatically — the copy promises automation, never a '
+        'human chore)')
 
 
 def test_success_resets_the_backoff():

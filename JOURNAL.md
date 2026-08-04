@@ -1,3 +1,10 @@
+### 2026-08-04(向导现代化最后一公里:商店工件换新——受控端 45,171,747B built d9b34c71 / 桌面端 120,152,343B built 959fd1c9(mirrored→built 翻转),选择器/盘面/哈希三点核对全过) — owner 复核指令;纯工件操作+JOURNAL,零产品代码
+
+- **owner 复核擒获:** 模板现代化≠安装体验现代化——面板下载的商店工件仍是旧 MUI 向导(agent built 53,166,091B;full 甚至是 mirrored 的 CI Inno 117,946,479B)。用缓存 payload 直 wrap 入店:agent 走 payload-d9b34c71(=验收 epic `pt_59b62951aad2463e` 验证过的那份,30s),full 走 git 最新 payload-959fd1c9(116s)。**验收链注意:P4 现在下载到的是同一 d9b34c71 payload 的新向导版(45.17MB),验收步骤不变。**
+- **三点核对(owner 指定,全实测):** ①manifest 两行 size/sha256/git_sha/source 已更新(agent built d9b34c71、full 由 mirrored 翻转为 built 959fd1c9);②`store.find_for_platform('windows','x86_64',kind=agent|full)` 双双解析到新 built 工件,面板下载信息路由(routes/api_v1/desktop.py:167)走的正是这个选择器;③盘上 exe size+sha256 与 manifest 逐字节一致。
+- **大小注记:** 入店 full 120,152,343B 比 bench 版(d887b685 payload)大 46KB——payload 不同(959fd1c9 更新),预期内;agent 与 bench 差 296B(solid 块边界),无实质意义。
+
+### 2026-08-04(测试体系 P0 补记:unit 层全量墙钟实测 **20 分钟**
 ### 2026-08-04(测试体系 P0 补记:unit 层全量墙钟实测 **20 分钟**(16 worker/负载 95 共享机)——超 15min 业界阈值,「按路径选择运行」从「先实测」升级为「实测支持」;96-worker auto 在本机被内存压力收割卡死;189 红分诊零本批指纹) — epic `pt_2f2c847ff8524e5e` 补记;commit `8f3204f7`(13 文件 +543/−25)
 
 - **测量账:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -u -m pytest -p xdist -m unit -n 16 --dist worksteal` → **1198.5s(19m58s),15136 passed / 189 failed / 20 skipped**。结论:超 Google 惯例 ~15min 阈值 → P2「按路径映射的选择运行」实测有据(不上 ML);CI 干净 runner 应更快,但本地全量已影响迭代节奏。

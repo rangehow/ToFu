@@ -31,6 +31,25 @@ _DEFAULT_CONFIG = {
 }
 
 
+class ConnectLineError(ValueError):
+    """A parse_connect_line refusal, CODED for the UI boundary.
+
+    The desktop dialog maps ``code`` to a bilingual message
+    (``desktop._tk_theme.connect_error_text``) — a lib module must not own
+    user-facing prose, and an English-only sentence in a Chinese dialog is
+    exactly the leak the 2026-08-04 i18n sweep was ordered to kill. str()
+    stays a non-empty, secret-free token (``connect_line:<code>[:<detail>]``)
+    so refusals remain greppable in logs and the contract suite's「refusal
+    carries a message / never echoes the secret」pins keep holding.
+    """
+
+    def __init__(self, code, detail=''):
+        self.code = code
+        self.detail = detail
+        super().__init__('connect_line:%s%s'
+                         % (code, (':' + detail) if detail else ''))
+
+
 def parse_connect_line(line):
     """Parse the connect line the web UI hands the user → ``(url, secret)``.
 
@@ -49,23 +68,18 @@ def parse_connect_line(line):
     are also normalised, since both are common paste artefacts.
 
     Raises:
-        ValueError: with a message safe to show in a dialog, when either half
-            is missing or the URL is not http(s). Never echoes the secret.
+        ConnectLineError: coded refusal (``missing_parts`` /
+            ``too_many_parts`` / ``bad_url``) — the dialog localises it;
+            ``detail`` carries at most the URL half, never the secret.
     """
     parts = (line or '').split()
     if len(parts) < 2:
-        raise ValueError(
-            'Paste the whole line from Tofu — it must contain the server '
-            'address AND the token, separated by a space.')
+        raise ConnectLineError('missing_parts')
     if len(parts) > 2:
-        raise ValueError(
-            'That looks like more than one server address and token. Paste '
-            'exactly the line Tofu showed you.')
+        raise ConnectLineError('too_many_parts')
     url, secret = parts[0].strip(), parts[1].strip()
     if not url.startswith(('http://', 'https://')):
-        raise ValueError(
-            'The server address must start with http:// or https:// — got '
-            f'{url[:40]!r}.')
+        raise ConnectLineError('bad_url', detail=url[:40])
     return url.rstrip('/'), secret
 
 

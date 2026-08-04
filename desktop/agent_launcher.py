@@ -303,6 +303,11 @@ def _link_status_text(state: dict) -> str:
     if code == 'http':
         return theme.t('desktop.tray.stHttp', lang).replace(
             '{code}', str(st.get('code') or '?'))
+    if code == 'error':
+        # The detail is a raw exception string (dynamic): it stays verbatim
+        # behind a localized prefix — the sweep's rule for dynamic details.
+        return theme.t('desktop.tray.stError', lang).replace(
+            '{detail}', str(st.get('detail') or '?')[:80])
     return str(st.get('detail') or code)[:80]
 
 

@@ -99,8 +99,9 @@ def prompt_connect_line(current_url: str = '', log=_noop_log):
             parsed = parse_connect_line(entry.get())
         except ValueError as ve:
             # Keep the dialog open with a specific reason — silently closing
-            # would leave the user unable to tell what was wrong.
-            err.config(text=str(ve))
+            # would leave the user unable to tell what was wrong. The parser
+            # throws CODED refusals; the prose lives in the theme (bilingual).
+            err.config(text=theme.connect_error_text(ve, lang))
             return
         raw = entry.get().strip()
         if probe_state['armed_for'] != raw:
@@ -111,7 +112,7 @@ def prompt_connect_line(current_url: str = '', log=_noop_log):
             if not ok:
                 err.config(
                     text=theme.t('desktop.connect.verifyFailed', lang)
-                    .replace('{reason}', reason))
+                    .replace('{reason}', theme.reason_text(reason, lang)))
                 probe_state['armed_for'] = raw
                 return
         result['value'] = parsed
@@ -247,7 +248,7 @@ def prompt_attach(server_url: str = '', log=_noop_log):
             err.config(text=theme.t('desktop.pair.rateLimited', lang))
         else:
             err.config(text=theme.t('desktop.pair.failed', lang)
-                       .replace('{reason}', val))
+                       .replace('{reason}', theme.reason_text(val, lang)))
 
     def _use_line(*_a):
         result['value'] = PREFER_CONNECT_LINE

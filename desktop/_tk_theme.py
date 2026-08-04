@@ -614,6 +614,118 @@ STRINGS = {
         'en': 'Launch the agent automatically when you sign in.',
         'zh': '登录系统时自动启动受控端。',
     },
+    # ── Machine-token → phrase mapping (the 2026-08-04 i18n sweep) ──
+    # lib modules (probe/pair/config/post_install workers) return MACHINE
+    # TOKENS, never prose; the UI boundary maps them HERE so a Chinese
+    # dialog never shows a raw English token. Unknown tokens pass through
+    # verbatim (a new token is visible in dev, and the census ratchet in
+    # tests/test_desktop_native_i18n.py demands a key for it).
+    'desktop.reason.unreachable': {
+        'en': 'the address cannot be reached',
+        'zh': '无法连接到该地址',
+    },
+    'desktop.reason.timeout': {
+        'en': 'the connection timed out',
+        'zh': '连接超时',
+    },
+    'desktop.reason.error': {
+        'en': 'a network error occurred',
+        'zh': '发生网络错误',
+    },
+    'desktop.reason.notTofu': {
+        'en': 'the address answers but is not a Tofu server',
+        'zh': '该地址可达，但不是 Tofu 服务器',
+    },
+    'desktop.reason.badResponse': {
+        'en': 'the server returned an unreadable response',
+        'zh': '服务器返回了无法理解的响应',
+    },
+    'desktop.reason.http': {
+        'en': 'the server answered HTTP {code}',
+        'zh': '服务器返回 HTTP {code}',
+    },
+    # parse_connect_line refusals (ConnectLineError.code → message).
+    'desktop.connect.errMissingParts': {
+        'en': 'Paste the whole line from Tofu — it must contain the server '
+              'address AND the token, separated by a space.',
+        'zh': '请粘贴 Tofu 给出的完整一行——必须同时包含服务器地址和令牌，'
+              '以空格分隔。',
+    },
+    'desktop.connect.errTooManyParts': {
+        'en': 'That looks like more than one server address and token. '
+              'Paste exactly the line Tofu showed you.',
+        'zh': '内容看起来多于一组地址和令牌——请只粘贴 Tofu 给出的那一整行。',
+    },
+    'desktop.connect.errBadUrl': {
+        'en': 'The server address must start with http:// or https:// — '
+              'got {detail}.',
+        'zh': '服务器地址必须以 http:// 或 https:// 开头——当前为「{detail}」。',
+    },
+    # Component-card size hints (were hardcoded English attributes).
+    'desktop.comp.chromium.size': {
+        'en': '~115 MB download',
+        'zh': '需下载约 115 MB',
+    },
+    'desktop.comp.postgresql.size': {
+        'en': '~50 MB download',
+        'zh': '需下载约 50 MB',
+    },
+    # Component worker messages (install() + progress_callback tokens).
+    'desktop.compmsg.chromiumOk': {
+        'en': 'Chromium browser installed successfully.',
+        'zh': 'Chromium 浏览器安装成功。',
+    },
+    'desktop.compmsg.chromiumTimeout': {
+        'en': 'Download timed out (10 min). Check your network connection.',
+        'zh': '下载超时（10 分钟）——请检查网络连接。',
+    },
+    'desktop.compmsg.chromiumNoModule': {
+        'en': 'Playwright module not found in bundle.',
+        'zh': '安装包内缺少 Playwright 模块。',
+    },
+    'desktop.compmsg.chromiumDownloading': {
+        'en': 'Downloading Chromium…',
+        'zh': '正在下载 Chromium…',
+    },
+    'desktop.compmsg.pgOk': {
+        'en': 'PostgreSQL configured successfully.',
+        'zh': 'PostgreSQL 配置完成。',
+    },
+    'desktop.compmsg.pgBootstrapFailed': {
+        'en': 'PostgreSQL bootstrap failed. The app will use SQLite '
+              'instead. You can install PostgreSQL manually later.',
+        'zh': 'PostgreSQL 引导失败——应用将改用 SQLite；也可以稍后手动安装 '
+              'PostgreSQL。',
+    },
+    'desktop.compmsg.pgNoModule': {
+        'en': 'Database bootstrap module not available. PostgreSQL can be '
+              'installed manually.',
+        'zh': '数据库引导模块不可用——可手动安装 PostgreSQL。',
+    },
+    'desktop.compmsg.pgSettingUp': {
+        'en': 'Setting up PostgreSQL…',
+        'zh': '正在配置 PostgreSQL…',
+    },
+    # Dynamic worker details (stderr etc.) stay raw but get a localized
+    # prefix — the owner rule for the sweep.
+    'desktop.components.failedDetail': {
+        'en': 'Installation failed',
+        'zh': '安装失败',
+    },
+    # The tray link line's error branch (detail is the raw exception).
+    'desktop.tray.stError': {
+        'en': 'error — {detail}',
+        'zh': '出错——{detail}',
+    },
+    # The no-tkinter terminal fallback's interactive lines.
+    'desktop.terminal.installPrompt': {
+        'en': '  Install {name} ({size})? [{default}/{other}]: ',
+        'zh': '  安装 {name}（{size}）？[{default}/{other}]: ',
+    },
+    'desktop.terminal.alreadyInstalled': {
+        'en': '  [OK] {name} — already installed',
+        'zh': '  [OK] {name}——已安装',
+    },
 }
 
 
@@ -628,6 +740,78 @@ def t(key: str, lang: str = None) -> str:
     if not pair:
         return key
     return pair.get(lang) or pair.get('en') or key
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Machine-token → localized text (lib returns tokens; the UI maps)
+# ═══════════════════════════════════════════════════════════════
+
+_REASON_KEYS = {
+    'unreachable': 'desktop.reason.unreachable',
+    'timeout': 'desktop.reason.timeout',
+    'error': 'desktop.reason.error',
+    'not_tofu': 'desktop.reason.notTofu',
+    'bad_response': 'desktop.reason.badResponse',
+}
+
+_CONNECT_ERROR_KEYS = {
+    'missing_parts': 'desktop.connect.errMissingParts',
+    'too_many_parts': 'desktop.connect.errTooManyParts',
+    'bad_url': 'desktop.connect.errBadUrl',
+}
+
+_COMP_MSG_KEYS = {
+    'chromium_ok': 'desktop.compmsg.chromiumOk',
+    'chromium_timeout': 'desktop.compmsg.chromiumTimeout',
+    'chromium_no_module': 'desktop.compmsg.chromiumNoModule',
+    'chromium_downloading': 'desktop.compmsg.chromiumDownloading',
+    'pg_ok': 'desktop.compmsg.pgOk',
+    'pg_bootstrap_failed': 'desktop.compmsg.pgBootstrapFailed',
+    'pg_no_module': 'desktop.compmsg.pgNoModule',
+    'pg_setting_up': 'desktop.compmsg.pgSettingUp',
+}
+
+
+def reason_text(token, lang=None) -> str:
+    """Map a probe/pair machine token to a localized short phrase.
+
+    ``http_404`` fills the {code} placeholder of a shared key; an unknown
+    token passes through verbatim (visible in dev, never a crash — and the
+    census ratchet demands a key for every token the lib can emit).
+    """
+    tok = str(token or '')
+    if tok.startswith('http_'):
+        return t('desktop.reason.http', lang).replace('{code}', tok[5:])
+    key = _REASON_KEYS.get(tok)
+    return t(key, lang) if key else tok
+
+
+def connect_error_text(err, lang=None) -> str:
+    """Map a ConnectLineError to its localized dialog message.
+
+    Unknown/legacy ValueErrors (no ``code``) pass through str() — the
+    refusal must never be swallowed, coded or not.
+    """
+    key = _CONNECT_ERROR_KEYS.get(getattr(err, 'code', ''))
+    if not key:
+        return str(err)
+    return t(key, lang).replace('{detail}',
+                                getattr(err, 'detail', '') or '—')
+
+
+def component_msg(msg, lang=None) -> str:
+    """Map a component-worker message to localized text.
+
+    Tokens (``chromium_timeout`` …) map to keys; ``detail:<raw>`` keeps the
+    raw tail (a stderr excerpt) behind a localized「安装失败」prefix — the
+    owner rule for dynamic details; anything else passes through.
+    """
+    s = str(msg or '')
+    if s.startswith('detail:'):
+        return '%s: %s' % (t('desktop.components.failedDetail', lang),
+                           s[7:].strip())
+    key = _COMP_MSG_KEYS.get(s)
+    return t(key, lang) if key else s
 
 
 # ═══════════════════════════════════════════════════════════════

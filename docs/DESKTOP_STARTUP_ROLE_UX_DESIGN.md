@@ -21,6 +21,17 @@
 > locales (`Chinese (Simplified)_China` → zh — the whole native surface had
 > been English-only on Chinese Windows), and the font family is resolved from
 > an explicit per-platform stack (the tk default was SimSun serif there).
+>
+> **Amendment ② 2026-08-04 (owner review: i18n was NOT actually full).**
+> Systematic sweep: lib modules (`config.parse_connect_line`, `_probe`,
+> `_pair`, `post_install` workers) now return MACHINE TOKENS only — every
+> native-surface string is either a `_tk_theme.STRINGS` key or a token mapped
+> at the UI boundary via the three theme helpers (`reason_text` /
+> `connect_error_text` / `component_msg`); dynamic details (stderr) keep the
+> raw tail behind a localized prefix. `ConnectLineError(code, detail)`
+> replaces prose ValueErrors. A census ratchet
+> (`tests/test_desktop_native_i18n.py`) fails the build on any lib token
+> without a translation.
 
 ## 1. The gap
 

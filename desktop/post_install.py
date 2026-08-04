@@ -59,12 +59,17 @@ def _diag(msg: str) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 class Component:
-    """Base class for an optional downloadable component."""
+    """Base class for an optional downloadable component.
 
-    key: str = ''        # i18n lookup key: desktop.comp.<key>.name/.desc
-    name: str = ''       # English fallback (logs + terminal prompt)
+    All user-facing text is keyed (desktop.comp.<key>.name/.desc/.size in
+    _tk_theme.STRINGS); install() + progress_callback return/emit MACHINE
+    TOKENS ('chromium_timeout' …) or 'detail:<raw>' — never prose — which
+    the UI boundary localises via theme.component_msg (2026-08-04 sweep).
+    """
+
+    key: str = ''        # i18n lookup key: desktop.comp.<key>.name/.desc/.size
+    name: str = ''       # English fallback (logs)
     description: str = ''
-    size_hint: str = ''  # e.g. "~150 MB"
     recommended: bool = False
 
     def is_installed(self) -> bool:
@@ -82,7 +87,6 @@ class PlaywrightChromium(Component):
         'Enables advanced web page fetching, JavaScript rendering, '
         'and browser automation. Required for fetch_url on JS-heavy sites.'
     )
-    size_hint = '~115 MB download'
     recommended = True
 
     def is_installed(self) -> bool:
@@ -117,7 +121,7 @@ class PlaywrightChromium(Component):
         """
         try:
             if progress_callback:
-                progress_callback(self.name, 'Downloading Chromium...')
+                progress_callback(self.name, 'chromium_downloading')
 
             env = os.environ.copy()
             if getattr(sys, 'frozen', False):
@@ -134,15 +138,15 @@ class PlaywrightChromium(Component):
             )
 
             if result.returncode == 0:
-                return True, 'Chromium browser installed successfully.'
-            return False, f'Installation failed: {result.stderr or result.stdout}'
+                return True, 'chromium_ok'
+            return False, 'detail:%s' % (result.stderr or result.stdout)
 
         except subprocess.TimeoutExpired:
-            return False, 'Download timed out (10 min). Check your network connection.'
+            return False, 'chromium_timeout'
         except FileNotFoundError:
-            return False, 'Playwright module not found in bundle.'
+            return False, 'chromium_no_module'
         except Exception as e:
-            return False, f'Unexpected error: {e}'
+            return False, 'detail:%s' % e
 
 
 class PostgreSQL(Component):
@@ -153,7 +157,6 @@ class PostgreSQL(Component):
         'Provides better concurrency, JSONB support, and full-text search. '
         'Without this, the app uses SQLite (single-user, still fully functional).'
     )
-    size_hint = '~50 MB download'
     recommended = True
 
     def is_installed(self) -> bool:
@@ -170,7 +173,7 @@ class PostgreSQL(Component):
         """Bootstrap PostgreSQL via the app's existing mechanism."""
         try:
             if progress_callback:
-                progress_callback(self.name, 'Setting up PostgreSQL...')
+                progress_callback(self.name, 'pg_setting_up')
 
             # The app's lib/database/_bootstrap.py handles PG setup.
             # Trigger it by importing the database module.
@@ -181,19 +184,13 @@ class PostgreSQL(Component):
             success = ensure_pg_available()
 
             if success:
-                return True, 'PostgreSQL configured successfully.'
+                return True, 'pg_ok'
             else:
-                return False, (
-                    'PostgreSQL bootstrap failed. The app will use SQLite instead. '
-                    'You can install PostgreSQL manually later.'
-                )
+                return False, 'pg_bootstrap_failed'
         except ImportError:
-            return False, (
-                'Database bootstrap module not available. '
-                'PostgreSQL can be installed manually.'
-            )
+            return False, 'pg_no_module'
         except Exception as e:
-            return False, f'PostgreSQL setup error: {e}'
+            return False, 'detail:%s' % e
 
 
 # Registry of all optional components
@@ -280,7 +277,8 @@ def _prompt_gui(components: list[Component]) -> list[tuple]:
         inner.pack(fill='x')
         name = theme.t('desktop.comp.%s.name' % comp.key, lang)
         status = (' · %s' % theme.t('desktop.components.installed', lang)
-                  if installed else ' · %s' % comp.size_hint)
+                  if installed else
+                  ' · %s' % theme.t('desktop.comp.%s.size' % comp.key, lang))
         cb = ttk.Checkbutton(inner, text='%s%s' % (name, status),
                              variable=var, style='Tofu.TCheckbutton',
                              state='disabled' if installed else 'normal')
@@ -329,7 +327,7 @@ def _prompt_gui(components: list[Component]) -> list[tuple]:
                     prog_status[idx].set(
                         theme.t('desktop.components.installing', lang))
                 elif kind == 'status':
-                    prog_status[idx].set(payload)
+                    prog_status[idx].set(theme.component_msg(payload, lang))
                 elif kind == 'done':
                     success, msg = payload
                     bar['value'] = bar['value'] + 1
@@ -341,7 +339,8 @@ def _prompt_gui(components: list[Component]) -> list[tuple]:
                         prog_status[idx].set(
                             theme.t('desktop.components.failed', lang))
                         prog_style[idx].configure(style='Status.Err.TLabel')
-                        prog_msg[idx].set(str(msg)[:240])
+                        prog_msg[idx].set(
+                            theme.component_msg(msg, lang)[:240])
                 elif kind == 'finished':
                     results = payload
                     holder['results'] = results
@@ -433,31 +432,46 @@ def _prompt_terminal_gui_fallback(components: list[Component]) -> list[tuple]:
 
     Kept separate from _prompt_terminal (which only SELECTS, for __main__'s
     manual flow) so the GUI entry point's contract — returns install RESULTS,
-    not selections — holds on headless machines too.
+    not selections — holds on headless machines too. Interactive text is
+    bilingual like every other surface (the 2026-08-04 sweep) — only log
+    lines stay English.
     """
+    lang = theme.detect_lang()
     selected = _prompt_terminal(components)
     results = []
     for comp in selected:
-        ok, msg = comp.install(lambda n, txt: print(f'  … {txt}'))
+        ok, msg = comp.install(
+            lambda n, txt: print('  … %s' % theme.component_msg(txt, lang)))
         results.append((comp.name, ok, msg))
-        print(f"  [{'OK' if ok else 'FAIL'}] {comp.name}: {msg}")
+        print('  [%s] %s: %s' % ('OK' if ok else 'FAIL',
+                                 theme.t('desktop.comp.%s.name' % comp.key,
+                                         lang),
+                                 theme.component_msg(msg, lang)))
     return results
 
 
 def _prompt_terminal(components: list[Component]) -> list[Component]:
     """Fallback: terminal-based prompt for headless environments."""
+    lang = theme.detect_lang()
     print('\n' + '=' * 56)
-    print('  Tofu — Optional Components Setup')
+    print('  Tofu — %s' % theme.t('desktop.components.title', lang))
     print('=' * 56 + '\n')
 
     selected = []
     for comp in components:
+        name = theme.t('desktop.comp.%s.name' % comp.key, lang)
         if comp.is_installed():
-            print(f'  [OK] {comp.name} — already installed')
+            print(theme.t('desktop.terminal.alreadyInstalled', lang)
+                  .replace('{name}', name))
             continue
 
         default = 'Y' if comp.recommended else 'N'
-        prompt = f'  Install {comp.name} ({comp.size_hint})? [{default}/{"n" if comp.recommended else "y"}]: '
+        prompt = theme.t('desktop.terminal.installPrompt', lang) \
+            .replace('{name}', name) \
+            .replace('{size}', theme.t('desktop.comp.%s.size' % comp.key,
+                                       lang)) \
+            .replace('{default}', default) \
+            .replace('{other}', 'n' if comp.recommended else 'y')
         try:
             answer = input(prompt).strip().lower()
             if not answer:

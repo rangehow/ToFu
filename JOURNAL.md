@@ -1,3 +1,12 @@
+### 2026-08-04(状态镜像「刚提问就过期(>6h)」假案根修:检视器读取被流式噪音挤爆 10k 行上限——实测 51754 行任务只有 ≤6 轮可见;面板降级改尾部切片,不再倾倒 system prompt) — owner 截图两问(conv 搜索设置批 R87);commit `63be7fe0`(5 文件 +196/−14);环 **66 绿**;真实库实证 85 轮全解析
+
+- **问 1 定案(根本没过期,是被截断):** 每条 SSE delta 都独立落 `task_events`(精确游标冷回放设计,event_log 模块头明记),长任务日志被流式噪音主导——实测真实库 12 个任务超 1 万行(最大 51754 行/170 快照);而检视器 `_read_events_uncached` 取**前 10000 行**,该任务仅 11 张快照(≤R6)幸存,R7 起 159 张全截断 ⇒ state/request 双轴 miss ⇒ 前端误报「该状态镜像已过期(>6h)或不存在」。且话术本身也是化石:分层保留(§10.4)后结构事件存活 **30 天**,6h 只是流式噪音层。
+- **修复①(后端,根修):** 读取过滤为结构事件(`messages_snapshot`/`round_usage`/`round_start`/`round_end` + `endpoint_%`,复用 event_log.STRUCTURAL_EVENT_TYPES 防漂移)——检视器本来就只渲染这几类;同一 10k 上限从「撑不过 6 轮」变「覆盖数千轮」。真实库实证:51754 行任务 85 请求轮 + 85 状态行全折叠,R80 镜像 OK(R85 是最终答复轮,本就无 post-tool 镜像,mirror 在 roundNum='final',设计内走 request 轴兜底)。
+- **修复②(前端,owner 指令「只显示工具调用和结果,不要 system prompt」):** 精确增量(diff 前轮同轴负载)不可得时——R1/前轮缺失/前缀分叉——旧行为=整桶倾倒(含 system prompt);改 `_riTailSlice`:state 镜像尾部即本轮(带 tool_calls 的 assistant + 其 tool 结果),切尾展示;空切片兜底非 system 消息,**绝不渲染空面板**(P7 孤 user 镜像场景擒获)。request 轴(子代理兜底)保持全量,本无 post-tool 尾可切。
+- **修复③(话术):** `ri.stateEmpty` 改「该轮次没有可用的状态镜像(未生成或已被清理)」,双语同步 P7 harness 副本。
+- **测试账:** test_request_inspector +2——10300 行噪音压在前、R88 结构行在 10k 窗口外仍双轴解析(旧代码必红)+ 结构过滤 NEUTER(WHERE 改恒真、参数表不动,delta 泄漏即红);P7 harness +5(R9 前轮缺失→尾部切片五针:state 轴/工具调用可见/结果可见/system 隐藏/历史隐藏);环 = inspector 17 + P7 5 + retention/compaction/snapshot_delta 22 + i18n_coverage/P4/P6 15 + stale_bundle_self_heal 7 = **66 绿**。
+- **生效面:** 后端修复即重启即生效(或下次代码热载);前端两件走 bundle mtime 自愈重建(stale_bundle 套件实证),最迟随下次重启上线。
+- **事故自记(严重):** 首批 apply_diffs 调用 JSON 畸形(尾部混入数千个 `{}` 元素),工具忠实把 41KB 垃圾**写进了** request_inspector.py 的 SQL 语句中间——pytest SyntaxError 当场擒获;按标记点对切除+ast.parse 复核修复,零净残留(diff 最终仅 12 行意内改动)。教训=**任何编辑后、测试前先语法冒烟**(python -m py_compile / node --check),畸形工具载荷不报错就落盘。
 ### 2026-08-04(预存红闭环:test_the_053_floor_carries_its_rationale——钉字面 0.5.3 pin 行,而 floor 已两迁至 0.7.3;守卫改 floor 无关,钉「纪律」不钉「版本」) — 脑派发接我自票 `pt_6b0e8573e26043ec` **DONE**;commit 见下(2 文件);套件 **8/8** + NEUTER×3 精确
 
 - **定案(测试漂移的第二形态——钉了版本字面而非纪律):** requirements.txt 的 tofu-search floor 已两次上移(0.5.3 allow_private_hosts → 0.6.0 filter_mode → 0.7.3 replay no-op,每段理由注释俱在),旧守卫的 `^tofu-search>=0\.5\.3$` 字面正则失配——纪律本身从未失守,是守卫把「当前版本号」当成了「必须文档化」的代理。修法=floor 无关化:从 pin 行读出版本号,钉该版本必须配 `# >=<floor>:` 理由段 + 显式 HARD/SOFT 标记 + 非 stub(≥80 字符);守卫更名为 `test_the_floor_pin_carries_its_rationale`,模块头/节注释的 0.5.3 化石行同步改 floor 无关。

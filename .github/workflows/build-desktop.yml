@@ -466,6 +466,13 @@ jobs:
           ArchitecturesInstallIn64BitMode=x64compatible
           SetupIconFile=static\\icons\\tofu.ico
           PrivilegesRequired=lowest
+          ; Running-app guard (parity with the NSIS authoring's
+          ; TOFU_CLOSE_RUNNING_APP): upgrading over a running Tofu must
+          ; offer to close it, never die on a file-in-use error. These
+          ; ARE Inno's defaults — pinned explicitly because the contract
+          ; test binds them and a default flip would ship silently.
+          CloseApplications=yes
+          RestartApplications=no
           WizardStyle=modern
           WizardImageFile=static\\icons\\installer\\wizard-large.bmp
           WizardSmallImageFile=static\\icons\\installer\\wizard-small.bmp
@@ -612,6 +619,10 @@ jobs:
           ArchitecturesInstallIn64BitMode=x64compatible
           SetupIconFile=static\\icons\\tofu.ico
           PrivilegesRequired=lowest
+          ; Running-app guard — same contract as the full app above and
+          ; the NSIS authoring's TOFU_CLOSE_RUNNING_APP macro.
+          CloseApplications=yes
+          RestartApplications=no
           WizardStyle=modern
           WizardImageFile=static\\icons\\installer\\wizard-large.bmp
           WizardSmallImageFile=static\\icons\\installer\\wizard-small.bmp

@@ -220,6 +220,42 @@ def _reap_tunnels() -> None:
 atexit.register(_reap_tunnels)
 
 
+def _quiet_spawn_kwargs() -> dict:
+    """Popen kwargs that keep a console-subsystem child INVISIBLE.
+
+    The agent ships as a windowed exe (tofu-agent.spec: console=False),
+    so every ``ssh.exe`` it spawns without this gets a fresh console
+    window from Windows — a black shell popping up per tunnel attempt,
+    up to 3 hosts x 3 ports per ladder walk, re-run at every boot-time
+    resume (owner report 2026-08-04). CREATE_NO_WINDOW allocates no
+    console at all; the hidden STARTUPINFO covers children that create
+    their own window anyway. POSIX: no such concept, no kwargs.
+    All Windows-only subprocess attrs are getattr-guarded so the module
+    stays importable and testable on Linux.
+    """
+    if not sys.platform.startswith('win'):
+        return {}
+    kwargs = {}
+    no_window = getattr(subprocess, 'CREATE_NO_WINDOW', None)
+    if no_window is not None:
+        kwargs['creationflags'] = no_window
+    startupinfo_cls = getattr(subprocess, 'STARTUPINFO', None)
+    if startupinfo_cls is not None:
+        si = startupinfo_cls()
+        si.dwFlags |= getattr(subprocess, 'STARTF_USESHOWWINDOW', 1)
+        si.wShowWindow = 0  # SW_HIDE
+        kwargs['startupinfo'] = si
+    return kwargs
+
+
+def _spawn_tunnel(cmd: list):
+    """The REAL ssh spawn — quiet-kwargs applied exactly here, so the
+    injected ``_popen`` fakes in tests keep their narrow signature."""
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            **_quiet_spawn_kwargs())
+
+
 def _local_port_busy(port: int, _bind=None) -> bool:
     """Whether 127.0.0.1:<port> is already taken. A bind probe costs
     nothing, so an occupied candidate is skipped INSTANTLY instead of
@@ -245,7 +281,6 @@ def _tunnel_once(host: str, local_port: int, remote_port: int,
                  timeout: float, log, _popen, _probe) -> str:
     """One ssh -N -L attempt on one local port. Win → process kept, URL
     returned; any failure → process killed, ''."""
-    popen = _popen or subprocess.Popen
     probe = _probe or probe_server
     url = 'http://127.0.0.1:%d' % local_port
     cmd = ['ssh', '-N', '-T',
@@ -256,8 +291,11 @@ def _tunnel_once(host: str, local_port: int, remote_port: int,
            '-L', '%d:127.0.0.1:%d' % (local_port, remote_port),
            host]
     try:
-        proc = popen(cmd, stdout=subprocess.DEVNULL,
-                     stderr=subprocess.DEVNULL)
+        if _popen is not None:
+            proc = _popen(cmd, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL)
+        else:
+            proc = _spawn_tunnel(cmd)
     except (OSError, FileNotFoundError) as e:
         log('SSH tunnel to %s could not start: %s' % (host, e))
         return ''

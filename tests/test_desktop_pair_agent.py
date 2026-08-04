@@ -456,3 +456,76 @@ def test_tunnel_all_ports_busy_is_clean_miss():
                                _bind=busy_bind)
     assert url == ''
     assert called == []  # ssh never spawned against a port it cannot bind
+
+
+# ── hidden tunnel spawns (owner report 2026-08-04: black console windows) ──
+
+def test_quiet_spawn_kwargs_empty_off_windows():
+    """POSIX has no console-allocation concept — no kwargs, no hints."""
+    if sys.platform.startswith('win'):
+        pytest.skip('posix branch only')
+    assert _pair._quiet_spawn_kwargs() == {}
+
+
+def test_quiet_spawn_kwargs_windows_hides_console(monkeypatch):
+    """The agent exe is windowed (tofu-agent.spec console=False), so every
+    ssh.exe child gets a VISIBLE console from Windows unless the spawn
+    carries CREATE_NO_WINDOW (+ a hidden STARTUPINFO for grandchildren).
+    The Windows-only subprocess attrs are getattr-guarded, so the test
+    supplies them to simulate the win32 surface from Linux."""
+    class _SI:
+        def __init__(self):
+            self.dwFlags = 0
+            self.wShowWindow = None
+
+    monkeypatch.setattr(_pair.sys, 'platform', 'win32')
+    monkeypatch.setattr(_pair.subprocess, 'CREATE_NO_WINDOW', 0x08000000,
+                        raising=False)
+    monkeypatch.setattr(_pair.subprocess, 'STARTUPINFO', _SI, raising=False)
+    monkeypatch.setattr(_pair.subprocess, 'STARTF_USESHOWWINDOW', 1,
+                        raising=False)
+    kw = _pair._quiet_spawn_kwargs()
+    assert kw['creationflags'] == 0x08000000
+    assert isinstance(kw['startupinfo'], _SI)
+    assert kw['startupinfo'].dwFlags & 1  # STARTF_USESHOWWINDOW honored
+    assert kw['startupinfo'].wShowWindow == 0  # SW_HIDE
+
+
+def test_spawn_tunnel_routes_quiet_kwargs(monkeypatch):
+    """_spawn_tunnel is the ONE real-spawn seam: the quiet kwargs land on
+    the actual Popen call, output still DEVNULL'd."""
+    monkeypatch.setattr(_pair, '_quiet_spawn_kwargs',
+                        lambda: {'creationflags': 99})
+    seen = {}
+
+    def fake_popen(cmd, **kwargs):
+        seen['cmd'] = cmd
+        seen['kwargs'] = kwargs
+        return _FakePopen([None])
+
+    monkeypatch.setattr(_pair.subprocess, 'Popen', fake_popen)
+    _pair._spawn_tunnel(['ssh', '-N'])
+    assert seen['cmd'] == ['ssh', '-N']
+    assert seen['kwargs']['creationflags'] == 99
+    assert seen['kwargs']['stdout'] is _pair.subprocess.DEVNULL
+    assert seen['kwargs']['stderr'] is _pair.subprocess.DEVNULL
+
+
+def test_tunnel_without_injected_popen_uses_quiet_spawn(monkeypatch):
+    """Wiring: the production path (no _popen injection) must go through
+    _spawn_tunnel — a regression back to a bare subprocess.Popen call is
+    exactly the black-window bug returning. The Popen patch below keeps a
+    broken wiring from spawning a REAL ssh during the test."""
+    spawned = []
+
+    def quiet_spawn(cmd):
+        spawned.append(cmd)
+        return _FakePopen([None])
+
+    monkeypatch.setattr(_pair, '_spawn_tunnel', quiet_spawn)
+    monkeypatch.setattr(_pair.subprocess, 'Popen',
+                        lambda *a, **k: _FakePopen([1]))  # dead on arrival
+    url = _pair.try_ssh_tunnel('codelab', local_port=15234, timeout=2,
+                               _probe=lambda url, timeout=0: (True, ''))
+    assert url == 'http://127.0.0.1:15234'
+    assert len(spawned) == 1 and spawned[0][-1] == 'codelab'

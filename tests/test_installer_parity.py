@@ -222,6 +222,42 @@ def test_ci_inno_agent_authoring_matches_the_autostart_contract():
     assert 'PrivilegesRequired=lowest' in _WORKFLOW
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  Running-app guard (owner report 2026-08-04: install died on a locked exe)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_running_app_is_closed_gracefully_in_both_authorings():
+    """Upgrading over a RUNNING app must prompt + auto-close, never die on
+    a raw file-in-use error. NSIS: the TOFU_CLOSE_RUNNING_APP macro probes
+    the exe image lock (append-open is refused on a running image) and
+    kills the tree via nsExec (hidden console — taskkill must not flash
+    its own black window). Inno: CloseApplications, pinned explicitly
+    because it used to ride an unasserted default."""
+    # ── NSIS side, both components ──
+    assert '!macro TOFU_CLOSE_RUNNING_APP' in _NSI
+    for script, target, exe in ((_FULL, 'full', 'Tofu.exe'),
+                                (_AGENT, 'agent', 'TofuAgent.exe')):
+        expanded = _expand(script, target)
+        assert expanded.count('!insertmacro TOFU_CLOSE_RUNNING_APP') == 2, (
+            'the guard must run in BOTH .onInit (upgrade-over-running) and '
+            'un.onInit (uninstall-while-running)')
+        assert 'Function .onInit' in script
+        assert 'Function un.onInit' in script
+        assert f'FileOpen $0 "$INSTDIR\\{exe}" a' in expanded, (
+            'the lock probe must target the payload exe')
+        assert f"nsExec::Exec 'taskkill /IM {exe} /T /F'" in expanded, (
+            'the auto-close must hide its console (nsExec) and take the '
+            'whole tree (the agent ssh tunnels die with it)')
+        assert '$(TOFU_RUNNING_PROMPT)' in script
+    # Bilingual prompt (the installer declares English + SimpChinese).
+    assert 'LangString TOFU_RUNNING_PROMPT 1033' in _NSI
+    assert 'LangString TOFU_RUNNING_PROMPT 2052' in _NSI
+    # ── Inno side (CI): pinned, not defaulted ──
+    assert _WORKFLOW.count('CloseApplications=yes') == 2, (
+        'both Inno scripts (full + agent) must pin CloseApplications')
+    assert _WORKFLOW.count('RestartApplications=no') == 2
+
+
 def test_no_section_commands_leak_into_comments():
     """The 2026-08-02 collision: the renderer is a global replace, so a
     code-valued placeholder named in a COMMENT expanded there —

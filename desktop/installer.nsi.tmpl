@@ -80,6 +80,54 @@ ShowInstDetails show
 !insertmacro MUI_LANGUAGE "English"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
+!include "LogicLib.nsh"
+
+; Bilingual prompt for the running-app guard below.
+LangString TOFU_RUNNING_PROMPT 1033 "${APP_NAME} is currently running.$\r$\n$\r$\nChoose Yes to close it automatically and continue, or No to cancel."
+LangString TOFU_RUNNING_PROMPT 2052 "${APP_NAME} 正在运行。$\r$\n$\r$\n选择「是」自动关闭并继续，选择「否」取消。"
+
+; ── Running-app guard ──
+; A running app locks its exe image, so the payload copy (File /r) used
+; to die mid-install on a raw file-in-use Abort/Retry/Ignore box. Probe
+; the lock FIRST (an append-mode open of a running image is refused by
+; Windows) and offer to close the app FOR the user. Inserted into both
+; .onInit (upgrade-over-running) and un.onInit (uninstall-while-running
+; would leave a half-deleted dir). Labels stay function-scoped, so the
+; two insertions never collide.
+!macro TOFU_CLOSE_RUNNING_APP
+  ${If} ${FileExists} "$INSTDIR\${APP_EXE}"
+    ${Do}
+      ClearErrors
+      FileOpen $0 "$INSTDIR\${APP_EXE}" a
+      ${If} ${Errors}
+        MessageBox MB_ICONQUESTION|MB_YESNO|MB_DEFBUTTON1 \
+          "$(TOFU_RUNNING_PROMPT)" /SD IDYES \
+          IDYES tofu_close_app IDNO tofu_abort_setup
+        tofu_abort_setup:
+          Abort
+        tofu_close_app:
+          ; nsExec hides the taskkill console (no black flash); /T takes
+          ; the whole tree so the agent's ssh tunnels die with it, /F
+          ; forces — a tray agent owns no unsaved document.
+          nsExec::Exec 'taskkill /IM ${APP_EXE} /T /F'
+          Pop $1
+          Sleep 1200
+      ${Else}
+        FileClose $0
+        ${ExitDo}
+      ${EndIf}
+    ${Loop}
+  ${EndIf}
+!macroend
+
+Function .onInit
+  !insertmacro TOFU_CLOSE_RUNNING_APP
+FunctionEnd
+
+Function un.onInit
+  !insertmacro TOFU_CLOSE_RUNNING_APP
+FunctionEnd
+
 Section "Install"
 @INSTALL_REQUIRED@
   SetOutPath "$INSTDIR"

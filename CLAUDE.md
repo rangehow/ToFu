@@ -1581,12 +1581,17 @@ The boot banner includes a one-shot URL
 `http://host:port/?token=<token>` so opening the browser once installs
 the cookie. Disable with `TOFU_AUTO_KEY=0` if you want manual control.
 
-#### Default bind: 127.0.0.1
+#### Default bind: 0.0.0.0 (all interfaces)
 
-`server.py` defaults `--host` to `127.0.0.1`. Networked exposure is an
-explicit choice: pass `--host 0.0.0.0` (or `BIND_HOST=0.0.0.0`).
-Personal use stays effortless; accidental LAN/internet exposure stops
-being the default.
+`server.py` defaults `--host` to `0.0.0.0` (owner 2026-08-04 —
+bootstrap.py / Docker / install.sh already did; the desktop-agent LAN
+pairing flow needs off-loopback reachability). Loopback is the explicit
+opt-in: `--host 127.0.0.1` (or `BIND_HOST=127.0.0.1`). The packaged
+desktop app pins loopback for itself (`desktop/launcher.py`). The boot
+banner still warns loudly on open-auth + non-loopback binds, and the
+LAN discovery responder (`lib/desktop/pairing.py`) is ON by default
+(`TOFU_DESKTOP_LAN_DISCOVERY=0` disables) but stays silent on a
+loopback bind. Drift-pinned by `tests/test_bind_lan_default.py`.
 
 #### Public allow-list
 

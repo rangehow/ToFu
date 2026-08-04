@@ -684,7 +684,7 @@ The `.env.example` file documents all supported variables. Key ones:
 | `LLM_BASE_URL` | API endpoint | `https://api.openai.com/v1` |
 | `LLM_MODEL` | Default model | `gpt-4o` |
 | `PORT` | Server port | `15000` |
-| `BIND_HOST` | Bind address | `127.0.0.1` (loopback) |
+| `BIND_HOST` | Bind address | `0.0.0.0` (all interfaces) |
 | `TOFU_AUTH_MODE` | Force auth mode and lock the UI: `open` / `private` / `multi-user` | *(file-driven)* |
 | `TOFU_AUTO_KEY` | Set to `0` to skip first-boot admin-key bootstrap | `1` |
 | `TUNNEL_TOKEN` | **DEPRECATED** back-compat shim — use the API-keys system instead | *(disabled)* |
@@ -797,7 +797,7 @@ Tofu has a tri-state auth model, persisted at `data/config/auth.json` and switch
 | `private` | Bearer / `x-api-key` / cookie / `?token=` required; HTML hint page on `/` | Single multi-device operator |
 | `multi-user` | Same gate as `private`, plus per-user wallets + signup pages | Paid relay station serving many users |
 
-**Default bind is `127.0.0.1`** — the API is not reachable from the LAN unless you pass `--host 0.0.0.0` or `BIND_HOST=0.0.0.0`. Combined with open-by-default mode, personal use just works locally without exposure.
+**Default bind is `0.0.0.0`** — the API is reachable from the LAN out of the box (the desktop-agent pairing flow depends on it). Pass `--host 127.0.0.1` or `BIND_HOST=127.0.0.1` to bind loopback only; the packaged desktop app does this for itself. With open-by-default auth mode that means LAN reachability without a token — the boot banner warns loudly in that combination, so switch to `private` mode (Settings → API Keys) on untrusted networks.
 
 **First-boot bootstrap** (private/multi-user only) — when the api_keys store is empty and `TUNNEL_TOKEN` is unset, Tofu mints one `tofu_admin_<hex>` key on startup, prints the plaintext + a one-shot `?token=<...>` URL to stderr, and writes the plaintext to `data/config/.first_run_token` (chmod 0600). Disable with `TOFU_AUTO_KEY=0`.
 

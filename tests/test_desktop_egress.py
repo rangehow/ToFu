@@ -266,6 +266,33 @@ class TestOSProxyDiscovery(unittest.TestCase):
 
 
 class TestBridgeTTL(unittest.TestCase):
+    """Bridge 按命令 TTL。
+
+    Isolation (2026-08-04): take_pending_commands() with no args is a V1
+    poller in the legacy '' tenant — _deliverable answers it ONLY when no
+    ''-user agent is online. Any earlier suite that polls /api/desktop/poll
+    (test_desktop_pairing's lifecycle does) registers an agent that stays
+    "online" for 15s and this suite's assertions silently flip to [].
+    Snapshot-clear-restore the bridge registry so the TTL contract is
+    judged against a world these tests actually own (恢复式, never
+    destroyed for downstream suites).
+    """
+
+    def setUp(self):
+        from lib.desktop import bridge
+        self._bridge = bridge
+        with bridge.command_queue_lock:
+            self._saved_agents = dict(bridge._agents)
+            self._saved_v1 = bridge._v1_last_poll
+            bridge._agents.clear()
+            bridge._v1_last_poll = 0.0
+
+    def tearDown(self):
+        bridge = self._bridge
+        with bridge.command_queue_lock:
+            bridge._agents.clear()
+            bridge._agents.update(self._saved_agents)
+            bridge._v1_last_poll = self._saved_v1
 
     def test_per_command_ttl_override(self):
         from lib.desktop import bridge

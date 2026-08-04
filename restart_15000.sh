@@ -427,7 +427,7 @@ for attempt in 1 2 3; do
   fi
   LAUNCH_STAMP="$(date '+%F %T')"
   LOG_MARK="$(wc -l < "${LOG}" 2>/dev/null || echo 0)"
-  PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" setsid nohup "${PY}" server.py >> "${LOG}" 2>&1 9>&- &
+  PORT="${PORT}" BIND_HOST="${BIND_HOST:-0.0.0.0}" setsid nohup "${PY}" server.py >> "${LOG}" 2>&1 9>&- &
   NEWPID=$!
   echo "      Launched pid ${NEWPID}; logging to ${LOG}"
 

@@ -14,11 +14,13 @@ RNG, which is what actually bounds replay. A server restart invalidates
 all outstanding codes; the panel just mints again (cheap).
 
 The LAN DISCOVERY RESPONDER is the optional rung-B auto-discovery
-(§11.2.1): an opt-in UDP responder (env TOFU_DESKTOP_LAN_DISCOVERY=1)
-that advertises `http://<lan-ip>:15000` to a broadcast probe. Best-effort,
-silent when off. mDNS is deliberately NOT used — corporate networks
-filter multicast; a plain UDP broadcast with an HMAC'd response is the
-v1 primitive.
+(§11.2.1): a UDP responder that advertises `http://<lan-ip>:15000` to a
+broadcast probe. ON by default since 2026-08-04 (set
+TOFU_DESKTOP_LAN_DISCOVERY=0 to disable); it also stays silent when the
+server bound loopback-only, because advertising an unreachable LAN url
+would send every discovering agent to a dead address. mDNS is
+deliberately NOT used — corporate networks filter multicast; a plain UDP
+broadcast with an HMAC'd response is the v1 primitive.
 """
 
 from __future__ import annotations
@@ -192,9 +194,9 @@ def pending_codes(user_id: str) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════════
 
 class LanDiscoveryResponder:
-    """Opt-in UDP broadcast responder for local-network auto-discovery.
+    """UDP broadcast responder for local-network auto-discovery.
 
-    Off by default (TOFU_DESKTOP_LAN_DISCOVERY=1 to enable). Listens on
+    On by default (TOFU_DESKTOP_LAN_DISCOVERY=0 to disable). Listens on
     UDP 15001 (adjacent to the app); on receiving the exact probe magic
     replies with the server's LAN url + an HMAC (key = a per-process
     random, so a non-Tofu box that happens to listen on 15001 cannot be
@@ -292,9 +294,21 @@ def lan_ip() -> str:
         return ''
 
 
+#: Bind hosts that mean "not reachable from the LAN" — the responder
+#: must stay silent on these or it would advertise a dead address.
+_LOOPBACK_BINDS = frozenset({'127.0.0.1', 'localhost', '::1'})
+
+
 def maybe_start_responder(port: int, environ=None,
-                          bind: tuple | None = None):
-    """Start the LAN discovery responder iff TOFU_DESKTOP_LAN_DISCOVERY=1.
+                          bind: tuple | None = None,
+                          bind_host: str = ''):
+    """Start the LAN discovery responder unless explicitly disabled.
+
+    ON by default since 2026-08-04 (owner: LAN pairing is the primary
+    agent-attach flow and must not need an env var); set
+    TOFU_DESKTOP_LAN_DISCOVERY=0 to disable. ``bind_host`` is the server's
+    effective bind — a loopback-only bind makes the advertised LAN url
+    unreachable, so the responder stays silent then.
 
     Returns the running responder, or ``None`` when disabled / impossible.
     This is THE wiring the class never had (owner review 2026-08-03: the
@@ -304,7 +318,12 @@ def maybe_start_responder(port: int, environ=None,
     port); production keeps ``_LAN_BIND``.
     """
     env = os.environ if environ is None else environ
-    if (env.get('TOFU_DESKTOP_LAN_DISCOVERY') or '').strip() != '1':
+    if (env.get('TOFU_DESKTOP_LAN_DISCOVERY') or '').strip() == '0':
+        return None
+    if (bind_host or '').strip().lower() in _LOOPBACK_BINDS:
+        logger.debug('[DesktopPairing] LAN discovery skipped — server bound '
+                     'loopback-only (%s), advertising would be a lie',
+                     bind_host)
         return None
     ip = lan_ip()
     if not ip:

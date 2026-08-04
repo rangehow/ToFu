@@ -450,11 +450,12 @@ token 只在请求的 headers 里由服务器注入）。
    与 `k_2a687bc6`（egress-bridge-office），均 agents:bridge + user_id=''，
    两把等价可用；现行明文落 `data/config/.egress_bridge_key`（0600）。
 5. **服务器绑定与到达路径（两条，已定案主备）**：
-   - **主路径（直绑，早前定案）**：`BIND_HOST=0.0.0.0 ./restart_15000.sh`
-     重启（**必须走 shell 脚本**——UI 重启按钮是 os.execv，继承旧进程 env，
-     BIND_HOST 注不进去，2026-08-01 实测），办公机直连
+   - **主路径（直绑，早前定案；2026-08-04 起 0.0.0.0 已成为默认绑定，
+     无需再传 env）**：`./restart_15000.sh` 重启即全接口绑定，办公机直连
      `http://10.128.175.30:15000`。暴露面已评估：open 模式对非 loopback
-     拒发合成 admin，bridge 恒要凭证，可接受。
+     拒发合成 admin，bridge 恒要凭证，可接受。（历史注：BIND_HOST 曾必须
+     走 shell 脚本注入——UI 重启按钮是 os.execv，继承旧进程 env，
+     2026-08-01 实测。）
    - **备选路径（端口转发，免重启，今天就能用）**：办公机
      `ssh -L 15000:127.0.0.1:15000 <codelab-ssh-地址>`（或 VS Code 端口面板
      转发 15000），agent 连 `http://127.0.0.1:15000`，对 tofu 呈现 loopback。

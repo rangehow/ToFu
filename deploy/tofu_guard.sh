@@ -284,7 +284,7 @@ relaunch() {
     echo ""
     echo "════════════════ $(date '+%F %T') — launched by tofu_guard (serve-mode=${mode:-auto}) ════════════════"
   } >> "${SLOG}" 2>/dev/null
-  PORT="${PORT}" BIND_HOST="${BIND_HOST:-127.0.0.1}" ${tls_env} \
+  PORT="${PORT}" BIND_HOST="${BIND_HOST:-0.0.0.0}" ${tls_env} \
     setsid nohup "${PY}" server.py >> "${SLOG}" 2>&1 &
   local newpid=$!
   # persist launch epoch (state line 3) for check_once's boot grace

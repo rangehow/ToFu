@@ -2473,14 +2473,17 @@ def _start_background_workers():
         mark_interrupted_podcasts()
     except Exception as e:
         _server_log.warning('[Server] podcast interrupted sweep failed: %s', e)
-    # Desktop-agent LAN discovery responder (design §11.2.1 rung B): opt-in
-    # via TOFU_DESKTOP_LAN_DISCOVERY=1. Without THIS call the responder class
-    # was dead code — only tests ever instantiated it, so the agent's LAN
-    # rung could never get an answer in production (owner review 2026-08-03).
+    # Desktop-agent LAN discovery responder (design §11.2.1 rung B): ON by
+    # default since 2026-08-04 (TOFU_DESKTOP_LAN_DISCOVERY=0 disables), and
+    # skipped when the effective bind is loopback-only (advertising a LAN
+    # url the server cannot be reached at would be a lie). Without THIS
+    # call the responder class was dead code — only tests ever instantiated
+    # it (owner review 2026-08-03).
     try:
         from lib.desktop.pairing import maybe_start_responder
         _lan_responder = maybe_start_responder(
-            int(os.environ.get('_TOFU_RUNTIME_PORT') or '15000'))
+            int(os.environ.get('_TOFU_RUNTIME_PORT') or '15000'),
+            bind_host=os.environ.get('_TOFU_RUNTIME_HOST') or '')
         if _lan_responder is not None:
             _server_log.info('[Server] LAN discovery responder up on UDP '
                              '15001 (%s)', _lan_responder.url)
@@ -2724,10 +2727,14 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser(description='Tofu Async Server')
-    # Default to loopback. Networked exposure is an explicit choice via
-    # --host 0.0.0.0 / BIND_HOST=0.0.0.0. Personal use stays effortless;
-    # accidental LAN exposure stops being the default.
-    parser.add_argument('--host', default=os.environ.get('BIND_HOST', '127.0.0.1'))
+    # Default to all interfaces (owner 2026-08-04): bootstrap.py / Docker /
+    # install.sh already defaulted to 0.0.0.0, so direct `python server.py`
+    # was the only outlier — and the desktop-agent LAN flow NEEDS the
+    # server reachable off-loopback. Loopback is now the explicit choice
+    # via --host 127.0.0.1 / BIND_HOST=127.0.0.1 (the packaged desktop app
+    # pins that itself). The boot banner already warns loudly on open-auth
+    # + non-loopback binds.
+    parser.add_argument('--host', default=os.environ.get('BIND_HOST', '0.0.0.0'))
     parser.add_argument('--port', type=int, default=int(os.environ.get('PORT', 15000)))
     parser.add_argument('--certfile', default=os.environ.get('TLS_CERTFILE', ''))
     parser.add_argument('--keyfile', default=os.environ.get('TLS_KEYFILE', ''))
@@ -2864,6 +2871,10 @@ if __name__ == '__main__':
     # can reclaim it instead of re-probing. Read by _deferred_reexec in
     # routes/api_v1/update.py.
     os.environ['_TOFU_RUNTIME_PORT'] = str(port)
+    # The effective bind host, for the LAN-discovery responder's honesty
+    # guard: advertising http://<lan-ip> while bound loopback-only would
+    # send every discovering agent to a dead address.
+    os.environ['_TOFU_RUNTIME_HOST'] = host
 
     # ── TLS / HTTP/2 setup ──
     from lib.env_compat import getenv_compat

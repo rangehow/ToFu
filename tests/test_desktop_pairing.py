@@ -272,24 +272,18 @@ class TestPairIpBudget:
             .status_code == 201
 
 
-# ── 10: production wiring (owner review 2026-08-03) ──────────────────
+# ── 10: production wiring (owner review 2026-08-03; default-ON 2026-08-04) ──
 # The responder class used to be instantiated ONLY by these tests — no
 # caller in the server startup path meant rung B could never answer in
 # production. maybe_start_responder is the wiring; server.py calls it.
+# Since 2026-08-04 the responder is ON BY DEFAULT (owner: LAN pairing is
+# the primary agent-attach flow and must not need an env var) — only an
+# explicit TOFU_DESKTOP_LAN_DISCOVERY=0 or a loopback-only bind silences it.
 class TestMaybeStartResponder:
-    def test_off_by_default(self):
-        assert pairing_mod.maybe_start_responder(15000, environ={}) is None
-
-    def test_flag_off_variants(self):
-        for v in ('', '0', 'yes', 'true'):
-            assert pairing_mod.maybe_start_responder(
-                15000, environ={'TOFU_DESKTOP_LAN_DISCOVERY': v}) is None
-
-    def test_starts_when_enabled_and_advertises_lan_url(self, monkeypatch):
+    def _start(self, monkeypatch, environ, **kw):
         monkeypatch.setattr(pairing_mod, 'lan_ip', lambda: '192.168.1.50')
         res = pairing_mod.maybe_start_responder(
-            15000, environ={'TOFU_DESKTOP_LAN_DISCOVERY': '1'},
-            bind=('127.0.0.1', 0))
+            15000, environ=environ, bind=('127.0.0.1', 0), **kw)
         assert res is not None
         try:
             assert res.url == 'http://192.168.1.50:15000'
@@ -297,8 +291,37 @@ class TestMaybeStartResponder:
         finally:
             res.stop()
 
+    def test_on_by_default(self, monkeypatch):
+        # No env var at all → the responder STARTS (2026-08-04 default flip).
+        self._start(monkeypatch, {})
+
+    def test_zero_is_the_only_off_switch(self, monkeypatch):
+        assert pairing_mod.maybe_start_responder(
+            15000, environ={'TOFU_DESKTOP_LAN_DISCOVERY': '0'},
+            bind=('127.0.0.1', 0)) is None
+
+    def test_non_zero_values_do_not_disable(self, monkeypatch):
+        # '', '1', 'yes', 'true' all leave the default-ON responder up.
+        for v in ('', '1', 'yes', 'true'):
+            self._start(monkeypatch, {'TOFU_DESKTOP_LAN_DISCOVERY': v})
+
+    def test_loopback_bind_stays_silent(self, monkeypatch):
+        # Advertising http://<lan-ip> while bound loopback-only would send
+        # every discovering agent to a dead address — the responder must
+        # refuse even though discovery is on.
+        monkeypatch.setattr(pairing_mod, 'lan_ip', lambda: '192.168.1.50')
+        for lb in ('127.0.0.1', 'localhost', '::1'):
+            assert pairing_mod.maybe_start_responder(
+                15000, environ={}, bind=('127.0.0.1', 0),
+                bind_host=lb) is None
+
+    def test_all_interfaces_bind_advertises(self, monkeypatch):
+        self._start(monkeypatch, {}, bind_host='0.0.0.0')
+
+    def test_starts_when_enabled_and_advertises_lan_url(self, monkeypatch):
+        self._start(monkeypatch, {'TOFU_DESKTOP_LAN_DISCOVERY': '1'})
+
     def test_no_lan_ip_stays_silent(self, monkeypatch):
         monkeypatch.setattr(pairing_mod, 'lan_ip', lambda: '')
         assert pairing_mod.maybe_start_responder(
-            15000, environ={'TOFU_DESKTOP_LAN_DISCOVERY': '1'},
-            bind=('127.0.0.1', 0)) is None
+            15000, environ={}, bind=('127.0.0.1', 0)) is None

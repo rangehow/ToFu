@@ -552,12 +552,13 @@ once. Rungs in order, each short-circuiting the rest on first hit:
 |---|---|---|
 | A | Probe `http://127.0.0.1:15000/api/health` — the user's OWN tunnel is
       up, or the user is the server's own machine (local_source) | Zero — silent |
-| B | LAN discovery: the agent broadcasts a UDP query; a server running
-      the opt-in TOFU_DESKTOP_LAN_DISCOVERY=1 responder advertises
-      `http://<lan-ip>:15000`. Best-effort, ~2 s budget, silent when
-      nothing answers. (mDNS is deliberately NOT relied on — corporate
-      networks filter multicast; a plain UDP broadcast with an HMAC'd
-      response is the v1 primitive.) | Zero — silent |
+| B | LAN discovery: the agent broadcasts a UDP query; the server's
+      responder (ON by default since 2026-08-04 —
+      TOFU_DESKTOP_LAN_DISCOVERY=0 disables; silent on loopback binds)
+      advertises `http://<lan-ip>:15000`. Best-effort, ~2 s budget,
+      silent when nothing answers. (mDNS is deliberately NOT relied on —
+      corporate networks filter multicast; a plain UDP broadcast with an
+      HMAC'd response is the v1 primitive.) | Zero — silent |
 | C | SSH candidates: parse `~/.ssh/config` first Host, then VS Code
       Remote `remote.SSH.remotePlatform` / `~/.ssh/known_hosts`. For
       each, attempt `ssh -N -o BatchMode=yes -o ConnectTimeout=3

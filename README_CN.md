@@ -661,7 +661,7 @@ vim .env   # 填入你的值
 | `LLM_BASE_URL` | API 端点 | `https://api.openai.com/v1` |
 | `LLM_MODEL` | 默认模型 | `gpt-4o` |
 | `PORT` | 服务器端口 | `15000` |
-| `BIND_HOST` | 绑定地址 | `127.0.0.1`（仅本机） |
+| `BIND_HOST` | 绑定地址 | `0.0.0.0`（所有网卡） |
 | `TOFU_AUTH_MODE` | 强制认证模式并锁定 UI：`open` / `private` / `multi-user` | *（以配置文件为准）* |
 | `TOFU_AUTO_KEY` | 设为 `0` 可跳过首次启动的管理员密钥初始化 | `1` |
 | `TUNNEL_TOKEN` | **已废弃**，仅作向后兼容垫——请改用 API Keys 体系 | *（关闭）* |
@@ -774,7 +774,7 @@ Tofu 采用三态认证模型，持久化在 `data/config/auth.json`，可在 **
 | `private` | 必须携带 Bearer / `x-api-key` / Cookie / `?token=`；`/` 上返回 HTML 提示页 | 单使用者多设备 |
 | `multi-user` | 与 `private` 同样闸道，加上每用户钱包 + 注册页面 | 付费中继站，服务多个用户 |
 
-**默认绑定 `127.0.0.1`** —— 除非显式传入 `--host 0.0.0.0` 或设置 `BIND_HOST=0.0.0.0`，否则 API 不会对局域网曝露。默认 `open` 模式 + 本机绑定让个人使用场景开箱即用且不裸露接口。
+**默认绑定 `0.0.0.0`** —— API 开箱即可从局域网访问（桌面代理配对流程依赖这一点）。传入 `--host 127.0.0.1` 或设置 `BIND_HOST=127.0.0.1` 可仅绑定本机；打包桌面版会自行锁定本机绑定。默认 `open` 认证模式下这意味着局域网无需令牌即可访问——启动横幅会对该组合发出醒目警告，在不可信网络上请切换到 `private` 模式（设置 → API Keys）。
 
 **首次启动初始化**（仅 private/multi-user）—— 当 api_keys 存储为空且 `TUNNEL_TOKEN` 未设置时，Tofu 会在启动时造一把 `tofu_admin_<hex>` 密钥，将明文 + 一次性 `?token=<...>` URL 打印到 stderr，同时将明文写入 `data/config/.first_run_token`（chmod 0600）。设置 `TOFU_AUTO_KEY=0` 可禁用。
 

@@ -55,6 +55,19 @@ controls that used to be tray-only. Unchecking "Show this window at startup"
 sends future launches straight to the tray, which keeps a **Control panel…**
 item as the way back. Design: `docs/DESKTOP_STARTUP_ROLE_UX_DESIGN.md`.
 
+**Tray-first (2026-08-04).** On Windows the tray icon starts BEFORE the role
+window can ever hide: pystray's `icon.run()` owns the main thread from second
+zero, while a dedicated tk host thread (`desktop/_tk_host.py`) owns every
+window and dialog (tray callbacks marshal window work to it). Both the
+in-window "Minimize to tray" button and the title-bar minimize hide the window
+to the already-running tray — an earlier window-then-tray sequence made
+"minimize to tray" structurally impossible (the tray did not exist yet) and
+the window vanished. Off Windows (macOS demands the main thread for both
+frameworks) the legacy window-then-tray sequence stands. The native surface
+resolves an explicit per-platform font stack (the tk default fell through to
+SimSun serif on Chinese-locale Windows) and `detect_lang()` understands
+Windows display-name locales (`Chinese (Simplified)_China` → zh).
+
 The **installer only ships files and launches the app** — it never shells out to
 download components (a PyInstaller `--onedir` bundle has no standalone
 `python.exe`, so the old installer `[Run]` step that called

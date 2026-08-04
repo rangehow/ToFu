@@ -26,6 +26,18 @@ Deliberately split so headless CI can test every fact the window shows:
   instance per process: a second call lifts the existing window instead
   of stacking duplicates.
 
+Window ownership (owner report 2026-08-04 — "minimize to tray" stranded
+the app with NO tray): the renderer has two modes picked at call time.
+
+* **Host-backed** (``_tk_host.parent_or_none()`` non-None — the Windows
+  tray-first topology): the window is a Toplevel of the host root, this
+  function returns immediately, and BOTH the title-bar minimize button
+  and the in-window button hide it to the ALREADY-RUNNING tray.
+* **Standalone** (legacy sequence / first-run / host failed): its own Tk
+  + blocking mainloop, exactly the old behaviour — minimizing to a tray
+  that does not exist yet would strand the app, so the interception stays
+  off.
+
 The renderer never owns state: it pulls fresh facts from ``state_fn`` on
 every refresh and delegates every mutation to ``actions`` — the same
 seams the tray menus already call, so window and tray can never disagree
@@ -137,11 +149,23 @@ def role_state_agent(url, perms, autostart, show_flag=True,
 #  The renderer — lazy tkinter, one re-entrant instance
 # ═══════════════════════════════════════════════════════════════
 
-_OPEN = {'root': None}
+_OPEN = {'root': None, 'refresh': None}
+
+_TIER_KEYS = {
+    'allow_write': 'permWrite', 'allow_exec': 'permExec',
+    'allow_gui': 'permGui', 'allow_egress': 'permEgress',
+}
+
+_TIER_DESC_KEYS = {
+    'allow_write': 'desktop.role.tierWriteDesc',
+    'allow_exec': 'desktop.role.tierExecDesc',
+    'allow_gui': 'desktop.role.tierGuiDesc',
+    'allow_egress': 'desktop.role.tierEgressDesc',
+}
 
 
 def show_role_window(kind, state_fn, actions, log=_noop_log) -> None:
-    """Show the role window modally; return when the user dismisses it.
+    """Show the role window; host-backed mode returns immediately.
 
     Args:
         kind: 'full' or 'agent' — selects the layout sections.
@@ -156,6 +180,7 @@ def show_role_window(kind, state_fn, actions, log=_noop_log) -> None:
     window — the tray's "Control panel…" item relies on this.
     """
     from desktop import _tk_theme as theme
+    from desktop import _tk_host as host
     try:
         import tkinter as tk
         from tkinter import ttk
@@ -170,34 +195,50 @@ def show_role_window(kind, state_fn, actions, log=_noop_log) -> None:
             existing.deiconify()
             existing.lift()
             existing.focus_force()
+            refresh = _OPEN.get('refresh')
+            if refresh is not None:
+                refresh()
             return
         except tk.TclError:
             _OPEN['root'] = None
+            _OPEN['refresh'] = None
+
+    parent = host.parent_or_none()
 
     state = state_fn()
     lang = state.get('lang') or theme.detect_lang()
 
-    root = tk.Tk()
+    if parent is not None:
+        root = tk.Toplevel(parent)
+    else:
+        root = tk.Tk()
     _OPEN['root'] = root
     palette = theme.apply_theme(root)
     root.title(state['role'])
     root.resizable(False, False)
+    theme.set_window_icon(root)
     root.protocol('WM_DELETE_WINDOW', lambda: _close())
 
-    frame = ttk.Frame(root, style='Tofu.TFrame', padding=20)
+    frame = ttk.Frame(root, style='Tofu.TFrame', padding=(22, 20))
     frame.grid(sticky='nsew')
 
+    # ── Header: brand + role sentence + plain-language subtitle ──
     header = ttk.Frame(frame, style='Tofu.TFrame')
-    header.grid(row=0, column=0, sticky='w')
-    photo = theme.load_logo_photo(root, size=40)
+    header.grid(row=0, column=0, sticky='we')
+    photo = theme.load_logo_photo(root, size=44)
     if photo is not None:
         ttk.Label(header, image=photo, style='Tofu.TLabel').grid(
-            row=0, column=0, padx=(0, 10))
+            row=0, column=0, rowspan=2, padx=(0, 12), sticky='n')
     ttk.Label(header, text=state['role'],
               style='Tofu.Title.TLabel').grid(row=0, column=1, sticky='w')
+    sub_key = ('desktop.role.serverSub' if state['kind'] == 'full'
+               else 'desktop.role.agentSub')
+    ttk.Label(header, text=theme.t(sub_key, lang), wraplength=400,
+              justify='left', style='Tofu.Sub.TLabel').grid(
+        row=1, column=1, sticky='w', pady=(3, 0))
 
     body = ttk.Frame(frame, style='Tofu.TFrame')
-    body.grid(row=1, column=0, sticky='we', pady=(10, 0))
+    body.grid(row=1, column=0, sticky='we', pady=(16, 0))
 
     show_var = tk.BooleanVar(value=bool(state.get('show_at_startup', True)))
     tier_vars = {}
@@ -213,29 +254,58 @@ def show_role_window(kind, state_fn, actions, log=_noop_log) -> None:
             logger.warning('Role-window action %s failed: %s', name, e)
         _refresh()
 
-    def _close():
+    def _persist():
         persist_show_at_startup(show_var.get())
+
+    def _close():
+        _persist()
         _OPEN['root'] = None
+        _OPEN['refresh'] = None
         try:
             root.destroy()
         except tk.TclError:
             pass
 
-    def _tier_row(card, key, st, row):
+    def _on_unmap(event):
+        """Title-bar minimize = minimize to tray (host-backed mode only).
+
+        The tray icon exists before this window ever could hide (tray-
+        first topology), so converting the taskbar-iconify into a withdraw
+        keeps the design-doc promise「minimizing sends it to the tray」.
+        Standalone mode has no tray yet — the interception stays OFF and
+        the button keeps its stock taskbar meaning.
+        """
+        if event.widget is not root:
+            return
+        try:
+            if root.state() == 'iconic':
+                _persist()
+                root.withdraw()
+        except tk.TclError:
+            pass
+
+    def _tier_rows(card, key, st, row):
         var = tk.BooleanVar(value=bool(st['perms'].get(key)))
         tier_vars[key] = var
         cb = ttk.Checkbutton(
-            card, text=theme.t('desktop.tray.' + {
-                'allow_write': 'permWrite', 'allow_exec': 'permExec',
-                'allow_gui': 'permGui', 'allow_egress': 'permEgress',
-            }[key], lang),
-            style='Tofu.TCheckbutton', variable=var,
+            card, text=theme.t('desktop.tray.' + _TIER_KEYS[key], st['lang']),
+            style='Tier.TCheckbutton', variable=var,
             command=lambda k=key: _act('toggle_perm', k))
         # The full app gates tiers behind the CC enable toggle (mirroring
         # the tray's _perm_enabled); the agent's tiers are always live.
         if st['kind'] == 'full' and not st['cc_enabled']:
             cb.state(['disabled'])
-        cb.grid(row=row, column=0, sticky='w', pady=1)
+        cb.grid(row=row, column=0, sticky='w', padx=(10, 12), pady=(2, 0))
+        ttk.Label(card, text=theme.t(_TIER_DESC_KEYS[key], st['lang']),
+                  style='CardSub.TLabel', wraplength=410,
+                  justify='left').grid(row=row + 1, column=0, sticky='w',
+                                       padx=(34, 12), pady=(0, 4))
+        return row + 2
+
+    def _hairline(parent_widget, row):
+        line = tk.Frame(parent_widget, bg=palette['border'], height=1)
+        line.grid(row=row, column=0, sticky='we', padx=12, pady=(4, 0))
+        return row + 1
 
     def _refresh():
         st = state_fn()
@@ -244,30 +314,29 @@ def show_role_window(kind, state_fn, actions, log=_noop_log) -> None:
         tier_vars.clear()
         row = 0
 
-        sub_key = ('desktop.role.serverSub' if st['kind'] == 'full'
-                   else 'desktop.role.agentSub')
-        ttk.Label(body, wraplength=430, justify='left',
-                  style='Tofu.Sub.TLabel',
-                  text=theme.t(sub_key, st['lang'])).grid(
-            row=row, column=0, sticky='w', pady=(0, 8))
-        row += 1
-
         # ── Server card ──
         card = theme.card_frame(body, palette)
-        card.grid(row=row, column=0, sticky='we', pady=(0, 8))
+        card.grid(row=row, column=0, sticky='we', pady=(0, 10))
         row += 1
+        ttk.Label(card, text=theme.t('desktop.role.serverCardLabel',
+                                     st['lang']),
+                  style='CardHead.TLabel').grid(row=0, column=0, sticky='w',
+                                                padx=12, pady=(10, 0))
         url_text = st['server_url'] or theme.t('desktop.tray.notAttached',
                                                st['lang'])
-        ttk.Label(card, text=url_text, style='CardName.TLabel').grid(
-            row=0, column=0, sticky='w', padx=10, pady=(8, 2))
+        ttk.Label(card, text=url_text, style='CardName.TLabel',
+                  wraplength=430, justify='left').grid(
+            row=1, column=0, sticky='w', padx=12, pady=(2, 6))
+        card_row = 2
         if st['kind'] == 'full' and st.get('dual_role'):
-            ttk.Label(card, wraplength=400, justify='left',
+            ttk.Label(card, wraplength=410, justify='left',
                       style='CardSub.TLabel',
                       text=theme.t('desktop.role.alsoClient', st['lang'])
                       .replace('{url}', st['attached_url'])).grid(
-                row=1, column=0, sticky='w', padx=10, pady=(0, 4))
+                row=card_row, column=0, sticky='w', padx=12, pady=(0, 4))
+            card_row += 1
         btns = ttk.Frame(card, style='Card.TFrame')
-        btns.grid(row=2, column=0, sticky='w', padx=10, pady=(2, 8))
+        btns.grid(row=card_row, column=0, sticky='w', padx=12, pady=(0, 10))
         if st['kind'] == 'full':
             ttk.Button(btns, text=theme.t('desktop.tray.open', st['lang']),
                        style='Tofu.Accent.TButton',
@@ -283,20 +352,13 @@ def show_role_window(kind, state_fn, actions, log=_noop_log) -> None:
 
         # ── Computer-control card ──
         cc = theme.card_frame(body, palette)
-        cc.grid(row=row, column=0, sticky='we', pady=(0, 8))
+        cc.grid(row=row, column=0, sticky='we')
         row += 1
         head = ttk.Frame(cc, style='Card.TFrame')
-        head.grid(row=0, column=0, sticky='we', padx=10, pady=(8, 2))
+        head.grid(row=0, column=0, sticky='we', padx=12, pady=(10, 4))
         ttk.Label(head, text=theme.t('desktop.role.ccTitle', st['lang']),
                   style='CardName.TLabel').grid(row=0, column=0, sticky='w')
         if st['kind'] == 'full':
-            status_key = ('desktop.role.ccOn' if st['cc_enabled']
-                          else 'desktop.role.ccOff')
-            style = ('Status.Ok.TLabel' if st['cc_enabled']
-                     else 'CardSub.TLabel')
-            ttk.Label(cc, wraplength=400, justify='left', style=style,
-                      text=theme.t(status_key, st['lang'])).grid(
-                row=1, column=0, sticky='w', padx=10)
             ttk.Button(head,
                        text=theme.t('desktop.role.disable'
                                     if st['cc_enabled']
@@ -304,42 +366,68 @@ def show_role_window(kind, state_fn, actions, log=_noop_log) -> None:
                        style='Tofu.TButton',
                        command=lambda: _act('toggle_cc')).grid(
                 row=0, column=1, sticky='e', padx=(20, 0))
-        tier_row = 2
-        for key in st['tiers']:
-            _tier_row(cc, key, st, tier_row)
+            head.columnconfigure(0, weight=1)
+        tier_row = 1
+        if st['kind'] == 'full':
+            status_key = ('desktop.role.ccOn' if st['cc_enabled']
+                          else 'desktop.role.ccOff')
+            style = ('Status.Ok.TLabel' if st['cc_enabled']
+                     else 'CardSub.TLabel')
+            ttk.Label(cc, wraplength=410, justify='left', style=style,
+                      text=theme.t(status_key, st['lang'])).grid(
+                row=tier_row, column=0, sticky='w', padx=12, pady=(0, 4))
             tier_row += 1
+        for key in st['tiers']:
+            tier_row = _tier_rows(cc, key, st, tier_row)
         if st['kind'] == 'agent' and st.get('autostart') is not None:
             var = tk.BooleanVar(value=bool(st['autostart']))
             ttk.Checkbutton(
                 cc, text=theme.t('desktop.tray.autostart', st['lang']),
-                style='Tofu.TCheckbutton', variable=var,
+                style='Tier.TCheckbutton', variable=var,
                 command=lambda: _act('toggle_autostart')).grid(
-                row=tier_row, column=0, sticky='w', pady=1)
-            tier_row += 1
-        ttk.Label(cc, wraplength=400, justify='left', style='CardSub.TLabel',
+                row=tier_row, column=0, sticky='w', padx=(10, 12),
+                pady=(2, 0))
+            ttk.Label(cc, text=theme.t('desktop.role.autostartDesc',
+                                       st['lang']),
+                      style='CardSub.TLabel', wraplength=410,
+                      justify='left').grid(row=tier_row + 1, column=0,
+                                           sticky='w', padx=(34, 12),
+                                           pady=(0, 4))
+            tier_row += 2
+        tier_row = _hairline(cc, tier_row)
+        ttk.Label(cc, wraplength=410, justify='left', style='CardSub.TLabel',
                   text=theme.t('desktop.role.permHint', st['lang'])).grid(
-            row=tier_row, column=0, sticky='w', padx=10, pady=(4, 8))
+            row=tier_row, column=0, sticky='w', padx=12, pady=(4, 10))
 
         # Sync the tier checkboxes with fresh state (a toggle may have
         # failed or been overridden by the config restore).
         for key, var in tier_vars.items():
             var.set(bool(st['perms'].get(key)))
 
+    # ── Bottom bar: startup gate + the dismiss action ──
     bottom = ttk.Frame(frame, style='Tofu.TFrame')
-    bottom.grid(row=2, column=0, sticky='we', pady=(12, 0))
+    bottom.grid(row=2, column=0, sticky='we', pady=(16, 0))
     ttk.Checkbutton(bottom,
                     text=theme.t('desktop.role.showAtStartup', lang),
-                    style='Tofu.TCheckbutton',
+                    style='Bg.TCheckbutton',
                     variable=show_var).grid(row=0, column=0, sticky='w')
     ttk.Button(bottom, text=theme.t('desktop.role.minimize', lang),
                style='Tofu.Accent.TButton',
                command=_close).grid(row=0, column=1, sticky='e')
     bottom.columnconfigure(0, weight=1)
 
+    _OPEN['refresh'] = _refresh
     _refresh()
+    theme.center_on_screen(root, width=500)
+    if parent is not None:
+        # Host-backed: the tray is already running — the title-bar
+        # minimize also sends the window to it, and we never block.
+        root.bind('<Unmap>', _on_unmap)
+        return
     try:
         root.mainloop()
     except Exception as e:
         log('Role window failed: %s' % e)
         logger.warning('Role window failed: %s', e)
         _OPEN['root'] = None
+        _OPEN['refresh'] = None

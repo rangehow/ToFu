@@ -47,13 +47,19 @@ def prompt_connect_line(current_url: str = '', log=_noop_log):
         logger.warning('Connect dialog unavailable (no tkinter): %s', e)
         return None
     from desktop import _tk_theme as theme
+    from desktop import _tk_host as host
 
     lang = theme.detect_lang()
     result = {'value': None}
-    root = tk.Tk()
+    # Ride the tk host when it owns the process's windows (tray-first
+    # topology): a Toplevel on the ONE root, modal via wait_window.
+    # Otherwise the standalone Tk + mainloop of old.
+    parent = host.parent_or_none()
+    root = tk.Toplevel(parent) if parent is not None else tk.Tk()
     theme.apply_theme(root)
     root.title(theme.t('desktop.connect.title', lang))
     root.resizable(False, False)
+    theme.set_window_icon(root)
     frame = ttk.Frame(root, style='Tofu.TFrame', padding=20)
     frame.grid(sticky='nsew')
 
@@ -125,7 +131,16 @@ def prompt_connect_line(current_url: str = '', log=_noop_log):
     entry.bind('<Return>', _ok)
     root.bind('<Escape>', _cancel)
     entry.focus_set()
+    theme.center_on_screen(root, width=520)
 
+    if parent is not None:
+        root.transient(parent)
+        root.grab_set()
+        try:
+            parent.wait_window(root)
+        except tk.TclError:
+            pass
+        return result['value']
     try:
         root.mainloop()
     except Exception as e:
@@ -167,13 +182,16 @@ def prompt_attach(server_url: str = '', log=_noop_log):
         logger.warning('Pair dialog unavailable (no tkinter): %s', e)
         return None
     from desktop import _tk_theme as theme
+    from desktop import _tk_host as host
 
     lang = theme.detect_lang()
     result = {'value': None}
-    root = tk.Tk()
+    parent = host.parent_or_none()
+    root = tk.Toplevel(parent) if parent is not None else tk.Tk()
     theme.apply_theme(root)
     root.title(theme.t('desktop.pair.title', lang))
     root.resizable(False, False)
+    theme.set_window_icon(root)
     frame = ttk.Frame(root, style='Tofu.TFrame', padding=20)
     frame.grid(sticky='nsew')
 
@@ -254,7 +272,16 @@ def prompt_attach(server_url: str = '', log=_noop_log):
     code_entry.bind('<Return>', _ok)
     root.bind('<Escape>', _cancel)
     (code_entry if server_url else addr).focus_set()
+    theme.center_on_screen(root, width=520)
 
+    if parent is not None:
+        root.transient(parent)
+        root.grab_set()
+        try:
+            parent.wait_window(root)
+        except tk.TclError:
+            pass
+        return result['value']
     try:
         root.mainloop()
     except Exception as e:

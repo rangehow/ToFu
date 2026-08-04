@@ -246,6 +246,104 @@ class LangDetectTest(unittest.TestCase):
                 self.assertEqual(theme.detect_lang(), 'en')
 
 
+class LangDetectWindowsNamesTest(unittest.TestCase):
+    """Owner report 2026-08-04: a zh-CN Windows machine rendered the whole
+    native surface in ENGLISH. locale.getlocale() returns DISPLAY names on
+    Windows ('Chinese (Simplified)_China'), which the old startswith('zh')
+    check missed, and the `if loc: return 'en'` branch then hard-locked
+    English. NEUTER target: drop the 'chinese' prefix branch — both zh
+    cases here go red while every ISO-code test stays green."""
+
+    def _lang_with(self, loc):
+        theme = _theme()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('TOFU_LANG', 'LANG', 'LC_ALL', 'LC_MESSAGES')}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch.object(theme.locale, 'getlocale',
+                                   return_value=loc):
+                return theme.detect_lang()
+
+    def test_simplified_chinese_display_name(self):
+        self.assertEqual(
+            self._lang_with(('Chinese (Simplified)_China', '936')), 'zh')
+
+    def test_traditional_chinese_display_name(self):
+        self.assertEqual(
+            self._lang_with(('Chinese (Traditional)_Taiwan', '950')), 'zh')
+
+    def test_dashed_iso_code_normalises(self):
+        self.assertEqual(self._lang_with(('zh-CN', 'UTF-8')), 'zh')
+
+    def test_english_display_name_is_en(self):
+        self.assertEqual(
+            self._lang_with(('English_United States', '1252')), 'en')
+
+
+class FontStackTest(unittest.TestCase):
+    """The serif-UI root fix: the family is RESOLVED from an explicit
+    per-platform stack, CJK-first for zh — never left to tk's default
+    (SimSun, a serif face, on a Chinese-locale Windows). NEUTER target:
+    make pick_font_family return '' unconditionally — every case red."""
+
+    def test_windows_en_prefers_segoe(self):
+        theme = _theme()
+        fam = theme.pick_font_family({'Segoe UI', 'Microsoft YaHei UI'},
+                                     platform='win32', lang='en')
+        self.assertEqual(fam, 'Segoe UI')
+
+    def test_windows_zh_prefers_yahei(self):
+        theme = _theme()
+        fam = theme.pick_font_family({'Segoe UI', 'Microsoft YaHei UI'},
+                                     platform='win32', lang='zh')
+        self.assertEqual(fam, 'Microsoft YaHei UI')
+
+    def test_first_missing_falls_to_next(self):
+        theme = _theme()
+        fam = theme.pick_font_family({'Tahoma'}, platform='win32', lang='en')
+        self.assertEqual(fam, 'Tahoma')
+
+    def test_match_is_case_insensitive(self):
+        theme = _theme()
+        fam = theme.pick_font_family({'segoe ui'}, platform='win32',
+                                     lang='en')
+        self.assertEqual(fam, 'Segoe UI')
+
+    def test_none_available_returns_empty_for_tk_default(self):
+        theme = _theme()
+        fam = theme.pick_font_family({'Courier New'}, platform='win32',
+                                     lang='en')
+        self.assertEqual(fam, '')
+
+    def test_linux_zh_prefers_cjk(self):
+        theme = _theme()
+        fam = theme.pick_font_family({'Noto Sans', 'Noto Sans CJK SC'},
+                                     platform='linux', lang='zh')
+        self.assertEqual(fam, 'Noto Sans CJK SC')
+
+    def test_mac_zh_prefers_pingfang(self):
+        theme = _theme()
+        fam = theme.pick_font_family({'Helvetica Neue', 'PingFang SC'},
+                                     platform='darwin', lang='zh')
+        self.assertEqual(fam, 'PingFang SC')
+
+
+class CenterGeometryTest(unittest.TestCase):
+    """Pure math behind center_on_screen — the window must open centred,
+    and a window larger than the screen must clamp, never open with its
+    title bar off-screen."""
+
+    def test_centers_optically(self):
+        theme = _theme()
+        # x = (1920-500)/2 = 710; y = (1080-600)*0.38 = 182.
+        self.assertEqual(theme._center_geometry(1920, 1080, 500, 600),
+                         '+710+182')
+
+    def test_oversized_window_clamps_to_origin(self):
+        theme = _theme()
+        self.assertEqual(theme._center_geometry(800, 600, 2000, 1200),
+                         '+0+0')
+
+
 class StringsTest(unittest.TestCase):
 
     def test_t_returns_zh_and_en(self):
@@ -335,6 +433,20 @@ class ThemedWiringRatchetTest(unittest.TestCase):
                                  '%s reintroduced the stock-gray hardcoded '
                                  'color %s — colors belong in _tk_theme' %
                                  (rel, legacy))
+
+    def test_theme_resolves_a_real_font_family(self):
+        """NEUTER target: restore base_font = ('', 10) in apply_theme and
+        this goes red — the empty family falls through to SimSun (serif)
+        on a Chinese-locale Windows, the 2026-08-04「界面丑」report."""
+        src = self._src('desktop/_tk_theme.py')
+        self.assertIn('pick_font_family', src,
+                      'apply_theme no longer resolves a font family — the '
+                      'tk default (serif on zh Windows) is back')
+        self.assertIn('base_font = _f(10)', src,
+                      'base_font is built from the resolved family')
+        self.assertNotIn("base_font = ('', 10)", src,
+                         'the bare empty-family font is back — serif UI '
+                         'on zh Windows')
 
     def test_progress_is_wired_not_silent(self):
         """The invisible-install bug: _install_components was called with NO

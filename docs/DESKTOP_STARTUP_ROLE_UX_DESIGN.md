@@ -9,6 +9,18 @@
 > Related: docs/DESKTOP_AGENT_DIST_DESIGN.md (component separation, shipped),
 > epic pt_59b62951aad2463e (agent dist — owns the WEB panel surface; this doc
 > owns the NATIVE surface of both packaged apps, disjoint write set).
+>
+> **Amendment 2026-08-04 (owner report: ugly UI / no i18n / minimize vanished
+> the window).** §3.1's「minimizing sends it to the tray」was structurally
+> impossible as first implemented — the tray only started AFTER the first
+> window closed. Now TRAY-FIRST on Windows: pystray owns the main thread from
+> second zero; a dedicated tk host thread (`desktop/_tk_host.py`) owns every
+> window/dialog; tray callbacks marshal window work to it; BOTH the title-bar
+> minimize and the in-window button hide to the already-running tray. Also
+> root-fixed in the same pass: `detect_lang()` learnt Windows display-name
+> locales (`Chinese (Simplified)_China` → zh — the whole native surface had
+> been English-only on Chinese Windows), and the font family is resolved from
+> an explicit per-platform stack (the tk default was SimSun serif there).
 
 ## 1. The gap
 

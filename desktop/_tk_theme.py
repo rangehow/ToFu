@@ -117,9 +117,115 @@ def current_palette() -> dict:
     return DARK if detect_dark() else LIGHT
 
 
+# ═══════════════════════════════════════════════════════════════
+#  Font stacks — never let tk pick the family by itself
+# ═══════════════════════════════════════════════════════════════
+# The old dialogs styled everything with the empty-family tuple ('', 10).
+# On a Chinese-locale Windows that resolves through the system default GUI
+# font to SimSun (宋体) — a SERIF face — so the entire native surface
+# rendered in serifs (owner report 2026-08-04). Pick an explicit family at
+# runtime: the first stack entry tk actually has, CJK-first when the UI
+# language is zh, '' (= tk default) only as the last resort.
+_FONT_STACKS = {
+    'win': ('Segoe UI', 'Microsoft YaHei UI', 'Tahoma', 'Arial'),
+    'win_zh': ('Microsoft YaHei UI', 'Segoe UI', 'Tahoma', 'Arial'),
+    'darwin': ('Helvetica Neue', 'PingFang SC', 'Lucida Grande', 'Arial'),
+    'darwin_zh': ('PingFang SC', 'Helvetica Neue', 'Lucida Grande', 'Arial'),
+    'linux': ('Noto Sans', 'DejaVu Sans', 'Liberation Sans', 'Arial'),
+    'linux_zh': ('Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Noto Sans',
+                 'DejaVu Sans', 'Arial'),
+}
+
+
+def pick_font_family(available, platform=None, lang=None) -> str:
+    """First stack family present in ``available``, else '' (tk default).
+
+    Pure — takes the family list as an argument so headless tests drive it
+    without a display. ``platform``/``lang`` default to the real probes.
+    """
+    platform = platform if platform is not None else sys.platform
+    lang = lang or detect_lang()
+    if platform.startswith('win'):
+        key = 'win_zh' if lang == 'zh' else 'win'
+    elif platform == 'darwin':
+        key = 'darwin_zh' if lang == 'zh' else 'darwin'
+    else:
+        key = 'linux_zh' if lang == 'zh' else 'linux'
+    avail = {str(f).lower() for f in available}
+    for family in _FONT_STACKS[key]:
+        if family.lower() in avail:
+            return family
+    return ''
+
+
+def _center_geometry(screen_w, screen_h, win_w, win_h) -> str:
+    """'+x+y' placing the window optically centred (slightly above middle).
+
+    Pure math, headless-testable; clamps so a window larger than the
+    screen never opens with its title bar off the top edge.
+    """
+    x = max(0, (int(screen_w) - int(win_w)) // 2)
+    y = max(0, int((int(screen_h) - int(win_h)) * 0.38))
+    return '+%d+%d' % (x, y)
+
+
+def center_on_screen(root, width=None) -> None:
+    """Move ``root`` to the screen centre at its requested (or given) size.
+
+    Best-effort: a window in the wrong place is still a window, so every
+    failure is swallowed.
+    """
+    try:
+        root.update_idletasks()
+        w = int(width or root.winfo_reqwidth())
+        h = int(root.winfo_reqheight())
+        root.geometry('%dx%d%s' % (w, h, _center_geometry(
+            root.winfo_screenwidth(), root.winfo_screenheight(), w, h)))
+    except Exception:
+        pass
+
+
+def set_window_icon(root) -> None:
+    """Brand the window's title bar / taskbar entry (best-effort).
+
+    iconphoto works everywhere tk does; iconbitmap with the bundled .ico
+    additionally fixes the Windows taskbar/alt-tab icon (the tk-feather
+    default was part of the「窗口最小化后找不到」confusion).
+    """
+    try:
+        photo = load_logo_photo(root, size=64)
+        if photo is not None:
+            root.iconphoto(True, photo)
+    except Exception:
+        pass
+    if not sys.platform.startswith('win'):
+        return
+    try:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if getattr(sys, 'frozen', False):
+            bundle = os.path.join(os.path.dirname(sys.executable),
+                                  '_internal')
+            if os.path.isdir(bundle):
+                base = bundle
+        ico = os.path.join(base, 'static', 'icons', 'tofu.ico')
+        if os.path.isfile(ico):
+            root.iconbitmap(ico)
+    except Exception:
+        pass
+
+
 def detect_lang() -> str:
     """'zh' or 'en'. TOFU_LANG wins, then the OS locale, then LANG-family
-    env vars; 'en' when nothing says otherwise. Never raises."""
+    env vars; 'en' when nothing says otherwise. Never raises.
+
+    Windows gotcha (owner report 2026-08-04 — a zh-CN machine rendered the
+    whole native surface in English): ``locale.getlocale()`` there returns
+    DISPLAY names, not ISO codes — ``'Chinese (Simplified)_China'`` /
+    ``'Chinese (Traditional)_Taiwan'`` — which do not start with ``'zh'``,
+    so the old code hard-fell to English. Normalise (lowercase; dashes and
+    spaces to underscores) and accept both the ISO prefix and the Windows
+    display-name prefix.
+    """
     override = (os.environ.get('TOFU_LANG') or '').strip().lower()
     if override.startswith('zh'):
         return 'zh'
@@ -129,7 +235,8 @@ def detect_lang() -> str:
         loc = locale.getlocale()[0] or ''
     except Exception:
         loc = ''
-    if loc.lower().startswith('zh'):
+    norm = loc.strip().lower().replace('-', '_').replace(' ', '_')
+    if norm.startswith('zh') or norm.startswith('chinese'):
         return 'zh'
     if loc:
         return 'en'
@@ -481,6 +588,32 @@ STRINGS = {
         'en': 'Minimize to tray',
         'zh': '最小化到托盘',
     },
+    'desktop.role.serverCardLabel': {
+        'en': 'SERVER',
+        'zh': '服务器',
+    },
+    # One-line tier explanations — the tray never had room for these, so a
+    # tier like「转发订阅 API 流量」was guesswork. The window has the room.
+    'desktop.role.tierWriteDesc': {
+        'en': 'Create, edit and delete files on this machine.',
+        'zh': '在本机创建、修改和删除文件。',
+    },
+    'desktop.role.tierExecDesc': {
+        'en': 'Run shell commands and open applications.',
+        'zh': '运行命令、打开应用程序。',
+    },
+    'desktop.role.tierGuiDesc': {
+        'en': 'Move the mouse, type and capture the screen.',
+        'zh': '操作鼠标键盘、截取屏幕画面。',
+    },
+    'desktop.role.tierEgressDesc': {
+        'en': 'Relay subscription API traffic through this machine.',
+        'zh': '经本机转发订阅 API 流量。',
+    },
+    'desktop.role.autostartDesc': {
+        'en': 'Launch the agent automatically when you sign in.',
+        'zh': '登录系统时自动启动受控端。',
+    },
 }
 
 
@@ -552,31 +685,59 @@ def apply_theme(root, palette=None) -> dict:
     except tk.TclError:
         pass  # clam is shipped with every std tk; belt-and-braces only
 
-    base_font = ('', 10)
+    # The font family is RESOLVED, never '' (see _FONT_STACKS): on a
+    # Chinese-locale Windows '' fell through to SimSun and the whole
+    # surface rendered in serifs. '' only when no stack family exists.
+    try:
+        from tkinter import font as tkfont  # noqa: PLC0415 — lazy
+        _family = pick_font_family(set(tkfont.families(root)))
+    except Exception:
+        _family = ''
+
+    def _f(size, weight='normal'):
+        return (_family, size, weight) if _family else ('', size, weight)
+
+    base_font = _f(10)
     style.configure('Tofu.TFrame', background=p['bg'])
     style.configure('Card.TFrame', background=p['bg2'])
     style.configure('Tofu.TLabel', background=p['bg'], foreground=p['text'],
                     font=base_font)
     style.configure('Tofu.Title.TLabel', background=p['bg'],
-                    foreground=p['text'], font=('', 15, 'bold'))
+                    foreground=p['text'], font=_f(15, 'bold'))
     style.configure('Tofu.Sub.TLabel', background=p['bg'],
-                    foreground=p['text2'], font=('', 10))
+                    foreground=p['text2'], font=_f(9))
     style.configure('Tofu.Err.TLabel', background=p['bg'],
-                    foreground=p['error'], font=('', 9))
+                    foreground=p['error'], font=_f(9))
     style.configure('Card.TLabel', background=p['bg2'], foreground=p['text'],
                     font=base_font)
     style.configure('CardName.TLabel', background=p['bg2'],
-                    foreground=p['text'], font=('', 10, 'bold'))
+                    foreground=p['text'], font=_f(10, 'bold'))
     style.configure('CardSub.TLabel', background=p['bg2'],
-                    foreground=p['text2'], font=('', 9))
+                    foreground=p['text2'], font=_f(9))
+    # Section eyebrow inside a card (the「SERVER / 服务器」label row).
+    style.configure('CardHead.TLabel', background=p['bg2'],
+                    foreground=p['text3'], font=_f(8, 'bold'))
     style.configure('Status.Ok.TLabel', background=p['bg2'],
-                    foreground=p['success'], font=('', 9))
+                    foreground=p['success'], font=_f(9))
     style.configure('Status.Err.TLabel', background=p['bg2'],
-                    foreground=p['error'], font=('', 9))
+                    foreground=p['error'], font=_f(9))
     style.configure('Tofu.TCheckbutton', background=p['bg2'],
                     foreground=p['text'], font=base_font)
     style.map('Tofu.TCheckbutton',
               background=[('active', p['bg2'])],
+              foreground=[('disabled', p['text3'])])
+    # A checkbutton row with breathing room (tier rows in the role window).
+    style.configure('Tier.TCheckbutton', background=p['bg2'],
+                    foreground=p['text'], font=base_font, padding=(2, 2))
+    style.map('Tier.TCheckbutton',
+              background=[('active', p['bg2'])],
+              foreground=[('disabled', p['text3'])])
+    # A checkbutton sitting directly on the window background (the bottom
+    # bar) — the card-flavoured one would paint a bg2 patch behind itself.
+    style.configure('Bg.TCheckbutton', background=p['bg'],
+                    foreground=p['text'], font=base_font)
+    style.map('Bg.TCheckbutton',
+              background=[('active', p['bg'])],
               foreground=[('disabled', p['text3'])])
     style.configure('Tofu.TButton', padding=(14, 7), background=p['bg3'],
                     foreground=p['text'], borderwidth=1, font=base_font)
@@ -585,7 +746,7 @@ def apply_theme(root, palette=None) -> dict:
               foreground=[('disabled', p['text3'])])
     style.configure('Tofu.Accent.TButton', padding=(14, 7),
                     background=p['accent'], foreground=p['accent_fg'],
-                    borderwidth=0, font=('', 10, 'bold'))
+                    borderwidth=0, font=_f(10, 'bold'))
     style.map('Tofu.Accent.TButton',
               background=[('active', p['accent_hover']),
                           ('disabled', p['bg3'])],
@@ -620,7 +781,13 @@ def load_logo_photo(root, size=56):
         img = Image.open(path).convert('RGBA').resize((size, size),
                                                       Image.LANCZOS)
         photo = ImageTk.PhotoImage(img, master=root)
-        root._tofu_logo_photo = photo
+        # Anchor EVERY photo on the root — a single-slot anchor meant the
+        # 64px iconphoto was GC'd the moment the 40px header logo loaded
+        # (the classic tk blank-image bug, one window over).
+        photos = getattr(root, '_tofu_logo_photos', None)
+        if photos is None:
+            photos = root._tofu_logo_photos = []
+        photos.append(photo)
         return photo
     except Exception:
         return None

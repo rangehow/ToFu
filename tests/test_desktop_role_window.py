@@ -173,6 +173,45 @@ class ShowAtStartupGateTest(unittest.TestCase):
                 self.assertEqual(load_config().get('agent_id'), 'abc')
 
 
+class RendererDesignRatchetTest(unittest.TestCase):
+    """The 2026-08-04 redesign anchors: the window is centred and branded
+    (no more tk-feather icon in the taskbar), and every tier carries its
+    one-line explanation — the fact the tray never had room for. NEUTER
+    target: delete a desc key from _TIER_DESC_KEYS or let one go missing
+    from STRINGS."""
+
+    def test_window_is_centered_and_branded(self):
+        src = _src('desktop/role_window.py')
+        self.assertIn('theme.center_on_screen(', src,
+                      'the window opens wherever the WM drops it again')
+        self.assertIn('theme.set_window_icon(', src,
+                      'the tk-feather taskbar icon is back')
+
+    def test_every_tier_desc_key_exists_both_languages(self):
+        rw = _rw()
+        import desktop._tk_theme as theme
+        for tier, desc_key in rw._TIER_DESC_KEYS.items():
+            self.assertIn(tier, rw._TIER_KEYS,
+                          '%s has a desc but no label key' % tier)
+            pair = theme.STRINGS.get(desc_key)
+            self.assertIsNotNone(pair, '%s missing from STRINGS' % desc_key)
+            self.assertIn('en', pair, '%s missing en' % desc_key)
+            self.assertIn('zh', pair, '%s missing zh' % desc_key)
+
+    def test_tier_keys_cover_both_apps_tiers(self):
+        rw = _rw()
+        full = rw.role_state_full(15000, {}, '', lang='en')['tiers']
+        agent = rw.role_state_agent('http://s:1', {}, None,
+                                    lang='en')['tiers']
+        for tier in set(full) | set(agent):
+            self.assertIn(tier, rw._TIER_KEYS,
+                          '%s lost its label key' % tier)
+            self.assertIn(tier, rw._TIER_DESC_KEYS,
+                          '%s lost its desc key' % tier)
+
+
+class WiringRatchetTest(unittest.TestCase):
+    """Source-level pins so the panel can never silently vanish again."""
 class WiringRatchetTest(unittest.TestCase):
     """Source-level pins so the panel can never silently vanish again."""
 

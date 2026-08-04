@@ -234,18 +234,16 @@ def _prompt_gui(components: list[Component]) -> list[tuple]:
     lang = theme.detect_lang()
 
     holder: dict = {'results': []}
-    root = tk.Tk()
+    # Ride the tk host when it owns the process's windows (the tray-first
+    # topology): a Toplevel on the ONE root, modal via wait_window.
+    # Standalone Tk + mainloop otherwise (first launch, no host yet).
+    from desktop import _tk_host as host
+    parent = host.parent_or_none()
+    root = tk.Toplevel(parent) if parent is not None else tk.Tk()
     p = theme.apply_theme(root)
     root.title('Tofu — %s' % theme.t('desktop.components.title', lang))
-    root.geometry('560x560')
     root.resizable(False, False)
-
-    try:
-        icon_path = os.path.join(BASE_DIR, 'static', 'icons', 'tofu.ico')
-        if os.path.isfile(icon_path):
-            root.iconbitmap(icon_path)
-    except Exception:
-        pass
+    theme.set_window_icon(root)
 
     outer = ttk.Frame(root, style='Tofu.TFrame', padding=22)
     outer.pack(fill='both', expand=True)
@@ -417,6 +415,15 @@ def _prompt_gui(components: list[Component]) -> list[tuple]:
         style='Tofu.Accent.TButton', command=on_install)
     install_btn.pack(side='right')
 
+    theme.center_on_screen(root, width=560)
+    if parent is not None:
+        root.transient(parent)
+        root.grab_set()
+        try:
+            parent.wait_window(root)
+        except tk.TclError:
+            pass
+        return holder['results']
     root.mainloop()
     return holder['results']
 

@@ -308,8 +308,6 @@ def _link_status_text(state: dict) -> str:
 
 def _run_tray(state: dict, perms: dict) -> None:
     """The minimal tray: the whole configuration surface of this component."""
-def _run_tray(state: dict, perms: dict) -> None:
-    """The minimal tray: the whole configuration surface of this component."""
     from desktop.connect_ui import prompt_attachment_flow
     from lib.desktop_agent.config import save_remote_server, \
         save_computer_control
@@ -330,7 +328,13 @@ def _run_tray(state: dict, perms: dict) -> None:
         return
 
     def on_connect(icon, item):
-        parsed = prompt_attachment_flow(state.get('url') or '', log=_log)
+        # Only the DIALOG rides the tk host thread; the save/restart/menu
+        # refresh below stay on the tray thread (icon.update_menu is not
+        # thread-safe to call from the host). host.call inlines when the
+        # host is down or the caller is already on it (role-window path).
+        from desktop import _tk_host
+        parsed = _tk_host.call(
+            lambda: prompt_attachment_flow(state.get('url') or '', log=_log))
         if parsed is None:
             return
         url, secret = parsed
@@ -419,9 +423,9 @@ def _run_tray(state: dict, perms: dict) -> None:
     }
 
     def on_control_panel(icon, item):
-        from desktop import role_window
-        role_window.show_role_window('agent', _role_state_fn,
-                                     _role_actions, log=_log)
+        from desktop import _tk_host, role_window
+        _tk_host.post_or_call(lambda: role_window.show_role_window(
+            'agent', _role_state_fn, _role_actions, log=_log))
 
     menu = pystray.Menu(
         MenuItem(_tt('desktop.tray.controlPanel'), on_control_panel,
@@ -463,14 +467,19 @@ def _run_tray(state: dict, perms: dict) -> None:
 
     icon = pystray.Icon('tofu-agent', _load_icon(), 'Tofu Agent', menu)
 
-    # Startup role declaration (owner directive 2026-08-03): the window
-    # says 「受控端」 out loud and IS the control panel; the tray starts
-    # when the user dismisses it (or immediately when they unchecked
-    # "show at startup").
-    from desktop import role_window
+    # Startup role declaration (owner directive 2026-08-03), now TRAY-FIRST
+    # (owner report 2026-08-04: the window vanished with no tray anywhere):
+    # the old order — blocking window mainloop, THEN icon.run() — meant the
+    # entire first window session had no tray at all, so "minimize to tray"
+    # was structurally impossible. On Windows the tk host thread owns every
+    # window and the main thread reaches icon.run() immediately; off win32
+    # (macOS demands the main thread for both frameworks) host.start()
+    # returns False and post_or_call inlines — the legacy sequence stands.
+    from desktop import _tk_host, role_window
+    _tk_host.start(log=_log)
     if role_window.should_show_at_startup():
-        role_window.show_role_window('agent', _role_state_fn,
-                                     _role_actions, log=_log)
+        _tk_host.post_or_call(lambda: role_window.show_role_window(
+            'agent', _role_state_fn, _role_actions, log=_log))
     icon.run()
 
 

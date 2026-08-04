@@ -460,8 +460,11 @@ def _run_tray(port: int, proc: subprocess.Popen):
         if not not_installed:
             return
         # The dialog hosts the install itself (progress rows + bar) and
-        # returns the results; nothing downloads invisibly anymore.
-        results = _prompt_gui(not_installed)
+        # returns the results; nothing downloads invisibly anymore. The
+        # DIALOG rides the tk host thread (tray-first topology); the rest
+        # of this handler stays on the tray thread.
+        from desktop import _tk_host
+        results = _tk_host.call(lambda: _prompt_gui(not_installed))
         for name, success, msg in results:
             _log('%s %s: %s' % ('OK' if success else 'FAIL', name, msg))
 
@@ -476,7 +479,10 @@ def _run_tray(port: int, proc: subprocess.Popen):
 
     def on_connect_remote(icon, item):
         """Paste a connect line to attach this computer to a remote Tofu."""
-        parsed = _prompt_connect_line(_attached_url())
+        # Only the DIALOG rides the tk host thread; the save/restart/menu
+        # refresh stay here on the tray thread.
+        from desktop import _tk_host
+        parsed = _tk_host.call(lambda: _prompt_connect_line(_attached_url()))
         if parsed is None:
             return
         url, secret = parsed
@@ -577,9 +583,9 @@ def _run_tray(port: int, proc: subprocess.Popen):
     }
 
     def on_control_panel(icon, item):
-        from desktop import role_window
-        role_window.show_role_window('full', _role_state_fn,
-                                     _role_actions, log=_log)
+        from desktop import _tk_host, role_window
+        _tk_host.post_or_call(lambda: role_window.show_role_window(
+            'full', _role_state_fn, _role_actions, log=_log))
 
     # Dynamic "update available" item: its text is computed at menu-open time
     # and it is hidden entirely until the background check finds a newer tag.
@@ -615,15 +621,17 @@ def _run_tray(port: int, proc: subprocess.Popen):
 
     icon = pystray.Icon('tofu', icon_image, 'Tofu', menu)
 
-    # Startup role declaration (owner directive 2026-08-03): the window
-    # says 「服务器」 out loud — and admits it when this machine is ALSO
-    # a controlled endpoint of a remote Tofu (the tunnel-incident blind
-    # spot). The tray starts when the user dismisses it (or immediately
-    # when they unchecked "show at startup").
-    from desktop import role_window
+    # Startup role declaration (owner directive 2026-08-03), now TRAY-FIRST
+    # (owner report 2026-08-04): the tray must exist BEFORE the window can
+    # ever hide, or "minimize to tray" strands the app with no surface. The
+    # tk host thread owns the window; the main thread reaches icon.run()
+    # immediately. Off win32 host.start() returns False and post_or_call
+    # inlines — the legacy window-then-tray sequence stands there.
+    from desktop import _tk_host, role_window
+    _tk_host.start(log=_log)
     if role_window.should_show_at_startup():
-        role_window.show_role_window('full', _role_state_fn,
-                                     _role_actions, log=_log)
+        _tk_host.post_or_call(lambda: role_window.show_role_window(
+            'full', _role_state_fn, _role_actions, log=_log))
 
     # Kick off the update check off the main thread so it never delays the
     # tray appearing. When it finds a newer version it flips the holder and

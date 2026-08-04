@@ -1,3 +1,6 @@
+### 2026-08-04(预存红闭环:test_server_async::test_health_endpoint——断言钉迁移前裸数组契约,端点已按 charter#0 包 {ok,items} 信封;方向对齐,独立运行器同款断言同步修) — 脑派发接我自票 `pt_a1b4d3ec829c43c2` **DONE**;commit `3074918e`(1 文件 +8/−2,纯测试侧);套件 **13/13** + chat parity/drift 棘轮 **9/9**
+
+- **定案(测试漂移,与已关票 restart_smoke 同族):** `/api/v1/chat/active` 返回 `{'items': [], 'ok': True}`(charter#0:数组负载必须包对象信封),断言还钉迁移前的 `isinstance(data, list)`。修法=钉信封契约(`ok is True` + `items` 为 list),`__main__` 独立运行器里的同款断言一并对齐。failing-first 证据天然俱在(改前红改后绿);零产品代码。
 ### 2026-08-04(视频上传+分析 P1 落地:抽帧+转录骑既有图片通道——模型感知帧预算/聚合图像账/本地盘 scratch/上传时异步处理;owner 四决策+四补充全纳入) — epic `pt_6aca988757cb4019`;commit 见下(18 文件);新套件 **33 检全绿**(真 ffmpeg 合成片集成)+ 守卫环 **141 绿**(2 预存红各挂票,均实证与本批无关)
 
 - **形态(owner 定案 P1):** 视频上传即后台处理(ffprobe→原件持久化→均匀+场景检测抽帧→音轨骑 `lib/transcription` 既有 whisper 槽位链),产出自包含净载(耐用 `/api/images/` 帧 URL+转录+元数据)嵌进消息 `videos[]`——重载/断流恢复/多轮追问零额外机制。P2(Gemini 原生直通)留 epic 后半,依赖网关能力核查。

@@ -55,6 +55,7 @@ class _FakeSlot:
         self.protocol = 'openai'
         self.provider_id = 'fake'
         self.thinking_format = ''
+        self.adapter = None  # E4 commit 2383ae9a added slot.adapter
         self.stream_only = False
         self.capabilities = {'text'}
         self.consecutive_errors = 0

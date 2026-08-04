@@ -398,6 +398,7 @@ interface Window {
   continueButtonForSettlement: any;
   convAutoTranslate: any;
   convAutoTranslateEffective: any;
+  convFullIdById: any;
   convHasMoreEarlier: any;
   convHasPendingSync: any;
   convTitleById: any;

@@ -58,6 +58,8 @@ const { window, document, check, report } = setup({
         upsert: async (body) => { posted.push(body); return { source: {} }; },
         toggle: async () => ({}),
         remove: async () => ({}),
+        // auth_sources.js:43 probes live sessions at render time.
+        liveSession: async () => null,
       },
     },
   },

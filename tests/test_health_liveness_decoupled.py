@@ -50,7 +50,8 @@ def _call_health(common):
 
     async def _run():
         async with app.test_request_context('/api/health'):
-            resp = common.health_check()
+            # health_check() returns (resp, status) since api-contract batch 21
+            resp, _status = common.health_check()
             return await resp.get_json()
 
     return asyncio.run(_run())

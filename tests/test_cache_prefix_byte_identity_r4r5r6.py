@@ -358,6 +358,7 @@ def test_live_retry_preserves_task_id(monkeypatch):
         protocol = 'openai'
         provider_id = 'p'
         thinking_format = ''
+        adapter = None  # E4 commit 2383ae9a added slot.adapter
         consecutive_errors = 0
         def record_success(self, *a, **k): pass
         def record_error(self, *a, **k): pass

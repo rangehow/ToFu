@@ -342,8 +342,11 @@ def test_reopen_path_merges_translations_through_shared_reducer():
         f'expected >=3 reopen-branch translation merges, found {merges} — a '
         'reconcile branch may have lost its merge, which would resurrect '
         '"switch conversations to see the 译文"')
-    assert '_mergeTranslationFields(destMsgs[i], sourceMsgs[i])' in src, (
-        'reopen merge no longer routes through the shared reducer')
+    # The per-index literal call moved inside the array-level reducer
+    # (conversations.js:1060) — assert the reopen path routes through IT.
+    assert '_mergeServerTranslations(' in src, (
+        'reopen merge no longer routes through the shared array-level reducer '
+        '(_mergeServerTranslations internally calls _mergeTranslationFields)')
     # And the wholesale-overwrite branches take the server array (translations
     # included by construction).
     assert src.count('conv.messages = serverMsgs') >= 2, src[:0] or (

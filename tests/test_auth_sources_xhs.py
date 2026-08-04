@@ -122,8 +122,16 @@ class TestAuthSourceStore:
         assert rows['xiaohongshu.com']['has_cookies'] is False
 
     def test_match_requires_enabled_and_cookies(self):
-        # No cookies yet → never matches even if we enable it.
+        # browser_first rows match with ZERO cookies — the user's LIVE
+        # browser session is the credential (deliberate design,
+        # docs/SITE_KNOWLEDGE_LAYER_DESIGN.md:120), so enabling is enough.
         A.set_enabled('xiaohongshu.com', True)
+        assert A.match_source('https://www.xiaohongshu.com/explore/1') is not None
+
+        # No-match only for cookies_replay without cookies: replay has
+        # nothing to fire.
+        A.upsert_source('xiaohongshu.com', access_strategy='cookies_replay',
+                        enabled=True)
         assert A.match_source('https://www.xiaohongshu.com/explore/1') is None
 
         # Add cookies + enable → matches, including alias + subdomain.

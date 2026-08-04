@@ -4,7 +4,7 @@
 - **②flake/预存红三步制度化(进 docs/TESTING_STRATEGY.md §P2):** 隔离=挂板票带纯净 HEAD 复现证据+三态分诊(本批/预存/兄弟 churn);SLA=7 天根修或方向对齐;删除=SLA 过期默认删(能被无视的测试比没有更糟)。
 - **③按路径选择运行(scripts/test_select.py,不上 ML):** 静态反向索引=测试文件→AST import(lib.x→lib/x.py 双候选)+字面路径引用,mtime JSON 缓存(冷 4.2s/热 <1s);入选=改动∩引用 + 爆炸半径表(conftest→全量,jsdom 助手/api.js→前端族)+ 守卫核心常跑(契约/棘轮 5-7 枚);>40% 直接全量。实测:HEAD~6 十六改动→18/1593 套件(direct×8/self×5/guard×5)。failing-first 12 针(索引抽取/交集/爆炸半径/兜底/conftest 全量)。`make test-affected` 进迭代内环,全量仍是闸。
 - **测试账:** 新套件×2 20 针(select 12 + incident-link 8,含分类器合成源五态 NEUTER);ruff 四触点全绿。
-- **落地波折(自记):** ①`--write-docs | head` 被 SIGPIPE 截断,报告没写出来——管道截断会吃尾段动作,长输出命令别用 head 截有副作用的stdout;②scripts/ 是 `/scripts/*` 全忽略+白名单制,两新脚本必须同时进 .gitignore 白名单与 export.py `_OPENSOURCE_KEEP_FILES`(gitignore↔export 同步钉 `test_gitignore_covers_export_excludes` 看着);③同步钉复跑红 3 枚但 offenders 全是兄弟资产(verify_epic_e_deferrals.sh + logo/poster PNG/SVG×8,无一本批文件)——**预存红挂票 `pt_c61f0ac9b3d1`** 由资产属主会话处置(加忽略+git rm --cached 或加 keeper),不越权删兄弟资产。
+- **落地波折(自记):** ①`--write-docs | head` 被 SIGPIPE 截断,报告没写出来——管道截断会吃尾段动作,长输出命令别用 head 截有副作用的stdout;②scripts/ 是 `/scripts/*` 全忽略+白名单制,两新脚本必须同时进 .gitignore 白名单与 export.py `_OPENSOURCE_KEEP_FILES`(gitignore↔export 同步钉 `test_gitignore_covers_export_excludes` 看着);③同步钉复跑红 3 枚但 offenders 全是兄弟资产(verify_epic_e_deferrals.sh + logo/poster PNG/SVG×8,无一本批文件)——**预存红挂票 `pt_62b50abf2a8d45d1`** 由资产属主会话处置(加忽略+git rm --cached 或加 keeper),不越权删兄弟资产。
 
 
 ### 2026-08-04(测试体系 P1 落地:字段级契约——top-N 端点消费者驱动形状钉,响应多出字段不破钉;checker 自带 NEUTER 咬合自证) — 脑派发 epic `pt_adf0ac6c15d44f28` **DONE**;commit 见下(2 文件);套件 **11/11**(6 咬合自证+5 端点钉)

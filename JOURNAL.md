@@ -1,3 +1,12 @@
+### 2026-08-04(travel vertical 复活:tofu-search 0.8.0 provider 链——RollingGo(带key) → FlyAI(飞猪内置试用凭证,免配置);酒店类型史上首次免 key 可用) — owner 指令「方案 A 绕过不接受,目标是 tofu-search 自己拥有这个 vertical」;tofu-search commit `23e648b`(11 文件 +919/−85);环 **536 绿**(2 枚 mcp-extra 收集错误=mcp 2.0 删 fastmcp 的环境预存,无关本批);**无 key 实测 flight/hotel 端到端双通**
+
+- **起因复盘:** owner 问「当年想让 tofu-search 查机票酒店(类 RollingGo MCP、免 API 配置),现在是不是没成」。核查:travel vertical 早已建成(7/31 `a6dadf2`),但 ①RollingGo 航班端点 8/4 起对匿名调用稳定 401(error.log 实证),匿名时代终结;②酒店端点从来要 key;③进程内「需凭证」锁存翻转后 travel 域从 web_search 枚举自动摘除(诚实广告设计按预期工作)。结论:不是没建成,是上游关门+自我隐藏。
+- **根治(owner 定案):** 逆向公共 npm 包 @fly-ai/flyai-cli 的 bundle——飞猪后端本身就是 streamable-http MCP 端点(flyai.open.fliggy.com/mcp),CLI 的「免 key 试用」=内置共享试用凭证 + HMAC-SHA256 请求签名。新增 `travel_flyai.py` 在 tofu-search 代理感知 HTTP 层复刻该线协议(零 Node 依赖、零 shell-out),两个 type 改 provider 链:有 ROLLINGGO_API_KEY 先 RollingGo,失败/无 key 落 FlyAI。
+- **逆向三大坑(全部实测钉死):** ①node `digest('base64url')` **去 padding**,Python urlsafe_b64encode 带 '=' ——差一个字符就是 "Authorization verification failed";②线上工具名是 **snake_case**(search_flight/search_hotels),CLI 的 dashed 子命令名直接 401 "Tool not allowed";③签名覆盖**请求体原文字节**——requests 的 json= 重序列化(带空格+\u 转义)会静默破签,body 必须紧凑 ensure_ascii=False 一次序列化原文发送(base._post_json 新增 raw_body 路径)。黄金向量用 node 真 crypto 生成钉进测试,跨语言对拍。
+- **收益:** 酒店类型首次免 key 可用;航班结果首次带**预订链接**(bookable:true,RollingGo 时代只能「仅查询」);试用档酒店价格被上游脱敏(¥2xx)在内容中诚实标注并指引 FLYAI_API_KEY 解锁;平台 systemMessage(体验模式提示)透传。
+- **顺手根治(日历腐化):** travel_slots 设计意图是「时钟由调用方注入」,但 handler 层直接 date.today()——字面查询日期(2026-08-03)随日历过期,handler 测试**今天起集体转红**(与本批无关的预存雷,8/4 当天引爆)。时钟读点收进两个 handler 的 `_today()` 缝,测试 autouse 钉住;旧断言零改动复活。
+- **chatui 侧零代码改动:** 工具枚举本就由 describe_domains() 动态生成;运行中服务器骑既有重启队列自然上线。flyai skill 的 SKILL.md 补 NODE_USE_ENV_PROXY=1(node undici fetch 不吃 env 代理,本机裸跑必 ENOTFOUND;该文件在 .tofu 数据区,gitignored 不入库)。
+
 ### 2026-08-04(状态镜像「刚提问就过期(>6h)」假案根修:检视器读取被流式噪音挤爆 10k 行上限——实测 51754 行任务只有 ≤6 轮可见;面板降级改尾部切片,不再倾倒 system prompt) — owner 截图两问(conv 搜索设置批 R87);commit `63be7fe0`(5 文件 +196/−14);环 **66 绿**;真实库实证 85 轮全解析
 
 - **问 1 定案(根本没过期,是被截断):** 每条 SSE delta 都独立落 `task_events`(精确游标冷回放设计,event_log 模块头明记),长任务日志被流式噪音主导——实测真实库 12 个任务超 1 万行(最大 51754 行/170 快照);而检视器 `_read_events_uncached` 取**前 10000 行**,该任务仅 11 张快照(≤R6)幸存,R7 起 159 张全截断 ⇒ state/request 双轴 miss ⇒ 前端误报「该状态镜像已过期(>6h)或不存在」。且话术本身也是化石:分层保留(§10.4)后结构事件存活 **30 天**,6h 只是流式噪音层。

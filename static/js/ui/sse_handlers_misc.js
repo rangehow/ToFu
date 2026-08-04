@@ -405,6 +405,28 @@ function _handleWorkspaceRootAdded(ev, c) {
 
 }
 
+function _handleModelFallback(ev, c) {
+  const convId = c.convId;
+  const assistantMsg = c.assistantMsg;
+      /* ── Model-fallback EARLY notification ────────────────────────────
+       * Emitted AT THE DECISION MOMENT — before the fallback stream starts
+       * (lib/tasks_pkg/llm_fallback/_call.py) — so the in-bubble banner is
+       * up for the ENTIRE fallback generation, not painted after it. Stamp
+       * the SAME field names the settled message carries (the streaming
+       * banner and the settled finish-tag must agree); updateStreamingUI
+       * paints the banner from these fields (streaming_ui.js
+       * data-zone="fallback"). A cold reload mid-fallback re-adopts them
+       * from the state snapshot (sse_pipeline.js state sidecar). */
+      if (assistantMsg) {
+        assistantMsg.fallbackModel = ev.fallbackModel || '';
+        assistantMsg.fallbackFrom = ev.fallbackFrom || '';
+        assistantMsg.fallbackReason = ev.fallbackReason || '';
+        assistantMsg.fallbackKind = ev.fallbackKind || '';
+      }
+      if (typeof twUpdate === 'function') twUpdate(convId);
+
+}
+
 function _handleTimerPollCheck(ev, c) {
   const convId = c.convId, taskId = c.taskId;
   const assistantMsg = c.assistantMsg;

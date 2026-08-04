@@ -12,6 +12,11 @@
 //  Streaming UI
 // ══════════════════════════════════════════════
 function _ensureStreamZones(body) {
+  /* ★ Model-fallback zone sits at the TOP of the bubble (first child) —
+   * retrofit it into bodies seeded before it existed. */
+  if (!body.querySelector('[data-zone="fallback"]')) {
+    body.insertAdjacentHTML('afterbegin', '<div data-zone="fallback"></div>');
+  }
   if (body.querySelector('[data-zone="tool"]')) return;
   /* ★ FIX (blank streaming bubble on tablet): this innerHTML assignment WIPES
    *   the "Preparing…/等待中…" pulse that _streamingBubbleHTML seeded into
@@ -29,6 +34,7 @@ function _ensureStreamZones(body) {
     escapeHtml(typeof t === 'function' ? t('stream.phase.waiting') : 'Waiting…') +
     '</div>';
   body.innerHTML =
+    '<div data-zone="fallback"></div>' +
     '<div data-zone="memprefetch"></div>' +
     '<div data-zone="swarmInbox"></div>' +  /* async swarm-update chips */
     '<div data-zone="tool"></div>' +
@@ -157,10 +163,65 @@ function _toolContextPhaseText(p) {
   }
   return t('stream.phase.toolContext', { tools: labels.join(_toolLabelJoin()) });
 }
+/* ★ Model-fallback banner builder — '' unless fallbackModel is set.
+ * The banner names BOTH models (from → to) and carries the typed reason in
+ * the tooltip (and, when present, inline). Cause formatting comes from the
+ * SINGLE source — fallbackCauseParts(msg) in core/error_envelope.js — so
+ * this live banner and the settled finish-tag can never name one failure
+ * two ways (tests/test_frontend_finish_tag_fallback_cause.py). Everything
+ * interpolated goes through escapeHtml; i18n keys stream.fallback.banner /
+ * .bannerTip. */
+function renderModelFallbackBannerHtml(msg) {
+  if (!msg || !msg.fallbackModel) return '';
+  const _esc = (typeof escapeHtml === 'function') ? escapeHtml : (s) => String(s == null ? '' : s);
+  const from = msg.fallbackFrom || '', to = msg.fallbackModel || '';
+  const _fb = (typeof fallbackCauseParts === 'function')
+    ? fallbackCauseParts(msg)
+    /* Isolated eval contexts (JSDOM harnesses loading this file alone) have
+     * no core/error_envelope.js — degrade to the verbatim cause, mirroring
+     * finish_info.js's own fallback. */
+    : { kindLabel: '', detail: String(msg.fallbackReason || msg.fallbackKind || ''),
+        shown: String(msg.fallbackReason || ''),
+        hasCause: !!(msg.fallbackReason || msg.fallbackKind) };
+  const label = (typeof t === 'function'
+    ? t('stream.fallback.banner') : '') || 'Primary model failed — auto-switched';
+  let tip = (typeof t === 'function'
+    ? t('stream.fallback.bannerTip', { from, to, reason: _fb.detail }) : '') || '';
+  /* The tooltip MUST carry the cause verbatim — a renderer/i18n table whose
+   * template drops {reason} cannot hide it (guarded by the banner suite). */
+  if (_fb.detail && tip.indexOf(_fb.detail) === -1) {
+    tip = (tip ? tip + '\n' : '') + _fb.detail;
+  }
+  const icon = (typeof Icon === 'function') ? Icon('alert', 12) : '';
+  return '<div class="fallback-banner" title="' + _esc(tip) + '">'
+    + '<span class="fb-icon">' + icon + '</span>'
+    + '<span class="fb-text">'
+    + (_fb.kindLabel ? '<span class="fb-kind">' + _esc(_fb.kindLabel) + '</span>' : '')
+    + _esc(label) + ' '
+    + '<span class="fb-models">' + _esc(from) + ' → ' + _esc(to) + '</span>'
+    + (_fb.shown ? '<span class="fb-reason"><span class="fb-reason-label"></span>' + _esc(_fb.shown) + '</span>' : '')
+    + '</span></div>';
+}
+
 function updateStreamingUI(msg) {
   const zones = _getStreamZones();
   if (!zones) return;
   const { body, memprefetch: memprefetchZone, tool: toolZone, think: thinkZone, content: contentZone, fc: fcZone } = zones;
+  /* ★ Model-fallback banner: painted into the TOP zone, fingerprint-gated
+   * (data-fb-key) so an unchanged frame never rewrites the DOM, and CLEARED
+   * the moment a frame arrives without fallbackModel (e.g. the final frame
+   * after the fallback produced its answer — the settled finish-tag takes
+   * over from there). */
+  const fbZone = body.querySelector('[data-zone="fallback"]');
+  if (fbZone) {
+    const fbKey = (msg && msg.fallbackModel)
+      ? [msg.fallbackModel, msg.fallbackFrom, msg.fallbackReason, msg.fallbackKind].join('|')
+      : '';
+    if (fbZone.getAttribute('data-fb-key') !== fbKey) {
+      fbZone.setAttribute('data-fb-key', fbKey);
+      fbZone.innerHTML = renderModelFallbackBannerHtml(msg);
+    }
+  }
   let statusZone = zones.status;
   if (!statusZone) {
     /* ★ Lazy-create the status zone: a bubble template may omit it (the

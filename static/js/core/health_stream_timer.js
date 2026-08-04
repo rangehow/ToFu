@@ -929,6 +929,12 @@ function _streamFrameArg(convId) {
     phase: _sess.phase,
     _memoryPrefetch: ckpt && ckpt._memoryPrefetch,
     _mcpLoginHint: ckpt && ckpt._mcpLoginHint,
+    /* Model-fallback banner survival across the coalesced-timer repaint path
+     * (same forward set as stream_lifecycle.js's synthetic payloads). */
+    fallbackModel: ckpt && ckpt.fallbackModel,
+    fallbackFrom: ckpt && ckpt.fallbackFrom,
+    fallbackReason: ckpt && ckpt.fallbackReason,
+    fallbackKind: ckpt && ckpt.fallbackKind,
   };
 }
 

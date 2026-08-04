@@ -721,6 +721,16 @@ function dispatchSSEEvent(line, ctx) {
       if (ev.createdAt && typeof _seedStreamTimerStart === 'function') {
         _seedStreamTimerStart(convId, ev.createdAt);
       }
+      /* ★ Model-fallback sidecar adoption: the backend stamps these AT THE
+       *   DECISION MOMENT (llm_fallback/_call.py) and folds them into every
+       *   state snapshot — a cold reload DURING the fallback generation must
+       *   re-stamp them so the banner repaints instead of waiting for done. */
+      if (ev.fallbackModel && assistantMsg) {
+        assistantMsg.fallbackModel = ev.fallbackModel;
+        assistantMsg.fallbackFrom = ev.fallbackFrom || '';
+        assistantMsg.fallbackReason = ev.fallbackReason || '';
+        assistantMsg.fallbackKind = ev.fallbackKind || '';
+      }
       /* ★ Endpoint mode reconnection: rebuild conv.messages from endpointTurns
        *   and set the correct phase (working/reviewing) so streaming goes to
        *   the right target (assistantMsg vs _epCriticMsg). */
@@ -1179,6 +1189,8 @@ function dispatchSSEEvent(line, ctx) {
         round: ev.roundNum || 0,
       });
       if (typeof twUpdate === 'function') twUpdate(convId);
+    } else if (ev.type === "model_fallback") {
+      _handleModelFallback(ev, _hctx());
     } else if (ev.type === "tool_start") {
       _handleToolStart(ev, _hctx());
     } else if (ev.type === "human_guidance_request") {

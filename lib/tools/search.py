@@ -234,3 +234,95 @@ def build_fetch_url_tool() -> dict:
 FETCH_URL_TOOL = build_fetch_url_tool()
 
 __all__ = ['build_search_tool', 'build_fetch_url_tool', 'FETCH_URL_TOOL']
+# Boot-time snapshot for static capability listing (routes/api_v1/capabilities.py).
+# Per-request consumers must call build_fetch_url_tool() instead — see its docstring.
+FETCH_URL_TOOL = build_fetch_url_tool()
+
+
+def build_update_search_settings_tool() -> dict:
+    """Build the update_search_settings tool schema.
+
+    STATIC description (prompt-cache contract): current values are NOT baked
+    in — the model reads them by calling the tool with no arguments, which is
+    a pure read. Writes go through lib.search_settings.apply_updates
+    (validate → clamp → persist → hot-reload → audit), never through raw
+    file edits.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "update_search_settings",
+            "description": (
+                "Read or adjust the SERVER-WIDE web search & fetch pipeline settings "
+                "(the same knobs shown in Settings → Search). Changes apply globally, "
+                "persist across restarts, and take effect immediately (hot reload) — "
+                "they affect every conversation, so change them only when the user "
+                "asks or when search/fetch results are demonstrably hurt by the current "
+                "values (e.g. repeated fetch timeouts, too-shallow results).\n\n"
+                "Call with NO arguments to read the current effective values first — "
+                "always do this before proposing a change.\n\n"
+                "Adjustable knobs (all optional; integers are clamped to safe ranges):\n"
+                "- fetch_top_n (1-20): pages auto-fetched per search. Higher = more "
+                "complete, slower, more tokens.\n"
+                "- fetch_timeout (5-120s): per-page fetch timeout.\n"
+                "- max_chars_search / max_chars_direct: content caps for search-result "
+                "pages / direct fetch_url calls.\n"
+                "- max_chars_pdf (0 = unlimited): PDF text cap.\n"
+                "- max_download_mb (>0, MB): max download size. Use MB, NOT bytes.\n"
+                "- llm_content_filter (boolean): when ON, a cheap LLM strips nav/ads "
+                "from fetched pages (better quality, slower); OFF returns raw text "
+                "(faster, cheaper, noisier).\n"
+                "- block_domain / unblock_domain: add/remove a domain in the fetch "
+                "blocklist (e.g. block_domain='pinterest.com' when results keep "
+                "surfacing useless pages from one host).\n\n"
+                "The result reports what was applied, what was rejected (with reasons), "
+                "env-var overrides that shadow a saved change, and the new effective "
+                "values. Report the outcome to the user in plain language."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fetch_top_n": {
+                        "type": "integer",
+                        "description": "Pages auto-fetched per search (1-20)."
+                    },
+                    "fetch_timeout": {
+                        "type": "integer",
+                        "description": "Per-page fetch timeout in seconds (5-120)."
+                    },
+                    "max_chars_search": {
+                        "type": "integer",
+                        "description": "Max characters kept from a search-result page (1000-500000)."
+                    },
+                    "max_chars_direct": {
+                        "type": "integer",
+                        "description": "Max characters kept from a direct fetch_url page (1000-1000000)."
+                    },
+                    "max_chars_pdf": {
+                        "type": "integer",
+                        "description": "Max characters kept from a PDF (0 = unlimited, up to 2000000)."
+                    },
+                    "max_download_mb": {
+                        "type": "integer",
+                        "description": "Max download size in MEGABYTES (>0, ≤500) — converted to bytes server-side."
+                    },
+                    "llm_content_filter": {
+                        "type": "boolean",
+                        "description": "ON = LLM strips boilerplate from fetched pages; OFF = raw text (faster)."
+                    },
+                    "block_domain": {
+                        "type": "string",
+                        "description": "Add a domain to the fetch blocklist (normalized: scheme/www/path stripped)."
+                    },
+                    "unblock_domain": {
+                        "type": "string",
+                        "description": "Remove a domain from the fetch blocklist."
+                    }
+                }
+            }
+        }
+    }
+
+
+__all__ = ['build_search_tool', 'build_fetch_url_tool', 'FETCH_URL_TOOL',
+           'build_update_search_settings_tool']

@@ -43,6 +43,19 @@ def _build_search(ctx: ToolContext) -> list[dict]:
     return []
 
 
+def _build_search_settings(ctx: ToolContext) -> list[dict]:
+    # update_search_settings tunes the pipeline web_search/fetch_url run on,
+    # so it rides the SAME gate — a conversation with search OFF has no use
+    # for it. Registered as its own spec appended at the END of the base
+    # phase: inserting it into the search spec put it mid-list (position 2),
+    # which broke the cache-stable tool-order ratchet
+    # (tests/test_tool_registry.py::TestOrdering).
+    if ctx.search_mode in ('single', 'multi'):
+        from lib.tools import build_update_search_settings_tool
+        return [build_update_search_settings_tool()]
+    return []
+
+
 def _build_fetch(ctx: ToolContext) -> list[dict]:
     # Built per call: the schema's ``reason`` param follows the runtime
     # LLM_CONTENT_FILTER_ENABLED flag — a module-level constant would freeze
@@ -485,6 +498,15 @@ def _register_builtins() -> None:
         ToolSpec('human_guidance', _build_human_guidance, phase='base',
                  provides=frozenset({'ask_human'}),
                  category='human', description='Ask the human for guidance'),
+        # update_search_settings — appended at the END of the base phase so
+        # every earlier tool's position stays byte-stable for the prompt
+        # cache (the "appending HERE" rule this module's header documents).
+        # It mutates server-GLOBAL config every conversation feels, so it is
+        # approval-gated + serial like the other state-changing tools.
+        ToolSpec('search_settings', _build_search_settings, phase='base',
+                 provides=frozenset({'update_search_settings'}),
+                 write_tools=frozenset({'update_search_settings'}),
+                 category='search', description='Search/fetch pipeline settings'),
         # ── capability phase ──
         ToolSpec('memory', _build_memory, phase='capability',
                  provides=frozenset({

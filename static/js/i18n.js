@@ -1737,7 +1737,23 @@ var _i18n = {
   // ══════════════════════════════════════
   'settings.searchFetch': { zh: '搜索与抓取', en: 'Search & Fetch' },
   'settings.llmContentFilter': { zh: 'LLM 内容过滤', en: 'LLM Content Filter' },
-  'settings.llmContentFilterDesc': { zh: '抓取网页后用模型过滤无关内容（导航栏、广告等）。关闭可显著提升抓取速度并节省 token，但搜索质量会下降', en: 'Filter irrelevant content (nav, ads) after fetching pages. Turning off improves speed and saves tokens, but reduces search quality.' },
+  'settings.llmContentFilterDesc': { zh: '抓到网页后先让小模型删掉导航栏、广告等杂质，再把干净内容送给大模型。开启=更干净但更慢；关闭=更快更省 token，但会混入网页噪音', en: 'After fetching a page, a small model strips nav/ads before the main model sees it. ON = cleaner but slower; OFF = faster and cheaper, but noisier.' },
+  // Backend live status strip + pipeline preview (the frontend↔backend bridge)
+  'settings.searchBackendLive': { zh: '后端实况', en: 'Backend live' },
+  'settings.searchStatusUnavailable': { zh: '后端状态不可用', en: 'Backend status unavailable' },
+  'settings.searchStatusExtOn': { zh: '浏览器扩展在线', en: 'Browser extension online' },
+  'settings.searchStatusExtOff': { zh: '扩展离线（浏览器兜底不可用）', en: 'Extension offline (browser fallback unavailable)' },
+  'settings.searchStatusFilter': { zh: '过滤 {mode} · {model}', en: 'filter {mode} · {model}' },
+  'settings.searchStatusDeadline': { zh: '限时 整轮 {call}s · 单页 {url}s', en: 'deadline {call}s/call · {url}s/page' },
+  'settings.searchPipelineTitle': { zh: '一次搜索实际发生什么', en: 'What one search actually does' },
+  'settings.searchPipelineTpl': { zh: '搜索引擎返回结果 → 抓取前 {n} 个网页（每页 ≤{chars} 字符 · 超时 {timeout}s）→ {filter} → 注入对话', en: 'Engine returns results → fetch top {n} pages (≤{chars} chars each · {timeout}s timeout) → {filter} → inject into chat' },
+  'settings.searchFilterOnTpl': { zh: 'LLM 过滤杂质', en: 'LLM filters boilerplate' },
+  'settings.searchFilterOffTpl': { zh: '跳过过滤（原文直送）', en: 'no filtering (raw text)' },
+  'settings.searchHotReloadHint': { zh: '本页参数保存后立即热生效于后端搜索管线，无需重启。', en: 'Saved values hot-apply to the backend search pipeline immediately — no restart needed.' },
+  'settings.fetchTopNSimple': { zh: '每次搜索抓取的网页数', en: 'Pages fetched per search' },
+  'settings.fetchTopNSimpleHint': { zh: '调大更全面但更慢、更费 token；调小更快但可能漏掉关键页面', en: 'Higher = more complete but slower and more tokens; lower = faster but may miss key pages' },
+  'settings.searchAdvanced': { zh: '高级参数', en: 'Advanced parameters' },
+  'settings.searchAdvancedSub': { zh: '超时与内容上限，一般无需改动', en: 'Timeouts and content caps — rarely need changes' },
   'settings.searchFetchParams': { zh: '搜索与抓取参数', en: 'Search & Fetch Parameters' },
   'settings.fetchTopN': { zh: '抓取前 N 条', en: 'Fetch Top N' },
   'settings.fetchTopNHint': { zh: '搜索后自动抓取排名靠前的网页', en: 'Auto-fetch top-ranked pages after search' },
@@ -1757,7 +1773,7 @@ var _i18n = {
   // Site-access registry (was: login-required sources) — each row is one
   // internalized site: strategy badge + knowledge state + toggle.
   'settings.authSources': { zh: '站点接入', en: 'Site Access' },
-  'settings.authSourcesDesc': { zh: '每内化一个网站就在这里追加一条：在你自己的浏览器中登录后粘贴 Cookie 即可连接；之后搜索与抓取链接将优先通过你的浏览器会话读取内容（browser_first），不再回放 Cookie 到服务器。Cookie 仅保存在本地服务器，不会上传。', en: 'Internalizing a site = appending a row here. Connect by logging in via your OWN browser and pasting the cookie; search and link fetching then prefer your browser session (browser_first) instead of replaying cookies server-side. Cookies are stored only on your local server and never uploaded.' },
+  'settings.authSourcesDesc': { zh: '接入需要登录的网站：在你自己的浏览器里登录该站后点「连接」，之后搜索与抓取会优先走你的浏览器会话。Cookie 只保存在本地服务器，不会上传。', en: 'Connect login-walled sites: log into the site in YOUR browser, then hit Connect — search and fetching will prefer your live browser session. Cookies stay on your local server and are never uploaded.' },
   'settings.authSrcStrategyBrowserFirst': { zh: '浏览器优先', en: 'browser-first' },
   'settings.authSrcStrategyCookiesReplay': { zh: '凭据回放', en: 'cookies-replay' },
   'settings.authSrcStrategyPublic': { zh: '公开站', en: 'public' },
@@ -1773,7 +1789,7 @@ var _i18n = {
 
   // Internal-host allowlist (SSRF exemption — reachability, NOT credentials)
   'settings.privateHosts': { zh: '内网主机放行', en: 'Internal Host Allowlist' },
-  'settings.privateHostsDesc': { zh: '默认不允许抓取解析到内网地址的网址（防止 SSRF）。在此填写你确实需要访问的内网主机名，例如 aigc.sankuai.com。填父域名可覆盖其子域。此处只开放“能否访问”，不提供登录凭证；需要登录的站点请在上方“站点接入”连接。', en: 'By default the fetcher refuses URLs whose host resolves to an internal address (SSRF protection). List the internal hostnames you do mean to reach, e.g. aigc.sankuai.com. A parent domain covers its subdomains. This grants REACHABILITY only, never credentials — for sites needing a login, connect them under "Site Access" above.' },
+  'settings.privateHostsDesc': { zh: '默认禁止抓取内网地址（防 SSRF）。确需访问的内网主机名加到这里，填父域名可覆盖其子域。只放行“能否访问”，不含登录凭证；需要登录的站点请在上方“站点接入”连接。', en: 'Fetching internal addresses is blocked by default (SSRF protection). Add the internal hostnames you do mean to reach — a parent domain covers its subdomains. This grants reachability only, no credentials; connect login-walled sites under "Site Access" above.' },
   'settings.privateHostsEmpty': { zh: '尚未放行任何内网主机。', en: 'No internal hosts allowlisted yet.' },
   'settings.privateHostsLoadFail': { zh: '加载失败', en: 'Failed to load' },
   'settings.privHostAllowed': { zh: '已放行', en: 'Allowed' },
@@ -3316,6 +3332,7 @@ var _i18n = {
   'settings.maxCharsDirectFull': { zh: '最大字符数 <span style="color:var(--text-tertiary);font-weight:normal">（直接抓取 URL）</span>', en: 'Max Characters <span style="color:var(--text-tertiary);font-weight:normal">(direct URL fetch)</span>' },
   'settings.maxCharsPdfFull': { zh: '最大字符数 <span style="color:var(--text-tertiary);font-weight:normal">（PDF 文件，0=不限制）</span>', en: 'Max Characters <span style="color:var(--text-tertiary);font-weight:normal">(PDF files, 0=unlimited)</span>' },
   'settings.maxBytesFull': { zh: '最大下载大小 <span style="color:var(--text-tertiary);font-weight:normal">（字节，默认 20MB）</span>', en: 'Max Download Size <span style="color:var(--text-tertiary);font-weight:normal">(bytes, default 20MB)</span>' },
+  'settings.maxBytesMBFull': { zh: '最大下载大小 <span style="color:var(--text-tertiary);font-weight:normal">（MB，超过则拒绝下载）</span>', en: 'Max Download Size <span style="color:var(--text-tertiary);font-weight:normal">(MB; larger downloads are refused)</span>' },
   'settings.maxCharsPdfPh': { zh: '0=不限制', en: '0=unlimited' },
   'settings.bypassDomainsFull': { zh: '绕过域名 <span style="color:var(--text-tertiary);font-weight:normal">（每行一个，后缀匹配 — 例如 <code>.your-corp.com</code>）</span>', en: 'Bypass Domains <span style="color:var(--text-tertiary);font-weight:normal">(one per line, suffix matching — e.g. <code>.your-corp.com</code>)</span>' },
   'settings.fallbackModelFull': { zh: '回退模型 <span style="color:var(--text-tertiary);font-weight:normal">（主模型失败时自动切换）</span>', en: 'Fallback Model <span style="color:var(--text-tertiary);font-weight:normal">(auto-switch on primary failure)</span>' },

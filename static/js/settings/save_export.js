@@ -193,7 +193,9 @@ async function _saveServerConfig() {
   payload.search.max_chars_search = parseInt(document.getElementById('settingMaxCharsSearch')?.value) || 60000;
   payload.search.max_chars_direct = parseInt(document.getElementById('settingMaxCharsDirect')?.value) || 200000;
   payload.search.max_chars_pdf = parseInt(document.getElementById('settingMaxCharsPdf')?.value) || 0;
-  payload.search.max_bytes = parseInt(document.getElementById('settingMaxBytes')?.value) || 20971520;
+  // Displayed in MB, stored in bytes (the pipeline's native unit).
+  var _mbVal = parseFloat(document.getElementById('settingMaxBytesMB')?.value);
+  payload.search.max_bytes = (_mbVal > 0) ? Math.round(_mbVal * 1048576) : 20971520;
   if (typeof ChipInput !== 'undefined') payload.search.skip_domains = ChipInput.getValues('settingSkipDomains');
 
   // Network — proxy address config (no_proxy is auto-managed by bypass domains)

@@ -176,6 +176,16 @@ def get_server_config():
             from lib.search_bridge import sync_search_config
             sync_search_config()
 
+    # Live backend search status (tofu-search version / engines / extension
+    # reachability / filter model+mode) — the piece that lets the Settings UI
+    # show what the backend will ACTUALLY do, not just the saved knobs.
+    try:
+        from lib.search_settings import status_payload as _ss_status
+        search_status = _ss_status()
+    except Exception as _e:
+        logger.warning('[ServerConfig] search status unavailable: %s', _e)
+        search_status = {'ok': False, 'error': str(_e)}
+
     total_keys = sum(len(p.get('api_keys', [])) for p in providers)
     total_models = sum(len(p.get('models', [])) for p in providers)
     server_info = {
@@ -413,6 +423,7 @@ def get_server_config():
     return api_ok({
         'providers': providers, 'presets': presets,
         'models': models, 'search': search_info,
+        'search_status': search_status,
         'server_info': server_info,
         'feishu': feishu_info,
         'face_refusals': face_refusals,

@@ -1,3 +1,11 @@
+### 2026-08-04(存量舰队恢复链:owner 复核擒获「自愈代码够不到已卡死的旧扩展」——extVersion 上线路 + locked-out 登记处 + 面板三态诚实;顺手根修扫描器族原子改名窗口误判) — owner 复核指令四步;commit `5c252962`(13 文件 +510/−21);新套件 **9 针**(failing-first 对 HEAD 精确 9 红)+ 扩展结构针 +1;环 **254/254**(18 套件)
+
+- **盲区定案(owner 擒获):** 上一批(`faa9169f`)的自动重配全部装在新扩展文件里,而 load-unpacked 侧载扩展**没有更新通道**,401 卡死后连轮询都进不来——服务器对「门外徘徊的旧版扩展」与「从未安装」零区分,面板一律「尚未安装」,是误导性谎言;桌面 agent 侧早有 `_with_drift`,浏览器扩展侧是零。
+- **链(四步):** ①扩展 poll body 带 `extVersion`(manifest 直读,杜绝硬编码孪生);②`mark_poll` 存 `ext_version` 且**成功轮询自动清除该 client 的 locked-out 记录**(重下载的新 zip 沿用同 storage 同 clientId,自愈零账面);③`browser_poll` 鉴权失败先解析 body 记 locked-out(TTL 15min 读时过滤——避开 Python 默认参数绑定陷阱;容量 32 上限逐最旧;匿名无 clientId 不记)——Tofu 自己的 401 只可能是凭证失效,这正是存量呼救信号;④status 端点暴露 `servedExtVersion`(读盘 manifest,TTLCache 60s)+ `lockedOutClients`。
+- **面板三态:** 已连接但版本落后 → 绿点不动 + 升级提示(两个版本号都点名)+ 下载按钮;未连接但有 locked-out → 状态「已安装但凭证已失效」(不再是「尚未安装」)+ 救援话术 + 一键重下载(preseed 零配置);下载按钮单源化(`_lcExtDownloadAction`/`_lcWireExtDownload`,三处复用防漂移)。
+- **顺手根修(环中自擒):** merge 套件符号定位器把打包器原子改名窗口里的 `.bundle-<hash>.<rand>.js` 半成品当成第二定义源报「SINGLE SOURCE COPIED」——四处 rglob/walk 扫描器(merge×2/connect_line_contract/no_client_timeouts)统一排除 dotfile,该类误判绝种。
+- **提交纪律新器:** i18n.js 工作树混有兄弟 msdzvqi5 未提交键族——`git diff | 按 hunk 过滤 | git apply --cached` 只把本批 3 键摘进暂存区,`git commit` 不带 pathspec 提交纯暂存区;兄弟 WIP 零沾染。
+
 ### 2026-08-04(搜索设置页重设计 + LLM 直改设置工具:后端实况条 + 管线预览 + 主旋钮双枚 + 高级折叠 + MB 单位 + update_search_settings) — owner 截图三指令(①风格乱无重点、前后端关系看不懂、页面太长 ②最大下载大小为何是字节,改 MB ③给大模型一个直接改设置的方法);commit 见下(14 文件);新套件 **22+19 针全绿** + NEUTER×3 精确;环 **249+52 绿**(2 预存红挂票)
 
 - **重设计(焦点+前后端架桥):** 页首新增「后端实况」徽章条——扩展在线态/tofu-search 版本/SearXNG 实例数/过滤模式与模型/整轮+单页限时,数据来自 `GET /api/v1/server-config` 新增 `search_status` 投影(`lib/search_settings.status_payload` 单源,前端从此显示的是后端真实状态而非仅回显保存值);「一次搜索实际发生什么」管线预览卡——当前旋钮值实时代入一句话(引擎→抓取前 N 页(字符/超时)→过滤→注入),过滤关闭整行灰显「跳过过滤(原文直送)」,input/change 事件联动;主旋钮只留两枚(抓取网页数+LLM 内容过滤),5 个高级参数(超时/MB/字符×3)折叠进 `<details>`;三条长说明(过滤/站点接入/内网主机)腰斩重写。最大下载大小字节→MB(显示 ÷1MiB、保存 ×1MiB、0.5MB 分数合法、垃圾输入回退 20MB)。

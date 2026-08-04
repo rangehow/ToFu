@@ -621,8 +621,11 @@ STRINGS = {
     # verbatim (a new token is visible in dev, and the census ratchet in
     # tests/test_desktop_native_i18n.py demands a key for it).
     'desktop.reason.unreachable': {
-        'en': 'the address cannot be reached',
-        'zh': '无法连接到该地址',
+        # No 'reach'/'连' here — the shells already say「连不上 / Cannot
+        # reach」, and the composed sentence must not double the verb on
+        # the most-read failure copy in the product (owner final polish).
+        'en': 'no answer from the server',
+        'zh': '服务器无响应',
     },
     'desktop.reason.timeout': {
         'en': 'the connection timed out',

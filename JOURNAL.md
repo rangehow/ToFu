@@ -1,3 +1,8 @@
+### 2026-08-04(收官抛光:最高频失败文案双语撞动词根修——`reason.unreachable` 改「服务器无响应 / no answer from the server」,shell/reason 缝不再复读;compose 断言钉成类防回潮) — owner 复核末项指令;commit 见下(3 文件);套件 **24/24**(ComposedCopy +3),NEUTER 一针精确,环 **213 绿**
+
+- **定案(owner compose 验收擒获):** `unreachable` 是探测/配对失败的主力 token(服务器没开/端口错/隧道死),其拼合文案是产品里被读次数最多的错误句,而清扫批选的短语与外壳动词撞车——en「Cannot reach Tofu there: **the address cannot be reached**.」/ zh「连不上服务器:**无法连接到该地址**。」,verifyFailed 与 pair.failed 双壳双语四句全拗口。根修=一处:`desktop.reason.unreachable` 改不重复外壳动词的说法(en `no answer from the server` / zh「服务器无响应」)——拼完四句全通顺(Cannot reach Tofu there: no answer from the server. / 连不上服务器:服务器无响应。)。
+- **同类排查:** timeout/error/not_tofu/bad_response/http_ 族 compose 无病(短语均不含外壳 reach/连/配对 动词)——钉成 `test_other_reason_tokens_compose_without_the_same_disease`,防的是「下一个 token 又犯同病」而非这一处。
+- **测试账:** ComposedCopyTest +3——短语钉死(owner 亲定措辞)、四句 compose 禁含 `cannot be reached`/`无法连接` 且理由不空、兄弟 token 无同病;NEUTER 一针(还原文案→三针全红)。native_i18n 套件 21→24。
 ### 2026-08-04(原生面 i18n 系统性清扫:owner 复核驳回「i18n 全量落实」——lib 层全 token 化 + UI 边界唯一三映射(reason_text/connect_error_text/component_msg) + token 普查棘轮;顺手擒获 owner 清单外进度文案/终端兜底两族) — owner 复核指令五条;epic `pt_a28866376e614375`;commit 见下(7 文件);新套件 **21 针**,NEUTER×6 全精确;环 **256+196=452 绿**;zh 渲染实弹演示八连全中
 
 - **定案(owner 抽查五漏,全部实证):** ①`parse_connect_line` 三条英文 ValueError 被对话框 `str(ve)` 原样上屏;②probe/pair 机读 token('unreachable'/'http_404'/'not_tofu'/'bad_response')被 `.replace('{reason}', val)` 裸渲进中文句;③`size_hint='~115 MB download'` 英文属性拼进组件卡;④`install()`/progress 全系英文消息('Chromium browser installed successfully.' 等)进度视图原样渲染;⑤托盘链路行 `str(detail or code)` 兜底可摆英文异常。我补查又擒两族同族漏网:progress_callback 文案('Downloading Chromium...')与无 tkinter 终端兜底交互。

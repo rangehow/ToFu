@@ -199,6 +199,62 @@ class ComponentMsgTest(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Composed copy — the shell + reason seam must read clean
+# ═══════════════════════════════════════════════════════════════
+
+class ComposedCopyTest(unittest.TestCase):
+    """Owner final polish 2026-08-04: the most-read failure copy in the
+    product doubled its verb at the shell/reason seam —
+    'Cannot reach Tofu there: the address cannot be reached.' and
+    「连不上服务器：无法连接到该地址。」 — in BOTH languages and BOTH
+    dialogs. unreachable is the dominant probe/pair failure (server off /
+    wrong port / dead tunnel), so this exact composed string is what a
+    user reads most often. NEUTER target: restore a reach-verb phrase in
+    reason.unreachable and both pins go red."""
+
+    def test_unreachable_phrase_is_shell_compatible(self):
+        theme = _theme()
+        self.assertEqual(theme.reason_text('unreachable', 'en'),
+                         'no answer from the server')
+        self.assertEqual(theme.reason_text('unreachable', 'zh'),
+                         '服务器无响应')
+
+    def test_unreachable_composes_without_doubled_wording(self):
+        theme = _theme()
+        for shell_key in ('desktop.connect.verifyFailed',
+                          'desktop.pair.failed'):
+            en = theme.t(shell_key, 'en').replace(
+                '{reason}', theme.reason_text('unreachable', 'en'))
+            zh = theme.t(shell_key, 'zh').replace(
+                '{reason}', theme.reason_text('unreachable', 'zh'))
+            self.assertNotIn('cannot be reached', en,
+                             '%s en doubles the reach verb again' % shell_key)
+            self.assertNotIn('无法连接', zh,
+                             '%s zh doubles 连不上/无法连接 again' % shell_key)
+            # The reason still carries information, not a euphemism void:
+            self.assertIn('server', en.lower())
+            self.assertIn('服务器', zh)
+
+    def test_other_reason_tokens_compose_without_the_same_disease(self):
+        """The sibling tokens, checked for the same shell-verb collision so
+        this stays fixed as a CLASS, not a one-word patch: none of them may
+        contain the shells' reach/连 verb or the pair shell's pair verb."""
+        theme = _theme()
+        for token in ('timeout', 'error', 'not_tofu', 'bad_response'):
+            en_reason = theme.reason_text(token, 'en').lower()
+            zh_reason = theme.reason_text(token, 'zh')
+            self.assertNotIn('reach', en_reason,
+                             '%s en reason reuses the shell verb' % token)
+            self.assertNotIn('pair', en_reason,
+                             '%s en reason reuses the pair verb' % token)
+            self.assertNotIn('连不上', zh_reason,
+                             '%s zh reason reuses 连不上' % token)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Surface wiring ratchets — the boundaries must USE the mapping
+# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 #  Surface wiring ratchets — the boundaries must USE the mapping
 # ═══════════════════════════════════════════════════════════════
 

@@ -1,3 +1,8 @@
+### 2026-08-04(预存红闭环:gitignore↔export 同步钉 3 红——untrack 9 件(verify_epic_e_deferrals.sh+营销图×8),candidates 母带 keeper-prefix 设计误判自纠) — 脑派发接我自票 `pt_62b50abf2a8d45d1` **DONE**;commit 见下(10 文件,9 删 1 改);同步钉+导出清理 **12/12 绿**
+
+- **处置(三态分治):** ①`scripts/verify_epic_e_deferrals.sh`——全仓零引用的一次性 Epic-E 校验脚本,rm --cached(/scripts/* 忽略自动罩住);②`static/images/` 营销图×8(attach-icon/onigiri-icon/tofu-cache-article-cover×2/tofu-poster×2)——export.py 早已判「零引用死重」入 OPENSOURCE_EXTRA_EXCLUDE_FILES(2026-08-01 verdict,我 grep 复核零 url()/路径引用),rm --cached + .gitignore 八行第二防线;③`static/icons/_gen/tofu-pet/_candidates/` 母带×16——**我首版误判 rm --cached**,撞上同步钉的 keeper-prefix 承重针(test_keeper_prefixes_are_live_and_narrow/test_neuter_keeper_prefix_is_load_bearing):兄弟的设计是「1024² 母带保留跟踪(宠物重生成源),export 剥离,keeper-prefix 白名单豁免 gitignore」——撤回 untrack 与忽略行,恢复原设计。
+- **判例自记:** 「stripped-by-export 必 gitignored」与「keeper-prefix 豁免跟踪」是同步钉里**并存的两条合法通道**——动手 untrack 前先查 _KEEPER_PREFIXES,别把白名单内资产当 offenders。首版失败清单里 candidates 文件出现在 NEUTER 针的构造场景里是**设计内**(证明 prefix 承重),真 offenders 自始至终只有 verify.sh+营销图×8。
+
 ### 2026-08-04(测试体系 P2 落地:防负优化制度化三件——棘轮殡葬审计(152 守护套件:锚定 92/候选 60)+ flake SLA 三步进 docs + 按路径选择运行(静态反向索引,冷 4.2s,make test-affected)) — 脑派发 epic `pt_e55e6995baee4f54` **DONE**(候选处置另票);commit 见下(9 文件);套件 **20 针** + ruff 四触点全绿
 
 - **①殡葬审计(scripts/ratchet_audit.py→docs/RATCHET_AUDIT.md):** 机械分类器双锚信号(NEUTER 咬合证明/事故引用 pt_/commit/JOURNAL/事故)。首跑 152 套件 83 候选——其中 21 个 api_contract parity 是 charter#0 迁移批一族,补**家族锚登记处**(严格:引用工件必须在库,脚本自校验防洗白)→候选 60。候选**不自动删**(删保护要人判),处置=补链接/补 NEUTER/降级/删除,另票待人领。**增量闸**:tests/test_ratchet_incident_link——新守护套件无锚禁入,存量祖父化(152 基线 JSON),基线整体清空即红(防删基线洗白)。

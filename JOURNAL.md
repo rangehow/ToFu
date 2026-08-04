@@ -1,3 +1,9 @@
+### 2026-08-05(§2.2 日志纪律清扫:69 静默 catch 全部绑定留痕 + 3 裸 getLogger 收编 + 8 F401——双守卫 13/13 绿,零控制流变更) — 脑派发 epic `pt_c60bdb8a997d417d` **DONE**;commit `adef0842`(38 文件);四路 swarm(desktop_agent/desktop/misc/tail)+ 敏感邻接环 **85+35+53 绿**
+
+- **形态:** 首波三路按目录切(desktop_agent×5 文件/desktop+dist+browser+routes×9/misc×9),我复盘时擒获**自己的截断事故**——违规清单 head -30 只派了前 30 处,lib 层原 50 处的尾巴 22 处漏派;补一路 tail×16 文件收口。**教训:派活前先用 count 验证清单完整性,别用 head 截决定工作量的输出。**
+- **纪律落法(全部零控制流变更):** `except X:` → `except X as e:` + `logger.debug/warning(..., %s, e)`(探测/超时/清理/best-effort 走 debug,值得注意但已处理走 warning);缺 logger 的文件收 `lib.log.get_logger`;3 裸 `logging.getLogger` 换门面对称收编;8 个 F401(ruff --fix 安全删除后全绿 + 包级导入冒烟)。
+- **flake 隔离判例再添一枚:** test_dispatch_model_health 并行批红/单跑绿(高载时序),diff 复核本批 api.py 改动纯日志,与红无关——三态分诊(本批/预存/flake)已是肌肉记忆。
+
 ### 2026-08-05(测试基建残留漂移票五子项全闭环:install.sh 门根修/legacy carve-out×2/db_guard×4/suite_health A-A2-B 回落/inbox NC 重锚过滤器链;发布票 human-gated 挂起等凭证) — 脑派发两票:`pt_da91d3e6b3c343f9` **DONE**;`pt_ccab5c8de3fe4254` 阻塞带三选项问题(自推/agent 带凭证推/挂起);commit 见下(17 文件);环 **6+2+60+131+7+4+6 全绿** + ruff/bash -n 干净
 
 - **① install.sh force-reinstall 门(产品真 bug,测试即规格):** 门判 BEFORE 列表=健康环境恒触发(稳态 10/10 全在)——补 `_CONDA_PKGS_AFTER_PURGE` 快照改 **BEFORE∩¬AFTER diff**(健康重跑不再重铺 ~30 包);retry 分支显式 `_FORCE_REINSTALL="--force-reinstall"`(继承空闸=坏环境不可修);6/6 绿 + `bash -n` 过。

@@ -1,3 +1,10 @@
+### 2026-08-04(设置侧栏「深色砧板」退役:奶油豆腐索引栏——chrome 同族奶油色 + 四组印花分隔标签 + 激活白块嵌金条;轻量重排导航) — owner 截图指令「侧栏差点意思,与整体设计不搭,重设计到完美」;commit `8e4ac0d7`(3 文件 +81/−68);环 **81 绿**(52+29);桌面/移动双视口截图实证
+
+- **定案(深棕渐变侧栏=异物):** 旧「cutting board」深色木纹渐变(#38332c→#2b2620)+暖灰文字在奶油面板里像外挂的另一应用;13+ 项平铺无层级。新设计=**豆腐索引栏**:侧栏与 header 同 `var(--s-cream)`(L 形铬框包白色内容面,心智模型=奶油框+纸面);新增 `.settings-tab-group` 印花分隔标签(10px/900/0.14em 字距 + 右侧细规线,呼应 `.settings-section-title`);激活态=白豆腐块(2px 墨边 + `inset 4px 0 0` 金条 + `2px 2px 0` 硬阴影,与关闭按钮/内容卡同语言);hover=实底 `--s-skin`(告别 alpha 洗色);focus-visible 金描边(a11y 补齐);图标不透明度 0.45→0.7、激活描金 `--s-gold-dim`。
+- **导航重排(轻量):** 显示提前贴通用;订阅登录上移与服务商组成「模型接入」;其余按 能力(搜索/翻译/语音)/连接(网络/设备/飞书/MCP/Skills)/系统(记忆与偏好/高级) 落组;i18n 四键双语(groupModels/Features/Connections/System)。`data-tab` 按钮结构不变,`switchSettingsTab` 零改动,测试按属性寻址不受影响。
+- **两枚顺手擒获:** ①飞书 logo 是 fill 型 SVG,全局 `stroke:currentColor` 会给品牌 logo 描边染色——加 `tab-logo` 类豁免(旧代码就有此隐患,奶油底上更显);②移动端横条覆写钉的是旧激活态(金底边+`::after`  shimmer,均已删)——同步为白块硬阴影并隐藏分组标签。面板 88vh→90vh 为分组标签腾纵向空间。
+- **验证:** 预览 harness(实时抓真 index.html 标记+真 CSS)双视口截图——桌面 1280×950 全 14 项+4 组免滚动、移动端 390×844 横条图标态正常;harness 用后即删。环:devices/mcp_oauth_deferred/onboarding/i18n_coverage/bundle_parity 52 + settings 三套件 29 = **81 绿**。与兄弟 msdzvqi5(搜索页内容重设计)边界互认:它碰 settings_panels/search.html + styles.css 搜索组件区,侧栏段零交叠。
+
 ### 2026-08-03(owner 复核三枚全修:①致命——首启隧道 atexit 必死而 saved loopback 永久跳过阶梯,「开机自启」机器第二天必死无自愈;②LAN 响应器纯死代码;③隧道死磕 15000;修复后安装包二次重建) — epic `pt_59b62951aad2463e`;commit `d9b34c71`(6 文件)+ 构建 state=ok(git_sha `d9b34c71`);套件 **30+16+邻接 42 = 88 绿**;agent 烟雾 OK;server.py 编译过
 
 - **① 地雷定性(owner 擒获,我 P3 的假绿):** 首启 `try_ssh_tunnel` 赢的 ssh 子进程挂 `_ACTIVE_TUNNELS`,`_reap_tunnels` 注册在 **atexit**——进程一退隧道必死;但 `save_remote_server` 存的 `http://127.0.0.1:15000` 只有隧道活着才可达,而 `agent_launcher.main` 第二幕只见 url 非空就**整体跳过阶梯**——第二次开机轮询死端口,托盘 Connect 又不重跑阶梯,用户零自愈。安装器默认勾开机自启 ⇒ 验收当天绿、第二天必死。**根修(按 owner 处方):** `resume_attachment` 先探后信——`probe_server(saved)` 活则零动作;死才重跑阶梯;找到服务器**保留原 token**(bearer 凭证与可达地址无关),地址变了才写盘;阶梯也空→原样返回(服务器可能只是没开,轮询继续、托盘 unreachable 诚实呈现,绝不把用户弹回首启对话框)。

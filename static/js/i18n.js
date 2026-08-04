@@ -2978,13 +2978,14 @@ var _i18n = {
     zh: '已等待 {elapsed}s：{model} 尚未返回首个字节（{reason}）',
     en: 'Waiting {elapsed}s — no first byte from {model} yet ({reason})',
   },
-  // Stall-watch banner (pt_e0ea29f2): the ONLY frames arriving are
-  // heartbeat self-ticks — the tool has produced nothing for {n}s. This is
-  // the "no unannounced freeze" card: it announces the wedge (amber) and
-  // offers Stop; a real output event flips it back off by itself.
+  // Stall-watch banner (pt_e0ea29f2; regime split 2026-08-04): the stream
+  // delivered NOTHING for {n}s — not even a heartbeat self-tick — so the
+  // freeze would otherwise go unannounced. A tool merely EXECUTING silently
+  // (heartbeats flowing) is normal and never raises this card: the tool row
+  // already counts the seconds, and the backend reaper owns the wedge case.
   'stream.stalled.banner': {
-    zh: '已停滞 · 静默 {n}s — 期间仅有心跳，无新产出',
-    en: 'Stalled · silent {n}s — heartbeats only, no new output',
+    zh: '已停滞 · 静默 {n}s — 期间连心跳帧都未到达，疑似卡死',
+    en: 'Stalled · silent {n}s — not even heartbeat frames arrived',
   },
   'stream.stalled.stop': {
     zh: '停止',

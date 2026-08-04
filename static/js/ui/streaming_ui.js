@@ -614,13 +614,17 @@ function updateStreamingUI(msg) {
     _phaseKey = "none";
     _phaseHtml = "";
   }
-  /* ★ Stall banner (pt_e0ea29f2 — the "no unannounced freeze" watch). When
-   *   the ONLY frames arriving are heartbeat self-ticks past the threshold,
-   *   stall_watch.js flags the task and THIS seam paints the announcement —
-   *   it takes precedence over every other phase (a frozen tool's phase row
-   *   is blank by design, which is exactly the dead zone the user reported).
-   *   Read on EVERY repaint so a late real event flips it back off
-   *   (self-healing, same as the swarm stalled-card). */
+  /* ★ Stall banner (pt_e0ea29f2 — the "no unannounced freeze" watch;
+   *   regime split, owner ruling 2026-08-04). stall_watch.js flags the task
+   *   only when NOTHING has arrived past the threshold — not even a
+   *   heartbeat self-tick — and THIS seam paints the announcement (it takes
+   *   precedence over every other phase: a frozen stream's phase row is
+   *   blank by design, exactly the dead zone the user reported). A tool
+   *   merely EXECUTING silently (heartbeats flowing) is normal and never
+   *   raises this card — the tool row already counts the seconds, and the
+   *   backend reaper owns the genuinely-wedged case. Read on EVERY repaint
+   *   so a late real event flips it back off (self-healing, same as the
+   *   swarm stalled-card). */
   const _swTaskId = (function () {
     if (typeof conversations === 'undefined' || typeof activeConvId === 'undefined') return null;
     const _c = conversations.find(x => x.id === activeConvId);

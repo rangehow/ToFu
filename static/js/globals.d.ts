@@ -213,6 +213,9 @@ interface Window {
   // ONCE at module init and never assigned in-tree (optional on purpose:
   // absence is the production case — same precedent as Navigator.userAgentData).
   _STALL_WATCH_THRESHOLD_S?: any;
+  // ui/stall_watch.js — test-seam override for the heartbeat-flow window
+  // (0 neuters the tick-flow gate, so the banner fires during tool execution).
+  _STALL_WATCH_TICK_WINDOW_S?: any;
 }
 // (FileReader.result stays string|ArrayBuffer — call sites coerce via String()
 //  since merging can't override an existing property's declared type.)

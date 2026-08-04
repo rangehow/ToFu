@@ -48,6 +48,7 @@ declare var _CLIENT_LOCAL_ROUND_KEYS: any;   // static/js/ui/stream_reducer.js
 declare var _ROUND_KEY_ORDER: any;   // static/js/ui/stream_reducer.js
 declare var _STALL_THRESHOLD_S: any;   // static/js/ui/stall_watch.js
 declare var _TERMINAL_ROUND_STATUS: any;   // static/js/ui/stream_reducer.js
+declare var _TICK_FLOW_WINDOW_S: any;   // static/js/ui/stall_watch.js
 declare var __RELAY_BILLING_ENABLED: any;   // static/js/relay-admin.js
 declare var __RELAY_MODEL_ENABLED: any;   // static/js/relay-admin.js
 declare var __fitCount: any;   // static/js/settings/providers/access_matrix.js
@@ -74,7 +75,14 @@ declare var _evClock: any;   // static/js/ui/stall_watch.js
 declare var _evRoundNum: any;   // static/js/ui/stream_reducer.js
 declare var _finalizeProjection: any;   // static/js/ui/stream_reducer.js
 declare var _isBootLoadHeld: any;   // static/js/core/cross_tab_sync.js
+declare var _paperDeepenClickWired: any;   // static/js/paper/deepen.js
+declare var _paperFocusKeysWired: any;   // static/js/paper/focus_mode.js
+declare var _paperNotesClickWired: any;   // static/js/paper/notes.js
 declare var _paperResponsiveOnCrossing: any;   // static/js/paper/pdf_responsive.js
+declare var _paperXpClickWired: any;   // static/js/paper/reading_xp.js
+declare var _paperXpGet: any;   // static/js/paper/reading_xp.js
+declare var _paperXpSet: any;   // static/js/paper/reading_xp.js
+declare var _paperXpSkimApply: any;   // static/js/paper/reading_xp.js
 declare var _pmModelDocCloseBound: any;   // static/js/paper/podcast.js
 declare var _resetStallWatchForTests: any;   // static/js/ui/stall_watch.js
 declare var _resolveContextLimit: any;   // static/js/context-bar.js
@@ -88,7 +96,8 @@ declare var _stampDeltaReset: any;   // static/js/ui/stream_reducer.js
 declare var _streamRenderNoHighlight: any;   // static/js/ui/streaming_ui.js
 declare var _swReconcileTicker: any;   // static/js/ui/streaming_swarm_panel.js
 declare var _swTimerTicker: any;   // static/js/ui/streaming_swarm_panel.js
-declare var _timerCountdownTicker: any;   // static/js/ui/tool_rounds.js
+declare var _ticksFlowing: any;   // static/js/ui/stall_watch.js
+declare var _timerCountdownTicker: any;   // static/js/ui/tool_rounds_rich.js
 declare var _tofuProjectModalOpen: any;   // static/js/project.js
 declare var _translationPolicy: any;   // static/js/main/main_toolbar_ui.js
 declare var _uploadShrinkPolicy: any;   // static/js/main/main_toolbar_ui.js
@@ -228,6 +237,7 @@ interface Window {
   _convMainTurnInFlight: any;
   _currentUserId: any;
   _cvOnLanguageChange: any;
+  _deepenReportHeadings: any;
   _deriveChatModeFromFlags: any;
   _dispatchableQueueCount: any;
   _ensureStallTimer: any;
@@ -271,7 +281,31 @@ interface Window {
   _onConvSyncPush: any;
   _onFoldersChangedPush: any;
   _onReady: any;
+  _paperDeepenAfterRender: any;
+  _paperDeepenClickWired: any;
+  _paperFocusAfterRender: any;
+  _paperFocusKeysWired: any;
+  _paperFocusModeToggle: any;
+  _paperNoteAnchorFromSelection: any;
+  _paperNoteFromSelection: any;
+  _paperNoteOpenEditor: any;
+  _paperNotesAfterRender: any;
+  _paperNotesClickWired: any;
+  _paperNotesDecorate: any;
   _paperResponsiveOnCrossing: any;
+  _paperXpAfterRender: any;
+  _paperXpApplyMetaEvent: any;
+  _paperXpClickWired: any;
+  _paperXpCostBreakdown: any;
+  _paperXpDistribute: any;
+  _paperXpDistributeCheckpoints: any;
+  _paperXpGet: any;
+  _paperXpHandleCheckpointsEvent: any;
+  _paperXpHandleInsightEvent: any;
+  _paperXpSessionSummary: any;
+  _paperXpSet: any;
+  _paperXpSkimApply: any;
+  _paperXpSkimToggle: any;
   _patchTranslateLoadingDom: any;
   _pmModelDocCloseBound: any;
   _prefetchConvCosts: any;
@@ -298,6 +332,7 @@ interface Window {
   _rollbackContinueShell: any;
   _runTerminalContinuation: any;
   _seedStreamTimerStart: any;
+  _serverHasImagesLocalLacks: any;
   _serverHasSegmentsLocalLacks: any;
   _serverHasTranslationLocalLacks: any;
   _setOptimizerPanelOpen: any;
@@ -482,10 +517,8 @@ interface Window {
   toggleBrowserFromLocalModal: any;
   toggleChatModeMenu: any;
   toggleDesktopFromLocalModal: any;
-  toggleOptimizerPanel: any;
   togglePendingQueueCollapsed: any;
   toggleProjectBrain: any;
-  toggleTimerPanel: any;
   toggleVoiceInput: any;
   translateClaim: any;
   translateInflight: any;

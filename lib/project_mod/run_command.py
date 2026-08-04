@@ -55,6 +55,7 @@ from lib.project_mod.command_analysis import (  # noqa: F401
     _extract_write_targets,
     _filter_changes_by_targets,
     _format_cuda_device_range,
+    _grep_filesystem_segment,
     _has_unquoted_shell_metachars,
     _is_catastrophic_delete,
     _is_dangerous_command,
@@ -639,6 +640,40 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
                     f"specific subdirectory instead; (2) pass an explicit "
                     f"`timeout` to run_command; or (3) wrap the scan with "
                     f"coreutils `timeout <secs>`.")
+
+    # ★ Filesystem-grep redirect guard (2026-08-04). The tool description has
+    #   advised grep_search-over-grep for months, yet grep-via-run_command
+    #   kept recurring — measured: a two-grep pipeline sat RUNNING 17m04s in
+    #   a FUSE bad window with zero output and no timeout to end it. Advice
+    #   is not enforcement: refuse grep-family segments that read the
+    #   FILESYSTEM (file/dir operands or -r) and translate the call to
+    #   grep_search. Stream filters (`pytest 2>&1 | grep PASS`,
+    #   `ps aux | grep python`), rg, git grep and timeout-wrapped shapes all
+    #   stay legal. TOFU_RUN_GREP_GUARD=0 opts out.
+    if os.environ.get('TOFU_RUN_GREP_GUARD', '1') != '0':
+        _gseg = _grep_filesystem_segment(command)
+        if _gseg is not None:
+            logger.error('[run_command] BLOCKED filesystem grep (cwd=%s): %.200s',
+                         base, command)
+            return (
+                'Error: Command intercepted: this `grep` reads the filesystem, '
+                'which belongs to the dedicated `grep_search` tool, not '
+                f'run_command. Refused segment: `{_gseg[:150]}`\n'
+                'Translate:\n'
+                "  - `grep -rn 'X' lib/`   -> grep_search(pattern='X', path='lib')\n"
+                "  - `grep -n 'X' f.py`    -> grep_search(pattern='X', path='f.py')\n"
+                "  - `grep -c 'X' dir/`    -> grep_search(pattern='X', path='dir', count_only=True)\n"
+                "  - `... | head -20`      -> grep_search(..., max_results=20) "
+                '(never pipe to head)\n'
+                'grep_search is 5x+ faster on this network filesystem '
+                '(ripgrep; .gitignore- and junk-dir-aware), caps runaway '
+                "output via max_results, and won't wedge for minutes in a "
+                'FUSE bad window (measured: a `grep -rn ... | head` pipeline '
+                'ran 17m+ with zero output). Filtering ANOTHER command\'s '
+                'output through grep stays allowed '
+                '(`pytest 2>&1 | grep PASS`, `ps aux | grep python`) — only '
+                'grep with file/dir operands or `-r` is intercepted. '
+                'Escape hatch: TOFU_RUN_GREP_GUARD=0.')
 
     # ★ Cross-DC timeout adjustment — multiply timeout for remote DolphinFS clusters
     try:

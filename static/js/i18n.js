@@ -1077,6 +1077,7 @@ var _i18n = {
   'skills.pageInfo': { zh: '显示 {from}–{to} / {total}', en: 'Showing {from}–{to} of {total}' },
   'skills.noMatch': { zh: '没有匹配的 Skill。', en: 'No matching skills.' },
   'skills.official': { zh: '官方', en: 'Official' },
+  'skills.featured': { zh: '推荐', en: 'Featured' },
   'skills.by': { zh: '作者：{author}', en: 'by {author}' },
   'skills.reqBins': { zh: '需要 {bins}', en: 'Requires {bins}' },
   'skills.reqEnv': { zh: '需要环境变量 {env}', en: 'Requires env vars {env}' },

@@ -339,7 +339,8 @@ def _hue_spread(hexs):
     dab pulled to the same hue → spread → 0. This is the discriminating metric
     for \"the three scenes look identical at 3am\": chroma can survive a
     crush (the indigo wash is itself colourful), but hue variety cannot."""
-    import colorsys, statistics
+    import colorsys
+    import statistics
     hs = []
     for h in hexs:
         v = int(h[1:], 16)

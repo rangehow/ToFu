@@ -1,3 +1,8 @@
+### 2026-08-04(预存红×2 闭环:test_frontend_backend_contract 悬空插值假 MISS 根修 + ruff E401 拆行——脑派发接我自票) — epic `pt_d42f32511279432a` **DONE**;commit 见下(2 文件);契约套件 **4/4** + ruff 清零
+
+- **① 契约红根修(normaliser 侧,非 api.js 侧):** api.js:1251 `…/live-session${refresh ? '?refresh=1' : ''}` 含两个插值;提取器字符类在第二个插值**内部**的 `?` 截断,留下 `live-session${refresh` 悬空半插值——`_DYNAMIC_SEG_RE` 要求闭合 `}` 不识→段保持字面→对注册路由 `<domain>/live-session` 报假 MISS。定案:悬空 `${`(其后无 `}`)只可能产出查询串或空,**route 段在它之前结束**——`_normalise` 截断悬空处(段空则弃),完整插值/混合段/Werkzeug 转换器三语义钉针不动。NEUTER 级回归针四形态(事故原形/段首悬空/完整插值/混合段)。
+- **② E401:** `import colorsys, statistics` 拆两行(HEAD 预存,本地 ruff 0.15.15 擒获)。
+
 ### 2026-08-04(测试体系 P0-3 落地:浏览器主干道巡检 12 条——中止/会话恢复/侧栏/多轮/键盘/新会话/主题持久化/设置弹窗/上传 chip 九旅程入 e2e hermetic 车道,Makefile+CI 双缝收编) — epic `pt_2f2c847ff8524e5e` P0 全量收口;commit 见下(4 文件);旅程 **9+3 全绿**;collect-only **15642 零错**
 
 - **形态(对齐业界 10-50 条关键旅程守闸惯例):** 骑 test_e2e_smoke 母版的 hermetic 合约(真 app+真 Chromium+stub LLM,session fixture 直接 import 复用零重复),每条=一个真实用户旅程打在 live DOM 上;全部 LLM 路径断言 stub 哨兵递进(patch-miss 即红,绝不拿真模型输出充数)。

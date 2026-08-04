@@ -108,7 +108,7 @@ def oauth_test():
     from lib.proxy import proxies_for
 
     endpoints = {
-        'claude_token': 'https://console.anthropic.com/v1/oauth/token',
+        'claude_token': 'https://platform.claude.com/v1/oauth/token',
         'claude_auth':  'https://claude.ai/',
         'codex_token':  'https://auth.openai.com/oauth/token',
         'codex_auth':   'https://auth.openai.com/',

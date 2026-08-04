@@ -37,6 +37,7 @@ logger = get_logger(__name__)
 _ALLOWED_HOSTS = frozenset({
     'api.anthropic.com',
     'console.anthropic.com',
+    'platform.claude.com',
     'claude.ai',
     'auth.openai.com',
     'auth0.openai.com',

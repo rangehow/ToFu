@@ -6,7 +6,7 @@ OAuth flow (console callback):
   3. User authenticates on claude.ai
   4. Redirect to console.anthropic.com/oauth/code/callback which shows code#state
   5. User copies code#state and pastes into Tofu input box
-  6. Exchange code for access_token / refresh_token via console.anthropic.com/v1/oauth/token
+  6. Exchange code for access_token / refresh_token via platform.claude.com/v1/oauth/token
   7. Token is a standard Anthropic API key (sk-ant-oat01-...)
      → use with Authorization: Bearer header on api.anthropic.com/v1/messages
 
@@ -38,17 +38,21 @@ __all__ = [
 
 # ══════════════════════════════════════════════════════════
 #  OAuth Configuration Constants
-#  (from CLIProxyAPI v6.9.10 / Claude Code official client)
+#  (from CLIProxyAPI v7 / Claude Code 2.1.220, synced 2026-08-04 —
+#   drift alarmed by tests/test_oauth_cloaking_drift.py)
 # ══════════════════════════════════════════════════════════
 
 CLAUDE_OAUTH_CONFIG = {
     'auth_url': 'https://claude.ai/oauth/authorize',
-    'token_url': 'https://console.anthropic.com/v1/oauth/token',
+    # Claude Code 2.1.220 posts exchange+refresh to platform.claude.com,
+    # not console.anthropic.com (CLIProxyAPI anthropic_auth.go TokenURL).
+    'token_url': 'https://platform.claude.com/v1/oauth/token',
     'client_id': '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
     'callback_port': 54545,  # kept for relay server (auto-callback)
     'redirect_uri': 'https://console.anthropic.com/oauth/code/callback',
     'redirect_uri_local': 'http://localhost:54545/callback',  # for relay server auto-callback
-    'scope': 'org:create_api_key user:profile user:inference',
+    'scope': ('user:profile user:inference user:sessions:claude_code '
+              'user:mcp_servers user:file_upload'),
     'provider': 'claude',
 }
 

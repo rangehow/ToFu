@@ -1,3 +1,21 @@
+### 2026-08-04(订阅增强 E1+E2+E3 落地:漂移对拍守卫上线 + cloaking 常量同步 2.1.220/codex-tui/platform.claude.com + dispatcher 三果实 + 多 agent 有序 fallback;E4 适配器 epic 上板 pt_728134281fb841c3) — owner 复核设计稿后拍板实施(四点修订: S2 行陈腐更正/登录坍缩红利/适配器攻击面/更新通道);commit 见下(17 文件);环 **100 绿** + collect-only 15528 零错
+
+- **设计稿修订(owner 四点):** S2 OS 代理发现早已实现(_egress.py:72-92,我误标 TODO);§4.4 补「登录链整个坍缩」红利(适配器自带本机 OAuth 回调,三级登录兜底+刷新 singleflight 对托管订阅整体删除)与适配器攻击面(随机 api-key + management 端点锁)与更新通道(周检 release+哈希换二进制,否则漂移在边缘重演);O1 分发 owner 拍板=首启下载+钉版本+哈希+周期更新。
+- **E1 漂移守卫(failing-first 实证 7 红→绿):** 新套件 `test_oauth_cloaking_drift.py` 10 检——直接解析 ../CLIProxyAPI 的 Go 常量(UA 版本/Stainless 四件/token_url/scope/client_id/originator/beta 线序/盐+cch 分支)与 tofu 对拍,漂移即红且报错带同步指引;参照仓库缺席 skip(CI/开源导出无碍);NEUTER 自检比较器必咬人。常量同步:2.1.63→**2.1.220**、codex_cli_rs→**codex-tui**(UA 换新格式)、token 端点 console.anthropic.com→**platform.claude.com**(双白名单+oauth 探测端点同步补)、beta 基线重排 2.1.220 线序(11 枚+has_tools 条件插 advanced-tool-use;淘汰 structured-outputs/fast-mode/token-efficient-tools 出基线)、补 Stainless 画像四件(0.94.0/v26.3.0/MacOS/arm64)。**dangerous-direct-browser-access 证据翻转**:CLIProxyAPI 2.1.220 活捉套件带此头,我旧注释「真 Claude Code 不发」是未测假设——按证据发改。
+- **E2 三果实(子代理实施,21 检):** ①Codex `usage_limit_reached`/`at capacity` → 定时冷却(llm_errors 解析 resets_at/resets_in_seconds,钳 1s-24h;slot.record_error 收 cooldown_s;与 80431312 的 429 无限重试分通道不互撞);②oauth slot 401 → 强制刷新一次+重试一次才回退(_force_oauth_token_refresh,per-request 单次闸,非 oauth slot 不动);③404/422 晋请求级错误(RequestScopedError,release 不进冷却不耗回退)——400 本已请求级,钉守卫。
+- **E3 多 agent fallback(6 新检):** route_request 拆出 route_candidates(pin 领先→最近成功→last_seen;未 pin 不再报错——旧「必须去设置页 pin」契约废除);egress_http 桥失败/agent 网络失败换下一台,**已送达 HTTP 错误(500 等)绝不换机**(防双计订阅配额);open_stream 仅零帧(pre-meta)才换机,有帧无 meta 宁报错不 retry(同防双计)。failing-first 在干净 HEAD worktree 实证 10 红 5 err→本批全绿。
+- **测试账:** 七套件 **100 绿**(drift 10 + cloak 26 + outbound 10 + egress 33 + quota 10 + 401 4 + request-scoped 7);collect-only 15528 零错;e2 邻接环 306 绿(test_error_transparency_guard 红为预存,纯净树同签名)。事故自记:route_candidates 引 threading 早于中段 import→NameError 当场被套件擒获,提顶修复(教训重申:模块级常量引名先查 import 时序)。
+- **未竟(结构不可达,列入 P4 真机验收):** 常量同步后「上游真收货」实测需经 egress agent(本服务器 geo-block 且无在线 agent);E4 适配器 epic `pt_728134281fb841c3` 已上板待实施。
+
+### 2026-08-04(预存红闭环 + MCP per-tool 开关落地:update_search_settings 审批 enricher 补位(双红同族);MCP 工具从「全有或全无」到按工具勾选——桥过滤/热更新/调用拒绝三闸) — 脑派发接我自票×2 **DONE**;commits `8685385a`(enricher,3 文件)+ `75a56630`(MCP,8 文件 +641/−5);新套件×2 **22 针** + 环 **235+93 绿**
+
+- **① 预存红 `pt_eb0251bb1cbe4a27`:** 搜索设置批(eb315d4b)把 `update_search_settings` 列入写分区却漏了审批 enricher——TestApprovalEnricherRatchet + approval CASES 覆盖双红(纯净 HEAD worktree 实证)。修法=一枚 enricher(逐 knob 列「设置项=新值」,无参纯读明示无变更)+ CASES 一行 + 台账重生成(gap 归 0)。97/97 绿。
+- **② MCP per-tool 开关 `pt_53065dbe86bb4286`(browser v2 拆出的 Phase 2):** 本部署 ~190 个 MCP schema 全有或全无。现每服务器配置行携带 `disabled_tools`——禁用工具同时三闸:**藏**(get_openai_tool_defs/get_tool_safety 过滤,schema 瘦身即时生效)、**拒**(call_tool 对陈旧历史/在飞调用抛「disabled by user」)、**存**(JSON 行持久,config 迁移原样保留——钉了 overleaf 迁移场景)。PUT `/api/v1/mcp/servers/<name>/tools` 全量替换语义 + `set_disabled_tools` 热应用免重连 + 闩锁失效。设置页连接卡工具数徽章变展开按钮(勾选面板,乐观更新失败回滚),徽章/头部计数显示启用/总数。
+- **刻意不做(定案记录):** MCP 长描述**不截断**——那些「小作文」装着承重使用契约(stop_job 的 runid-vs-runId 警告就在长文里),截断=静默劣化工具调用正确性;按工具勾选才是安全的瘦身(禁用工具 schema 整体出请求,省得最多)。
+- **测试账:** test_mcp_tool_toggle 10 针(过滤/安全表同步/跨服同名隔离/默认全开/假桥无 _configs 兼容/调用拒绝/热更新往返/输入归一/配置回环/迁移保留)+ test_frontend_mcp_tool_toggle jsdom(徽章按钮形态/a-b 计数/面板行/全量名单 PUT——集合比较/重启用 + NEUTER 删面板渲染精确红);环=32 开关族 + 235 MCP 全家 + 93 registry/i18n/api-contract。
+- **事故自记:** ①jsdom harness 断言把 PUT 名单当有序数组,实际行序语义——后端本就 sorted(set) 归一,断言改集合比较;②`import routes.api_v1.mcp` 直接导入撞已知 `@push_bp.websocket` AttributeError(环境预存,profile 明记可忽略),路由冒烟改走 py_compile+parity 套件。
+- **生效面:** 后端即重启即生效;前端走 bundle mtime 自愈重建。用户在 设置→MCP→连接卡「N 个工具」按钮处按工具勾选。
+
 ### 2026-08-04(视频 epic 关票:P2 问题 owner 裁定「不做厂商专属」——视觉解说词接力落为模型无关答案:管线期一次批量视觉调用把帧条讲成 storyboard,纯文本聊天模型也能读视频) — epic `pt_6aca988757cb4019` **DONE**;commit `7384aa31`(11 文件 +304/−20);套件 **41/41** + 守卫环 **97 绿**
 
 - **owner 答问定案:** P2 挂板提问「Gemini 原生直通怎么做」,owner 答「一定要用 gemini 吗?用户有什么模型用什么模型不可以么?」——裁定**不做厂商专属原生路径**。审视 P1 后擒获真缺口:帧通道只服务视觉聊天模型,**无视觉聊天模型丢整个视觉信道**(哪怕槽位池里有视觉模型)。

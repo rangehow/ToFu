@@ -334,10 +334,18 @@ class Slot:
     def record_error(self, is_rate_limit=False, error: str = '',
                      is_quota_exhausted: bool = False, is_gateway: bool = False,
                      is_shared_contention: bool = False,
-                     is_account_quota: bool = False):
+                     is_account_quota: bool = False,
+                     cooldown_s: float = None):
         """Call after a failed request.
 
         Args:
+            cooldown_s: Explicit cooldown duration (seconds) for rate-limit
+                class errors — used when the upstream TOLD us when the
+                window resets (OAuth-subscription quota:
+                ``RateLimitError.retry_after_s`` parsed from
+                ``resets_at``/``resets_in_seconds``). Overrides the generic
+                0.5s 429 steering nudge; None keeps the generic policy
+                (the 80431312 transient-429 behavior is untouched).
             is_rate_limit: True for HTTP 429/gateway-throttled errors — these
                 typically reflect contention, not key health, so they don't
                 count as failures in the daily success-rate tracker UNLESS
@@ -413,10 +421,23 @@ class Slot:
                 # then has to recover from at 1.1x.
                 if not is_shared_contention:
                     self.rpm_limit = max(5, self.rpm_limit * 0.8)
-                # Very brief cooldown — just enough to steer picker to
-                # another slot; the caller will keep cycling rapidly.
-                self.cooldown_until = time.time() + 0.5
-                self.cooldown_reason = 'upstream' if is_gateway else 'rate_limit'
+                if cooldown_s and cooldown_s > 0:
+                    # ★ Subscription-quota timed hold — the upstream named
+                    #   the reset time, so park the slot for exactly that
+                    #   long instead of the generic 0.5s steering nudge.
+                    #   Reason 'quota' (long hold — NOT worth a sticky-key
+                    #   wait), NOT 'rate_limit'.
+                    self.cooldown_until = time.time() + min(float(cooldown_s), 86400.0)
+                    self.cooldown_reason = 'quota'
+                    logger.warning('  ⏳ Slot %s:%s cooled down %.0fs '
+                                   '(subscription quota reset)',
+                                   self.key_name, self.model,
+                                   min(float(cooldown_s), 86400.0))
+                else:
+                    # Very brief cooldown — just enough to steer picker to
+                    # another slot; the caller will keep cycling rapidly.
+                    self.cooldown_until = time.time() + 0.5
+                    self.cooldown_reason = 'upstream' if is_gateway else 'rate_limit'
             elif self.consecutive_errors >= 3:
                 # Exponential backoff cooldown after repeated failures.
                 # Cap at 300s (5min) for sustained failures (e.g. DNS unreachable).

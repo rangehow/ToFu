@@ -104,8 +104,10 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {token}',
                 'OpenAI-Beta': 'responses=experimental',
-                'originator': 'codex_cli_rs',
-                'User-Agent': 'codex_cli_rs/0.20.0 (external; Tofu)',
+                'originator': 'codex-tui',
+                # Single line on purpose: the drift guard
+                # (test_oauth_cloaking_drift) greps this literal verbatim.
+                'User-Agent': 'codex-tui/0.146.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.146.0)',
                 'session_id': _uuid.uuid4().hex,
             }
             if account_id:

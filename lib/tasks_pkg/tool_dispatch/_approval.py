@@ -669,6 +669,46 @@ def _approval_meta_motion_video_narrate(approval_meta, fn_args):
     )
 
 
+#: The adjustable knobs of ``update_search_settings`` (schema order). Every
+#: one is optional and any subset may change in one call, so the dialog must
+#: name each knob being touched — a bare "update settings" row is the blind
+#: approval this enricher exists to prevent.
+_SEARCH_SETTINGS_KNOBS = (
+    'fetch_top_n', 'fetch_timeout', 'max_chars_search', 'max_chars_direct',
+    'max_chars_pdf', 'max_download_mb', 'llm_content_filter',
+    'block_domain', 'unblock_domain',
+)
+
+
+def _approval_meta_update_search_settings(approval_meta, fn_args):
+    """``update_search_settings`` — mutates SERVER-WIDE search/fetch config.
+
+    Changes are global, persist across restarts, and hit every conversation,
+    so each knob being changed is listed with its new value. A no-arg call
+    is a pure READ (the model inspecting current values before proposing a
+    change) — say so instead of rendering an empty table.
+    """
+    changes = [
+        (f'Setting: {k}', str(fn_args[k]))
+        for k in _SEARCH_SETTINGS_KNOBS
+        if fn_args.get(k) is not None
+    ]
+    if not changes:
+        _risk(
+            approval_meta,
+            ('Change set', 'none — read-only inspection of current values'),
+            note='Read the current search/fetch pipeline settings (no change)',
+        )
+        return
+    approval_meta['path'] = ', '.join(k for k, _v in changes)
+    _risk(
+        approval_meta,
+        *changes,
+        note=('Change SERVER-WIDE search/fetch settings — applies globally, '
+              'persists across restarts, affects every conversation'),
+    )
+
+
 # Module-level dispatch table — maps tool name → approval meta enricher.
 # Only tools that need special approval metadata are listed; tools not in
 # this dict get the base metadata only (path + description).
@@ -717,6 +757,8 @@ _APPROVAL_META_ENRICHERS = {
     'motion_video_concat':      _approval_meta_motion_video_concat,
     'motion_video_mux':         _approval_meta_motion_video_mux,
     'motion_video_narrate':     _approval_meta_motion_video_narrate,
+    # ── search settings: server-wide config mutation ──
+    'update_search_settings':   _approval_meta_update_search_settings,
 }
 
 

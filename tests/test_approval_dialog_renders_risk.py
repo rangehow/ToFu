@@ -175,6 +175,9 @@ CASES: dict[str, tuple[dict, str]] = {
                       'continuation_message': 'CONT_X'}, 'CONT_X'),
     'timer_manage': ({'action': 'cancel', 'timer_id': 'timer-X'}, 'timer-X'),
     'project_charter_commit': ({'decision': 'DECISION_X'}, 'DECISION_X'),
+    'update_search_settings': ({'fetch_top_n': 5, 'llm_content_filter': False,
+                                'block_domain': 'pinterest.com'},
+                               'pinterest.com'),
 }
 
 

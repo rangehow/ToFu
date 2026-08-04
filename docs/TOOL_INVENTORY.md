@@ -14,7 +14,7 @@ Built-in tools: **84**
 
 | gap | count | meaning |
 |---|---|---|
-| write tool with no approval enricher | 1 | the approval dialog renders a bare tool name — the user approves blind, which the approval module itself calls "worse than not prompting at all" |
+| write tool with no approval enricher | 0 | the approval dialog renders a bare tool name — the user approves blind, which the approval module itself calls "worse than not prompting at all" |
 | no UI label | 70 | the raw tool name is shown in the activity line |
 | no reachable handler | 0 | schema advertised to the model but nothing executes it |
 | description cannot disambiguate | 4 | the model cannot tell this tool apart from its neighbours and picks the wrong one |
@@ -32,10 +32,6 @@ Confusable same-category tool pairs (first-sentence overlap >= 0.5):
 - [swarm] `read_artifact` vs `store_artifact` — overlap 0.83, shared: artifact, data, read, shared, store
 - [desktop] `desktop_read_file` vs `desktop_write_file` — overlap 0.57, shared: computer, file, local, user
 
-
-Write tools lacking an approval enricher:
-
-- `update_search_settings`
 
 ## Built-in tools
 
@@ -104,7 +100,7 @@ Write tools lacking an approval enricher:
 | timer_create | scheduler | scheduler | SET | ✓ |  |  | ✓ | ✓ |  |  |  |  | ✓ |
 | timer_manage | scheduler | scheduler | SET | ✓ |  |  | ✓ |  |  |  |  |  | ✓ |
 | fetch_url | search | fetch | EXACT |  | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ |
-| update_search_settings | search | search_settings | EXACT | ✓ |  |  |  |  |  |  |  |  | ✓ |
+| update_search_settings | search | search_settings | EXACT | ✓ |  |  | ✓ |  |  |  |  |  | ✓ |
 | web_search | search | search | EXACT |  | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |
 | activate_skill | skills | skills | SET |  | ✓ | ✓ |  |  |  |  |  |  | ✓ |
 | await_agents | swarm | swarm | SET |  |  |  |  |  |  |  |  |  | ✓ |

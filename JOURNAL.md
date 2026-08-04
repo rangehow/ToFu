@@ -1,3 +1,10 @@
+### 2026-08-04(测试体系 P0 补记:unit 层全量墙钟实测 **20 分钟**(16 worker/负载 95 共享机)——超 15min 业界阈值,「按路径选择运行」从「先实测」升级为「实测支持」;96-worker auto 在本机被内存压力收割卡死;189 红分诊零本批指纹) — epic `pt_2f2c847ff8524e5e` 补记;commit `8f3204f7`(13 文件 +543/−25)
+
+- **测量账:** `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -u -m pytest -p xdist -m unit -n 16 --dist worksteal` → **1198.5s(19m58s),15136 passed / 189 failed / 20 skipped**。结论:超 Google 惯例 ~15min 阈值 → P2「按路径映射的选择运行」实测有据(不上 ML);CI 干净 runner 应更快,但本地全量已影响迭代节奏。
+- **96-worker 卡死教训:** `-n auto`(96 worker)在这台 uptime 8 天、load 95 的共享机上 40 分钟零输出——worker 群被内存压力静默收割(历史 OOM 判例的弱化重演)。本机测量/排障一律 `-n 16`;Makefile `auto` 在超载共享机上的这个失效形态值得记牢。
+- **189 红三态分诊(运行期间兄弟落地 ≥4 批提交,树在动):** 53 前端红全是 Epic-E 拆分 churn——锚点抽取类套件钉的函数被搬文件(`_renderPeerDelivery not found`、`_restoreConvProject is not defined`);`expect_pass`/`__JSDOM_RESULT__`/`PASS assertions` 指纹全日志 **零命中**;我改门卫的 4 个 scene 套件(weather/time_of_day/perf/pixeldiff)全绿;契约套件红=已挂票 `pt_d42f32511279432a` 的预存红。**本批测试基建与全部 189 红无关。**
+- **P0 收口状态:** P0-1 哨兵 + P0-2 结构化断言地板已提交生效(下批前端套件自动受 expect_pass 棘轮约束);P0-3 浏览器主干道巡检(10-20 条关键旅程,test_e2e_smoke 母版)为下一批开工点。
+
 ### 2026-08-04(安装向导现代化:经典 MUI2 灰向导退役——自绘 nsDialogs 扁平向导(整页烘焙位图+真标签坐 3DFACE 卡片) + /SOLID lzma;受控端 53.2→45.2MB、桌面端 ~153→120MB) — owner 指令「受控端和桌面端安装风格像 2000s,速度也要优化」;epic `pt_0a8543c795e34698` **DONE**;commit 见下(8 文件);新套件×2 + 重写 parity=**31 针全绿**;NEUTER 精确;环 **58+31 绿**;collect-only **15633 零错**
 
 - **风格根修(架构决策,实测驱动):** 2000s 观感本体=经典 MUI2 向导(灰侧栏+MS Shell Dlg 8+逐文件日志面板)。conda nsDialogs **无控件着色能力**(无 SetCtlColors 插件/无 WM_CTLCOLOR 回调,strings 实证),32 位应用在本机 wine 必挂(SIGSYS 实测 probe.exe core dump)——运行时验证不可行,故选**零运行时机关**方案:每页=一张 wrap 期烘焙的整页位图(PIL,`lib/desktop_dist/installer_art.py`,承载产品名+版本,文字仅品牌短词)+ 真 LangString 标签坐在位图里 #F0F0F0(=COLOR_3DFACE 精确值)的卡片上,du 坐标两侧同源——DPI/CJK 对话框字制度量差异下位图拉伸与控件摆放**同比例**,永不错位(CJK 拉伸陷阱的结构性免疫)。标签字体 Segoe UI/雅黑按 $LANGUAGE 切换+DPI MulDiv;ManifestDPIAware。

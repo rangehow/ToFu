@@ -1,3 +1,14 @@
+### 2026-08-04(扩展 popup 全量重设计:暗黑紫孤岛退役——豆腐块语言(奶油头/墨边/金 CTA) + 状态英雄卡层级 + emoji 全族清零;新增 Paused 状态不再伪装 Disconnected) — owner 截图指令「信息层级不清、emoji 滥用,UI/UX 都要改」;commit 见下(3 文件);新套件 **9 检** + 扩展环 **60 绿**;三状态截图实证
+
+- **定案(与侧栏/技能页同族判例):** popup 是最后一面暗黑紫(#1a1a2e/#a78bfa)孤岛——全 app 面板已豆腐化,扩展还停在旧时代;且层级扁平(罕见的 Pause 键与主操作同重)、emoji 充图标(✦🆔⏸▶✓✗📤⏳ 八枚)。重设计全部骑既有豆腐语言零新发明:奶油头+金锔钉线(对齐 settings-header)/墨底金字版本徽标(对齐 .mcp-app-status.on)/金左镶条状态英雄卡(inset 4px gold,对齐 .stg- 卡)/金 CTA(btn-gold)/墨边偏移影(3px/2px)/方角。
+- **层级(DOM 序=阅读序,钉进守卫):** 状态英雄卡( Connected/原因双行,绿点带脉冲)→ 修复 callout(金框,唯一可见补救)→ Server 配置 → Advanced 折叠(手工 key 字段按 2026-08-04 敕令永居 collapsed details)→ 统计数字瓦片(大数字+小号大写标签,Failed>0 转红)→ 页脚(Pause/Resume 次级 ghost 键 + client ID 虚线 chip,点击复制全量带 Copied 反馈)→ tagline。
+- **顺手擒真 UX 缺陷(Paused 伪装):** 旧代码 pollActive=false 时状态落 `lastError || 'Disconnected'`——用户自己暂停却读成故障「Disconnected」。新增第三状态:金点 + 「Paused / Polling is off」,Resume 键同帧呼应。三态(connected/repair/paused)截图全过:repair 态金 callout 在英雄卡正下方,层级读感正确。
+- **契约守恒(三套件既有钉全绿):** versionBadge 派生锚/`{ type: 'repairNow' }` 字面/repairRow+needsRepair 接线/bridgeSecret 永居 details/'never needed in normal use' 话术——auto_repair 16 + preseed 10 + parity 25 零改动通过;消息协议(getStatus/setServer/setBridgeSecret/repairNow/toggle)与背景侧零接触。
+- **测试账:** 新 `tests/test_browser_extension_popup_design.py` 9 检——豆腐四 token 正针(#f2ecda/#faf8f3/#1a1814/#c9993f)、暗黑五 hex 棘轮、**emoji 扫描器**(U+2300-23FF 媒体控制块含 ⏸⏳/U+25A0-27BF 含 ▶✓✦/U+2B00+/SMP 全平面;首版漏 U+23F8 自纠)、DOM 序层级钉、getElementById↔HTML id 双向接线钉、三状态 dot 类钉、统计瓦片钉;NEUTER×2(抹金 token→红;⏸/✓ 扫描器 sanity)。failing-first:`git show HEAD:` 旧 popup 实证 3 emoji+4 暗黑 hex+0 豆腐 token,全针必红。
+- **事故自记:** ①run_command grep 大文件 static/styles.css 在 FUSE 坏窗口空跑 1835s 零输出(同日 grep 拦截闸 epic 的活样本)——dedicated grep_search 才是正路;②browser_preview_page 三连 45s 超时(FUSE 抖动),单加重试即过;③preview harness 三状态 + chrome.* stub 用后即删(debug/_popup_preview*)。
+- **生效面:** 纯扩展静态资源——用户重载扩展/下次打包下载即得;`scripts/package_extension.sh` 拷贝清单不变(popup.html/popup.js 原位)。
+
+### 2026-08-04(视频上传+分析调研定案:两路线全景 + Tofu 接入点地图——「连环画+台词本」走现有图片通道,LLM 层零改动;video cap 早已预留) — owner 指令「调研开源系统如何让大模型处理视频,让输入框支持视频上传分析」;三路 swarm(开源模型/商用API+开源前端/本库链路);零产品代码;记忆 `video-upload-analysis-design` 入库
 ### 2026-08-04(预存红闭环:test_frontend_sse_assistantmsg_invariant——固定 1200 字符断言窗被 _ensureMsgId 加固挤爆;改守卫块作用域锚定,方向对齐而非代码迁就) — 脑派发接我自票 `pt_eab154ae989f456c` **DONE**;commit `c5d3977b`(1 文件 +7/−3,纯测试侧);套件 **2/2** + NEUTER 精确
 
 - **定案(纯测试漂移,代码无罪):** `connectToTask` 的非空守卫(sse_pipeline.js:384)完整无缺——构造新 assistant 消息/`_ensureMsgId` 赋 ID/push 俱在,「dispatch 前非空」不变量成立。漂移源:某批给守卫块加 `_ensureMsgId` 硬化后块长 ~1370 字符,断言的固定 1200 字符窗把 `conv.messages.push(assistantMsg)` 挤出界外(失败输出正好截在 `conv.messages.pus`)。

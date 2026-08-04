@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (badge) badge.textContent = 'v' + chrome.runtime.getManifest().version;
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
+  const statusReason = document.getElementById('statusReason');
   const serverInput = document.getElementById('serverUrl');
   const saveBtn = document.getElementById('saveBtn');
   const secretInput = document.getElementById('bridgeSecret');
@@ -15,6 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const statsDiv = document.getElementById('stats');
   const repairRow = document.getElementById('repairRow');
   const repairBtn = document.getElementById('repairBtn');
+  const clientIdChip = document.getElementById('clientIdText');
 
   // Load current secret state (we never echo the actual value into the
   // popup — only show whether one is set, like a password reset flow).
@@ -24,16 +26,44 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  function setStatus(word, reason, dotState) {
+    statusDot.className = 'status-dot ' + dotState;
+    statusText.textContent = word;
+    statusReason.textContent = reason;
+  }
+
+  function statTile(value, label, isBad) {
+    const div = document.createElement('div');
+    div.className = 'stat' + (isBad ? ' stat-bad' : '');
+    const num = document.createElement('span');
+    num.className = 'stat-num';
+    num.textContent = value;
+    const lab = document.createElement('span');
+    lab.className = 'stat-label';
+    lab.textContent = label;
+    div.append(num, lab);
+    return div;
+  }
+
+  function flashSaved(btn) {
+    btn.textContent = 'Saved';
+    setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+  }
+
   function updateStatus() {
     chrome.runtime.sendMessage({ type: 'getStatus' }, (resp) => {
       if (chrome.runtime.lastError || !resp) {
-        statusDot.className = 'status-dot disconnected';
-        statusText.textContent = 'Service Worker inactive';
+        setStatus('Offline', 'Service worker inactive — reopen the popup or reload the extension.', 'disconnected');
         return;
       }
 
-      statusDot.className = resp.connected ? 'status-dot connected' : 'status-dot disconnected';
-      statusText.textContent = resp.connected ? 'Connected' : (resp.lastError || 'Disconnected');
+      if (resp.connected) {
+        setStatus('Connected', 'Commands from your Tofu server run in this browser.', 'connected');
+      } else if (!resp.pollActive) {
+        setStatus('Paused', 'Polling is off — the bridge accepts no commands.', 'paused');
+      } else {
+        setStatus('Disconnected', resp.lastError || 'Reaching for the server…', 'disconnected');
+      }
 
       // The repair row appears exactly when the background has declared the
       // credential dead — and disappears the moment the silent ladder heals
@@ -54,23 +84,23 @@ document.addEventListener('DOMContentLoaded', () => {
         serverInput.value = resp.serverUrl;
       }
 
-      toggleBtn.textContent = resp.pollActive ? '⏸ Pause' : '▶ Resume';
+      toggleBtn.textContent = resp.pollActive ? 'Pause' : 'Resume';
 
-      // Show client ID (first 12 chars for readability)
-      const clientIdText = document.getElementById('clientIdText');
-      if (clientIdText && resp.clientId) {
-        clientIdText.textContent = resp.clientId.substring(0, 12) + '…';
-        clientIdText.title = resp.clientId;  // Full ID on hover
+      // Client ID chip: truncated for layout, click copies the full ID.
+      if (clientIdChip && resp.clientId) {
+        clientIdChip.textContent = resp.clientId.substring(0, 12) + '…';
+        clientIdChip.dataset.full = resp.clientId;
+        clientIdChip.title = resp.clientId + ' — click to copy';
       }
 
-      // Stats
       if (statsDiv) {
-        statsDiv.innerHTML = `
-          <div>✓ ${resp.commandsExecuted || 0} executed</div>
-          <div>✗ ${resp.commandsFailed || 0} failed</div>
-          <div>📤 ${resp.resultQueue || 0} queued</div>
-          <div>⏳ ${resp.inflight || 0} in-flight</div>
-        `;
+        const failed = resp.commandsFailed || 0;
+        statsDiv.replaceChildren(
+          statTile(resp.commandsExecuted || 0, 'Executed', false),
+          statTile(failed, 'Failed', failed > 0),
+          statTile(resp.resultQueue || 0, 'Queued', false),
+          statTile(resp.inflight || 0, 'In-flight', false),
+        );
       }
     });
   }
@@ -79,8 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const url = serverInput.value.trim();
     if (!url) return;
     chrome.runtime.sendMessage({ type: 'setServer', url }, () => {
-      saveBtn.textContent = '✓ Saved';
-      setTimeout(() => { saveBtn.textContent = 'Save'; }, 1500);
+      flashSaved(saveBtn);
       setTimeout(updateStatus, 500);
     });
   });
@@ -88,9 +117,8 @@ document.addEventListener('DOMContentLoaded', () => {
   saveSecretBtn.addEventListener('click', () => {
     const secret = secretInput.value;
     chrome.runtime.sendMessage({ type: 'setBridgeSecret', secret }, () => {
-      saveSecretBtn.textContent = '✓ Saved';
+      flashSaved(saveSecretBtn);
       secretInput.value = '';
-      setTimeout(() => { saveSecretBtn.textContent = 'Save'; }, 1500);
       setTimeout(updateStatus, 500);
     });
   });
@@ -101,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
       repairBtn.textContent = 'Re-pairing…';
       chrome.runtime.sendMessage({ type: 'repairNow' }, (resp) => {
         repairBtn.disabled = false;
-        repairBtn.textContent = (resp && resp.ok) ? '✓ Re-paired' : 'Re-pair now';
+        repairBtn.textContent = (resp && resp.ok) ? 'Re-paired' : 'Re-pair now';
         setTimeout(updateStatus, 500);
       });
     });
@@ -112,6 +140,18 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(updateStatus, 300);
     });
   });
+
+  if (clientIdChip) {
+    clientIdChip.addEventListener('click', () => {
+      const full = clientIdChip.dataset.full;
+      if (!full || !navigator.clipboard) return;
+      navigator.clipboard.writeText(full).then(() => {
+        const shown = clientIdChip.textContent;
+        clientIdChip.textContent = 'Copied';
+        setTimeout(() => { clientIdChip.textContent = shown; }, 900);
+      }, () => {});
+    });
+  }
 
   updateStatus();
   setInterval(updateStatus, 2000);

@@ -1237,7 +1237,17 @@ async function loadConversationMessages(convId) {
          *   rendering stale English narration. (The cache-fresh else-branch
          *   ALSO merges translations in-place; this disjunct covers the case
          *   where a full server adopt is cleaner.) */
-        _serverHasTranslationLocalLacks(serverMsgs, conv.messages);
+        _serverHasTranslationLocalLacks(serverMsgs, conv.messages) ||
+        /* ★ Symmetric to the segments/translation backstops: the IndexedDB
+         *   cache write (_stripToolRound) strips imageDataUris[].uri (OOM
+         *   guard) while the PUT/DB copy keeps them — and no count/
+         *   updatedAt change marks the difference, so a cache-fresh reload
+         *   silently degraded every image round (read_files / inspect_image
+         *   / browser_screenshot / browser_preview_page) to its badge-only
+         *   line. Treat "server has image uris the local copy lacks" as
+         *   stale so the reopened conv adopts the server copy and the
+         *   inline thumbnails survive reloads. */
+        _serverHasImagesLocalLacks(serverMsgs, conv.messages);
 
       if (cacheIsStale) {
         /* ★ The server is NOT authoritative when it has FEWER messages than we

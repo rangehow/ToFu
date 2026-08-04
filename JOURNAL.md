@@ -1,3 +1,27 @@
+### 2026-08-04(设置页模型卡「乱序」根修:排序键=卡片实际渲染的裸 model_id,不再是 pricing 注册表的隐形友好名——claude-fable-5 被 "Fable 5" 拖到 Doubao 与 gemini 之间,机器字母序、读者乱序) — owner 截图问「为什么模板没按模型名字母序排?claude-fable-5 为何在 d 下面?」;commit 见下(2 文件 +JOURNAL);套件 **11/11** + 守卫环 13 绿,failing-first 实证,api_contract 红实证预存
+
+- **定案(证据链闭合):** 设置页 `_renderModelCard` 渲染的是裸 `m.model_id`,而 `_compareModelEntries`(core_panel.js)把冷排序/二分插入委托给了 `_compareModelsByDisplayName`——其排序键 `_modelShortName` 优先取 pricing 注册表名字:`lib/pricing/_tables.py:37` 给 `claude-fable-5` 起名 **"Fable 5"**($9.94/$49.72 与截图价格吻合)。排序结果 deepseek < doubao < "fable 5" < gemini——与截图逐像素吻合。列表其实排了序,只是按一个卡片上根本不显示的字符串排。
+- **根修:** `_compareModelEntries` 改按裸 model_id 排序,复用 branding.js 共享的 `_MODEL_NAME_COLLATOR`(numeric 感知 + 大小写折叠,claude-opus-4.10 排在 4.6 后),branding 缺席(陈旧 bundle)回退小写比较。友好名比较器不动——它仍是工具栏 picker/预设页/默认模型下拉这些**渲染友好名的列表**的正确键。`_insertModelSorted`/`_coldSortModels` 自动跟随(discover/template-sync/手加模型同键)。
+- **测试账:** test_frontend_model_picker_order 原第 6 检钉的正是 buggy 契约(「settings 冷排序与 picker 一致」)——方向对齐重钉:冷排序按裸 id 全序钉死 + 两枚事故针(`settings_pricing_name_does_not_move_card` claude-fable-5 必须坐 index 2 归 'c';`settings_gateway_id_sorts_where_shown` yuju-… 归 'y');静态守卫反转:core_panel 必须走共享 collator 且**禁止**再引友好名比较器/_modelShortName;消费者一律禁自建 Intl.Collator。failing-first:stash 产品文件后新针精确红,恢复全绿。事故自记:守卫断言 `'_modelShortName' not in core` 第一版被我自己注释里的字面量骗红——与 icon.run() 判例同族,注释措辞避开受检标识符。
+- **环:** 本套件 4 + local_presets 4 + template_sync 3 = 11 绿;bundle manifest + access_matrix 13 绿;test_frontend_api_contract 红在纯净 HEAD 同签名复现=预存,与本批无关。
+- **生效面:** 纯前端,设置页下次打开冷排序即按裸 id 重排;bundle mtime 自愈重建,无需重启。
+
+### 2026-08-04(测试体系战略调研:业界怎么做×我们家底盘点×防负优化方案——三路 swarm 实证;结论=骨架已对齐业界,真缺口是「真浏览器主干道巡检+jsdom 静默 skip+棘轮治理 SLA」) — owner 战略问「项目已超大,前后端分开查 bug 和集成 bug 都难,大项目怎么做测试?防测试负优化」;纯调查,零产品代码
+
+- **家底盘点(子代理实测):** 1,581 测试文件、**15,528** collect-only 实测(87.7s);单元~950/集成 API~40/守护棘轮~113(91 个 parity)/前端 jsdom 族 **467**/真浏览器 E2E 仅 4。前后端缝已有轻量契约守卫(test_frontend_backend_contract 静态抽 api.js 路径对 live url_map)——恰是 Fowler 认可的 monolith 场景 Pact 廉价替代。CI(.github/workflows/ci.yml)+ Makefile + conftest 自动打标兜底齐备。
+- **业界结论(全部一手源):** Google 70/20/10 金字塔 + S/M/L hermetic 分级;Dodds 奖杯「mostly integration」;Google/Meta/微软测试选择(Taming/Meta arXiv 1810.05286/Herzig ICSE15:~50% 测试可跳过);flake 隔离+SLA+删除;覆盖率只作信号不作闸;Pact 在单消费者 monolith 反噬。
+- **三个真缺口(按 ROI 排序):** ①CI 无 node 时 467 个前端套件**静默 skip**(skip-gated)=前端防线可整体消失而无人知晓;②真浏览器关键路径巡检太薄(4 vs 467,业界惯例 10-50 条关键旅程);③棘轮族无治理 SLA——日志「预存红闭环」系列反复出现「测试钉死旧契约→方向对齐」,正是 Dodds 警告的 implementation-detail 负优化形态,需定期殡葬审计。
+- **明确不做(防负优化清单):** 不追全仓覆盖率数字、不上 Pact、不上 ML 测试选择(先量全量跑墙钟时间,>15min 才做路径映射选择)、不把 E2E 扩成主防线。
+- **待 owner 拍板:** 方案若批准 → 落 docs/TESTING_STRATEGY.md + 挂 epic 分 P0(补 CI node 闸+10-20 条浏览器巡检)/P1(字段级契约钉 top-N 端点)/P2(棘轮殡葬审计+flake SLA 制度化)。
+
+### 2026-08-04(强刷后侧栏点击全死:owner 报障定案——非慢同步,是兄弟中断编辑的语法残骸 + fallback 重复标签补刀;最小修复保兄弟功能,兄弟复工后自行提交闭环) — owner 报障「强刷后点侧边栏没反应」;commit `076d1183`(index.html);兄弟 `338b9d1e` 收编 chat_render.js 修复
+
+- **诊断链(error.log 客户端三连错):** ①`chat_render.js:2263 Unexpected end of input`;②`stream_reducer.js:1 _TERMINAL_ROUND_STATUS already declared`;③`renderMessage is not defined ← showStreamingUIForConv ← loadConversation ← _handleConvClick`——③即「点侧边栏没反应」直接现场。SyncDrift STALLED 系背景噪音,排除。
+- **根因双层:** 兄弟 mse9r2ir7ql0v4 一次中断编辑在 chat_render.js:1349-1350 留下两行 `function renderMessage(msg, idx) {`(多一开括号);esbuild 产出残包→打包器语法闸拒服(闸正常)→降级 dev-fallback→撞同源坏文件 + index.html 里 stream_reducer.js 重复 script 标签(classic script 顶层 const 二次执行必抛)。
+- **处置:** 删重复签名行(兄弟卡片功能原样保留)→ bundle mtime 自愈重建实证(531d1ecc,200/1.07MB/语法 OK)→ 删 index.html 重复标签单独提交 → peer message 移交兄弟 → 兄弟复工先验证残骸已清再走完全程(47 针新套件+169 环)自行提交 `338b9d1e` 闭环。全量 static/js 语法扫描 + index.html 标签 uniq -d 扫描零残留。
+- **判例沉淀:** 共享树未提交中断编辑=生产即坏;语法闸保得住 bundle 保不了 fallback——fallback 模式逐文件加载,源文件坏即全坏,且重复标签这类静默负债只在 fallback 才显形。
+
+### 2026-08-04(大脑派发消息溯源卡片:_brainEpic 元数据贯通
 ### 2026-08-04(大脑派发消息溯源卡片:_brainEpic 元数据贯通——创建者可点标题/派发方式/路由原因三要素上屏,原文收进折叠 details;兄弟移交修掉我中断编辑的语法残骸) — owner 截图指令「项目大脑消息要显示哪个对话创建的 epic(可点击标题而非裸 id)、怎么派的、为什么派给我,样式再好看些」;commit `338b9d1e`(7 文件 +923/−7);新套件×2 **47 针**;回归环 **169 + bundle 29 + i18n 65 全绿**
 
 - **数据链(三处贯通,display-only 不进模型):** `dispatch_epic` 队列载荷新增 `_brainEpic`(epicId/epicTitle 截 300/originatorConv+DB 解析标题/method/route/answered);`message_queue` 持久化缝传播到 user 消息(前端从 conv 行渲染,与 `_boardTaskId` 同缝)。**method** = 哪个缝派的:四事件缝各自 stamp `_via`(dependency_done/answered/posted/conv_idle),sweep 走 heartbeat 默认,未知 token 回落 heartbeat(防打错缝名裸泄)。**route** = 为什么是我:按板面自有字段推导(dispatch_target override ≠ created_by_conv→migrated;等于创建者→creator;否则 fallback),不新造数据源。签名零改动——`_via` 骑 epic dict 传入,既有 monkeypatch lambda(config=None) 全部不破。

@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 73c874b0 — test(tool-rounds): permanent wire-parity gate for _renderUnifiedToolLine
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """Wire-parity regression gate for _renderUnifiedToolLine (tool_rounds.js).
 
 Renders the 41-round battery (tests/_tool_rounds_wire_parity_rounds.json)

@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 5c0b8732 — refactor(orchestrator): pt_03f4cdf1 slice 32 — extract round-open (RO...
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """Wire-parity guards for pt_03f4cdf1 slice 32 — extract the per-round
 open (ROUND_START event + phase emit) and the streaming-accumulator
 construction from _run.py's stream loop into

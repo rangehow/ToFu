@@ -1,3 +1,9 @@
+### 2026-08-04(棘轮殡葬候选 60 件全量处置:出生提交溯源锚定——零删除,候选清零 153/153 锚定;23 个 orchestrator 族顺带补回 epic pt_03f4cdf1 链接) — 脑派发 epic `pt_c565a36b3e8f42e6` **DONE**;commit 见下(62 文件);前进棘轮 **8/8** + 60 文件 ruff/collect **663 零错**
+
+- **定案(诚实的最低成本锚):** 零删除——每个候选的出生提交就是它的出处(本仓提交信息全带 epic/事故上下文)。批量脚本逐文件 `git log --follow --diff-filter=A` 取出生提交,插 2 行锚注释(出生 hash+主题截 72 字符;主题含 pt_ 则另起一行 epic 链接);幂等(已有 anchor 跳过)/跳 shebang/不碰 docstring。审计复跑 **153/153 锚定、候选 0**。
+- **族谱账:** 23 个 `test_lib_orchestrator_*_wire_parity` 全是一个 epic(pt_03f4cdf1 切片迁移)——锚注释顺带把 epic id 从提交主题捞回文件;6 件出生自 `ab99ef8b checkpoint` 批、4 件出生自 `e794681c MAPS 快照`——锚真实但信息量弱,**这 10 件列入「下次碰其守护契约时补 NEUTER」清单**(注在锚注释第二行,不再另票)。
+- **闸:** 前进棘轮 8/8;ruff 60 文件全绿;60 文件 collect-only 663 用例零错(纯注释改动,行为面零接触)。docs/RATCHET_AUDIT.md 重生成(本次没走 head 管道——上批 SIGPIPE 教训)。
+
 ### 2026-08-04(预存红闭环:gitignore↔export 同步钉 3 红——untrack 9 件(verify_epic_e_deferrals.sh+营销图×8),candidates 母带 keeper-prefix 设计误判自纠) — 脑派发接我自票 `pt_62b50abf2a8d45d1` **DONE**;commit 见下(10 文件,9 删 1 改);同步钉+导出清理 **12/12 绿**
 
 - **处置(三态分治):** ①`scripts/verify_epic_e_deferrals.sh`——全仓零引用的一次性 Epic-E 校验脚本,rm --cached(/scripts/* 忽略自动罩住);②`static/images/` 营销图×8(attach-icon/onigiri-icon/tofu-cache-article-cover×2/tofu-poster×2)——export.py 早已判「零引用死重」入 OPENSOURCE_EXTRA_EXCLUDE_FILES(2026-08-01 verdict,我 grep 复核零 url()/路径引用),rm --cached + .gitignore 八行第二防线;③`static/icons/_gen/tofu-pet/_candidates/` 母带×16——**我首版误判 rm --cached**,撞上同步钉的 keeper-prefix 承重针(test_keeper_prefixes_are_live_and_narrow/test_neuter_keeper_prefix_is_load_bearing):兄弟的设计是「1024² 母带保留跟踪(宠物重生成源),export 剥离,keeper-prefix 白名单豁免 gitignore」——撤回 untrack 与忽略行,恢复原设计。

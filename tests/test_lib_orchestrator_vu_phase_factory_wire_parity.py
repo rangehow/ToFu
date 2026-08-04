@@ -1,3 +1,5 @@
+# Incident anchor: born in commit c4a5e390 — refactor(orchestrator): pt_03f4cdf1 slice 37 — VU phase closure facto...
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """Wire-parity guards for pt_03f4cdf1 slice 37 — replace run_task's
 inline VU-startup attribution + closure adapter with
 lib.tasks_pkg.orchestrator._vu_startup.make_vu_phase().

@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 11205270 — Remove trading subsystem from core (extracted to tofu-trading plugin)
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """tests/test_core_schema_parity.py — READ-ONLY parity gate for Core migration.
 
 This ships NOTHING live. It never opens a DB connection and never touches

@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 8f37b141 — refactor(orchestrator): pt_03f4cdf1 slice 33 — extract turn prelude t...
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """Wire-parity guards for pt_03f4cdf1 slice 33 — extract the pre-Section-1
 turn prelude from _run.py into
 lib.tasks_pkg.orchestrator._turn_prelude.run_turn_prelude().

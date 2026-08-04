@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 4ae62fe4 — test(docs): guard CLAUDE.md against path drift; fix 8 stale references
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """CLAUDE.md path-drift guard.
 
 Why this exists

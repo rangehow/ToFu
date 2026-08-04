@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 619a0118 — feat(desktop-dist): S3 wrapper — NSIS-native installer + preseed + la...
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """tests/test_installer_parity.py — the installer authorings must agree.
 
 WHY THIS EXISTS

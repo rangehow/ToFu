@@ -1,3 +1,5 @@
+# Incident anchor: born in commit b34c7ba8 — refactor(orchestrator): pt_03f4cdf1 slice 35 — extract task-open clus...
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """Wire-parity guards for pt_03f4cdf1 slice 35 — extract the task-open
 cluster from _run.py's preamble into
 lib.tasks_pkg.orchestrator._task_open (three helpers):

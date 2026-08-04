@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 530055a5 — refactor(orchestrator): pt_03f4cdf1 slice 34 — extract BaseException ...
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """Wire-parity guards for pt_03f4cdf1 slice 34 — extract the BaseException
 fatal handler from _run.py into
 lib.tasks_pkg.orchestrator._post_loop.handle_task_base_exception().

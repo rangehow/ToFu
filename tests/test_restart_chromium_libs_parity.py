@@ -1,3 +1,5 @@
+# Incident anchor: born in commit 4551701e — chromium-libs 双 launcher 不变量:supervisord conf 补 CHROMIUM_EXTRA_LIB_DI...
+# (funeral audit pt_c565a36b3e8f42e6, docs/RATCHET_AUDIT.md)
 """tests/test_restart_chromium_libs_parity.py — the two-launcher invariant.
 
 Measured hole (owner review, 2026-08-03): the FUSE root-cause fix for

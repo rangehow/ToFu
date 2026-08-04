@@ -68,6 +68,12 @@ data/
 !/scripts/gen_frontend_globals.py
 !/scripts/gen_tool_inventory.py
 !/scripts/audit_tests.py
+# P2 test tooling (docs/TESTING_STRATEGY.md): test_select.py is loaded by
+# tests/test_test_select.py and driven by `make test-affected`; ratchet_audit.py
+# is loaded by tests/test_ratchet_incident_link.py and regenerates
+# docs/RATCHET_AUDIT.md. A clean clone without them breaks both consumers.
+!/scripts/test_select.py
+!/scripts/ratchet_audit.py
 !/scripts/package_extension.sh
 !/scripts/install_on_server.sh
 # Shared "is this release complete?" predicate. BOTH gates in

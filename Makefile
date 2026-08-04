@@ -115,6 +115,9 @@ test-coverage: ## Run unit + api tests with coverage report
 smoke: ## Run smoke tests only (import validation, cross-platform, syntax)
 	python -m pytest $(PYTEST_BASE) tests/test_smoke.py -m unit --tb=short -v
 
+test-affected: ## Iteration loop: run only tests that can see your changes (static reverse index — full tier stays the gate, P2-3)
+	python scripts/test_select.py --run
+
 # ── Diagnostics ────────────────────────────────────────────────
 
 healthcheck: ## Run project health diagnostics

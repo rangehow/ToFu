@@ -429,6 +429,16 @@ _OPENSOURCE_KEEP_FILES = {
     # needs the tool too. Reads only tests/*.py + lib//routes source paths --
     # no secrets, no internal paths.
     'scripts/audit_tests.py',
+    # Affected-test selection (P2-3, docs/TESTING_STRATEGY.md). Loaded by
+    # tests/test_test_select.py via spec_from_file_location and driven by the
+    # Makefile test-affected target — the public tree ships both consumers, so
+    # it must ship the tool. Pure stdlib AST/git subprocess -- no secrets, no
+    # internal paths.
+    'scripts/test_select.py',
+    # Ratchet funeral audit (P2-1). Loaded by tests/test_ratchet_incident_link.py
+    # the same way, and regenerates docs/RATCHET_AUDIT.md. Pure stdlib regex
+    # scan of tests/ -- no secrets, no internal paths.
+    'scripts/ratchet_audit.py',
     # Builds the extension upload zip (dev or --store trimmed manifest). The
     # docs/chrome-web-store/ kit SHIPS in the opensource export and its
     # checklist step 2 is "bash scripts/package_extension.sh --store", so

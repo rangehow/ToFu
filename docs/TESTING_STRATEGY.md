@@ -61,10 +61,25 @@
   （轻量 schema pin，**不上 Pact**）。消费者驱动——只钉前端真读的字段,
   响应多出新字段不破钉(防快照剧场);checker 自带 NEUTER 咬合自证。
 
-### P2（制度化防负优化）
-- flake/预存红三步：隔离 + SLA + 删除，SLA 过期未修默认删。
-- 每季度棘轮殡葬审计：只挡变化不挡 bug 的棘轮降级或删除（棘轮必须有
-  「它防的那次事故」链接，没有的进审计名单）。
+### P2 ✅(2026-08-04 落地,防负优化制度化)
+- **①棘轮殡葬审计**(`scripts/ratchet_audit.py` → `docs/RATCHET_AUDIT.md`):
+  152 个守护套件机械分类——锚定 92(NEUTER 咬合证明/事故引用 pt_/commit/
+  JOURNAL/事故/家族锚×21)、殡葬候选 60。候选**不自动删**(删保护要人判),
+  逐个:补事故链接/补 NEUTER/降级/删除。增量由
+  `tests/test_ratchet_incident_link.py` 守:**新守护套件必须带锚,无锚禁入**
+  (存量祖父化于 tests/_ratchet_guard_baseline.json);FAMILY_ANCHORS 工件
+  必须在库(防洗白)。
+- **②flake/预存红三步(制度化):** 隔离—— flake 或预存红先挂板票
+  (三态分诊:本批引入/预存/兄弟 churn,票据须带纯净 HEAD 复现证据);
+  SLA—— 自挂票起 7 天内根修或方向对齐;删除—— SLA 过期未处置,默认
+  删除该测试(一个能被无视的测试比没有更糟,Google flake 政策同义)。
+  季度重跑 `ratchet_audit.py --write-docs` 刷新候选清单。
+- **③按路径选择运行**(`scripts/test_select.py` + `make test-affected`):
+  静态反向索引(测试文件→AST import+字面路径引用,mtime 缓存 ~4s 冷/
+  <1s 热),改动∩引用=入选 + 爆炸半径表(conftest→全量,jsdom 助手/
+  api.js→前端族)+ 守卫核心常跑;选择超 40% 直接跑全量。**不上 ML**——
+  透明映射可审计,15k 规模用不上预测模型。全量层(unit 19m58s 实测)
+  仍是 CI/预推闸门;选择器只做迭代内环。
 
 ## 5. 明确不做（防负优化清单）
 

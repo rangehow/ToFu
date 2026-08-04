@@ -1,3 +1,12 @@
+### 2026-08-04(测试体系 P2 落地:防负优化制度化三件——棘轮殡葬审计(152 守护套件:锚定 92/候选 60)+ flake SLA 三步进 docs + 按路径选择运行(静态反向索引,冷 4.2s,make test-affected)) — 脑派发 epic `pt_e55e6995baee4f54` **DONE**(候选处置另票);commit 见下(9 文件);套件 **20 针** + ruff 四触点全绿
+
+- **①殡葬审计(scripts/ratchet_audit.py→docs/RATCHET_AUDIT.md):** 机械分类器双锚信号(NEUTER 咬合证明/事故引用 pt_/commit/JOURNAL/事故)。首跑 152 套件 83 候选——其中 21 个 api_contract parity 是 charter#0 迁移批一族,补**家族锚登记处**(严格:引用工件必须在库,脚本自校验防洗白)→候选 60。候选**不自动删**(删保护要人判),处置=补链接/补 NEUTER/降级/删除,另票待人领。**增量闸**:tests/test_ratchet_incident_link——新守护套件无锚禁入,存量祖父化(152 基线 JSON),基线整体清空即红(防删基线洗白)。
+- **②flake/预存红三步制度化(进 docs/TESTING_STRATEGY.md §P2):** 隔离=挂板票带纯净 HEAD 复现证据+三态分诊(本批/预存/兄弟 churn);SLA=7 天根修或方向对齐;删除=SLA 过期默认删(能被无视的测试比没有更糟)。
+- **③按路径选择运行(scripts/test_select.py,不上 ML):** 静态反向索引=测试文件→AST import(lib.x→lib/x.py 双候选)+字面路径引用,mtime JSON 缓存(冷 4.2s/热 <1s);入选=改动∩引用 + 爆炸半径表(conftest→全量,jsdom 助手/api.js→前端族)+ 守卫核心常跑(契约/棘轮 5-7 枚);>40% 直接全量。实测:HEAD~6 十六改动→18/1593 套件(direct×8/self×5/guard×5)。failing-first 12 针(索引抽取/交集/爆炸半径/兜底/conftest 全量)。`make test-affected` 进迭代内环,全量仍是闸。
+- **测试账:** 新套件×2 20 针(select 12 + incident-link 8,含分类器合成源五态 NEUTER);ruff 四触点全绿。
+- **落地波折(自记):** ①`--write-docs | head` 被 SIGPIPE 截断,报告没写出来——管道截断会吃尾段动作,长输出命令别用 head 截有副作用的stdout;②scripts/ 是 `/scripts/*` 全忽略+白名单制,两新脚本必须同时进 .gitignore 白名单与 export.py `_OPENSOURCE_KEEP_FILES`(gitignore↔export 同步钉 `test_gitignore_covers_export_excludes` 看着);③同步钉复跑红 3 枚但 offenders 全是兄弟资产(verify_epic_e_deferrals.sh + logo/poster PNG/SVG×8,无一本批文件)——**预存红挂票 `pt_c61f0ac9b3d1`** 由资产属主会话处置(加忽略+git rm --cached 或加 keeper),不越权删兄弟资产。
+
+
 ### 2026-08-04(测试体系 P1 落地:字段级契约——top-N 端点消费者驱动形状钉,响应多出字段不破钉;checker 自带 NEUTER 咬合自证) — 脑派发 epic `pt_adf0ac6c15d44f28` **DONE**;commit 见下(2 文件);套件 **11/11**(6 咬合自证+5 端点钉)
 
 - **形态(Pact-lite,不上 Pact):** `tests/test_api_field_contract.py`(api 层)——`assert_shape` 迷你 DSL(类型/并集/嵌套 dict/逐 item list),**消费者驱动**:只钉 api.js 真读的字段,extra keys 放行——刻意的加法变更永不破钉,删/改名/改型必红且报点路径(防快照剧场=负优化)。钉五端点:chat send(taskId/convId/userMessage…)/conversations list({ok,items[]}+种子会话必在)/conversation get(messages[]…)/server-config 模型选择器(providers[].models[].model_id+capabilities)/images upload({ok,filename})。形状全部实测于活 app(探针 dump 三轮),非手撰文档。

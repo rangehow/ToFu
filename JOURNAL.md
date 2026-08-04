@@ -1,3 +1,13 @@
+### 2026-08-04(绑定默认值收敛:0.0.0.0 全接口 + LAN 发现默认开——`python server.py` 是最后一个 loopback 孤岛;顺手根修批跑互染预存红 TestBridgeTTL) — owner 指令「BIND_HOST=0.0.0.0 TOFU_DESKTOP_LAN_DISCOVERY=1 以后设为默认,用户总是 python server.py 启动」;commit `6a70adb6`(14 文件 +224/−57);环 **79 绿**
+
+- **定案(本就该统一的孤岛):** 排查发现默认值早已四分五裂——bootstrap.py(`os.environ.get('BIND_HOST','0.0.0.0')`)、Dockerfile、docker-compose、install.sh、`.env.example` 注释全是 0.0.0.0;只有 server.py argparse、restart_15000.sh、tofu_guard.sh、supervisor tofu.conf 还钉 127.0.0.1,而本部署恰好走这条路。owner 拍板全接口为默认,loopback 改为显式 opt-in(`--host 127.0.0.1`/`BIND_HOST=127.0.0.1`)。
+- **安全面(不是裸奔):** ①server.py:3083 启动横幅早就有「open 认证+非 loopback 绑定」醒目告警(新默认下每次启动都亮,正好是踏绊线);②打包桌面版 `desktop/launcher.py` 自带 `BIND_HOST=127.0.0.1` 钉——笔记本 app 不继承 LAN 默认(守卫套件钉死);③bridge 端点恒要凭证,open 模式对非 loopback 拒发合成 admin(egress 设计稿 §11.5 已评估)。
+- **LAN 发现默认开 + 诚实守卫:** `maybe_start_responder` 闸门从 `!= '1'` 翻成 `== '0'`(显式 0 才关);新增 bind_host 守卫——loopback 绑定时响应器沉默,否则广告一个不可达的 LAN 地址=把每个发现中的 agent 引向死地址。server.py 记录 `_TOFU_RUNTIME_HOST` 供此(与既有 `_TOFU_RUNTIME_PORT` 同缝)。三启动器 BIND_HOST 默认翻转,tofu_guard 那枚尤其要害:OOM 重生不能悄悄收窄绑定。
+- **顺手根修(批跑互染预存红):** 扩环时 `test_desktop_egress::TestBridgeTTL::test_per_command_ttl_override` 单独绿、批跑红。逐类二分定位污染者=TestPairingLifecycle.test_2(预存,非本批):其 /api/desktop/poll 注册的 agent 在 15s 在线窗内使 `_online_ids_locked('')` 非空,v1 poller 的 `_deliverable` 恒 False→pending=[]。顺带查清一个文档化行为:无 TOFU_BRIDGE_SECRET 时 route 层 open_when_unset 短路与,per-user pairing key 的 user 绑定不进注册表(单租户无害;relay 部署设 global secret 后 per-user key 才生效——设计内,未动)。修法=TestBridgeTTL 密封化(快照-清空-恢复 bridge 注册表,87a54720 恢复式判例),测试侧零产品代码。
+- **测试账:** TestMaybeStartResponder 按默认开重写 7 针(默认开/唯 0 关/非 0 值不关/loopback 沉默×3/全接口广告/无 LAN IP 沉默);新套件 `test_bind_lan_default.py` 6 针(argparse 默认正则钉/三启动器/桌面 loopback 钉/横幅存活钉);环=pairing 19+bind 6+parity 3+egress 30+agent_cli+contract_parity+lock_race=**79 绿**。
+- **生效面:** 代码即重启即生效;从此 `./restart_15000.sh` 裸跑即全接口+LAN 发现,epic `pt_59b62951aad2463e` 的 P4 验收不再需要 env 前缀。文档面 CLAUDE.md/README×2/.env.example/两设计稿同步。
+
+### 2026-08-04(受控端安装体验双修:运行中安装→双语提示自动关闭(不再裸撞文件锁);SSH 隧道黑窗全灭——CREATE_NO_WINDOW 收进唯一真实 spawn 缝) — owner 两指令(「已运行时安装被中断,应提示或给关闭按钮」+「装完反复弹黑壳窗,后台隧道要更优雅」);commit `a139dff6`(5 文件 +209/−3);环 **47/47 + 261 绿**;真 makensis 双组件编译实证
 ### 2026-08-04(popup 重设计复核擒获根修:2s 轮询每 tick 无条件覆写 serverInput——用户输入中的 URL 每 2 秒被冲掉;focus/dirty 双闸 guardedField 收编全部自动刷新字段) — owner 复核指令;commit 见下(3 文件);设计套件 +2(环 **62 绿**);打字跨 tick 截图实证
 
 - **定案(owner 复核擒获的继承性旧疾):** 重设计原样继承了旧行为——`setInterval(updateStatus, 2000)` 每 tick `serverInput.value = resp.serverUrl` 无条件覆写,用户正在键入的新地址每 2 秒被冲回服务器值;我的三状态截图天然不可见此病(canned 桩值==键入值),owner 一句点破。

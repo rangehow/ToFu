@@ -1,3 +1,9 @@
+### 2026-08-04(预存红闭环:census 套件本机恒红两枚——feature-* 构建产物跳过表收编 + 后端普查改 git 索引枚举(294s→0.2s);首版并行读误诊被实测推翻) — 脑派发接我自票 `pt_759f78bdafa2430a` **DONE**;commit `4fdef290`(1 文件 +80/−23,纯测试基建);套件 **4/4 in 1.46s**(原 302s 超时红)
+
+- **① 前端普查假阳(命名漂移):** `_js_call_sites` 跳过表只认 `bundle-` 前缀,Epic E 后产物是 `feature-<8hex>.js`——扫描到产物里拼接的 `Api.chat.active(` 源码,误判「未申报消费者」。修法=跳过形状与 js_bundler 陈旧清理器同源的哈希锚定正则 `^(bundle|feature)-[0-9a-f]{8}\.js$`(源文件 `feature-loader.js` 不误伤),形状针四断言钉住。
+- **② 后端普查超时(实测定案,首版误诊):** 第一版并行化**文件读取**无效仍 302s——探针实证瓶颈是 **os.walk 目录枚举本身**(294s FUSE readdir RPC;读内容仅 0.75s,并行 0.09s)。根修=枚举改走 **git 索引**(`git ls-files -co --exclude-standard`,实测 0.2s,覆盖已跟踪+未跟踪未忽略=共享树兄弟 WIP 也在普查内),线程池只负责读;git 缺席时回退线程化 walk(剪 __pycache__/.tofu_trash)。
+- **意外之喜(git 语义更正确):** 集合 diff 实证裸 walk 多扫的 6 个文件全是 `.tofu_trash/` 恢复快照——已删除的消费者会被裸 walk 误计为活调用点,git 视图天然排除。
+- **事故自记:** 首版「并行读」修法未先测量瓶颈即下手,302s 复跑仍红;教训=性能修复先 profile(本票靠 walk/read 分段计时 30 秒定位),勿凭假设开药。
 ### 2026-08-04(travel 续刀:vertical auto 路径富 items 直通前端紫卡——owner 复核擒获的集成缺口;孤儿测试文件收编) — owner 复验指令;commit `2619e3ef`(3 文件 +219/−9);环 **39+42=81 绿**
 
 - **缺口(owner 擒获):** auto-detect 是用户命中 travel 的默认路径,而 `resolve_vertical` auto 分支返回 type-level 记录(有 items 无 sources)——`_vertical_to_sse_payload` 的直通条件是「items AND sources 同在」,type-level 落 legacy 分支被压成 content 首行合成的一行,航班 10 条可预订条目在前端紫卡全丢(LLM 文本不受影响)。explicit `vertical='travel'` 域路径无此病。

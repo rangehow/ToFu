@@ -9,9 +9,11 @@
 > `python server.py`」）：任何一次普通启动在本地 pgdata 未播种时自动执行，
 > 无需带任何环境变量。** `TOFU_DB_SEED_LOCAL=0` 仅作推迟用的逃生门。
 >
-> 机制源码：`lib/database/_pg_seed.py::_seed_local_pgdata_from_legacy`
+> 机制源码：`lib/database/_pg_seed.py::_migrate_local_primary_if_due`
 > （幂等，verify-before-canonical，失败自动 quarantine 本地半成品、legacy
-> 保持权威；失败后下次启动自动重试——自愈，无死锁标记）。
+> 保持权威；失败进 6h 冷却标记，过窗自动重试——自愈）。**2026-08-05 起为
+> 单启动原子迁移：播种+校验+翻转同一次启动完成**，只有 server 进程
+> （`TOFU_SERVER_PROCESS` 标记）会触发；探针/工具进程只挂载不迁移。
 
 ## 0. 前置事实（2026-08-01 实测）
 
@@ -38,32 +40,32 @@ PGGSSENCMODE=disable psql -h 127.0.0.1 -p 15439 -U "$USER" -d tofu -tAc \
 curl -s http://127.0.0.1:15000/api/health
 ```
 
-## 2. 执行（DEFAULT-ON：普通重启即触发）
+## 2. 执行（DEFAULT-ON：一次普通重启全完成）
 
 ```bash
 python server.py        # 或 ./restart_15000.sh —— 任何形式的重启都行，无需 env
 ```
 
-- 启动序列：DB bootstrap Step -1 触发种子 → legacy 在运行则直接复用做
-  `pg_dumpall`（fresh dump，**一致快照、零丢失窗口**；起不来才回退
-  nightly dump 并 WARN）→ initdb+restore 进 `/tmp/tofu/pgdata` → 启动本地
-  集群并校验 `conversations` 行数与源一致 → 通过才声明 local 为权威。
-- **本次启动会多花数分钟**（dump+restore 21GB，FUSE 读 + 本地写），日志
-  持续输出 `[DB-Seed]` 进度——这是一次性成本，不是卡死。期间服务不可用。
-- 该进程本身仍从 legacy 伺服（解析翻转发生在下一次启动，见 §3-③ 的
-  两条预期日志）。
+- 启动序列（单启动原子）：DB bootstrap Step -1 触发迁移 → legacy 在运行则直接
+  复用做 `pg_dumpall`（fresh dump，**一致快照、零丢失窗口**）→ initdb+restore
+  进 `/tmp/tofu/pgdata` → 校验 `conversations` 行数与源一致 → **同一启动内**停
+  legacy、把 local 切到钉死端口（15439）启动 → 本次启动即伺服 local。
+- **本次启动会多花 10–20 分钟**（dump+restore ~46GB，FUSE 读 + 本地写），日志
+  持续输出 `[DB-Seed]`/`[DB-Flip]` 进度——这是一次性成本，不是卡死。
+- 失败语义：任一步失败自动 quarantine 半成品 + legacy 保持权威 + 写 6h 冷却
+  标记（`/tmp/tofu/.seed_failed`）；修好根因后删标记或等过窗，下次启动自动
+  重试。
 
-## 3. 验收（三条全过才算成；第②③条需要再一次普通重启）
+## 3. 验收（三条全过才算成——同一次启动后即可查）
 
 ```bash
-# ① 播种进程的日志出现成功标记（行数必须等于预检基线）
+# ① 播种+翻转双成功日志（行数必须等于预检基线）
 grep -a 'DB-Seed] SUCCESS' logs/app.log | tail -1
-# ② 再一次普通重启后，local 成为权威
-grep -a 'Local-primary split ENGAGED' logs/app.log | tail -1
-# ③ 活库的数据目录已切到本地
+grep -a 'DB-Flip] SUCCESS' logs/app.log | tail -1
+# ② 活库的数据目录已切到本地
 PGGSSENCMODE=disable psql -h 127.0.0.1 -p 15439 -U "$USER" -d tofu -tAc \
   'SHOW data_directory'   # 期望 /tmp/tofu/pgdata
-# ④ 行数一致 + 业务冒烟
+# ③ 行数一致 + 业务冒烟
 PGGSSENCMODE=disable psql -h 127.0.0.1 -p 15439 -U "$USER" -d tofu -tAc \
   'SELECT count(*) FROM conversations'   # == 预检基线（2026-08-01: 4394）
 curl -s http://127.0.0.1:15000/api/health

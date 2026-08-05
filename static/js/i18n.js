@@ -2212,8 +2212,6 @@ var _i18n = {
   'local.bundleRebuilding': { zh: '受控端安装包正在后台重建（携带零配置配对的新版本）——几分钟后此处可用；急用可先下载裸安装包 + 连接行手动配对。', en: 'The agent installer is rebuilding in the background (the zero-config build) — available in a few minutes; in a hurry, use the bare installer + a connect line below.' },
   'local.bindLoopbackWarn': { zh: '⚠️ 服务器当前只监听本机回环（BIND_HOST=127.0.0.1）——受控端无法直连内网地址，只能靠自动隧道；去掉该环境变量并重启后，受控端可直连，更快更稳。', en: '⚠️ The server binds loopback only (BIND_HOST=127.0.0.1) — agents cannot reach it over the LAN and must fall back to the automatic tunnel; unset it and restart for a direct, faster attach.' },
   'local.connectLineToggle': { zh: '高级：连接行（自动配对不可用时兜底）', en: 'Advanced: connect line (fallback when auto-attach is unavailable)' },
-  'local.copied': { zh: '已复制', en: 'Copied' },
-  'local.agentStep3': { zh: '③ 连上后此处状态变绿 —— 之后它常驻托盘，无需再操作。', en: '3. The status here turns green once connected — it then lives in the tray, nothing more to do.' },
   'local.agentStepAuto': { zh: '② 装完启动即可 —— 安装包已内置服务器通路与配对凭证，会自动连上；此处状态变绿就是成功。', en: '2. Just install and run — the bundle already carries the server routes and credential, so it connects by itself; green status here means done.' },
   'local.fullVersionToggle': { zh: '这台电脑也想跑 Tofu 本体（服务器+界面）？下载完整桌面版', en: 'Want Tofu itself on this machine (server + UI)? Get the full desktop app' },
   'local.mintCopied': { zh: '连接行已复制 —— 粘贴到受控端的连接框即可', en: 'Connect line copied — paste it into the agent\'s connect box' },

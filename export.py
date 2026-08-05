@@ -1006,6 +1006,69 @@ def _untracked_root_dirs(src: Path) -> set[str]:
     return stray_dirs
 
 
+def _untracked_nested_files(src: Path, stray_root_dirs: set[str]) -> set[str]:
+    """Untracked, non-gitignored FILES that would otherwise ship verbatim.
+
+    The root-dir rule collapses stray top-level dirs, but an untracked FILE
+    inside a TRACKED dir used to slip straight into the public repo —
+    measured 2026-08-05: the uncommitted tests/test_frontend_autopilot_run_notice.py
+    shipped to rangehow/ToFu and red-filed the public CI, and the
+    tests/tmp*.js NC-harness temp copies rode along the same way. The
+    published tree is a MIRROR OF COMMITTED SOURCE: if a file is worth
+    publishing it is worth ``git add``ing — tracking IS the keeper
+    mechanism, so there is deliberately no second allowlist here.
+
+    ``git ls-files -o --exclude-standard`` (no ``--directory``) enumerates
+    every untracked file individually; entries under ``stray_root_dirs`` are
+    already covered by the root-dir rule and filtered out so the exclude
+    list stays short. Root-level untracked FILES (``_fe.tmp.js``,
+    ``JOURNAL.md.lock``, …) are included — the same argument applies.
+
+    Best-effort: empty set when git is unavailable / src is not a repo.
+    Personal mode never consults this (full self-use backup).
+    """
+    if not _have_tool('git'):
+        return set()
+    try:
+        proc = subprocess.run(
+            ['git', 'ls-files', '-z', '-o', '--exclude-standard'],
+            cwd=str(src), capture_output=True, text=True,
+        )
+    except Exception as e:
+        logger.warning('git ls-files for untracked-file scan failed: %s', e)
+        return set()
+    if proc.returncode != 0:
+        logger.debug('git ls-files -o (files) rc=%s — skipping: %.200s',
+                     proc.returncode, proc.stderr)
+        return set()
+    out: set[str] = set()
+    for raw in proc.stdout.split('\0'):
+        entry = raw.strip()
+        if not entry or entry.endswith('/'):
+            continue
+        top = entry.split('/', 1)[0]
+        if '/' in entry and top in stray_root_dirs:
+            continue  # already excluded by the root-dir rule
+        out.add(entry)
+    return out
+
+
+def _untracked_file_excludes(src: Path) -> list[str]:
+    """tar excludes for :func:`_untracked_nested_files`, with the same loud
+    operator-facing summary the root-dir rule gives."""
+    stray = _untracked_nested_files(src, _untracked_root_dirs(src))
+    if stray:
+        shown = sorted(stray)
+        head = ', '.join(shown[:8]) + (f' … (+{len(shown) - 8} more)' if len(shown) > 8 else '')
+        logger.warning('[Export] Skipping %d untracked, non-gitignored '
+                       'file(s) in tracked dirs: %s', len(shown), head)
+        print(f"  {C_YELLOW}\u26a0 Skipping {len(shown)} untracked file(s) "
+              f"(not committed — the export mirrors committed source): {head}{C_END}")
+        print(f"  {C_DIM}  \u2192 if any is real source, `git add` it before "
+              f"exporting (or `.gitignore` it if it's junk).{C_END}")
+    return [f'--exclude=./{f}' for f in sorted(stray)]
+
+
 def _untracked_root_excludes(src: Path) -> list[str]:
     """Build tar ``--exclude=./<dir>`` args for the stray root dirs.
 
@@ -1089,6 +1152,11 @@ def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list
         # _untracked_root_excludes. Prevents stray code-exec dirs (module1/,
         # scratchpad/, …) leaking into the export and breaking the ruff gate.
         tar_excludes.extend(_untracked_root_excludes(ROOT))
+        # …and untracked FILES inside tracked dirs (uncommitted new/WIP
+        # source, tests/tmp*.js NC-temp copies) — the export mirrors
+        # committed source; `git add` is the keeper. See
+        # _untracked_nested_files for the incident that forced this.
+        tar_excludes.extend(_untracked_file_excludes(ROOT))
 
     # Preserve dest user data + git history across re-exports. Same set for
     # all modes — these dirs belong to the destination user, not source.
@@ -2585,6 +2653,11 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
     # the real run drops them. Computed once (one git call) before the walk.
     _stray_root_dirs: set[str] = (
         set() if mode == 'personal' else _untracked_root_dirs(ROOT))
+    # Same alignment for untracked FILES in tracked dirs — the preview must
+    # count exactly what the real copy drops.
+    _stray_files: set[str] = (
+        set() if mode == 'personal'
+        else _untracked_nested_files(ROOT, _stray_root_dirs))
 
     for dirpath, dirnames, filenames in os.walk(ROOT):
         # Compute relative path
@@ -2613,6 +2686,16 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
         for filename in sorted(filenames):
             relpath = os.path.join(rel_dir, filename) if rel_dir else filename
             src_path = Path(dirpath) / filename
+
+            # Untracked files in tracked dirs (uncommitted WIP, tmp scratch) —
+            # the real tar copy drops them; the preview must count them too.
+            if relpath in _stray_files:
+                stats['excluded'] += 1
+                reason = 'untracked non-gitignored file'
+                stats['excluded_reasons'][reason] = \
+                    stats['excluded_reasons'].get(reason, 0) + 1
+                excluded_log.append((relpath, f'{reason}: {relpath}'))
+                continue
 
             # Check exclusion
             reason = _should_exclude(relpath, filename, mode)

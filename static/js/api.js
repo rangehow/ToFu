@@ -1488,6 +1488,11 @@
     brainWatchPromote: (itemId, convId, expectedVersion) =>
       post('/api/v1/project/brain/watch/promote',
            { itemId, convId: convId || '', expectedVersion: expectedVersion }),
+    // Follow-up Q&A anchored to ONE trail response (human↔brain lane; the
+    // answer appends to the same trail with trigger='follow_up').
+    brainWatchFollowUp: (itemId, question, seq) =>
+      post('/api/v1/project/brain/watch/follow_up',
+           { itemId, question, seq: seq || 0 }),
     // Per-conversation brain INFLUENCE — how THIS conv is affected by the
     // brain (charter bound by, epics owned vs avoided, decisions awaiting).
     brainInfluence: (path, convId) =>

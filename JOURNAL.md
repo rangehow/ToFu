@@ -1,3 +1,13 @@
+### 2026-08-05(Watch 车道每条回答可交互:owner「每条回答应该是个对话,点进去能继续问/请求修复」落地=设计稿 deferred Increment 2 首片) — owner 截图问「基于目标发现的问题怎么跟进?现在没有交互入口」;commit 见下(9 文件);新后端 **5 针** + 前端 jsdom **6 针**(38/38 绿)+ 邻接环 75 绿(1 预存红三态分诊挂板 `pt_bfb5ead4ec334c58`)
+
+- **owner 提案正中预留设计:** docs/PROJECT_BRAIN_STATUS_LANE.md §8 的 Increment 2(propose-actions layer)当时定为 owner-gated deferred——本轮即 owner 开门。实施严守 §2 不变量:**不新开任何跨会话写通道、无 fan-out、车道保持 human-facing-only**。
+- **继续追问:** 每条回答(最新+轨迹行)带内联输入框;`answer_follow_up(item_id, question, response_seq=)` 以**实时板块状态 + 条目原文 + 锚定的那条回答**接地作答,答案追加进**同一条只增轨迹**(trigger='follow_up',问题存证据 JSON 的 followUpQuestion/anchorSeq,渲染为回答上方的「追问 ·」标签行)。**刻意不动 response_fingerprint**——Q&A 轮不是新评估,绝不能让周期回视误判「已新鲜」(有针钉死)。
+- **请求修复:** 内联 epic 草稿编辑器,标题从锚定回答首句预填(90 字符截,人可改),提交走**现有的人类把关通道** `POST /api/v1/project/board/post`(created_by_conv=当前对话=派发目标)——大脑自动派发给某对话,owner 切到任务板页即可点进该对话跟进。「每条回答是个对话」由「追问留在车道 + 修复落成可点进去的真对话」两半拼成。
+- **REST:** `POST /api/v1/project/brain/watch/follow_up`(信封+限流,api_contract_drift 棘轮过)。
+- **测试账:** 后端 5 针(锚定+接地+持久化/显式 seq 选锚/周期闸门不被 Q&A 触碰/校验+LLM 崩不写轨迹/无锚诚实作答)+ 前端 6 针 jsdom(每条回答双门/追问标签行/锚 seq 透传/二次点击收起/修复走 boardPost 通道且 convId=派发目标/trigger 标签)。
+- **落地事故自记×2:** ①insert_content(position='before') 时把锚点文本抄进了插入内容末尾,`_buildWatchActions` 头重复一次→IIFE 少一个闭括号,node --check 定位;②先写了一个 replace==search 的无效 diff。**教训:insert 的 anchor 由工具保留,内容里不要再写锚;diff 提交前默查 search≠replace。**
+- **预存红分诊(非本批):** bundle parity 红——credentials_vault.js 入 _BUNDLE_FILES(327082e8)但 index.html 漏 dev-fallback 标签(HEAD 实证),挂板 `pt_bfb5ead4ec334c58` 归凭证保管库属主。
+
 ### 2026-08-05(write_file 失败载荷挽救 + 路径形状守卫:owner 设计问「tool result 怎么写要让模型能自愈」落地) — owner 以 PG runbook 改写事故(缺 path → EISDIR)指令设计 auto-fix 机制;commit `ff03c109`(4 文件 +394/−8);新套件 **11 针** + 邻接环 **175 绿**(atomic 9/read_gate 14/project_tools 84/input_repair·bg_write·undo 57)+ collect-only 闸过
 
 - **事故链定案:** 模型发的 write_file **只有 content 没有 path** → 空串过 `_safe_path` 解析成项目根**目录** → 原子写把 `.tofu_atomic_*` 临时文件建到了项目根的**父目录** → `os.replace` 撞目录 EISDIR → 载荷整个丢失,报错既不说错因也不给恢复路。磁盘侧事后实证零残留(原子写 except 自清),runbook 改写后来已由兄弟会话补写成功(f0355504)。

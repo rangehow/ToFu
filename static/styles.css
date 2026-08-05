@@ -22095,6 +22095,13 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .pb-watch-diverged{color
 .pb-watch-trail-row{display:flex;gap:8px;font-size:11.5px;line-height:1.45;color:var(--text-secondary)}
 .pb-watch-trail-when{flex-shrink:0;color:var(--text-tertiary)}
 .pb-watch-trail-text{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.pb-watch-followup-q{font-size:11px;font-weight:600;color:var(--accent);margin-bottom:3px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.pb-watch-resp-tools{margin-top:5px}
+.pb-watch-resp-actions{display:flex;gap:4px}
+.pb-watch-resp-act{background:none;border:none;padding:2px 4px;font:inherit;font-size:11px;font-weight:600;color:var(--text-tertiary);cursor:pointer;border-radius:var(--pb-radius-sm)}
+.pb-watch-resp-act:hover{color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.pb-watch-resp-editor{margin-top:6px;display:flex;flex-direction:column;gap:6px}
+.pb-watch-fix-title{font-size:12px}
 .pb-watch-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
 .pb-watch-btn{padding:3px 10px;font-size:11px;font-weight:600;color:var(--text-secondary);background:transparent;border:1px solid var(--border);border-radius:var(--pb-radius-sm);cursor:pointer;transition:opacity var(--transition),border-color var(--transition),color var(--transition)}
 .pb-watch-btn:hover{color:var(--text-primary);border-color:var(--text-tertiary)}

@@ -1,3 +1,7 @@
+### 2026-08-05(预存红闭环:test_bundle_manifest_parity——client_log_relay.js 缺 index.html dev-fallback 标签) — 脑派发接我自票 `pt_f7cfa779d29c47ec` **DONE**;commit `76263e42`(1 文件);parity **15/15**(双向边同绿)
+
+- ecd182f7 把 `core/client_log_relay.js` 收进 `_BUNDLE_FILES` 时漏了 index.html 兜底标签,bundling 失败时 dev 回退会静默丢「console→logs/frontend.log 回传」——与 97157428 修掉的 credentials_vault.js 同族。修法=按 manifest 同序补标签(core.js 壳之后、core/ 子包之前,注释写明同序约束)。
+
 ### 2026-08-05(受控端零配置化:配对码全链路退役——「装了却连不上」根因定案=agent 从未到达 Tofu(地址死路×3),修复=下载即凭证的 attach bundle + agent 窗口链路状态诚实化) — owner 截图问「tofu agent 装好了为什么还是无法控制本机?另外不要设计任何配对码,要么直接烙进安装包,要么干脆不设计,我们不允许给用户加配置负担」;epic `pt_3b7b37e696a9482a`;commit 见下(17 文件);新套件 **15 针** + 方向对齐 4 套件 + 邻接环 **58+93+149+19+46+49 绿** + collect-only 15902 零错 + ruff 干净
 
 - **根因定案(全部实证,非推测):** 三天 access.log:`POST /api/desktop/poll` 今日 0 / 昨日 0 / 前日 1,`/api/desktop/pair` 今日 0——**这台 agent 一个字节都没到过 Tofu**,面板的「等待受控端连入」等的是永远不会到的请求。地址死路三层:①agent 存的 vscode 代理 URL 丢 https+丢 `/proxy/15000` 前缀(`request.host_url` 结构性看不到前缀,与 08-04 扩展 405 同型);②即使补对,SSO 边缘对无 cookie 的 /api/* 一律 401(08-03 实测),浏览器靠 SSO cookie 过,agent 没有;③部署环境 `BIND_HOST=127.0.0.1`(平台容器注入,/proc/pid/environ 实证)悄悄盖掉 08-04 收敛的 0.0.0.0 默认值,直连内网也死。**配对码从来就不是拦路虎——它只能在那条已死的地址上兑换。**

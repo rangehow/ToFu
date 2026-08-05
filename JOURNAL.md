@@ -1,3 +1,8 @@
+### 2026-08-05(owner 两连问闭环:①「强刷还是一句话」=bundle 故意的一次加载滞后,修复实测已在 19:17 的 feature-ee733218.js 里 ②任务板删除按钮全链落地 + relay 预存红收编) — owner 指令「我强制刷新了还是只有一句话啊,还有,任务板上的任务为什么没有删除按钮?」;commits `054ecf54`(删除 9 文件 +255/−20)+`ecd182f7`(relay 收编);板 47+大脑前端 21+watch 6 等 **91 绿** + collect-only 15894 零错
+
+- **①定案(逐字节实证,非推测):** 19:17:09 的后台重建日志 + 盘上新 feature 包内含 `createElement("textarea")`/`.rows=4`/2000 封顶新码,旧包含首句切分旧码——**修复已在线上 bundle**。「强刷无效」是 bundler 的既定取舍:源码变更后的第一次 `GET /` 返回旧包+后台异步重建(6s,node 闸),下一次加载才拿新包——为把全量构建挪出请求线程(历史事故:重连风暴期 GET / 卡 95s)。owner 的那次强刷正是触发重建的那次,看到旧码后即回报。**操作口径:源码级修复后,第一次刷新给旧包,隔几秒第二次刷新才拿到新包**;若第二次仍旧才该查 [Bundle] 日志。
+- **②删除按钮(此前不存在):** `delete_task`(project_board.py)——任意状态可删(人类 > 咨询性租约,认领方不被打断,其后续 complete 落空本就有 'task not found' 容错);**一致性闸门**:有 ACTIVE 依赖方时拒删并点名(被删 dep 永远到不了 done,依赖方会被 select_dispatchable 隐形搁浅);feed note + audit 可观测。路由 /board/delete 骑 complete 同型人类闸门(api_ok 信封, charter#0)。前端五种卡片(open/claimed/done/blocked/awaiting)全带垃圾桶按钮,_boardMutate delete 分支先 window.confirm——唯一「记录彻底消失」的板动作,confirm 不省。守卫:后端 5 针 + 前端 harness 8 针(confirm 拒=零调用/受=载荷形状)。
+- **顺带擒获(预存红):** 兄弟批 81f515e0(前端日志回传)的 client_log_relay.js 用 `fetch(_relayUrl())` 变量 URL 直打 /api/v1/logs/client,绕开 api.js 隔离棘轮且违反 carve-out 教义(只收非 /api 调用)。正解=收编:api.js request() 新增 keepalive 透传 + logs.clientRelay(静默失败),relay 的 fetch 分支改走 Api,sendBeacon 路径不动(非 fetch 不计数),Api 未就绪的早期 pagehide 按 never-amplify 教义静默丢批。隔离套件转绿。
 ### 2026-08-05(同角色邻接存量回填:owner 复核「WARNING 应归零」最后一公里——一次性迁移落地并实测归零) — owner 实测钉「近 7 天 20/199 会话仍带邻接,新增已防但存量会继续 warn」;commit `4ca1a872`(3 文件 +392);套件 **9 针** + 环 **54 绿**;**验收实测:全表 57 行/120 对 → 0**
 
 - **owner 的判据拆解:** 生产者双修(56406f93)只防新增;存量邻接在 DB 里,每次这些会话被用到都会从 store 重建 wire 继续 warn——「不增长」不等于「归零」。

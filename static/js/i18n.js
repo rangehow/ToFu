@@ -993,6 +993,15 @@ var _i18n = {
   'debug.brainBadgeTitle': { zh: '本条 system 消息注入了项目大脑上下文（模型实际可见）', en: 'This system message carries injected Project Brain context (visible to the model)' },
   'debug.brainSummaryTitle': { zh: '本次任务向模型注入的项目大脑上下文块', en: 'Project Brain context blocks injected into the model this task' },
 
+  // ── Structured message body (debug panel / inline state panel) ──
+  'debug.structReasoning': { zh: '思考过程', en: 'Reasoning' },
+  'debug.structContent': { zh: '内容', en: 'Content' },
+  'debug.structToolCalls': { zh: '工具调用', en: 'Tool calls' },
+  'debug.structToolResult': { zh: '工具结果', en: 'Tool result' },
+  'debug.structFields': { zh: '其他字段', en: 'Other fields' },
+  'debug.structRawJson': { zh: '原始 JSON', en: 'Raw JSON' },
+  'debug.structImage': { zh: '图片', en: 'image' },
+
   // ══════════════════════════════════════
   //  Request Inspector (P2 drawer)
   // ══════════════════════════════════════
@@ -1097,6 +1106,27 @@ var _i18n = {
   'skills.scopeIdLine': { zh: 'scope: {scope} · id: {id}', en: 'scope: {scope} · id: {id}' },
   'skills.enable': { zh: '启用', en: 'Enable' },
   'skills.disable': { zh: '禁用', en: 'Disable' },
+  // Install-scope selector + per-skill env/key bindings (credential vault)
+  'skills.installScopeTitle': { zh: '新安装的技能包放到哪里：全局（所有对话可用，推荐）或仅本项目', en: 'Where new installs land: global (available everywhere, recommended) or this project only' },
+  'skills.scopeGlobal': { zh: '安装到全局', en: 'Install: global' },
+  'skills.scopeProject': { zh: '安装到本项目', en: 'Install: this project' },
+  'skills.moveToGlobal': { zh: '移到全局', en: 'Move to global' },
+  'skills.moveToProject': { zh: '移到本项目', en: 'Move to project' },
+  'skills.scopeMoved': { zh: '已移动 {id}', en: 'Moved {id}' },
+  'skills.scopeMoveFailed': { zh: '移动失败: {err}', en: 'Move failed: {err}' },
+  'skills.envConfigured': { zh: '已配置', en: 'Configured' },
+  'skills.envMissing': { zh: '未配置', en: 'Not configured' },
+  'skills.envSet': { zh: '配置', en: 'Set' },
+  'skills.envUpdate': { zh: '更新', en: 'Update' },
+  'skills.envSave': { zh: '保存', en: 'Save' },
+  'skills.envSaved': { zh: '已保存 {name}（加密存储在凭证保管库）', en: 'Saved {name} (encrypted in the credential vault)' },
+  'skills.envEmpty': { zh: '值不能为空', en: 'Value cannot be empty' },
+  'skills.envPlaceholder': { zh: '粘贴值，保存后加密存储', en: 'Paste value — stored encrypted' },
+  'skills.envDelete': { zh: '删除', en: 'Delete' },
+  'skills.envDeleteConfirm': { zh: '确定删除 {name} 的配置吗？', en: 'Delete the configured value for {name}?' },
+  'skills.envDeleted': { zh: '已删除 {name}', en: 'Deleted {name}' },
+  'skills.envSaveFailed': { zh: '保存失败: {err}', en: 'Save failed: {err}' },
+  'skills.envDeleteFailed': { zh: '删除失败: {err}', en: 'Delete failed: {err}' },
   // Actions / toasts
   'skills.installing': { zh: '安装中…', en: 'Installing…' },
   'skills.downloadingInstalling': { zh: '正在下载并安装 {id} …', en: 'Downloading and installing {id}…' },
@@ -1106,6 +1136,7 @@ var _i18n = {
   'skills.installHintSuffixUpload': { zh: ' · 安装脚本: {files}', en: ' · install scripts: {files}' },
   'skills.installError': { zh: '安装异常: {err}', en: 'Install error: {err}' },
   'skills.uninstallConfirm': { zh: '确定要卸载技能包 "{id}" 吗？整个目录会被删除。', en: 'Uninstall skill pack "{id}"? The entire directory will be deleted.' },
+  'skills.uninstallConfirmEnv': { zh: '它在凭证保管库中配置的密钥也会一并删除。', en: 'Its configured keys in the credential vault are removed too.' },
   'skills.uninstallFailed': { zh: '卸载失败: {err}', en: 'Uninstall failed: {err}' },
   'skills.uninstalledToast': { zh: '已卸载 {id}', en: 'Uninstalled {id}' },
   'skills.uninstallError': { zh: '卸载异常: {err}', en: 'Uninstall error: {err}' },

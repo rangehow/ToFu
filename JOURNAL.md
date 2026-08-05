@@ -37,6 +37,35 @@
 - **Result / status:** outcome, metrics, or current state
 -->
 
+### 2026-08-05 — activate() stamped recency with a full-row write from a stale snapshot; test-local.sh un-staled
+- **Change:** `SessionController.activate()` now bumps recency with the targeted
+  `ProfileDao.touchLastUsed` and RE-READS the row (`getById`) before login, returning
+  `ProfileResult` (renamed from `EditResult`, now shared with `editProfile`); the
+  ViewModel navigates with the re-read row. `migrateProxyAuthDefaults()` flips auth
+  types with the new targeted `ProfileDao.setAuthType`. Commits `f410acd` (fix) +
+  `39596c9` (harness).
+- **Why:** same hazard class as the 2026-07-28 `@Update` rollback, on the hottest
+  path of all — `activate()` runs on EVERY card tap with a row rendered from the
+  `observeAll()` Flow, a snapshot that lags any write not yet re-emitted. The old
+  `dao.update(profile.copy(lastUsedAt = …))` rewrote the WHOLE row from that stale
+  snapshot: it would reinstate a `cookie_host` a concurrent login had just stamped
+  (silently re-locking the supervisor controls the user had already unlocked) or
+  cleared. The migration loop had the same interleaving window (suspends on every
+  write over a `getAllOnce()` snapshot). The fake DAO's new `afterSnapshot` hook is
+  what makes the interleaving reproducible in a test at all.
+- **Result / status:** **107 pure-JVM + 3 Robolectric green** via `test-local.sh`.
+- **Harness repair (same commit series):** `test-local.sh` had rotted behind the
+  session layer — its generated `CookieBridge` stub predated `CookieSink.cookieHeader`,
+  and `InteractiveSso.kt` / `ServerLifecycle.kt` (pure) were never in the tier-1
+  sources, so the pure tier no longer even compiled, and
+  `SessionManagerInteractiveSsoTest` had NO local runner. Fixed the stub, added the
+  pure mains + four suites; `SupervisorRunner` deliberately stays Gradle-tier
+  (needs `SupervisorClient` → `android.webkit` + `org.json`). Toolchain note: no
+  kotlinc dist on this box — ran the embeddable compiler jar through a synthetic
+  `kotlin-home` shim (`-kotlin-home` pointing at a dir whose `lib/` symlinks the
+  `kotlin-stdlib/reflect/script-runtime` jars from `.testharness/libs`), which makes
+  stdlib auto-resolution behave exactly like a real distribution.
+
 ### 2026-07-28 — A full-row `@Update` could silently roll back a concurrent edit (owner review)
 - **Change:** New `ProfileDao.setCookieHost(id, host)` — a targeted
   `@Query("UPDATE profiles SET cookie_host = :host WHERE id = :id")`. Both stamping sites use it.

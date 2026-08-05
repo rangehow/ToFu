@@ -79,16 +79,18 @@ def test_request_path_never_touches_db_inline(probe_env, monkeypatch):
     # not "first call in a fresh process is fast"; both warm-ups are
     # config/repo-size-driven, so their one-time cost legitimately differs
     # between deployments.
+    import logging
+    _warm_log = logging.getLogger(__name__)
     try:
         from lib.cross_dc import get_status as _cdc_status
         _cdc_status()
-    except Exception:  # noqa: BLE001 — cross_dc is optional; absence is fine
-        pass
+    except Exception as _w1:  # cross_dc is optional; absence is fine
+        _warm_log.debug('cross_dc warm-up skipped: %s', _w1)
     try:
         from lib import boot_identity as _bi
         _bi.code_fingerprint()
-    except Exception:  # noqa: BLE001 — fingerprint is best-effort on the route
-        pass
+    except Exception as _w2:  # fingerprint is best-effort on the route
+        _warm_log.debug('code_fingerprint warm-up skipped: %s', _w2)
 
     t0 = time.monotonic()
     data = _call_health(common)

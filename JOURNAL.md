@@ -1,3 +1,13 @@
+### 2026-08-05(实况视图全链路系统审计:三路 swarm 普查(写入点 40+/DOM 谓词/471 套件覆盖图)+ 同类隐患三连根修——branch 面板过期 pin 误切定居尾、409 陈旧检查点整体替换改 rebase、endpoint_iteration splice 收窄单行) — owner 指令「前端问题修了很多很多次,把整个逻辑彻底过一遍」;commit 见下(7 文件);新套件×3 **6 针**(本批)+ 邻接环 **48+30 绿** + collect-only 10 零错
+
+- **审计形态:** 三路并行普查——①`conv.messages` 全部写入点普查(40+ 站点逐格:触发/护栏/信标/能否删持久消息/测试);②DOM 面全部变更点 + 「缺席标记当流式」谓词类残留清剿;③471 个前端套件→12 流水线阶段的覆盖映射。结论:12 阶段 11 有守护,唯一 NONE=boot Case A 活任务重挂(仅传递覆盖);PARTIAL=编辑重发截断/KEEP_LOCAL 行为驱动薄。
+- **同类隐患判例(「持久化标记缺席 ≠ 在流」族):** 主聊已修(stream_lifecycle 身份绑定,commit 8ea8588d),审计在同一类里又擒三枚:
+- **F1 branch.js `_renderBranchPanel`:** `(isStreaming||hasPersistentTask)?slice(0,-1)`——`branch.activeTaskId` 是持久化 pin,任务在关页期间完成后 pin 过期,面板**无条件切掉定居尾轮**还画假「Generating…」区;修=过期 pin 臂改查尾轮自身持久记录(`finishReason`/`error` 会持久化),崩溃重连形状不变。
+- **F2 conversations.js 409 blocked_stale_checkpoint:** 恢复路径整体替换 `conv.messages=freshMsgs`(同文件 rev-conflict 路径早已用 `_rebaseUnackedTail`)——未上岸本地尾(弱网 pending-sync/救援失败行)被无信标丢弃;修为同一 rebase 原语。
+- **F3 sse_pipeline.js endpoint_iteration:** 去重 `splice(staleIdx)` 单参=截到尾——过期 worker 后若有已持久化用户追问(重载+重连带排队发送)被静默删;收窄 `splice(staleIdx,1)`(endpoint_new_turn 的到尾截断是有意设计,不动)。
+- **复核降级:** cross_tab_sync Case-1 整体收养(server 更长才触发,服务端只追加不重排)风险低;`_isEndpointPlanner` 顶层不持久化(DB 实证 622 会话命中均为 segments 嵌套),三枚 `!done` 旗标臂在「定居即 done=true」纪律下安全;`_skipIdx=total-1`(chat_render)被 Guard 1c 同条件前置拦截=不可达死防御,留档不动。
+- **测试账:** F1/F2 行为驱动+NEUTER 各一(branch 面板定居尾静态可见 NEUTER 恢复 pin-only 必红;409 rebase 保尾 NEUTER 恢复整体替换必红);F3 源级守卫+双 NEUTER。断言教训:流式区会回显被切尾轮的内容,「文本出现」不能区分静态渲染与区回显——钉静态独有形状(finish div 紧邻)或出现次数。
+
 ### 2026-08-05(§2.2 日志纪律清扫:69 静默 catch 全部绑定留痕 + 3 裸 getLogger 收编 + 8 F401——双守卫 13/13 绿,零控制流变更) — 脑派发 epic `pt_c60bdb8a997d417d` **DONE**;commit `adef0842`(38 文件);四路 swarm(desktop_agent/desktop/misc/tail)+ 敏感邻接环 **85+35+53 绿**
 
 - **形态:** 首波三路按目录切(desktop_agent×5 文件/desktop+dist+browser+routes×9/misc×9),我复盘时擒获**自己的截断事故**——违规清单 head -30 只派了前 30 处,lib 层原 50 处的尾巴 22 处漏派;补一路 tail×16 文件收口。**教训:派活前先用 count 验证清单完整性,别用 head 截决定工作量的输出。**

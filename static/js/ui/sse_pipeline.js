@@ -1365,11 +1365,17 @@ function dispatchSSEEvent(line, ctx) {
           }
 
           if (!existingSm) {
-            /* ★ Dedup: remove any stale DB-loaded worker for this iteration */
+            /* ★ Dedup: remove any stale DB-loaded worker for this iteration.
+             *   ONE row only — a one-arg splice would drop everything AFTER it
+             *   too, including a persisted user follow-up queued behind the
+             *   stale worker (reload + reconnect with a queued send). The
+             *   to-end truncation contract belongs to endpoint_new_turn below
+             *   (which re-streams the whole iteration); here only the stale
+             *   worker twin is stale. */
             const staleIdx = conv.messages.findIndex(m =>
               m.role === "assistant" && m._epIteration === ev.iteration);
             if (staleIdx >= 0) {
-              conv.messages.splice(staleIdx);
+              conv.messages.splice(staleIdx, 1);
             }
 
             const newAssistant = {

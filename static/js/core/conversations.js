@@ -293,7 +293,12 @@ async function syncConversationToServer(conv, { allowTruncate = false } = {}) {
           if (freshData) {
             const freshMsgs = freshData.messages || [];
             if (freshMsgs.length > 0) {
-              conv.messages = freshMsgs;
+              /* ★ Rebase, don't clobber: the wholesale replace used to drop a
+               * genuinely un-synced local tail (pending-sync poor-network
+               * message / failed-rescue rows) with no beacon. The rev-conflict
+               * path above already uses _rebaseUnackedTail — same primitive:
+               * server base + identity-filtered local-only tail. */
+              conv.messages = _rebaseUnackedTail(freshMsgs, conv.messages);
               conv.title = freshData.title || conv.title;
               conv._serverMsgCount = freshMsgs.length;
               ConvCache.put(conv);

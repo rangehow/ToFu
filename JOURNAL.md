@@ -1,3 +1,11 @@
+### 2026-08-05(滚动审计新窗口三连根修 + 播种三枚隐藏缺陷被迫现形补齐——owner「日志是滚动的」复核批) — commits `c36fbd16`(播种收官)+`56406f93`(同角色生产者)+`7ffc8bb2`(run_command 降级)+`4fd61f16`(LoopWatch 压力上下文);新套件×2 + 终环 **237 绿**;NC×2 各咬各的
+
+- **复核驱动的事实链:** 8月3–5 窗口证实前两批修复的生产实效(LoopWatch 8月3–4 零停摆、401 风暴 3104→25→2),也抓出三类新账。
+- **账①(llm_sanitize 爆发 1157 条/窗):** 证据链——preview 直方图 1203/1203 全是派发族;DB 扫描实证持久化 user,user 邻接(msco7vqmkf8yb2:两 kickoff 相隔 463ms、任务 17582690 空 done 5 秒零内容;msb6ohqifdz7yj:VU 行无应答后接 kickoff)。双根因:P1=引擎轮空死留无应答尾(修:`append_user_msg_idempotent` 内嵌 `settle_unanswered_engine_tail`——新追加落到引擎标无应答尾上时先补**非空**墓志铭 assistant 行,人类尾永远不补);P2=双派发竞态(修:`dispatch_next_queued` 锁内活任务闸,有活任务即拒派发留队)。套件 10 针 + NC×2 + 邻接环 35 绿。
+- **账②(今日 19 次停摆):** 9/19 top_frame=server.py:<module>(loop 空转签名),7/19 与 cgroup_guard 压力事件 120s 内相关——宿主压力类为主(16:11 簇恰逢我自己的大探针烧 CPU)。修:`_stall_pressure_context()` 让停摆行自带 `load1=X cgmem=Y%`(只读本地 cgroupfs+/proc,永不碰 FUSE),分类从此内联免对表;套件 +4 针。
+- **账③(run_command ERROR×127/窗):** 127/127 全是 grep/scan 拦截闸的教学日志,双闸 ERROR→WARNING(owner:真拦错才配 ERROR)。
+- **被迫现形的播种三缺陷(我自己的 f0355504 default-on 数小时内引爆,全部实证):** ①恢复路径确定性死——dump 全局段 `DROP ROLE IF EXISTS "当前用户"` 撞 ON_ERROR_STOP=1 第 28 行即中止(两次裸导入各烧一整轮 46GB dump 并被 quarantine);修=恢复改 stdin 流式 + 精确行头过滤(仅当前角色的 DROP/CREATE,头部 8MB 界限防数据误食),scratch 双集群 e2e 实证 3/3 行恢复。②两次重启翻转=陈旧陷阱+钉死端口下静默永不翻转;修=`_migrate_local_primary_if_due` 单启动原子迁移(播种→校验→停 legacy→local 切钉死端口→验证;失败重启 legacy+6h 冷却标记;陈旧 local 自动泊车重播)。③任意进程 import lib.database 都触发迁移;修=server.py 进程内标记 `TOFU_SERVER_PROCESS`(非用户开关),探针导入 569s→1.2s。套件 9→20 针,DB 环+冒烟 70 绿。
+- **方法论自记:** 「默认开启」的闸门翻转会让从未被真实流量踩过的路径瞬间全部现身——恢复/翻转/触发面三枚缺陷在 opt-in 时代全隐形;以及 insert_content 的 anchor 含 `def/class` 行时重复行要当即读回核对(本批踩了两次)。
 ### 2026-08-05(排队气泡根治:时间线常驻 `_pendingQueued` 一等投影 + 前端日志回传通道落地;/api/v1/logs/client→logs/frontend.log) — owner 两连指令(「user 气泡经常突然消失,agent 生成完刷新才回来,为什么」→「可以根治吗?前端日志能不能定期传后端」);epic `pt_cfdfd30c8699407b` **DONE**;commits `81f515e0`(16 文件 +1218/−16)+`63d0b498`(d.ts regen);新套件×3 **18 针** + 邻接环 **111 绿** + collect-only 17 零错
 
 - **定案(全链实证,非推测):** 症状=「生成中发的消息,气泡突然出现又突然消失」。消失=发送管线 queued 分支**故意 splice** 乐观气泡(`"queue bar only"` 注释自述);回来=服务端派发时才落库,刷新走全量 GET。讽刺点:后端 fix 2a 早已把首条排队消息**镜像进会话体**(`_pendingQueued` 展示行,同 `_msgId`,dispatch 原地对账),渲染器(chat_render)+样式(dashed+时钟 chip)+指纹折叠**全部就位**——splice 是唯一断链。根治=摘除 splice,气泡打 `_pendingQueued`(派发清标记自动翻回正常气泡,`_reconcileQueuedMarkers` 以服务端事实为准),排队条退化为纯控制面。

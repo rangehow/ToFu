@@ -121,6 +121,7 @@ class EventType:
     DONE = 'done'
     ERROR = 'error'
     RETRY_RESET = 'retry_reset'
+    MODEL_FALLBACK = 'model_fallback' 
     # ── content ──
     DELTA = 'delta'
     DELTA_RESET = 'delta_reset'
@@ -292,6 +293,19 @@ _SPECS: tuple[EventSpec, ...] = (
               fields={'attempt': 'whole-turn retry number (1-based)',
                       'max': 'retry budget',
                       'kind': 'error kind that triggered the re-run'}),
+    EventSpec(EventType.MODEL_FALLBACK, _C.LIFECYCLE,
+              'The primary model failed and the turn is being re-streamed on '
+              'the configured fallback model. Emitted EARLY, at the decision '
+              'moment — BEFORE the fallback stream starts — so the client can '
+              'paint an in-bubble fallback banner for the whole (potentially '
+              'minutes-long) fallback generation and a cold reload can '
+              'repaint it from the task stamps. Non-terminal; the terminal '
+              '`done` still follows.',
+              fields={'fallbackModel': 'the model the turn fell back TO',
+                      'fallbackFrom': 'the original model that failed',
+                      'fallbackKind': 'error kind that triggered the fallback',
+                      'fallbackReason': 'human-readable reason (kind: detail, '
+                                        'capped at 300 chars)'}),
     # ───────────────────────── content ─────────────────────────
     EventSpec(EventType.DELTA, _C.CONTENT,
               'Incremental assistant output — append to the live bubble.',

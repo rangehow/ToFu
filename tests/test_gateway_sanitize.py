@@ -30,7 +30,18 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from lib.mcp.registry import is_opensource_build
+
 _ZWSP = '​'
+
+# The provider-gate tests below pin the INTERNAL corp gateway (its provider
+# ids and host are sanitized to example-corp placeholders on opensource
+# export, and the exported gate literal + provider ids diverge by
+# construction). They stay live in the source tree; opensource CI skips them.
+_REQUIRES_INTERNAL_GATEWAY = pytest.mark.skipif(
+    is_opensource_build(),
+    reason='pins the internal corp gateway provider gate — the internal '
+           'gateway host/provider ids are not shipped in opensource builds')
 
 
 @pytest.mark.unit
@@ -90,6 +101,7 @@ class TestBuildBodyProviderGate:
         k = next(iter(_GATEWAY_BLOCKED_TERMS))
         return k, _GATEWAY_BLOCKED_TERMS[k]
 
+    @_REQUIRES_INTERNAL_GATEWAY
     def test_sankuai_anthropic_provider_gets_sanitized(self):
         from lib.llm.body import build_body
         term, broken = self._term_and_broken()
@@ -101,6 +113,7 @@ class TestBuildBodyProviderGate:
             'provider sankuai_anthropic rides the same aigc.sankuai.com '
             'gateway — its requests must get the ZWSP sanitizer')
 
+    @_REQUIRES_INTERNAL_GATEWAY
     def test_sankuai_provider_still_sanitized(self):
         from lib.llm.body import build_body
         term, broken = self._term_and_broken()

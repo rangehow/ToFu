@@ -362,33 +362,62 @@ def _direct_lan_candidate() -> str:
     return 'http://%s:%d' % (ip, port)
 
 
-_HEAD_SHA_CACHE = {'at': 0.0, 'sha': ''}
+_GIT_CACHE = {'at': 0.0, 'fix': '', 'verdicts': {}}
 
 
-def _head_sha() -> str:
-    """This repo's HEAD sha, 60 s cached ('' when unreadable — packaged).
+def _attach_flow_sha() -> str:
+    """The newest commit that introduced the attach-import code.
 
-    The bundle route compares the stored artifact's git_sha against this:
-    an exe built before the attach flow shipped would silently IGNORE the
-    bundled credential file, so serving it as "zero-config" would be a
-    lie. Unreadable HEAD (no repo next to the server) → cannot prove
-    staleness → serve optimistically.
+    Self-adjusting (symbol-content lookup, not a hardcoded sha — those rot
+    on the next rebase): the artifact must contain THIS code or it
+    silently ignores the bundled attach file. '' when the repo is
+    unreadable (packaged server) — the caller then serves optimistically.
     """
     now = time.time()
-    if now - _HEAD_SHA_CACHE['at'] < 60:
-        return _HEAD_SHA_CACHE['sha']
-    sha = ''
+    if now - _GIT_CACHE['at'] < 60:
+        return _GIT_CACHE['fix']
+    fix = ''
     try:
         import subprocess
-        out = subprocess.run(['git', 'rev-parse', 'HEAD'],
-                             cwd=_REPO_ROOT, capture_output=True, timeout=15)
+        out = subprocess.run(
+            ['git', 'log', '-S', 'import_attach_bundle', '--format=%H',
+             '-1', '--', 'desktop/connect_ui.py'],
+            cwd=_REPO_ROOT, capture_output=True, timeout=15)
         if out.returncode == 0:
-            sha = out.stdout.decode('utf-8', 'replace').strip()
+            fix = out.stdout.decode('utf-8', 'replace').strip()
     except Exception as e:
-        logger.debug('[Desktop] HEAD sha unreadable: %s', e)
-    _HEAD_SHA_CACHE['at'] = now
-    _HEAD_SHA_CACHE['sha'] = sha
-    return sha
+        logger.debug('[Desktop] attach-flow sha lookup failed: %s', e)
+    _GIT_CACHE['at'] = now
+    _GIT_CACHE['fix'] = fix
+    _GIT_CACHE['verdicts'] = {}
+    return fix
+
+
+def _contains_fix(fix: str, artifact_sha: str) -> bool:
+    """``fix`` is an ancestor of (or equals) ``artifact_sha`` — i.e. the
+    artifact was built from a tree that CARRIES the attach flow.
+
+    Ancestry, not equality: on this shared tree sibling commits keep
+    landing on top of the fix, so equality would flap the panel's
+    readiness note on every unrelated commit (measured during the v5
+    rollout — the rebuild ran at 1a5e4bd5 over the fix's 514ba38b).
+    """
+    if artifact_sha == fix:
+        return True
+    verdicts = _GIT_CACHE['verdicts']
+    if artifact_sha in verdicts:
+        return verdicts[artifact_sha]
+    ok = False
+    try:
+        import subprocess
+        out = subprocess.run(
+            ['git', 'merge-base', '--is-ancestor', fix, artifact_sha],
+            cwd=_REPO_ROOT, capture_output=True, timeout=15)
+        ok = out.returncode == 0
+    except Exception as e:
+        logger.debug('[Desktop] merge-base probe failed: %s', e)
+    verdicts[artifact_sha] = ok
+    return ok
 
 
 def _agent_bundle_ready(entry: dict | None) -> bool:
@@ -398,8 +427,8 @@ def _agent_bundle_ready(entry: dict | None) -> bool:
     sha = str((entry or {}).get('git_sha') or '').strip()
     if not sha:
         return False  # unknown lineage — cannot prove the attach flow ships
-    head = _head_sha()
-    return (not head) or sha == head
+    fix = _attach_flow_sha()
+    return (not fix) or _contains_fix(fix, sha)
 
 
 def _agent_store_entry() -> dict | None:

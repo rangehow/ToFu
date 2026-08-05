@@ -85,7 +85,9 @@ def fake_artifact(tmp_path, monkeypatch):
                         lambda *a, **kw: [entry])
     monkeypatch.setattr(d._dist_store, 'resolve_file',
                         lambda name: str(exe) if name == exe.name else None)
-    monkeypatch.setattr(d, '_head_sha', lambda: 'shaHEAD')
+    monkeypatch.setattr(d, '_attach_flow_sha', lambda: 'shaHEAD')
+    monkeypatch.setattr(d, '_contains_fix',
+                        lambda fix, sha: fix == sha)
     kicked = []
     import lib.desktop_dist.winbuilder as wb
     monkeypatch.setattr(wb, 'is_running', lambda: False)
@@ -112,7 +114,7 @@ class TestAgentBundleRoute:
                                                        fake_artifact,
                                                        monkeypatch):
         import routes.api_v1.desktop as d
-        monkeypatch.setattr(d, '_head_sha', lambda: 'shaDIFFERENT')
+        monkeypatch.setattr(d, '_contains_fix', lambda fix, sha: False)
         r = flask_client.get('/api/v1/desktop/agent-bundle',
                              headers=_bearer())
         assert r.status_code == 409
@@ -196,6 +198,28 @@ class TestAgentBundleRoute:
                             .read('tofu-agent-attach.json'))
         assert not any('evil.example.com' in u
                        for u in attach['fallback_candidates'])
+
+    def test_7b_descendant_artifact_is_ready_ancestor_is_not(self):
+        """The readiness gate is ANCESTRY, not equality (shared tree: sibling
+        commits keep landing on top of the attach-flow commit — equality
+        would flap the panel's readiness note on every unrelated one)."""
+        import routes.api_v1.desktop as d
+        fix = d._attach_flow_sha()
+        if not fix:
+            pytest.skip('repo unreadable here')
+        # A descendant of the fix (HEAD) is ready; the fix's PARENT is not.
+        import subprocess
+        head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=d._REPO_ROOT,
+                              capture_output=True, timeout=15)
+        parent = subprocess.run(['git', 'rev-parse', fix + '^'],
+                                cwd=d._REPO_ROOT, capture_output=True,
+                                timeout=15)
+        head_sha = head.stdout.decode().strip()
+        parent_sha = parent.stdout.decode().strip()
+        assert d._contains_fix(fix, head_sha) is True
+        assert d._contains_fix(fix, parent_sha) is False
+        assert d._agent_bundle_ready({'git_sha': head_sha}) is True
+        assert d._agent_bundle_ready({'git_sha': parent_sha}) is False
 
     def test_7_mint_failure_still_serves_zip(self, flask_client,
                                              fake_artifact, monkeypatch):

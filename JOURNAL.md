@@ -1,3 +1,25 @@
+### 2026-08-06(公开仓 CI 全绿收官:八轮 root-cause 迭代 27→0——池路径戳/sys.modules 恢复/spawn_task 桩卸载/insight 关网/脱敏域名对/ci_serial 车道) — epic `pt_1f4068f7f06640f7`;内仓 commits `8bf2b8b8`/`2c94ce54`/`75e183d9`(G4 虚构对)/`c91dcbc5`/`dccdca43`/`68dc36ef`/`2159b45c`;公开仓 `7a4c727`→`565ebc1`;**unit 双版本 14.5k 测试收敛路径 27 红 → 16 → 5 → 5 → 3 → 0**
+
+- **方法学结论(本轮最值钱的一条):** CI-only 红分四类,各有根治手法——①**环境缺失**(ffmpeg/scipy/PG)→ 响亮 skip(前序批);②**脱敏拆对**(proxy G4):导出 sanitizer 把 `aigc.sankuai.com`→`api.openai.com`、`sankuai.com`→`example-corp.com` 独立重写,后缀关系被拆断,本地永远绿、CI 永远红——**测试若断言内部域名的配对关系,必须用脱敏存活的虚构对**(`corp-example.internal`);③**跨套件全局污染**(本轮主力):`restart_smoke`/`sync_body_timeout` 把重载的 server 模块注册进 `sys.modules['server']` 不还原,后跑套件的 monkeypatch 全打在错实例上(static_route 的 503/206 桩不咬);`e2e_headless_api` 的 `spawn_task` 桩只装不卸(spawn_serving_loop 吃到 KeyError)——**全局注册表改动必须配 restore,fixture 化即根治**;④**并发/时序**(锁族/心跳窗/双实例 e2e)→ `ci_serial` 串行车道(600s 超时),不是降断言,是给时序敏感的测试一个无竞争环境。
+- **最大根修(lib 级):sqlite 池路径戳。** `_sqlite_pool` 是扁平列表、不看路径——任何套件重绑 `DB_PATH` 后归还的连接会被下一个取用者拿到,写到 A 库、读自 B 库(paper_export 的 CI 404:种子已提交,处理器读另一个文件)。修:连接打 `_pool_path` 戳,`_pool_get` 取用时路径不匹配即关闭跳过;`test_db_aio` 加 NC 回归针(撤修复必红,已实证)。这是「测试只在 CI 红」的整类病根之一,生产侧 DB_PATH 运行期重绑的隐患同除。
+- **脑套件(off-by-环境):** `post_task` 的 `on_epic_posted` 会同步自动 claim+enqueue+引流一个真任务(真 LLM 调用),其 running 注册表项触发 81f515e0 的 per-conv 双派发守卫,测试自己的手动 `dispatch_next_queued` 被拒——修复=autouse fixture 中和 `_drain_idle_target`(套件内 ③ 已有同款先例),断言零改动。复跑 6/6×3;另发现 queue_lease 跨套件污染在 a97d73fa 就存在(预存 flake,另票)。
+- **insight 二段 CI 悬挂(离线套件触网):** 五个离线 paper 报告套件只桩了报告主路的 `dispatch_stream`,insight 二段(rubric→synthesize)走真派发——CI 占位 key 401,`strict=True` 冷却循环**永不退出**,3 枚测试各挂 600s 超时。修:任务 cfg 盖 `paperInsightEnabled: False`(走真实门控链,语义零改动)。**遗留生产隐患另票:dispatch_stream 在 all-keys-401 时 strict 冷却循环无退出条件。**
+- **paper_export 404 的二次归因:** 第一轮误判为双 app 实例异步引导竞态(顺手把 `_load_app` 改成复用 conftest 已导入的 server——正确卫生,保留),真根因是上面的池路径污染。**教训:CI-only 失败的理论必须解释『为什么本地永不现』,两轮归因都栽在没先验证这一点的修复上;第三轮起所有修复先本地复现(stash 对照 NC 咬)再推。**
+- **纪律:** 每轮 CI 全表核对+日志分诊,凡修复必带 NC/复现对照;test-slow 腿 endpoint_messages ×4(0 LLM calls,跨套件 mock/端口干扰)属 continue-on-error 非阻塞腿,另票挂板不收尾巴。
+
+### 2026-08-05(兄弟边界收编:export 'data' 根锚定契约双钉落地 + .gitignore 未锚定观察移交) — 兄弟(msg0cop6)边界通告:`2e751b38` 把 'data' 从逐组件排除改为根锚定(android/.../client/data/ 3 个跟踪 Kotlin 文件曾被误剥,lib/paper 同族);commit `576b59b1`(1 文件 +34);六套导出邻接 **95 绿** + NEUTER 实证
+
+- **收编动作:** 核实我的 git ls-files 机制与兄弟改动的全缝交互——跟踪文件永不进 -o 列表、含跟踪文件的嵌套 data/ 不会被 --directory 塌缩,gitignore 后门无缝可钻;在 test_export_untracked_file_basis.py 补两枚缝钉(_should_exclude 根排/嵌套随包双模 + tar 有 --exclude=./data 且无裸 --exclude=data),NEUTER 实证旧世界必红。回兄弟一封 CONFIRM+HAND OFF。
+- **移交观察(兄弟车道):** .gitignore 第 31 行 `data/` 仍未锚定——android/**/client/data/ 下的新未跟踪文件对 git status/add 隐形(同一静默丢件类,深一层);锚定 `/data/` 需给 lib/data/(运行期 scratch)单开忽略行。
+
+### 2026-08-05(共享 HEAD 四红分诊收绿:兄弟 msebjymx 协调通告——三枚真红按 commit 溯源全在离线兄弟批,代修闭环;我的流式批零关联) — peer 通告「CI 与本地红 4 枚守卫,你与 msfthr9m 的改动在守护面上」;commit `94f2b0e6`(3 文件 +22/−4);4 套件 **39/39** + 邻接环 **68/68**
+
+- **分诊(git 溯源,非猜测):** 复现得 3 红(parity 第 4 枚本地即绿,板上 pt_f7cfa779d29c47ec 已被 msfz3xtga9o4b6 认领并闭环 76263e42)。三红归属:①`test_no_convview_missing_raw_fallbacks` 与 ②`test_reopen_path_merges_translations_through_shared_reducer` 同属 **81f515e0**(排队气泡批,epic 已关、作者 peer_status 离线);③`test_messages_rows_hook_coverage` 属 **4ca1a872**(engine_tail_heal 批,同样离线)。我的批 c3b84d31 未碰前端/conversations 面,实证零关联。
+- **①回归修复:** 81f515e0 在 main_send_pipeline.js 重引入 `typeof window.ConvView.replaceAll === 'function'` 守卫——boot 硬检查已保证 seam 存在,守卫只会把 bundler 失误藏成静默空转(该棘轮的存在意义)。摘除,直调。
+- **②方向对齐:** 同批把一条整表采纳车道包进 `_withPendingQueuedTail(conv.messages, serverMsgs)`(保留本地未镜像排队行),字面 `conv.messages = serverMsgs` 计数 2→1。语义由构造保持(包装仍整表采纳,译文随 serverMsgs 同行)——断言收编两种采纳形式。
+- **③真缺口修复:** heal 的 CAS 写后补 `mirror_write_and_commit(full=True)`——插行重排序超出行存计数启发式表达力,必须全量镜像;flag-off 字节级 no-op,JSONB 仍是权威,失败不遮 written 计数(独立 try,与 notify 块同型)。
+- **方法论自记:** 离线兄弟批的守卫红,先 peer_status 确认无人认领再代修,回执里写清 commit 溯源——比逐层转发路由快一个数量级,CI 解堵是唯一目标。
+
 ### 2026-08-05(预存红闭环:test_bundle_manifest_parity——client_log_relay.js 缺 index.html dev-fallback 标签) — 脑派发接我自票 `pt_f7cfa779d29c47ec` **DONE**;commit `76263e42`(1 文件);parity **15/15**(双向边同绿)
 
 - ecd182f7 把 `core/client_log_relay.js` 收进 `_BUNDLE_FILES` 时漏了 index.html 兜底标签,bundling 失败时 dev 回退会静默丢「console→logs/frontend.log 回传」——与 97157428 修掉的 credentials_vault.js 同族。修法=按 manifest 同序补标签(core.js 壳之后、core/ 子包之前,注释写明同序约束)。

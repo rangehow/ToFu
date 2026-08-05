@@ -1,3 +1,9 @@
+### 2026-08-05(同角色邻接存量回填:owner 复核「WARNING 应归零」最后一公里——一次性迁移落地并实测归零) — owner 实测钉「近 7 天 20/199 会话仍带邻接,新增已防但存量会继续 warn」;commit `4ca1a872`(3 文件 +392);套件 **9 针** + 环 **54 绿**;**验收实测:全表 57 行/120 对 → 0**
+
+- **owner 的判据拆解:** 生产者双修(56406f93)只防新增;存量邻接在 DB 里,每次这些会话被用到都会从 store 重建 wire 继续 warn——「不增长」不等于「归零」。
+- **迁移形态(全部按 owner 四条):** `lib/conversations/engine_tail_heal.py`——dry-run 默认、`--apply` 落库;谓词与行构造全部单源化(`is_engine_user_msg` / `build_engine_no_reply_tombstone` 从 settle 路径抽进 lib/chat/messages.py,回填与运行时 settle 骑同一函数,零漂移面);写入走 rev-CAS(触发器顶 rev)+ 读回真 rev + `notify_conv_changed`(开着的标签页会 refetch 到回填后的正文,Phase 4 纪律);单行失败跳过、CAS 撞车留待重跑、已愈对结构性不再匹配 = 幂等。
+- **验收(实测非自报):** 全表 dry-run 57 行/120 对 → `--apply` 57/57 写、57 notify、0 错 → owner 探针窗重扫 **236 会话 0 邻接**(原 20)→ 全表复扫 0 对(幂等实证)。
+- **套件:** 检测形态(多对/人类尾豁免/已愈不再匹配)、降序插入纯函数、单源钉、DB 写路(rev bump + notify 带真 rev)、dry-run 不写、重跑 no-op、坏行隔离、NC(挖掉 insert → 对数照数但永不愈)。
 ### 2026-08-05(Watch 车道「请求修复」只发第一句根修:预填改全文诊断 + 单行 input 换多行 textarea——状态诊断先夸后问题,首句截断把表扬句当成任务发板) — owner 截图指令「这个请求修复的功能为啥只把大模型诊断的第一句话作为任务啊??」;commit `7a4c6009`(3 文件 +40/−25);邻接环 **59 绿**(6+21+32)+ collect-only 15880 零错
 
 - **定案(设计错非笔误):** `_draftFixTitle`(project-brain-status.js)刻意按 `[。！？.!?]` 切句取首句再 90 字封顶,注释自述「起草 epic 标题,人类发前自己改」;叠加单行 `<input>` 的视觉暗示,全文无处可放。讽刺点:后端 `post_task` title 上限 `_TITLE_MAX_CHARS=2000` 本就为多句设计描述而设——砍字的是前端,不是链路。owner 案例实证危害:诊断首句是「导出重构符合目标」的**表扬**,真正问题(PG 播种停滞/发布滞后)在后句——发出的 epic `pt_fbc00224b77347b4` 是一句夸,认领对话无事可修。

@@ -32,7 +32,7 @@ from lib.database._pg_ownership import (
     _fix_unix_socket_conf,
 )
 from lib.database._pg_seed import (
-    _pgdata_major_compatible, _seed_local_pgdata_from_legacy,
+    _pgdata_major_compatible,
 )
 from lib.database._pg_backup import _try_self_heal_corrupt_pg
 

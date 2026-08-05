@@ -1,3 +1,14 @@
+### 2026-08-05(大脑派发注入轮全程隐身事故根修:三层缝——派发 notify 带真 rev + 引擎轮服务端铸 _msgId + 流式存活期「定居前缀收编」双车道;残尾「只有模型标的结算条」顺带根治) — owner 报障(conv msebjymx5b4a25)「板上答题后毫无动静,刷新只见 Agent 凭空生成,派发消息跑完强刷才现身」;commit 见下(7 文件);新套件×1 **20 针+NC** + 邻接环 **228 绿** + collect-only 闸过
+
+- **取证(全链服务端无腐坏):** DB 记录 msg23=大脑 kickoff(带 _brainEpic 溯源卡)自始至终在册;app.log 客户端信标定序——09:19:01 答题→:11 建任务→:14 忙帧 attach(信标 prior-turn guard tailTask=a6ba70da **finishReason=none**=本地尾轮缺结算字段实锤)→:16 孤儿恢复二次 attach。症状三层各对应一条结构缝。
+- **缝①(信号层):** 队列排水追加用户消息后 DB 触发器已顶 rev(973),但 notify 却发 `rev=None`——调用点注释自述「rev unchanged by dispatch」,与触发器语义直接矛盾。打开标签页的 rev 闸永远看不到内容变化 → 正文校验一次不发 → 注入消息整个任务期不可见,只有忙帧 attach 画出「凭空生成」的 Agent 泡。根修:排水后读回真实 rev 带上(notify 只是 hint,客户端拉权威正文)。
+- **缝②(收编层):** 即便拿到真 rev,流式存活期所有收编路全关——notify 侧 activeStreams 守卫只走 translation-only;Phase-2 MERGE_ACTIVE_TASK 追加闸 `!activeStreams.has` 在 boot-attach 之后恒假。根修=新 reducer `_adoptInjectedSettledPrefix`(conv_reducers):锚定最后一个定居本地消息(_msgId,无 id 回退 role+timestamp),把服务端多出的定居消息插到流绑定活尾**之前**,排除活任务自身 partial 行(_taskId 命中 + 尾位未完结 assistant 双规则);绑定对象零触碰。两条车道同骑:notify 侧新 `_streamActiveVerify`(插入+定居前缀结算字段补全+按 _msgId 翻译合并;插入走 showStreamingUIForConv 身份重切,字段级走 applyMessage;编辑中降级 translation-only;锚失不偷推 rev)+ Phase-2 同 reducer 收编。
+- **缝③(结算条):** 本地尾轮缓存于终态同步前(无 finishReason)→「只有 kimi-k3 模型标的残缺结算条」;车道内 `_mergeTerminalTurnFields` 按 _msgId 补全(对活绑定尾禁用——流式轮绝不被盖 finishReason)。
+- **缝④(身份):** 引擎自造轮(大脑/peer)从无 _msgId——id 键控的对账车道锚不住;排水构建处服务端铸 uuid 兜底(payload 带来的仍优先)。
+- **测试账:** 新套件 test_frontend_injected_turn_stream_visible(20 针:notify 车道插入位置/绑定不动/活 partial 不静态化/结算条补全/翻译不回归/幂等第二帧/锚失拒绝且不偷推 rev/Phase-2 同款;NC 挖 reducer splice→双车道同红而车道侧字段补全仍绿,两层故事钉死)+ 后端两钉(持久化轮铸 _msgId;notify 带真实 rev)进 test_brain_dispatch_provenance;translate_guard_lane NC 扩为双车道;环 25+2+17+83+77+24 全绿。
+- **落地波折(自记):** 新 harness 首跑 18/20——收养数据断言全过而重绘计数全零:conv_family eval 里 conv_save.js 的真 saveConversations **词法绑定**压过 global 桩,裸 node 下抛错被车道 .catch(debugLog 空桩)吞掉,收养已落、重绘丢失。修法:eval 后覆盖词法绑定。**教训:family 系 harness 里 global 桩会被族内词法声明静默遮蔽;异步车道的 .catch 会把抛错吞成「数据对、副作用丢」——先盯副作用计数,再信数据断言。**
+- **预存 lint(另票不捎修):** lib/message_queue.py:1105 F841 `cur_updated_at` 未使用(HEAD 预存,本批未碰该函数)。
+
 ### 2026-08-05(实况视图全链路系统审计:三路 swarm 普查(写入点 40+/DOM 谓词/471 套件覆盖图)+ 同类隐患三连根修——branch 面板过期 pin 误切定居尾、409 陈旧检查点整体替换改 rebase、endpoint_iteration splice 收窄单行) — owner 指令「前端问题修了很多很多次,把整个逻辑彻底过一遍」;commit 见下(7 文件);新套件×3 **6 针**(本批)+ 邻接环 **48+30 绿** + collect-only 10 零错
 
 - **审计形态:** 三路并行普查——①`conv.messages` 全部写入点普查(40+ 站点逐格:触发/护栏/信标/能否删持久消息/测试);②DOM 面全部变更点 + 「缺席标记当流式」谓词类残留清剿;③471 个前端套件→12 流水线阶段的覆盖映射。结论:12 阶段 11 有守护,唯一 NONE=boot Case A 活任务重挂(仅传递覆盖);PARTIAL=编辑重发截断/KEEP_LOCAL 行为驱动薄。

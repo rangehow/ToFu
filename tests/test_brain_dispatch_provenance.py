@@ -269,6 +269,76 @@ def test_persisted_turn_carries_meta(flask_app, monkeypatch):
     assert last_user.get('_boardTaskId') == epic_id
 
 
+def test_persisted_turn_carries_server_minted_msgid(flask_app, monkeypatch):
+    """Engine-built turns arrive with no client-minted _msgId — the drain must
+    stamp one so the persisted kickoff carries the stable identity every
+    reconciliation lane keys on (the windowed-tail anchor, the frontend's
+    injected-turn dedup). Its absence was one of the reasons the kickoff in
+    conv msebjymx5b4a25 (2026-08-05) stayed invisible mid-task."""
+    import uuid as _uuid
+    from lib.conversations.project_board import post_task
+    from lib.conversations.project_dispatch import (
+        dispatch_epic, select_dispatchable)
+    from lib.message_queue import dispatch_next_queued
+    import lib.tasks_pkg as tp
+    monkeypatch.setattr(tp, 'spawn_task', lambda task: None)
+    with flask_app.app_context():
+        _seed_conv(flask_app, 'cMSGID', title='m', project_path='/bp/mid')
+        _mark_busy('cMSGID')
+        post_task('/bp/mid', 'cMSGID', 'msgid epic')
+        _clear_task_registry()
+        epic = select_dispatchable('/bp/mid')[0]
+        assert dispatch_epic('/bp/mid', epic, 'cMSGID')['ok']
+        assert dispatch_next_queued('cMSGID')
+        import json as _json
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        row = get_thread_db(DOMAIN_CHAT).execute(
+            'SELECT messages FROM conversations WHERE id=?', ('cMSGID',),
+        ).fetchone()
+        last_user = [m for m in _json.loads(row['messages'])
+                     if m.get('role') == 'user'][-1]
+    minted = last_user.get('_msgId')
+    assert minted, 'the persisted kickoff must carry a server-minted _msgId'
+    _uuid.UUID(minted)  # raises unless it is a well-formed uuid
+
+
+def test_dispatch_notify_carries_content_rev(flask_app, monkeypatch):
+    """The dispatch notify must carry the REAL post-append content rev — the
+    DB trigger bumps rev on the messages append, so reporting rev=None
+    ("metadata-only") was a lie that told every open tab "no body change":
+    no refetch ever fired and the injected turn stayed invisible for the
+    whole task (conv msebjymx5b4a25, 2026-08-05)."""
+    from lib.conversations.project_board import post_task
+    from lib.conversations.project_dispatch import (
+        dispatch_epic, select_dispatchable)
+    from lib.message_queue import dispatch_next_queued
+    import lib.tasks_pkg as tp
+    monkeypatch.setattr(tp, 'spawn_task', lambda task: None)
+    notified = []
+    monkeypatch.setattr('lib.conversations.notify_conv_changed',
+                        lambda conv_id, **kw: notified.append(kw))
+    with flask_app.app_context():
+        _seed_conv(flask_app, 'cREV', title='r', project_path='/bp/rev')
+        _mark_busy('cREV')
+        post_task('/bp/rev', 'cREV', 'rev epic')
+        _clear_task_registry()
+        epic = select_dispatchable('/bp/rev')[0]
+        assert dispatch_epic('/bp/rev', epic, 'cREV')['ok']
+        assert dispatch_next_queued('cREV')
+        from lib.database import DOMAIN_CHAT, get_thread_db
+        row = get_thread_db(DOMAIN_CHAT).execute(
+            'SELECT rev FROM conversations WHERE id=?', ('cREV',)).fetchone()
+    assert notified, 'the dispatch must emit a conv_changed notify'
+    last = notified[-1]
+    assert last.get('rev') is not None and last['rev'] == row['rev'], (
+        f"notify carried rev={last.get('rev')!r} but the row's content rev "
+        f"is {row['rev']!r} — a metadata-only notify strands the injected "
+        f"turn on every open tab")
+
+
+# ════════════════════════════════════════════════════════════════════
+#  Every event seam stamps its own _via
+# ════════════════════════════════════════════════════════════════════
 # ════════════════════════════════════════════════════════════════════
 #  Every event seam stamps its own _via
 # ════════════════════════════════════════════════════════════════════

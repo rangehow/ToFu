@@ -439,3 +439,106 @@ function _adoptTaskPlaceholder(conv, taskId, candidate) {
   return { msg: candidate, adopted: false };
 }
 if (typeof window !== 'undefined') window._adoptTaskPlaceholder = _adoptTaskPlaceholder;
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   _adoptInjectedSettledPrefix(conv, serverMsgs, liveEntry) — surface a
+   SERVER-SIDE-INJECTED turn while a stream is live.
+
+   Incident (conv msebjymx5b4a25, 2026-08-05): a Project-Brain kickoff,
+   minted when the owner answered a blocked epic on the board, was appended
+   to the conversation by the server-side queue drain and immediately
+   spawned a task. The open tab attached to the stream (busy signal) but
+   every adoption path for the injected USER message was closed behind
+   "never disturb a live stream" — so for the WHOLE task the user saw an
+   Agent generating with no triggering message above it ("out of nowhere"),
+   and the kickoff only surfaced after the task finished + a manual refresh.
+
+   The blanket refusal protects exactly ONE thing: the stream's BOUND
+   assistantMsg (connectToTask holds the object ref; replacing the array or
+   appending BEHIND it orphans the ref / misorders the turn). Everything
+   SETTLED in front of that live tail is safe to touch. So this reducer:
+
+     • anchors on the last SETTLED local message (the one right before the
+       stream's bound tail) and finds it in the server window by stable
+       _msgId (role+timestamp fallback for legacy id-less rows). Anchor
+       missing → refuse (return 0): a later full read heals, a wrong
+       insertion never does;
+     • inserts every server message AFTER the anchor that is not already
+       represented locally — the injected kickoff and any settled sibling —
+       immediately BEFORE the live tail, in server order;
+     • EXCLUDES the live turn's own rows: anything whose _taskId a local
+       message already carries (the bound placeholder is taskId-stamped at
+       bind time), and an unfinished assistant at the server tail while a
+       stream is live (the partial-sync checkpoint — its content is owned by
+       the stream/poll lanes, never by a static insert).
+
+   The bound object is never mutated, removed, or moved. Returns the number
+   of messages inserted (0 = nothing done — the fail-safe default on any
+   ambiguity). Pure over its three arguments — callers read `activeStreams`
+   and pass the entry in, so this stays load-order-safe.
+   ═══════════════════════════════════════════════════════════════════ */
+function _adoptInjectedSettledPrefix(conv, serverMsgs, liveEntry) {
+  if (!conv || !Array.isArray(conv.messages)
+      || !Array.isArray(serverMsgs) || !serverMsgs.length) return 0;
+  const localMsgs = conv.messages;
+
+  /* The live tail = the stream's BOUND message (object identity first, then
+   * the _taskId binding). A detached carrier (autopilot VU) leaves
+   * liveIdx=-1: the whole local array is settled prefix. */
+  let liveIdx = -1;
+  const bound = liveEntry && liveEntry.assistantMsg;
+  if (bound) {
+    liveIdx = localMsgs.indexOf(bound);
+    if (liveIdx < 0 && liveEntry.taskId) {
+      for (let i = localMsgs.length - 1; i >= 0; i--) {
+        const m = localMsgs[i];
+        if (m && m.role === 'assistant' && m._taskId
+            && m._taskId === liveEntry.taskId) { liveIdx = i; break; }
+      }
+    }
+  }
+  const settledEnd = liveIdx >= 0 ? liveIdx : localMsgs.length;
+
+  /* Anchor on the last settled local message inside the server window. */
+  let anchorPos = -1;
+  const lastSettled = settledEnd > 0 ? localMsgs[settledEnd - 1] : null;
+  if (lastSettled) {
+    for (let i = serverMsgs.length - 1; i >= 0; i--) {
+      const sm = serverMsgs[i];
+      if (!sm) continue;
+      if (lastSettled._msgId && sm._msgId === lastSettled._msgId) {
+        anchorPos = i; break;
+      }
+      if (!lastSettled._msgId && sm.role === lastSettled.role
+          && sm.timestamp != null && sm.timestamp === lastSettled.timestamp) {
+        anchorPos = i; break;
+      }
+    }
+    if (anchorPos < 0) return 0;
+  }
+
+  const localIds = new Set();
+  const localTaskIds = new Set();
+  for (const m of localMsgs) {
+    if (!m) continue;
+    if (m._msgId) localIds.add(m._msgId);
+    if (m._taskId) localTaskIds.add(m._taskId);
+  }
+  const streamLive = !!liveEntry;
+
+  const candidates = [];
+  for (let i = anchorPos + 1; i < serverMsgs.length; i++) {
+    const sm = serverMsgs[i];
+    if (!sm || typeof sm !== 'object') continue;
+    if (sm._msgId && localIds.has(sm._msgId)) continue;
+    if (sm._taskId && localTaskIds.has(sm._taskId)) continue;
+    if (streamLive && sm.role === 'assistant' && i === serverMsgs.length - 1
+        && !sm.finishReason && !sm.error) continue;
+    candidates.push(sm);
+  }
+  if (!candidates.length) return 0;
+  localMsgs.splice(settledEnd, 0, ...candidates);
+  return candidates.length;
+}
+if (typeof window !== 'undefined') window._adoptInjectedSettledPrefix = _adoptInjectedSettledPrefix;

@@ -1180,7 +1180,32 @@ async function loadConversationMessages(convId) {
        *   Append them now, but ONLY when no stream is actually live for
        *   this conv (otherwise an orphaned assistantMsg ref held by
        *   connectToTask could be invalidated mid-stream). */
-      if (!activeStreams.has(convId) && serverMsgs.length > conv.messages.length) {
+      if (activeStreams.has(convId)) {
+        /* ★ Stream-live injected-turn adoption (conv msebjymx5b4a25,
+         *   2026-08-05): a brain/peer/queue kickoff persisted SERVER-side
+         *   while this tab was away was refused by EVERY Phase-2 path once a
+         *   stream was attached — the triggering user message stayed
+         *   invisible for the whole task ("an Agent generating out of
+         *   nowhere"; it surfaced only after completion + manual refresh).
+         *   Insert the missing settled messages immediately BEFORE the
+         *   stream's bound tail — identity-anchored, the bound object is
+         *   never touched — then rebuild through the streaming composer so
+         *   the new statics render above the live bubble. */
+        const _injN = (typeof _adoptInjectedSettledPrefix === 'function')
+          ? _adoptInjectedSettledPrefix(conv, serverMsgs, activeStreams.get(convId))
+          : 0;
+        if (_injN > 0) {
+          console.info(`[loadConvMsgs] 📥 MERGE_ACTIVE_TASK inserted ${_injN} ` +
+            `server-injected settled msg(s) before the live tail for ` +
+            `conv=${convId.slice(0,8)} (brain/peer/queue kickoff)`);
+          try { ConvCache.put(conv); } catch (_e) {
+            debugLog(`[conversations] ConvCache.put failed (MERGE_ACTIVE_TASK inject-adopt) conv=${convId.slice(0,8)}: ${_e && _e.message}`, 'warn');
+          }
+          if (convId === activeConvId && typeof showStreamingUIForConv === 'function') {
+            showStreamingUIForConv(convId);
+          }
+        }
+      } else if (serverMsgs.length > conv.messages.length) {
         const _appendStart = conv.messages.length;
         const _appended = serverMsgs.slice(_appendStart);
         conv.messages.push(..._appended);

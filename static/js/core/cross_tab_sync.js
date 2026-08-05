@@ -243,6 +243,164 @@ async function _translationOnlyVerify(convId) {
 if (typeof window !== "undefined") {
   window._translationOnlyVerify = _translationOnlyVerify;
 }
+
+let _convStreamVerifyTimer = 0;
+function _scheduleStreamActiveVerify(convId) {
+  clearTimeout(_convStreamVerifyTimer);
+  _convStreamVerifyTimer = setTimeout(() => {
+    _streamActiveVerify(convId).catch((e) =>
+      debugLog(`[conv-notify] stream-active verify failed: ${e && e.message}`, "warn"));
+  }, _CONV_ACTIVE_VERIFY_DELAY_MS);
+}
+
+/* ── STREAM-ACTIVE verify lane (2026-08-05, conv msebjymx5b4a25) ───────────
+ *
+ *   The live-stream guard used to divert a genuinely-newer-rev frame to the
+ *   TRANSLATION-ONLY lane — correct for what it protected (never rebuild the
+ *   live bubble / never clobber in-flight content) but blind to a whole class
+ *   of server-side change: an ENGINE-INJECTED turn (Project-Brain kickoff,
+ *   peer message, drained queue turn) is appended to the conversation by the
+ *   server and immediately spawns the task this tab then attaches to. The
+ *   injected user message is SETTLED the moment it exists, yet every adoption
+ *   path refused while the stream ran — the user watched an Agent generate
+ *   "out of nowhere" for the whole task, and the triggering message only
+ *   surfaced after completion + a manual refresh.
+ *
+ *   This lane keeps the guard's protection and closes the blindness:
+ *     1. `_adoptInjectedSettledPrefix` inserts the missing settled messages
+ *        immediately BEFORE the stream's bound tail (identity-anchored; the
+ *        bound object is never touched), excluding the live turn's own
+ *        partial checkpoint rows;
+ *     2. `_mergeTerminalTurnFields` tops up terminal metadata on the settled
+ *        prefix (the stale "model-only finish bar" half of the same incident
+ *        — a locally-cached mid-stream tail never healed while the conv
+ *        stayed busy);
+ *     3. `_mergeTranslationFields` — the translation lane's original duty,
+ *        keyed by _msgId so it stays correct after an insertion shifts
+ *        indices.
+ *
+ *   Repaint: an insertion rebuilds through showStreamingUIForConv (it
+ *   re-slices the bubble owner by identity and preserves the reader's scroll
+ *   anchor); field-only changes repaint per-message via ConvView.applyMessage
+ *   (the live bubble is never rebuilt). While the user is EDITING a message
+ *   the lane degrades to the translation-only twin — an insertion rebuild
+ *   would destroy the live edit form.
+ *
+ *   _serverRev advances ONLY when something was actually adopted or the
+ *   anchor was found and there was genuinely nothing to do — an anchor-miss
+ *   (the window didn't reach our tail) is NOT a verify, so the frame's rev
+ *   stays unread and a later frame/full read still reconciles. */
+async function _streamActiveVerify(convId) {
+  const conv = conversations.find((c) => c.id === convId);
+  if (!conv || !Array.isArray(conv.messages)) return false;
+  if (activeConvId === convId && typeof _editingMsgIdx !== "undefined"
+      && _editingMsgIdx !== null) {
+    return _translationOnlyVerify(convId);
+  }
+  let data = null;
+  try {
+    data = await Api.conversations.get(convId, {
+      signal: (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+        ? AbortSignal.timeout(15000) : undefined,
+    });
+  } catch (e) {
+    debugLog(`[conv-notify] stream-active fetch failed: ${e && e.message}`, "warn");
+    return false;
+  }
+  if (!data || !Array.isArray(data.messages)) return false;
+  /* Re-resolve: the conv may have been closed/replaced during the await. */
+  const live = conversations.find((c) => c.id === convId);
+  if (!live || !Array.isArray(live.messages)) return false;
+
+  const entry = (typeof activeStreams !== "undefined")
+    ? (activeStreams.get(convId) || null) : null;
+
+  /* 1. Injected settled turns (the incident half). */
+  const inserted = (typeof _adoptInjectedSettledPrefix === "function")
+    ? _adoptInjectedSettledPrefix(live, data.messages, entry) : 0;
+
+  /* 2+3. Field-level merges keyed by _msgId (index-safe after an insertion). */
+  const idxById = new Map();
+  for (let i = 0; i < live.messages.length; i++) {
+    const m = live.messages[i];
+    if (m && m._msgId) idxById.set(m._msgId, i);
+  }
+  const touchedIdx = [];
+  const _boundMsg = entry && entry.assistantMsg;
+  const _boundTid = entry && entry.taskId;
+  for (const sm of data.messages) {
+    if (!sm || !sm._msgId) continue;
+    const li = idxById.get(sm._msgId);
+    if (li === undefined) continue;
+    const lm = live.messages[li];
+    let ch = 0;
+    /* Terminal top-up is for SETTLED messages only — never stamp
+     * finishReason/usage onto the live-bound tail (a streaming turn would
+     * read as settled mid-flight). Translations keep their own byte-equality
+     * guard and stay allowed (the translation lane's long-standing rule). */
+    const _isLiveBound = !!(_boundMsg && lm === _boundMsg)
+      || !!(_boundTid && lm._taskId && lm._taskId === _boundTid);
+    if (!_isLiveBound && typeof _mergeTerminalTurnFields === "function") {
+      ch += _mergeTerminalTurnFields(lm, sm);
+    }
+    if (typeof _mergeTranslationFields === "function") {
+      ch += _mergeTranslationFields(lm, sm);
+    }
+    if (ch > 0) touchedIdx.push(li);
+  }
+
+  if (!inserted && !touchedIdx.length) {
+    /* A verified no-op — advance the CAS base so this frame doesn't
+     * re-verify, EXCEPT on an anchor miss (the server window did not reach
+     * our settled tail — that is NOT a verify; leave the rev unread so a
+     * later read still reconciles). Mirrors the reducer's anchor rule. */
+    const _b = entry && entry.assistantMsg;
+    const _bi = _b ? live.messages.indexOf(_b) : -1;
+    const _se = _bi >= 0 ? _bi : live.messages.length;
+    const _tail = _se > 0 ? live.messages[_se - 1] : null;
+    const anchorOk = !_tail
+      || (_tail._msgId
+          ? data.messages.some((m) => m && m._msgId === _tail._msgId)
+          : data.messages.some((m) => m && m.role === _tail.role
+                                && m.timestamp != null
+                                && m.timestamp === _tail.timestamp));
+    if (anchorOk && typeof data.rev === "number") live._serverRev = data.rev;
+    return false;
+  }
+
+  if (typeof data.rev === "number") live._serverRev = data.rev;
+  if (typeof saveConversations === "function") saveConversations(convId);
+  try { ConvCache.put(live); } catch (e) {
+    debugLog(`[conv-notify] cache put skipped: ${e && e.message}`, "warn");
+  }
+
+  if (activeConvId === convId) {
+    if (inserted > 0) {
+      /* Message-set changed — rebuild through the streaming composer (it
+       * re-slices the bubble owner by identity and preserves the reader's
+       * scroll anchor); a still-live stream keeps its bubble untouched. */
+      if (typeof activeStreams !== "undefined" && activeStreams.has(convId)
+          && typeof showStreamingUIForConv === "function") {
+        showStreamingUIForConv(convId);
+      } else if (window.ConvView && typeof window.ConvView.replaceAll === "function") {
+        window.ConvView.replaceAll(convId, { forceScroll: false });
+      }
+    } else if (window.ConvView && typeof window.ConvView.applyMessage === "function") {
+      for (const idx of touchedIdx) {
+        try { window.ConvView.applyMessage(convId, live.messages[idx], { idx }); }
+        catch (e) {
+          debugLog(`[conv-notify] stream-active repaint failed idx=${idx}: ${e && e.message}`, "warn");
+        }
+      }
+    }
+  }
+  debugLog(`[conv-notify] 🔀 stream-active adopt: +${inserted} injected, ` +
+           `${touchedIdx.length} field top-ups conv=${convId.slice(0, 8)}`, "info");
+  return true;
+}
+if (typeof window !== "undefined") {
+  window._streamActiveVerify = _streamActiveVerify;
+}
 let _convNotifyListRefreshTimer = 0;
 function _scheduleConvListRefresh() {
   clearTimeout(_convNotifyListRefreshTimer);
@@ -664,7 +822,10 @@ function _onConvNotifyPush(frame) {
      *   loses the 译文 until a manual refresh. Divert to the translation-only
      *   lane, which cannot touch the content these guards protect. */
     if (activeStreams.has(convId)) {
-      _scheduleTranslationOnlyVerify(convId);
+      /* Live stream: divert to the STREAM-ACTIVE lane — translations AND the
+       * server-injected settled prefix (a brain/peer/queue kickoff that
+       * spawned this task) adopt safely around the bound bubble. */
+      _scheduleStreamActiveVerify(convId);
       return;
     }
     if (activeConvId === convId && _editingMsgIdx !== null) {

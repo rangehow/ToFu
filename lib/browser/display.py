@@ -103,19 +103,11 @@ def get_tab_hostname(tab_id):
 
 
 def _current_work_tab_id():
-    """The remembered working-tab id, or None.
-
-    Reads _resolve's store directly (lazy import — _resolve imports this
-    module at top level, so a top-level import would cycle). Deliberately
-    NOT a public _resolve getter: that file is mid-edit by the receipt-v3
-    sibling (new-tab detection, 2026-08-05), and adding API there risks a
-    write conflict; promote this to _resolve.current_work_tab() once that
-    work lands.
-    """
+    """The remembered working-tab id, or None (lazy import — _resolve
+    imports this module at top level, so a top-level import would cycle)."""
     try:
-        from lib.browser import _resolve
-        with _resolve._work_tab_lock:
-            return _resolve._work_tab['id']
+        from lib.browser._resolve import current_work_tab
+        return current_work_tab()
     except Exception as e:
         logger.debug('[Display] work-tab lookup failed: %s', e)
         return None

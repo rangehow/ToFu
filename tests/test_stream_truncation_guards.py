@@ -347,30 +347,35 @@ class TestAsyncProxyFor(unittest.TestCase):
             else:
                 os.environ[k] = v
 
+    # Fictional pair on purpose: the bypass host and the URL host must keep
+    # their suffix relationship through the opensource export sanitizer — a
+    # real internal pair (aigc.sankuai.com + sankuai.com) gets rewritten
+    # INDEPENDENTLY (host → api.openai.com, suffix → example-corp.com) and
+    # the exported test then fails deterministically on CI while passing
+    # locally. 'corp-example.internal' survives every rewrite rule verbatim.
+    _BYPASS = 'localhost,corp-example.internal'
+    _INTERNAL_URL = 'https://llm-gw.corp-example.internal/v1/chat/completions'
+
     def test_env_no_proxy_suffix_bypasses(self):
         from lib.proxy import async_proxy_for
         # lib.proxy rebuilds os.environ['no_proxy'] from its IMPORT-TIME
         # baseline (_ENV_NO_PROXY) on every _sync_no_proxy() (Settings save /
         # startup config apply — the async boot thread can land one mid-test
         # under a loaded CI runner). A re-sync between the env set below and
-        # the assertion silently drops the suffix, and the test then fails
-        # ONLY where the process started without an ambient no_proxy covering
-        # it (CI) while staying green on dev shells that export one (local
-        # mask). Pin the baseline to the same value so any mid-test re-sync
-        # rewrites exactly what we set.
+        # the assertion would silently drop the suffix, so pin the baseline
+        # to the same value: any mid-test re-sync rewrites what we set.
         import lib.proxy as _lp
         saved_baseline = _lp._ENV_NO_PROXY
-        _lp._ENV_NO_PROXY = 'localhost,sankuai.com'
+        _lp._ENV_NO_PROXY = self._BYPASS
         try:
-            os.environ['no_proxy'] = 'localhost,sankuai.com'
-            self.assertIsNone(
-                async_proxy_for('https://aigc.sankuai.com/v1/chat/completions'))
+            os.environ['no_proxy'] = self._BYPASS
+            self.assertIsNone(async_proxy_for(self._INTERNAL_URL))
         finally:
             _lp._ENV_NO_PROXY = saved_baseline
 
     def test_external_host_uses_proxy(self):
         from lib.proxy import async_proxy_for
-        os.environ['no_proxy'] = 'localhost,sankuai.com'
+        os.environ['no_proxy'] = self._BYPASS
         self.assertEqual(async_proxy_for('https://api.openai.com/v1/x'),
                          'http://corp-proxy:8412')
 
@@ -378,7 +383,7 @@ class TestAsyncProxyFor(unittest.TestCase):
         from lib.proxy import async_proxy_for
         os.environ.pop('no_proxy', None)
         os.environ.pop('NO_PROXY', None)
-        self.assertEqual(async_proxy_for('https://aigc.sankuai.com/v1/x'),
+        self.assertEqual(async_proxy_for(self._INTERNAL_URL),
                          'http://corp-proxy:8412')
 
     def test_localhost_always_direct(self):

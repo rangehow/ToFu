@@ -349,9 +349,24 @@ class TestAsyncProxyFor(unittest.TestCase):
 
     def test_env_no_proxy_suffix_bypasses(self):
         from lib.proxy import async_proxy_for
-        os.environ['no_proxy'] = 'localhost,sankuai.com'
-        self.assertIsNone(
-            async_proxy_for('https://aigc.sankuai.com/v1/chat/completions'))
+        # lib.proxy rebuilds os.environ['no_proxy'] from its IMPORT-TIME
+        # baseline (_ENV_NO_PROXY) on every _sync_no_proxy() (Settings save /
+        # startup config apply — the async boot thread can land one mid-test
+        # under a loaded CI runner). A re-sync between the env set below and
+        # the assertion silently drops the suffix, and the test then fails
+        # ONLY where the process started without an ambient no_proxy covering
+        # it (CI) while staying green on dev shells that export one (local
+        # mask). Pin the baseline to the same value so any mid-test re-sync
+        # rewrites exactly what we set.
+        import lib.proxy as _lp
+        saved_baseline = _lp._ENV_NO_PROXY
+        _lp._ENV_NO_PROXY = 'localhost,sankuai.com'
+        try:
+            os.environ['no_proxy'] = 'localhost,sankuai.com'
+            self.assertIsNone(
+                async_proxy_for('https://aigc.sankuai.com/v1/chat/completions'))
+        finally:
+            _lp._ENV_NO_PROXY = saved_baseline
 
     def test_external_host_uses_proxy(self):
         from lib.proxy import async_proxy_for

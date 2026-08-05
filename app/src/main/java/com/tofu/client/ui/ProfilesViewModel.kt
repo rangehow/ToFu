@@ -84,7 +84,12 @@ class ProfilesViewModel(
     fun activate(profile: Profile) {
         _status.value = UiStatus.LoggingIn(profile.alias)
         viewModelScope.launch {
-            handleLogin(controller.activate(profile), profile)
+            // Navigate with the row the controller actually read back, not the
+            // list-rendered snapshot we were handed: that snapshot lags any
+            // write the Flow hasn't re-emitted yet, and for SSO it is what
+            // WebScreen holds for the entire session.
+            val r = controller.activate(profile)
+            handleLogin(r.login, r.persisted)
         }
     }
 

@@ -60,6 +60,12 @@ class SessionManagerInteractiveSsoTest {
             stamps += host
             return 1
         }
+        override suspend fun touchLastUsed(id: Long, timestamp: Long): Int {
+            current = current.copy(lastUsedAt = timestamp); return 1
+        }
+        override suspend fun setAuthType(id: Long, authType: AuthType): Int {
+            current = current.copy(authType = authType); return 1
+        }
     }
 
     private fun profile(cookieHost: String? = null) = Profile(

@@ -91,6 +91,29 @@ interface ProfileDao {
     @Query("UPDATE profiles SET cookie_host = :host WHERE id = :id")
     suspend fun setCookieHost(id: Long, host: String?): Int
 
+    /**
+     * Bump ONLY the recency stamp. Same reasoning as [setCookieHost], and the
+     * hotter path of the two: this runs on every card tap, and its caller holds
+     * a row rendered from the `observeAll()` Flow — a snapshot that lags any
+     * write which has not yet been re-emitted and recomposed. A full-row
+     * `@Update` from that snapshot would reinstate every stale column, most
+     * damagingly a `cookie_host` that a login had just stamped, silently
+     * re-locking the supervisor controls the user had already unlocked.
+     */
+    @Query("UPDATE profiles SET last_used_at = :timestamp WHERE id = :id")
+    suspend fun touchLastUsed(id: Long, timestamp: Long): Int
+
+    /**
+     * Flip ONLY the auth type. Used by the launch migration, which iterates a
+     * `getAllOnce()` snapshot: the loop suspends on every write, and it runs on
+     * `viewModelScope` concurrently with the UI that `setContent` builds
+     * moments later — so a card tap can land between the read and the write. A
+     * full-row update would then reinstate that row's pre-tap `cookie_host`
+     * and `last_used_at`.
+     */
+    @Query("UPDATE profiles SET auth_type = :authType WHERE id = :id")
+    suspend fun setAuthType(id: Long, authType: AuthType): Int
+
     @Query("DELETE FROM profiles WHERE id = :id")
     suspend fun deleteById(id: Long)
 }

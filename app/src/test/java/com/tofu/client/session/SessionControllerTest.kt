@@ -42,7 +42,19 @@ class SessionControllerTest {
         init { if (seed != null) rows[seed.id] = seed }
         override fun observeAll(): Flow<List<Profile>> = flowOf(rows.values.toList())
         override suspend fun getById(id: Long) = rows[id]
-        override suspend fun getAllOnce(): List<Profile> = rows.values.toList()
+        /**
+         * One-shot hook fired AFTER the snapshot is taken but BEFORE the caller
+         * acts on it — the only way to reproduce a write interleaving into a
+         * read-then-write loop.
+         */
+        var afterSnapshot: (suspend () -> Unit)? = null
+        override suspend fun getAllOnce(): List<Profile> {
+            val snapshot = rows.values.toList()
+            val hook = afterSnapshot
+            afterSnapshot = null
+            hook?.invoke()
+            return snapshot
+        }
         override suspend fun getByAlias(alias: String) = rows.values.firstOrNull { it.alias == alias }
         override suspend fun insert(profile: Profile): Long {
             val id = nextId++; rows[id] = profile.copy(id = id); return id
@@ -52,6 +64,16 @@ class SessionControllerTest {
         override suspend fun setCookieHost(id: Long, host: String?): Int {
             val row = rows[id] ?: return 0
             rows[id] = row.copy(cookieHost = host)
+            return 1
+        }
+        override suspend fun touchLastUsed(id: Long, timestamp: Long): Int {
+            val row = rows[id] ?: return 0
+            rows[id] = row.copy(lastUsedAt = timestamp)
+            return 1
+        }
+        override suspend fun setAuthType(id: Long, authType: AuthType): Int {
+            val row = rows[id] ?: return 0
+            rows[id] = row.copy(authType = authType)
             return 1
         }
     }
@@ -171,6 +193,52 @@ class SessionControllerTest {
         assertNull(ctl.findSharedSecret("https://$oldHost/proxy/15000/", excludeAlias = "p15000"))
     }
 
+    /**
+     * THE HOTTEST STALE-SNAPSHOT PATH. `activate` runs on EVERY card tap, and
+     * its argument is a row rendered from the `observeAll()` Flow — a snapshot
+     * that lags any write not yet re-emitted and recomposed.
+     *
+     * The damaging sequence: a previous session stamped `cookieHost`; the Flow
+     * has not yet pushed that value into the frame the user is looking at; the
+     * user taps the card; a full-row `dao.update(profile.copy(lastUsedAt = …))`
+     * writes the STALE row back and erases the stamp — silently re-locking the
+     * supervisor controls the user had already unlocked. That is the exact
+     * symptom chased across the last several rounds, entered by a card tap.
+     *
+     * NEUTER CHECK: restore `dao.update(profile.copy(lastUsedAt = clock()))`
+     * and this fails — cookieHost comes back null.
+     */
+    @Test
+    fun activate_does_not_roll_back_a_freshly_stamped_cookie_host() = runTest {
+        // The row as it truly is: a login already stamped cookieHost.
+        val seed = profile("zw05", oldHost)
+        val dao = FakeDao(seed); val vault = FakeVault(); val sink = FakeCookieSink()
+        val ctl = SessionController(dao, vault, mgr(dao, vault, sink), clock = { 999L })
+
+        // What the list is still rendering: the pre-stamp row.
+        val staleFromFlow = seed.copy(cookieHost = null, lastUsedAt = 1L)
+
+        val result = ctl.activate(staleFromFlow)
+
+        assertEquals("the stamp must survive a card tap", oldHost, dao.rows[1]!!.cookieHost)
+        assertEquals("recency must still be bumped", 999L, dao.rows[1]!!.lastUsedAt)
+        // …and the caller must be handed the authoritative row, not its snapshot.
+        assertEquals(oldHost, result.persisted.cookieHost)
+    }
+
+    /** A row deleted between render and tap must not crash or resurrect itself. */
+    @Test
+    fun activate_falls_back_to_the_given_row_when_it_no_longer_exists() = runTest {
+        val dao = FakeDao(); val vault = FakeVault(); val sink = FakeCookieSink()
+        val ctl = SessionController(dao, vault, mgr(dao, vault, sink))
+        val ghost = profile("gone", oldHost, id = 42)
+
+        val result = ctl.activate(ghost)
+
+        assertEquals("gone", result.persisted.alias)
+        assertTrue("must not resurrect a deleted row", dao.rows.isEmpty())
+    }
+
     @Test
     fun delete_removes_secret_and_row() = runTest {
         val seed = profile("zw05", oldHost)
@@ -210,5 +278,44 @@ class SessionControllerTest {
 
         // Idempotent: a second run fixes nothing.
         assertEquals(0, ctl.migrateProxyAuthDefaults())
+    }
+
+    /**
+     * The migration iterates a `getAllOnce()` SNAPSHOT and suspends on each
+     * write, running on `viewModelScope` concurrently with the UI that
+     * `setContent` builds moments later — so a card tap can land between the
+     * read and the write. A full-row update would then reinstate that row's
+     * pre-tap `cookieHost` / `lastUsedAt` from the snapshot.
+     *
+     * NEUTER CHECK: restore `dao.update(p.copy(authType = …))` and this fails —
+     * the concurrently-stamped cookieHost is wiped.
+     */
+    @Test
+    fun migration_does_not_roll_back_a_concurrent_write() = runTest {
+        val dao = FakeDao(); val vault = FakeVault(); val sink = FakeCookieSink()
+        val staleRow = Profile(
+            id = 1, alias = "shanghai",
+            baseUrl = "https://abc-vscode-shxstraining.mlp.sankuai.com/proxy/15000/",
+            authType = AuthType.NONE, cookieHost = null, lastUsedAt = 0L,
+        )
+        dao.rows[1] = staleRow
+        val ctl = SessionController(dao, vault, mgr(dao, vault, sink))
+
+        // The interleaving: a login stamps this row AFTER the migration has
+        // taken its snapshot but BEFORE it writes. Doing it earlier would prove
+        // nothing — the snapshot would already contain the new values.
+        dao.afterSnapshot = {
+            dao.setCookieHost(1, "abc-vscode-shxstraining.mlp.sankuai.com")
+            dao.touchLastUsed(1, 777L)
+        }
+
+        ctl.migrateProxyAuthDefaults()
+
+        val row = dao.rows[1]!!
+        assertEquals("the migration must still do its job",
+            AuthType.CODE_SERVER_PASSWORD, row.authType)
+        assertEquals("a concurrent stamp must survive",
+            "abc-vscode-shxstraining.mlp.sankuai.com", row.cookieHost)
+        assertEquals("a concurrent recency bump must survive", 777L, row.lastUsedAt)
     }
 }

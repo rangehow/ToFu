@@ -91,7 +91,7 @@ class SessionController(
         newAuthType: AuthType,
         newSecret: String,
         newProjectPath: String? = null,
-    ): EditResult {
+    ): ProfileResult {
         val a = newAlias.trim()
         val pp = newProjectPath?.trim()?.ifEmpty { null }
 
@@ -122,20 +122,37 @@ class SessionController(
             // URL host changed → the purge-and-relogin path owns persistence, so
             // it also owns what the persisted row looks like.
             val reauth = session.updateUrlAndReauth(base, newUrl)
-            EditResult(reauth.login, reauth.persisted)
+            ProfileResult(reauth.login, reauth.persisted)
         } else {
             val updated = ProfileForm.toProfile(
                 current.id, a, newUrl, newAuthType, current.lastUsedAt, pp,
             )
             dao.update(updated)
-            EditResult(session.login(updated), updated)
+            ProfileResult(session.login(updated), updated)
         }
     }
 
-    /** Activate a profile (make it current): bump recency, then log in. */
-    suspend fun activate(profile: Profile): LoginResult {
-        dao.update(profile.copy(lastUsedAt = clock()))
-        return session.login(profile)
+    /**
+     * Activate a profile (make it current): bump recency, then log in.
+     *
+     * [profile] comes from the list Flow, i.e. a row as RENDERED — which lags
+     * any write not yet re-emitted and recomposed. Two consequences, both fixed
+     * here rather than papered over at the call site:
+     *
+     *  - the recency bump is a TARGETED write, so it cannot reinstate stale
+     *    columns (a full-row update would happily restore a `cookieHost` that a
+     *    login had just cleared, or wipe one it had just stamped);
+     *  - the row is RE-READ before login, so the handshake and every decision
+     *    downstream of it (authType, baseUrl, cookieHost) see the database's
+     *    truth rather than what the screen happened to be showing.
+     *
+     * Returns the row actually used, so the caller navigates with that and not
+     * with its own stale copy.
+     */
+    suspend fun activate(profile: Profile): ProfileResult {
+        dao.touchLastUsed(profile.id, clock())
+        val current = dao.getById(profile.id) ?: profile
+        return ProfileResult(session.login(current), current)
     }
 
     /**
@@ -148,12 +165,18 @@ class SessionController(
      *
      * Only touches proxy+NONE rows; bare-host NONE and any non-NONE auth are
      * left as-is. Runs over the DAO seam → unit-testable with fakes.
+     *
+     * The write is TARGETED. This loop iterates a `getAllOnce()` snapshot and
+     * suspends on every write, while running on `viewModelScope` concurrently
+     * with the UI built moments later — so a card tap CAN land between the read
+     * and the write. A full-row update would then reinstate that row's pre-tap
+     * `cookieHost` / `lastUsedAt`. Narrow write, no interleaving hazard.
      */
     suspend fun migrateProxyAuthDefaults(): Int {
         var fixed = 0
         for (p in dao.getAllOnce()) {
             if (ServerUrl.needsProxyAuthFix(p.baseUrl, p.authType)) {
-                dao.update(p.copy(authType = AuthType.CODE_SERVER_PASSWORD))
+                dao.setAuthType(p.id, AuthType.CODE_SERVER_PASSWORD)
                 fixed++
                 Log.i(TAG, "migrateProxyAuthDefaults: fixed alias=%s NONE→CODE_SERVER_PASSWORD"
                     .format(p.alias))
@@ -175,10 +198,11 @@ class SessionController(
     }
 
     /**
-     * The login outcome plus the row as it was actually written to Room. The UI
-     * navigates with [persisted], never with a locally-reconstructed copy.
+     * The login outcome plus the row as it was actually written to / read from
+     * Room. The UI navigates with [persisted], never with a locally
+     * reconstructed or list-rendered copy.
      */
-    data class EditResult(val login: LoginResult, val persisted: Profile)
+    data class ProfileResult(val login: LoginResult, val persisted: Profile)
 
     private companion object {
         const val TAG = "SessionController"

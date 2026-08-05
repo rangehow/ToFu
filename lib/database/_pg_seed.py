@@ -262,7 +262,9 @@ def _seed_local_pgdata_from_legacy(local_pgdata, legacy_pgdata, base_dir,
          this runs at Step -1 (before the normal start path), the legacy cluster
          is first STARTED if it is down (via _ensure_legacy_up_for_seed); the
          nightly dump is used ONLY when legacy genuinely cannot be started — NOT
-         merely because it wasn't up yet. Opt-in via TOFU_DB_SEED_LOCAL=1.
+         merely because it wasn't up yet. Default-on since 2026-08-05 (owner
+         directive — plain `python server.py` must Just Work);
+         TOFU_DB_SEED_LOCAL=0 defers.
       2. Idempotent on ``pgdata_is_populated(local)`` — if local already looks
          initialized, skip entirely (never re-restore over newer local data).
       3. Verify-before-canonical — after restoring into local, confirm the
@@ -276,15 +278,18 @@ def _seed_local_pgdata_from_legacy(local_pgdata, legacy_pgdata, base_dir,
     """
     from lib.database.db_paths import pgdata_is_populated
 
-    # OPT-IN: the seed is a heavy, operator-visible event (a full pg_dumpall +
-    # restore, potentially many GB, running BEFORE the server serves). It must
-    # NOT fire unexpectedly on a routine restart. Default OFF; the operator sets
-    # TOFU_DB_SEED_LOCAL=1 to deliberately trigger the one-time migration. The
-    # gate keeps resolution on the intact legacy cluster until then, so nothing
-    # regresses by requiring an explicit opt-in.
-    if getenv_compat('TOFU_DB_SEED_LOCAL', default='0').lower() not in ('1', 'true', 'yes'):
-        logger.debug('[DB-Seed] not opted in (TOFU_DB_SEED_LOCAL!=1) — skipping '
-                     'one-time local seed; staying on legacy')
+    # DEFAULT-ON (owner directive 2026-08-05): the seed fires automatically on
+    # any plain `python server.py` start when local is unpopulated — operators
+    # must NOT need to remember an env flag for a migration that is idempotent,
+    # verify-gated and quarantine-on-failure. The env var survives only as an
+    # opt-OUT escape hatch (TOFU_DB_SEED_LOCAL=0) for deliberately deferring
+    # the heavy event (full dump+restore before serving). On failure the local
+    # half-restore is quarantined and legacy stays canonical, so the next boot
+    # simply retries — self-healing once the transient cause (disk full, FUSE
+    # wobble) clears; the failure is loud (CRITICAL + audit_log) every boot.
+    if getenv_compat('TOFU_DB_SEED_LOCAL', default='1').lower() in ('0', 'false', 'no'):
+        logger.warning('[DB-Seed] opted out (TOFU_DB_SEED_LOCAL=0) — deferring '
+                       'one-time local seed; staying on legacy FUSE pgdata')
         return False
 
     # ── Property 2: idempotent — never touch an already-populated local ──

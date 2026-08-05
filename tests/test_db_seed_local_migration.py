@@ -162,10 +162,27 @@ def test_bootstrap_failure_quarantines(tmp_path, monkeypatch):
     assert calls['quarantined'] == [local]
 
 
-def test_opt_in_required_default_off(tmp_path, monkeypatch):
-    """Seed is opt-in: without TOFU_DB_SEED_LOCAL=1 it is a total no-op."""
+def test_default_on_and_explicit_opt_out(tmp_path, monkeypatch):
+    """Default-ON contract (owner directive 2026-08-05): a plain
+    `python server.py` start must seed automatically — no env flag to
+    remember. The env var survives ONLY as an opt-out escape hatch.
+
+    Direction-aligned from test_opt_in_required_default_off: the pre-change
+    contract (opt-in, default-off) was deliberately abandoned because the
+    operator's real start form never carries env vars. This test went red on
+    the gate flip (failing-first verified) before being rewritten.
+    """
+    # 1. No env at all → the seed FIRES (default-on).
     calls = _wire(monkeypatch, live_ok=True, src_convs=100, restored_convs=100,
-                  opt_in=False)  # do NOT set the opt-in flag
+                  opt_in=False)  # no TOFU_DB_SEED_LOCAL in env
+    ok, _, _ = _seed(tmp_path)
+    assert ok is True, 'default-on broken: the seed must fire without any env flag'
+    assert calls['legacy_up'] == 1
+
+    # 2. Explicit TOFU_DB_SEED_LOCAL=0 → total no-op (the escape hatch).
+    calls = _wire(monkeypatch, live_ok=True, src_convs=100, restored_convs=100,
+                  opt_in=False)
+    monkeypatch.setenv('TOFU_DB_SEED_LOCAL', '0')
     ok, _, _ = _seed(tmp_path)
     assert ok is False
     assert calls['dump_live'] == 0

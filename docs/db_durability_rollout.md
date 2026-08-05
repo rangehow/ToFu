@@ -27,8 +27,10 @@ df -T /tmp        # expect a real block device (e.g. /dev/md0p1 xfs), not overla
 mountpoint -q /tmp && echo "/tmp is a distinct volume (good)"
 ```
 
-**Nothing is engaged until you opt in.** With no `TOFU_DB_*` envs set, resolution
-stays on the intact legacy cluster; this is safe to run indefinitely.
+**The split auto-engages on network mounts and the seed is DEFAULT-ON**
+(since 2026-08-05, owner directive — plain `python server.py` must Just Work):
+the first boot that finds the local pgdata unpopulated runs the one-time seed
+automatically. `TOFU_DB_SEED_LOCAL=0` is the escape hatch to defer it.
 
 ## Environment variables (all default OFF / safe)
 
@@ -37,7 +39,7 @@ stays on the intact legacy cluster; this is safe to run indefinitely.
 | `TOFU_DB_LOCAL_SPLIT` | auto (`/mnt/`→on) | Force the local-primary split on/off. Auto-engages only when the data root is a network mount. |
 | `TOFU_DB_LOCAL_ROOT` | `/tmp/tofu` | Parent of the live local `pgdata`. Must be durable-across-process-restart local disk. |
 | `TOFU_DB_BACKUP_ROOT` | `<data>/pg_backups` | DolphinFS durability target (dumps + `wal/` + `base/`). |
-| `TOFU_DB_SEED_LOCAL` | `0` | **Opt-in** the one-time seed migration (heavy: full dump+restore before serving). |
+| `TOFU_DB_SEED_LOCAL` | `1` (since 2026-08-05) | **Default-on**: the one-time seed migration fires automatically on any plain start (heavy: full dump+restore before serving). Set `0` to defer. |
 | `TOFU_DB_TIER_B` | `0` | **Opt-in** WAL archiving + base backups + PITR cold-start (seconds-RPO). |
 | `TOFU_DB_BASEBACKUP_INTERVAL_H` | `24` | `pg_basebackup -X stream` cadence. |
 | `TOFU_DB_WAL_ARCHIVE_TIMEOUT` | `30` | Per-segment archive hard timeout (FUSE-stall guard). |
@@ -48,12 +50,13 @@ stays on the intact legacy cluster; this is safe to run indefinitely.
 
 ## 1. Rollout order (do NOT reorder — the safety depends on it)
 
-### Step 1 — Seed the local primary (one-time, operator-triggered)
+### Step 1 — Seed the local primary (one-time, automatic on a plain restart)
 ```bash
-export TOFU_DB_SEED_LOCAL=1      # opt in to the seed
+# Nothing to export — the seed is default-on. Just start the server normally:
+python server.py        # (or the usual restart script)
 # (leave TOFU_DB_TIER_B unset for now — seed via a fresh live dump first)
-# restart the server
 ```
+To DEFER the seed on a given boot instead: `TOFU_DB_SEED_LOCAL=0`.
 On this boot, `_ensure_pg_running` Step -1 will:
 1. Ensure the legacy cluster is **up** (start it if down — do NOT let it fall back
    to the stale nightly just because it wasn't running).
@@ -148,14 +151,18 @@ that is explicitly gated on ALL of:
    sustained `archiving has fallen behind` CRITICALs), and
 4. **Explicit owner sign-off.**
 
-Until then: keep legacy on FUSE as the fallback. If anything goes wrong, unset the
-opt-in envs (`TOFU_DB_SEED_LOCAL` / `TOFU_DB_TIER_B` / `TOFU_DB_LOCAL_SPLIT=0`) and
-restart — resolution returns to the intact legacy cluster.
+Until then: keep legacy on FUSE as the fallback. If anything goes wrong, force
+`TOFU_DB_LOCAL_SPLIT=0` and restart — resolution returns to the intact legacy
+cluster (the seed never fires with the split off; `TOFU_DB_SEED_LOCAL=0` also
+defers it).
 
 ## 4. Rollback (at any point before retirement)
 ```bash
-unset TOFU_DB_SEED_LOCAL TOFU_DB_TIER_B
-export TOFU_DB_LOCAL_SPLIT=0      # force legacy primary
+export TOFU_DB_LOCAL_SPLIT=0      # force legacy primary (the seed never fires
+                                  # with the split off — no other env needed)
+unset TOFU_DB_TIER_B
 # restart → resolve_pgdata_dir returns the legacy FUSE pgdata; you are back to
 # the pre-rollout state. The seeded /tmp/tofu/pgdata is harmless (ignored).
+# (Without the split override, the DEFAULT-ON seed would simply re-verify the
+# already-populated local and no-op.)
 ```

@@ -1,16 +1,15 @@
 """routes/chat.py — Chat start, streaming, polling, abort."""
 
 import json
-import threading
 import time
 
-import orjson
+import orjson  # noqa: F401  (module attribute — tests/test_chat_stream_snapshot_offload.py NC asserts chat_mod.orjson.dumps is what _dumps_yielding uses)
 
 from flask import Blueprint, request
 
 from lib.agent_core.events import EventType, build_event
-from lib.database import DOMAIN_CHAT, get_db
-from lib.log import audit_log, get_logger
+from lib.database import DOMAIN_CHAT
+from lib.log import get_logger
 from lib.api_response import api_bad_request, api_error, api_internal_error, api_not_found, api_ok, sse_response
 from lib.request_parser import parse_body
 from routes.api_v1.auth import current_auth, require_scope

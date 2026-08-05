@@ -27,10 +27,10 @@ logger = get_logger(__name__)
 
 
 from lib.llm import AbortedError  # noqa: F401  (re-exported by the package facade)
-from lib.agent_core.events import EventType, build_event
+from lib.agent_core.events import EventType, build_event  # noqa: F401  (re-exported by the package facade)
 from lib.tasks_pkg.manager import (
     _strip_base64_for_snapshot,  # noqa: F401  (re-exported by the package facade after slice 15)
-    append_event,
+    append_event,  # noqa: F401  (re-exported by the package facade)
     checkpoint_task_partial,  # noqa: F401  (re-exported by the package facade)
     persist_task_result,  # noqa: F401  (re-exported by the package facade after slice 34)
     stream_llm_response,  # noqa: F401  (re-exported by the package facade)
@@ -41,22 +41,11 @@ from lib.tasks_pkg.commit_round import (  # noqa: E402
     _spawn_async_profile_consolidation,  # noqa: F401  (re-exported by the facade)
     derive_round_modified_files,  # noqa: F401  (re-exported by the facade)
 )
-from lib.tasks_pkg.system_context import (
-    _inject_system_contexts,
-    _disabled_prompt_blocks,
-)
-from lib.tasks_pkg.server_message_store import (
-    save_messages as _save_messages_to_store,
-)
 from lib.tasks_pkg.tool_dispatch import (
     tool_label,  # noqa: F401  (re-exported by the package facade)
 )
 
 # Per-turn / finalize helpers live in the sibling ``_finalize`` module.
-from lib.tasks_pkg.orchestrator._finalize import (
-    _finalize_and_emit_done,
-    _maybe_auto_retry_turn,
-)
 
 # Startup helpers extracted 2026-07-23 (pt_03f4cdf1 slice 2) — the first
 # real source movement out of run_task's 1813-line body. The VU closure
@@ -213,8 +202,6 @@ def run_task(task: dict[str, Any]) -> None:
         desktop_enabled = mcfg['desktop_enabled']
         swarm_enabled   = mcfg['swarm_enabled']
         image_gen_enabled = mcfg['image_gen_enabled']
-        human_guidance_enabled = mcfg.get('human_guidance_enabled', False)
-        scheduler_enabled = mcfg.get('scheduler_enabled', False)
         # ── Memory/project prefetch pool (slice 3 → _prefetch;
         #    shut down in the context-inject helper).
         _prefetch_executor = start_prefetches(

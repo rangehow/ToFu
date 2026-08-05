@@ -371,8 +371,6 @@ def test_proposal_text_commits_whole_through_the_real_route(flask_app):
 
 # ── Source-level NEGATIVE CONTROL ──
 
-from tests._nc_harness import patch_restore as _patch_restore  # noqa: E402
-
 
 def test_NC_severity_rank_is_load_bearing(flask_app):
     """NC: invert the severity rank table → advisory outranks blocking → the

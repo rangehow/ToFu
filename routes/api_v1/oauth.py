@@ -165,7 +165,6 @@ def oauth_egress_agent_get():
     try:
         from lib.desktop import list_agents
         from lib.desktop.egress import _pinned_agent
-        from lib.json_store import read_json
         from .auth import current_auth
         auth = current_auth()
         uid = (auth.user_id if auth and getattr(auth, 'user_id', '') else '')

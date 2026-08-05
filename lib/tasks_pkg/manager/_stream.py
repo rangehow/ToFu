@@ -12,7 +12,7 @@ from lib.agent_core.events import EventType, build_event
 from lib.cost import normalize_usage
 from lib.llm_dispatch import dispatch_stream
 from lib.llm_dispatch.retry_i18n import (
-    GATEWAY_PREFIXES as _GATEWAY_PREFIXES,
+    GATEWAY_PREFIXES as _GATEWAY_PREFIXES,  # noqa: F401  (re-exported by the manager facade)
     display_model_name as _display_model_name,
     retry_phase_fields,
 )

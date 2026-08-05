@@ -212,8 +212,6 @@ class RendererDesignRatchetTest(unittest.TestCase):
 
 class WiringRatchetTest(unittest.TestCase):
     """Source-level pins so the panel can never silently vanish again."""
-class WiringRatchetTest(unittest.TestCase):
-    """Source-level pins so the panel can never silently vanish again."""
 
     def _imports_role_window(self, rel):
         tree = ast.parse(_src(rel), filename=rel)

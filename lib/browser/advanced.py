@@ -7,7 +7,7 @@ Provides high-level compound operations for multi-step, deep interactions.
 import time
 from typing import Any
 
-from lib.browser._resolve import resolve_element, resolve_work_tab
+from lib.browser._resolve import resolve_element
 from lib.browser.queue import send_browser_command
 from lib.log import get_logger
 

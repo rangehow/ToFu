@@ -30,7 +30,7 @@ from __future__ import annotations
 import hashlib
 import os
 
-from flask import Blueprint, send_file
+from flask import Blueprint
 
 from lib.api_response import api_bad_request, api_not_found, api_ok
 from lib.log import get_logger

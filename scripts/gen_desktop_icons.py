@@ -214,7 +214,7 @@ def _dmg_background(src: Image.Image, scale: int) -> Image.Image:
 
     draw = ImageDraw.Draw(img)
     app_x, app_y = DMG_APP_ICON_POS[0] * scale, DMG_APP_ICON_POS[1] * scale
-    drop_x, drop_y = DMG_DROP_ICON_POS[0] * scale, DMG_DROP_ICON_POS[1] * scale
+    drop_x, _ = DMG_DROP_ICON_POS[0] * scale, DMG_DROP_ICON_POS[1] * scale
 
     # Drag arrow between the two icon centres (clear of the 100px icons).
     x0, x1, ay = app_x + 80 * scale, drop_x - 90 * scale, app_y

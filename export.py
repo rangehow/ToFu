@@ -42,6 +42,7 @@ Sanitization levels:
 """
 
 import argparse
+import ast
 import json
 import logging
 import os
@@ -736,6 +737,13 @@ def _sanitize_source_opensource(content: str, filepath: str) -> str:
 
     # 15. Clean remaining internal identifiers.
     #     'sankuai' (三快) is an internal corp name — always replace.
+    #     Inside an identifier (word char on either side) the hyphenated form
+    #     breaks Python/JS syntax — `def test_sankuai_…` became
+    #     `def test_example-corp_…` and the exported file no longer parsed
+    #     (bitten 2026-08-05, tests/test_gateway_sanitize.py). Identifiers get
+    #     the underscore form; prose/domains keep the hyphen.
+    content = re.sub(r'(?<=[A-Za-z0-9_])sankuai|sankuai(?=[A-Za-z0-9_])',
+                     'example_corp', content)
     content = content.replace('sankuai', 'example-corp')
     content = content.replace('三快', 'your-corp')
     content = content.replace('龙猫', 'your-mascot')
@@ -2550,6 +2558,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
         # export loudly instead of shipping a white-screening tree.
         if mode in ('internal', 'opensource'):
             _verify_exported_js_syntax(dest)
+            _verify_exported_py_syntax(dest)
             _verify_exported_py_integrity(dest)
         if push:
             _git_push(dest, mode, commit_msg, is_release=is_release,
@@ -2781,6 +2790,44 @@ def _verify_exported_js_syntax(dest: Path) -> None:
             'Sanitizer produced %d syntactically-invalid JS file(s): %s'
             % (len(broken), ', '.join(f'{rel} ({err})' for rel, err in broken))
         )
+def _verify_exported_py_syntax(dest: Path) -> None:
+    """``ast.parse`` every exported ``.py`` — the Python twin of the JS check.
+
+    The 2026-08-05 incident proved the gap: the sanitizer hyphenated an
+    identifier in tests/test_gateway_sanitize.py, the JS-only net never looked
+    at it, and the corruption was only caught because CI lints the whole tree.
+    ast.parse is fast (~1k files in seconds) and needs no toolchain, so this
+    runs unconditionally. Scope is the whole exported tree (CI runs
+    ``ruff check .`` over everything, including tests/ and scripts/).
+
+    Raises:
+        ExportSyntaxError: if any exported ``.py`` file fails to parse.
+    """
+    py_files = [p for p in dest.rglob('*.py')
+                if p.is_file() and '.git' not in p.parts]
+    print(f"  {C_BOLD}\U0001f50d Verifying exported Python syntax ({len(py_files)} files)\u2026{C_END}")
+
+    broken: list[tuple[str, str]] = []
+    for p in py_files:
+        try:
+            src = p.read_text(encoding='utf-8')
+            ast.parse(src, filename=str(p))
+        except SyntaxError as e:
+            rel = p.relative_to(dest)
+            broken.append((str(rel), f'{e.msg} (line {e.lineno})'))
+            print(f"    {C_RED}\u2717 {rel}: {e.msg} (line {e.lineno}){C_END}")
+        except (OSError, UnicodeDecodeError) as e:
+            logger.warning('py-syntax: could not read %s: %s', p, e)
+
+    if broken:
+        print(f"\n  {C_RED}\u26a0 {len(broken)} exported Python file(s) FAIL to parse \u2014 "
+              f"the sanitizer corrupted them.{C_END}")
+        raise ExportSyntaxError(
+            'Sanitizer produced %d syntactically-invalid Python file(s): %s'
+            % (len(broken), ', '.join(f'{rel} ({err})' for rel, err in broken))
+        )
+
+
 class ExportIntegrityError(RuntimeError):
     """Raised when the exported Python tree is missing/truncated vs the source.
 

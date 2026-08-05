@@ -1611,7 +1611,12 @@ try:
     import brotli as _brotli
 except ImportError as _e:
     _brotli = None
-    _lifecycle_log.info('[Compress] brotli unavailable (%s) — gzip only', _e)
+    # _lifecycle_log is only bound further down this module (line ~1755); on a
+    # brotli-less box this except fires DURING import, before that binding —
+    # a bare reference here was a startup NameError. Import the logger locally.
+    from lib.log import get_logger as _get_logger
+    _get_logger('server.lifecycle').info(
+        '[Compress] brotli unavailable (%s) — gzip only', _e)
 
 # Compressed-artifact cache for CONTENT-ADDRESSED immutable assets.
 #
@@ -1750,7 +1755,6 @@ async def method_override():
 # ── Request lifecycle logging ──
 from lib.log import (get_logger, set_req_id, req_id as _get_req_id,
                      resolve_inbound_rid as _resolve_inbound_rid)
-import uuid as _uuid
 
 _lifecycle_log = get_logger('server.lifecycle')
 _QUIET_PREFIXES = ('/api/browser/', '/api/desktop/', '/static/', '/api/task/')

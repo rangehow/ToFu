@@ -1,3 +1,7 @@
+### 2026-08-05(预存红闭环:test_bundle_manifest_parity——credentials_vault.js 漏 index.html dev-fallback 标签) — 脑派发接我自票 `pt_bfb5ead4ec334c58` **DONE**;commit `97157428`(1 文件);parity **15/15**(含反向 strip→rebundled 边)
+
+- 凭证保管库批(327082e8)把 `settings/credentials_vault.js` 收进 `_BUNDLE_FILES` 却漏了 index.html 兜底标签,bundling 失败时 dev 回退会静默丢保管库 UI;修法=按清单同序补标签(private_hosts→credentials_vault→save_export),同 2026-08-03 族判例。
+
 ### 2026-08-05(浏览器桥 v3:点击「新标签页无感知」根修——动作回执改 tab-id 集合差集 + 扩展 4.8.0 cursor:pointer 全扫描;钱管家事故 11 轮打转压成 1 次 browser_click) — owner 指令(conv msft42tqheea8x 复盘)「浏览器工具设计问题多,点开餐车补贴报销新标签页居然感知不到;能代码兜底的别让大模型推理」;epic `pt_4ef0583e3ad44278` **DONE**;commits `4b76b996`(兄弟孤儿 display 修复收编)+`9008e9ce`(v3 主体 10 文件 +558/−91);新套件 **16 针** + 浏览器全环 **148+121 绿** + node --check 干净
 
 - **事故链(全链取证自 raw 记录):** 模型在钱管家首页点「餐车补贴报销」卡片,点击**确实**弹出了详情页——在新标签页;但回执只比对**旧 tab** 的 URL/title,结论「no navigation happened」,随后 ~11 轮耗在截图、execute_js DOM 考古(找可点祖先→打 data-tofu-target 标记→再点)、最后靠 browser_get_history 侥幸发现详情 URL,任务随即搁浅。三层根因:①回执对 target=_blank 结构性失明;②扩展枚举只认语义可交互元素(a/button/role/[onclick]),React/Vue 把监听器挂在根上,卡片 div 唯一线索是计算样式 cursor:pointer——整页枚举 0 元素,text= 点击永不命中;③模型被迫手工做「找元素→标记→点击」这套本属代码的活。

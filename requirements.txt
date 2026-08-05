@@ -85,7 +85,11 @@ psutil>=5.9
 # rows match cookie-less — the live session IS the credential), on top of
 # 0.7.2's access_strategy consumption. SOFT floor: older libraries just waste
 # one anonymous pool load in that fallback — inert, no crash.
-tofu-search>=0.7.3
+# >=0.8.0: travel vertical chain — RollingGo (keyed) → FlyAI (Fliggy
+# anonymous), hotel type usable key-free for the first time. Also the first
+# version actually PUBLISHED to public PyPI past 0.5.3 (0.7.2/0.7.3 were cut
+# but never uploaded), so the floor moves to the artifact CI can resolve.
+tofu-search>=0.8.0
 trafilatura>=1.6
 # playwright is optional — powers the JS-rendered fallback in tofu_search.fetch.
 # On Linux, Chromium needs X11/GTK shared libs (libatk, libgbm, libXcomposite, …).

@@ -80,11 +80,14 @@ def _migrate(providers):
 
 def test_two_faces_of_one_account_become_one_card():
     provs = _legacy_pair()
+    # Derived, not a literal: export.py rewrites the card's id, so the
+    # expectation must come from the same source to hold in both builds.
+    anchor_id = provs[0]['id']
     changed = _migrate(provs)
     assert changed is True
     assert len(provs) == 1, [p.get('id') for p in provs]
     card = provs[0]
-    assert card['id'] == 'sankuai', 'the default-face card keeps its identity'
+    assert card['id'] == anchor_id, 'the default-face card keeps its identity'
     assert card['base_url'] == OPENAI_URL
     assert card['faces']['anthropic']['base_url'] == ANTHROPIC_URL
     assert card['faces']['anthropic']['protocol'] == 'anthropic'

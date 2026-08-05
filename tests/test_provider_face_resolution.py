@@ -56,15 +56,21 @@ from __future__ import annotations
 
 import os
 import sys
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
+from lib.mcp.registry import is_opensource_build
+
 pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit]
 
-GW = 'aigc.sankuai.com'
 OPENAI_URL = 'https://aigc.sankuai.com/v1/openai/native'
+# Derived, not spelled out: export.py rewrites the URL's endpoint form and
+# the bare-host form differently, so a hardcoded GW would split from the
+# card's host in the exported tree. Deriving keeps them equal in BOTH builds.
+GW = urlparse(OPENAI_URL).hostname
 ANTHROPIC_URL = 'https://aigc.sankuai.com/v1/anthropic'
 
 # The merged provider card: ONE account, TWO faces.
@@ -213,6 +219,10 @@ def test_explicit_pin_to_the_default_face_overrides_the_refusal():
 #  3. Dual-face host discovery — derived, never hand-copied
 # ═══════════════════════════════════════════════════════════
 
+@pytest.mark.skipif(is_opensource_build(),
+                    reason='the internal dual-face gateway template is not '
+                           'shipped in opensource builds, so its host is '
+                           'legitimately absent from the derived set')
 def test_dual_face_hosts_are_derived_from_shipped_templates():
     """The host set must come from data (the shipped templates), not a
     hardcoded list that drifts the moment a template changes."""

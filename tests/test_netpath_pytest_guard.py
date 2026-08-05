@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 import lib.netpath as netpath
+from lib.mcp.registry import is_opensource_build
 
 _PROD_STORE = Path(__file__).resolve().parents[1] / 'data' / 'config' / 'netpath.json'
 
@@ -77,7 +78,13 @@ def test_ghost_hosts_are_detected(host):
 
 @pytest.mark.unit
 @pytest.mark.parametrize('host', [
-    'aigc.sankuai.com', 'api.openai.com', 'latest', 'contest.org',
+    # The export sanitizer rewrites this internal host to a doc placeholder
+    # (your-llm-gateway.example.com), which IS a ghost suffix by design — so
+    # this parameter is only meaningful in the internal tree.
+    pytest.param('aigc.sankuai.com', marks=pytest.mark.skipif(
+        is_opensource_build(),
+        reason='export sanitizes this internal host to a doc placeholder')),
+    'api.openai.com', 'latest', 'contest.org',
 ])
 def test_real_hosts_are_not_ghosts(host):
     assert not _is_ghost_host(host)

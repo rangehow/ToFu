@@ -49,6 +49,8 @@ from pathlib import Path
 
 import pytest
 
+from lib.mcp.registry import is_opensource_build
+
 REPO = Path(__file__).resolve().parent.parent
 PET_JS = REPO / "static" / "js" / "tofu-pet.js"
 PET_DIR = REPO / "static" / "icons" / "pet" / "tofu"
@@ -215,6 +217,9 @@ def test_no_fill_colour_reaches_the_canvas_edge():
     )
 
 
+@pytest.mark.skipif(is_opensource_build(),
+                    reason='export.py is not shipped in opensource builds — '
+                           'export-tier guards only run in the source tree')
 def test_pet_art_survives_every_export_level():
     """The art must actually REACH the user (charter: export is a first-class
     acceptance target).
@@ -262,6 +267,9 @@ def test_pet_art_is_git_tracked():
     )
 
 
+@pytest.mark.skipif(is_opensource_build(),
+                    reason='the frame pipeline (static/icons/_gen/) is not '
+                           'shipped in opensource builds')
 def test_pipeline_is_the_single_source_of_the_frames():
     """NO SECOND COPY: the on-disk frames must match the pipeline exactly.
 
@@ -486,6 +494,9 @@ def test_NEUTER_edge_touched_art_is_caught(tmp_path):
         "the clipping check did not flag bright fill at the edge — it is blind"
 
 
+@pytest.mark.skipif(is_opensource_build(),
+                    reason='the frame pipeline (static/icons/_gen/) is not '
+                           'shipped in opensource builds')
 def test_NEUTER_pipeline_drift_is_caught():
     """A hand-edited frame must make the --check gate red.
 

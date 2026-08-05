@@ -215,6 +215,7 @@ interface Window {
   __tofuDiagRing: any;
   __translatePushWired: any;
   _acquireBootLoad: any;
+  _adoptInjectedSettledPrefix: any;
   _adoptTaskPlaceholder: any;
   _applyChatModeUI: any;
   _applyContinueCheckpoint: any;
@@ -341,6 +342,7 @@ interface Window {
   _stallWatchTick: any;
   _stampLatestLiveTask: any;
   _startPendingSyncPolling: any;
+  _streamActiveVerify: any;
   _streamRenderNoHighlight: any;
   _stripUsageTransient: any;
   _swReconcileTicker: any;

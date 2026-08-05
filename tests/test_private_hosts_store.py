@@ -26,7 +26,16 @@ from unittest import mock
 
 import pytest
 
+from lib.mcp.registry import is_opensource_build
+
 pytestmark = pytest.mark.unit
+
+# The internal gateway host, referenced ONLY through this constant so that
+# export.py's sanitization rewrites the definition and every use stays
+# consistent with it (a literal 'https://aigc.sankuai.com/...' would be
+# endpoint-rewritten while a bare 'aigc.sankuai.com' expectation would not
+# be, splitting the pair in the exported tree).
+_GW = 'aigc.sankuai.com'
 
 
 @pytest.fixture(autouse=True)
@@ -47,10 +56,10 @@ def _isolated_store():
 # ── 1. Normalization + validation ──
 
 @pytest.mark.parametrize('raw,expected', [
-    ('https://aigc.sankuai.com/ml/modelPlaza?a=1', 'aigc.sankuai.com'),
-    ('AIGC.Sankuai.COM', 'aigc.sankuai.com'),
-    ('aigc.sankuai.com:443', 'aigc.sankuai.com'),
-    ('aigc.sankuai.com.', 'aigc.sankuai.com'),
+    (f'https://{_GW}/ml/modelPlaza?a=1', _GW),
+    (_GW.upper(), _GW),
+    (f'{_GW}:443', _GW),
+    (f'{_GW}.', _GW),
     ('  sankuai.com  ', 'sankuai.com'),
     ('http://user:pw@host.example.com/x', 'host.example.com'),
 ])
@@ -84,11 +93,11 @@ def test_bare_ip_refusal_message_explains_the_reason(_isolated_store):
 
 def test_upsert_then_enabled_hosts(_isolated_store):
     ph = _isolated_store
-    ph.upsert_host('https://aigc.sankuai.com/ml/', label='Meituan internal')
-    assert ph.enabled_hosts() == {'aigc.sankuai.com'}
+    ph.upsert_host(f'https://{_GW}/ml/', label='Meituan internal')
+    assert ph.enabled_hosts() == {_GW}
     rows = ph.list_hosts()
     assert len(rows) == 1
-    assert rows[0]['host'] == 'aigc.sankuai.com'
+    assert rows[0]['host'] == _GW
     assert rows[0]['label'] == 'Meituan internal'
     assert rows[0]['enabled'] is True
 
@@ -101,12 +110,12 @@ def test_new_entry_defaults_to_enabled(_isolated_store):
 
 def test_toggle_and_delete_are_normalization_insensitive(_isolated_store):
     ph = _isolated_store
-    ph.upsert_host('aigc.sankuai.com')
-    assert ph.set_enabled('AIGC.SANKUAI.COM.', False) is True
+    ph.upsert_host(_GW)
+    assert ph.set_enabled(_GW.upper() + '.', False) is True
     assert ph.enabled_hosts() == set()
-    assert ph.set_enabled('https://aigc.sankuai.com/x', True) is True
-    assert ph.enabled_hosts() == {'aigc.sankuai.com'}
-    assert ph.delete_host('  aigc.sankuai.com  ') is True
+    assert ph.set_enabled(f'https://{_GW}/x', True) is True
+    assert ph.enabled_hosts() == {_GW}
+    assert ph.delete_host(f'  {_GW}  ') is True
     assert ph.list_hosts() == []
 
 
@@ -190,7 +199,7 @@ def test_allowlisting_a_host_grants_no_credentials(_isolated_store):
     """Reachability must not imply a login."""
     from lib.auth_sources import match_source
     _isolated_store.upsert_host('sankuai.com')
-    assert match_source('https://aigc.sankuai.com/ml/x') is None, (
+    assert match_source(f'https://{_GW}/ml/x') is None, (
         'an allowlist entry must NOT register an auth source')
 
 
@@ -228,6 +237,9 @@ def _export_excluded_dirs():
     return set(mod.ALWAYS_EXCLUDE_DIRS)
 
 
+@pytest.mark.skipif(is_opensource_build(),
+                    reason='export.py is not shipped in opensource builds — '
+                           'export-survival guards only run in the source tree')
 @pytest.mark.parametrize('path', [
     'lib/private_hosts.py',
     'routes/api_v1/private_hosts.py',
@@ -243,6 +255,9 @@ def test_feature_code_survives_export(path):
         'the feature would be broken in an exported copy')
 
 
+@pytest.mark.skipif(is_opensource_build(),
+                    reason='export.py is not shipped in opensource builds — '
+                           'export-survival guards only run in the source tree')
 def test_the_data_file_is_export_excluded_on_purpose():
     """The allowlist DATA is per-install intent: a fresh copy starts closed.
 

@@ -70,7 +70,14 @@ class TestTwoLauncherChromiumLibsParity:
         assert conf_dir.endswith('tofu-browser-libs/lib'), (
             f'conf pins {conf_dir!r} which drifts from the script convention '
             '($HOME/tofu-browser-libs/lib)')
-        home = os.path.expanduser('~')
-        assert conf_dir == os.path.join(home, 'tofu-browser-libs', 'lib'), (
-            f'conf path {conf_dir!r} != this host convention '
-            f'{os.path.join(home, "tofu-browser-libs", "lib")!r}')
+        # Compare against the conf's OWN HOME pin, not the test host's ~: the
+        # conf is a deployment artefact (the opensource export sanitizes it to
+        # /home/your-user), so expanduser('~') made this guard red on every
+        # machine but the one box the conf was written for. The invariant that
+        # actually matters is INTERNAL consistency — the libs dir must sit
+        # under the same HOME the supervised server will run with.
+        hm = re.search(r'(?:^|[,\s])HOME="([^"]+)"', conf)
+        assert hm, 'conf must pin HOME in its environment line'
+        assert conf_dir == os.path.join(hm.group(1), 'tofu-browser-libs', 'lib'), (
+            f'conf libs path {conf_dir!r} != conf HOME convention '
+            f'{os.path.join(hm.group(1), "tofu-browser-libs", "lib")!r}')

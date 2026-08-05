@@ -47,6 +47,17 @@ import subprocess
 
 import pytest
 
+from lib.mcp.registry import is_opensource_build
+
+# CLAUDE.md is an internal working doc and is deliberately NOT shipped in
+# opensource exports — every test in this file guards its path references,
+# so the whole module self-skips there.
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(is_opensource_build(),
+                       reason='CLAUDE.md is not shipped in opensource builds'),
+]
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '..'))
 CLAUDE_MD = os.path.join(ROOT, 'CLAUDE.md')

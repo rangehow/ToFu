@@ -1,3 +1,10 @@
+### 2026-08-05(「别设计开关」owner 指令落地:PG 播种改 DEFAULT-ON——普通 `python server.py` 即自动迁移,env 变量降级为 opt-out 逃生门) — owner 原话「Stop designing these switches; users will only start it in the form of python server.py!!」;commit `f0355504`(5 文件 +86/-50);**失败先行**(旧 opt-in 钉转红)→ 方向对齐;DB 环 **56/56**;memory `no-startup-env-switches` 立规;epic `pt_4d321fb8f1c2400c` 闸门简化为「任意一次普通重启」
+
+- **指令的实证根基:** 播种 epic 6 次人门重试零进展——不是 owner 拖延,是设计在 owner 的真实启动形态下**物理上不可能触发**(UI 重启走 os.execv 不继承 env,shell 重启要背一个变量名)。「需要用户记得带参数」=「永远不会发生」。
+- **改法:** `_pg_seed.py` 闸门翻转为默认开(未播种即自动跑),`TOFU_DB_SEED_LOCAL=0` 仅推迟本次;**安全性不靠开关靠失败语义**——失败即 quarantine 半成品 + legacy 保持权威 + 下次启动自动重试(自愈,无死锁标记),成功幂等跳过。db_paths 门警告、rollout 文档(env 表/Step 1/回退)、播种 runbook 全部对齐(回退简化为 `TOFU_DB_LOCAL_SPLIT=0` 一条)。
+- **测试:** 旧钉 `test_opt_in_required_default_off` 翻闸即红(失败先行实证它钉的是被废契约)→ 改写为 `test_default_on_and_explicit_opt_out`(无 env 必触发 + 显式 =0 全 no-op);DB 环 seed+tier_b+paths+backup+guard 56/56。
+- **预先声明的边缘(不修只立):** 播种成功后 /tmp 被清空会从冻结 legacy「陈旧复活」——与现行 legacy 回退同级,真要修需 FUSE 侧持久标记,另行立案;已写进 runbook §4。
+- **epic 余账:** 播种本体等 owner 任意一次普通重启自动发生(重启还会顺带激活 `ae2a390e`/`2c3f9cd2`/`1bdecfef`/`f4c33f8c`/`f838e0ad` 全部在库修复);我的重试探测+§3 验收预案不变,验过即关票。
 ### 2026-08-05(export 集合 git 基准化:未跟踪文件不再混入公开仓——嵌套文件排除规则 + dry-run 同集合对齐 + 公开仓 45 件历史垃圾清除) — epic `pt_be8275eed168401e` **DONE**;commit `32b2f237`(源)+ tofu-open `9ed7b47`(推双仓);新套件 **5 针** + 邻接钉 **14 绿** + 导出树终验 **66 绿/3 自跳过**
 
 - **根修:** 旧规则只排未跟踪**根目录**,跟踪目录内的未跟踪**文件**直通——WIP 测试/NC tmp 副本被发布。新增 `_untracked_nested_files`(git ls-files -o 全集减去根目录族),tar 排除 + **响亮清单**(前 8 名+计数,教 operator `git add`);dry-run 预览咨询同一集合(预览/实拷分叉正是这次事故的隐身衣);personal 模式不动(全量自备份语义)。

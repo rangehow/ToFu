@@ -1,3 +1,10 @@
+### 2026-08-05(凭证保管库落地:Fernet 加密落盘 + 密钥分离 + 设置页「凭证保管库」+ export 消费链收编;owner 指令全项兑现) — epic `pt_60b86585a1124d53` **DONE**;commits `327082e8`(特性 15 文件)+`8a93a74c`(d.ts regen);后端 **31 针** + 前端 jsdom **23 针** + 邻接守卫环 **30+10 绿**
+
+- **形态:** `lib/credentials_vault.py`(Fernet AES-128-CBC+HMAC,cryptography 已是硬依赖;密钥独立 `.credentials_vault.key` 600——**拷走的库文件没有密钥毫无用处**;store 600;值永不进日志);`routes/api_v1/credentials.py`(信封契约,list 全掩码,**reveal 是唯一明文出口且审计**);设置页 Advanced「凭证保管库」(掩码列表/新增/删除前确认/查看后 30s 自动隐藏);README 双语。
+- **消费链:** export._load_gh_token = env TOFU_GH_TOKEN → **vault** → 旧 .secrets 文件;首启 bootstrap 把 `.secrets/github_token`+`pypirc` 自动收进 vault(实测已收编两条,existing-wins 幂等,旧文件保留)。
+- **实测擒获两枚只有自己跑才见的坑:** ①`config_path` 返回 str 而 vault 用 Path 方法——测试夹具全量重定向了路径,只有真跑炸 `'str' has no 'exists'`(回归钉=reload 模块钉默认值类型);②jsdom harness 里裸 `navigator` 落到 **Node 21+ 自带的全局 navigator**(无 clipboard)→ 复制静默 no-op,改 `window.navigator`;③globals 生成器以 `git ls-files` 为基准——新模块**入库后** regen 才生效(先提模块再 regen,顺序钉死)。
+- **子代理中断交接:** vault-ui 在 i18n 步骤 LLM 断线,落地物大半可用;我收尾=clipboard 根修 + expect_pass 计数修正(24→23) + 全绿验证。
+
 ### 2026-08-05(发布滞后两枚全落地:tofu-search 0.8.0 上公开 PyPI+ digest 钉同提交;export 同步推 rangehow+NiuTrans 双仓 drift 8/8 绿;凭证按 owner 指令收编 .secrets/) — epic `pt_ccab5c8de3fe4254` **DONE**;commits:`23f6704a`(token 外置)→`9e55674a`(地板+digest)→`014bfaf0`(sanitizer/真 bug×2)→`200ac228`(lint 25)→`209a4aa2`(SOFT 标)→`4d8f73bc`(parity a/b 25)→`cea54c87`(parity d 8)→`6cc6927a`(收编 10 套件)→`ebd8e8bd`(A2 合规)→`9e0b07dc`(addopts 内建 no:timeout);公开 CI 对照:基线 7329c03 **全测试腿启动即崩**,本推 f0a930e **lint+e2e 转绿**、unit 14296 绿(98 红全为 CI 干净环境差,纯净克隆实证非回归)→ 挂板 `pt_1f4068f7f06640f7`
 
 - **凭证安全化(owner 答题):** GitHub PAT 从 export.py 硬编码 → `TOFU_GH_TOKEN` env / `.secrets/github_token`(chmod 600,与 pypirc 同目录);`data/config/mcp_servers.json` 实证 gitignored;设置页凭证保管库需求挂板 `pt_60b86585a1124d53`。

@@ -248,6 +248,17 @@ _TOP_LEVEL_ONLY_EXCLUDE_DIRS = {
     'paper',                       # academic paper draft, NOT lib/paper/ (core package)
 }
 
+# Like _TOP_LEVEL_ONLY_EXCLUDE_DIRS but honored in internal + opensource modes
+# (personal deliberately KEEPS its own data/, so it is NOT unioned into the
+# personal sets). 'data' MUST be root-anchored: as a nested (path-component)
+# exclusion it strips legitimate nested packages — the android/ subtree's
+# Room package android/app/src/.../client/data/ lost 3 tracked files to it
+# (the lib/paper drop-bug class). Root data/ (databases, configs, runtime
+# state) stays fully excluded in both modes.
+ALWAYS_EXCLUDE_ROOT_ONLY_DIRS = {
+    'data',                        # databases (*.db), configs, runtime state — ROOT only
+}
+
 PERSONAL_EXCLUDE_GLOBS = {
     '*.pyc',
     '*.pyo',
@@ -282,7 +293,6 @@ PERSONAL_EXCLUDE_GLOBS_HEAVY = {
 # These contain personal data, chat history, runtime state
 ALWAYS_EXCLUDE_DIRS = {
     # Personal data / runtime
-    'data',                        # databases (*.db), configs, runtime state
     'logs',                        # application logs (contain queries, API calls, personal content)
     '.chatui',                     # skills, error resolutions (personal)
     '.tofu',                       # agent state: file-history undo store, skills, error resolutions (personal)
@@ -811,6 +821,10 @@ def _should_exclude(relpath: str, filename: str, mode: str) -> str | None:
         return None
 
     # ── Internal / Opensource: full exclusions ──
+    # Root-anchored dir exclusions (e.g. 'data' — nested data/ dirs ship).
+    if parts and parts[0] in ALWAYS_EXCLUDE_ROOT_ONLY_DIRS:
+        return f'excluded dir: {parts[0]} (top-level only)'
+
     # Check dir exclusions
     for part in parts:
         if part in ALWAYS_EXCLUDE_DIRS:
@@ -1112,19 +1126,21 @@ def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list
         files = PERSONAL_EXCLUDE_FILES
         globs = PERSONAL_EXCLUDE_GLOBS | PERSONAL_EXCLUDE_GLOBS_HEAVY
     elif mode == 'internal':
-        dirs = ALWAYS_EXCLUDE_DIRS | _TOP_LEVEL_ONLY_EXCLUDE_DIRS
+        dirs = (ALWAYS_EXCLUDE_DIRS | _TOP_LEVEL_ONLY_EXCLUDE_DIRS
+                | ALWAYS_EXCLUDE_ROOT_ONLY_DIRS)
         files = ALWAYS_EXCLUDE_FILES
         globs = ALWAYS_EXCLUDE_GLOBS
     else:  # opensource
         dirs = (ALWAYS_EXCLUDE_DIRS | OPENSOURCE_EXTRA_EXCLUDE_DIRS
-                | _TOP_LEVEL_ONLY_EXCLUDE_DIRS)
+                | _TOP_LEVEL_ONLY_EXCLUDE_DIRS | ALWAYS_EXCLUDE_ROOT_ONLY_DIRS)
         files = ALWAYS_EXCLUDE_FILES | OPENSOURCE_EXTRA_EXCLUDE_FILES
         globs = ALWAYS_EXCLUDE_GLOBS
 
     for d in dirs:
-        # Top-level-only entries (e.g. 'paper', 'sundries') anchored at './'
-        # so a nested subdir of the same name elsewhere isn't pruned.
-        if d in _TOP_LEVEL_ONLY_EXCLUDE_DIRS:
+        # Top-level-only entries (e.g. 'paper', 'sundries', root 'data')
+        # anchored at './' so a nested subdir of the same name elsewhere
+        # isn't pruned.
+        if d in _TOP_LEVEL_ONLY_EXCLUDE_DIRS or d in ALWAYS_EXCLUDE_ROOT_ONLY_DIRS:
             tar_excludes.append(f'--exclude=./{d}')
         else:
             # Anchored AND nested — applies wherever it appears in the tree.
@@ -2642,7 +2658,8 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
     }
 
     # Collect the right dir set for excluded-items display
-    _all_excluded_dirs = PERSONAL_EXCLUDE_DIRS if mode == 'personal' else ALWAYS_EXCLUDE_DIRS
+    _all_excluded_dirs = (PERSONAL_EXCLUDE_DIRS if mode == 'personal'
+                          else ALWAYS_EXCLUDE_DIRS | ALWAYS_EXCLUDE_ROOT_ONLY_DIRS)
 
     excluded_log = []
 

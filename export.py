@@ -3030,15 +3030,28 @@ def _verify_opensource(dest: Path):
 # this file is internal-only today, but a credential in any committable file is
 # one whitelist mistake away from a public push.
 def _load_gh_token() -> str:
+    """Resolution order: TOFU_GH_TOKEN env → the credential vault (auto-
+    bootstrapping from the legacy .secrets/ file) → the legacy file itself."""
     tok = os.environ.get('TOFU_GH_TOKEN', '').strip()
     if tok:
         return tok
-    p = Path(__file__).resolve().parent.parent / '.secrets' / 'github_token'
+    secrets_dir = Path(__file__).resolve().parent.parent / '.secrets'
+    try:
+        from lib.credentials_vault import bootstrap_from_legacy, get_entry
+        bootstrap_from_legacy(secrets_dir)
+        tok = (get_entry('github_token') or '').strip()
+        if tok:
+            return tok
+    except Exception as e:
+        logger.warning('[Export] vault read for github_token failed, '
+                       'falling back to .secrets file: %s', e)
+    p = secrets_dir / 'github_token'
     try:
         tok = p.read_text(encoding='utf-8').strip()
     except OSError as e:
         raise SystemExit(
-            f'GitHub token not found: set TOFU_GH_TOKEN or create {p} '
+            f'GitHub token not found: set TOFU_GH_TOKEN, store it in the '
+            f'credential vault (Settings → 凭证保管库), or create {p} '
             f'(chmod 600). ({e})')
     if not tok:
         raise SystemExit(f'GitHub token file {p} is empty.')

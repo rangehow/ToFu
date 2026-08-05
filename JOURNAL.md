@@ -1,3 +1,10 @@
+### 2026-08-05(write_file 失败载荷挽救 + 路径形状守卫:owner 设计问「tool result 怎么写要让模型能自愈」落地) — owner 以 PG runbook 改写事故(缺 path → EISDIR)指令设计 auto-fix 机制;commit `ff03c109`(4 文件 +394/−8);新套件 **11 针** + 邻接环 **175 绿**(atomic 9/read_gate 14/project_tools 84/input_repair·bg_write·undo 57)+ collect-only 闸过
+
+- **事故链定案:** 模型发的 write_file **只有 content 没有 path** → 空串过 `_safe_path` 解析成项目根**目录** → 原子写把 `.tofu_atomic_*` 临时文件建到了项目根的**父目录** → `os.replace` 撞目录 EISDIR → 载荷整个丢失,报错既不说错因也不给恢复路。磁盘侧事后实证零残留(原子写 except 自清),runbook 改写后来已由兄弟会话补写成功(f0355504)。
+- **三层设计(已过思考的设计决策,非拍脑袋):** ①**守卫前置**——`tool_write_file` 在任何文件 I/O 之前拒「path 缺失/空/非字符串」与「解析结果是已存在目录」两类,EISDIR 从 write_file **作为错误类永久消失**;②**载荷挽救**——任何 write_file 失败(守卫拒/resolve 拒/makedirs 败/原子写败)且 content 非空即暂存 `<tmp>/tofu_write_salvage/`(0700/0600、8MB 上限、24h TTL + 100 件上限每次暂存时自清),错误带暂存路径 + 精确 `run_command mv` 恢复指令,**零 token 重生成**;③**措辞契约**——`Write failed:` 前缀是 `_read_gate._result_indicates_success` 和 `tools/meta.py` 两个下游的匹配锚点,丰富文本只能跟在错因**之后**。
+- **刻意不做(想过且砍掉,防回潮):** 不改 `_safe_path` 空串行为(list_dir('.') 等读工具合法依赖,写侧守卫才是正确位置);apply_diff/insert 不做 salvage(失败时 merged content 服务端可确定性重算,search/replace 本就在模型上下文,无增量价值);不改 write_file 的 tool description 教学(打破全会话 prompt cache 断点,成本>收益,错误消息本身就是 teachable moment);不做「从 content 启发式猜目标路径自动写入」(magic 行为,给恢复手段不替模型做决定)。
+- **顺带擒获并根修(read-gate 洞):** 三条 `_resolve_base` ValueError 拒绝臂用小写前缀 `write_file:/apply_diff:/insert_content:`——read-gate 只认 `Write failed/Diff failed/Insert failed`,**失败写入被误判为「已满足 read-before-edit」证据**;全面对齐并针 `test_resolve_rejection_uses_load_bearing_prefix` 钉死。
+- **判例自记:** tool result 的文案不是散文是**结构信号**——本项目至少两处下游用 startswith 消费它;改任何工具报错文案前先 grep 前缀消费面(本次消费面=read_gate+meta.py,均已钉)。
 ### 2026-08-05(「别设计开关」owner 指令落地:PG 播种改 DEFAULT-ON——普通 `python server.py` 即自动迁移,env 变量降级为 opt-out 逃生门) — owner 原话「Stop designing these switches; users will only start it in the form of python server.py!!」;commit `f0355504`(5 文件 +86/-50);**失败先行**(旧 opt-in 钉转红)→ 方向对齐;DB 环 **56/56**;memory `no-startup-env-switches` 立规;epic `pt_4d321fb8f1c2400c` 闸门简化为「任意一次普通重启」
 
 - **指令的实证根基:** 播种 epic 6 次人门重试零进展——不是 owner 拖延,是设计在 owner 的真实启动形态下**物理上不可能触发**(UI 重启走 os.execv 不继承 env,shell 重启要背一个变量名)。「需要用户记得带参数」=「永远不会发生」。

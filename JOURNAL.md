@@ -1,3 +1,13 @@
+### 2026-08-05(premature close 根因定案 + G1-G4 全修:网关裸掐流实证五连;截断工具参数永不执行/部分内容软着陆/槽位窗口冷却/异步代理对齐) — owner 两连指令(「gateway 为何不发 DONE?重试层分析得对吗?深挖」→「可见但不打断,把 G1-G4 全修掉」);commit `c3b84d31`(9 文件 +816/−44);新套件 **24 针** + 邻接环 **198+81 绿** + collect-only 15866 零错 + ruff 干净
+
+- **根因(全部来自生产日志,非推测):** ①375 次断流全在 aigc.sankuai.com 一个 host、横跨 6+ 模型,其余端点零事件;②560 具 missing_done 转储的末行**全是完整 JSON、零半截**——发送方应用层主动关连接,不是网络层砍断;③同步主路实测绕过公司代理(should_bypass_proxies=True);④客户端唯一主动关流路径(用户 abort)被 `_missing_done` 显式排除;⑤断流突发与网关 429 风暴(org 级配额)精确同窗。结论=**网关/推理后端在负载下弃流且不补终止帧**(规范实现应补 error 事件或 [DONE]);每条带 resp_trace,375 个 trace id 可向网关团队逐条定位。疗效基线:当日 17 次重试 0 耗尽 0 用户可见失败。
+- **G1(最重缺口):** 断流死在工具参数半截时(560 转储 34 例),analyse 见 tool_calls 就放行执行——半截 JSON 或被 sanitizer 洗成 `{}` 让工具拿空参数执行错误动作。修:`_missing_done` 时先过 `unparseable_tool_calls`(JSON 自限界性保证「可解析即字节完整」),不可解析→骑 classic 预算透明重试:本轮脏文本重置到 round base(_stream.py 新戳 `_round_base_content/thinking`)+ DELTA_RESET + 脏快照录 `_floor_retry_residue`(收缩守卫精确字节豁免);耗尽才 premature_close 信封。swarm 侧同型守卫:毒轮**不入账**直接骑 chassis retry_bonus(上限 2),耗尽剥离坏调用降级;顺带堵掉「空断流静默当 FINAL answer」。
+- **G2(owner 哲学:可见但不打断):** 有内容断流旧路=abnormal_stop 错误卡 + 整轮 auto-retry 抹掉部分内容——用户唯一能做的本来就是 Retry/Continue。修:软着陆 finishReason=**premature_close**(settlement 词表本就映射 interrupted/gateway:Continue 可用、非错误态、不触发整轮重跑),finish tag「网关中断·内容可能不完整」常驻可见;无内容残留保持诚实 abnormal_stop 信封不动。
+- **G3:** 截断冷却原只看连续错误,间歇成功次次清零(当日 19 次断流冷却仅 firing 2 次);加 10 分钟滚动窗(≥3 次即冷却,升级指数取 streak/window 较强者),间歇性烂上游终于会被降温。
+- **G4:** 异步 httpx 路径拿到显式 proxy= 后不认 env no_proxy——内网网关请求绕经公司代理,与同步路径不一致。修:lib/proxy.py 新 `async_proxy_for` 唯一判定口(proxies_for 规则 OR requests 同款 should_bypass_proxies 谓词,构造性防漂移),astream/http_client 两处 `_httpx_proxy_url` 收编委托。
+- **自记事故:** insert_content 重复粘贴头块把 agent_loop.py 打成 import 即 SyntaxError,兄弟 peer 预警后秒修(重跑验证六形全过)——**insert 纯新增内容时绝不在 content 里复述锚点块**。
+- **后续(未做,挂给 owner 决策):** 375 条 resp_trace 证据包脚本化发网关团队(治本唯一路径);G2 后 `docs/HEADLESS_API.md` 的 abnormal_stop 行仍准确(空内容才产生),无需改。
+
 ### 2026-08-05(「气泡间距忽大忽小」根修:turn-ctx 右侧信息栏出轨流——绝对定位进轨道盒,行高永远=max(头像,正文),展开 +N 也不再撑行) — owner 截图两连问「为什么 user 气泡和 agent 气泡间距有时候特别大」+「右栏与中列基本独立,能不能重设计」;commits:styles.css 半被兄弟 `48e07615` 收编 + 本批 `88a48e60`(3 文件);几何套件 **3/3**(432 测量行零膨胀)+ turn-ctx 邻接环 **14 绿** + 真 Chromium 探针实测
 
 - **诊断(实况 DOM + 截图几何双证):** 用户消息是三列网格(头像|气泡|信息栏),行高=最高列。信息栏(`.turn-ctx`,模型/工具 chip/工作区)当时在流——短气泡(~165px)+ 胖栏(每 MCP server 一 chip,实测 ~170-350px)时,气泡下方多出一段「无人认领的空白」。截图 2 实测:一行气泡底 165px,栏排到 ~370px,Agent 头 438px——空白≈栏超挂+margin。折叠态有 200px 滚动上限兜底,但 `:has(.tctx-overflow:not([hidden])){max-height:none}` 让展开态**完全无界**。「有时候」=气泡长短 × 当时 MCP/工具数 × 是否展开过 +N。

@@ -59,6 +59,30 @@ _ENGINE_USER_FLAGS = ('_brainDispatch', '_isVirtualUser', '_isVuDirective',
                       '_peerMessage')
 
 
+def is_engine_user_msg(msg) -> bool:
+    """The shared predicate: a user-role row minted by an engine seam (brain
+    kickoff / VU / peer / workflow), whose turn can end without a persisted
+    assistant reply. SINGLE SOURCE — the settle path and the one-time heal
+    migration (lib/conversations/engine_tail_heal.py) both ride it."""
+    return (isinstance(msg, dict) and msg.get('role') == 'user'
+            and any(msg.get(f) for f in _ENGINE_USER_FLAGS))
+
+
+def build_engine_no_reply_tombstone(now_ms) -> dict:
+    """The shared tombstone row for an engine turn that ended with no reply.
+    NON-empty content is load-bearing: ``_drop_empty_assistant_messages``
+    drops empty assistant rows at wire-build, which would recreate the
+    same-role adjacency the tombstone exists to break."""
+    return {
+        'role': 'assistant',
+        'content': '*(该引擎轮未产生回复 — 任务在生成输出前终止 / '
+                   'the engine turn ended before producing a reply)*',
+        'timestamp': now_ms,
+        'finishReason': 'engine_no_output',
+        '_engineNoReply': True,
+    }
+
+
 def settle_unanswered_engine_tail(messages, now_ms=None):
     """Append a tombstone assistant row when the tail is an unanswered
     ENGINE-minted user row (brain kickoff / VU / peer / workflow).
@@ -81,21 +105,12 @@ def settle_unanswered_engine_tail(messages, now_ms=None):
     if not messages:
         return False
     tail = messages[-1]
-    if not (isinstance(tail, dict) and tail.get('role') == 'user'):
-        return False
-    if not any(tail.get(f) for f in _ENGINE_USER_FLAGS):
+    if not is_engine_user_msg(tail):
         return False
     if now_ms is None:
         import time as _time
         now_ms = int(_time.time() * 1000)
-    messages.append({
-        'role': 'assistant',
-        'content': '*(该引擎轮未产生回复 — 任务在生成输出前终止 / '
-                   'the engine turn ended before producing a reply)*',
-        'timestamp': now_ms,
-        'finishReason': 'engine_no_output',
-        '_engineNoReply': True,
-    })
+    messages.append(build_engine_no_reply_tombstone(now_ms))
     logger.warning('[Send] Settled an unanswered engine user tail with a '
                    'tombstone assistant row (ts=%s) — prevents a persisted '
                    'user,user adjacency', tail.get('timestamp'))
@@ -149,4 +164,6 @@ def append_user_msg_idempotent(messages, user_msg):
     return True
 
 
-__all__ = ['resolve_conv_refs', 'append_user_msg_idempotent']
+__all__ = ['resolve_conv_refs', 'append_user_msg_idempotent',
+           'settle_unanswered_engine_tail', 'is_engine_user_msg',
+           'build_engine_no_reply_tombstone']

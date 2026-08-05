@@ -1,3 +1,11 @@
+### 2026-08-05(CLAUDE.md 同步 JOURNAL + 瘦身:新规则五件收编(凭证保管库/启动默认开/测试体系接线/导出 git 基准/grep 拦截闸)+ 考古叙事出清;净 -156 行/-4.9KB,§ 编号零漂移) — owner 指令「check journal.md to see whether claude.md needs to be updated, and also streamline」;commit 见下(2 文件)
+
+- **收编(JOURNAL→CLAUDE,全部先实证落盘再落笔):** ①凭证保管库(lib/credentials_vault.py + api_v1/credentials.py 进图条/§4.6 表行/§6 清单/§8 快查/§10.3 触发行——「凭证进 vault,永不硬编码永不入库」);②owner「别设计开关」规则进 §9 卷首块(启动操作 DEFAULT-ON,env 仅存 =0 逃生门;实证根基=PG 播种 6 次人门零进展)+ db_paths/_pg_seed 图条 + TOFU_DB_SEED_LOCAL/TOFU_DB_LOCAL_SPLIT/TOFU_GH_TOKEN env 登记;③§7 测试重写(docs/TESTING_STRATEGY.md 北极星、make test-affected 内环、-p no:napari/-p no:timeout 双雷、TOFU_REQUIRE_FRONTEND 响亮 skip、expect_pass 棘轮、殡葬审计+增量锚闸、flake 7 天 SLA、12 旅程 hermetic e2e);④导出 git 基准化进 §10.1(未跟踪嵌套文件排除+响亮清单+dry-run 同集合)+ scripts/ 白名单触发行 + ast.parse 全树语法门补记;⑤run_command grep 拦截闸进图条(TOFU_RUN_GREP_GUARD=0)。
+- **兄弟协同:** 18886198(Skill 长期化)的提交信息明示「CLAUDE.md 技能节更新留工作区,兄弟正在压缩改写,不扫」——其 skills 图条扩写(env.py vault 绑定/default-global scope/set_skill_scope/卸载清绑定)已原样收进本批,零冲突。
+- **瘦身(规则全保,砍冗余与考古):** 目录图去考古(搬迁日期/epic id/迁移叙事——JOURNAL 是它们的家);§5 四示例收敛为 §2.2 级别表的应用清单(保留 5.4 后台线程示例+编号锚);§14 一次性脚本收缩;§12 规则四复述并一;§10.4 重复示例删;§4.1 平凡 Flask 样例删;§15.2 transports/key-model 紧凑化;§3.6/§3.7/§4.6.2 叙事收紧。毛裁剪 ~250 行被新增规则 ~95 行抵消,净 1733→1577 行、102.3→97.4KB。
+- **编号稳定性(刻意):** §1-§15 及关键小节号全部保持——仓内 `CLAUDE.md §x.y` 外部引用逐一核对(docs/ARCHITECTURE.md 的 §11/§16、EVENTS.md 的 §14 为**预存漂移**,非本批引入,留档不动);本批唯一自引入漂移=§5.4(后台线程,DEVELOPMENT_DIRECTION.md:125 引用)已回补编号修复。
+- **落地波折(自记):** 一批 apply_diffs 四枚 replace 误填字面占位符——四处段落被单字符替换;立即按上下文锚逐枚修复并复核 `^x$` 零残留。**教训:批量 diff 发出前先逐枚对账 search/replace,占位符绝不能进参数。**
+
 ### 2026-08-05(Skill 体系长期化重构:vault 密钥绑定 + 声明位真 YAML 解析 + 全局默认 scope 根治「装了却说没装」+ 执行期 env 注入;残留双清单校验后清理零误删) — owner 指令「Set up the skill system in the most long-term and robust way possible」;epic `pt_b1c5ab25c79d4259` **DONE**;commit `18886198`(17 文件 +1020/−17);新套件 **14 针** + 邻接环 **87+142+43 绿** + collect-only 15778 零错 + ruff/node 干净
 
 - **复盘先行(上一轮的取证结论):** 注入链/注册表/activate 全链健康(skills_index:963 字符恒定=双包在册);soyoung 消失=owner 09:44 在设置页亲手 DELETE(access.log 实证),非 bug;真缺口=Key 配置三层断裂(catalog 只警告不收集/非 catalog 包的需求是散文/全系统无 per-skill 密钥存储)。

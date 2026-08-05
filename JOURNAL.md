@@ -1,3 +1,9 @@
+### 2026-08-05(Watch 车道「请求修复」只发第一句根修:预填改全文诊断 + 单行 input 换多行 textarea——状态诊断先夸后问题,首句截断把表扬句当成任务发板) — owner 截图指令「这个请求修复的功能为啥只把大模型诊断的第一句话作为任务啊??」;commit `7a4c6009`(3 文件 +40/−25);邻接环 **59 绿**(6+21+32)+ collect-only 15880 零错
+
+- **定案(设计错非笔误):** `_draftFixTitle`(project-brain-status.js)刻意按 `[。！？.!?]` 切句取首句再 90 字封顶,注释自述「起草 epic 标题,人类发前自己改」;叠加单行 `<input>` 的视觉暗示,全文无处可放。讽刺点:后端 `post_task` title 上限 `_TITLE_MAX_CHARS=2000` 本就为多句设计描述而设——砍字的是前端,不是链路。owner 案例实证危害:诊断首句是「导出重构符合目标」的**表扬**,真正问题(PG 播种停滞/发布滞后)在后句——发出的 epic `pt_fbc00224b77347b4` 是一句夸,认领对话无事可修。
+- **修法:** 预填=全文(空白折叠,2000 字封顶对齐后端);编辑器 textarea(rows=4,沿用 pb-status-ask-input 样式——CSS 本就 resize:vertical 为 textarea 设计),Enter 换行/Ctrl+Enter 提交/Escape 关闭,与追问编辑器手势一致。
+- **守卫:** fixture seq-1 改多句(表扬在前问题在后),断言预填与提交载荷=全文 + tagName=TEXTAREA——首句切分或单行回潮即红;设计文档 §8c 同步。
+- **flake 注记:** 首跑 collect-only 撞 4 错(test_request_parser 族)=兄弟 mid-edit 瞬态,复跑 15880 零错自消;CLAUDE.md 有兄弟未提交改动,显式 pathspec 隔离未收。
 ### 2026-08-05(滚动审计新窗口三连根修 + 播种三枚隐藏缺陷被迫现形补齐——owner「日志是滚动的」复核批) — commits `c36fbd16`(播种收官)+`56406f93`(同角色生产者)+`7ffc8bb2`(run_command 降级)+`4fd61f16`(LoopWatch 压力上下文);新套件×2 + 终环 **237 绿**;NC×2 各咬各的
 
 - **复核驱动的事实链:** 8月3–5 窗口证实前两批修复的生产实效(LoopWatch 8月3–4 零停摆、401 风暴 3104→25→2),也抓出三类新账。

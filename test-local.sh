@@ -43,6 +43,7 @@ import okhttp3.Cookie
 private class CookieBridgeStubImpl : CookieSink {
   override fun inject(origin: String, cookies: List<Cookie>) {}
   override fun purgeHost(host: String) {}
+  override fun cookieHeader(origin: String): String? = null
 }
 val CookieBridge: CookieSink = CookieBridgeStubImpl()
 EOF
@@ -59,6 +60,8 @@ echo "== TIER 1: pure-JVM =="
   "$SRC/main/java/com/tofu/client/session/SessionManager.kt" \
   "$SRC/main/java/com/tofu/client/session/SessionController.kt" \
   "$SRC/main/java/com/tofu/client/session/SupervisorUrl.kt" \
+  "$SRC/main/java/com/tofu/client/session/InteractiveSso.kt" \
+  "$SRC/main/java/com/tofu/client/session/ServerLifecycle.kt" \
   "$SRC/main/java/com/tofu/client/data/Profile.kt" \
   "$OUT/stub/CookieBridgeStub.kt" \
   "$SRC/test/java/com/tofu/client/session/ServerUrlTest.kt" \
@@ -68,7 +71,10 @@ echo "== TIER 1: pure-JVM =="
   "$SRC/test/java/com/tofu/client/session/SessionManagerLoginDegradeTest.kt" \
   "$SRC/test/java/com/tofu/client/session/ProfileFormTest.kt" \
   "$SRC/test/java/com/tofu/client/session/SessionControllerTest.kt" \
-  "$SRC/test/java/com/tofu/client/session/SupervisorUrlTest.kt"
+  "$SRC/test/java/com/tofu/client/session/SupervisorUrlTest.kt" \
+  "$SRC/test/java/com/tofu/client/session/InteractiveSsoTest.kt" \
+  "$SRC/test/java/com/tofu/client/session/SessionManagerInteractiveSsoTest.kt" \
+  "$SRC/test/java/com/tofu/client/session/ServerLifecycleTest.kt"
 
 "$JAVA_HOME/bin/java" -cp "$CP:$KRT:$OUT" org.junit.runner.JUnitCore \
   com.tofu.client.session.ServerUrlTest \
@@ -78,7 +84,10 @@ echo "== TIER 1: pure-JVM =="
   com.tofu.client.session.SessionManagerLoginDegradeTest \
   com.tofu.client.session.ProfileFormTest \
   com.tofu.client.session.SessionControllerTest \
-  com.tofu.client.session.SupervisorUrlTest
+  com.tofu.client.session.SupervisorUrlTest \
+  com.tofu.client.session.InteractiveSsoTest \
+  com.tofu.client.session.SessionManagerInteractiveSsoTest \
+  com.tofu.client.session.ServerLifecycleTest
 
 # ── TIER 2: Robolectric (optional — needs the instrumented android-all jar) ──
 INSTRUMENTED="$(ls "$LIBS"/android-all-instrumented-*.jar 2>/dev/null | head -1 || true)"

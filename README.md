@@ -196,9 +196,12 @@ The canonical target is `./gradlew test` (needs the Android SDK). For a fast
 proof without the SDK, `./test-local.sh` runs two tiers on a plain JDK 17 +
 `kotlinc`:
 
-- **Pure-JVM tier** (28 tests: `ServerUrl`, `LoginForm`, `CookieHeaders`,
+- **Pure-JVM tier** (107 tests: `ServerUrl`, `LoginForm`, `CookieHeaders`,
   `ProfileForm`, `SessionManager` + `SessionController` via the `CookieSink` /
-  `SecretVault` seams) — no Android runtime.
+  `SecretVault` seams, `InteractiveSso`, `ServerLifecycle`, `SupervisorUrl`) —
+  no Android runtime. `SupervisorRunner` stays Gradle-tier (it needs
+  `SupervisorClient` → `android.webkit` + `org.json`, absent from the pure
+  classpath).
 - **Robolectric tier** (3 tests: `CookieBridge` against a shadow `CookieManager`;
   `ReauthWebViewClient` latch) — runs headless on the JVM, no device/emulator.
   Needs the Robolectric jars + an instrumented `android-all` in `LIBS`.

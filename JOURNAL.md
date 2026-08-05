@@ -1,3 +1,12 @@
+### 2026-08-05(发布滞后两枚全落地:tofu-search 0.8.0 上公开 PyPI+ digest 钉同提交;export 同步推 rangehow+NiuTrans 双仓 drift 8/8 绿;凭证按 owner 指令收编 .secrets/) — epic `pt_ccab5c8de3fe4254` **DONE**;commits:`23f6704a`(token 外置)→`9e55674a`(地板+digest)→`014bfaf0`(sanitizer/真 bug×2)→`200ac228`(lint 25)→`209a4aa2`(SOFT 标)→`4d8f73bc`(parity a/b 25)→`cea54c87`(parity d 8)→`6cc6927a`(收编 10 套件)→`ebd8e8bd`(A2 合规);公开 CI lint 腿已绿
+
+- **凭证安全化(owner 答题):** GitHub PAT 从 export.py 硬编码 → `TOFU_GH_TOKEN` env / `.secrets/github_token`(chmod 600,与 pypirc 同目录);`data/config/mcp_servers.json` 实证 gitignored;设置页凭证保管库需求挂板 `pt_60b86585a1124d53`。
+- **② PyPI:** 0.7.2/0.7.3 历史上只 cut 未传(tag 都缺)——按 digest 钉 docstring 纪律走全链:git archive 干净构建 → twine check → 隔离 --target 探针(**必须断言 `__file__` 前缀**,否则探的是环境里 0.6.0 假绿)→ uv publish → PyPI JSON digest 与本地 sha256 逐字节相等 → v0.8.0 推 rangehow/tofu-search。requirements 地板 0.7.3→**0.8.0**(勿降指令,+SOFT 标),`_EXPECTED_DIGESTS` 同提交换钉;identity+resolvable **40/40 绿**。
+- **① export 同步(最大暗坑链):** ①sanitizer `sankuai→example-corp` 裸替换**把标识符里的连字符毁语法**(test_sankuai_…→不可解析)——根修=词界内先换 `example_corp`,并补 **ast.parse 全树语法门**(原 JS-only 网漏 tests/);②公开 CI `ruff check .` 全树——源仓 63 项 lint 债(F401 再导出/facade 结构)清零(TRAP 1 纪律:noqa 钉再导出、删真死码);③**opensource-parity 大批**:~40 套件在导出树红(内网模板/网关宿主被 sanitize 或不ship)——TRAP 4 自跳过 + 派生容忍断言;④真 bug×3 顺带擒获:`model_fallback` SSE 事件发射+前端处理却**从未注册**(event_registry 守卫立功)、compaction 收敛投影 `_count_tokens_authoritative` 未导入→**静默永远 heuristic**(测试对齐=dense payload 让双尺度同判,293/293 绿)、server.py brotli 缺失分支先用后定义 NameError;⑤vendor 捆绑轮 0.5.3→0.8.0(installer 契约钉);⑥10 个闭环票守卫套件从未跟踪收编(export 从磁盘 ship,本就上公开 CI)。
+- **推运:** 双远端 7329c03→1854045 干净 FF;本机 github.com 需走 ambient proxy(老记忆的 no-proxy 建议已过时);tofu-open 的 node_modules 会被 export 的 mirror_delete 清掉,本地验 jsdom 需 npm ci 且**add -A 后**测(git ls-files 类测试依赖索引)。
+- **后续挂板:** `pt_be8275eed168401e`——export 从工作树整树 tar,未跟踪文件(兄弟 WIP/tests tmp*)混入公开仓,应改 git ls-files 基准。
+- **终态:** 源仓原失败集 **874 绿/0 真红**(2 枚高载时序 flake 单跑恒绿,SLA 观察中)。
+
 ### 2026-08-05(大脑派发注入轮全程隐身事故根修:三层缝——派发 notify 带真 rev + 引擎轮服务端铸 _msgId + 流式存活期「定居前缀收编」双车道;残尾「只有模型标的结算条」顺带根治) — owner 报障(conv msebjymx5b4a25)「板上答题后毫无动静,刷新只见 Agent 凭空生成,派发消息跑完强刷才现身」;commit 见下(7 文件);新套件×1 **20 针+NC** + 邻接环 **228 绿** + collect-only 闸过
 
 - **取证(全链服务端无腐坏):** DB 记录 msg23=大脑 kickoff(带 _brainEpic 溯源卡)自始至终在册;app.log 客户端信标定序——09:19:01 答题→:11 建任务→:14 忙帧 attach(信标 prior-turn guard tailTask=a6ba70da **finishReason=none**=本地尾轮缺结算字段实锤)→:16 孤儿恢复二次 attach。症状三层各对应一条结构缝。

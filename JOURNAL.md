@@ -1,3 +1,10 @@
+### 2026-08-05(export 集合 git 基准化:未跟踪文件不再混入公开仓——嵌套文件排除规则 + dry-run 同集合对齐 + 公开仓 45 件历史垃圾清除) — epic `pt_be8275eed168401e` **DONE**;commit `32b2f237`(源)+ tofu-open `9ed7b47`(推双仓);新套件 **5 针** + 邻接钉 **14 绿** + 导出树终验 **66 绿/3 自跳过**
+
+- **根修:** 旧规则只排未跟踪**根目录**,跟踪目录内的未跟踪**文件**直通——WIP 测试/NC tmp 副本被发布。新增 `_untracked_nested_files`(git ls-files -o 全集减去根目录族),tar 排除 + **响亮清单**(前 8 名+计数,教 operator `git add`);dry-run 预览咨询同一集合(预览/实拷分叉正是这次事故的隐身衣);personal 模式不动(全量自备份语义)。
+- **keeper 哲学:** 不设第二白名单——「值得发布就值得 git add」,跟踪本身就是 keeper;tofu-open 残余差异终态恰为 5 件刻意项(data/.gitkeep×2、vendor/.gitkeep+捆绑 0.8.0 轮、导出期生成的 openai.json 示例模板)。
+- **公开仓清扫:** git rm 45 件(logo-redesign/wordmark 草稿 26、tests/tmp*.js 14、uploads/papers 测试 PDF 4、根级 tmp/lock/占位 5)。
+- **判例自记:** tar overlay 永不删(TRAP 2)意味着「停止拷贝」≠「树上消失」——排删除必须同时在 dest `git rm`;本次顺手验证了 3 个 opensource 自跳过钉在导出树正确 firing。
+
 ### 2026-08-05(凭证保管库落地:Fernet 加密落盘 + 密钥分离 + 设置页「凭证保管库」+ export 消费链收编;owner 指令全项兑现) — epic `pt_60b86585a1124d53` **DONE**;commits `327082e8`(特性 15 文件)+`8a93a74c`(d.ts regen);后端 **31 针** + 前端 jsdom **23 针** + 邻接守卫环 **30+10 绿**
 
 - **形态:** `lib/credentials_vault.py`(Fernet AES-128-CBC+HMAC,cryptography 已是硬依赖;密钥独立 `.credentials_vault.key` 600——**拷走的库文件没有密钥毫无用处**;store 600;值永不进日志);`routes/api_v1/credentials.py`(信封契约,list 全掩码,**reveal 是唯一明文出口且审计**);设置页 Advanced「凭证保管库」(掩码列表/新增/删除前确认/查看后 30s 自动隐藏);README 双语。

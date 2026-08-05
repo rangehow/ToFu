@@ -1,3 +1,11 @@
+### 2026-08-05(浏览器桥 v3 补缝:高级 flow 接入动作回执——menu_click/fill_form 的菜单项/提交点击不再绕过新标签页感知;异步 window.open 限制留档) — owner 复核指令「v3 修的是感知机制,不能只覆盖三个基础工具」;epic `pt_4ef0583e3ad44278` 追加;commit 见下(4 文件);新增 **5 针** + 全环 **209 绿**
+
+- **盲区根因(owner 验收擒获):** `lib/browser/advanced.py` 四个 flow(menu_click/fill_form_sequential/hover_and_click/right_click_menu_select)直调 `click_element`,而「菜单项开新页」「表单提交弹新页」恰是新标签页最高发的两个场景——v3 只覆盖 click/type/press_key 时,同款「点了却没感知」在 browser_menu_click/browser_fill_form 上原样复现。
+- **修法(单缝,零 flow 内部改动):** 回执落在 `dispatch._handle_advanced_tool` 一层——flow 启动前 `tab_snapshot`、结束后 `action_receipt`,**成功与失败两路都追加**(flow 可以先开页后失败,如 submenu 缺失);legacy 直调者无 tabId 时跳过回执(零桥调用)。monkeypatch 契约不变:flow 命令走 advanced 模块级 send,回执 list_tabs 走 dispatch 模块级 send,测试分两路 patch。
+- **测试 5 针:** 菜单项开新页(跟随+双 list_tabs 调用序钉死)、fill_form 提交开新页、同页不误报 NEW TAB、失败路仍带回执、legacy 无 tab_id 跳过。schema 两句同步(menu_click/fill_form 描述补新页跟随),diet 守卫绿。
+- **留档(防下次误判):** 异步 `window.open`(XHR 回调延迟数百毫秒开窗)可滑过 id 差集窗口——写进 `action_receipt` docstring Known limit;同步 target=_blank(本次事故形态)全覆盖,延迟开窗仍可由下一次动作的回执/list_tabs 发现。
+- **协调:** HAND OFF 已发 msftevy65q3zlp——其 epic `pt_a35e7982b38a42eb` 的「Read ?」半边收编知会 + 公共 getter 提升兑现,剩余前端半边基于新 HEAD 续作。
+
 ### 2026-08-05(预存红闭环:test_bundle_manifest_parity——credentials_vault.js 漏 index.html dev-fallback 标签) — 脑派发接我自票 `pt_bfb5ead4ec334c58` **DONE**;commit `97157428`(1 文件);parity **15/15**(含反向 strip→rebundled 边)
 
 - 凭证保管库批(327082e8)把 `settings/credentials_vault.js` 收进 `_BUNDLE_FILES` 却漏了 index.html 兜底标签,bundling 失败时 dev 回退会静默丢保管库 UI;修法=按清单同序补标签(private_hosts→credentials_vault→save_export),同 2026-08-03 族判例。

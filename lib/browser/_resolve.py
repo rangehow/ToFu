@@ -325,6 +325,12 @@ def action_receipt(tab_id, before, send=None):
     goes — Chrome focuses it too) and the receipt says so explicitly, so
     the next tab_id-less call lands on the NEW page. ``before`` may be a
     legacy 2-tuple (title, url) — then only the title/URL comparison runs.
+
+    Known limit: an ASYNC window.open — one fired from an XHR callback
+    hundreds of ms after the click returns — can slip the diff window (the
+    receipt list_tabs runs before the tab exists). The synchronous
+    target=_blank case that motivated v3 is covered; a delayed open is
+    still discoverable via browser_list_tabs / the next action's receipt.
     """
     send = send or _default_send()
     try:

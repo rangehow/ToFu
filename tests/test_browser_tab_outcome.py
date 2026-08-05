@@ -259,6 +259,144 @@ def test_resolver_unique_pointer_card_wins():
     assert el['selector'] == 'div.b'
 
 
+# ── 5. Advanced flows ride the SAME receipt seam (dispatch layer) ─────
+#
+# menu_click / fill_form / hover_and_click / right_click_menu call
+# click_element DIRECTLY — and a menu item or a form SUBMIT are the two
+# highest-frequency new-tab openers. The v3 receipt therefore lives in
+# dispatch._handle_advanced_tool: one snapshot/diff wrap covering all four
+# flows (owner review follow-up, 2026-08-05).
+
+def _patch_dispatch_and_flow(monkeypatch, flow_script, tabs_script):
+    """Two patch points, two call journals.
+
+    The FLOW commands (hover/click/type/elements) go through
+    lib.browser.advanced's module-level send_browser_command; the receipt
+    seam's list_tabs goes through lib.browser.dispatch's. Both are the
+    documented monkeypatch contracts — patch each where it lives.
+    """
+    import lib.browser.advanced as adv
+    import lib.browser.dispatch as disp
+    calls = {'flow': [], 'tabs': []}
+    monkeypatch.setattr(adv, 'send_browser_command',
+                        _fake_send(flow_script, calls['flow']))
+    monkeypatch.setattr(disp, 'send_browser_command',
+                        _fake_send(tabs_script, calls['tabs']))
+    return calls
+
+
+def test_menu_click_reports_new_tab_and_follows(monkeypatch):
+    calls = _patch_dispatch_and_flow(monkeypatch, {
+        'hover_element': ({'hovered': True}, None),
+        'get_interactive_elements': (
+            {'elements': [{'text': '查看详情', 'selector': '#detail'}]}, None),
+        'click_element': ({'clicked': True}, None),
+    }, {
+        'list_tabs': [
+            ([{'id': 1, 'url': 'http://list', 'title': 'List'}], None),
+            ([{'id': 1, 'url': 'http://list', 'title': 'List'},
+              {'id': 7, 'url': 'http://detail', 'title': 'Detail',
+               'active': True}], None),
+        ],
+    })
+    from lib.browser.dispatch import _handle_advanced_tool
+    out = _handle_advanced_tool('browser_menu_click', {
+        'tabId': 1, 'target_selector': '#m', 'item_text': '查看详情',
+        'menu_wait': 0})
+    assert 'succeeded' in out
+    assert 'NEW TAB #7' in out
+    assert 'http://detail' in out
+    from lib.browser import _resolve
+    assert _resolve.current_work_tab() == 7
+    # The seam's snapshot/diff both went through the dispatch send.
+    assert [c for c, _ in calls['tabs']] == ['list_tabs', 'list_tabs']
+
+
+def test_fill_form_submit_reports_new_tab(monkeypatch):
+    """The form SUBMIT is the classic new-tab opener — it must not be a
+    blind spot when the model fills via browser_fill_form."""
+    _patch_dispatch_and_flow(monkeypatch, {
+        'type_text': ({'typed': True}, None),
+        'click_element': ({'clicked': True}, None),
+    }, {
+        'list_tabs': [
+            ([{'id': 1, 'url': 'http://form', 'title': 'Form'}], None),
+            ([{'id': 1, 'url': 'http://form', 'title': 'Form'},
+              {'id': 9, 'url': 'http://done', 'title': 'Done',
+               'active': True}], None),
+        ],
+    })
+    from lib.browser.dispatch import _handle_advanced_tool
+    out = _handle_advanced_tool('browser_fill_form', {
+        'tabId': 1,
+        'fields': [{'selector': '#q', 'value': 'x', 'type': 'type'}],
+        'submit_selector': '#go', 'field_delay': 0})
+    assert 'succeeded' in out
+    assert 'NEW TAB #9' in out
+    from lib.browser import _resolve
+    assert _resolve.current_work_tab() == 9
+
+
+def test_menu_click_same_page_receipt_has_no_new_tab(monkeypatch):
+    _patch_dispatch_and_flow(monkeypatch, {
+        'hover_element': ({'hovered': True}, None),
+        'get_interactive_elements': (
+            {'elements': [{'text': 'Export', 'selector': '#exp'}]}, None),
+        'click_element': ({'clicked': True}, None),
+    }, {
+        'list_tabs': (
+            [{'id': 1, 'url': 'http://a', 'title': 'A'}], None),
+    })
+    from lib.browser.dispatch import _handle_advanced_tool
+    out = _handle_advanced_tool('browser_menu_click', {
+        'tabId': 1, 'target_selector': '#m', 'item_text': 'Export',
+        'menu_wait': 0})
+    assert 'same page (URL unchanged)' in out
+    assert 'NEW TAB' not in out
+
+
+def test_menu_click_failure_still_appends_receipt(monkeypatch):
+    """A flow can open a tab and STILL fail (submenu item missing) — the
+    receipt must fire on the failure path too."""
+    _patch_dispatch_and_flow(monkeypatch, {
+        'hover_element': ({'hovered': True}, None),
+        'get_interactive_elements': [
+            ({'elements': [{'text': '导出', 'selector': '#exp'}]}, None),
+            ({'elements': []}, None),
+        ],
+        'click_element': ({'clicked': True}, None),
+    }, {
+        'list_tabs': [
+            ([{'id': 1, 'url': 'http://a', 'title': 'A'}], None),
+            ([{'id': 1, 'url': 'http://a', 'title': 'A'},
+              {'id': 2, 'url': 'http://opened', 'title': 'Opened',
+               'active': True}], None),
+        ],
+    })
+    from lib.browser.dispatch import _handle_advanced_tool
+    out = _handle_advanced_tool('browser_menu_click', {
+        'tabId': 1, 'target_selector': '#m', 'item_text': '导出',
+        'submenu_text': 'CSV', 'menu_wait': 0})
+    assert 'failed' in out          # submenu item never matched
+    assert 'NEW TAB #2' in out      # …but the first click DID open a tab
+    from lib.browser import _resolve
+    assert _resolve.current_work_tab() == 2
+
+
+def test_legacy_flow_without_tab_id_skips_receipt(monkeypatch):
+    """Direct legacy callers that omit tabId: no snapshot, no receipt, no
+    bridge call wasted — and no crash."""
+    calls = _patch_dispatch_and_flow(monkeypatch, {
+        'hover_element': ({'hovered': True}, None),
+        'click_element': ({'clicked': True}, None),
+    }, {})
+    from lib.browser.dispatch import _handle_advanced_tool
+    out = _handle_advanced_tool('browser_hover_and_click', {
+        'hover_selector': '#h', 'click_selector': '#c', 'hover_wait': 0})
+    assert 'succeeded' in out
+    assert calls['tabs'] == []
+
+
 # ── 5. Extension source pins (no JS harness in this repo — the
 #       established convention for background.js) ──────────────────────
 

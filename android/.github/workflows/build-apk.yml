@@ -1,0 +1,84 @@
+name: Build Android APK
+
+# Builds the debug APK on every push/PR (so the build can never silently rot),
+# and on a version tag ALSO assembles the release APK and publishes it as a
+# GitHub Release asset — which is what the Tofu web UI's "Mobile client"
+# download link points at.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write   # needed to create/attach the Release on tag builds
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Run unit tests
+        run: ./gradlew test --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tofu-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      # ── Release path (tag builds only) ──
+      - name: Assemble release APK
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: ./gradlew assembleRelease --stacktrace
+
+      # Pin the published asset to the EXACT name the Tofu backend's default
+      # download URL points at (DEFAULT_MOBILE_CLIENT_URL → …/download/
+      # tofu-android.apk). Gradle emits app-release[-unsigned].apk, which would
+      # NOT match the deep link and give a permanent 404 — so we rename to the
+      # canonical asset name here. Kept in lockstep with the backend constant by
+      # tests/test_mobile_client_apk_url.py (asset name = 'tofu-android.apk').
+      - name: Rename release APK to canonical asset name
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          src="$(ls app/build/outputs/apk/release/*.apk | head -1)"
+          cp "$src" "app/build/outputs/apk/release/tofu-android.apk"
+          echo "Published asset will be: tofu-android.apk (from $src)"
+
+      # The release APK is ALREADY signed: build.gradle.kts binds the release
+      # buildType to a FIXED, committed debug keystore (app/debug.keystore), so
+      # assembleRelease produces a directly-installable, update-compatible APK
+      # with NO repo-secret setup. (Signing with the debug KEY does not make the
+      # build debuggable — release stays isDebuggable=false.) Switch to a
+      # secret-backed signingConfigs.release only before any Play Store
+      # submission. See README "Release / cutting a version".
+      - name: Publish APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/release/tofu-android.apk
+          fail_on_unmatched_files: true

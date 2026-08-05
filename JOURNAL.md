@@ -1,3 +1,12 @@
+### 2026-08-05(「气泡间距忽大忽小」根修:turn-ctx 右侧信息栏出轨流——绝对定位进轨道盒,行高永远=max(头像,正文),展开 +N 也不再撑行) — owner 截图两连问「为什么 user 气泡和 agent 气泡间距有时候特别大」+「右栏与中列基本独立,能不能重设计」;commits:styles.css 半被兄弟 `48e07615` 收编 + 本批 `88a48e60`(3 文件);几何套件 **3/3**(432 测量行零膨胀)+ turn-ctx 邻接环 **14 绿** + 真 Chromium 探针实测
+
+- **诊断(实况 DOM + 截图几何双证):** 用户消息是三列网格(头像|气泡|信息栏),行高=最高列。信息栏(`.turn-ctx`,模型/工具 chip/工作区)当时在流——短气泡(~165px)+ 胖栏(每 MCP server 一 chip,实测 ~170-350px)时,气泡下方多出一段「无人认领的空白」。截图 2 实测:一行气泡底 165px,栏排到 ~370px,Agent 头 438px——空白≈栏超挂+margin。折叠态有 200px 滚动上限兜底,但 `:has(.tctx-overflow:not([hidden])){max-height:none}` 让展开态**完全无界**。「有时候」=气泡长短 × 当时 MCP/工具数 × 是否展开过 +N。
+- **修法(根因非补丁):** 栏改 `position:absolute`(`.message` 本已 relative),`top:0/right:0/width:var(--rail-w)/max-height:100%`——**宽度仍由 pane 所有的第三轨道供给**(容器查询授权不变,水平不溢出的构造性保证不动),**高度零贡献**:行高回到 max(头像,正文)。栏盒被消息盒自身高度钳制(百分比 max-height 对 abspos 包含块有效),超出滚动;展开 +N 在同一有界盒内揭示,旧「展开即长个」 carve-out 随在流栏一起退役。栏永不越过下一条消息,无需 paint containment 豁免。
+- **守卫收紧:** test_turn_ctx_rail_geometry 断言#3 从「折叠态 ≤2.5× 膨胀」升级为**全状态零膨胀不变量**(msg==content±8px,展开行同守)——432 行清扫(3 主题×72 面板态×折叠/展开)58s 全绿;chip/path 两枚 overflow 套件同绿(展开揭示数断言不受影响:滚动盒内 offsetParent 仍非空)。
+- **探针插曲(自记):** 临时 harness 实测时撞见 `content-visibility:auto`+`contain-intrinsic-size:auto 120px` 的测量假象——**从未渲染过的元素**被尺寸遏制在固有 120px,点 +N 后元素变 relevant 才落回真实 68px。harness 等两帧再量即得真值。线上无碍(在屏消息本就渲染),但钉死一条:量消息几何前必须先让它渲染过。
+- **共享树插曲×2:** ①验证途中 visual 套件 setup 全灭——兄弟 msftgnt3 的 agent_loop.py 重复粘贴头(`from __future__` 在 54 行)模块即毁,peer message 预警后兄弟修好;②我的 styles.css 半批被兄弟 `48e07615` 连锅收编进 HEAD(已逐行核对含全部三处 hunk:注释重写/absolute 基础规则/200px 上限+展开豁免删除),剩余三文件显式 pathspec 提交 `88a48e60`。
+- **未动:** 栏内容层(≤9 chips/≤3 paths)不动——边界从「像素上限」换成「消息自身高度」后,内容 cap 只剩一瞥可读性语义;窄屏 fold 回退路径不动。
+
 ### 2026-08-05(流式 phase 文本推送统一接口落地:Phase 子注册表 + build_phase/emit_phase 唯一构造口 + capabilities phases 块机器可发现 + 四向漂移守卫——裸 `{'type':'phase'}` 字面量全库清零) — owner 指令「phase 推送散在各处,难统一优化,LLM 难以感知推了什么/推的内容」;epic `pt_7a786b5ee6da4576` **DONE**;commit `cf585d6b`(21 文件 +841/−173);新守卫 **10 针** + 邻接环 **262+193+118+9 绿** + collect-only 15824 零错 + ruff 干净
 
 - **现状定案(三路宇宙):** ①chat 流 phase 事件(状态条文案)——9 个值散在 10 文件 ~20 站点,typed/裸字面量混用;②生产管线(motion_video×12/podcast×2/research/longform)同 wire type 全裸字面量,且其 `phase_started`/`progress` 私有类型本就不在事件注册表(EVENTS.md §1 范围裁决,不动);③前端本地派生态 `thinking_active` 非推送。事件注册表只守 type 层,phase **值**无任何守卫——PHASE EventSpec 的字段文档还是散文带省略号。

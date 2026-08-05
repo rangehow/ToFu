@@ -1,3 +1,15 @@
+### 2026-08-05(Skill 体系长期化重构:vault 密钥绑定 + 声明位真 YAML 解析 + 全局默认 scope 根治「装了却说没装」+ 执行期 env 注入;残留双清单校验后清理零误删) — owner 指令「Set up the skill system in the most long-term and robust way possible」;epic `pt_b1c5ab25c79d4259` **DONE**;commit `18886198`(17 文件 +1020/−17);新套件 **14 针** + 邻接环 **87+142+43 绿** + collect-only 15778 零错 + ruff/node 干净
+
+- **复盘先行(上一轮的取证结论):** 注入链/注册表/activate 全链健康(skills_index:963 字符恒定=双包在册);soyoung 消失=owner 09:44 在设置页亲手 DELETE(access.log 实证),非 bug;真缺口=Key 配置三层断裂(catalog 只警告不收集/非 catalog 包的需求是散文/全系统无 per-skill 密钥存储)。
+- **①声明位(根修):** `_frontmatter.py` 新增 Case A2——顶层空值键+缩进块走 PyYAML safe_load,OpenClaw 嵌套 `metadata.openclaw.requires.{bins,env,os}` 从此真解析(原手搓解析器塌成空串,requires 门对真实 OpenClaw 包全瞎,8/4 记忆判例的「Adjacent latent gap」闭环)。只拦「空值+缩进」一种形状,既有解析结果零漂移(有回归针)。
+- **②密钥(骑当天落地的凭证保管库):** 新 `lib/skills/env.py`——vault 键 `skill.<id>.<env_lower>`;eligibility 门(_files.py)的 requires_env 检查认进程 env **或** vault 值(设置页填了=解锁);`exec_env_overlay` 把启用中 skill 的已配置值合入 run_command 子进程 env(唯一缝 `_get_cmd_env`,code_exec 同骑);卸载清绑定(无孤儿密钥)。REST:`/api/v1/skills/<id>/env` GET(掩码)/PUT/DELETE + `/scope` POST,全走 api_response 信封。
+- **③scope 根治「装了却说没装」:** catalog/zip 安装默认 project→**global**(外部经验包本质跨项目,chat 模式不挂项目只扫 global 仓);设置页头部加「安装到全局/本项目」选择器;`set_skill_scope` 支持双向移动(已装卡片的「移到全局」按钮)。chat 模式从此可见全局包。
+- **④残留清理(校验后零误删):** `.tofu/skills/global/` 40 个旧全局 memory 与 server 仓逐字节一致→删原件;`git-diff-magnitude-check-before-commit.md` 双份**内容分叉**(skills 版 22:48 更新更丰富但被 memories 版遮蔽)→**新版内容写回 memories/ 再删 skills 版**,collision 警告从此消失。
+- **前端:** 已装卡片 env 状态行(已配置 hint/未配置)+密码输入编辑器+删除;scope 移动按钮;卸载确认追加「保管库密钥一并删除」;i18n 22 新键双语;settings.css env 区样式。
+- **落地事故自记×2:** ①`_get_cmd_env(cwd=None)` 我写成 `project_path=base`——NameError 被自己的 except 吞成静默降级,**是新套件的行为针直调 `_get_cmd_env` 擒获的**(教训:懒加载+吞异常的缝必须配行为针,不能信「import 不炸」);②insert_content 又把锚点文本抄进内容→i18n.js 重复键三行(同型事故本日第二次,见下一条 Watch 条目——**insert 内容里绝不重复锚点文本**,肌肉记忆级教训)。
+- **共享 HEAD 纪律:** CLAUDE.md 正被兄弟压缩改写(+388/−544),我的 skills 节更新留在工作区不扫进本批(commit message 已披露);i18n.js 顺带携带兄弟 9 行 debug.struct* 纯增量键(已披露)。
+- **后续(不阻塞):** soyoung 恢复待 owner 重拖 zip(SKILL.md/api-spec.md 全文我有,keywords/store-directory 没读过);注入索引的「索引中/全文已加载」可视化未做(owner 复盘第④项,优先级低)。
+
 ### 2026-08-05(Watch 车道每条回答可交互:owner「每条回答应该是个对话,点进去能继续问/请求修复」落地=设计稿 deferred Increment 2 首片) — owner 截图问「基于目标发现的问题怎么跟进?现在没有交互入口」;commit 见下(9 文件);新后端 **5 针** + 前端 jsdom **6 针**(38/38 绿)+ 邻接环 75 绿(1 预存红三态分诊挂板 `pt_bfb5ead4ec334c58`)
 
 - **owner 提案正中预留设计:** docs/PROJECT_BRAIN_STATUS_LANE.md §8 的 Increment 2(propose-actions layer)当时定为 owner-gated deferred——本轮即 owner 开门。实施严守 §2 不变量:**不新开任何跨会话写通道、无 fan-out、车道保持 human-facing-only**。

@@ -8,7 +8,7 @@
 - **flake 判例再添一笔:** capabilities_extensibility×8+motion_parity×1 在 10 文件大批中红、单跑/两半/原批复跑全绿——高载时序互染,与本批无关(三态分诊:非本批/非预存确定性红/flake,记入观察)。
 - **兄弟 WIP 注记:** server.py 在提交时处于语法破损态(py_compile IndentationError,兄弟 mid-edit)——conftest shim 跳过预安装,我的套件不受影响全绿;未触碰,显式 pathspec 提交隔离。
 
-### 2026-08-05(debug 面板消息体结构化重设计:tool_call arguments 解析成可读分块 + 内联面板 TOOLS 大列表退役 + 小增量自动展开;共享渲染器单缝不造第二路径) — owner 截图指令「debug 面板里的 JSON 没有格式化,arguments 本来也是复杂 JSON,不渲染看得很困难,这个面板要好好再设计一下;然后不要给每个工具调用的结果显示 TOOLs 大列表了,没意义」;commit 见下(8 文件);新套件 **4 针**(双 NEUTER+静态钉)+ 邻接环 **63 绿** + collect-only 15808 零错
+### 2026-08-05(debug 面板消息体结构化重设计:tool_call arguments 解析成可读分块 + 内联面板 TOOLS 大列表退役 + 小增量自动展开;共享渲染器单缝不造第二路径) — owner 截图指令「debug 面板里的 JSON 没有格式化,arguments 本来也是复杂 JSON,不渲染看得很困难,这个面板要好好再设计一下;然后不要给每个工具调用的结果显示 TOOLs 大列表了,没意义」;commits `48e07615`(本批 6 文件)+ 兄弟收编 `18886198`(i18n 键)+`c4fb7d10`(本条目);新套件 **4 针**(双 NEUTER+静态钉)+ 邻接环 **63 绿** + collect-only 15808 零错
 
 - **根修(单缝共享渲染器):** 旧体 `colorJson` 把整条消息信封 dump 成一坨 JSON,`tool_calls[].function.arguments`(线上本就是 JSON **字符串**)在里面是一行 `\n` 转义的超长引号串——截图里 write_file 的 runbook content 完全无法读。新 `_renderMsgBodyHtml`(debug_panel.js,抽屉详情与内联面板**同一条路径**):arguments 经 `_debugTryParseJson` 解析后按 key 分块——长/多行字符串 → 真实换行的 `.debug-arg-val` 文本块(320px 滚动),嵌套对象与「内容本身是 JSON 的字符串」→ 语法着色 `.debug-json`,短标量行内 `.debug-kv`;reasoning_content/content 进可读 `.debug-text`(tool 结果是 JSON 文本则解析渲染,长文默认折叠节);未识别键收进「其他字段」。**原始信封不丢**:每块尾部 `原始 JSON` <details> 保留完整 colorJson dump——复制路径与对账的 ground truth,也保住 preserve_open 的 `.debug-msg-body pre` 非空钉。三处懒渲染调用点(createBlock 点击/增量重渲/全量恢复)收编为 `_debugRenderBody` + `_debugOpenBlock` 公共原语(NEUTER 锚点逐字保留)。
 - **TOOLS 列表退役范围:** 内联「这一轮工具调用」面板不再 `updateDebugToolsBlock`——每轮都相同的 schema 清单对单轮答案是纯噪声;**抽屉详情保留**(那里 tools 是请求 payload 的组成部分,检视请求时有意义)。静态钉锁「永不回长」。

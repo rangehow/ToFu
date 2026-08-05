@@ -2977,9 +2977,28 @@ def _verify_opensource(dest: Path):
 #  Git Auto-Push
 # ═══════════════════════════════════════════════════════════
 
-# Upstream repo config — hardcoded for convenience.
-# Token is scoped to these two repos only.
-_GH_TOKEN = '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'
+# Upstream repo config.
+# Token lives OUTSIDE the repo (owner directive 2026-08-05): env TOFU_GH_TOKEN,
+# else the chmod-600 file in the sibling .secrets/ dir. Never hardcode it here —
+# this file is internal-only today, but a credential in any committable file is
+# one whitelist mistake away from a public push.
+def _load_gh_token() -> str:
+    tok = os.environ.get('TOFU_GH_TOKEN', '').strip()
+    if tok:
+        return tok
+    p = Path(__file__).resolve().parent.parent / '.secrets' / 'github_token'
+    try:
+        tok = p.read_text(encoding='utf-8').strip()
+    except OSError as e:
+        raise SystemExit(
+            f'GitHub token not found: set TOFU_GH_TOKEN or create {p} '
+            f'(chmod 600). ({e})')
+    if not tok:
+        raise SystemExit(f'GitHub token file {p} is empty.')
+    return tok
+
+
+_GH_TOKEN = _load_gh_token()
 _GIT_REPOS = {
     'opensource': {
         'remotes': [

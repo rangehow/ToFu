@@ -17,7 +17,7 @@ import org.junit.Test
  */
 class InteractiveSsoTest {
 
-    private val host = "abc-vscode-zw05.mlp.sankuai.com"
+    private val host = "abc-vscode-dc1.codelab.example.com"
     private val base = "https://$host/proxy/15000/"
 
     private fun profile(

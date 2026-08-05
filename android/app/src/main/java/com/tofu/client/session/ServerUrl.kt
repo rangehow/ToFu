@@ -6,7 +6,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Parsed view of a server base URL, e.g.
- * `https://<uuid>-vscode-zw05.mlp.sankuai.com/proxy/15000/`.
+ * `https://<uuid>-vscode-dc1.codelab.example.com/proxy/15000/`.
  *
  * The feasibility spike established two facts this class encodes:
  *  - the session cookie is `Domain`-pinned to the FULL host, so [host] is the
@@ -96,9 +96,9 @@ data class ServerUrl(
          *
          * An MLP sandbox URL is ~90 characters of which the only distinguishing
          * part is the UUID prefix, so rendering the raw string made every row
-         * in the list look identical (and truncate to the same "https://5665b…").
+         * in the list look identical (and truncate to the same "https://abc12…").
          * We compress `<uuid>-vscode-<idc>.<domain>/proxy/<port>/` to
-         * `5665bc99 · zw05 : 15000` — the three fields that actually differ
+         * `abc12345 · dc1 : 15000` — the three fields that actually differ
          * between a user's sandboxes.
          *
          * Non-MLP hosts fall back to `host:port/path`, and an unparseable

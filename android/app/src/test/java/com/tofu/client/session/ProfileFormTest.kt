@@ -8,12 +8,12 @@ import org.junit.Test
 
 class ProfileFormTest {
 
-    private val goodUrl = "https://5665bc99-vscode-zw05.mlp.sankuai.com/proxy/15000/"
+    private val goodUrl = "https://abc12345-vscode-dc1.codelab.example.com/proxy/15000/"
 
     @Test
     fun valid_form_passes() {
         val r = ProfileForm.validate(
-            alias = "zw05", baseUrl = goodUrl,
+            alias = "dc1", baseUrl = goodUrl,
             authType = AuthType.CODE_SERVER_PASSWORD, secret = "pw",
             existingAliases = emptySet(),
         )
@@ -29,14 +29,14 @@ class ProfileFormTest {
 
     @Test
     fun duplicate_alias_flagged_but_not_when_editing_self() {
-        val taken = setOf("zw05", "prod")
+        val taken = setOf("dc1", "prod")
         assertFalse(
-            ProfileForm.validate("zw05", goodUrl, AuthType.NONE, "", taken).ok,
+            ProfileForm.validate("dc1", goodUrl, AuthType.NONE, "", taken).ok,
         )
         // Editing the same profile (editingAlias == alias) is allowed.
         assertTrue(
-            ProfileForm.validate("zw05", goodUrl, AuthType.NONE, "", taken,
-                editingAlias = "zw05").ok,
+            ProfileForm.validate("dc1", goodUrl, AuthType.NONE, "", taken,
+                editingAlias = "dc1").ok,
         )
     }
 
@@ -69,7 +69,7 @@ class ProfileFormTest {
 
     @Test
     fun toProfile_extracts_instance_uuid() {
-        val p = ProfileForm.toProfile(0, "zw05", goodUrl, AuthType.CODE_SERVER_PASSWORD, 0)
-        assertEquals("5665bc99", p.instanceUuid)
+        val p = ProfileForm.toProfile(0, "dc1", goodUrl, AuthType.CODE_SERVER_PASSWORD, 0)
+        assertEquals("abc12345", p.instanceUuid)
     }
 }

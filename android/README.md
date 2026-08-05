@@ -1,5 +1,10 @@
 # Tofu Android Client
 
+> **Repository layout (monorepo):** the app's SOURCE lives here — `android/`
+> inside the Tofu repo (`rangehow/ToFu`). Release APKs are still published to
+> the SEPARATE `rangehow/tofu-android` repo's Releases (see *Distribution*
+> below for why the release stream must not merge with the desktop one).
+
 A thin native Kotlin **WebView shell** for the Tofu self-hosted assistant. It does
 **not** re-implement the SPA — the existing vanilla-JS frontend renders inside a
 WebView (it already derives `BASE_PATH` from `location.pathname` and carries the
@@ -8,7 +13,7 @@ can't: **credential/session management** and **multi-server profiles**.
 
 ## Why this exists
 
-Connecting to a cloud-IDE-hosted Tofu (`https://<uuid>-vscode-<idc>.mlp.…/proxy/15000/`)
+Connecting to a cloud-IDE-hosted Tofu (`https://<uuid>-vscode-<idc>.codelab.example.com/proxy/15000/`)
 means re-typing a long code-server password and copy-pasting UUID-scoped URLs.
 This app remembers servers and authenticates once per profile.
 
@@ -74,13 +79,21 @@ UI surfaces a download link in the Settings footer from `GET /api/health` →
 `mobile_client_url`, which **defaults to a DIRECT APK deep link**:
 
 ```
-https://github.com/rangehow/ToFu/releases/latest/download/tofu-android.apk
+https://github.com/rangehow/tofu-android/releases/latest/download/tofu-android.apk
 ```
 
 GitHub's `/releases/latest/download/<asset>` is a stable redirect that always
 serves the newest release's asset and triggers a real download on tap — exactly
 what a phone needs. `TOFU_MOBILE_CLIENT_URL` overrides it (e.g. to pin a
 specific version's asset).
+
+**Why the APK release stream stays on `rangehow/tofu-android` even though the
+source moved into `rangehow/ToFu`:** `/releases/latest/download/<asset>`
+resolves to the CHRONOLOGICALLY NEWEST release in the repo. Co-locating the
+APK on the ToFu release stream would let any newer desktop-only release
+(`v0.14.x`, which carries no `tofu-android.apk`) shadow the deep link into a
+permanent 404. A dedicated repo has no competing release stream, so the link
+can never be shadowed.
 
 **Graceful-degradation tradeoff (deliberate):** before the first tagged release
 this deep link **404s** — an honest "not published yet". We chose that over the
@@ -92,19 +105,22 @@ the URL is blanked, so emptying `TOFU_MOBILE_CLIENT_URL` never yields a dead
 button.
 
 The URL's filename (`tofu-android.apk`) and the CI-published asset name are the
-**same string**, kept in lockstep by `chatui/tests/test_mobile_client_apk_url.py`
-(backend `MOBILE_CLIENT_APK_ASSET` ⇔ workflow publish list) so the deep link
-can't silently rot into a 404.
+**same string**, kept in lockstep by `tests/test_mobile_client_apk_url.py`
+(same repo: backend `MOBILE_CLIENT_APK_ASSET` ⇔ workflow publish list) so the
+deep link can't silently rot into a 404.
 
 ## Building the APK & CI
-`.github/workflows/build-apk.yml`:
-- **every push/PR** → runs `./gradlew test` + `assembleDebug` and uploads the
-  debug APK as a build artifact (so the build can't silently rot);
-- **on a `v*` tag** → `assembleRelease`, **renames the output to
+`.github/workflows/build-android-apk.yml` (repo root, in the ToFu monorepo):
+- **every push/PR touching `android/**`** → runs `./gradlew test` +
+  `assembleDebug` and uploads the debug APK as a build artifact (so the build
+  can't silently rot);
+- **on an `android-v*` tag** → `assembleRelease`, **renames the output to
   `tofu-android.apk`** (Gradle emits `app-release[-unsigned].apk`, which would
-  NOT match the deep link), and publishes exactly that asset
-  (`fail_on_unmatched_files: true`, so a missing/misnamed APK fails the release
-  loudly instead of silently shipping a 404 link).
+  NOT match the deep link), and publishes exactly that asset **to the
+  `rangehow/tofu-android` repo's Releases** (`fail_on_unmatched_files: true`,
+  so a missing/misnamed APK fails the release loudly instead of silently
+  shipping a 404 link). The tag prefix is `android-v*` — NOT bare `v*` — so
+  desktop releases (`v0.14.x`) never fire an APK build.
 
 ### Release & signing
 A release APK must be **signed** to install on a normal device. Because this is
@@ -139,7 +155,7 @@ the tag build in CI.
 Beyond "open" (the WebView), a profile can carry an optional **project path** so
 the app can **start and stop** the Tofu server on the host. Because a stopped
 server can't answer a "start me" request, this is driven by a separate always-on
-daemon, `supervisor.py` (in the Tofu repo), NOT by Tofu itself. Design +
+daemon, `supervisor.py` (this repo's root), NOT by Tofu itself. Design +
 rationale: [`docs/SUPERVISOR_DESIGN.md`](docs/SUPERVISOR_DESIGN.md).
 
 - **Reachability:** the supervisor is proxied by the SAME code-server as Tofu,
@@ -207,7 +223,7 @@ proof without the SDK, `./test-local.sh` runs two tiers on a plain JDK 17 +
   Needs the Robolectric jars + an instrumented `android-all` in `LIBS`.
 
 The jars are fetched reproducibly by the committed `fetch-test-deps.sh` (pinned
-versions, sankuai mirror → Maven Central fallback; it also extracts the
+versions, `MIRROR`-overridable with Maven Central fallback; it also extracts the
 `classes.jar` from the androidx.test `.aar`s Robolectric needs). From a fresh
 clone:
 
@@ -216,7 +232,7 @@ export JAVA_HOME=/path/to/jdk17            # e.g. Temurin 17
 export KOTLINC=/path/to/kotlinc/bin/kotlinc  # kotlinc 1.9.24
 
 ./fetch-test-deps.sh /tmp/tofu-libs        # populate a LIBS dir from Maven
-LIBS=/tmp/tofu-libs ./test-local.sh        # → 28 pure-JVM + 3 Robolectric green
+LIBS=/tmp/tofu-libs ./test-local.sh        # → 107 pure-JVM + 3 Robolectric green
 ```
 
 (A JDK 17 + `kotlinc` on PATH are the only prerequisites the script does not
@@ -255,9 +271,9 @@ Tofu backend serves (`DEFAULT_MOBILE_CLIENT_URL` →
 newest tagged release published, so cutting a version IS the delivery.
 
 ### Prerequisites
-- A machine/terminal with **GitHub write access** to
-  `github.com/rangehow/tofu-android` (push over HTTPS with a credential helper /
-  token, or SSH). CI itself needs no secrets — the release APK is signed with
+- A machine/terminal with **GitHub write access** to `rangehow/ToFu` (the
+  source monorepo). The cross-repo publish to `rangehow/tofu-android` is done
+  by CI via a PAT secret — see the workflow. The release APK is signed with
   the **committed** `app/debug.keystore` (see below), not a repo secret.
 
 ### Steps
@@ -268,13 +284,13 @@ newest tagged release published, so cutting a version IS the delivery.
    Commit the bump together with the change it ships.
 2. **Tag and push** (fast-forward; never force):
    ```bash
-   git push origin main
-   git tag vX.Y.Z          # e.g. v0.1.11 — MUST match versionName, prefix "v"
-   git push origin vX.Y.Z
+   git push origin master
+   git tag android-vX.Y.Z   # e.g. android-v0.1.11 — MUST match versionName
+   git push origin android-vX.Y.Z
    ```
-   The `v*` tag is what triggers the release path in
-   `.github/workflows/build-apk.yml` (a plain push to `main` only builds/tests
-   the debug APK — it does NOT publish a release).
+   The `android-v*` tag is what triggers the release path in
+   `.github/workflows/build-android-apk.yml` (a plain push to `master` only
+   builds/tests the debug APK — it does NOT publish a release).
 3. **Watch CI** (Actions → the `vX.Y.Z` run). On the tag it runs, in order:
    `Assemble release APK` → `Rename release APK to canonical asset name` →
    `Publish APK to GitHub Release`. All three must be green.
@@ -292,8 +308,8 @@ newest tagged release published, so cutting a version IS the delivery.
    failing with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` / "App not installed".
    With the current setup this should never happen — every tag is signed with
    the SAME committed `app/debug.keystore` (verify across two tags with
-   `git rev-parse v<old>:app/debug.keystore` == `git rev-parse
-   v<new>:app/debug.keystore`). It CAN happen if someone (a) migrated the
+   `git rev-parse android-v<old>:android/app/debug.keystore` == `git rev-parse
+   android-v<new>:android/app/debug.keystore`). It CAN happen if someone (a) migrated the
    release to a secret-backed `signingConfigs.release`, or (b) the tester's
    existing install came from a locally-built APK signed with a personal debug
    key. **Fix:** uninstall the old app first, then install the new APK

@@ -13,7 +13,7 @@ import org.junit.Test
 class CookieHeadersTest {
 
     private val host =
-        "https://5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com/".toHttpUrl()
+        "https://00000000-0000-4000-8000-000000000001-vscode-dc1.codelab.example.com/".toHttpUrl()
 
     /** The poisoned input: a session cookie with NO Max-Age/Expires. */
     private fun sessionCookie(): Cookie =
@@ -42,7 +42,7 @@ class CookieHeadersTest {
         val expires = now + 3_600_000L // +1h
         val c = Cookie.Builder()
             .name("code-server-session").value("v")
-            .domain("5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com")
+            .domain("00000000-0000-4000-8000-000000000001-vscode-dc1.codelab.example.com")
             .path("/")
             .expiresAt(expires)
             .build()

@@ -18,8 +18,8 @@ import org.junit.Test
  */
 class SessionControllerTest {
 
-    private val oldHost = "5665bc99-vscode-zw05.mlp.sankuai.com"
-    private val newHost = "aaaa1111-vscode-zw05.mlp.sankuai.com"
+    private val oldHost = "abc12345-vscode-dc1.codelab.example.com"
+    private val newHost = "aaaa1111-vscode-dc1.codelab.example.com"
 
     private class FakeCookieSink : CookieSink {
         val purged = mutableListOf<String>()
@@ -94,30 +94,30 @@ class SessionControllerTest {
         val dao = FakeDao(); val vault = FakeVault(); val sink = FakeCookieSink()
         val ctl = SessionController(dao, vault, mgr(dao, vault, sink), clock = { 42L })
 
-        val res = ctl.addProfile("zw05", "https://$oldHost/proxy/15000/",
+        val res = ctl.addProfile("dc1", "https://$oldHost/proxy/15000/",
             AuthType.CODE_SERVER_PASSWORD, "sekret")
 
         assertTrue(res is SessionController.AddResult.Added)
         // Secret stored under the alias, row inserted.
-        assertEquals("sekret", vault.map["zw05"])
+        assertEquals("sekret", vault.map["dc1"])
         assertEquals(1, dao.rows.size)
     }
 
     @Test
     fun add_rejects_duplicate_alias() = runTest {
-        val dao = FakeDao(profile("zw05", oldHost)); val vault = FakeVault(); val sink = FakeCookieSink()
+        val dao = FakeDao(profile("dc1", oldHost)); val vault = FakeVault(); val sink = FakeCookieSink()
         val ctl = SessionController(dao, vault, mgr(dao, vault, sink))
-        val res = ctl.addProfile("zw05", "https://$oldHost/proxy/15000/", AuthType.NONE, "")
+        val res = ctl.addProfile("dc1", "https://$oldHost/proxy/15000/", AuthType.NONE, "")
         assertTrue(res is SessionController.AddResult.DuplicateAlias)
     }
 
     @Test
     fun edit_url_host_change_purges_old_jar() = runTest {
-        val seed = profile("zw05", oldHost)
+        val seed = profile("dc1", oldHost)
         val dao = FakeDao(seed); val vault = FakeVault(); val sink = FakeCookieSink()
         val ctl = SessionController(dao, vault, mgr(dao, vault, sink))
 
-        ctl.editProfile(seed, "zw05", "https://$newHost/proxy/15000/", AuthType.NONE, "")
+        ctl.editProfile(seed, "dc1", "https://$newHost/proxy/15000/", AuthType.NONE, "")
 
         // NEUTER: if editProfile didn't route host-changes through
         // updateUrlAndReauth, the old Domain-pinned jar would survive.
@@ -126,10 +126,10 @@ class SessionControllerTest {
 
     @Test
     fun edit_same_host_does_not_purge() = runTest {
-        val seed = profile("zw05", oldHost)
+        val seed = profile("dc1", oldHost)
         val dao = FakeDao(seed); val vault = FakeVault(); val sink = FakeCookieSink()
         val ctl = SessionController(dao, vault, mgr(dao, vault, sink))
-        ctl.editProfile(seed, "zw05", "https://$oldHost/proxy/16000/", AuthType.NONE, "")
+        ctl.editProfile(seed, "dc1", "https://$oldHost/proxy/16000/", AuthType.NONE, "")
         assertTrue(sink.purged.isEmpty())
     }
 
@@ -211,7 +211,7 @@ class SessionControllerTest {
     @Test
     fun activate_does_not_roll_back_a_freshly_stamped_cookie_host() = runTest {
         // The row as it truly is: a login already stamped cookieHost.
-        val seed = profile("zw05", oldHost)
+        val seed = profile("dc1", oldHost)
         val dao = FakeDao(seed); val vault = FakeVault(); val sink = FakeCookieSink()
         val ctl = SessionController(dao, vault, mgr(dao, vault, sink), clock = { 999L })
 
@@ -241,14 +241,14 @@ class SessionControllerTest {
 
     @Test
     fun delete_removes_secret_and_row() = runTest {
-        val seed = profile("zw05", oldHost)
+        val seed = profile("dc1", oldHost)
         val dao = FakeDao(seed); val vault = FakeVault(); val sink = FakeCookieSink()
-        vault.putSecret("zw05", "sekret")
+        vault.putSecret("dc1", "sekret")
         val ctl = SessionController(dao, vault, mgr(dao, vault, sink))
 
         ctl.deleteProfile(seed)
 
-        assertNull("secret must be removed", vault.map["zw05"])
+        assertNull("secret must be removed", vault.map["dc1"])
         assertTrue("row must be deleted", dao.deleted.contains(seed.id))
     }
 
@@ -258,7 +258,7 @@ class SessionControllerTest {
         // NONE (leave), and a proxy profile explicitly on INTERACTIVE_SSO (leave).
         val dao = FakeDao(); val vault = FakeVault(); val sink = FakeCookieSink()
         val proxyNone = Profile(id = 1, alias = "shanghai",
-            baseUrl = "https://abc-vscode-shxstraining.mlp.sankuai.com/proxy/15000/",
+            baseUrl = "https://abc-vscode-dc2.codelab.example.com/proxy/15000/",
             authType = AuthType.NONE)
         val bareNone = Profile(id = 2, alias = "bare",
             baseUrl = "https://tofu.example.com/", authType = AuthType.NONE)
@@ -295,7 +295,7 @@ class SessionControllerTest {
         val dao = FakeDao(); val vault = FakeVault(); val sink = FakeCookieSink()
         val staleRow = Profile(
             id = 1, alias = "shanghai",
-            baseUrl = "https://abc-vscode-shxstraining.mlp.sankuai.com/proxy/15000/",
+            baseUrl = "https://abc-vscode-dc2.codelab.example.com/proxy/15000/",
             authType = AuthType.NONE, cookieHost = null, lastUsedAt = 0L,
         )
         dao.rows[1] = staleRow
@@ -305,7 +305,7 @@ class SessionControllerTest {
         // taken its snapshot but BEFORE it writes. Doing it earlier would prove
         // nothing — the snapshot would already contain the new values.
         dao.afterSnapshot = {
-            dao.setCookieHost(1, "abc-vscode-shxstraining.mlp.sankuai.com")
+            dao.setCookieHost(1, "abc-vscode-dc2.codelab.example.com")
             dao.touchLastUsed(1, 777L)
         }
 
@@ -315,7 +315,7 @@ class SessionControllerTest {
         assertEquals("the migration must still do its job",
             AuthType.CODE_SERVER_PASSWORD, row.authType)
         assertEquals("a concurrent stamp must survive",
-            "abc-vscode-shxstraining.mlp.sankuai.com", row.cookieHost)
+            "abc-vscode-dc2.codelab.example.com", row.cookieHost)
         assertEquals("a concurrent recency bump must survive", 777L, row.lastUsedAt)
     }
 }

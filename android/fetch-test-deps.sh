@@ -14,8 +14,9 @@ set -euo pipefail
 DEST="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.testharness/libs}"
 mkdir -p "$DEST"
 
-# Primary mirror first, then Maven Central. Override MIRROR to point elsewhere.
-MIRROR="${MIRROR:-https://maven.sankuai.com/nexus/content/groups/public}"
+# Maven Central is the default source; set MIRROR to a nearer mirror (e.g. a
+# corporate Nexus) to override. CENTRAL is the fallback when MIRROR is set.
+MIRROR="${MIRROR:-https://repo1.maven.org/maven2}"
 CENTRAL="https://repo1.maven.org/maven2"
 
 # groupPath/artifact/version/file  — one per line (Maven coordinates as a path).

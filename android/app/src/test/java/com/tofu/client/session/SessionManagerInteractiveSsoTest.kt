@@ -23,7 +23,7 @@ import org.junit.Test
  */
 class SessionManagerInteractiveSsoTest {
 
-    private val host = "5665bc99-vscode-zw05.mlp.sankuai.com"
+    private val host = "abc12345-vscode-dc1.codelab.example.com"
     private val base = "https://$host/proxy/15000/"
 
     private class FakeCookieSink(private val header: String?) : CookieSink {

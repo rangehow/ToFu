@@ -53,15 +53,15 @@ class SessionManagerReauthTest {
 
     private fun profile(url: String, cookieHost: String?) = Profile(
         id = 1,
-        alias = "zw05 tofu",
-        instanceUuid = "5665bc99-279b-4edf-8553-c7b7804c6e02",
+        alias = "dc1 tofu",
+        instanceUuid = "00000000-0000-4000-8000-000000000001",
         baseUrl = url,
         authType = AuthType.CODE_SERVER_PASSWORD,
         cookieHost = cookieHost,
     )
 
-    private val oldHost = "5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com"
-    private val newHost = "aaaa1111-2222-3333-4444-bbbbccccdddd-vscode-zw05.mlp.sankuai.com"
+    private val oldHost = "00000000-0000-4000-8000-000000000001-vscode-dc1.codelab.example.com"
+    private val newHost = "aaaa1111-2222-3333-4444-bbbbccccdddd-vscode-dc1.codelab.example.com"
 
     @Test
     fun host_change_purges_old_jar_before_relogin() = runTest {

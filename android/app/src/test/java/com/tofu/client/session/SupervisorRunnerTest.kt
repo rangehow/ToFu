@@ -21,7 +21,7 @@ import org.junit.Test
  */
 class SupervisorRunnerTest {
 
-    private val host = "abc-vscode-zw05.mlp.sankuai.com"
+    private val host = "abc-vscode-dc1.codelab.example.com"
 
     private fun profile(cookieHost: String? = host) = Profile(
         id = 1, alias = "s",
@@ -267,7 +267,7 @@ class SupervisorRunnerTest {
     fun `work started before a slot was recycled is not current`() {
         val started = CardKey.of(profile())
         val recycledInto = CardKey.of(
-            profile().copy(id = 7, baseUrl = "https://zzz-vscode-zw05.mlp.sankuai.com/proxy/15000/"),
+            profile().copy(id = 7, baseUrl = "https://zzz-vscode-dc1.codelab.example.com/proxy/15000/"),
         )
         assertFalse(isStillCurrent(started, recycledInto))
         assertTrue(isStillCurrent(started, started))

@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config
 @Config(sdk = [33])
 class CookieBridgeRobolectricTest {
 
-    private val host = "5665bc99-vscode-zw05.mlp.sankuai.com"
+    private val host = "abc12345-vscode-dc1.codelab.example.com"
     private val origin = "https://$host"
 
     private fun sessionCookie() =
@@ -53,7 +53,7 @@ class CookieBridgeRobolectricTest {
     @Test
     fun reauth_latch_clears_only_on_settled_not_by_time() {
         val profile = Profile(
-            id = 1, alias = "zw05", baseUrl = "$origin/proxy/15000/",
+            id = 1, alias = "dc1", baseUrl = "$origin/proxy/15000/",
             authType = AuthType.CODE_SERVER_PASSWORD,
         )
         var reauthCalls = 0

@@ -16,7 +16,7 @@ import org.junit.Test
 class ServerUrlTest {
 
     private val sandbox =
-        "https://5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com/proxy/15000/"
+        "https://00000000-0000-4000-8000-000000000001-vscode-dc1.codelab.example.com/proxy/15000/"
 
     @Test
     fun loginUrl_is_origin_root_not_under_proxy_subpath() {
@@ -24,7 +24,7 @@ class ServerUrlTest {
         // NEUTER CHECK: if loginUrl were built as origin + httpUrl.encodedPath + "login"
         // it would contain "/proxy/15000/login" and this assertion would fail.
         assertEquals(
-            "https://5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com/login",
+            "https://00000000-0000-4000-8000-000000000001-vscode-dc1.codelab.example.com/login",
             s.loginUrl,
         )
         assert(!s.loginUrl.contains("/proxy/")) { "login must NOT be under the proxy subpath" }
@@ -34,11 +34,11 @@ class ServerUrlTest {
     fun origin_and_host_are_the_full_uuid_host() {
         val s = ServerUrl.parse(sandbox)!!
         assertEquals(
-            "5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com",
+            "00000000-0000-4000-8000-000000000001-vscode-dc1.codelab.example.com",
             s.host,
         )
         assertEquals(
-            "https://5665bc99-279b-4edf-8553-c7b7804c6e02-vscode-zw05.mlp.sankuai.com",
+            "https://00000000-0000-4000-8000-000000000001-vscode-dc1.codelab.example.com",
             s.origin,
         )
     }
@@ -46,7 +46,7 @@ class ServerUrlTest {
     @Test
     fun instanceUuid_extracted_from_mlp_host() {
         val s = ServerUrl.parse(sandbox)!!
-        assertEquals("5665bc99-279b-4edf-8553-c7b7804c6e02", s.instanceUuid)
+        assertEquals("00000000-0000-4000-8000-000000000001", s.instanceUuid)
     }
 
     @Test
@@ -104,7 +104,7 @@ class ServerUrlTest {
         // reproducing the "upgraded proxy profile can't headless-login" bug.
         assertTrue(
             ServerUrl.needsProxyAuthFix(
-                "https://67dc97fd-vscode-shxstraining.mlp.sankuai.com/proxy/15000/",
+                "https://def45678-vscode-dc2.codelab.example.com/proxy/15000/",
                 AuthType.NONE,
             ),
         )
@@ -115,8 +115,8 @@ class ServerUrlTest {
     @Test
     fun displayLabel_compresses_mlp_sandbox_to_uuid_idc_port() {
         // NEUTER CHECK: return the raw URL and this fails — reproducing the
-        // unreadable list where every row truncated to the same "https://5665b…".
-        assertEquals("5665bc99 · zw05 : 15000", ServerUrl.displayLabel(sandbox))
+        // unreadable list where every row truncated to the same "https://abc12…".
+        assertEquals("00000000 · dc1 : 15000", ServerUrl.displayLabel(sandbox))
     }
 
     @Test

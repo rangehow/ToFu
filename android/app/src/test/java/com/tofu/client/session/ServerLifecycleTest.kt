@@ -19,7 +19,7 @@ class ServerLifecycleTest {
 
     private fun profile(
         alias: String = "s",
-        baseUrl: String = "https://abc-vscode-zw05.mlp.sankuai.com/proxy/15000/",
+        baseUrl: String = "https://abc-vscode-dc1.codelab.example.com/proxy/15000/",
         cookieHost: String? = null,
         projectPath: String? = "/home/dev/chatui",
     ) = Profile(
@@ -55,14 +55,14 @@ class ServerLifecycleTest {
      */
     @Test
     fun `cookie from a different host does not count as signed in`() {
-        val p = profile(cookieHost = "old-vscode-zw05.mlp.sankuai.com")
+        val p = profile(cookieHost = "old-vscode-dc1.codelab.example.com")
         assertFalse(ServerLifecycle.isSignedIn(p))
         assertEquals(ServerState.UNKNOWN, ServerLifecycle.resolve(p, null))
     }
 
     @Test
     fun `matching cookie host counts as signed in`() {
-        val p = profile(cookieHost = "abc-vscode-zw05.mlp.sankuai.com")
+        val p = profile(cookieHost = "abc-vscode-dc1.codelab.example.com")
         assertTrue(ServerLifecycle.isSignedIn(p))
         assertEquals(ServerState.UNKNOWN, ServerLifecycle.resolve(p, null))
     }
@@ -74,14 +74,14 @@ class ServerLifecycleTest {
 
     @Test
     fun `running and stopped resolve from the poll result`() {
-        val p = profile(cookieHost = "abc-vscode-zw05.mlp.sankuai.com")
+        val p = profile(cookieHost = "abc-vscode-dc1.codelab.example.com")
         assertEquals(ServerState.RUNNING, ServerLifecycle.resolve(p, running = true))
         assertEquals(ServerState.STOPPED, ServerLifecycle.resolve(p, running = false))
     }
 
     @Test
     fun `busy outranks a stale poll result`() {
-        val p = profile(cookieHost = "abc-vscode-zw05.mlp.sankuai.com")
+        val p = profile(cookieHost = "abc-vscode-dc1.codelab.example.com")
         assertEquals(
             ServerState.TRANSITIONING,
             ServerLifecycle.resolve(p, running = true, busy = true),
@@ -90,7 +90,7 @@ class ServerLifecycleTest {
 
     @Test
     fun `failure surfaces as unreachable`() {
-        val p = profile(cookieHost = "abc-vscode-zw05.mlp.sankuai.com")
+        val p = profile(cookieHost = "abc-vscode-dc1.codelab.example.com")
         assertEquals(
             ServerState.UNREACHABLE,
             ServerLifecycle.resolve(p, running = null, failed = true),

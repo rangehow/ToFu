@@ -11,13 +11,13 @@ class SupervisorUrlTest {
     @Test
     fun derives_supervisor_base_from_proxy_url() {
         val su = SupervisorUrl.fromServerUrl(
-            "https://5665bc99-vscode-zw05.mlp.sankuai.com/proxy/15000/",
+            "https://abc12345-vscode-dc1.codelab.example.com/proxy/15000/",
         )!!
         assertEquals(
-            "https://5665bc99-vscode-zw05.mlp.sankuai.com/proxy/15001", su.base,
+            "https://abc12345-vscode-dc1.codelab.example.com/proxy/15001", su.base,
         )
         assertEquals(
-            "https://5665bc99-vscode-zw05.mlp.sankuai.com", su.origin,
+            "https://abc12345-vscode-dc1.codelab.example.com", su.origin,
         )
     }
 

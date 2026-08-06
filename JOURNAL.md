@@ -1,3 +1,11 @@
+### 2026-08-06(脑派发双票 DONE:dispatch all-keys-401 strict 冷却循环永不退出根修 + test-slow 腿 endpoint_messages ×4 跨套件桩污染根修;另挂预存红新票) — epics `pt_2017f53aeba643f3` / `pt_0d5f53c496174454` **DONE**;commits `9d4b2b7c`(dispatch)+`4af2f48d`(slow 腿);公开仓 test-slow 连续两 run(4e208f49/c548d090)绿;401 回归针 10/10 本地绿
+
+- **401 死循环根因(生产隐患):** strict 冷却循环的退出条件 `_429_count > 0 or _slots_exist` 自维持——`note_cooldown_cycle` 每轮自增 `_429_count`,于是**任何一次**冷却循环后,全 401/配额耗尽的池子永远空转(CI insight pass 曾挂 600s)。新 `_cycling_can_ever_serve` 只查**可治愈池**(caller bans + durable exclusions);transient 排除继续循环(60s reset 可复活,hard attempts 兜底)。NC 实证:回退修复则新针撞上 60-pick 哨兵。
+- **endpoint_messages 慢腿根因(跨套件污染):** 两个视觉 e2e 套件带 slow 标,其**会话级 LLM 桩在慢腿全局安装**;慢腿无 chromium 它们必 skip,但桩已抢答了同 worker endpoint_messages 套件的调用 → ×4 红(0 LLM calls)。摘掉两套件 slow 标即解——test-slow 腿连续两 run 绿实证。
+- **导出器撕裂守卫收尾:** `e9a6c169` torn-snapshot guard(dirty 已跟踪文件 import 被排除的未跟踪新文件→中止导出,`--allow-dirty` 逃生门)+ HEAD 快照语义测试 `b2873b01`(5 针:committed 字节/sha 锚定完整性校验/提交后守卫静默)。导出已切 `git archive` HEAD 快照,工作区脏态从此无法污染公开仓。
+- **预存红另票(`pt_bad525c9f55642c3`):** c548d090 run 的 unit 双腿红 11 项+frontend typecheck 2 错+lint F401 ×3,**内部 HEAD 本地复现全中**——sibling 近期提交(design_sys P2 visual_qa/log_aggregates/SSE 重构/orchestrator)踩破 ratchet 族(silent catches/spine 354>350 行/NC guard 注册表/grandfathered loops/stream loop 守卫),与本批两票无关,按纪律另票处理。
+- **CI 凭证心得:** 公开仓 log 下载需 auth 且 302 重定向不能带 Authorization 头(带则 Azure 侧 401)——手动跟随重定向、目标 URL 裸取。
+
 ### 2026-08-06(设置页「备用协议面」行重设计:面名输入框退役——协议下拉前置+URL 占位符随协议+面名隐藏自动派生;后端契约零改动) — owner 截图三问「前面输入框显示不全、面名是什么、URL 和协议不是重复吗?把 UI/UX 和后端协调搞好」;commit 见下(4 文件);协议面三套 **45 绿**(新增 3 钉)+ collect-only **16,022** 零错 + ruff 干净 + 像素级预览实证
 
 - **定案(读码+数据模型核实,非推测):** 「面名」输入框 flex 0 0 118px 放不下自己的占位符(截图红框处截断),且「面名」只有懂 faces{} 数据结构的人才答得上——它是模型钉选下拉和 chip tooltip 引用的内部句柄,不该是问用户的问题。URL 与协议**不冗余**(地址=打到哪里,协议=用什么格式对话,`_anthropic_face` 按 protocol 字段匹配、从不按名字),但旧 UI 把两个问题摆成三个等宽输入框,视觉上就是重复。

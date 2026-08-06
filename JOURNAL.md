@@ -1,3 +1,8 @@
+### 2026-08-06(PG /tmp 播种方案按 owner 终裁永久撤回——「以后都不许想这个」;default-on 引信已拆,epic `pt_4d321fb8f1c2400c` 永久关票) — owner 终裁原文:「不要使用除了项目以外的路径来解决这个问题,/tmp这些路径不准用来部署db,会丢的。以后都不许想这个,永久关票吧。」;commit `15870630`(5 文件);DB 环 **68/68**(失败先行:default-on 钉随回滚转红后方向对齐)
+
+- **拆弹优先级:** HEAD 上 8/5 的 default-on 翻转(f0355504)会在任意一次普通重启时把 21GB pgdata 自动播种到 /tmp——正是终裁禁止的行为(在跑进程是 8/3 的,从未触发)。撤回批把两个闸门的默认值都翻回 opt-in('0'),机制保留但惰性化(verify-gated 播种/原子翻转/冷却标记全部留作「探索过并被否决」的存档,不是活计划);db_paths 门警告改为「legacy-FUSE 解析即稳态」;两份 runbook 加 WITHDRAWN 横幅引终裁原文;/tmp/tofu 残留(两次裸导入事故留下的 46GB 隔离半成品+失败标记)已清。
+- **测试方向对齐:** `test_opt_in_required_default_off` 钉死「裸启动永不播种 + 显式 =1 仍可演习机制」;migrator harness 显式 opt-in;套件 20/20 + 环 68/68。
+- **规矩沉淀:** owner 新永久规则——DB 永远不部署到项目目录以外(/tmp 会被清,数据会丢)。慢 DELETE 族 / PG appears dead 按终裁接受为稳态,不再寻求外部路径方案。这条与 8/5 的「别设计开关」不冲突:开关问题在交互层,路径禁令在数据安全层。
 ### 2026-08-06(轮询降级通道增量协议落地:回显指纹分节省略——2s/968KB 全量快照 → 未变节 100B 标记,自愈零记账) — 脑派发接我自票 `pt_688f978365014218` **DONE**(另案自 pt_6cb1607e);commit 见下(4 文件);后端新套件 **3 针** + 前端降级套件扩 **5 针** + 邻接环 16 套 **124 绿** + collect-only **16,014** 零错
 
 - **协议(OPT-IN,非 incr 调用方字节不变):** `?incr=1` 的响应带 `fp`(content/thinking 的 crc32;toolRounds/endpointTurns 的 [count, 末元素 crc32]);轮询循环下次请求原样回显 `ifp`;指纹未变的胖节省略并打 `contentSame/thinkingSame/roundsSame/endpointTurnsSame` 标记。任何重置/截断/改写都改指纹→下一帧自动回全量——无版本号、无记账、最坏一帧延迟。**比较器必须是 crc32 而非长度**:在飞 round 的 elapsed 跳秒是同长度改写,长度检查会漏(套件第 6/7 针实证捕捉)。

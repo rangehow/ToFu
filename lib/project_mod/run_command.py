@@ -116,6 +116,17 @@ def _get_cmd_env(cwd=None):
     except Exception as _env_e:
         logger.debug('[run_command] skill env overlay skipped: %s', _env_e)
 
+    # General credential-vault overlay: non-skill entries (github_token →
+    # GITHUB_TOKEN, pypi_token → PYPI_TOKEN, …) so agent commands can
+    # reference $VAR without the value ever entering the conversation. The
+    # model discovers these via the <credential_vault> prompt block. Same
+    # never-raises contract; the child env is never logged.
+    try:
+        from lib.credentials_vault import exec_env_overlay as _vault_env_overlay
+        env.update(_vault_env_overlay())
+    except Exception as _vault_env_e:
+        logger.debug('[run_command] vault env overlay skipped: %s', _vault_env_e)
+
     # ── Block user-site-packages (~/.local/) writes & reads ──
     env['PYTHONNOUSERSITE'] = '1'
     env['PIP_USER'] = '0'

@@ -1,3 +1,12 @@
+### 2026-08-06(安装向导空白二轮根修:Z 序钉被真机证伪 → 根因候选=透明标签延迟首绘(WS_EX_TRANSPARENT)——TOFU_LABEL 改官方示例不透明形态 + 顺手擒获进度页句柄栈下溢;商店包已重打 45,390,016B) — owner 报障「installer 什么都不显示但能一路 Next 装完,是不是缺字体」;commit `da2a9c97`(2 文件 +62/−5);守卫 **35/35**(art/parity/真 makensis 编译)+ collect-only **16,080** 零错
+
+- **字体嫌疑排除(实测):** 从当前商店包抽出 welcome.bmp 目检——横幅/logo/产品名/版本号/卡片全部完好(烘焙侧零问题);运行时标签即使 CreateFont 失败也回退库存字体,字体在任何世界线都不可能造成空页。
+- **Z 序钉证伪:** 当前商店包(8-05 21:18 重建)经祖先后代核验确含 c39c6dc6 的 HWND_BOTTOM 钉且包内四图在位,真机仍空白 → 叠放次序不是(唯一)根因。插件源码审计还排除了 FreeImage 过早:`nsDialogs::Show` 内跑模态消息循环直到翻页,Show 之后的 FreeImage 是在页面销毁后才执行。
+- **根因候选(已发货):** nsDialogs 的 NSD_CreateLabel 带 WS_EX_TRANSPARENT——「标签隐形直到强制重绘」是该库文档化的故障类(透明 static 的首绘被推迟到兄弟之后,可能永远不到达;官方论坛两例实证)。本设计根本不需要透明(标签坐在烘焙进位图的 #F0F0F0 卡片上,恰是不透明 static 自绘的 COLOR_3DFACE),透明样式只带风险零收益。TOFU_LABEL 改 `nsDialogs::CreateControl STATIC` 官方 welcome.nsi 形态(exstyle 0)。
+- **顺手擒获(栈审计):** 进度页 `Pop $StatusCtl` 在 TOFU_LABEL 已 Pop 之后执行=栈下溢,$StatusCtl 恒空,DoInstall 的全部状态更新被 `<> ""` 守卫 no-op——进度文案永远不变。改 `StrCpy $StatusCtl $0`;两枚回归针(不透明契约剥注释断言+句柄捕获)入 test_installer_art.py。
+- **打包纪律:** 先提交再从已提交树 wrap(脏树构建正是 8-04 事故的根);载荷复用零配置 payload(1a5e4bd5,内容未变),清单 git_sha 维持载荷戳;旧包备份 /tmp/tofuagent-zpin-20260805.exe。编译期门=真 makensis 过(新宏形态)。
+- **像素验收边界仍在:** 本机 wine 跑不了 32 位(SIGSYS),真机验收是最后一关。若仍空白:①拖窗遮挡强制重绘探针鉴别延迟首绘类 ②回退经典 MUI2 向导(owner 机器上验证过的形态,回退路线 8-05 已备)。
+
 ### 2026-08-06(脑派发双票 DONE:dispatch all-keys-401 strict 冷却循环永不退出根修 + test-slow 腿 endpoint_messages ×4 跨套件桩污染根修;另挂预存红新票) — epics `pt_2017f53aeba643f3` / `pt_0d5f53c496174454` **DONE**;commits `9d4b2b7c`(dispatch)+`4af2f48d`(slow 腿);公开仓 test-slow 连续两 run(4e208f49/c548d090)绿;401 回归针 10/10 本地绿
 
 - **401 死循环根因(生产隐患):** strict 冷却循环的退出条件 `_429_count > 0 or _slots_exist` 自维持——`note_cooldown_cycle` 每轮自增 `_429_count`,于是**任何一次**冷却循环后,全 401/配额耗尽的池子永远空转(CI insight pass 曾挂 600s)。新 `_cycling_can_ever_serve` 只查**可治愈池**(caller bans + durable exclusions);transient 排除继续循环(60s reset 可复活,hard attempts 兜底)。NC 实证:回退修复则新针撞上 60-pick 哨兵。
@@ -25,6 +34,15 @@
 - **前端四缝:** 请求带 `incr:1`+有 fp 才回显;json 解析即捕 `data.fp`(**先于**重绑);重绑(换合并对象)即 `_pollFP=null` 强制下次全量——指纹描述的字节只有旧对象保证持有;四节省略微合并守卫。Scenario D 针:省略帧保状态不灌 undefined、回显逐字节一致、终端全量帧正常定居。
 - **实测口径:** 健康轮询期(内容滚动)胖节只在变化帧返回;工具等待/稳态期每帧仅 meta+fp(~100B)。4 会话同降级的隧道账:~2MB/2s → ~KB 级/2s(变化帧除外)。
 - **flake 注记:** 邻接环首跑 parity 1 红=兄弟正 mid-edit index.html+js_bundler(git status 实证),单跑复跑 15/15 自消——与本批无关。
+
+### 2026-08-06(设计系统 P3 落地:lib/slides 全链——PPTD 子集+自研渲染器+python-pptx 原生导出器+produce_slides 工具+交付路由;DJI 18 页金样零校验红、预览像素级保真、导出件结构回读全对) — epic `pt_7b3f63ce9e844ecf` P3 **DONE**(P4 续);commit 见下(20 文件);新套件 **21 针** + 邻接守卫 **29+43** 绿 + 三套件回归 **60 绿** + ruff 干净
+
+- **PPTD 子集(`pptd.py`):** version/size/theme/pages 清单 + 六元素(text/shape/line/image/icon/table)解析;主题 token 三级(textStyles/tableStyles/colors)集中解析(渲染器与导出器永不分歧);路径容器化(绝对路径/`..` 拒绝);零 LLM 校验器(必填/类型/出界/token 可查/表格行宽和=1/媒体存在)。**DJI 金样 18 页解析零 findings。**
+- **自研渲染器(`render_html.py`+`render_png.py`):** 元素→HTML/CSS 确定映射(渐变角换算 PPTD 0°=左→右 → CSS (θ+90)%360;HEX8→rgba;crop+fit→object-view-box+object-fit;形状→SVG 参数路径含 donut 挖空/star5;smooth 线→Catmull-Rom 采样;表格→五层样式链+合并格展开);字体经 design_sys 注册表 @font-face 绝对路径注入。**金样 18 页预览目检像素级保真**(封面全幅图+渐变纱罩/目录金数字/价格页大金字+来源行)。
+- **原生导出器(`export_pptx.py`,~1000 行):** text→真实文本框(runs 级粗斜/颜色/字号/字距 spc/行距/段距;**latin+ea 双轨字体**,CJK 不吃主题回退);shape→MSO 自选图形+adjustments;渐变/透明度/阴影走 XML 直注(python-pptx 无 API);image→crop 分数+cover 数学+prstGeom 裁形;line→freeform(Catmull-Rom 采样)+箭头 headEnd/tailEnd;icon→playwright 光栅透明 PNG 缓存;table→原生表格+merge+tcPr 边框 XML;每页写入淡入淡出切换并校验 CT_Slide 子序(cSld→clrMapOvr→transition)。**金样导出 1.9MB/18 页/18 切换,结构回读+XML 抽查全对。**
+- **生产链全缝(零专属轮询路由):** recipe 七阶段(outline→design→author→assets→render→visual_qa→export)骑 production stages checkpoint;runtime/engine 镜像 longform(ProductionRuntime+去重+崩溃重入入 server.py 启动);`produce_slides` 工具进 produce 族(search-gated);/api/v1/tasks 的 _registries+_starters 各一行收编(start/poll/stream/abort 全通用);routes/api_v1/slides.py 只扛文件下载+页预览(路径零客户端输入+重启磁盘兜底);前端 family 列表/_TOOL_DISPLAY/图标映射/rich heads/i18n 四缝收编。
+- **作者回路纪律:** 页作者=brief+绑定主题块+场景圣经+PPTD 速查表→YAML,校验 findings 内环修复(≤3 轮);修不好降级为「标题+正文」兜底页(theme token 全走,永不失败整本);QA 轮 blocker/major findings 单页重修 1 轮。金样事故自记:`matches_template` 语义在 marker 路径与主题无关(测试初稿断言反了);load_draft 需 data-duration 匹配;engine `_emit` 需 task_id。
+- **兄弟协调:** msebjymx 在清「HEAD 齐红 11 项+F401×3+typecheck 2 错」epic,其中 design_sys/slides lint 债归我——已自清(ruff 20→0);其 _TOOL_SPECS list/dict 重构与 tool_rounds.js 中途双声明语法错均已自行收绿;已发 peer 通告交界面(我的 produce_slides 前端 entries 非重构残渣)。
 
 ### 2026-08-06(设计系统 P2 落地:多模态视觉质检——「好看」第一次有人负责;VLM 清单核查→findings 进作者修复环,全链可降级) — epic `pt_7b3f63ce9e844ecf` P2 **DONE**(P3/P4 续);新套件 **16 针** + 邻接回归 **127 绿**
 

@@ -1494,3 +1494,9 @@
 - **harness 漂移顺手修(兄弟 Epic-E sub-9 把 boot 块换成 `_onReady`,4 个 update 老 harness 载入即崩):** 各补 stub。教训复用既有判例:共享树上批跑失败先怀疑「脚下的文件在动」,再怀疑代码。
 - **测试:** test_export_dest_cleanup.py(7:镜像删排除/保运行态/旧语义对照/force_strip/接线针+图片排除双模式)、test_update_pending_restart.py(9:投影四态+路由级+NEUTER 绕过)、test_frontend_update_pending_restart.py(12 检查:boot toast/一次一版/重启卡/重连订阅/NEUTER)。
 
+
+### 2026-08-06(Epic pt_59b62951aad2463e 关票:Agent-only 分发分离——交付物全落地,验收轨道移交零配置化 epic)
+
+- **关票判据:** 本 epic 全部 agent 侧交付物已在树并在店——①设计稿 docs/DESKTOP_AGENT_DIST_DESIGN.md(A1-A4+P1-P3 全系列);②`TofuAgent-Setup-0.16.0-win64.exe` 53MB 轻量被控端(无前端/无服务器栈,体积 −65%);③Local Control 双下载入口;④开机自启/版本漂移检测/诚实边界三项 owner 补点;⑤SSH 隧道阶梯+先探后信 resume 根修(owner 复核擒获的「第二天必死」地雷)。
+- **验收轨道变更(owner 指令 2026-08-05):** 原 P4 验收(配对码真机流程)所测的配对 UX 已被 owner 指令**全链路退役**(受控端零配置化:下载即凭证 ZIP=exe+attach.json)——旧验收按其设计已无法执行。真机端到端验收整体移交给 `pt_3b7b37e696a9482a`(零配置化 epic,其板上问题正等 owner 重启服务器+真机安装);本 epic 不再重复挂起同一人类动作。
+- **诚实边界:** 关票≠真机验收已过;验收未丢,只是在新 epic 里以新链路(零配置)执行。配对端点服务端仍留(routes/api_v1/desktop.py 注释标注 RETIRED,面板入口已撤)。

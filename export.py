@@ -1103,6 +1103,107 @@ def _untracked_root_excludes(src: Path) -> list[str]:
     return [f'--exclude=./{d}' for d in sorted(stray_dirs)]
 
 
+def _dirty_tracked_files(src: Path) -> list[str]:
+    """Tracked files whose worktree content differs from HEAD (staged or not).
+
+    The export copies the WORKTREE but skips untracked files, so a dirty
+    tracked file is the only way content that is not in HEAD (and may
+    reference skipped untracked files) reaches the published tree.
+    """
+    if not _have_tool('git'):
+        return []
+    try:
+        proc = subprocess.run(
+            ['git', 'diff', '--name-only', '-z', 'HEAD'],
+            cwd=str(src), capture_output=True, text=True, timeout=30,
+        )
+    except Exception as e:
+        logger.debug('git diff for torn-snapshot guard failed: %s', e)
+        return []
+    if proc.returncode != 0:
+        return []
+    return [e for e in proc.stdout.split('\0') if e.strip()]
+
+
+def _torn_snapshot_pairs(src: Path) -> list[tuple[str, str]]:
+    """(dirty tracked file, skipped untracked file it references) pairs.
+
+    Incident 2026-08-06: a sibling's uncommitted server.py edit imported
+    lib/log_aggregates.py while that module was still untracked. The export
+    shipped the dirty server.py (tracked) but dropped the module (untracked
+    skip) — a TORN snapshot that red-filed public CI with 800+
+    ModuleNotFoundError cascades. The untracked-file skip ("the export
+    mirrors committed source") is only sound when dirty tracked files do
+    not reference the files being skipped; this guard detects exactly that
+    cross-reference so the operator can commit (or pass --allow-dirty)
+    instead of publishing a tree that cannot even be imported.
+    """
+    skipped = _untracked_nested_files(src, _untracked_root_dirs(src))
+    if not skipped:
+        return []
+    # Reference token per skipped file: its repo-relative path
+    # ('lib/design_sys/fonts.py') — matched as a substring it also covers
+    # leading-slash ('/static/…') web references — and, for Python files,
+    # the dotted module ('lib.design_sys.fonts'; a package's __init__.py
+    # contributes the package name 'lib.design_sys'). Bare stems ('fonts',
+    # 'index') are far too generic — measured 2026-08-06: stem matching
+    # false-positived on every preview/index/fonts word in the tree.
+    tokens: dict[str, str] = {}
+    for rel in sorted(skipped):
+        tokens.setdefault(rel, rel)
+        p = Path(rel)
+        if p.suffix == '.py':
+            dotted = rel[:-3].replace('/', '.')
+            if p.stem == '__init__':
+                dotted = dotted.rsplit('.', 1)[0]
+            tokens.setdefault(dotted, rel)
+    pairs: list[tuple[str, str]] = []
+    for dirty in _dirty_tracked_files(src):
+        # Prose never breaks an import: JOURNAL.md / docs routinely name
+        # in-flight file paths (this project's JOURNAL convention), which
+        # would otherwise false-trip the guard on every documented WIP.
+        if Path(dirty).suffix.lower() in ('.md', '.rst', '.txt'):
+            continue
+        fpath = src / dirty
+        try:
+            if not fpath.is_file() or fpath.stat().st_size > 2_000_000:
+                continue
+            text = fpath.read_text(encoding='utf-8', errors='strict')
+        except (OSError, UnicodeDecodeError):
+            continue  # binary / unreadable — no textual reference possible
+        for token, rel in tokens.items():
+            if token in text and (dirty, rel) not in pairs:
+                pairs.append((dirty, rel))
+    return pairs
+
+
+def _torn_snapshot_guard(src: Path, allow_dirty: bool,
+                         dry_run: bool = False) -> None:
+    """Abort (or loudly warn) when the export would publish a torn snapshot.
+
+    See _torn_snapshot_pairs for the incident class. Best-effort: silent
+    when git is unavailable or the tree is clean.
+    """
+    pairs = _torn_snapshot_pairs(src)
+    if not pairs:
+        return
+    lines = '\n'.join(f'      {d}  →  references skipped untracked {u}'
+                      for d, u in pairs[:12])
+    more = f'\n      … (+{len(pairs) - 12} more)' if len(pairs) > 12 else ''
+    head = ('DRY-RUN: export WOULD abort — torn snapshot detected'
+            if dry_run else 'Export aborted — torn snapshot detected')
+    print(f"  {C_RED}✗ {head}:{C_END}\n"
+          f"    Dirty tracked file(s) reference untracked file(s) that the\n"
+          f"    export skips — the published tree would not even import:\n"
+          f"{lines}{more}\n"
+          f"    {C_DIM}→ `git add` the untracked file(s) (or commit the dirty\n"
+          f"      ones away), or re-run with --allow-dirty to publish the\n"
+          f"      worktree state as-is.{C_END}")
+    logger.error('Torn snapshot guard tripped: %s', pairs)
+    if not dry_run and not allow_dirty:
+        raise SystemExit(2)
+
+
 def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list[str]]:
     """Build ``--exclude=`` args for the streaming tar copy, per mode.
 
@@ -2356,7 +2457,8 @@ def _create_skeleton(dest: Path, mode: str):
 # ═══════════════════════════════════════════════════════════
 
 def _export_via_tar_with_sanitize(mode: str, dest: Path,
-                                  progress: bool = False) -> dict:
+                                  progress: bool = False,
+                                  allow_dirty: bool = False) -> dict:
     """Fast non-personal export: bulk tar copy + post-pass sanitize.
 
     This is the internal/opensource analogue of ``_export_personal_via_tar``.
@@ -2372,6 +2474,7 @@ def _export_via_tar_with_sanitize(mode: str, dest: Path,
     summary printer doesn't need to special-case anything.
     """
     dest.mkdir(parents=True, exist_ok=True)
+    _torn_snapshot_guard(ROOT, allow_dirty)
     tar_excludes, preserved = _build_tar_excludes_for_mode(mode, dest)
     if preserved:
         print(f"  {C_CYAN}\U0001f4be Preserving dest: {', '.join(preserved + ['/'])}"
@@ -2520,7 +2623,8 @@ def _dest_cleanup_targets(dest: Path, mode: str, source_names: set) -> list:
 def export_project(mode: str, dest: Path, dry_run: bool = False,
                    push: bool = False, commit_msg: str | None = None,
                    is_release: bool = False, branch_override: str | None = None,
-                   progress: bool = False, force: bool = False):
+                   progress: bool = False, force: bool = False,
+                   allow_dirty: bool = False):
     """Main export function.
 
     Args:
@@ -2582,7 +2686,9 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
     print(f"  Source:  {C_DIM}{ROOT}{C_END}")
     print(f"  Dest:    {C_DIM}{dest}{C_END}")
     if dry_run:
-        print(f"  {C_YELLOW}\U0001f50d DRY RUN \u2014 no files will be written{C_END}")
+        print(f"  {C_YELLOW}\U0001f50d DRY RUN — no files will be written{C_END}")
+        if mode != 'personal':
+            _torn_snapshot_guard(ROOT, allow_dirty, dry_run=True)
     print()
 
     # Set module-level version for sanitization pipeline
@@ -2617,7 +2723,8 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             _bundle_tofu_search_wheel(dest, mode)
             _portablize_bundled_mcp_config(dest, mode)
         else:
-            stats = _export_via_tar_with_sanitize(mode, dest, progress=progress)
+            stats = _export_via_tar_with_sanitize(mode, dest, progress=progress,
+                                                  allow_dirty=allow_dirty)
             excluded_log = []
             _all_excluded_dirs = (ALWAYS_EXCLUDE_DIRS
                                   if mode == 'internal'
@@ -3527,6 +3634,12 @@ def main():
              '(force-push branch + move existing release tags). Default preserves '
              'remote history via an ours-merge fast-forward instead',
     )
+    parser.add_argument(
+        '--allow-dirty', action='store_true',
+        help='Publish even when dirty tracked files reference skipped untracked '
+             'files (torn-snapshot guard override). Default aborts — commit the '
+             'in-flight work first so the published tree imports cleanly',
+    )
 
     args = parser.parse_args()
 
@@ -3591,7 +3704,8 @@ def main():
     export_project(args.mode, dest, dry_run=args.dry_run,
                    push=args.push, commit_msg=commit_msg,
                    is_release=is_release, branch_override=args.branch,
-                   progress=args.progress, force=args.force)
+                   progress=args.progress, force=args.force,
+                   allow_dirty=args.allow_dirty)
 
 
 if __name__ == '__main__':

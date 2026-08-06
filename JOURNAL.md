@@ -1,3 +1,11 @@
+### 2026-08-06(grep 拦截闸「误解子 Shell」根修:_split_pipeline 不识括号/换行——`)` 幻影操作数冤拦合法流式过滤、`(` 掩码命令词成逃逸洞;共享层一刀三洞同闭) — owner 截图问「guard 怎么会误解 R39 的子 Shell」;commit 见下(3 文件);守卫套件 **34 针**(新增 7 针)+ 邻接三环(extraction/project_tools/danger_quoted/rm_rf/scan_guard/not_run_meta)**213 绿**
+
+- **事故(conv mshbbp2867js1a R39):** 验证脚本 `( … env | grep -E '^(TOFU_TLS|PORT|BIND_HOST)=' )` 是 guard 自家规则明文合法的流式过滤(无操作数、stdin 来自管道),却被拒;模型只得「改成完全不使用 grep 的结构」——闸教出了与自身规则相反的教训。
+- **根因(实测定案,非推测):** `_split_pipeline` 只识 `|` `;` `&&` `||` 四类边界+引号/转义保护,不识子 Shell 括号与换行。子 Shell 闭括号作为普通字符黏进 grep 段尾 → `_grep_segment_reads_filesystem` 剥掉 pattern 位置参数后还剩 `)` → 误判「有文件操作数=读文件系统」。同一盲区镜像三洞,全部实测复现:①流式过滤假阳性(R39)②`( grep -rn x lib/ )` 整体逃逸(parts[0]='(' 掩码命令词,guard 根本看不见 grep)③`echo $(grep -rn …)` 命令替换逃逸;顺带实证灾难删除闸同款 `( rm -rf / )` 逃逸。
+- **修复(共享层,非个案补丁):** `_split_pipeline` 把裸 `(` `)` 与换行视为命令边界——shell 语法上它们永远不可能是裸词字符(转义 `\(` 与引号形态由既有分支先行保护,`grep -i "a|b"` 语义不变针原样通过)。六个消费方(写目标提取×2/破坏性判定/灾难删除/递归扫描/grep 重定向)只吃更干净的段,无一方依赖括号留存;`{ }` 花括号不动(`${var}` 参数展开会被误碎)。
+- **回归针:** 被拦阵 +3(子 Shell 逃逸/命令替换逃逸/换行分隔的文件系 grep),放行阵 +4(R39 原形/纯子 Shell 流滤/命令替换流滤/换行流滤),e2e +1(`( printf … | grep a )` 真实执行)。
+- **设计层观察(记,未动):** owner 原意「透明重定向,模型以为自己在跑 run_command」;现行实现是响亮拒绝+翻译文案——即使判对也会打碎幻象、扭曲行为。真透明重定向(rg 后端执行+标志翻译+输出保真+退出码映射)是更大的独立决策,留待 owner 拍板;本批只修误判。
+
 ### 2026-08-06(派发路由改 model_id 唯一键:alias 并集跨条目/跨 provider 合并退役——官方 DeepSeek 请求被三酷镜像劫持事故根修) — owner 指令「routing group 只用 model_id,不用 aliases 并集;model_id 就是预设与路由键」;commit `f5668c43`(4 文件 +199/−100);邻接环 **182+67 绿** + collect-only **16,107** 零错 + **生产配置实测**:prefer=deepseek-v4-flash1 只命中官方 provider
 
 - **事故定案(conv msh9x2itap6r5f,字节级实证):** owner 为躲轮转建了官方条目 `deepseek-v4-flash1` 并挂 alias `deepseek-v4-flash` 想「仍能叫到」——旧 union-find 把 {model_id}∪aliases 与静态 MODEL_ALIAS_GROUPS 按连通分量跨条目合并,官方条目与三酷 `deepseek-v4-flash`(request_ids: meituan/tencent/huawei)被粘成一组;点 flash1 永远落三酷(key_stats 铁证:官方 key 当天 3 次 success 全是设置页探活,聊天零次到达官方)。静态表本身就含 `{deepseek-v4-flash, deepseek-v4-flash-huawei}`——劫持是双层的。

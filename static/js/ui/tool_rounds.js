@@ -126,6 +126,7 @@ const _MOTION_TOOL_FAMILY = [
   "produce_report",
   "produce_research",
   "produce_slides",
+  "edit_slides",
 ];
 function _isRoundMotion(round) {
   return _MOTION_TOOL_FAMILY.includes(round.toolName);
@@ -166,6 +167,7 @@ const _TOOL_DISPLAY = {
   produce_report:   { icon: "", label: "Report",  color: "#f472b6" },
   produce_research: { icon: "", label: "Research", color: "#f472b6" },
   produce_slides:   { icon: "", label: "Slides",   color: "#38bdf8" },
+  edit_slides:      { icon: "", label: "Edit Slide", color: "#38bdf8" },
   todo_write: { icon: "", label: "Checklist", color: "#34d399" },
 };
 function _getToolDisplay(round) {
@@ -246,6 +248,7 @@ function _getRoundIcon(round) {
       produce_report: "mv_report",
       produce_research: "mv_research",
       produce_slides: "mv_report",
+      edit_slides: "mv_report",
     };
     return m[round.toolName] || "mv_render";
   }

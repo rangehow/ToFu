@@ -22,8 +22,7 @@ Two consumers, one contract:
 from __future__ import annotations
 
 import os
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from lib.log import get_logger
 
@@ -374,8 +373,8 @@ def theme_prompt_block(theme: Theme, *, for_video: bool = False,
             f'use these family names exactly; never name an unstaged font)')
     lines = [
         f'## BINDING THEME — "{theme.label}" ({theme.id})',
-        f'This artefact has ONE visual system, already decided. Do not '
-        f'improvise colors or fonts outside it.',
+        'This artefact has ONE visual system, already decided. Do not '
+        'improvise colors or fonts outside it.',
         f'- mood: {theme.mood}',
         f'- background: {c["bg"]}   text/ink: {c["ink"]}',
         f'- structural color (titles, rules, key series): {c["primary"]}',
@@ -383,11 +382,11 @@ def theme_prompt_block(theme: Theme, *, for_video: bool = False,
         f'a word): {c["accent"]}',
         f'- secondary text: {c["muted"]}   hairlines: {c["hairline"]}',
         typeface_line,
-        f'- hard prohibitions: no rounded-rectangle card walls to build '
-        f'hierarchy (use whitespace, thin rules, size contrast); no '
-        f'blue-purple gradients; no cyan-purple neon; no glassmorphism; no '
-        f'glow; no 2x2-matrix / three-even-columns default layouts; no '
-        f'second accent color.',
+        '- hard prohibitions: no rounded-rectangle card walls to build '
+        'hierarchy (use whitespace, thin rules, size contrast); no '
+        'blue-purple gradients; no cyan-purple neon; no glassmorphism; no '
+        'glow; no 2x2-matrix / three-even-columns default layouts; no '
+        'second accent color.',
     ]
     if for_video:
         lines.append(

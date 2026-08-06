@@ -1,3 +1,10 @@
+### 2026-08-06(设计系统 P2 落地:多模态视觉质检——「好看」第一次有人负责;VLM 清单核查→findings 进作者修复环,全链可降级) — epic `pt_7b3f63ce9e844ecf` P2 **DONE**(P3/P4 续);新套件 **16 针** + 邻接回归 **127 绿**
+
+- **visual_qa.py:** 9 项设计师清单(变形/压关键画面/出界/对比度/排版/溢出/遮挡 + 两枚新增:主题一致性[绑死色板进 prompt]、反 AI 味套路)→ 结构化 findings(check/element/issue/severity/fix);**降级纪律**:无 playwright/无 Chromium/无视觉槽位/派发失败/回复不可解析,全部不阻塞交付——QA 是增强层,断电不烧片。截图走 playwright 先 `progress(1)` 收束时间线(评的是观众真正读到的定居帧)。
+- **作者修复环(extra_findings 通道):** QA findings(blocker/major)→ save_draft 现帧 → author_scene 重入(2 轮/45k token 预算,独立于我场景预算)——**关键缝:带 extra_findings 必须跳过零花费收养**(草稿本就过程序闸门才被收养,不跳过则审美发现永远到不了修复环);prompt 文案区分「基础设施中断续修」与「设计评审修复」。修复件回 `_commit_scene_html` 防退化闸把关(修得更差=拒收)。
+- **生产链实证:** 裸 CLI 进程无槽位正确 skip;生产侧 kimi-k3 在 DEFAULT_SLOT_CONFIGS 带 `vision` cap + 名称启发式双命中,服务器进程内 `_vision_model()` 可解析。
+- **测试事故自记:** draft 需含匹配 `data-duration` 否则 load_draft 返回空(两针因此误触真派发);engine `_emit` 需要 task['task_id']。
+
 ### 2026-08-06(停滞横幅假阳性根修落地:SSE 降级升为一等状态——轮询清表+30s 无游标回升探测+重连退避 0.5→16s+stalled K=3 容忍+轮询稳定 ID 重绑) — owner 四条验收口径全纳入(接同日「假阳性定案」诊断条);epic `pt_6cb1607e16fb49c8`;commit 见下(4 文件);重连套件重写 **10 针** + 新轮询降级套件 **4 针** + 邻接环 15 套 **83 绿** + collect-only **15,994** 零错
 
 - **三修(全部 owner 口径):** ①`_resumeSSEWithRetry` 退避阶梯 `_SSE_RESUME_BACKOFF_MS=[500..16000]`(尝试 1 保留立即路径)+`_SSE_RESUME_MAX_STALLED=3` 连续 stalled 才投降(一次 stalled=抖动窗口噪声,游标推进即复位)+`_sleepOrAbort` 可中止睡眠(16s 空档不挡用户 Stop);②`_pollFallback` 入口 `stallWatchClear(taskId)`——心跳帧只在 SSE 通道存在,投降后轮询通道的「零帧」是结构性必然而非冻结,横幅在此 100% 假阳性;③轮询期间每 30s 单发 `_trySSE` 回升探测,**无游标**连接(`stream._lastEventId=null`+`_clearSseCursor`)——轮询快照已整幅覆盖文本,陈旧游标的增量重放会叠字;无游标拿后端 fold 的 state 快照(逐字替换,同刷新形态),探活即 SSE 收编到 done、轮询让位。

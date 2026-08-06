@@ -1,3 +1,19 @@
+### 2026-08-06(「$ ?」与「六轮齐 RUNNING」定案+根修:网关半截掐流实证——截断 arguments 提前播报产 '?' + 修复刷新此前只写内存不发事件;修补帧 tool_progress{query,_repaired} 落地双通道) — owner 截图两问(conv msebjymx5b4a25)+复核纠正两处方言;commit `3d17d0da`(6 文件 +434/−6);新套件 **8 针** + 邻接环 **85+58 绿** + collect-only **16,106** 零错 + ruff/node --check 干净
+
+- **「$ ?」字节级定案(raw_sse_anomaly.log trace 3da3af10):** 网关在 rn=109 把 SSE 流掐在 arguments JSON 半截——最后一帧 `{"arguments":".py"}`,收尾引号/后续参数/闭括号永未到达。提前播报 `json.loads` 失败→`fn_args={}`→`project_tool_display` 的 `fn_args.get('command','?')` 产出字面 '?'(tools.py:1125)。转储同时反证执行无恙:`repair_json` 收拢截断串恢复出完整 `git status --short lib/llm_dispatch/api.py`,命令正常跑完。
+- **「六轮齐 EXEC」不是并行 bug(日志三方互证):** 任务 e5198ff6 全程严格串行(run_command 起止成对:110 轮 15:37:56→15:38:13、111 轮 15:38:46→15:39:05),每轮「LLM 回完→执行→回结果→下一轮」。前端滞留根因(owner 复核纠正后的口径):①14:02:25 隧道一秒掐 4 条 SSE,settle 帧全丢;②降级轮询的 toolRounds 整体合并自 6-12(e794681c)就在,但**缺 `_msgId/_taskId` 重绑**——Phase-2 整表替换后合并写进幽灵 assistantMsg(写了渲不出),4172eefe 已修;③在跑服务器是 8-03 进程(16:16/16:50 两枚修复不在其中)。新服务器 17:26 起(pid 3513629,head=328369b9,bundle-de2d9c5c 已构建),硬刷即收。**方言纠正:不是「旧轮询故意不覆盖 settle」,是幽灵引用写入。**
+- **根修(owner 指令,非补丁):** `_apply_repair_to_round` 刷新后此前零事件——健康 SSE 下长命令也会全程挂 `$ ?` 到结束。现:刷新且**确有变化**时返回新 query,parse_tool_calls 复用支即发 `tool_progress{query,_repaired}` 修补帧(tool_progress 永不 settle 轮次,spinner 不会提前翻);events.py TOOL_PROGRESS 契约登记两字段;reducer tool_progress 支应用修补(status 不动);轮询/冷快照通道因共享 finalizer 自动同构。无变化不发(热路径零噪音,门针钉死)。
+- **测试经济学:** 后端 4 针=事故逐字节复演(截断串→'?'→修复→修补帧且轮次仍 searching)/无修复零帧/显示未变的修复零帧/NEUTER(刷新信号被掐则纵有 repair summary 也无帧——帧由刷新信号驱动而非 summary 存在);前端 node harness 4 针=修补生效且不 settle/普通 chunk 帧不冲显示/幽灵轮 no-op/活体折叠 vs 冷快照 canonicalize 逐字节相等。
+
+### 2026-08-06(本机控制弹窗四连根修
+### 2026-08-06(本机控制弹窗四连根修:LNA 警告归位浏览器卡 / 受控端按钮遮挡=inline 锚点垂直 padding 越界绘制 / 桌面安装块即时地板 / 垂直堆叠改左右双栏宽界面) — owner 截图四指令;待提交(共享 HEAD 兄弟在飞,见下);地板套件 **15/15** + 像素级预览三态实证 + node --check 干净
+
+- **遮挡根因(实测定案,非推测):** 受控端下载是全库唯一 `<a class="btn">`(grep 实证)——锚点 UA 默认 `display:inline`,而 `.modal .btn` 只给 padding 不给 display;**inline 盒的垂直 padding/border 不撑行盒、直接叠绘到上下行**,tofu 主题的金块于是压在自家说明文字上。兄弟的 `<button>` 全是 inline-block 所以从未发作。根修=新规则 `.modal a.btn{display:inline-flex;align-items:center;justify-content:center}`(+`.lc-cap-setup a.btn` 垂直节奏),一类 bug 的类级修复而非个案补丁。
+- **LNA 归位:** `#browserLnaWarning` 原是两张能力卡之后的第三块(隔在浏览器卡与电脑卡语义之间);移入 `#lcBrowserCap` 内部(`#lcBrowserSetup` 之后),`_applyBrowserLnaWarning` 只按 id 寻址零改动;外边距 `margin-bottom:16px`→`margin:12px 0 0` 适配卡内位。
+- **「安装包等一下才渲染」根因与修法:** 浏览器侧地板是静态 markup(首帧即可点),桌面侧地板只有一行通用文字,受控端下载块要等 `Api.desktop.status(arch)` 往返才由 `_lcRenderDesktop` 补上——但 `_lcAgentBundleUrl()` 是纯前端推导(apiUrl+origin),bundle 未就绪时端点自己回诚实 404/409+重建指引,地板完全可以首帧渲染。`_lcPaintFloor` 桌面地板改=引导行(新 i18n 键 `local.desktopFloorLead`)+ `_lcAgentAttachBlockHtml({agent_bundle_ready:true})`——**复用检测分支同一作者函数**,两份按钮文案必漂移(文件头铁律)。静态地板测试的「禁 href」口径不受影响(它钉的是 index.html 静态段;JS 地板的 href 是运行时推导,不是烘焙 URL)。
+- **双栏宽界面:** `.local-modal` 560px→940px,两卡包进 `.lc-cols`(grid 1fr 1fr,align-items:start),浏览器左/电脑右;≤860px 视口塌回单列(768 以下模态本就全屏)。像素级预览三态实证:地板帧(两按钮首帧同屏)/检测帧(local_source 全内容,LNA 在浏览器卡内,按钮零遮挡,兄弟的诊断收件箱 details 在桌面卡尾正常混排)/780px 窄帧(单列回退)。
+- **兄弟协调(mshbk0a2,共享 HEAD 在飞):** 其诊断收件箱三函数(_lcDiagInboxHtml/_lcWireDiag/_lcDiagRefreshRecent)与我同文件在飞;其 `_lcDiagRefreshRecent` 未守卫 `Api.desktop.listDiags` 存在性,同步 TypeError 打红两套存量 harness(agent_download 3+devices 4,merge 环险些同红)——已 peer 通报+harness 评论留痕,对方已采纳加守卫并认领三环回归。**提交纪律:** index.html 同时载三家 hunks(我的双栏+工具面板 tab+论文开关退役),local-control.js/i18n.js 载兄弟诊断特性半套(api.js/desktop.py 未提交前单独提交我侧=对外暴露未定义 Api 调用),故本批等兄弟各自落账后以 pathspec 收编残余,已设 watcher。
+
 ### 2026-08-06(安装向导空白二轮根修:Z 序钉被真机证伪 → 根因候选=透明标签延迟首绘(WS_EX_TRANSPARENT)——TOFU_LABEL 改官方示例不透明形态 + 顺手擒获进度页句柄栈下溢;商店包已重打 45,390,016B) — owner 报障「installer 什么都不显示但能一路 Next 装完,是不是缺字体」;commit `da2a9c97`(2 文件 +62/−5);守卫 **35/35**(art/parity/真 makensis 编译)+ collect-only **16,080** 零错
 
 - **字体嫌疑排除(实测):** 从当前商店包抽出 welcome.bmp 目检——横幅/logo/产品名/版本号/卡片全部完好(烘焙侧零问题);运行时标签即使 CreateFont 失败也回退库存字体,字体在任何世界线都不可能造成空页。

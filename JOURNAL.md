@@ -5,7 +5,6 @@
 - **根修(owner 指令,非补丁):** `_apply_repair_to_round` 刷新后此前零事件——健康 SSE 下长命令也会全程挂 `$ ?` 到结束。现:刷新且**确有变化**时返回新 query,parse_tool_calls 复用支即发 `tool_progress{query,_repaired}` 修补帧(tool_progress 永不 settle 轮次,spinner 不会提前翻);events.py TOOL_PROGRESS 契约登记两字段;reducer tool_progress 支应用修补(status 不动);轮询/冷快照通道因共享 finalizer 自动同构。无变化不发(热路径零噪音,门针钉死)。
 - **测试经济学:** 后端 4 针=事故逐字节复演(截断串→'?'→修复→修补帧且轮次仍 searching)/无修复零帧/显示未变的修复零帧/NEUTER(刷新信号被掐则纵有 repair summary 也无帧——帧由刷新信号驱动而非 summary 存在);前端 node harness 4 针=修补生效且不 settle/普通 chunk 帧不冲显示/幽灵轮 no-op/活体折叠 vs 冷快照 canonicalize 逐字节相等。
 
-### 2026-08-06(本机控制弹窗四连根修
 ### 2026-08-06(本机控制弹窗四连根修:LNA 警告归位浏览器卡 / 受控端按钮遮挡=inline 锚点垂直 padding 越界绘制 / 桌面安装块即时地板 / 垂直堆叠改左右双栏宽界面) — owner 截图四指令;待提交(共享 HEAD 兄弟在飞,见下);地板套件 **15/15** + 像素级预览三态实证 + node --check 干净
 
 - **遮挡根因(实测定案,非推测):** 受控端下载是全库唯一 `<a class="btn">`(grep 实证)——锚点 UA 默认 `display:inline`,而 `.modal .btn` 只给 padding 不给 display;**inline 盒的垂直 padding/border 不撑行盒、直接叠绘到上下行**,tofu 主题的金块于是压在自家说明文字上。兄弟的 `<button>` 全是 inline-block 所以从未发作。根修=新规则 `.modal a.btn{display:inline-flex;align-items:center;justify-content:center}`(+`.lc-cap-setup a.btn` 垂直节奏),一类 bug 的类级修复而非个案补丁。

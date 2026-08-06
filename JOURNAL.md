@@ -1,3 +1,9 @@
+### 2026-08-06(补漏:36ac03a6 pathspec 漏提 lib/desktop_agent 两文件——owner 验收拆 payload 擒获,安装包缺 Fix B/C 且 HEAD 红;补提 `239074f7` + 带外重建落盘 239074f7 本体) — owner 验收指令「add/status 共用一份不完整清单,自检形同虚设」;补漏 commit `239074f7`(2 文件 +73/−2);复跑 **70 绿**(提交后,HEAD 一致性)+ 安装包带外重建 `239074f7`(45.66MB,mtime 23:42,manifest 登记=补漏提交,在服就绪闸 ready)
+
+- **事故定案(owner 实证,非自查):** 批次共触 16 文件——2 被兄弟裹挟(已核对)、12 入库、**`lib/desktop_agent/_run.py`(+68)与 `_probe.py`(+7)被遗忘在工作区**。后果双连:7bdb1708 安装包只含 Fix A+诊断按钮,轮询环自愈与探针对齐缺席;已提交测试调用 `run_agent(route_repair=...)` 在 HEAD 上 TypeError——**HEAD 即红**。根因=`git add` 与提交后 `git status` 用了**同一份不完整 pathspec**,审计对漏项不可见。
+- **流程根修(owner 指令④,即刻生效):** 每次提交后跑**无 pathspec 的 `git status` 全量审计**,把本批触碰清单与提交文件清单逐一核对,差一个不收工。本次补漏即按此执行:全量审计确认除这两文件外无其他漏网(其余脏文件均属兄弟批次)。
+- **重建实证:** 带外 `build_installer` 3 分钟建成(在服线程仍不可信),manifest `winbuild.git_sha=239074f75519`(补漏提交本体),exe 45,657,169B 刷新,在服 `_agent_bundle_ready=True`——owner 可重新下载。
+
 ### 2026-08-06(受控端「装新版仍连不上」定案+三修+诊断回传双端:死附件否决新 bundle 修复材料——修复感知导入/轮询环路由自愈/探测轮询传输对齐;agent 窗口+托盘「复制诊断信息」↔ 面板粘贴收件箱;在服构建线程同类卡死改带外建成) — owner 截图指令「latest agent still cannot connect, design a place in the frontend to copy and display logs」;commit `36ac03a6`(12 文件 +845/−25,api.js/i18n.js hunk 被兄弟 `5dc88f2d`/`b8c40725` 裹挟已逐一核对无损)+ agent 安装包带外重建落盘 `7bdb1708`(36ac03a6 祖先判定通过,45.65MB);新套件 **27 针** + 邻接环 **90+78+66+127 绿** + collect-only **16,118** 零错 + ruff/node 干净
 
 - **定案(app.log+代码+配置三方互证,非推测):** 服务器 17:26/17:39 两次以新码烙 bundle(候选=`http://10.128.175.30:15000` 直连+vscode 兜底,token minted),poll 到达=0。根因三层:①`import_attach_bundle` 对已存附件**无条件跳过**——旧死 vscode 地址(用户目录 config 跨重装存活)一票否决了新 bundle 的可用直连候选,而 one-shot `finally` 把 attach.json 照删,**修复材料没用就被销毁**;②轮询环 proxy/unreachable 分支只有 sleep+retry 同一死地址——链路行写「正在自动重找通路」是**文案撒谎**,环内从无重发现;③`probe_server` 走 requests 默认系统代理而轮询环钉死 `no_proxy:'*'`——探测与轮询量的是两张网。

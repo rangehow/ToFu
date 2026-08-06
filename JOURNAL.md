@@ -1,3 +1,12 @@
+### 2026-08-06(设计系统 P1 落地:lib/design_sys 字体注册表+主题库+设计圣经 + motion_video 全链主题贯通——实测真 MiSans 渲染出帧,衬线回退时代终结) — epic `pt_7b3f63ce9e844ecf` P1 **DONE**(P2-P4 续);commits 见下;新套件 **23 针** + motion 全邻接 **176+219 绿** + **E2E 实证:headless Chrome 渲出深空控制台主题真 MiSans 帧**
+
+- **字体注册表(许可核验+字节钉):** 9 族 15 文件全部实测可下——MiSans 400/600/700(@fontpkg/mi-sans OTF)、Noto Sans/Serif SC 400+700(fontsource woff2 子集)、得意黑/数黑体/刀隶体(@fontpkg woff2)、霞鹜文楷(@fontsource woff2)、站酷文艺体(wordshub raw TTF)、Liter/Oranienbaum(fontsource latin woff2);每文件 SHA-256 钉死(实测立功:首次并行下载 MiSans-Regular 被截到 92%,哈希校验拒绝入库),许可四族登记(OFL-1.1/MiSans 免费商用/阿里妈妈免费商用/站酷免费全社会商用)含官方证据 URL。通道教训:jsdelivr gh 通道对 50MB+ 仓库 403(wordshub 全集)与无 tag 仓库无效;cn-fontsource 是 unicode-range 碎包(数百片)不适合场景本地化 @font-face;@fontpkg/* 单文件 woff2 是最优通道。
+- **主题库:** 7 场景 × 2 主题 = 14 套手工调色(色值全部取自移植圣经自己的调色板参考——「意料之中、选择之外」),每主题绑字体三联(display/body/latin);`classify_scenario` 关键词投票零 LLM 首分,recipe LLM 可覆盖;`theme_prompt_block` 生成 ~350 token 绑定块(色板+字族+反 AI 味硬禁令),`staged_font_ids` 参数防幽灵字族(未 staging 成功的字族角色自动改映射到已 staging 者)。
+- **设计圣经 8 份(_general+7 场景):** 从 open-kimi-ppt 参考库(MIT)逐场景蒸馏适配——保留全部反 AI 味禁令(禁卡片墙/禁蓝紫渐变/禁 2×2 套路/禁风格混搭/单一强调色)、叙事骨架表、图表纪律、场景调色板,新增 motion notes(视频侧怎么用)与验收清单。
+- **motion_video 贯通(默认开,零开关):** engine compose 阶段解析全片主题(task['theme'] 显式 > 话题关键词分类 → 默认);`_scene_author` staging 双路径(主题字族配对优先,旧单 CJK 字族兜底)+`_build_prompt` 注入主题块+逐字重 @font-face CSS;`_template` 降级卡主题化(实底+墨+点缀条,4 渐变轮播退役)——**matches_template 重渲比对全链带 theme**(markerless 旧卡比对语义不破)。
+- **E2E 实证:** ensure_font 真实下载→staging 入 scene(4 字重)→手写深空控制台合成( MiSans+Liter @font-face)→静态闸绿→draft 渲染→抽帧目检:墨黑底/青瓷绿/信号黄/真 MiSans 中文黑体——**本机渲染管线史上第一帧「被选中的中文字体」**。
+- **事故自记:** author_scene 的实际工作函数是 `_author_once`(transient 重试包装),theme 参数先加到外层导致 NameError——engine 套件 17 红当场擒获,穿透后 176 全绿。
+
 ### 2026-08-06(论文阅读两开关按 owner 指令退役 + 速览/专注双根修:速览实测只折叠 3-14% 等于没按——v2 过矫后 v3 规则实测 43.5%;专注「只是字体变浅」=聚光灯不可见+H1 家具块占位) — owner 截图指令「这两个默认开启就行,不需要设计成开关了。速览和专注有啥用?按了速览一点变化没有,专注只是让字体全变浅了」;commit 见下(17 文件,+191/−246 净简化);后端 **21+50** 绿 + 前端 jsdom **全绿**(§11 翻转+§14 新增)+ 邻接环 **59+34** 绿 + collect-only **15,964** 零错 + ruff 干净 + 像素级预览实证
 
 - **开关退役(owner 指令,链收敛不留暗层):** 「洞察二遍」「随堂检查卡」两枚 Settings toggle 全链拆除——general.html 两行卡片、other_tabs.js 填充/收集函数、core_panel.js 调用、save_export.js 载荷、i18n 四键、routes/config.py 的 GET 实况面与 POST 合并块;引擎侧 `insight_enabled`/`checkpoints_enabled` 由四级链收敛为**三级链**(cfg 显式戳 > env 舰队总闸 > 默认 ON),`_reading_experience_cfg` 随删。**headless fail-closed 纹丝不动**(personal_scope 注册表保留,API 调用默认不跑二遍、不被沉默计费)——退役的只是交互面的「关」选项,不是成本护栏:费用分解仍在 finish tag 可见。已存的 `paper.reading_experience` 配置节不再被读取(无副作用)。设计文档 §3.4/§4.2/§4.3/§5 同步。

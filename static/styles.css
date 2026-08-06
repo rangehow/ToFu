@@ -1975,10 +1975,6 @@ textarea::placeholder{color:var(--text-tertiary)}
 .paper-xp-flip .paper-xp-flip-back{display:none}
 .paper-xp-flip.is-flipped .paper-xp-flip-front{display:none}
 .paper-xp-flip.is-flipped .paper-xp-flip-back{display:block}
-/* Skim mode (P2): deterministic collapse — sections reduce to first
- * paragraph + callouts + the xp tutor cards. */
-.xp-skim-hidden{display:none!important}
-.paper-skim-btn.is-on{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--border));background:color-mix(in srgb,var(--accent) 10%,transparent)}
 /* Deepen (P3): heading ghost buttons + the drawer. */
 .paper-deepen-btn{display:inline-block;margin-left:6px;padding:1px 8px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text-quaternary);font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;vertical-align:middle;opacity:0;transition:opacity .15s,color .12s,border-color .12s}
 .paper-deepen-btn::after{content:attr(data-label);margin-left:3px}
@@ -2009,13 +2005,6 @@ h2:hover .paper-deepen-btn,h3:hover .paper-deepen-btn,.paper-deepen-btn:focus{op
 .paper-note-editor-actions button{padding:4px 12px;border-radius:7px;border:1px solid var(--border);background:transparent;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--text-secondary)}
 .paper-note-editor-actions .paper-note-save{background:var(--accent);border-color:var(--accent);color:#fff}
 .paper-note-editor-actions .paper-note-del:hover{color:#ef4444;border-color:#ef4444}
-/* Focus mode (P4): one block in the spotlight, the rest dims away. The
- * spotlight must be VISIBLE — a pure opacity contrast (1 vs .22) read as
- * "everything went gray" (owner report 2026-08-06); the current block gets a
- * soft accent wash + a left accent bar via box-shadow (no layout shift). */
-.paper-focus-on .paper-report-article > *{opacity:.22;transition:opacity .25s}
-.paper-focus-on .paper-report-article > *.paper-focus-current{opacity:1;background:color-mix(in srgb,var(--accent) 8%,transparent);box-shadow:-4px 0 0 0 var(--accent);border-radius:4px}
-.paper-focus-btn.is-on{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,var(--border));background:color-mix(in srgb,var(--accent) 10%,transparent)}
 .paper-report-content img,.paper-report-body img{display:block;max-width:100%;height:auto;margin:14px auto;border:1px solid var(--border);border-radius:6px;background:#fff;padding:4px;box-shadow:0 2px 8px rgba(0,0,0,.15);cursor:zoom-in}
 .paper-report-content p:has(> img:only-child),.paper-report-body p:has(> img:only-child){text-align:center;margin:14px 0}
 .paper-report-content p > img + em,.paper-report-body p > img + em{display:block;text-align:center;font-size:12px;color:var(--text-tertiary);margin-top:4px}
@@ -9109,6 +9098,55 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .ptool-board-mini-open { border-left-color: var(--pb-amber, #eab308); }
 .ptool-board-mini-claimed { border-left-color: var(--accent); }
 .ptool-board-mini-deferred { border-left-color: var(--text-tertiary); opacity: 0.85; border-left-style: dashed; }
+
+/* ── Motion-video / produce tool cards ──
+   The body reuses .ptool-convmeta-block / summary / src-chip styles; these
+   are the motion-specific internals (detail rows, dep list, scene table). */
+.ptool-motion-block > summary .ptool-convmeta-src {
+  color: #f472b6;
+  background: color-mix(in srgb, #f472b6 15%, transparent);
+}
+.ptool-motion-body {
+  margin: 4px 0 6px 11px;
+  padding: 12px 14px;
+  border-left: 2px solid color-mix(in srgb, #f472b6 55%, transparent);
+  background: var(--accent-subtle);
+  border-radius: 0 8px 8px 0;
+  font-size: 12.5px;
+}
+.ptool-motion-row { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; }
+.ptool-motion-k {
+  flex: none; min-width: 96px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-tertiary);
+}
+.ptool-motion-v { color: var(--text-primary); overflow-wrap: anywhere; }
+.ptool-motion-mono { font-family: var(--font-mono, monospace); font-size: 11.5px; }
+.ptool-motion-section { margin-top: 9px; }
+.ptool-motion-section-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-tertiary); margin-bottom: 4px;
+}
+.ptool-motion-li { padding: 1.5px 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.ptool-motion-err { color: var(--danger, #f87171); }
+.ptool-motion-warn { color: var(--warning, #fbbf24); }
+.ptool-motion-hint { color: var(--text-secondary); }
+.ptool-motion-more { color: var(--text-tertiary); font-style: italic; }
+.ptool-motion-dep {
+  display: flex; align-items: center; gap: 8px; padding: 2px 0;
+}
+.ptool-motion-dep-name { flex: none; min-width: 96px; font-family: var(--font-mono, monospace); font-size: 11.5px; }
+.ptool-motion-dep-ok .ptool-motion-dep-val { color: var(--text-secondary); overflow-wrap: anywhere; }
+.ptool-motion-dep-miss .ptool-motion-dep-val { color: var(--danger, #f87171); }
+.ptool-motion-scene {
+  display: flex; align-items: baseline; gap: 8px; padding: 2.5px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
+}
+.ptool-motion-scene:last-child { border-bottom: none; }
+.ptool-motion-scene-id { flex: none; min-width: 96px; font-family: var(--font-mono, monospace); font-size: 11.5px; color: var(--text-secondary); }
+.ptool-motion-scene-dur { color: var(--text-primary); }
+.ptool-motion-scene-grew .ptool-motion-scene-dur { color: var(--warning, #fbbf24); }
+.ptool-motion-scene-overflow { color: var(--danger, #f87171); font-size: 11px; }
 .ptool-board-mini-done { border-left-color: var(--pb-green, #22c55e); opacity: 0.75; }
 .ptool-board-mini-title { flex: 1; overflow-wrap: anywhere; }
 .ptool-board-mini-owner { font-size: 10px; color: var(--accent); font-family: var(--mono, monospace); }
@@ -23082,10 +23120,10 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-warn{
 }
 
 /* ══ Provider card — alternate wire-faces editor ════════════════════════════
-   Mirrors the Custom Headers row editor: one row per declared face
-   (name + base_url + protocol). Until this existed the only writer of
-   faces{} was "sync from template", so a self-built dual-face gateway could
-   not be configured through the UI at all. */
+   One row per declared face: protocol select + base_url + delete. The face
+   NAME is a hidden auto-derived handle (protocol + collision suffix), never
+   a text box — owner review 2026-08-06: a 118px '面名' input was both
+   unreadable and unanswerable. */
 .stg-faces-header{
   display:flex;
   align-items:center;
@@ -23095,9 +23133,8 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-warn{
 }
 .stg-faces-list{display:flex;flex-direction:column;gap:6px}
 .stg-face-row{display:flex;align-items:center;gap:6px}
-.stg-face-row .stg-face-name{flex:0 0 118px;min-width:0}
+.stg-face-row .stg-face-proto{flex:0 0 124px}
 .stg-face-row .stg-face-url{flex:1 1 auto;min-width:0}
-.stg-face-row .stg-face-proto{flex:0 0 104px}
 .stg-faces-btn{
   flex:0 0 auto;
   padding:4px 8px;

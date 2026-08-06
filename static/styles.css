@@ -6324,10 +6324,39 @@ input.settings-mono {
   background: var(--s-cream);
   border: var(--s-border);
   border-radius: var(--s-radius);
-  padding: 14px;
+  padding: 16px 16px 12px;
   margin-top: 8px;
   margin-bottom: 4px;
-  box-shadow: var(--s-shadow-xs);
+  box-shadow: var(--s-shadow-sm);
+}
+/* Section rhythm (redesign 2026-08-06): the form reads as labeled blocks —
+ * identity → wire → quota → capabilities → aliases — instead of one flat
+ * wall. The label is a small gold-ticked stamp; the ::before tick carries
+ * the accent so the text can stay ink-soft and quiet. */
+.stg-edit-sec { margin-bottom: 14px; }
+.stg-edit-sec:last-child { margin-bottom: 0; }
+.stg-edit-sec-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  color: var(--s-ink-soft);
+  margin-bottom: 7px;
+  user-select: none;
+}
+.stg-edit-sec-label::before {
+  content: '';
+  width: 3px;
+  height: 11px;
+  background: var(--s-gold);
+  flex-shrink: 0;
+}
+.stg-edit-sec-label .stg-hint {
+  font-weight: 500;
+  letter-spacing: 0;
+  opacity: 0.65;
 }
 /* Uniform 2-column grid (redesign 2026-08-01): the old 1fr/auto/auto made
  * every row a different width — the price section looked misaligned because
@@ -6351,6 +6380,9 @@ input.settings-mono {
 }
 .stg-cap-toggles { display: flex; gap: 5px; flex-wrap: wrap; }
 .stg-cap-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 4px 10px;
   border: 1.5px solid var(--s-ink-soft);
   background: none;
@@ -6362,6 +6394,8 @@ input.settings-mono {
   transition: all 0.12s;
   user-select: none;
 }
+.stg-cap-ico { display: inline-flex; }
+.stg-cap-ico svg { display: block; }
 .stg-cap-btn.active {
   border-color: var(--s-ink);
   background: var(--s-gold);
@@ -6436,6 +6470,24 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-auto-pick { co
 html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-auto-refused { color: #f87171; }
 
 .stg-edit-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+/* Footer bar (redesign 2026-08-06): the thinking-default toggle used to
+ * float as an orphaned row; it now shares a ruled footer with the actions,
+ * so the form ends on one deliberate line. */
+.stg-edit-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-top: 1.5px dashed rgba(26, 24, 20, 0.18);
+  padding-top: 12px;
+}
+.stg-edit-foot .stg-edit-actions { margin-top: 0; }
+.stg-edit-proto {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  font-size: 12px;
+}
 
 /* ══════════════════════════════════════
    Preset Mapping Table — tofu grid
@@ -15648,7 +15700,7 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .browser-local-shortcut code.copyable-url:hover::after{opacity:1}
 .browser-local-shortcut code.copyable-url.copied{background:rgba(34,197,94,0.18);color:#22c55e;box-shadow:0 0 0 2px rgba(34,197,94,0.25)}
 
-.browser-lna-warning{padding:12px 16px;border-radius:10px;margin-bottom:16px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25)}
+.browser-lna-warning{padding:12px 16px;border-radius:10px;margin:12px 0 0;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25)}
 .browser-lna-warning strong{display:block;font-size:13px;color:#f59e0b;margin-bottom:4px}
 .browser-lna-warning p{font-size:12px;line-height:1.5;color:var(--text-secondary,#888);margin:0 0 8px}
 .browser-lna-warning code{background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:4px;font-size:12px;font-family:'JetBrains Mono',monospace}
@@ -15689,8 +15741,24 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 #localControlToggle.active{background:rgba(168,85,247,0.15);color:#a855f7;border-color:rgba(168,85,247,0.3)}
 [data-theme="light"] #localControlToggle.active{background:rgba(126,34,206,0.1);color:#7e22ce;border-color:rgba(126,34,206,0.25)}
 
-.local-modal{max-width:560px}
+/* Wide layout: the two capabilities are peers, so they sit SIDE BY SIDE
+   (browser left / computer right) instead of forcing a vertical scan past
+   one card to reach the other. The base .modal cap (92vw) still bounds small
+   windows; the grid collapses to one column before the cards get cramped. */
+.local-modal{width:940px}
 .local-modal .modal-desc{color:var(--text-secondary,#888);font-size:13px;margin:0 0 18px}
+.lc-cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+.lc-cols .lc-cap{margin-bottom:0}
+@media(max-width:860px){.lc-cols{grid-template-columns:1fr}.lc-cols .lc-cap{margin-bottom:12px}}
+
+/* An <a class="btn …"> is still display:inline by default — and an inline
+   box's VERTICAL padding/border does not grow its line box, it PAINTS OVER
+   the lines above and below. Measured 2026-08-06: the agent-bundle CTA (an
+   anchor, unlike every <button> sibling, which is inline-block per UA style)
+   rendered its gold block straight across its own note paragraph. Any anchor
+   styled as a modal button gets the same box geometry a <button> would. */
+.modal a.btn{display:inline-flex;align-items:center;justify-content:center}
+.lc-cap-setup a.btn{margin:2px 0 10px}
 
 .lc-cap{border:1px solid var(--border,#2a2a35);border-radius:12px;padding:14px 16px;margin-bottom:12px;background:rgba(255,255,255,0.015)}
 .lc-cap-head{display:flex;align-items:center;gap:12px}
@@ -15791,6 +15859,16 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 .lc-details[open]>summary::before{content:'▾\00a0'}
 .lc-details>summary:hover{color:var(--text-primary,#e8e8f0)}
 .lc-details[open]>summary{margin-bottom:6px}
+
+/* ── Agent diagnostics inbox (2026-08-06) — the paste box for the
+   agent's「复制诊断信息」bundle; monospace because it is log text. */
+.lc-diag-text{width:100%;box-sizing:border-box;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.5;color:var(--text-primary,#e6e6ea);background:rgba(0,0,0,0.18);border:1px solid var(--border,rgba(148,148,168,0.18));border-radius:8px;padding:8px 10px;margin:2px 0 8px;resize:vertical}
+[data-theme="light"] .lc-diag-text{background:rgba(0,0,0,0.03)}
+.lc-diag-actions{display:flex;align-items:center;gap:10px}
+.lc-diag-hint{font-size:12px;color:var(--text-secondary,#9898a8)}
+.lc-diag-recent{margin:8px 0 0}
+.lc-diag-recent-head{font-size:11px;font-weight:600;color:var(--text-tertiary,#6a6a7a);margin:0 0 3px}
+.lc-diag-row{font-size:11.5px;color:var(--text-secondary,#9898a8);line-height:1.6}
 
 [data-theme="light"] .lc-cap{border-color:rgba(0,0,0,0.09);background:rgba(0,0,0,0.012)}
 [data-theme="light"] .lc-cap-icon{background:rgba(126,34,206,0.1);color:#7e22ce}

@@ -1,3 +1,11 @@
+### 2026-08-06(轮询降级通道增量协议落地:回显指纹分节省略——2s/968KB 全量快照 → 未变节 100B 标记,自愈零记账) — 脑派发接我自票 `pt_688f978365014218` **DONE**(另案自 pt_6cb1607e);commit 见下(4 文件);后端新套件 **3 针** + 前端降级套件扩 **5 针** + 邻接环 16 套 **124 绿** + collect-only **16,014** 零错
+
+- **协议(OPT-IN,非 incr 调用方字节不变):** `?incr=1` 的响应带 `fp`(content/thinking 的 crc32;toolRounds/endpointTurns 的 [count, 末元素 crc32]);轮询循环下次请求原样回显 `ifp`;指纹未变的胖节省略并打 `contentSame/thinkingSame/roundsSame/endpointTurnsSame` 标记。任何重置/截断/改写都改指纹→下一帧自动回全量——无版本号、无记账、最坏一帧延迟。**比较器必须是 crc32 而非长度**:在飞 round 的 elapsed 跳秒是同长度改写,长度检查会漏(套件第 6/7 针实证捕捉)。
+- **形态选择(记):** 后过滤器——`chat_poll` 内存分支照旧构造全量 dict(字段表契约零接触),出口 `_maybe_trim_incr_poll` 按回显删节;省序列化(省略节不进 json.dumps)且单点可拆。DB 分支(崩溃/驱逐任务)永不裁剪——一次性恢复读的全量就是它的意义,源针钉死单调用点。
+- **前端四缝:** 请求带 `incr:1`+有 fp 才回显;json 解析即捕 `data.fp`(**先于**重绑);重绑(换合并对象)即 `_pollFP=null` 强制下次全量——指纹描述的字节只有旧对象保证持有;四节省略微合并守卫。Scenario D 针:省略帧保状态不灌 undefined、回显逐字节一致、终端全量帧正常定居。
+- **实测口径:** 健康轮询期(内容滚动)胖节只在变化帧返回;工具等待/稳态期每帧仅 meta+fp(~100B)。4 会话同降级的隧道账:~2MB/2s → ~KB 级/2s(变化帧除外)。
+- **flake 注记:** 邻接环首跑 parity 1 红=兄弟正 mid-edit index.html+js_bundler(git status 实证),单跑复跑 15/15 自消——与本批无关。
+
 ### 2026-08-06(设计系统 P2 落地:多模态视觉质检——「好看」第一次有人负责;VLM 清单核查→findings 进作者修复环,全链可降级) — epic `pt_7b3f63ce9e844ecf` P2 **DONE**(P3/P4 续);新套件 **16 针** + 邻接回归 **127 绿**
 
 - **visual_qa.py:** 9 项设计师清单(变形/压关键画面/出界/对比度/排版/溢出/遮挡 + 两枚新增:主题一致性[绑死色板进 prompt]、反 AI 味套路)→ 结构化 findings(check/element/issue/severity/fix);**降级纪律**:无 playwright/无 Chromium/无视觉槽位/派发失败/回复不可解析,全部不阻塞交付——QA 是增强层,断电不烧片。截图走 playwright 先 `progress(1)` 收束时间线(评的是观众真正读到的定居帧)。

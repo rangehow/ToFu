@@ -97,6 +97,14 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
   /* Stamped at probe COMPLETION (not start) so a flap that kills probes
    * instantly cannot spin the probe path back-to-back. */
   let _lastSseReprobe = Date.now();
+  /* ★ Incremental-poll echo state (2026-08-06, epic pt_688f9783): the last
+   * `fp` the server sent, echoed verbatim as `ifp` on the next request.
+   * Sections whose fingerprint still matches come back as `<section>Same`
+   * omissions — the full snapshot (968KB measured on a 60-round task) stops
+   * riding every ~2s poll. Forced back to null (next pull FULL) whenever the
+   * merge target REBINDS to a different message object: the fp describes
+   * bytes only the OLD object is guaranteed to hold. */
+  let _pollFP = null;
   console.warn(`[_pollFallback] START — conv=${convId.slice(0,8)} taskId=${taskId.slice(0,8)} preExistingContent=${_preExistingContent}chars preExistingThinking=${_preExistingThinking}chars`);
   // Poll until the task finishes, the user aborts, or server is confirmed dead.
   let _pollIter = 0;
@@ -156,7 +164,9 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
     }
     const _pollStart = Date.now();
     try {
-      const resp = await Api.chat.poll(taskId);
+      const _pollQuery = { incr: 1 };
+      if (_pollFP) _pollQuery.ifp = JSON.stringify(_pollFP);
+      const resp = await Api.chat.poll(taskId, { query: _pollQuery });
       if (!resp || !resp.ok) {
         /* ★ 503 Service Unavailable = transient server overload (DB pool
          *   saturated during a reconnection burst). This is NOT a network
@@ -217,6 +227,9 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
       }
       _consecutiveErrors = 0; // ★ Reset on any successful response
       const data = await resp.json();
+      /* Incr-poll echo state — captured BEFORE the merge path (a rebind below
+       * may force the next pull back to full by nulling this). */
+      if (data.fp) _pollFP = data.fp;
 
       /* ★ SyncFix: discard poll responses for a superseded/aborted task so we
        *   don't resurrect old endpoint turns into conv.messages after the user
@@ -258,6 +271,9 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             console.warn(`[_pollFallback] 🔁 rebinding poll target for conv=${convId.slice(0,8)} — ` +
               `closure ref was detached (prevLen=${(assistantMsg.content||'').length} liveLen=${(_live.content||'').length})`);
             assistantMsg = _live;
+            /* The fp describes bytes the OLD object holds — the rebound one
+             * may be behind/ahead, so the next pull must be FULL. */
+            _pollFP = null;
           }
         }
       }
@@ -313,7 +329,10 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
       /* ★ Endpoint mode: poll returns endpointTurns with the full multi-turn
        *   structure.  Rebuild conv.messages from it instead of overwriting
        *   a single assistantMsg with the current turn's content. */
-      if (data.endpointMode && data.endpointTurns && data.endpointTurns.length > 0) {
+      if (data.endpointMode && data.endpointTurnsSame) {
+        /* incr: endpoint turns unchanged since the echo — skip the wholesale
+         * rebuild (and its replaceAll re-render churn). */
+      } else if (data.endpointMode && data.endpointTurns && data.endpointTurns.length > 0) {
         const conv = conversations.find(c => c.id === convId);
         if (conv) {
           // Find where original messages end (non-endpoint messages)
@@ -361,7 +380,9 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
          * regression then OVERWROTE anyway, silently losing what the user
          * already saw. Now we keep whichever side is longer and only log
          * suspicious shrinkage. */
-        if (data.content != null) {
+        if (data.contentSame) {
+          /* incr: server fingerprint says our content is current — keep it. */
+        } else if (data.content != null) {
           const oldLen = assistantMsg.content?.length || 0;
           const newLen = data.content.length;
           /* ★ P1b flicker guard: once the tail is SETTLED (has finishReason —
@@ -382,7 +403,9 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
               `oldContentLen=${oldLen} newContentLen=${newLen} — keeping longer accumulated content (delta cycle vs poll cycle race).`);
           }
         }
-        if (data.thinking != null) {
+        if (data.thinkingSame) {
+          /* incr: unchanged — keep the local copy. */
+        } else if (data.thinking != null) {
           const oldThinkLen = assistantMsg.thinking?.length || 0;
           const newThinkLen = data.thinking.length;
           if (newThinkLen >= oldThinkLen) {
@@ -462,7 +485,9 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
         // the equivalent merge step (~line 2246).
         delete assistantMsg._continueApiRounds;
       }
-      if (data.toolRounds) {
+      if (data.roundsSame) {
+        /* incr: rounds unchanged since the echo — keep the local copy. */
+      } else if (data.toolRounds) {
         /* ★ RENDER_CONTRACT Phase 3: route the POLL toolRounds assembly through
          *   the ONE pure reducer (projectColdSnapshot) — same projection the
          *   live fold + cold state block use, so a poll-fallback turn's rounds

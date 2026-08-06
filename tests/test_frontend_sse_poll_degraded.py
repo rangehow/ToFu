@@ -77,6 +77,7 @@ global.window = global;
 if (CFG.reprobeMs != null) global._SSE_REPROBE_INTERVAL_MS = CFG.reprobeMs;
 
 const calls = { stallWatchClear: [], clearSseCursor: [], trySSE: [],
+                pollQueries: [],
                 twUpdate: 0, twStop: 0, finishStream: 0, save: 0 };
 global.stallWatchClear = (t) => { calls.stallWatchClear.push(t); };
 global._clearSseCursor = (t) => { calls.clearSseCursor.push(t); };
@@ -116,7 +117,9 @@ global.activeConvId = 'conv-dg';
 const placeholder = conv.messages[1];   // the connectToTask recovery placeholder
 
 let pi = 0;
-global.Api = { chat: { poll: async () => {
+global.Api = { chat: { poll: async (tid, opts) => {
+  calls.pollQueries.push(opts && opts.query
+    ? { incr: opts.query.incr, ifp: opts.query.ifp || null } : null);
   const step = CFG.polls[Math.min(pi, CFG.polls.length - 1)];
   pi++;
   if (step.swapMessages) {
@@ -160,6 +163,11 @@ eval(fs.readFileSync(process.argv[2], 'utf8'));   // ui/sse_poll_fallback.js (re
 """
 
 
+def _js(obj) -> str:
+    """JSON.stringify wire shape (no spaces) — what the JS echo produces."""
+    return json.dumps(obj, separators=(',', ':'))
+
+
 def _run(cfg: dict) -> dict:
     probe = os.path.join(ROOT, 'node_modules', '.tmp_poll_degraded_harness.js')
     os.makedirs(os.path.dirname(probe), exist_ok=True)
@@ -189,6 +197,8 @@ def test_entry_clears_stall_watch_and_poll_paints_in_tree():
     SSE probes at bay; snapshots paint into the SAME in-tree placeholder
     (identity) and the terminal poll finalizes exactly once."""
     r = _run({'reprobeMs': 1e15, 'polls': [_RUN1, _RUN2, _DONE]})
+    assert all(q and q['incr'] == 1 and q['ifp'] is None for q in r['calls']['pollQueries']), \
+        f"every degraded poll opts into incr mode; no fp to echo when responses carry none: {r}"
     assert r['calls']['stallWatchClear'] == ['task-dg-1'], \
         f"poll entry must clear the stall watch for the surrendered task: {r}"
     assert r['calls']['trySSE'] == [], \
@@ -205,10 +215,15 @@ def test_rebind_after_phase2_replace_writes_in_tree_not_ghost():
     """Scenario B: conv.messages is wholesale-replaced BETWEEN polls (the
     Phase-2 reload shape). The next poll must re-resolve by _msgId and write
     into the NEW in-tree object — the ghost ref must freeze."""
+    fp_a = {'c': 11, 't': 22, 'r': [0, 0]}
+    fp_b = {'c': 33, 't': 22, 'r': [0, 0]}
+    run1 = {'data': dict(_RUN1['data'], fp=fp_a)}
     swap2 = {'swapMessages': True, 'swapContent': 's' * 20,
              'data': {'status': 'running', 'content': 'y' * 30, 'thinking': '',
-                      'toolRounds': [], 'taskId': 'task-dg-1', 'phase': None}}
-    r = _run({'reprobeMs': 1e15, 'polls': [_RUN1, swap2, _DONE]})
+                      'toolRounds': [], 'taskId': 'task-dg-1', 'phase': None,
+                      'fp': fp_b}}
+    done = {'data': dict(_DONE['data'], fp=fp_b)}
+    r = _run({'reprobeMs': 1e15, 'polls': [run1, swap2, done]})
     assert r['ghostContent'] == 'x' * 10, \
         f"the ghost ref must stop receiving merges after the replace: {r}"
     assert r['inTreeIsPlaceholder'] is False, \
@@ -216,6 +231,39 @@ def test_rebind_after_phase2_replace_writes_in_tree_not_ghost():
     assert r['inTreeContent'] == 'z' * 40, \
         f"post-rebind merges land on the in-tree object: {r}"
     assert r['calls']['finishStream'] == 1, r
+    # Incr-poll echo discipline across the rebind: poll #2 echoes fp_a; the
+    # swap fires the rebind, which must FORCE the next pull full (ifp gone) —
+    # the fp describes bytes only the ghost object holds.
+    qs = r['calls']['pollQueries']
+    assert qs[1]['ifp'] == _js(fp_a), f'poll #2 echoes the last fp: {qs}'
+    assert qs[2]['ifp'] is None, f'a rebind must force the next pull FULL: {qs}'
+
+
+@pytest.mark.skipif(not _node_available(), reason='node not installed')
+def test_incr_omissions_keep_state_and_echo_fp():
+    """Scenario D (epic pt_688f9783): the echo-fingerprint incremental merge.
+    Poll 1 is full and carries `fp`; poll 2 omits every fat section behind
+    `*Same` markers — the merge must KEEP the accumulated state (not clobber
+    it with undefined); poll 3's terminal full body still settles the turn.
+    The echo itself is pinned: poll 2's request carries poll 1's fp verbatim.
+    """
+    fp = {'c': 111, 't': 222, 'r': [1, 5]}
+    full1 = {'data': {'status': 'running', 'content': 'x' * 10, 'thinking': 't1',
+                      'toolRounds': [{'round': 1}], 'taskId': 'task-dg-1',
+                      'phase': None, 'fp': fp}}
+    omit2 = {'data': {'status': 'running', 'contentSame': True, 'thinkingSame': True,
+                      'roundsSame': True, 'taskId': 'task-dg-1', 'phase': None,
+                      'fp': fp}}
+    done3 = {'data': {'status': 'done', 'content': 'x' * 10 + '!final', 'thinking': 't1',
+                      'toolRounds': [{'round': 1}], 'taskId': 'task-dg-1',
+                      'finishReason': 'stop', 'fp': fp}}
+    r = _run({'reprobeMs': 1e15, 'polls': [full1, omit2, done3]})
+    qs = r['calls']['pollQueries']
+    assert qs[0]['incr'] == 1 and qs[0]['ifp'] is None, f'first contact is full: {qs}'
+    assert qs[1]['ifp'] == _js(fp), f'the echo is verbatim: {qs}'
+    assert r['inTreeContent'] == 'x' * 10 + '!final', \
+        f'omissions must KEEP state, the terminal full body must settle: {r}'
+    assert r['calls']['finishStream'] == 1 and r['calls']['twStop'] == 1, r
 
 
 @pytest.mark.skipif(not _node_available(), reason='node not installed')
@@ -254,6 +302,12 @@ def test_source_wires_degraded_mode_seams():
         'the SSE re-probe call was removed from the poll loop'
     assert '_resolveAssistantById' in src and '_resolveAssistantByTaskId' in src, \
         'the stable-id rebind was removed — ghost writes after a Phase-2 replace return'
+    # Incr-poll seams (pt_688f9783): drop any of these and every poll silently
+    # goes back to hauling the full ~1MB snapshot through the tunnel.
+    assert "const _pollQuery = { incr: 1 };" in src, 'poll requests no longer opt into incr mode'
+    assert '_pollQuery.ifp = JSON.stringify(_pollFP)' in src, 'the fp echo was removed'
+    assert 'data.contentSame' in src and 'data.roundsSame' in src, 'the omission merge guards were removed'
+    assert '_pollFP = null;' in src, 'the rebind→force-full reset was removed'
 
 
 if __name__ == '__main__':
@@ -261,6 +315,8 @@ if __name__ == '__main__':
     print('PASS test_entry_clears_stall_watch_and_poll_paints_in_tree')
     test_rebind_after_phase2_replace_writes_in_tree_not_ghost()
     print('PASS test_rebind_after_phase2_replace_writes_in_tree_not_ghost')
+    test_incr_omissions_keep_state_and_echo_fp()
+    print('PASS test_incr_omissions_keep_state_and_echo_fp')
     test_reprobe_cursorless_and_hands_back_to_sse()
     print('PASS test_reprobe_cursorless_and_hands_back_to_sse')
     test_source_wires_degraded_mode_seams()

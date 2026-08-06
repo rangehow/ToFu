@@ -1,3 +1,18 @@
+### 2026-08-06(「说完要去查就死了」定案+双根修:网关 finish_reason=tool_calls 零载荷谎报——新第五异常 tool_calls_no_payload 落原始帧 + analyse 改透明重试不再将错就错) — owner 指令「Why did this conversation just stop like that with msh3qeplzneph5? Go check the PostgreSQL database」;commits 见下(6 文件);新套件 **10 针**(NEUTER 6 红实证)+ 邻接环 **141+20 绿** + collect-only **15,964** 零错
+
+- **定案(PG+日志+代码三方互证):** 任务 153fccfc R3(14:03:56),sankuai 网关对 kimi-k3 干净收流([DONE] 有、无传输异常)却报 `finish_reason=tool_calls`——61 chunks/128s/缓存 0% 命中里**一个 tool_call delta 都没有**,213 completion tokens 约 150 个凭空消失(同日 14:24 同模型另一起 missing_done 裸掐流,网关当天在抖)。此后四关全放行:①_raw SSE 异常只 4 类(missing_done/missing_finish_reason/empty_stop/tool_name_unknown),此型全不中,原始帧没落盘;②`_analyse.py:668` 归一成 stop 且日志错怪 phantom 过滤器(全日志零条 Filtering phantom,过滤器从未触发);③intent-stall nudge 因「上轮工具成功」跳过;④SUSPICIOUS COMPLETION 守卫把 R1 的 89 字开场白「我去查 402 链路…」当最终交付——owner 看到的就是「说完一句话就停了」。
+- **Fix A(观测黑洞,lib/llm/_sse_core.py):** finalize 新增第五异常 `tool_calls_no_payload`——finish_reason∈{tool_calls,tool_use} 但累加器为空即 WARNING+`dump_anomaly` 落原始帧(下次复发直接拿到网关帧,不再靠猜);phantom 过滤器前捕获预过滤计数,`usage['_tool_calls_void']` 区分两世界:'gateway_no_payload'(线上根本没发)vs 'filtered'(自家过滤器丢光,其逐条 WARNING 在日志中可查)。
+- **Fix B(行为根修,stream_handler):** `_analyse.py` 该分支从「归一成 stop」改为骑现有重试家族的**透明重试本轮**(共享 `_premature_retry_count_phase` 计数器,新上限 `_TOOL_CALLS_NO_PAYLOAD_RETRY_MAX=2` 入 `_budget.py`——毒轮已计费,与 empty_stop/canned_greeting 同档;`_reset_round_to_base` 助手重置文本到轮基+FloorRetry 残渣登记+DELTA_RESET;emit_phase RETRYING bucket='tool_calls_no_payload'),重试耗尽落诚实 premature_close 错误信封(可 Continue),**永不把开场白当结局交付**;防御归一分支日志改为读 `_tool_calls_void` 区分真相,不再盲甩 phantom 过滤器。
+- **守卫:** 10 针(转储×2 世界/正常载荷静默/普通 stop 静默/事故复演重试/轮基重置/耗尽诚实收尾/无戳老客户端仍重试/真 stop 不受影响/真工具调用不受影响);NEUTER 实证=挖掉两修复 6 红 4 绿(绿者恰为补集静默针,双世界同真)。
+
+### 2026-08-06(「已停滞·静默 1485s 疑似卡死」假阳性定案:隧道集体掐流 → 重连预算 3 秒烧光投降轮询 → 轮询通道永不喂停滞表 → 横幅必弹且诱导杀健康任务) — owner 截图问「现在经常这样,是不是有bug」;纯诊断(未改码),证据链全实证
+
+- **抓到现行:** 截图会话=msh3k8lutrv8n7、任务 819abd38。服务器侧该任务从 13:50 一直健康跑到 14:56+(R60,429 冷却循环),从未卡死;浏览器侧 14:02:26 后零 SSE 帧 → 300s 后横幅弹、一直计数到 1485s。**横幅是冤案,「停止」按钮在诱导用户杀健康任务。**
+- **事故时间线(全部日志实证):** 14:02:25 VS Code 隧道(vscode-zw05…/proxy/15000)**同一秒掐断全部 4 条 SSE**(e5198ff6/0b236156/f854ab9e/819abd38,各已活 668-824s)→ 前端重连 gen1→4 在 3 秒内全部打完(`_resumeSSEWithRetry` 6 次尝试**零退避**),全部撞在隧道抖动窗口里 → 14:02:28 四个任务同秒齐刷「SSE resume stalled at cursor — surrendering to poll」→ 永久轮询(2s/968KB 数据照流,单副本下 `reconnect:true` 回升路径是死代码)→ stall watch 只被 `dispatchSSEEvent` 喂(sse_pipeline.js:685),轮询循环(sse_poll_fallback.js)全程不喂 → 300s 后横幅必弹。
+- **量化「经常」:** 仅今天 app.log:16 次 tunnel premature-close recovery + 8 次 surrender-to-poll;每次投降=5 分钟后必得一条假横幅。环境触发是云 IDE 隧道(周期集体掐长连),无法消除,只能让降级自愈。
+- **三层缺陷(修复靶点,已报 owner 待批):** ①`_resumeSSEWithRetry` 无退避+「重连后游标未推进=停滞」一次即投降(管道只是暂时安静也判死);②投降后轮询到任务结束都不再试 SSE(降级不自愈);③轮询通道不 `stallWatchClear/Feed`——横幅在轮询模式 100% 假阳性。另观察:轮询通道虽每 2s 更新 content/thinking/toolRounds,但本例气泡观感冻结,疑 14:02:25 重连风暴推入的 recovery placeholder 使 assistantMsg 脱锚(_trySSE 有同类探测器),待修时一并核。
+- **同族对照:** 14:24:09 任务 71b012a1 网关裸掐流(premature close 189s 只交付 thinking)→ ABNORMAL STOP 重试层正常接棒恢复——真·挂流今天只此一例且自愈,佐证高频横幅几乎全部来自轮询假阳性族。
+
 ### 2026-08-06(Stop「点了又自己跑/要点好几次」根修:prep 阶段 abort 盲区关闭——分段闸门 + send/regen 注册后 marker 复检 + 前端 abortConv 先于 rescue sync) — owner 报障「误发消息点暂停,几秒后又自动继续生成,要点好几次才停」;commit `f0e2c1bf`(7 文件 +511/−7);新套件 **15 针** + abort/send 邻接环 **48+56+27 全绿** + collect-only **15,954** 零错 + ruff 干净
 
 - **事故实证(逐字节,非推测):** conv msftgnt3 task 456bf5c7 日志显示 `ABORT RECEIVED elapsed=5.0s` 后任务继续 prep——上下文注入实测 **88s**（FUSE 慢盘）,85 秒内所有再点全是 `abort DUPLICATE` no-op;最终 `finish=aborted rounds=0`（一个 token 没生成）。「恢复翻译」的观感=消息发送时的服务器端自动翻译+prep（连接中气泡）,「又开始生成」= 任务在 Stop 之后才启动。

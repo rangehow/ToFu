@@ -33,6 +33,15 @@
 - **防漂移普查针(AST,枚举不信名单):** `test_every_failure_sentinel_has_a_verdict` 扫描 `execute_tool_pipeline` 源码——每个失败哨兵写入必须有配对判定(判定表或即时 terminal_status settle);该针当场擒获两条已正确即时 settle 的 abort 车道(白名单机制豁免)与我首版注释撑出窗口的真漏(判定必须紧跟哨兵)。
 
 ### 2026-08-06(grep 拦截闸「误解子 Shell」根修:
+### 2026-08-06(文件系 grep 透明重定向落地:进程内 GNU 等价引擎 + 临时文件拼接续跑管道——拒绝+教学降级为兜底;三轮真机 GNU 探针锚定字节级保真,差异对拍套件常驻) — owner 指令「尽可能正确的透明重定向,robust/覆盖面大,支持 grep 完再 cat 到文件」;epic `pt_aab1b54411aa4dda` **DONE**;commit 见下(7 文件);新套件 **36 针** + e2e 套件扩 **12 针** + 邻接环 **231 绿** + ruff 干净 + collect-only **16,220** 零错
+
+- **形态:** `lib/project_mod/grep_redirect.py` 新模块——自研分词器(引号/转义/偏移量保留)→ getopt 规则参数解析(-e/-f/-m/-A/-B/-C/-d 吃参、长短标志、egrep/fgrep 默认模式)→ BRE/ERE→Python re 翻译器(`\|` `\+` `\(\)` `\{m,n\}` `\<` `\>`、POSIX 类、fixed 转义)→ GNU 保真引擎(文件名前缀规则/上下文 `--` 分隔/二进制通报/退出码 0/1/2 全按探针真值)→ span 拼接器:段替换为 `{ cat 临时文件 ; exit N ; }`(cmdsubst 内)或 `( … ; exit N )`(其余),重定向尾巴原样保留。run_command 骑 `exec_command` 缝(rm→trash 同款):回显仍是模型原命令,执行侧才是拼接件——幻象不破。
+- **正确性契约(plan 期执行的前置安全分析):** 重定向的 grep 在 shell 跑之前执行,仅当**所有前驱段可证只读**(_READONLY_COMMANDS 白名单 + 无输出重定向 + 字面 cd 折入引擎 cwd;`git checkout`/`sed -i`/`awk`/`make` 一律不算)——`printf … > log; grep … log` 这类「先写后读」形状诚实拒绝并附原因,绝不拿陈旧字节冒充结果。
+- **实测排掉的四个真坑:** ①`$( (` 被 bash 当算术展开(替换体在 `$()` 内改花括号组)②顶层花括号组里 `exit` 会杀掉整个 bash -c 进程(链式 `|| echo` 被吞)③环境变量赋值不能前缀任何组形式(挪入组内)④`[^[:digit:]]` 否定 POSIX 类误译(os.walk 换 DFS 保 GNU readdir 顺序,`grep -r | head` 首屏一致)。
+- **覆盖面:** 单/多文件前缀、-n/-c/-l/-L/-o/-q/-s/-w/-x/-i/-v/-m/-A/-B/-C/-H/-h/-r、--include/--exclude/--exclude-dir(显式操作数同样生效,与探针一致)、glob 展开(bash 排序)/$VAR/~/裸 `-r` 无 `./` 前缀、IGNORE_DIRS 下降剪枝(与 hardening 层同口径)、二进制通报、缺失文件错误行+rc2、-q 遇首匹配即停。拒绝兜底:-P/-z/backtick/`$(…)` 参数/sudo 包裹/混合 stdin 操作数/模式文件不可读/40s 内部死线(FUSE 坏窗诚实失败转教学)。
+- **测试:** GNU 真值矩阵 31 针(三轮真机探针字节级锚定:前缀/退出码/上下文分隔/二进制/-l -L 裸匹配基准/--include 显式操作数/DFS 顺序)+ 拼接形状 10 针(wc/cat 落盘/`&&`/`||`/`if`/`$()`/子 Shell/多 grep 链/文件系→流式混排)+ 诚实拒绝 13 针 + 临时文件生命周期 + **差异对拍套件**(同语料同标志与本机真 GNU grep 逐字节比 stdout+rc,skipUnless GNU)+ e2e 12 针(17 分钟事故命令首次真实执行出结果/owner 的 grep→cat 落盘形状/兜底原因文案/双 kill switch)。
+- **文档:** run_command 工具描述与 CLAUDE.md 同步改「透明执行,拒绝仅兜底」。
+
 ### 2026-08-06(grep 拦截闸「误解子 Shell」根修:_split_pipeline 不识括号/换行——`)` 幻影操作数冤拦合法流式过滤、`(` 掩码命令词成逃逸洞;共享层一刀三洞同闭) — owner 截图问「guard 怎么会误解 R39 的子 Shell」;commit 见下(3 文件);守卫套件 **34 针**(新增 7 针)+ 邻接三环(extraction/project_tools/danger_quoted/rm_rf/scan_guard/not_run_meta)**213 绿**
 
 - **事故(conv mshbbp2867js1a R39):** 验证脚本 `( … env | grep -E '^(TOFU_TLS|PORT|BIND_HOST)=' )` 是 guard 自家规则明文合法的流式过滤(无操作数、stdin 来自管道),却被拒;模型只得「改成完全不使用 grep 的结构」——闸教出了与自身规则相反的教训。

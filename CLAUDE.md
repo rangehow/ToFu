@@ -61,6 +61,11 @@ lib/                   — Core business logic
                          .credentials_vault.key (600); values never logged; reveal
                          endpoint is the only plaintext exit (audited). THE place for
                          user credentials — never hardcode, never commit (§6 / §10.3).
+                         Model-facing: build_vault_index() → <credential_vault>
+                         prompt block (names + $ENV vars + notes ONLY, byte-stable),
+                         spliced by system_context/_inject.py; exec_env_overlay()
+                         injects values into the run_command child env (skill.*
+                         entries stay owned by lib/skills/env.py).
                          UI: Settings → Advanced →「凭证保管库」; REST: api_v1/credentials.py.
   task_runtime.py      — Compatibility shim → re-exports TaskRuntime from
                          lib/agent_core/task_runtime.py. See §13.

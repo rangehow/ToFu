@@ -1,3 +1,20 @@
+### 2026-08-06(派发路由改 model_id 唯一键:alias 并集跨条目/跨 provider 合并退役——官方 DeepSeek 请求被三酷镜像劫持事故根修) — owner 指令「routing group 只用 model_id,不用 aliases 并集;model_id 就是预设与路由键」;commit `f5668c43`(4 文件 +199/−100);邻接环 **182+67 绿** + collect-only **16,107** 零错 + **生产配置实测**:prefer=deepseek-v4-flash1 只命中官方 provider
+
+- **事故定案(conv msh9x2itap6r5f,字节级实证):** owner 为躲轮转建了官方条目 `deepseek-v4-flash1` 并挂 alias `deepseek-v4-flash` 想「仍能叫到」——旧 union-find 把 {model_id}∪aliases 与静态 MODEL_ALIAS_GROUPS 按连通分量跨条目合并,官方条目与三酷 `deepseek-v4-flash`(request_ids: meituan/tencent/huawei)被粘成一组;点 flash1 永远落三酷(key_stats 铁证:官方 key 当天 3 次 success 全是设置页探活,聊天零次到达官方)。静态表本身就含 `{deepseek-v4-flash, deepseek-v4-flash-huawei}`——劫持是双层的。
+- **新契约:** Slot 新增 `logical_model`(所属条目的 model_id,wire id 留在 `Slot.model`,env/ephemeral 槽 __post_init__ 兜底=model);`_build_alias_index`/`_alias_set` 退役 → `_build_logical_index`/`_route_logical`/`_prefer_matcher`。解析顺序:条目内名字(含 wire ids,存量会话拼写回本条目)→ exact model_id → 静态组**恰好一个**已配置成员(存量 Bedrock 拼写续命)→ None 退 exact wire 相等,绝不落陌生人。
+- **冲突响亮化:** 一名被两条目声明时 exact model_id 为属主+构建期 WARNING——生产配置实测当场揪出 owner 的撞名:`'deepseek-v4-flash' is claimed by multiple entries ['deepseek-v4-flash','deepseek-v4-flash1']`。
+- **保留语义:** 条目内轮转活着(disabled_ids 把 root 禁掉、alias 槽仍服务 root 请求的针原样保留);env 路径静态变体归到所配 base 的 logical 下;`routing_group()`(model_entry.py)不动——它还服务 endpoint binding。fallback 链/strict_model/has_capable_slots/sticky 等待全部改吃 matcher,行为钉在 test_dispatch_durable_exclusions。
+- **/tmp 播种史诗注记:** owner 同日终裁撤回 epic pt_4d321fb8f1c2400c(runbook 顶部撤回声明:/tmp 不准部署 DB,播种后 /tmp 被清会从冻结 legacy「陈旧复活」=真丢数据窗口)。「卡」的 DB 级解法只剩减少 prep 期 DB 往返一族,另案。
+
+### 2026-08-06(空白向导「假设循环」切断:TOFU_DIAG 测量缝落地——同一套向导 + $TEMP 事实日志,诊断包已可下载;owner 指令「下一修复必须测量驱动」) — owner 复核指令;commit `183d7706`(3 文件 +174);守卫 **37/37**(新增 diag 模式真 makensis 编译钉+宏接线钉)+ collect-only **16,115** 零错
+
+- **形态(长期化,非一次性 fork):** 诊断缝以 `!ifdef TOFU_DIAG` 进主模板,全部插入点住在共享宏(TOFU_PAGE_ART/TOFU_LABEL)里——生产编译展开为空(字节级零影响,双模式编译门钉死),`-DTOFU_DIAG=1` 编出测量版。fork 一份「近似副本」去测 = 测的不是真向导,拒了。
+- **测量面:** .onInit 头部(版本/语言/**DPI**/TEMP/PLUGINSDIR)+四图 FileExists;每页创建时对话框+位图控件的矩形/可见性、LoadImage 句柄+GetLastError(宏内首指令先捕错误码,后续调用会覆盖)、STM_GETIMAGE 实况;每标签矩形/可见性;**Show 后 400ms 活探针**(定时器在插件消息循环内触发)枚举内层对话框的每个子窗口(类名/矩形/可见性)——「没创建/创建了但不可见/几何错位」三世界一行可判。
+- **双探针实例:** NSIS 禁止 install 函数引用 un.*(反之亦然),OnTofuDiagProbe/un.OnTofuDiagProbe 共享探针体宏,定时器按 `__UNINSTALL__` 分支选边。
+- **事故自记(第三次):** insert_content 又复述锚点(Function DoInstall 双份→「Function not valid in Function」)——JOURNAL 8-05 已警过的同一坑,编译门一轮擒获;规则再钉:insert 内容绝不复述锚点文本。
+- **诊断包:** `TofuAgent-Setup-0.16.0-diag-win64.exe`(45,393,436B,载荷同正式包 1a5e4bd5,从已提交树构建)以 kind='agent-diag' 入店——find_for_platform 精确匹配 kind,面板 agent 列表实测仍只显示正式包;下载走 `/api/v1/desktop/download/<filename>`。正式包不动(45,390,016B 仍为候选修复版)。
+- **判读表(日志→世界线→修法):** 对话框 0×0/屏外→1018 定位/DPI→修几何;image_handle=0/MISSING→位图加载($TEMP 路径/杀软)→改嵌入资源;全控件 visible=1 矩形正常但屏上空白→环境(GDI 钩子/DLP)→回退经典向导;标签 visible=1 但无字→重绘类实锤→RedrawWindow 腰带(已在 owner 备案,未入本批)。
+
 ### 2026-08-06(Settings 新增「工具」面板:统一注册表实时盘点上屏——21 家族 85 工具按组组织,门状态/写徽章/插件与 MCP 行全量呈现;`git commit -- paths` 共享 HEAD 收编事故记) — owner 指令「项目迭代加了很多工具我都不知道,要实时看到所有注册在案的工具,好好设计给人呈现」;commit `5dc88f2d`(15 文件 +1289/−59,内嵌兄弟 hunk 见末条);后端新套件 **15 针** + 前端 jsdom **28 针** + parity/bundle/隔离/注册表邻接环 **119 绿** + collect-only **16,080** 零错 + 像素级预览实证
 
 - **设计定案(骑统一注册接口,零并行真源):** owner 曾立「所有工具必须统一注册」——`lib/tools/registry` 的 `ToolSpec.provides` 即全量工具宇宙(SSOT 棘轮 test_tool_registry_write_partition_ssot 钉死:有 handler 必须声明)。本批新增的只是**读侧**:`lib/tools/registry/_introspect.py` 的 `build_tool_inventory()` 走 `_TOOL_SPECS` 单一注册表,按 category 分组,每个家族的「门」用它自己的 `build()` 在**参考上下文**(普通聊天回合默认:搜索 multi/无项目/功能开关读 _SAVED_CONFIG)里求实况——不是手维护的猜测表。`ToolSpec` 新增 `gate` 人读字段(21 枚内建全填),「开启方式」文案的唯一来源,测试钉死内建必填。

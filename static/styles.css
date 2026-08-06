@@ -23209,6 +23209,8 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-chip.refused{
   font-size:11px;
   line-height:1.5;
 }
+.stg-face-warn-ic{ margin-right:3px; }
+.stg-face-warn-ic svg{ vertical-align:-0.15em; }
 [data-theme="dark"] .stg-face-warn,
 html:not([data-theme="light"]):not([data-theme="tofu"]) .stg-face-warn{
   background:rgba(251,191,36,0.10);

@@ -252,3 +252,27 @@ def test_progress_status_label_handle_is_captured_from_r0():
                          .split('FunctionEnd')[0]
             assert 'StrCpy $StatusCtl $0' in body, (target, page)
             assert 'Pop $StatusCtl' not in body, (target, page)
+
+
+
+def test_diag_seam_is_wired_into_the_shared_macros():
+    """The TOFU_DIAG measurement seam (2026-08-06): the log calls live
+    INSIDE the shared macros so every page (install + uninstall) is
+    covered, production compiles expand them to nothing, and the seam
+    cannot be dropped without this pin going red."""
+    tmpl = (_ROOT / 'desktop' / 'installer.nsi.tmpl').read_text(
+        encoding='utf-8')
+    art_macro = tmpl.split('!macro TOFU_PAGE_ART')[1].split('!macroend')[0]
+    label_macro = tmpl.split('!macro TOFU_LABEL')[1].split('!macroend')[0]
+    assert '!insertmacro TOFU_DIAG_PAGE' in art_macro, (
+        'page-level diag (dialog/art/image-handle) fell out of '
+        'TOFU_PAGE_ART')
+    assert '!insertmacro TOFU_DIAG_HW "label" $0' in label_macro, (
+        'label-level diag fell out of TOFU_LABEL')
+    assert '!ifdef TOFU_DIAG' in tmpl and 'OnTofuDiagProbe' in tmpl, (
+        'the diag block / live-page probe timer went missing')
+    # The empty-expansion else branch is what keeps production builds
+    # byte-clean of the seam.
+    assert tmpl.count('!macro TOFU_DIAG_WRITE') == 2, (
+        'TOFU_DIAG_* macros must exist in BOTH an ifdef and an '
+        'empty-else form')

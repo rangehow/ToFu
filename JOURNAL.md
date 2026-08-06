@@ -1,3 +1,9 @@
+### 2026-08-06(第六轮:tool_exec 超时腿定案=3.10 异类异常——`concurrent.futures.TimeoutError` 3.11 才并入内建 TimeoutError;双捕修两车道,CI 3.10 实证转绿) — epic `pt_b27e1d2610304889` **DONE**;commits `c18932b2`(双捕+静态针)+`8b459a6`(heartbeat 宽限)
+
+- **定案(一票封案的版本知识):** `as_completed(timeout=)`/`future.result(timeout=)` 抛的是 `concurrent.futures.TimeoutError`——3.10 上它与内建 `TimeoutError` 是**两个类**(3.11 起才做别名),于是 `except TimeoutError` 在 3.10 接不住,整个池超时车道(verdict 盖章+wire status+模型侧失败串)从未触发,异常直接逃逸出 `execute_tool_pipeline`。「3.10 腿间歇红」实为**确定性红**——前二轮被更大的红批淹没,且 3.12 开发机永远看不见。双捕 `(TimeoutError, _FuturesTimeoutError)` 修两处(_pipeline + streaming_tool_executor 的 future.result 车道),套件加静态针(双版本不可行为模拟,静态针+3.10 CI 腿是证据链)。**同类排查口诀:凡是 catch futures 超时的 `except TimeoutError`,3.10 全漏。**
+- **顺手收编:** `test_serial_lane_heartbeat` 线程死亡断言加 2s 宽限(stop 事件 set≠线程已退出,CI 负载下调度延迟;真泄漏 2s 后仍红,契约不松)。
+- **CI 运营注记:** 当轮撞 GitHub Actions 基建故障(Service Unavailable,腿级零跑)——`POST /actions/runs/{id}/rerun-failed-jobs`(token 从 tofu-open remote URL 取)可直接续跑,无需空推。
+
 ### 2026-08-06(公开仓 CI 五轮清扫收官:预存红批+锁毒源双票 DONE——锁级联真身不是锁,是「桩泄漏」;收割器+连接创建栈取证网落地;三轮导出实证 HEAD 快照导出器抗共享树脏态) — epics `pt_bad525c9f55642c3` / `pt_3e3ff7dae98047fe` **DONE**;commits `4b19149e`(棘轮对齐+静默 catch 收编+lint/typecheck 债)+`171c6368`(ttl_sweep 单调钟强制+produce_slides 收编+盘点再生成+3.10 语法)+`7bdb1708`(slides 冻结 Stage 缝+fontTools 依赖+事务收割器)+`7182210c`(连接取证)+桩泄漏根修(见下);CI 第 5 轮 paper/锁族双腿清零
 
 - **五轮收敛曲线(run → 残留):** c548d090 红 17 → 684619ba 红 14 → de74bb71 红 13 → 42440c84 红 11 → 46559da3 **红 5 全属兄弟在飞件**(grep_engine×2=mshee0vd 在飞引擎套件;i18n+bundle×2=focus_mode/reading_xp 兄弟删到一半未提交;desktop_agent×4 兄弟 239074f7 已补提)。我票内条目(11 棘轮+typecheck 2+lint F401+paper 404 族+锁级联族+ttl_sweep)**逐项实证转绿**。

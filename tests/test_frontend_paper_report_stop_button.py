@@ -181,7 +181,7 @@ def test_stop_button_stays_disabled_across_poll_repaint():
     lines = _run(REPORT_JS)
     fails = [ln for ln in lines if ln.startswith('FAIL')]
     assert not fails, 'paper report stop-button failures:\n' + '\n'.join(lines)
-    assert len(lines) >= 18, f'expected >=18 result lines, got:\n' + '\n'.join(lines)
+    assert len(lines) >= 18, 'expected >=18 result lines, got:\n' + '\n'.join(lines)
 
 
 @pytest.mark.skipif(not _node_deps_available(),

@@ -220,7 +220,7 @@ def test_neuter_strip_connect_regresses():
     # arg count, but never the delegated definition elsewhere.
     neutered, n = re.subn(r"connectToTask\(id, [^;]*\);",
                           "/* connectToTask neutered */ void 0;", src)
-    assert n >= 1, f"no connectToTask call found in _reconnectServerTaskIfIdle"
+    assert n >= 1, "no connectToTask call found in _reconnectServerTaskIfIdle"
     assert neutered != src, "neuter pattern did not match connectToTask call"
     r = _run(neutered, _running_conv(), "c1", behaviour="running")
     assert r["calls"]["connectToTask"] == [], \

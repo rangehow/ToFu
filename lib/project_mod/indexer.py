@@ -147,7 +147,7 @@ def _journal_seed() -> str:
     session. It is intentionally rule-text only (no fabricated history) — the
     agent fills in real entries as the project evolves.
     """
-    return f"""# Project Journal
+    return """# Project Journal
 
 > This file is the project's **evolution journal** — a living record the AI
 > assistant maintains across sessions. It is NOT a rules file (project rules

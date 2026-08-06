@@ -215,7 +215,8 @@ def test_NC_send_window_gates_are_load_bearing(tmp_path):
     exactly the two-layer story this suite documents."""
     srcs = _sources(neuter='both_gates')
     # run_harness asserts zero FAILs; for the neuter we EXPECT a fail, so run raw.
-    import subprocess, tempfile
+    import subprocess
+    import tempfile
     with tempfile.NamedTemporaryFile('w', suffix='.js', dir=HERE, delete=False) as fh:
         hp = fh.name
         fh.write(_HARNESS)

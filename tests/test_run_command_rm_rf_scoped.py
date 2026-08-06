@@ -116,7 +116,7 @@ class TestCatastrophicDeleteMatrix:
         f'{_RM} -rf /data/',
         f'{_RM} /mnt -r -f',          # flag order can't smuggle
         f'{_RM} -rf /mnt/*',          # wildcard tail stripped
-        f'rmdir /usr',
+        'rmdir /usr',
         f'sudo {_RM} -rf /',
         f'sudo -E {_RM} -rf /mnt',
         f'sudo -u root {_RM} -rf /',
@@ -134,7 +134,7 @@ class TestCatastrophicDeleteMatrix:
         f'sudo {_RM} -rf /tmp/wt_fill',               # scoped sudo delete
         f'{_RM} -rf ~/old_build',                     # deep home subpath
         'echo sudo rm -rf /',                         # printed, not executed
-        f'find . -name "*.pyc" | head',               # no delete at all
+        'find . -name "*.pyc" | head',               # no delete at all
     ])
     def test_scoped_shapes_allowed(self, command):
         assert _is_catastrophic_delete(command) is None

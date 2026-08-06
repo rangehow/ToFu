@@ -34,7 +34,6 @@ only what the model currently sees.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from lib.log import get_logger

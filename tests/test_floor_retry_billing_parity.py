@@ -274,7 +274,7 @@ def test_parity_primary_path_all_floored(monkeypatch, pinned_pricing):
          dict(_FLOOR, cache_creation_input_tokens=148_500)],
         'parity-all-floored')
 
-    assert gateway.calls == 3, f'primary + 2 resends when nothing recovers'
+    assert gateway.calls == 3, 'primary + 2 resends when nothing recovers'
     assert len(api_rounds) == 3, (
         f'api_rounds must include ALL 3 gateway-billed attempts; '
         f'got {len(api_rounds)}: {[r.get("tag") for r in api_rounds]}')

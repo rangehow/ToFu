@@ -576,6 +576,8 @@ var _i18n = {
   'tool.hallucinated': { zh: '非真实工具', en: 'not a real tool' },
   'tool.hallucinatedTip': { zh: '模型调用了本轮不存在的工具，已被拒绝、未执行。', en: "The model called a tool that doesn't exist this turn — it was rejected and never run." },
   'tool.didYouMean': { zh: '是否想用', en: 'did you mean' },
+  'tool.failed': { zh: '失败', en: 'failed' },
+  'tool.failedTip': { zh: '工具执行失败 —— 未成功完成。', en: 'The tool failed — it did not complete successfully.' },
   // ── Write-gate refusal card (shared-worktree guards: read-before-edit +
   //    write-freshness). Shown when a write tool call was INTERCEPTED — nothing
   //    executed; the assistant re-reads and re-issues on its own. ──
@@ -1749,6 +1751,12 @@ var _i18n = {
   'settings.meCostDerived': { zh: '（已由输入/输出价自动折算）', en: '(auto-derived from input/output prices)' },
   'settings.mePriceCustomTag': { zh: '自定义', en: 'custom' },
   'settings.mePriceInvalidWarn': { zh: '输入/输出价格需同时填写，且为非负数字——本次未改动已保存的价格。', en: 'Input and output prices must both be filled with non-negative numbers — your saved pricing was left unchanged.' },
+  // ── Model edit form section labels + single-face wire protocol (redesign 2026-08-06) ──
+  'settings.meSecIdentity': { zh: '身份', en: 'Identity' },
+  'settings.meSecWire': { zh: '协议线', en: 'Wire' },
+  'settings.meSecQuota': { zh: '配额与定价', en: 'Quota & pricing' },
+  'settings.meProvProto': { zh: '协议', en: 'Protocol' },
+  'settings.meProvProtoHint': { zh: '（改这里 = 改服务商默认面的协议；单面网关下对所有模型生效）', en: '(edits the provider default face protocol — applies to every model on a single-face gateway)' },
   // ── Model card health strip (per-model runtime state, auto-polled) ──
   'settings.mhCooldown': { zh: '冷却 {s}s', en: 'cooldown {s}s' },
   'settings.mhReasonRateLimit': { zh: '限流', en: 'rate-limited' },
@@ -3989,7 +3997,6 @@ var _i18n = {
   'tool.list_conversations': { zh: '列出历史会话', en: 'List conversations' },
   'tool.get_conversation': { zh: '读取历史会话', en: 'Read a conversation' },
   'projectBrain.peersHere': { zh: '当前在场 {n} 个', en: '{n} here now' },
-  'tool.get_conversation': { zh: '读取历史会话', en: 'Read a conversation' },
 
   // ── Motion-video / produce tool cards (tool_rounds_rich.js
   //    _renderMotionVideoBlock) — head = the card header line, why = the
@@ -4009,6 +4016,7 @@ var _i18n = {
   'motionHead.produceReport': { zh: '启动了一份研究报告', en: 'Started a research report' },
   'motionHead.produceResearch': { zh: '启动了一次研究调查', en: 'Started a research survey' },
   'motionHead.produceSlides': { zh: '启动了一份幻灯片生成任务', en: 'Started a slide-deck job' },
+  'motionHead.editSlides': { zh: '修改了 deck 的一页', en: 'Edited one page of a deck' },
   'motionWhy.envCheck': { zh: '确认 Node / HyperFrames / ffmpeg / 无头 Chrome 全部就位，然后才开始任何渲染工作。', en: 'Confirms Node / HyperFrames / ffmpeg / headless Chrome are all present before any render work starts.' },
   'motionWhy.storyboard': { zh: '零 LLM 闸：分镜必须端到端覆盖整个配音文案，任何一个镜头才被允许渲染。', en: 'Zero-LLM gate: the storyboard must cover the narration transcript end-to-end before any scene may render.' },
   'motionWhy.check': { zh: '静态检查 + 无头 Chrome 运行时校验 + 排版检查。一个镜头必须先通过这关才能渲染。', en: 'Lint + headless-Chrome runtime check + layout inspection. A scene must pass before it is allowed to render.' },
@@ -4021,6 +4029,7 @@ var _i18n = {
   'motionWhy.produceReport': { zh: '一句话 → 带引用的长文报告，完成后以 markdown 工件发布。', en: 'One sentence → a cited long-form report, published as a markdown artifact when it finishes.' },
   'motionWhy.produceResearch': { zh: '先收割近期文献，再对其做综述并对研究想法做新颖性打分。', en: 'Harvests the recent literature, then proposes and scores genuinely-novel research ideas against it.' },
   'motionWhy.produceSlides': { zh: '一句话 → 设计级可编辑 PPTX：场景定调 + 主题色板/字体绑定 + 逐页排版 + 视觉质检，后台完成后可下载。', en: 'One sentence → a designer-quality editable PPTX: scenario theme + bound palette/typefaces + per-page layout + visual QA. Downloads when done.' },
+  'motionWhy.editSlides': { zh: '按你的一句话只重排其中一页，然后重出预览并重导出 PPTX。', en: 'Re-authors ONE page of a produced deck from your plain-language instruction, then re-renders the preview and re-exports the PPTX.' },
   'motionRow.status': { zh: '状态', en: 'Status' },
   'motionRow.envReady': { zh: '就绪 — 所有依赖都已就位', en: 'ready — every dependency resolved' },
   'motionRow.envMissing': { zh: '缺依赖', en: 'missing dependencies' },
@@ -4068,7 +4077,6 @@ var _i18n = {
   'motionSec.fixHints': { zh: '怎么修', en: 'How to fix' },
   'motionSec.sceneDurations': { zh: '逐镜头时长', en: 'Per-scene durations' },
 
-  'projectBrain.peersHere': { zh: '当前在场 {n} 个', en: '{n} here now' },
   'projectBrain.peerSubAgent': { zh: '子代理 {id}', en: 'sub-agent {id}' },
   'projectBrain.peerUntitled': { zh: '会话 {id}', en: 'conversation {id}' },
   'projectBrain.peerAdvancing': { zh: '推进《{epic}》', en: 'advancing «{epic}»' },

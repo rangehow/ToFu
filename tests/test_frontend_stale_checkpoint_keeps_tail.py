@@ -124,7 +124,8 @@ def _sources(*, neuter=False):
 
 
 def _run(srcs):
-    import subprocess, tempfile
+    import subprocess
+    import tempfile
     with tempfile.NamedTemporaryFile('w', suffix='.js', dir=HERE, delete=False) as fh:
         hp = fh.name
         fh.write(_HARNESS)

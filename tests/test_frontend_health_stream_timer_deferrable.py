@@ -125,7 +125,7 @@ def test_no_bare_tw_call_sites_outside_health_stream_timer():
         'core/health_stream_timer.js were moved to _DEFERRED_FILES '
         '(pt_3879f00e sub-part 3). Wrap each in '
         "``if (typeof twX === 'function') twX(...)`` so the deferrability "
-        f'sweep stays intact:\n\n' + '\n'.join('  ' + v for v in violations)
+        'sweep stays intact:\n\n' + '\n'.join('  ' + v for v in violations)
     )
 
 

@@ -382,8 +382,8 @@ def _seed_job(tmp_path):
         d = job / 'scenes' / sc['id']
         d.mkdir(parents=True)
         (d / 'index.html').write_text(
-            f'<div data-composition-id="main" data-duration="3.0" '
-            f'data-width="1080" data-height="1440"></div>', encoding='utf-8')
+            '<div data-composition-id="main" data-duration="3.0" '
+            'data-width="1080" data-height="1440"></div>', encoding='utf-8')
         (d / f"{sc['id']}.mp4").write_bytes(b'old')
     (job / 'audio' / 'narration.wav').write_bytes(b'wav')
     (job / 'final.mp4').write_bytes(b'old-final')

@@ -138,7 +138,7 @@ def probe_credential_accepted(cookies):
 
     body = r.text or ''
     if r.status_code == 200:
-        return 'accepted', f'HTTP 200'
+        return 'accepted', 'HTTP 200'
     # 服务端回显的 ssoid：空 = 没收到
     seen = None
     m = re.search(r'"ssoid"\s*:\s*"([^"]*)"', body)

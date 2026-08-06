@@ -373,7 +373,6 @@ class LLMDispatcher:
             _forced_proto = _oauth_wire_protocol(provider)
             if _forced_proto and (provider.get('protocol') or '') != _forced_proto:
                 provider = dict(provider, protocol=_forced_proto)
-            prov_protocol = provider.get('protocol', '')
 
             # ── Multi-endpoint expansion for local providers ──
             # Backwards-compatible: when 'endpoints' is absent we fall back

@@ -131,7 +131,7 @@ def test_settings_tabs_open_without_js_errors(page):
             missing_pane.append(tab)
 
     print(f'\n  swept {len(_SETTINGS_TABS)} settings tabs')
-    print(f'  errors during openSettings(): none')
+    print('  errors during openSettings(): none')
     print(f'  tabs with HARD JS errors : {sorted(failures) or "none"}')
     print(f'  tabs whose pane not shown: {missing_pane or "none"}')
 

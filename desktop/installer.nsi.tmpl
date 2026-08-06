@@ -229,7 +229,17 @@ Var FontBody
   ${NSD_SetStretchedImage} $BmpCtl "$PLUGINSDIR\${bitmap}" $R0
 !macroend
 !macro TOFU_LABEL x y w h text font
-  ${NSD_CreateLabel} ${x} ${y} ${w} ${h} "${text}"
+  ; Opaque STATIC at exstyle 0 — the official nsDialogs example's shape.
+  ; Stock ${NSD_CreateLabel} inherits __NSD_Label_EXSTYLE =
+  ; WS_EX_TRANSPARENT from nsDialogs.nsh: a transparent static's first
+  ; paint is deferred behind its siblings and can simply never arrive
+  ; (the documented "label invisible until a forced redraw" failure
+  ; class — prime suspect in the 2026-08-06 still-blank wizard after
+  ; the HWND_BOTTOM pin shipped). Transparency buys this design
+  ; NOTHING: every label sits on a #F0F0F0 card baked into the page
+  ; art, exactly the COLOR_3DFACE an opaque static paints anyway.
+  ; Leaves the control's HWND in $0.
+  nsDialogs::CreateControl STATIC ${WS_VISIBLE}|${WS_CHILD}|${WS_CLIPSIBLINGS}|${SS_NOTIFY} 0 ${x} ${y} ${w} ${h} "${text}"
   Pop $0
   SendMessage $0 ${WM_SETFONT} ${font} 1
 !macroend
@@ -388,8 +398,10 @@ Function ProgressPageCreate
   ${EndIf}
   !insertmacro TOFU_PAGE_ART "progress.bmp"
   !insertmacro TOFU_LABEL 20u 62u 236u 10u "$(TOFU_PROG_COPYING)" $FontBody
-  Pop $StatusCtl
-  SendMessage $StatusCtl ${WM_SETFONT} $FontBody 1
+  ; TOFU_LABEL already popped the HWND into $0 — copying it; a second
+  ; Pop would underflow the stack and leave $StatusCtl empty, turning
+  ; every DoInstall status update into its guarded no-op.
+  StrCpy $StatusCtl $0
   ${NSD_CreateProgressBar} 20u 96u 226u 8u ""
   Pop $ProgressCtl
   ${NSD_AddStyle} $ProgressCtl ${PBS_MARQUEE}
@@ -517,8 +529,7 @@ Function un.ProgressPageCreate
   ${EndIf}
   !insertmacro TOFU_PAGE_ART "progress.bmp"
   !insertmacro TOFU_LABEL 20u 62u 236u 10u "$(TOFU_UN_PROGRESS)" $FontBody
-  Pop $StatusCtl
-  SendMessage $StatusCtl ${WM_SETFONT} $FontBody 1
+  StrCpy $StatusCtl $0
   ${NSD_CreateProgressBar} 20u 96u 226u 8u ""
   Pop $ProgressCtl
   ${NSD_AddStyle} $ProgressCtl ${PBS_MARQUEE}

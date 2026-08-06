@@ -50,6 +50,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import threading
 import time
@@ -91,6 +92,12 @@ _handler = logging.StreamHandler()
 _handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
 logger.addHandler(_handler)
 logger.setLevel(logging.INFO)
+
+# Set by _stage_head_snapshot: the exact commit the export copied. The
+# post-copy integrity check must list files from THIS commit, not HEAD —
+# a sibling commit landing mid-export would otherwise flag files the
+# snapshot legitimately predates.
+_EXPORT_SOURCE_SHA: str | None = None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1190,18 +1197,72 @@ def _torn_snapshot_guard(src: Path, allow_dirty: bool,
     lines = '\n'.join(f'      {d}  →  references skipped untracked {u}'
                       for d, u in pairs[:12])
     more = f'\n      … (+{len(pairs) - 12} more)' if len(pairs) > 12 else ''
-    head = ('DRY-RUN: export WOULD abort — torn snapshot detected'
-            if dry_run else 'Export aborted — torn snapshot detected')
+    head = ('DRY-RUN: torn snapshot detected'
+            if dry_run
+            else 'Torn snapshot detected (publishing anyway — --worktree)'
+            if allow_dirty else 'Export aborted — torn snapshot detected')
     print(f"  {C_RED}✗ {head}:{C_END}\n"
           f"    Dirty tracked file(s) reference untracked file(s) that the\n"
           f"    export skips — the published tree would not even import:\n"
           f"{lines}{more}\n"
           f"    {C_DIM}→ `git add` the untracked file(s) (or commit the dirty\n"
-          f"      ones away), or re-run with --allow-dirty to publish the\n"
-          f"      worktree state as-is.{C_END}")
+          f"      ones away), or re-run with --worktree to publish the\n"
+          f"      uncommitted state as-is.{C_END}")
     logger.error('Torn snapshot guard tripped: %s', pairs)
     if not dry_run and not allow_dirty:
         raise SystemExit(2)
+
+
+def _stage_head_snapshot(src: Path) -> Path | None:
+    """Extract committed HEAD content into a local temp dir for copy source.
+
+    The internal/opensource export publishes COMMITTED source: the shared
+    worktree routinely carries siblings' in-flight edits, and copying the
+    worktree ships half-written code (2026-08-06, twice in one day: a dirty
+    server.py importing an untracked module red-filed public CI with 800+
+    cascades; a dirty mid-edit motion_video module followed with F821
+    NameErrors). ``git archive HEAD`` is the exact committed tree — immune
+    to dirty/untracked worktree state by construction. Returns None (caller
+    falls back to the worktree + torn-snapshot guard) when git/tar fail.
+    """
+    if not _have_tool('git'):
+        return None
+    try:
+        tmp = Path(tempfile.mkdtemp(prefix='tofu-export-head-'))
+        # Pin the sha FIRST and archive that exact commit: a sibling can land
+        # a commit mid-export, and the post-copy integrity check must compare
+        # against the SAME tree the snapshot was taken from (2026-08-06: a
+        # mid-export design_sys commit made the HEAD-based check flag a file
+        # the snapshot legitimately lacked).
+        rev = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=str(src),
+                             capture_output=True, text=True, timeout=30)
+        if rev.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+        sha = rev.stdout.strip()
+        arc = subprocess.Popen(['git', 'archive', '--format=tar', sha],
+                               cwd=str(src), stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+        ext = subprocess.Popen(['tar', 'xf', '-'], cwd=str(tmp),
+                               stdin=arc.stdout, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE)
+        if arc.stdout is not None:
+            arc.stdout.close()
+        _, xerr = ext.communicate()
+        _, aerr = arc.communicate()
+        if arc.returncode != 0 or ext.returncode != 0:
+            logger.warning('HEAD snapshot failed (arc rc=%s, tar rc=%s): %.200s %.200s',
+                           arc.returncode, ext.returncode,
+                           (aerr or b'').decode('utf-8', 'replace'),
+                           (xerr or b'').decode('utf-8', 'replace'))
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+        global _EXPORT_SOURCE_SHA
+        _EXPORT_SOURCE_SHA = sha
+        return tmp
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning('HEAD snapshot unavailable (%s) — worktree fallback', e)
+        return None
 
 
 def _build_tar_excludes_for_mode(mode: str, dest: Path) -> tuple[list[str], list[str]]:
@@ -2458,7 +2519,7 @@ def _create_skeleton(dest: Path, mode: str):
 
 def _export_via_tar_with_sanitize(mode: str, dest: Path,
                                   progress: bool = False,
-                                  allow_dirty: bool = False) -> dict:
+                                  worktree: bool = False) -> dict:
     """Fast non-personal export: bulk tar copy + post-pass sanitize.
 
     This is the internal/opensource analogue of ``_export_personal_via_tar``.
@@ -2474,14 +2535,35 @@ def _export_via_tar_with_sanitize(mode: str, dest: Path,
     summary printer doesn't need to special-case anything.
     """
     dest.mkdir(parents=True, exist_ok=True)
-    _torn_snapshot_guard(ROOT, allow_dirty)
+    snapshot: Path | None = None
+    src = ROOT
+    if worktree:
+        logger.warning('--worktree: exporting UNCOMMITTED worktree state')
+        _torn_snapshot_guard(ROOT, allow_dirty=True)  # warn, never block
+    else:
+        snapshot = _stage_head_snapshot(ROOT)
+        if snapshot is not None:
+            src = snapshot
+            dirty = _dirty_tracked_files(ROOT)
+            if dirty:
+                shown = ', '.join(dirty[:8]) + (f' … (+{len(dirty) - 8})' if len(dirty) > 8 else '')
+                print(f"  {C_DIM}ℹ Export source = committed HEAD; {len(dirty)} dirty "
+                      f"tracked file(s) NOT published (commit to include, or\n"
+                      f"  --worktree to export uncommitted state): {shown}{C_END}")
+        else:
+            # Worktree fallback — the torn-snapshot hazard applies, so guard hard.
+            _torn_snapshot_guard(ROOT, allow_dirty=False)
     tar_excludes, preserved = _build_tar_excludes_for_mode(mode, dest)
     if preserved:
         print(f"  {C_CYAN}\U0001f4be Preserving dest: {', '.join(preserved + ['/'])}"
               f"  (not overwritten from source){C_END}")
 
     print(f"  {C_DIM}Streaming tar pipe (src → dst) — fast path…{C_END}")
-    _stream_tar_copy(ROOT, dest, tar_excludes, progress=progress)
+    try:
+        _stream_tar_copy(src, dest, tar_excludes, progress=progress)
+    finally:
+        if snapshot is not None:
+            shutil.rmtree(snapshot, ignore_errors=True)
 
     # Targeted sanitize pass — only opens files containing trigger patterns.
     print(f"  {C_DIM}Running targeted sanitize pass (rg-driven)…{C_END}")
@@ -2503,7 +2585,7 @@ def _print_export_summary(dest: Path, mode: str, stats: dict,
     Extracted from ``export_project`` so both the fast path and the
     dry-run walk path produce identical output.
     """
-    print(f"\n{C_BOLD}{'\u2500'*64}{C_END}")
+    print(f"\n{C_BOLD}{chr(0x2500) * 64}{C_END}")
     print(f"  {C_GREEN}\u2713 Copied:    {stats['copied']}{C_END}")
     if stats.get('sanitized'):
         print(f"  {C_YELLOW}\U0001f527 Sanitized: {stats['sanitized']}{C_END}")
@@ -2533,10 +2615,10 @@ def _print_export_summary(dest: Path, mode: str, stats: dict,
             else:
                 print(f"    {C_RED}\u2717{C_END} {C_DIM}{relpath} \u2014 {reason}{C_END}")
 
-    print(f"\n  {C_GREEN}{'\u2550'*50}{C_END}")
+    print(f"\n  {C_GREEN}{chr(0x2550) * 50}{C_END}")
     print(f"  {C_GREEN}\u2705 Export complete!{C_END}")
     print(f"  {C_GREEN}   {dest}{C_END}")
-    print(f"  {C_GREEN}{'\u2550'*50}{C_END}")
+    print(f"  {C_GREEN}{chr(0x2550) * 50}{C_END}")
     print(f"\n  {C_BOLD}Next steps:{C_END}")
     print(f"  1. cd {dest}")
     if mode == 'personal':
@@ -2624,7 +2706,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
                    push: bool = False, commit_msg: str | None = None,
                    is_release: bool = False, branch_override: str | None = None,
                    progress: bool = False, force: bool = False,
-                   allow_dirty: bool = False):
+                   worktree: bool = False):
     """Main export function.
 
     Args:
@@ -2680,15 +2762,17 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             logger.info('Cleanup: removed %d items from dest (mode=%s)',
                         len(targets), mode)
 
-    print(f"\n{C_BOLD}{'\u2550'*64}{C_END}")
+    print(f"\n{C_BOLD}{chr(0x2550) * 64}{C_END}")
     print(f"{C_BOLD}  \U0001f4e6 Tofu Export \u2014 Mode: {mode.upper()}  (v{_read_version()}){C_END}")
-    print(f"{C_BOLD}{'\u2550'*64}{C_END}")
+    print(f"{C_BOLD}{chr(0x2550) * 64}{C_END}")
     print(f"  Source:  {C_DIM}{ROOT}{C_END}")
     print(f"  Dest:    {C_DIM}{dest}{C_END}")
     if dry_run:
         print(f"  {C_YELLOW}\U0001f50d DRY RUN — no files will be written{C_END}")
-        if mode != 'personal':
-            _torn_snapshot_guard(ROOT, allow_dirty, dry_run=True)
+        if mode != 'personal' and not worktree:
+            print(f"  {C_DIM}ℹ The real export copies committed HEAD (git archive), not the\n"
+                  f"    worktree walked below — uncommitted files listed here do NOT ship.{C_END}")
+            _torn_snapshot_guard(ROOT, allow_dirty=True, dry_run=True)
     print()
 
     # Set module-level version for sanitization pipeline
@@ -2724,7 +2808,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             _portablize_bundled_mcp_config(dest, mode)
         else:
             stats = _export_via_tar_with_sanitize(mode, dest, progress=progress,
-                                                  allow_dirty=allow_dirty)
+                                                  worktree=worktree)
             excluded_log = []
             _all_excluded_dirs = (ALWAYS_EXCLUDE_DIRS
                                   if mode == 'internal'
@@ -2850,7 +2934,7 @@ def export_project(mode: str, dest: Path, dry_run: bool = False,
             stats['copied'] += 1
 
     # ── Dry-run summary ──
-    print(f"\n{C_BOLD}{'\u2500'*64}{C_END}")
+    print(f"\n{C_BOLD}{chr(0x2500) * 64}{C_END}")
     print(f"  {C_GREEN}\u2713 Would copy:    {stats['copied']}{C_END}")
     if stats['sanitized']:
         print(f"  {C_YELLOW}\U0001f527 Would sanitize: {stats['sanitized']}{C_END}")
@@ -3065,8 +3149,7 @@ def _verify_exported_py_integrity(dest: Path) -> None:
     """
     try:
         listed = subprocess.run(
-            ['git', 'ls-files', 'lib/*.py', 'lib/**/*.py',
-             'routes/*.py', 'routes/**/*.py', 'server.py', 'bootstrap.py'],
+            ['git', 'ls-tree', '-r', '--name-only', _EXPORT_SOURCE_SHA or 'HEAD'],
             cwd=str(ROOT), capture_output=True, text=True, timeout=30,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
@@ -3074,7 +3157,10 @@ def _verify_exported_py_integrity(dest: Path) -> None:
         print(f"  {C_DIM}\u23ed git ls-files unavailable \u2014 skipping Python integrity check{C_END}")
         return
 
-    rels = [ln.strip() for ln in (listed.stdout or '').splitlines() if ln.strip().endswith('.py')]
+    rels = [ln.strip() for ln in (listed.stdout or '').splitlines()
+            if ln.strip().endswith('.py')
+            and (ln.strip().startswith(('lib/', 'routes/'))
+                 or ln.strip() in ('server.py', 'bootstrap.py'))]
     print(f"  {C_BOLD}\U0001f50d Verifying exported Python integrity ({len(rels)} files)\u2026{C_END}")
 
     def _size_with_retry(p: Path) -> int:
@@ -3635,10 +3721,10 @@ def main():
              'remote history via an ours-merge fast-forward instead',
     )
     parser.add_argument(
-        '--allow-dirty', action='store_true',
-        help='Publish even when dirty tracked files reference skipped untracked '
-             'files (torn-snapshot guard override). Default aborts — commit the '
-             'in-flight work first so the published tree imports cleanly',
+        '--worktree', action='store_true',
+        help='Export the WORKTREE including uncommitted changes (legacy behavior). '
+             'Default internal/opensource exports copy committed HEAD via git '
+             'archive, so sibling in-flight edits never tear the published tree',
     )
 
     args = parser.parse_args()
@@ -3705,7 +3791,7 @@ def main():
                    push=args.push, commit_msg=commit_msg,
                    is_release=is_release, branch_override=args.branch,
                    progress=args.progress, force=args.force,
-                   allow_dirty=args.allow_dirty)
+                   worktree=args.worktree)
 
 
 if __name__ == '__main__':

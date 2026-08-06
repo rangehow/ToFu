@@ -31,6 +31,15 @@
  *   • 'offline' shows at most once per cooldown.
  * Pure display coalescing — the recovery LOGIC (health checks, poll resume,
  * offline-recovery polling) is untouched. */
+/* ★ Degraded-mode self-heal cadence (2026-08-06, epic pt_6cb1607e): while
+ * polling, re-probe the SSE lane this often. The surrender to poll was a
+ * verdict about the tunnel AT THAT MOMENT — tunnel flaps pass, and without a
+ * re-probe the conv would keep polling full snapshots for the rest of the
+ * turn even after the tunnel heals (measured: 8 surrenders today, each one
+ * permanent until this). window-overridable for the test harness. */
+const _SSE_REPROBE_INTERVAL_MS = (typeof window !== 'undefined' && window._SSE_REPROBE_INTERVAL_MS != null)
+  ? window._SSE_REPROBE_INTERVAL_MS : 30000;
+
 function _connToast(phase, icon, title, msg, dur) {
   if (typeof showToast !== 'function') return;
   const st = (window._connToastState = window._connToastState || { phase: 'ok', at: 0 });
@@ -70,6 +79,24 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
     const _startConv = conversations.find(c => c.id === convId);
     if (_startConv) _startConv._epPollTurnCount = 0;
   }
+  /* ★ Degraded-mode handoff (2026-08-06, epic pt_6cb1607e): the SSE lane is
+   * down BY DELIBERATION — the resume budget was spent against a flapping
+   * tunnel. The stall watch's "not even heartbeat frames arrived" premise
+   * only holds ON the SSE lane: heartbeat self-ticks are only ever emitted
+   * onto SSE, so once we surrender, the watch measures a silence that is
+   * STRUCTURAL, not a freeze — and 300s later it raises 「已停滞 · 疑似卡死」
+   * against a healthy, actively-polling turn (measured: every surrender
+   * fired the banner; the Stop affordance nearly killed a live 60-round
+   * task). Poll responses are the liveness proof now — clear the watch. If
+   * SSE later re-attaches (the re-probe below), the feed seam re-seeds it.
+   */
+  if (typeof stallWatchClear === 'function') {
+    try { stallWatchClear(taskId); }
+    catch (e) { console.debug('[_pollFallback] stallWatchClear failed: %s', e); }
+  }
+  /* Stamped at probe COMPLETION (not start) so a flap that kills probes
+   * instantly cannot spin the probe path back-to-back. */
+  let _lastSseReprobe = Date.now();
   console.warn(`[_pollFallback] START — conv=${convId.slice(0,8)} taskId=${taskId.slice(0,8)} preExistingContent=${_preExistingContent}chars preExistingThinking=${_preExistingThinking}chars`);
   // Poll until the task finishes, the user aborts, or server is confirmed dead.
   let _pollIter = 0;
@@ -89,6 +116,43 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
       if (typeof twStop === 'function') twStop(convId);
       finishStream(convId);
       return;
+    }
+    /* ★ Degraded-mode self-heal: re-probe the SSE lane on a cadence. The
+     * probe goes CURSOR-LESS on purpose: poll snapshots overwrite
+     * content/thinking WHOLESALE, so resuming from the stale pre-surrender
+     * cursor would replay INCREMENTAL deltas on top of the full snapshot and
+     * double the text. A cursor-less connect gets the backend-folded `state`
+     * snapshot (verbatim text replacement — the page-reload shape) + live
+     * tail. On attach _trySSE owns the stream to done (poll yields); on
+     * failure polling resumes one interval later. */
+    if (typeof _trySSE === 'function'
+        && !stream.controller.signal.aborted
+        && (Date.now() - _lastSseReprobe) >= _SSE_REPROBE_INTERVAL_MS) {
+      console.warn(`[_pollFallback] ↻ SSE re-probe (degraded-mode self-heal) — conv=${convId.slice(0,8)} task=${taskId.slice(0,8)}`);
+      stream._lastEventId = null;
+      if (typeof _clearSseCursor === 'function') _clearSseCursor(taskId);
+      let _reprobeDone = false;
+      try {
+        _reprobeDone = await _trySSE(convId, taskId, stream, assistantMsg);
+      } catch (e) {
+        if (e && e.name === 'AbortError') {
+          if (typeof twStop === 'function') twStop(convId);
+          finishStream(convId);
+          return;
+        }
+        console.warn(`[_pollFallback] SSE re-probe threw: ${e && e.message} — resuming poll`);
+      }
+      _lastSseReprobe = Date.now();
+      if (stream.controller.signal.aborted) {
+        if (typeof twStop === 'function') twStop(convId);
+        finishStream(convId);
+        return;
+      }
+      if (_reprobeDone) {
+        console.info(`[_pollFallback] ✅ SSE re-attached and ran the turn to done — poll yields for conv=${convId.slice(0,8)}`);
+        return;
+      }
+      /* Probe failed / dropped again — fall through to this lap's poll. */
     }
     const _pollStart = Date.now();
     try {
@@ -168,6 +232,32 @@ async function _pollFallback(convId, taskId, stream, assistantMsg) {
             if (typeof twStop === 'function') twStop(convId);
             finishStream(convId);
             return;
+          }
+        }
+      }
+
+      /* ★ Stable-id rebind — the poll lane's answer to dispatchSSEEvent's
+       *   _rebindAssistant. A poll loop can run for the REST OF THE TURN; a
+       *   Phase-2 reload / ConvView.replaceAll in that window REPLACES
+       *   conv.messages and ghosts this closure ref — merges would land on an
+       *   object nothing renders (the frozen-bubble mechanism). Re-resolve by
+       *   _msgId (then by _taskId) at each successful poll so the merge below
+       *   always writes into the in-tree bubble. Not found → keep the ref
+       *   (current behaviour; the next reload repaints from the server). */
+      {
+        const _rbConv = conversations.find(c => c.id === convId);
+        if (_rbConv && assistantMsg) {
+          let _live = null;
+          if (assistantMsg._msgId && typeof _resolveAssistantById === 'function') {
+            _live = _resolveAssistantById(_rbConv, assistantMsg._msgId, null);
+          }
+          if (!_live && typeof _resolveAssistantByTaskId === 'function') {
+            _live = _resolveAssistantByTaskId(_rbConv, taskId);
+          }
+          if (_live && _live !== assistantMsg) {
+            console.warn(`[_pollFallback] 🔁 rebinding poll target for conv=${convId.slice(0,8)} — ` +
+              `closure ref was detached (prevLen=${(assistantMsg.content||'').length} liveLen=${(_live.content||'').length})`);
+            assistantMsg = _live;
           }
         }
       }

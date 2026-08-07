@@ -10,9 +10,9 @@ from lib.llm_sanitize._fields import _strip_tool_calls
 
 logger = get_logger(__name__)
 
+import hashlib
 import json
 import re
-import uuid
 
 
 # ══════════════════════════════════════════════════════════
@@ -31,6 +31,28 @@ _UNNAMED_TOOL_NAME = 'unnamed_tool_call'
 _TOOL_NAME_VALID_RE = re.compile(r'^[a-zA-Z0-9_-]{1,64}$')
 _TOOL_NAME_INVALID_RE = re.compile(r'[^a-zA-Z0-9_-]')
 _TOOL_NAME_MAX = 64
+
+
+def _mint_tool_call_id(msg_idx: int, call_idx: int, tc: dict) -> str:
+    """Deterministic id for an id-less tool_call: ``call_<sha1[:12]>`` over
+    (message index, call index, id-less canonical JSON of the call).
+
+    ``_strip_non_api_fields`` DEEP-copies, so this heal never reaches the
+    source messages — a random mint would give the same persisted call a
+    DIFFERENT wire id on every round, breaking the prompt-cache prefix and
+    tripping cache_tracking ``body_identical=false`` for exactly the
+    non-parse producers (endpoint mode, compat shims, legacy history) this
+    healer exists to protect (owner review 2026-08-07: two build_body runs
+    over one id-less call minted call_d35b67054ae1 vs call_426a3d3ea09a).
+    Deriving from (position, content) makes the mint idempotent across
+    rounds; identical id-less twins in one message still get distinct ids
+    via the call index.
+    """
+    payload = json.dumps({k: v for k, v in tc.items() if k != 'id'},
+                         sort_keys=True, ensure_ascii=False, default=str)
+    digest = hashlib.sha1(
+        f'{msg_idx}:{call_idx}:{payload}'.encode('utf-8')).hexdigest()
+    return f'call_{digest[:12]}'
 
 
 def _fix_tool_call_wire_shape(messages: list) -> list:
@@ -56,9 +78,11 @@ def _fix_tool_call_wire_shape(messages: list) -> list:
     Anthropic's name pattern):
       * name invalid chars → ``'_'``, clamped to 64 chars (probe I showed
         kimi accepts ``antml:thinking``; Anthropic does not)
-      * tool_call ``id`` empty/missing → minted ``call_<uuid12>`` (kimi
-        tolerates ``''``, probe J — but the orphan/adjacency fixer pairs
-        BY id, so an id-less call would orphan its own receipt)
+      * tool_call ``id`` empty/missing → minted ``call_<sha1[:12]>``
+        DETERMINISTICALLY from (message idx, call idx, content) — kimi
+        tolerates ``''`` (probe J), but the orphan/adjacency fixer pairs
+        BY id; and a random mint would break the cache prefix every round
+        because the deep-copy seam never writes the heal back
 
     Deliberately NOT touched (live-probed accepted — healing them would
     change behaviour on a guess and destroy evidence):
@@ -98,7 +122,7 @@ def _fix_tool_call_wire_shape(messages: list) -> list:
                 out.append(msg)
                 continue
             kept = []
-            for tc in tcs:
+            for tc_i, tc in enumerate(tcs):
                 if not isinstance(tc, dict):
                     dropped_entry += 1
                     continue
@@ -107,7 +131,7 @@ def _fix_tool_call_wire_shape(messages: list) -> list:
                     tc['id'] = str(tcid)
                     fixed_id += 1
                 elif not tcid:
-                    tc['id'] = f'call_{uuid.uuid4().hex[:12]}'
+                    tc['id'] = _mint_tool_call_id(idx, tc_i, tc)
                     fixed_id += 1
                 if tc.get('type') != 'function':
                     tc['type'] = 'function'

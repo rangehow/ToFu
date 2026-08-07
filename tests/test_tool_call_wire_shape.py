@@ -176,6 +176,56 @@ def test_missing_id_minted():
 
 
 @pytest.mark.unit
+def test_mint_is_deterministic_across_build_body_runs():
+    """Cache-parity pin (owner review 2026-08-07): _strip_non_api_fields
+    deep-copies, so the heal never reaches the source messages — a random
+    mint would give the same persisted id-less call a DIFFERENT wire id
+    every round and break the prompt-cache prefix. Two build_body runs
+    over the same id-less history must produce BYTE-IDENTICAL wires."""
+    legacy = [
+        {'role': 'user', 'content': 'hi'},
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': '', 'type': 'function',
+             'function': {'name': '', 'arguments': '{}'}}]},
+        _tool_msg('', 'x'),
+    ]
+    import copy as _copy
+    b1 = build_body('kimi-k3', _copy.deepcopy(legacy))
+    b2 = build_body('kimi-k3', _copy.deepcopy(legacy))
+    assert (json.dumps(b1['messages'], sort_keys=True, ensure_ascii=False)
+            == json.dumps(b2['messages'], sort_keys=True, ensure_ascii=False))
+
+
+@pytest.mark.unit
+def test_mint_derives_from_content_and_position():
+    """Same id-less call at the same position → same id; at a different
+    position → different id (position is in the hash input, so identical
+    id-less twins in one message never collide)."""
+    def minted_at(msg_idx):
+        msgs = [{'role': 'user', 'content': 'hi'}] * msg_idx + [
+            {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'type': 'function',
+                 'function': {'name': 'run_command', 'arguments': '{}'}}]}]
+        out = _fix_tool_call_wire_shape(msgs)
+        return out[msg_idx]['tool_calls'][0]['id']
+
+    assert minted_at(1) == minted_at(1)
+    assert minted_at(1) != minted_at(2)
+
+
+@pytest.mark.unit
+def test_identical_idless_twins_get_distinct_ids():
+    msg = {'role': 'assistant', 'content': '', 'tool_calls': [
+        {'type': 'function', 'function': {'name': '', 'arguments': '{}'}},
+        {'type': 'function', 'function': {'name': '', 'arguments': '{}'}},
+    ]}
+    out = _fix_tool_call_wire_shape([msg])
+    ids = [tc['id'] for tc in out[0]['tool_calls']]
+    assert ids[0] != ids[1]
+    assert all(re.fullmatch(r'call_[0-9a-f]{12}', i) for i in ids)
+
+
+@pytest.mark.unit
 def test_non_string_id_coerced_on_both_sides():
     """int id on the assistant call + int tool_call_id on the receipt —
     coercing both to str keeps the pair matchable downstream."""

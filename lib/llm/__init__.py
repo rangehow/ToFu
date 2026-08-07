@@ -81,6 +81,7 @@ from lib.llm_sanitize import (  # noqa: F401
     _fix_empty_user_messages,
     _fix_orphaned_tool_calls,
     _fix_tool_call_adjacency,
+    _fix_tool_call_wire_shape,
     _merge_consecutive_same_role,
     _sanitize_gateway_content,
     _sanitize_messages,
@@ -138,6 +139,7 @@ __all__ = [
     '_drop_empty_assistant_messages',
     '_fix_empty_user_messages',
     '_fix_orphaned_tool_calls', '_fix_tool_call_adjacency',
+    '_fix_tool_call_wire_shape',
     '_merge_consecutive_same_role', '_sanitize_gateway_content',
     '_sanitize_messages', '_strip_non_api_fields',
 ]

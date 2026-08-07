@@ -11,6 +11,7 @@ from lib.llm_sanitize import (
     _drop_empty_assistant_messages,
     _fix_empty_user_messages,
     _fix_orphaned_tool_calls,
+    _fix_tool_call_wire_shape,
     _merge_consecutive_same_role,
     _sanitize_messages,
     _strip_empty_text_blocks,
@@ -114,6 +115,12 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     # list left empty by the strip is claimed by them (Kimi 400 "text content
     # is empty" — see _strip_empty_text_blocks).
     _strip_empty_text_blocks(clean_messages)
+    # Heal tool_call wire shape for ANY model BEFORE the orphan/adjacency
+    # fixer (which pairs BY id): empty/missing function.name → placeholder,
+    # missing type/id, non-string arguments, unpairable tool_call_id.
+    # Kimi hard-400s the whole request on these with the misleading
+    # "tokenization failed" (live-probed 2026-08-07, task 9a8196f3).
+    clean_messages = _fix_tool_call_wire_shape(clean_messages)
     clean_messages = _fix_orphaned_tool_calls(clean_messages)
     clean_messages = _drop_empty_assistant_messages(clean_messages)
     clean_messages = _merge_consecutive_same_role(clean_messages)

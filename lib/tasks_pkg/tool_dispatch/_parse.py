@@ -11,6 +11,7 @@ import json
 import uuid
 from typing import Any
 
+from lib.llm_sanitize import _UNNAMED_TOOL_NAME
 from lib.log import audit_log, get_logger
 from lib.tasks_pkg.executor import SWARM_TOOL_NAMES
 from lib.tasks_pkg.manager import append_event
@@ -172,6 +173,17 @@ def parse_tool_calls(
                 # back so the synthetic tool_result pairs with the tool_use
                 # instead of becoming a second, differently-keyed orphan.
                 tc['id'] = tc_id
+            # Same write-back for an EMPTY name: this wire dict is replayed
+            # verbatim on the next round, and strict vendors hard-400 the
+            # WHOLE request on name='' (Kimi "tokenization failed" —
+            # live-probed 2026-08-07, task 9a8196f3 R4). The receipt below
+            # still tells the model the call never ran; the placeholder only
+            # keeps the replayed wire protocol-valid. The build_body
+            # chokepoint (_fix_tool_call_wire_shape) heals every OTHER
+            # producer — this is the source fix.
+            _fn_wire = tc.get('function')
+            if isinstance(_fn_wire, dict) and not (_fn_wire.get('name') or ''):
+                _fn_wire['name'] = _UNNAMED_TOOL_NAME
             _drop_reason = _ingested.drop_reason or 'missing'
             if _drop_reason == 'internal_artifact':
                 _why = (f'its function name {fn_name!r} is an internal/proxy '

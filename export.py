@@ -480,6 +480,12 @@ _OPENSOURCE_KEEP_FILES = {
     # carry a release pipeline that dies on a missing file the first time it
     # runs. Pure stdlib (argparse/re/pathlib), no secrets, no internal paths.
     'scripts/changelog_gate.py',
+    # The CI wizard pixel probe (windows runner: build the TOFU_DIAG
+    # installer + PrintWindow frames + BM_CLICK page turns). The shipped
+    # .github/workflows/installer-ui-probe.yml drives it — without this the
+    # public tree carries a workflow that dies on a missing file. Pure
+    # stdlib + PIL ctypes, no secrets, no internal paths.
+    'debug/win_ci_shot.py',
 }
 
 OPENSOURCE_EXTRA_EXCLUDE_FILES = OPENSOURCE_EXTRA_EXCLUDE_FILES | {

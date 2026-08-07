@@ -94,6 +94,9 @@ LoadLanguageFile "${NSISDIR}\Contrib\Language files\SimpChinese.nlf"
 !ifndef PBS_MARQUEE
   !define PBS_MARQUEE 0x08
 !endif
+!ifndef LR_LOADFROMFILE
+  !define LR_LOADFROMFILE 0x10
+!endif
 
 ; ── Wizard text (every sentence on the pages; buttons ride the NLF) ──
 LangString TOFU_WELCOME_TITLE 1033 "Install ${APP_NAME}"
@@ -200,9 +203,9 @@ Var FontBody
   ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
     StrCpy $FontFamily "Microsoft YaHei UI"
   ${EndIf}
-  System::Call 'user32::GetDC(i 0) p .r0'
+  System::Call 'user32::GetDC(p 0) p .r0'
   System::Call 'gdi32::GetDeviceCaps(p r0, i 90) i .r1'  ; LOGPIXELSY
-  System::Call 'user32::ReleaseDC(i 0, p r0)'
+  System::Call 'user32::ReleaseDC(p 0, p r0) i .r3'
   IntOp $2 $r1 * 13
   IntOp $2 $2 / 72
   IntOp $2 0 - $2
@@ -215,7 +218,7 @@ Var FontBody
   StrCpy $5 $2
   System::Call 'gdi32::CreateFont(i $2, i 0, i 0, i 0, i 400, i 0, i 0, i 0, i 1, i 0, i 0, i 5, i 0, w "$FontFamily") p .s'
   Pop $FontBody
-  !insertmacro TOFU_DIAG_FONTS
+  !insertmacro TOFU_DIAG_FONTS $r1
 !macroend
 
 ; Full-page art + one label helper shared by every page.
@@ -229,7 +232,16 @@ Var FontBody
   ; receives NO WM_PAINT at all — the 2026-08-05 blank-wizard failure
   ; class (band+cards render, every label/edit/button silently dead).
   System::Call 'user32::SetWindowPos(p $BmpCtl, i 1, i 0, i 0, i 0, i 0, i 0x13)'
-  ${NSD_SetStretchedImage} $BmpCtl "$PLUGINSDIR\${bitmap}" $R0
+  ; Load from $PLUGINSDIR (extracted by .onInit via File). The
+  ; documented NSIS pattern: File extracts the bmp into $PLUGINSDIR,
+  ; LoadImage(LR_LOADFROMFILE) reads it. The prior approach used a
+  ; non-existent NSIS variable for the exe module handle, which
+  ; expanded to empty → LoadImage(p 0, i resid, …) returns NULL
+  ; silently — the root cause of the 2026-08-07 blank-wizard
+  ; (image_handle=0 on every page, every control w=0 h=0).
+  System::Call 'user32::LoadImage(p 0, t "$PLUGINSDIR\${bitmap}", i ${IMAGE_BITMAP}, i 0, i 0, i ${LR_LOADFROMFILE}) p .R0'
+  System::Call 'kernel32::GetLastError() i .r9'
+  SendMessage $BmpCtl ${STM_SETIMAGE} ${IMAGE_BITMAP} $R0
   !insertmacro TOFU_DIAG_PAGE "${bitmap}"
 !macroend
 !macro TOFU_LABEL x y w h text font
@@ -282,7 +294,7 @@ Var DiagLog
   Push $0
   System::Alloc 16
   Pop $0
-  System::Call 'user32::GetWindowRect(p ${hwnd}, p $0)'
+  System::Call 'user32::GetWindowRect(p ${hwnd}, p $0) i .r2'
   System::Call '*$0(i .r3, i .r4, i .r5, i .r6)'
   System::Free $0
   System::Call 'user32::IsWindowVisible(p ${hwnd}) i .r7'
@@ -295,7 +307,6 @@ Var DiagLog
 ; Page banner: GetLastError is captured FIRST so it still describes the
 ; LoadImage inside NSD_SetStretchedImage (every later call clobbers it).
 !macro TOFU_DIAG_PAGE name
-  System::Call 'kernel32::GetLastError() i .r9'
   SendMessage $BmpCtl ${STM_GETIMAGE} ${IMAGE_BITMAP} 0 $r7
   StrCpy $8 "page ${name}: dialog=$Dialog bmpctl=$BmpCtl image_handle=$R0 stm_getimage=$r7 loadimage_lasterror=$r9"
   !insertmacro TOFU_DIAG_WRITE "$8"
@@ -313,20 +324,12 @@ Var DiagLog
   FileOpen $DiagLog "$TEMP\tofu-setup-diag.log" w
   StrCpy $8 "=== tofu-setup-diag ${APP_NAME} ${APP_VERSION} compiled ${__DATE__} ${__TIME__} ==="
   !insertmacro TOFU_DIAG_WRITE "$8"
-  System::Call 'user32::GetDC(i 0) p .r6'
+  System::Call 'user32::GetDC(p 0) p .r6'
   System::Call 'gdi32::GetDeviceCaps(p r6, i 90) i .r7'
-  System::Call 'user32::ReleaseDC(i 0, p r6)'
+  System::Call 'user32::ReleaseDC(p 0, p r6) i .r5'
   StrCpy $8 "env: language=$LANGUAGE dpi=$r7 temp=$TEMP"
   !insertmacro TOFU_DIAG_WRITE "$8"
   StrCpy $8 "env: pluginsdir=$PLUGINSDIR exedir=$EXEDIR"
-  !insertmacro TOFU_DIAG_WRITE "$8"
-!macroend
-!macro TOFU_DIAG_ART_CHECK file
-  ${If} ${FileExists} "$PLUGINSDIR\${file}"
-    StrCpy $8 "art: ${file} present"
-  ${Else}
-    StrCpy $8 "art: ${file} MISSING"
-  ${EndIf}
   !insertmacro TOFU_DIAG_WRITE "$8"
 !macroend
 ; A label's live text length — distinguishes "created but EMPTY" (len 0)
@@ -339,8 +342,8 @@ Var DiagLog
 ; The font pipeline facts: real DPI, the two requested pixel heights
 ; (negative = EM-height request) and the resulting GDI handles — a zero
 ; or absurd value here blanks text without touching geometry.
-!macro TOFU_DIAG_FONTS
-  StrCpy $8 "fonts: dpi=$r1 htitle=$4 hbody=$5 title=$FontTitle body=$FontBody"
+!macro TOFU_DIAG_FONTS dpi
+  StrCpy $8 "fonts: dpi=${dpi} htitle=$4 hbody=$5 title=$FontTitle body=$FontBody"
   !insertmacro TOFU_DIAG_WRITE "$8"
 !macroend
 ; A one-line marker (page reached Show / page left Show).
@@ -395,11 +398,9 @@ FunctionEnd
 !macroend
 !macro TOFU_DIAG_HEADER
 !macroend
-!macro TOFU_DIAG_ART_CHECK file
-!macroend
 !macro TOFU_DIAG_TEXT tag hwnd
 !macroend
-!macro TOFU_DIAG_FONTS
+!macro TOFU_DIAG_FONTS dpi
 !macroend
 !macro TOFU_DIAG_MARK msg
 !macroend
@@ -484,10 +485,6 @@ Function .onInit
   File "@ART_DIR@/progress.bmp"
   File "@ART_DIR@/finish.bmp"
   !insertmacro TOFU_DIAG_HEADER
-  !insertmacro TOFU_DIAG_ART_CHECK "welcome.bmp"
-  !insertmacro TOFU_DIAG_ART_CHECK "directory.bmp"
-  !insertmacro TOFU_DIAG_ART_CHECK "progress.bmp"
-  !insertmacro TOFU_DIAG_ART_CHECK "finish.bmp"
 FunctionEnd
 
 Function .onGUIInit
@@ -672,6 +669,7 @@ Function un.onInit
   ${EndIf}
   SetOutPath $PLUGINSDIR
   File "@ART_DIR@/welcome.bmp"
+  File "@ART_DIR@/directory.bmp"
   File "@ART_DIR@/progress.bmp"
   File "@ART_DIR@/finish.bmp"
   !insertmacro TOFU_DIAG_HEADER

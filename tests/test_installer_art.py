@@ -280,9 +280,8 @@ def test_diag_seam_is_wired_into_the_shared_macros():
     # The empty-expansion else branch is what keeps production builds
     # byte-clean of the seam.
     for name in ('TOFU_DIAG_WRITE', 'TOFU_DIAG_HW', 'TOFU_DIAG_PAGE',
-                 'TOFU_DIAG_HEADER', 'TOFU_DIAG_ART_CHECK',
-                 'TOFU_DIAG_TEXT', 'TOFU_DIAG_FONTS', 'TOFU_DIAG_MARK',
-                 'TOFU_DIAG_RETITLE'):
+                 'TOFU_DIAG_HEADER', 'TOFU_DIAG_TEXT', 'TOFU_DIAG_FONTS',
+                 'TOFU_DIAG_MARK', 'TOFU_DIAG_RETITLE'):
         assert tmpl.count(f'!macro {name}') == 2, (
             f'{name} must exist in BOTH an ifdef and an empty-else form')
 
@@ -300,6 +299,58 @@ _PAGES = ('WelcomePageCreate', 'DirPageCreate', 'ProgressPageCreate',
 _RETITLING = {'WelcomePageCreate': 'welcome', 'FinishPageCreate': 'finish',
               'un.ConfirmPageCreate': 'un.confirm',
               'un.FinishPageCreate': 'un.finish'}
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  The art-source contract: File → $PLUGINSDIR → LR_LOADFROMFILE
+# ═══════════════════════════════════════════════════════════════════
+# The 2026-08-07 CI pixel run proved the prior exe-resource approach
+# was broken: $EXEHANDLE is NOT a real NSIS variable (it expands to
+# empty → LoadImage(p 0, i 900, …) returns NULL → image_handle=0 on
+# every page), and !packhdr cannot embed RT_RCDATA (it post-processes
+# the exehead stub, it does not add resources). The documented NSIS
+# pattern is File (extracts bmp into $PLUGINSDIR) + LoadImage with
+# LR_LOADFROMFILE (0x10).
+
+def test_art_loads_from_pluginsdir_via_file_and_loadimage():
+    tmpl = (_ROOT / 'desktop' / 'installer.nsi.tmpl').read_text(
+        encoding='utf-8')
+    macro = tmpl.split('!macro TOFU_PAGE_ART')[1].split('!macroend')[0]
+    assert '$EXEHANDLE' not in macro, (
+        '$EXEHANDLE is not a real NSIS variable — it expands to empty '
+        'and LoadImage returns NULL (root cause of the 2026-08-07 '
+        'blank wizard, image_handle=0 on every page)')
+    assert 'LoadImage' in macro and 'LR_LOADFROMFILE' in macro, (
+        'the page art must load from $PLUGINSDIR via LR_LOADFROMFILE')
+    assert '$PLUGINSDIR' in macro, (
+        'LoadImage must reference $PLUGINSDIR (extracted by File in '
+        '.onInit)')
+    assert '!packhdr' not in tmpl, (
+        '!packhdr cannot embed resources — it post-processes the '
+        'exehead stub; the dead line was removed')
+    calls = re.findall(r'!insertmacro TOFU_PAGE_ART "(\w+\.bmp)"',
+                       tmpl)
+    assert sorted(calls) == sorted([
+        'welcome.bmp', 'welcome.bmp',
+        'directory.bmp',
+        'progress.bmp', 'progress.bmp',
+        'finish.bmp', 'finish.bmp']), calls
+    # The .onInit File instructions that extract the bmps into $PLUGINSDIR
+    for bmp in ('welcome.bmp', 'directory.bmp',
+                'progress.bmp', 'finish.bmp'):
+        assert f'File "@ART_DIR@/{bmp}"' in tmpl, (
+            f'{bmp} must be extracted via File in .onInit/un.onInit')
+
+
+def test_no_exehandle_anywhere_in_template():
+    """The exe-module-handle pseudo-variable is not a real NSIS variable
+    — any occurrence would expand to empty and silently break any API
+    call that receives it."""
+    tmpl = (_ROOT / 'desktop' / 'installer.nsi.tmpl').read_text(
+        encoding='utf-8')
+    assert '$EXEHANDLE' not in tmpl, (
+        'the exe-handle pseudo-variable appeared in the template — it is '
+        'not a valid NSIS variable (see NSIS docs §4.2)')
 
 
 def test_every_page_logs_reached_show_before_show():

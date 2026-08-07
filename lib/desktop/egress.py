@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 
 from lib.json_store import read_json
 from lib.log import get_logger
+from lib.proxy import SUBSCRIPTION_HOSTS
 from lib.ttl_cache import TTLCache
 
 logger = get_logger(__name__)
@@ -47,21 +48,28 @@ __all__ = [
 ]
 
 #: Exact-match egress whitelist (§7.1). NO suffix matching —
-#: ``api.anthropic.com.evil.com`` must never pass.
-ALLOWED_EGRESS_HOSTS = frozenset({
-    'api.anthropic.com',
-    'console.anthropic.com',
-    'platform.claude.com',
-    'claude.ai',
-    'auth.openai.com',
-    'auth0.openai.com',
-    'chatgpt.com',
-    'api.openai.com',
-})
+#: ``api.anthropic.com.evil.com`` must never pass. Aliases
+#: ``lib.proxy.SUBSCRIPTION_HOSTS`` (single source of truth — the proxy
+#: pool's ``subscription`` scope serves exactly this set).
+ALLOWED_EGRESS_HOSTS = SUBSCRIPTION_HOSTS
 
 #: Per-host direct-reachability verdicts ('ok' / 'geo_blocked' /
 #: 'network_fail'), 300s TTL — probing on every exchange would add seconds.
 _probe_cache = TTLCache(ttl=300, max_size=32)
+
+
+def invalidate_probe_cache() -> int:
+    """Drop every cached reachability verdict. Called by lib.proxy whenever
+    the proxy topology (pool / legacy address / bypass list) changes — a
+    verdict measured through the OLD path must never route traffic under
+    the NEW one (2026-08-07: pre-fix, a proxy change left stale
+    ``geo_blocked`` verdicts misrouting subscription traffic to desktop
+    agents for up to 300s)."""
+    n = _probe_cache.clear()
+    if n:
+        logger.info('[Egress] probe cache invalidated (%d hosts) — proxy '
+                    'topology changed', n)
+    return n
 
 #: egress_http bridge-command TTL (design §4.3: token calls are short).
 _EGRESS_HTTP_TTL_S = 120
@@ -138,21 +146,69 @@ def _probe_host(url: str) -> str:
     POST the real endpoint WITHOUT auth: a 401/400/404/405 proves the
     application layer answered (network path OK — 'ok'); 403 is the
     geo-block signature; an exception is a network failure. Cached per host.
+
+    Multi-path (2026-08-07): when the proxy pool carries enabled
+    ``subscription`` entries they are probed IN FAILOVER ORDER with an
+    explicit per-entry proxy (each outcome feeds the entry's health — the
+    probe is also the cooldown-revival path), then the legacy env path as
+    the final fallback. 'ok' from ANY path means server-side traffic can
+    reach the host — ``proxies_for`` picks the same winning order.
     """
     host = (urlparse(url).hostname or '').lower()
     cached = _probe_cache.get(host)
     if cached:
         return cached
-    verdict = 'network_fail'
-    try:
-        from lib.http_client import http_post
-        resp = http_post(url, json={}, timeout=5)
-        verdict = 'geo_blocked' if resp.status_code == 403 else 'ok'
-    except Exception as e:
-        logger.debug('[Egress] direct probe of %s failed: %s', host, e)
+    verdict = _probe_host_paths(url, host)
     _probe_cache.set(host, verdict)
     logger.info('[Egress] probe %s → %s', host, verdict)
     return verdict
+
+
+def _post_probe(url: str, proxies: dict | None) -> str:
+    """One reachability POST over an explicit proxy dict (None = env via
+    http_client). Any HTTP answer = path works; 403 = geo/policy block."""
+    try:
+        if proxies is None:
+            from lib.http_client import http_post
+            resp = http_post(url, json={}, timeout=5)
+        else:
+            import requests
+            resp = requests.post(url, json={}, timeout=5, proxies=proxies)
+            resp.close()
+        return 'geo_blocked' if resp.status_code == 403 else 'ok'
+    except Exception as e:
+        logger.debug('[Egress] probe POST %s failed: %s', url, e)
+        return 'network_fail'
+
+
+def _probe_host_paths(url: str, host: str) -> str:
+    """The uncached multi-path probe — see :func:`_probe_host`."""
+    from lib.proxy import pool_note_outcome, pool_probe_entries
+    try:
+        entries = pool_probe_entries()
+    except Exception as e:
+        logger.debug('[Egress] pool probe entries failed: %s', e)
+        entries = []
+    saw_geo = False
+    saw_fail = False
+    for pid, purl in entries:
+        v = _post_probe(url, {'http': purl, 'https': purl})
+        try:
+            pool_note_outcome(pid, v == 'ok')
+        except Exception as e:
+            logger.debug('[Egress] pool outcome note failed for %s: %s', pid, e)
+        if v == 'ok':
+            logger.info('[Egress] probe %s ok via pool proxy %s', host, pid)
+            return 'ok'
+        saw_geo = saw_geo or v == 'geo_blocked'
+        saw_fail = saw_fail or v == 'network_fail'
+    # Legacy/env path — also the only path when no pool is configured.
+    v = _post_probe(url, None)
+    if v == 'ok':
+        return 'ok'
+    saw_geo = saw_geo or v == 'geo_blocked'
+    saw_fail = saw_fail or v == 'network_fail'
+    return 'geo_blocked' if saw_geo else 'network_fail'
 
 
 def _online_egress_agents(user_id: str = '') -> list:

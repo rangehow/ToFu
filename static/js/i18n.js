@@ -3521,6 +3521,26 @@ var _i18n = {
   'settings.proxyBypassBody': { zh: '在此添加不需要走代理的域名后缀或主机名（每行一个，后缀匹配）。匹配的请求会<strong>完全绕过 HTTP 代理</strong>。', en: 'Add domain suffixes or hostnames that should bypass the proxy (one per line, suffix matching). Matching requests <strong>fully bypass the HTTP proxy</strong>.' },
   'settings.proxyBypassTipFull': { zh: '<strong>💡 提示：</strong>内网地址和 LLM API 域名都应加在这里。企业/VPN 代理会静默断开长连接（SSE 流），导致 <code>BrokenPipeError</code>，添加对应域名即可解决。也可通过环境变量 <code>PROXY_BYPASS_DOMAINS</code>（逗号分隔）配置，两处合并生效。', en: '<strong>💡 Tip:</strong> Internal addresses and LLM API domains should both be added here. Corporate/VPN proxies silently drop long-lived connections (SSE streams) causing <code>BrokenPipeError</code> — adding the domain here fixes it. You can also set <code>PROXY_BYPASS_DOMAINS</code> (comma-separated) env var; both merge.' },
 
+  // Network proxy pool (ordered, scoped — 2026-08-07)
+  'settings.proxyPoolTitle': { zh: '代理池', en: 'Proxy Pool' },
+  'settings.proxyPoolBody': { zh: '有序代理列表，自上而下故障转移。<strong>仅订阅流量</strong>只服务 OpenAI/Anthropic 订阅端点（OAuth 登录、令牌刷新、订阅对话）；<strong>全局流量</strong>服务所有不绕过代理的出站请求。代理地址里写的账号密码会自动拆进「凭证保管库」，不会明文落盘；带凭证的代理仅限订阅作用域。留空列表则回落到环境变量（<code>http_proxy</code> / <code>https_proxy</code>）。修改立即生效，无需重启。', en: 'Ordered proxy list with top-down failover. <strong>Subscription only</strong> serves just the OpenAI/Anthropic subscription endpoints (OAuth login, token refresh, subscription chats); <strong>Global</strong> serves every non-bypassed outbound request. Credentials in the URL are split into the credential vault automatically — never persisted in plaintext; credentialed proxies are restricted to the subscription scope. An empty list falls back to env vars (<code>http_proxy</code> / <code>https_proxy</code>). Changes take effect immediately.' },
+  'settings.proxyPoolAdd': { zh: '添加代理', en: 'Add proxy' },
+  'settings.proxyPhName': { zh: '名称', en: 'Name' },
+  'settings.proxyPhCred': { zh: 'user:password（可选）', en: 'user:password (optional)' },
+  'settings.proxyCredSaved': { zh: '凭证已保存（留空不变）', en: 'Credential saved (leave blank to keep)' },
+  'settings.proxyScopeSub': { zh: '仅订阅流量', en: 'Subscription only' },
+  'settings.proxyScopeGlobal': { zh: '全局流量', en: 'Global' },
+  'settings.proxyEnable': { zh: '启用', en: 'On' },
+  'settings.proxyTest': { zh: '测试', en: 'Test' },
+  'settings.proxyTesting': { zh: '测试中…', en: 'Testing…' },
+  'settings.proxyDel': { zh: '删除', en: 'Delete' },
+  'settings.proxyTestNoUrl': { zh: '先填写代理地址', en: 'Enter a proxy URL first' },
+  'settings.proxyTestFail': { zh: '测试失败', en: 'Test failed' },
+  'settings.proxyTestOkTpl': { zh: '{label} 可达（HTTP {code} · {ms}ms）', en: '{label} reachable (HTTP {code} · {ms}ms)' },
+  'settings.proxyTestBlockedTpl': { zh: '{label} 被拦截（HTTP {code}）', en: '{label} blocked (HTTP {code})' },
+  'settings.proxyTestFailTpl': { zh: '{label} 网络失败：{err}', en: '{label} network failure: {err}' },
+  'settings.proxyLegacyRow': { zh: '旧版单代理（迁移）', en: 'Legacy single proxy (migrated)' },
+
   // ══════════════════════════════════════
   //  MCP manual-add form (settings)
   // ══════════════════════════════════════

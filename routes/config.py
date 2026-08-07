@@ -317,6 +317,12 @@ def get_server_config():
         'env_proxy_bypass': os.environ.get('PROXY_BYPASS_DOMAINS', ''),
     }
     try:
+        from lib.proxy import get_proxy_pool
+        network_info['proxy_pool'] = get_proxy_pool()
+    except Exception as _e:
+        logger.debug('get server config: proxy pool view failed (%s)', _e)
+        network_info['proxy_pool'] = []
+    try:
         from lib.netpath import status_summary as _np_status
         network_info['netpath'] = _np_status()
     except Exception as _e:
@@ -1212,6 +1218,38 @@ def _hot_reload_feishu(feishu_data: dict):
         logger.warning('[Feishu] Hot-reload failed: %s', e, exc_info=True)
 
 
+@config_bp.route('/api/v1/network/proxy-test', methods=['POST'])
+def test_network_proxy():
+    """POST — live-probe ONE proxy entry against the subscription canaries.
+
+    Body: ``{url, scope, credential?, credential_vault?, id?, name?}``.
+    Works on UNSAVED rows (the Settings test button fires before saving):
+    an inline ``credential`` (or URL userinfo) is used for this probe only
+    and never persisted; a bare ``credential_vault`` reference resolves
+    through the vault. Returns ``{ok, results: [{target, label, status,
+    latency_ms, verdict}]}`` — 403 from the canary = geo/policy block, any
+    other HTTP answer = the app layer was reached.
+    """
+    data = parse_body()
+    from lib.proxy import sanitize_proxy_pool, test_proxy_entry
+    entries, creds, err = sanitize_proxy_pool([{
+        'id': data.get('id') or 'probe',
+        'name': data.get('name') or 'probe',
+        'url': data.get('url') or '',
+        'credential': data.get('credential') or '',
+        'credential_vault': data.get('credential_vault') or '',
+        'scope': data.get('scope') or 'subscription',
+        'enabled': True,
+    }])
+    if err or not entries:
+        return api_bad_request('proxy-test: %s' % (err or 'empty entry'))
+    result = test_proxy_entry(entries[0], credential=creds.get(entries[0]['id']))
+    # 'ok' belongs to the envelope — the diagnostic verdict rides 'any_ok'.
+    return api_ok({'any_ok': bool(result.get('ok')),
+                   'results': result.get('results') or [],
+                   'error': result.get('error') or ''})
+
+
 @config_bp.route('/api/v1/server-config', methods=['POST'])
 def save_server_config():
     """POST — save server configuration changes.
@@ -1227,6 +1265,32 @@ def save_server_config():
     data = parse_body()
     changes = []
     dispatch_reset_needed = False
+
+    # ── Proxy pool pre-processing (OUTSIDE the atomic mutator) ──
+    # Sanitize + split URL userinfo into the credentials vault BEFORE the
+    # config-lock write: vault CRUD is a side effect that must not run
+    # inside the mutator. ``pool_prep`` is the sanitized persisted shape.
+    pool_prep = None
+    pool_old_ids = set()
+    if 'proxy_pool' in data:
+        from lib.proxy import sanitize_proxy_pool
+        entries, creds, err = sanitize_proxy_pool(data['proxy_pool'])
+        if err:
+            return api_bad_request('proxy_pool: %s' % err)
+        try:
+            from lib.credentials_vault import set_entry as _vault_set
+            for _pid, _secret in creds.items():
+                _vault_set('proxy_%s_auth' % _pid, _secret,
+                           note='proxy pool credential')
+        except ValueError as e:
+            return api_bad_request('proxy_pool credential: %s' % e)
+        pool_prep = entries
+        try:
+            _prior = _read_server_config()
+            pool_old_ids = {e.get('id') for e in (_prior.get('proxy_pool') or [])
+                            if isinstance(e, dict) and e.get('id')}
+        except Exception as e:
+            logger.debug('[ServerConfig] prior proxy_pool read failed: %s', e)
 
     # The whole read-modify-write runs inside ONE ``update_json_atomic``
     # mutator so it is serialised (per-path thread lock + cross-process
@@ -1312,6 +1376,22 @@ def save_server_config():
             )
             changes.append('proxy_config')
 
+        if pool_prep is not None:
+            existing['proxy_pool'] = pool_prep
+            # The pool editor owns proxying once used — retire the legacy
+            # single-proxy slot so both never apply at once (the pool's
+            # 'global' rows replace it; env vars remain the last fallback).
+            if existing.get('proxy_config') and any(
+                    existing['proxy_config'].get(k)
+                    for k in ('http_proxy', 'https_proxy')):
+                existing['proxy_config'] = {'http_proxy': '', 'https_proxy': ''}
+                from lib.proxy import set_proxy_config
+                set_proxy_config()
+                changes.append('proxy_config retired (migrated to pool)')
+            from lib.proxy import set_proxy_pool
+            set_proxy_pool(pool_prep)
+            changes.append('proxy_pool (%d entries)' % len(pool_prep))
+
         if 'feishu' in data and isinstance(data['feishu'], dict):
             existing['feishu'] = data['feishu']
             changes.append('feishu')
@@ -1342,6 +1422,16 @@ def save_server_config():
         logger.error('[ServerConfig] Failed to write config file to %s: %s',
                      _SERVER_CONFIG_PATH, e, exc_info=True)
         return api_internal_error('Failed to write config file')
+
+    # Vault hygiene: credentials of REMOVED pool entries die with the entry.
+    if pool_prep is not None:
+        try:
+            from lib.credentials_vault import delete_entry as _vault_del
+            new_ids = {e['id'] for e in pool_prep}
+            for _rid in sorted(pool_old_ids - new_ids):
+                _vault_del('proxy_%s_auth' % _rid)
+        except Exception as e:
+            logger.warning('[ServerConfig] stale proxy credential sweep failed: %s', e)
 
     # ── Hot-reload: update all module-level variables from disk ──
     try:

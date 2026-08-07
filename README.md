@@ -678,7 +678,7 @@ All configuration is done through the **⚙️ Settings** panel (top-right gear 
 | **📦 Display** | Which models appear in dropdowns, default model, fallback model |
 | **🔍 Search & Fetch** | Result count, timeouts, character limits, blocked domains, content filter |
 | **🌐 Translation** | Machine translation provider (NiuTrans / Custom), API key, endpoint |
-| **🌐 Network** | HTTP/HTTPS proxy, bypass domains |
+| **🌐 Network** | Proxy pool (ordered, scoped: subscription-only / global, automatic failover, credentials vaulted, per-entry connectivity test), bypass domains |
 | **🔀 Subscription Login** | Log in to Claude Pro/Max or ChatGPT and use it as a provider |
 | **🐦 Feishu** | App credentials, default project, allowed users |
 | **🔗 MCP** | Model Context Protocol servers (App-Store catalog + custom) |

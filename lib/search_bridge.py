@@ -368,10 +368,19 @@ class _ChatuiSiteKnowledgeProvider(_SiteKnowledgeBase):
 def _resolve_proxy_url() -> str:
     """Return chatui's effective HTTPS/HTTP proxy URL, or '' when none.
 
-    Prefers the Settings-resolved value from ``lib.proxy`` (which also mirrors
-    the env vars) so tofu-search's adaptive dual-attempt tries the SAME proxy
-    chatui itself uses, independent of env-var casing quirks.
+    Prefers the proxy pool's first healthy GLOBAL entry (2026-08-07 pool
+    feature), then the Settings-resolved legacy value from ``lib.proxy``
+    (which also mirrors the env vars) so tofu-search's adaptive
+    dual-attempt tries the SAME proxy chatui itself uses, independent of
+    env-var casing quirks.
     """
+    try:
+        from lib.proxy import first_global_proxy_url
+        pooled = first_global_proxy_url()
+        if pooled:
+            return pooled
+    except Exception as e:
+        logger.debug('[Bridge] pool proxy resolve failed: %s', e)
     try:
         from lib.proxy import get_proxy_config
         cfg = get_proxy_config()

@@ -1094,6 +1094,12 @@
     report: (payload) => post('/api/client-error', payload, { onError: 'null', parse: 'none' }),
   };
 
+  // Network (proxy pool live test — Settings → Network → 测试) --------
+  const network = {
+    proxyTest: (payload) =>
+      request('/api/v1/network/proxy-test', { method: 'POST', json: payload }),
+  };
+
   // server-config / browser-status / features -----------------------
   const serverConfig = {
     get:    () => get('/api/v1/server-config'),
@@ -1847,7 +1853,7 @@
     // domains
     folders, paperFolders, orchestrations, memory, skills, profile, timer, scheduler, optimizer, compactions,
     conversations, text, translate, chat, images, pdf, doc, audio, videos, artifacts,
-    health, pricing, clientError, serverConfig, browser, project, daily, paper,
+    health, pricing, clientError, serverConfig, network, browser, project, daily, paper,
     desktop,
     features, providers, dispatch, oauth, mcp, update, trading, authSources,
     privateHosts, credentials,

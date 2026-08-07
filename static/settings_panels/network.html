@@ -1,19 +1,13 @@
         <div class="settings-tab-panel" id="settingsTab_network">
-          <div class="settings-section-title" data-i18n="settings.httpProxy">HTTP 代理</div>
-          <p class="settings-desc" data-i18n-html="settings.httpProxyBody">配置用于所有出站请求（LLM API、网页搜索、页面抓取）的 HTTP/HTTPS 代理。留空则使用系统环境变量（<code>http_proxy</code> / <code>https_proxy</code>）。修改立即生效，无需重启。</p>
+          <div class="settings-section-title" data-i18n="settings.proxyPoolTitle">代理池</div>
+          <p class="settings-desc" data-i18n-html="settings.proxyPoolBody">有序代理列表，自上而下故障转移。<strong>仅订阅流量</strong>只服务 OpenAI/Anthropic 订阅端点（OAuth 登录、令牌刷新、订阅对话）；<strong>全局流量</strong>服务所有不绕过代理的出站请求。代理地址里写的账号密码会自动拆进「凭证保管库」，不会明文落盘；带凭证的代理仅限订阅作用域。留空列表则回落到环境变量（<code>http_proxy</code> / <code>https_proxy</code>）。修改立即生效，无需重启。</p>
           <div id="proxyEnvBanner" class="settings-hint-banner" style="display:none;margin-top:0;margin-bottom:12px">
             ℹ️ <span id="proxyEnvBannerText"></span>
           </div>
           <div class="settings-group">
-            <div class="settings-row two-col">
-              <div class="settings-field">
-                <label data-i18n="settings.httpProxy">HTTP 代理</label>
-                <input type="text" id="settingHttpProxy" class="settings-mono" placeholder="http://proxy.example.com:8080" spellcheck="false">
-              </div>
-              <div class="settings-field">
-                <label data-i18n="settings.httpsProxy">HTTPS 代理</label>
-                <input type="text" id="settingHttpsProxy" class="settings-mono" placeholder="http://proxy.example.com:8080" spellcheck="false">
-              </div>
+            <div id="proxyPoolList"></div>
+            <div>
+              <button type="button" id="proxyPoolAddBtn" class="auth-src-btn sm"></button>
             </div>
           </div>
 

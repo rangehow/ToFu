@@ -2262,6 +2262,12 @@ try:
     _saved_proxy = _saved_cfg.get('proxy_bypass_domains', [])
     if _saved_proxy:
         set_bypass_domains(_saved_proxy)
+    # Ordered proxy pool (scoped subscription/global entries) — additive
+    # over the legacy single-proxy env fallback applied just above.
+    _saved_pool = _saved_cfg.get('proxy_pool') or []
+    if _saved_pool:
+        from lib.proxy import set_proxy_pool
+        set_proxy_pool(_saved_pool)
 except Exception as _e:
     _lifecycle_log.warning('Failed to load proxy config: %s', _e)
 

@@ -107,9 +107,8 @@ function _wireSearchPipelinePreview() {
 function _populateNetworkTab(cfg) {
   var n = cfg.network || {};
 
-  // ── Proxy address fields (editable) ──
-  _setVal('settingHttpProxy', n.http_proxy || '');
-  _setVal('settingHttpsProxy', n.https_proxy || '');
+  // ── Proxy pool editor (ordered, scoped) ──
+  _renderProxyPool(n);
 
   // Show env hint banner if env vars are set (so user knows the baseline)
   var envParts = [];
@@ -140,6 +139,172 @@ function _populateNetworkTab(cfg) {
   }
 }
 
+
+// ══════════════════════════════════════════════════════
+//  Network tab — proxy pool editor (ordered, scoped, 2026-08-07)
+// ══════════════════════════════════════════════════════
+// Rows render from cfg.network.proxy_pool (credential-free; the backend
+// holds user:pass in the credentials vault). A legacy single-proxy config
+// (proxy_config) surfaces as ONE synthetic global row so saving migrates
+// it into the pool seamlessly. All entry points null-guard the container
+// so stripped-down jsdom harnesses (and a stale cached DOM) never crash.
+
+function _renderProxyPool(n) {
+  var list = document.getElementById('proxyPoolList');
+  if (!list) return;
+  var pool = ((n && n.proxy_pool) || []).slice();
+  // Legacy migration: a configured legacy single proxy with no global pool
+  // row rides the editor as one synthetic global row; saving retires the
+  // legacy slot server-side.
+  var hasGlobal = pool.some(function (e) { return e && e.scope === 'global'; });
+  if (n && n.proxy_configured && n.http_proxy && !hasGlobal) {
+    pool.push({
+      id: 'legacy', name: (t('settings.proxyLegacyRow') || '旧版单代理（迁移）'),
+      url: n.http_proxy, scope: 'global', enabled: true,
+      has_credential: false, credential_vault: '', _legacy: true,
+    });
+  }
+  list.innerHTML = pool.map(_proxyPoolRowHtml).join('');
+  var addBtn = document.getElementById('proxyPoolAddBtn');
+  if (addBtn && !addBtn._wired) {
+    addBtn._wired = true;
+    addBtn.innerHTML = (typeof Icon === 'function' ? Icon('plus', 12) + ' ' : '') +
+      escapeHtml(t('settings.proxyPoolAdd') || '添加代理');
+    addBtn.onclick = function () { _proxyPoolAppendRow(); };
+  }
+}
+
+function _proxyPoolRowHtml(e) {
+  var id = e.id || '';
+  var scope = e.scope === 'global' ? 'global' : 'subscription';
+  var credPh = e.has_credential
+    ? (t('settings.proxyCredSaved') || '凭证已保存（留空不变）')
+    : (t('settings.proxyPhCred') || 'user:password（可选）');
+  var trash = (typeof Icon === 'function') ? Icon('trash', 12) : '×';
+  return String(safeHtml`
+    <div class="proxy-pool-row" data-id="${id}">
+      <div class="proxy-pool-main">
+        <input type="text" class="pp-name" value="${e.name || ''}"
+               placeholder="${t('settings.proxyPhName') || '名称'}" maxlength="40">
+        <input type="text" class="pp-url settings-mono" value="${e.url || ''}"
+               placeholder="http://host:8080 或 http://user:pass@host:8080"
+               spellcheck="false" autocomplete="off">
+        <select class="pp-scope">
+          <option value="subscription" ${raw(scope === 'subscription' ? 'selected' : '')}>${t('settings.proxyScopeSub') || '仅订阅流量'}</option>
+          <option value="global" ${raw(scope === 'global' ? 'selected' : '')}>${t('settings.proxyScopeGlobal') || '全局流量'}</option>
+        </select>
+        <input type="password" class="pp-cred settings-mono" placeholder="${credPh}"
+               spellcheck="false" autocomplete="new-password">
+        <input type="hidden" class="pp-credvault" value="${e.credential_vault || ''}">
+        <label class="pp-enable">
+          <input type="checkbox" class="pp-enabled" ${raw(e.enabled !== false ? 'checked' : '')}>
+          ${t('settings.proxyEnable') || '启用'}
+        </label>
+        <button type="button" class="auth-src-btn sm" onclick="_proxyPoolTest(this)">${t('settings.proxyTest') || '测试'}</button>
+        <button type="button" class="auth-src-btn ghost danger sm icon-box" title="${t('settings.proxyDel') || '删除'}"
+                onclick="_proxyPoolDelete(this)">${raw(trash)}</button>
+      </div>
+      <div class="pp-result" style="display:none"></div>
+    </div>`);
+}
+
+function _proxyPoolAppendRow() {
+  var list = document.getElementById('proxyPoolList');
+  if (!list) return;
+  list.insertAdjacentHTML('beforeend', _proxyPoolRowHtml({ enabled: true }));
+  var rows = list.querySelectorAll('.proxy-pool-row');
+  var last = rows[rows.length - 1];
+  var urlInput = last && last.querySelector('.pp-url');
+  if (urlInput) urlInput.focus();
+}
+
+function _proxyPoolDelete(btn) {
+  var row = btn && btn.closest ? btn.closest('.proxy-pool-row') : null;
+  if (row) row.remove();
+}
+
+function _proxyPoolRowPayload(row) {
+  function val(sel) {
+    var el = row.querySelector(sel);
+    return (el && el.value || '').trim();
+  }
+  var enabledEl = row.querySelector('.pp-enabled');
+  return {
+    id: row.getAttribute('data-id') || '',
+    name: val('.pp-name'),
+    url: val('.pp-url'),
+    scope: (row.querySelector('.pp-scope') || {}).value || 'subscription',
+    credential: val('.pp-cred'),
+    credential_vault: val('.pp-credvault'),
+    enabled: enabledEl ? !!enabledEl.checked : true,
+  };
+}
+
+function _proxyPoolTest(btn) {
+  var row = btn && btn.closest ? btn.closest('.proxy-pool-row') : null;
+  if (!row || typeof Api === 'undefined' || !Api.network) return;
+  var result = row.querySelector('.pp-result');
+  if (!result) return;
+  var payload = _proxyPoolRowPayload(row);
+  if (!payload.url) {
+    result.style.display = '';
+    result.className = 'pp-result err';
+    result.textContent = t('settings.proxyTestNoUrl') || '先填写代理地址';
+    return;
+  }
+  btn.disabled = true;
+  result.style.display = '';
+  result.className = 'pp-result';
+  result.textContent = t('settings.proxyTesting') || '测试中…';
+  Api.network.proxyTest(payload).then(function (data) {
+    btn.disabled = false;
+    var results = (data && data.results) || [];
+    if (!results.length) {
+      result.className = 'pp-result err';
+      result.textContent = (data && data.error) || (t('settings.proxyTestFail') || '测试失败');
+      return;
+    }
+    var ok = !!data.any_ok;
+    result.className = 'pp-result ' + (ok ? 'ok' : 'err');
+    result.textContent = results.map(function (r) {
+      if (r.verdict === 'ok') {
+        return (t('settings.proxyTestOkTpl') || '{label} 可达（HTTP {code} · {ms}ms）')
+          .replace('{label}', r.label || r.target)
+          .replace('{code}', String(r.status))
+          .replace('{ms}', String(r.latency_ms));
+      }
+      if (r.verdict === 'geo_blocked') {
+        return (t('settings.proxyTestBlockedTpl') || '{label} 被拦截（HTTP {code}）')
+          .replace('{label}', r.label || r.target)
+          .replace('{code}', String(r.status));
+      }
+      return (t('settings.proxyTestFailTpl') || '{label} 网络失败：{err}')
+        .replace('{label}', r.label || r.target)
+        .replace('{err}', r.error || 'timeout');
+    }).join('　·　');
+  }).catch(function (e) {
+    btn.disabled = false;
+    result.className = 'pp-result err';
+    result.textContent = ((e && e.body && e.body.error) || (e && e.message) ||
+      (t('settings.proxyTestFail') || '测试失败'));
+  });
+}
+
+/** Collect the editor rows into the save payload. Returns null when the
+ *  pool editor is absent from the DOM (legacy/other surfaces) so the caller
+ *  leaves the server's proxy config untouched. */
+function _collectProxyPool() {
+  var list = document.getElementById('proxyPoolList');
+  if (!list) return null;
+  var out = [];
+  var rows = list.querySelectorAll('.proxy-pool-row');
+  for (var i = 0; i < rows.length; i++) {
+    var p = _proxyPoolRowPayload(rows[i]);
+    if (!p.url) continue;  // blank rows are dropped, never persisted
+    out.push(p);
+  }
+  return out;
+}
 
 // ══════════════════════════════════════════════════════
 //  Machine Translation Provider (General tab)

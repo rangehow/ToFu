@@ -2070,6 +2070,61 @@
 .auth-src-btn.danger { background: var(--s-white); color: var(--s-blocked); }
 .auth-src-btn.danger:hover { background: var(--s-blocked); color: var(--s-white); }
 
+/* ── Proxy pool editor (Settings → Network, 2026-08-07) ──
+   One tofu-block card per proxy entry: hard ink border + offset shadow,
+   flex-wrap grid so narrow modals reflow instead of clipping. */
+#proxyPoolList { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.proxy-pool-row {
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+  box-shadow: var(--s-shadow-xs);
+  padding: 10px 12px;
+}
+.proxy-pool-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.proxy-pool-main input[type="text"],
+.proxy-pool-main input[type="password"],
+.proxy-pool-main select {
+  height: 32px;
+  padding: 0 10px;
+  background: var(--s-white);
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  color: var(--s-ink);
+  font-size: 12px;
+  outline: none;
+}
+.proxy-pool-main input:focus,
+.proxy-pool-main select:focus { background: #fffef5; }
+.proxy-pool-main .pp-name { flex: 0 1 110px; min-width: 72px; font-weight: 700; }
+.proxy-pool-main .pp-url  { flex: 1 1 240px; min-width: 160px; font-family: 'JetBrains Mono', monospace; }
+.proxy-pool-main .pp-scope { flex: 0 0 auto; }
+.proxy-pool-main .pp-cred { flex: 0 1 190px; min-width: 130px; font-family: 'JetBrains Mono', monospace; }
+.pp-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--s-ink-soft);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pp-result {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--s-ink-soft);
+  line-height: 1.6;
+}
+.pp-result.ok  { color: var(--s-done); }
+.pp-result.err { color: var(--s-blocked); }
+
 /* ── Internal-host allowlist (SSRF exemption — reachability, NOT credentials) ──
    Deliberately flatter than .auth-src-card: an entry here is one hostname with
    two verbs, not a multi-step connect flow, so it reads as a list row rather

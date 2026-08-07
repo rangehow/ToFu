@@ -198,11 +198,14 @@ async function _saveServerConfig() {
   payload.search.max_bytes = (_mbVal > 0) ? Math.round(_mbVal * 1048576) : 20971520;
   if (typeof ChipInput !== 'undefined') payload.search.skip_domains = ChipInput.getValues('settingSkipDomains');
 
-  // Network — proxy address config (no_proxy is auto-managed by bypass domains)
-  payload.proxy_config = {
-    http_proxy:  (document.getElementById('settingHttpProxy')?.value || '').trim(),
-    https_proxy: (document.getElementById('settingHttpsProxy')?.value || '').trim(),
-  };
+  // Network — proxy pool (ordered, scoped). The pool editor owns
+  // proxying: the backend retires the legacy single-proxy slot whenever
+  // the key is present. Container absent (legacy/other surfaces) → leave
+  // the server's proxy config untouched.
+  var _pool = (typeof _collectProxyPool === 'function') ? _collectProxyPool() : null;
+  if (_pool !== null) {
+    payload.proxy_pool = _pool;
+  }
 
   // Network — unified bypass domains (feeds both proxies_for() and no_proxy env)
   if (typeof ChipInput !== 'undefined') {

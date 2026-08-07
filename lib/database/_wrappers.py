@@ -384,6 +384,11 @@ class PgConnection:
 
     def commit(self):
         self._conn.commit()
+        try:
+            from lib.database import _core as _core_mod
+            _core_mod._COMMIT_TOTAL += 1
+        except Exception as e:
+            logger.debug('[DB] commit counter increment failed: %s', e)
 
     def rollback(self):
         self._conn.rollback()

@@ -130,12 +130,19 @@ def _read_events_uncached(task_id: str) -> list:
     and rounds 7+ all rendered "mirror expired". Structural rows are a few
     per round, so the same cap now spans thousands of rounds.
     """
+    from lib.tasks_pkg.event_log import (
+        STRUCTURAL_EVENT_TYPES, pending_event_rows)
+    # Lane-aware (docs/STORAGE_REDESIGN.md §4): snapshot the write-behind
+    # lane's pending structural rows BEFORE the DB read — a row mid
+    # commit→shadow-pop must not vanish from the inspector for one poll.
+    _pending = [r for r in pending_event_rows(task_id)
+                if r['type'] in STRUCTURAL_EVENT_TYPES
+                or r['type'].startswith('endpoint_')]
     try:
         db = get_thread_db(DOMAIN_CHAT)
     except Exception as e:
         logger.debug('[RequestInspector] thread db unavailable: %s', e)
         return []
-    from lib.tasks_pkg.event_log import STRUCTURAL_EVENT_TYPES
     _struct_ph = ','.join(['?'] * len(STRUCTURAL_EVENT_TYPES))
     try:
         rows = db.execute(
@@ -167,6 +174,10 @@ def _read_events_uncached(task_id: str) -> list:
         except (TypeError, ValueError) as e:
             logger.debug('[RequestInspector] row skipped for task=%s: %s',
                          task_id[:8], e)
+    if _pending:
+        seen = {r['event_id'] for r in out}
+        out.extend(r for r in _pending if r['event_id'] not in seen)
+        out.sort(key=lambda r: r['event_id'])
     return _rebuild_snapshot_rows(out)
 
 

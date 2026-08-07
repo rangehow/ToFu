@@ -1525,3 +1525,13 @@
 - **关票判据:** 本 epic 全部 agent 侧交付物已在树并在店——①设计稿 docs/DESKTOP_AGENT_DIST_DESIGN.md(A1-A4+P1-P3 全系列);②`TofuAgent-Setup-0.16.0-win64.exe` 53MB 轻量被控端(无前端/无服务器栈,体积 −65%);③Local Control 双下载入口;④开机自启/版本漂移检测/诚实边界三项 owner 补点;⑤SSH 隧道阶梯+先探后信 resume 根修(owner 复核擒获的「第二天必死」地雷)。
 - **验收轨道变更(owner 指令 2026-08-05):** 原 P4 验收(配对码真机流程)所测的配对 UX 已被 owner 指令**全链路退役**(受控端零配置化:下载即凭证 ZIP=exe+attach.json)——旧验收按其设计已无法执行。真机端到端验收整体移交给 `pt_3b7b37e696a9482a`(零配置化 epic,其板上问题正等 owner 重启服务器+真机安装);本 epic 不再重复挂起同一人类动作。
 - **诚实边界:** 关票≠真机验收已过;验收未丢,只是在新 epic 里以新链路(零配置)执行。配对端点服务端仍留(routes/api_v1/desktop.py 注释标注 RETIRED,面板入口已撤)。
+
+### 2026-08-07(存储架构重设计定案+P1.1 events 攒批车道落地:PG 退役获 owner 批准;三连调试擒获「双读跨 commit→pop 缝」与「即拿即冲退化」;411GB 备份囤清单待 owner 过目) — epic `pt_11b40d23b0104dc4` 在飞(P0/P1.1);设计文档 `docs/STORAGE_REDESIGN.md`;board 已领票;charter 提案「SQLite 单引擎+数据不出项目目录」待批;P1.1 commits 见下(4 文件 +2 新套件);车道套件 **6 针**+原子可见性针+邻接环 **24 套件 196 绿**+collect-only **16,322** 零错;全量 unit 在跑
+
+- **owner 三裁决(实证后拍板):** ①下线 PostgreSQL 批准(row-equal 逐表验证+跨重启+签字前 pgdata 只归档不删);②备份囤只留最新 1 份;③events 0.3s 落盘窗口批准(回放缓存,内存 SSE 是真源)。**定性证据链:** 在服 error.log 当日慢查询——`UPDATE conversations` 整段 JSONB 重写 10.5-11.9s、task_events TTL DELETE 2-12.7s;`data/tofu.db` 6GB 过期回落库(mtime 停在 07-09)+ fail-loud 守卫只警告仍服务=重启即可能写分叉库;双套独立 FUSE 基准互证(fsync 0.23-0.9ms 不贵,WAL 0.79-1.19ms/提交 vs DELETE 9-12.75ms,单事务 2.3-3 万行/s,WAL 关闭无残留,逐块 fsync 吞吐掉 37 倍)——**FUSE 按 IO 次数收税,策略=少而大的操作,不是搬数据**。
+- **P1.1 车道形态:** 单写者线程+票号回执;终帧(done/error/aborted/interrupted)同步等回执保 durable-before-visible;生产者影子 `_PENDING_SHADOW`(入队前登记,commit 后才注销)+`pending_event_rows` 全形访问器;`read_events` 与 inspector `_read_events_uncached` 双读车道感知;`TOFU_EVENT_BATCH=0` 回旧车道;队列满降级同步写不丢行;atexit 有界冲刷。实测 120 追加 ≤2 提交(≥60 倍,验收线 ≥10 倍)。
+- **教训一(双读跨缝):** 读者若先 DB 读、后取影子快照,可能恰好跨在写者「commit 成功 → 影子注销」之间——行两边都不可见(fold 落后一个突发,实测 9/30 推送瞬间)。修=**影子快照必须先于 DB 读**(read_events 与 inspector 同规)。口诀:双源合并读,快照顺序与失效顺序相反。
+- **教训二(组提交窗口):** 「队列有货即 drain 即冲」在稀疏流(追加慢于 drain)下退化为逐行提交——实测 30 事件 26 提交,攒批形同虚设。修=首个 get 返回后按窗口聚合(300ms 或 500 行),稀疏流也成批。
+- **教训三(探针自扰):** 排查时用「池化连接读→影子检查→新连接读」的串行观测,微秒级错位制造了「连接失速」假象(WRITEMOST 的 rollback/COMMIT/纯 sqlite 探针全不实证);原子快照(锁内影子+同连接读同一瞬间)才见真相。排此类问题先把观测做成单点原子。
+- **P0 待 owner 过目后动手:** 备份囤 411GB 清单(pg_backups 留最新 1 删 7、pg_backup.sql 67GB、pre_rename 5.7GB、emergency 396MB、dumps 738MB、claude_dialogue 残留 543MB)、死残留(chat.db 0B/chatui.db 16MB)、tofu.db 6GB 改名归档、_pg_seed.py 619 行撤回代码。
+- **余程:** P1.2 消息行存转正(conversation_messages 升主、conversations 退化元数据行,杀 10-12s JSONB 重写);P2 导出器+row-equal;P3 拆桥 ~9k 行+单写者全量收编+跨机双开哨兵。

@@ -918,6 +918,22 @@ class _SqliteCursorWrapper:
         self._cursor.close()
 
 
+# ── Global commit counter (docs/STORAGE_REDESIGN.md §8 acceptance metric) ──
+# Approximate by design (no lock — the GIL makes += good enough for a gauge).
+_COMMIT_TOTAL = 0
+
+
+def get_commit_count():
+    """Total DB commits this process has issued (all backends combined)."""
+    return _COMMIT_TOTAL
+
+
+def reset_commit_count():
+    """Reset the commit gauge (acceptance probes snapshot around a workload)."""
+    global _COMMIT_TOTAL
+    _COMMIT_TOTAL = 0
+
+
 class _SqliteConnectionWrapper:
     """SQLite connection wrapper providing the same API as PgConnection."""
 
@@ -952,6 +968,8 @@ class _SqliteConnectionWrapper:
     def commit(self):
         self._conn.commit()
         self._dirty = False
+        global _COMMIT_TOTAL
+        _COMMIT_TOTAL += 1
 
     def rollback(self):
         self._conn.rollback()

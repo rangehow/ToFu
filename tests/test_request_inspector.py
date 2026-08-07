@@ -40,9 +40,10 @@ _TARGET = os.path.join(ROOT, 'lib', 'tasks_pkg', 'request_inspector.py')
 
 def _seed(task_id, events):
     """Persist (type, payload) events with sequential ids; returns task_id."""
-    from lib.tasks_pkg.event_log import append_persistent_event
+    from lib.tasks_pkg.event_log import append_persistent_event, flush_pending
     for eid, (etype, payload) in enumerate(events):
         append_persistent_event(task_id, eid, payload | {'type': etype})
+    flush_pending(task_id)  # write-behind lane: drain before asserting
     return task_id
 
 
@@ -221,6 +222,8 @@ def test_streaming_noise_never_hides_recent_rounds():
     append_persistent_event(
         tid, base + 2,
         _usage_event(88, 'R88')[1] | {'type': 'round_usage'})
+    from lib.tasks_pkg.event_log import flush_pending
+    flush_pending(tid)  # write-behind lane: drain before asserting
     try:
         rows = _read_events(tid)
         assert rows, 'no rows returned'

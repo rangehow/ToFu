@@ -45,12 +45,13 @@ def _fail(msg): print(' ', _color('\u2717', '31'), msg); sys.exit(1)
 
 def _persist_deltas(task_id, chunks, *, resets=()):
     """Persist a delta stream to task_events; `resets` = {index: 'delta_reset'|'retry_reset'}."""
-    from lib.tasks_pkg.event_log import append_persistent_event
+    from lib.tasks_pkg.event_log import append_persistent_event, flush_pending
     eid = 0
     for i, chunk in enumerate(chunks):
         if i in dict(resets):
             append_persistent_event(task_id, eid, {'type': dict(resets)[i]}); eid += 1
         append_persistent_event(task_id, eid, {'type': 'delta', 'content': chunk}); eid += 1
+    flush_pending(task_id)  # write-behind lane: drain before reading back
     return eid
 
 

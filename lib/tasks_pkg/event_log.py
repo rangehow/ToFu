@@ -21,17 +21,26 @@ sweep on the table, deleting rows whose task is terminal and older than
 ``EVENT_TTL_MS``.  This keeps the table bounded without a background
 thread.
 
-Note on persistence semantics: every event (including each delta) is
-persisted as its own row on arrival.  No in-memory buffering, no
-coalescing — the previous "250 ms delta coalesce" behaviour was removed
-in 2026-05 because cold-replay required exact-cursor reconstruction.
-``flush_pending`` is retained as a no-op for API compatibility with the
-sole caller in ``manager.append_event``; it does not need to be called
-by new code.
+Note on persistence semantics (2026-08-07, docs/STORAGE_REDESIGN.md §4):
+every event — including each delta — is still persisted as its OWN row at
+its real cursor, so exact-cursor cold replay is unchanged. What changed is
+the COMMIT cadence: rows go through a write-behind batch lane (one writer
+thread, burst commits) instead of one commit per row, because FUSE charges
+per IO operation, not per byte (measured 20x). A process crash loses at
+most the unflushed tail (≤0.3 s of rebuildable replay events — owner-
+approved); terminal frames (done/error/aborted/interrupted) are
+durability-ACKED before ``append_persistent_event`` returns, so
+durable-before-visible holds for every frame a reconnect can anchor to.
+``TOFU_EVENT_BATCH=0`` restores the legacy one-commit-per-row path;
+``flush_pending`` drains the lane (bounded wait).
 """
 
+import atexit
 import json
+import os
+import queue
 import random
+import threading
 import time
 
 from lib.database import DOMAIN_CHAT, get_thread_db, json_dumps_pg
@@ -77,6 +86,239 @@ _COMPACT_MAX_TASKS = 2
 # durable, so a slow batch never discards the work of earlier ones.
 _PRUNE_BATCH_TASKS = 200
 _PRUNE_MAX_BATCHES = 25
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Write-behind batch lane (docs/STORAGE_REDESIGN.md §4)
+# ═══════════════════════════════════════════════════════════════════════════
+_EVENT_BATCH_ENABLED = os.environ.get(
+    'TOFU_EVENT_BATCH', '1').strip().lower() not in ('0', 'false', 'no')
+_EVENT_BATCH_WINDOW_S = 0.3
+_EVENT_BATCH_MAX_ROWS = 500
+_EVENT_QUEUE_MAX = 100_000
+_TERMINAL_FLUSH_TIMEOUT_S = 5.0
+_TERMINAL_EVENT_TYPES = ('done', 'error', 'aborted', 'interrupted')
+
+_EVENT_Q = queue.Queue(maxsize=_EVENT_QUEUE_MAX)
+_WRITER_LOCK = threading.Lock()
+_WRITER_THREAD = None
+_TICKET_LOCK = threading.Lock()
+_TICKET_NEXT = 0
+_FLUSH_COND = threading.Condition()
+_FLUSHED_TICKET = 0
+# Producer-side shadow of every not-yet-committed row (ticket → row). The
+# PRODUCER registers before enqueueing and the writer unregisters only after
+# commit (or drop), so read_events sees a row at every point of its
+# lifecycle with NO pull-window hole: shadow ∪ committed is complete.
+_PENDING_SHADOW = {}
+# Approximate gauges (no lock — good enough for the acceptance metric):
+# rows in, rows out, commits, losses.
+_STATS = {'enqueued': 0, 'flushed_rows': 0, 'commits': 0,
+          'dropped': 0, 'sync_writes': 0, 'flush_errors': 0}
+
+
+def get_batch_stats():
+    """Approximate batch-lane gauges (acceptance metric, STORAGE_REDESIGN §8)."""
+    return dict(_STATS)
+
+
+def _next_ticket():
+    global _TICKET_NEXT
+    with _TICKET_LOCK:
+        _TICKET_NEXT += 1
+        return _TICKET_NEXT
+
+
+def _current_ticket():
+    with _TICKET_LOCK:
+        return _TICKET_NEXT
+
+
+def _wait_ticket(ticket, timeout):
+    """Block until the writer has flushed (or dropped — error-logged) `ticket`."""
+    if ticket <= 0:
+        return True
+    with _FLUSH_COND:
+        ok = _FLUSH_COND.wait_for(lambda: _FLUSHED_TICKET >= ticket, timeout)
+    if not ok:
+        logger.warning('[EventLog] flush ack for ticket=%d not seen within %.1fs '
+                       '(flushed=%d) — proceeding with durability unconfirmed',
+                       ticket, timeout, _FLUSHED_TICKET)
+    return ok
+
+
+def _mark_flushed(max_ticket):
+    global _FLUSHED_TICKET
+    with _FLUSH_COND:
+        _FLUSHED_TICKET = max(_FLUSHED_TICKET, max_ticket)
+        _FLUSH_COND.notify_all()
+
+
+def _upsert_row(db, row):
+    """One DO-NOTHING upsert (NO commit) + the duplicate-seq collision canary.
+
+    ON CONFLICT (task_id, event_id) DO NOTHING because the composite PK
+    guarantees idempotency on retry — but a real duplicate (caller minted the
+    same seq twice for different events) WOULD silently drop data, so a
+    rowcount of 0 raises the canary. retry=False is REQUIRED —
+    upsert(retry=True) routes through db_execute_with_retry which returns
+    None, destroying cur.rowcount; DO-NOTHING rowcount semantics (insert→1,
+    duplicate→0) are verified identical on PG and sqlite3.
+    """
+    from lib.database._core_schema import TASK_EVENTS, upsert
+    cur = upsert(
+        db, TASK_EVENTS, row,
+        conflict_cols=['task_id', 'event_id'],
+        insert_cols=['task_id', 'event_id', 'ts_ms', 'type', 'payload'],
+        update_cols=[],  # DO NOTHING — append-only event log
+        commit=False, retry=False,
+    )
+    if getattr(cur, 'rowcount', 1) == 0:
+        # Either an exact retry (harmless — same row already there) or two
+        # distinct events colliding on event_id (DATA LOSS).  We can't cheaply
+        # distinguish, but a non-zero rate is the canary.
+        logger.warning('[EventLog] event_id collision on task=%s event_id=%d type=%s — '
+                       'ON CONFLICT DO NOTHING dropped the row.  If this is not a retry, the '
+                       'caller minted a duplicate seq and cold replay will be missing this '
+                       'event.', row['task_id'][:8], int(row['event_id']), row['type'])
+
+
+def _write_row_sync(db, row):
+    """Legacy synchronous lane: one committed upsert per row (kill switch /
+    writer unavailable / queue full). Never raises — a transient DB blip must
+    not abort the SSE stream; the WARNING makes the cold-replay hole visible.
+    """
+    try:
+        _upsert_row(db, row)
+        db.commit()
+        _STATS['sync_writes'] += 1
+    except Exception as e:
+        logger.warning('[EventLog] persist event failed for task=%s type=%s: %s',
+                       row['task_id'][:8], row['type'], e)
+
+
+def _flush_batch(db, rows):
+    """Write `rows` in ONE commit. Payloads arrive pre-serialized, so a failure
+    here is DB-level; the writer's retry re-runs the whole batch, which
+    ON CONFLICT DO NOTHING makes idempotent."""
+    for row in rows:
+        _upsert_row(db, row)
+    db.commit()
+
+
+def _ensure_writer():
+    """Lazily spawn the single writer thread. None → caller uses the sync lane."""
+    global _WRITER_THREAD
+    t = _WRITER_THREAD
+    if t is not None and t.is_alive():
+        return t
+    with _WRITER_LOCK:
+        if _WRITER_THREAD is not None and _WRITER_THREAD.is_alive():
+            return _WRITER_THREAD
+        try:
+            t = threading.Thread(target=_writer_loop, name='event-log-writer',
+                                 daemon=True)
+            t.start()
+        except Exception as e:
+            logger.warning('[EventLog] writer thread spawn failed — sync lane: %s', e)
+            return None
+        _WRITER_THREAD = t
+        return t
+
+
+def _writer_loop():
+    """Drain _EVENT_Q in bursts; ONE commit per burst.
+
+    The ack watermark advances even when a batch is dropped (dead DB): a
+    terminal-event waiter must never hang the stream because durability is
+    degraded — the drop itself is error-logged.
+    """
+    db = None
+    while True:
+        try:
+            pending = []
+            try:
+                pending.append(_EVENT_Q.get(timeout=_EVENT_BATCH_WINDOW_S))
+            except queue.Empty:
+                pass
+            if pending:
+                # Group-commit window: keep collecting until the window
+                # expires or the batch fills, so SPARSE streams batch too
+                # (an immediate drain-then-flush degenerates to one commit
+                # per row the moment appends arrive slower than the drain).
+                first = time.monotonic()
+                while len(pending) < _EVENT_BATCH_MAX_ROWS:
+                    remaining = _EVENT_BATCH_WINDOW_S - (time.monotonic() - first)
+                    if remaining <= 0:
+                        break
+                    try:
+                        pending.append(_EVENT_Q.get(timeout=remaining))
+                    except queue.Empty:
+                        break
+            if not pending:
+                continue
+            max_tk = max(tk for tk, _ in pending)
+            rows = [r for _, r in pending]
+            flushed = False
+            if db is None:
+                try:
+                    db = get_thread_db(DOMAIN_CHAT)
+                except Exception as e:
+                    logger.error('[EventLog] writer db unavailable — dropping %d rows '
+                                 '(cold-replay window degraded): %s', len(rows), e)
+                    _STATS['dropped'] += len(rows)
+            if db is not None:
+                try:
+                    _flush_batch(db, rows)
+                    flushed = True
+                except Exception as e:
+                    _STATS['flush_errors'] += 1
+                    logger.warning('[EventLog] batch flush failed (%d rows): %s — '
+                                   'retrying once on a fresh connection', len(rows), e)
+                    try:
+                        db.rollback()
+                    except Exception as re:
+                        logger.debug('[EventLog] rollback after flush failure: %s', re)
+                    db = None
+                    try:
+                        db = get_thread_db(DOMAIN_CHAT)
+                        _flush_batch(db, rows)
+                        flushed = True
+                    except Exception as e2:
+                        _STATS['dropped'] += len(rows)
+                        logger.error('[EventLog] batch flush retry failed — dropping %d '
+                                     'rows (cold-replay window degraded): %s',
+                                     len(rows), e2)
+                        db = None
+            if flushed:
+                _STATS['flushed_rows'] += len(rows)
+                _STATS['commits'] += 1
+            # Unregister only now — after the commit (or the error-logged
+            # drop) — so readers never see a committed-but-invisible gap.
+            with _TICKET_LOCK:
+                for tk, _ in pending:
+                    _PENDING_SHADOW.pop(tk, None)
+            _mark_flushed(max_tk)
+        except Exception as e:
+            logger.error('[EventLog] writer loop iteration failed: %s', e, exc_info=True)
+            if pending:
+                _STATS['dropped'] += len(pending)
+                with _TICKET_LOCK:
+                    for tk, _ in pending:
+                        _PENDING_SHADOW.pop(tk, None)
+            time.sleep(0.5)
+
+
+def _flush_lane_at_exit():
+    """atexit: give the writer a bounded window to land the queued tail."""
+    try:
+        if _WRITER_THREAD is not None:
+            _wait_ticket(_current_ticket(), 3.0)
+    except Exception as e:
+        logger.debug('[EventLog] atexit flush wait failed: %s', e)
+
+
+atexit.register(_flush_lane_at_exit)
 
 
 def _row_payload_to_json(payload):
@@ -146,43 +388,33 @@ def append_persistent_event(task_id, event_id, event):
                            'task=%s (storing full row): %s', task_id[:8], e)
             row_event = event
 
-    # ON CONFLICT (task_id, event_id) DO NOTHING because the composite PK
-    # guarantees idempotency on retry — but a real duplicate (caller minted
-    # the same seq twice for different events) WOULD silently drop data.  We
-    # detect that by checking ``rowcount`` and warning, so cold-replay holes
-    # are observable in logs/error.log instead of being invisible.
-    #
-    # NOTE: retry=False is REQUIRED here — upsert(retry=True) routes through
-    # db_execute_with_retry which returns None, destroying the cur.rowcount
-    # the collision canary below depends on.  DO-NOTHING rowcount semantics
-    # (insert→1, duplicate→0) are verified identical on PG and sqlite3.
-    try:
-        from lib.database._core_schema import TASK_EVENTS, upsert
-        cur = upsert(
-            db, TASK_EVENTS,
-            {'task_id': task_id, 'event_id': event_id, 'ts_ms': int(now * 1000),
-             'type': etype or 'unknown', 'payload': _row_payload_to_json(row_event)},
-            conflict_cols=['task_id', 'event_id'],
-            insert_cols=['task_id', 'event_id', 'ts_ms', 'type', 'payload'],
-            update_cols=[],  # DO NOTHING — append-only event log
-            commit=True, retry=False,
-        )
-        rc = getattr(cur, 'rowcount', 1)
-        if rc == 0:
-            # Either an exact retry (harmless — same row already there) or
-            # two distinct events colliding on event_id (DATA LOSS).  We can't
-            # cheaply distinguish, but a non-zero rate is the canary.
-            logger.warning('[EventLog] event_id collision on task=%s event_id=%d type=%s — '
-                           'ON CONFLICT DO NOTHING dropped the row.  If this is not a retry, the '
-                           'caller minted a duplicate seq and cold replay will be missing this '
-                           'event.', task_id[:8], int(event_id), etype or 'unknown')
-    except Exception as e:
-        # Catch broadly because this runs on every SSE delta — we never want
-        # a transient DB blip to abort the stream.  Logged at WARNING (was
-        # DEBUG): a silent persist failure means cold replay returns nothing
-        # for that window, which the user perceives as data loss.
-        logger.warning('[EventLog] persist event failed for task=%s type=%s: %s',
-                       task_id[:8], etype, e)
+    # ── Persist: batch lane (default) or legacy synchronous lane ──
+    # The row is built AND the payload serialized here on the producer
+    # thread, so the writer thread never pays the projection/JSON cost.
+    row = {'task_id': task_id, 'event_id': event_id, 'ts_ms': int(now * 1000),
+           'type': etype or 'unknown', 'payload': _row_payload_to_json(row_event)}
+    if _EVENT_BATCH_ENABLED and _ensure_writer() is not None:
+        tk = _next_ticket()
+        with _TICKET_LOCK:
+            _PENDING_SHADOW[tk] = row
+        try:
+            _EVENT_Q.put_nowait((tk, row))
+            _STATS['enqueued'] += 1
+        except queue.Full:
+            with _TICKET_LOCK:
+                _PENDING_SHADOW.pop(tk, None)
+            _STATS['dropped'] += 1
+            logger.warning('[EventLog] batch queue FULL (cap %d) — writing task=%s '
+                           'event_id=%s synchronously', _EVENT_QUEUE_MAX,
+                           task_id[:8], event_id)
+            _write_row_sync(db, row)
+        else:
+            # Durable-before-visible for terminal frames: a reconnect may
+            # anchor to done/error/aborted — block until THAT row is flushed.
+            if etype in _TERMINAL_EVENT_TYPES:
+                _wait_ticket(tk, _TERMINAL_FLUSH_TIMEOUT_S)
+    else:
+        _write_row_sync(db, row)
 
     if random.random() < _PRUNE_PROBABILITY:
         try:
@@ -216,18 +448,72 @@ def append_persistent_event(task_id, event_id, event):
 
 
 def flush_pending(task_id):
-    """No-op kept for API compatibility.
+    """Drain the batch lane up to NOW (bounded wait); no-op when disabled.
 
-    Historically this drained a 250 ms delta coalescer.  The coalescer was
-    removed (see module docstring) because cold-replay needs every event
-    at its real cursor.  Now every event is persisted on arrival, so
-    there is nothing to flush.
+    ``manager.append_event`` calls this on the terminal 'done' frame. The
+    terminal row itself is already durability-acked inside
+    ``append_persistent_event``; this wait additionally lands any earlier
+    non-terminal rows still queued, so a finished task's ENTIRE log is
+    durable before the stream closes. ``task_id`` is accepted for API
+    compatibility — the lane is global, so the wait covers every task.
     """
-    pass
+    if not _EVENT_BATCH_ENABLED:
+        return
+    try:
+        _wait_ticket(_current_ticket(), _TERMINAL_FLUSH_TIMEOUT_S)
+    except Exception as e:
+        logger.debug('[EventLog] flush_pending wait failed (non-fatal): %s', e)
+
+
+def pending_event_rows(task_id, since_event_id=None):
+    """Lane-shadow rows for `task_id` in FULL row shape, ticket order.
+
+    Each entry: {'event_id', 'type', 'ts_ms', 'payload' (parsed dict)} —
+    the shape the Request Inspector's structural read needs. Snapshots the
+    producer-side shadow (registered BEFORE enqueue, dropped only after
+    commit), so a row is visible at every point of its lifecycle.
+    Best-effort — a snapshot failure degrades to [].
+    """
+    if not (_EVENT_BATCH_ENABLED and _WRITER_THREAD is not None):
+        return []
+    try:
+        with _TICKET_LOCK:
+            items = list(_PENDING_SHADOW.items())
+    except Exception as e:
+        logger.debug('[EventLog] pending snapshot failed: %s', e)
+        return []
+    rows = []
+    for _tk, row in items:
+        if row.get('task_id') != task_id:
+            continue
+        try:
+            eid = int(row.get('event_id'))
+        except (TypeError, ValueError):
+            continue
+        if since_event_id is not None and eid <= int(since_event_id):
+            continue
+        try:
+            payload = json.loads(row['payload'])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {'type': row.get('type') or 'unknown'}
+        rows.append({'event_id': eid, 'type': row.get('type') or 'unknown',
+                     'ts_ms': int(row.get('ts_ms') or 0), 'payload': payload})
+    return rows
+
+
+def _pending_rows_for(task_id, since_event_id=None):
+    """read_events-shaped projection of :func:`pending_event_rows`."""
+    return [{'event_id': r['event_id'], 'payload': r['payload']}
+            for r in pending_event_rows(task_id, since_event_id)]
 
 
 def read_events(task_id, since_event_id=None, limit=10000):
     """Read persisted events for a task, ordered by event_id.
+
+    Lane-aware (STORAGE_REDESIGN §4): rows still queued/in-flight in the
+    batch lane are MERGED over the DB rows (dedup by event_id, re-sorted),
+    so callers — SSE cold replay, cold fold — always see every appended
+    event, never just the committed prefix.
 
     Args:
         task_id: task identifier.
@@ -239,6 +525,12 @@ def read_events(task_id, since_event_id=None, limit=10000):
     """
     if not task_id:
         return []
+    # Snapshot the lane shadow BEFORE the DB read: a row committed (and
+    # shadow-popped) WHILE our DB query runs is still in this snapshot —
+    # taking the shadow after the DB read would let a reader straddle the
+    # writer's commit→pop and see the row in NEITHER store (measured in the
+    # durable-before-visible suite: fold lagging by one burst).
+    pending = _pending_rows_for(task_id, since_event_id)
     try:
         db = get_thread_db(DOMAIN_CHAT)
     except Exception as e:
@@ -286,6 +578,12 @@ def read_events(task_id, since_event_id=None, limit=10000):
             logger.debug('[EventLog] row missing event_id, dropping: %s', e)
             continue
         out.append({'event_id': eid, 'payload': payload})
+    if pending:
+        seen = {e['event_id'] for e in out}
+        out.extend(e for e in pending if e['event_id'] not in seen)
+        out.sort(key=lambda e: e['event_id'])
+        if len(out) > int(limit):
+            out = out[:int(limit)]
     return out
 
 

@@ -1,3 +1,11 @@
+### 2026-08-07(kimi-k3「tokenization failed」定案+全模型协议修复器:畸形工具调用空 name 上 wire——11 探针实测矩阵钉死触发器;`_fix_tool_call_wire_shape` chokepoint 落地) — owner 两连指令(「What's this bug?」→「for any model, the request protocol must be handled properly」);epic `pt_1fd4f09b65834aa8`;commit `27190164`(6 文件 +608);新套件 **27 针** + 邻接环(body/sanitize/anthropic_outbound 122 + parse 消费方 35)全绿 + collect-only **16,254** 零错 + ruff 干净
+
+- **事故(conv msebjymx5b4a25/task 9a8196f3,大脑派发):** kimi-k3 R3 吐出 `id=''`+`function.name=''` 的畸形工具调用;parse 层跳过执行、铸 id、回填错误回执,但 **`name=''` 留在 wire dict 上**;R4 回放后被 Kimi 双 key 确定性 400「tokenization failed」(名字洪亮、文案撒谎——实际是工具调用校验),fallback 救到 qwen3.5-plus 一次成功。横幅本身是 fallback 链按设计工作,非 bug。
+- **实测驱动(11 探针,max_tokens=1,真网关):** 触发器=`name=''`/name 缺失/`type` 缺失/arguments 为 dict/`tool_call_id` 空(全 400);**安全不动**=`id=''`、`arguments=''`、坏 JSON 串、标量 JSON、name 非法字符、孤立代理字符(全 200)。修复方案本体(`unnamed_tool_call` 占位名)也先探针验证 200 才落地。**教训:第二批探针推翻了两个猜想——坏 JSON arguments 与孤立代理字符均非触发器,不实测就会修错方向。**
+- **三层修复:** ①`_fix_tool_call_wire_shape`(lib/llm_sanitize/_toolcalls.py)=**全模型 chokepoint**,在 build_body 里位于 orphan/adjacency 修复器之前(配对按 id);覆盖五个实测触发器 + Anthropic 严格 name pattern 规范化,实测安全形态一律不动(不凭猜想改行为、不毁证据);②_parse.py 生产方写回占位名(与铸 id 同缝);③27 针回归:链交互(铸 id 后 orphan 修复器不拆对)/build_body NEUTER 咬合/调用顺序静态针/治愈必 WARNING 留痕。
+- **共享 HEAD 纪律又一次实战:** _parse.py 工作区混着兄弟的 tool_progress 修补 hunk(板载 DONE 但 HEAD 未见,兄弟在飞)——过滤补丁 `git apply --cached` 只暂存我的 2 块(+12),兄弟件原样留在工作区;提交后无 pathspec 全量审计核对清单吻合。
+- **顺带发现(owner 知会):** sankuai provider `api_keys[0]` 已被网关上端禁用(401「App ID 已被禁用,去 Friday 控制台」),`api_keys[1]` 探测 60s 读超时;dispatch 层一直在兜底轮换,建议去 Friday 控制台查配额。
+
 ### 2026-08-06(第六轮:tool_exec 超时腿定案=3.10 异类异常——`concurrent.futures.TimeoutError` 3.11 才并入内建 TimeoutError;双捕修两车道,CI 3.10 实证转绿) — epic `pt_b27e1d2610304889` **DONE**;commits `c18932b2`(双捕+静态针)+`8b459a6`(heartbeat 宽限)
 
 - **定案(一票封案的版本知识):** `as_completed(timeout=)`/`future.result(timeout=)` 抛的是 `concurrent.futures.TimeoutError`——3.10 上它与内建 `TimeoutError` 是**两个类**(3.11 起才做别名),于是 `except TimeoutError` 在 3.10 接不住,整个池超时车道(verdict 盖章+wire status+模型侧失败串)从未触发,异常直接逃逸出 `execute_tool_pipeline`。「3.10 腿间歇红」实为**确定性红**——前二轮被更大的红批淹没,且 3.12 开发机永远看不见。双捕 `(TimeoutError, _FuturesTimeoutError)` 修两处(_pipeline + streaming_tool_executor 的 future.result 车道),套件加静态针(双版本不可行为模拟,静态针+3.10 CI 腿是证据链)。**同类排查口诀:凡是 catch futures 超时的 `except TimeoutError`,3.10 全漏。**

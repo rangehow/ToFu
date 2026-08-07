@@ -5,6 +5,7 @@
 - **三层修复:** ①`_fix_tool_call_wire_shape`(lib/llm_sanitize/_toolcalls.py)=**全模型 chokepoint**,在 build_body 里位于 orphan/adjacency 修复器之前(配对按 id);覆盖五个实测触发器 + Anthropic 严格 name pattern 规范化,实测安全形态一律不动(不凭猜想改行为、不毁证据);②_parse.py 生产方写回占位名(与铸 id 同缝);③27 针回归:链交互(铸 id 后 orphan 修复器不拆对)/build_body NEUTER 咬合/调用顺序静态针/治愈必 WARNING 留痕。
 - **共享 HEAD 纪律又一次实战:** _parse.py 工作区混着兄弟的 tool_progress 修补 hunk(板载 DONE 但 HEAD 未见,兄弟在飞)——过滤补丁 `git apply --cached` 只暂存我的 2 块(+12),兄弟件原样留在工作区;提交后无 pathspec 全量审计核对清单吻合。
 - **顺带发现(owner 知会):** sankuai provider `api_keys[0]` 已被网关上端禁用(401「App ID 已被禁用,去 Friday 控制台」),`api_keys[1]` 探测 60s 读超时;dispatch 层一直在兜底轮换,建议去 Friday 控制台查配额。
+- **owner 复核擒获(二轮修复,commit `7b5b8b60`):** 铸 id 用随机 uuid 是**缓存自杀**——`_strip_non_api_fields` 深拷贝隔离使 wire 治愈永远写不回源消息,同一条无 id 历史调用每轮 build_body 换一张新脸(owner 实测两次构建 `call_d35b67054ae1`≠`call_426a3d3ea09a`),prompt-cache 前缀逐轮全断、`body_identical=false`。修为 `_mint_tool_call_id()`:「消息序号+调用序号+去 id 规范化 JSON」的 sha1[:12] 确定性派生,跨轮幂等、同消息孪生不撞;+3 针(幂等字节相同/位置派生/孪生异 id),套件 27→30,邻接环 157 绿。**口诀:凡在 build_body 的深拷贝层做修补,修补值必须幂等——随机数是 cache parity 的天敌。**
 
 ### 2026-08-06(第六轮:tool_exec 超时腿定案=3.10 异类异常——`concurrent.futures.TimeoutError` 3.11 才并入内建 TimeoutError;双捕修两车道,CI 3.10 实证转绿) — epic `pt_b27e1d2610304889` **DONE**;commits `c18932b2`(双捕+静态针)+`8b459a6`(heartbeat 宽限)
 

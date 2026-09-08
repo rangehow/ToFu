@@ -59,7 +59,7 @@ _DEFAULT_MAX = 10_000
 
 # TODO(enterprise, S5): per-process replay cache and single-flight registry;
 # move claims to an atomic shared-store primitive so replicas dedupe.
-# docs/ENTERPRISE_READINESS_AUDIT.md
+# docs/ENTERPRISE_EVOLUTION.md
 _cache = TTLCache(ttl=_DEFAULT_TTL, max_size=_DEFAULT_MAX,
                    name='idempotency')
 

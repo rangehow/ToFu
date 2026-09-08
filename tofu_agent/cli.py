@@ -318,7 +318,7 @@ def _run_task(args) -> int:
         runtime.close(abort=False)
 
     document = {
-        'ok': result.status == 'done',
+        'ok': result.ok,
         'id': result.id,
         'task_id': result.task_id,
         'model': result.model,
@@ -331,13 +331,16 @@ def _run_task(args) -> int:
         'error': result.error,
         'provider_id': result.provider_id,
     }
+    for field in ('stream_state', 'stream_diagnostics'):
+        if field in result.raw:
+            document[field] = result.raw[field]
     if result.trajectory_format:
         document['trajectory_format'] = result.trajectory_format
         document['trajectory'] = result.trajectory
 
     _emit(document, args.output)
 
-    if result.status == 'done':
+    if result.ok:
         return 0
     _report_failure(result)
     if result.status == 'aborted':
@@ -353,7 +356,7 @@ def _run_task(args) -> int:
 
 def _report_failure(result) -> None:
     error = result.error if isinstance(result.error, Mapping) else {}
-    parts = [f'status={result.status}']
+    parts = [f'status={result.status}', f'finish_reason={result.finish_reason}']
     for key in ('kind', 'message', 'detail', 'raw'):
         value = str(error.get(key) or '').strip()
         if value:

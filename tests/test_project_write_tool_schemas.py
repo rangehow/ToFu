@@ -60,12 +60,30 @@ def test_edit_schema_keeps_anchor_efficiency_and_partial_failure_contracts():
             '1–30 ordered anchored edits', 'earlier round',
             'insert_after/insert_before', 'content is only new text',
             'do not repeat', 'add B between A/C', 'Safe insertion echoes',
-            'pure echoes', 'wraps its unchanged anchor',
-            'replace only to change/remove', 'match exactly once',
+            'pure echoes', 'Replace uses full content',
+            'even when it retains the anchor', 'never adds line breaks',
+            'match exactly once',
             'replace_all permits multiple matches only for replace',
             'Later edits see earlier changes',
             'neither rolls back nor stops the others'):
         assert phrase in desc, phrase
+
+
+def test_edit_contract_survives_resident_projection_search_and_budget():
+    from lib.tools.gateway import search_executable_catalog
+    from lib.tools.project import project_tools_for_runtime
+
+    resident = next(tool for tool in project_tools_for_runtime()
+                    if tool['function']['name'] == 'edit_file')
+    assert resident == PROJECT_TOOL_EDIT_FILE
+    found = search_executable_catalog([resident], 'edit_file', limit=1)
+    item = found['items'][0]
+    assert item['name'] == 'edit_file'
+    assert item['arguments_schema'] == resident['function']['parameters']
+    assert 'even when it retains the anchor' in item['description']
+    projected = fit_tool_schema_budget([resident], budget_tokens=385, model='kimi-k3')
+    assert projected and projected[0]['function']['description'] == resident['function']['description']
+    assert tool_schema_tokens(projected, model='kimi-k3') <= 385
 
 
 def test_edit_schema_rejects_empty_and_oversized_batches_before_execution():

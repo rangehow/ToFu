@@ -37,7 +37,7 @@ function _purgeEmptyConvs() {
 /* ── Brand detection for model_id — typed owner alias from _prelude.js ── */
 const _DEPTH_ICONS  = { off: '', medium: '', high: '', xhigh: '', max: '', ultra: '' };
 const _DEPTH_ICON_FALLBACK = '';
-const _DEPTH_LABELS = { off: 'Off', medium: 'Med', high: 'High', xhigh: 'xHigh', max: 'Max', ultra: 'Ultra' };
+const _DEPTH_LABELS = { off: 'Off', low: 'Low', medium: 'Med', high: 'High', xhigh: 'xHigh', max: 'Max', ultra: 'Max' };
 /* Models whose model_id indicates thinking/depth support.
  * Uses server-provided thinking_default from _registeredModels;
  * falls back to regex before server config loads. */
@@ -70,6 +70,10 @@ var _hiddenIgModels = new Set();  // shared with image-gen.js
 let _lastAppliedModelId = null;
 let _lastAppliedIsThinking = null;
 
+const _conversationModelController = createConversationModelController({
+  hasDraft: () => _hasProjectComposerDraft(),
+  selection: () => captureComposerModel(config),
+});
 function _applyModelUI(modelId) {
   /* SINGLE RESOLVER. This function — and ONLY this function — decides what
    *   to paint when a conversation has no stored model. Callers MUST pass the
@@ -420,21 +424,21 @@ function selectThinkingDepth(depth) {
    * before the user sends, it clobbers config.thinkingDepth back to
    * conv.thinkingDepth
    * → backend receives the stale depth → no thinking generated. */
+  commitComposerModel(getActiveConv(), captureComposerModel(config));
   captureActiveConversationSettings();
   try { localStorage.setItem("claude_client_config", JSON.stringify(_configForPersist())); }
+
   catch (e) { debugLog(`[selectThinkingDepth] localStorage save failed: ${e.message}`, 'error'); }
 }
 
+// Narrow retained adapter; remove with the remaining composer model UI migration.
+const _thinkingDepthSlider = createThinkingDepthSlider({
+  document, translate: (key) => t(key), commit: (depth) => selectThinkingDepth(depth),
+});
+retainedCompositionLifecycle.add(() => _thinkingDepthSlider.destroy());
 function _updateDepthButtons(activeDepth) {
-  /* PERF: Cache the depth button NodeList and use a for-loop instead of
-   * querySelectorAll + forEach on every call.  During rapid conv switching,
-   * this avoids repeated DOM queries + closure allocation. */
-  const buttons = _depthButtonsCache || (_depthButtonsCache = document.querySelectorAll('.depth-btn'));
-  for (let i = 0, len = buttons.length; i < len; i++) {
-    buttons[i].classList.toggle('active', buttons[i].getAttribute('data-depth') === activeDepth);
-  }
+  _thinkingDepthSlider.sync(activeDepth, _isThinkingCapable(config.model));
 }
-let _depthButtonsCache = null;
 function _applySearchModeUI(mode) {
   // 'single' is a retired mode — fold legacy values into 'multi'.
   if (mode === "single") mode = "multi";
@@ -607,14 +611,7 @@ function captureActiveConversationSettings() {
    *   model. Only a value the user actually chose (or one restored from the
    *   conv itself) is durable. A conv with no model simply keeps none — the
    *   composer still renders the default, it just stops being written down. */
-  if (!config._modelIsProvisional && config.model) {
-    conv.model = config.model;
-    if (config.modelRef && typeof config.modelRef === 'object') {
-      conv.modelRef = Object.assign({}, config.modelRef);
-      conv.preferredProviderId = config.preferredProviderId || '';
-    }
-  }
-  conv.thinkingDepth = config.thinkingDepth;
+  // Model identity is committed only by explicit model/depth selection or send.
   /* FIX: Track the selected image gen model separately so pure image-gen
    * conversations accurately record which model was actually used, without
    * polluting the chat model field (which _applyModelUI reads on restore). */
@@ -639,31 +636,8 @@ function captureActiveConversationSettings() {
   conv.humanGuidanceEnabled = !!humanGuidanceEnabled;
   conv.chatMode = chatMode || 'chat';
   conv.planMode = !!planMode;
-  /* FIX: Sync projectPath from the UI-visible projectState to the conv object.
-   * Without this, conv.projectPath can diverge from projectState when:
-   *  (a) A new conv is created (has no projectPath property at all)
-   *  (b) _restoreConvProject succeeds (updates projectState but not conv.projectPath)
-   *  (c) The conv was loaded from cache/server without projectPath in settings
-   * This divergence causes the bug: "UI shows project B active, but backend gets
-   * no project path" because startAssistantResponse reads conv.projectPath (empty)
-   * while projectState.path still shows the project. */
-  /* Only sync conv.projectPath when projectState is actively showing a project.
-   * Do NOT clear conv.projectPath when projectState.active is false, because
-   * _restoreConvProject temporarily clears projectState during its async fetch.
-   * If we cleared here, a toggle during that gap would destroy the saved path.
-   * Explicit clearing is handled by clearProject() → _saveConvProjectPath(""). */
-  if (projectState.active && projectState.path) {
-    conv.projectPath = projectState.path;
-    // Also sync multi-root paths if present
-    const allPaths = [projectState.path];
-    if (projectState.extraRoots?.length) {
-      for (const r of projectState.extraRoots) {
-        const p = typeof r === 'string' ? r : r.path;
-        if (p && !allPaths.includes(p)) allPaths.push(p);
-      }
-    }
-    conv.projectPaths = allPaths;
-  }
+  /* Tool/settings capture is not a project selection. A draft may deliberately
+   * carry a different composer project across conversation navigation. */
   /* Do not overwrite autoTranslate on a conversation with an active Turn.
    * The autoTranslate state is frozen at send-time. If the user toggles it OFF
    * while viewing this conversation, its running attempt must still use the
@@ -704,7 +678,7 @@ function scheduleConversationSettingsPersist(conv, delayMs = 1500) {
   }, delayMs));
 }
 
-function restoreConversationSettingsToComposer(conv) {
+function restoreConversationSettingsToComposer(conv, modelEligible) {
   /* Old/local snapshots may predate Plan Mode's exclusivity contract and carry
    * incompatible execution modes at the same time. Normalize the painted
    * runtime without writing during restore; the backend independently
@@ -718,6 +692,7 @@ function restoreConversationSettingsToComposer(conv) {
   const _restoredPlanMode = _restoredInteraction.agentMode === 'plan';
   const _restoredWorkflowMode = _restoredInteraction.agentMode !== 'standard'
     || !!_restoredInteraction.activeFlow;
+  if (modelEligible ? modelEligible() : !_hasProjectComposerDraft()) {
   config.thinkingDepth = conv.thinkingDepth || null;   // ← restore depth BEFORE model UI (let _applyModelUI normalize)
   config.modelRef = (conv.modelRef && typeof conv.modelRef === 'object')
     ? Object.assign({}, conv.modelRef) : null;
@@ -728,6 +703,7 @@ function restoreConversationSettingsToComposer(conv) {
    * that stored nothing must reach _applyModelUI as falsy so the default it
    * paints is marked provisional and never written back. */
   _applyModelUI(conv.model || conv.preset || conv.effort);
+  }
   _applySearchModeUI(conv.searchMode || "multi");
   _applyFetchEnabledUI(true);  // always on
   _applyCodeExecUI(!!conv.codeExecEnabled);

@@ -51,7 +51,7 @@ _EXACT_RULES: tuple[tuple[str, int, str], ...] = (
     # backfill into static knowledge so fresh installs and template setups
     # resolve them too. Substring order matters in two places:
     # 'gemini-3.5-flash-lite' before 'gemini-3.5-flash'. The
-    # gemini-3.5/3.6/3.7 unknown guard below sits AFTER these rules, so
+    # gemini-3.5–3.8 unknown guard below sits AFTER these rules, so
     # verified variants win while unknown future variants (e.g. a
     # hypothetical gemini-3.5-pro) still refuse to inherit the generic
     # 'gemini' family estimate.
@@ -59,6 +59,7 @@ _EXACT_RULES: tuple[tuple[str, int, str], ...] = (
     ('gemini-3.5-flash', 1_000_000, 'vendor_official'),
     ('gemini-3.6-flash', 1_000_000, 'vendor_official'),
     ('gemini-3.7-flash', 1_000_000, 'vendor_official'),
+    ('gemini-3.8-flash', 1_000_000, 'vendor_official'),
     ('glm-5.1', 200_000, 'vendor_official'),
     ('glm-5.2', 1_000_000, 'vendor_official'),
     ('glm-5.3', 1_000_000, 'vendor_official'),
@@ -66,6 +67,9 @@ _EXACT_RULES: tuple[tuple[str, int, str], ...] = (
     ('hy3-preview', 256_000, 'vendor_official'),
     ('hy4-preview', 1_000_000, 'vendor_official'),
     ('longcat-2.0', 1_000_000, 'vendor_official'),
+    # Meta Muse Spark (dev.meta.ai/docs/models, 2026-09): 1,048,576
+    # context; both SKUs share it. Substring covers -contributor.
+    ('muse-spark-1.3', 1_048_576, 'vendor_official'),
     ('text-embedding-3', 8_191, 'vendor_official'),
     ('text-embedding-v4', 8_192, 'vendor_official'),
 )
@@ -111,6 +115,15 @@ def context_profile(model: str, provider_id: str = '') -> dict:
     if registered is not None:
         return registered
 
+    # gpt-6-astra rides the GPT-5.6 contract for pricing, but its verified
+    # window is 272K on every route: CLIProxyAPI's Codex subscription registry
+    # lists context_length 272000 and the Codex client catalogue lists
+    # context_window 272000 (max_context_window 872000 — still below the
+    # contract-wide 1.05M, which belongs to the public gpt-5.6 API line).
+    # Synced 2026-09-07; must run BEFORE the contract branch that would
+    # otherwise claim 1.05M and overshoot Astra's real ceiling.
+    if 'gpt-6-astra' in name:
+        return ContextProfile(272_000, 'vendor_official', True).as_dict()
     if is_official_gpt56_model(name):
         return ContextProfile(
             GPT56_CONTEXT_WINDOW, 'openai_official', True).as_dict()
@@ -127,7 +140,8 @@ def context_profile(model: str, provider_id: str = '') -> dict:
     for needle, window, source in _EXACT_RULES:
         if needle in name:
             return ContextProfile(window, source, True).as_dict()
-    if 'gemini-3.5' in name or 'gemini-3.6' in name or 'gemini-3.7' in name:
+    if ('gemini-3.5' in name or 'gemini-3.6' in name
+            or 'gemini-3.7' in name or 'gemini-3.8' in name):
         return _UNKNOWN.as_dict()
     for needle, window, source in _ESTIMATE_RULES:
         if needle in name:

@@ -24,6 +24,7 @@ from lib.llm._sse_core import (
     classify_status_error,
     prepare_request,
 )
+from lib.llm.request import transport_body
 from lib.llm._sse_framer import SSEFramer
 from lib.llm._transport import (
     CONNECT_TIMEOUT,
@@ -48,6 +49,7 @@ from lib.llm_errors import (
     ModelLimitError,
     PermissionError_,
     PromptTooLongError,
+    PROVIDER_RESPONSE_ERRORS,
     RateLimitError,
     RetryableAPIError,
     _RETRYABLE,
@@ -65,10 +67,40 @@ logger = get_logger(__name__)
 
 
 def _iter_response_bytes(response):
-    """Yield raw response bytes, with a narrow legacy-test fallback."""
+    """Yield available decoded bytes, never wait to fill a read buffer.
+
+    requests.iter_content(64KiB) uses urllib3.read(amt), which fills amt on
+    non-chunked HTTP bodies. Even a flushed heartbeat then stays invisible to
+    the watchdog until EOF. read1 keeps decompression but returns available
+    data. Preserve requests' exception vocabulary for the existing retries.
+    """
+    from urllib3.response import HTTPResponse
+    from urllib3.exceptions import (
+        DecodeError, ProtocolError, ReadTimeoutError, SSLError,
+    )
+
+    raw = getattr(response, 'raw', None)
+    if isinstance(raw, HTTPResponse) and callable(getattr(raw, 'read1', None)):
+        try:
+            while True:
+                chunk = raw.read1(64 << 10, decode_content=True)
+                if not chunk:
+                    return
+                yield chunk
+        except ProtocolError as error:
+            raise requests.exceptions.ChunkedEncodingError(error) from error
+        except DecodeError as error:
+            raise requests.exceptions.ContentDecodingError(error) from error
+        except ReadTimeoutError as error:
+            raise requests.exceptions.ConnectionError(error) from error
+        except SSLError as error:
+            raise requests.exceptions.SSLError(error) from error
     iter_content = getattr(response, 'iter_content', None)
     if callable(iter_content):
-        for chunk in iter_content(chunk_size=64 << 10):
+        # Old urllib3 without read1 needs a one-byte read to avoid buffering.
+        # Desktop relay adapters already deliver available bounded chunks.
+        for chunk in iter_content(chunk_size=1 if isinstance(raw, HTTPResponse)
+                                  else 64 << 10):
             if chunk:
                 yield bytes(chunk)
         return
@@ -328,7 +360,7 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                         adapter.get('agent_id', ''),
                         int(adapter.get('port') or 0),
                         _relay_path, headers=plan.hdrs,
-                        body=json.dumps(plan.body).encode(),
+                        body=json.dumps(transport_body(plan.body)).encode(),
                         user_id=_owner_scope, log_prefix=log_prefix)
                 except _eg.EgressUnavailable as e:
                     _report_network_outcome(False, 'connect')
@@ -360,7 +392,7 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                     try:
                         resp = _eg.open_stream(
                             plan.url, method='POST', headers=plan.hdrs,
-                            body=json.dumps(plan.body).encode(),
+                            body=json.dumps(transport_body(plan.body)).encode(),
                             agent_id=_egress_route, user_id=_owner_scope,
                             log_prefix=log_prefix, abort_check=abort_check)
                     except _eg.EgressUnavailable as e:
@@ -387,7 +419,7 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                                 resp = _tp.post_headers_abortable(
                                     lambda: get_sync_session().post(
                                         plan.url, headers=plan.hdrs,
-                                        json=plan.body, stream=True,
+                                        json=transport_body(plan.body), stream=True,
                                         timeout=(CONNECT_TIMEOUT, None),
                                         proxies=_server_route.requests_proxies(),
                                         allow_redirects=False),
@@ -438,7 +470,7 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                                 plan.url, proxies=_generic_proxies))
                         resp = _tp.post_headers_abortable(
                             lambda: get_sync_session().post(
-                                plan.url, headers=plan.hdrs, json=plan.body,
+                                plan.url, headers=plan.hdrs, json=transport_body(plan.body),
                                 stream=True, timeout=(CONNECT_TIMEOUT, None),
                                 proxies=_generic_proxies,
                                 allow_redirects=False),
@@ -537,6 +569,7 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
             on_thinking=on_thinking, on_content=on_content,
             on_tool_call_ready=on_tool_call_ready,
             route_output_limit_key=plan.route_output_limit_key,
+            credential_present=getattr(plan, 'credential_present', False),
             progress=_progress)
 
         framer = SSEFramer()
@@ -576,9 +609,7 @@ def _stream_chat_once(body, *, on_thinking=None, on_content=None,
                 raise AbortedError(
                     'User aborted while waiting on %s' % plan.url,
                     url=plan.url) from _iter_e
-            elif isinstance(_iter_e, (
-                    RateLimitError, PermissionError_, ContentFilterError,
-                    PromptTooLongError, ModelLimitError, RetryableAPIError)):
+            elif isinstance(_iter_e, PROVIDER_RESPONSE_ERRORS):
                 # A typed SSE application error proves the route delivered a
                 # valid provider frame. It belongs to dispatch/provider health,
                 # not network path health.

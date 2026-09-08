@@ -46,6 +46,11 @@ _ARTIFACT_CONTINUATION_MARKER = (
     "\n… [truncated; continue with read_tool_artifact using the envelope's "
     "artifactRef as artifact_ref and its cursor]"
 )
+_ARTIFACT_RESUME_MARKER = (
+    "\n… [truncated; this preview already shows the start of the result — "
+    "continue with read_tool_artifact using the envelope's artifactRef as "
+    "artifact_ref and its cursor, which points past this preview]"
+)
 _NARROWER_QUERY_MARKER = (
     "\n… [truncated; rerun the source tool with a narrower query or range]"
 )
@@ -362,11 +367,37 @@ def _materialize_envelope(*, status: str, summary: str, items: list[Any],
                           observed_at_ms: int, world_version: str,
                           evidence_id: str, model: str,
                           recovery=None,
+                          artifact_content: str = "",
                           token_budget: int = TOOL_RESULT_V2_MAX_TOKENS) -> str:
     from lib.tools.result_envelope import ToolResultEnvelopeV2
 
-    recovery_marker = (_ARTIFACT_CONTINUATION_MARKER if artifact_ref
-                       else _NARROWER_QUERY_MARKER)
+    # A summary that is the raw content itself (plain-text results) makes the
+    # preview a true byte prefix of the stored artifact, so the cursor can
+    # resume past it. Synthesized summaries keep the generic marker + "0".
+    prefix_resumable = bool(artifact_ref) and artifact_content == summary
+    recovery_marker = (
+        (_ARTIFACT_RESUME_MARKER if prefix_resumable
+         else _ARTIFACT_CONTINUATION_MARKER) if artifact_ref
+        else _NARROWER_QUERY_MARKER)
+
+    def _resume_cursor(candidate_summary: str) -> str:
+        """Byte offset where the visible summary ends inside the artifact.
+
+        Only plain-text results have a summary that is a true byte prefix of
+        the stored artifact content; for those the model has already seen
+        bytes 0..N, so the cursor must point past the preview instead of
+        restarting at 0. Synthesized summaries (structured results, aggregate
+        reductions) do not map onto raw content offsets and keep "0".
+        """
+        if not artifact_ref:
+            return ""
+        prefix = candidate_summary
+        if prefix.endswith(recovery_marker):
+            prefix = prefix[: -len(recovery_marker)]
+        if prefix and artifact_content and \
+                artifact_content.startswith(prefix):
+            return str(len(prefix.encode("utf-8")))
+        return "0"
 
     def _render(candidate_summary: str, candidate_items: list[Any],
                 candidate_truncated: bool) -> str:
@@ -375,7 +406,7 @@ def _materialize_envelope(*, status: str, summary: str, items: list[Any],
         return ToolResultEnvelopeV2(
             status=visible_status, summary=candidate_summary,
             items=tuple(candidate_items), artifact_ref=artifact_ref,
-            cursor="0" if artifact_ref else "",
+            cursor=_resume_cursor(candidate_summary),
             truncated=candidate_truncated,
             raw_bytes=raw_bytes, visible_bytes=0,
             observed_at_ms=observed_at_ms, world_version=world_version,
@@ -709,6 +740,7 @@ def budget_tool_result_v2(tool_name: str, content: str, *, user_id: int,
         evidence_id=evidence_id,
         model=model,
         recovery=recovery,
+        artifact_content=content,
         token_budget=token_budget,
     )
 

@@ -232,9 +232,16 @@ def context_status(scope: str = '') -> dict:
 def save_context_items(items: list[dict], scope: str = '', *,
                        enforce_cap: bool = True,
                        source_default: str = 'manual') -> dict:
-    """Replace all context items after validation and cap enforcement."""
+    """Replace all context items after validation and cap enforcement.
+
+    Every item that disappears in the replacement leaves a ``delete`` record
+    in the bounded changes log, so the consolidation learner can tell
+    "user explicitly removed this" apart from "never seen it" and does not
+    resurrect deleted content.
+    """
     if not isinstance(items, list):
         raise ContextValidationError('items must be a list')
+    previous = load_context(scope)['items']
     stamp = _now()
     normalized: list[dict] = []
     seen: set[str] = set()
@@ -263,6 +270,9 @@ def save_context_items(items: list[dict], scope: str = '', *,
             logger.warning('[UserContext] clear failed: %s', exc)
             raise
     _write_legacy_mirror(normalized, scope)
+    for old in previous:
+        if old.get('id') and old['id'] not in seen:
+            _append_change(scope, 'delete', old, None)
     audit_log('user_context_saved', items=len(normalized), chars=chars)
     return {'saved': True, 'items': deepcopy(normalized), 'chars': chars,
             'cap': CONTEXT_CHAR_CAP, 'over_cap': chars > CONTEXT_CHAR_CAP}
@@ -361,6 +371,9 @@ def undo_context_change(change_id: str, scope: str = '') -> dict:
         restored = deepcopy(change['before'])
         next_items = [restored if i.get('id') == change.get('item_id') else i
                       for i in doc['items']]
+    elif change.get('operation') == 'delete' and change.get('before'):
+        restored = deepcopy(change['before'])
+        next_items = list(doc['items']) + [restored]
     else:
         raise ContextConflictError('This context change cannot be undone')
     result = save_context_items(next_items, scope)
@@ -372,6 +385,22 @@ def undo_context_change(change_id: str, scope: str = '') -> dict:
 
 def legacy_profile_body(scope: str = '') -> str:
     return _legacy_markdown(load_context(scope)['items'])
+def deleted_context_items(scope: str = '') -> list[dict]:
+    """Snapshots of items the user explicitly removed (not since undone).
+
+    The consolidation learner treats these as tombstones: content matching a
+    tombstone must not be re-learned, because the user already rejected it.
+    """
+    data = read_json(context_changes_path(scope), default={})
+    changes = list(data.get('changes') or []) if isinstance(data, dict) else []
+    tombstoned: list[dict] = []
+    for change in changes:
+        if change.get('operation') != 'delete' or change.get('undone_at'):
+            continue
+        before = change.get('before')
+        if isinstance(before, dict):
+            tombstoned.append(deepcopy(before))
+    return tombstoned
 
 
 def legacy_items_to_context(items: list[dict]) -> list[dict]:
@@ -404,6 +433,6 @@ __all__ = [
     'ContextValidationError', 'ContextConflictError', 'load_context',
     'context_status', 'context_markdown', 'context_char_count',
     'save_context_items', 'create_context_item', 'update_context_item',
-    'delete_context_item', 'undo_context_change', 'legacy_profile_body',
-    'legacy_items_to_context',
+    'delete_context_item', 'undo_context_change', 'deleted_context_items',
+    'legacy_profile_body', 'legacy_items_to_context',
 ]

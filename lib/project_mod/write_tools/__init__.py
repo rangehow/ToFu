@@ -40,6 +40,7 @@ from ._text import (
 from ._ops import (
     _apply_one_diff,
     _dedupe_target,
+    _fail_tag,
     _insert_one,
     _invalid_edit_entry_msg,
     save_uploaded_file,

@@ -61,7 +61,6 @@ class SSEFramer:
         self._line_has_content = False
         self._data_lines: list[str] = []
         self._saw_data_field = False
-        self._saw_event_field = False
         self._event_name = ''
         self._event_id = ''
         self._retry_ms: int | None = None
@@ -93,7 +92,6 @@ class SSEFramer:
         self._line_has_content = False
         self._data_lines.clear()
         self._saw_data_field = False
-        self._saw_event_field = False
         self._event_name = ''
         self._event_id = ''
         self._retry_ms = None
@@ -138,17 +136,18 @@ class SSEFramer:
             field, value = line, ''
         if field == 'data':
             self._saw_data_field = True
-            self._saw_event_field = True
             self._data_lines.append(value)
         elif field == 'event':
-            self._saw_event_field = True
             self._event_name = value
         elif field == 'id' and '\x00' not in value:
-            self._saw_event_field = True
             self._event_id = value
-        elif field == 'retry' and value.isdigit():
-            self._saw_event_field = True
-            self._retry_ms = int(value)
+        elif field == 'retry' and value.isascii() and value.isdigit():
+            # This is an advisory reconnection hint, never our retry policy.
+            # Ignore values outside a bounded integer without parsing an
+            # arbitrarily large decimal or accepting Unicode numeric glyphs.
+            digits = value.lstrip('0') or '0'
+            if len(digits) <= 10 and int(digits) <= 2_147_483_647:
+                self._retry_ms = int(digits)
 
     def _finish_line(self) -> SSEEvent | None:
         line_was_empty = not self._line_has_content
@@ -264,7 +263,7 @@ class SSEFramer:
         return events
 
     def finalize(self) -> list[SSEEvent]:
-        """Close the decoder and reject any unterminated event at EOF."""
+        """Close the decoder; reject unfinished data, discard control-only EOF."""
         if self._closed:
             return []
         self._closed = True
@@ -277,13 +276,17 @@ class SSEFramer:
             )
             self._discard_event = True
             self._pending_utf8 = b''
-        if (self._discard_event or self._line_has_content
-                or self._saw_data_field or self._saw_event_field):
+        pending_field = ''.join(self._line_parts).partition(':')[0]
+        if (self._discard_event or self._saw_data_field
+                or pending_field == 'data'):
             self._record_issue(
                 'truncated_event',
                 'stream ended before the SSE event delimiter',
             )
-            self._reset_event()
+        # Comments, unknown fields, and id/event/retry without data cannot
+        # carry lost model output. EOF discards them without invalidating a
+        # previously verified finish; unfinished provider data still fails.
+        self._reset_event()
         return events
 
 

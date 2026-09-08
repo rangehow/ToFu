@@ -129,12 +129,12 @@ def test_personal_process_allocator_default_is_small_and_child_visible():
     assert environment['TOFU_KNOWLEDGE_ENRICH_WORKERS'] == '1'
     assert environment['TOFU_KNOWLEDGE_ENRICH_OWNER_CAPACITY'] == '16'
     assert environment['TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS'] == '60'
-    assert environment['TOFU_SWARM_GLOBAL_WORKERS'] == '2'
-    assert environment['TOFU_SWARM_MAX_PARALLEL'] == '2'
-    assert environment['TOFU_SWARM_MAX_AGENTS_PER_WAVE'] == '4'
-    assert environment['TOFU_SWARM_MAX_AGENTS_PER_SESSION'] == '12'
+    assert environment['TOFU_SWARM_GLOBAL_WORKERS'] == '0'
+    assert environment['TOFU_SWARM_MAX_PARALLEL'] == '8'
+    assert environment['TOFU_SWARM_MAX_AGENTS_PER_WAVE'] == '16'
+    assert environment['TOFU_SWARM_MAX_AGENTS_PER_SESSION'] == '48'
     assert environment['TOFU_SWARM_MAX_RETRIES'] == '1'
-    assert environment['TOFU_SWARM_SESSION_CAPACITY'] == '4'
+    assert environment['TOFU_SWARM_SESSION_CAPACITY'] == '8'
     assert environment['TOFU_MCP_CRED_PROBE_WORKERS'] == '2'
     assert environment['TOFU_PROCESS_RSS_RECYCLE_MB'] == '3072'
 
@@ -364,19 +364,19 @@ def test_resource_profiles_keep_personal_small_without_hardcoding_core_logic():
         'TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS', personal,
         snapshot=snapshot) == 60
     assert deployment_resource_default(
-        'TOFU_SWARM_GLOBAL_WORKERS', personal, snapshot=snapshot) == 2
+        'TOFU_SWARM_GLOBAL_WORKERS', personal, snapshot=snapshot) == 0
     assert deployment_resource_default(
-        'TOFU_SWARM_MAX_PARALLEL', personal, snapshot=snapshot) == 2
+        'TOFU_SWARM_MAX_PARALLEL', personal, snapshot=snapshot) == 8
     assert deployment_resource_default(
         'TOFU_SWARM_MAX_AGENTS_PER_WAVE', personal,
-        snapshot=snapshot) == 4
+        snapshot=snapshot) == 16
     assert deployment_resource_default(
         'TOFU_SWARM_MAX_AGENTS_PER_SESSION', personal,
-        snapshot=snapshot) == 12
+        snapshot=snapshot) == 48
     assert deployment_resource_default(
         'TOFU_SWARM_MAX_RETRIES', personal, snapshot=snapshot) == 1
     assert deployment_resource_default(
-        'TOFU_SWARM_SESSION_CAPACITY', personal, snapshot=snapshot) == 4
+        'TOFU_SWARM_SESSION_CAPACITY', personal, snapshot=snapshot) == 8
     assert deployment_resource_default(
         'TOFU_MCP_CRED_PROBE_WORKERS', personal, snapshot=snapshot) == 2
     assert deployment_resource_default(
@@ -499,7 +499,7 @@ def test_resource_profiles_keep_personal_small_without_hardcoding_core_logic():
     assert deployment_resource_default(
         'TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS', distributed) == 600
     assert deployment_resource_default(
-        'TOFU_SWARM_GLOBAL_WORKERS', distributed) == 16
+        'TOFU_SWARM_GLOBAL_WORKERS', distributed) == 0
     assert deployment_resource_default(
         'TOFU_SWARM_MAX_PARALLEL', distributed) == 8
     assert deployment_resource_default(
@@ -611,6 +611,7 @@ def test_personal_resource_probe_scales_down_cpu_memory_and_disk_together():
         'TOFU_STORAGE_SQLITE_WRITER_QUEUE_CAPACITY': 8,
         'TOFU_STORAGE_SQLITE_WRITER_CACHE_MIB': 32,
         'TOFU_STORAGE_TURN_PROJECTION_CACHE_MIB': 16,
+        'TOFU_MODEL_REPLAY_CACHE_MAX_MIB': 32,
         'TOFU_TURN_SEARCH_PROJECTION_MAX_MIB': 128,
         'TOFU_BROWSER_STAGING_MAX_MIB': 64,
         'TOFU_RAW_ARCHIVE_BUDGET_MIB': 30,
@@ -659,12 +660,12 @@ def test_personal_resource_probe_scales_down_cpu_memory_and_disk_together():
         'TOFU_KNOWLEDGE_ENRICH_WORKERS': 1,
         'TOFU_KNOWLEDGE_ENRICH_OWNER_CAPACITY': 8,
         'TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS': 60,
-        'TOFU_SWARM_GLOBAL_WORKERS': 1,
-        'TOFU_SWARM_MAX_PARALLEL': 1,
-        'TOFU_SWARM_MAX_AGENTS_PER_WAVE': 2,
-        'TOFU_SWARM_MAX_AGENTS_PER_SESSION': 6,
+        'TOFU_SWARM_GLOBAL_WORKERS': 0,
+        'TOFU_SWARM_MAX_PARALLEL': 4,
+        'TOFU_SWARM_MAX_AGENTS_PER_WAVE': 8,
+        'TOFU_SWARM_MAX_AGENTS_PER_SESSION': 24,
         'TOFU_SWARM_MAX_RETRIES': 1,
-        'TOFU_SWARM_SESSION_CAPACITY': 2,
+        'TOFU_SWARM_SESSION_CAPACITY': 4,
         'TOFU_MCP_CRED_PROBE_WORKERS': 1,
         'TOFU_CONTROL_RPC_WORKERS': 4,
         'TOFU_PROJECT_REFRESH_QUEUE_CAPACITY': 32,
@@ -754,12 +755,12 @@ def test_personal_resource_probe_scales_large_hosts_with_bounded_parallelism():
     assert defaults['TOFU_KNOWLEDGE_ENRICH_WORKERS'] == 2
     assert defaults['TOFU_KNOWLEDGE_ENRICH_OWNER_CAPACITY'] == 32
     assert defaults['TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS'] == 60
-    assert defaults['TOFU_SWARM_GLOBAL_WORKERS'] == 4
-    assert defaults['TOFU_SWARM_MAX_PARALLEL'] == 4
-    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_WAVE'] == 8
-    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_SESSION'] == 24
+    assert defaults['TOFU_SWARM_GLOBAL_WORKERS'] == 0
+    assert defaults['TOFU_SWARM_MAX_PARALLEL'] == 36
+    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_WAVE'] == 64
+    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_SESSION'] == 192
     assert defaults['TOFU_SWARM_MAX_RETRIES'] == 1
-    assert defaults['TOFU_SWARM_SESSION_CAPACITY'] == 8
+    assert defaults['TOFU_SWARM_SESSION_CAPACITY'] == 36
     assert defaults['TOFU_MCP_CRED_PROBE_WORKERS'] == 4
     assert defaults['TOFU_STORAGE_RECOVERY_COPY_BUDGET_MIB'] == 512 * 1024
     assert defaults['TOFU_STORAGE_SQLITE_BACKUP_TIMEOUT_SECONDS'] == 21_600
@@ -988,10 +989,10 @@ def test_probe_failure_degrades_to_one_cpu_and_bounded_memory_fallback(
     assert defaults['TOFU_KNOWLEDGE_ENRICH_WORKERS'] == 1
     assert defaults['TOFU_KNOWLEDGE_ENRICH_OWNER_CAPACITY'] == 4
     assert defaults['TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS'] == 60
-    assert defaults['TOFU_SWARM_GLOBAL_WORKERS'] == 1
-    assert defaults['TOFU_SWARM_MAX_PARALLEL'] == 1
-    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_WAVE'] == 2
-    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_SESSION'] == 6
+    assert defaults['TOFU_SWARM_GLOBAL_WORKERS'] == 0
+    assert defaults['TOFU_SWARM_MAX_PARALLEL'] == 2
+    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_WAVE'] == 4
+    assert defaults['TOFU_SWARM_MAX_AGENTS_PER_SESSION'] == 12
     assert defaults['TOFU_SWARM_MAX_RETRIES'] == 1
     assert defaults['TOFU_SWARM_SESSION_CAPACITY'] == 2
     assert defaults['TOFU_MCP_CRED_PROBE_WORKERS'] == 1

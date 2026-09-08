@@ -158,8 +158,8 @@ def _infer_cost(model_id: str, capabilities: set) -> float:
 
     Checks MODEL_PRICING first, falls back to name-based estimate.
     """
-    from lib import MODEL_PRICING
-    pricing = MODEL_PRICING.get(model_id)
+    from lib.pricing import pricing_for_model
+    pricing = pricing_for_model(model_id)
     if pricing:
         return round((pricing['input'] + pricing['output']) / 2.0 / 1000.0, 4)
 

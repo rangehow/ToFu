@@ -2900,7 +2900,7 @@ provides-extras = ["full", "storage", "release", "app", "test", "dev", "worker",
 
 [[package]]
 name = "tofu-search"
-version = "0.10.3"
+version = "0.10.4"
 source = { editable = "packages/tofu-search" }
 dependencies = [
     { name = "beautifulsoup4" },

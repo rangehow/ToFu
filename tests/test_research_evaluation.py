@@ -212,3 +212,21 @@ def test_idea_assessments_absent_in_old_judges_yields_empty_list(monkeypatch):
     got = ev.evaluate_research_result('direction', _result())
 
     assert got['ok'] is True and got['idea_assessments'] == []
+
+
+def test_issue_resolution_requires_independent_evidence(monkeypatch):
+    import lib.research.evaluation as ev
+    result = _result()
+    result['revision_issues'] = [{'issue_id': 'issue_1', 'change': 'Add prediction'}]
+    first = _judgement(4, True)
+    first['issue_resolutions'] = [{'issue_id': 'issue_1', 'resolved': True,
+                                   'evidence': 'Measured prediction added'}]
+    second = _judgement(4, True)
+    seen = []
+    monkeypatch.setattr(ev, 'dispatch_stream', _fake_dispatch([first, second], seen))
+    assert ev.evaluate_research_result('direction', result)['issue_resolutions'] == []
+    second['issue_resolutions'] = first['issue_resolutions']
+    monkeypatch.setattr(ev, 'dispatch_stream', _fake_dispatch([first, second], []))
+    got = ev.evaluate_research_result('direction', result)
+    assert got['issue_resolutions'][0]['issue_id'] == 'issue_1'
+    assert 'revision_issues' in seen[0][0][1]['content']

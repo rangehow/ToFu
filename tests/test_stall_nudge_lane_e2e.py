@@ -320,12 +320,13 @@ def _rehydrate_via_shipped_js(sidecar: list) -> list:
 
 def test_the_sidecar_rehydrates_into_a_synthetic_row():
     """Reload path: the persisted sidecar must rebuild the in-timeline row."""
-    rows = _rehydrate_via_shipped_js(_sidecar_from_real_producer())
+    sidecar = _sidecar_from_real_producer()
+    rows = _rehydrate_via_shipped_js(sidecar)
     assert len(rows) == 1, 'the chip must survive a reload'
     row = rows[0]
     assert row['_stallNudge'] is True
     assert row['stallTool'] == 'run_command'
-    assert row['stallPrompt'].startswith('[SYSTEM: TOOL CALL DID NOT RUN]')
+    assert row['stallPrompt'] == sidecar[0]['prompt']
 
 
 def test_rehydration_is_idempotent():
@@ -354,7 +355,8 @@ def test_the_real_renderer_emits_a_chip_with_provenance_and_the_bound():
     html = probe['html']
     assert 'sw-stall-row' in html, 'the stall-nudge chip did not render'
     assert 'run_command' in html, 'the chip must name the tool that failed'
-    assert 'TOOL CALL DID NOT RUN' in html, 'the verbatim prompt must be shown'
+    from html import unescape
+    assert sidecar[0]['prompt'] in unescape(html), 'the verbatim prompt must be shown'
     # The bound must be stated — otherwise "the system re-drove my agent" reads
     # as an unbounded spend risk.
     assert 'sw-stall-bound' in html

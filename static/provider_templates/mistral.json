@@ -8,18 +8,170 @@
   "offering_recipes": [
     {
       "model_id": "mistral-large-latest",
-      "capabilities": ["text", "vision", "cheap"],
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
       "rpm": 60
     },
     {
       "model_id": "mistral-small-latest",
-      "capabilities": ["text", "vision", "cheap"],
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
       "rpm": 120
     },
     {
       "model_id": "mistral-medium-latest",
-      "capabilities": ["text", "vision"],
+      "capabilities": [
+        "text",
+        "vision"
+      ],
       "rpm": 60
+    },
+    {
+      "model_id": "mistral-large",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 128000,
+      "pricing": {
+        "input": 2.0,
+        "output": 6.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mistral-medium-3",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 131072,
+      "pricing": {
+        "input": 0.4,
+        "output": 2.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mistral-medium-3-5",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 262144,
+      "pricing": {
+        "input": 1.5,
+        "output": 7.5,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mistral-medium-3.1",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 131072,
+      "pricing": {
+        "input": 0.4,
+        "output": 2.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mistral-nemo",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 131072,
+      "pricing": {
+        "input": 0.019,
+        "output": 0.03,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mistral-saba",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 32768,
+      "pricing": {
+        "input": 0.2,
+        "output": 0.6,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mistral-small-3.1-24b-instruct",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 128000,
+      "pricing": {
+        "input": 0.351,
+        "output": 0.555,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mistral-small-3.2-24b-instruct",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 131072,
+      "pricing": {
+        "input": 0.075,
+        "output": 0.2,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "mixtral-8x22b-instruct",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 65536,
+      "pricing": {
+        "input": 2.0,
+        "output": 6.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
     }
   ]
 }

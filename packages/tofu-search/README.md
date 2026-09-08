@@ -13,8 +13,14 @@ stays dependency-free when used standalone.
 ## Features
 
 - **Multi-engine search (parallel)**: DuckDuckGo (HTML + API), Brave, Bing,
-  SearXNG, Marginalia — plus Xiaohongshu when an auth-source provider supplies
-  a logged-in session.
+  SearXNG, Marginalia. Native site capabilities are **explicit only**: use
+  `engines=['Site:catalog']` with a registered site provider, or
+  `engines=['Xiaohongshu']` with an available session. Defaults never discover
+  or invoke these sources. Explicit selections (including `[]`) never widen
+  to other engines or generic browser search; unknown/unavailable selections
+  return empty results with `_search_diag`. Native queries reject Web
+  operators such as `site:` (even matching domains) and freshness rather than
+  silently discarding constraints. Use a Web engine for those constraints.
 - **Vertical / structured search**: auto-detects CVE IDs, arXiv IDs, DOIs,
   stock tickers, PyPI/npm packages, GitHub repos, IP addresses, Hugging Face
   daily papers, and Semantic Scholar related-work — answered from the relevant

@@ -328,6 +328,12 @@ def _record_stream_prompt_usage(task, body, usage, message, *, model, prefix):
                 total_prompt_tokens = prompt_tokens + cache_write + cache_read
             else:
                 total_prompt_tokens = prompt_tokens
+        if conv_id and isinstance(usage, dict) and usage.get('effective_prompt_tokens'):
+            # Native compaction measured a different, provider-owned input.
+            # The original body is not evidence of that smaller prefix.
+            from lib.token_counter import invalidate
+            invalidate(conv_id)
+            return total_prompt_tokens
         if conv_id and total_prompt_tokens > 0:
             from lib.token_counter import record_usage
             record_usage(
@@ -336,6 +342,8 @@ def _record_stream_prompt_usage(task, body, usage, message, *, model, prefix):
                 model=model,
                 message_count=len(body.get('messages') or []),
                 messages=body.get('messages'),
+                system=body.get('system'),
+                tools=body.get('tools'),
                 opaque_replay_tokens=opaque_replay_tokens,
             )
     except Exception as exc:

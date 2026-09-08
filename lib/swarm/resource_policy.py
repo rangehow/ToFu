@@ -14,23 +14,33 @@ from runtime_guards import resolve_resource_budget
 
 
 def swarm_global_workers() -> int:
+    """Process-wide concurrent SubAgent execution permits.
+
+    ``0`` (the launch default) means **unlimited** — concurrency is then
+    bounded only by the global LLM semaphore and each session's own
+    ``swarm_max_parallel`` ceiling. A positive env value is an explicit
+    operator override, still capped at the 64 hard ceiling.
+    """
+    raw = os.environ.get('TOFU_SWARM_GLOBAL_WORKERS', '').strip()
+    if raw == '0':
+        return 0
     return resolve_resource_budget(
-        'TOFU_SWARM_GLOBAL_WORKERS', minimum=1, maximum=32)
+        'TOFU_SWARM_GLOBAL_WORKERS', minimum=0, maximum=64)
 
 
 def swarm_max_parallel() -> int:
     return resolve_resource_budget(
-        'TOFU_SWARM_MAX_PARALLEL', minimum=1, maximum=16)
+        'TOFU_SWARM_MAX_PARALLEL', minimum=1, maximum=64)
 
 
 def swarm_max_agents_per_wave() -> int:
     return resolve_resource_budget(
-        'TOFU_SWARM_MAX_AGENTS_PER_WAVE', minimum=1, maximum=32)
+        'TOFU_SWARM_MAX_AGENTS_PER_WAVE', minimum=1, maximum=64)
 
 
 def swarm_max_agents_per_session() -> int:
     return resolve_resource_budget(
-        'TOFU_SWARM_MAX_AGENTS_PER_SESSION', minimum=1, maximum=128)
+        'TOFU_SWARM_MAX_AGENTS_PER_SESSION', minimum=1, maximum=256)
 
 
 def swarm_max_retries() -> int:
@@ -43,7 +53,7 @@ def swarm_max_retries() -> int:
 
 def swarm_session_capacity() -> int:
     return resolve_resource_budget(
-        'TOFU_SWARM_SESSION_CAPACITY', minimum=1, maximum=64)
+        'TOFU_SWARM_SESSION_CAPACITY', minimum=1, maximum=128)
 
 
 __all__ = [

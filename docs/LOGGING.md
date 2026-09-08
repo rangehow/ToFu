@@ -146,6 +146,31 @@ count, and family bytes. PostgreSQL uses unique timestamped collector
 filenames so a size-triggered rotation can never reopen the same over-limit
 file.
 
+## Swarm diagnosis
+
+Correlate the execution/session ID and agent ID across `app.log`, the frontend
+relay, and access records. A successful status HTTP response establishes route
+availability, not successful child execution or a correctly painted panel.
+An `await_agents` timeout ends that bounded wait only: children continue, and
+an admission heartbeat proves liveness/backpressure rather than productive
+model/tool progress. A scheduler stall verdict is separate evidence; inspect
+the last real round/tool/dispatch before assigning a cause.
+
+A driver summary with `failed=0` is not a success certificate: cancelled,
+stalled, skipped, or unresolved children must remain distinguishable from
+completed work. Read the explicit terminal outcome and child counts together.
+Expected user cancellation must not be reclassified as an infrastructure
+failure, and a late successful child can resolve an earlier stall observation.
+Run summaries are bounded diagnostic projections, not a second durable state
+machine or an exactly-once model-delivery guarantee. In particular, restart
+recovery and provider acknowledgement remain subject to the owning task-engine
+and conversation delivery contracts.
+
+Source/unit checks, generated-bundle checks, and the running service are
+separate verification layers. A changed Python source does not prove that an
+already-running worker has loaded it, and a newly published frontend graph
+does not prove that an existing browser tab has adopted it.
+
 ## Adding a diagnostic
 
 - Use `lib.log.get_logger`, not a private file handler.

@@ -37,6 +37,63 @@ class ToolScriptError(ValueError):
         return {'code': self.code, 'message': str(self), **self.detail}
 
 
+def _catalog_search_arguments(args: list[Any]) -> list[Any]:
+    """Adapt the local builtin without coercing or widening the search schema."""
+    from lib.tools.gateway import search_tools_schema
+
+    schema = search_tools_schema()['function']['parameters']
+    properties = schema['properties']
+    names = ('query', 'namespace', 'limit', 'cursor')
+    retry_hint = (
+        'Retry catalog.search({query:"tool capability", namespace:"", '
+        f'limit:{properties["limit"]["default"]}, cursor:""}}), or '
+        'catalog.search(query, namespace, limit, cursor). '
+        'Use only these keys; query must be a nonblank string, namespace and '
+        'cursor strings, and limit an integer from '
+        f'{properties["limit"]["minimum"]} to {properties["limit"]["maximum"]}.')
+
+    def reject(message: str) -> None:
+        raise ToolScriptError(
+            'invalid_search_arguments', f'catalog.search: {message}',
+            retry_hint=retry_hint)
+
+    if not args:
+        reject('query is required')
+    object_form = isinstance(args[0], dict)
+    if object_form:
+        if len(args) != 1:
+            reject('pass one options object, not an object plus positional arguments')
+        values = args[0]
+        if any(key not in properties for key in values):
+            reject('unknown options key; allowed keys are query, namespace, limit, cursor')
+    else:
+        if len(args) > len(names):
+            reject('expected at most four positional arguments')
+        values = dict(zip(names, args))
+    if 'query' not in values:
+        reject('query is required')
+    for name in names:
+        if name not in values:
+            continue
+        value, rule = values[name], properties[name]
+        if rule['type'] == 'string':
+            if not isinstance(value, str):
+                reject(f'{name} must be a string')
+            if len(value) > rule['maxLength']:
+                reject(f'{name} must contain at most {rule["maxLength"]} characters')
+            if name == 'query' and not value.strip():
+                reject('query must be a nonblank string')
+        elif (not isinstance(value, int) or isinstance(value, bool)
+              or not rule['minimum'] <= value <= rule['maximum']):
+            reject(f'{name} must be an integer from {rule["minimum"]} '
+                   f'to {rule["maximum"]} (not a boolean)')
+    if not object_form:
+        return args
+    return [values['query'], values.get('namespace', ''),
+            values.get('limit', properties['limit']['default']),
+            values.get('cursor', '')]
+
+
 @dataclass(frozen=True)
 class Token:
     kind: str
@@ -650,7 +707,7 @@ class Interpreter:
             owner, name = callee.owner, callee.name
             if isinstance(owner, _Namespace) and owner.name == 'catalog' \
                     and name == 'search':
-                return self.search(*args)
+                return self.search(*_catalog_search_arguments(args))
             if isinstance(owner, _Namespace) and owner.name == 'tools':
                 if name == 'call':
                     self._admit_calls(1)

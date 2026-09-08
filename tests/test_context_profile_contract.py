@@ -19,7 +19,7 @@ def test_unknown_new_catalogue_models_are_not_fabricated():
     # flash variants win earlier, but unknown future variants must NOT
     # inherit the generic 'gemini' family estimate.
     for model in ('gemini-3.5-pro', 'gemini-3.6-ultra', 'gemini-3.7-pro',
-                  'glm-6', 'kimi-k4'):
+                  'gemini-3.8-pro', 'glm-6', 'kimi-k4'):
         assert context_profile(model) == {
             'window': None, 'source': 'unknown', 'exact': False,
         }
@@ -36,6 +36,7 @@ def test_sankuai_catalog_models_promoted_to_vendor_windows():
         'gemini-3.5-flash-lite': 1_000_000,
         'gemini-3.6-flash': 1_000_000,
         'gemini-3.7-flash': 1_000_000,
+        'gemini-3.8-flash': 1_000_000,
         'glm-5.1': 200_000,
         'glm-5.2': 1_000_000,
         'glm-5.3': 1_000_000,
@@ -79,6 +80,9 @@ def test_codex_catalog_models_have_vendor_windows():
         'gpt-5.4': (1_000_000, 'vendor_official', True),
         'gpt-5.4-mini': (400_000, 'vendor_official', True),
         'gpt-5.3-codex-spark': (128_000, 'vendor_official', True),
+        # Codex subscription registry + client catalogue both pin 272K
+        # (max 872K) — below the public gpt-5.6 contract's 1.05M.
+        'gpt-6-astra': (272_000, 'vendor_official', True),
         # Watermark serving variant of the official 1.05M contract id.
         'gpt-5.6-sol-wm': (1_050_000, 'family_estimate', False),
     }
@@ -94,6 +98,12 @@ def test_verified_and_estimated_registry_values_are_distinguishable():
     assert context_profile('kimi-k3') == {
         'window': 1_000_000, 'source': 'repository_verified', 'exact': True,
     }
+
+    assert context_profile('muse-spark-1.3') == {
+        'window': 1_048_576, 'source': 'vendor_official', 'exact': True,
+    }
+    # The contributor SKU shares the standard window (substring rule).
+    assert context_profile('muse-spark-1.3-contributor')['window'] == 1_048_576
     estimated = context_profile('MiniMax-M3')
     assert estimated['window'] == 1_000_000
     assert estimated['source'] == 'family_estimate'
@@ -127,6 +137,61 @@ def test_stale_expand_never_pins_below_static_window(monkeypatch):
     # An expand ABOVE static still surfaces (the gateway really accepted more).
     monkeypatch.setattr(limits, '_LEARNED', {'sankuai::claude-opus-5': 1_110_553})
     assert resolved_context_profile('claude-opus-5', 'sankuai')['window'] == 1_110_553
+
+
+def test_per_model_policy_assembled_from_routing_v2(monkeypatch):
+    """2026-09-04 regression: the routing-v2 cutover emptied
+    ``context.per_model`` in /api/v1/server-config, and every context gauge
+    rendered \"Context window: unknown\". The assembly must key enabled
+    offerings by ``provider::model`` with a first-wins bare alias, prefer
+    the compaction gate's own resolver, and fall back to the offering's
+    declared ceiling only when no knowledge exists."""
+    import lib.context_limits as limits
+    from routes.config import _per_model_context_from_routing
+
+    monkeypatch.setattr(limits, '_LEARNED', {})
+    monkeypatch.setattr(limits, '_META', {})
+    document = {
+        'provider_accesses': [
+            {'provider_access_id': 'acc-1', 'provider_id': 'sankuai'},
+            {'provider_access_id': 'acc-2', 'provider_id': 'other'},
+        ],
+        'offerings': [
+            {'enabled': True, 'provider_access_id': 'acc-1',
+             'model': {'model_id': 'kimi-k3'}, 'context_window': 999},
+            # Cross-provider name collision: bare alias keeps FIRST row.
+            {'enabled': True, 'provider_access_id': 'acc-2',
+             'model': {'model_id': 'kimi-k3'}, 'context_window': 555},
+            # Unknown to static/learned: offering ceiling is the floor.
+            {'enabled': True, 'provider_access_id': 'acc-1',
+             'model': {'model_id': 'future-model-x'}, 'context_window': 777_000},
+            # Disabled rows never surface.
+            {'enabled': False, 'provider_access_id': 'acc-1',
+             'model': {'model_id': 'retired-model'}, 'context_window': 1000},
+        ],
+    }
+    per_model = _per_model_context_from_routing(document)
+
+    scoped = per_model['sankuai::kimi-k3']
+    assert scoped == {
+        'window': 1_000_000, 'source': 'repository_verified', 'exact': True,
+    }
+    assert per_model['kimi-k3'] is scoped          # bare alias, first-wins
+    assert per_model['other::kimi-k3'] is not scoped
+    assert per_model['sankuai::future-model-x'] == {
+        'window': 777_000, 'source': 'offering', 'exact': True,
+    }
+    assert 'sankuai::retired-model' not in per_model
+    assert 'retired-model' not in per_model
+
+
+def test_per_model_policy_without_auth_context_is_empty():
+    """The request-scoped wrapper must degrade to an empty map (never raise)
+    when no authenticated owner is bound — the endpoint still serves the
+    threshold half of the policy."""
+    import routes.config as config_routes
+
+    assert config_routes._build_per_model_context_policy() == {}
 
 
 def test_learned_override_is_provider_model_scoped(monkeypatch):

@@ -24,6 +24,8 @@ from lib.browser.handlers import (
     _handle_type,
 )
 from lib.browser.tool_runtime import BrowserToolRuntime
+
+from lib.browser.site_tool import site_tool
 from lib.log import get_logger
 from lib.tools.result_envelope import typed_tool_error
 
@@ -190,6 +192,8 @@ def _handle_advanced_tool(fn_name, fn_args, runtime):
 # Extension-backed handlers share ``handler(arguments, runtime)``. The page
 # preview is a server renderer and is called separately below.
 BROWSER_HANDLERS = {
+
+    'browser_site': site_tool,
     'browser_list_tabs': _handle_list_tabs,
     'browser_read_page': _handle_read_page,
     'browser_research_page': _handle_research_page,

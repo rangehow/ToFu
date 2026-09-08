@@ -152,7 +152,10 @@ impl MultiplexedEngineLogicalOutboxSinkConfig {
             ));
         }
         let mut source_scopes = Vec::with_capacity(count);
-        for chunk in encoded[CONFIG_HEADER_BYTES..].chunks_exact(CONFIG_SCOPE_BYTES) {
+        for chunk in encoded[CONFIG_HEADER_BYTES..]
+            .as_chunks::<CONFIG_SCOPE_BYTES>()
+            .0
+        {
             source_scopes.push(LogicalOutboxOwnerScope {
                 tenant_id: u64::from_le_bytes(chunk[..8].try_into().unwrap()),
                 owner_user_id: u64::from_le_bytes(chunk[8..].try_into().unwrap()),

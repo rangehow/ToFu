@@ -316,4 +316,4 @@ def test_gate_is_wired_after_export_transforms_and_before_push():
     assert push_window.index("_run(['git', 'commit', '-m', commit_msg])") < push_window.index(
         "_run(['git', 'rev-parse', 'HEAD^{tree}'])")
     assert push_window.index("_run(['git', 'rev-parse', 'HEAD^{tree}'])") < push_window.index(
-        '_push_branch(_run, rname, branch')
+        '_push_branch(_run, target, branch')

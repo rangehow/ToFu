@@ -3,7 +3,7 @@
  * Markdown parsing/localization are injected pure ports; this module alone
  * applies their output to ConversationSurface-owned nodes.
  */
-import type { TurnActivityEntry } from '../../api/conversation-sync.generated';
+import type { BackgroundCommandCompletion, TurnActivityEntry } from '../../api/conversation-sync.generated';
 import type {
   ConversationBlockViewModel,
   ConversationQueueItemViewModel,
@@ -929,6 +929,38 @@ function actionIcon(
   return svg;
 }
 
+function renderBackgroundCompletion(
+  node: HTMLElement,
+  completion: BackgroundCommandCompletion,
+  ports: ClassicConversationRendererPorts,
+): void {
+  const document = node.ownerDocument;
+  const details = document.createElement('details');
+  details.className = 'bgcmd-details';
+  const summary = document.createElement('summary');
+  summary.className = 'bgcmd-summary';
+  summary.append(`${textFor(ports, 'bgCommand.output', 'Command result')} · `);
+  const commandId = document.createElement('code');
+  commandId.className = 'bgcmd-id';
+  commandId.textContent = completion.commandId.slice(0, 128);
+  summary.appendChild(commandId);
+  const command = document.createElement('pre');
+  command.className = 'bgcmd-command';
+  command.textContent = completion.command.slice(0, 2000);
+  const output = document.createElement('pre');
+  output.className = 'sw-card-raw-pre';
+  output.textContent = completion.resultPreview.slice(0, 2000)
+    || textFor(ports, 'bgCommand.noPayload', 'No result available.');
+  details.append(summary, command, output);
+  if (completion.resultTruncated || completion.resultPreview.length > 2000) {
+    const note = document.createElement('p');
+    note.className = 'bgcmd-note';
+    note.textContent = textFor(ports, 'bgCommand.truncated', 'Output preview truncated.');
+    details.append(note);
+  }
+  node.replaceChildren(details);
+}
+
 function renderTextBlock(
   node: HTMLElement,
   block: Extract<ConversationBlockViewModel, { kind: 'text' }>,
@@ -938,6 +970,16 @@ function renderTextBlock(
   node.className = 'conversation-block conversation-block--text message-body';
   node.dataset.deliverable = String(block.deliverable);
   node.dataset.terminal = String(block.terminal);
+  const completion = turn?.source.projection.backgroundCommand;
+  if (completion) {
+    renderBackgroundCompletion(node, completion, ports);
+    const label = node.ownerDocument.createElement('p');
+    label.className = 'bgcmd-label';
+    label.textContent = textFor(ports, 'bgCommand.freshTurn',
+      'Background command finished · submitted as turn input');
+    node.prepend(label);
+    return;
+  }
   let body = directClassChild<HTMLElement>(node, 'md-content');
   if (!body) {
     body = node.ownerDocument.createElement('div');
@@ -951,6 +993,30 @@ function renderTextBlock(
     turn?.actor === 'human' ? { escapeRawHtml: true } : undefined,
   ));
   renderTranslationAlternative(node, block, ports);
+  /* Assistant text blocks carry their own copy affordance: the turn-level
+   * Copy only holds the final answer (projection.content), so mid-turn
+   * prose between tool calls would otherwise have no copy path at all.
+   * Human bubbles are exempt: their single text block IS the turn content,
+   * so the action-bar Copy covers it and the floating button only overlaps
+   * the message text. */
+  let copy = directClassChild<HTMLButtonElement>(node, 'conversation-block-copy');
+  if (turn?.actor === 'human') {
+    copy?.remove();
+    return;
+  }
+  if (!copy) {
+    copy = node.ownerDocument.createElement('button');
+    copy.type = 'button';
+    copy.dataset.conversationAction = 'copy-block';
+    const icon = actionIcon(node.ownerDocument, 'copy');
+    if (icon) copy.appendChild(icon);
+  }
+  copy.className = 'msg-action-btn conversation-block-copy'
+    + ' conversation-action--copy-block';
+  const copyLabel = textFor(ports, 'msgAction.copy', 'Copy');
+  copy.title = copyLabel;
+  copy.setAttribute('aria-label', copyLabel);
+  if (node.lastElementChild !== copy) node.appendChild(copy);
 }
 
 function renderThinkingBlock(
@@ -1056,8 +1122,10 @@ function renderLiveStatusBlock(
   let label = localizedDetail || value.detail || value.label;
   if (phase === 'warming') {
     label = textFor(ports, 'autopilot.warming', 'Autopilot is starting…');
-  } else if (phase === 'thinking_active' || phase === 'llm_thinking') {
-    label = textFor(ports, 'stream.phase.reasoning', 'Reasoning…');
+  } else if (phase === 'thinking_active') {
+    label = textFor(ports, 'stream.thinking.active', 'Thinking…');
+  } else if (phase === 'llm_thinking' && !label) {
+    label = textFor(ports, 'stream.phase.generatingResponse', 'Generating response…');
   } else if (phase === 'tool_exec' && value.tools?.length) {
     label = value.detail || value.tools.join(', ');
   } else if (phase === 'retrying' && !localizedDetail && !value.detail) {
@@ -1069,7 +1137,7 @@ function renderLiveStatusBlock(
   } else if (phase === 'waiting' && !localizedDetail && !value.detail) {
     label = textFor(
       ports, 'stream.phase.waitingWorkerStatus',
-      'No execution status yet — resynchronizing…',
+      'Waiting for an execution status update…',
     );
   } else if (phase === 'responding' && !value.detail) {
     label = textFor(ports, 'autopilot.warming', 'Autopilot is responding…');
@@ -1106,13 +1174,11 @@ function renderLiveStatusBlock(
   row.className = `stream-phase${
     phase === 'retrying' ? ' stream-phase-retrying' : ''}${
     phase === 'storage_wedged' ? ' stream-phase-wedged' : ''}${
-    phase === 'thinking_active' || phase === 'llm_thinking'
-      ? ' stream-phase-thinking' : ''}`;
+    phase === 'thinking_active' ? ' stream-phase-thinking' : ''}`;
   const textNode = document.createElement('span');
   textNode.className = 'stream-phase-text';
   textNode.textContent = label;
-  if ((phase === 'thinking_active' || phase === 'llm_thinking')
-      && value.thinkingLength != null) {
+  if (phase === 'thinking_active' && value.thinkingLength != null) {
     const counter = document.createElement('span');
     counter.className = 'stream-phase-counter';
     counter.textContent = textFor(
@@ -1519,8 +1585,8 @@ const SYSTEM_NOTE_TODO_ICON_HTML = '<svg viewBox="0 0 24 24" fill="none" stroke=
 
 /* Engine-authored intervention (stall nudge / todo reminder) carried as a
  * durable system_note segment. Renders in the injection-chip visual family,
- * collapsed by default; the body is the verbatim text the model was sent
- * (textContent, never markdown) so the render cannot drift from the wire. */
+ * collapsed by default; action details are plain text, never markdown.
+ * Appending context is not an acknowledgement of model consumption. */
 function renderSystemNoteBlock(
   node: HTMLElement,
   block: Extract<ConversationBlockViewModel, { kind: 'system-note' }>,
@@ -1542,12 +1608,21 @@ function renderSystemNoteBlock(
   label.textContent = textFor(
     ports,
     block.noteKind === 'todo-continuation'
-      ? 'systemNote.todoContinuationLabel' : 'systemNote.intentStallLabel',
+      ? 'systemNote.todoContinuationLabel' : block.noteKind === 'intent-stall'
+        ? 'systemNote.intentStallLabel' : 'systemNote.interventionLabel',
     'System note',
   );
   const badge = document.createElement('span');
   badge.className = 'ptool-badge ptool-badge-info';
-  badge.textContent = textFor(ports, 'peer.injectRowBadge', 'injected → context');
+  const action = block.action ?? 'prompt';
+  const actionLabels = {
+    prompt: ['systemNote.actionPrompt', 'Context appended'],
+    stop: ['systemNote.actionStop', 'Stopped'],
+    'tool-policy': ['systemNote.actionToolPolicy', 'Tool policy changed'],
+    continue: ['systemNote.actionContinue', 'Continuation requested'],
+  } as const;
+  const actionLabel = actionLabels[action] ?? actionLabels.prompt;
+  badge.textContent = textFor(ports, actionLabel[0], actionLabel[1]);
   summary.append(icon, label, badge);
   const body = document.createElement('div');
   body.className = 'sw-inbox-row-body';
@@ -1557,7 +1632,12 @@ function renderSystemNoteBlock(
   head.className = 'sw-card-head';
   const role = document.createElement('span');
   role.className = 'sw-card-role';
-  role.textContent = textFor(ports, 'stall.promptLabel', 'Sent to the model');
+  role.textContent = textFor(ports, 'systemNote.detailsLabel', 'Recorded intervention');
+  if (block.reason) {
+    const reason = document.createElement('span');
+    reason.textContent = `${textFor(ports, 'systemNote.reasonLabel', 'Reason')}: ${block.reason}`;
+    head.appendChild(reason);
+  }
   head.appendChild(role);
   const pre = document.createElement('pre');
   pre.className = 'sw-card-raw-pre';
@@ -2336,13 +2416,27 @@ function renderQueueStatusBlock(
   icon.innerHTML = QUEUE_ITEM_ICON_SVG;
   const label = node.ownerDocument.createElement('span');
   label.className = 'conversation-queue-status__label';
-  label.textContent = `${textFor(ports, 'sidebar.queued', 'Queued')} #${
-    block.value.position}`;
+  label.textContent = block.value.backgroundCommand
+    ? textFor(ports, 'bgCommand.queued', 'Background command finished · delivery unconfirmed')
+    : block.value.steerFallback
+    ? textFor(ports, 'queue.steerFallbackChip',
+      'Insert window closed · queued #{n}', { n: block.value.position })
+    : `${textFor(ports, 'sidebar.queued', 'Queued')} #${
+      block.value.position}`;
+  if (block.value.steerFallback) {
+    node.classList.add('conversation-block--queue-fallback');
+    status.title = textFor(ports, 'queue.steerFallbackHint',
+      'You chose "insert now", but this reply’s insert window had already '
+      + 'closed; the message was queued and will be sent as a fresh turn '
+      + 'after this reply ends.');
+  }
   const cancel = node.ownerDocument.createElement('button');
   cancel.type = 'button';
   cancel.className = 'msg-action-btn queue-item-cancel';
   cancel.dataset.conversationAction = 'remove-queue';
-  cancel.textContent = textFor(ports, 'queue.cancelMsg', 'Cancel');
+  cancel.textContent = block.value.backgroundCommand
+    ? textFor(ports, 'bgCommand.cancelDelivery', 'Cancel delivery')
+    : textFor(ports, 'queue.cancelMsg', 'Cancel');
   status.append(icon, label, cancel);
   node.replaceChildren(status);
 }
@@ -2355,7 +2449,8 @@ function renderNativeQueueItem(
   node.className = `conversation-queue-item message user-msg qsrc-${
     item.source.isPeerMessage
       ? (item.source.isPeerHuman ? 'operator' : 'agent')
-      : (item.kind === 'workflow_step' ? 'workflow' : 'own')}`;
+      : (item.kind === 'workflow_step' ? 'workflow' : 'own')}${
+    item.source.steerFallback ? ' queue-item--fallback' : ''}`;
   const document = node.ownerDocument;
   const header = document.createElement('header');
   header.className = 'message-header conversation-queue-item__header';
@@ -2364,7 +2459,18 @@ function renderNativeQueueItem(
   icon.innerHTML = QUEUE_ITEM_ICON_SVG;
   const label = document.createElement('span');
   label.className = 'message-role';
-  label.textContent = textFor(ports, 'sidebar.queued', 'Queued');
+  label.textContent = item.source.backgroundCommand
+    ? textFor(ports, 'bgCommand.queued', 'Background command finished · delivery unconfirmed')
+    : item.source.steerFallback
+    ? textFor(ports, 'queue.steerFallbackLabel',
+      'Insert window closed · queued')
+    : textFor(ports, 'sidebar.queued', 'Queued');
+  if (item.source.steerFallback) {
+    header.title = textFor(ports, 'queue.steerFallbackHint',
+      'You chose "insert now", but this reply’s insert window had already '
+      + 'closed; the message was queued and will be sent as a fresh turn '
+      + 'after this reply ends.');
+  }
   const number = document.createElement('span');
   number.className = 'queue-item-number';
   number.textContent = `#${item.position}`;
@@ -2383,12 +2489,16 @@ function renderNativeQueueItem(
   cancel.type = 'button';
   cancel.className = 'msg-action-btn queue-item-cancel';
   cancel.dataset.conversationAction = 'remove-queue';
-  cancel.textContent = textFor(ports, 'queue.cancelMsg', 'Cancel');
+  cancel.textContent = item.source.backgroundCommand
+    ? textFor(ports, 'bgCommand.cancelDelivery', 'Cancel delivery')
+    : textFor(ports, 'queue.cancelMsg', 'Cancel');
   header.appendChild(cancel);
   const body = document.createElement('div');
   body.className = 'message-body conversation-queue-item__body';
   body.textContent = item.text || textFor(ports, 'queue.attachment', 'Attachment');
-  if (item.text) body.title = item.text;
+  if (item.source.backgroundCommand) {
+    renderBackgroundCompletion(body, item.source.backgroundCommand, ports);
+  } else if (item.text) body.title = item.text;
   const attachmentKinds = [
     item.source.hasImages ? 'img' : '',
     item.source.hasPdfs ? 'pdf' : '',

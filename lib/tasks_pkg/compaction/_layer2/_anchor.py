@@ -25,6 +25,9 @@ from lib.tasks_pkg.compaction._constants import (
     _USER_VERBATIM_MAX_MESSAGES,
 )
 from lib.tasks_pkg.compaction._tokens import _estimate_msg_tokens
+from lib.tasks_pkg.compaction._history import (
+    collect_history_entries, history_entries, is_human_message, user_text,
+)
 
 logger = get_logger(__name__)
 
@@ -54,9 +57,10 @@ def _objective_anchor_index(messages: list) -> int | None:
     exactly as before — no anchor to protect).
     """
     for i, m in enumerate(messages):
-        if not isinstance(m, dict) or m.get('role') != 'user':
-            continue
-        if m.get('_isVuDirective') or m.get('_isVirtualUser') or m.get('_isMeta'):
+        if any(entry['kind'] == 'opening_request'
+               for entry in history_entries(m)):
+            return i
+        if not is_human_message(m):
             continue
         content = m.get('content')
         if isinstance(content, str):
@@ -96,73 +100,35 @@ def _extract_current_query(messages: list) -> str:
     current query steers the lossy summary away from the human request.
     """
     for msg in reversed(messages):
-        if msg.get('role') == 'user':
-            if msg.get('_isMeta'):
-                continue
-            if msg.get('_isInboxInject') and not msg.get('_containsHumanSteer'):
-                continue
-            content = msg.get('content', '')
-            if isinstance(content, list):
-                text_parts = [
-                    b.get('text', '')
-                    for b in content
-                    if isinstance(b, dict) and b.get('type') == 'text'
-                ]
-                return '\n'.join(text_parts)[:500]
-            elif isinstance(content, str):
-                return content[:500]
+        if is_human_message(msg):
+            return user_text(msg)
     return ''
 
 
 def _user_message_text(msg: dict) -> str:
     """Plain-text content of a user message ('' when it carries no text)."""
-    content = msg.get('content', '')
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts = [b.get('text', '') for b in content
-                 if isinstance(b, dict) and b.get('type') == 'text']
-        return '\n'.join(p for p in parts if p).strip()
-    return ''
+    return user_text(msg)
 
 
-def _extract_objective_anchor_text(
-    messages: list,
-    *,
-    char_limit: int = 2_400,
-) -> str:
-    """Return a bounded text view of the opening-request anchor.
+def _extract_objective_anchor_text(messages: list) -> str:
+    """Literal opening-request evidence for summary dispatch and projection.
 
-    The automatic compactor removes the anchor message from the lossy history
-    before dispatch and re-inserts it verbatim afterwards, so the summary
-    model would not see the opening request at all without this re-supply.
-    It reaches the model as VERBATIM EVIDENCE (labeled "may already be
-    completed or explicitly replaced"); the model authors the receipt's
-    Objective from all user messages, with this anchor as the failure-floor
-    fallback (``_ensure_summary_objective``). This helper derives both views
-    from the same canonical anchor index; it does not invent a second
-    objective source of truth.
-
-    The live message remains unmodified and unbounded. Only the cheap-model
-    prompt is capped, retaining both ends because long requests commonly put
-    references first and the operative instruction last.
+    The opener can be excluded from the lossy region and supplied separately.
+    Do not cut its middle: a revocation or scope limit there is as binding as
+    one at either end. The full summary request is checked by input admission;
+    if irreducible human evidence cannot fit, fail without silently rewriting
+    it. Neither this evidence nor a missing receipt Objective revives a goal.
     """
     anchor_index = _objective_anchor_index(messages)
     if anchor_index is None:
         return ''
-    text = _user_message_text(messages[anchor_index])
+    message = messages[anchor_index]
+    opening = next((entry for entry in history_entries(message)
+                    if entry['kind'] == 'opening_request'), None)
+    text = user_text(opening if opening is not None else message)
     if not text:
         return '[The primary request contains non-text attachment content.]'
-    limit = max(500, int(char_limit))
-    if len(text) <= limit:
-        return text
-    head = max(250, (limit * 3) // 5)
-    tail = max(250, limit - head - 80)
-    return (
-        text[:head]
-        + '\n...[middle of durable objective elided for summary prompt]...\n'
-        + text[-tail:]
-    )
+    return text
 
 
 def _collect_user_verbatim(
@@ -180,46 +146,14 @@ def _collect_user_verbatim(
     ``max_messages`` (the most recent instructions are the ones most likely
     to still bind the current work), returned in chronological order.
 
-    Skips: synthetic ``_isMeta`` carriers (incl. a previous retention
-    wrapper — no feedback duplication), every engine/agent-initiated turn as
-    resolved by the canonical turn-initiator vocabulary, empty/non-text
-    content, and exact duplicates. Human operator guidance and a swarm inbox
-    carrier that contains a human steer remain eligible. The objective anchor
-    is already removed from ``old_messages`` by the caller, so it is never
-    duplicated here.
+    Producer-owned historical entries remain eligible across generations;
+    pasted wrappers are not decoded. Ordinary synthetic context and engine
+    turns are excluded. Operator guidance and inbox-carried human steering
+    remain eligible. Selection uses the history owner's bounded policy.
     """
-    picked: list[str] = []
-    seen: set[str] = set()
-    spent = 0
-    from lib.turn_initiation import (
-        INITIATOR_OPERATOR,
-        is_auto_initiated,
-        resolve_initiator,
-    )
-    for msg in reversed(old_messages):
-        if len(picked) >= max_messages:
-            break
-        if not isinstance(msg, dict) or msg.get('role') != 'user':
-            continue
-        if msg.get('_isMeta') or msg.get('_isVuDirective'):
-            continue
-        human_steer = bool(msg.get('_containsHumanSteer'))
-        human_operator = resolve_initiator(msg) == INITIATOR_OPERATOR
-        if is_auto_initiated(msg) and not (human_steer or human_operator):
-            continue
-        if msg.get('_isInboxInject') and not human_steer:
-            continue
-        text = _user_message_text(msg)
-        if not text or text in seen:
-            continue
-        cost = _estimate_msg_tokens(msg)
-        if picked and spent + cost > budget_tokens:
-            continue
-        picked.append(text)
-        seen.add(text)
-        spent += cost
-    picked.reverse()
-    return picked
+    entries = collect_history_entries(
+        old_messages, budget_tokens=budget_tokens, max_messages=max_messages)
+    return [user_text(entry) for entry in entries if user_text(entry).strip()]
 
 
 def _find_turn_boundary(
@@ -248,8 +182,7 @@ def _find_turn_boundary(
     # them. Without this skip a trailing meta reminder would split the
     # in-flight turn at the boundary and the real current turn would lose its
     # "always preserved whole" invariant.
-    user_idx = [i for i, m in enumerate(messages)
-                if m.get('role') == 'user' and not m.get('_isMeta')]
+    user_idx = [i for i, m in enumerate(messages) if is_human_message(m)]
     if not user_idx:
         return len(messages)
 
@@ -426,6 +359,74 @@ def _fold_recent_intra_turn(
     kept = [m for k, m in enumerate(recent_messages) if k not in cold_idx]
     cold_msgs = [recent_messages[k] for k in sorted(cold_idx)]
     return kept, cold_msgs
+
+
+def _plan_cross_turn_tail(messages, *, budget_tokens, max_turns):
+    """Select global complete execution rounds before the whole-turn cut.
+
+    Count the preserved shells and unfinished batches, then admit one newest
+    contiguous round suffix. Synthetic compaction receipts are cold, not recent
+    execution. The newest complete batch and unfinished batches are irreducible
+    floors; final request admission handles an oversized floor explicitly.
+    Returns (boundary, preserved messages, folded round messages).
+    """
+    from lib.tasks_pkg.compaction._constants import _COMPACT_TOOL_NAME
+
+    spans = _apiform_tool_rounds(messages)
+    round_indices = {i for start, end in spans for i in range(start, end)}
+    live_starts = [i for i, message in enumerate(messages)
+                   if is_human_message(message)]
+    if not live_starts:
+        return len(messages), [], []
+    starts = [i for i, message in enumerate(messages)
+              if is_human_message(message) or history_entries(message)]
+    costs = [_estimate_msg_tokens(message) for message in messages]
+    shells = [cost if i not in round_indices else 0 for i, cost in enumerate(costs)]
+    candidates, protected, synthetic = [], [], []
+    for start, end in spans:
+        calls = messages[start]['tool_calls']
+        pairs = adjacent_tool_call_result_pairs(messages[start:end])
+        complete = len(pairs) == len(calls) == end - start - 1
+        if not complete:
+            protected.append((start, end))
+            shells[start] = sum(costs[start:end])
+        elif all(call.get('function', {}).get('name') == _COMPACT_TOOL_NAME
+                 for call in calls):
+            synthetic.append((start, end))
+        else:
+            candidates.append((start, end))
+    # A prefix sum accounts extra enclosing prose once as the suffix grows.
+    prefix = [0]
+    for cost in shells:
+        prefix.append(prefix[-1] + cost)
+    from bisect import bisect_right
+
+    def turn_start(index):
+        position = bisect_right(starts, index) - 1
+        return starts[max(0, position)]
+
+    floor = min([live_starts[-1]] + [turn_start(start) for start, _ in protected])
+    shell_start = floor
+
+    def round_cost(span):
+        nonlocal shell_start
+        start, end = span
+        enclosing = min(shell_start, turn_start(start))
+        extra = prefix[shell_start] - prefix[enclosing]
+        shell_start = enclosing
+        return sum(costs[start:end]) + extra
+
+    cold, hot = _split_cold_rounds(
+        candidates, hot_budget_tokens=budget_tokens,
+        base_tokens=prefix[-1] - prefix[floor], token_cost=round_cost)
+    boundary = min(_find_turn_boundary(
+        messages, budget_tokens=budget_tokens, max_turns=max_turns),
+        floor, *(turn_start(start) for start, _ in hot))
+    cold_indices = {i for start, end in cold + synthetic
+                    for i in range(start, end) if i >= boundary}
+    recent = [message for i, message in enumerate(messages)
+              if i >= boundary and i not in cold_indices]
+    return boundary, recent, [messages[i] for i in sorted(cold_indices)]
 
 
 def _coerce_spec_list(value) -> list:

@@ -26,6 +26,7 @@ interface UserContextApi {
     items?: ContextItem[];
     cap?: number;
   } | null>;
+  remove(id: string): Promise<unknown>;
 }
 
 interface MemoryClearApi {
@@ -70,6 +71,7 @@ const SECTIONS: readonly ContextSection[] = [
 
 let capacity = 2500;
 let items: ContextItem[] = [];
+let savedCleanItems: CleanContextItem[] = [];
 let savedFingerprint = '[]';
 let lifecycle: LifecycleScope | null = null;
 let requestGeneration = 0;
@@ -314,11 +316,30 @@ export function finishEdit(index: number): void {
 }
 
 export async function removeContext(index: number): Promise<void> {
-  if (!items[index]) return;
+  const item = items[index];
+  if (!item) return;
   const ok = await (globals().showConfirm?.(
     translate('context.removeConfirm', '删除这条长期上下文？'), { danger: true },
   ) ?? Promise.resolve(true));
   if (!ok) return;
+  // Persisted items are deleted on the server immediately: a trash click
+  // that only staged the deletion until 保存更改 looked like it worked but
+  // the item came back on the next load. Unsaved rows (no id) exist only
+  // locally, so splicing them is the whole deletion.
+  if (item.id) {
+    try {
+      await contextApi().remove(item.id);
+    } catch (error: unknown) {
+      const status = document.getElementById('prefsStatus');
+      if (status) {
+        status.textContent = `${translate('context.removeFailed', '删除失败')}: ${errorMessage(error)}`;
+        status.className = 'ctx-status is-error';
+      }
+      return;
+    }
+    savedCleanItems = savedCleanItems.filter((saved) => saved.id !== item.id);
+    savedFingerprint = JSON.stringify(savedCleanItems);
+  }
   items.splice(index, 1);
   renderPreferences();
 }
@@ -353,7 +374,8 @@ export async function refreshPreferences(): Promise<void> {
     if (!Array.isArray(data?.items)) throw new Error('empty response');
     capacity = data.cap || capacity;
     items = data.items.map((item) => ({ ...item, _editing: false }));
-    savedFingerprint = fingerprint();
+    savedCleanItems = cleanItems();
+    savedFingerprint = JSON.stringify(savedCleanItems);
     renderPreferences();
     if (status) status.textContent = '';
   } catch (error: unknown) {
@@ -385,7 +407,8 @@ export async function savePreferences(button?: HTMLButtonElement | null): Promis
       throw new Error('server reported save failed');
     }
     items = result.items.map((item) => ({ ...item, _editing: false }));
-    savedFingerprint = fingerprint();
+    savedCleanItems = cleanItems();
+    savedFingerprint = JSON.stringify(savedCleanItems);
     renderPreferences();
     if (status) {
       status.textContent = translate('context.saved', '已保存，下一轮对话开始生效');

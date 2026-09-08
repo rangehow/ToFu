@@ -720,4 +720,22 @@ def parse_tool_calls(
 
         parsed_tcs.append((tc, fn_name, tc_id, fn_args, rn, round_entry, _args_parse_error))
 
+    # Heal the at-rest segment mirror after the pre-tool prose stamp. The
+    # prelude's _discard_pretool_prose has already zeroed the accumulators
+    # (DELTA_RESET), but the persisted mirror still carries the pre-parse
+    # assembly — its terminal prose was blanked by that reset, so until the
+    # round_end checkpoint re-assembles, the narration the model just emitted
+    # is invisible on refresh. Rebuild now: the stamp above put this batch's
+    # prose on its first round entry, so the mirror immediately renders the
+    # narration ahead of these tool cards. Skipped while the accumulators
+    # still hold prose (no discard ran ⇒ the live terminal blocks own the
+    # narration and the mirror is already correct).
+    if not (task.get('content') or task.get('thinking')):
+        try:
+            from lib.tasks_pkg.segments import assemble_segments
+            task['segments'] = assemble_segments(task)
+        except Exception:
+            logger.debug('[Task %s] post-parse segment mirror refresh failed',
+                         tid, exc_info=True)
+
     return parsed_tcs, tool_round_num

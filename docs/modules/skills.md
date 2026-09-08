@@ -4,6 +4,20 @@ This domain owns discoverable instruction packages. A skill can improve model
 behavior by supplying task-specific guidance and bounded resources; it does not
 grant execution authority, install dependencies, or bypass tool policy.
 
+
+Discovery separates lexical relevance, registry semantic order, and release
+verification. Installed status cannot create a lexical match. Delimited tool
+names match complete words; single-word prefix-only online noise (such as
+Frida/Friday) is discarded before verification without blocking semantic synonyms.
+Empty queries with four or more distinct words can recover using the first and
+middle original-query anchors, stopping at the first nonempty candidate list.
+Each call performs at most three search requests and twelve release verifications;
+search errors (including 429) stop recovery. This is a request-count budget, not
+a whole-call deadline. Query caches also cover fallback requests.
+Model results expose source status, recovery queries, rejected/unavailable counts,
+verification errors and retry metadata. Search cards distinguish matches, no
+matches and partial discovery rather than presenting every completed call as ready.
+
 ## Ownership
 
 | Concern | Owner |
@@ -31,7 +45,8 @@ descriptions, not full instructions. It is frozen for the task so prompt-cache
 prefixes do not change during a turn.
 
 The model can call `search_skills` for local lexical catalog discovery and,
-by default, one on-demand ClawHub query,
+by default, an on-demand ClawHub query (at most two original-query anchor
+fallbacks only for empty multi-concept searches),
 `load_skill` for one full instruction file, and `read_skill_resource` for a
 paged text resource. Results expose `skill://` identifiers rather than server
 filesystem paths. Inputs, output pages, metadata, instruction files, and the
@@ -92,8 +107,9 @@ Public reads are fixed to `https://clawhub.ai`; callers cannot supply a host or
 URL. JSON, archives, paths, files, directories, expanded bytes, timeouts, and
 result counts all have independent limits. Relevance search and compact
 verification caches expire after five minutes and hold at most 64 and 256
-entries respectively; a 30-second, 32-entry failure cache prevents outage
-hammering. Concurrent searches share one lazy four-worker verification
+entries respectively; a 30-second, 32-entry failure cache bounds repeated search
+and verification failures. Only successful verification enters the five-minute
+verification cache; failures retain their error code and retry metadata. Concurrent searches share one lazy four-worker verification
 generation; the last active search closes it before a new generation can be
 published, so an explicit search does not leave threads resident or briefly
 double the hard concurrency bound. Reclaimable caches remain registered with
@@ -153,7 +169,7 @@ the frozen index mid-task.
 | Owner/API/UI | paths, registry, API route, feature module | owner isolation, multipart-only route, unavailable card |
 
 ```bash
-pytest -q tests/test_skill_channel.py \
+pytest -q tests/test_skill_search_recovery.py tests/test_skill_channel.py \
   tests/test_skill_installation_contract.py tests/test_skill_online_catalog.py \
   tests/test_skills_api_split.py
 pytest -q tests/test_skill_env_vault.py tests/test_tool_registry.py \

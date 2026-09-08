@@ -351,11 +351,12 @@ def test_generic_tofu_modal_input_still_gets_theme(css_text):
 # ─────────────────────────── NC-1 double-neuter (on-disk, subprocess) ───────────────────────────
 
 # NOTE: the shipped bleed selector also carries `:not(.recent-search-input)`
-# (see tests/test_recent_search_tofu_specificity.py). This neuter removes ONLY
+# (see tests/test_recent_search_tofu_specificity.py) and `:not(.settings-panel)`
+# (2026-09-04 Settings soft redesign). This neuter removes ONLY
 # the `:not(.memory-modal)` carve-out (its purpose) and preserves the
-# recent-search one, so it stays surgical.
-_NC1_FIND = '[data-theme="tofu"] .modal:not(.memory-modal) input:not(.recent-search-input){'
-_NC1_REPL = '[data-theme="tofu"] .modal input:not(.recent-search-input){'
+# other two, so it stays surgical.
+_NC1_FIND = '[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel) input:not(.recent-search-input){'
+_NC1_REPL = '[data-theme="tofu"] .modal:not(.settings-panel) input:not(.recent-search-input){'
 
 
 def _subrun_resolve_mem_bg():

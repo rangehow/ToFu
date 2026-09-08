@@ -285,7 +285,7 @@ def _run(scenario, *, patch='', min_pass=1, reconcile_src=None):
 
 @pytest.mark.unit
 def test_action_plan_renders_cards_with_estimate_banner():
-    out = _run('actions', min_pass=8)
+    _run('actions', min_pass=8)
 
 
 @pytest.mark.unit
@@ -337,9 +337,8 @@ def test_neuter_stripping_skipped_renderer_kills_the_empty_state():
     neutered = src[:start] + src[end:]
     assert 'rec-skipped' not in neutered, 'NEUTER patch did not apply'
 
-    out = ''
     try:
-        out = _run('empty', min_pass=99, reconcile_src=neutered)
+        _run('empty', min_pass=99, reconcile_src=neutered)
     except AssertionError as e:
         assert 'skipped-explained-3' in str(e) or 'gate-names' in str(e), (
             f'NEUTER failed the wrong test — the guard is not specific:\n{e}')

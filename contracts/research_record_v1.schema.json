@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tofu.local/contracts/research_record_v1.schema.json",
+  "title": "Durable Research run snapshot",
+  "type": "object",
+  "required": ["schema_version", "task_id", "direction", "lang", "status", "created_at", "updated_at", "research_progress", "resumable"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "task_id": {"type": "string", "maxLength": 160},
+    "direction": {"type": "string"},
+    "lang": {"enum": ["en", "zh"]},
+    "status": {"enum": ["pending", "running", "interrupted", "done", "degraded", "error", "aborted"]},
+    "created_at": {"type": "integer", "minimum": 0},
+    "updated_at": {"type": "integer", "minimum": 0},
+    "resumable": {"type": "boolean"},
+    "research_progress": {"anyOf": [{"type": "null"}, {"$ref": "research_progress_v1.schema.json"}]},
+    "result": {"type": "object", "description": "Exact run-scoped published artifact; never hydrated from a different run of the same direction."},
+    "papers": {
+      "type": "array", "maxItems": 200,
+      "items": {
+        "type": "object",
+        "properties": {
+          "arxivId": {"type": "string", "maxLength": 160},
+          "paperId": {"type": "string", "maxLength": 160},
+          "phash": {"type": "string", "maxLength": 128},
+          "title": {"type": "string", "maxLength": 500},
+          "status": {"type": "string", "maxLength": 40},
+          "error": {"type": "string", "maxLength": 500},
+          "pageCount": {"type": "integer", "minimum": 0},
+          "textLength": {"type": "integer", "minimum": 0},
+          "degraded": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

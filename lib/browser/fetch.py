@@ -357,71 +357,22 @@ def fetch_url_via_browser(
                                 text_for_log(exc))
                     return None
 
-        # API bodies captured during navigation are often the only authoritative
-        # content on SPA catalogues/dashboards.  Normalize them once at the
-        # owner-scoped server boundary: response URLs re-enter read policy and
-        # credential-shaped fields are redacted before model context is built.
-        try:
-            from lib.browser.network_evidence import render_network_evidence
-            network_text = render_network_evidence(
-                result, owner_user_id=owner_user_id,
-                max_chars=max_chars)
-        except Exception as exc:
-            logger.warning('[BrowserFetch] network evidence normalization failed '
-                           'for %s: %s', url_for_log(url), text_for_log(exc))
-            network_text = ''
-
-        # ── Prefer server-side extraction from HTML (same pipeline as fetch_page_content) ──
-        html = result.get('html', '')
-        if html and len(html) > 200:
-            try:
-                from lib.search_runtime import prepare_search_dependency_import
-                prepare_search_dependency_import()
-                from tofu_search.fetch.html_extract import extract_html_text
-                extracted = extract_html_text(html, max_chars, url=url)
-                if extracted and len(extracted) > 50:
-                    title = result.get('title', '')
-                    logger.debug('Browser fetch OK (HTML→extract %s chars) title="%s" — %s',
-                                 f'{len(extracted):,}',
-                                 text_for_log(title, max_chars=60),
-                                 url_for_log(url))
-                    _record_fallback(url, ok=True, client_id=_cid,
-                                     owner_user_id=owner_user_id,
-                                     detail=f'html:{len(extracted)}')
-                    if network_text:
-                        from lib.browser.network_evidence import merge_page_and_network
-                        extracted = merge_page_and_network(
-                            extracted, network_text, max_chars=max_chars)
-                    return extracted
-            except Exception as e:
-                logger.warning('Browser fetch HTML extraction failed, falling back '
-                               'to innerText: %s', text_for_log(e))
-
-        # ── Fallback: use raw innerText from extension ──
-        text = result.get('text', '')
-        if text and len(text) > 50:
-            title = result.get('title', '')
-            logger.debug('Browser fetch OK (innerText %s chars) title="%s" — %s',
-                         f'{len(text):,}', text_for_log(title, max_chars=60),
-                         url_for_log(url))
+        # File handoff and login remediation remain transport-owned above.
+        # Every textual browser path now shares the same evidence acceptance.
+        from lib.browser.content import collect_content, render_content
+        payload = dict(result)
+        payload.setdefault('url', url)
+        content = collect_content(payload, owner_user_id=owner_user_id,
+                                  max_chars=max_chars)
+        if content['status'] in ('ok', 'partial') and (content['content'] or content['records']):
             _record_fallback(url, ok=True, client_id=_cid,
                              owner_user_id=owner_user_id,
-                             detail=f'text:{len(text)}')
-            if network_text:
-                from lib.browser.network_evidence import merge_page_and_network
-                text = merge_page_and_network(
-                    text, network_text, max_chars=max_chars)
-            return text
-        if network_text:
-            logger.debug('Browser fetch OK (captured API data %s chars) — %s',
-                         f'{len(network_text):,}', url_for_log(url))
-            _record_fallback(url, ok=True, client_id=_cid,
-                             owner_user_id=owner_user_id,
-                             detail=f'network:{len(network_text)}')
-            return network_text
-        err = result.get('error', '')
-        logger.debug('Browser fetch empty for %s%s', url_for_log(url),
-                     f' ({text_for_log(err)})' if err else '')
+                             detail='content:' + content['status'])
+            return render_content(content, max_chars=max_chars)
+        _record_fallback(url, ok=False, client_id=_cid,
+                         owner_user_id=owner_user_id,
+                         detail='content:' + content['status'])
+        return None
 
     _record_fallback(
         url, ok=False, client_id=_cid,

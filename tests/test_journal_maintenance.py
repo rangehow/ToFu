@@ -209,5 +209,26 @@ class ConcurrencyTest(unittest.TestCase):
             self.assertTrue(tag in live or tag in archived, f'appended{k} lost')
 
 
+@pytest.mark.unit
+def test_prompt_read_does_not_rotate_large_journal(tmp_path):
+    from lib.project_mod.indexer import get_context_for_prompt
+
+    journal = tmp_path / 'JOURNAL.md'
+    original = _journal([
+        _entry('2026-07-01', f'historical-title-{i}', body_kb=20)
+        for i in range(100)
+    ])
+    journal.write_text(original, encoding='utf-8')
+    before = journal.stat().st_mtime_ns
+    ctx = get_context_for_prompt(str(tmp_path))
+    assert str(journal) in ctx
+    assert 'historical-title-' not in ctx
+    assert len(ctx) < 2000
+    assert journal.read_text(encoding='utf-8') == original
+    assert journal.stat().st_mtime_ns == before
+    assert not (tmp_path / '.tofu').exists()
+    assert not (tmp_path / '.gitignore').exists()
+
+
 if __name__ == '__main__':
     unittest.main()

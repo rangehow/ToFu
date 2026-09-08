@@ -1,0 +1,14 @@
+{
+  "brand": "siliconflow",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "siliconflow",
+  "category": "relay",
+  "name": "SiliconFlow",
+  "base_url": "https://api.siliconflow.cn/v1",
+  "offering_recipes": [
+    {"model_id": "deepseek-ai/DeepSeek-V3.2-Exp",     "capabilities": ["text", "cheap"]},
+    {"model_id": "Qwen/Qwen3.5-397B-A17B-Instruct",   "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "zai-org/GLM-5.3",                   "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "moonshotai/Kimi-K2.6",              "capabilities": ["text", "thinking", "cheap"]}
+  ]
+}

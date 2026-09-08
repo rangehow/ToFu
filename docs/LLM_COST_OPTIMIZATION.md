@@ -87,7 +87,47 @@ A 2026-08-30 delivery-aware replay of one 739-tool-row Kimi trace found 127 `awa
 No-ID waits now consume only unseen completion deltas across synchronous returns, automatic inbox delivery, and restart rehydration; explicit-ID waits and `get_agent_result` still permit deliberate rereads. The historical calls immediately following those 90 await-only returns cost ¥16.4289 and read 6,560,000 cached tokens, 10.72% of the trace's ¥153.1896 regular main-loop API cost.
 That ¥16.4289 is an opportunity ceiling, not an observed saving: under the corrected protocol a wait may still incur a later model call after a new completion or timeout. The directly removed behavior is old completed payloads immediately satisfying another no-ID `mode=any` call.
 
-After six successful one-call rounds, the post-dispatch guard may append one fixed `_isMeta` efficiency reminder. It only recommends grouping independent direct calls, existing batch arrays, and bounded read-only shell verification; it never executes, reorders dependencies, combines writes/state changes, bypasses approval, or changes explicit thinking depth. Failed/parallel rounds, interactive/MCP tools, `search_tools`/`execute_tools`, safety corrections, and real user steering block it. It shares one per-task budget with the specific local-PTC adoption hint, and persistence retains only one content-free witness.
+Serial-call observations remain diagnostic, not grounds for model intervention. The six-round efficiency reminder and three-round local-PTC adoption prompt are removed: successful serial calls do not establish independence, and a batched read is still one tool call. Existing tool instructions describe batching; actual tool results and measured quality/cost remain the evidence for optimization.
+
+## Claude effort and prompt cache
+
+Anthropic documents that resolved top-level `output_config.effort` and thinking
+configuration are rendered into the prompt. Changing effort therefore changes
+its cache prefix: message breakpoints miss, and tool/system breakpoints can
+also miss depending on model rendering. This is prefix non-matching, not proof
+that a cache entry was deleted. Omitting effort and explicitly setting its
+resolved default `high` are not different effort values. See the official
+[effort](https://platform.claude.com/docs/en/build-with-claude/effort) and
+[thinking/cache](https://platform.claude.com/docs/en/build-with-claude/thinking#thinking-and-prompt-caching) contracts.
+
+Hold top-level effort stable within a cache-sensitive session unless changing
+quality/cost is worth a rewarm. The documented Opus 5 per-message beta
+`mid-conversation-output-config-2026-07-01` can append an empty system message
+with `output_config.effort` before the next user turn while retaining the initial
+top-level value. Tofu does not enable it: current system-hoisting conversion is
+not a lossless carrier, and Sankuai support is unverified. Tool-change betas are
+independent; old `cache_edits` experiments establish neither beta's support.
+
+A route-level validation uses a fixed cacheable prefix, explicit breakpoints,
+constant route/model/account/headers and sequential A/A/B/B/A requests within
+the TTL, changing only effort. First establish A's warm cache read; then check
+B's miss/rewarm and A's reuse. Record raw read/write/input/output usage and
+request identity. Missing cache fields mean unknown, not zero; HTTP 200 and
+latency alone prove neither effort use nor cache hits. No current live gateway
+probe is implied by offline final-wire tests.
+
+## Model continuation lifecycle
+
+- Completed ordinary chat tasks retain their final bounded working context through `lib/storage/model_continuation.py`, not the disposable node-local replay cache.
+- One latest value per owner/conversation/lane is capped at 8 MiB, 16,384 messages and 4,096 Turn witnesses; no TTL, resident payload index or new worker. Publication runs once after settlement.
+- Sidecar ownership and frontier CAS prevent foreign/stale replacement; restore validates the complete historical prefix and policy. Deletion removes derived state.
+- Edits, incompatible policy, missing media or unavailable storage trigger explicit cold-rebuild diagnostics. A valid durable checkpoint survives restart and temporary cache eviction.
+- Text-only model switches can reuse verified continuation without old composer carriers or model-specific wire latches. Unknown provider/private or multimodal state remains conservatively nonportable.
+
+- For Opus 4.7+ with thinking still enabled, an additional fixed-size policy witness permits depth-only changes to retain the full signed working view and tool latch (`restored_effort`). Model, v2 ModelRef/provider preference/routing intent, policy, permissions, sources and on/off changes remain guarded. Old checkpoints without that witness may cold-rebuild once. This checks requested policy, not actual provider/credential affinity; it does not promise an upstream cache hit or newly certify arbitrary gateway/failover replay. The official thinking signature format is portable across Claude API/Bedrock/Google Cloud, so a raw-key equality rule would not be an API-derived requirement.
+- Full transcript authority is unchanged; no persistence failure rolls back a settled user turn.
+- `tests/test_model_continuation_store.py` covers real-Sidecar restart, owner/lane isolation, stale publication, bounds and deletion; `tests/test_model_replay_stability.py` and `tests/test_model_continuation_policy.py` cover prefix parity and cross-model compatibility.
+- The old bounded `ModelReplayCache` remains a disposable repository utility/test fixture, not the production continuation lifecycle.
 
 ## Expected interpretation
 
@@ -246,13 +286,12 @@ Tool Search for the non-pinned residual catalog:
   Stateless replay preserves `program`, nested `caller`, structured `function_call_output`, and `program_output` order. Chat persists canonical `programRuns`, then projects a source-labelled parent card while ordinary child views remain below it.
   The local backend projects `execute_tools` through `ptc_local_wire_tools`, resolved in `prepare_request`; all model sizes author bounded server-side ToolScript reductions, and malformed programs return typed retryable interpreter errors behind catalog/schema/call/byte limits. `TOFU_PTC_TIER=batch` is the parallel-`calls[]` operator/benchmark override; fixed-tier schemas stay stable while hosted-eligibility observations remain outside the wire.
   `task['_ptc_local']` selects the local tier and retains activation evidence; it does not narrow child authority. Local programs and ordinary `execute_tools` batches share the executable catalog, admission/approval pipeline, bookkeeping, and UI.
-  A local projection followed by three productive single eligible-read rounds adds at most one fixed, non-forcing `_isMeta` adoption hint. Safety corrections preempt it, native/off lanes and genuine user steering exclude it, and terminal metadata keeps one content-free witness; actual `programRuns`, not the hint, remain the adoption authority.
-  `programmaticExposure=additive` remains the shipped default. The
-  `serial_gateway` value performs one explicit gateway-only trial after the
-  same three-round evidence threshold and then restores direct tools; it is an
-  opt-in experiment, not a quality or cost assumption.
+  Productive single-read chains no longer inject adoption instructions or activate gateway-only exposure. Actual `programRuns` remain the adoption authority.
+  `programmaticExposure=additive` remains the shipped default. The legacy
+  `serial_gateway` configuration/lifecycle API remains readable for explicit
+  experiments, but the ordinary loop does not activate it from serial calls.
   Production calibration found one 93-call coding task with 107 tools, 7.149M prompt tokens (6.945M cache reads), ¥23.05 cost, and 2,286.3 seconds wall time; its retained decision tail offered the local gateway 45 times but recorded no program run.
-  Five observed serial-read chains covered 24 model rounds. Perfectly collapsing every chain to one call gives a 19-call theoretical ceiling; counting only calls after each third-read detection gives a stricter nine-call counterfactual opportunity ceiling. Neither number is an observed saving, so rollout still requires post-hint `programRuns`, quality parity, and measured latency/cost.
+  Five observed serial-read chains covered 24 model rounds. Perfectly collapsing every chain to one call gives a 19-call theoretical ceiling; counting only calls after each third-read detection gives a stricter nine-call counterfactual opportunity ceiling. Neither number is an observed saving; any future optimization requires completed `programRuns`, quality parity, and measured latency/cost.
 - `responses.promptProfile=auto` selects compact GPT-5.6 but keeps Kimi on full.
   Explicit Kimi lean/ablation arms emit applied profile, SHA-256 and token proof;
   the benchmark rejects missing/mismatched adoption before any promotion.

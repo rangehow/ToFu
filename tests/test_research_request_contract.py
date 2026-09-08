@@ -29,9 +29,9 @@ def test_request_normalizes_identity_and_rejects_unbounded_seed_lists():
         7, 'KV cache compression', 'en', 12,
         ('2312.00752', '2401.12345'), 'kimi-k3')
 
-    with pytest.raises(ValueError, match='at most 20'):
+    with pytest.raises(ValueError, match='at most 200'):
         normalize_research_request(
-            'bounded', seed_arxiv_ids=[f'2501.{i:05d}' for i in range(21)])
+            'bounded', seed_arxiv_ids=[f'2501.{i:05d}' for i in range(201)])
     with pytest.raises(ValueError, match=r'\[0\].*valid arXiv'):
         normalize_research_request('bounded', seed_arxiv_ids=['not-a-paper'])
     with pytest.raises(ValueError, match='model exceeds 256'):
@@ -46,6 +46,8 @@ def test_engine_claim_uses_complete_normalized_identity_and_atomic_fields(
     claimed = []
     spawned = []
     ids = iter(('research_contract_1', 'research_contract_2'))
+    import lib.research.records as records
+    monkeypatch.setattr(records, 'persist_record', lambda *args, **kwargs: None)
 
     def claim(key, task_id, **fields):
         claimed.append((key, fields))
@@ -126,6 +128,9 @@ def test_manifest_roundtrip_and_resume_preserve_seed_corpus(
 
     recreated = []
     spawned = []
+    import lib.research.records as records
+    monkeypatch.setattr(records, 'persist_record', lambda *args, **kwargs: None)
+    monkeypatch.setattr(records, 'load_record', lambda *args, **kwargs: None)
 
     def recreate(task_id, **fields):
         recreated.append((task_id, fields))
@@ -186,12 +191,12 @@ def test_recipe_caps_misbehaving_search_iterator_and_idea_fanout(monkeypatch):
         'direction': 'bounded', 'folder_id': 'folder', 'user_id': 1,
         'harvest_n': 100_000,
     })
-    assert searched == [20]
-    assert offered == 20
-    assert len(harvested) == 20
+    assert searched == [40, 40, 40]
+    assert offered == 120
+    assert len(harvested) == 40
     assert harvest_kwargs[0]['titles_by_arxiv_id'] == {
         f'2501.{index:05d}': f'Search title {index}'
-        for index in range(20)
+        for index in range(40)
     }
 
     generated = []
@@ -262,14 +267,18 @@ def test_chinese_direction_uses_one_english_discovery_alias(monkeypatch):
     assert second['usage'] == first['usage']
 
 
-def test_translation_failure_falls_back_to_raw_direction_and_retries(
+def test_translation_failure_skips_vertical_and_web_search_rescues(
         monkeypatch):
-    """A failed discovery translation must not zero the harvest: search with
-    the raw direction, and re-attempt translation on the next stage run."""
+    """A failed discovery translation must NOT feed the raw zh direction to
+    the English-only arXiv vertical — that query matches nothing by
+    construction and zeroed the harvest (2026-09-04 incident). The vertical
+    is skipped, Tofu's own web search rescues the seed list, and the next
+    stage run re-attempts the translation."""
     import lib.research.recipe as recipe
 
     translated = []
     searched = []
+    web_calls = []
 
     def translate(direction, *, abort_check=None):
         translated.append(direction)
@@ -280,7 +289,12 @@ def test_translation_failure_falls_back_to_raw_direction_and_retries(
 
     def search(query, max_results=20):
         searched.append(query)
-        return [{'arxiv_id': '2501.00001', 'title': 'Paper 1'}]
+        return [{'arxiv_id': f'2501.0001{index}', 'title': f'Paper {index}'}
+                for index in range(3)]
+
+    def web_search(query, *, max_results, abort_check=None):
+        web_calls.append(query)
+        return ['2501.00001']
 
     def harvest(ids, **kwargs):
         return {
@@ -291,6 +305,7 @@ def test_translation_failure_falls_back_to_raw_direction_and_retries(
 
     monkeypatch.setattr(recipe, '_translate_direction_for_search', translate)
     monkeypatch.setattr(recipe, '_search_arxiv', search)
+    monkeypatch.setattr(recipe, '_search_arxiv_via_web', web_search)
     monkeypatch.setattr(recipe, '_harvest_batch', harvest)
     ctx = {
         'direction': 'KV-cache 压缩对长上下文罕见证据的影响',
@@ -300,10 +315,106 @@ def test_translation_failure_falls_back_to_raw_direction_and_retries(
     first = recipe._run_harvest(ctx)
     second = recipe._run_harvest(ctx)
 
-    assert searched == [
-        'KV-cache 压缩对长上下文罕见证据的影响',
-        'english discovery query',
-    ]
+    # The raw zh direction never reaches the English-only vertical.
+    assert searched == ['english discovery query']
+    # The failed first run was rescued by web search, in the direction's own
+    # language.
+    assert web_calls == ['KV-cache 压缩对长上下文罕见证据的影响']
     assert first['arxiv_ids'] == ['2501.00001']
     assert first['usage'] == {}
     assert second['usage']['prompt_tokens'] == 5
+
+
+def test_discovery_translation_429_waits_out_window_and_retries(monkeypatch):
+    """429 budget exhaustion is transient for a background stage: sleep on
+    the agent turn-retry backoff schedule and retry instead of dying — the
+    same policy that keeps a chat turn alive through a saturated window."""
+    import lib.research.recipe as recipe
+    from lib.llm_dispatch import DispatchRateLimitBudgetExceeded
+
+    attempts = []
+    sleeps = []
+    searched = []
+
+    def translate(direction, *, abort_check=None):
+        attempts.append(direction)
+        if len(attempts) < 3:
+            raise DispatchRateLimitBudgetExceeded(
+                RuntimeError('429 per-minute'), attempts=8, limit=8)
+        return 'english discovery query', {}
+
+    monkeypatch.setattr(recipe, '_translate_direction_for_search', translate)
+    monkeypatch.setattr(
+        recipe, '_discovery_sleep',
+        lambda seconds, abort_check=None: sleeps.append(seconds))
+    monkeypatch.setattr(
+        recipe, '_search_arxiv',
+        lambda query, max_results=20: (searched.append(query) or [
+            {'arxiv_id': f'2501.0002{i}', 'title': f'P{i}'}
+            for i in range(3)]))
+    monkeypatch.setattr(
+        recipe, '_search_arxiv_via_web',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('web rescue must not fire on a healthy vertical')))
+    monkeypatch.setattr(
+        recipe, '_harvest_batch',
+        lambda ids, **kwargs: {
+            'parsed': len(ids), 'cache_hits': 0, 'errors': 0,
+            'results': [{'arxivId': arxiv_id, 'status': 'parsed'}
+                        for arxiv_id in ids]})
+
+    out = recipe._run_harvest({
+        'direction': '小参数模型多轮工具调用中的错误恢复',
+        'folder_id': 'folder', 'user_id': 1, 'harvest_n': 5,
+    })
+
+    assert len(attempts) == 3, '429s must be retried, not fatal'
+    assert len(sleeps) == 2 and all(s > 0 for s in sleeps), \
+        'each retry waits out the window on the agent backoff schedule'
+    assert searched == ['english discovery query']
+    assert len(out['arxiv_ids']) == 3
+
+
+def test_discovery_429_storm_past_deadline_falls_back_to_web(monkeypatch):
+    """When a 429 storm outlasts the discovery deadline, the run still does
+    not die and the raw zh direction still never reaches the arXiv vertical —
+    Tofu's built-in web search takes over the discovery."""
+    import lib.research.recipe as recipe
+    from lib.llm_dispatch import DispatchRateLimitBudgetExceeded
+
+    monkeypatch.setenv('TOFU_RESEARCH_DISCOVERY_TRANSLATE_DEADLINE_S', '30')
+    attempts = []
+    web_calls = []
+
+    def translate(direction, *, abort_check=None):
+        attempts.append(direction)
+        raise DispatchRateLimitBudgetExceeded(
+            RuntimeError('429 per-minute'), attempts=8, limit=8)
+
+    monkeypatch.setattr(recipe, '_translate_direction_for_search', translate)
+    monkeypatch.setattr(
+        recipe, '_discovery_sleep', lambda seconds, abort_check=None: None)
+    monkeypatch.setattr(
+        recipe, '_search_arxiv',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('raw zh direction must never reach the vertical')))
+    monkeypatch.setattr(
+        recipe, '_search_arxiv_via_web',
+        lambda query, *, max_results, abort_check=None: (
+            web_calls.append(query) or
+            ['2501.00031', '2501.00032', '2501.00033']))
+    monkeypatch.setattr(
+        recipe, '_harvest_batch',
+        lambda ids, **kwargs: {
+            'parsed': len(ids), 'cache_hits': 0, 'errors': 0,
+            'results': [{'arxivId': arxiv_id, 'status': 'parsed'}
+                        for arxiv_id in ids]})
+
+    out = recipe._run_harvest({
+        'direction': '小参数模型多轮工具调用中的错误恢复',
+        'folder_id': 'folder', 'user_id': 1, 'harvest_n': 5,
+    })
+
+    assert len(attempts) >= 2, 'the deadline budget must span several retries'
+    assert web_calls == ['小参数模型多轮工具调用中的错误恢复']
+    assert out['arxiv_ids'] == ['2501.00031', '2501.00032', '2501.00033']

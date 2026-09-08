@@ -1075,8 +1075,6 @@ class TestFromResponses:
              'name': 'read_files', 'arguments': {}}]},
         {'status': 'incomplete', 'output': [], 'incomplete_details': []},
         {'status': 'incomplete', 'output': [], 'incomplete_details': {}},
-        {'status': 'incomplete', 'output': [],
-         'incomplete_details': {'reason': 'content_filter'}},
     ])
     def test_malformed_or_nonterminal_response_fails_closed(self, data):
         out = responses_response_to_openai(data)

@@ -30,6 +30,7 @@ def capture_mcp_result_images(
     *,
     source_tool: str,
     tool_call_id: str,
+    reference_field: str = '_mcpImages',
 ) -> int:
     """Persist supported images from *result* and attach their Turn refs.
 
@@ -50,10 +51,12 @@ def capture_mcp_result_images(
     media_lock = task.setdefault("_mcpMediaLock", threading.Lock())
     appended = 0
     with media_lock:
-        images = task.setdefault("_mcpImages", [])
+        if reference_field not in {'_mcpImages', '_toolModelImages'}:
+            raise ValueError('unsupported media reference lane')
+        images = task.setdefault(reference_field, [])
         if not isinstance(images, list):
             images = []
-            task["_mcpImages"] = images
+            task[reference_field] = images
         total_bytes = int(task.get("_mcpImageBytes") or 0)
         existing_ids = {
             str(item.get("attachmentId") or "")
@@ -61,7 +64,8 @@ def capture_mcp_result_images(
             if isinstance(item, dict)
         }
         for ordinal, payload in enumerate(payloads):
-            if len(images) >= MAX_MCP_IMAGES_PER_TURN:
+            if (len(task.get('_mcpImages') or []) + len(task.get('_toolModelImages') or [])
+                    >= MAX_MCP_IMAGES_PER_TURN):
                 logger.warning("[MCP:Media] turn image count budget reached")
                 break
             if not isinstance(payload, dict):
@@ -117,6 +121,7 @@ def capture_mcp_result_images(
                 )
                 continue
             attachment_id = str(image_ref.get("attachmentId") or "")
+            image_ref['sourceOrdinal'] = ordinal
             if not attachment_id or attachment_id in existing_ids:
                 continue
             images.append(image_ref)

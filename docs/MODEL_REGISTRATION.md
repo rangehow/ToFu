@@ -42,6 +42,12 @@ before one same-route retry.
 Official `Model` facts and actual `Offering` facts are deliberately separate.
 An Offering's capabilities must be a subset of its confirmed Model's
 capabilities, and its effective context must not exceed the official limit.
+
+Managed pricing-tier tags (`cheap`, owned by
+`lib/llm_dispatch/config/_pricing.py`) are exempt from the subset check:
+they derive from each provider's own price book and are re-synced from live
+prices, so a reseller undercutting the creator's list price legitimately
+carries a tier the official Model row lacks.
 Prices use `{input, output, currency, unit}` with optional cache rates;
 `unit` is `per_million_tokens`. A task price budget is a hard filter—missing or
 currency-mismatched actual pricing does not pass a requested limit.
@@ -95,6 +101,16 @@ After all routes for an official Model fail, a compatible higher-quality
 fallback Model may be considered under the same hard request policy, preferring
 the original Provider.
 
+The dispatcher snapshots compiled candidates into its slot pool at
+initialization. Every Settings mutation that commits the authority — the
+model-routing CAS replace behind the provider template card, ProviderAccess
+create/replace/delete, credential secret rotation, and migration commit —
+rebuilds that pool in-process, so a saved disable/enable takes effect on
+the next pick without a restart; the health sweep, template supply,
+catalogue sync, and local-serve registration do the same after their own
+authority writes. Executable specification:
+`tests/test_api_v1_model_routing_contract.py` (`DispatcherHotReloadTest`).
+
 ## Health and traceability
 
 Configured enablement and runtime health are separate. Route-missing affects a
@@ -122,6 +138,18 @@ model failover is appended to the activity timeline without changing the
 conversation's saved preference. Old turns are projected with a legacy
 snapshot at read time and are not rewritten.
 
+## Detection matrix recommendations
+
+A chat probe's `ok` verdict requires protocol-valid generated output, and reasoning output counts as generated output in every dialect: OpenAI `reasoning_content`/`reasoning` message fields, Anthropic `thinking`/`redacted_thinking` content blocks, Responses `reasoning` output items (id/encrypted payload suffices when the summary never materialized), and Anthropic SSE `thinking_delta`/`signature_delta` events. A 2xx carrying neither text nor reasoning stays `invalid_response`. Probe budgets are deliberately not raised to hide this — the validator must recognize reasoning instead. Executable specification: `tests/test_probe_cells.py`.
+
+A final `rate_limited` (HTTP 429) verdict recommends disabling the credential's
+model grant by default, including per-minute/per-hour rate limits. Existing
+saved 429 snapshots receive the same recommendation on read. Probe retries
+still treat any successful attempt as healthy; this policy does not change
+transient 429 handling during ordinary dispatch. Applying recommendations
+removes flagged grants only and does not automatically re-enable healthy
+cells. Executable specification: `tests/test_probe_rate_limit_defaults.py`.
+
 ## Repository and migration
 
 All reads and writes pass an explicit owner/tenant boundary to the repository.
@@ -145,6 +173,25 @@ missing ProviderAccess bundles. The merge uses the same validation, encrypted
 secret channel, and revision CAS, so resources already written to v2 are
 preserved and the repair is idempotent.
 
+## World catalogue sync
+
+The Models settings page is the registry of models that EXIST, not models a
+configured provider currently supplies. At startup
+`lib/model_routing/world_catalog.sync_world_model_catalog` compiles every
+package provider template and inserts the missing Creator/Model rows into the
+owner authority. The sync is insert-only and idempotent: provider supply
+collections are never touched and existing registry rows (including owner
+edits) are never overwritten, so a newly shipped model appears in the catalog
+even before any provider bundle carries it. Executable specification:
+`tests/test_world_catalog_sync.py`.
+
+The Codex OAuth catalogue request carries a `client_version` that upstream
+uses to gate newly released models. `lib/oauth/codex_version.py` resolves it
+at fetch time from the npm `@openai/codex` `latest` dist-tag (bounded cache,
+floor at the version pinned in `lib/oauth/outbound.py`), so new models reach
+the catalogue without a Tofu release; a registry outage degrades to the floor
+rather than failing the refresh. Executable specification:
+`tests/test_codex_version.py`.
 ## Browser projection
 
 The browser projects the v2 authority along the same semantic boundary as the
@@ -158,7 +205,16 @@ dispatcher:
   read-only Creator/Model catalog for official models: it groups Models by
   Creator and may project Model-owned quality rank and list pricing, but it
   never reads ProviderAccess, Offering, Deployment, wire identifier, alias, or
-  route state. The adjacent Artificial Analysis source is external benchmark
+  route state. The catalog renders one row per semantic Model: provider
+  namespaces (``kimi/kimi-k2.5``) and supply-channel variants
+  (``Qwen3_8-27B-Meituan``, FP8 re-registrations, a trailing ``instruct`` tag
+  on an otherwise identical registration) are the same Model rented through
+  different supply paths, so they collapse into the canonical bare
+  registration under its developer, with facts the canonical row lacks
+  (pricing, benchmark score) filled from the hidden twins. Near-name twins
+  that are genuinely distinct Models never merge: ``gpt-3.5-turbo-instruct``
+  (own pricing, 4096 context) is pinned as separate from ``gpt-3.5-turbo``.
+  The adjacent Artificial Analysis source is external benchmark
   enrichment keyed by that exact Creator/Model identity; its encrypted
   owner-scoped key, cache status, and score attribution do not create or alter
   a Provider. A future owner-created custom Model uses an explicit editable
@@ -167,7 +223,13 @@ dispatcher:
   aliases. The same exact Model may therefore appear under several Providers.
 - The catalog's **Cost × AA Index** Pareto chart plots a Model only when it
   has both an external quality score and an official `list_pricing`
-  (3:1 blended input/output USD cost); scored-but-unpriced Models are not
+  (3:1 blended input/output USD cost). Scores attach by exact normalized
+  identity only: a variant the external source never benchmarked (dated
+  snapshot, turbo/highspeed spin, regional supply alias) carries no score
+  rather than inheriting the base model's result. Registrations that resolve
+  to the same benchmarked model (a bare id and a provider-namespaced id
+  matched to the same external row) collapse to a single chart point, keeping
+  the priced, canonical registration. Scored-but-unpriced Models are not
   points and are named in the chart note instead. A $0 official price renders
   in a dedicated $0 lane left of the log axis while its tooltip keeps the raw
   value. Markers that
@@ -180,3 +242,20 @@ dispatcher:
 - Connection and wire request identifiers are operational details. They are
   bounded and lazy-rendered only in the Provider manager's connection and route
   diagnostics views; ordinary chat cannot pin either resource.
+
+## Daily provider detection
+
+`Daily Provider Detection` is enabled on personal scheduler startup at `0 8 * * *`
+(08:00 server-local time); reconciliation preserves user-disabled state. The
+`provider_probe_daily` action delegates to `lib/model_routing/probe_automation.py`
+with the row owner's `providers` principal. It probes fresh matrices, including
+ungranted cells, through the existing shared lane (no additional cell pool).
+One run is capped at 4,096 cells and 30 minutes; cancellation prevents queued
+cells from starting. In-flight HTTP calls retain their normal timeout. Actual
+probes can incur provider charges, including image generation.
+Only complete fresh results remove recommended model grants (including 429s);
+healthy cells are not automatically enabled. All changes use one revision CAS:
+a failed/incomplete/cancelled run or concurrent configuration edit leaves grants
+unchanged. Results remain visible in the matrix cache and scheduler history.
+The server must be running at 08:00; missed cron occurrences are not backfilled.
+Tests: `tests/test_provider_probe_automation.py`.

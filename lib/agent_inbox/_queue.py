@@ -7,8 +7,9 @@ reference so every caller touches the SAME objects — this is what preserves th
 exactly-once delivery semantics.
 
 Concurrency: every public function is thread-safe. The orchestrator runs
-``drain()`` on the main task thread; ``enqueue()`` is called from the swarm
-scheduler's worker threads.
+``drain()`` on the main task thread; ``enqueue()`` is called from producer
+threads (swarm scheduler workers, the background-command daemon, sync
+request handlers).
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ from ._state import (
     MAX_PER_TASK,
     _PRIORITY,
     _TOMBSTONE_MAX,
+    _CONSUMED_QUEUE_MAX,
+    _consumed_queue_ids,
     _inboxes,
     _lock,
     _tombstones,
@@ -51,8 +54,8 @@ def _append_item_locked(task_id: str, item: dict[str, Any]) -> None:
 # ═══════════════════════════════════════════════════════════
 
 def enqueue(task_id: str, value: str, *,
+            mode: str,
             priority: str = 'later',
-            mode: str = 'swarm-update',
             agent_id: str = '',
             extra: dict | None = None) -> bool:
     """Enqueue a notification for *task_id*.
@@ -61,11 +64,15 @@ def enqueue(task_id: str, value: str, *,
 
     Args:
         task_id: The owning task (matches ``task['id']`` in orchestrator).
-        value: The string to inject as a ``user`` message body. Typically a
-            ``<swarm-update>...</swarm-update>`` XML payload.
+        value: The string to inject as a ``user`` message body — the lane's
+            XML payload (``<swarm-update>``, ``<background-command>``, …).
+        mode: REQUIRED lane tag identifying the producer / delivery owner
+            (``'swarm-update'`` / ``'background-command'`` / ``'user-steer'``
+            / ``'peer-msg'``). The bucket is shared, so every item must
+            carry its lane: the scoped filters (``drain(modes=…)``,
+            ``clear(modes=…)``, ``has_pending``/``pending_items``) key off
+            it, and the orchestrator may render it as a UI chip.
         priority: ``'now' | 'next' | 'later'`` (default ``'later'``).
-        mode: A free-form string for grep / debug; orchestrator may also
-            use it to render a UI chip ("📨 swarm-update").
         agent_id: Optional originating agent id for diagnostics.
         extra: Optional dict merged into the item for downstream consumers.
     """
@@ -88,14 +95,16 @@ def enqueue(task_id: str, value: str, *,
         item.update(extra)
 
     with _lock:
-        # Refuse to (re-)create an inbox for a task that has already ended.
-        # Late-arriving sub-agents (the parent main task closed before the
-        # swarm finished) would otherwise leak memory — nobody will drain
-        # the bucket because the orchestrator has stopped looking.
+        # Refuse to (re-)create an inbox for a key whose task has already
+        # ended. Late-arriving producers (e.g. a sub-agent that finishes
+        # after its parent task closed) would otherwise leak memory —
+        # nobody will drain the bucket; the orchestrator has stopped looking.
         if task_id in _tombstones:
             logger.debug(
                 '[Inbox:%s] enqueue (mode=%s agent=%s) dropped — task ended',
                 task_id, mode, agent_id or '?')
+            return False
+        if (task_id, str(item.get('queueId') or '')) in _consumed_queue_ids:
             return False
         _append_item_locked(task_id, item)
 
@@ -110,8 +119,8 @@ def enqueue_after_durable_commit(
     value: str,
     commit: Callable[[], Any],
     *,
+    mode: str,
     priority: str = 'later',
-    mode: str = 'swarm-update',
     agent_id: str = '',
     extra: dict | None = None,
 ) -> tuple[bool, Any]:
@@ -136,6 +145,8 @@ def enqueue_after_durable_commit(
         item.update(extra)
     with _lock:
         if task_id in _tombstones:
+            return False, None
+        if (task_id, str(item.get('queueId') or '')) in _consumed_queue_ids:
             return False, None
         committed = commit()
         _append_item_locked(task_id, item)
@@ -263,6 +274,10 @@ def consume_peer(task_id: str, queue_ids) -> int:
         row as a fresh turn BEFORE the next drain — it calls THIS to drop the
         now-redundant inbox twin so it isn't re-injected on that fresh turn.
 
+    IDs are fenced even when their inbox twin has not been published yet.
+    The last 16,384 slot/ID pairs survive clear and revival; older pairs are
+    FIFO-evicted. Unique durable IDs and the existing conversation-key owner
+    boundary apply. This process-local fence is not durable delivery history.
     Items whose ``queueId`` is not in *queue_ids* (and any swarm items, which
     carry no ``queueId``) are left untouched. Returns the number removed.
     """
@@ -272,6 +287,12 @@ def consume_peer(task_id: str, queue_ids) -> int:
     if not ids:
         return 0
     with _lock:
+        # Dispatch can win before the producer publishes its twin. Record even
+        # an absent item; clear/untombstone must not reopen that publication.
+        for queue_id in ids:
+            _consumed_queue_ids.setdefault((task_id, queue_id), None)
+            if len(_consumed_queue_ids) > _CONSUMED_QUEUE_MAX:
+                _consumed_queue_ids.popitem(last=False)
         bucket = _inboxes.get(task_id)
         if not bucket:
             return 0
@@ -315,6 +336,26 @@ def has_pending(task_id: str, *, modes: list[str] | None = None) -> bool:
         )
 
 
+def pending_items(task_id: str, *,
+                  modes: list[str] | None = None) -> list[dict[str, Any]]:
+    """Read-only snapshot (shallow copies) of pending items for policy gates.
+
+    Swarm auto-continuation inspects per-agent outcomes WITHOUT consuming
+    delivery — the round-boundary injector remains the sole owner of
+    ``drain``. Items carry their originator's ``extra`` fields (e.g. the
+    sub-agent terminal ``status`` stamped by the swarm master).
+    """
+    if not task_id:
+        return []
+    wanted = set(modes) if modes is not None else None
+    with _lock:
+        return [
+            dict(item)
+            for item in _inboxes.get(task_id, ())
+            if wanted is None or item.get('mode', '') in wanted
+        ]
+
+
 def is_tombstoned(task_id: str) -> bool:
     """Return True if *task_id*'s inbox slot has been tombstoned (task ended).
 
@@ -330,20 +371,48 @@ def is_tombstoned(task_id: str) -> bool:
         return task_id in _tombstones
 
 
-def clear(task_id: str) -> int:
-    """Discard all queued items for *task_id* AND tombstone the slot.
+def clear(task_id: str, *, modes: list[str] | None = None) -> int:
+    """Discard queued items for *task_id* AND tombstone the slot.
 
     Call this when the main task ends so:
       * any unread items are dropped now,
       * any LATE sub-agent completion (one that races the task end) is
         also dropped instead of being silently kept around forever.
 
-    Returns the number of items that were unread when the task ended.
+    ``modes=None`` (default) drops every unread item — the task-end form.
+    ``modes=[...]`` drops only items whose ``mode`` is in the list; other
+    lanes' items survive. Swarm lifecycle teardown (session recycle, TTL
+    reaper, capacity eviction) uses the filtered form because the
+    conversation-keyed inbox is SHARED with lanes the swarm does not own
+    (``background-command`` / ``user-steer`` / ``peer-msg``) — wiping those
+    mid-turn destroys their fast path and leaves their durable rows waiting
+    for settlement instead of the next round-boundary drain.
+
+    The slot is tombstoned in both forms so late sub-agent completions can
+    never recreate the bucket. Non-swarm lanes tolerate the brief tombstone
+    window: their producers probe ``is_tombstoned`` / treat a refused
+    enqueue as harmless and fall back to the durable row.
+
+    Returns the number of items discarded.
     """
     if not task_id:
         return 0
     with _lock:
-        bucket = _inboxes.pop(task_id, None)
+        if modes is None:
+            bucket = _inboxes.pop(task_id, None)
+            n = len(bucket) if bucket else 0
+        else:
+            bucket = _inboxes.get(task_id)
+            if not bucket:
+                n = 0
+            else:
+                wanted = set(modes)
+                kept = [it for it in bucket if it.get('mode', '') not in wanted]
+                n = len(bucket) - len(kept)
+                if kept:
+                    _inboxes[task_id] = kept
+                else:
+                    _inboxes.pop(task_id, None)
         # Tombstone — bounded LRU-ish: when the cap is hit, drop the
         # oldest tombstone to avoid unbounded growth.
         _tombstones.add(task_id)
@@ -352,19 +421,19 @@ def clear(task_id: str) -> int:
                 _tombstones.pop()  # set.pop = arbitrary element — fine here
             except KeyError as e:
                 logger.debug('[Inbox] tombstone evict on empty set: %s', e)
-    n = len(bucket) if bucket else 0
     if n:
-        logger.info('[Inbox:%s] cleared %d unread item(s) on task end', task_id, n)
+        logger.info('[Inbox:%s] cleared %d unread item(s) (modes=%s)',
+                    task_id, n, modes if modes is not None else 'ALL')
     return n
 
 
 def untombstone(key: str) -> None:
     """Remove *key* from the tombstone set so its inbox can be re-created.
 
-    Called when a fresh ``spawn_agents`` wave starts on a conversation whose
-    previous swarm was explicitly aborted (which tombstoned the slot). Without
-    this, the new wave's ``enqueue`` calls would be silently dropped because
-    the slot is still tombstoned from the abort.
+    Called when a new live turn (a fresh ``spawn_agents`` wave, or a revived
+    conversation) starts on a key whose slot was tombstoned by a prior
+    ``clear``. Without this, the new owner's ``enqueue`` calls would be
+    silently dropped because the slot is still tombstoned.
     """
     if not key:
         return
@@ -382,9 +451,13 @@ def reset_for_test(task_id: str = '') -> None:
         if task_id:
             _inboxes.pop(task_id, None)
             _tombstones.discard(task_id)
+            for key in list(_consumed_queue_ids):
+                if key[0] == task_id:
+                    del _consumed_queue_ids[key]
         else:
             _inboxes.clear()
             _tombstones.clear()
+            _consumed_queue_ids.clear()
 
 
 def stats() -> dict[str, int]:

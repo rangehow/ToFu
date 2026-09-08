@@ -59,6 +59,7 @@ _RESOURCE_FALLBACKS = {
         'TOFU_STORAGE_SQLITE_WRITER_QUEUE_CAPACITY': 8,
         'TOFU_STORAGE_SQLITE_WRITER_CACHE_MIB': 32,
         'TOFU_STORAGE_TURN_PROJECTION_CACHE_MIB': 16,
+        'TOFU_MODEL_REPLAY_CACHE_MAX_MIB': 32,
         'TOFU_TURN_SEARCH_PROJECTION_MAX_MIB': 512,
         'TOFU_BROWSER_STAGING_MAX_MIB': 256,
         'TOFU_RAW_ARCHIVE_BUDGET_MIB': 256,
@@ -107,7 +108,7 @@ _RESOURCE_FALLBACKS = {
         'TOFU_KNOWLEDGE_ENRICH_WORKERS': 1,
         'TOFU_KNOWLEDGE_ENRICH_OWNER_CAPACITY': 4,
         'TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS': 60,
-        'TOFU_SWARM_GLOBAL_WORKERS': 1,
+        'TOFU_SWARM_GLOBAL_WORKERS': 0,
         'TOFU_SWARM_MAX_PARALLEL': 1,
         'TOFU_SWARM_MAX_AGENTS_PER_WAVE': 2,
         'TOFU_SWARM_MAX_AGENTS_PER_SESSION': 6,
@@ -152,6 +153,7 @@ _RESOURCE_FALLBACKS = {
         'TOFU_STORAGE_SQLITE_WRITER_QUEUE_CAPACITY': 128,
         'TOFU_STORAGE_SQLITE_WRITER_CACHE_MIB': 64,
         'TOFU_STORAGE_TURN_PROJECTION_CACHE_MIB': 256,
+        'TOFU_MODEL_REPLAY_CACHE_MAX_MIB': 256,
         'TOFU_TURN_SEARCH_PROJECTION_MAX_MIB': 1024,
         'TOFU_BROWSER_STAGING_MAX_MIB': 4096,
         'TOFU_RAW_ARCHIVE_BUDGET_MIB': 4096,
@@ -200,7 +202,7 @@ _RESOURCE_FALLBACKS = {
         'TOFU_KNOWLEDGE_ENRICH_WORKERS': 8,
         'TOFU_KNOWLEDGE_ENRICH_OWNER_CAPACITY': 128,
         'TOFU_KNOWLEDGE_ENRICH_WORKER_IDLE_SECONDS': 600,
-        'TOFU_SWARM_GLOBAL_WORKERS': 16,
+        'TOFU_SWARM_GLOBAL_WORKERS': 0,
         'TOFU_SWARM_MAX_PARALLEL': 8,
         'TOFU_SWARM_MAX_AGENTS_PER_WAVE': 16,
         'TOFU_SWARM_MAX_AGENTS_PER_SESSION': 64,
@@ -816,19 +818,24 @@ def _personal_resource_defaults(
         classic_pdf_timeout = max(
             300, min(1800, classic_pdf_max_pages * 2))
     # Swarm agents outlive the root turn and historically created one private
-    # thread/API pool per conversation. Derive both the process-wide expensive
-    # execution ceiling and each session's smaller share from the root-task
-    # envelope, then bound accepted waves/results separately. On the 8 GiB
-    # reference host this is two executing agents, four agents per wave, and
-    # twelve total agents in one live session.
-    swarm_global_workers = max(
-        1, min(4, max(1, (task_parallelism + 1) // 2)))
+    # thread/API pool per conversation. Owner directive 2026-09-04: spawned
+    # agents must start immediately, never queue behind a half-envelope cap.
+    # 2026-09-06: the process-wide GLOBAL permit ceiling is removed entirely
+    # (0 = unlimited) — a single marathon swarm holding every permit starved
+    # all other conversations' agents into pre-admission aborts. Concurrency
+    # is still bounded by the global LLM semaphore, each session's own
+    # max_parallel share, and bounded accepted waves/results. Per-session
+    # defaults keep tracking the root-task envelope; an explicit positive
+    # TOFU_SWARM_GLOBAL_WORKERS remains as an operator override.
+    swarm_global_workers = 0
+    swarm_max_parallel = max(
+        1, min(64, task_parallelism * 2))
     swarm_max_agents_per_wave = max(
-        2, min(8, swarm_global_workers * 2))
+        4, min(64, swarm_max_parallel * 2))
     swarm_max_agents_per_session = max(
-        6, min(24, swarm_max_agents_per_wave * 3))
+        12, min(256, swarm_max_agents_per_wave * 3))
     swarm_session_capacity = max(
-        2, min(8, task_parallelism))
+        2, min(128, task_parallelism * 2))
     # SQLite's default cache is only 2 MiB per connection.  That is adequate
     # for bounded readers, but the sole writer repeatedly touches hot indexes
     # from every domain; evicting those pages turns a small UPSERT into random
@@ -1022,6 +1029,7 @@ def _personal_resource_defaults(
             8, min(64, io_parallelism * 2)),
         'TOFU_STORAGE_SQLITE_WRITER_CACHE_MIB': sqlite_writer_cache_mib,
         'TOFU_STORAGE_TURN_PROJECTION_CACHE_MIB': turn_projection_cache_mib,
+        'TOFU_MODEL_REPLAY_CACHE_MAX_MIB': min(64, turn_projection_cache_mib * 2),
         'TOFU_TURN_SEARCH_PROJECTION_MAX_MIB': search_projection_max_mib,
         'TOFU_BROWSER_STAGING_MAX_MIB': browser_staging_max_mib,
         'TOFU_RAW_ARCHIVE_BUDGET_MIB': raw_archive_budget_mib,
@@ -1168,7 +1176,7 @@ def _personal_resource_defaults(
         # owner-fair gate. These caps bound thread/API fan-out, accepted model
         # work, retries, and live conversation registries independently.
         'TOFU_SWARM_GLOBAL_WORKERS': swarm_global_workers,
-        'TOFU_SWARM_MAX_PARALLEL': swarm_global_workers,
+        'TOFU_SWARM_MAX_PARALLEL': swarm_max_parallel,
         'TOFU_SWARM_MAX_AGENTS_PER_WAVE': swarm_max_agents_per_wave,
         'TOFU_SWARM_MAX_AGENTS_PER_SESSION': (
             swarm_max_agents_per_session),

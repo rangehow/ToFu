@@ -208,17 +208,28 @@ mod tests {
         assert!(STORAGE_OPERATIONS
             .windows(2)
             .all(|pair| pair[0].name < pair[1].name));
-        let counts = STORAGE_OPERATIONS
-            .iter()
-            .fold([0_usize; 3], |mut counts, operation| {
-                counts[match operation.kind {
-                    StorageOperationKind::Query => 0,
-                    StorageOperationKind::Command => 1,
-                    StorageOperationKind::Maintenance => 2,
-                }] += 1;
-                counts
-            });
-        assert_eq!(counts, [139, 188, 4]);
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/storage_operations_v1.json"
+        ))
+        .unwrap();
+        let operations = catalog["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), STORAGE_OPERATION_COUNT);
+        for (actual, expected) in STORAGE_OPERATIONS.iter().zip(operations) {
+            assert_eq!(actual.name, expected["name"].as_str().unwrap());
+            assert_eq!(actual.domain, expected["domain"].as_str().unwrap());
+            let kind = match actual.kind {
+                StorageOperationKind::Query => "query",
+                StorageOperationKind::Command => "command",
+                StorageOperationKind::Maintenance => "maintenance",
+            };
+            assert_eq!(kind, expected["kind"].as_str().unwrap(), "{}", actual.name);
+            assert_eq!(
+                actual.receipt_required,
+                expected["receiptRequired"].as_bool().unwrap(),
+                "{}",
+                actual.name
+            );
+        }
     }
 
     #[test]

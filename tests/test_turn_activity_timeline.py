@@ -448,6 +448,8 @@ def test_model_switch_event_has_an_exact_backend_decision_clock():
         EventType.MODEL_FALLBACK,
         fallbackFrom='kimi-k3',
         fallbackModel='glm-5.3',
+        fallbackKind='provider_unavailable',
+        fallbackReason='provider_unavailable: all slots unavailable',
     )
 
     assert event['emittedAt'] > 1_000_000_000_000

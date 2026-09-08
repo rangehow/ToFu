@@ -96,16 +96,6 @@ class TestProjection:
         for name, t in hinted.items():
             assert t == base[name]
 
-    def test_remote_hint_applies_to_scaffold_spec(self, monkeypatch):
-        # create_project 的新家:project_scaffold spec 在远程绑定下同样
-        # 携带本地执行提示(同一 with_remote_hint 路径)。
-        monkeypatch.setenv('TOFU_REMOTE_WORKTREE', '1')
-        from lib.tools.registry._build import _build_project_scaffold
-        tools = _build_project_scaffold(_ctx())
-        assert [t['function']['name'] for t in tools] == ['create_project']
-        desc = tools[0]['function']['description']
-        assert 'local machine' in desc.lower() or '本地' in desc
-
     def test_master_switch_off_no_hint(self, monkeypatch):
         monkeypatch.delenv('TOFU_REMOTE_WORKTREE', raising=False)
         from lib.tools.project import PROJECT_TOOLS

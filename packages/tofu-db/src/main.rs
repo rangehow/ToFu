@@ -16,6 +16,12 @@ use tofu_db::generated_tofudb_ir::MAX_ACTIVITY_CANDIDATE_BACKFILL_ROWS_PER_TRANS
 use tofu_db::generated_tofudb_ir::MAX_ACTIVITY_CANDIDATE_BACKFILL_SOURCE_BYTES_PER_TRANSACTION;
 use tofu_db::resource_probe::{probe_launch_resources, DaemonResourceBudget};
 
+// The commit hot paths rewrite COW pages and stage receipts through many
+// short-lived Vec allocations; glibc malloc accounted for ~38% of serve-side
+// CPU in perf profiles of conversation.create bursts.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn usage() -> ! {
     eprintln!("usage: tofu-db <init|inspect> --data-dir <persistent-path>\n       tofu-db serve --data-dir <existing-authority> --owner-id <positive-id> [--tenant-id <positive-id>] [--search-projection-dir <persistent-path>]\n       tofu-db certify-filesystem --data-dir <persistent-empty-path>\n       tofu-db collect-garbage --data-dir <existing-authority> [--execute]\n       tofu-db backfill-activity-index --data-dir <existing-authority> --tenant-id <positive-id> --owner-id <positive-id> [--maximum-rows <1..256>] --execute\n       tofu-db backup --data-dir <source> --backup-dir <persistent-path>\n       tofu-db restore --backup-dir <source> --data-dir <restore-target>\n       tofu-db prune-backup --backup-dir <persistent-path> --retain-generations <count>");
     std::process::exit(2)

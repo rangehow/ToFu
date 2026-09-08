@@ -69,7 +69,7 @@ def test_create_list_and_get_keep_plaintext_out_of_storage_projection():
     assert "api_key" not in listed[0]
     assert "api_key_ciphertext" not in listed[0]
     assert "owner_user_id" not in listed[0]
-    assert listed[0]["key_hint"] == "sk-s…AAAA"
+    assert listed[0]["key_hint"] == "sk-s******AAAA"
 
     stored = get_storage_client().query(
         "provider.get",
@@ -136,7 +136,7 @@ def test_update_reencrypts_secret_and_refreshes_hint():
     )["api_key_ciphertext"]
     assert after != before
     assert get_provider(created["id"], ALICE)["api_key"] == "new-secret-9999"
-    assert get_public(created["id"], ALICE)["key_hint"] == "new-…9999"
+    assert get_public(created["id"], ALICE)["key_hint"] == "new-*******9999"
 
 
 def test_secret_ciphertext_is_bound_to_owner_and_record():

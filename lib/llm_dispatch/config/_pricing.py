@@ -59,11 +59,11 @@ def _resolve_prices(model_id: str,
     inp, out = input_price, output_price
     if inp is None or out is None:
         try:
-            from lib import MODEL_PRICING
+            from lib.pricing import pricing_for_model
         except Exception as e:
             logger.debug('[PricingTiers] MODEL_PRICING unavailable: %s', e)
             return inp, out
-        pricing = MODEL_PRICING.get(model_id)
+        pricing = pricing_for_model(model_id)
         if pricing:
             if inp is None:
                 inp = pricing.get('input')

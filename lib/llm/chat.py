@@ -35,6 +35,7 @@ from lib.llm_errors import (
     _classify_http_error,
     _has_outbound_credential,
     decode_error_body,
+    provider_error_http_status,
 )
 from lib.cost import canonicalize_usage_cache_keys
 from lib.log import get_logger
@@ -43,7 +44,7 @@ from lib.model_info import (
     _parse_token_limit_from_error,
     is_claude,
 )
-from lib.subscription_quota import record_codex_quota
+from lib.subscription_quota import USAGE_QUOTA_KEY, record_codex_quota
 from lib.http_client import http_post
 
 logger = get_logger(__name__)
@@ -107,6 +108,9 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
         thinking_enabled=thinking_enabled,
         preset=effort or preset,
         stream=False,
+        # Explicit effort is a depth, not the legacy preset named 'low'.
+        thinking_depth=effort if effort in (
+            'off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra') else None,
         extra=extra,
         thinking_format=thinking_format,
         provider_id=provider_id,
@@ -146,6 +150,14 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                 else:
                     extra_headers['anthropic-beta'] = _ttl_beta
 
+    from lib.llm.body._admission import enforce_body_input_limit
+    from lib.llm.request import (
+        detach_input, semantic_request_id, seal_request, transport_body)
+    detach_input(body)
+    _input_tokens = enforce_body_input_limit(
+        body, model=model, provider_id=provider_id)
+    _semantic_id = semantic_request_id(body)
+
     _cloak_reverse = None
     _resp_reverse = None
     if _responses:
@@ -159,6 +171,15 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
         if oauth == 'claude':
             from lib.oauth.outbound import apply_claude_cloak
             body, _cloak_reverse = apply_claude_cloak(body)
+
+    if _anthropic:
+        from lib.llm.request import recount_anthropic_input
+        _input_tokens = recount_anthropic_input(
+            body, model=model, provider_id=provider_id)
+
+    body = seal_request(
+        body, model=model, provider_id=provider_id, protocol=api_protocol,
+        endpoint=url, input_tokens=_input_tokens, semantic_id=_semantic_id)
 
     if log_prefix:
         logger.debug('%s POST %s model=%s msgs=%d', log_prefix, url, model, len(messages))
@@ -220,7 +241,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                             _adapter.get('agent_id', ''),
                             int(_adapter.get('port') or 0),
                             _relay_path, method='POST', headers=hdrs,
-                            body=json.dumps(body).encode(),
+                            body=body.payload,
                             timeout=min(timeout or 60, 60),
                             user_id=_owner_scope)
                     except _EU as e:
@@ -230,7 +251,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                     try:
                         resp = _eg.egress_http(
                             url, method='POST', headers=hdrs,
-                            body=json.dumps(body).encode(),
+                            body=body.payload,
                             timeout=min(timeout or 60, 60),
                             user_id=_owner_scope,
                             agent_id=_egress_route)
@@ -238,7 +259,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                         raise EndpointUnreachableError(
                             str(e), base_url=url) from e
                 else:
-                    resp = http_post(url, headers=hdrs, json=body,
+                    resp = http_post(url, headers=hdrs, json=transport_body(body),
                                      timeout=(CONNECT_TIMEOUT, timeout))
             except requests.exceptions.ConnectionError as ce:
                 # Connect-phase failure = endpoint down. Escape to the
@@ -323,7 +344,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             for _ch in data.get('choices') or []:
                 restore_claude_tool_names(
                     (_ch.get('message') or {}).get('tool_calls'), _cloak_reverse)
-    if 'error' in data:
+    if data.get('error') is not None:
         # Protocol converters use the same error envelope as HTTP failures.
         # Do not manufacture an empty assistant turn from malformed provider
         # JSON, and do not assume the provider's error field is well shaped.
@@ -332,8 +353,12 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                          if isinstance(converted_error, dict) else '')
         if not isinstance(error_message, str) or not error_message:
             error_message = 'provider returned an invalid response'
-        _classify_http_error(500, error_message, model, log_prefix,
-                             max_tokens=max_tokens)
+        error_status = provider_error_http_status(converted_error) or 500
+        error_body = (json.dumps({'error': converted_error}, ensure_ascii=False)
+                      if isinstance(converted_error, dict) else error_message)
+        _classify_http_error(error_status, error_body, model, log_prefix,
+                             max_tokens=max_tokens,
+                             credential_present=_has_outbound_credential(hdrs))
     choices = data.get('choices')
     if choices is None:
         choices = []
@@ -372,6 +397,7 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
         usage = {}
     # Stamp canonical cache keys from vendor spellings (see _sse_core note).
     canonicalize_usage_cache_keys(usage)
+    usage['_request_identity'] = body.diagnostics()
 
     _finish_reason = first_choice.get('finish_reason', '')
     if isinstance(_finish_reason, str) and _finish_reason:
@@ -424,6 +450,10 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
                     ('adapter:' + str(adapter.get('agent_id') or '')
                      if isinstance(adapter, dict) and adapter else 'codex'))
     usage = record_codex_quota(resp.headers, usage, cache_key=_quota_scope)
+    if _adapter and isinstance(usage, dict) and USAGE_QUOTA_KEY in usage:
+        from lib.desktop import adapter as _adapter_service
+        _adapter_service.note_adapter_quota_observed(
+            _adapter.get('agent_id'), user_id=_owner_scope)
 
     if log_prefix:
         tokens = usage.get('total_tokens', 0)

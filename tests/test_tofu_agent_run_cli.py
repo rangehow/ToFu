@@ -199,17 +199,6 @@ def test_run_timeout_maps_to_exit_3(runtime_slot, tmp_path, capsys):
     rc = main(['--env-file', str(tmp_path / 'absent.env'),
                'run', '--task', 'x', '--timeout-s', '5'])
     assert rc == 3
-    document = json.loads(capsys.readouterr().out)
-    assert document['ok'] is False
-    assert document['status'] == 'timeout'
-def test_run_timeout_maps_to_exit_3(runtime_slot, tmp_path, capsys):
-    from tofu_agent.cli import main
-
-    _slot, install = runtime_slot
-    install(_FakeRuntime(exc=AgentTimeoutError('too slow')))
-    rc = main(['--env-file', str(tmp_path / 'absent.env'),
-               'run', '--task', 'x', '--timeout-s', '5'])
-    assert rc == 3
     captured = capsys.readouterr()
     document = json.loads(captured.out)
     assert document['ok'] is False

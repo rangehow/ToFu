@@ -21,6 +21,7 @@ Entry points: :func:`resolve_multi_agent_backend`,
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from lib.swarm.resource_policy import swarm_max_agents_per_wave
@@ -130,17 +131,26 @@ def project_multi_agent_wire_tools(
         return visible
 
     try:
-        max(1, min(
+        maximum = max(1, min(
             int(max_concurrent_agents),
             8,
             swarm_max_agents_per_wave(),
         ))
     except (TypeError, ValueError):
-        pass
-    # Runtime stage and capacity guidance is appended to the request's trailing
-    # user context by the dispatch boundary. Keep the canonical declaration
-    # byte-identical so routing changes never rewrite the tool prefix.
-    spawn = source
+        maximum = 3
+    # Deep-copy the authority schema so the per-request wave ceiling is
+    # stamped onto a private copy — mutating the shared catalog entry would
+    # leak one request's cap into every other conversation.
+    spawn = deepcopy(source)
+    function = spawn.get('function')
+    if not isinstance(function, dict):
+        function = spawn
+    parameters = function.get('parameters')
+    if isinstance(parameters, dict):
+        properties = parameters.get('properties')
+        agents = properties.get('agents') if isinstance(properties, dict) else None
+        if isinstance(agents, dict):
+            agents['maxItems'] = maximum
 
     out: list[dict[str, Any]] = []
     inserted = False

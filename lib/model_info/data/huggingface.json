@@ -1,0 +1,14 @@
+{
+  "brand": "huggingface",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "huggingface",
+  "category": "relay",
+  "name": "Hugging Face",
+  "base_url": "https://router.huggingface.co/v1",
+  "offering_recipes": [
+    {"model_id": "deepseek-ai/DeepSeek-V3.2-Exp",     "capabilities": ["text", "cheap"]},
+    {"model_id": "Qwen/Qwen3.5-397B-A17B-Instruct",   "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "zai-org/GLM-5.3",                   "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "openai/gpt-oss-120b",               "capabilities": ["text", "thinking", "cheap"]}
+  ]
+}

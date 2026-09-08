@@ -12,6 +12,7 @@ import copy
 from dataclasses import dataclass, field
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -19,6 +20,7 @@ from urllib.parse import urlparse
 
 from lib.log import get_logger
 from lib.model_catalog import _creator_identity
+from lib.provider_headers import split_header_secrecy
 
 from .domain import (
     CONTRACT_VERSION,
@@ -95,6 +97,59 @@ def _pricing(value: object) -> dict[str, Any] | None:
         if isinstance(amount, (int, float)) and not isinstance(amount, bool):
             result[target] = max(0.0, float(amount))
     return result
+
+
+def _list_pricing(value: object) -> dict[str, Any] | None:
+    pricing = _pricing(value)
+    if pricing is None:
+        return None
+    if pricing["input"] <= 0 and pricing["output"] <= 0:
+        # Catalog scans materialized explicit zeros when no price card
+        # existed. An all-zero official list price is that placeholder, not a
+        # free tier: leave the Model unpriced so the catalog shows 目录未挂牌
+        # and the Pareto chart reports it as unknown instead of plotting a
+        # fake $0 frontier point. Provider-actual $0 (a free gateway) stays
+        # representable via offering.actual_pricing, which keeps zeros.
+        return None
+    return pricing
+
+
+# Dated-checkpoint pins (deepseek-v4-pro-0813) serve the same model as their
+# rolling alias, and vendors do not reprice a pin — but legacy catalogs
+# materialized explicit zero pricing when a scan had no price card, and the
+# migrated $0 then plots as an official free tier.  Fold ONE trailing
+# -MMDD / -YYYYMMDD stamp so the pin inherits the rolling alias's in-document
+# list price, mirroring the billing seam (lib.pricing.pricing_for_model).
+_DATED_PIN_SUFFIX_RE = re.compile(r"-(?:\d{8}|\d{4})$")
+
+
+def _positive_list_pricing(pricing: object) -> bool:
+    if not isinstance(pricing, Mapping):
+        return False
+    amounts = []
+    for key in ("input", "output"):
+        value = pricing.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        amounts.append(float(value))
+    return any(amount > 0 for amount in amounts)
+
+
+def _fold_dated_pin_list_pricing(document: dict[str, Any]) -> None:
+    priced = {
+        (row["creator_id"], row["model_id"]): row["list_pricing"]
+        for row in document["models"]
+        if _positive_list_pricing(row.get("list_pricing"))
+    }
+    for row in document["models"]:
+        if _positive_list_pricing(row.get("list_pricing")):
+            continue
+        alias = _DATED_PIN_SUFFIX_RE.sub("", row["model_id"])
+        if alias == row["model_id"]:
+            continue
+        inherited = priced.get((row["creator_id"], alias))
+        if inherited is not None:
+            row["list_pricing"] = copy.deepcopy(inherited)
 
 
 def _context_window(row: Mapping[str, Any]) -> int:
@@ -248,7 +303,7 @@ def _official_rows(
             "context_window": _context_window(source),
             "quality_rank": _quality_rank(source),
         }
-        list_pricing = _pricing(source.get("list_pricing") or source.get("pricing"))
+        list_pricing = _list_pricing(source.get("list_pricing") or source.get("pricing"))
         if list_pricing is not None:
             row["list_pricing"] = list_pricing
         if source.get("lifecycle") in {"stable", "preview", "dated_snapshot", "retired"}:
@@ -309,7 +364,7 @@ def _identity_match(
                 else "stable"
             ),
         }
-        list_pricing = _pricing(seed.get("pricing"))
+        list_pricing = _list_pricing(seed.get("pricing"))
         if list_pricing is not None:
             row["list_pricing"] = list_pricing
         return _IdentityMatch(
@@ -459,6 +514,13 @@ def plan_legacy_migration(
                     ))
         if not connection_specs:
             connection_specs.append(("default", {"base_url": "local://identity", "protocol": "local"}))
+        # Header values may themselves be credentials.  Credential-named and
+        # transport-reserved headers stay in the independently encrypted
+        # secret envelope; plain routing headers live on the inspectable
+        # Connection metadata, matching their plaintext legacy storage.
+        envelope_headers, connection_headers = split_header_secrecy(
+            legacy.get("extra_headers")
+            if isinstance(legacy.get("extra_headers"), Mapping) else {})
         for connection_index, (face_name, spec) in enumerate(connection_specs):
             endpoint_url = str(spec.get("base_url") or base_url or "local://identity").strip().rstrip("/")
             connection_id = _stable_id("conn", access_id, face_name, endpoint_url)
@@ -472,10 +534,7 @@ def plan_legacy_migration(
                 "protocol": _protocol(spec.get("protocol") or legacy.get("protocol"), endpoint_url),
                 "enabled": not bool(spec.get("disabled")) and bool(spec.get("enabled", True)),
                 "priority": int(spec.get("priority") or connection_index * 10 + 100),
-                # Header values may themselves be credentials. Migration
-                # places all of them in the independently encrypted secret
-                # envelope instead of the inspectable Connection metadata.
-                "extra_headers": {},
+                "extra_headers": dict(connection_headers),
                 **({"adapter": copy.deepcopy(
                     spec.get("adapter") or legacy.get("adapter"))}
                    if spec.get("adapter") or legacy.get("adapter") else {}),
@@ -489,10 +548,7 @@ def plan_legacy_migration(
         elif "api_key" in legacy:
             raw_keys.append(str(legacy.get("api_key") or "").strip())
         oauth = str(legacy.get("oauth") or "").strip()
-        secret_headers = {
-            str(key): str(value)
-            for key, value in (legacy.get("extra_headers") or {}).items()
-        } if isinstance(legacy.get("extra_headers"), Mapping) else {}
+        secret_headers = envelope_headers
         credential_kind = "api_key"
         if oauth:
             raw_keys = [""]
@@ -713,6 +769,8 @@ def plan_legacy_migration(
         credential["authorization"]["models"] = [
             unique[key] for key in sorted(unique)
         ]
+
+    _fold_dated_pin_list_pricing(document)
 
     try:
         document = normalize_document(document)

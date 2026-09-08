@@ -143,6 +143,151 @@ def test_steer_mode_injects_into_running_turn_inbox(flask_client, conversation_c
     assert injection['previews'] == [{'text': 'steer me'}]
 
 
+def test_steer_preserves_pending_background_completion(
+    flask_client, conversation_command_db, monkeypatch,
+):
+    from lib import agent_inbox
+    from lib.message_queue import KIND_WORKFLOW, enqueue_message, get_queue
+
+    first, starts = _start_first_turn(flask_client, monkeypatch)
+    completion = enqueue_message(
+        'conv-command-inject',
+        {'text': 'background result', '_backgroundCommand': 'bg-pending'},
+        {'model': 'gpt-4o'}, KIND_WORKFLOW, user_id=1,
+    )
+    agent_inbox.enqueue(
+        'conv-command-inject', 'background result',
+        priority='next', mode='background-command',
+        extra={'queueId': completion['queueId'], 'commandId': 'bg-pending'},
+    )
+
+    response = flask_client.post(
+        '/api/v3/conversations/conv-command-inject/turns',
+        json={'commandId': 'cmd-steer-with-background',
+              'inputTurn': {'content': 'insert now'},
+              'config': {'model': 'gpt-4o'}, 'injectMode': 'steer'},
+    )
+    assert response.status_code == 200, response.get_json()
+    result = response.get_json()
+    assert result['steered'] is True
+    assert result['latestTurn']['turnId'] == first['turn']['turnId']
+    assert len(starts) == 1
+    assert [row['queueId'] for row in get_queue(
+        'conv-command-inject', user_id=1,
+    )] == [completion['queueId']]
+    items = agent_inbox.drain('conv-command-inject')
+    assert [item['mode'] for item in items] == [
+        'background-command', 'user-steer',
+    ]
+    assert items[1]['value'] == 'insert now'
+
+
+def test_large_steer_receipt_is_bounded_and_replay_is_exactly_once(
+    flask_client, conversation_command_db, monkeypatch, chat_sidecar,
+):
+    import hashlib
+    import json
+    import zlib
+
+    from lib import agent_inbox
+    from lib.turn_lifecycle import LifecycleConflict, commit_user_steer, get_turn
+
+    first, _ = _start_first_turn(flask_client, monkeypatch)
+    client = chat_sidecar.client()
+    turn_id = first['turn']['turnId']
+    attempt_id = first['attempt']['attemptId']
+    noise = ''.join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(20000))
+    assert len(zlib.compress(noise.encode(), 1)) > 64 * 1024
+    # Build real live history in bounded event increments, not an oversized
+    # fixture create receipt (which must still fail its independent budget).
+    tools = []
+    for index in range(20):
+        tools.append({'round': index, 'calls': [{'id': f'tool-{index}', 'name': 'test',
+                      'result': noise[index * 64000:(index + 1) * 64000]}]})
+        assert client.command('turn.event.record', {
+            'attempt_id': attempt_id, 'user_id': 1,
+            'task_id': first['attempt']['taskId'], 'status': 'running',
+            'terminal': False, 'projection': {'toolRounds': list(tools)},
+            'event_type': 'projection_updated', 'event_payload': {'updateKind': 'tool_end'},
+        }, None)['applied']
+    response = flask_client.post(
+        '/api/v3/conversations/conv-command-inject/turns',
+        json={'commandId': 'large-steer', 'inputTurn': {'content': 'insert now'},
+              'config': {'model': 'gpt-4o'}, 'injectMode': 'steer'},
+    )
+    assert response.status_code == 200, response.get_json()
+    body = response.get_json()
+    assert body['steered'] is True
+    assert body['latestTurn']['projection']['toolRounds'] == tools
+    assert len(agent_inbox.drain('conv-command-inject', modes=['user-steer'])) == 1
+    before = client.query('turn.sync.snapshot', {
+        'conversation_id': 'conv-command-inject', 'user_id': 1,
+    })
+    receipt = commit_user_steer('conv-command-inject', attempt_id,
+                              command_id='large-steer', text='insert now', user_id=1)
+    assert 'turn' not in receipt
+    assert receipt['turnId'] == turn_id
+    assert len(json.dumps(receipt).encode()) < 2048
+
+    envelope = client._call(
+        'command', 'turn.steer.commit',
+        {'conversation_id': 'conv-command-inject', 'attempt_id': attempt_id,
+         'command_id': 'large-steer', 'text': 'insert now', 'user_id': 1},
+        command_id='turn-steer-commit:conv-command-inject:large-steer',
+        deadline=None, priority='user',
+    )
+    assert envelope['value'] == receipt
+    assert len(json.dumps(envelope).encode()) < 2048
+    notice = envelope['events'][0]['event']
+    assert notice['type'] == 'conversation.activity'
+    assert notice['payload']['requiresSnapshot'] is True
+    assert client.query('turn.sync.snapshot', {
+        'conversation_id': 'conv-command-inject', 'user_id': 1,
+    }) == before
+    assert len(get_turn('conv-command-inject', turn_id, user_id=1)[
+        'projection']['_userSteerInjects']) == 1
+    for overrides in ({'text': 'different'}, {'user_id': 2}):
+        args = dict(command_id='large-steer', text='insert now', user_id=1)
+        args.update(overrides)
+        with pytest.raises(LifecycleConflict):
+            commit_user_steer('conv-command-inject', attempt_id, **args)
+    # The same operation with a new identity must enforce owner filtering too.
+    with pytest.raises(LifecycleConflict):
+        commit_user_steer('conv-command-inject', attempt_id,
+                         command_id='wrong-owner', text='no', user_id=2)
+    assert client.query('turn.sync.snapshot', {
+        'conversation_id': 'conv-command-inject', 'user_id': 1,
+    }) == before
+
+
+def test_steer_hydration_failure_does_not_lose_committed_inbox_wakeup(
+    flask_client, conversation_command_db, monkeypatch,
+):
+    from lib import agent_inbox
+    import lib.turn_lifecycle as lifecycle
+    from lib.storage import StorageError
+
+    first, _ = _start_first_turn(flask_client, monkeypatch)
+    real_get = lifecycle.get_turn
+
+    def fail_hydration(*args, **kwargs):
+        raise StorageError('database_unavailable', 'injected postcommit read failure')
+
+    monkeypatch.setattr(lifecycle, 'get_turn', fail_hydration)
+    response = flask_client.post(
+        '/api/v3/conversations/conv-command-inject/turns',
+        json={'commandId': 'hydrate-fails', 'inputTurn': {'content': 'still deliver'},
+              'config': {'model': 'gpt-4o'}, 'injectMode': 'steer'},
+    )
+    assert response.status_code == 200
+    assert response.get_json()['steered'] is True
+    assert 'latestTurn' not in response.get_json()
+    items = agent_inbox.drain('conv-command-inject', modes=['user-steer'])
+    assert [item['value'] for item in items] == ['still deliver']
+    turn = real_get('conv-command-inject', first['turn']['turnId'], user_id=1)
+    assert turn['projection']['_userSteerInjects'][0]['commandId'] == 'hydrate-fails'
+
+
 def test_missing_inject_mode_preserves_lane_busy_conflict(flask_client,
                                                           conversation_command_db,
                                                           monkeypatch):
@@ -181,7 +326,36 @@ def test_steer_falls_back_to_queue_when_inbox_tombstoned(flask_client,
     body = resp.get_json()
     assert body['queued'] is True
     assert body.get('steered') is not True
+    # The human picked "insert now" — the ACK and every downstream queue
+    # surface must say WHY the message waits for the next turn instead of
+    # injecting mid-reply (2026-09-04 report: steer silently showed as an
+    # ordinary queued row after the swarm teardown tombstoned the inbox).
+    assert body['steerFallback'] is True
+    assert body['queueItem']['steerFallback'] is True
     assert get_queue_depth('conv-command-inject', user_id=1) == 1
+
+    from lib.message_queue import get_queue
+    rows = get_queue('conv-command-inject', user_id=1)
+    assert rows[0]['steerFallback'] is True
+
+    snapshot = flask_client.get(
+        '/api/v3/conversations/conv-command-inject/sync').get_json()
+    snapshot_item = next(
+        item for item in snapshot['queueItems']
+        if item['queueId'] == body['queueId'])
+    assert snapshot_item['steerFallback'] is True
+    # A plain queued row (injectMode='queue') must NOT carry the marker.
+    plain = flask_client.post(
+        '/api/v3/conversations/conv-command-inject/turns',
+        json={'commandId': 'cmd-plain-queue',
+              'inputTurn': {'content': 'ordinary queue'},
+              'config': {'model': 'gpt-4o'},
+              'injectMode': 'queue'})
+    assert plain.status_code == 200
+    plain_body = plain.get_json()
+    assert plain_body['queued'] is True
+    assert 'steerFallback' not in plain_body
+    assert 'steerFallback' not in plain_body['queueItem']
 
 
 def test_settlement_drains_queued_row_into_turn_pair(flask_client, conversation_command_db,

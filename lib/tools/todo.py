@@ -80,7 +80,7 @@ TODO_WRITE_TOOL = {
                 'todos': {
                     'type': 'array',
                     'maxItems': TODO_MAX_ITEMS,
-                    'description': 'FULL list; max 24.',
+                    'description': 'FULL list.',
                     'items': {
                         'type': 'object',
                         'properties': {
@@ -88,13 +88,16 @@ TODO_WRITE_TOOL = {
                                 'type': 'string',
                                 'minLength': 1,
                                 'maxLength': TODO_MAX_ID_CHARS,
-                                'description': 'Stable id.',
+                                'description': (
+                                    f'Stable id (max {TODO_MAX_ID_CHARS} chars).'),
                             },
                             'content': {
                                 'type': 'string',
                                 'minLength': 1,
                                 'maxLength': TODO_MAX_CONTENT_CHARS,
-                                'description': 'Imperative step.',
+                                'description': (
+                                    f'Imperative step '
+                                    f'(max {TODO_MAX_CONTENT_CHARS} chars).'),
                             },
                             'status': {
                                 'type': 'string',
@@ -384,15 +387,209 @@ def _cascade_completed(state: dict) -> list[str]:
     return popped
 
 
+TODO_LIST_COMMANDS = ('create', 'complete', 'load', 'add', 'remove', 'lookup')
+
+
+def _todo_list_command_name(args: dict) -> str:
+    """Return the Amazon Q ``todo_list`` verb in ``args``, or ''."""
+    command = args.get('command')
+    if not isinstance(command, str):
+        return ''
+    command = command.strip().lower()
+    return command if command in TODO_LIST_COMMANDS else ''
+
+
+def _todo_list_task_texts(raw) -> list:
+    """Coerce an Amazon Q ``tasks``/``new_tasks`` array to content strings.
+
+    Items are plain strings in the source harness; dict items are tolerated
+    when they carry a recognizable content key. Anything else is dropped —
+    the caller turns an empty result into a rejection receipt, never a crash.
+    """
+    if not isinstance(raw, list):
+        return []
+    texts = []
+    for item in raw:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = next(
+                (item[key] for key in
+                 ('content', 'description', 'title', 'task', 'text')
+                 if isinstance(item.get(key), str)),
+                '',
+            )
+        else:
+            continue
+        text = text.strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
+def _todo_list_indices(raw) -> list:
+    """Coerce an Amazon Q index array to deduped non-negative ints."""
+    if not isinstance(raw, list):
+        return []
+    indices = []
+    for item in raw:
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int):
+            index = item
+        elif isinstance(item, float) and item.is_integer():
+            index = int(item)
+        elif isinstance(item, str) and item.strip().lstrip('-').isdigit():
+            index = int(item.strip())
+        else:
+            continue
+        if index >= 0 and index not in indices:
+            indices.append(index)
+    return indices
+
+
+def _next_todo_ids(used: set, count: int) -> list:
+    ids = []
+    candidate = 1
+    while len(ids) < count:
+        tid = str(candidate)
+        candidate += 1
+        if tid in used:
+            continue
+        used.add(tid)
+        ids.append(tid)
+    return ids
+
+
+def _translate_todo_list_command(state: dict, args: dict, command: str):
+    """Map an Amazon Q ``todo_list`` command onto the canonical protocol.
+
+    Returns ``(canonical_args, note)`` — a native sync/replan payload plus an
+    optional receipt annotation (load/lookup only) — or ``(None, reason)``
+    when the command is not meaningfully executable; the caller turns that
+    into a rejection receipt.
+
+    Verified against aws/amazon-q-developer-cli
+    ``crates/chat-cli/src/cli/chat/tools/todo.rs`` / ``tool_index.json``:
+    ``create {tasks[], todo_list_description?}`` replaces the list,
+    ``complete {completed_indices[]}`` marks by 0-based index,
+    ``add {new_tasks[], insert_indices[]}`` inserts,
+    ``remove {remove_indices[]}`` deletes,
+    ``load``/``lookup`` read the current list. The source harness keeps
+    several named lists; this session keeps exactly one active checklist,
+    so the read commands degenerate to "show the current list".
+    """
+    active = _active_frame(state)
+    current = copy.deepcopy(active['todos']) if active else []
+
+    if command == 'create':
+        tasks = _todo_list_task_texts(args.get('tasks'))
+        if not tasks:
+            return None, 'todo_list create requires a non-empty tasks array'
+        new = [{'id': str(i + 1), 'content': text, 'status': 'pending'}
+               for i, text in enumerate(tasks)]
+        if not active or new == current:
+            return {'operation': 'sync', 'todos': new}, ''
+        reason = args.get('todo_list_description')
+        reason = reason.strip() if isinstance(reason, str) else ''
+        if not reason:
+            reason = 'todo_list create replaces the active checklist'
+        return {'operation': 'replan', 'todos': new, 'reason': reason}, ''
+
+    if command == 'complete':
+        if not current:
+            return None, ('todo_list complete found no active checklist; '
+                          'create one first')
+        for index in _todo_list_indices(args.get('completed_indices')):
+            if index < len(current):
+                current[index]['status'] = 'completed'
+        return {'operation': 'sync', 'todos': current}, ''
+
+    if command == 'add':
+        new_tasks = _todo_list_task_texts(args.get('new_tasks'))
+        if not new_tasks:
+            return None, 'todo_list add requires a non-empty new_tasks array'
+        if not current:
+            new = [{'id': str(i + 1), 'content': text, 'status': 'pending'}
+                   for i, text in enumerate(new_tasks)]
+            return {'operation': 'sync', 'todos': new}, ''
+        used = {t['id'] for t in current}
+        items = [{'id': tid, 'content': text, 'status': 'pending'}
+                 for tid, text in
+                 zip(_next_todo_ids(used, len(new_tasks)), new_tasks)]
+        positions = _todo_list_indices(args.get('insert_indices'))
+        while len(positions) < len(items):
+            positions.append(None)
+        merged = list(current)
+        for item, position in zip(items, positions):
+            if position is None:
+                merged.append(item)
+            else:
+                merged.insert(min(position, len(merged)), item)
+        if state.get('root_completed'):
+            return {'operation': 'replan', 'todos': merged,
+                    'reason': 'todo_list add extended the completed checklist'}, ''
+        return {'operation': 'sync', 'todos': merged}, ''
+
+    if command == 'remove':
+        if not current:
+            return None, ('todo_list remove found no active checklist; '
+                          'create one first')
+        drop = set(_todo_list_indices(args.get('remove_indices')))
+        if not drop:
+            return None, 'todo_list remove requires remove_indices'
+        remaining = [t for i, t in enumerate(current) if i not in drop]
+        removed = len(current) - len(remaining)
+        if not removed:
+            return None, ('todo_list remove: no remove_indices matched the '
+                          'checklist')
+        # Always replan: sync cannot drop unfinished items, and even a
+        # completed-only removal after root completion must pass replan's
+        # reason audit anyway.
+        return {
+            'operation': 'replan',
+            'todos': remaining,
+            'reason': f'todo_list remove deleted {removed} task(s)',
+        }, ''
+
+    # load / lookup: read-only views of the one active checklist.
+    note = f'todo_list {command}: current checklist (no state change).'
+    return {'operation': 'sync', 'todos': current}, note
+
+
 def apply_todo_operation(current_state: dict | None, fn_args: dict | None) -> dict:
     """Pure state transition for the revisioned checklist protocol.
 
     The returned dict always carries the resulting state and the active list.
     Invalid transitions are receipts, not exceptions: ``rejected`` is true and
     the prior state is returned unchanged so the model can repair its call.
+
+    Cross-harness compatibility: Amazon Q Developer CLI's checklist tool is
+    named ``todo_list`` (the name-alias layer redirects it here) and speaks a
+    command vocabulary instead of this protocol's full-list operations. A
+    payload whose ``command`` is a known todo_list verb and which carries no
+    real ``todos`` list is translated into the equivalent canonical operation
+    first; the state machine below then runs unchanged. A payload with both
+    ``command`` and a non-empty ``todos`` list runs as native — ``todos``
+    always wins.
     """
     state = _normalise_state(current_state)
     args = fn_args if isinstance(fn_args, dict) else {}
+    command = _todo_list_command_name(args)
+    note = ''
+    if command and not args.get('todos'):
+        translated, note = _translate_todo_list_command(state, args, command)
+        if translated is None:
+            return _rejection(state, 'sync', note)
+        args = translated
+    outcome = _apply_canonical_todo_operation(state, args)
+    if note and not outcome.get('rejected'):
+        outcome['note'] = note
+    return outcome
+
+
+def _apply_canonical_todo_operation(state: dict, args: dict) -> dict:
+    """State machine for native sync/push/replan payloads (see wrapper)."""
     operation = args.get('operation') or 'sync'
     if operation not in VALID_OPERATIONS:
         return _rejection(state, str(operation), 'operation must be sync, push, or replan')
@@ -549,7 +746,8 @@ def _result_text(outcome: dict) -> str:
     if outcome.get('rejected'):
         prefix = 'Checklist update rejected: ' + outcome.get('reason', 'invalid transition') + '.'
     elif outcome.get('no_op'):
-        prefix = 'Checklist unchanged (duplicate update; no new revision).'
+        prefix = outcome.get('note') or (
+            'Checklist unchanged (duplicate update; no new revision).')
     else:
         total = len(todos)
         done = sum(1 for t in todos if t.get('status') == 'completed')

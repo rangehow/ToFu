@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import uuid
 # concurrent.futures.TimeoutError only became an alias of builtin
 # TimeoutError in 3.11 — on 3.10 it is a DISTINCT class, so
@@ -305,6 +305,50 @@ def _bounded_tool_env_int(name: str, default: int, minimum: int,
                        name, raw, default)
         value = default
     return max(minimum, min(value, maximum))
+
+
+def _completed_tools_until_cancel(futures, task, deadline):
+    """Bound each wait so Stop is observed even when no worker produces output."""
+    pending = set(futures)
+    while pending:
+        if task.get('aborted'):
+            # Preserve real receipts completed before Stop was observed. Only
+            # the remaining occurrences receive the cancellation verdict.
+            completed = {f for f in pending if f.done() and not f.cancelled()}
+            yield from completed
+            yield None
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _FuturesTimeoutError()
+        done, pending = wait(
+            pending, timeout=min(0.1, remaining), return_when=FIRST_COMPLETED)
+        for future in done:
+            yield future
+
+
+def _drain_cancelled_tool_workers(task, futures):
+    """Release scoped resources before allowing the task to become terminal.
+
+    Python threads cannot be killed safely. A worker still owns the live task,
+    round and possibly external write handles: abandoning it with wait=False
+    would allow mutations AFTER settlement. Cancellation callbacks are the
+    existing runtime's resource boundary; keep ownership until workers exit.
+    Non-cooperative handlers therefore remain cancelling (not falsely stopped).
+    No reaper thread or replacement executor is spawned here.
+    """
+    from lib.tasks_pkg.tool_runtime import cancel_task_contexts
+
+    pending = set(futures)
+    for future in pending:
+        future.cancel()
+    while pending:
+        # Repeat fanout to close the submit -> context registration race.
+        # Callback removal is exactly-once in the runtime context registry.
+        cancel_task_contexts(task)
+        pending = {future for future in pending if not future.done()}
+        if pending:
+            wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
 
 
 def _parallel_worker_limit(item_count: int, *, programmatic: bool = False
@@ -706,8 +750,9 @@ def _settle_tool_result(
             tc_content_str = tool_content
         else:
             tc_content_str = json.dumps(tool_content, ensure_ascii=False)
-        if len(tc_content_str) > 50000:
-            tc_content_str = tc_content_str[:50000] + '\n... [truncated for continue context]'
+        # L0/V2 and the hard result ceiling already bound this value. A second
+        # display-only truncation here would make Continue replay different
+        # bytes from the content just returned to the model.
 
         # Persist toolContent on round_entry so checkpoint writes
         #   it to DB.  Without this, crash-recovery loses tool
@@ -786,6 +831,9 @@ def _settle_tool_result(
         )
         if tool_result_evidence is not None:
             _evt['toolResultEvidence'] = dict(tool_result_evidence)
+        if ((round_entry or {}).get('toolModelContent') is not None
+                and not task.get('_transientRuntime')):
+            _evt['toolModelContent'] = round_entry['toolModelContent']
         # Terminal verdict (). A lane that never executed the tool
         #   settles with a NON-SUCCESS verdict. Stamp it on the round so the
         #   spinner stops NOW instead of at the end-of-task dangling sweep, and
@@ -859,6 +907,71 @@ def _screenshot_display_content(model: str, tool_content: dict) -> tuple[str, bo
             True,
         )
     return (tool_content.get('_text_fallback', '') or 'Image captured.', False)
+
+
+_INLINE_MODEL_IMAGE_MAX_BYTES = 256 * 1024
+_INLINE_MODEL_IMAGES_PER_TURN_MAX_BYTES = 1024 * 1024
+
+
+def _prepare_screenshot_replay(task, row, screenshot, model, tool_name, call_id):
+    """Freeze the multimodal model receipt before the terminal event is sent."""
+    if row is None or row.get('toolModelContent') is not None:
+        return
+    if _screenshot_display_content(model, screenshot)[1]:
+        return
+    carrier = []
+    _append_screenshot_message(carrier, call_id, screenshot)
+    blocks = carrier[0]['content']
+    if task.get('_userId') and not task.get('_transientRuntime'):
+        from types import SimpleNamespace
+        from lib.tasks_pkg.mcp_result_media import capture_mcp_result_images
+        payloads = []
+        for block in blocks:
+            if block.get('type') == 'image_url':
+                header, encoded = block['image_url']['url'].split(',', 1)
+                payloads.append({'mimeType': header[5:].split(';')[0], 'data': encoded})
+        capture_mcp_result_images(
+            task, SimpleNamespace(image_contents=payloads),
+            source_tool=tool_name, tool_call_id=call_id, reference_field='_toolModelImages')
+        refs = {ref.get('sourceOrdinal'): ref for ref in task.get('_toolModelImages', [])
+                if ref.get('toolCallId') == call_id and ref.get('sourceTool') == tool_name}
+        projected = []
+        live_projected = []
+        ordinal = 0
+        for block in blocks:
+            if block.get('type') != 'image_url':
+                projected.append(block)
+                live_projected.append(block)
+                continue
+            if ordinal in refs:
+                projected.append({'type': 'image_url', 'image_url': {
+                    'url': 'tofu-media:' + refs[ordinal]['attachmentId']}})
+                live_projected.append(block)
+            else:
+                # Retention failure must not blind the active model. A small
+                # inline receipt is the bounded storage-failure fallback;
+                # larger pixels remain available to this call and the next
+                # model-view checkpoint, with an honest cold-replay marker.
+                url = block['image_url']['url']
+                encoded_bytes = (len(url.encode('utf-8')) if len(url) <= _INLINE_MODEL_IMAGE_MAX_BYTES
+                                 else _INLINE_MODEL_IMAGE_MAX_BYTES + 1)
+                inline_used = int(task.get('_inlineModelImageBytes') or 0)
+                if (encoded_bytes <= _INLINE_MODEL_IMAGE_MAX_BYTES
+                        and inline_used + encoded_bytes <= _INLINE_MODEL_IMAGES_PER_TURN_MAX_BYTES):
+                    projected.append(block)
+                    task['_inlineModelImageBytes'] = inline_used + encoded_bytes
+                else:
+                    projected.append({'type': 'text', 'text':
+                        '[Image unavailable on cold replay: the source could not be retained.]'})
+                live_projected.append(block)
+            ordinal += 1
+        blocks = projected
+        screenshot['_modelReplayBlocks'] = live_projected
+        screenshot['_modelReplaySources'] = [
+            block['image_url']['url'] for block in projected
+            if block.get('type') == 'image_url' and block['image_url']['url'].startswith('tofu-media:')]
+    row['toolModelContent'] = blocks
+    screenshot.setdefault('_modelReplayBlocks', blocks)
 
 
 def _apply_round_aggregate_budget(
@@ -968,11 +1081,6 @@ def _apply_round_aggregate_budget(
                     if isinstance(new_content, str)
                     else str(new_content)
                 )
-                if len(content_text) > 50000:
-                    content_text = (
-                        content_text[:50000]
-                        + '\n... [truncated for continue context]'
-                    )
                 round_entry['toolContent'] = content_text
                 original_chars = original_chars_by_call_id.get(tool_call_id, 0)
                 compacted_chars = len(content_text)
@@ -980,8 +1088,7 @@ def _apply_round_aggregate_budget(
                 round_entry['compactedFromChars'] = original_chars
                 round_entry['compactedToChars'] = compacted_chars
 
-                # Parse the internal envelope, not content_text: the latter
-                # may carry the 50k continue-context truncation suffix.
+                # Parse the internal envelope, not the sparse model text.
                 _register_spilled_artifact_origin(
                     task, round_entry, tool_name, new_internal_content)
                 round_entry['toolTokens'] = _safe_count_tokens(
@@ -1135,6 +1242,14 @@ def _approval_stops_tool_call(
         internal_result_sink=internal_result_sink,
         settled_results=settled_results)
     return True
+
+
+def _dispatch_settle_content(task, row, content, model, tool_name, call_id):
+    """Retain image receipts before either dispatch lane emits completion."""
+    if isinstance(content, dict) and content.get('__screenshot__'):
+        _prepare_screenshot_replay(task, row, content, model, tool_name, call_id)
+        return _screenshot_display_content(model, content)[0]
+    return content
 
 
 def execute_tool_pipeline(
@@ -1851,31 +1966,12 @@ def execute_tool_pipeline(
         #   round. Same barrier, different lane. Screenshots included
         #   () — see the parallel lane for why the vision verdict
         #   needs no barrier.
-        if (isinstance(tool_content, dict)
-                and tool_content.get('__screenshot__')):
-            _shot_txt, _ = _screenshot_display_content(
-                model, tool_content)
-            _settle_current(
-                task, fn_name, tc_id_ret, fn_args, rn, round_entry,
-                _shot_txt, idempotent_tools=_idempotent_tools,
-                cache=_cache, tid=tid, round_num=round_num)
-        else:
-            _settle_current(
-                task, fn_name, tc_id_ret, fn_args, rn, round_entry,
-                tool_content, idempotent_tools=_idempotent_tools,
-                cache=_cache, tid=tid, round_num=round_num)
-
-    # ── A serial write may flip task['aborted'] mid-lane (fix 1 ordering).
-    #    Reads were submitted BEFORE the write ran, so reproduce the OLD
-    #    pre-pool abort verdict here instead of letting the drain loop's
-    #    in-pool path drop already-completed reads as "Unknown tool".
-    if _futures and task.get('aborted'):
-        for _pf, (_pid, _pfn) in _futures.items():
-            if not _pf.done():
-                _pf.cancel()
-            if _pid not in tool_results:
-                tool_results[_pid] = ('Task aborted by user.', False)
-                tool_verdicts[_pid] = 'aborted'
+        _settle_arg = _dispatch_settle_content(
+            task, round_entry, tool_content, model, fn_name, tc_id_ret)
+        _settle_current(
+            task, fn_name, tc_id_ret, fn_args, rn, round_entry,
+            _settle_arg, idempotent_tools=_idempotent_tools,
+            cache=_cache, tid=tid, round_num=round_num)
 
     # ══════════════════════════════════════════
     #  Main phase: Drain the read pool (reads were submitted BEFORE the writes)
@@ -1883,18 +1979,16 @@ def execute_tool_pipeline(
     if _futures:
         try:
             try:
-                _remaining = (_tool_deadline - time.monotonic()
-                              if _tool_deadline is not None else 0.0)
-                for fut in as_completed(_futures, timeout=max(0.0, _remaining)):
+                for fut in _completed_tools_until_cancel(
+                        _futures, task, _tool_deadline):
                     # ── Abort check during parallel execution: cancel remaining futures ──
-                    if task.get('aborted'):
+                    if fut is None:
                         logger.info('[Task %s] Abort detected during parallel tool execution — cancelling remaining', tid)
                         for pending_fut, (pending_id, pending_fn) in _futures.items():
-                            if not pending_fut.done():
-                                pending_fut.cancel()
-                                if pending_id not in tool_results:
-                                    tool_results[pending_id] = ('Task aborted by user.', False)
-                                    tool_verdicts[pending_id] = 'aborted'
+                            pending_fut.cancel()
+                            if pending_id not in tool_results:
+                                tool_results[pending_id] = ('Task aborted by user.', False)
+                                tool_verdicts[pending_id] = 'aborted'
                         break
                     fut_tc_id, fut_fn_name = _futures[fut]
                     try:
@@ -1981,14 +2075,10 @@ def execute_tool_pipeline(
                         #   parameter we already hold, so there is nothing to
                         #   wait for. Only the multimodal MESSAGE append stays
                         #   in the post-phase, where tool-call order lives.
-                        _is_shot = (isinstance(tool_content, dict)
-                                    and tool_content.get('__screenshot__'))
                         _pi = _parallel_by_id.get(ret_tc_id)
                         if _pi is not None:
-                            _settle_arg = tool_content
-                            if _is_shot:
-                                _settle_arg, _ = _screenshot_display_content(
-                                    model, tool_content)
+                            _settle_arg = _dispatch_settle_content(
+                                task, _pi[5], tool_content, model, _pi[1], ret_tc_id)
                             _settle_current(
                                 task, _pi[1], ret_tc_id, _pi[3],
                                 _pi[4], _pi[5], _settle_arg,
@@ -2062,10 +2152,14 @@ def execute_tool_pipeline(
             # Stop the heartbeat ticker first so it can't emit after the round
             # settles (it checks round status, but stop the loop deterministically).
             _pool_hb_stop.set()
-            # On timeout use wait=False + cancel_futures=True to avoid
-            # blocking indefinitely on still-running tool threads.
-            # On normal completion wait=True is fine (all futures done).
-            _pool.shutdown(wait=not _timed_out, cancel_futures=_timed_out)
+            # Preserve the finite pool-timeout contract. Runtime cancellation
+            # callbacks are synchronous and arbitrary handlers may never exit;
+            # neither can be drained on this timeout path. Running threads may
+            # still mutate shared state: wait=False is NOT a resource fence.
+            # Stop retains cooperative cleanup/ownership until workers exit.
+            if task.get('aborted') and not _timed_out:
+                _drain_cancelled_tool_workers(task, _futures)
+            _pool.shutdown(wait=not _timed_out, cancel_futures=True)
 
     # ══════════════════════════════════════════
     #  Post-phase: Add tool messages in original order
@@ -2107,6 +2201,7 @@ def execute_tool_pipeline(
         #   (and still does the work for a screenshot that never reached a
         #   dispatch lane at all).
         if isinstance(tool_content, dict) and tool_content.get('__screenshot__'):
+            _prepare_screenshot_replay(task, round_entry, tool_content, model, fn_name, tc_id)
             # ``model`` (the PARAMETER) is authoritative: the orchestrator passes
             # the round's resolved model and only MIRRORS it onto task['model']
             # afterwards, so reading the mirror risks a stale value on a
@@ -2249,6 +2344,12 @@ def _append_screenshot_message(messages, tc_id, tool_content):
     """
     # A multi-image batch (read_files of several images) carries every image
     # in ``images``; otherwise treat the dict itself as the single image.
+    if isinstance(tool_content.get('_modelReplayBlocks'), list):
+        import copy
+        messages.append({'role': 'tool', 'tool_call_id': tc_id,
+                         'content': copy.deepcopy(tool_content['_modelReplayBlocks']),
+                         '_modelImageSources': list(tool_content.get('_modelReplaySources') or [])})
+        return
     img_dicts = tool_content.get('images') or [tool_content]
 
     def _data_url_parts(img):

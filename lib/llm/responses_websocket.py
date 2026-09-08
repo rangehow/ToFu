@@ -23,6 +23,7 @@ from lib.llm.stream_result import ProviderStreamState
 from lib.llm_errors import (
     AbortedError,
     EndpointUnreachableError,
+    PROVIDER_RESPONSE_ERRORS,
     RetryableAPIError,
 )
 from lib.log import get_logger
@@ -153,20 +154,15 @@ def _open_session(plan, key: str) -> _Session:
 
 
 def _request_payload(plan, session: _Session) -> tuple[dict, Counter]:
-    full_input = list(plan.body.get('input') or [])
-    counts = _external_counts(full_input)
-    if not session.previous_response_id:
-        response = dict(plan.body)
-        # Streaming is inherent in WebSocket mode.
-        response.pop('stream', None)
-        return response, counts
-    response = {
-        'model': plan.body.get('model', ''),
-        'previous_response_id': session.previous_response_id,
-        'input': _incremental_input(session, full_input),
-        'store': False,
-    }
-    return response, counts
+    from lib.llm.request import transport_body
+
+    response = dict(transport_body(plan.body))
+    # Reuse the connection, not opaque provider history. Until ordered history
+    # and configuration identity are proven, every turn explicitly resets state
+    # and sends the complete admitted input and all selected generation knobs.
+    response.pop('stream', None)
+    response['previous_response_id'] = None
+    return response, _external_counts(response.get('input'))
 
 
 def stream_responses_websocket(
@@ -197,6 +193,7 @@ def stream_responses_websocket(
             on_thinking=on_thinking, on_content=on_content,
             on_tool_call_ready=on_tool_call_ready,
             route_output_limit_key=plan.route_output_limit_key,
+            credential_present=getattr(plan, 'credential_present', False),
             progress=progress)
         idle_timeout = _tp.stream_idle_timeout_seconds()
         last_beat = time.monotonic()
@@ -274,10 +271,6 @@ def stream_responses_websocket(
                 )
                 _close_session(key, reason='invalid event shape')
                 break
-            if event.get('type') == 'error':
-                event = {'type': 'response.error',
-                         'error': event.get('error') or event}
-                message = json.dumps(event, ensure_ascii=False)
             if acc.feed_payload(message, count_event=True):
                 break
 
@@ -314,7 +307,7 @@ def stream_responses_websocket(
         _close_session(key, reason='stream failure')
         if not send_attempted:
             raise ResponsesWebSocketUnavailable(str(exc)) from exc
-        if isinstance(exc, (EndpointUnreachableError, RetryableAPIError)):
+        if isinstance(exc, (EndpointUnreachableError, *PROVIDER_RESPONSE_ERRORS)):
             raise
         raise RetryableAPIError(
             f'Responses WebSocket failed: {exc}') from exc

@@ -810,6 +810,16 @@
   "roundNum": 48
  },
  {
+  "_name": "error-failed-tool-long-multiline",
+  "status": "error",
+  "toolName": "mcp__llm__experiment_stop",
+  "query": "llm/experiment_stop — ['359059'] · dry-run",
+  "toolCallId": "call-exp-stop-1",
+  "toolContent": "MCP Error: {\"ok\": false, \"error\": \"destructive operation requires confirm=true\", \"confirmation_required\": true, \"error_detail\": {\"type\": \"confirmation_required\", \"message\": \"destructive operation requires confirm=true\"}, \"confirmation\": {\"tool\": \"experiment_stop\", \"mis\": \"your-username\", \"target\": \"{\\\"id\\\": 359059, \\\"reason\\\": \\\"user requested stop\\\"}\", \"hint\": \"Call again with confirm=true to proceed. The dry-run shows what would be stopped: 3 running trials, 12 queued trials across 2 searchers.\"}}\nerror",
+  "results": [],
+  "roundNum": 49
+ },
+ {
   "_name": "hg-awaiting-expired",
   "status": "awaiting_human",
   "toolName": "ask_human",
@@ -930,5 +940,42 @@
    {}
   ],
   "roundNum": 105
+ }
+,
+ {
+  "_name": "rejected-contract-invalid",
+  "status": "rejected",
+  "toolName": "search_tool_artifact",
+  "query": "Search compacted result of R56 · Tool batch: browser_preview_page: consoleErrors",
+  "rejection": {
+   "kind": "tool_contract_invalid",
+   "tool": "search_tool_artifact",
+   "code": "missing_required_arguments",
+   "path": "$.searches[0]",
+   "reason": "ERROR: Tool call `search_tool_artifact` was NOT executed. [missing_required_arguments] Missing required arguments: artifact_ref Path: $.searches[0]. Match arguments_schema and retry. `search_tool_artifact` expects a JSON object — keys: searches(array), artifact_ref(string), query(string), cursor(string), limit(integer), offset(string), includeScore(boolean) (* = required: artifact_ref, plus one of query or searches).",
+   "retryable": true
+  },
+  "results": [
+   {}
+  ],
+  "roundNum": 106
+ }
+,
+ {
+  "_name": "rejected-hallucinated",
+  "status": "rejected",
+  "toolName": "read_fiels",
+  "rejection": {
+   "kind": "hallucinated",
+   "attempted": "read_fiels",
+   "suggestions": [
+    "read_files"
+   ],
+   "reason": "Error: `read_fiels` is not a real tool and was NOT executed. It is not in the list of tools available to you this turn. Did you mean one of: `read_files`?"
+  },
+  "results": [
+   {}
+  ],
+  "roundNum": 107
  }
 ]

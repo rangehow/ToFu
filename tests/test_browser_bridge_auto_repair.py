@@ -30,7 +30,11 @@ The fix, pinned here:
      secret or open a tunnel; the manual key field survives only inside
      a collapsed <details> in the popup;
   5. both manifests moved to 4.7.0 together (the contract the server
-     and the web-store build read).
+     and the web-store build read);
+  6. a hidden repair tab outlives a service-worker kill: its id is
+     ledgered in ``chrome.storage.session`` before the first long await,
+     and ``init()`` reaps the orphan on the next worker start — a
+     forgotten tab used to sit blank in the user's strip forever.
 
 background.js has no JS harness in this repo — pins are source-level,
 the same convention as test_browser_bridge_auth_backoff.py.
@@ -169,6 +173,54 @@ def test_popup_button_rides_repair_now():
     assert 'forceTab: true' in block, (
         'the popup click is a real user gesture — THAT is when a '
         'foreground Tofu tab is allowed')
+
+
+# ── 2b. A hidden repair tab never outlives a service-worker kill ─────
+
+def test_repair_tab_id_is_ledgered_before_the_first_wait():
+    body = _extract_fn_body(_src(), 'async function attemptAutoRepair(')
+    assert 'chrome.storage.session.set' in body, (
+        'the hidden repair tab id must be ledgered in chrome.storage.session '
+        '— an MV3 service-worker kill mid-ladder otherwise forgets the id and '
+        'the half-opened tab sits blank forever')
+    assert body.index('chrome.storage.session.set') < \
+        body.index('waitForTabLoad(tab.id'), (
+        'the ledger write must precede the first long await — the kill '
+        'window IS the wait')
+    i_set = body.index('chrome.storage.session.set')
+    assert 'opts.forceTab' in body[max(0, i_set - 200):i_set], (
+        'the foreground (popup-gesture) tab must NEVER enter the reaper '
+        'ledger — the user may be completing sign-in there')
+    assert 'chrome.storage.session.remove' in body, (
+        'a completed ladder clears its own ledger entry')
+
+def test_orphaned_repair_tab_reaper_shape_and_init_hook():
+    src = _src()
+    body = _extract_fn_body(src, 'async function _reapOrphanedRepairTab(')
+    assert 'chrome.storage.session.get' in body
+    assert 'chrome.tabs.remove' in body, (
+        'the reaper must actually close the orphaned blank/error tab')
+    assert "tab.status === 'complete'" in body, (
+        'a repair tab that finished loading into a real Tofu client is '
+        'KEPT — the next ladder rung mints from it invisibly')
+    assert "'about:'" in body and "'chrome-error:'" in body, (
+        'blank and unreachable-server tabs are the leak — they must be '
+        'the close branch')
+    assert "chrome.storage.local.get(['serverUrl'])" in body, (
+        'init() runs before the module-level SERVER_URL is restored, so '
+        'the own-server check must read the paired origin from storage')
+    init_body = _extract_fn_body(src, 'function init(')
+    assert '_reapOrphanedRepairTab()' in init_body, (
+        'init() runs on every worker (re)start — that is where the '
+        'orphan gets reaped')
+
+def test_NEUTER_dropping_the_reaper_init_hook_is_caught():
+    src = _src()
+    neutered = src.replace('  _reapOrphanedRepairTab();\n', '', 1)
+    assert neutered != src, 'NEUTER did not remove the init hook'
+    init_body = _extract_fn_body(neutered, 'function init(')
+    assert '_reapOrphanedRepairTab()' not in init_body, (
+        'sanity: without the init hook the reaper pin above goes red')
 
 
 # ── 3. The copy never asks for a credential or a tunnel ───────────────

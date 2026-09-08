@@ -19,7 +19,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from lib.log import get_logger
 from lib.model_registration import normalize_model_entry
+
+logger = get_logger(__name__)
 
 
 RECIPE_VERSION = 'tofu.provider-offering-recipe/v1'
@@ -130,44 +133,82 @@ def provider_from_template(raw: Any, provider_id: Any) -> dict:
 
 
 def load_provider_templates() -> list[dict]:
-    """Load normalized onboarding recipes from their package-owned sources."""
-    from lib.model_info._openai_gpt56 import OPENAI_TEMPLATE
+    """Load normalized onboarding recipes from their file-backed sources.
 
-    # Share the bootstrap picker's curated builtin list so first-run and
-    # Settings offer the same providers.  ``custom`` is a bootstrap-form
-    # placeholder with an empty model id; ``anthropic`` has no v2
-    # OpenAI-compatible protocol mapping and would compile a broken
-    # connection.  Both stay available to bootstrap itself.
-    from bootstrap_pkg.providers import _BUILTIN_PROVIDER_TEMPLATES
-
-    sources: list[dict] = [
-        copy.deepcopy(template) for template in _BUILTIN_PROVIDER_TEMPLATES
-        if template.get('key') not in ('custom', 'anthropic')
-    ]
-    sources.append(copy.deepcopy(OPENAI_TEMPLATE))
-    template_directory = Path(__file__).parents[1] / 'static' / 'provider_templates'
-    if template_directory.is_dir():
+    The catalog authority is hot-reloaded on every call:
+    ``lib/model_info/data/*.json`` (package catalog) merged with
+    ``static/provider_templates/*.json`` (deployment overrides) by key, in
+    that order — template edits never require a restart.  The bootstrap
+    picker merges the same directories in the same order, so both pickers
+    offer identical providers.  The Python-side
+    ``bootstrap_pkg.providers._BUILTIN_PROVIDER_TEMPLATES`` list is not a
+    source here: it only retains bootstrap scaffolding (the protocol-less
+    ``anthropic`` stub, which would compile an OpenAI-shaped connection
+    against the native Messages API, and the ``custom`` form placeholder
+    with an empty model id).
+    """
+    sources: list[dict] = []
+    template_directories = (
+        Path(__file__).parent / 'model_info' / 'data',
+        Path(__file__).parents[1] / 'static' / 'provider_templates',
+    )
+    for template_directory in template_directories:
+        if not template_directory.is_dir():
+            continue
         for path in sorted(template_directory.glob('*.json')):
+            # A template file being hot-edited (transiently invalid JSON) or
+            # a malformed deployment drop-in must not take down the whole
+            # picker — skip the offending file and keep serving the rest.
             try:
-                sources.append(json.loads(path.read_text(encoding='utf-8')))
+                raw = json.loads(path.read_text(encoding='utf-8'))
             except (OSError, json.JSONDecodeError) as exc:
-                raise ProviderTemplateRecipeError(
-                    f'cannot load provider template {path.name}: {exc}') from exc
+                logger.warning(
+                    'skipping unreadable provider template %s: %s',
+                    path.name, exc)
+                continue
+            if not isinstance(raw, dict):
+                logger.warning(
+                    'skipping provider template %s: not a JSON object',
+                    path.name)
+                continue
+            try:
+                sources.append(normalize_provider_template(raw))
+            except ProviderTemplateRecipeError as exc:
+                logger.warning(
+                    'skipping invalid provider template %s: %s',
+                    path.name, exc)
 
     # Deployment-local files intentionally override a package recipe by key.
     by_key: dict[str, dict] = {}
-    for raw in sources:
-        normalized = normalize_provider_template(raw)
+    for normalized in sources:
         if (normalized['offering_recipes']
                 or normalized.get('category') == 'local'):
             by_key[normalized['key']] = normalized
-    return sorted(
+    templates = sorted(
         by_key.values(),
         key=lambda row: (
             str(row.get('category') or ''),
             str(row.get('name') or row['key']).casefold(),
         ),
     )
+    # Dynamic feed overlay (docs/PROVIDER_TEMPLATE_RECIPES.md — Dynamic
+    # feed): cached public-catalog rows extend the mapped templates;
+    # authored rows always win and a stale/missing cache never blocks the
+    # picker — it only kicks a one-flight background refresh.  The stdlib
+    # bootstrap picker never fetches and keeps serving the authored catalog.
+    try:
+        from lib.provider_template_feed import (
+            load_cached_feed,
+            maybe_refresh_async,
+            merge_feed_recipes,
+        )
+        feed = load_cached_feed()
+        if feed is not None:
+            templates = merge_feed_recipes(templates, feed)
+        maybe_refresh_async(feed)
+    except Exception as exc:
+        logger.warning('provider template feed unavailable: %s', exc)
+    return templates
 
 
 def compile_provider_template_bundle(
@@ -205,6 +246,7 @@ def compile_provider_template_bundle(
     reevaluate_pricing_tags(
         recipes, log_prefix='template:%s' % key, strip_unpriced=False)
 
+
     legacy = copy.deepcopy(template)
     legacy['id'] = template['key']
     legacy['models'] = recipes
@@ -222,6 +264,25 @@ def compile_provider_template_bundle(
         raise ProviderTemplateRecipeError('; '.join(
             issue.message for issue in plan.blocking_issues))
     document = plan.document
+
+    # An offering may never exceed its official model row's context_window
+    # (normalize_document is fail-closed).  Registry rows derive their window
+    # from context_profile when the provider catalogue does not declare one,
+    # while recipe rows follow public catalogues that report binary windows
+    # (1M as 1048576) or marketing ceilings.  Clamp each compiled offering
+    # down to the profile window so a bundle can never violate the invariant
+    # no matter which source inserted the registry row first; an under-
+    # claimed offering is a legal subset.  Bundle MODEL rows keep the recipe
+    # value so the world-catalogue registry stays truthful.
+    from lib.model_info._context import context_profile
+    for offering in document['offerings']:
+        claimed = offering.get('context_window')
+        if not isinstance(claimed, int) or isinstance(claimed, bool):
+            continue
+        model_ref = offering.get('model') or {}
+        window = context_profile(model_ref.get('model_id') or '').get('window')
+        if isinstance(window, int) and window > 0 and claimed > window:
+            offering['context_window'] = window
     credentials = copy.deepcopy(document['credentials'])
     for credential in credentials:
         credential['secret_reference'] = ''
@@ -235,8 +296,9 @@ def compile_provider_template_bundle(
         'deployments': copy.deepcopy(document['deployments']),
         'creators': copy.deepcopy(document['creators']),
         'models': copy.deepcopy(document['models']),
-        # Static recipe headers are folded into the encrypted credential
-        # envelope by the browser together with the user-entered API key.
+        # Static recipe headers are surfaced on each Connection's
+        # extra_headers by the browser; only the user-entered API key
+        # enters the encrypted credential envelope.
         'credential_extra_headers': copy.deepcopy(
             template.get('extra_headers') or {}),
     }

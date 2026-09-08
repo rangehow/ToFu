@@ -40,10 +40,13 @@ _MIN_SURFACE_CHARS = 4
 _LONG_SURFACE_REVIEW_CHARS = 200
 # How much recent text to feed the model.
 _MAX_SURFACE_CHARS = 6000
-# This advisory pass is retried naturally by future user turns.  It must yield
-# after one real provider-capacity rejection instead of competing with the
-# foreground task across the dispatcher's model rotation.
-_MAX_429_ATTEMPTS = 1
+# This advisory pass is retried naturally by future user turns, so it stays
+# well below the foreground budget — but a personal-gateway cheap pool is
+# often transiently saturated, and one 429 used to kill every pass (observed:
+# 19/19 dispatched passes lost to `budget exhausted (1/1)` over four days,
+# nothing learned).  Each 429 rotates to a different provider slot, so a small
+# bound buys real recall without hammering one provider.
+_MAX_429_ATTEMPTS = 3
 # A model response is bounded before any profile write.  Two lets one explicit
 # statement carry both an identity fact and a response preference without
 # turning a single turn into an unreviewable profile rewrite.
@@ -53,8 +56,8 @@ _MAX_EVIDENCE_CHARS = 400
 
 _DURABLE_SIGNAL_PATTERNS = (
     re.compile(
-        r'(?:我|本人)(?:是|在.{0,40}(?:工作|任职|就职|担任)|负责|从事|擅长|'
-        r'专注(?:于)?|常用|主要使用)'),
+        r'(?:我|本人)(?:是|来自|在.{0,40}(?:工作|任职|就职|担任)|负责|从事|'
+        r'擅长|专注(?:于)?|常用|主要使用)'),
     re.compile(
         r'(?:我的|本人(?:的)?)(?:偏好|习惯|工作习惯|工作规则|工作知识|回答偏好|回复偏好|'
         r'职业|职位|岗位|角色|公司|团队|组织|专业|专长|技术栈|工作环境)'),
@@ -65,13 +68,14 @@ _DURABLE_SIGNAL_PATTERNS = (
         r'只用|统一|务必)'),
     re.compile(
         r'(?:请)?(?:记住|以后|今后|往后|从现在起|始终|一直|默认|每次|'
-        r'每当|一律|务必|永远|不要再)'),
+        r'每当|一律|务必|永远|不要|不要再)'),
     re.compile(
         r"\b(?:i(?:'m| am)\s+(?:an?\s+)?(?:engineer|developer|designer|"
         r'manager|researcher|student|teacher|founder|consultant)|'
         r'i work\s+(?:at|for|as|in)\b|my\s+(?:preference|preferences|role|job|'
         r'company|team|organization|profession|expertise|stack|environment)\b|'
         r'i\s+(?:prefer|like|dislike|always|never)\b|please\s+(?:always|remember)\b|'
+        r"i(?:'m| am)\s+from\b|"
         r'from now on\b|going forward\b|by default\b|whenever\b)',
         re.IGNORECASE,
     ),
@@ -124,6 +128,15 @@ format for just this turn, temporary state, current bug/repository fact, chat
 summary, model reasoning, solution approach, generic lesson, compliment, or
 social filler. Those are not user context.
 
+Only learn from a [user] message that carries an explicit durable signal:
+the user stating who they are (我来自…, 我在…工作, I work at…), what they
+generally prefer (我喜欢/偏好/不要…, I prefer/never…), or an explicit
+long-term directive (记住, 以后, 默认, 每次, 始终, always, whenever,
+remember). A style-sounding request scoped to the current task (审阅这篇论
+文, 'add a copy button to this page', 'be rigorous here') is a one-off task
+instruction: no action. Quoted or pasted text inside a user message is not
+the user's own statement.
+
 Every action MUST include `evidence`: a short VERBATIM quote copied from a
 recent [user] message. Paraphrased or invented evidence is invalid. The saved
 fields must be the shortest standalone statement that preserves the useful
@@ -151,9 +164,9 @@ Return ONLY JSON:
 Return {"actions":[]} when uncertain. Prefer zero or one action."""
 
 
-def _recent_surface(messages: list, cap: int = _MAX_SURFACE_CHARS, *,
-                    user_message_limit: int = 4) -> str:
-    """Plain text from recent real USER messages only.
+def _recent_user_texts(messages: list, cap: int = _MAX_SURFACE_CHARS, *,
+                       user_message_limit: int = 4) -> list[str]:
+    """Plain text of recent real USER messages only (oldest first).
 
     Excluding assistant/tool/synthetic messages here is a data-boundary
     guarantee, not merely a prompt suggestion: the learner cannot turn its own
@@ -164,7 +177,8 @@ def _recent_surface(messages: list, cap: int = _MAX_SURFACE_CHARS, *,
     # Walk newest-first and spend the fixed budget there. The old join-then-
     # slice shape kept the oldest of four messages, so one long historical
     # request could silently remove the just-finished user's explicit fact.
-    rows_newest_first: list[str] = []
+    prefix_chars = len('[user] ')
+    texts_newest_first: list[str] = []
     used = 0
     for message in reversed(messages):
         if message.get('role') != 'user' or message.get('_isMeta'):
@@ -172,26 +186,34 @@ def _recent_surface(messages: list, cap: int = _MAX_SURFACE_CHARS, *,
         text = _msg_plain_text(message).strip()
         if not text:
             continue
-        row = f'[user] {text}'
-        separator_chars = 2 if rows_newest_first else 0
-        available = cap - used - separator_chars
+        separator_chars = 2 if texts_newest_first else 0
+        available = cap - used - separator_chars - prefix_chars
         if available <= 0:
             break
-        if len(row) > available:
-            if rows_newest_first:
+        if len(text) > available:
+            if texts_newest_first:
                 break
             marker = '\n[... user message shortened ...]\n'
             if available <= len(marker) + 2:
-                row = row[-available:]
+                text = text[-available:]
             else:
                 head_chars = (available - len(marker)) // 2
                 tail_chars = available - len(marker) - head_chars
-                row = row[:head_chars] + marker + row[-tail_chars:]
-        rows_newest_first.append(row)
-        used += separator_chars + len(row)
-        if len(rows_newest_first) >= user_message_limit:
+                text = text[:head_chars] + marker + text[-tail_chars:]
+        texts_newest_first.append(text)
+        used += separator_chars + prefix_chars + len(text)
+        if len(texts_newest_first) >= user_message_limit:
             break
-    return '\n\n'.join(reversed(rows_newest_first))
+    return list(reversed(texts_newest_first))
+
+
+def _recent_surface(messages: list, cap: int = _MAX_SURFACE_CHARS, *,
+                    user_message_limit: int = 4) -> str:
+    """The recent user texts rendered with their ``[user] `` role prefixes."""
+    return '\n\n'.join(
+        f'[user] {text}'
+        for text in _recent_user_texts(
+            messages, cap, user_message_limit=user_message_limit))
 
 
 def _parse_actions(content: str) -> list[dict]:
@@ -248,6 +270,23 @@ def _grounded_evidence(action: dict, surface: str) -> str:
     return evidence if normalized in _comparison_text(surface) else ''
 
 
+def _evidence_has_durable_signal(evidence: str, user_texts: list[str]) -> bool:
+    """A NEW item may only grow out of a user message that itself carries a
+    durable-context signal.
+
+    Verbatim grounding alone cannot tell "记住：……" apart from random quoted
+    chatter — observed assistant-learned garbage like the response preference
+    \"Yes, you can\" was perfectly verbatim-grounded in its source message.
+    """
+    compared = _comparison_text(evidence)
+    if not compared:
+        return False
+    for text in user_texts:
+        if compared in _comparison_text(text):
+            return any(
+                pattern.search(text) for pattern in _DURABLE_SIGNAL_PATTERNS)
+    return False
+
 def _item_signature(item: dict) -> tuple[str, ...]:
     item_type = str(item.get('type') or '')
     if item_type == 'work_rule':
@@ -290,7 +329,8 @@ def _field_is_supported(field: str, evidence: str) -> bool:
 
 
 def _validated_actions(actions: list[dict], surface: str,
-                       existing: list[dict]) -> list[dict]:
+                       existing: list[dict],
+                       user_texts: list[str]) -> list[dict]:
     """Fail closed on ungrounded, verbose, duplicate, or type-changing output."""
     existing_by_id = {
         str(item.get('id') or ''): item for item in existing if item.get('id')
@@ -300,14 +340,29 @@ def _validated_actions(actions: list[dict], surface: str,
 
     # Inspect only the declared bound. A model cannot hide a large mutation
     # after a prefix of invalid actions.
+    rejected: dict[str, int] = {}
+
+    def _reject(reason: str) -> None:
+        rejected[reason] = rejected.get(reason, 0) + 1
+
     for raw_action in actions[:_MAX_ACTIONS_PER_PASS]:
         if not isinstance(raw_action, dict):
+            _reject('shape')
             continue
         evidence = _grounded_evidence(raw_action, surface)
         if not evidence:
+            _reject('evidence')
             continue
         kind = str(raw_action.get('kind') or '').strip().casefold()
         if kind not in {'new', 'update', 'reinforce'}:
+            _reject('kind')
+            continue
+        # Corrections to an existing item carry their own intent (the user is
+        # sharpening something already saved); brand-new items need the
+        # source message itself to show durable intent.
+        if kind == 'new' and not _evidence_has_durable_signal(
+                evidence, user_texts):
+            _reject('no_durable_signal')
             continue
 
         action = dict(raw_action)
@@ -326,6 +381,7 @@ def _validated_actions(actions: list[dict], surface: str,
                     action['text'] = action.get('new_text')
             current = existing_by_id.get(item_id)
             if current is None:
+                _reject('unknown_item')
                 continue
 
         item_type = str(action.get('type') or '').strip()
@@ -339,8 +395,10 @@ def _validated_actions(actions: list[dict], surface: str,
                 'response preferences': 'response_preference',
             }.get(header, '')
         if item_type not in {'identity', 'work_rule', 'response_preference'}:
+            _reject('type')
             continue
         if current is not None and current.get('type') != item_type:
+            _reject('type_change')
             continue
 
         cleaned: dict = {
@@ -354,23 +412,33 @@ def _validated_actions(actions: list[dict], surface: str,
             condition = _clean_context_field(action.get('condition'))
             required_action = _clean_context_field(action.get('action'))
             if not condition or not required_action:
+                _reject('fields')
                 continue
             if not (_field_is_supported(condition, evidence)
                     and _field_is_supported(required_action, evidence)):
+                _reject('unsupported')
                 continue
             cleaned.update({'condition': condition, 'action': required_action})
         else:
             text = _clean_context_field(action.get('text'))
-            if not text or not _field_is_supported(text, evidence):
+            if not text:
+                _reject('fields')
+                continue
+            if not _field_is_supported(text, evidence):
+                _reject('unsupported')
                 continue
             cleaned['text'] = text
 
         candidate = {**(current or {}), **cleaned, 'type': item_type}
         signature = _item_signature(candidate)
         if signature in seen_signatures:
+            _reject('duplicate')
             continue
         accepted.append(cleaned)
         seen_signatures.add(signature)
+    if rejected:
+        logger.debug('[ProfileConsolidate] rejected proposed actions: %s',
+                     rejected)
     return accepted
 
 
@@ -390,7 +458,8 @@ def run_profile_consolidation(messages: list, task: dict | None = None) -> list[
     latest_surface = _recent_surface(messages, user_message_limit=1)
     if not _surface_is_worth_reviewing(latest_surface):
         return []
-    surface = _recent_surface(messages)
+    user_texts = _recent_user_texts(messages)
+    surface = '\n\n'.join(f'[user] {text}' for text in user_texts)
 
     # Identity scope captured onto the task at creation (the daemon thread has
     # no request context). '' → the single global profile (open/private mode).
@@ -435,7 +504,7 @@ def run_profile_consolidation(messages: list, task: dict | None = None) -> list[
         return []
 
     actions = _validated_actions(
-        _parse_actions(content or ''), surface, context['items'])
+        _parse_actions(content or ''), surface, context['items'], user_texts)
     if not actions:
         return []
 
@@ -478,6 +547,11 @@ def run_profile_consolidation(messages: list, task: dict | None = None) -> list[
                 existing = up.load_context(scope)['items']
                 if any(all(item.get(k) == raw.get(k) for k in raw)
                        for item in existing):
+                    continue
+                # A delete tombstone means the user explicitly removed this
+                # content; re-learning it would fight their decision.
+                if any(all(item.get(k) == raw.get(k) for k in raw)
+                       for item in up.deleted_context_items(scope)):
                     continue
                 res = up.create_context_item(
                     raw, scope, source='assistant', record_change=True)

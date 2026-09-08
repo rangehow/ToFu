@@ -103,6 +103,27 @@ class EphemeralSlotTest(unittest.TestCase):
         finally:
             dispose_ephemeral_slot(h)
 
+    def test_v2_responses_protocol_emits_responses_request(self):
+        from lib.llm._sse_core import prepare_request
+        from lib.llm_dispatch.ephemeral import (
+            dispose_ephemeral_slot, mint_ephemeral_slot,
+        )
+        handle = mint_ephemeral_slot(
+            base_url='http://10.0.0.5:8080/v1', api_key='synthetic-key',
+            model_id='responses-model', protocol='openai_responses')
+        try:
+            slot = handle.slot
+            plan = prepare_request(
+                {'model': slot.model, 'messages': [
+                    {'role': 'user', 'content': 'Reply OK'}]},
+                base_url=slot.base_url, api_key=slot.api_key,
+                api_protocol=slot.protocol)
+            self.assertEqual(plan.url, slot.base_url + '/responses')
+            self.assertIn('input', plan.body)
+            self.assertNotIn('messages', plan.body)
+        finally:
+            dispose_ephemeral_slot(handle)
+
     def test_private_host_registers_no_proxy(self):
         from lib import proxy
         from lib.llm_dispatch.ephemeral import (

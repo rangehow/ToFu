@@ -234,6 +234,60 @@ def oauth_device_login():
         logger.error('[OAuth.v1] device-login failed: %s', e, exc_info=True)
         return api_internal_error(e, source='api_v1.oauth.device_login')
 
+_CONSUME_ERROR_STATUS = {
+    'not_authenticated': 401,
+    'account_identity_unavailable': 401,
+    'account_changed': 409,
+    'none_available': 409,
+    'nothing_to_reset': 409,
+    'already_redeemed': 409,
+    'upstream_rejected': 502,
+    'upstream_unavailable': 502,
+    'unresolved': 502,
+}
+
+
+@api_v1_oauth_bp.route('/api/v1/oauth/reset-offer/consume', methods=['POST'])
+@require_auth
+@api_meta(
+    summary='Redeem one earned Codex usage-limit reset',
+    description=(
+        "Consumes one banked rate-limit reset credit for the caller's "
+        'authenticated Codex account. This is the explicitly confirmed, '
+        'idempotent command: the server selects the soonest-expiring '
+        'available credit, persists its ``redeem_request_id`` before the '
+        'upstream spend, and reuses that key on a retry of an ambiguous '
+        'outcome so a credit can never be spent twice by accident. The '
+        'response carries the force-refreshed ``reset_offer`` projection. '
+        'Failure codes: ``none_available``/``nothing_to_reset``/'
+        '``already_redeemed`` (409, nothing was spent), ``unresolved``/'
+        '``upstream_*`` (502 — for ``unresolved`` the credit may have been '
+        'spent; the refreshed projection is the reconciliation).'
+    ),
+    tags=['capabilities'],
+)
+def oauth_reset_offer_consume():
+    parse_body()
+    owner_user_id = request_principal().require_owner(
+        context='Codex reset consume')
+    try:
+        from lib.oauth.codex_usage import consume_codex_usage_reset
+        result = consume_codex_usage_reset(user_id=str(owner_user_id))
+    except Exception as e:
+        logger.error('[OAuth.v1] reset-offer consume failed: %s', e,
+                     exc_info=True)
+        return api_internal_error(e, source='api_v1.oauth.reset_offer_consume')
+    if result.get('ok'):
+        from lib.log import audit_log
+        audit_log(
+            'oauth_codex_reset_consumed',
+            owner_user_id=str(owner_user_id),
+            windows_reset=result.get('windows_reset'),
+        )
+        return api_ok(result)
+    error = str(result.get('error') or 'consume_failed')
+    return api_payload(result, _CONSUME_ERROR_STATUS.get(error, 500))
+
 # ── Egress agent pin selector (multi-agent deployments) ─────────────
 
 

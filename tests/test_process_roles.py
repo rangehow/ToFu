@@ -56,6 +56,7 @@ def test_route_background_owners_are_role_scoped(monkeypatch):
 
     import lib.knowledge.enrichment as enrichment
     import lib.oauth.codex_catalog as codex_catalog
+    import lib.oauth.outbound as oauth_outbound
     import lib.scheduler.manager as scheduler_manager
     import routes
     import routes.plugin_registry as plugins
@@ -75,6 +76,9 @@ def test_route_background_owners_are_role_scoped(monkeypatch):
             calls.append('scheduler'),
         )[-1])
     monkeypatch.setattr(
+        oauth_outbound, 'reconcile_oauth_providers',
+        lambda: calls.append('oauth-reconcile'))
+    monkeypatch.setattr(
         codex_catalog, 'start_codex_catalog_refresher',
         lambda: calls.append('codex') or True)
     monkeypatch.setattr(
@@ -91,7 +95,7 @@ def test_route_background_owners_are_role_scoped(monkeypatch):
     api_app = App()
     assert routes.start_registered_background_services(
         api_app, process_role='api') == 1
-    assert calls == ['codex']
+    assert calls == ['oauth-reconcile', 'codex']
 
     calls.clear()
     scheduler_app = App()
@@ -146,6 +150,7 @@ def test_distributed_api_role_does_not_start_ownerless_codex_catalog(
     from types import SimpleNamespace
 
     import lib.oauth.codex_catalog as codex_catalog
+    import lib.oauth.outbound as oauth_outbound
     import routes
     import runtime_guards
 
@@ -153,6 +158,9 @@ def test_distributed_api_role_does_not_start_ownerless_codex_catalog(
     monkeypatch.setattr(
         runtime_guards, 'load_deployment_configuration',
         lambda: SimpleNamespace(mode='distributed'))
+    monkeypatch.setattr(
+        oauth_outbound, 'reconcile_oauth_providers',
+        lambda: calls.append('oauth-reconcile'))
     monkeypatch.setattr(
         codex_catalog, 'start_codex_catalog_refresher',
         lambda: calls.append('codex') or True)

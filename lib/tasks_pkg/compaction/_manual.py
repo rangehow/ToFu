@@ -4,10 +4,9 @@ Unlike the automatic L2 path (``_layer2.execute_compact_tool``), which is
 *ephemeral* and rewrites only the in-flight request, this module implements the
 **persistent** manual compaction the user asks for with a button. It rewrites
 the conversation's actual transcript authority so every subsequent turn loads
-a small context: a legacy conversation uses a message-aggregate revision CAS;
-a turn-native conversation compiles the before/after projections into the
-receipt-backed atomic ``turn.compact`` command. It never overwrites the frozen
-legacy placeholder after Turn rows become authoritative.
+a small context by compiling before/after projections into the receipt-backed
+atomic ``turn.compact`` command. It never overwrites the frozen legacy
+placeholder after Turn rows become authoritative.
 
 It REUSES the L2 summary engine verbatim (``_generate_query_aware_summary`` +
 the compact state-receipt prompt + objective-anchor protection +
@@ -74,6 +73,7 @@ from lib.tasks_pkg.compaction._layer2 import (
     _objective_anchor_index,
     _split_cold_rounds,
 )
+from lib.tasks_pkg.compaction._history import is_human_message
 from lib.tasks_pkg.compaction._tokens import (
     _estimate_total_tokens,
     _get_context_limit,
@@ -194,8 +194,7 @@ def _raw_turn_boundary(
         caller short-circuits (nothing to compact).
     """
     config = config or {}
-    user_idx = [i for i, m in enumerate(raw_messages)
-                if isinstance(m, dict) and m.get('role') == 'user']
+    user_idx = [i for i, m in enumerate(raw_messages) if is_human_message(m)]
     if not user_idx:
         return len(raw_messages)
 
@@ -225,12 +224,69 @@ def _raw_turn_boundary(
     return boundary
 
 
+def _complete_raw_round(round_value) -> bool:
+    return (isinstance(round_value, dict)
+            and bool(round_value.get('toolCallId'))
+            and 'toolContent' in round_value
+            and round_value.get('toolContent') is not None
+            and round_value.get('status') not in ('running', 'pending'))
+
+
+def _select_global_hot_rounds(raw_messages, *, config, budget_tokens):
+    """Choose a chronological tail, charging enclosing user shells as needed."""
+    candidates = []
+    shells = []
+    user_start = None
+    incomplete_start = None
+    for index, message in enumerate(raw_messages):
+        copied = dict(message)
+        if is_human_message(message):
+            user_start = index
+        if message.get('role') == 'assistant':
+            retained = []
+            for round_index, value in enumerate(message.get('toolRounds') or []):
+                if not _complete_raw_round(value):
+                    retained.append(value)
+                    if user_start is not None:
+                        incomplete_start = (user_start if incomplete_start is None
+                                            else min(incomplete_start, user_start))
+                elif value.get('toolName') != 'context_compact' and user_start is not None:
+                    candidates.append((index, round_index, user_start, value))
+            copied['toolRounds'] = retained
+        shells.append(copied)
+    if user_start is None:
+        return set(), len(raw_messages)
+    shell_start = min(user_start, incomplete_start) if incomplete_start is not None else user_start
+    base_tokens = _raw_estimate_tokens(shells[shell_start:], config)
+
+    def cost(descriptor):
+        nonlocal shell_start
+        index, round_index, start, value = descriptor
+        shell_cost = 0
+        if start < shell_start:
+            shell_cost = _raw_estimate_tokens(shells[start:shell_start], config)
+            shell_start = start
+        return shell_cost + _raw_estimate_tokens([{
+            'role': 'assistant', 'content': '', 'toolRounds': [value],
+        }], config)
+
+    _, hot = _split_cold_rounds(
+        candidates, _MANUAL_INTRA_TURN_HOT_ROUNDS,
+        hot_budget_tokens=budget_tokens, base_tokens=base_tokens, token_cost=cost)
+    boundary = min([user_start] + [d[2] for d in hot]
+                   + ([incomplete_start] if incomplete_start is not None else []))
+    return {(d[0], d[1]) for d in hot}, boundary
+
+
 def _collect_reserve_folds(
     reserve_raw: list,
     *,
     config: dict | None = None,
     hot_budget_tokens: int | None = None,
+    selected_hot: set | None = None,
+    raw_offset: int = 0,
 ) -> list:
+
     """档B — intra-turn fold plan for the RESERVE region.
 
     Scans every assistant in the preserved (reserve) region and splits complete
@@ -253,6 +309,21 @@ def _collect_reserve_folds(
     tool_call/result pair.  We edit ONLY that message's ``toolRounds`` list —
     never slice across messages (design §4.1).
     """
+    if selected_hot is not None:
+        folds = []
+        for index, message in enumerate(reserve_raw):
+            if message.get('role') != 'assistant':
+                continue
+            cold, hot = [], []
+            for round_index, value in enumerate(message.get('toolRounds') or []):
+                keep = (not _complete_raw_round(value)
+                        or (index + raw_offset, round_index) in selected_hot)
+                (hot if keep else cold).append(value)
+            if cold:
+                folds.append({'asst_idx': index, 'cold_rounds': cold,
+                              'hot_rounds': hot})
+        return folds
+
     # The legacy/no-budget helper keeps its original per-assistant behavior for
     # compatibility with direct callers. The real planner supplies a budget and
     # uses one chronological round sequence across the entire reserve, matching
@@ -375,10 +446,13 @@ def plan_manual_compaction(
 
     usable = _usable_context(_get_context_limit(task))
     preserve_budget_tokens = max(1, int(usable * _PRESERVE_BUDGET_RATIO))
+    selected_hot, hot_boundary = _select_global_hot_rounds(
+        raw_messages, config=config, budget_tokens=preserve_budget_tokens)
     boundary = _raw_turn_boundary(
         raw_messages, config=config, task=task, max_turns=resolved_max,
         budget_tokens=preserve_budget_tokens)
 
+    boundary = min(boundary, hot_boundary)
     anchor_idx = _objective_anchor_index(raw_messages)
     anchor_msg = None
     if anchor_idx is not None and system_end <= anchor_idx < boundary:
@@ -398,6 +472,8 @@ def plan_manual_compaction(
         reserve_raw,
         config=config,
         hot_budget_tokens=preserve_budget_tokens,
+        selected_hot=selected_hot,
+        raw_offset=boundary,
     )
 
     # ── turns mode: a genuine OLD region exists (reserve folds may also apply) ──
@@ -603,6 +679,15 @@ def compact_conversation_now(
                     log_id, len(raw_messages))
         return {'ok': False, 'error': 'nothing_to_compact'}
 
+    # Freeze the read set BEFORE the slow summary call. Taking this image
+    # afterward lets in-process aliases hide changes to summarized records.
+    boundary = plan['boundary']
+    watermark = _fold_watermark(plan)
+    folded_prefix_fp = _msgs_fingerprint(raw_messages[:watermark])
+
+    human_steering_fp = _msgs_fingerprint([
+        message for message in raw_messages if is_human_message(message)])
+    objective_applied = False
     msgs_before = len(raw_messages)
 
     # ── ARCHIVE the full pre-compaction snapshot BEFORE any rewrite ──
@@ -666,8 +751,7 @@ def compact_conversation_now(
             preserved_turns=_preserved_turns,
             folded_tool_rounds=_folded_rounds,
             objective_anchored=plan.get('anchor_msg') is not None,
-            durable_objective_applied=bool(
-                _extract_summary_objective(summary_text)),
+            durable_objective_applied=objective_applied,
             retained_user_messages=0,
             recent_files=recent_files,
             turn_diff_included=_turn_diff_included,
@@ -727,12 +811,6 @@ def compact_conversation_now(
         )
         return {'ok': False, 'error': 'summary_failed', 'archiveId': archive_id,
                 'receipt': failure_receipt}
-
-    # Same re-pin as the automatic L2 path: an accepted receipt carries the
-    # current effective goal, so keep the autopilot objective pin in step.
-    from lib.tasks_pkg.autopilot_state import _update_objective_from_receipt
-    _update_objective_from_receipt(
-        conv_id, _extract_summary_objective(summary_text), user_id=user_id)
 
     if recent_files:
         file_list = '\n'.join(f'  - {f}' for f in recent_files)
@@ -797,10 +875,6 @@ def compact_conversation_now(
     # ever-fresher tail until it lands makes a bounded burst un-surfaceable as a
     # failure. Only a change WITHIN the folded region is a true conflict → stale;
     # exhausting the budget also yields stale (defensive, not expected in prod).
-    boundary = plan['boundary']
-    watermark = _fold_watermark(plan)
-    folded_prefix_fp = _msgs_fingerprint(raw_messages[:watermark])
-
     budget_sec = manual_reconcile_budget_sec()
     deadline = time.monotonic() + budget_sec
     new_messages = None
@@ -896,6 +970,20 @@ def compact_conversation_now(
         logger.info('[ManualCompact] conv=%s reload→CAS raced (attempt %d, '
                     '%.2fs left) — reconciling against fresher tail',
                     log_id, attempts, max(0.0, deadline - time.monotonic()))
+
+    # The summary can still describe folded history after a new tail arrives,
+    # but it cannot repin a goal derived before a newer human stop/replacement.
+    # Compare the human read set used by the accepted CAS, not a mutable alias
+    # of the original snapshot. The pin remains advisory, never authorization.
+    if _msgs_fingerprint([message for message in cur_messages
+                          if is_human_message(message)]) == human_steering_fp:
+        try:
+            from lib.tasks_pkg.autopilot_state import _update_objective_from_receipt
+            objective = _extract_summary_objective(summary_text)
+            _update_objective_from_receipt(conv_id, objective, user_id=user_id)
+            objective_applied = bool(objective)
+        except Exception as e:
+            logger.debug('[ManualCompact] objective pin update skipped: %s', e)
 
     receipt = _manual_receipt(
         'completed', summary_value=summary_text, summary_generated=True,

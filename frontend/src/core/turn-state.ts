@@ -1,4 +1,5 @@
 import type {
+  ActiveAttemptPhase,
   AttemptEvent as ContractAttemptEvent,
   AttemptRecord as ContractAttemptRecord,
   ConversationQueueItem as ContractConversationQueueItem,
@@ -24,6 +25,7 @@ export type TurnEvent = ContractAttemptEvent;
 export interface TurnSnapshotInput extends UnknownRecord {
   conversationRevision?: number;
   authoritativeFull?: boolean;
+  activeAttemptPhase?: ActiveAttemptPhase;
   turns?: ReadonlyArray<ProjectionTurn>;
   attempts?: ReadonlyArray<AttemptRecord>;
   queueItems?: ReadonlyArray<ConversationQueueItem>;
@@ -208,6 +210,11 @@ function putAttempt(next: TurnState, attempt: AttemptRecord | null | undefined):
   next.attemptsById[attempt.attemptId] = { ...previous, ...incoming };
 }
 
+// Recovery is authoritative; unknown-turn transport data is only a bounded
+// bridge until that snapshot arrives, never a second replay log.
+const MAX_PENDING_EVENTS = 256;
+const MAX_PENDING_EVENT_BYTES = 1024 * 1024;
+
 function reduceEvent(
   next: TurnState,
   event: TurnEvent | null | undefined,
@@ -220,7 +227,19 @@ function reduceEvent(
     const queue = next.pendingEventsByTurn[event.turnId]
       ?? (next.pendingEventsByTurn[event.turnId] = []);
     if (!queue.some((item) => item.attemptId === event.attemptId
-        && Number(item.seq) === Number(event.seq))) queue.push(event);
+        && Number(item.seq) === Number(event.seq))) {
+      const pending = Object.values(next.pendingEventsByTurn).flatMap(
+        (events) => events ?? [],
+      );
+      if (pending.length < MAX_PENDING_EVENTS
+          && JSON.stringify([...pending, event]).length <= MAX_PENDING_EVENT_BYTES / 2) {
+        queue.push(event);
+      } else {
+        // Drop reconstructible transport data, not durable Turn state. The
+        // existing recovery callback below supplies the missing authority.
+        next.pendingEventsByTurn = Object.create(null) as Record<string, TurnEvent[]>;
+      }
+    }
     onUnknownTurn?.(event.turnId);
     return;
   }
@@ -236,10 +255,10 @@ function reduceEvent(
     && turnState?.turnId === event.turnId
     && turnState.currentAttemptId === event.attemptId;
   if (turn.currentAttemptId !== event.attemptId && !adoptsAttempt) return;
-  for (const relatedTurn of payload.turns ?? []) putTurn(next, relatedTurn);
-  for (const relatedAttempt of payload.attempts ?? []) putAttempt(next, relatedAttempt);
   const previousAttempt = next.attemptsById[event.attemptId]
     ?? { attemptId: event.attemptId };
+  if (previousAttempt.turnId && previousAttempt.turnId !== event.turnId) return;
+  if (previousAttempt.status === 'superseded') return;
   if (Number(event.seq || 0) <= Number(previousAttempt.lastSeq || 0)) return;
   const incomingRevision = Number(event.projectionRevision || 0);
   if (incomingRevision <= Number(turn.projectionRevision || 0)) {
@@ -295,6 +314,10 @@ function reduceEvent(
       || event.type === 'interaction_request') {
     updated.status = 'running';
   }
+  // Related authorities are part of the accepted event, not a bypass around
+  // duplicate, stale-attempt or patch-base validation.
+  for (const relatedTurn of payload.turns ?? []) putTurn(next, relatedTurn);
+  for (const relatedAttempt of payload.attempts ?? []) putAttempt(next, relatedAttempt);
   next.turnsById[event.turnId] = updated;
   next.attemptsById[event.attemptId] = {
     ...previousAttempt,
@@ -311,6 +334,10 @@ function reduceEvent(
   // (first content delta / terminal frame).
   if ('phase' in payload) {
     next.livePhase = (payload as UnknownRecord).phase ?? null;
+  }
+  if (event.type === 'terminal_settlement' || adoptsAttempt) {
+    next.livePhase = event.type === 'terminal_settlement' ? null
+      : (payload as UnknownRecord).phase ?? null;
   }
   delete next.commandPending[event.turnId];
 }
@@ -404,6 +431,9 @@ export function reduceTurnState(
         < Number(next.conversationRevision || 0)) return next;
     next.conversationRevision = Number(snapshot.conversationRevision || 0);
     if (snapshot.authoritativeFull) {
+
+      next.livePhase = null;
+      next.liveRoundUsageByTurn = Object.create(null) as Record<string, LiveRoundUsage>;
       next.turnsById = Object.create(null) as Record<string, ProjectionTurn>;
       next.laneOrder = Object.create(null) as Record<string, string[]>;
       next.historyByLane = Object.create(null) as Record<
@@ -424,6 +454,17 @@ export function reduceTurnState(
     );
     for (const turn of snapshot.turns ?? []) putTurn(next, turn);
     for (const attempt of snapshot.attempts ?? []) putAttempt(next, attempt);
+    if (snapshot.authoritativeFull && snapshot.activeAttemptPhase) {
+      const active = snapshot.activeAttemptPhase;
+      const turn = next.turnsById[active.turnId];
+      const attempt = next.attemptsById[active.attemptId];
+      if (turn?.laneId === 'main' && turn.status === 'running'
+          && turn.currentAttemptId === active.attemptId
+          && attempt?.turnId === turn.turnId && attempt.status === 'running'
+          && active.projectionRevision <= Number(turn.projectionRevision || 0)) {
+        next.livePhase = active.phase;
+      }
+    }
     const pageWindow = snapshot.turnWindow;
     if (pageWindow) {
       next.historyByLane[pageWindow.laneId] = {
@@ -532,19 +573,19 @@ export function createTurnStore(
 ): TurnStore {
   let state = createTurnState(conversationId);
   const listeners = new Set<(state: TurnState) => void>();
-  const resyncing = new Set<string>();
+  let resyncing = false;
   let store: TurnStore;
 
   const requestResync = (turnId: string): void => {
-    if (resyncing.has(turnId) || !options.fetchSnapshot) return;
-    resyncing.add(turnId);
+    if (resyncing || !options.fetchSnapshot) return;
+    resyncing = true;
     Promise.resolve()
       .then(() => options.fetchSnapshot?.())
       .then((snapshot) => {
         if (snapshot) store.dispatch({ type: 'snapshot', snapshot });
       })
       .catch((error: unknown) => options.onResyncError?.(error, turnId))
-      .finally(() => resyncing.delete(turnId));
+      .finally(() => { resyncing = false; });
   };
 
   const dispatch = (action: TurnAction): TurnState => {

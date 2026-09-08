@@ -38,7 +38,7 @@
   transition: transform 0.15s, box-shadow 0.15s;
 }
 .mt-provider-card:hover {
-  transform: translate(-1px, -1px);
+  transform: translateY(-1px);
   box-shadow: var(--s-shadow-sm);
 }
 .mt-provider-card-header {
@@ -79,23 +79,28 @@
   gap: 5px;
   padding: 6px 14px;
   font-size: 12.5px;
-  font-weight: 600;
-  color: var(--s-white);
-  background: var(--accent-color, #d4a853);
-  border: 2px solid var(--s-ink);
+  font-weight: 700;
+  color: var(--s-ink);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
+  background: linear-gradient(180deg, #e3ba66 0%, #cfa14a 52%, #bd8f39 100%);
+  border: 1px solid #a87d2e;
   border-radius: 8px;
-  box-shadow: 2px 2px 0 var(--s-ink);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 1px 2px rgba(26, 24, 20, 0.14), 0 4px 12px rgba(201, 153, 63, 0.26);
   text-decoration: none;
-  transition: transform 0.1s, box-shadow 0.1s;
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
   white-space: nowrap;
 }
 .mt-apply-link:hover {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--s-ink);
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, #ecc576 0%, #d8a951 52%, #c69840 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 2px 4px rgba(26, 24, 20, 0.15), 0 8px 20px rgba(201, 153, 63, 0.32);
 }
 .mt-apply-link:active {
-  transform: translate(2px, 2px);
-  box-shadow: none;
+  transform: translateY(1px);
+  background: linear-gradient(180deg, #c89940 0%, #bd8f39 100%);
+  box-shadow: inset 0 2px 5px rgba(122, 84, 20, 0.32), 0 1px 2px rgba(26, 24, 20, 0.10);
 }
 .mt-provider-card-body {
   padding: 14px 16px;
@@ -118,12 +123,12 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin: 12px 0;
+  margin: 8px 0 10px;
 }
 .oauth-responsibility-item {
   display: grid;
-  gap: 4px;
-  padding: 11px 12px;
+  gap: 3px;
+  padding: 8px 12px;
   border: var(--s-border);
   border-radius: var(--s-radius);
   background: var(--s-white);
@@ -143,7 +148,7 @@
 .oauth-responsibility-item strong {
   color: var(--s-ink);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.45;
 }
 @media (max-width: 620px) {
   .oauth-responsibility { grid-template-columns: 1fr; }
@@ -154,16 +159,16 @@
   display: flex;
   align-items: stretch;
   flex-wrap: wrap;
-  gap: 8px;
-  margin: 10px 0 12px;
+  gap: 6px;
+  margin: 8px 0 10px;
 }
 .oauth-step {
   flex: 1;
   min-width: 150px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 7px 10px;
   background: var(--s-white);
   border: var(--s-border);
   border-radius: var(--s-radius);
@@ -171,19 +176,19 @@
 }
 .oauth-step-num {
   flex-shrink: 0;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--s-ink);
   color: var(--s-white);
   font-weight: 800;
-  font-size: 12px;
+  font-size: 11px;
   border-radius: 50%;
 }
-.oauth-step-title { font-size: 12.5px; font-weight: 800; color: var(--s-ink); }
-.oauth-step-sub { font-size: 11.5px; color: var(--s-muted); margin-top: 1px; line-height: 1.4; }
+.oauth-step-title { font-size: 12px; font-weight: 800; color: var(--s-ink); }
+.oauth-step-sub { font-size: 11px; color: var(--s-muted); margin-top: 1px; line-height: 1.35; }
 .oauth-step-arrow { align-self: center; color: var(--s-muted); font-weight: 800; }
 
 /* China-access banner — same amber language as .stg-oauth-note */
@@ -201,16 +206,17 @@
 .oauth-provider-card {
   border: var(--s-border);
   border-radius: var(--s-radius);
-  padding: 16px;
-  margin-bottom: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
   background: var(--s-white);
   box-shadow: var(--s-shadow-sm);
 }
 .oauth-provider-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin-bottom: 4px;
 }
 .oauth-provider-name {
   font-weight: 800;
@@ -245,22 +251,28 @@
 .oauth-provider-desc {
   font-size: 12px;
   color: var(--s-muted);
-  margin: 4px 0 10px;
-  line-height: 1.5;
+  margin: 2px 0 8px;
+  line-height: 1.45;
 }
-.oauth-provider-desc {
-  font-size: 12px;
-  color: var(--s-muted);
-  margin: 4px 0 10px;
-  line-height: 1.5;
+/* Email + egress share one meta row; display:none children leave no gap,
+   and an all-hidden row collapses instead of leaking stray margins. */
+.oauth-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 6px;
 }
+.oauth-meta-row:not(:empty) { margin-bottom: 8px; }
 .oauth-provider-info {
   font-size: 12px;
   color: var(--s-ink);
-  margin-bottom: 10px;
-  padding: 6px 10px;
+  margin: 0;
+  padding: 4px 10px;
   background: var(--s-cream);
   border-radius: var(--s-radius);
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
 }
 .oauth-email {
   font-family: var(--font-mono, monospace);
@@ -270,8 +282,9 @@
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  margin: 0 0 10px;
-  padding: 7px 10px;
+  margin: 0;
+  padding: 4px 10px;
+  flex: 1 1 240px;
   border: 1px solid var(--s-border-color, #ccc);
   border-radius: var(--s-radius);
   background: var(--s-cream);
@@ -299,8 +312,8 @@
    like the tofu-bar convention: white track + 1.5px ink border, gold fill
    (same as [data-theme="tofu"] .upd-restart-bar in styles.css). */
 .oauth-quota {
-  margin-bottom: 10px;
-  padding: 8px 12px 10px;
+  margin-bottom: 8px;
+  padding: 6px 10px 8px;
   background: var(--s-cream);
   border: var(--s-border-sm);
   box-shadow: var(--s-shadow-xs);
@@ -313,7 +326,7 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--s-ink-soft);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .oauth-quota-pending {
   color: var(--s-muted);
@@ -361,14 +374,14 @@
   transition: width 0.3s ease;
 }
 .oauth-quota-source {
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 10px;
   line-height: 1.4;
   color: var(--s-muted);
 }
 .oauth-reset-offer {
-  margin: 0 0 10px;
-  padding: 10px 12px;
+  margin: 0 0 8px;
+  padding: 7px 10px;
   border: 1.5px solid var(--s-gold-dim);
   background: rgba(201, 153, 63, .1);
   box-shadow: var(--s-shadow-xs);
@@ -385,7 +398,7 @@
 .oauth-reset-offer-title {
   font-size: 12px;
   font-weight: 850;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .oauth-reset-offer-copy,
 .oauth-reset-offer-hint {
@@ -398,6 +411,9 @@
   font-family: var(--font-mono, monospace);
   font-size: 10px;
 }
+.oauth-reset-offer-actions {
+  margin-top: 8px;
+}
 .oauth-reset-offer-hint {
   margin-top: 5px;
   color: var(--s-ink-soft);
@@ -405,6 +421,7 @@
 .oauth-provider-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 .oauth-provider-actions .btn-small,
@@ -412,31 +429,53 @@
   padding: 6px 16px;
   font-size: 12px;
   font-weight: 700;
-  border: var(--s-border);
+  border: 1px solid var(--s-line-strong);
   border-radius: var(--s-radius);
   cursor: pointer;
-  box-shadow: var(--s-shadow-xs);
-  transition: transform 0.1s, box-shadow 0.1s;
+  background: linear-gradient(180deg, #ffffff 0%, #f6f1e3 100%);
+  color: var(--s-ink);
+  box-shadow: inset 0 1px 0 #ffffff, 0 1px 2px rgba(26, 24, 20, 0.10), 0 3px 8px rgba(26, 24, 20, 0.06);
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
 }
 .oauth-provider-actions .btn-small:hover,
 .oauth-manual-fallback .btn-small:hover {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 #ffffff, 0 2px 4px rgba(26, 24, 20, 0.12), 0 8px 18px rgba(26, 24, 20, 0.09);
+}
+.oauth-provider-actions .btn-small:active,
+.oauth-manual-fallback .btn-small:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(26, 24, 20, 0.12), 0 1px 2px rgba(26, 24, 20, 0.08);
 }
 .oauth-provider-actions .btn-primary,
 .oauth-manual-fallback .btn-primary {
-  background: var(--s-ink);
+  background: linear-gradient(180deg, #3d362c 0%, #1a1814 100%);
+  border-color: #0c0b09;
   color: var(--s-white);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 1px 2px rgba(26, 24, 20, 0.18),
+    0 4px 12px rgba(26, 24, 20, 0.22);
+}
+.oauth-provider-actions .btn-primary:hover,
+.oauth-manual-fallback .btn-primary:hover {
+  background: linear-gradient(180deg, #4a4237 0%, #221f1a 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 2px 4px rgba(26, 24, 20, 0.18),
+    0 8px 20px rgba(26, 24, 20, 0.26);
 }
 .oauth-provider-actions .btn-danger,
 .oauth-manual-fallback .btn-danger {
-  background: #dc3545;
+  background: linear-gradient(180deg, #f26d6d 0%, #dc2626 55%, #c11f1f 100%);
   color: #fff;
-  border-color: #dc3545;
+  border-color: #b91c1c;
+  text-shadow: 0 1px 0 rgba(122, 16, 16, 0.30);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.30), 0 1px 2px rgba(26, 24, 20, 0.14),
+    0 4px 12px rgba(220, 38, 38, 0.26);
 }
-.oauth-manual-fallback .btn-small:not(.btn-primary):not(.btn-danger) {
-  background: var(--s-white);
-  color: var(--s-ink);
+.oauth-provider-actions .btn-danger:hover,
+.oauth-manual-fallback .btn-danger:hover {
+  background: linear-gradient(180deg, #f57f7f 0%, #e23232 55%, #c92424 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34), 0 2px 4px rgba(26, 24, 20, 0.15),
+    0 8px 20px rgba(220, 38, 38, 0.32);
 }
 .oauth-manual-fallback {
   margin-top: 10px;
@@ -780,8 +819,8 @@
 }
 .mcp-search:focus {
   outline: none;
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 var(--s-ink);
+  border-color: var(--s-gold);
+  box-shadow: 0 0 0 3px var(--s-gold-glow);
 }
 .mcp-search::placeholder { color: var(--s-ink-soft); opacity: 0.7; }
 /* ── Category pills ── */
@@ -810,16 +849,16 @@
 .mcp-cat-pill:hover {
   background: var(--s-cream);
   color: var(--s-ink);
-  transform: translate(-1px, -1px);
-  box-shadow: 2px 2px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .mcp-cat-pill.active {
-  background: var(--s-ink);
-  color: var(--s-white);
-  border-color: var(--s-ink);
-  box-shadow: 2px 2px 0 var(--s-gold);
+  background: rgba(201, 153, 63, 0.14);
+  color: var(--s-ink);
+  border-color: rgba(201, 153, 63, 0.45);
+  box-shadow: none;
 }
-.mcp-cat-pill.active .mcp-cat-count { color: var(--s-gold); opacity: 1; }
+.mcp-cat-pill.active .mcp-cat-count { color: var(--s-gold-dim); opacity: 1; }
 .mcp-cat-count {
   font-weight: 700;
   font-size: 10px;
@@ -880,15 +919,15 @@
   transition: transform 0.1s, box-shadow 0.1s, border-color 0.1s, color 0.1s;
 }
 .skills-page-btn:hover:not([disabled]):not(.is-active) {
-  border-color: var(--s-ink);
+  border-color: var(--s-line-strong);
   color: var(--s-ink);
-  transform: translate(-1px, -1px);
-  box-shadow: 2px 2px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .skills-page-btn.is-active {
-  background: var(--s-ink);
-  color: var(--s-gold);
-  border-color: var(--s-ink);
+  background: rgba(201, 153, 63, 0.14);
+  color: var(--s-ink);
+  border-color: rgba(201, 153, 63, 0.45);
   cursor: default;
 }
 .skills-page-btn[disabled] { opacity: .35; cursor: not-allowed; }
@@ -913,15 +952,16 @@
   transition: transform 0.1s, box-shadow 0.1s;
 }
 .mcp-app-card:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .mcp-app-card.connected {
   background: linear-gradient(180deg, rgba(201, 153, 63, 0.05) 0%, var(--s-white) 60%);
-  box-shadow: 2px 2px 0 var(--s-gold), var(--s-shadow-xs);
+  border-color: rgba(201, 153, 63, 0.45);
+  box-shadow: var(--s-shadow-xs);
 }
 .mcp-app-card.connected:hover {
-  box-shadow: 3px 3px 0 var(--s-gold), 4px 4px 0 var(--s-ink);
+  box-shadow: var(--s-shadow-sm);
 }
 .mcp-app-card.installed { background: var(--s-cream); }
 /* Icon tile */
@@ -937,12 +977,12 @@
   border: var(--s-border-sm);
   border-radius: var(--s-radius);
   background: var(--s-cream);
-  box-shadow: 2px 2px 0 var(--s-ink);
+  box-shadow: none;
   line-height: 1;
 }
 .mcp-app-card.connected .mcp-app-icon {
   background: var(--s-white);
-  box-shadow: 2px 2px 0 var(--s-gold);
+  box-shadow: none;
 }
 .mcp-app-icon img,
 .mcp-app-icon svg {
@@ -1413,9 +1453,9 @@
 }
 .mcp-install-modal {
   background: var(--s-white);
-  border: 3px solid var(--s-ink);
-  border-radius: var(--s-radius);
-  box-shadow: 8px 8px 0 var(--s-ink);
+  border: 1px solid rgba(26, 24, 20, 0.18);
+  border-radius: var(--s-radius-lg);
+  box-shadow: 0 24px 70px rgba(26, 24, 20, 0.3), 0 6px 22px rgba(26, 24, 20, 0.14);
   width: 420px;
   max-width: 90vw;
   max-height: 90vh;
@@ -1499,7 +1539,7 @@
   background: var(--s-white);
   color: var(--s-ink);
 }
-.mcp-env-input:focus { outline: 2px solid var(--s-ink); outline-offset: -1px; }
+.mcp-env-input:focus { outline: none; border-color: var(--s-gold); box-shadow: 0 0 0 3px var(--s-gold-glow); }
 .mcp-env-select {
   width: 100%;
   padding: 5px 8px;
@@ -1510,20 +1550,20 @@
   background: var(--s-white);
   color: var(--s-ink);
 }
-.mcp-env-select:focus { outline: 2px solid var(--s-ink); outline-offset: -1px; }
+.mcp-env-select:focus { outline: none; border-color: var(--s-gold); box-shadow: 0 0 0 3px var(--s-gold-glow); }
 /* ── Skills Settings tab ── App-Store layout (brutalist tofu) ── */
 /* Header count badges — tofu stamp chips. Same markup lives in the MCP tab
  * header, so both store tabs get the same chip language here. (The shared
  * .stg-badge indigo/green pair in styles.css is for provider cards; the
  * store header overrides it — settings.css loads after styles.css.) */
 .mcp-store-header-title .stg-badge{border:var(--s-border-sm);background:var(--s-white);color:var(--s-ink-soft);box-shadow:none;border-radius:var(--s-radius);text-transform:none;letter-spacing:.02em}
-/* Scope segmented control — cream track + ink active block with the gold
- * offset shadow, echoing .mcp-cat-pill.active (one 'active' language per
- * panel). Shared with the MCP tab's scope control (same classes). */
+/* Scope segmented control — cream track + raised white active segment
+ * (macOS segmented-control register). Shared with the MCP tab's scope
+ * control (same classes). */
 .skills-scope-tabs{display:inline-flex;gap:3px;padding:3px;background:var(--s-cream);border:var(--s-border-sm);border-radius:var(--s-radius);box-shadow:var(--s-shadow-xs);align-items:center}
-.skills-scope-tab{padding:5px 14px;border:1.5px solid transparent;background:transparent;color:var(--s-ink-soft);font-size:11px;font-weight:800;letter-spacing:.03em;border-radius:var(--s-radius);cursor:pointer;transition:background .1s,color .1s,box-shadow .1s;font-family:inherit;line-height:1.2}
+.skills-scope-tab{padding:5px 14px;border:1px solid transparent;background:transparent;color:var(--s-ink-soft);font-size:11px;font-weight:800;letter-spacing:.03em;border-radius:var(--s-radius);cursor:pointer;transition:background .1s,color .1s,box-shadow .1s,border-color .1s;font-family:inherit;line-height:1.2}
 .skills-scope-tab:hover{color:var(--s-ink);background:var(--s-skin)}
-.skills-scope-tab.active{background:var(--s-ink);color:var(--s-white);border-color:var(--s-ink);box-shadow:2px 2px 0 var(--s-gold)}
+.skills-scope-tab.active{background:var(--s-white);color:var(--s-ink);border-color:var(--s-line-strong);box-shadow:var(--s-shadow-xs)}
 /* Cross-link to memory creation — a quiet secondary action, visually
  * separated from the scope control it used to masquerade as. */
 .skills-intro{margin:2px 0 10px}
@@ -1531,7 +1571,7 @@
  * lift, gold fill while a file is held over it. */
 .skills-drop-zone{display:flex;align-items:center;justify-content:center;gap:10px;padding:13px 18px;margin:2px 0 14px;border:1.5px dashed rgba(26,24,20,.35);border-radius:var(--s-radius);color:var(--s-ink-soft);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s ease;background:var(--s-white)}
 .skills-drop-zone svg{color:var(--s-gold-dim);flex-shrink:0}
-.skills-drop-zone:hover{border-color:var(--s-ink);color:var(--s-ink);background:var(--s-cream);transform:translate(-1px,-1px);box-shadow:var(--s-shadow-xs)}
+.skills-drop-zone:hover{border-color:var(--s-ink);color:var(--s-ink);background:var(--s-cream);transform:translateY(-1px);box-shadow:var(--s-shadow-xs)}
 .skills-drop-zone.is-dragging{border-style:solid;border-color:var(--s-gold-dim);background:var(--s-gold-glow);color:var(--s-ink);transform:none;box-shadow:var(--s-shadow-xs)}
 .skills-drop-zone-text{pointer-events:none}
 /* Skill card uses mcp-app-card as base; add skill-specific accents.
@@ -1562,12 +1602,12 @@
 .skill-env-state.is-missing{color:#b3462e}
 .skill-env-editor{display:flex;gap:6px;align-items:center;padding:4px 0 2px}
 .skill-env-input{flex:1;min-width:0;padding:5px 8px;font-size:11px;border:var(--s-border-sm);border-radius:var(--s-radius);background:var(--s-white);color:var(--s-ink)}
-.skill-env-input:focus{outline:2px solid var(--s-ink);outline-offset:-1px}
+.skill-env-input:focus{outline:none;border-color:var(--s-gold);box-shadow:0 0 0 3px var(--s-gold-glow)}
 /* Installed state — same gold language as .mcp-app-card.connected: the
  * card reads 'already yours' without the old green wash. */
-.mcp-app-card.is-installed{background:linear-gradient(180deg,rgba(201,153,63,.06) 0%,var(--s-white) 60%);box-shadow:2px 2px 0 var(--s-gold),var(--s-shadow-xs)}
-.mcp-app-card.is-installed:hover{box-shadow:3px 3px 0 var(--s-gold),4px 4px 0 var(--s-ink)}
-.mcp-app-card .skill-installed-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:var(--s-radius);background:var(--s-ink);color:var(--s-gold);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;align-self:center;font-family:'JetBrains Mono',monospace}
+.mcp-app-card.is-installed{background:linear-gradient(180deg,rgba(201,153,63,.06) 0%,var(--s-white) 60%);border-color:rgba(201,153,63,.45);box-shadow:var(--s-shadow-xs)}
+.mcp-app-card.is-installed:hover{box-shadow:var(--s-shadow-sm)}
+.mcp-app-card .skill-installed-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border:1px solid rgba(201,153,63,.4);border-radius:var(--s-radius);background:rgba(201,153,63,.14);color:var(--s-gold-dim);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;align-self:center;font-family:'JetBrains Mono',monospace}
 /* Skills file browser list */
 .skills-files-modal{max-width:640px;max-height:80vh;max-height:calc(var(--vh100,100vh)*0.8);display:flex;flex-direction:column}
 .skills-files-list{flex:1;overflow-y:auto;margin:12px 0;padding:6px 0;border:var(--s-border-sm);border-radius:var(--s-radius);background:var(--s-white);max-height:50vh;max-height:calc(var(--vh100,100vh)*0.5)}
@@ -1778,12 +1818,12 @@
 .tool-discovery-card {
   margin: 12px 0 16px;
   padding: 15px;
-  border: 1.5px solid color-mix(in srgb, var(--s-gold, #b98a2f) 55%, var(--s-ink, #2a2a2a));
-  border-radius: var(--s-radius, 10px);
+  border: 1px solid color-mix(in srgb, var(--s-gold, #b98a2f) 38%, transparent);
+  border-radius: 12px;
   background:
     radial-gradient(circle at 100% 0, color-mix(in srgb, var(--s-gold, #b98a2f) 16%, transparent), transparent 42%),
     var(--s-white, #fff);
-  box-shadow: 3px 3px 0 color-mix(in srgb, var(--s-ink, #2a2a2a) 88%, transparent);
+  box-shadow: 0 1px 2px rgba(26, 24, 20, 0.05), 0 10px 26px rgba(26, 24, 20, 0.08);
 }
 .tool-discovery-head { display: flex; align-items: center; gap: 11px; }
 .tool-discovery-icon {
@@ -1793,12 +1833,12 @@
   width: 34px;
   height: 34px;
   flex: 0 0 34px;
-  border: 1.5px solid var(--s-ink, #2a2a2a);
+  border: 0;
   border-radius: 9px;
-  background: var(--s-ink, #2a2a2a);
+  background: linear-gradient(180deg, #3d362c 0%, #1a1814 100%);
   color: var(--s-gold, #f0c66b);
   font: 800 16px/1 'JetBrains Mono', ui-monospace, monospace;
-  box-shadow: 2px 2px 0 var(--s-gold, #b98a2f);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 2px 6px rgba(26, 24, 20, 0.30), 0 0 0 3px rgba(201, 153, 63, 0.16);
 }
 .tool-discovery-title { color: var(--s-ink, #2a2a2a); font-size: 14px; font-weight: 900; }
 .tool-discovery-sub { margin-top: 2px; color: var(--s-ink-soft, #6b6250); font-size: 11.5px; line-height: 1.45; }
@@ -1870,7 +1910,7 @@
 .tool-state-dot.is-blocked { background: #94a3b8; box-shadow: 0 0 0 2px rgba(148, 163, 184, .16); }
 
 @media (max-width: 620px) {
-  .tool-discovery-card { padding: 13px; box-shadow: 2px 2px 0 var(--s-ink, #2a2a2a); }
+  .tool-discovery-card { padding: 13px; }
   .tool-discovery-flow { grid-template-columns: 1fr; gap: 5px; }
   .tool-discovery-flow > i { transform: rotate(90deg); justify-self: center; line-height: 1; }
 }
@@ -2074,7 +2114,8 @@
 .auth-src-state-dot {
   flex: none;
   width: 12px; height: 12px;
-  border: 2px solid var(--s-ink);
+  border: 1.5px solid var(--s-line-strong);
+  border-radius: 50%;
   background: var(--s-skin);
 }
 .auth-src-state-dot.on     { background: var(--s-done); }
@@ -2114,11 +2155,20 @@
   box-shadow: var(--s-shadow-xs);
   transition: transform .1s ease, box-shadow .1s ease, background .1s ease;
 }
-.auth-src-btn:hover  { transform: translate(-1px,-1px); box-shadow: 3px 3px 0 var(--s-ink); }
-.auth-src-btn:active { transform: translate(1px,1px); box-shadow: none; }
+.auth-src-btn:hover  { transform: translateY(-1px); box-shadow: var(--s-shadow-sm); }
+.auth-src-btn:active { transform: translateY(1px); box-shadow: none; }
 .auth-src-btn.primary {
-  background: var(--s-gold);
+  background: linear-gradient(180deg, #e3ba66 0%, #cfa14a 52%, #bd8f39 100%);
+  border-color: #a87d2e;
   color: var(--s-ink);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 1px 2px rgba(26, 24, 20, 0.14), 0 4px 12px rgba(201, 153, 63, 0.26);
+}
+.auth-src-btn.primary:hover {
+  background: linear-gradient(180deg, #ecc576 0%, #d8a951 52%, #c69840 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 2px 4px rgba(26, 24, 20, 0.15), 0 8px 20px rgba(201, 153, 63, 0.32);
 }
 .auth-src-btn.ghost  { background: var(--s-cream); }
 .auth-src-btn.sm     { padding: 5px 11px; font-size: 11.5px; }
@@ -2727,7 +2777,8 @@
 .priv-host-dot {
   flex: none;
   width: 12px; height: 12px;
-  border: 2px solid var(--s-ink);
+  border: 1.5px solid var(--s-line-strong);
+  border-radius: 50%;
   background: var(--s-skin);
 }
 .priv-host-dot.on  { background: var(--s-done); }
@@ -2753,9 +2804,21 @@
   box-shadow: var(--s-shadow-xs);
   transition: transform .1s ease, box-shadow .1s ease, background .1s ease;
 }
-.priv-host-btn:hover  { transform: translate(-1px,-1px); box-shadow: 3px 3px 0 var(--s-ink); }
-.priv-host-btn:active { transform: translate(1px,1px); box-shadow: none; }
-.priv-host-btn.primary { background: var(--s-gold); color: var(--s-ink); }
+.priv-host-btn:hover  { transform: translateY(-1px); box-shadow: var(--s-shadow-sm); }
+.priv-host-btn:active { transform: translateY(1px); box-shadow: none; }
+.priv-host-btn.primary {
+  background: linear-gradient(180deg, #e3ba66 0%, #cfa14a 52%, #bd8f39 100%);
+  border-color: #a87d2e;
+  color: var(--s-ink);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 1px 2px rgba(26, 24, 20, 0.14), 0 4px 12px rgba(201, 153, 63, 0.26);
+}
+.priv-host-btn.primary:hover {
+  background: linear-gradient(180deg, #ecc576 0%, #d8a951 52%, #c69840 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 2px 4px rgba(26, 24, 20, 0.15), 0 8px 20px rgba(201, 153, 63, 0.32);
+}
 .priv-host-btn.danger  { background: var(--s-white); color: var(--s-blocked); }
 .priv-host-btn.danger:hover { background: var(--s-blocked); color: var(--s-white); }
 .priv-host-add { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
@@ -2931,23 +2994,30 @@
 .search-deny-row input { flex: 1 1 auto; min-width: 0; }
 .search-deny-row .stg-btn-secondary { flex: none; white-space: nowrap; }
 
-/* ── Toggle switch — brutalist hard-edged ── */
+/* ── Toggle switch — same recessed-track / floating-thumb language as
+   .stg-toggle so every switch in the dialog shares one physics. ── */
 .auth-src-switch { flex: none; position: relative; display: inline-block; cursor: pointer; }
 .auth-src-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
 .auth-src-switch-track {
   display: block; width: 42px; height: 24px;
-  background: var(--s-skin);
-  border: 2px solid var(--s-ink);
-  border-radius: 0;
-  transition: background .15s ease;
+  background: linear-gradient(180deg, #ddd6c8 0%, #e9e3d6 100%);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 1.5px 3px rgba(70, 58, 35, 0.22), inset 0 -1px 0 rgba(255, 255, 255, 0.6);
+  transition: background .2s ease, box-shadow .2s ease;
 }
 .auth-src-switch-thumb {
   position: absolute; top: 3px; left: 3px;
-  width: 16px; height: 16px;
-  background: var(--s-ink);
-  transition: transform .15s ease;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #ffffff 0%, #f1ede4 100%);
+  box-shadow: 0 2px 5px rgba(50, 40, 20, 0.3), 0 1px 1.5px rgba(50, 40, 20, 0.18);
+  transition: transform .26s cubic-bezier(.34, 1.45, .64, 1);
 }
-.auth-src-switch input:checked + .auth-src-switch-track { background: var(--s-done); }
+.auth-src-switch input:checked + .auth-src-switch-track {
+  background: linear-gradient(180deg, #0c8a80 0%, #14b8a6 100%);
+  box-shadow: inset 0 1.5px 3px rgba(0, 55, 50, 0.35), inset 0 -1px 0 rgba(255, 255, 255, 0.18);
+}
 .auth-src-switch input:checked + .auth-src-switch-track .auth-src-switch-thumb { transform: translateX(18px); }
 .auth-src-switch input:disabled + .auth-src-switch-track { opacity: .45; cursor: not-allowed; }
 
@@ -3128,11 +3198,15 @@
   transition: transform 0.1s, box-shadow 0.1s;
 }
 .remote-root-add:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
-.remote-root-add:active { transform: translate(1px, 1px); box-shadow: none; }
-/* Model-routing v2 settings: Models are identities; Providers are suppliers. */
+.remote-root-add:active { transform: translateY(1px); box-shadow: none; }
+/* Model-routing v2 settings: Models are identities; Providers are suppliers.
+   The provider card's model supply is managed by the always-on access matrix
+   (07-access-matrix.css); this file carries the card chrome, the shared
+   picker/catalog overlay shell, and the small inline parts (capability chips,
+   structured pricing, status filter chips) the matrix reuses. */
 .stg-v2-intro{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin:0 0 12px;padding:10px 0;border-bottom:1px solid var(--border,#ddd)}
 .stg-v2-intro strong{font-size:13px}
 .stg-v2-intro span,.stg-v2-manager-brand span{color:var(--text-muted,#777);font-size:12px}
@@ -3148,31 +3222,26 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-provider-card-v2 .stg-provider-badges .stg-badge{background:rgba(99,102,241,.12);color:#4f46e5}
 .stg-provider-card-v2 .stg-provider-badges .stg-badge-models{background:rgba(22,163,74,.12);color:#15803d}
 .stg-provider-card-v2 .stg-provider-badges .stg-badge.off{background:rgba(220,38,38,.1);color:#b91c1c}
-.stg-provider-v2-foot{display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:9px 13px;border-top:1px solid var(--s-line,rgba(26,24,20,.08));background:var(--s-cream,#f2ecda)}
 
-/* Expanded body — v0.15.0 layout: name/Base URL fields, one row per
-   credential, and full-width model cards. All rules are card-scoped so the
-   ported legacy classes cannot leak into other settings surfaces. */
+/* Expanded body — name/Base URL fields, one row per credential, and the
+   always-on access matrix. All rules are card-scoped so the ported legacy
+   classes cannot leak into other settings surfaces. */
 /* display:block must be explicit: the legacy class-toggle accordion hides
    .stg-provider-body globally (06-file-changes-settings-shell.css) and the v2
    card expands via native <details open>, never the .expanded class. Closed
    details still suppress rendering via UA behavior. */
 .stg-provider-card-v2 .stg-provider-body{display:block;padding:14px 16px 6px;border-top:1px solid var(--s-line,rgba(26,24,20,.08));background:var(--s-white,#faf8f3)}
 .stg-provider-card-v2 .stg-field-grid{margin-bottom:2px}
+/* Footer row: inline 思维参数格式 label+select left, 启用 toggle and 删除服务商
+   grouped right — a single center-aligned line, so nothing floats at a
+   different baseline. */
+.stg-provider-card-v2 .stg-provider-foot{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px}
+.stg-provider-card-v2 .stg-provider-foot .stg-thinking-field{display:flex;align-items:center;flex:1 1 300px;gap:8px;min-width:230px}
+.stg-provider-card-v2 .stg-thinking-field label{margin:0;white-space:nowrap;cursor:help}
+.stg-provider-card-v2 .stg-thinking-field select{flex:1;min-width:0}
+.stg-provider-card-v2 .stg-provider-foot-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin:0 0 12px auto}
 .stg-provider-card-v2 .stg-models-section{margin-top:14px;padding-top:14px;border-top:1px solid var(--s-line,rgba(26,24,20,.08))}
-.stg-provider-card-v2 .stg-models-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
-.stg-provider-card-v2 .stg-models-title{color:var(--s-ink-soft,#3d362c);font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}
-.stg-provider-card-v2 .stg-model-list{display:flex;flex-direction:column;gap:8px}
-.stg-provider-card-v2 .stg-empty-sm{margin:0;padding:10px 0;color:var(--s-ink-soft,#3d362c);font-size:11px;font-weight:600;text-align:center}
-.stg-provider-card-v2 .stg-mcard{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--s-line,rgba(26,24,20,.08));border-radius:10px;background:#fff;box-shadow:var(--s-shadow-xs,0 1px 2px rgba(26,24,20,.05));transition:border-color .14s,box-shadow .14s}
-.stg-provider-card-v2 .stg-mcard:hover{border-color:var(--s-line-strong,rgba(26,24,20,.15));box-shadow:var(--s-shadow-sm,0 1px 2px rgba(26,24,20,.04),0 3px 8px rgba(26,24,20,.06))}
-.stg-provider-card-v2 .stg-mcard.disabled{opacity:.55;background:rgba(26,24,20,.02)}
-.stg-provider-card-v2 .stg-mcard.disabled .stg-mcard-id{text-decoration:line-through;text-decoration-thickness:1.5px}
-.stg-provider-card-v2 .stg-mcard-icon{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:24px;height:24px;margin-top:1px}
-.stg-provider-card-v2 .stg-mcard-body{flex:1;min-width:0}
-.stg-provider-card-v2 .stg-mcard-main{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.stg-provider-card-v2 .stg-mcard-id{overflow:hidden;color:var(--s-ink,#1a1814);font:800 12px/1.35 'JetBrains Mono',ui-monospace,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
-.stg-provider-card-v2 .stg-mcard-caps{display:flex;align-items:center;gap:4px;margin-top:5px;flex-wrap:wrap}
+/* Capability chips — matrix root-row meta line and picker/catalog rows. */
 .stg-provider-card-v2 .stg-cap,.stg-v2-manager .stg-cap{padding:2px 8px;border:0;border-radius:999px;background:rgba(26,24,20,.06);color:var(--s-ink-soft,#3d362c);font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
 .stg-provider-card-v2 .stg-cap.text,.stg-v2-manager .stg-cap.text{color:#2563eb;background:rgba(96,165,250,.14)}
 .stg-provider-card-v2 .stg-cap.vision,.stg-v2-manager .stg-cap.vision{color:#7c3aed;background:rgba(167,139,250,.14)}
@@ -3180,48 +3249,13 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-provider-card-v2 .stg-cap.image_gen,.stg-v2-manager .stg-cap.image_gen{color:#db2777;background:rgba(244,114,182,.14)}
 .stg-provider-card-v2 .stg-cap.embedding,.stg-v2-manager .stg-cap.embedding{color:#0d9488;background:rgba(45,212,191,.14)}
 .stg-provider-card-v2 .stg-cap.thinking,.stg-v2-manager .stg-cap.thinking{color:#c2410c;background:rgba(251,146,60,.15)}
-.stg-provider-card-v2 .stg-mcard-stat{overflow:hidden;color:var(--s-ink-soft,#3d362c);font-size:10px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
-.stg-provider-card-v2 .stg-mcard-pricing{margin-top:5px;color:var(--s-ink-soft,#3d362c);font:10px/1.45 'JetBrains Mono',ui-monospace,Menlo,monospace}
-.stg-provider-card-v2 .stg-mcard-aliases{margin-top:5px;font:600 10px/1.45 'JetBrains Mono',ui-monospace,Menlo,monospace}
-.stg-provider-card-v2 .stg-cap-toggle{cursor:default}
-.stg-provider-card-v2 .stg-cap-toggle.thinking.off{border:1px dashed color-mix(in srgb,var(--s-ink,#1a1814) 30%,transparent);opacity:.75;color:var(--s-ink-soft,#3d362c);background:transparent}
-.stg-provider-card-v2 .stg-price-label{color:var(--s-ink-soft,#3d362c)}
-.stg-provider-card-v2 .stg-price-val{padding:0 3px;border:1px solid;border-radius:3px;font-weight:800}
-.stg-provider-card-v2 .stg-price-val.in{color:#2563eb;background:rgba(96,165,250,.12);border-color:#2563eb}
-.stg-provider-card-v2 .stg-price-val.out{color:#c2410c;background:rgba(251,146,60,.12);border-color:#c2410c}
-.stg-provider-card-v2 .stg-price-sep{padding:0 4px;color:var(--s-ink-soft,#3d362c)}
-.stg-provider-card-v2 .stg-price-unit{padding-left:6px;color:var(--s-ink-soft,#3d362c);font-size:9px}
-.stg-provider-card-v2 .stg-price-na{color:var(--s-ink-soft,#3d362c);opacity:.7}
-.stg-provider-card-v2 .stg-price-free{color:#16a34a;font-weight:800}
-.stg-provider-card-v2 .stg-aliases-label,.stg-v2-manager .stg-aliases-label{color:var(--s-ink-soft,#3d362c)}
-.stg-provider-card-v2 .stg-alias-chip,.stg-v2-manager .stg-alias-chip{display:inline-flex;align-items:center;gap:3px;margin:1px 4px 1px 0;padding:1px 6px;border:1px solid var(--s-line,rgba(26,24,20,.08));border-radius:6px;background:var(--s-cream,#f2ecda);color:var(--s-gold-dim,#a87d2e)}
-.stg-provider-card-v2 .stg-alias-chip.pending,.stg-v2-manager .stg-alias-chip.pending{border-style:dashed;opacity:.7}
-.stg-provider-card-v2 .stg-alias-x,.stg-v2-manager .stg-alias-x{padding:0 2px;color:var(--s-ink-soft,#3d362c);cursor:pointer;font-weight:800}
-.stg-provider-card-v2 .stg-alias-x:hover,.stg-v2-manager .stg-alias-x:hover{color:#b04c4c}
-.stg-provider-card-v2 .stg-alias-add,.stg-v2-manager .stg-alias-add{margin:1px 0;padding:1px 7px;border:1px dashed color-mix(in srgb,var(--s-ink,#1a1814) 30%,transparent);border-radius:6px;background:transparent;color:var(--s-ink-soft,#3d362c);font:inherit;cursor:pointer}
-.stg-provider-card-v2 .stg-alias-add:hover,.stg-v2-manager .stg-alias-add:hover{border-style:solid;border-color:var(--s-gold-dim,#a87d2e);color:var(--s-gold-dim,#a87d2e)}
-.stg-provider-card-v2 .stg-mcard-toggle{margin:0}
-.stg-provider-card-v2 .stg-mcard-actions{display:flex;align-items:center;align-self:center;flex-direction:column;flex-shrink:0;gap:4px}
-.stg-provider-card-v2 .stg-v2-cred-secret{width:100%;min-height:32px;margin-top:6px;padding:6px 9px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font:12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;transition:border-color .12s,box-shadow .12s}
-.stg-provider-card-v2 .stg-v2-cred-secret:focus{border-color:var(--s-gold,#c9993f);box-shadow:0 0 0 3px var(--s-gold-glow,rgba(201,153,63,.18));outline:none}
-.stg-v2-foot-spacer{flex:1}
-.stg-provider-model-alias,.stg-tpl-wizard-alias{color:var(--s-gold-dim,#a87d2e)!important}
-.stg-provider-cross-candidate{flex:0 0 auto;padding:4px 8px;border:0;border-radius:999px;background:rgba(201,153,63,.16);color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:900;white-space:nowrap}
-.stg-provider-model-more{width:100%;min-height:34px;border:0;border-top:1px solid var(--s-line,rgba(26,24,20,.08));background:var(--s-cream,#f2ecda);color:var(--s-ink-soft,#3d362c);font:800 10px/1.2 inherit;cursor:pointer}
-.stg-provider-model-more:hover{background:color-mix(in srgb,var(--s-gold,#c9993f) 20%,var(--s-cream,#f2ecda))}
-.stg-provider-model-more:focus-visible{outline:3px solid var(--s-gold,#c9993f);outline-offset:-3px}
+.stg-tpl-wizard-alias{color:var(--s-gold-dim,#a87d2e)!important}
 
-.stg-v2-close,.stg-v2-more{border:1px solid var(--border,#ddd);background:var(--bg-primary,#fff);color:var(--text-primary,#222);font:600 12px/1.2 inherit;cursor:pointer}
-.stg-v2-more:hover{background:var(--bg-hover,#f3f3f3)}
-.stg-v2-close:focus-visible,.stg-v2-more:focus-visible{outline:2px solid var(--accent,#6d5dfc);outline-offset:2px}
-/* Card-foot 管理 button — dashed tofu action chip, same family as the legacy
-   provider-card action buttons. */
-.stg-v2-manage{padding:7px 12px;border:1px dashed color-mix(in srgb,var(--s-ink,#1a1814) 30%,transparent);border-radius:8px;background:var(--s-white,#faf8f3);color:var(--s-ink,#1a1814);font:800 11px/1.2 inherit;cursor:pointer;white-space:nowrap;transition:border-color .14s,color .14s,background .14s}
-.stg-v2-manage:hover{border-color:var(--s-gold-dim,#a87d2e);color:var(--s-gold-dim,#a87d2e);background:rgba(201,153,63,.07)}
-.stg-v2-manage:focus-visible{outline:3px solid var(--s-gold,#c9993f);outline-offset:2px}
-.stg-v2-switch,.stg-v2-inline-check{display:inline-flex!important;align-items:center;gap:6px;margin:0!important;color:var(--text-secondary,#555);font-size:12px;white-space:nowrap}
-.stg-v2-switch input,.stg-v2-inline-check input{inline-size:auto!important}
+.stg-v2-close{border:1px solid var(--border,#ddd);background:var(--bg-primary,#fff);color:var(--text-primary,#222);font:600 12px/1.2 inherit;cursor:pointer}
+.stg-v2-close:focus-visible{outline:2px solid var(--accent,#6d5dfc);outline-offset:2px}
 
+/* Shared overlay shell — the 添加模型 picker and the model catalog both
+   render inside this manager frame. */
 .stg-v2-manager-overlay{position:fixed;inset:0;z-index:12000;display:grid;place-items:center;padding:24px;background:rgba(10,12,14,.42);backdrop-filter:blur(2px)}
 .stg-v2-manager{display:grid;grid-template-rows:auto auto minmax(0,1fr);width:min(860px,94vw);max-height:min(760px,88vh);overflow:hidden;border:1px solid rgba(26,24,20,.18);border-radius:var(--s-radius-lg,14px);background:var(--s-white,#faf8f3);box-shadow:0 24px 70px rgba(26,24,20,.3),0 6px 22px rgba(26,24,20,.14)}
 .stg-v2-manager-head{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--s-line,rgba(26,24,20,.08));background:var(--s-cream,#f2ecda)}
@@ -3231,33 +3265,29 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-v2-close{width:32px;height:32px;border:0;border-radius:6px;background:transparent;font-size:22px}
 .stg-v2-manager-body{min-height:300px;overflow:auto;padding:16px 18px 20px}
 
-.stg-v2-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-.stg-v2-toolbar input,#stgModelCatalogSearch{width:min(420px,100%);min-height:38px}
-.stg-v2-toolbar>span{color:var(--text-muted,#777);font-size:11px}
-.stg-v2-list,.stg-v2-catalog-list{border-top:1px solid var(--border,#ddd)}
-.stg-v2-model-row,.stg-v2-catalog-row{display:grid;align-items:center;gap:12px;min-width:0;padding:11px 4px;border-bottom:1px solid var(--border,#ddd)}
-.stg-v2-model-row{grid-template-columns:minmax(170px,1fr) minmax(0,1.8fr) auto}
-.stg-v2-model-row.is-pending{background:color-mix(in srgb,#f59f00 6%,transparent)}
-.stg-v2-model-row.is-disabled{opacity:.55}
-.stg-v2-model-row.is-disabled .stg-v2-model-identity strong{text-decoration:line-through;text-decoration-thickness:1.5px}
-.stg-v2-model-detail{display:grid;min-width:0;gap:5px}
-.stg-v2-model-stat{white-space:nowrap}
-.stg-v2-model-aliases{display:flex;flex-wrap:wrap;align-items:center;font:600 10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
-.stg-v2-model-actions{display:flex;align-items:center;gap:10px}
-.stg-v2-model-identity,.stg-v2-catalog-identity{display:grid;min-width:0;gap:3px}
-.stg-v2-model-identity strong,.stg-v2-catalog-identity strong{overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
-.stg-v2-model-identity span,.stg-v2-catalog-identity span,.stg-v2-model-price{overflow:hidden;color:var(--text-muted,#777);font:10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
-.stg-v2-model-meta{display:flex;flex-wrap:wrap;gap:4px 8px;color:var(--text-secondary,#555);font-size:11px}
-
-.stg-v2-pending{margin:0 0 12px;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:7px;background:var(--bg-secondary,#f7f7f7);color:var(--text-secondary,#555);font-size:12px}
-.stg-v2-more{width:100%;margin-top:10px;padding:9px;border-radius:6px}
-.stg-v2-catalog-tools{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:0 0 12px}
+#stgModelCatalogSearch{width:min(420px,100%);min-height:38px}
+.stg-v2-catalog-list{border-top:1px solid var(--border,#ddd)}
+.stg-v2-catalog-row{display:grid;align-items:center;gap:12px;min-width:0;padding:11px 4px;border-bottom:1px solid var(--border,#ddd)}
+.stg-v2-catalog-identity{display:grid;min-width:0;gap:3px}
+.stg-v2-catalog-identity strong{overflow:hidden;min-width:0;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.stg-v2-catalog-identity span{overflow:hidden;color:var(--text-muted,#777);font:10px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
 .stg-v2-catalog-count{margin:0 0 8px;color:var(--text-muted,#777);font-size:11px}
 .stg-v2-catalog-row{grid-template-columns:28px minmax(190px,1fr) minmax(180px,1.4fr) auto}
 .stg-v2-catalog-icon{display:grid;place-items:center}
-.stg-v2-pending{margin-top:12px}
-.stg-v2-pending summary{cursor:pointer;font-weight:650}
-.stg-v2-pending p{margin:8px 0 0;color:var(--text-muted,#777)}
+
+/* ── 结构化价格件（矩阵根行 meta / catalog 行共用）── */
+.stg-v2-price-cur{margin-right:5px;font-weight:700}
+.stg-v2-price-io{margin-right:2px;color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800}
+.stg-v2-price-sep{margin:0 4px;opacity:.45}
+.stg-v2-price-tag{margin-left:6px;padding:0 5px;border-radius:4px;background:rgba(201,153,63,.13);color:var(--s-gold-dim,#a87d2e);font-size:9px;font-weight:800;white-space:nowrap}
+
+/* ── 状态过滤 chips（矩阵 manage row 的全部/已启用/已停用/待确认）── */
+.stg-v2-filter-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 11px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:999px;background:var(--s-white,#faf8f3);color:var(--s-ink-soft,#3d362c);font-size:11px;font-weight:700;cursor:pointer;transition:border-color .14s,background .14s,color .14s}
+.stg-v2-filter-chip em{color:var(--text-muted,#777);font-size:10px;font-style:normal;font-weight:800}
+.stg-v2-filter-chip:hover{border-color:var(--s-gold-dim,#a87d2e);color:var(--s-gold-dim,#a87d2e)}
+.stg-v2-filter-chip.active{border-color:var(--s-gold,#c9993f);background:var(--s-gold-glow,rgba(201,153,63,.14));color:var(--s-ink,#1a1814)}
+.stg-v2-filter-chip.active em{color:var(--s-gold-dim,#a87d2e)}
+.stg-v2-filter-chip:focus-visible{outline:2px solid var(--s-gold,#c9993f);outline-offset:2px}
 
 .stg-tpl-wizard{width:min(720px,94vw)}
 .stg-tpl-wizard .stg-modal-body{display:grid;gap:12px}
@@ -3279,12 +3309,55 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-tpl-wizard-mid{overflow:hidden;color:var(--s-ink,#1a1814);font:800 12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
 .stg-tpl-wizard-alias{overflow:hidden;font:10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
 .stg-tpl-wizard-meta{color:var(--s-ink-soft,#3d362c);font-size:10px;text-align:right}
+/* ── 本地部署 preset chooser — grouped card tiles（不影响服务商模板下拉的紧凑样式）── */
+.stg-local-deploy .stg-modal-body{gap:8px}
+.stg-local-deploy .stg-modal-desc{margin-bottom:6px}
+.stg-local-group-label{margin-top:6px;color:var(--s-ink-soft,#3d362c);font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.75}
+.stg-local-deploy .stg-template-grid{gap:10px;padding:0 0 4px}
+.stg-local-deploy .stg-local-preset{position:relative;align-items:center;gap:12px;padding:12px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:12px;background:var(--s-white,#faf8f3);box-shadow:var(--s-shadow-xs,0 1px 2px rgba(26,24,20,.05));text-align:left;transition:border-color .15s,box-shadow .15s,transform .15s,background .15s}
+.stg-local-deploy .stg-local-preset:hover{border-color:var(--s-gold,#c9993f);background:#fff;box-shadow:0 2px 5px rgba(26,24,20,.06),0 10px 24px rgba(201,153,63,.16);transform:translateY(-1px)}
+.stg-local-deploy .stg-local-preset:active{transform:none;box-shadow:var(--s-shadow-xs,0 1px 2px rgba(26,24,20,.05))}
+.stg-local-deploy .stg-local-preset:focus-visible{outline:2px solid var(--s-gold,#c9993f);outline-offset:2px}
+.stg-local-preset-icon{display:grid;place-items:center;flex:0 0 auto;width:40px;height:40px;border:1px solid var(--s-line,rgba(26,24,20,.08));border-radius:10px;background:var(--s-cream,#f2ecda);transition:background .15s,border-color .15s}
+.stg-local-deploy .stg-local-preset:hover .stg-local-preset-icon{border-color:rgba(201,153,63,.4);background:var(--s-gold-glow,rgba(201,153,63,.18))}
+.stg-local-deploy .stg-local-preset .stg-template-info{gap:3px}
+.stg-local-deploy .stg-local-preset .stg-template-name{font-size:13px;font-weight:800}
+.stg-local-deploy .stg-local-preset .stg-template-models{font-size:11px;line-height:1.45;white-space:normal;opacity:.85}
+.stg-local-preset-arrow{align-self:center;flex:0 0 auto;color:var(--s-gold-dim,#a87d2e);opacity:0;transform:translateX(-4px);transition:opacity .15s,transform .15s}
+.stg-local-preset-arrow svg{display:block}
+.stg-local-deploy .stg-local-preset:hover .stg-local-preset-arrow,.stg-local-deploy .stg-local-preset:focus-visible .stg-local-preset-arrow{opacity:1;transform:none}
+
 .stg-local-endpoints-input{width:100%;min-height:96px;padding:8px 10px;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
 .stg-local-endpoints-input:focus{outline:none;border-color:var(--s-gold,#c9993f);box-shadow:0 0 0 3px var(--s-gold-glow,rgba(201,153,63,.18))}
 .stg-local-endpoint-results{display:grid;gap:6px}
 .stg-local-endpoint-row{padding:6px 8px;border-radius:8px;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
 .stg-local-endpoint-row.is-ok{background:rgba(22,163,74,.08);color:#16a34a;border:1px solid rgba(22,163,74,.22)}
 .stg-local-endpoint-row.is-fail{background:rgba(239,68,68,.08);color:var(--s-blocked,#b42318);border:1px solid rgba(239,68,68,.22)}
+
+/* ── 添加模型 picker（矩阵 manage row 上方的二级弹层）── */
+.stg-v2-picker-overlay{z-index:12010}
+.stg-v2-picker{width:min(640px,94vw)}
+.stg-v2-picker .stg-v2-manager-body{display:grid;gap:16px;align-content:start}
+.stg-v2-picker-custom,.stg-v2-picker-catalog{display:grid;gap:8px;min-width:0}
+.stg-v2-picker-custom>label,.stg-v2-picker-catalog>label{color:var(--s-ink,#1a1814);font-size:12px;font-weight:800}
+.stg-v2-picker-custom-row{display:flex;gap:8px}
+.stg-v2-picker-custom-row input{flex:1;min-width:0;min-height:36px;padding:7px 10px;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font:12px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace}
+.stg-v2-picker-custom-row input:focus,.stg-v2-picker-search:focus{outline:none;border-color:var(--s-gold,#c9993f);box-shadow:0 0 0 3px var(--s-gold-glow,rgba(201,153,63,.18))}
+.stg-v2-picker-hint{margin:0;color:var(--s-ink-soft,#3d362c);font-size:11px}
+.stg-v2-picker-search{width:100%;min-height:36px;padding:7px 10px;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:8px;background:#fff;color:var(--s-ink,#1a1814);font-size:12px}
+.stg-v2-picker-list{display:grid;max-height:min(320px,40vh);overflow:auto;border:var(--s-border,1px solid rgba(26,24,20,.15));border-radius:10px;background:#fff}
+.stg-v2-picker-row{display:flex;align-items:center;gap:10px;min-width:0;padding:8px 10px;border-bottom:1px solid color-mix(in srgb,var(--s-ink,#1a1814) 14%,transparent);cursor:pointer}
+.stg-v2-picker-row:last-child{border-bottom:0}
+.stg-v2-picker-row:hover{background:var(--s-cream,#f2ecda)}
+.stg-v2-picker-row input{flex:0 0 auto}
+.stg-v2-picker-row-icon{display:grid;place-items:center;flex:0 0 auto}
+.stg-v2-picker-row-id{display:grid;flex:1;min-width:0;gap:2px}
+.stg-v2-picker-row-id strong{overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.stg-v2-picker-row-id span{overflow:hidden;color:var(--text-muted,#777);font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-overflow:ellipsis;white-space:nowrap}
+.stg-v2-picker-row-price{flex:0 0 auto;color:var(--text-muted,#777);font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap}
+.stg-v2-picker-empty{margin:0;padding:16px 12px;color:var(--text-muted,#777);font-size:12px;text-align:center}
+.stg-v2-picker-foot{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.stg-v2-picker-foot>span{color:var(--s-ink-soft,#3d362c);font-size:11px;font-weight:700}
 
 @media (max-width:760px){
   .stg-section-actions{width:100%;flex-wrap:wrap}
@@ -3299,15 +3372,14 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   .stg-provider-head-v2 .stg-provider-info{flex:1}
   .stg-provider-head-v2 .stg-provider-badges{order:3;width:100%;justify-content:flex-start;padding-left:42px}
   .stg-provider-card-v2 .stg-field-grid{grid-template-columns:1fr}
-  .stg-provider-card-v2 .stg-mcard{flex-wrap:wrap;gap:6px}
-  .stg-provider-card-v2 .stg-mcard-actions{align-self:flex-end;flex-direction:row}
+  .stg-provider-card-v2 .stg-provider-foot{flex-direction:column;align-items:stretch}
+  .stg-provider-card-v2 .stg-provider-foot .stg-thinking-field{flex:1 1 auto;min-width:0}
+  .stg-provider-card-v2 .stg-provider-foot-actions{margin-left:0}
   .stg-v2-manager-overlay{align-items:end;padding:0}
   .stg-v2-manager{width:100%;max-height:92dvh;border-radius:10px 10px 0 0}
   .stg-v2-manager-body{min-height:240px;padding:14px}
-  .stg-v2-model-row{grid-template-columns:minmax(0,1fr) auto}
-  .stg-v2-model-detail{grid-column:1/-1}
+  .stg-v2-picker-row-price{display:none}
   .stg-v2-catalog-row{grid-template-columns:24px minmax(0,1fr)}
-  .stg-v2-catalog-tools{align-items:stretch;flex-direction:column}
   #stgModelCatalogSearch{width:100%}
   .stg-tpl-wizard-row{grid-template-columns:auto minmax(0,1fr)}
   .stg-tpl-wizard-meta{grid-column:2;text-align:left}
@@ -3316,19 +3388,57 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 }
 
 @media (prefers-reduced-motion:reduce){.stg-v2-manager-overlay{backdrop-filter:none}}
-/* ── Access matrix (per-credential × per-model grant grid) ──
-   Restored from the pre-v2 settings design; dead rules from that era
-   (inline key-name inputs, cell override editor, badge chips) are not
-   carried over. Column headers are static credential labels now. */
-
-/* Active state for the card-toolbar "访问矩阵" toggle button. */
-.stg-matrix-toggle.active {
-  background: var(--s-ink);
-  color: var(--s-white);
-  border-color: var(--s-ink);
-}
+/* ── Access matrix — the provider's always-on model-supply manager ──
+   One surface per provider: a manage row (search / status buckets / 添加模型),
+   the probe toolbar, and the (credential × wire id) grant grid whose root
+   rows carry the supply metadata (state chips, capability/pricing meta) and
+   row actions (row probe, add request name, remove offering). Column headers
+   identify each credential by its masked key hint (kind string as fallback
+   for hint-less rows). */
 
 .stg-matrix { margin-top: 10px; }
+
+/* ── Manage row: substring search + exclusive status buckets + 添加模型 ── */
+.stg-mx-manage {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+/* Scoped to beat the global `.modal input` stretch (width:100%) so the
+   field flexes inside the manage row instead of overflowing it. */
+.stg-matrix .stg-mx-search {
+  flex: 1 1 200px; width: auto; min-width: 140px; max-width: 320px;
+  min-height: 32px; margin: 0; padding: 6px 10px;
+  border: var(--s-border, 1px solid rgba(26,24,20,0.15)); border-radius: 8px;
+  background: #fff; color: var(--s-ink);
+  font: 12px/1.3 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  box-sizing: border-box;
+}
+.stg-matrix .stg-mx-search:focus {
+  outline: none; border-color: var(--s-gold);
+  box-shadow: 0 0 0 3px var(--s-gold-glow, rgba(201,153,63,0.18));
+}
+.stg-mx-filters { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.stg-mx-addmodel { flex: none; margin-left: auto; white-space: nowrap; }
+
+/* Empty states: no offerings at all, or offerings but zero credentials. */
+.stg-mx-empty, .stg-mx-nokeys {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--s-ink-soft);
+  border: 1.5px dashed var(--s-ink);
+  border-radius: var(--s-radius);
+}
+.stg-mx-nokeys {
+  padding: 10px 12px;
+  font-size: 11px;
+  border-style: dotted; border-color: var(--s-line-strong);
+}
+.stg-matrix-table td.stg-mx-nomatch {
+  padding: 16px 6px;
+  text-align: center;
+  color: var(--s-ink-soft); font-size: 11px;
+}
 .stg-matrix-toolbar {
   display: flex; justify-content: space-between; align-items: center;
   gap: 10px; flex-wrap: wrap;
@@ -3348,7 +3458,9 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 }
 .stg-mx-status.running { color: #b45309; }
 .stg-mx-status.error { color: #b91c1c; }
-.stg-mx-probe.running { animation: stg-mx-spin 0.7s linear infinite; }
+/* Spin the bolt glyph only — rotating the whole button flings its
+   "probing…" status text around the toolbar. */
+.stg-mx-probe.running svg { animation: stg-mx-spin 0.7s linear infinite; }
 .stg-mx-apply {
   background: rgba(74, 222, 128, 0.14) !important;
   border-color: #16a34a !important;
@@ -3361,13 +3473,13 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-mx-leg { display: inline-flex; align-items: center; gap: 4px; }
 .stg-mx-leg .stg-mx-dot {
   width: 10px; height: 10px; border-radius: 50%;
-  border: 1.5px solid var(--s-ink);
+  border: 1px solid var(--s-line-strong);
 }
 .stg-mx-leg.on .stg-mx-dot { background: #16a34a; border-color: #16a34a; }
 .stg-mx-leg.off .stg-mx-dot { background: var(--s-white); }
 .stg-matrix-scroll {
   overflow-x: auto;
-  border: 2px solid var(--s-ink);
+  border: 1px solid var(--s-line-strong);
   border-radius: var(--s-radius);
   /* A shadow CANNOT overflow its own element's border-radius, so both fade
      masks live on the single scroll wrapper: the ::before block is
@@ -3433,8 +3545,8 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   }
 }
 .stg-matrix-table th, .stg-matrix-table td {
-  border-bottom: 1px solid var(--s-border);
-  border-right: 1px solid var(--s-border);
+  border-bottom: 1px solid var(--s-line);
+  border-right: 1px solid var(--s-line);
   padding: 4px 6px;
 }
 .stg-matrix-table thead th {
@@ -3444,15 +3556,20 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--s-ink-soft);
-  border-bottom: 2px solid var(--s-ink);
+  border-bottom: 1px solid var(--s-line-strong);
   position: sticky; top: 0; z-index: 2;
 }
 .stg-mx-corner {
   text-align: left;
   position: sticky; left: 0; z-index: 4 !important;
   background: var(--s-cream);
+  /* Shrink-to-fit: the table's min-width:100% surplus must go to the
+     credential columns, not the label column. auto layout ignores td
+     max-width, so width:1% is the working constraint; min-width keeps a
+     floor for short ids; long ids widen the column past that floor —
+     request names are never abbreviated, the matrix scroller takes over. */
+  width: 1%;
   min-width: 170px;
-  max-width: 260px;
 }
 /* Credential column headers: a static label (序号 + kind) with a reserved
    right lane for the column probe trigger. */
@@ -3474,15 +3591,21 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   color: var(--s-ink-soft);
   font-family: 'JetBrains Mono', monospace;
   text-transform: none; letter-spacing: normal;
-  margin-top: 1px;
+  margin: 1px auto 0;
+  /* A masked key hint (up to 64 chars) must not stretch the credential
+     column: a max-width-capped block contributes the cap as its intrinsic
+     width, and the overflow ellipsizes. The full hint stays in the title. */
+  max-width: 150px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* Model label cells: sticky first column, brand icon + id. */
 .stg-mx-model {
   position: sticky; left: 0;
   background: var(--s-white);
   text-align: left;
+  /* Same shrink-to-fit contract as .stg-mx-corner (see above). */
+  width: 1%;
   min-width: 170px;
-  max-width: 260px;
   z-index: 1;
   /* Reserve a right lane for the row probe button so it never overlaps id text. */
   padding-right: 28px !important;
@@ -3507,11 +3630,40 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 .stg-mx-mid {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px; font-weight: 700;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Full request names, never abbreviated: the shrink-to-fit label column
+     widens past its 170px floor and the matrix scroller absorbs the rest. */
+  white-space: nowrap;
   display: inline-block;
-  max-width: 150px;
   vertical-align: middle;
 }
+/* Catalog-retired root ids strike through (the red 已下线 chip explains). */
+.stg-mx-mid.retired { text-decoration: line-through; text-decoration-thickness: 1.5px; }
+
+/* ── Root-row state chips: 待确认 / 已下线 / 已停用 request name ── */
+.stg-mx-chip {
+  display: inline-flex; align-items: center;
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  font-size: 8.5px; font-weight: 800; letter-spacing: 0.05em; line-height: 1.5;
+  white-space: nowrap; vertical-align: 1px;
+}
+.stg-mx-chip.pending { color: #b45309; background: rgba(245,159,0,0.16); }
+.stg-mx-chip.retired { color: #b42318; background: rgba(239,68,68,0.12); }
+.stg-mx-chip.off { color: var(--s-ink-soft); background: rgba(26,24,20,0.08); }
+
+/* ── Root-row meta line: capability chips + context / release / pricing,
+   on its own line under the id, aligned past the toggle + brand icon ── */
+.stg-mx-meta {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px;
+  max-width: 340px; margin: 3px 0 1px 34px;
+  font-size: 10px; color: var(--s-ink-soft);
+}
+.stg-mx-meta .stg-cap { padding: 1px 7px; font-size: 9px; }
+.stg-mx-meta-bit {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px; font-weight: 600;
+  white-space: nowrap;
+}
+.stg-mx-meta-bit.stg-mx-price { display: inline-flex; align-items: baseline; }
 .stg-mx-aliascount {
   margin-left: 5px;
   font-size: 8.5px; font-weight: 800; line-height: 1;
@@ -3525,7 +3677,7 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
    separator; rows of one offering read as a unit. */
 .stg-mx-row { border-bottom: none; }
 .stg-mx-row td { border-bottom: 1px dashed rgba(0,0,0,0.08); }
-.stg-mx-row.group-end td { border-bottom: 2px solid var(--s-ink); }
+.stg-mx-row.group-end td { border-bottom: 1px solid var(--s-line-strong); }
 .stg-mx-row:not(.grouped):not(.is-alias) td { border-bottom: 1.5px solid var(--s-ink); }
 /* ── Logical root row: the canonical model id of an offering whose every
    deployment routes to a DIFFERENT upstream id. It is not sent on the
@@ -3675,10 +3827,51 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
 /* Column scope: vertically centered in the header's reserved right lane. */
 .stg-mx-zap.col { position: absolute; top: 50%; right: 4px; margin-top: -9px; opacity: 0.4; }
 .stg-mx-keyhead:hover .stg-mx-zap.col { opacity: 1; }
-/* Row scope: right edge of the (sticky) model label cell, hover-revealed. */
-.stg-mx-zap.row { position: absolute; top: 50%; right: 4px; margin-top: -9px; opacity: 0; }
-.stg-mx-model:hover .stg-mx-zap.row { opacity: 0.9; }
-.stg-mx-zap.row.probing { opacity: 1; }
+/* Row scope: the row-action lane at the right edge of the (sticky) model
+   label cell — row probe + add request name + remove offering on root rows,
+   row probe + remove request name on alias rows. Hover-revealed, opaque so
+   the buttons never sit on top of ellipsized id text. */
+.stg-mx-rowacts {
+  position: absolute; top: 50%; right: 4px; margin-top: -9px;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding-left: 6px;
+  border-radius: 4px;
+  background: var(--s-white);
+  opacity: 0; transition: opacity 0.12s;
+}
+.stg-mx-model:hover .stg-mx-rowacts,
+.stg-mx-rowacts:focus-within,
+.stg-mx-rowacts:has(.probing) { opacity: 1; }
+.stg-mx-model.logical .stg-mx-rowacts { background: var(--s-cream); }
+.stg-mx-rowacts .stg-mx-zap.row { position: static; margin: 0; opacity: 1; }
+/* Mini square action button — the zap's sibling in the lane. */
+.stg-mx-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0;
+  border: 1.5px solid var(--s-ink); border-radius: 4px;
+  background: var(--s-white); color: var(--s-ink);
+  font-size: 12px; font-weight: 800; line-height: 1;
+  cursor: pointer; box-sizing: border-box;
+  transition: background 0.12s, transform 0.1s, color 0.12s, border-color 0.12s;
+}
+.stg-mx-act svg { width: 10px; height: 10px; display: block; }
+.stg-mx-act:hover { background: var(--s-gold); transform: scale(1.12); }
+.stg-mx-act.danger { color: #b42318; border-color: rgba(180,35,24,0.5); }
+.stg-mx-act.danger:hover { background: rgba(248,113,113,0.16); border-color: #b42318; }
+/* Reserved right lanes so id text never slides under the action lane:
+   root = probe+add+del (3×18 + gaps), alias = probe+del (2×18 + gap). */
+.stg-mx-model.root { padding-right: 74px !important; }
+.stg-mx-model.alias { padding-right: 52px !important; }
+/* Pending supplies tint the root label amber to match the 待确认 chip. */
+.stg-mx-model.root.pending,
+.stg-mx-model.root.pending .stg-mx-rowacts {
+  background: color-mix(in srgb, #f59f00 7%, var(--s-white));
+}
+/* A disabled request name keeps its delete affordance but reads as off. */
+.stg-mx-model.alias.wire-off .stg-mx-tree,
+.stg-mx-model.alias.wire-off .stg-mx-aliasidx,
+.stg-mx-model.alias.wire-off .stg-mx-brand,
+.stg-mx-model.alias.wire-off .stg-mx-mid { opacity: 0.5; }
 /* Cell scope: bottom-left corner, hover-revealed (only when no pip yet —
    once a verdict exists the pip itself is the re-probe trigger). */
 .stg-mx-zap.cell { position: absolute; bottom: 2px; left: 3px; opacity: 0; }
@@ -3692,16 +3885,57 @@ summary.stg-provider-head-v2:focus-visible{outline:3px solid var(--s-gold,#c9993
   to { transform: rotate(360deg); }
 }
 
-.stg-matrix-empty {
-  padding: 16px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--s-ink-soft);
-  border: 1.5px dashed var(--s-ink);
-  border-radius: var(--s-radius);
-  margin-top: 8px;
-}
-
 @media (max-width: 640px) {
   .stg-mx-keyhead, .stg-mx-cell { min-width: 76px; }
 }
+/* ===== settings/08-local-deploy.css ===== */
+/* 本地部署 page: hardware probe strip, ranked recommendation cards with
+ * fit chips, the cloud escape hatch, and managed-instance rows with
+ * status chips + agent handoff actions. Scoped under .stg-local-deploy so
+ * the compact template dropdown and manager rows keep their own rules. */
+
+.stg-ld-hint{padding:10px 2px;color:var(--text-muted,#777);font-size:12px}
+
+/* ── hardware strip ── */
+.stg-ld-hw{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 8px}
+.stg-ld-hw-item{padding:3px 9px;border:1px solid var(--s-line,rgba(26,24,20,.08));border-radius:999px;background:var(--s-cream,#f2ecda);color:var(--s-ink-soft,#3d362c);font-size:11px;line-height:1.5;white-space:nowrap}
+.stg-ld-hw-item.stg-ld-hw-warn{color:#b45309;background:rgba(245,159,0,.12);border-color:rgba(245,159,0,.28)}
+
+/* ── purpose filter chips ── */
+.stg-ld-purposes{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.stg-ld-purpose{padding:3px 11px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:999px;background:var(--s-white,#faf8f3);color:var(--s-ink-soft,#3d362c);font-size:11px;font-weight:600;cursor:pointer;transition:border-color .15s,background .15s}
+.stg-ld-purpose:hover{border-color:var(--s-gold,#c9993f)}
+.stg-ld-purpose.is-active{border-color:var(--s-gold,#c9993f);background:rgba(201,153,63,.12);color:var(--s-ink,#1a1814)}
+
+/* ── recommendation + cloud cards ── */
+.stg-ld-recs{display:grid;gap:8px;margin-bottom:4px}
+.stg-ld-rec,.stg-ld-cloud{display:flex;align-items:flex-start;gap:12px;padding:12px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:12px;background:var(--s-white,#faf8f3);box-shadow:var(--s-shadow-xs,0 1px 2px rgba(26,24,20,.05))}
+.stg-ld-cloud{border-style:dashed;border-color:rgba(201,153,63,.45)}
+.stg-ld-rec-icon{display:grid;place-items:center;flex:0 0 auto;width:40px;height:40px;border:1px solid var(--s-line,rgba(26,24,20,.08));border-radius:10px;background:var(--s-cream,#f2ecda)}
+.stg-ld-rec-main{display:flex;flex:1 1 auto;min-width:0;flex-direction:column;gap:3px}
+.stg-ld-rec-title{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px;color:var(--s-ink,#1a1814)}
+.stg-ld-rec-sub{color:var(--text-muted,#777);font-size:11px;line-height:1.5}
+.stg-ld-rec-note{color:var(--s-ink-soft,#3d362c);font-size:11px;line-height:1.5}
+.stg-ld-rec-cmd{display:flex;align-items:center;gap:6px;margin-top:2px;min-width:0}
+.stg-ld-rec-cmd code{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 8px;border-radius:6px;background:rgba(26,24,20,.06);color:var(--s-ink-soft,#3d362c);font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.stg-ld-copy{flex:0 0 auto;padding:2px 8px;border:1px solid var(--s-line-strong,rgba(26,24,20,.15));border-radius:6px;background:transparent;color:var(--s-ink-soft,#3d362c);font-size:10px;cursor:pointer}
+.stg-ld-copy:hover{border-color:var(--s-gold,#c9993f)}
+.stg-ld-rec-go,.stg-ld-cloud-go{flex:0 0 auto;align-self:center;white-space:nowrap}
+
+/* fit chips */
+.stg-ld-fit{flex:0 0 auto;padding:1px 7px;border-radius:999px;font-size:9px;font-weight:800;letter-spacing:.05em;line-height:1.5;white-space:nowrap}
+.stg-ld-fit.is-comfortable{color:var(--s-ok,#067647);background:rgba(16,185,129,.14)}
+.stg-ld-fit.is-tight{color:#b45309;background:rgba(245,159,0,.16)}
+.stg-ld-fit.is-extreme{color:var(--s-blocked,#b42318);background:rgba(239,68,68,.12)}
+.stg-ld-fit.is-cpu{color:var(--text-muted,#777);background:rgba(26,24,20,.08)}
+
+/* ── managed instance rows ── */
+.stg-ld-instances{display:grid;gap:6px;margin-bottom:4px}
+.stg-ld-inst{display:flex;align-items:flex-start;gap:12px;padding:10px 12px;border:1px solid var(--s-line,rgba(26,24,20,.08));border-radius:10px;background:var(--s-white,#faf8f3)}
+.stg-ld-inst-main{display:flex;flex:1 1 auto;min-width:0;flex-direction:column;gap:3px}
+.stg-ld-state{flex:0 0 auto;padding:1px 7px;border-radius:999px;font-size:9px;font-weight:800;letter-spacing:.05em;line-height:1.5;white-space:nowrap}
+.stg-ld-state.is-running{color:var(--s-ok,#067647);background:rgba(16,185,129,.14)}
+.stg-ld-state.is-installing,.stg-ld-state.is-starting{color:#b45309;background:rgba(245,159,0,.16)}
+.stg-ld-state.is-failed{color:var(--s-blocked,#b42318);background:rgba(239,68,68,.12)}
+.stg-ld-state.is-stopped,.stg-ld-state.is-planned{color:var(--text-muted,#777);background:rgba(26,24,20,.08)}
+.stg-ld-inst-fix,.stg-ld-inst-start{flex:0 0 auto;align-self:center;white-space:nowrap}

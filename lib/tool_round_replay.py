@@ -20,6 +20,7 @@ canonicalized in returned round records.
 from __future__ import annotations
 
 import json
+import copy
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,15 @@ from lib.tool_caller_identity import (
 
 SUPERSEDED_PROVIDER_ATTEMPT_FIELD = "_providerAttemptDiscarded"
 _MAX_REPLAY_TOOL_NAME_CHARS = 512
+
+
+def model_tool_content(round_entry: Mapping[str, Any]) -> Any:
+    """Return a detached model receipt, honoring explicit compaction boundaries."""
+    if (isinstance(round_entry.get('toolModelContent'), list)
+            and not round_entry.get('_persistCompacted')
+            and round_entry.get('compactionLayer') != 'L1'):
+        return copy.deepcopy(round_entry['toolModelContent'])
+    return round_entry.get('toolContent') or ''
 
 
 def _reject_json_constant(value: str) -> None:

@@ -102,6 +102,44 @@ def project_flow_tool_rounds(tool_log) -> list[dict]:
         tool = str(row.get('tool') or '')
         if not tool:
             continue
+
+        canonical = row.get('canonical_round')
+        if isinstance(canonical, Mapping) and canonical:
+            entry = dict(canonical)
+            # The durable row owns occurrence identity; never allow an old
+            # executor/provider id to replace the Flow-global identity.
+            entry['toolName'] = tool
+            entry['toolCallId'] = str(
+                row.get('tool_call_id') or entry.get('toolCallId') or
+                f'flow-tool-{len(rounds) + 1}')
+            agent_id = str(row.get('agentId') or entry.get('agentId') or '')
+            if agent_id:
+                entry['agentId'] = agent_id
+            else:
+                entry.pop('agentId', None)
+            entry.setdefault('roundNum', row.get('round') or len(rounds) + 1)
+            entry.setdefault('llmRound', row.get('round'))
+            entry.setdefault('query', str(row.get('args_brief') or '') or tool)
+            persisted_status = str(row.get('status') or '')
+            if persisted_status:
+                entry['status'] = (
+                    'error' if persisted_status in {'failed', 'error'}
+                    else 'done' if persisted_status == 'done'
+                    else persisted_status)
+            else:
+                entry.setdefault('status', 'done')
+            if entry.get('toolArgs') is None and isinstance(
+                    row.get('tool_args'), Mapping):
+                entry['toolArgs'] = dict(row['tool_args'])
+            if not entry.get('toolContent'):
+                entry['toolContent'] = str(
+                    row.get('error') or row.get('preview') or '')
+            if entry.get('tEnd') is None:
+                timestamp = row.get('timestamp')
+                if isinstance(timestamp, (int, float)) and timestamp > 0:
+                    entry['tEnd'] = int(timestamp * 1000)
+            rounds.append(entry)
+            continue
         rn = len(rounds) + 1
         persisted_call_id = str(row.get('tool_call_id') or '')
         agent_round = row.get('round')

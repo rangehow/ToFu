@@ -195,6 +195,66 @@ console.log(JSON.stringify({html: html, brandCalls: brandCalls}));
     assert output['html'].count('data-brand="meta"') == 1
 
 
+@pytest.mark.skipif(not NODE, reason='node not installed')
+def test_access_matrix_header_shows_masked_key_hint(tmp_path):
+    # The credential column header must identify the key by its masked
+    # recognition hint (sk-…•••…wxyz); the bare kind string is the fallback
+    # for hint-less credentials (oauth / local identity).
+    provider = tmp_path / 'provider-render.js'
+    provider.write_text(runtime_section('settings/provider_render.js'), encoding='utf-8')
+    matrix = tmp_path / 'access-matrix.js'
+    matrix.write_text(runtime_section('settings/access_matrix.js'), encoding='utf-8')
+    harness = tmp_path / 'harness.js'
+    harness.write_text(r'''
+const fs = require('fs');
+global.window = global;
+global.runtimeScope = global;
+global.escapeHtml = value => String(value == null ? '' : value)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;');
+global.t = key => key;
+global._detectBrand = () => 'generic';
+global._brandSvg = () => '';
+global._stgPendingCredentialSecrets = {};
+global._stgModelRoutingLoadError = '';
+global.document = {
+  getElementById: () => null,
+  querySelector: () => null,
+  querySelectorAll: () => [],
+};
+global.Api = { modelRouting: { probeCellsStatus: () => new Promise(() => {}) } };
+global._stgModelRouting = {
+  contract_version: 'tofu.model-routing/v2',
+  providers: [{provider_id: 'p1', name: 'Gateway', scope: 'owner', brand: 'generic'}],
+  provider_accesses: [{provider_access_id: 'p1-access', provider_id: 'p1',
+    display_name: 'Gateway', enabled: true, quota_policy: {}}],
+  connections: [{connection_id: 'p1-conn', provider_access_id: 'p1-access',
+    base_url: 'https://gw.example/v1', protocol: 'openai', enabled: true}],
+  credentials: [
+    {credential_id: 'cred-a', provider_access_id: 'p1-access', kind: 'api_key',
+      key_hint: 'sk-ab\u2026\u2026wxyz', enabled: true,
+      authorization: {connection_ids: ['p1-conn'], models: []}},
+    {credential_id: 'cred-b', provider_access_id: 'p1-access', kind: 'oauth',
+      enabled: true, authorization: {connection_ids: ['p1-conn'], models: []}},
+  ],
+  models: [],
+  offerings: [{offering_id: 'off-0', provider_access_id: 'p1-access', identity_state: 'confirmed',
+    model: {creator_id: 'meta', model_id: 'esmfold'}, enabled: true, stale: false,
+    capabilities: ['text'], context_window: 1000}],
+  deployments: [{deployment_id: 'dep-0', offering_id: 'off-0', connection_id: 'p1-conn',
+    wire_model_id: 'esmfold', enabled: true, identity_confidence: 'high', probe_status: 'passed'}],
+};
+eval(fs.readFileSync(process.argv[2], 'utf8'));
+eval(fs.readFileSync(process.argv[3], 'utf8'));
+console.log(JSON.stringify({html: _renderAccessMatrix('p1')}));
+''', encoding='utf-8')
+    output = json.loads(_run_node(harness, provider, matrix))
+    html = output['html']
+    assert 'sk-ab……wxyz' in html
+    assert 'api_key · sk-ab……wxyz' in html  # title carries kind + full hint
+    assert '>oauth</span>' in html          # hint-less credential shows kind
+
+
 def test_model_brand_resolver_wiring_source_pins():
     detection = (
         ROOT / 'frontend/src/core/model-brand-detection.ts'

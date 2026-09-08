@@ -57,6 +57,8 @@ def build_round_request(task, rs, messages, tool_list, *,
     LLM-call writeback, so read fresh each round).
     """
     _tools_this_round = tool_list
+    from lib.tasks_pkg.model_images import pin_model_images
+    pin_model_images(messages, model=rs.model, user_id=task.get('_userId'))
 
     _snapshot_arguments = {
         'tid': tid,
@@ -148,10 +150,12 @@ def build_round_request(task, rs, messages, tool_list, *,
         from lib.tasks_pkg.tool_orchestration_policy import (
             resolve_tool_orchestration)
         from lib.tools.programmatic import ACTIVE_PROGRAMMATIC_MODES
-        _latched_optimization = task.get('_toolOrchestrationPromptLatch')
+        _latched_optimization = (task.get('_toolOrchestrationPromptLatch')
+                                or (task.get('config') or {}).get('_modelReplayToolLatch'))
         if isinstance(_latched_optimization, dict):
             _optimization = copy.deepcopy(_latched_optimization)
             _optimization['round'] = int(round_num)
+            task['_toolOrchestrationPromptLatch'] = copy.deepcopy(_latched_optimization)
         else:
             _optimization = resolve_tool_orchestration(
                 requested_programmatic=(

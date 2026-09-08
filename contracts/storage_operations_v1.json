@@ -3,9 +3,9 @@
   "generatedBy": "scripts/gen_storage_operation_catalog.py",
   "sourceProtocol": "storage.v1",
   "sourceSchemaVersion": 58,
-  "sourceRegistryVersion": 38,
-  "operationCount": 331,
-  "operationsSha256": "dd3bb5e43e9842f7f3de7602910c9b30037d5c1fc4b4d9df406047866c6c7e93",
+  "sourceRegistryVersion": 40,
+  "operationCount": 335,
+  "operationsSha256": "d82b972303d945c402c6b9ea83f0961b7b5042eed00b81c0ff91ad5192f0ef35",
   "operations": [
     {
       "name": "artifact.create",
@@ -912,6 +912,30 @@
       "ownerScope": "handler-enforced"
     },
     {
+      "name": "model_continuation.delete",
+      "domain": "archives",
+      "kind": "command",
+      "receiptRequired": false,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
+      "name": "model_continuation.get",
+      "domain": "archives",
+      "kind": "query",
+      "receiptRequired": false,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
+      "name": "model_continuation.put",
+      "domain": "archives",
+      "kind": "command",
+      "receiptRequired": false,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
       "name": "model_routing.commit",
       "domain": "model_routing",
       "kind": "command",
@@ -1736,6 +1760,14 @@
       "ownerScope": "handler-enforced"
     },
     {
+      "name": "queue.injection.ack",
+      "domain": "queue",
+      "kind": "command",
+      "receiptRequired": true,
+      "transactionTimeoutSeconds": null,
+      "ownerScope": "handler-enforced"
+    },
+    {
       "name": "queue.kind.clear",
       "domain": "queue",
       "kind": "command",
@@ -2379,7 +2411,7 @@
       "name": "turn.cleanup",
       "domain": "turns",
       "kind": "command",
-      "receiptRequired": false,
+      "receiptRequired": true,
       "transactionTimeoutSeconds": null,
       "ownerScope": "handler-enforced"
     },
@@ -2491,7 +2523,7 @@
       "name": "turn.queue.activate",
       "domain": "turns",
       "kind": "command",
-      "receiptRequired": true,
+      "receiptRequired": false,
       "transactionTimeoutSeconds": null,
       "ownerScope": "handler-enforced"
     },
@@ -2499,7 +2531,7 @@
       "name": "turn.queue.cancel",
       "domain": "turns",
       "kind": "command",
-      "receiptRequired": true,
+      "receiptRequired": false,
       "transactionTimeoutSeconds": null,
       "ownerScope": "handler-enforced"
     },

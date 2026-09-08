@@ -234,7 +234,7 @@ def openai_body_to_anthropic(body: dict) -> dict:
     """Translate a built OpenAI Chat Completions body to an Anthropic body.
 
     Preserves model / max_tokens / stream / temperature / top_p / thinking /
-    effort (build_body already produces Claude-correct thinking params).
+    effort (mapped to native ``output_config.effort`` at this boundary).
     Hoists ``system`` out of the message list and merges consecutive
     tool-result messages into a single Anthropic user turn.
     """
@@ -248,9 +248,19 @@ def openai_body_to_anthropic(body: dict) -> dict:
     # Carry model-level params Anthropic accepts (build_body already pruned
     # the ones Opus 4.7+ rejects, e.g. temperature/top_p/top_k).
     for k in ('temperature', 'top_p', 'top_k', 'stop_sequences', 'thinking',
-              'effort', 'tool_choice'):
+              'tool_choice'):
         if k in body:
             out[k] = body[k]
+
+    # Canonical/OpenAI-compatible gateways use top-level effort; Messages
+    # accepts it only inside output_config. Canonical effort wins conflicts
+    # (it is the model-adjusted rung), while native-only output settings such
+    # as format survive. Copy the envelope so conversion never mutates input.
+    output_config = dict(body.get('output_config') or {})
+    if 'effort' in body:
+        output_config['effort'] = body['effort']
+    if output_config:
+        out['output_config'] = output_config
 
     # Public Anthropic API server-side compaction. The exact route capability
     # and beta header are owned by ``llm._sse_core``; this translator only

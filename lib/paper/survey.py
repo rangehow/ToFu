@@ -51,6 +51,10 @@ from lib.log import get_logger
 from lib.paper.contracts import (
     PAPER_FANIN_MAX_PAPERS,
     PAPER_FANIN_MAX_TEXT_CHARS,
+    PAPER_SURVEY_MAX_PAPERS,
+    PAPER_SURVEY_WORKING_SET_PAPERS,
+    PAPER_SURVEY_CONTEXT_CHARS,
+    PAPER_SURVEY_EVIDENCE_SPAN_CHARS,
     PAPER_SURVEY_MAX_CLUSTERS,
     PAPER_SURVEY_MAX_GAPS,
     PAPER_SURVEY_MAX_GROUND_PROBES,
@@ -77,7 +81,7 @@ _SURVEY_PER_PAPER_CHARS = PAPER_FANIN_MAX_TEXT_CHARS
 
 # How many library papers to feed the synthesis at most (a survey of hundreds
 # is summarized from the most relevant slice, not the entire shelf).
-_SURVEY_MAX_PAPERS = PAPER_FANIN_MAX_PAPERS
+_SURVEY_MAX_PAPERS = PAPER_SURVEY_MAX_PAPERS
 
 _SURVEY_TEMPERATURE = 0.3      # below insight's 0.45 — survey is descriptive, not divergent
 _SURVEY_MAX_TOKENS = 8000
@@ -85,7 +89,7 @@ _SURVEY_LANG_PREFIX = 'survey'
 # Agentic survey rounds repeatedly carry a large, already-distilled corpus.
 # This is a token envelope, not a round ceiling: after it is reached the next
 # dispatch gets no tools and must synthesize from evidence already collected.
-_SURVEY_AGENT_TOKEN_BUDGET = 240_000
+_SURVEY_AGENT_TOKEN_BUDGET = 1_000_000
 
 
 def survey_lang_key(lang: str) -> str:
@@ -170,6 +174,7 @@ def _load_paper_inputs(
     user_id: int,
     per_paper_chars: int = _SURVEY_PER_PAPER_CHARS,
     max_papers: int = _SURVEY_MAX_PAPERS,
+    abort=None,
 ) -> list:
     """Load existing reports or parsed text without reparsing any PDF."""
     from lib.paper.library_repository import PaperLibraryRepository
@@ -195,8 +200,16 @@ def _load_paper_inputs(
         if len(requested_ids) >= paper_limit:
             break
     try:
-        entries = PaperLibraryRepository(user_id).by_arxiv_ids(
-            requested_ids, max_text_chars=content_limit)
+        repository = PaperLibraryRepository(user_id)
+        entries = []
+        for start in range(0, len(requested_ids), PAPER_FANIN_MAX_PAPERS):
+            if abort and abort():
+                raise AbortedError('paper survey input load aborted')
+            entries.extend(repository.by_arxiv_ids(
+                requested_ids[start:start + PAPER_FANIN_MAX_PAPERS],
+                max_text_chars=content_limit))
+    except AbortedError:
+        raise
     except Exception as error:
         logger.error(
             '[Paper:Survey] library input load failed: %s', error,
@@ -210,16 +223,6 @@ def _load_paper_inputs(
         if normalized and entry.parsed_text:
             entries_by_arxiv_id.setdefault(normalized, entry)
 
-    from lib.paper.artifact_repository import PaperArtifactRepository
-    artifacts = PaperArtifactRepository(user_id)
-    try:
-        reports_by_hash = artifacts.report_excerpts(
-            [entry.paper_hash for entry in entries if entry.paper_hash],
-            lang, max_chars=content_limit)
-    except Exception as error:
-        logger.warning(
-            '[Paper:Survey] batch report excerpt load failed: %s', error)
-        reports_by_hash = {}
     output = []
     seen = set()
     for raw in requested_ids:
@@ -237,21 +240,17 @@ def _load_paper_inputs(
                 '[Paper:Survey] %s not in library — skipped', normalized)
             continue
 
-        content = ''
-        source_kind = ''
-        if entry.paper_hash:
-            report = reports_by_hash.get(entry.paper_hash)
-            if report and report.report.strip():
-                content = report.report
-                source_kind = 'report'
-        if not content:
-            content = entry.parsed_text
-            source_kind = 'parsed_text'
+        # Reports are secondary model claims, never original-source evidence.
+        content = entry.parsed_text
+        source_kind = 'parsed_text'
         if not content.strip():
             continue
         output.append({
             'arxiv_id': normalized,
             'paper_hash': entry.paper_hash,
+            'source_version': entry.arxiv_id,
+            'parser_version': entry.parser_version,
+            'source_total_chars': entry.parsed_text_length,
             'title': entry.title or f'arXiv:{normalized}',
             'source': source_kind,
             'content': content[:content_limit],
@@ -287,7 +286,11 @@ def _library_id_set(candidate_ids=(), *, user_id: int,
         if len(requested_ids) >= _SURVEY_MAX_PAPERS:
             break
     try:
-        entries = PaperLibraryRepository(user_id).by_arxiv_ids(requested_ids)
+        repository = PaperLibraryRepository(user_id)
+        entries = []
+        for start in range(0, len(requested_ids), PAPER_FANIN_MAX_PAPERS):
+            entries.extend(repository.by_arxiv_ids(
+                requested_ids[start:start + PAPER_FANIN_MAX_PAPERS]))
     except Exception as error:
         logger.error(
             '[Paper:Survey] library id-set query failed: %s',
@@ -487,7 +490,7 @@ def _verify_against_library(gap_map: dict, *, user_id: int,
     for g in gap_rows[:PAPER_SURVEY_MAX_GAPS]:
         if not isinstance(g, dict):
             continue
-        g2 = dict(g)
+        g2 = _normalize_gap(g)
         gap_tiers: dict = {}
         g2['evidence'] = _tier_ids(g.get('evidence'), lib_ids, stripped, gap_tiers,
                                    ground_fn, ground_cache, ground_state,
@@ -503,12 +506,18 @@ def _verify_against_library(gap_map: dict, *, user_id: int,
                                 {_norm_id(e) for e in g2['evidence']} if k in gap_tiers}
         g2['library_evidence_count'] = lib_n
         g2['grounded_evidence_count'] = gnd_n
-        g2['low_confidence'] = (lib_n == 0)
+        g2['reference_verification'] = {
+            'support': 'identity_only',
+            'closest_work': 'unverified',
+            'counterevidence': 'unverified',
+            'note': 'Preserved model claims; source existence does not establish entailment.',
+        }
+        g2['low_confidence'] = True  # identity verification is not entailment
         all_tiers.update(gap_tiers)
         if g2['low_confidence']:
-            logger.info('[Paper:Survey] open_gap %s is low_confidence (grounded-only, '
-                        '%d grounded / 0 library): %.60s', g.get('id', '?'), gnd_n,
-                        g.get('gap', ''))
+            logger.info('[Paper:Survey] open_gap %s has unverified entailment '
+                        '(%d grounded / %d library): %.60s', g.get('id', '?'),
+                        gnd_n, lib_n, g.get('gap', ''))
         gaps.append(g2)
     out['open_gaps'] = gaps
     out = _ensure_open_gap_ids(out)
@@ -596,6 +605,89 @@ def _fetch_arxiv_titles(arxiv_ids):
     return fetch_arxiv_titles_batch(arxiv_ids)
 
 
+def _survey_working_set(paper_inputs, direction, abort=None):
+    """Rank bounded stored excerpts locally; never equate selection with full reading.
+
+    Offsets and SHA256 refer to the exact loaded report/parsed-text snapshot,
+    not to PDF bytes. Two spans preserve both relevance and limitation signals.
+    """
+    import re
+
+    def terms_for(value):
+        tokens = set(re.findall(r'[a-z0-9_-]{3,}', value.lower()))
+        for segment in re.findall(r'[\u4e00-\u9fff]+', value):
+            tokens.update(segment[i:i + 2] for i in range(len(segment) - 1))
+        return tokens
+
+    terms = terms_for(direction)
+    ranked = []
+    for paper in paper_inputs[:PAPER_SURVEY_MAX_PAPERS]:
+        if abort and abort():
+            raise AbortedError('paper survey retrieval aborted')
+        text = paper.get('content', '')[:_SURVEY_PER_PAPER_CHARS]
+        spans = []
+        for start in range(0, len(text), PAPER_SURVEY_EVIDENCE_SPAN_CHARS):
+            quote = text[start:start + PAPER_SURVEY_EVIDENCE_SPAN_CHARS]
+            words = terms_for(quote)
+            score = len(terms & words)
+            caution = bool(words & {'however', 'limitation', 'limitations', 'fails',
+                                    'failure', 'contrary', 'unlike', 'not',
+                                    '然而', '局限', '失败', '不足', '限制', '相反'})
+            spans.append((score, caution, start, quote))
+        if not spans:
+            continue
+        relevant = max(spans, key=lambda s: (s[0], -s[2]))
+        contrary = max(spans, key=lambda s: (s[1], s[0], -s[2]))
+        chosen = sorted({s[2]: s for s in (relevant, contrary)}.values(),
+                        key=lambda s: s[2])
+        snapshot = hashlib.sha256(text.encode('utf-8')).hexdigest()
+        cards = [{'arxiv_id': paper['arxiv_id'], 'source': paper.get('source', ''),
+                  'paper_hash': paper.get('paper_hash', ''),
+                  'source_version': paper.get('source_version', ''),
+                  'snapshot_sha256': snapshot, 'start': s[2],
+                  'end': s[2] + len(s[3]), 'quote': s[3],
+                  'verification': 'snapshot_span_verified',
+                  'entailment': 'unverified'} for s in chosen]
+        item = dict(paper, evidence_cards=cards,
+                    content='\n\n'.join(s[3] for s in chosen))
+        title_score = len(terms & terms_for(paper.get('title', '')))
+        ranked.append((relevant[0] + title_score, paper['arxiv_id'], item))
+    ranked.sort(key=lambda row: (-row[0], row[1]))
+    import json
+    selected = []
+    remaining = PAPER_SURVEY_CONTEXT_CHARS - 3000
+    for _, _, item in ranked:
+        cost = len(json.dumps(item['evidence_cards'], ensure_ascii=False)) + 400
+        if cost > remaining:
+            continue
+        remaining -= cost
+        selected.append(item)
+        if len(selected) >= PAPER_SURVEY_WORKING_SET_PAPERS:
+            break
+    return selected
+
+
+def _normalize_gap(row):
+    """One compatibility seam for model field synonyms; uncertainty survives R3."""
+    out = dict(row)
+    aliases = {'gap': ('scoped_claim', 'claim', 'description', 'title'),
+               'why_open': ('rationale', 'reason', 'explanation'),
+               'closest_work': ('closest_prior_work', 'related_work'),
+               'counterevidence': ('counter_evidence', 'contradictions'),
+               'falsifier': ('falsification_test', 'disconfirming_test'),
+               'unknowns': ('uncertainties',)}
+    for field, alternatives in aliases.items():
+        if not out.get(field):
+            out[field] = next((out[key] for key in alternatives if out.get(key)),
+                              [] if field in ('closest_work', 'counterevidence', 'unknowns') else '')
+    out.setdefault('scoped_claim', out['gap'])
+    # A library/title hit only establishes identity, never scientific entailment.
+    out['entailment'] = 'unverified'
+    out['confidence'] = 'low'
+    out['low_confidence'] = True
+    return out
+
+
 def _synthesize_survey(paper_inputs, direction, lang, *, user_id, model=None,
                        abort=None, on_tool_event=None, usage_meter=None):
     """Agentic fan-in synthesis: research the frontier, then emit the survey.
@@ -627,12 +719,20 @@ def _synthesize_survey(paper_inputs, direction, lang, *, user_id, model=None,
     usage_meter = usage_meter or PaperAgentUsageMeter.for_stage(
         'survey', fallback_model=model or '')
     system = date_anchor_clause(lang) + _survey_system_prompt(lang)
-    parts = [f'## RESEARCH DIRECTION\n\n{direction}\n',
-             '## LIBRARY PAPERS (already parsed — synthesize from these, do NOT re-read)\n']
-    for i, p in enumerate(paper_inputs, 1):
-        parts.append(f'### [{i}] {p["title"]}  (arXiv:{p["arxiv_id"]}, source={p["source"]})\n\n'
-                     + p['content'])
-    user_content = '\n\n---\n\n'.join(parts)
+    system += ('\nScope all conclusions to the supplied excerpts, never claim exhaustive reading. '
+               'Each gap MUST contain gap, why_open, scoped_claim, closest_work, evidence, '
+               'counterevidence, falsifier, unknowns, confidence. Preserve counterevidence even '
+               'when it undermines the gap. Cite original arxiv_id and snapshot span cards. '
+               'Source existence and a matching quote do NOT verify entailment or novelty. '
+               'Use low confidence for missing source support; identify what would close the gap.')
+    import json
+    parts = [f'## RESEARCH DIRECTION\n\n{direction[:2000]}\n',
+             '## SELECTED EXCERPTS ONLY (not full papers; not exhaustive coverage)\n']
+    for i, p in enumerate(paper_inputs[:PAPER_SURVEY_WORKING_SET_PAPERS], 1):
+        parts.append(f'### [{i}] {p["title"][:200]} (arXiv:{p["arxiv_id"]})\n'
+                     + json.dumps(p.get('evidence_cards', []), ensure_ascii=False)
+                     + ('\n' + p['content'][:1400] if not p.get('evidence_cards') else ''))
+    user_content = '\n\n---\n\n'.join(parts)[:PAPER_SURVEY_CONTEXT_CHARS]
 
     messages = [{'role': 'system', 'content': system},
                 {'role': 'user', 'content': user_content}]
@@ -727,22 +827,24 @@ def _survey_system_prompt(lang: str) -> str:
     if zh:
         return (
             '你是一位资深研究员,正在为一个方向撰写**相关工作综述 + 空白地图**。\n'
-            '基于给定的库内论文(已解析,勿重读),完成两件事:\n'
+            '基于给定的论文片段完成两件事；片段不等于全文，必要时用工具核对原文和反证:\n'
             '1) 一份结构化的中文综述 markdown:按主题聚类描述已有工作、它们的共同假设与局限;'
             '引用具体论文时用 `arXiv:<id>` 内联标注(id 必须来自给定库内论文);\n'
             '2) 综述之后,追加一个 ```json 代码块,严格符合 open_gaps schema(schema_version=1):'
             'clusters / method_matrix / open_gaps 三部分。**所有 papers/paper/evidence 里的 arxiv_id '
             '必须是上面给定库内论文的 id,不得编造库外论文。**\n'
             'method_matrix 是必填比较表：上面每篇库内论文至少一行，字段为 '
-            '`paper/method/compression_unit/selection_signal/update_timing/system_tradeoff/'
-            'robustness_assumption/evaluation_tasks/limitation`；不能用空数组。用这张表逐论文'
+            '`paper/method/assumptions/evaluation_tasks/budget/limitation`，并按研究方向补充比较维度；'
+            '未知字段标记 unknown，不得猜测；不能用空数组。用这张表逐论文'
             '说明为何每个 gap 仍然存在，而不是只做串行摘要。\n'
-            'open_gaps 是核心:标出真正没人做的空白,每条必须有唯一的字符串 id(如 gap_1)并附 '
-            'evidence(证明这确实是空白的库内论文 id)。'
+            'open_gaps 是待证伪的局部研究判断，不是学界无人研究的证明；每条必须有唯一字符串 '
+            'id(如 gap_1)、gap、why_open、scoped_claim、closest_work、counterevidence、'
+            'falsifier、unknowns 和 evidence(相关论文 id)。检索未命中不能证明新颖性。'
             '可用 web 工具交叉核对,但空白地图的 id 只能来自库内。')
     return (
         'You are a senior researcher writing a **related-work survey + open-gap map** '
-        'for a direction. From the given library papers (already parsed — do NOT re-read), produce:\n'
+        'for a direction. The supplied excerpts are NOT full papers; use tools to inspect '
+        'original passages and counterevidence when needed. Produce:\n'
         '1) a structured survey markdown: cluster prior work by theme, describe shared '
         'assumptions and limitations; cite specific papers inline as `arXiv:<id>` '
         '(ids MUST come from the given library papers);\n'
@@ -751,13 +853,15 @@ def _survey_system_prompt(lang: str) -> str:
         'papers/paper/evidence MUST be an id of a given library paper — never invent papers '
         'outside the library.**\n'
         'method_matrix is a REQUIRED comparison table, with at least one row for EVERY given '
-        'library paper and these fields: `paper/method/compression_unit/selection_signal/'
-        'update_timing/system_tradeoff/robustness_assumption/evaluation_tasks/limitation`. '
+        'selected paper and these fields: `paper/method/assumptions/evaluation_tasks/budget/'
+        'limitation`, plus domain-relevant comparison dimensions. Mark unknown values unknown. '
         'It may not be empty. Use it to explain, paper by paper, why each gap remains open '
         'rather than writing serial summaries.\n'
-        'open_gaps is the core: mark genuinely unexplored gaps, each with a unique string id '
-        '(for example gap_1) and evidence (library '
-        'paper ids that prove it is a gap). You may cross-check with web tools, but the gap '
+        'open_gaps are scoped falsifiable research claims, NOT proof that nobody has studied '
+        'a topic. Each needs a unique string id (for example gap_1), gap, why_open, '
+        'scoped_claim, closest_work, counterevidence, falsifier, unknowns and evidence '
+        '(related library paper ids). Search absence does not prove novelty. '
+        'Cross-check with web tools; the gap '
         "map's ids may only come from the library.")
 
 
@@ -766,7 +870,8 @@ def _survey_system_prompt(lang: str) -> str:
 def build_survey(direction: str, arxiv_ids, *, lang: str = 'en', user_id: int,
                  folder_id: str = '', model: Optional[str] = None,
                  abort: Optional[Callable[[], bool]] = None,
-                 on_tool_event: Optional[Callable[[dict], None]] = None) -> dict:
+                 on_tool_event: Optional[Callable[[dict], None]] = None,
+                 workdir=None) -> dict:
     """Produce a fan-in survey + library-verified open-gap map for a direction.
 
     Args:
@@ -791,7 +896,7 @@ def build_survey(direction: str, arxiv_ids, *, lang: str = 'en', user_id: int,
           'error': str,                     # set when ok is False
         }
     """
-    from lib.paper.agent_usage import paper_agent_dispatch_budget
+    from lib.paper.agent_usage import resolve_paper_agent_budget
     from lib.research.telemetry import ResearchUsageMeter, research_token_budget
 
     user_id = require_user_id(user_id, context='paper survey')
@@ -800,13 +905,21 @@ def build_survey(direction: str, arxiv_ids, *, lang: str = 'en', user_id: int,
         'survey', fallback_model=model or '',
         token_budget=research_token_budget(
             'TOFU_RESEARCH_SURVEY_TOKEN_BUDGET', _SURVEY_AGENT_TOKEN_BUDGET),
-        dispatch_budget=paper_agent_dispatch_budget('survey'), repeat_limit=0)
+        dispatch_budget=resolve_paper_agent_budget(
+            'TOFU_RESEARCH_SURVEY_DISPATCH_BUDGET', 32, minimum=2, maximum=32), repeat_limit=0)
     if not direction:
         return {'ok': False, 'error': 'empty direction', 'direction': '',
                 'lang': lang, 'survey_md': '', 'open_gaps': {}, 'citation_audit': None,
                 'inputs_used': 0, 'usage': usage_meter.snapshot()}
 
-    inputs = _load_paper_inputs(arxiv_ids, lang=lang, user_id=user_id)
+    try:
+        inputs = _load_paper_inputs(arxiv_ids, lang=lang, user_id=user_id, abort=abort)
+    except AbortedError:
+        return {'ok': False, 'error': 'aborted', 'inputs_used': 0,
+                'open_gaps': {}, 'survey_md': '', 'usage': usage_meter.snapshot()}
+    if abort and abort():
+        return {'ok': False, 'error': 'aborted', 'inputs_used': 0,
+                'open_gaps': {}, 'survey_md': '', 'usage': usage_meter.snapshot()}
     if not inputs:
         logger.warning('[Paper:Survey] no library inputs for direction=%.80s (harvest first?)',
                        direction)
@@ -815,10 +928,20 @@ def build_survey(direction: str, arxiv_ids, *, lang: str = 'en', user_id: int,
                 'open_gaps': {}, 'citation_audit': None, 'inputs_used': 0,
                 'usage': usage_meter.snapshot()}
 
+    corpus_inputs = inputs
+    from lib.research.survey_hierarchy import BoundedCalls, map_reduce
+    from lib.research.entailment import assess_gaps
+    calls = BoundedCalls(dispatch_stream, _parse_llm_json, usage_meter,
+                         direction=direction + '\n' + lang, user_id=user_id,
+                         model=model, abort=abort, workdir=workdir,
+                         sources=[(p['arxiv_id'], p.get('source_version'),
+                                   p.get('parser_version'),
+                                   hashlib.sha256(p['content'].encode()).hexdigest())
+                                  for p in corpus_inputs])
     try:
-        survey_md, raw_gap_map = _synthesize_survey(
-            inputs, direction, lang, user_id=user_id, model=model, abort=abort,
-            on_tool_event=on_tool_event, usage_meter=usage_meter)
+        survey_md, raw_gap_map, inputs, evidence_cards, batch_failures = map_reduce(
+            corpus_inputs, direction, calls,
+            lambda papers, query: _survey_working_set(papers, query, abort))
     except Exception as e:
         if isinstance(e, AbortedError):
             logger.info('[Paper:Survey] aborted during synthesis')
@@ -858,6 +981,31 @@ def build_survey(direction: str, arxiv_ids, *, lang: str = 'en', user_id: int,
     gap_map['library_folder_id'] = folder_id
     gap_map['surveyed_count'] = len(inputs)
     gap_map['surveyed_arxiv_ids'] = sorted(surveyed_ids)
+    corpus_ids = {_norm_id(p['arxiv_id']) for p in corpus_inputs}
+    gap_map['coverage'] = {
+        'mode': 'hierarchical_all_admitted_excerpts', 'corpus_count': len(corpus_inputs),
+        'complete': len(inputs) == len(corpus_inputs),
+        'batch_failures': batch_failures, 'cache_hits': calls.cache_hits,
+        'selected_count': len(inputs), 'selected_arxiv_ids': sorted(surveyed_ids),
+        'unread_arxiv_ids': sorted(corpus_ids - surveyed_ids),
+        'full_papers_read': 0, 'source_prefix_chars': _SURVEY_PER_PAPER_CHARS,
+        'max_corpus_papers': PAPER_SURVEY_MAX_PAPERS,
+        'max_working_set_papers': PAPER_SURVEY_WORKING_SET_PAPERS,
+        'max_context_chars': PAPER_SURVEY_CONTEXT_CHARS,
+    }
+    gap_map['evidence_cards'] = evidence_cards
+    try:
+        assess_gaps(gap_map.get('open_gaps', []), evidence_cards,
+                    {p['arxiv_id']: p for p in corpus_inputs}, calls)
+    except AbortedError:
+        return {'ok': False, 'error': 'aborted', 'inputs_used': len(inputs),
+                'open_gaps': gap_map, 'survey_md': survey_md, 'usage': usage_meter.snapshot()}
+    if batch_failures:
+        for gap in gap_map.get('open_gaps', []):
+            gap['assessment_incomplete'] = True
+            gap['low_confidence'] = True
+            if gap.get('status') != 'closed':
+                gap['status'] = 'uncertain'
     matrix_ids = {_norm_id(row.get('paper')) for row in
                   (gap_map.get('method_matrix') or []) if isinstance(row, dict)}
     matrix_ids.discard('')

@@ -279,7 +279,7 @@ def test_extension_capture_is_bounded_and_starts_before_navigation():
         'entries': 80,
         'trackedRequests': 160,
         'totalBodyChars': 1024 * 1024,
-        'active': 4,
+        'active': 32,
     }
     assert 'Network.getResponseBody' in probe['debuggerCommands']
     assert network['pageUrl'] == 'https://example.test/app'

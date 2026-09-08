@@ -45,6 +45,7 @@ export const ERROR_KIND_LABELS: Readonly<Record<string, string>> = Object.freeze
   budget_exceeded: 'Budget exceeded',
   tool_not_available: 'Tool not available',
   tool_call_rejected: 'Tool call blocked',
+  user_switch: 'Switched by you',
 });
 
 export const FALLBACK_DETAIL_MAX = 160;

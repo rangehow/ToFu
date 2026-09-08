@@ -222,6 +222,33 @@ function matchingToolRoundIndex(
   ));
 }
 
+function copyToolFrameFields(
+  target: UnknownRecord,
+  frame: UnknownRecord,
+  keys: ReadonlyArray<string>,
+): void {
+  for (const key of keys) {
+    if (frame[key] !== undefined) target[key] = frame[key];
+  }
+}
+
+function settleUnfinishedToolRounds(
+  rounds: ReadonlyArray<UnknownRecord>,
+  timestamp: number,
+): UnknownRecord[] {
+  return rounds.map((round) => {
+    const status = text(round.status);
+    if (status !== 'running' && status !== 'searching' && status !== 'cancelling') {
+      return round;
+    }
+    return {
+      ...round,
+      status: 'done',
+      ...(number(round.tEnd) == null ? { tEnd: timestamp } : {}),
+    };
+  });
+}
+
 function phasePresentation(
   current: TransientTurnPresentation,
   inner: UnknownRecord,
@@ -386,6 +413,7 @@ export function reduceAutopilotVuTransientTurn(
       parentToolCallId: text(evt.parentToolCallId),
       llmRound: evt.llmRound ?? null,
       agentId: text(evt.agentId),
+      ...(evt.tStart == null ? {} : { tStart: evt.tStart }),
     };
     const match = matchingToolRoundIndex(rounds, inner);
     rounds = match >= 0
@@ -403,6 +431,10 @@ export function reduceAutopilotVuTransientTurn(
       rounds = rounds.map((round, index) => {
         if (index !== match) return round;
         const next = { ...round };
+        copyToolFrameFields(next, inner, [
+          'roundNum', 'llmRound', 'agentId', 'taskId', 'attemptId',
+          'toolCallId', 'toolName', 'tStart', 'tEnd',
+        ]);
         if (type === 'tool_result') {
           /* Contracted fold (see tool_complete below). */
           const evt = inner as unknown as ToolResultEvent;
@@ -479,10 +511,35 @@ export function settleAutopilotVuTransientTurn(
 ): TransientTurnRecord {
   const finalMessage = record(value);
   const projection = snapshotProjection(finalMessage);
+  const settledAt = number(finalMessage.timestamp) ?? timestamp;
+  projection.timestamp = settledAt;
+  projection.toolRounds = settleUnfinishedToolRounds(
+    records(projection.toolRounds),
+    settledAt,
+  ) as TurnToolRound[];
+  projection.segments = projectionSegments(
+    text(projection.content),
+    text(projection.thinking),
+    projection.toolRounds as UnknownRecord[],
+  );
   const backendSegments = Array.isArray(finalMessage.segments)
     ? finalMessage.segments as TurnContentSegment[] : [];
   if (backendSegments.length) projection.segments = backendSegments;
-  projection.timestamp = number(finalMessage.timestamp) ?? timestamp;
+  if (!projection.toolRounds.length && current?.projection.toolRounds?.length) {
+    const rounds = settleUnfinishedToolRounds(
+      records(current.projection.toolRounds), settledAt,
+    );
+    projection.toolRounds = rounds as TurnToolRound[];
+    // Terminal segments are authoritative chronology. Restoring omitted rich
+    // rounds must not replace backend text/thinking blocks with stale live
+    // segments; synthesize a timeline only for legacy terminal payloads that
+    // supplied no segments at all.
+    if (!backendSegments.length) {
+      projection.segments = projectionSegments(
+        text(projection.content), text(projection.thinking), rounds,
+      );
+    }
+  }
   const base = current ?? createAutopilotVuTransientTurn({
     conversationId, vuMsgId, timestamp,
   });

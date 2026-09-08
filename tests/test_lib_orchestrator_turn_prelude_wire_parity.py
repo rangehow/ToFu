@@ -136,3 +136,35 @@ def test_behaviour_auto_continue_turn_skips_reset_default_profile_noop(monkeypat
         'auto-continue turn must NOT reset the chain (the ceiling '
         'bounds the runaway unattended loop)')
     assert out is cfg, "default profile must return the SAME cfg object"
+
+def test_behaviour_revives_tombstoned_inbox_slot(monkeypatch):
+    """A stale conv-inbox tombstone (left by the PRIOR turn's swarm
+    teardown / abort) must not outlive task start: THIS task drains that
+    same key every round via drain_and_inject_inbox, so the prelude
+    revives the slot — otherwise operator steer silently degrades to the
+    durable queue for the whole turn (2026-09-04 incident)."""
+    import lib.agent_inbox as inbox
+    import lib.swarm.integration as swi
+    import lib.tasks_pkg.orchestrator._turn_prelude as leaf
+    monkeypatch.setattr(swi, 'swarm_key_for', lambda t: 'K')
+    inbox._tombstones.add('K')
+    try:
+        task = {'config': {'model': 'm', '_swarmAutoContinue': True}}
+        leaf.run_turn_prelude(task, task['config'], 'deadbeef')
+        assert not inbox.is_tombstoned('K'), (
+            'prelude must revive the tombstoned slot this task will drain')
+    finally:
+        inbox._tombstones.discard('K')
+
+
+def test_behaviour_inbox_revival_is_fail_soft(monkeypatch):
+    """A revival failure logs at debug and never blocks the turn."""
+    import lib.agent_inbox as inbox
+    import lib.swarm.integration as swi
+    import lib.tasks_pkg.orchestrator._turn_prelude as leaf
+    monkeypatch.setattr(swi, 'swarm_key_for', lambda t: 'K')
+    monkeypatch.setattr(inbox, 'is_tombstoned',
+                        lambda k: (_ for _ in ()).throw(RuntimeError('boom')))
+    task = {'config': {'model': 'm', '_swarmAutoContinue': True}}
+    out = leaf.run_turn_prelude(task, task['config'], 'deadbeef')
+    assert out is task['config'], 'revival failure must not block the prelude'

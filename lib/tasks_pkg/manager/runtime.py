@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 # poller window. Active tasks are never TTL-evicted by TaskRuntime.
 # TODO(enterprise, R1): live task/event registry is single-process memory —
 # relay per-task frames on the push bus so any replica can serve
-# SSE/poll/abort. docs/ENTERPRISE_READINESS_AUDIT.md
+# SSE/poll/abort. docs/ENTERPRISE_EVOLUTION.md
 CHAT_TASK_TERMINAL_TTL_SECONDS = resolve_chat_task_terminal_ttl_seconds()
 chat_task_runtime = TaskRuntime(
     'chat', ttl=CHAT_TASK_TERMINAL_TTL_SECONDS,

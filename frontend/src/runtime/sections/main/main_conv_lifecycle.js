@@ -6,12 +6,12 @@
  */
 
 function newChat() {
+  _conversationModelController.begin();
   _purgeEmptyConvs();
   const prevConv = getActiveConv();
   if (prevConv) {
     /* Never persist a provisional model paint. */
-    if (!config._modelIsProvisional && config.model) prevConv.model = config.model;
-    prevConv.thinkingDepth = config.thinkingDepth;
+    // Navigation does not commit a draft's model to the outgoing conversation.
     prevConv.searchMode = searchMode || "multi";
     prevConv.fetchEnabled = !!fetchEnabled;
     prevConv.codeExecEnabled = !!codeExecEnabled;
@@ -29,17 +29,12 @@ function newChat() {
       prevConv.imageGenResolution = _igSelectedResolution || '1K';
     }
     prevConv.autoTranslate = !!autoTranslate;
-    /* Preserve inherited project binding when leaving an unopened shell. */
-    if (projectState.active && projectState.path) {
-      prevConv.projectPath = projectState.path;
-    }
+    /* Navigation never commits the composer's possibly unrelated project. */
   }
-  const hasInput =
-    document.getElementById("userInput").value.trim() ||
-    pendingImages.length > 0 ||
-    pendingPdfTexts.length > 0 ||
-    (_pendingLogClean && _pendingLogClean.originalText);
+  const hasInput = _hasProjectComposerDraft();
+  _conversationProjectController.begin();
   activeConvId = null;
+  runtimeScope.updateBackgroundActivity?.();
   sessionStorage.removeItem('tofu_activeConvId');
   runtimeScope.ConversationTurnStore?.reconcileConversationActivity?.(
     prevConv?.id,
@@ -80,6 +75,8 @@ function newChat() {
   if (typeof runtimeScope.updateContextBar === 'function') runtimeScope.updateContextBar();
 }
 function loadConversation(id) {
+  let projectRestoreEligible = _conversationProjectController.begin();
+  const modelRestoreEligible = _conversationModelController.begin();
   _purgeEmptyConvs();
   // ── Exit branch mode when switching conversations ──
   if (typeof closeBranchPanel === "function" && typeof isBranchModeActive === "function" && isBranchModeActive()) {
@@ -94,8 +91,7 @@ function loadConversation(id) {
     /* See captureActiveConversationSettings: switching AWAY from a conv must not stamp a
      *   provisional default paint onto it. This is the exact path that turned
      *   a mispainted composer into persisted corruption. */
-    if (!config._modelIsProvisional && config.model) prevConv.model = config.model;
-    prevConv.thinkingDepth = config.thinkingDepth;
+    // Navigation does not commit a draft's model to the outgoing conversation.
     prevConv.searchMode = searchMode || "multi";
     prevConv.fetchEnabled = !!fetchEnabled;
     prevConv.codeExecEnabled = !!codeExecEnabled;
@@ -119,20 +115,11 @@ function loadConversation(id) {
     if (!_prevTaskActive) {
       prevConv.autoTranslate = !!autoTranslate;
     }
-    if (projectState.active && projectState.path) {
-      prevConv.projectPath = projectState.path;
-      const allPaths = [projectState.path];
-      if (projectState.extraRoots?.length) {
-        for (const r of projectState.extraRoots) {
-          const p = typeof r === 'string' ? r : r.path;
-          if (p && !allPaths.includes(p)) allPaths.push(p);
-        }
-      }
-      prevConv.projectPaths = allPaths;
-    }
+    /* Project bindings change only through explicit selection or send. */
     _needsDeferredSave = true;
   }
   activeConvId = id;
+  runtimeScope.updateBackgroundActivity?.();
   sessionStorage.setItem('tofu_activeConvId', id);
   runtimeScope.ConversationTurnStore?.reconcileConversationActivity?.(
     prevConv?.id, id,
@@ -163,6 +150,10 @@ function loadConversation(id) {
    * preserves its own scroll anchor while Turn data converges. */
   if (c._turnSnapshotRequired) {
     runtimeScope.requestAuthoritativeConversationRender(c.id);
+    if (projectRestoreEligible()) {
+      _clearProjectStateLocal();
+      projectRestoreEligible = _conversationProjectController.begin();
+    }
     void (async () => {
       if (typeof hydrateConversationRuntime !== 'function') {
         console.error('[loadConversation] conversation turn runtime is unavailable');
@@ -176,8 +167,8 @@ function loadConversation(id) {
         await hydrateConversationRuntime(c.id);
         if (activeConvId === id) {
           runtimeScope.requestAuthoritativeConversationRender(c.id);
-          if (typeof restoreConversationSettingsToComposer === 'function') restoreConversationSettingsToComposer(c);
-          _restoreConvProject(c);
+          if (typeof restoreConversationSettingsToComposer === 'function') restoreConversationSettingsToComposer(c, modelRestoreEligible);
+          _restoreConvProject(c, projectRestoreEligible);
         }
         _resumePendingTranslations(id);
       } catch (error) {
@@ -218,9 +209,9 @@ function loadConversation(id) {
    * after Turn hydration above; restoring the shell copy here as well raced an
    * identical setPaths request, rotated the server undo session, and warmed
    * the same tree index twice. Warm opens already own exact settings. */
-  if (!c._turnSnapshotRequired) _restoreConvProject(c);
+  if (!c._turnSnapshotRequired) _restoreConvProject(c, projectRestoreEligible);
   /* Restore settings only after the authoritative Turn snapshot is ready. */
-  if (!c._turnSnapshotRequired) restoreConversationSettingsToComposer(c);
+  if (!c._turnSnapshotRequired) restoreConversationSettingsToComposer(c, modelRestoreEligible);
 
   /* Persist outgoing settings after the new conversation is interactive.
    * setTimeout(0) keeps the settings PATCH off the critical paint path. */
@@ -656,6 +647,8 @@ async function _buildConvSettings(conv) {
 
 async function _buildConvSubmission(conv) {
   const configInputs = _buildConvConfigInputs(conv);
+  configInputs.overrides.model = conv.model || configInputs.overrides.model;
+  configInputs.overrides.thinkingDepth = conv.thinkingDepth;
   return _conversationSettingsResolution.resolveSubmission(
     configInputs,
     _buildConvSettingsInputs(conv, configInputs.overrides),

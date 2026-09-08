@@ -223,7 +223,10 @@ def test_attachment_text_budget_is_shared_across_the_model_request(
     assert sum(item['text_chars'] for item in projections) \
         <= MODEL_TEXT_REQUEST_CAP
     assert budget.text_chars_remaining == 0
-    assert all(item['text_chars'] > 0 for item in projections)
+    assert projections[0]['text_chars'] > 0
+    assert projections[-1]['text_chars'] == 0
+    assert any('request budget exhausted' in block.get('text', '')
+               for block in projections[-1]['blocks'])
     overflow = project_for_model(
         [references[-1]], user_id=TEST_OWNER_USER_ID, query='',
         model='text-only-test', projection_budget=budget)

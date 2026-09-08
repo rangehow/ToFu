@@ -61,7 +61,8 @@ class _EditThenFinishLLM:
         self._barrier = threading.Barrier(n_agents)
 
     def __call__(self, body, *, on_content=None, on_thinking=None,
-                 abort_check=None, prefer_model='', log_prefix='', on_retry=None):
+                 abort_check=None, prefer_model='', log_prefix='', on_retry=None,
+                 **_dispatch_kwargs):
         agent_id = body.get('_task_id', '?')
         with self._lock:
             n = self._rounds.get(agent_id, 0)

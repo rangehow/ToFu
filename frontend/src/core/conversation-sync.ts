@@ -270,6 +270,10 @@ export class ConversationSyncCoordinator implements ConversationSyncConnection {
     if (this.snapshotPromise) return this.snapshotPromise;
     if (this.closed) throw new Error('Conversation sync coordinator is closed');
     let startSnapshot!: () => void;
+    // A snapshot captures an earlier replay head than events arriving while
+    // its request is in flight. Fence that generation before the read, then
+    // resume from the snapshot cursor; never roll an active projection back.
+    this.closeSource();
     const operation = new Promise<ConversationSyncSnapshot>((resolve, reject) => {
       startSnapshot = () => {
         try {
@@ -281,6 +285,7 @@ export class ConversationSyncCoordinator implements ConversationSyncConnection {
             { timeout: SNAPSHOT_FETCH_TIMEOUT_MS },
           )
             .then((wireSnapshot) => {
+              if (this.closed) throw new Error('Conversation sync coordinator is closed');
               const snapshot = materializeSnapshotReferences(
                 wireSnapshot,
               );
@@ -314,7 +319,7 @@ export class ConversationSyncCoordinator implements ConversationSyncConnection {
   }
 
   private open(): void {
-    if (this.closed || !this.shouldConnect || this.source) return;
+    if (this.closed || !this.shouldConnect || this.source || this.snapshotPromise) return;
     this.clearReconnectTimer();
     this.generation += 1;
     const sourceGeneration = this.generation;

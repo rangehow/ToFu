@@ -26,7 +26,7 @@ const CREATOR_LABELS: Readonly<Record<string, string>> = Object.freeze({
   iflytek: 'iFlytek', '01ai': '01.AI', cohere: 'Cohere', ai21: 'AI21',
   nvidia: 'NVIDIA', microsoft: 'Microsoft', amazon: 'Amazon',
   perplexity: 'Perplexity', upstage: 'Upstage',
-  thinkingmachines: 'Thinking Machines',
+  thinkingmachines: 'Thinking Machines', openbmb: 'OpenBMB',
 });
 
 const BRAND_TO_VENDOR: Readonly<Record<string, string>> = Object.freeze({

@@ -53,7 +53,6 @@ from .auth import current_auth, require_scope
 # are resolved server-side from the owner-scoped secret store; the browser
 # only ever addresses credentials by their column index.
 from lib.json_store import read_json, write_json_atomic
-from lib.model_routing.dispatch_adapter import decode_credential_secret
 from lib.provider_probe import (
     CELL_PROBE_LOCK,
     CELL_PROBE_TASKS,
@@ -87,6 +86,23 @@ def _boundary() -> OwnerBoundary | None:
 
 def _repository() -> ModelRoutingRepository:
     return ModelRoutingRepository()
+
+
+def _hot_reload_dispatcher_slots() -> None:
+    """Rebuild the dispatcher slot pool after a committed authority change.
+
+    ``LLMDispatcher.initialize()`` snapshots offerings, endpoints, keys and
+    quotas into slots; without this rebuild a saved edit (disable toggle,
+    provider add/remove, key rotation) only takes effect on process restart.
+    A rebuild failure must not fail the request — the commit already landed.
+    """
+    try:
+        from lib.llm_dispatch.health_local import _rebuild_dispatcher_slots
+        _rebuild_dispatcher_slots()
+    except Exception as exc:
+        logger.error(
+            "model-routing committed but slot rebuild failed: %s", exc,
+            exc_info=True)
 
 
 def _expected_revision(body: Mapping[str, Any]) -> int:
@@ -128,45 +144,7 @@ def _contract_rejection(operation_id: str, body: Any):
     return None
 
 
-def _provider_bundle(document: Mapping[str, Any], provider_id: str) -> dict[str, Any] | None:
-    provider = next(
-        (row for row in document["providers"] if row["provider_id"] == provider_id),
-        None,
-    )
-    if provider is None:
-        return None
-    accesses = [
-        row for row in document["provider_accesses"]
-        if row["provider_id"] == provider_id
-    ]
-    access_ids = {row["provider_access_id"] for row in accesses}
-    connections = [
-        row for row in document["connections"]
-        if row["provider_access_id"] in access_ids
-    ]
-    connection_ids = {row["connection_id"] for row in connections}
-    credentials = [
-        row for row in document["credentials"]
-        if row["provider_access_id"] in access_ids
-    ]
-    offerings = [
-        row for row in document["offerings"]
-        if row["provider_access_id"] in access_ids
-    ]
-    offering_ids = {row["offering_id"] for row in offerings}
-    deployments = [
-        row for row in document["deployments"]
-        if row["offering_id"] in offering_ids
-        and row["connection_id"] in connection_ids
-    ]
-    return {
-        "provider": copy.deepcopy(provider),
-        "provider_access": copy.deepcopy(accesses[0]) if accesses else None,
-        "connections": copy.deepcopy(connections),
-        "credentials": copy.deepcopy(credentials),
-        "offerings": copy.deepcopy(offerings),
-        "deployments": copy.deepcopy(deployments),
-    }
+from lib.model_routing.probe_plan import provider_bundle as _provider_bundle
 
 
 def _remove_provider(document: dict[str, Any], provider_id: str) -> list[str]:
@@ -291,6 +269,48 @@ def _apply_bundle(
     return provider_id
 
 
+def _refresh_legacy_key_hints(repository, boundary, authority):
+    """Re-seal credentials whose stored hint predates the asterisk mask format.
+
+    Existing secrets were persisted with the `head…tail` ellipsis hint; the
+    settings document keeps serving that format until each secret is
+    re-sealed once. A CAS conflict just defers the rewrite to the next read.
+    """
+    stale = [
+        row for row in (authority.document.get("credentials") or [])
+        if isinstance(row, dict)
+        and "…" in str(row.get("key_hint") or "")
+        and str(row.get("secret_reference") or "")
+    ]
+    if not stale:
+        return authority
+    hints: dict[str, str] = {}
+    for row in stale:
+        reference = str(row["secret_reference"])
+        try:
+            plaintext = repository.resolve_secret(boundary, reference)
+            metadata = repository.put_secret(
+                boundary, plaintext, secret_reference=reference)
+        except ModelRoutingError:
+            continue
+        hints[reference] = str(metadata.get("key_hint") or "")
+    if not hints:
+        return authority
+
+    working = copy.deepcopy(authority.document)
+    for credential in working.get("credentials") or []:
+        if not isinstance(credential, dict):
+            continue
+        hint = hints.get(str(credential.get("secret_reference") or ""))
+        if hint:
+            credential["key_hint"] = hint
+    try:
+        return repository.compare_and_swap(
+            boundary, working, expected_revision=authority.revision)
+    except ModelRoutingError:
+        return authority
+
+
 @api_v1_providers_bp.route("/api/v1/model-routing", methods=["GET"])
 @require_scope("providers")
 @api_meta(summary="Get the owner model-routing v2 authority", tags=["providers"], scope="providers")
@@ -298,7 +318,9 @@ def get_model_routing():
     boundary = _boundary()
     if boundary is None:
         return api_not_found("Model routing authority not found")
-    authority = _repository().get(boundary)
+    repository = _repository()
+    authority = repository.get(boundary)
+    authority = _refresh_legacy_key_hints(repository, boundary, authority)
     return api_ok(model_routing=authority.public_document(), revision=authority.revision)
 
 
@@ -320,6 +342,7 @@ def put_model_routing():
             raise ModelRoutingError("model_routing must be an object")
         committed = _repository().compare_and_swap(
             boundary, document, expected_revision=expected)
+        _hot_reload_dispatcher_slots()
         return api_ok(
             model_routing=committed.public_document(), revision=committed.revision)
     except ModelRoutingError as exc:
@@ -471,95 +494,7 @@ def _read_persisted_probe_snapshot(cache_key: str) -> dict[str, Any] | None:
     return cached
 
 
-def _matrix_probe_plan(
-    repository: ModelRoutingRepository,
-    boundary: OwnerBoundary,
-    bundle: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Resolve one ProviderAccess bundle into engine probe inputs.
-
-    Returns ``{provider, models, api_keys, oauth, adapter, extra_headers}``:
-    ``api_keys[i]`` is the resolved plaintext key for column i (never leaves
-    the process; ``public_probe_snapshot`` strips the task's private fields).
-    A pure subscription access (every credential decodes to an oauth name)
-    switches the task to the engine's oauth mode, which resolves the live
-    token per cell instead of probing the stored sentinel.
-    """
-    connections = [
-        row for row in bundle["connections"]
-        if row.get("enabled", True) and str(row.get("base_url") or "").strip()
-    ]
-    if not connections:
-        raise ModelRoutingError(
-            "provider access has no enabled connection with a base_url",
-            kind="provider_probe_no_connection",
-        )
-    primary = connections[0]
-    credentials = list(bundle["credentials"])
-    if not credentials:
-        raise ModelRoutingError(
-            "provider access has no credentials to probe",
-            kind="provider_probe_no_credentials",
-        )
-    api_keys: list[str] = []
-    oauth_names: list[str] = []
-    for credential in credentials:
-        reference = str(credential.get("secret_reference") or "")
-        plaintext = ""
-        if reference:
-            try:
-                plaintext = repository.resolve_secret(boundary, reference)
-            except ModelRoutingError:
-                plaintext = ""
-        api_key, oauth, _headers = decode_credential_secret(
-            plaintext, kind=str(credential.get("kind") or "api_key"))
-        api_keys.append(api_key)
-        oauth_names.append(oauth)
-    oauth_mode = (
-        bool(credentials)
-        and all(name and name == oauth_names[0] for name in oauth_names)
-    )
-    deployments_by_offering: dict[str, list[str]] = {}
-    for deployment in bundle["deployments"]:
-        if deployment.get("enabled", True) is False:
-            continue
-        wire_id = str(deployment.get("wire_model_id") or "").strip()
-        if not wire_id:
-            continue
-        rows = deployments_by_offering.setdefault(deployment["offering_id"], [])
-        if wire_id not in rows:
-            rows.append(wire_id)
-    models: list[dict[str, Any]] = []
-    for offering in bundle["offerings"]:
-        if offering.get("identity_state") != "confirmed" or not offering.get("model"):
-            continue
-        entry: dict[str, Any] = {
-            "model_id": str(offering["model"].get("model_id") or ""),
-            "aliases": [],
-            "capabilities": list(offering.get("capabilities") or []),
-        }
-        wire_ids = deployments_by_offering.get(offering["offering_id"], [])
-        if wire_ids:
-            entry["request_ids"] = wire_ids
-        models.append(entry)
-    if not models:
-        raise ModelRoutingError(
-            "provider access has no confirmed offerings to probe",
-            kind="provider_probe_no_offerings",
-        )
-    return {
-        "provider": {
-            "id": str(bundle["provider"]["provider_id"]),
-            "base_url": str(primary.get("base_url") or ""),
-            "protocol": str(primary.get("protocol") or "openai") or "openai",
-            "faces": {},
-        },
-        "models": models,
-        "api_keys": (["oauth-managed"] * len(credentials)) if oauth_mode else api_keys,
-        "oauth": oauth_names[0] if oauth_mode else "",
-        "adapter": dict(primary.get("adapter") or {}),
-        "extra_headers": dict(primary.get("extra_headers") or {}),
-    }
+from lib.model_routing.probe_plan import matrix_probe_plan as _matrix_probe_plan
 
 
 @api_v1_providers_bp.route(
@@ -689,6 +624,7 @@ def probe_provider_cells_start(provider_id: str):
             "_protocol": plan["provider"]["protocol"],
             "_oauth": plan["oauth"],
             "_adapter": plan["adapter"],
+            "_disabled_cells": set(plan.get("disabled_cells") or ()),
             "_owner_user_id": boundary.owner_user_id,
         }
         with CELL_PROBE_LOCK:
@@ -785,6 +721,7 @@ def create_provider_route():
             provider_id=provider_id,
             revision=committed.revision,
         )
+        _hot_reload_dispatcher_slots()
         return api_created(
             provider=_provider_bundle(committed.public_document(), provider_id),
             revision=committed.revision,
@@ -857,6 +794,7 @@ def update_provider_route(provider_id: str):
             [reference for reference in old_secrets
              if reference and reference not in active_refs],
         )
+        _hot_reload_dispatcher_slots()
         return api_ok(
             provider=_provider_bundle(committed.public_document(), provider_id),
             revision=committed.revision,
@@ -902,6 +840,7 @@ def delete_provider_route(provider_id: str):
             provider_id=provider_id,
             revision=committed.revision,
         )
+        _hot_reload_dispatcher_slots()
         return api_ok(deleted=provider_id, revision=committed.revision)
     except ModelRoutingError as exc:
         return _error(exc)
@@ -953,6 +892,7 @@ def replace_credential_secret(credential_id: str):
         if prior_reference and prior_reference != stored["secret_reference"]:
             _reclaim_secret_references(
                 repository, boundary, [prior_reference])
+        _hot_reload_dispatcher_slots()
         return api_ok(
             credential_id=credential_id,
             key_hint=stored["key_hint"],
@@ -1058,6 +998,7 @@ def migration_commit_route():
             revision=result.authority.revision if result.authority else 0,
             source_digest=plan.source_digest,
         )
+        _hot_reload_dispatcher_slots()
         return api_ok(
             model_routing=result.authority.public_document() if result.authority else None,
             revision=result.authority.revision if result.authority else 0,

@@ -24,7 +24,6 @@ from lib.storage_sidecar.turn_projection_write import (
     delete_turn_projection_checkpoint,
 )
 import time
-import uuid
 from lib.storage_sidecar.operations_pkg._turns_core import (
     _SYNC_PRIVATE_SETTING_KEYS,
     _attempt_public,
@@ -222,6 +221,14 @@ def _attempt_get(session: Session, payload: Mapping[str, Any]) -> Any:
         "WHERE a.attempt_id=? AND t.user_id=?",
         (attempt_id, user_id),
     )
+    if row is not None and payload.get("resolve_executor"):
+        root_id = str((_load(row["config_json"]) or {}).get("flowRootAttemptId") or "")
+        if root_id:
+            row = session.fetch_one(
+                "SELECT a.* FROM storage_generation_attempts a "
+                "JOIN storage_conversation_turns t ON t.turn_id=a.turn_id "
+                "WHERE a.attempt_id=? AND t.user_id=? AND a.conversation_id=?",
+                (root_id, user_id, row["conversation_id"]))
     return None if row is None else _attempt_public(row)
 
 
@@ -548,6 +555,7 @@ def _partition_visible_messages(messages: Any) -> tuple[list[Any], list[Any]]:
             isinstance(message, Mapping)
             and message.get("role") == "user"
             and message.get("_isVirtualUser")
+            and not message.get("_flowLivePhase")
             and _empty(message.get("content"))
         ):
             dropped_indices.add(index)
@@ -672,14 +680,23 @@ def _visible_shape(
 
 def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
     from lib.orchestration_message_compat import is_flow_turn_kind
+    from lib.orchestration_visible_identity import visible_phase_identity
+    from ._turns_events import _turn_event_record
 
     conv_id = _required_text(payload, "conversation_id", 256)
     user_id = _integer(payload, "user_id", minimum=1)
     attempt_id = _required_text(payload, "attempt_id", 128)
     root_id = _required_text(payload, "root_turn_id", 128)
-    messages, _ = _partition_visible_messages(payload.get("messages") or [])
+    live = bool(payload.get("live"))
+    offset = _integer(payload, "start_index", minimum=0, default=0)
+    source = payload.get("messages") or []
+    messages = list(source) if live else _partition_visible_messages(source)[0]
+    if offset + len(messages) > 4096 or (live and len(messages) != 1):
+        raise StorageError("database_protocol_error", "Invalid visible phase window")
     if not messages:
         return None
+    session.lock_key("conversation", f"{user_id}:{conv_id}")
+    session.lock_key("turn_conversation", f"{user_id}:{conv_id}")
     session.lock_key("attempt_events", attempt_id)
     attempt = session.fetch_one(
         "SELECT * FROM storage_generation_attempts WHERE attempt_id=?", (attempt_id,)
@@ -688,7 +705,8 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
         "SELECT * FROM storage_conversation_turns WHERE conversation_id=? AND turn_id=?",
         (conv_id, root_id),
     )
-    if (attempt is None or root is None or int(root["user_id"]) != user_id
+    if (attempt is None or attempt["status"] not in ("pending", "running")
+            or root is None or int(root["user_id"]) != user_id
             or root["current_attempt_id"] != attempt_id):
         return None
     root_base_revision = int(root["projection_revision"] or 0)
@@ -697,11 +715,15 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
         root_projection_before = {}
     now = int(time.time() * 1000)
     run_id = str(root["run_id"] or (payload.get("run_id") or attempt_id))
-    previous_id = root["parent_turn_id"]
-    related, visible_ids = [], []
+    previous_id = (visible_phase_identity(root_id, attempt_id, offset - 1)[0]
+                   if offset else root["parent_turn_id"])
+    related = [_turn_public(session, root)] if offset else []
+    visible_ids = [visible_phase_identity(root_id, attempt_id, i)[0]
+                   for i in range(offset)]
+    child_events = []
     changed = False
     sync_event: dict[str, Any] | None = None
-    for index, message in enumerate(messages):
+    for index, message in enumerate(messages, start=offset):
         actor, kind, projection = _visible_shape(
             message,
             str(payload.get("default_kind") or "flow_node"),
@@ -745,14 +767,7 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
             _upsert_turn_search_row(session, root)
             related.append(_turn_public(session, root))
             continue
-        turn_id = str(
-            uuid.uuid5(uuid.NAMESPACE_URL, f"turn-attempt:{attempt_id}:visible:{index}")
-        )
-        child_attempt_id = str(
-            uuid.uuid5(
-                uuid.NAMESPACE_URL, f"turn-attempt:{attempt_id}:visible-attempt:{index}"
-            )
-        )
+        turn_id, child_attempt_id = visible_phase_identity(root_id, attempt_id, index)
         visible_ids.append(turn_id)
         existing = session.fetch_one(
             "SELECT * FROM storage_conversation_turns WHERE turn_id=?", (turn_id,)
@@ -763,8 +778,9 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
                 (conv_id, root["lane_id"]),
             )
             ordinal = int(ordinal_row["ordinal"]) + 1
+            phase_status = "running" if live else ("failed" if message.get("error") else "completed")
             settlement = {
-                "outcome": "completed",
+                "outcome": phase_status,
                 "cause": "phase_completed",
                 "providerFinishReason": None,
                 "error": None,
@@ -772,6 +788,8 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
                     {"operation": "regenerate", "anchor": {"type": "turn_start"}}
                 ],
             }
+            if live:
+                settlement = {}
             session.execute(
                 "INSERT INTO storage_conversation_turns (turn_id,conversation_id,user_id,lane_id,parent_turn_id,ordinal,actor,kind,run_id,status,current_attempt_id,projection_json,projection_revision,settlement_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
@@ -784,7 +802,7 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
                     actor,
                     kind,
                     run_id,
-                    "completed",
+                    phase_status,
                     child_attempt_id,
                     _dump(projection),
                     1,
@@ -800,16 +818,16 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
                     conv_id,
                     turn_id,
                     f"run:{attempt_id}:visible:{index}",
-                    "",
+                    str(attempt["task_id"] or ""),
                     "generate",
-                    "completed",
+                    phase_status,
                     0,
                     _dump({}),
-                    _dump({"runId": run_id}),
+                    _dump({"runId": run_id, "flowRootAttemptId": attempt_id}),
                     _dump({}),
                     now,
                     now,
-                    now,
+                    None if live else now,
                 ),
             )
             event = {
@@ -818,9 +836,9 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
                 "attemptId": child_attempt_id,
                 "seq": 1,
                 "projectionRevision": 1,
-                "type": "terminal_settlement",
+                "type": "status_changed" if live else "terminal_settlement",
                 "payload": {
-                    "status": "completed",
+                    "status": phase_status,
                     "settlement": settlement,
                 },
             }
@@ -831,7 +849,7 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
                 conversation_id=conv_id,
                 turn_id=turn_id,
                 projection_revision=1,
-                event_type="terminal_settlement",
+                event_type="status_changed" if live else "terminal_settlement",
                 envelope=event,
                 created_at=now,
             )
@@ -839,6 +857,25 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
                 "SELECT * FROM storage_conversation_turns WHERE turn_id=?", (turn_id,)
             )
             changed = True
+        elif not live and existing["status"] in ("pending", "running"):
+            _, _, projection = _visible_shape(
+                message, str(payload.get("default_kind") or "flow_node"),
+                live_projection=projection_from_turn_row(session, existing))
+            phase_status = "failed" if message.get("error") else "completed"
+            result = _turn_event_record(session, {
+                "attempt_id": child_attempt_id, "user_id": user_id,
+                "flow_root_attempt_id": attempt_id,
+                "terminal": True, "status": phase_status,
+                "projection": projection,
+                "settlement": {"outcome": phase_status, "cause": "phase_completed",
+                               "resumeOptions": []},
+                "event_type": "terminal_settlement", "event_payload": {},
+            })
+            if not result.get("applied"):
+                raise StorageError("database_conflict", "Visible phase settlement lost authority")
+            child_events.extend(result.get("_conversationSyncAttemptEvents") or [])
+            existing = session.fetch_one(
+                "SELECT * FROM storage_conversation_turns WHERE turn_id=?", (turn_id,))
         _upsert_turn_search_row(session, existing)
         related.append(_turn_public(session, existing))
         previous_id = turn_id
@@ -909,7 +946,58 @@ def _turn_visible_sync(session: Session, payload: Mapping[str, Any]) -> Any:
         sync_event = event_result["event"]
     return {
         "visibleTurnIds": visible_ids,
-        "_conversationSyncAttemptEvents": [sync_event] if sync_event else [],
+        "_conversationSyncAttemptEvents": child_events + ([sync_event] if sync_event else []),
+    }
+
+
+def _snapshot_active_attempt_phase(
+    session: Session,
+    turns: list[Mapping[str, Any]],
+    attempts: list[Mapping[str, Any]],
+    *,
+    conversation_id: str,
+    user_id: int,
+) -> dict[str, Any] | None:
+    """Read at most one 32 KiB event at the snapshot's existing read head.
+
+    The latest event is the only evidence: a cleared, missing or oversized
+    phase never falls back to an older stage or to diagnostic timing history.
+    Terminal and superseded attempts contribute no live presentation.
+    """
+    running = {
+        str(row['attempt_id']) for row in attempts
+        if str(row['status']) == 'running'
+    }
+    turn = next((row for row in reversed(turns)
+                 if row['lane_id'] == 'main' and row['status'] == 'running'
+                 and str(row['current_attempt_id']) in running), None)
+    if turn is None:
+        return None
+    event_row = session.fetch_one(
+        "SELECT CASE WHEN e.payload_bytes<=32768 THEN e.payload_json "
+        "ELSE NULL END AS payload_json FROM storage_attempt_events e "
+        "JOIN storage_conversation_turns t ON t.turn_id=e.turn_id "
+        "AND t.conversation_id=e.conversation_id "
+        "AND t.current_attempt_id=e.attempt_id "
+        "WHERE e.attempt_id=? AND e.conversation_id=? AND t.user_id=? "
+        "ORDER BY e.sequence DESC LIMIT 1",
+        (turn['current_attempt_id'], conversation_id, user_id),
+    )
+    event = _load(event_row['payload_json']) if event_row is not None else None
+    if not isinstance(event, Mapping):
+        return None
+    body = event.get('payload')
+    phase = body.get('phase') if isinstance(body, Mapping) else None
+    revision = event.get('projectionRevision')
+    if (not isinstance(phase, dict) or not phase.get('phase')
+            or not isinstance(revision, int) or isinstance(revision, bool)
+            or not 0 <= revision <= int(turn['projection_revision'])):
+        return None
+    return {
+        'turnId': str(turn['turn_id']),
+        'attemptId': str(turn['current_attempt_id']),
+        'projectionRevision': revision,
+        'phase': phase,
     }
 
 
@@ -1052,6 +1140,10 @@ def _turn_sync_snapshot(session: Session, payload: Mapping[str, Any]) -> Any:
                 "fromConv": str(queue_payload.get("_fromConv") or ""),
                 "isPeerHuman": bool(queue_payload.get("_peerHuman")),
             })
+        from lib.background_command_projection import background_command_completion
+        completion = background_command_completion(queue_payload)
+        if completion is not None:
+            item["backgroundCommand"] = completion
         if queue_payload.get("_steerFallback"):
             item["steerFallback"] = True
         queue_items.append(item)
@@ -1074,6 +1166,11 @@ def _turn_sync_snapshot(session: Session, payload: Mapping[str, Any]) -> Any:
         "attempts": [_attempt_public(row) for row in attempts],
         "queueItems": queue_items,
     }
+    active_phase = _snapshot_active_attempt_phase(
+        session, turns, attempts, conversation_id=conv_id, user_id=user_id,
+    )
+    if active_phase is not None:
+        result['activeAttemptPhase'] = active_phase
     if turn_window is not None:
         result["turnWindow"] = turn_window
     if include_artifact_hint:

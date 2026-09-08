@@ -28,6 +28,10 @@ Pins:
 
 from __future__ import annotations
 
+
+import pytest
+
+pytestmark = pytest.mark.unit
 import os
 import shutil
 import tempfile
@@ -42,6 +46,7 @@ from lib.project_mod.write_tools import (
     drain_root_added_signals,
     tool_apply_diffs,
     tool_edit_file,
+    tool_insert_contents,
     tool_write_file,
 )
 
@@ -183,6 +188,75 @@ class BatchGateTest(_Base):
         self.assertIn('allow_outside_workspace=true', str(res))
         self.assertNotIn('c1', cfg._conv_roots)
 
+
+    def test_edit_file_confirmed_write_end_to_end_through_repair(self):
+        """The exact conv mtq3ev44samfhr path: model args go through
+        validate_then_repair, the executor reads the flag from the REPAIRED
+        dict, and the confirmed out-of-root edit must succeed."""
+        from lib.tool_input_repair import validate_then_repair
+        target = os.path.join(self._sibling, 'mod.py')
+        with open(target, 'w') as fh:
+            fh.write('a\n')
+        repaired, _ = validate_then_repair('edit_file', {
+            'description': 'd',
+            'allow_outside_workspace': True,
+            'edits': [{'path': target, 'operation': 'replace',
+                       'anchor': 'a', 'content': 'b'}],
+        })
+        res = tool_edit_file(self._proj, repaired['edits'],
+                             conv_id='c1', task_id='t1',
+                             allow_outside=bool(repaired.get('allow_outside_workspace')))
+        self.assertIn('1/1', str(res))
+        with open(target) as fh:
+            self.assertEqual(fh.read(), 'b\n')
+        self.assertIn(os.path.abspath(self._sibling), self._conv_root_paths('c1'))
+
+class MetaStampTest(_Base):
+    """The card-facing stamp: the model keeps the full flag-named sentence
+    (it carries the re-issue instructions), while ``build_project_tool_meta``
+    stamps a structured ``outside_workspace`` refusal so the frontend renders
+    one brief notice instead of the verbose dump / a truncated-path chip."""
+
+    def test_batch_failure_stamps_structured_refusal(self):
+        from lib.tools.meta import build_project_tool_meta
+        target = os.path.join(self._sibling, 'mod.py')
+        edits = [{'path': target, 'operation': 'replace',
+                  'anchor': 'a', 'content': 'b'}]
+        content = tool_edit_file(self._proj, edits, conv_id='c1', task_id='t1')
+        meta = build_project_tool_meta('edit_file', {'edits': edits}, content)
+
+        self.assertIn('allow_outside_workspace=true', content,
+                      'model-facing text must keep the re-issue instructions')
+        refusal = meta.get('refusal')
+        self.assertIsNotNone(refusal, meta)
+        self.assertEqual(refusal['kind'], 'outside_workspace')
+        self.assertEqual(refusal['paths'], [target])
+        summary = meta['editSummaries'][0]
+        self.assertEqual(summary['status'], 'fail')
+        self.assertIs(summary.get('outsideWorkspace'), True)
+        self.assertIn('outside every registered workspace root',
+                      summary['detail'])
+
+    def test_insert_contents_failure_stamps_structured_refusal(self):
+        from lib.tools.meta import build_project_tool_meta
+        target = os.path.join(self._sibling, 'mod.py')
+        args = {'edits': [{'path': target, 'anchor': 'a', 'content': 'b'}]}
+        content = tool_insert_contents(self._proj, args['edits'],
+                                       conv_id='c1', task_id='t1')
+        meta = build_project_tool_meta('insert_contents', args, content)
+        self.assertEqual(meta['refusal']['kind'], 'outside_workspace')
+        self.assertEqual(meta['refusal']['paths'], [target])
+        self.assertIs(meta['editSummaries'][0].get('outsideWorkspace'), True)
+
+    def test_ordinary_failure_stamps_no_refusal(self):
+        from lib.tools.meta import build_project_tool_meta
+        args = {'edits': [{'path': 'a.py', 'operation': 'replace',
+                           'anchor': 'x', 'content': 'y'}]}
+        content = ('Applied 0/1 edits (1 failed)\n'
+                   '[1] FAIL a.py: anchor not found')
+        meta = build_project_tool_meta('edit_file', args, content)
+        self.assertNotIn('refusal', meta)
+        self.assertNotIn('outsideWorkspace', meta['editSummaries'][0])
 
 class WireSchemaTest(unittest.TestCase):
     def test_all_six_write_schemas_expose_the_flag(self):

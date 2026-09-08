@@ -63,13 +63,17 @@ def test_sparse_summary_items_projection_unwraps_to_the_spawn_handle():
 def test_snapshot_versions_never_regress_a_settled_round():
     from lib.swarm.snapshot import stamp_round
 
-    round_projection = {"toolName": "spawn_agents", "_swarm": True}
+    import json
+    round_projection = {"toolName": "spawn_agents", "_swarm": True,
+                        "toolContent": json.dumps({"swarm_id": "run"})}
     settled = {
         "agents": [{"id": "a", "status": "done"}],
+        "swarm_id": "run",
         "settled": True,
         "version": 100001,
     }
     late_partial = {
+        "swarm_id": "run",
         "agents": [{"id": "a", "status": "running"}],
         "settled": False,
         "version": 0,
@@ -194,6 +198,7 @@ def test_spawn_settlement_compensates_when_fast_agent_finished_before_handle(
     settled = {
         "agents": [{
             "id": "fast-agent",
+            # Identity is on the snapshot and launch receipt, not this row.
             "role": "researcher",
             "objective": "finish before handle settlement",
             "status": "done",
@@ -202,6 +207,7 @@ def test_spawn_settlement_compensates_when_fast_agent_finished_before_handle(
             "tokens": 11,
         }],
         "settled": True,
+        "swarm_id": "spawn-task",
         "totalTokens": 11,
         "agentCount": 1,
         "doneCount": 1,
@@ -221,6 +227,7 @@ def test_spawn_settlement_compensates_when_fast_agent_finished_before_handle(
         "toolContent": json.dumps({
             "status": "async_launched",
             "agents": [{"id": "fast-agent"}],
+            "swarm_id": "spawn-task",
         }),
     }
 

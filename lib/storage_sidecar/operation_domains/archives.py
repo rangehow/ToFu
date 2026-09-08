@@ -1,9 +1,16 @@
 """Compaction archive operation catalog."""
 
 from lib.storage_sidecar import operations as ops
+from lib.storage_sidecar.operations_pkg._model_continuation import (
+    continuation_get, continuation_put, continuation_delete,
+)
 
 
 OPERATIONS = {
+    # Live frontier CAS, not receipt replay: retain no historical payload copies.
+    'model_continuation.get': ops.OperationSpec('query', False, continuation_get),
+    'model_continuation.put': ops.OperationSpec('command', False, continuation_put),
+    'model_continuation.delete': ops.OperationSpec('command', False, continuation_delete),
     "compaction_archive.create": ops.OperationSpec(
         "command", True, ops._archive_create
     ),

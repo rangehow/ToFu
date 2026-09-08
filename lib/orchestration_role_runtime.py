@@ -95,6 +95,7 @@ class OrchestrationRoleRuntime:
             effective_context = self._feedback.compose_shared_context(
                 node_id,
                 effective_context if typed_input is not None else context,
+                include_history=typed_input is None,
             )
         if verifier:
             effective_context = self._progress.append_deliverables_snapshot(

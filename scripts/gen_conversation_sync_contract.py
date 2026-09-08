@@ -439,6 +439,19 @@ function jsonValuesEqual(left: unknown, right: unknown): boolean {
       && jsonValuesEqual(leftObject[field], rightObject[field]));
 }
 
+// JSON Schema lengths count code points, not UTF-16 units; avoid allocating an array.
+function stringLength(schema: ContractSchema, value: string): number {
+  if (typeof schema.minLength !== 'number' && typeof schema.maxLength !== 'number') {
+    return value.length;
+  }
+  let length = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.codePointAt(index)! > 0xffff) index += 1;
+    length += 1;
+  }
+  return length;
+}
+
 function isValidNode(schemaValue: unknown, value: unknown): boolean {
   const schema = record(schemaValue) ?? {};
   const ref = typeof schema.$ref === 'string' ? schema.$ref : '';
@@ -470,9 +483,10 @@ function isValidNode(schemaValue: unknown, value: unknown): boolean {
   const kind = schema.type;
   if (kind === 'null') return value === null;
   if (kind === 'string') {
-    return typeof value === 'string'
-      && (typeof schema.minLength !== 'number' || value.length >= schema.minLength)
-      && (typeof schema.maxLength !== 'number' || value.length <= schema.maxLength)
+    if (typeof value !== 'string') return false;
+    const length = stringLength(schema, value);
+    return (typeof schema.minLength !== 'number' || length >= schema.minLength)
+      && (typeof schema.maxLength !== 'number' || length <= schema.maxLength)
       && (typeof schema.pattern !== 'string' || (new RegExp(schema.pattern)).test(value));
   }
   if (kind === 'integer' || kind === 'number') {
@@ -552,10 +566,11 @@ function validateNode(schemaValue: unknown, value: unknown, path: string): strin
   if (kind === 'null') return value === null ? [] : [`${path}: expected null`];
   if (kind === 'string') {
     if (typeof value !== 'string') return [`${path}: expected string`];
-    if (typeof schema.minLength === 'number' && value.length < schema.minLength) {
+    const length = stringLength(schema, value);
+    if (typeof schema.minLength === 'number' && length < schema.minLength) {
       return [`${path}: string is shorter than ${schema.minLength}`];
     }
-    if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) {
+    if (typeof schema.maxLength === 'number' && length > schema.maxLength) {
       return [`${path}: string is longer than ${schema.maxLength}`];
     }
     if (typeof schema.pattern === 'string' && !(new RegExp(schema.pattern)).test(value)) {

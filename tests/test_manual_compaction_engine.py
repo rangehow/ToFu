@@ -767,3 +767,110 @@ def test_reconcile_budget_exhaustion_is_stale(monkeypatch):
     from lib.tasks_pkg.compaction._constants import _MANUAL_RECONCILE_HARD_ITER_CAP
     assert len(store.cas_calls) < _MANUAL_RECONCILE_HARD_ITER_CAP, (
         'time budget must stop the loop long before the infinite-loop iter cap')
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('marker', [
+    {'_isVirtualUser': True}, {'_isVuDirective': True},
+    {'_isInboxInject': True}, {'_isMeta': True},
+])
+def test_manual_tail_and_boundary_ignore_synthetic_user_roles(marker):
+    import lib.tasks_pkg.compaction._manual as man
+
+    raw = [_u('Continue authorized work.', 1), _a_tools('working', 5, 2),
+           dict(_u('runtime notification', 3), **marker)]
+    assert man._raw_turn_boundary(raw, max_turns=1, budget_tokens=1) == 0
+    hot, boundary = man._select_global_hot_rounds(raw, config={}, budget_tokens=1)
+    assert boundary == 0
+    assert hot == {(1, 4)}
+
+
+@pytest.mark.unit
+def test_global_hot_tail_expands_previous_user_shell(monkeypatch):
+    import copy
+    import lib.tasks_pkg.compaction._manual as man
+
+    monkeypatch.setattr(man, '_MANUAL_INTRA_TURN_HOT_ROUNDS', 2)
+    monkeypatch.setattr(man, '_usable_context', lambda limit: 100)
+    raw = [_u('objective', 1), _a_plain('old', 2),
+           _u('execute', 3), _a_tools('giant', 8, 4, chars=8000),
+           _u('continue', 5)]
+    before = copy.deepcopy(raw)
+    plan = man.plan_manual_compaction(raw, max_turns=1)
+    assert plan['boundary'] == 2
+    rebuilt = man.apply_manual_compaction(raw, plan, 'summary')
+    rounds = [r for m in rebuilt for r in m.get('toolRounds', [])]
+    assert [r['toolCallId'] for r in rounds] == ['tc_4_7']
+    assert _api_ok(man._project(rebuilt))[0]
+    assert raw == before
+
+
+@pytest.mark.unit
+def test_global_hot_tail_does_not_reset_per_assistant(monkeypatch):
+    import lib.tasks_pkg.compaction._manual as man
+
+    monkeypatch.setattr(man, '_MANUAL_INTRA_TURN_HOT_ROUNDS', 2)
+    raw = [_u('execute', 1), _a_tools('first', 4, 2, chars=100),
+           _u('next', 3), _a_tools('second', 1, 4, chars=100)]
+    pending = {'toolCallId': 'pending', 'toolName': 'read_files', 'status': 'running'}
+    synthetic = dict(raw[-1]['toolRounds'][0], toolCallId='compact',
+                     toolName='context_compact')
+    raw[-1]['toolRounds'].extend([synthetic, pending])
+    plan = man.plan_manual_compaction(raw, total_tokens=100000)
+    rebuilt = man.apply_manual_compaction(raw, plan, 'summary')
+    ids = [r['toolCallId'] for m in rebuilt for r in m.get('toolRounds', [])]
+    assert ids == ['tc_2_3', 'tc_4_0', 'pending']
+    assert all(pending not in fold['cold_rounds'] for fold in plan['intra_folds'])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('change', ['append', 'edit'])
+def test_manual_new_human_tail_cannot_repin_from_pre_stop_summary(monkeypatch, change):
+    import lib.tasks_pkg.autopilot_state as autopilot
+
+    store = _FakeStore(_long_conv())
+    man = _install(monkeypatch, store)
+    calls = []
+    stop = 'Stop release work; report only.'
+
+    def summarize(*args, **kwargs):
+        if change == 'append':
+            store.messages.append(_u(stop, 99999))
+        else:
+            store.messages[-2]['content'] = stop
+        return '### Objective\nContinue release work.'
+
+    monkeypatch.setattr(man, '_generate_query_aware_summary', summarize)
+    monkeypatch.setattr(autopilot, '_update_objective_from_receipt',
+                        lambda *a, **k: calls.append(a))
+    result = man.compact_conversation_now('c', user_id=1, config={})
+    assert result['ok']
+    assert any(m.get('content') == stop for m in store.saved)
+    assert not calls
+    assert result['receipt']['preserved']['durableObjectiveApplied'] is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('outcome', ['summary_failed', 'stale', 'accepted', 'pin_failure'])
+def test_manual_objective_pin_requires_accepted_cas(monkeypatch, outcome):
+    import lib.tasks_pkg.autopilot_state as autopilot
+
+    store = _FakeStore(_long_conv())
+    man = _install(monkeypatch, store, summary='' if outcome == 'summary_failed' else 'summary')
+    calls = []
+
+    def pin(*args, **kwargs):
+        assert store.saved is not None
+        calls.append(args)
+        if outcome == 'pin_failure':
+            raise RuntimeError('advisory pin unavailable')
+
+    monkeypatch.setattr(autopilot, '_update_objective_from_receipt', pin)
+    if outcome == 'stale':
+        def summarize(*args, **kwargs):
+            store.messages[1]['content'] = 'changed folded source'
+            return 'summary'
+        monkeypatch.setattr(man, '_generate_query_aware_summary', summarize)
+    result = man.compact_conversation_now('c', user_id=1, config={})
+    assert result['ok'] is (outcome in ('accepted', 'pin_failure'))
+    assert len(calls) == int(outcome in ('accepted', 'pin_failure'))

@@ -16,11 +16,13 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
 use crate::authority::AuthorityDatabase;
+
 use crate::authority_gc::{
     AuthorityGarbageCollectionBudget, MAX_AUTHORITY_GC_ORPHAN_PAYLOAD_SEGMENT_FILES_REMOVED,
     MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED, MAX_AUTHORITY_GC_PAYLOAD_SEGMENT_FILES_SCANNED,
     MAX_AUTHORITY_GC_TEMPORARY_BLOCK_FILES_REMOVED, MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS,
 };
+use crate::background_pack::BackgroundPacker;
 use crate::generated_storage_operations::STORAGE_SCHEMA_VERSION;
 use crate::generated_storage_v2::{
     MAX_DAEMON_AUTH_SECRET_BYTES, MAX_IN_FLIGHT_FRAMES, MIN_DAEMON_AUTH_SECRET_BYTES,
@@ -200,6 +202,17 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
         })
         .transpose()?;
     let maintenance_observer = maintenance.as_ref().map(MaintenanceScheduler::observer);
+    // Packing staged blocks into payload segments costs an 8 MiB write +
+    // fsync; doing it here keeps that latency off every rotation commit.
+    let background_packer = if std::env::var_os("TOFU_DB_DISABLE_BACKGROUND_PACK").is_some() {
+        None
+    } else {
+        let database = database
+            .lock()
+            .map_err(|_| io::Error::other("authority mutex poisoned"))?;
+        Some(BackgroundPacker::start(database.block_store_shared())?)
+    };
+    let packer_observer = background_packer.as_ref().map(BackgroundPacker::observer);
     let result = listener.run_with_search_and_gc_budget(
         database,
         search_projection,
@@ -213,6 +226,9 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
             if let Some(observer) = maintenance_observer.as_ref() {
                 observer.require_healthy()?;
             }
+            if let Some(observer) = packer_observer.as_ref() {
+                observer.require_healthy()?;
+            }
             parent_lease.poll_alive()
         },
     );
@@ -220,9 +236,22 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
         .as_ref()
         .map(MaintenanceScheduler::stop_and_join)
         .transpose();
+    let packer_result = background_packer
+        .as_ref()
+        .map(BackgroundPacker::stop_and_join)
+        .transpose();
     let parent_result = parent_lease.join_if_finished();
+    if std::env::var_os("TOFU_DB_FSYNC_STATS").is_some() {
+        eprintln!("fsync_stats: {}", crate::fsync_stats::report());
+        eprintln!("stage_stats:\n{}", crate::fsync_stats::stage_report());
+        eprintln!(
+            "packer_metrics: {:?}",
+            background_packer.as_ref().map(BackgroundPacker::metrics)
+        );
+    }
     let listener_metrics = result?;
     maintenance_result?;
+    packer_result?;
     parent_result?;
     Ok(listener_metrics)
 }

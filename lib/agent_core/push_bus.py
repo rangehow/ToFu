@@ -1,8 +1,7 @@
 """lib/agent_core/push_bus.py — Cross-replica fan-out transport for PushHub.
 
 Epic B (). See the ratified design in
-``docs/ENTERPRISE_READINESS_AUDIT.md`` §3 (relay), §4 (Redis substrate) and
-§3.1 (uniform bus-only delivery).
+``docs/ENTERPRISE_EVOLUTION.md`` (Runtime and scale-out).
 
 **The bug this fixes.** ``PushHub`` fan-out is process-local: a frame
 published on the replica that owns a task never reaches a subscriber whose

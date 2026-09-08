@@ -11,11 +11,12 @@ Fix (P1): ``generate_conversation_title`` passes ``exclude_models=`` to
 routing. The excluded set is a frozenset constant maintained inside
 ``title_gen`` — this test guards two invariants:
 
-1. The constant exactly equals the set derived from
-   ``bootstrap._BUILTIN_PROVIDER_TEMPLATES`` (i.e. every model with BOTH
-   ``cheap`` AND ``thinking`` capabilities). If a sibling adds a new
-   cheap+thinking model to bootstrap without updating the constant,
-   this fails — forcing the update.
+1. ``_thinking_models_to_exclude()`` derives its set from the LIVE
+   template catalog (``load_provider_templates()``) on every call — every
+   model with BOTH ``cheap`` AND ``thinking`` capabilities — so hot-updated
+   template files apply without a restart. The static
+   ``_THINKING_MODELS_TO_EXCLUDE`` frozenset is only the emergency floor
+   for a catalog-unreadable call and must stay within the derivation.
 2. ``generate_conversation_title`` forwards that exact set as
    ``exclude_models=`` to the dispatcher. NEUTER check disproves a
    trivial no-op guard.
@@ -45,33 +46,56 @@ def _restore_dispatch_module_after_stub():
         sys.modules['lib.llm_dispatch'] = original
 
 
-def _derive_expected_from_bootstrap() -> frozenset[str]:
-    """Compute the ground-truth set of cheap+thinking model ids from bootstrap."""
-    bootstrap = importlib.import_module('bootstrap')
+def _derive_expected_from_catalog() -> frozenset[str]:
+    """Ground-truth cheap+thinking model ids from the live template catalog."""
+    recipes = importlib.import_module('lib.provider_template_recipes')
     result: set[str] = set()
-    for provider in bootstrap._BUILTIN_PROVIDER_TEMPLATES:
-        for m in provider.get('models', []):
-            caps = set(m.get('capabilities', []))
-            if {'cheap', 'thinking'}.issubset(caps):
-                result.add(m['model_id'])
+    for template in recipes.load_provider_templates():
+        for row in template.get('offering_recipes') or []:
+            caps = set(row.get('capabilities') or [])
+            model_id = str(row.get('model_id') or '')
+            if model_id and {'cheap', 'thinking'}.issubset(caps):
+                result.add(model_id)
     return frozenset(result)
 
 
-def test_constant_matches_bootstrap_derivation():
-    """title_gen's excluded set ≡ every cheap+thinking model in bootstrap."""
+def test_runtime_derivation_matches_catalog():
+    """_thinking_models_to_exclude() ≡ every cheap+thinking catalog model."""
     tg = importlib.import_module('lib.conversations.title_gen')
-    assert hasattr(tg, '_THINKING_MODELS_TO_EXCLUDE'), \
-        'title_gen must expose _THINKING_MODELS_TO_EXCLUDE constant'
-    got = tg._THINKING_MODELS_TO_EXCLUDE
+    got = tg._thinking_models_to_exclude()
     assert isinstance(got, frozenset), \
         f'must be frozenset, got {type(got).__name__}'
-    expected = _derive_expected_from_bootstrap()
+    expected = _derive_expected_from_catalog()
     assert got == expected, (
-        f'title_gen._THINKING_MODELS_TO_EXCLUDE out of sync with bootstrap.\n'
-        f'  missing (in bootstrap, not in constant): {expected - got}\n'
-        f'  extra (in constant, not in bootstrap): {got - expected}\n'
-        f'Update _THINKING_MODELS_TO_EXCLUDE in lib/conversations/title_gen.py '
-        f'when adding/removing a cheap+thinking model in bootstrap.py.')
+        f'title_gen._thinking_models_to_exclude() out of sync with the '
+        f'template catalog.\n'
+        f'  missing (in catalog, not derived): {expected - got}\n'
+        f'  extra (derived, not in catalog): {got - expected}')
+
+
+def test_static_floor_stays_within_catalog_derivation():
+    """The emergency floor must not rot: every floor entry is still a
+    cheap+thinking model in the live catalog (otherwise trim the floor)."""
+    tg = importlib.import_module('lib.conversations.title_gen')
+    assert isinstance(tg._THINKING_MODELS_TO_EXCLUDE, frozenset)
+    stale = tg._THINKING_MODELS_TO_EXCLUDE - _derive_expected_from_catalog()
+    assert not stale, (
+        f'static floor entries no longer cheap+thinking in the catalog: '
+        f'{sorted(stale)} — trim _THINKING_MODELS_TO_EXCLUDE in '
+        f'lib/conversations/title_gen.py')
+
+
+def test_catalog_unreadable_falls_back_to_static_floor(monkeypatch):
+    """A broken template catalog must not crash title generation — the
+    exclusion set degrades to the static floor instead."""
+    recipes = importlib.import_module('lib.provider_template_recipes')
+
+    def _boom():
+        raise RuntimeError('catalog mid-write')
+
+    monkeypatch.setattr(recipes, 'load_provider_templates', _boom)
+    tg = importlib.import_module('lib.conversations.title_gen')
+    assert tg._thinking_models_to_exclude() == tg._THINKING_MODELS_TO_EXCLUDE
 
 
 def test_constant_contains_known_offenders():
@@ -81,11 +105,11 @@ def test_constant_contains_known_offenders():
     they remain live in a corp gateway template, we want to notice.
     """
     tg = importlib.import_module('lib.conversations.title_gen')
-    got = tg._THINKING_MODELS_TO_EXCLUDE
+    got = tg._thinking_models_to_exclude()
     for name in ('deepseek-v4-pro', 'qwen3-max', 'glm-4.7'):
         assert name in got, (
             f'{name} sampled as producing finish=length on title tasks '
-            f'must stay in _THINKING_MODELS_TO_EXCLUDE')
+            f'must stay in the title-gen exclusion set')
 
 
 def test_generate_forwards_exclude_models_to_dispatch():
@@ -116,9 +140,9 @@ def test_generate_forwards_exclude_models_to_dispatch():
     assert 'exclude_models' in captured.get('kwargs', {}), (
         'generate_conversation_title must pass exclude_models=')
     fwd = set(captured['kwargs']['exclude_models'])
-    assert fwd == set(tg._THINKING_MODELS_TO_EXCLUDE), (
-        f'forwarded exclude_models {fwd} != constant '
-        f'{set(tg._THINKING_MODELS_TO_EXCLUDE)}')
+    assert fwd == set(tg._thinking_models_to_exclude()), (
+        f'forwarded exclude_models {fwd} != derived set '
+        f'{set(tg._thinking_models_to_exclude())}')
 
 
 def test_neuter_forwarding_check_would_fail_on_empty_exclude():
@@ -126,12 +150,14 @@ def test_neuter_forwarding_check_would_fail_on_empty_exclude():
     (or forwarded an empty list), test_generate_forwards_exclude_models_to_dispatch
     MUST turn red. Prove non-triviality by hand-constructing the negative case."""
     tg = importlib.import_module('lib.conversations.title_gen')
-    # The forwarding-check compares to a NON-EMPTY constant; if a would-be
+    # The forwarding-check compares to a NON-EMPTY derived set; if a would-be
     # regression forwarded exclude_models=[] we should be able to detect
-    # inequality against the real constant. Sanity: the constant is non-empty.
-    assert len(tg._THINKING_MODELS_TO_EXCLUDE) >= 4, (
-        'constant is expected to hold at least the 4 known offenders — '
+    # inequality against the real set. Sanity: derivation and floor non-empty.
+    assert len(tg._thinking_models_to_exclude()) >= 4, (
+        'derived set is expected to hold at least the 4 known offenders — '
         'if it drops below that, the NEUTER guard is weakened')
+    assert len(tg._THINKING_MODELS_TO_EXCLUDE) >= 4, (
+        'static floor must stay non-empty for the catalog-unreadable case')
 
 
 # ─────────────────────────────────────────────────────────────

@@ -43,6 +43,18 @@ const STOPPING_ICON = '<svg aria-hidden="true" width="16" height="16" viewBox="0
 
 const boundDraftInputs = new WeakSet<HTMLTextAreaElement>();
 
+/* innerHTML replacement recreates the badge span, which replays its CSS pop
+ * animation — the draft listener refreshes on every keystroke, so an
+ * unconditional rewrite makes the queue count flicker while typing. Rewrite
+ * only when the markup actually changed (state flip or count change). */
+const renderedMarkups = new WeakMap<HTMLButtonElement, string>();
+
+function setButtonMarkup(button: HTMLButtonElement, markup: string): void {
+  if (renderedMarkups.get(button) === markup) return;
+  renderedMarkups.set(button, markup);
+  button.innerHTML = markup;
+}
+
 function buttonById(document: Document, id: string): HTMLButtonElement | null {
   const element = document.getElementById(id);
   return element?.tagName === 'BUTTON' ? element as HTMLButtonElement : null;
@@ -88,7 +100,7 @@ function showSend(
   button.style.cursor = '';
   button.removeAttribute('aria-busy');
   setAccessibleLabel(button, input.labels.sendTitle, input.labels.send);
-  button.innerHTML = SEND_ICON;
+  setButtonMarkup(button, SEND_ICON);
   button.onclick = input.onSend;
 }
 
@@ -105,8 +117,11 @@ function showStop(
   button.style.cursor = input.stopping ? 'progress' : '';
   button.setAttribute('aria-busy', String(input.stopping));
   setAccessibleLabel(button, label, label);
-  button.innerHTML = (input.stopping ? STOPPING_ICON : STOP_ICON)
-    + queueBadge(input.queueCount);
+  setButtonMarkup(
+    button,
+    (input.stopping ? STOPPING_ICON : STOP_ICON)
+      + queueBadge(input.queueCount),
+  );
   button.onclick = input.onStop;
 }
 

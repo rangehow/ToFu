@@ -118,10 +118,12 @@ def test_latex_scaffold_preserves_edits_and_exports_safe_deterministic_zip():
 
 def test_readiness_invalidates_compile_and_publication_after_source_edit():
     from lib.research.program import readiness, source_tree_digest
+    from lib.research.program import scientific_dependency_digest
     from lib.research.workspace import empty_workspace
 
     workspace = empty_workspace('Evidence contracts')
     workspace['source_files'] = [{'path': 'main.tex', 'content': 'v1'}]
+    workspace['manuscript']['scientific_dependency_digest'] = scientific_dependency_digest(workspace)
     digest = source_tree_digest(workspace['source_files'])
     workspace['compilation'].update(status='passing', source_digest=digest)
     workspace['publication'].update(status='published', source_digest=digest)

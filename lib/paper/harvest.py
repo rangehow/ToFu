@@ -649,7 +649,7 @@ def harvest_arxiv_batch(arxiv_ids: Iterable[str], *, folder_id: str = '',
             out['cache_hits'] += 1
         else:
             out['errors'] += 1
-        if on_progress is not None:
+        if on_progress is not None and not (abort_check and abort_check()):
             try:
                 on_progress({'type': 'paper_done', 'index': index,
                              'total': total, 'result': res.to_dict()})

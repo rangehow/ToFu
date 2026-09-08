@@ -249,6 +249,36 @@ def project_agent_result(
         'usage': task.get('usage') or {},
         'n_tool_rounds': len(rounds),
     }
+    if task.get('streamState'):
+        result['stream_state'] = task['streamState']
+    # Last 16 per-request parser receipts, not summed usage flags. Whitelist
+    # fields so future backend diagnostics cannot export request bodies/keys.
+    diagnostics = []
+    terminal_fields = (
+        'state', 'provider_finish_reason', 'finish_seen', 'done_seen',
+        'malformed_frames', 'transport_bytes', 'sse_events', 'content_chars',
+        'reasoning_chars', 'tool_calls', 'tool_argument_chars',
+    )
+    for row in (task.get('apiRounds') or [])[-16:]:
+        if not isinstance(row, dict):
+            continue
+        usage = row.get('usage') or {}
+        terminal = usage.get('_stream_terminal') if isinstance(usage, dict) else None
+        if not isinstance(terminal, dict):
+            continue
+        from lib.log_redaction import redact_text
+        receipt = {key: terminal[key] for key in terminal_fields if key in terminal}
+        receipt = {key: (redact_text(value, max_chars=160)
+                         if isinstance(value, str) else value)
+                   for key, value in receipt.items()
+                   if isinstance(value, (str, int, float, bool)) or value is None}
+        round_id = row.get('round')
+        receipt['round'] = (round_id if isinstance(round_id, int) else
+                            redact_text(str(round_id or ''), max_chars=64))
+        receipt['trace_id'] = redact_text(str(usage.get('trace_id') or ''), max_chars=160)
+        diagnostics.append(receipt)
+    if diagnostics:
+        result['stream_diagnostics'] = diagnostics
     if task.get('compactionUsage'):
         result['compaction_usage'] = task['compactionUsage']
     if (last_round and isinstance(last_round, dict)

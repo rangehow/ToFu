@@ -432,7 +432,7 @@ class AutopilotProjectionContractTest(unittest.TestCase):
         self.assertEqual(vu_msg['_autopilotRunId'], 'run-1')
         self.assertEqual(vu_msg['content'], 'Keep going')
 
-    def test_task_done_discards_placeholder_and_never_persists_token(self):
+    def test_task_done_settles_visible_phase_without_persisting_control_token(self):
         streamed = []
         adapter = FlowEventAdapter(
             on_stream=streamed.append,
@@ -450,12 +450,14 @@ class AutopilotProjectionContractTest(unittest.TestCase):
             'role': 'virtual_user', 'emits': 'user',
             'output': '[VU: TASK_DONE]',
         })
-        self.assertEqual(adapter.messages, [])
+        self.assertEqual(len(adapter.messages), 1)
+        self.assertEqual(adapter.messages[0]['content'], '')
+        self.assertTrue(adapter.messages[0]['_flowLivePhase'])
         terminal = streamed[-1]
         self.assertEqual(terminal['type'], 'flow_critic_msg')
         self.assertEqual(terminal['vuMsgId'], vu_msg_id)
         self.assertEqual(terminal['next_phase'], 'stop')
-        self.assertTrue(terminal['discard'])
+        self.assertFalse(terminal.get('discard', False))
         self.assertEqual(terminal['content'], '')
 
     def test_step_phase_for_producer_becomes_wire_phase(self):

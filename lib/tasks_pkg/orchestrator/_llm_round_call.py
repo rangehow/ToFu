@@ -15,9 +15,9 @@ stream loop. Steps:
    model / preset / thinking_enabled land on ``rs`` (usage keeps the
    previous value when the result carries none).
 3. **Deferred peer + steer inbox flush**
-   (``flush_deferred_peer_and_steer`` — slice 12): the LLM call just
-   succeeded, so the peer and human-steer messages injected into
-   ``messages`` earlier this round WERE consumed by the model; the
+   (``flush_deferred_peer_and_steer`` — slice 12): only a verified
+   provider completion (not a local failure dictionary or loop break)
+   confirms consumption of messages injected earlier this round. The
    flush emits the confirm chips + dedups the durable queue rows.
 4. **Early model surface**: ``task['model']`` is stamped AS SOON as
    the resolved model is known (was only set at finalization), so
@@ -120,10 +120,21 @@ def run_llm_call_with_fallback(
         rs.preset = llm_result['preset']
         rs.thinking_enabled = llm_result['thinking_enabled']
 
+        # Returning a dictionary is not success: the fallback layer also
+        # returns local/rejected/exhausted failures with a loop break. Require
+        # the provider result carried by successful primary/fallback/rescue
+        # paths, and its closed completion verdict. The synthetic legacy
+        # writeback above is for downstream compatibility, not delivery proof.
+        provider_consumed = (
+            raw_stream_result is not None
+            and rs.last_stream_result.is_verified_complete
+            and llm_result['_loop_action'] != 'break'
+        )
+
         # Narrative cursor advancement is an acknowledgement of model
         # consumption, not request construction.  Only the first successful
         # provider return can confirm the pending Project Context page.
-        if task.get('_projectNarrativeDelivery'):
+        if provider_consumed and task.get('_projectNarrativeDelivery'):
             pending_delivery = task.pop('_projectNarrativeDelivery')
             try:
                 from lib.agent_core.store import get_conversation_store
@@ -136,15 +147,16 @@ def run_llm_call_with_fallback(
                     tid, exc)
 
         # ── Flush DEFERRED peer + steer inbox ( slice 12) ──
-        #   The LLM call above just succeeded, so the peer and
-        #   human-steer messages injected into ``messages`` earlier
-        #   this round WERE consumed by the model. The helper emits
+        #   Only verified completion confirms consumption of the peer,
+        #   steer and background-command messages injected earlier this
+        #   round. Failed/unusable attempts leave them pending. The helper emits
         #   the PEER_INBOX_INJECT / USER_STEER_INJECT chips, records
         #   display-only sidecars on the task, and de-dups the
         #   durable message_queue rows so dispatch_next_queued can't
         #   later re-dispatch them as a redundant fresh turn.
-        #   Never-zero-and-never-double invariants preserved.
-        flush_deferred_peer_and_steer(task, round_num=round_num, tid=tid)
+        #   Preserve recoverability; consumption and storage ACK are not atomic.
+        if provider_consumed:
+            flush_deferred_peer_and_steer(task, round_num=round_num, tid=tid)
 
         # Surface the resolved model on the task AS SOON as it's known
         # (was only set at task finalization), so per-round telemetry

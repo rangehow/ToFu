@@ -18,6 +18,7 @@ from lib.model_catalog._creator_identity import (
     is_creator_row,
     strip_routing_decoration,
 )
+from lib.model_catalog._score_matching import match_model, normalize_name
 
 
 pytestmark = pytest.mark.unit
@@ -37,6 +38,7 @@ pytestmark = pytest.mark.unit
     ('deepseek-ai/DeepSeek-V3', 'DeepSeek-V3'),
     ('meta/llama-3-8b-instruct', 'llama-3-8b-instruct'),
     ('qwen/qwen3-235b-a22b', 'qwen3-235b-a22b'),
+    ('openbmb/MiniCPM-V-4.6', 'MiniCPM-V-4.6'),
     ('google/gemma-2-2b-it', 'gemma-2-2b-it'),
 
     ('zai.glm-5', 'glm-5'),
@@ -143,8 +145,16 @@ def test_canonical_key_unifies_creator_and_relay_skus():
     ('minimax-m2.5', 'minimax'),
     ('kimi-k2-0711', 'moonshot'),
     ('glm-4.6', 'zhipu'),
+    ('hy4-preview', 'tencent'),
+    ('hy3', 'tencent'),
+    ('hy-mt2-7b', 'tencent'),
+    ('hunyuan-2.0-thinking-20251109', 'tencent'),
+    ('tencent/hunyuan-large', 'tencent'),
     ('doubao-seed-1-6', 'bytedance'),
     ('Ling-1T', 'bailing'),
+    ('openbmb/minicpm5-1b', 'openbmb'),
+    ('minicpm-v-4-6-1-3b', 'openbmb'),
+    ('siliconflow/minicpm5-1b', 'openbmb'),
     # ink**ling** contains 'ling' but is Thinking Machines, not Ant Group.
     ('thinkingmachines/inkling', 'thinkingmachines'),
     ('inkling', 'thinkingmachines'),
@@ -153,6 +163,45 @@ def test_canonical_key_unifies_creator_and_relay_skus():
 ])
 def test_creator_family(raw, expected):
     assert creator_family(raw) == expected
+
+
+def _aa_row(name: str, slug: str, creator: str) -> dict:
+    keys = {normalize_name(name), normalize_name(slug)} - {''}
+    return {'aa_name': name, 'aa_slug': slug, '_keys': keys,
+            '_creator_keys': {normalize_name(creator)} - {''}}
+
+
+def test_match_model_bridges_external_creator_spellings():
+    """AA labels creators by its own names (SpaceXAI for Grok, InclusionAI
+    for Ling/Ring, OpenBMB for MiniCPM); the family brand table must bridge
+    them to the canonical creator ids or every score is filtered out."""
+    rows = [
+        _aa_row('Grok 4.1 Fast (Reasoning)', 'grok-4-1-fast-reasoning',
+                'SpaceXAI'),
+        _aa_row('Ling-1T', 'ling-1t', 'InclusionAI'),
+        _aa_row('MiniCPM5-1B (Reasoning)', 'minicpm5-1b', 'OpenBMB'),
+    ]
+    assert match_model({
+        'creator_id': 'xai',
+        'model_id': 'grok-4.1-fast-reasoning',
+        'display_name': 'Grok 4.1 Fast (Reasoning)',
+    }, rows) is rows[0]
+    assert match_model({
+        'creator_id': 'bailing',
+        'model_id': 'Ling-1T',
+        'display_name': 'Ling-1T',
+    }, rows) is rows[1]
+    assert match_model({
+        'creator_id': 'openbmb',
+        'model_id': 'minicpm5-1b',
+        'display_name': 'MiniCPM5-1B (Reasoning)',
+    }, rows) is rows[2]
+    # The alias bridge never licenses a cross-creator match.
+    assert match_model({
+        'creator_id': 'meta',
+        'model_id': 'Ling-1T',
+        'display_name': 'Ling-1T',
+    }, rows) is None
 
 
 @pytest.mark.parametrize('brand,expected', [

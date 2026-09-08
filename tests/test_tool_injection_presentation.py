@@ -278,6 +278,31 @@ check('bg_command_lane_renders_escaped_result_without_markdown_port',
   && bgcmdHtml.includes('&lt;raw result&gt;')
   && !bgcmdHtml.includes('<raw result>')
   && !bgcmdHtml.includes('sw-steer-row'));
+const typedBg = presentation.renderInjectionHtml({
+  _bgCommandInject: true,
+  bgCommandPreviews: [{commandId: 'bg_1', text: 'XML_SHOULD_NOT_RENDER',
+    backgroundCommand: {commandId: 'bg_1', status: 'completed', command: 'cmd',
+      resultPreview: '<img onerror=bad>' + 'X'.repeat(2200), resultTruncated: true}}],
+});
+check('typed_background_preview_is_escaped_bounded_and_honest',
+  typedBg.includes('&lt;img onerror=bad&gt;')
+  && typedBg.includes('content-limit:2000')
+  && !typedBg.includes('<img') && !typedBg.includes('XML_SHOULD_NOT_RENDER'));
+const fullTypedBg = presentation.renderInjectionHtml({
+  _bgCommandInject: true,
+  bgCommandPreviews: [{commandId: 'bg_full', text: 'CLIPPED_WRAPPER', textTruncated: true,
+    backgroundCommand: {commandId: 'bg_full', status: 'completed', command: 'cmd',
+      resultPreview: 'complete output', resultTruncated: false}}],
+});
+check('complete_typed_output_ignores_unused_wrapper_truncation',
+  fullTypedBg.includes('complete output') && !fullTypedBg.includes('content-limit:'));
+const cutXmlBg = presentation.renderInjectionHtml({
+  _bgCommandInject: true,
+  bgCommandPreviews: [{text: '<background-command id="bg" status="completed">output', textTruncated: true}],
+});
+check('truncated_legacy_xml_does_not_leak_wrapper',
+  cutXmlBg.includes('output') && !cutXmlBg.includes('&lt;background-command')
+  && cutXmlBg.includes('content-limit:'));
 const emptyBgcmdHtml = presentation.renderInjectionHtml({
   _bgCommandInject: true,
   bgCommandPreviews: 'malformed',
@@ -331,6 +356,6 @@ def test_tool_injection_owner_contract():
     run_harness(
         target_js=str(OWNER_JS),
         body_js=_OWNER_HARNESS,
-        expect_pass=21,
+        expect_pass=24,
         label='tool injection presentation owner',
     )

@@ -205,7 +205,7 @@ export function createConversationSurfaceController(
             repaintPresentation();
             return;
           }
-          if (intent.type === 'copy') {
+          if (intent.type === 'copy' || intent.type === 'copy-block') {
             host.onIntent?.({ ...intent, operation: `copy-${mode}` });
             return;
           }

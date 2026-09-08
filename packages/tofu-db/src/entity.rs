@@ -1,6 +1,6 @@
 //! Owner-scoped MVCC entities on immutable copy-on-write B+Tree pages.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +26,11 @@ const PAGE_VERSION: u32 = 1;
 const ROOT_VERSION: u32 = 1;
 const ROOT_DIRECTORY_MAGIC: &[u8; 8] = b"TDBRDIR1";
 const ROOT_DIRECTORY_VERSION: u32 = 1;
-const PAGE_TARGET_BYTES: usize = 16 * 1024;
+/// Fresh pages pack to this target. Pages up to PAGE_MAX_BYTES (the original
+/// pack target) stay readable and writable so trees written before the target
+/// tightened need no migration, and one maximum-size entry always fits.
+const PAGE_PACK_TARGET_BYTES: usize = 8 * 1024;
+const PAGE_MAX_BYTES: usize = 16 * 1024;
 const MAX_NAMESPACE_BYTES: usize = 63;
 const MAX_TREE_DEPTH: usize = 16;
 const MAX_RANGE_WITNESS_LEAVES: usize = 1_024;
@@ -164,9 +168,107 @@ struct RootDirectory {
     mounts: Vec<RangeMount>,
 }
 
+#[derive(Clone)]
 enum RootNode {
     Page(Page),
     Directory(RootDirectory),
+}
+
+/// Default decoded entity-page cache budget.  Decoded pages expand to roughly
+/// four times their encoded size once per-entry Vec/String overhead lands, so
+/// 16 MiB resident covers the hot root-to-leaf paths of personal-mode
+/// authorities without leaving the personal resource budget.
+const DEFAULT_PAGE_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const PAGE_CACHE_DECODED_EXPANSION: usize = 4;
+const PAGE_CACHE_ENTRY_OVERHEAD_BYTES: usize = 256;
+
+/// Byte-bounded LRU over decoded entity root nodes (B+Tree pages and root
+/// directories).  Population happens only on the read path, after the block
+/// store's own verification accepted the payload and the node decoded
+/// successfully — never at write time — so corruption injected behind the
+/// store stays observable exactly as with the block payload cache.  Nodes are
+/// immutable copy-on-write artifacts keyed by content hash, so entries never
+/// need invalidation.
+struct DecodedPageCache {
+    entries: HashMap<BlockId, (Arc<RootNode>, usize, u64)>,
+    lru: VecDeque<(BlockId, u64)>,
+    resident_bytes: usize,
+    capacity_bytes: usize,
+    tick: u64,
+}
+
+impl DecodedPageCache {
+    fn new(capacity_bytes: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+            resident_bytes: 0,
+            capacity_bytes,
+            tick: 0,
+        }
+    }
+
+    fn get(&mut self, id: BlockId) -> Option<Arc<RootNode>> {
+        let (node, _, entry_tick) = self.entries.get_mut(&id)?;
+        let node = Arc::clone(node);
+        self.tick = self.tick.wrapping_add(1);
+        *entry_tick = self.tick;
+        self.lru.push_back((id, self.tick));
+        self.compact_recency();
+        Some(node)
+    }
+
+    fn insert(&mut self, id: BlockId, node: Arc<RootNode>, encoded_len: usize) {
+        let charge = encoded_len
+            .saturating_mul(PAGE_CACHE_DECODED_EXPANSION)
+            .saturating_add(PAGE_CACHE_ENTRY_OVERHEAD_BYTES);
+        if charge > self.capacity_bytes || self.entries.contains_key(&id) {
+            return;
+        }
+        self.tick = self.tick.wrapping_add(1);
+        let tick = self.tick;
+        self.resident_bytes = self.resident_bytes.saturating_add(charge);
+        self.entries.insert(id, (node, charge, tick));
+        self.lru.push_back((id, tick));
+        self.evict_within_budget();
+    }
+
+    fn set_capacity_bytes(&mut self, capacity_bytes: usize) {
+        self.capacity_bytes = capacity_bytes;
+        self.evict_within_budget();
+    }
+
+    /// Keep at most two recency records per resident page. Retaining only
+    /// current ticks preserves exact LRU order and amortizes hot-read cleanup.
+    fn compact_recency(&mut self) {
+        if self.lru.len() > self.entries.len().saturating_mul(2) {
+            self.lru.retain(|(id, tick)| {
+                self.entries
+                    .get(id)
+                    .is_some_and(|(_, _, current)| current == tick)
+            });
+        }
+    }
+
+    fn evict_within_budget(&mut self) {
+        while self.resident_bytes > self.capacity_bytes {
+            let Some((candidate, candidate_tick)) = self.lru.pop_front() else {
+                break;
+            };
+            match self.entries.get(&candidate) {
+                Some((_, _, tick)) if *tick == candidate_tick => {
+                    if let Some((_, charge, _)) = self.entries.remove(&candidate) {
+                        self.resident_bytes = self.resident_bytes.saturating_sub(charge);
+                    }
+                }
+                _ => continue,
+            }
+        }
+        self.compact_recency();
+        if self.entries.is_empty() {
+            self.lru = VecDeque::new();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -207,6 +309,7 @@ pub struct EntityDatabase {
     root: Option<BlockId>,
     database_instance_id: Uuid,
     snapshot_pins: Arc<Mutex<SnapshotPinState>>,
+    page_cache: Mutex<DecodedPageCache>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -338,6 +441,7 @@ impl PreparedEntityCommit {
 
 struct Tree<'a> {
     engine: &'a Engine,
+    page_cache: Option<&'a Mutex<DecodedPageCache>>,
 }
 
 type ScanResult = (Vec<(Vec<u8>, EntityValue)>, Vec<BlockId>);
@@ -830,7 +934,7 @@ impl Page {
     }
 
     fn decode(bytes: &[u8]) -> io::Result<Self> {
-        if bytes.len() < 16 || bytes.len() > PAGE_TARGET_BYTES || &bytes[..8] != PAGE_MAGIC {
+        if bytes.len() < 16 || bytes.len() > PAGE_MAX_BYTES || &bytes[..8] != PAGE_MAGIC {
             return Err(invalid_data("entity page magic mismatch"));
         }
         if u32::from_le_bytes(bytes[8..12].try_into().unwrap()) != PAGE_VERSION {
@@ -1122,17 +1226,45 @@ where
 }
 
 impl<'a> Tree<'a> {
+    /// Loads a root node through the decoded-page cache.  A miss reads and
+    /// fully verifies the block through the engine, decodes it, and only then
+    /// populates the cache; a failed verify/decode populates nothing.
+    fn load_node(&self, id: BlockId) -> io::Result<Arc<RootNode>> {
+        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_LOAD_NODE);
+        if let Some(cache) = self.page_cache {
+            let hit = cache
+                .lock()
+                .map_err(|_| io::Error::other("entity page cache lock was poisoned"))?
+                .get(id);
+            if let Some(node) = hit {
+                return Ok(node);
+            }
+        }
+        let encoded = self.engine.read_block_shared(id)?;
+        let node = if encoded.starts_with(ROOT_DIRECTORY_MAGIC) {
+            RootNode::Directory(RootDirectory::decode(&encoded)?)
+        } else {
+            RootNode::Page(Page::decode(&encoded)?)
+        };
+        let node = Arc::new(node);
+        if let Some(cache) = self.page_cache {
+            cache
+                .lock()
+                .map_err(|_| io::Error::other("entity page cache lock was poisoned"))?
+                .insert(id, Arc::clone(&node), encoded.len());
+        }
+        Ok(node)
+    }
+
     fn load(&self, id: BlockId) -> io::Result<Page> {
-        Page::decode(&self.engine.read_block(id)?)
+        match &*self.load_node(id)? {
+            RootNode::Page(page) => Ok(page.clone()),
+            RootNode::Directory(_) => Err(invalid_data("entity page magic mismatch")),
+        }
     }
 
     fn load_root(&self, id: BlockId) -> io::Result<RootNode> {
-        let encoded = self.engine.read_block(id)?;
-        if encoded.starts_with(ROOT_DIRECTORY_MAGIC) {
-            RootDirectory::decode(&encoded).map(RootNode::Directory)
-        } else {
-            Page::decode(&encoded).map(RootNode::Page)
-        }
+        Ok((*self.load_node(id)?).clone())
     }
 
     fn store_directory(
@@ -1209,10 +1341,11 @@ impl<'a> Tree<'a> {
     }
 
     fn store(&self, page: &Page, written_block_ids: &mut Vec<BlockId>) -> io::Result<Child> {
+        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_STORE_PAGE);
         page.validate()?;
         let encoded = page.encode()?;
-        if encoded.len() > PAGE_TARGET_BYTES {
-            return Err(invalid_data("entity page exceeds target after split"));
+        if encoded.len() > PAGE_MAX_BYTES {
+            return Err(invalid_data("entity page exceeds maximum after split"));
         }
         let block_id = self.engine.write_block(&encoded)?;
         if !written_block_ids.contains(&block_id) {
@@ -1240,8 +1373,8 @@ impl<'a> Tree<'a> {
         if directory_depth > MAX_TREE_DEPTH {
             return Err(invalid_data("entity root directory exceeds maximum depth"));
         }
-        match self.load_root(root)? {
-            RootNode::Page(page) => self.get_page(page, key),
+        match &*self.load_node(root)? {
+            RootNode::Page(page) => self.get_page(page, key, 0),
             RootNode::Directory(directory) => {
                 if let Some(base_root) = directory.base_root {
                     if let Some(value) = self.get_root(base_root, key, directory_depth + 1)? {
@@ -1266,24 +1399,23 @@ impl<'a> Tree<'a> {
         }
     }
 
-    fn get_page(&self, page: Page, key: &[u8]) -> io::Result<Option<EntityValue>> {
-        let mut current_page = page;
-        for _ in 0..=MAX_TREE_DEPTH {
-            match current_page {
-                Page::Leaf(entries) => {
-                    return Ok(entries
-                        .binary_search_by(|entry| entry.0.as_slice().cmp(key))
-                        .ok()
-                        .map(|index| entries[index].1.clone()));
-                }
-                Page::Internal { children, .. } => {
-                    let index =
-                        children.partition_point(|child| child.lower_bound.as_slice() <= key);
-                    current_page = self.load(children[index.saturating_sub(1)].block_id)?;
+    fn get_page(&self, page: &Page, key: &[u8], depth: usize) -> io::Result<Option<EntityValue>> {
+        if depth > MAX_TREE_DEPTH {
+            return Err(invalid_data("entity tree exceeds maximum depth"));
+        }
+        match page {
+            Page::Leaf(entries) => Ok(entries
+                .binary_search_by(|entry| entry.0.as_slice().cmp(key))
+                .ok()
+                .map(|index| entries[index].1.clone())),
+            Page::Internal { children, .. } => {
+                let index = children.partition_point(|child| child.lower_bound.as_slice() <= key);
+                match &*self.load_node(children[index.saturating_sub(1)].block_id)? {
+                    RootNode::Page(child) => self.get_page(child, key, depth + 1),
+                    RootNode::Directory(_) => Err(invalid_data("entity page magic mismatch")),
                 }
             }
         }
-        Err(invalid_data("entity tree exceeds maximum depth"))
     }
 
     fn pack_leaves(
@@ -1303,7 +1435,9 @@ impl<'a> Tree<'a> {
                 let entry = &entries[end];
                 let entry_bytes =
                     2 + 2 + 8 + 1 + entry.0.len() + entry.1.value.as_ref().map_or(0, Vec::len);
-                if used + entry_bytes > PAGE_TARGET_BYTES {
+                // The first entry is always admitted: a maximum-size key and
+                // value overshoot the pack target but still fit PAGE_MAX_BYTES.
+                if end > start && used + entry_bytes > PAGE_PACK_TARGET_BYTES {
                     break;
                 }
                 used += entry_bytes;
@@ -1332,12 +1466,12 @@ impl<'a> Tree<'a> {
         let mut used = 16;
         for child in children {
             let child_bytes = 2 + child.lower_bound.len() + 32;
-            if !current.is_empty() && used + child_bytes > PAGE_TARGET_BYTES {
+            if !current.is_empty() && used + child_bytes > PAGE_PACK_TARGET_BYTES {
                 groups.push(current);
                 current = Vec::new();
                 used = 16;
             }
-            if used + child_bytes > PAGE_TARGET_BYTES {
+            if used + child_bytes > PAGE_PACK_TARGET_BYTES {
                 return Err(invalid_data("entity child cannot fit in one internal page"));
             }
             used += child_bytes;
@@ -1378,8 +1512,14 @@ impl<'a> Tree<'a> {
         }
         let mut written_block_ids = Vec::new();
         let (mut replacements, mut level) = if let Some(root) = root {
-            let root_page = self.load(root)?;
-            let level = match &root_page {
+            let root_node = self.load_node(root)?;
+            let root_page = match &*root_node {
+                RootNode::Page(page) => page,
+                RootNode::Directory(_) => {
+                    return Err(invalid_data("entity page magic mismatch"));
+                }
+            };
+            let level = match root_page {
                 Page::Leaf(_) => 0,
                 Page::Internal { level, .. } => *level,
             };
@@ -1408,7 +1548,7 @@ impl<'a> Tree<'a> {
 
     fn apply_page(
         &self,
-        page: Page,
+        page: &Page,
         writes: &[(Vec<u8>, Option<Vec<u8>>)],
         version: u64,
         depth: usize,
@@ -1419,40 +1559,90 @@ impl<'a> Tree<'a> {
         }
         match page {
             Page::Leaf(entries) => {
-                let mut merged: BTreeMap<Vec<u8>, EntityValue> = entries.into_iter().collect();
-                for (key, value) in writes {
-                    merged.insert(
-                        key.clone(),
+                // batch: writes win on equal keys, exactly the previous
+                // BTreeMap overlay, without per-entry map node allocations.
+                let mut merged: Vec<(Vec<u8>, EntityValue)> =
+                    Vec::with_capacity(entries.len() + writes.len());
+                let mut write_index = 0;
+                for (key, value) in entries {
+                    while write_index < writes.len()
+                        && writes[write_index].0.as_slice() < key.as_slice()
+                    {
+                        let (write_key, write_value) = &writes[write_index];
+                        merged.push((
+                            write_key.clone(),
+                            EntityValue {
+                                version,
+                                value: write_value.clone(),
+                            },
+                        ));
+                        write_index += 1;
+                    }
+                    if write_index < writes.len()
+                        && writes[write_index].0.as_slice() == key.as_slice()
+                    {
+                        let (write_key, write_value) = &writes[write_index];
+                        merged.push((
+                            write_key.clone(),
+                            EntityValue {
+                                version,
+                                value: write_value.clone(),
+                            },
+                        ));
+                        write_index += 1;
+                        continue;
+                    }
+                    merged.push((key.clone(), value.clone()));
+                }
+                while write_index < writes.len() {
+                    let (write_key, write_value) = &writes[write_index];
+                    merged.push((
+                        write_key.clone(),
                         EntityValue {
                             version,
-                            value: value.clone(),
+                            value: write_value.clone(),
                         },
-                    );
+                    ));
+                    write_index += 1;
                 }
-                self.pack_leaves(merged.into_iter().collect(), written_block_ids)
+                self.pack_leaves(merged, written_block_ids)
             }
             Page::Internal { level, children } => {
-                let mut grouped = vec![Vec::new(); children.len()];
-                for (key, value) in writes {
-                    let index = children
-                        .partition_point(|child| child.lower_bound.as_slice() <= key.as_slice());
-                    grouped[index.saturating_sub(1)].push((key.clone(), value.clone()));
-                }
-                let mut next_children = Vec::new();
-                for (child, child_writes) in children.into_iter().zip(grouped) {
-                    if child_writes.is_empty() {
-                        next_children.push(child);
-                    } else {
-                        next_children.extend(self.apply_page(
-                            self.load(child.block_id)?,
-                            &child_writes,
-                            version,
-                            depth + 1,
-                            written_block_ids,
-                        )?);
+                // The sorted write batch maps to a sparse, nondecreasing run
+                // of child indexes; only those children are reloaded and
+                // repacked, the rest pass through by reference.
+                let mut next_children = Vec::with_capacity(children.len());
+                let mut write_index = 0;
+                for (child_index, child) in children.iter().enumerate() {
+                    let group_start = write_index;
+                    while write_index < writes.len() && {
+                        let index = children.partition_point(|candidate| {
+                            candidate.lower_bound.as_slice() <= writes[write_index].0.as_slice()
+                        });
+                        index.saturating_sub(1) == child_index
+                    } {
+                        write_index += 1;
                     }
+                    if group_start == write_index {
+                        next_children.push(child.clone());
+                        continue;
+                    }
+                    let child_node = self.load_node(child.block_id)?;
+                    let child_page = match &*child_node {
+                        RootNode::Page(page) => page,
+                        RootNode::Directory(_) => {
+                            return Err(invalid_data("entity page magic mismatch"));
+                        }
+                    };
+                    next_children.extend(self.apply_page(
+                        child_page,
+                        &writes[group_start..write_index],
+                        version,
+                        depth + 1,
+                        written_block_ids,
+                    )?);
                 }
-                self.pack_internal(level, next_children, written_block_ids)
+                self.pack_internal(*level, next_children, written_block_ids)
             }
         }
     }
@@ -1830,7 +2020,8 @@ impl<'a> Tree<'a> {
         if directory_depth > MAX_TREE_DEPTH {
             return Err(invalid_data("entity root directory exceeds maximum depth"));
         }
-        match self.load_root(root)? {
+        let node = self.load_node(root)?;
+        match &*node {
             RootNode::Page(_) => {
                 let mut rows = Vec::new();
                 if reverse {
@@ -1914,8 +2105,8 @@ impl<'a> Tree<'a> {
         if depth > MAX_TREE_DEPTH {
             return Err(invalid_data("entity tree exceeds maximum depth"));
         }
-        match self.load(id)? {
-            Page::Leaf(entries) => {
+        match &*self.load_node(id)? {
+            RootNode::Page(Page::Leaf(entries)) => {
                 if leaves.len() == MAX_RANGE_WITNESS_LEAVES {
                     return Err(invalid_input("entity range witness exceeds 1024 leaves"));
                 }
@@ -1926,11 +2117,11 @@ impl<'a> Tree<'a> {
                         && value.value.is_some()
                         && rows.len() < limit
                     {
-                        rows.push((key, value));
+                        rows.push((key.clone(), value.clone()));
                     }
                 }
             }
-            Page::Internal { children, .. } => {
+            RootNode::Page(Page::Internal { children, .. }) => {
                 for (index, child) in children.iter().enumerate() {
                     if rows.len() == limit {
                         break;
@@ -1945,6 +2136,7 @@ impl<'a> Tree<'a> {
                     }
                 }
             }
+            RootNode::Directory(_) => return Err(invalid_data("entity page magic mismatch")),
         }
         Ok(())
     }
@@ -1981,23 +2173,23 @@ impl<'a> Tree<'a> {
         if depth > MAX_TREE_DEPTH {
             return Err(invalid_data("entity tree exceeds maximum depth"));
         }
-        match self.load(id)? {
-            Page::Leaf(entries) => {
+        match &*self.load_node(id)? {
+            RootNode::Page(Page::Leaf(entries)) => {
                 if leaves.len() == MAX_RANGE_WITNESS_LEAVES {
                     return Err(invalid_input("entity range witness exceeds 1024 leaves"));
                 }
                 leaves.push(id);
-                for (key, value) in entries.into_iter().rev() {
+                for (key, value) in entries.iter().rev() {
                     if key.as_slice() >= start
                         && key.as_slice() < end
                         && value.value.is_some()
                         && rows.len() < limit
                     {
-                        rows.push((key, value));
+                        rows.push((key.clone(), value.clone()));
                     }
                 }
             }
-            Page::Internal { children, .. } => {
+            RootNode::Page(Page::Internal { children, .. }) => {
                 for (index, child) in children.iter().enumerate().rev() {
                     if rows.len() == limit {
                         break;
@@ -2020,6 +2212,7 @@ impl<'a> Tree<'a> {
                     }
                 }
             }
+            RootNode::Directory(_) => return Err(invalid_data("entity page magic mismatch")),
         }
         Ok(())
     }
@@ -2067,6 +2260,7 @@ impl EntityDatabase {
             root: None,
             database_instance_id: Uuid::new_v4(),
             snapshot_pins: Default::default(),
+            page_cache: Mutex::new(DecodedPageCache::new(DEFAULT_PAGE_CACHE_BYTES)),
         })
     }
 
@@ -2076,6 +2270,7 @@ impl EntityDatabase {
             root: None,
             database_instance_id: Uuid::new_v4(),
             snapshot_pins: Default::default(),
+            page_cache: Mutex::new(DecodedPageCache::new(DEFAULT_PAGE_CACHE_BYTES)),
         })
     }
 
@@ -2100,14 +2295,30 @@ impl EntityDatabase {
                 .ok_or_else(|| invalid_data("latest transaction has no authority state root"))?,
         };
         if let Some(root) = root {
-            Tree { engine: &engine }.load_root(root)?;
+            Tree {
+                engine: &engine,
+                page_cache: None,
+            }
+            .load_root(root)?;
         }
         Ok(Self {
             engine,
             root,
             database_instance_id: Uuid::new_v4(),
             snapshot_pins: Default::default(),
+            page_cache: Mutex::new(DecodedPageCache::new(DEFAULT_PAGE_CACHE_BYTES)),
         })
+    }
+
+    /// Overrides the decoded entity-page cache budget.  The default serves
+    /// personal-mode authorities; embedders with tighter memory budgets lower
+    /// this before serving traffic, and tests use it to exercise eviction.
+    pub fn set_page_cache_capacity_bytes(&self, capacity_bytes: usize) -> io::Result<()> {
+        self.page_cache
+            .lock()
+            .map_err(|_| io::Error::other("entity page cache lock was poisoned"))?
+            .set_capacity_bytes(capacity_bytes);
+        Ok(())
     }
 
     pub fn begin(&self, tenant_id: u64, owner_user_id: u64) -> io::Result<EntityTransaction> {
@@ -2247,6 +2458,7 @@ impl EntityDatabase {
             .ok_or_else(|| invalid_input("cannot snapshot ranges from an empty entity tree"))?;
         let (capsule_root, mut staged_blocks) = (Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         })
         .extract_ranges(source_root, &encoded_ranges)?;
         if !staged_blocks.contains(&capsule_root) {
@@ -2310,6 +2522,7 @@ impl EntityDatabase {
         let snapshot = decode_persistent_root_pin(encoded_snapshot)?;
         let pin_record = (Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         })
         .get(transaction.snapshot.root, pin_state.pin_key.encoded())?
         .ok_or_else(|| invalid_data("persistent entity snapshot pin disappeared"))?;
@@ -2475,6 +2688,7 @@ impl EntityDatabase {
         let pin_key = persistent_root_pin_key(tenant_id, owner_user_id, pin_id)?;
         let Some(record) = (Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         })
         .get(self.root, pin_key.encoded())?
         else {
@@ -2491,6 +2705,7 @@ impl EntityDatabase {
         }
         Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         }
         .load_root(snapshot.root.unwrap())?;
         self.begin_at_snapshot(tenant_id, owner_user_id, Vec::new(), snapshot, false)
@@ -2530,6 +2745,7 @@ impl EntityDatabase {
         let staged = transaction.writes.get(key.encoded()).cloned();
         let entity = match (Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         })
         .get(transaction.snapshot.root, key.encoded())
         {
@@ -2576,6 +2792,7 @@ impl EntityDatabase {
             .ok_or_else(|| invalid_input("entity range limit overflow"))?;
         let scan_result = (Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         })
         .scan(
             transaction.snapshot.root,
@@ -2649,6 +2866,7 @@ impl EntityDatabase {
             .ok_or_else(|| invalid_input("entity range limit overflow"))?;
         let scan_result = (Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         })
         .scan_reverse(
             transaction.snapshot.root,
@@ -2722,6 +2940,7 @@ impl EntityDatabase {
         }
         let tree = Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         };
         let directory = tree.split_root(transaction.snapshot.root)?;
         let owner_prefix = [
@@ -2984,6 +3203,7 @@ impl EntityDatabase {
         }
         let tree = Tree {
             engine: &self.engine,
+            page_cache: Some(&self.page_cache),
         };
         if (!transaction.retired_ranges.is_empty() || !transaction.mounted_ranges.is_empty())
             && transaction.snapshot.root != self.root
@@ -3014,29 +3234,37 @@ impl EntityDatabase {
                 "entity replacement range has no matching retirement",
             ));
         }
-        for (key, witnessed) in &transaction.point_witnesses {
-            let current = tree.get(self.root, key)?.map(|value| value.version);
-            if &current != witnessed {
-                return Err(conflict("entity point witness changed"));
+        // Roots are content-addressed and immutable: while the transaction's
+        // snapshot root still is the current root, every comparison below
+        // would re-read the exact content the witnesses were recorded from
+        // and pass by construction, so the re-verification is skipped.  Any
+        // intervening commit that changed observable content produced a
+        // different root and takes the full verification path.
+        if transaction.snapshot.root != self.root {
+            for (key, witnessed) in &transaction.point_witnesses {
+                let current = tree.get(self.root, key)?.map(|value| value.version);
+                if &current != witnessed {
+                    return Err(conflict("entity point witness changed"));
+                }
             }
-        }
-        for key in transaction.writes.keys() {
-            let snapshot = tree
-                .get(transaction.snapshot.root, key)?
-                .map(|value| value.version);
-            let current = tree.get(self.root, key)?.map(|value| value.version);
-            if snapshot != current {
-                return Err(conflict("entity write witness changed"));
+            for key in transaction.writes.keys() {
+                let snapshot = tree
+                    .get(transaction.snapshot.root, key)?
+                    .map(|value| value.version);
+                let current = tree.get(self.root, key)?.map(|value| value.version);
+                if snapshot != current {
+                    return Err(conflict("entity write witness changed"));
+                }
             }
-        }
-        for witness in &transaction.range_witnesses {
-            let (_, current_leaves) = if witness.reverse {
-                tree.scan_reverse(self.root, &witness.start, &witness.end, witness.scan_limit)?
-            } else {
-                tree.scan(self.root, &witness.start, &witness.end, witness.scan_limit)?
-            };
-            if current_leaves != witness.leaf_ids {
-                return Err(conflict("entity range witness changed"));
+            for witness in &transaction.range_witnesses {
+                let (_, current_leaves) = if witness.reverse {
+                    tree.scan_reverse(self.root, &witness.start, &witness.end, witness.scan_limit)?
+                } else {
+                    tree.scan(self.root, &witness.start, &witness.end, witness.scan_limit)?
+                };
+                if current_leaves != witness.leaf_ids {
+                    return Err(conflict("entity range witness changed"));
+                }
             }
         }
         if transaction.writes.is_empty()
@@ -3073,11 +3301,15 @@ impl EntityDatabase {
             retirement_changed |= mounts_changed;
         }
         if !transaction.writes.is_empty() {
-            let (written_root, write_blocks) = tree.apply_batch(
-                directory.base_root,
-                transaction.writes.into_iter().collect(),
-                sequence,
-            )?;
+            let (written_root, write_blocks) = {
+                let _timer =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_APPLY_BATCH);
+                tree.apply_batch(
+                    directory.base_root,
+                    transaction.writes.into_iter().collect(),
+                    sequence,
+                )?
+            };
             directory.base_root = Some(written_root);
             written_block_ids.extend(write_blocks);
         } else if !retirement_changed && transaction.mounted_ranges.is_empty() {
@@ -3192,6 +3424,93 @@ mod tests {
 
     fn key(value: u16) -> EntityKey {
         EntityKey::new(7, 11, "conversation", &value.to_be_bytes()).unwrap()
+    }
+
+    #[test]
+    fn apply_batch_matches_a_btree_oracle_across_splits_replaces_and_deletes() {
+        // Regression coverage for the merge-join leaf overlay and sparse
+        // internal grouping in `Tree::apply_page`: every committed batch is
+        // compared against an in-memory oracle, including keys that replace
+        // existing values and tombstoned deletes, across enough data to force
+        // leaf splits and multi-level internal nodes.
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = EntityDatabase::initialize(directory.path()).unwrap();
+        let mut oracle: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+        let mut state: u64 = 0x9e3779b97f4a7c15;
+        let mut next_random = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let keyspace: Vec<Vec<u8>> = (0..240u32)
+            .map(|index| {
+                let mut encoded = b"oracle/".to_vec();
+                encoded.extend_from_slice(&index.to_be_bytes());
+                encoded
+            })
+            .collect();
+        for round in 0..60 {
+            let mut transaction = database.begin(7, 11).unwrap();
+            for _ in 0..24 {
+                let key = keyspace[(next_random() as usize) % keyspace.len()].clone();
+                match next_random() % 4 {
+                    0 => {
+                        if oracle.remove(&key).is_some() || next_random() % 2 == 0 {
+                            database
+                                .delete(
+                                    &mut transaction,
+                                    EntityKey::new(7, 11, "oracle", &key).unwrap(),
+                                )
+                                .unwrap();
+                            oracle.remove(&key);
+                        } else {
+                            let value = next_random().to_le_bytes().to_vec();
+                            database
+                                .put(
+                                    &mut transaction,
+                                    EntityKey::new(7, 11, "oracle", &key).unwrap(),
+                                    value.clone(),
+                                )
+                                .unwrap();
+                            oracle.insert(key, value);
+                        }
+                    }
+                    _ => {
+                        let size = 16 + (next_random() as usize) % 400;
+                        let mut value = next_random().to_le_bytes().to_vec();
+                        value.resize(size, (next_random() % 251) as u8);
+                        database
+                            .put(
+                                &mut transaction,
+                                EntityKey::new(7, 11, "oracle", &key).unwrap(),
+                                value.clone(),
+                            )
+                            .unwrap();
+                        oracle.insert(key, value);
+                    }
+                }
+            }
+            database.commit(transaction).unwrap();
+            let mut read = database.begin(7, 11).unwrap();
+            let (start, end) = EntityKey::prefix_range(7, 11, "oracle", b"").unwrap();
+            let mut scanned: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+            let mut cursor = start;
+            loop {
+                let page = database.scan(&mut read, &cursor, &end, 37).unwrap();
+                if page.is_empty() {
+                    break;
+                }
+                let last = page.last().unwrap().0.clone();
+                for (key, value) in page {
+                    scanned.insert(key.key_bytes().to_vec(), value);
+                }
+                let mut after = last.key_bytes().to_vec();
+                after.push(0);
+                cursor = EntityKey::new(7, 11, "oracle", &after).unwrap();
+            }
+            assert_eq!(scanned, oracle, "round {round} diverged from the oracle");
+        }
     }
 
     #[test]
@@ -3575,6 +3894,7 @@ mod tests {
         let count_key = persistent_root_pin_count_key().unwrap();
         let count_record = (Tree {
             engine: &database.engine,
+            page_cache: Some(&database.page_cache),
         })
         .get(database.root, count_key.encoded())
         .unwrap()
@@ -3636,6 +3956,7 @@ mod tests {
                     .is_none());
                 assert!((Tree {
                     engine: &database.engine,
+                    page_cache: Some(&database.page_cache),
                 })
                 .get(
                     database.root,
@@ -3659,6 +3980,7 @@ mod tests {
                 );
                 let count = (Tree {
                     engine: &database.engine,
+                    page_cache: Some(&database.page_cache),
                 })
                 .get(
                     database.root,
@@ -3830,6 +4152,7 @@ mod tests {
             database.commit(second).unwrap();
             let old = Tree {
                 engine: &database.engine,
+                page_cache: Some(&database.page_cache),
             }
             .get(old_snapshot.root, key(50).encoded())
             .unwrap()
@@ -3854,10 +4177,10 @@ mod tests {
         }
         database.commit(transaction).unwrap();
         let after = database.engine.block_write_metrics();
-        assert_eq!(after.blocks_written - before.blocks_written, 3);
-        assert!(after.bytes_written - before.bytes_written <= 32 * 1024);
+        assert_eq!(after.blocks_staged - before.blocks_staged, 5);
+        assert!(after.bytes_staged - before.bytes_staged <= 32 * 1024);
         let first_commit = database.engine.committed_transactions().last().unwrap();
-        assert_eq!(first_commit.envelope.block_ids.len(), 3);
+        assert_eq!(first_commit.envelope.block_ids.len(), 5);
         assert!(first_commit
             .envelope
             .block_ids
@@ -3870,10 +4193,7 @@ mod tests {
             .unwrap();
         database.commit(update).unwrap();
         let after_update = database.engine.block_write_metrics();
-        assert_eq!(
-            after_update.blocks_written - before_update.blocks_written,
-            2
-        );
+        assert_eq!(after_update.blocks_staged - before_update.blocks_staged, 2);
         let update_commit = database.engine.committed_transactions().last().unwrap();
         assert_eq!(update_commit.envelope.block_ids.len(), 2);
         assert!(update_commit
@@ -4095,7 +4415,7 @@ mod tests {
         database.commit(restore).unwrap();
         let after_restore = database.engine.block_write_metrics();
         assert_eq!(
-            after_restore.blocks_written - before_restore.blocks_written,
+            after_restore.blocks_staged - before_restore.blocks_staged,
             1,
             "restoring a capsule must publish only its bounded root directory"
         );
@@ -4201,6 +4521,7 @@ mod tests {
         assert!(matches!(
             (Tree {
                 engine: &database.engine,
+                page_cache: Some(&database.page_cache),
             })
             .load_root(database.root.unwrap())
             .unwrap(),
@@ -4370,6 +4691,7 @@ mod tests {
             3 => assert!(matches!(
                 (Tree {
                     engine: &database.engine,
+                    page_cache: Some(&database.page_cache),
                 })
                 .load_root(database.root.unwrap())
                 .unwrap(),
@@ -4378,6 +4700,7 @@ mod tests {
             4 => assert!(matches!(
                 (Tree {
                     engine: &database.engine,
+                    page_cache: Some(&database.page_cache),
                 })
                 .load_root(database.root.unwrap())
                 .unwrap(),
@@ -4874,8 +5197,12 @@ mod tests {
             let mut database =
                 EntityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone())
                     .unwrap();
+            // The corruption target below is a loose block file, so the seed
+            // commit must spill: carried bytes past the ceiling materialize
+            // every staged page as a loose file up front, and the checkpoint
+            // retires the WAL copy.
             let mut seed = database.begin(7, 11).unwrap();
-            for index in 0..64_u16 {
+            for index in 0..300_u16 {
                 database
                     .put(&mut seed, key(index), vec![index as u8; 8 * 1024])
                     .unwrap();
@@ -4950,5 +5277,101 @@ mod tests {
             reads <= MAXIMUM_POINT_COMMIT_READS,
             "single-key commit performed {reads} page/file reads"
         );
+    }
+
+    #[test]
+    fn decoded_page_cache_evicts_least_recently_used_within_byte_budget() {
+        let mut cache = DecodedPageCache::new(1_000);
+        let node = || Arc::new(RootNode::Page(Page::Leaf(Vec::new())));
+        // charge = encoded_len * PAGE_CACHE_DECODED_EXPANSION + 256
+        cache.insert(BlockId([1; 32]), node(), 100);
+        cache.insert(BlockId([2; 32]), node(), 100);
+        assert!(cache.get(BlockId([1; 32])).is_none());
+        assert!(cache.get(BlockId([2; 32])).is_some());
+        cache.insert(BlockId([3; 32]), node(), 50);
+        assert!(cache.get(BlockId([2; 32])).is_none());
+        assert!(cache.get(BlockId([3; 32])).is_some());
+        cache.insert(BlockId([3; 32]), node(), 50);
+        assert_eq!(cache.resident_bytes, 456);
+        cache.insert(BlockId([9; 32]), node(), 4_096);
+        assert!(cache.get(BlockId([9; 32])).is_none());
+        cache.set_capacity_bytes(0);
+        assert_eq!(cache.resident_bytes, 0);
+        assert!(cache.get(BlockId([3; 32])).is_none());
+    }
+
+    #[test]
+    fn decoded_page_cache_hot_reads_bound_recency_and_preserve_eviction_order() {
+        let mut cache = DecodedPageCache::new(2 * 656);
+        let node = || Arc::new(RootNode::Page(Page::Leaf(Vec::new())));
+        cache.insert(BlockId([1; 32]), node(), 100);
+        cache.insert(BlockId([2; 32]), node(), 100);
+        for _ in 0..100_000 {
+            assert!(cache.get(BlockId([1; 32])).is_some());
+            assert!(cache.lru.len() <= 2 * cache.entries.len());
+        }
+        assert_eq!(cache.resident_bytes, 1312);
+        cache.insert(BlockId([3; 32]), node(), 100);
+        assert!(cache.get(BlockId([2; 32])).is_none());
+        assert!(cache.get(BlockId([1; 32])).is_some());
+        assert!(cache.get(BlockId([3; 32])).is_some());
+        cache.set_capacity_bytes(0);
+        assert!(cache.entries.is_empty());
+        assert!(cache.lru.is_empty());
+        assert_eq!(cache.lru.capacity(), 0);
+    }
+
+    #[test]
+    fn operations_remain_correct_without_decoded_page_cache_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = EntityDatabase::initialize(directory.path()).unwrap();
+        database.set_page_cache_capacity_bytes(0).unwrap();
+        let mut seed = database.begin(7, 11).unwrap();
+        for index in 0..64_u16 {
+            database
+                .put(&mut seed, key(index), vec![index as u8; 128])
+                .unwrap();
+        }
+        database.commit(seed).unwrap();
+        let mut read = database.begin(7, 11).unwrap();
+        assert_eq!(
+            database.get(&mut read, &key(17)).unwrap(),
+            Some(vec![17; 128])
+        );
+        let rows = database.scan(&mut read, &key(10), &key(20), 16).unwrap();
+        assert_eq!(rows.len(), 10);
+        let mut update = database.begin(7, 11).unwrap();
+        database.put(&mut update, key(17), b"new".to_vec()).unwrap();
+        database.commit(update).unwrap();
+        let mut reread = database.begin(7, 11).unwrap();
+        assert_eq!(
+            database.get(&mut reread, &key(17)).unwrap(),
+            Some(b"new".to_vec())
+        );
+    }
+
+    #[test]
+    fn stale_snapshot_still_conflicts_after_current_root_fast_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = EntityDatabase::initialize(directory.path()).unwrap();
+        let mut seed = database.begin(7, 11).unwrap();
+        database.put(&mut seed, key(1), b"one".to_vec()).unwrap();
+        database.commit(seed).unwrap();
+        let mut stale = database.begin(7, 11).unwrap();
+        database.get(&mut stale, &key(1)).unwrap();
+        let mut intervening = database.begin(7, 11).unwrap();
+        database
+            .put(&mut intervening, key(1), b"two".to_vec())
+            .unwrap();
+        database.commit(intervening).unwrap();
+        let mut current = database.begin(7, 11).unwrap();
+        database
+            .put(&mut current, key(2), b"second".to_vec())
+            .unwrap();
+        database.commit(current).unwrap();
+        database.put(&mut stale, key(1), b"stale".to_vec()).unwrap();
+        let error = database.commit(stale).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(error.to_string(), "entity point witness changed");
     }
 }

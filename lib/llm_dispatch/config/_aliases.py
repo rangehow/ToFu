@@ -18,6 +18,8 @@ logger = get_logger(__name__)
 MODEL_ALIAS_GROUPS = [
     # Anthropic Fable 5 — aws gateway + direct API + Bedrock-native + Meituan-gateway IDs are interchangeable
     {'aws.fable-5', 'fable-5', 'us.anthropic.fable-5-v1:0', 'claude-fable-5'},
+    # Anthropic Fable 5.1 — aws gateway + direct API + Bedrock-native IDs are interchangeable
+    {'aws.fable-5.1', 'fable-5.1', 'us.anthropic.fable-5-1-v1:0', 'claude-fable-5-1'},
     # Claude Opus 5 — logical id + the Meituan evaDaily gateway spelling
     {'claude-opus-5', 'yuju-claude-opus-5-evaDaily'},
     # Claude Opus 4.8 — logical id + aws gateway + direct API + Bedrock-native IDs are interchangeable
@@ -34,13 +36,11 @@ MODEL_ALIAS_GROUPS = [
     {'claude-sonnet-4.6', 'aws.claude-sonnet-4.6', 'claude-sonnet-4-20250514',
      'claude-sonnet-4-6-20250514', 'claude-sonnet-4-6',
      'us.anthropic.claude-sonnet-4-6-v1:0'},
-    # DeepSeek V3.2 — Meituan gateway mirrors across Tencent/Baidu/Huawei/Doubao clouds
-    {'deepseek-v3.2-tencent', 'deepseek-v3.2-baidu', 'deepseek-v3.2-huawei', 'deepseek-v3.2-doubao'},
     # DeepSeek V4 Flash — direct DeepSeek API + Meituan gateway cloud mirrors
     {'deepseek-v4-flash', 'deepseek-v4-flash-huawei', 'deepseek-v4-flash-tencent',
      'deepseek-v4-flash-meituan'},
     # DeepSeek V4 Pro — direct DeepSeek API + Meituan gateway Tencent-cloud mirror
-    {'deepseek-v4-pro', 'deepseek-v4-pro-tencent'},
+    {'deepseek-v4-pro', 'deepseek-v4-pro-tencent', 'deepseek-v4-pro-0813'},
     # GLM-5.1 — Meituan gateway default + Huawei-cloud mirror
     {'glm-5.1', 'glm-5.1-huawei'},
 ]

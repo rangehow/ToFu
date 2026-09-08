@@ -60,3 +60,49 @@ def test_readiness_and_startup_require_lifecycle_and_storage(monkeypatch):
             assert _status(common.startup_check()) == 200
 
     asyncio.run(exercise())
+
+
+def test_quiescence_reports_running_task_count(monkeypatch):
+    from routes import common
+
+    app = create_base_app('probe-quiescence', {'TESTING': True})
+    rows = [{'taskId': 't1'}]
+    monkeypatch.setattr(
+        'lib.tasks_pkg.manager.list_running_tasks', lambda: list(rows))
+
+    async def exercise():
+        async with app.test_request_context('/health/quiescence'):
+            response, status = common.quiescence_check()
+            payload = await response.get_json()
+            assert status == 200
+            assert payload['quiet'] is False
+            assert payload['runningTasks'] == 1
+            rows.clear()
+            response, status = common.quiescence_check()
+            payload = await response.get_json()
+            assert status == 200
+            assert payload['quiet'] is True
+            assert payload['runningTasks'] == 0
+
+    asyncio.run(exercise())
+
+
+def test_quiescence_registry_failure_reports_busy(monkeypatch):
+    from routes import common
+
+    app = create_base_app('probe-quiescence-error', {'TESTING': True})
+
+    def _boom():
+        raise RuntimeError('registry down')
+
+    monkeypatch.setattr('lib.tasks_pkg.manager.list_running_tasks', _boom)
+
+    async def exercise():
+        async with app.test_request_context('/health/quiescence'):
+            response, status = common.quiescence_check()
+            payload = await response.get_json()
+            assert status == 200
+            assert payload['quiet'] is False
+            assert payload['runningTasks'] is None
+
+    asyncio.run(exercise())

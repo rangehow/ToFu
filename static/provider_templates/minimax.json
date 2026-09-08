@@ -1,0 +1,125 @@
+{
+  "brand": "minimax",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "minimax",
+  "category": "official",
+  "name": "MiniMax",
+  "base_url": "https://api.minimax.io/v1",
+  "offering_recipes": [
+    {
+      "model_id": "MiniMax-M3",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60
+    },
+    {
+      "model_id": "MiniMax-M2.7",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60
+    },
+    {
+      "model_id": "MiniMax-M2.7-highspeed",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60
+    },
+    {
+      "model_id": "MiniMax-M2.5",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60
+    },
+    {
+      "model_id": "minimax-01",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 1000000,
+      "pricing": {
+        "input": 0.2,
+        "output": 1.1,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "minimax-m1",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 1000000,
+      "pricing": {
+        "input": 0.55,
+        "output": 2.2,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "minimax-m2",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 204800,
+      "pricing": {
+        "input": 0.255,
+        "output": 1.02,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "minimax-m2-her",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 65536,
+      "pricing": {
+        "input": 0.3,
+        "output": 1.2,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "minimax-m2.1",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 204800,
+      "pricing": {
+        "input": 0.3,
+        "output": 1.2,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    }
+  ]
+}

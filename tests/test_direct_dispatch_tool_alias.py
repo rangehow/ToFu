@@ -269,7 +269,7 @@ def test_swarm_agent_schema_repair_applies_on_direct_path(monkeypatch):
     assert captured['fn_args'] == {'edits': [{
         'path': 'x.py', 'operation': 'replace',
         'anchor': 'a', 'content': 'b',
-    }]}, (
+    }], 'description': 'Edit x.py'}, (
         'swarm direct path must apply param-key alias repair — got %r'
         % captured.get('fn_args'))
 

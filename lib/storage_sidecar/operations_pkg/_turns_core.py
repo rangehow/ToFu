@@ -466,6 +466,27 @@ def _turn_change_capture(
             user_id,
         ))
 
+    elif operation_name == "turn.steer.commit":
+        # Both the public Turn and the injection-array patch grow with history.
+        # Keep the receipt (including its committed-event envelope) content-free.
+        conversation_id = str(clean_result["conversationId"])
+        turn_id = str(clean_result["turnId"])
+        user_id = _conversation_owner_for_turn(session, conversation_id, turn_id)
+        committed.append(_committed_event_notice(
+            _append_conversation_change(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                change_type="conversation.activity",
+                payload={
+                    "requiresSnapshot": True,
+                    "conversationRevision": int(clean_result["conversationRevision"]),
+                },
+                turn_id=turn_id,
+            ),
+            user_id,
+        ))
+
     elif operation_name == "turn.compact":
         if not isinstance(clean_result, Mapping) or not isinstance(
             clean_result.get("turn"), Mapping
@@ -503,7 +524,6 @@ def _turn_change_capture(
         "turn.projection.update",
         "turn.branch.create",
         "turn.branch.delete",
-        "turn.steer.commit",
     }:
         if not isinstance(clean_result, Mapping) or not isinstance(
             clean_result.get("turn"), Mapping
@@ -631,6 +651,18 @@ def _turn_change_capture(
                             clean_result.get("conversationRevision") or 0
                         ),
                     },
+                ),
+                user_id,
+            ))
+
+        elif operation_name == "turn.queue.cancel" and clean_result.get("cancelled"):
+            committed.append(_committed_event_notice(
+                _append_conversation_change(
+                    session, conversation_id=conversation_id, user_id=user_id,
+                    change_type="turn.upsert",
+                    payload={"turns": [], "attempts": [],
+                             "removedQueueIds": [str(clean_result["queueId"])],
+                             "conversationRevision": int(clean_result["conversationRevision"])},
                 ),
                 user_id,
             ))

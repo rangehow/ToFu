@@ -183,16 +183,36 @@ fn process_conversation(
     unreachable!("bounded turn-search page loop returns at its limit")
 }
 
+/// Internal/operator entry point: schedule exactly this explicit owner scope.
+/// This does not claim legacy global RPC semantics or projection completion.
+pub fn schedule_owner_search_backfill(
+    database: &mut AuthorityDatabase,
+    scope: crate::maintenance::MaintenanceScope,
+) -> io::Result<u64> {
+    let mut transaction = database.begin(scope.tenant_id, scope.owner_user_id)?;
+    let state = crate::semantic_executor::search_backfill::schedule(database, &mut transaction)?;
+    database.commit(transaction)?;
+    Ok(state.generation)
+}
+
 pub fn process_turn_search_batch(
     authority: &Arc<Mutex<AuthorityDatabase>>,
     projection: &Arc<Mutex<TurnSearchProjection>>,
     scope: crate::maintenance::MaintenanceScope,
 ) -> io::Result<TurnSearchWorkerMetrics> {
     let mut metrics = TurnSearchWorkerMetrics::default();
-    let Some(database) = try_authority(authority, &mut metrics)? else {
+    let Some(mut database) = try_authority(authority, &mut metrics)? else {
         return Ok(metrics);
     };
-    let dirty = search_dirty::list(&database, scope.tenant_id, scope.owner_user_id)?;
+    let mut dirty = search_dirty::list(&database, scope.tenant_id, scope.owner_user_id)?;
+    if dirty.is_empty() {
+        crate::semantic_executor::search_backfill::consume_page(
+            &mut database,
+            scope.tenant_id,
+            scope.owner_user_id,
+        )?;
+        dirty = search_dirty::list(&database, scope.tenant_id, scope.owner_user_id)?;
+    }
     let sources = dirty
         .iter()
         .map(|_| database.begin(scope.tenant_id, scope.owner_user_id))
@@ -344,6 +364,25 @@ mod tests {
         for query in ["branch must", "running must"] {
             assert!(search(&projection, query).is_empty());
         }
+
+        // A clean authority still rebuilds a disposable empty projection when
+        // explicitly scheduled. The ordinary bounded worker consumes the page.
+        projection
+            .lock()
+            .unwrap()
+            .remove_conversation(7, 11, "conversation")
+            .unwrap();
+        assert!(search(&projection, "searchable").is_empty());
+        schedule_owner_search_backfill(&mut authority.lock().unwrap(), scope).unwrap();
+        let rebuilt = process_turn_search_batch(&authority, &projection, scope).unwrap();
+        assert_eq!(rebuilt.rebuilt_conversations, 1);
+        assert_eq!(search(&projection, "searchable").len(), 1);
+        assert_eq!(
+            process_turn_search_batch(&authority, &projection, scope)
+                .unwrap()
+                .dirty_conversations,
+            0
+        );
 
         let mut database = authority.lock().unwrap();
         let mut delete = database.begin_with_identity_claim_scopes(7, 11).unwrap();

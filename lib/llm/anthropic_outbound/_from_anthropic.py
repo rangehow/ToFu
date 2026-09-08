@@ -231,6 +231,8 @@ def anthropic_response_to_openai(data: object) -> dict:
             'message': 'top-level Anthropic payload must be an object',
             'type': 'invalid_response',
         }}
+    if data.get('error') is not None:
+        return {'error': data['error']}
     content = data.get('content')
     if not isinstance(content, list):
         return {'error': {

@@ -1,0 +1,13 @@
+{
+  "brand": "cohere",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "cohere",
+  "category": "official",
+  "name": "Cohere",
+  "base_url": "https://api.cohere.com/compatibility/v1",
+  "offering_recipes": [
+    {"model_id": "command-a",       "capabilities": ["text", "cheap"]},
+    {"model_id": "command-a-plus",  "capabilities": ["text", "cheap"]},
+    {"model_id": "north-mini-code", "capabilities": ["text", "cheap"]}
+  ]
+}

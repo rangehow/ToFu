@@ -6,7 +6,7 @@
     "maximumSteps": 128,
     "maximumSlots": 64,
     "maximumLiteralBytes": 8388608,
-    "maximumExecutableOperations": 331
+    "maximumExecutableOperations": 335
   },
   "physicalBounds": {
     "maximumEntityKeyBytes": 3072,
@@ -67,7 +67,7 @@
   },
   "filesystemCertification": {
     "maximumRetainedEntries": 4096,
-    "payloadBlockBytes": 1048576,
+    "payloadBlockBytes": 2097153,
     "requiredMeasurements": [
       "write-process-micros",
       "first-reopen-micros",
@@ -1373,6 +1373,9 @@
       "updatedIndexNamespace": "turns_by_updated",
       "tombstoneNamespace": "turn_tombstones",
       "tombstoneAgeIndexNamespace": "turn_tombstones_by_age",
+      "supersededAttemptIndexNamespace": "generation_attempts_by_superseded",
+      "maximumCleanupAttemptsPerTransaction": 64,
+      "maximumCleanupIndexScanRowsPerTransaction": 256,
       "lifecycle": "durable-user-state",
       "constraints": [
         "turn document, lane and compact activity indexes and head, conversation header revision/count/timestamp/index, search markers, sync event, receipt, and outbox commit atomically",
@@ -1404,6 +1407,7 @@
         "turn and every historical attempt identity claim survive logical deletion in a versioned bounded tombstone until garbage collection so delete and recreate cannot produce an ABA identity",
         "conversation trash capsules retain and restore the bounded attempt identity directory and count but not Attempt documents or events; the inert metadata cannot execute and lets later deletion or permanent purge release every fenced identity",
         "each deleting transaction prunes at most 256 owner-scoped tombstones older than seven days through the age-leading index and releases only ownership-verified identity claims",
+        "terminal supersession maintains one owner-scoped age-leading superseded-attempt index in the same transaction as the Attempt document; turn.cleanup scans at most 256 index rows, revalidates the exact superseded status and timestamp, refuses attempts still referenced as a live Turn current attempt or by retained conversation-sync replay data, and atomically removes at most 64 superseded non-current Attempts with their events, derived indexes, exact Turn directory and count repair, and bounded raw-archive state while retaining tenant-global identity claims against delete/recreate ABA",
         "one delete resolves at most 2000 settled turns across at most 256 recursively owned branch lanes before its first write",
         "document, lane/update indexes, counts, every historical attempt and event range, derived attempt indexes, tombstones, conversation header, sync event, outbox, and search invalidation delete atomically",
         "settled projection replacement uses projection-revision CAS and atomically updates the blob-capable document, lane/update indexes, conversation revision, search invalidation, compact replay patch, and outbox",
@@ -1848,6 +1852,9 @@
     {"name": "knowledge.settings.patch", "kind": "command", "table": "knowledge_documents", "receiptRequired": true},
     {"name": "log_aggregate.flush", "kind": "command", "table": "log_aggregates", "receiptRequired": false},
     {"name": "log_aggregate.query", "kind": "query", "table": "log_aggregates", "receiptRequired": false},
+    {"name": "model_continuation.delete", "kind": "command", "table": "model_continuations", "receiptRequired": false},
+    {"name": "model_continuation.get", "kind": "query", "table": "model_continuations", "receiptRequired": false},
+    {"name": "model_continuation.put", "kind": "command", "table": "model_continuations", "receiptRequired": false},
     {
       "name": "model_routing.commit",
       "kind": "command",
@@ -2051,6 +2058,7 @@
     {"name": "queue.dequeue", "kind": "command", "table": "conversation_queue", "receiptRequired": false},
     {"name": "queue.enqueue", "kind": "command", "table": "conversation_queue", "receiptRequired": true},
     {"name": "queue.finalize", "kind": "command", "table": "conversation_queue", "receiptRequired": true},
+    {"name": "queue.injection.ack", "kind": "command", "table": "conversation_queue", "receiptRequired": true},
     {"name": "queue.kind.clear", "kind": "command", "table": "conversation_queue", "receiptRequired": true},
     {"name": "queue.lease.bind", "kind": "command", "table": "conversation_queue", "receiptRequired": true},
     {"name": "queue.lease.release", "kind": "command", "table": "conversation_queue", "receiptRequired": true},
@@ -2212,6 +2220,12 @@
       "receiptRequired": false
     },
     {
+      "name": "turn.cleanup",
+      "kind": "command",
+      "table": "conversation_turns",
+      "receiptRequired": true
+    },
+    {
       "name": "turn.compact",
       "kind": "command",
       "table": "conversation_turns",
@@ -2293,13 +2307,13 @@
       "name": "turn.queue.activate",
       "kind": "command",
       "table": "conversation_turns",
-      "receiptRequired": true
+      "receiptRequired": false
     },
     {
       "name": "turn.queue.cancel",
       "kind": "command",
       "table": "conversation_turns",
-      "receiptRequired": true
+      "receiptRequired": false
     },
     {
       "name": "turn.recover",
@@ -2316,6 +2330,12 @@
     {
       "name": "turn.revision",
       "kind": "query",
+      "table": "conversation_turns",
+      "receiptRequired": false
+    },
+    {
+      "name": "turn.search.backfill",
+      "kind": "command",
       "table": "conversation_turns",
       "receiptRequired": false
     },

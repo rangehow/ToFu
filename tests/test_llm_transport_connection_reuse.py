@@ -26,6 +26,7 @@ from lib.llm._transport import (  # noqa: E402
     get_async_client,
     get_sync_session,
     reset_pools_for_test,
+    transport_owner_scope,
 )
 from lib.llm.astream import async_stream_chat  # noqa: E402
 from lib.llm.stream import stream_chat  # noqa: E402
@@ -202,6 +203,24 @@ def test_async_reuses_one_connection_across_turns():
         loop.run_until_complete(asyncio.sleep(0))
         loop.close()
         _clean()
+
+
+def test_transport_owner_scope_is_idempotent_on_no_owner_sentinel():
+    """``''`` is the no-owner scope; normalizing it again must not crash.
+
+    Regression pin: stream/chat/astream normalize the owner once, then hand
+    the result to ``prepare_request``, whose OAuth branch normalizes AGAIN —
+    before the fix the second pass fed ``''`` into ``require_user_id`` and
+    ownerless OAuth-slot calls died with "requires a numeric user_id".
+    """
+    assert transport_owner_scope(None) == ''
+    assert transport_owner_scope('') == ''
+    assert transport_owner_scope(1) == '1'
+    assert transport_owner_scope('7') == '7'
+    assert transport_owner_scope(transport_owner_scope(3)) == '3'
+    for bad in (True, 0, -1, 'abc'):
+        with pytest.raises(ValueError):
+            transport_owner_scope(bad)
 
 
 if __name__ == '__main__':

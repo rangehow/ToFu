@@ -8,6 +8,10 @@ owner-scoped model-routing provider access once it is running.
 
 Flow contract the descriptions teach the model:
 
+    local_serve_recommend read-only: probe hardware, rank the curated
+                          open-model catalog against it, and name a cheap
+                          cloud API alternative when local hardware is too
+                          weak. Use when the user has NOT picked a model yet.
     local_serve_prepare   read-only: inspect the path, probe hardware,
                           return the exact engine + launch plan. ALWAYS run
                           this first and show the user the plan.
@@ -27,6 +31,41 @@ files live on a DIFFERENT machine, managed deployment cannot reach them —
 say so instead of probing paths that do not exist locally.
 """
 
+LOCAL_SERVE_RECOMMEND_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "local_serve_recommend",
+        "description": (
+            "Probe this machine's GPU/RAM/disk and rank a curated catalog "
+            "of open-weight models (Qwen3, DeepSeek-R1-Distill, Llama, "
+            "Gemma…) against it: each candidate comes with the best variant "
+            "(BF16 for vLLM / Q4_K_M GGUF for llama.cpp), the fit tier "
+            "(comfortable/tight/extreme/cpu), and the exact download "
+            "command. When the hardware cannot comfortably run a capable "
+            "model, the response includes a cheap cloud API alternative "
+            "(DeepSeek V4 Flash) instead — offer it honestly rather than "
+            "pushing a hopeless local install. Read-only. Use this FIRST "
+            "whenever the user wants a local model but has not picked one "
+            "yet; once they choose, guide the download, then "
+            "local_serve_prepare + local_serve_deploy."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "purpose": {
+                    "type": "string",
+                    "enum": ["chat", "coding", "reasoning", "vision",
+                             "multilingual"],
+                    "description": (
+                        "Optional use-case filter. Omit for a general "
+                        "ranking across all categories."
+                    )
+                },
+            },
+            "required": [],
+        },
+    },
+}
 LOCAL_SERVE_PREPARE_TOOL = {
     "type": "function",
     "function": {
@@ -110,7 +149,13 @@ LOCAL_SERVE_STATUS_TOOL = {
             "last error, and a log tail. Use it to poll after "
             "local_serve_deploy (deployments can take minutes — model load "
             "and first-run engine downloads are slow) and to diagnose a "
-            "failed start."
+            "failed start. On 'failed' the response carries a structured "
+            "diagnosis {kind, summary, suggestions, retryable} — relay the "
+            "summary and suggestions, then act: retryable=true means "
+            "re-calling local_serve_deploy is worthwhile (possibly after "
+            "the user frees VRAM/disk); retryable=false means the model, "
+            "engine, or driver must change first — offer to pick a smaller "
+            "model via local_serve_recommend or the cloud alternative."
         ),
         "parameters": {
             "type": "object",
@@ -184,6 +229,7 @@ LOCAL_SERVE_REMOVE_TOOL = {
 }
 
 LOCAL_SERVE_TOOLS = [
+    LOCAL_SERVE_RECOMMEND_TOOL,
     LOCAL_SERVE_PREPARE_TOOL,
     LOCAL_SERVE_DEPLOY_TOOL,
     LOCAL_SERVE_STATUS_TOOL,
@@ -193,8 +239,9 @@ LOCAL_SERVE_TOOLS = [
 ]
 
 LOCAL_SERVE_TOOL_NAMES = frozenset({
-    'local_serve_prepare', 'local_serve_deploy', 'local_serve_status',
-    'local_serve_list', 'local_serve_stop', 'local_serve_remove',
+    'local_serve_recommend', 'local_serve_prepare', 'local_serve_deploy',
+    'local_serve_status', 'local_serve_list', 'local_serve_stop',
+    'local_serve_remove',
 })
 
 __all__ = ['LOCAL_SERVE_TOOLS', 'LOCAL_SERVE_TOOL_NAMES']

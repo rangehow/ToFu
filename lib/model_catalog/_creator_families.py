@@ -16,6 +16,7 @@ CREATOR_PROVIDERS: dict[str, tuple[str, ...]] = {
     'minimax': ('minimax', 'minimax-cn'),
     'bytedance': ('volcengine',),
     'meituan': ('longcat',),
+    'tencent': ('hunyuan', 'tencent'),
     'alibaba': ('alibaba', 'alibaba-cn'),
     'meta': ('meta', 'llama'),
     'mistral': ('mistral',),
@@ -28,6 +29,7 @@ CREATOR_PROVIDERS: dict[str, tuple[str, ...]] = {
     'perplexity': ('perplexity',),
     'xiaomi': ('xiaomi',),
     'bailing': ('bailing',),
+    'openbmb': ('openbmb',),
 }
 
 FAMILY_BRAND_KEYS: dict[str, tuple[str, ...]] = {
@@ -40,11 +42,12 @@ FAMILY_BRAND_KEYS: dict[str, tuple[str, ...]] = {
     'minimax': ('minimax', 'abab', 'hailuo'),
     'bytedance': ('bytedance', 'doubao', 'dola', 'seed'),
     'meituan': ('meituan', 'longcat'),
+    'tencent': ('tencent', 'hunyuan'),
     'alibaba': ('alibaba', 'qwen', 'tongyi', 'qwq'),
     'meta': ('meta', 'llama'),
     'mistral': ('mistral', 'mixtral', 'ministral', 'codestral', 'pixtral',
                 'magistral', 'voxtral'),
-    'xai': ('xai', 'grok'),
+    'xai': ('xai', 'grok', 'spacex'),
     'stepfun': ('stepfun', 'step'),
     'cohere': ('cohere', 'command'),
     'nvidia': ('nvidia', 'nemotron'),
@@ -52,8 +55,9 @@ FAMILY_BRAND_KEYS: dict[str, tuple[str, ...]] = {
     'amazon': ('amazon', 'nova'),
     'perplexity': ('perplexity', 'sonar'),
     'xiaomi': ('xiaomi', 'mimo'),
-    'bailing': ('bailing',),
+    'bailing': ('bailing', 'inclusionai'),
     'thinkingmachines': ('thinkingmachines', 'thinking machines', 'inkling'),
+    'openbmb': ('openbmb', 'minicpm'),
 }
 
 FAMILY_ID_PREFIXES: dict[str, tuple[str, ...]] = {
@@ -67,6 +71,9 @@ FAMILY_ID_PREFIXES: dict[str, tuple[str, ...]] = {
     'minimax': ('minimax', 'abab', 'hailuo'),
     'bytedance': ('doubao', 'seed-', 'dola', 'skylark'),
     'meituan': ('longcat', 'meituan'),
+    # 'hy' covers the Hunyuan API spellings (hy3, hy4-preview, hy-mt2-7b);
+    # no other creator family publishes an id starting with it.
+    'tencent': ('hunyuan', 'hy'),
     'alibaba': ('qwen', 'qwq', 'qvq', 'tongyi'),
     'meta': ('llama', 'meta-', 'muse-'),
     'mistral': ('mistral', 'mixtral', 'ministral', 'codestral', 'pixtral',
@@ -81,6 +88,7 @@ FAMILY_ID_PREFIXES: dict[str, tuple[str, ...]] = {
     'xiaomi': ('mimo',),
     'bailing': ('ling-', 'ring-'),
     'thinkingmachines': ('thinkingmachines/', 'inkling'),
+    'openbmb': ('minicpm',),
 }
 
 

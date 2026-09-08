@@ -333,7 +333,7 @@ def test_replay_drops_old_failure_after_a_new_accepted_revision():
     assert [row['toolCallId'] for row in projected] == ['accepted-new']
 
 
-def test_wire_replay_contains_only_latest_effective_todo_revision():
+def test_wire_replay_preserves_every_sent_todo_revision():
     from lib.tasks_pkg.conv_message_builder._toolcalls import _reconstruct_tool_call_messages
 
     rounds = []
@@ -350,8 +350,8 @@ def test_wire_replay_contains_only_latest_effective_todo_revision():
     calls = [tc for msg in wire if msg.get('role') == 'assistant'
              for tc in msg.get('tool_calls') or []]
     results = [msg for msg in wire if msg.get('role') == 'tool']
-    assert [tc['id'] for tc in calls] == ['todo-2']
-    assert [msg['tool_call_id'] for msg in results] == ['todo-2']
+    assert [tc['id'] for tc in calls] == ['todo-0', 'todo-1', 'todo-2']
+    assert [msg['tool_call_id'] for msg in results] == ['todo-0', 'todo-1', 'todo-2']
 
 
 def test_continue_resume_restores_authoritative_checklist_stack():
@@ -638,7 +638,7 @@ def test_enforcer_redrive_on_incomplete_todos(monkeypatch):
     # A reminder user-message was injected carrying the incomplete item.
     assert messages[-1]['role'] == 'user'
     assert messages[-1]['_isMeta'] is True
-    assert 'TODO CONTINUATION' in messages[-1]['content']
+    assert 'TODO STATUS RECONCILIATION' in messages[-1]['content']
     assert 'unfinished item' in messages[-1]['content']
 
 
@@ -794,6 +794,54 @@ def test_enforcer_does_not_waste_nudges_on_explicit_blocker(monkeypatch):
     assert len(messages) == 1
 
 
+@pytest.mark.parametrize('boundary', [
+    {'_pendingHumanGuidance': {'id': 'h'}},
+    {'pendingGuidanceId': 'h'},
+    {'toolRounds': [{'toolName': 'ask_user', 'status': 'done'}]},
+    {'toolRounds': [{'toolName': 'run_command', 'status': 'pending_approval'}]},
+    {'toolRounds': [{'toolName': 'run_command', 'status': 'awaiting_stdin'}]},
+])
+def test_todo_reconciliation_preserves_structured_handoff(monkeypatch, boundary):
+    monkeypatch.setenv('TOFU_TODO_CONTINUATION_MAX', '3')
+    task = _task(_todos=[{'id': 'p', 'content': 'Deploy', 'status': 'pending'}],
+                 **boundary)
+    messages = [{'role': 'user', 'content': 'x'}]
+    decision = _run(task, messages)
+    assert decision['action'] == 'break'
+    assert decision['last_finish_reason'] == 'incomplete'
+    assert task['_todo_blocked']['reason'] == 'todo_declared_stop'
+    assert '_todo_continuation_count' not in task
+    assert len(messages) == 1
+
+
+@pytest.mark.parametrize('reason', ['awaiting_human', 'blocked', 'done'])
+def test_declared_stop_does_not_override_unfinished_todo_truth(monkeypatch, reason):
+    monkeypatch.setenv('TOFU_TODO_CONTINUATION_MAX', '3')
+    task = _task(_todos=[{'id': 'p', 'content': 'Deploy', 'status': 'pending'}])
+    messages = []
+    decision = _run(task, messages, f'Current status. [END_TURN: {reason}]')
+    assert decision['action'] == 'break'
+    assert decision['last_finish_reason'] == 'incomplete'
+    assert not messages
+    assert '_todo_continuation_count' not in task
+
+
+def test_todo_reminder_lists_only_unresolved_work(monkeypatch):
+    monkeypatch.setenv('TOFU_TODO_CONTINUATION_MAX', '3')
+    task = _task(_todos=[
+        {'id': 'd', 'content': 'Already verified secret detail', 'status': 'completed'},
+        {'id': 'p', 'content': 'Verify deployment', 'status': 'pending'},
+        {'id': 'b', 'content': 'Obtain credential', 'status': 'blocked'},
+    ])
+    messages = []
+    assert _run(task, messages)['action'] == 'continue'
+    text = messages[-1]['content']
+    assert 'Already verified secret detail' not in text
+    assert 'Verify deployment' in text and 'Obtain credential' in text
+    assert 'cite the evidence' in text and 'replan' in text
+    assert 'approval requirement' in text and 'new user steering' in text
+
+
 def test_enforcer_disabled_by_env(monkeypatch):
     """TOFU_TODO_CONTINUATION_MAX=0 disables nudges, not completion honesty."""
     monkeypatch.setenv('TOFU_TODO_CONTINUATION_MAX', '0')
@@ -818,9 +866,12 @@ def test_enforcer_only_on_real_content(monkeypatch):
         _premature_retry_count=0, messages=messages,
         usage=_clean_usage(),
     )
-    # Not a continue-for-todos: content was empty so the enforcer skipped it.
-    assert decision['action'] == 'break'
+    # Empty-response recovery owns this retry before todo reconciliation.
+    # A continue directive alone is not evidence that the todo enforcer fired.
+    assert decision['action'] == 'continue'
+    assert task['_abnormal_terminal_recovery_count'] == 1
     assert '_todo_continuation_count' not in task
+    assert messages == [{'role': 'user', 'content': 'x'}]
 
 
 # ── TRIPLE-NEUTER on the flagship enforcer ──

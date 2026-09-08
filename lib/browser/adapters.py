@@ -197,7 +197,13 @@ def _validate_value(schema: dict, value, *, path='value') -> None:
 def _validate_params(schema: dict, params: dict) -> None:
     if not isinstance(params, dict):
         raise AdapterValidationError('adapter params must be an object')
-    _validate_value(schema, params, path='params')
+    # Execute the same declared JSON Schema that discovery exposes. The old
+    # bounded subset ignored additionalProperties, lengths, enums and bounds.
+    from jsonschema import Draft202012Validator
+    error = next(Draft202012Validator(schema).iter_errors(params), None)
+    if error is not None:
+        location = '.'.join(str(part) for part in error.path) or 'params'
+        raise AdapterValidationError(f'{location}: {error.message}')
 
 
 def adapter_health(adapter: SiteAdapter, *, client_id: str | None = None,
@@ -244,6 +250,13 @@ def invoke_adapter(adapter_id: str, command_name: str, params: dict | None = Non
     command = adapter.command(command_name)
     params = dict(params or {})
     _validate_params(command.input_schema, params)
+
+    if command_name == 'search':
+        query = str(params.get('query') or '')
+        if re.search(r'(?i)(?:^|\s)(?:site|filetype|intitle|inurl|ext):|(?:^|\s)(?:AND|OR|NOT)(?:\s|$)', query):
+            raise AdapterValidationError(
+                'Native site search does not accept web operators; use native keywords '
+                'or a scoped web engine. Constraints are never silently stripped.')
     target_domain = normalize_domain(params.get('url') or adapter.domains[0])
     if params.get('url') and not any(
             target_domain == normalize_domain(domain)
@@ -352,6 +365,50 @@ def _ensure_site_page(page: BrowserPage, domains: tuple[str, ...], *, site: str,
         retryable=True, details={'login_url': login_url, 'redirect_domain': host})
 
 
+def _page_content(page: BrowserPage, *, target=None, max_chars=60000,
+                  candidates=None, payload=None) -> dict:
+    from .content import collect_content
+    if payload is None:
+        receipt = page.read(max_chars=max_chars)
+        payload = dict(receipt.get('result') or {})
+        payload.setdefault('url', (receipt.get('page') or {}).get('url') or page.current_url)
+    if candidates:
+        payload = dict(payload)
+        snapshot = dict(payload.get('contentSnapshot') or {})
+        snapshot['records'] = (list(snapshot.get('records') or []) + candidates)[:100]
+        snapshot.setdefault('text', payload.get('text') or payload.get('collectedText') or '')
+        payload['contentSnapshot'] = snapshot
+    content = collect_content(payload, owner_user_id=page.lease.owner_user_id,
+                              target=target, max_chars=max_chars)
+    if content['status'] in ('blocked', 'unavailable'):
+        raise AdapterExecutionError(
+            'content_' + content['status'],
+            'Target content was not acquired: ' + content['coverage']['stop_reason'],
+            retryable=content['status'] == 'unavailable',
+            details={'coverage': content['coverage']})
+    return content
+
+
+def _read_search_records(page, query, limit, source_id, source_name, *,
+                         candidates=None, payload=None):
+    content = _page_content(page, target={'kind': 'list', 'query': query},
+                            candidates=candidates, payload=payload)
+    if not content['records'] and content['status'] != 'empty':
+        raise AdapterExecutionError('extraction_incomplete',
+                                    'Page loaded without validated result records', retryable=True)
+    return [{**record, 'source': source_name,
+             'metadata': {'adapter': source_id, 'coverage': content['coverage']}}
+            for record in content['records'][:limit]]
+
+
+def _read_detail(page, params, *, fields=None):
+    content = _page_content(page, target={'kind': 'article'},
+                            max_chars=int(params.get('max_chars') or 60000))
+    return {**(fields or {}), 'title': content['title'], 'url': content['url'],
+            'content': content['content'], 'status': content['status'],
+            'coverage': content['coverage']}
+
+
 def _xhs_search(page: BrowserPage, params: dict) -> list[dict]:
     query = params['query'].strip()
     limit = max(1, min(30, int(params.get('limit') or 20)))
@@ -367,14 +424,9 @@ def _xhs_search(page: BrowserPage, params: dict) -> list[dict]:
     for _ in range(max(0, min(4, int(params.get('pages') or 1) - 1))):
         page.scroll(direction='down', amount=1200, trusted_read=True)
     raw = _extract_result(page.execute(_XHS_EXTRACT, trusted_read=True))
-    items = raw if isinstance(raw, list) else []
-    return [{
-        'title': str(item.get('title') or '')[:200],
-        'url': str(item.get('url') or ''),
-        'snippet': str(item.get('snippet') or '')[:300],
-        'source': 'Xiaohongshu',
-        'metadata': {'adapter': 'xiaohongshu'},
-    } for item in items if isinstance(item, dict) and item.get('url')][:limit]
+    # Verified site selectors contribute candidates, never decide success.
+    return _read_search_records(page, query, limit, 'xiaohongshu', 'Xiaohongshu',
+                                candidates=raw if isinstance(raw, list) else [])
 
 
 def _xhs_detail(page: BrowserPage, params: dict) -> dict:
@@ -400,17 +452,13 @@ def _xhs_detail(page: BrowserPage, params: dict) -> dict:
 })()
 """, trusted_read=True))
     fields = raw if isinstance(raw, dict) else {}
-    read = page.read(max_chars=int(params.get('max_chars') or 60_000))
-    result = read.get('result') if isinstance(read, dict) else {}
-    return {'title': fields.get('title') or (read.get('page') or {}).get('title', ''),
-            'url': (read.get('page') or {}).get('url', params['url']),
-            'content': fields.get('content') or (result or {}).get('text')
-            or (result or {}).get('html') or '',
-            'author': str(fields.get('author') or ''),
-            'published_at': str(fields.get('published_at') or ''),
-            'likes': str(fields.get('likes') or ''),
-            'comments': str(fields.get('comments') or ''),
-            'tags': fields.get('tags') if isinstance(fields.get('tags'), list) else []}
+    return _read_detail(page, params, fields={
+        'author': str(fields.get('author') or ''),
+        'published_at': str(fields.get('published_at') or ''),
+        'likes': str(fields.get('likes') or ''),
+        'comments': str(fields.get('comments') or ''),
+        'tags': fields.get('tags') if isinstance(fields.get('tags'), list) else [],
+    })
 
 
 _MODEL_PLAZA_EXTRACT = r"""
@@ -461,21 +509,9 @@ def _friday_search(page: BrowserPage, params: dict) -> list[dict]:
         max_pages=pages, pagination='auto')
     payload = receipt.get('result') if isinstance(receipt, dict) else None
     payload = payload if isinstance(payload, dict) else {}
-    from .network_evidence import extract_business_records
-    records = extract_business_records(
-        payload, owner_user_id=page.lease.owner_user_id,
-        source_url=url, query=query, limit=limit)
-    return [{
-        'title': record['title'],
-        'url': record['url'],
-        'snippet': record['snippet'],
-        'source': 'Friday Skills Market',
-        'metadata': {
-            **(record.get('metadata') or {}),
-            'id': record.get('id') or '',
-            'adapter': 'friday',
-        },
-    } for record in records]
+    payload.setdefault('url', url)
+    return _read_search_records(page, query, limit, 'friday', 'Friday Skills Market',
+                                payload=payload)
 
 
 def _friday_detail(page: BrowserPage, params: dict) -> dict:
@@ -484,15 +520,9 @@ def _friday_detail(page: BrowserPage, params: dict) -> dict:
         max_scrolls=3, max_pages=1, pagination='none')
     payload = receipt.get('result') if isinstance(receipt, dict) else None
     payload = payload if isinstance(payload, dict) else {}
-    from .research import render_research_payload
-    content = render_research_payload(
-        payload, owner_user_id=page.lease.owner_user_id,
-        mode='content', max_chars=int(params.get('max_chars') or 80_000))
-    return {
-        'title': str(payload.get('title') or ''),
-        'url': str(payload.get('url') or params['url']),
-        'content': content,
-    }
+    payload.setdefault('url', params['url'])
+    return _page_content(page, target={'kind': 'article'}, payload=payload,
+                         max_chars=int(params.get('max_chars') or 80000))
 
 
 def _model_plaza_search(page: BrowserPage, params: dict) -> list[dict]:
@@ -528,13 +558,9 @@ def _model_plaza_search(page: BrowserPage, params: dict) -> list[dict]:
     # the args object rather than interpolating it into executable JS.
     raw = _extract_result(page.execute(
         _MODEL_PLAZA_EXTRACT, args={'query': query}, trusted_read=True))
-    items = raw if isinstance(raw, list) else []
-    q = query.lower()
-    items = [item for item in items if q in
-             (str(item.get('title') or '') + ' ' + str(item.get('snippet') or '')).lower()]
     limit = max(1, min(40, int(params.get('limit') or 20)))
-    return [{**item, 'source': 'ModelPlaza',
-             'metadata': {'adapter': 'modelplaza'}} for item in items[:limit]]
+    return _read_search_records(page, query, limit, 'modelplaza', 'ModelPlaza',
+                                candidates=raw if isinstance(raw, list) else [])
 
 
 def _model_plaza_detail(page: BrowserPage, params: dict) -> dict:
@@ -542,11 +568,7 @@ def _model_plaza_detail(page: BrowserPage, params: dict) -> dict:
     _ensure_site_page(
         page, ('your-llm-gateway.example.com',), site='ModelPlaza',
         login_url=_MODEL_PLAZA_URL)
-    read = page.read(max_chars=int(params.get('max_chars') or 80_000))
-    result = read.get('result') or {}
-    return {'title': (read.get('page') or {}).get('title', ''),
-            'url': (read.get('page') or {}).get('url', params['url']),
-            'content': result.get('text') or result.get('html') or ''}
+    return _read_detail(page, params)
 
 
 _MODEL_PLAZA_COMPARE_JS = r"""
@@ -600,7 +622,7 @@ _DETAIL_CAPS = (BrowserCapability.TABS.value, BrowserCapability.READ.value,
 _XHS_DETAIL_CAPS = _DETAIL_CAPS + (BrowserCapability.EXECUTE.value,)
 _CATALOG_SEARCH_CAPS = (
     BrowserCapability.TABS.value, BrowserCapability.EXECUTE.value,
-    BrowserCapability.SNAPSHOT.value,
+    BrowserCapability.SNAPSHOT.value, BrowserCapability.READ.value,
 )
 _XHS_SEARCH_CAPS = _CATALOG_SEARCH_CAPS + (
     BrowserCapability.WAIT.value, BrowserCapability.SCROLL.value,
@@ -613,9 +635,17 @@ _DEEP_RESEARCH_CAPS = (
     BrowserCapability.DEEP_COLLECT.value,
     BrowserCapability.NETWORK_BODY.value,
 )
-_SEARCH_SCHEMA = {'type': 'object', 'properties': {
-    'query': {'type': 'string'}, 'limit': {'type': 'integer'},
-    'pages': {'type': 'integer'}}, 'required': ['query']}
+_SEARCH_SCHEMA = {'type': 'object', 'additionalProperties': False, 'properties': {
+    'query': {'type': 'string', 'minLength': 1, 'maxLength': 512,
+              'description': 'Native keywords, not web operators or a general question.'},
+    'limit': {'type': 'integer', 'minimum': 1, 'maximum': 40},
+    'pages': {'type': 'integer', 'minimum': 1, 'maximum': 5}}, 'required': ['query']}
+_MODEL_NAME_SCHEMA = {'type': 'object', 'additionalProperties': False, 'properties': {
+    'query': {'type': 'string', 'minLength': 1, 'maxLength': 128,
+              'pattern': r'^[A-Za-z0-9][A-Za-z0-9._ /:+-]*$',
+              'description': 'A model name or alias only, such as Claude or kimi-0902-preview.'},
+    'limit': {'type': 'integer', 'minimum': 1, 'maximum': 40},
+    'pages': {'type': 'integer', 'minimum': 1, 'maximum': 1}}, 'required': ['query']}
 _DETAIL_SCHEMA = {'type': 'object', 'properties': {
     'url': {'type': 'string'}, 'max_chars': {'type': 'integer'}},
     'required': ['url']}
@@ -648,8 +678,8 @@ def _register_builtins() -> None:
         login_url=_MODEL_PLAZA_URL,
         risk_notice='使用浏览器中的美团 SSO 活会话；无需服务器私网放行。',
         builtin=True, commands=(
-            AdapterCommand('search', '检索、筛选并读取模型列表',
-                           input_schema=_SEARCH_SCHEMA,
+            AdapterCommand('search', '按模型名称或别名查找目录条目；不支持文档、协议问题或全文搜索',
+                           input_schema=_MODEL_NAME_SCHEMA,
                            output_schema=_RESULT_LIST_SCHEMA,
                            required_capabilities=_MODEL_SEARCH_CAPS, timeout=35,
                            handler=_model_plaza_search),
@@ -659,9 +689,9 @@ def _register_builtins() -> None:
                            handler=_model_plaza_detail),
             AdapterCommand('model-info',
                            '批量查询模型的定价/上下文/请求 ID/能力标签（compareModels API）',
-                           input_schema={'type': 'object', 'properties': {
-                               'names': {'type': 'array',
-                                         'items': {'type': 'string'}}},
+                           input_schema={'type': 'object', 'additionalProperties': False, 'properties': {
+                               'names': {'type': 'array', 'minItems': 1, 'maxItems': 64,
+                                         'items': {'type': 'string', 'minLength': 1, 'maxLength': 128}}},
                                'required': ['names']},
                            required_capabilities=_MODEL_INFO_CAPS, timeout=35,
                            handler=_model_plaza_model_info),

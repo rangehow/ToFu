@@ -75,6 +75,42 @@ def test_preset_order_keeps_custom_last_and_managed_before_it():
     assert engines == ['vllm', 'sglang', 'ollama', 'llamacpp', 'managed', '']
 
 
+def test_preset_chooser_renders_grouped_card_tiles():
+    src = _local_deploy_src()
+    # The chooser modal gets its own scope class so the compact provider
+    # template dropdown keeps its flat styling.
+    assert "'stg-modal stg-tpl-wizard stg-local-deploy'" in src
+    # Tiles are cards: icon tile + info + chevron affordance.
+    assert 'stg-template-item stg-local-preset' in src
+    assert 'stg-local-preset-icon' in src
+    assert 'stg-local-preset-arrow' in src
+    # Visual grouping: engines vs managed/custom, driven by i18n labels.
+    assert 'data-group="engines"' in src
+    assert 'data-group="other"' in src
+    assert "t('settings.localPresetGroupEngines')" in src
+    assert "t('settings.localPresetGroupOther')" in src
+
+
+def test_page_renders_smart_sections_and_agent_handoffs():
+    src = _local_deploy_src()
+    # Live sections: hardware strip, ranked recommendations, managed ledger.
+    assert 'data-ld="hardware"' in src
+    assert 'data-ld="recs"' in src
+    assert 'data-ld="instances"' in src
+    assert 'Api.localServe.hardware()' in src
+    assert 'Api.localServe.recommendations(' in src
+    assert 'Api.localServe.deployments()' in src
+    # Recommendation cards hand the deploy off to the chat agent; the cloud
+    # escape hatch adds the DeepSeek template directly (no wizard).
+    assert "t('settings.localRecDeployPrompt'" in src
+    assert '_addTemplateProvider(' in src
+    # Failed/stopped ledger rows hand diagnosis & restart to the agent.
+    assert "t('settings.localRepairPrompt'" in src
+    assert "t('settings.localStartPrompt'" in src
+    # Purpose filter chips drive the recommendations query.
+    assert 'var _LD_PURPOSES' in src
+
+
 def test_managed_handoff_fills_draft_after_new_chat():
     src = _local_deploy_src()
     body = src.split('function _startManagedDeployChat', 1)[1]
@@ -89,10 +125,48 @@ def test_endpoint_batch_stages_through_provider_render_authority():
     assert 'Api.providers.probe(url, apiKey,' in src
 
 
-def test_template_menu_drops_recipe_less_templates_and_wizard_gates_empty():
+def test_template_menu_drops_recipe_less_templates_and_adds_directly():
     src = _read(os.path.join(SECTIONS, 'settings', 'provider_render.js'))
     assert re.search(r'filter\(function\(tpl\) \{\s*return \(tpl\.offering_recipes \|\| \[\]\)\.length > 0;', src)
-    assert 'addButton.disabled = count === 0;' in src
+    # No secondary wizard: a template click compiles the full recipe set and
+    # stages it straight into the editable provider card.
+    assert '_openTemplateWizard' not in src
+    assert "void _addTemplateProvider(tpl.key);" in src
+
+
+def test_template_stage_strips_compile_only_fields_and_gates_placeholder_credentials():
+    src = _read(os.path.join(SECTIONS, 'settings', 'provider_render.js'))
+    # credential_extra_headers is CompiledProviderBundle-only; echoing it in
+    # ProviderWriteRequest trips the contract (undeclared field).
+    assert 'delete draft.credential_extra_headers;' in src
+    # Keyless add: the v2 domain rejects a non-local credential without a
+    # secret_reference, so the recipe's placeholder credential must be
+    # dropped; the card's 「+ 添加密钥」 mints the real one.
+    assert re.search(
+        r"draft\.credentials = \(draft\.credentials \|\| \[\]\)\.filter\(function\(row\) \{\s*"
+        r"return row\.kind === 'local_identity';", src)
+
+
+def test_template_item_resets_button_ua_leak_and_grid_may_shrink():
+    # The provider-template items are <button> elements: without an explicit
+    # reset the UA stylesheet leaks a gray buttonface tile, centered text and
+    # the wrong font into the menu (reported 2026-09-04 as 「样式好丑」).
+    css = _read(os.path.join(
+        PROJECT_ROOT, 'frontend', 'src', 'styles', 'application',
+        '06-file-changes-settings-shell.css'))
+    item_block = css.split('.stg-template-item {', 1)[1].split('}', 1)[0]
+    for prop in ('background: transparent', 'text-align: left',
+                 'font-family: inherit', 'color: inherit'):
+        assert prop in item_block
+    # Brand marks stay bare — an icon background box was rejected by the owner.
+    assert '.stg-template-menu .stg-template-item .stg-brand-icon {' not in css
+    # The menu sizes to its two full columns (its containing block is only the
+    # header button row), and the grid tracks may shrink below the nowrap
+    # names' min-content — otherwise the second column is clipped.
+    menu_block = css.split('.stg-template-menu {', 1)[1].split('}', 1)[0]
+    assert 'width: max-content' in menu_block
+    grid_block = css.split('.stg-template-grid {', 1)[1].split('}', 1)[0]
+    assert 'repeat(2, minmax(0, 1fr))' in grid_block
 
 
 @pytest.mark.parametrize('locale', ['zh', 'en'])
@@ -111,9 +185,38 @@ def test_locales_carry_local_deploy_keys(locale):
         'settings.localProvider',
         'settings.localPresetTitle',
         'settings.localPresetManagedName',
+        'settings.localPresetGroupEngines',
+        'settings.localPresetGroupOther',
         'settings.managedDeployPrompt',
         'settings.epProbingN',
         'settings.epModelsCount',
+        # Redesigned page: smart sections + agent handoffs.
+        'settings.localRecGroupTitle',
+        'settings.localRecPurposeAll',
+        'settings.localRecPurposeCoding',
+        'settings.localRecLoading',
+        'settings.localRecError',
+        'settings.localRecEmpty',
+        'settings.localRecDeploy',
+        'settings.localRecFitComfortable',
+        'settings.localRecFitCpu',
+        'settings.localRecSub',
+        'settings.localRecDeployPrompt',
+        'settings.localHwVram',
+        'settings.localHwNoGpu',
+        'settings.localHwRam',
+        'settings.localHwDisk',
+        'settings.localCloudTitle',
+        'settings.localCloudPrice',
+        'settings.localCloudAdd',
+        'settings.localManagedGroup',
+        'settings.localManagedEmpty',
+        'settings.localManagedRepair',
+        'settings.localManagedStart',
+        'settings.localRepairPrompt',
+        'settings.localStartPrompt',
+        'settings.localStatusRunning',
+        'settings.localStatusFailed',
     }
     missing = required - set(data)
     assert not missing, f'{locale}.json missing: {sorted(missing)}'

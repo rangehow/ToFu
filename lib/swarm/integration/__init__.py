@@ -91,6 +91,7 @@ from lib.swarm.integration._state import (  # noqa: E402,F401
     get_active_session,
     get_swarm_status,
     stop_swarm_cleanup_timer,
+    list_active_swarms,
     swarm_cleanup_snapshot,
 )
 
@@ -136,7 +137,7 @@ __all__ = [
     '_resolve_key', '_key_is_live', '_cleanup_stale_sessions',
     '_background_cleanup', '_start_cleanup_timer',
     '_get_session', '_set_session', '_remove_session', 'add_session_alias',
-    'get_active_session', 'get_swarm_status',
+    'get_active_session', 'get_swarm_status', 'list_active_swarms',
     'abort_swarm', 'stop_swarm_cleanup_timer', 'swarm_cleanup_snapshot',
     # Auto-continue
     'reset_autocontinue_chain', '_maybe_autocontinue', '_start_autocontinue_turn',

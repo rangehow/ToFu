@@ -37,7 +37,8 @@ Endpoints (all under the proxied prefix):
     POST /reload  {projectPath, expectedFingerprint}
                                     → reload Supervisor, preserve worker
     POST /restart-deferred {projectPath}
-                                    → reply, then replace worker
+                                    → reply, await worker quiescence,
+                                      then replace worker
 
 Launch (owner-ratified): a systemd USER UNIT with ``Restart=always``; fall back
 to ``supervisor.sh`` + nohup where user-lingering is unavailable.
@@ -46,6 +47,7 @@ to ``supervisor.sh`` + nohup where user-lingering is unavailable.
 import json
 import os
 import signal
+import ssl
 import subprocess
 import sys
 import threading
@@ -54,7 +56,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-from server_manager import LifecycleManager, project_server_env
+from server_manager import (
+    LifecycleManager, _read_probe_json, project_server_env)
 from runtime_guards import install_process_resource_defaults
 from supervisor_protocol import (
     SUPERVISOR_PROTOCOL_VERSION,
@@ -85,6 +88,59 @@ ENV_PORT = 'TOFU_SUPERVISOR_PORT'
 ENV_HOST = 'TOFU_SUPERVISOR_HOST'
 ENV_PYTHON = 'TOFU_SUPERVISOR_PYTHON'       # interpreter used to launch server.py
 ENV_OWNER_PID = 'TOFU_SUPERVISOR_OWNER_PID'  # optional ephemeral owner boundary
+ENV_DEFER_QUIESCE_MAX_WAIT_S = 'TOFU_SUPERVISOR_DEFER_QUIESCE_MAX_WAIT_S'
+ENV_DEFER_QUIESCE_POLL_S = 'TOFU_SUPERVISOR_DEFER_QUIESCE_POLL_S'
+_DEFER_QUIESCE_DEFAULT_MAX_WAIT_S = 3600.0
+_DEFER_QUIESCE_DEFAULT_POLL_S = 2.0
+
+
+def _env_seconds(name, default):
+    try:
+        value = float(os.environ.get(name, '') or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _worker_quiescence(manager):
+    """True quiet / False busy / None undecidable for the live worker.
+
+    An older worker without ``/health/quiescence`` (404), an unreachable
+    worker, and a malformed payload are all undecidable — the caller then
+    proceeds, matching pre-quiescence behavior so a restart never wedges.
+    """
+    try:
+        mode = (manager.data_dir / '.last_serve_mode').read_text().strip()
+    except OSError:
+        mode = ''
+    schemes = ['https', 'http'] if mode == 'https' else ['http', 'https']
+    for scheme in schemes:
+        context = (
+            ssl._create_unverified_context() if scheme == 'https' else None)
+        url = f'{scheme}://127.0.0.1:{manager.port}/health/quiescence'
+        try:
+            status, payload = _read_probe_json(
+                url, timeout=2.0, context=context)
+        except Exception:
+            continue
+        if status == 404:
+            return None
+        if not isinstance(payload, dict) or payload.get('quiet') is None:
+            continue
+        return bool(payload.get('quiet'))
+    return None
+
+
+def _await_worker_quiescence(manager, *, max_wait_s, poll_s):
+    """Poll until the worker reports quiet: 'quiet' | 'timeout' | 'unknown'."""
+    deadline = time.monotonic() + max_wait_s
+    while True:
+        state = _worker_quiescence(manager)
+        if state is not False:
+            return 'quiet' if state else 'unknown'
+        if time.monotonic() >= deadline:
+            return 'timeout'
+        time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
 
 
 class SupervisorOwnershipLost(RuntimeError):
@@ -503,7 +559,7 @@ class SupervisorHandler(BaseHTTPRequestHandler):
             self._send_json(202 if accepted else 409, {
                 'ok': accepted,
                 'accepted': accepted,
-                **({} if accepted else {
+                **({'waitsForQuiescence': True} if accepted else {
                     'message': 'A deferred worker restart is already pending.',
                 }),
             })
@@ -586,7 +642,30 @@ class ManagerHTTPServer(ThreadingHTTPServer):
             # client time to receive the 202 before SIGTERM begins.
             time.sleep(0.35)
             try:
-                result = self.managers[project].restart(source=source)
+                manager = self.managers[project]
+                try:
+                    outcome = _await_worker_quiescence(
+                        manager,
+                        max_wait_s=_env_seconds(
+                            ENV_DEFER_QUIESCE_MAX_WAIT_S,
+                            _DEFER_QUIESCE_DEFAULT_MAX_WAIT_S),
+                        poll_s=_env_seconds(
+                            ENV_DEFER_QUIESCE_POLL_S,
+                            _DEFER_QUIESCE_DEFAULT_POLL_S))
+                except Exception:
+                    logger.exception(
+                        'deferred worker restart quiescence probe failed '
+                        'project=%s; proceeding', project)
+                    outcome = 'error'
+                if outcome == 'quiet':
+                    logger.info(
+                        'deferred worker restart: worker quiet, restarting '
+                        'project=%s', project)
+                else:
+                    logger.warning(
+                        'deferred worker restart proceeding with worker '
+                        'quiescence=%s project=%s', outcome, project)
+                result = manager.restart(source=source)
                 if not result.get('ok'):
                     logger.error(
                         'deferred worker restart refused project=%s: %s',

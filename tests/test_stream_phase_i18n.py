@@ -340,6 +340,9 @@ const zh = {
   'stream.phase.retryReason': '重试中…{reason}（{model}，第 {attempt} 次）',
   'stream.phase.retryCooldownWait': '{reason}（{model}）',
   'stream.phase.modelRouted': '模型路由：{from} → {to}（{role}，{tier} 档）',
+  'stream.phase.generatingResponse': '正在生成回复…',
+  'stream.phase.analyzingRound': '正在分析工具结果（第 {round} 轮）…',
+  'stream.thinking.active': '思考中…',
   'stream.retryReason.endpointUnreachable': '连不上模型服务器',
   'stream.retryReason.waitingBackoff': '等待模型（错误退避中，非限流）',
 };
@@ -398,10 +401,31 @@ if (neuter) {
       role: 'worker', tier: 'heavy', kind: 'role_tier',
     },
   }}, {});
+  const renderPhase = value => {
+    renderers.renderBlock(node, {kind: 'live-status', blockId: 'live-status', value}, {});
+    return node.querySelector('.stream-phase-text').textContent;
+  };
+  const routeText = node.textContent;
+  check('generation_localizes_detail', renderPhase({phase: 'llm_thinking',
+    detailKey: 'stream.phase.generatingResponse', detail: 'Generating response…'}) === '正在生成回复…');
+  check('analysis_preserves_round', renderPhase({phase: 'llm_thinking',
+    detailKey: 'stream.phase.analyzingRound', detailArgs: {round: 3},
+    detail: 'Analyzing results'}) === '正在分析工具结果（第 3 轮）…');
+  check('generation_preserves_raw_detail', renderPhase({phase: 'llm_thinking',
+    detail: 'Custom generation status'}) === 'Custom generation status');
+  check('generation_preserves_label', renderPhase({phase: 'llm_thinking',
+    label: 'Custom label'}) === 'Custom label');
+  check('bare_generation_is_not_reasoning', renderPhase({phase: 'llm_thinking',
+    thinkingLength: 42}) === '正在生成回复…'
+    && !node.querySelector('.stream-phase-counter,.stream-phase-thinking'));
+  check('thinking_uses_content_wording', renderPhase({phase: 'thinking_active',
+    thinkingLength: 3}).startsWith('思考中…')
+    && !!node.querySelector('.stream-phase-counter')
+    && !!node.querySelector('.stream-phase-thinking'));
   check('role_route_is_disclosed',
-    node.textContent.includes('模型路由')
-      && node.textContent.includes('kimi-k3')
-      && node.textContent.includes('deepseek-v4-pro'));
+    routeText.includes('模型路由')
+      && routeText.includes('kimi-k3')
+      && routeText.includes('deepseek-v4-pro'));
 }
 console.log(out.join('\n'));
 """
@@ -440,7 +464,7 @@ def _run_harness(neuter=False):
 def test_stream_phase_i18n_frontend():
     """Frontend renderer prefers detailKey → t() over raw detail."""
     output = _run_harness()
-    assert output.count('PASS') == 7, output
+    assert output.count('PASS') == 13, output
 
 
 def test_generic_waiting_key_retired_from_locales():

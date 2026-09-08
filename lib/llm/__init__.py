@@ -61,10 +61,11 @@ __all__ = [
     # model detection (re-exported)
     'is_claude', 'is_claude_opus_47', 'is_doubao', 'is_ernie',
     'is_gemini', 'is_glm', 'is_glm53', 'is_gpt', 'is_gpt5', 'is_gpt_56',
-    'is_kimi', 'is_kimi_k3', 'is_longcat', 'is_minimax', 'is_qwen',
+    'is_kimi', 'is_kimi_k3', 'is_longcat', 'is_minimax', 'is_muse_spark',
+    'is_qwen',
     'model_supports_vision',
     'gemini_reasoning_effort', 'glm_reasoning_effort', 'gpt_reasoning_effort',
-    'kimi_k3_reasoning_effort',
+    'kimi_k3_reasoning_effort', 'muse_spark_reasoning_effort',
     '_clamp_max_tokens',
     # sanitization (re-exported)
     '_drop_empty_assistant_messages',
@@ -140,8 +141,10 @@ _EXPORT_MODULES = {
     'is_kimi_k3': 'lib.model_info',
     'is_longcat': 'lib.model_info',
     'is_minimax': 'lib.model_info',
+    'is_muse_spark': 'lib.model_info',
     'is_qwen': 'lib.model_info',
     'kimi_k3_reasoning_effort': 'lib.model_info',
+    'muse_spark_reasoning_effort': 'lib.model_info',
     'model_supports_vision': 'lib.model_info',
     # Canonical message sanitization.
     '_drop_empty_assistant_messages': 'lib.llm_sanitize',

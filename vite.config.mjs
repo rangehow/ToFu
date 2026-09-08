@@ -50,7 +50,13 @@ export default defineConfig({
   base: './',
   build: {
     outDir,
-    emptyOutDir: true,
+    // Never wipe the output directory: the orchestrated build stages into a
+    // private temp dir and publishes atomically with bounded multi-generation
+    // retention (scripts/build_frontend.mjs), and a raw `vite build` pointed
+    // at the live dir must not delete generations that long-lived tabs can
+    // still import. Stale files left by raw builds are pruned by the next
+    // orchestrated build.
+    emptyOutDir: false,
     manifest: 'manifest.json',
     target: 'safari15',
     sourcemap: true,

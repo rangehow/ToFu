@@ -362,9 +362,8 @@ def _register_vu_carrier(task: dict, vu_msg_id: str | None = None) -> dict | Non
         )
 
     vu_messages = [dict(m) for m in parent_messages]
-    vu_messages.append({
-        'role': 'user',
-        'content': (
+    from lib.tasks_pkg.context_composer import append_injection
+    append_injection(vu_messages, 'virtual_user_directive', (
             f'{objective_block}'
             f'=== Your role for THIS turn: Simulated User '
             f'[prompt v{VU_PROMPT_VERSION}] ===\n'
@@ -373,10 +372,7 @@ def _register_vu_carrier(task: dict, vu_msg_id: str | None = None) -> dict | Non
             'Based on the conversation above, produce the simulated '
             'user\'s reply now.  Verify the assistant\'s key claims with '
             'tools first, then output the reply text only.'
-        ),
-        '_isVuDirective': True,
-        '_vuPromptVersion': VU_PROMPT_VERSION,
-    })
+        ), flags={'_isVuDirective': True, '_vuPromptVersion': VU_PROMPT_VERSION})
 
     # Build a fresh sub-task that inherits the parent's config so
     # _assemble_tool_list constructs the same tool list the worker had.
@@ -441,6 +437,8 @@ def _register_vu_carrier(task: dict, vu_msg_id: str | None = None) -> dict | Non
         supersede=False,
     )
     sub_task['_inline_messages'] = True
+    from lib.tasks_pkg.context_composer.injections import record_manifest_rows
+    record_manifest_rows(sub_task, [vu_messages[-1]['_contextInjection']])
     sub_task['_vu_subtask'] = True
     sub_task['_autopilotParent'] = task.get('id', '')
     # Back-pointer for the parent's conv-sync freshness guard: the carrier

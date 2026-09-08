@@ -48,14 +48,14 @@ _ROOT = os.path.normpath(os.path.join(_HERE, '..'))
 
 
 def _mk_agent(*, dispatch_fn, timeout_seconds=0,
-              abort_check=None, events=None):
+              abort_check=None, events=None, parent_task=None):
     from lib.swarm.agent import SubAgent
     from lib.swarm.types import SubTaskSpec
     spec = SubTaskSpec(role='researcher', objective='parity-test objective',
                        timeout_seconds=timeout_seconds)
     agent = SubAgent(
         spec,
-        parent_task={},               # no id → request snapshots are no-ops
+        parent_task=parent_task or {},  # no id → request snapshots are no-ops
         all_tools=[],
         model='parity-model',
         thinking_enabled=False,
@@ -111,6 +111,39 @@ class TestSwarmOnChassis(unittest.TestCase):
         self.assertEqual(agent.result.rounds_used, 1)
         self.assertEqual(disp['n'], 1)
         self.assertEqual(agent._tool_batches, [])
+
+    def test_dispatch_receives_bounded_429_budget(self):
+        captured = {}
+
+        def dispatch(body, **kw):
+            captured.update(kw)
+            return _final_msg('the answer is 42 — long enough to matter')
+
+        agent = _mk_agent(dispatch_fn=dispatch)
+        agent._run_loop(time.time())
+        from lib.swarm import agent as swarm_agent
+        self.assertEqual(captured['max_429_attempts'],
+                         swarm_agent.SWARM_MAX_429_ATTEMPTS)
+        self.assertGreaterEqual(captured['max_429_attempts'], 1)
+
+    def test_dispatch_receives_owner_scope_from_parent_task(self):
+        # OAuth slots resolve the token per tenant and desktop egress routes
+        # per owner — the sub-agent must forward its task's owner, not drop
+        # to the ownerless default (which fails closed on those routes).
+        captured = {}
+
+        def dispatch(body, **kw):
+            captured.update(kw)
+            return _final_msg('the answer is 42 — long enough to matter')
+
+        agent = _mk_agent(dispatch_fn=dispatch, parent_task={'_userId': 7})
+        agent._run_loop(time.time())
+        self.assertEqual(captured.get('owner_user_id'), 7)
+
+        captured.clear()
+        agent = _mk_agent(dispatch_fn=dispatch)
+        agent._run_loop(time.time())
+        self.assertIsNone(captured.get('owner_user_id'))
 
     def test_stream_log_creates_parent_only_when_output_arrives(self):
         def dispatch(body, **kwargs):

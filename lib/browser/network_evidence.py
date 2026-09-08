@@ -92,7 +92,7 @@ def _truncate_text(value: str, limit: int) -> str:
 def _is_sensitive_key(key: object) -> bool:
     raw = str(key or '').lower()
     compact = re.sub(r'[^a-z0-9]', '', raw)
-    return compact in _SECRET_KEY_EXACT or any(
+    return 'token' in compact or compact in _SECRET_KEY_EXACT or any(
         part in compact for part in _SECRET_KEY_PARTS)
 
 
@@ -101,19 +101,25 @@ def _redact_text(value: str) -> str:
     return _TEXT_SECRET_RE.sub(r'\1[redacted]', value)
 
 
-def _redact_json(value, *, depth=0):
-    if depth >= _MAX_JSON_DEPTH:
-        return '[depth limit]'
+def _redact_json(value, *, depth=0, _budget=None):
+    from itertools import islice
+    budget = _budget if _budget is not None else [12000, 1048576]
+    if depth >= _MAX_JSON_DEPTH or budget[0] <= 0:
+        return '[depth or node limit]'
+    budget[0] -= 1
     if isinstance(value, dict):
         return {
-            str(key): ('[redacted]' if _is_sensitive_key(key)
-                       else _redact_json(child, depth=depth + 1))
-            for key, child in value.items()
+            str(key)[:128]: ('[redacted]' if _is_sensitive_key(key)
+                            else _redact_json(child, depth=depth + 1, _budget=budget))
+            for key, child in islice(value.items(), 80) if budget[0] > 0
         }
     if isinstance(value, list):
-        return [_redact_json(child, depth=depth + 1) for child in value]
+        return [_redact_json(child, depth=depth + 1, _budget=budget)
+                for child in value[:100] if budget[0] > 0]
     if isinstance(value, str):
-        return _redact_text(value)
+        count = min(len(value), 8192, budget[1])
+        budget[1] -= count
+        return _redact_text(value[:count])
     return value
 
 
@@ -154,10 +160,12 @@ def _parse_body(row: dict):
         return body
     if not isinstance(body, str) or not body.strip():
         return None
+    if len(body) > 262144:
+        return None
     stripped = body.strip()
     try:
         return json.loads(stripped)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return stripped
 
 
@@ -245,7 +253,11 @@ def _response_allowed(owner_user_id: str, url: str) -> bool:
     # Page captures also see extension/content-script requests (e.g. a
     # translation add-on fetching chrome-extension://<id>/config.json);
     # those bodies are not page evidence and must never reach model context.
-    if urlsplit(str(url)).scheme.lower() not in ('http', 'https', 'ws', 'wss'):
+    try:
+        parts = urlsplit(str(url))
+        if parts.scheme.lower() not in ('http', 'https', 'ws', 'wss') or not parts.hostname or parts.username or parts.password:
+            return False
+    except ValueError:
         return False
     try:
         from lib.browser.access import is_read_allowed
@@ -375,7 +387,7 @@ def _score_reasons(row: dict, body, score: float) -> list[str]:
     return reasons[:5]
 
 
-def analyze_network_evidence(
+def _legacy_analyze_network_evidence(
     payload: dict,
     *,
     owner_user_id: str,
@@ -481,7 +493,7 @@ def _first_scalar(record: dict, keys: tuple[str, ...]):
     return ''
 
 
-def extract_business_records(
+def _legacy_extract_business_records(
     payload: dict,
     *,
     owner_user_id: str,
@@ -576,17 +588,10 @@ def extract_business_records(
         })
         if len(normalized) >= item_limit:
             break
-    # A server-side query filter may not match localized/encoded results even
-    # though the site already applied the query. Fall back to the captured list
-    # instead of turning a successful remote search into a false empty result.
-    if needle and not normalized:
-        return extract_business_records(
-            payload, owner_user_id=owner_user_id, source_url=source_url,
-            query='', limit=item_limit)
     return normalized
 
 
-def render_network_evidence(
+def _legacy_render_network_evidence(
     payload: dict,
     *,
     owner_user_id: str,
@@ -681,6 +686,53 @@ def merge_page_and_network(
     if not second or len(first) + len(separator) > budget:
         return _truncate_text(first, budget)
     return _truncate_text(first + separator + second, budget)
+
+
+def extract_business_records(payload, *, owner_user_id, source_url='', query='', limit=30):
+    """Compatibility cards projected by the canonical target-aware collector."""
+    from .content import collect_content
+    scoped = dict(payload) if isinstance(payload, dict) else {}
+    scoped.setdefault('url', source_url)
+    receipt = collect_content(scoped, owner_user_id=owner_user_id,
+                              target={'kind': 'list', 'query': query})
+    try:
+        limit = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        limit = 30
+    return [{'id': r.get('fields', {}).get('id', ''), 'title': r['title'],
+             'url': r['url'], 'snippet': r['snippet'],
+             'metadata': r.get('fields', {})} for r in receipt['records'][:limit]]
+
+
+def render_network_evidence(payload, *, owner_user_id, max_chars=30000, target=None):
+    """Only relevant projected records, never arbitrary captured response bodies."""
+    from .content import collect_content, render_content
+    budget = _character_budget(max_chars)
+    if budget < 256:
+        return ''
+    receipt = collect_content(payload, owner_user_id=owner_user_id,
+                              target=target, max_chars=max(1000, budget))
+    if not any(e['strategy'] == 'captured_api' for e in receipt['evidence']):
+        return ''
+    return render_content(receipt, max_chars=max(1000, budget))[:budget]
+
+
+def analyze_network_evidence(payload, *, owner_user_id, max_entries=12, target=None):
+    """Inventory only endpoints corroborated by the same page-content rules."""
+    from .content import collect_content
+    receipt = collect_content(payload, owner_user_id=owner_user_id, target=target)
+    allowed = {e['url'] for e in receipt['evidence'] if e['strategy'] == 'captured_api'}
+    scoped = dict(payload) if isinstance(payload, dict) else {}
+    network = dict(scoped.get('network') or {})
+    network['responses'] = [dict(row, body={'records': [{'title': 'projected'}]},
+                                 responsePreview=None, responseBody=None)
+                            for row in _network_rows(scoped)
+                            if _redact_url(str(row.get('url') or '')) in allowed]
+    scoped['network'] = network
+    result = _legacy_analyze_network_evidence(scoped, owner_user_id=owner_user_id,
+                                              max_entries=max_entries)
+    result['denied_response_count'] = sum(not _response_allowed(owner_user_id, str(row.get('url') or '')) for row in _network_rows(payload))
+    return result
 
 
 __all__ = [

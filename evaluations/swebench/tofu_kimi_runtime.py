@@ -21,6 +21,26 @@ TOFU_KIMI_AGENT = (
 )
 TOFU_KIMI_PROFILE_ID = "tofu-kimi"
 TOFU_KIMI_RUNTIME_SCHEMA = "tofu-production-kimi-runtime/v1"
+
+# Benchmark arms may run only these explicitly registered models.  Each entry
+# carries the public, non-secret routing facts the Harbor adapter needs to
+# build the same creator/model/provider graph as production.
+TOFU_BENCHMARK_MODELS: dict[str, dict[str, Any]] = {
+    "kimi-k3": {
+        "creator_id": "moonshot",
+        "creator_name": "Moonshot AI",
+        "display_name": "Kimi K3",
+        "context_window": 262_144,
+        "wire_model_id": "kimi-k3",
+    },
+    "glm-5.3-m17": {
+        "creator_id": "zai",
+        "creator_name": "Z.ai",
+        "display_name": "GLM-5.3",
+        "context_window": 200_000,
+        "wire_model_id": "glm-5.3-m17",
+    },
+}
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PUBLIC_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _RUNTIME_RESERVED_KEYS = frozenset({
@@ -200,6 +220,7 @@ class TofuKimiCandidateSettings:
     experiment_arm: str
     runtime_config: Mapping[str, Any]
     agent_timeout_seconds: int = 3600
+    model: str = "kimi-k3"
     command_timeout_seconds: int = 480
     upstream_base_url_env: str = "KIMI_CHAT_BASE_URL"
     upstream_api_key_env: str = "KIMI_API_KEY"
@@ -218,6 +239,11 @@ class TofuKimiCandidateSettings:
         return _canonical_config(self.runtime_config)[1]
 
     def validate(self) -> None:
+        if str(self.model) not in TOFU_BENCHMARK_MODELS:
+            raise ValueError(
+                "Tofu benchmark model must be one of "
+                + ", ".join(sorted(TOFU_BENCHMARK_MODELS))
+            )
         for value, label in (
             (self.provider_face, "provider face"),
             (self.provider_slot_id, "provider slot ID"),
@@ -279,6 +305,7 @@ class TofuKimiCandidateSettings:
             "experiment_arm": self.experiment_arm,
             "runtime_config": dict(self.runtime_config),
             "runtime_config_sha256": self.runtime_config_sha256,
+            "model": str(self.model),
             "thinking_format": self.thinking_format,
             "timeout_sec": int(self.agent_timeout_seconds),
             "command_timeout_sec": int(self.command_timeout_seconds),
@@ -290,10 +317,10 @@ class TofuKimiCandidateSettings:
             "schema": TOFU_KIMI_RUNTIME_SCHEMA,
             "agentImport": TOFU_KIMI_AGENT,
             "agentVersion": self.agent_version,
-            "model": "kimi-k3",
             "providerFace": self.provider_face,
             "providerSlotId": self.provider_slot_id,
             "experimentArm": self.experiment_arm,
+            "model": str(self.model),
             "runtimeConfig": dict(self.runtime_config),
             "runtimeConfigSha256": self.runtime_config_sha256,
             "toolSchemaSha256": tofu_kimi_tool_schema_sha256(),
@@ -318,7 +345,7 @@ class TofuKimiCandidateSettings:
                 or value.get("schema") != TOFU_KIMI_RUNTIME_SCHEMA:
             raise ValueError("Tofu Kimi runtime manifest has an unsupported schema")
         if value.get("agentImport") != TOFU_KIMI_AGENT \
-                or value.get("model") != "kimi-k3" \
+                or str(value.get("model") or "") not in TOFU_BENCHMARK_MODELS \
                 or value.get("credentialBoundary") != "harbor-host-only" \
                 or value.get("guestCredentialValues") is not False:
             raise ValueError("Tofu Kimi runtime manifest violates its trust boundary")
@@ -327,6 +354,7 @@ class TofuKimiCandidateSettings:
             provider_slot_id=str(value.get("providerSlotId") or ""),
             agent_version=str(value.get("agentVersion") or ""),
             experiment_arm=str(value.get("experimentArm") or ""),
+            model=str(value.get("model") or ""),
             runtime_config=(value.get("runtimeConfig")
                             if isinstance(value.get("runtimeConfig"), dict)
                             else {}),
@@ -353,6 +381,7 @@ class TofuKimiCandidateSettings:
 
 
 __all__ = [
+    "TOFU_BENCHMARK_MODELS",
     "TOFU_KIMI_AGENT",
     "TOFU_KIMI_PROFILE_ID",
     "TOFU_KIMI_RUNTIME_SCHEMA",

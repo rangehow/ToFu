@@ -162,12 +162,14 @@ def _document() -> dict:
     }
 
 
-def _build(monkeypatch, document=None, *, mode='personal'):
+def _build(monkeypatch, document=None, *, mode='personal', credential_secrets=None):
     import lib.model_routing as model_routing
     from lib.llm_dispatch.dispatcher import LLMDispatcher
 
     repository = InMemoryModelRoutingRepository()
     boundary = OwnerBoundary.create(1)
+    for reference, plaintext in (credential_secrets or {}).items():
+        repository.put_secret(boundary, plaintext, secret_reference=reference)
     repository.compare_and_swap(
         boundary, document or _document(), expected_revision=0)
     monkeypatch.setattr(
@@ -195,6 +197,49 @@ def test_v2_materialization_preserves_wire_contract_and_nonchat_slots(
     assert by_wire['alpha-wire-b'].protocol == 'anthropic'
     assert by_wire['whisper-wire'].capabilities == {'transcription'}
     assert dispatcher._is_chat_compatible(by_wire['whisper-wire']) is False
+
+
+@pytest.mark.parametrize('oauth,base_url', [
+    ('codex', 'https://chatgpt.com/backend-api/codex'),
+    ('', 'https://responses.example/v1'),
+])
+def test_shared_responses_route_emits_responses_endpoint_and_payload(
+        monkeypatch, oauth, base_url):
+    from lib.llm._sse_core import prepare_request
+
+    document = _document()
+    document['connections'][0].update(
+        protocol='openai_responses', base_url=base_url)
+    secrets = {}
+    if oauth:
+        document['credentials'][0].update(
+            kind='oauth', secret_reference='codex-secret')
+        secrets['codex-secret'] = 'oauth:codex'
+    dispatcher = _build(monkeypatch, document, credential_secrets=secrets)
+    slot = next(slot for slot in dispatcher.slots if slot.model == 'alpha-wire-a')
+
+    def resolve_token(provider, body, headers, user_id):
+        assert provider == 'codex'
+        assert user_id == '1'
+        return 'synthetic-token', headers, body
+
+    monkeypatch.setattr('lib.oauth.outbound.resolve_oauth_request', resolve_token)
+    canonical = {'model': slot.model, 'messages': [
+        {'role': 'user', 'content': 'Reply OK'}]}
+    plan = prepare_request(
+        canonical, base_url=slot.base_url, api_key=slot.api_key,
+        extra_headers=slot.extra_headers, api_protocol=slot.protocol,
+        oauth=slot.oauth, owner_user_id=1)
+
+    assert plan.url == base_url + '/responses'
+    assert plan.body['model'] == 'alpha-wire-a'
+    assert plan.body['stream'] is True
+    assert plan.body['input'][0]['content'][0]['text'] == 'Reply OK'
+    assert 'messages' not in plan.body
+    assert plan.wire_translator is not None
+    assert plan.responses_profile == ('codex' if oauth else 'default')
+    assert canonical['messages'][0]['content'] == 'Reply OK'
+    assert document['connections'][0]['protocol'] == 'openai_responses'
 
 
 def test_strict_picker_fails_over_only_within_official_model(monkeypatch):

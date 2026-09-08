@@ -1043,19 +1043,31 @@ class TaskRuntime:
                     self.kind, task_id[:8])
         return True
 
-    def abort_owned(self, task_id: str, *, user_id: int) -> bool:
-        """Atomically abort only a task owned by ``user_id``."""
+    def abort_owned(self, task_id: str, *, user_id: int,
+                    source: str | None = None,
+                    expected_task: dict | None = None) -> bool:
+        """Atomically signal an owned task before terminal settlement wins.
+
+        Optional cancellation metadata is stamped under the same lock as the
+        event. Resource callbacks belong outside this lock; ``expected_task``
+        fences a caller's resource snapshot against registry replacement.
+        """
         if (isinstance(user_id, bool)
                 or not isinstance(user_id, int)
                 or user_id < 1):
             raise ValueError('TaskRuntime.abort_owned requires a positive user_id')
         with self._lock:
             task = self._tasks.get(task_id)
-            if task is None or int(task.get('_userId') or 0) != user_id:
+            if (task is None or int(task.get('_userId') or 0) != user_id
+                    or (expected_task is not None and task is not expected_task)):
                 return False
             if (task['status'] in TASK_REPLAY_TERMINAL_STATUSES
                     or task.get('_executionTerminalizing')):
                 return False
+            if source is not None:
+                task['aborted'] = True
+                task.setdefault('_abort_timestamp', time.time())
+                task.setdefault('_abortSource', str(source or 'unknown'))
             task['abort_event'].set()
         logger.info('[TaskRuntime:%s] owner abort requested for task %s',
                     self.kind, task_id[:8])

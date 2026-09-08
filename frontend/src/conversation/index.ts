@@ -183,6 +183,8 @@ export {
   type TransientTurnRecord,
 } from './domain/transient-turn';
 export {
+  CONVERSATION_BLOCK_WINDOW_BATCH_BLOCKS,
+  CONVERSATION_BLOCK_WINDOW_MAX_BLOCKS,
   CONVERSATION_DOM_WINDOW_BATCH_TURNS,
   CONVERSATION_DOM_WINDOW_MAX_TURNS,
   createConversationSurface,

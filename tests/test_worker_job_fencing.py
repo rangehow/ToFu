@@ -310,7 +310,7 @@ def test_worker_job_registry_marks_live_cas_operations_unreceipted():
     from lib.storage_sidecar.operation_domains import REGISTRY_VERSION
     from lib.storage_sidecar.operation_domains.worker_jobs import OPERATIONS
 
-    assert REGISTRY_VERSION == 38
+    assert REGISTRY_VERSION == 39
     assert OPERATIONS['worker_job.enqueue'].receipt_required is True
     assert OPERATIONS['worker_job.request_cancel'].receipt_required is True
     assert OPERATIONS['worker_job.complete'].receipt_required is True

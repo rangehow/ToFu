@@ -75,6 +75,50 @@ def _request_owner_user_id() -> int:
     return int(request_user_id())
 
 
+def _scan_report_days(reports_dir, prefix, *, owner_user_id):
+    """Summarize task completion for one month of cached report files.
+
+    Synchronous filesystem walk — async handlers must offload it via
+    ``asyncio.to_thread`` (one thread hop for the whole month, instead of
+    one per report file).
+    """
+    days = {}
+    try:
+        for fname in os.listdir(reports_dir):
+            if not (fname.startswith(prefix) and fname.endswith('.json')):
+                continue
+            try:
+                day_num = int(fname[len(prefix):].replace('.json', ''))
+            except ValueError as e:
+                logger.debug('[DailyReport] Skipping non-day filename %r: %s',
+                             fname, e)
+                continue
+            report = _load_report(
+                fname.replace('.json', ''),
+                owner_user_id=owner_user_id)
+            if not report or not ('streams' in report or 'tasks' in report):
+                continue
+            streams = report.get('streams', [])
+            tasks = report.get('tasks', [])
+            if streams:
+                done = sum(1 for s in streams if s.get('status') == 'done')
+                total = len(streams)
+            elif tasks:
+                done = sum(1 for t in tasks if t.get('status') == 'done')
+                total = len(tasks)
+            else:
+                continue
+            date_key = f'{prefix}{day_num:02d}'
+            days[date_key] = {
+                'total': total,
+                'done': done,
+                'incomplete': total - done,
+            }
+    except Exception as e:
+        logger.warning('[DailyReport] Calendar scan %s: %s', prefix, e)
+    return days
+
+
 # ═════════════════════════════════════════════════════════════
 #  Endpoints
 # ═════════════════════════════════════════════════════════════
@@ -102,8 +146,8 @@ async def generate_daily_report():
 
     # Return cached report unless force regenerate
     if not force:
-        existing = _load_report(
-            target_date, owner_user_id=owner_user_id)
+        existing = await asyncio.to_thread(
+            _load_report, target_date, owner_user_id=owner_user_id)
         if existing and (existing.get('streams') or existing.get('tasks')):
             n = len(existing.get('streams', existing.get('tasks', [])))
             logger.info('[DailyReport] POST %s: returning cached (%d items)',
@@ -134,7 +178,8 @@ async def generate_daily_report():
 
     # Persist if analysis succeeded
     if (result.get('streams') or result.get('tomorrow')) and not result.get('error'):
-        result = _daily_report._save_generated_report(
+        result = await asyncio.to_thread(
+            _daily_report._save_generated_report,
             target_date, result, owner_user_id=owner_user_id)
 
     elapsed = time.monotonic() - t0
@@ -155,10 +200,11 @@ async def get_cached_report(date_str):
         return api_bad_request('Invalid date format')
     owner_user_id = _request_owner_user_id()
 
-    today_todos = _get_today_inherited_todos(
-        date_str, owner_user_id=owner_user_id)
+    today_todos = await asyncio.to_thread(
+        _get_today_inherited_todos, date_str, owner_user_id=owner_user_id)
 
-    report = _load_report(date_str, owner_user_id=owner_user_id)
+    report = await asyncio.to_thread(
+        _load_report, date_str, owner_user_id=owner_user_id)
     if report is None:
         # No report — check if previous day has tomorrow items to inherit
         if today_todos:
@@ -198,7 +244,8 @@ async def backfill_report(date_str):
     owner_user_id = _request_owner_user_id()
 
     # Don't re-generate if cached
-    existing = _load_report(date_str, owner_user_id=owner_user_id)
+    existing = await asyncio.to_thread(
+        _load_report, date_str, owner_user_id=owner_user_id)
     if existing and (existing.get('streams') or existing.get('tasks')):
         n = len(existing.get('streams', existing.get('tasks', [])))
         logger.info('[DailyReport] Backfill %s: already cached (%d items)',
@@ -220,7 +267,8 @@ async def backfill_report(date_str):
         owner_user_id=owner_user_id, preserve_manual=False)
 
     if result.get('streams') and not result.get('error'):
-        result = _daily_report._save_generated_report(
+        result = await asyncio.to_thread(
+            _daily_report._save_generated_report,
             date_str, result, owner_user_id=owner_user_id)
 
     elapsed = time.monotonic() - t0
@@ -254,43 +302,13 @@ async def get_calendar_month(year, month):
         days = cached['days']
         logger.debug('[DailyReport] Calendar %d-%02d: days cache hit', year, month)
     if days is None:
-        days = {}
-        try:
-            reports_dir = _daily_report._reports_dir_for_owner(
-                owner_user_id=owner_user_id)
-            for fname in os.listdir(reports_dir):
-                if not (fname.startswith(prefix) and fname.endswith('.json')):
-                    continue
-                try:
-                    day_num = int(fname[len(prefix):].replace('.json', ''))
-                except ValueError as e:
-                    logger.debug('[DailyReport] Skipping non-day filename %r: %s',
-                                 fname, e)
-                    continue
-                report = _load_report(
-                    fname.replace('.json', ''),
-                    owner_user_id=owner_user_id)
-                if not report or not ('streams' in report or 'tasks' in report):
-                    continue
-                streams = report.get('streams', [])
-                tasks = report.get('tasks', [])
-                if streams:
-                    done = sum(1 for s in streams if s.get('status') == 'done')
-                    total = len(streams)
-                elif tasks:
-                    done = sum(1 for t in tasks if t.get('status') == 'done')
-                    total = len(tasks)
-                else:
-                    continue
-                date_key = f'{year:04d}-{month:02d}-{day_num:02d}'
-                days[date_key] = {
-                    'total': total,
-                    'done': done,
-                    'incomplete': total - done,
-                }
-        except Exception as e:
-            logger.warning('[DailyReport] Calendar scan %d-%02d: %s',
-                           year, month, e)
+        reports_dir = _daily_report._reports_dir_for_owner(
+            owner_user_id=owner_user_id)
+        # Off-loop: a whole month of locked JSON report reads on a network
+        # filesystem stalls the event loop (LoopWatch 2026-09-06).
+        days = await asyncio.to_thread(
+            _scan_report_days, reports_dir, prefix,
+            owner_user_id=owner_user_id)
 
     # ── TTL cache for expensive DB scans (conv_days + cost_days) ──
     if cache_fresh:
@@ -439,8 +457,8 @@ async def update_task_status():
                 return report
         return None
 
-    _update_report(
-        date_str, _mutate, owner_user_id=owner_user_id)
+    await asyncio.to_thread(
+        _update_report, date_str, _mutate, owner_user_id=owner_user_id)
     if outcome['missing']:
         return api_not_found('No report for this date')
     if not outcome['found']:
@@ -480,8 +498,8 @@ async def toggle_tomorrow_todo():
                 return report
         return None
 
-    _update_report(
-        date_str, _mutate, owner_user_id=owner_user_id)
+    await asyncio.to_thread(
+        _update_report, date_str, _mutate, owner_user_id=owner_user_id)
     if outcome['missing']:
         return api_not_found('No report for this date')
     if not outcome['found']:
@@ -526,8 +544,8 @@ async def toggle_inherited_todo():
                 return report
         return None
 
-    _update_report(
-        origin_date, _mutate, owner_user_id=owner_user_id)
+    await asyncio.to_thread(
+        _update_report, origin_date, _mutate, owner_user_id=owner_user_id)
     if outcome['missing']:
         return api_not_found('No report for origin date')
     if not outcome['found']:
@@ -577,8 +595,8 @@ async def delete_inherited_todo():
         report['tomorrow'] = new_tomorrow
         return report
 
-    _update_report(
-        origin_date, _mutate, owner_user_id=owner_user_id)
+    await asyncio.to_thread(
+        _update_report, origin_date, _mutate, owner_user_id=owner_user_id)
     if outcome['missing']:
         return api_not_found('No report for origin date')
     if not outcome['found']:
@@ -646,8 +664,8 @@ async def add_manual_task():
         })
         return report
 
-    report = _update_report(
-        date_str, _mutate, owner_user_id=owner_user_id,
+    report = await asyncio.to_thread(
+        _update_report, date_str, _mutate, owner_user_id=owner_user_id,
         default=default_report)
     logger.info('[DailyReport] TODO added to %s: %s (id=%s)', date_str, task_text[:60], todo_id)
     return api_ok({'task_id': todo_id, 'report': report})
@@ -690,8 +708,8 @@ async def delete_manual_task():
         report['tomorrow'] = new_tomorrow
         return report
 
-    report = _update_report(
-        date_str, _mutate, owner_user_id=owner_user_id)
+    report = await asyncio.to_thread(
+        _update_report, date_str, _mutate, owner_user_id=owner_user_id)
     if outcome['missing']:
         return api_not_found('No report for this date')
     if not outcome['found']:
@@ -726,8 +744,8 @@ async def start_generation():
 
     # Check cache (unless forced)
     if not force:
-        existing = _load_report(
-            target_date, owner_user_id=owner_user_id)
+        existing = await asyncio.to_thread(
+            _load_report, target_date, owner_user_id=owner_user_id)
         if existing and (existing.get('streams') or existing.get('tasks')):
             return api_ok({'status': 'done', 'report': existing})
     # Launch background thread
@@ -765,12 +783,13 @@ async def get_generation_status(date_str):
 
     job = _daily_report._get_job(date_str, owner_user_id=owner_user_id)
 
-    today_todos = _get_today_inherited_todos(
-        date_str, owner_user_id=owner_user_id)
+    today_todos = await asyncio.to_thread(
+        _get_today_inherited_todos, date_str, owner_user_id=owner_user_id)
 
     if not job:
         # No active job — check disk cache
-        existing = _load_report(date_str, owner_user_id=owner_user_id)
+        existing = await asyncio.to_thread(
+            _load_report, date_str, owner_user_id=owner_user_id)
         if existing and (existing.get('streams') is not None or existing.get('tasks') is not None):
             existing['today_todos'] = today_todos
             return api_ok({'status': 'done', 'report': existing})
@@ -795,8 +814,8 @@ async def get_generation_status(date_str):
 
     if status == 'done':
         _daily_report._clear_job(date_str, owner_user_id=owner_user_id)
-        report = _load_report(
-            date_str, owner_user_id=owner_user_id) or {'tasks': []}
+        report = await asyncio.to_thread(
+            _load_report, date_str, owner_user_id=owner_user_id) or {'tasks': []}
         report['today_todos'] = today_todos
         return api_ok({'status': 'done', 'report': report})
     if status == 'error':

@@ -456,6 +456,12 @@
   // paper_reports, so it keeps working forever — it is what makes a finished
   // research job re-openable at all. `found:false` is a normal answer.
   const research = {
+    records: (limit) =>
+      get('/api/v1/research/records', { query: { limit: limit || 50 } }),
+    record: (taskId) =>
+      get(`/api/v1/research/records/${encodeURIComponent(taskId)}`),
+    resumeRecord: (taskId) =>
+      post(`/api/v1/research/records/${encodeURIComponent(taskId)}/resume`, {}),
     lookup: (direction, lang) =>
       get('/api/v1/research/lookup',
           { query: { direction: direction || '', lang: lang || 'en' },
@@ -472,6 +478,10 @@
           { query: { direction: direction || '', lang: lang || 'en' } }),
     saveWorkspace: (payload) =>
       put('/api/v1/research/workspace', payload),
+    // One-shot LLM draft of the frozen protocol, grounded in the persisted
+    // survey/gap/idea. A proposal only — the workspace PUT stays the authority.
+    draftProtocol: (payload) =>
+      post('/api/v1/research/workspace/draft-protocol', payload),
     capabilities: () =>
       get('/api/v1/research/capabilities'),
     scaffoldManuscript: (payload) =>
@@ -489,6 +499,16 @@
     reject:    (id, reason)   => post(`/api/v1/optimizer/proposals/${encodeURIComponent(id)}/reject`, { reason: reason || '' }),
     revert:    (id)           => post(`/api/v1/optimizer/proposals/${encodeURIComponent(id)}/revert`, undefined),
     runNow:    (opts)         => post('/api/v1/optimizer/run-now', Object.assign({ dry_run: false, window_hours: 24 }, opts || {})),
+  };
+
+  // overleaf live preview (chat TeX edit → compile + SyncTeX locate) ------
+  const overleaf = {
+    preview: (body)         => post('/api/v1/overleaf/preview', body || {}),
+  };
+
+  // local LaTeX live preview (workspace .tex edit → compile + SyncTeX) --
+  const latex = {
+    preview: (body)         => post('/api/v1/latex/preview', body || {}),
   };
 
   // compactions (per-conversation snapshots) ------------------------
@@ -847,6 +867,17 @@
       post(`/api/v1/swarm/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null' }),
   };
 
+  // background activity (cross-surface "still working" snapshot) ----------
+  // background: GET — {swarms:[{swarm_key, conv_id, running, pending,
+  //   completed, agents:[…], created_at}], backgroundCommands:[{command_id,
+  //   command, status, started_at, elapsed_s, delivery_status}]}
+  // Polled by the convStatusStrip background-activity chip on a few-second
+  // cadence; both lists are empty in the steady state.
+  const activity = {
+    background: () => get('/api/v1/activity/background',
+      { onError: 'null', coalesce: true, priority: 'background' }),
+  };
+
   // desktop bridge (RWA Devices page) ----------------------------------
   const desktop = {
     /* `arch` is the architecture the CLIENT resolved for itself via
@@ -966,6 +997,17 @@
            { onError: 'null' }),
   };
 
+  // local deployment (Settings → 本地部署; read-only — writes stay with the
+  // approval-gated local_serve agent tools)
+  const localServe = {
+    hardware: () => get('/api/v1/local-serve/hardware', { onError: 'null' }),
+    recommendations: (purpose) => get(
+      '/api/v1/local-serve/recommendations' +
+        (purpose ? '?purpose=' + encodeURIComponent(purpose) : ''),
+      { onError: 'null' }),
+    deployments: () => get('/api/v1/local-serve/deployments', { onError: 'null' }),
+  };
+
   // Canonical owner-scoped model/provider access authority. Credential
   // plaintext is written only through the dedicated secret operation.
   const modelRouting = {
@@ -1041,6 +1083,7 @@
     deviceLoginGet:  (provider)     =>
       request('/api/v1/oauth/device-login',
               { method: 'GET', query: { provider }, parse: 'response', onError: 'null' }),
+    resetOfferConsume: ()           => post('/api/v1/oauth/reset-offer/consume', {}, { onError: 'null', parse: 'response' }),
     egressAgentGet: ()              => get('/api/v1/oauth/egress-agent', { onError: 'null' }),
     egressAgentSet: (agentId)       => post('/api/v1/oauth/egress-agent', { agent_id: agentId }, { onError: 'null', parse: 'response' }),
   };
@@ -1696,12 +1739,13 @@
     pageRequestId,    // the correlation prefix every request of this page shares
     // domains
     folders, paperFolders, orchestrations, memory, skills, profile, userContext, timer, scheduler, optimizer, compactions,
+    overleaf, latex,
     conversations, text, translate, chat, images, pdf, doc, media, audio, videos, artifacts,
     health, pricing, clientError, serverConfig, costExperiments, network, browser, project, daily, paper,
     desktop,
-    features, providers, modelRouting, dispatch, oauth, mcp, update, trading, authSources,
+    features, providers, localServe, modelRouting, dispatch, oauth, mcp, update, trading, authSources,
     privateHosts, credentials,
-    swarm, logs, motion, tasks, users, research, tools, knowledge,
+    swarm, activity, logs, motion, tasks, users, research, tools, knowledge,
   };
 
   global.Api = Api;

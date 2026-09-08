@@ -25,7 +25,15 @@ wire tools 只描述“模型当前看见什么”；执行权限始终由任务
 }
 ```
 
-`search_tools` 只检索当前 `executable_tool_catalog` 中**尚未向该任务披露**的成员，并返回其原始注册名、namespace、有界摘要、紧凑参数 schema、`execute_with: "execute_tools"` 和简短执行提示。披露集合合并两类身份：最近一次有界 `tool_wire_projection.toolNames`（Provider 实际收到的最终投影），以及本任务此前搜索页已经返回的 `(精确工具名, 当前完整 catalog schema 指纹)`。排除发生在打分和分页之前，所以同一 schema 即使匹配不同查询，也不会在后续轮次、后续页或故障降级目录中重新出现；schema 修订后指纹变化，工具可再次披露。该状态仅在运行中任务内保留，最多 512 个不含原 schema 的身份，不是注册、导入、授权或跨任务用户偏好。精确搜索命中两类已披露身份时行为不同：wire 可见工具返回空 `items`、`already_visible` 和“直接调用”的停止提示；仅搜索披露（不在 wire）的工具返回 `already_disclosed` 并重新附上该工具的完整条目——压缩可能已丢弃早先的披露页，拒绝重发只会让模型猜测参数名（事故会话 mtgzs6bnmglpfa 因此把 `task_id` 猜成 `epic_id`），此时提示明确“不在直接工具列表，走 execute_tools”。宽检索仍然省略两类身份；零结果且本任务已有披露时，提示会说明已披露工具被省略、可按精确名重新查看 schema。普通语义搜索不复制完整 help/errors；精确名称（含唯一维护别名）命中才返回最多 1,200 字符 help 和 8 个紧凑错误条目。完整 JSON 页硬限 24,000 字符，超出时从最低排名尾部分页，参数名和 required 字段不截断。下一步模型把精确名称与匹配 schema 的参数交给 `execute_tools`；搜索不会签发 admission receipt，也不会扩大 executable catalog。
+`search_tools` 只检索当前 `executable_tool_catalog` 中**尚未向该任务披露**的成员，并返回其原始注册名、namespace、有界摘要、紧凑参数 schema、`execute_with: "execute_tools"` 和简短执行提示。披露集合合并两类身份：最近一次有界 `tool_wire_projection.toolNames`（Provider 实际收到的最终投影），以及本任务此前搜索页已经返回的 `(精确工具名, 当前完整 catalog schema 指纹)`。排除发生在打分和分页之前，所以同一 schema 即使匹配不同查询，也不会在后续轮次、后续页或故障降级目录中重新出现；schema 修订后指纹变化，工具可再次披露。该状态仅在运行中任务内保留，最多 512 个不含原 schema 的身份，不是注册、导入、授权或跨任务用户偏好。
+除 `(名称, schema 指纹)` 外，每条 ledger 身份还携带一份有界参数签名（required/optional 参数名，各至多 16 个、单名截断 64 字符，不含任何参数值），供压缩后的上下文恢复使用。
+精确搜索命中两类已披露身份时行为不同：wire 可见工具返回空 `items`、`already_visible` 和“直接调用”的停止提示；仅搜索披露（不在 wire）的工具返回 `already_disclosed` 并重新附上该工具的完整条目——压缩可能已丢弃早先的披露页，拒绝重发只会让模型猜测参数名（事故会话 mtgzs6bnmglpfa 因此把 `task_id` 猜成 `epic_id`），此时提示明确“不在直接工具列表，走 execute_tools”。
+
+
+披露是一次性投递，但 ledger 是持久的：搜索页本身会随轮次老化、被压缩摘要吞掉，而任务上的 ledger 不会。Composer 因此在每轮尾部注入 `disclosed_tools` 块（`tools.disclosure`，placement=tail，≤700 tokens），从 ledger 恢复“已披露但不在 wire”的 deferred 工具名单及其参数签名（至多 16 条、每条至多 8 个参数名），并明确指示“用 execute_tools 按精确全名调用，不要重跑宽检索；需要完整 schema 时用单个精确名搜索重新披露”。块跳过 wire 已可见或已不在 executable catalog 的名字；ledger 不可用时静默省略（`state_unavailable`），不阻断组装。该块只恢复名字与签名，不重新渲染完整 schema——精确名搜索的 `already_disclosed` 路径仍是唯一的按需全文重披露通道。
+宽检索仍然省略两类身份；零结果且本任务已有披露时，提示会说明已披露工具被省略、可按精确名重新查看 schema。
+handler 侧还对同一任务内逐字节相同的搜索计数：第二次起结果带 `repeated_query` 字段，宽检索/零结果检索的 notice 替换为破循环指令（目录不变，重搜不会改变结果——直接行动或本轮视为无此能力）；但精确名恢复（`already_disclosed` / `already_visible` / `resolved_name`）是压缩后的合法找回，保留原恢复提示不被破循环文案覆盖。
+普通语义搜索不复制完整 help/errors；精确名称（含唯一维护别名）命中才返回最多 1,200 字符 help 和 8 个紧凑错误条目。完整 JSON 页硬限 24,000 字符，超出时从最低排名尾部分页，参数名和 required 字段不截断。下一步模型把精确名称与匹配 schema 的参数交给 `execute_tools`；搜索不会签发 admission receipt，也不会扩大 executable catalog。
 
 普通调用使用：
 
@@ -39,6 +47,24 @@ wire tools 只描述“模型当前看见什么”；执行权限始终由任务
 搜索不是 admission receipt，也不是执行前置条件：如果模型已经知道任务目录中的精确工具名并给出符合该工具 schema 的参数，可以直接使用 `execute_tools.calls` 或 ToolScript；网关仍会重新校验名称、schema、权限与审批。
 
 有数据依赖的调用可使用有界 ToolScript：`catalog.search(...)`、`tools.call(...)`、`tools.callMany(...)` 和 `tools.parallel(...)`。ToolScript 可调用 executable catalog 中的任何真实工具，包括写入或需要审批的工具；这些子调用仍进入原权限、审批、串行化和执行流水线。解释器没有 `eval`、import、宿主文件系统、进程或直接网络能力。
+
+
+ToolScript 的主要用途是把**存在结果依赖的串行调用放在一次模型往返中完成**，而不是给单个调用增加外壳：先调用、检查回执、从结果生成下一步参数，再调用并返回有界汇总。无依赖的调用使用 `calls[]`；依赖链内部的独立分支可用 `tools.parallel(calls)`，不把有先后依赖的节点并行派发。一次程序完成不等于业务任务成功；失败、拒绝、取消或截断的前置结果不得被当作完整成功数据继续传递。需要新的语义判断或用户审批时，不承诺整条任务无需交互。
+
+`catalog.search({query, namespace?, limit?, cursor?})` 使用 `search_tools` 的参数契约；也接受位置参数 `catalog.search(query, namespace="", limit=8, cursor="")`。对象形式不可混用额外位置参数；未知字段、错误类型、空查询和越界参数返回带重试提示的解释器错误，不能把对象字符串化后继续检索。目录查询不计为真实子工具调用；已知精确工具名和 schema 时不必先搜索。
+
+`tools.call(name, arguments)` 返回回执而非裸业务对象：成功为 `status: "done"` 和 `output`，失败提供 `error`；`output_truncated` 表示内部结果是否不完整。JSON 文本通过 `JSON.parse(receipt.output)` 读取，不对普通文本盲目解析。以下示意使用已知 schema 的两个测试工具，在一次 `execute_tools.program` 中完成两步依赖：
+
+```js
+const first = tools.call("lookup_record", {key: "example"});
+if (first.status != "done" || first.output_truncated) return first;
+const record = JSON.parse(first.output);
+const second = tools.call("read_details", {record_id: record.id});
+if (second.status != "done" || second.output_truncated) return second;
+return JSON.parse(second.output);
+```
+
+搜索结果的 `ptc_eligible` 仅描述 hosted OpenAI PTC 的审核资格，不是本地 ToolScript 的权限开关；本地执行仍逐子调用校验任务目录、schema、权限与审批。
 
 本地索引使用字段加权 BM25，并在索引侧做有限的中英文概念归一（包括下载、保存、复制、导出、安装、解压、登录、认证、授权及其中英文近义表达）。认证属于动作意图：查询与工具名同时命中该概念时获得动作名加权，因此“登录/授权/NOT_LOGGED_IN”查询会把 login/auth 工具排在泛化的文档搜索工具之前。每个
 `ToolSpec` 可以通过 `search_hints` 提供按函数区分的 aliases/intents；MCP 则复用

@@ -35,6 +35,8 @@ export type HumanGuidanceLateAnswerRequest = Readonly<{
 export type HumanGuidanceActions = Readonly<{
   submitFreeText(element: unknown): Promise<void>;
   submitChoice(element: unknown): Promise<void>;
+  selectBatchChoice(element: unknown): void;
+  submitBatch(element: unknown): Promise<void>;
   destroy(): void;
 }>;
 
@@ -521,10 +523,95 @@ export function createHumanGuidanceActions(
     }
   }
 
+  function selectBatchChoice(value: unknown): void {
+    if (destroyed) return;
+    const element = asElement(value);
+    if (!element) return;
+    const card = cardFor(element);
+    if (!card || card.classList.contains('hg-submitting')) return;
+    const batchIndex = element.dataset.batchIndex;
+    if (batchIndex === undefined) return;
+    // Deselect siblings in the same question group, select this one.
+    const siblings = card.querySelectorAll<HTMLElement>(
+      `.hg-batch-choice[data-batch-index="${batchIndex}"]`,
+    );
+    for (const sib of siblings) {
+      sib.classList.toggle('hg-selected', sib === element);
+    }
+  }
+
+  async function submitBatch(value: unknown): Promise<void> {
+    if (destroyed) return;
+    const element = asElement(value);
+    if (!element) return;
+    const card = cardFor(element);
+    if (!card) return;
+    const guidanceId = boundedIdentity(card.dataset.gid, IDENTIFIER_UNITS);
+    if (!guidanceId) return;
+    const active = readActiveConversation();
+    if (!active) return;
+    const key = submissionKey(active.conversationId, guidanceId);
+    if (card.classList.contains('hg-submitting')
+        || activeSubmissions.has(key)) return;
+
+    // Collect answers from all batch sections.
+    const sections = card.querySelectorAll<HTMLElement>('.hg-batch-section');
+    const answers: Array<{ index: number; answer: string }> = [];
+    let hasEmpty = false;
+    for (const section of sections) {
+      const idxText = safeText(section.dataset.batchIndex);
+      const idx = /^(?:0|[1-9]\d*)$/.test(idxText) ? Number(idxText) : -1;
+      if (idx < 0) continue;
+      // Choice question: look for selected option.
+      const selected = section.querySelector<HTMLElement>(
+        '.hg-batch-choice.hg-selected',
+      );
+      if (selected) {
+        const label = boundedIdentity(selected.dataset.label, CHOICE_LABEL_UNITS);
+        answers.push({ index: idx, answer: label || '(no answer)' });
+        continue;
+      }
+      // Free-text question: look for textarea.
+      const textarea = section.querySelector<HTMLTextAreaElement>(
+        'textarea.hg-batch-input',
+      );
+      if (textarea) {
+        const text = textarea.value.trim();
+        if (!text) hasEmpty = true;
+        answers.push({ index: idx, answer: text || '(no answer)' });
+        continue;
+      }
+      answers.push({ index: idx, answer: '(no answer)' });
+    }
+
+    if (hasEmpty) {
+      safeToast(translatedText('project.hgBatchIncomplete'), 'warning');
+      return;
+    }
+
+    activeSubmissions.add(key);
+    card.classList.add('hg-submitting');
+    const responseJson = JSON.stringify(answers);
+    try {
+      const ok = await submitPayload(
+        active,
+        guidanceId,
+        responseJson,
+        responseJson,
+        lateAnswerTurnId(card),
+      );
+      if (!ok && !destroyed) card.classList.remove('hg-submitting');
+    } finally {
+      activeSubmissions.delete(key);
+    }
+  }
+
   function destroy(): void {
     destroyed = true;
     activeSubmissions.clear();
   }
 
-  return Object.freeze({ submitFreeText, submitChoice, destroy });
+  return Object.freeze({
+    submitFreeText, submitChoice, selectBatchChoice, submitBatch, destroy,
+  });
 }

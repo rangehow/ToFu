@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 import re
 import threading
 import time
@@ -594,9 +595,9 @@ def _freeze_and_return(state_key: str, *, now: float,
         state = _state_for_update_locked(state_key, now=now)
         frozen = state.get('wire')
         if frozen is None:
-            frozen = list(definitions)
+            frozen = copy.deepcopy(definitions)
             state['wire'] = frozen
-    return list(frozen)
+    return copy.deepcopy(frozen)
 
 
 def freeze_wire_definitions(
@@ -635,6 +636,16 @@ def frozen_wire_tool_names(
         str((tool.get('function') or {}).get('name') or '') for tool in wire)
     return tuple(name for name in names if name), True
 
+
+def frozen_wire_definitions(selection_scope_id: str) -> list[dict] | None:
+    """Detached cache checkpoint of declarations; never execution authority."""
+    state_key = _bounded_state_key(selection_scope_id)
+    if not state_key:
+        return None
+    with _LOCK:
+        wire = (_SELECTION_STATE.get(state_key) or {}).get('wire')
+        return copy.deepcopy(wire) if isinstance(wire, list) else None
+
 def select_active_mcp_tools(
     snapshot: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     *,
@@ -663,11 +674,11 @@ def select_active_mcp_tools(
             # Small catalogs skip retrieval scoring but still freeze: a later
             # disconnect must not shrink the wire mid-conversation either.
             frozen = [tool.definition for tool in index.tools]
-            state['wire'] = list(frozen)
+            state['wire'] = copy.deepcopy(frozen)
         retained_used = [name for name in state.get('used', [])
                          if name in index.by_name]
     if frozen is not None:
-        return list(frozen)
+        return copy.deepcopy(frozen)
     wanted = max(1, min(int(limit or DEFAULT_ACTIVE_LIMIT), 8))
 
     query_term_counts, _query_digest = _query_profile(query)
@@ -747,7 +758,7 @@ __all__ = [
     'build_catalog_index', 'canonical_schema_hash', 'catalog_cache_stats',
     'catalog_search_text_by_name', 'catalog_snapshot_fingerprint',
     'clear_tool_search_caches', 'freeze_wire_definitions',
-    'frozen_wire_tool_names', 'invalidate_server_catalog',
+    'frozen_wire_tool_names', 'frozen_wire_definitions', 'invalidate_server_catalog',
     'mcp_selection_scope_id',
     'recent_conversation_mcp_tool_names', 'record_mcp_tool_used',
     'select_active_mcp_tools',

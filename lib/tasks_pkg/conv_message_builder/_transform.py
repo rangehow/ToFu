@@ -35,12 +35,14 @@ def _transform_messages(
     *,
     exclude_last: bool = False,
     user_id: int | None = None,
+    prefix_messages: list[dict] | None = None,
 ) -> list[dict]:
     """Transform raw conversation messages into API-ready format.
 
     This is the server-side equivalent of the frontend's buildApiMessages().
     """
-    messages = []
+    messages = list(prefix_messages or [])
+    retained_count = len(messages)
     if user_id is None:
         try:
             configured_user_id = int(config.get('userId') or 0)
@@ -50,7 +52,7 @@ def _transform_messages(
 
     # 1. System prompt from user settings
     sys_prompt = (config.get('systemPrompt') or '').strip()
-    if sys_prompt:
+    if sys_prompt and not prefix_messages:
         messages.append({'role': 'system', 'content': sys_prompt})
 
     # Video-frame clamping is MODEL-AWARE (owner ruling 2026-08-04): the send
@@ -62,7 +64,7 @@ def _transform_messages(
     model = (config.get('model') or '') if isinstance(config, dict) else ''
     from lib.model_info import aggregate_image_cap
     _agg_cap = aggregate_image_cap(model) if model else None
-    _images_used = 0
+    _images_used = sum(_count_image_blocks(message) for message in messages)
 
     def _remaining_budget() -> int | None:
         if _agg_cap is None:
@@ -116,8 +118,18 @@ def _transform_messages(
             len(message.get('attachments') or []) for message in src
             if isinstance(message.get('attachments'), list))
         attachment_projection_budget = MediaProjectionBudget(
-            text_chars_remaining=document_text_request_cap(model),
+            text_chars_remaining=max(0, document_text_request_cap(model) - sum(
+                int(message.get('_attachmentTextChars') or 0) for message in messages)),
             attachments_remaining=max(1, attachment_count))
+
+    # Manual compaction keeps original user Turns for audit fidelity. Render
+    # their historical identity here instead of rewriting durable user content.
+    from lib.tasks_pkg.compaction._history import is_human_message, make_history_carrier
+    compacted_history = any(message.get('_isCompactionSummary') for message in src)
+    latest_human = next((message for message in reversed(src)
+                         if is_human_message(message)), None)
+    opening_human = next((message for message in src
+                          if is_human_message(message)), None)
 
     for msg in src:
         # 2. Skip Flow display-only messages
@@ -143,6 +155,8 @@ def _transform_messages(
         role = msg.get('role', '')
 
         if role == 'user':
+            before_attachment_chars = (attachment_projection_budget.text_chars_remaining
+                                       if attachment_projection_budget else 0)
             if isinstance(msg.get('planExecution'), dict):
                 built_user = {
                     'role': 'user',
@@ -154,6 +168,15 @@ def _transform_messages(
                     msg, model=model, image_budget=_remaining_budget(),
                     user_id=user_id,
                     attachment_projection_budget=attachment_projection_budget)
+            if attachment_projection_budget:
+                built_user['_attachmentTextChars'] = max(0, before_attachment_chars
+                    - attachment_projection_budget.text_chars_remaining)
+            if compacted_history and is_human_message(msg) and msg is not latest_human:
+                built_user = make_history_carrier([{
+                    'kind': ('opening_request' if msg is opening_human
+                             else 'earlier_request'),
+                    'content': built_user['content'],
+                }])
             messages.append(built_user)
             _images_used += _count_image_blocks(built_user)
 
@@ -168,7 +191,12 @@ def _transform_messages(
         # Skip other roles (system messages in the middle, etc.)
 
     # 9. Post-processing: merge consecutive same-role messages
-    _merge_consecutive_same_role(messages)
+    if retained_count:
+        suffix = messages[retained_count:]
+        _merge_consecutive_same_role(suffix)
+        messages[retained_count:] = suffix
+    else:
+        _merge_consecutive_same_role(messages)
 
     return messages
 

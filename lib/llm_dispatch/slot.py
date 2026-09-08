@@ -80,6 +80,12 @@ class Slot:
     capabilities: set       # {'text', 'vision', 'thinking', 'cheap'}
 
     def __post_init__(self):
+        # Model-routing v2 stores ``openai_responses``; transport and slot
+        # policy use ``responses``. Normalize at the shared construction
+        # boundary so pooled and request-scoped slots cannot choose different
+        # wire endpoints for the same Connection.
+        if self.protocol == 'openai_responses':
+            self.protocol = 'responses'
         # Defensive copy — prevent shared-reference bugs when
         # multiple Slots are built from the same caps set.
         self.capabilities = set(self.capabilities)

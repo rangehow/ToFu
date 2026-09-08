@@ -26,8 +26,8 @@ normalizes upstream results. Entity/selection rules live in
 
 1. Parse a structured native ModelRef or resolve one compatible string with explicit Creator/Provider hints; ambiguity is an error.
 2. Read the owner-scoped v2 aggregate, hard-filter authorization, capability, context, protocol, budget, probe, stale/pending, and health state, then bind the bounded ordered candidates as request-owned slots.
-3. Build the provider-neutral request body once; root rounds retain a validated positive full-prompt admission count as an internal-only sidecar, so same-model slot retries and same-conversation cache-settle classification reuse it while invalid, missing, or cross-model evidence recomputes locally and every provider wire strips it. The first exact wire-schema digest is reused only while the model and every ordered schema object remain identical. Per-slot adaptation deep-clones message history only for families that mutate it (cache-marker/Claude or Gemini); read-only OpenAI/Responses projection reuses the canonical list, while caller-byte immutability remains the enforced boundary. A VLM-to-text fallback projects only that derived copy: one bounded marker replaces all images in each image-bearing message at their first image position, adjacent captions/references/tool results/prior assistant descriptions remain, pixels are declared unseen, and the durable multimodal history is unchanged. Final transport diagnostics derive semantic, whole-message-byte, and field-byte fingerprints in one shared history traversal; canonical field normalization emits the temporary tool alignment key in the same message scan, takes standard strings/text blocks directly while routing images and unknown shapes through the generic normalizer, and already-required field serialization proves whether an encoded `cache_control` key exists, so only marker-bearing or malformed messages allocate a marker-free projection. Each top-level value is serialized once for both raw views and remains an independent reference until one final whole-message join; primitive fields use byte-identical direct encoding, complex fields share a stateless configured stdlib encoder, and tool arguments use sorted orjson canonicalization. Message-sized values use process-local keyed integers, canonical rows retain only their alignment key plus field map, and stable-format hoisted/static/routing digests remain separate while standalone diagnostic APIs retain identical outputs.
-4. Translate only at the provider adapter boundary.
+3. Build the provider-neutral request body once; root rounds retain a positive full-prompt admission count as an internal-only sidecar for upstream accounting and cache-settle classification; every provider wire strips it. Final selected-slot hard-window admission always recounts messages/system/tools locally after adaptation, using bounded content-digest tokenizer caches rather than trusting that integer or a same-model reuse hint. The first exact wire-schema digest is reused only while the model and every ordered schema object remain identical. Per-slot adaptation deep-clones message history only for families that mutate it (cache-marker/Claude or Gemini); read-only OpenAI/Responses projection reuses the canonical list, while caller-byte immutability remains the enforced boundary. A VLM-to-text fallback projects only that derived copy: one bounded marker replaces all images in each image-bearing message at their first image position, adjacent captions/references/tool results/prior assistant descriptions remain, pixels are declared unseen, and the durable multimodal history is unchanged. Final transport diagnostics derive semantic, whole-message-byte, and field-byte fingerprints in one shared history traversal; canonical field normalization emits the temporary tool alignment key in the same message scan, takes standard strings/text blocks directly while routing images and unknown shapes through the generic normalizer, and already-required field serialization proves whether an encoded `cache_control` key exists, so only marker-bearing or malformed messages allocate a marker-free projection. Each top-level value is serialized once for both raw views and remains an independent reference until one final whole-message join; primitive fields use byte-identical direct encoding, complex fields share a stateless configured stdlib encoder, and tool arguments use sorted orjson canonicalization. Message-sized values use process-local keyed integers, canonical rows retain only their alignment key plus field map, and stable-format hoisted/static/routing digests remain separate while standalone diagnostic APIs retain identical outputs.
+4. Provider-boundary translation is followed by `lib/llm/request.py` sealing a request-lifetime immutable `AdmittedRequest`; Claude translated/cloaked text is recounted before sealing. Transports consume detached envelopes or sealed bytes; scalar lookups use immutable metadata, complex lookups decode only their field. Fixed-size semantic and provider-prefix identities extend existing diagnostics, not provider cache-key claims. Responses WebSocket reuses the connection but sends full requests with explicit previous-response reset until incremental state equivalence is proven.
 5. Execute with bounded connect policy and a 300s default rolling stream-idle window; every SSE/WS event renews it, so it is not a total request wall clock.
 6. Normalize stream events and terminal usage into the internal vocabulary.
 7. Settle health on the factual Deployment, Connection, Credential, or Credential×Deployment scope; record cost/usage, cache observations, retry outcome, and the final redacted RouteSnapshot.
@@ -41,22 +41,57 @@ Continuation rounds retain Provider preference and candidate ordering unless typ
 Provider adapters translate wire vocabulary; they do not own task policy, context compaction, billing, or tool execution.
 OpenAI-compatible, Responses-based, Anthropic, subscription, and owner ProviderAccess paths converge before task code consumes deltas.
 
+The v2 Connection protocol `openai_responses` becomes the execution protocol `responses` once in `Slot.__post_init__`, shared by pooled and request-scoped slots. The persisted Connection and RouteSnapshot retain the v2 vocabulary. Both subscription and keyed Responses routes must therefore emit `/responses` with a Responses body; passing the storage spelling through to the transport would fall through to `/chat/completions` and produce a deterministic Codex 404.
+
 A translator preserves text/reasoning/tool work, finish/truncation meaning, cache/reasoning usage, ordered tool-call occurrences, and typed errors without leaking credentials. Streaming tool assembly continues an index-less active slot only while ID/name evidence remains compatible.
 A different ID opens a new slot even when its name arrives later; same-name/no-ID ambiguity or an invalid index makes the stream malformed instead of merging executable calls. Exact complete-frame retransmission at the same stable slot is ignored, but equal payloads at different positions remain distinct.
 
 Responses adapters use `output_index` as the primary occurrence identity and use an item ID only while it is unambiguous. Recycled item IDs at distinct positions remain separate; a later delta carrying only an ambiguous ID fails closed.
-A terminal `response.output` array is the ordered authority and replaces provisional opaque items position-for-position, preserving even byte-identical entries. The WebSocket incremental-input ledger counts occurrences rather than set membership, and advances state only after a verified terminal response; malformed or interrupted streams retire the socket.
+A terminal `response.output` array is the ordered authority and replaces provisional opaque items position-for-position, preserving even byte-identical entries. Complete visible text snapshots append only a missing suffix after matching the emitted prefix with a constant-space length/hash proof; conflicting text fails, while omitted/null text metadata adds no text authority. Hidden agent messages stay hidden. The WebSocket incremental-input ledger counts occurrences rather than set membership, and advances state only after a verified terminal response; malformed or interrupted streams retire the socket.
 Unknown provider payloads fail explicitly: do not add `.get()` chains that turn a malformed response into an empty successful answer.
 
-## SSE framing and stream-activity watchdog
+## Claude effort and native-feature boundary
 
-All byte-stream transports use `lib/llm/_sse_framer.py`. It incrementally decodes strict UTF-8 and frames SSE events across arbitrary byte boundaries,
-including CR/LF/CRLF, comments, a leading BOM, repeated `data:` fields, multiple
-events in one read and a split `[DONE]`. One event is capped at 1 MiB. Invalid
-UTF-8, invalid JSON, an oversized event, or an unterminated EOF frame closes as
-`malformed_stream` with bounded, credential-free diagnostics. The Responses
-WebSocket path submits an already-decoded provider payload directly; it never
-manufactures a `data:` line.
+Opus 4.7+ requests carry explicit `low`, `medium`, `high`, `xhigh`, or `max`
+effort with adaptive thinking and summarized display. Composer `off` emits
+`thinking.type=disabled` without effort; legacy `ultra` maps to `max`.
+Product default `medium` differs from the documented API default `high`.
+Older-family omit-medium behavior is retained compatibility, not evidence of
+an official medium default; it remains a separate calibration gap.
+
+The canonical body stores `effort` at the top level. OpenAI-compatible gateway
+wires retain that shape. Only the Anthropic Messages boundary moves it to
+`output_config.effort`, preserving an existing `output_config.format` and
+letting canonical/model-adjusted effort win conflicts. No global dual-send,
+unconditional beta, or retry-by-dropping-effort exists. Native-only output
+settings are supported at that final converter, not as an alternative native
+Messages input to canonical dispatch/model swapping; native API ingress must
+normalize first. Explicit native disabled thinking with low/medium/high effort
+is valid and distinct from the composer's off policy.
+
+Explicit effort remains distinct from the legacy preset named `low` at the
+builder, fresh dispatch, and non-stream entry points. Same-model reactive
+rebuilds preserve the resolved Claude effort instead of falling back to the
+preset. An intentional configured fallback still owns its own effort policy.
+Safe SSE snapshots include only allowlisted native effort, never output schemas.
+
+Client-side proof ends at sealed request bytes/intercepted HTTP submission.
+Gateway acceptance, actual effort use, cache reads, beta support and logical-to-
+wire model alias identity require evidence from the exact served route. Native
+Messages syntax alone is not such evidence. Per-message effort, mid-conversation
+system/tool changes and task-budget betas are not enabled by this adaptation:
+the converter currently hoists system messages and cannot preserve their native
+per-message semantics. See [cache distinctions](../LLM_COST_OPTIMIZATION.md#claude-effort-and-prompt-cache)
+and Anthropic's [effort](https://platform.claude.com/docs/en/build-with-claude/effort)
+and [Opus 5 migration](https://platform.claude.com/docs/en/models/opus-5/migration-guide) references.
+
+Regression boundaries: `tests/test_claude_effort_final_wire.py` and
+`tests/test_claude_effort_rung_parity.py` cover canonical builder, fresh/swap,
+reactive rebuild, native conversion, OAuth shape, diagnostics and final wire.
+
+## SSE framing and stream-activity watchdog
+Sync HTTP uses decompressed urllib3 `read1` (legacy one-byte fallback), preserving requests errors; short SSE frames must arrive before EOF for close/length/chunked bodies, plain or gzip. Async and relay readers already yield available chunks. Specs: `test_sse_http_delivery.py`. Chat `reasoning` is a string alias; whitespace-only stop is empty; SSE `message` without `delta` is malformed, never silently discarded. `[DONE]` without finish is not completion; finish without DONE may be valid. `LLM_DEBUG_RAW_SSE=1`/model substring enables redacted capture (64 Ki chars/line, 400 lines/256 KiB ring, per-write file rotation via log policy); default anomaly logs keep counts, not bodies. JSON is redacted structurally; tool input/argument fragments, malformed/oversized payloads and over-depth values are omitted even in debug. Truncated/redacted capture is not byte-exact replay.
+All byte-stream transports use `lib/llm/_sse_framer.py`. It incrementally decodes strict UTF-8 and frames SSE events across arbitrary byte boundaries, including CR/LF/CRLF, comments, a leading BOM, repeated `data:` fields, multiple events in one read and a split `[DONE]`. One event is capped at 1 MiB. Invalid UTF-8, invalid JSON, an oversized event, or unterminated data at EOF closes as `malformed_stream` with bounded, credential-free diagnostics. Data-free comments/id/event/retry tails are discarded; retry hints require bounded ASCII integers. A provider finish without `[DONE]` does not log premature close. The Responses WebSocket path submits an already-decoded provider payload directly; it never manufactures a `data:` line.
 
 `TOFU_LLM_IDLE_STREAM_TIMEOUT_S` is one attempt's continuous transport-idle window, not its maximum wall time: default 300 seconds, `0` disables it, and positive values below 30 seconds clamp to 30. This matches native Codex's rolling stream behavior; sync SSE, async SSE, and Responses WebSocket paths share these rules. The pinned `@openai/codex` `rust-v0.149.1` [provider default](https://github.com/openai/codex/blob/rust-v0.149.1/codex-rs/model-provider-info/src/lib.rs#L26-L27) is 300,000 ms, and its [Responses SSE loop](https://github.com/openai/codex/blob/rust-v0.149.1/codex-rs/codex-api/src/sse/responses.rs#L552-L575) wraps each next stream event in that rolling timeout.
 
@@ -126,6 +161,14 @@ The Codex subscription settle profile follows OpenAI's [documented overflow rout
 Cold cacheable requests and warm uncached tails of at least 8,192 tokens arm the extra five-second visibility window; smaller warm tails proceed after the send interval, with continued growth eventually restoring the hold.
 `TOFU_CACHE_SETTLE_CODEX_WARM_WRITE_TOKENS` tunes the threshold; values below the 1,024-token cacheability floor use the safe default. Codex cache-health diagnostics retain only the prior wire message count plus a process-local digest inside the existing one-hour/4,096-entry bound; each new observation hashes its prior-length prefix to prove append-only growth, and one legacy rich entry migrates without losing evidence. Anthropic policy is independent. Auxiliary local-L2 summary prompts bind a separate opaque owner/conversation affinity to slot selection and their stream body: they neither inherit nor update the parent settle clock, repeated summaries keep a stable Codex session/cache route, and both identities remain inside the existing TTL/capacity bounds. The generic settle profile arms its 1.5-second visibility window only when the completed round proves a metered cache creation, has cold/missing cache telemetry, or has an unmetered warm suffix of at least 4,096 tokens. An explicit Anthropic `cache_creation_input_tokens=0` proves there is no new entry to settle. A smaller automatic-cache suffix can reuse the older visible prefix and proceeds immediately, bounding any extra reprocessing to 4,095 tokens instead of holding every fast tool-loop round; `TOFU_CACHE_SETTLE_WARM_WRITE_TOKENS` tunes that independent threshold. Missing or malformed usage remains conservative, and positive/cold writes retain the existing wait.
 
+Stateless translation dispatch drops conversation affinity for the call
+(`conv_affinity_cleared` around every engine dispatch in `lib/translate/engine/_engine.py`):
+every translate request carries a fresh payload, so there is no warm prefix worth preserving.
+Unbound, the picker stays purely score-based, the warm-key hold never engages, and a 429
+rotates straight to the healthiest eligible slot instead of waiting on the conversation's
+sticky key; the call also neither records nor rebinds that key, and the worker thread's
+binding is restored on exit.
+
 Retry execution and observability have separate budgets. Primary attended dispatch may rotate
 through ordinary transient 429/cooldown states until recovery or abort; configured fallback and
 pool rescue instead own a finite actual-response budget (default 3, task override clamped 1–16),
@@ -164,18 +207,14 @@ to both health systems. Each reserved slot is settled exactly once. Explicit
 bypass rules remain authoritative and are reported as
 `direct:configured-bypass` rather than being mislabeled as a proxy timeout.
 
-Stream-idle timeouts use the existing bounded premature-close retry budgets.
-The smaller semantic-stall retry bucket exists only to render/recover legacy
-attempt records; no live transport can enter it. Manual Retry remains
-available, and other truncation signatures retain their own caps.
+Stream-idle timeouts use the existing bounded premature-close retry budgets. Heartbeat-only EOF and short reasoning prefixes without a provider finish recover even on round zero, using capped, jittered, abort-aware backoff and same-model slot rotation; pings never grant an immediate retry or prove zero billed tokens. Chat, Anthropic and Responses errors inside HTTP 200, SSE or WebSocket preserve structured code/type/status and quota/reset details through `llm_errors.provider_error_http_status` and the shared HTTP classifier; explicit gateway status wins. Responses top-level `error` is terminal failure; `error:null` is not. WebSocket preserves typed errors; provider rejection does not penalize HTTP network-route health. Unknown provider errors remain explicit application failures, not invented socket errors. The smaller semantic-stall bucket only renders/recovers legacy records; no live transport enters it. Manual Retry remains available; other truncation signatures retain their own caps.
 
 ## Invariants
 
 - One canonical body builder and one transport policy.
 - Provider differences stop at focused translation modules.
 - Streaming and non-streaming paths project the same terminal meaning.
-- Requested ModelRef, Provider preference, and actual ProviderAccess/Offering/
-  Deployment/Connection identity survive every round in RouteSnapshot.
+- Requested ModelRef, Provider preference, and actual ProviderAccess/Offering/Deployment/Connection identity survive every round in RouteSnapshot.
 - Secrets stay in outbound headers and redacted diagnostics.
 - Chat and non-chat HTTP execution carry an explicit owner to v2; process-global environment credentials are a direct-library compatibility seam only.
 - HTTP adapters never call model dispatch, provider pins, or slot reservation; an AST gate requires task execution or a declared application service, and log compression/compatible embeddings carry finite input, deadline, and admission budgets.
@@ -213,8 +252,8 @@ available, and other truncation signatures retain their own caps.
 
 ```bash
 pytest -q tests/test_llm_transport_connection_reuse.py tests/test_llm_idle_stream_timeout.py tests/test_stream_anomaly_retry_widening.py tests/test_retry_budget_envelope.py \
-  tests/test_responses_outbound.py tests/test_responses_websocket.py tests/test_anthropic_outbound.py
+  tests/test_responses_outbound.py tests/test_responses_websocket.py tests/test_anthropic_outbound.py tests/test_stream_protocol_tolerance.py
 pytest -q tests/test_dispatch_stream.py tests/test_dispatch_model_health.py tests/test_provider_pin.py \
   tests/test_model_routing_contract.py tests/test_model_routing_capability_adapter.py tests/test_model_routing_bootstrap.py tests/test_turn_serving_route.py
-pytest -q tests/test_local_serve_probe.py tests/test_local_serve_plan.py tests/test_local_serve_process.py tests/test_local_serve_env_store_register.py tests/test_local_serve_tools.py tests/test_local_autodiscover.py
+pytest -q tests/test_local_serve_probe.py tests/test_local_serve_plan.py tests/test_local_serve_process.py tests/test_local_serve_env_store_register.py tests/test_local_serve_tools.py tests/test_local_serve_recommend.py tests/test_local_autodiscover.py
 ```

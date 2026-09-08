@@ -958,8 +958,13 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    its own --m-* shell (border/background/shadow/radius) and must not inherit
    the generic tofu block styling. Excluding it at the source lets its own
    .memory-modal shell rule win by normal cascade, retiring the shell
-   counter-!important overrides. */
-[data-theme="tofu"] .modal:not(.memory-modal){
+   counter-!important overrides.
+   :not(.settings-panel) — the settings panel owns the 2026-09-04 soft-shell
+   redesign (07's `.settings-panel.modal`: 1px hairline + deep soft shadow),
+   which this rule (0,3,0) silently out-specified — the panel still rendered
+   the 3px ink frame the owner rejected. Excluded at the source like
+   memory-modal. */
+[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel){
   background:#faf8f3;
   border:3px solid #1a1814;
   border-radius:var(--radius);
@@ -999,14 +1004,18 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
    Without this carve-out this bleed (0,3,1) out-specifies it and flattens its
    intended 2px ink border to the generic 1px — so exclude it at the source
    rather than adding an !important counter-rule. Proven by
-   tests/test_recent_search_tofu_specificity.py. */
-[data-theme="tofu"] .modal:not(.memory-modal) input:not(.recent-search-input){
+   tests/test_recent_search_tofu_specificity.py.
+   :not(.settings-panel) — SAME source-exclusion: this bleed (0,3,1) out-
+   specified BOTH the retired tofu pixel settings inputs (0,2,1) and the
+   2026-09-04 unified soft settings inputs, flattening them to a 1px no-shadow
+   box. Settings inputs now come solely from 07's cross-theme soft system. */
+[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel) input:not(.recent-search-input){
   border-radius:var(--radius);
   border:1px solid rgba(184,176,160,0.4);
   background:#F5F3ED;
   box-shadow:none
 }
-[data-theme="tofu"] .modal:not(.memory-modal) input:not(.recent-search-input):focus{border-color:#BB9572;box-shadow:none}
+[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel) input:not(.recent-search-input):focus{border-color:#BB9572;box-shadow:none}
 
 /* ── Project modal — tofu header band + blocky close (it nests its own
       .pm-header, so the generic > h3 rule doesn't reach it). ── */
@@ -1133,30 +1142,11 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
 [data-theme="tofu"] .upd-err-icon{color:#c0392b}
 [data-theme="tofu"] .upd-err-title{color:#1a1814;font-weight:900}
 [data-theme="tofu"] .upd-err-reason{color:#3d362c}
-/* ── Settings-panel inputs override tofu modal reset — keep pixel-art shadow ── */
-[data-theme="tofu"] .settings-panel input,
-[data-theme="tofu"] .settings-panel select {
-  background: #fff;
-  border: 2px solid var(--s-ink);
-  border-radius:var(--radius);
-  box-shadow:var(--clay-sm);
-}
-[data-theme="tofu"] .settings-panel input:focus,
-[data-theme="tofu"] .settings-panel select:focus {
-  transform: translate(1px, 1px);
-  box-shadow:var(--clay-sm);
-  background: #fffef5;
-  border-color: var(--s-ink);
-}
-[data-theme="tofu"] .settings-panel input[type="range"] {
-  box-shadow: none;
-  background: var(--s-skin);
-  border: 2px solid var(--s-ink);
-}
-[data-theme="tofu"] .settings-panel input[type="range"]:focus {
-  transform: none;
-  box-shadow: none;
-}
+/* ── Settings-panel pixel inputs RETIRED (2026-09-04 owner direction: no
+   brutalist ink boxes in Settings, any theme). They were already dead — the
+   generic `.modal input` bleed above out-specified them — and the unified
+   soft inputs in 07-settings-providers-onboarding.css now govern every
+   theme. The textarea typography rule below stays. ── */
 /* Override tofu console-style gold text for settings textareas (white bg) */
 [data-theme="tofu"] .settings-panel textarea,
 [data-theme="tofu"] .settings-panel .stg-field textarea {
@@ -1213,91 +1203,85 @@ html:not([data-theme="tofu"]) .tofu-pet{display:none}
   box-shadow:0 0 0 #1a1814;
   background:#E2DCCF
 }
-/* Settings footer — ensure pixel buttons override .settings-footer .btn base */
-[data-theme="tofu"] .settings-footer .btn{
-  border:none;border-radius:var(--radius-sm);box-shadow:none;
-  font-family:var(--sans-body);
-  font-size:13px;font-weight:650;letter-spacing:0.02em;
-  padding:9px 20px;text-transform:none;
-  image-rendering:auto;
-}
-[data-theme="tofu"] .settings-footer .btn-primary{
-  background:#BB9572;color:#FFFCF6;
-  border:2px solid #C4956A;
-  border-top-color:#D4BC9E;border-left-color:#D4BC9E;
-  border-right-color:#8E6B48;border-bottom-color:#8E6B48;
-  box-shadow:0 2px 0 #6B4F32;
-  clip-path:none
-}
-[data-theme="tofu"] .settings-footer .btn-primary:hover{
-  background:#A8845E;
-  box-shadow:0 2px 0 #5E4228
-}
-[data-theme="tofu"] .settings-footer .btn-secondary{
-  background:#E9E5DC;color:#5C5340;
-  border:2px solid #C8C0AE;
-  border-top-color:#FFFCF6;border-left-color:#FFFCF6;
-  border-right-color:#B0A890;border-bottom-color:#B0A890;
-  box-shadow:0 2px 0 #A09880;
-  clip-path:none
-}
-[data-theme="tofu"] .settings-footer .btn-secondary:hover{
-  background:#DDD8CC;color:#4A3F2F;
-  box-shadow:0 2px 0 #908870
-}
-[data-theme="tofu"] .settings-footer .btn:active{
-  transform:translateY(2px);
-  box-shadow:none
-}
+/* ── Settings buttons — standard theme button language (owner direction
+   2026-09-07, superseding the 2026-09-04 raised-gradient "bread" skin and the
+   earlier SNES pixel bevels, both retired as Settings-only divergence). Settings
+   buttons render with the same neo-brutalist blocks as the project modal's
+   Cancel/Clear/Apply row via the global [data-theme="tofu"] .btn-primary /
+   .btn-secondary rules above. Only the uppercase legacy of the all-theme base
+   in 07-settings-providers-onboarding.css needs a tofu reset here. ── */
+[data-theme="tofu"] .settings-footer .btn{text-transform:none}
 
-/* 🧱 Brutalist primary/secondary buttons in Settings — match `btn btn-danger btn-xs`
-   look (square 2px ink border, hard offset shadow, uppercase, press-down). Applies
-   in ALL themes; the high-specificity `.settings-panel`/`.settings-footer` scope plus
-   the trailing position out-specifies both the global rounded `.btn` base and the
-   tofu pixel-art skin above. */
-.settings-panel .btn-primary,
-.settings-panel .btn-secondary,
-.settings-panel .settings-footer .btn-primary,
-.settings-panel .settings-footer .btn-secondary{
-  border:var(--s-border);
-  border-radius:var(--s-radius);
-  box-shadow:var(--s-shadow-xs);
-  font-weight:800;
-  text-transform:uppercase;
-  letter-spacing:0.04em;
-  font-family:inherit;
-  image-rendering:auto;
-  transition:transform 0.1s, box-shadow 0.1s, background 0.1s;
+/* ── Settings card buttons — same blocks for the component classes the global
+   .btn-primary/.btn-secondary rules cannot reach (owner direction 2026-09-07,
+   second pass: retire the stg-btn-balance gold bread and the oauth red/dark
+   gradient breads). 0-3/0-4 specificity to outrank the settings sheet and the
+   comfort flattening, which load after this file. ── */
+[data-theme="tofu"] .settings-panel .stg-btn-balance{
+  background:#C9993F;color:#1a1814;
+  border:2px solid #1a1814;
+  border-radius:var(--radius-sm);
+  box-shadow:var(--clay-sm);
+  text-shadow:none;
+  text-transform:none;
+  letter-spacing:0.02em;
 }
-.settings-panel .btn-primary,
-.settings-panel .settings-footer .btn-primary{
-  background:var(--s-gold);
-  color:var(--s-ink);
+[data-theme="tofu"] .settings-panel .stg-btn-balance:hover{
+  background:#D6A848;
+  transform:translate(-1px,-1px);
+  box-shadow:var(--clay-md);
 }
-.settings-panel .btn-secondary,
-.settings-panel .settings-footer .btn-secondary{
-  background:var(--s-white);
-  color:var(--s-ink);
+[data-theme="tofu"] .settings-panel .stg-btn-balance:active{
+  transform:translate(3px,3px);
+  box-shadow:0 0 0 #1a1814;
+  background:#BC8A35;
 }
-.settings-panel .btn-primary:hover,
-.settings-panel .settings-footer .btn-primary:hover{
-  background:var(--s-gold-dim);
-  transform:translate(1px, 1px);
-  box-shadow:1px 1px 0 var(--s-ink);
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small{
+  background:#faf8f3;color:#1a1814;
+  border:2px solid #1a1814;
+  border-radius:var(--radius-sm);
+  box-shadow:var(--clay-sm);
+  text-shadow:none;
 }
-.settings-panel .btn-secondary:hover,
-.settings-panel .settings-footer .btn-secondary:hover{
-  background:var(--s-cream);
-  color:var(--s-ink);
-  transform:translate(1px, 1px);
-  box-shadow:1px 1px 0 var(--s-ink);
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small:hover,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small:hover{
+  background:#ECE7DD;
+  transform:translate(-1px,-1px);
+  box-shadow:var(--clay-md);
 }
-.settings-panel .btn-primary:active,
-.settings-panel .btn-secondary:active,
-.settings-panel .settings-footer .btn-primary:active,
-.settings-panel .settings-footer .btn-secondary:active{
-  transform:translate(2px, 2px);
-  box-shadow:0 0 0 var(--s-ink);
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small:active,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small:active{
+  transform:translate(3px,3px);
+  box-shadow:0 0 0 #1a1814;
+  background:#E2DCCF;
+}
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small.btn-primary,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small.btn-primary{
+  background:#C9993F;color:#1a1814;
+  border-color:#1a1814;
+}
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small.btn-primary:hover,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small.btn-primary:hover{
+  background:#D6A848;
+}
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small.btn-primary:active,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small.btn-primary:active{
+  background:#BC8A35;
+}
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small.btn-danger,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small.btn-danger{
+  background:#C0392B;color:#FFFCF6;
+  border-color:#1a1814;
+  text-shadow:none;
+}
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small.btn-danger:hover,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small.btn-danger:hover{
+  background:#D0492F;
+}
+[data-theme="tofu"] .settings-panel .oauth-provider-actions .btn-small.btn-danger:active,
+[data-theme="tofu"] .settings-panel .oauth-manual-fallback .btn-small.btn-danger:active{
+  background:#A93324;
 }
 
 /* ══════════════════════════════════════════════════════

@@ -32,8 +32,14 @@
    same window scope as every other runtime section. No imports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
-/** Per-provider matrix view toggle state, keyed by provider_id. */
-var _stgMatrixOpen = {};
+/** Per-provider management-surface state (search text + status filter
+ *  chip), keyed by provider_id. The matrix is this provider's always-on
+ *  model-supply manager. It is deliberately provider-scoped: the global,
+ *  read-only Creator/Model registry is the 模型 (Models) tab
+ *  (settings/model_catalog_tab.js + frontend/src/features/model-catalog/),
+ *  which the matrix never renders. */
+var _stgMatrixQuery = {};
+var _stgMatrixFilter = {};
 
 /** Per-provider probe snapshot, keyed by provider_id. Shape:
  *  ``{ status: 'running'|'done'|'error', cells: { "<credIdx>::<wireId>":
@@ -60,6 +66,10 @@ var _stgMatrixProbeScope = {};
 
 /** Shared lightning-bolt glyph for every probe trigger (toolbar + scopes). */
 var _MX_BOLT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
+
+
+/** Trash glyph for the remove-offering row action. */
+var _MX_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
 
 /** Update the attempts setting for a provider from the toolbar selector. */
 function _setMatrixAttempts(providerId, val) {
@@ -218,16 +228,20 @@ function _fitMatrixPanelWidth() {
   });
 })();
 
-/** Flip between the model-list view and the access-matrix view. */
-function _toggleMatrixView(providerId) {
-  providerId = String(providerId || '');
-  if (!providerId) return;
-  _stgMatrixOpen[providerId] = !_stgMatrixOpen[providerId];
-  if (_stgMatrixOpen[providerId]) _stgMatrixProbeAttached[providerId] = false; // allow resume on (re)open
-  _renderProvidersTab();
+// ── v2 data derivation ──────────────────────────────────────────────────
+
+/** Update the matrix search text for a provider (input action). */
+function _setMatrixQuery(providerId, value) {
+  _stgMatrixQuery[providerId] = String(value || '');
+  _rerenderMatrix(providerId);
 }
 
-// ── v2 data derivation ──────────────────────────────────────────────────
+/** Switch the exclusive status bucket the matrix lists. */
+function _setMatrixFilter(providerId, value) {
+  _stgMatrixFilter[providerId] = ['all', 'enabled', 'disabled', 'pending'].indexOf(value) >= 0
+    ? value : 'all';
+  _rerenderMatrix(providerId);
+}
 
 /** The credential columns of the matrix: the access's credentials in
  *  document order — the SAME order the backend's probe plan uses, so cell
@@ -236,44 +250,72 @@ function _matrixCredentials(context) {
   return context ? context.credentials : [];
 }
 
-/** De-duplicated list of trimmed non-empty strings, order stable. */
-function _mxDedupe(list) {
-  var seen = {}, out = [];
-  for (var i = 0; i < (list || []).length; i++) {
-    var v = (typeof list[i] === 'string') ? list[i].trim() : '';
-    if (v && !seen[v]) { seen[v] = true; out.push(v); }
-  }
-  return out;
-}
-
-/** One matrix row-group per confirmed offering:
- *  ``{ offering, offeringIndex, canonical, wireIds, capabilities }``.
+/** One matrix row-group per offering (confirmed AND pending — the matrix
+ *  doubles as the supply manager):
+ *  ``{ offering, offeringIndex, canonical, pending, retired, releaseDate,
+ *      pricing, catalogPrice, wireIds, disabledWireIds, deploymentByWire,
+ *      capabilities }``.
  *  ``wireIds`` are the ENABLED deployments' upstream ids in document order
- *  (mirroring the backend probe plan); an offering without any enabled
- *  deployment falls back to probing its canonical model id, the same
- *  legacy shape the backend uses. */
+ *  (mirroring the backend probe plan); ``disabledWireIds`` are the rest —
+ *  rendered as dimmed sub-rows so freshly added request names (which the
+ *  backend refuses to enable before a passed probe) stay visible, probeable
+ *  and deletable. ``deploymentByWire`` maps either bucket's id to its GLOBAL
+ *  deployments-array index (what ``_removeV2Alias`` expects). An offering
+ *  without any enabled deployment falls back to probing its canonical
+ *  model id, the same legacy shape the backend uses. */
 function _matrixModelRows(context) {
   var out = [];
   if (!context) return out;
   context.offerings.forEach(function(item) {
     var offering = item.row;
-    if (offering.identity_state !== 'confirmed' || !offering.model) return;
-    var canonical = String(offering.model.model_id || '').trim();
+    var pending = offering.identity_state === 'pending_identity' || !offering.model;
+    var canonical = pending
+      ? String(offering.pending_model_id || offering.offering_id || '').trim()
+      : String(offering.model.model_id || '').trim();
     if (!canonical) return;
-    var wireIds = _mxDedupe(context.deployments.filter(function(dep) {
-      return dep.row.offering_id === offering.offering_id && dep.row.enabled !== false;
-    }).map(function(dep) {
-      return dep.row.wire_model_id;
-    }));
+    var wireIds = [], disabledWireIds = [], deploymentByWire = {};
+    context.deployments.forEach(function(dep) {
+      if (dep.row.offering_id !== offering.offering_id) return;
+      var wire = String(dep.row.wire_model_id || '').trim();
+      if (!wire) return;
+      var bucket = (dep.row.enabled !== false) ? wireIds : disabledWireIds;
+      if (bucket.indexOf(wire) < 0) {
+        bucket.push(wire);
+        deploymentByWire[wire] = dep.index;
+      }
+    });
+    var modelKey = pending
+      ? '' : (String(offering.model.creator_id || '') + '::' + canonical);
     out.push({
       offering: offering,
       offeringIndex: item.index,
       canonical: canonical,
+      pending: pending,
+      retired: !pending && context.modelLifecycles[modelKey] === 'retired',
+      releaseDate: pending ? '' : (context.modelReleaseDates[modelKey] || ''),
+      pricing: pending ? null
+        : (offering.actual_pricing || context.modelListPricing[modelKey] || null),
+      catalogPrice: !pending && !offering.actual_pricing &&
+        !!context.modelListPricing[modelKey],
       wireIds: wireIds,
+      disabledWireIds: disabledWireIds,
+      deploymentByWire: deploymentByWire,
       capabilities: (offering.capabilities || []).slice(),
     });
   });
   return out;
+}
+
+/** Exclusive-bucket status filter + substring match over every id the
+ *  group displays (canonical + enabled & disabled request names). */
+function _matrixGroupMatches(entry, query, filter) {
+  if (filter === 'enabled' && (entry.pending || entry.offering.enabled === false)) return false;
+  if (filter === 'disabled' && (entry.pending || entry.offering.enabled !== false)) return false;
+  if (filter === 'pending' && !entry.pending) return false;
+  if (!query) return true;
+  var hay = [entry.canonical].concat(entry.wireIds, entry.disabledWireIds)
+    .join(' ').toLowerCase();
+  return hay.indexOf(query) >= 0;
 }
 
 /** The wire-id pool the matrix renders/probes for one row-group. */
@@ -295,6 +337,7 @@ function _matrixIsPureLogical(entry) {
  *  authorization allow-list? The grant is per (credential × model), so
  *  every wire row of one offering shares the same state. */
 function _matrixCellOn(credentialRow, entry) {
+  if (!entry.offering || !entry.offering.model) return false; // pending: no ModelRef exists
   var grants = (credentialRow.authorization && credentialRow.authorization.models) || [];
   var creator = String(entry.offering.model.creator_id || '');
   var modelId = String(entry.offering.model.model_id || '');
@@ -305,21 +348,77 @@ function _matrixCellOn(credentialRow, entry) {
   return false;
 }
 
+/** Exclusive-bucket filter chip with a live count. */
+function _mxFilterChip(providerId, active, value, label, count) {
+  var on = active === value;
+  return '<button type="button" class="stg-v2-filter-chip' + (on ? ' active' : '') +
+    '" aria-pressed="' + (on ? 'true' : 'false') + '" data-provider-id="' + escapeHtml(providerId) +
+    '" data-tofu-action="_setMatrixFilter(this.dataset.providerId,\'' + value + '\')">' +
+    escapeHtml(label) + ' <em>' + count + '</em></button>';
+}
+
+/** 待确认 / 已下线 state chip for a root row (empty string when neither). */
+function _mxStateChips(entry) {
+  if (entry.pending) {
+    return '<span class="stg-mx-chip pending" title="' + escapeHtml(t('settings.matrixPendingHint')) + '">' +
+      escapeHtml(t('settings.matrixPendingChip')) + '</span>';
+  }
+  if (entry.retired) {
+    return '<span class="stg-mx-chip retired" title="' + escapeHtml(t('settings.matrixRetiredHint')) + '">' +
+      escapeHtml(t('settings.matrixRetiredChip')) + '</span>';
+  }
+  return '';
+}
+
+/** Compact meta line under a root row's id: capability chips + context
+ *  window + release date + pricing (catalog prices carry a 目录价 tag).
+ *  Pending rows render nothing — there is no catalog identity to describe. */
+function _mxMetaHtml(entry) {
+  if (entry.pending) return '';
+  var capLabels = (typeof _MODEL_CAP_LABELS === 'object' && _MODEL_CAP_LABELS) || {};
+  var caps = entry.capabilities.map(function(cap) {
+    return '<span class="stg-cap ' + escapeHtml(cap) + '" title="' + escapeHtml(cap) + '">' +
+      escapeHtml(capLabels[cap] || cap) + '</span>';
+  }).join('');
+  var bits = '';
+  if (entry.offering.context_window) {
+    var ctxLabel = (typeof _modelRoutingContextLabel === 'function')
+      ? _modelRoutingContextLabel(entry.offering.context_window)
+      : String(entry.offering.context_window);
+    bits += '<span class="stg-mx-meta-bit">' + escapeHtml(t('settings.matrixContextLabel')) + ' ' +
+      escapeHtml(ctxLabel) + '</span>';
+  }
+  if (entry.releaseDate) {
+    bits += '<span class="stg-mx-meta-bit">' + escapeHtml(t('settings.matrixReleaseLabel')) + ' ' +
+      escapeHtml(entry.releaseDate) + '</span>';
+  }
+  if (entry.pricing) {
+    bits += '<span class="stg-mx-meta-bit stg-mx-price" title="' + escapeHtml(t('settings.matrixPriceTitle')) + '">' +
+      '<span class="stg-v2-price-cur">' + escapeHtml(entry.pricing.currency || 'USD') + '</span>' +
+      '<span class="stg-v2-price-io">' + escapeHtml(t('settings.matrixPriceIn')) + '</span>' +
+      escapeHtml(String(Number(entry.pricing.input || 0))) +
+      '<span class="stg-v2-price-sep">/</span>' +
+      '<span class="stg-v2-price-io">' + escapeHtml(t('settings.matrixPriceOut')) + '</span>' +
+      escapeHtml(String(Number(entry.pricing.output || 0))) +
+      (entry.catalogPrice
+        ? '<span class="stg-v2-price-tag">' + escapeHtml(t('settings.matrixCatalogPrice')) + '</span>'
+        : '') +
+    '</span>';
+  }
+  if (!caps && !bits) return '';
+  return '<span class="stg-mx-meta">' + caps + bits + '</span>';
+}
+
 // ── Render ──────────────────────────────────────────────────────────────
 
-/** Build the full access-matrix table for a provider. */
+/** Build the full access-matrix table for a provider — the provider's
+ *  always-on model-supply manager: search + status buckets + add-model on
+ *  the manage row, probe tools on the second toolbar row. */
 function _renderAccessMatrix(providerId) {
   var context = _modelRoutingProviderContext(providerId);
   if (!context) return '';
   var credentials = _matrixCredentials(context);
-  var rows = _matrixModelRows(context);
-
-  if (credentials.length === 0) {
-    return '<div class="stg-matrix-empty">' + escapeHtml(t('settings.matrixNoKeys')) + '</div>';
-  }
-  if (rows.length === 0) {
-    return '<div class="stg-matrix-empty">' + escapeHtml(t('settings.noModels')) + '</div>';
-  }
+  var allRows = _matrixModelRows(context);
 
   // Lazily re-attach to a persisted/running probe the first time we render
   // this provider's matrix in a session.
@@ -327,6 +426,27 @@ function _renderAccessMatrix(providerId) {
     _stgMatrixProbeAttached[providerId] = true;
     setTimeout(function() { _resumeMatrixProbe(providerId); }, 0);
   }
+
+  // Exclusive status buckets + substring search over every displayed id.
+  var counts = { all: allRows.length, enabled: 0, disabled: 0, pending: 0 };
+  allRows.forEach(function(entry) {
+    if (entry.pending) { counts.pending++; return; }
+    if (entry.offering.enabled === false) counts.disabled++;
+    else counts.enabled++;
+  });
+  var query = String(_stgMatrixQuery[providerId] || '');
+  var filter = _stgMatrixFilter[providerId] || 'all';
+  var q = query.trim().toLowerCase();
+  var rows = allRows.filter(function(entry) {
+    return _matrixGroupMatches(entry, q, filter);
+  }).sort(function(left, right) {
+    // Disabled offerings sink below usable ones (pending counts as usable).
+    var rank = ((right.offering.enabled === false) ? 0 : 1) -
+               ((left.offering.enabled === false) ? 0 : 1);
+    if (rank) return rank;
+    return left.canonical.localeCompare(right.canonical, undefined,
+      { numeric: true, sensitivity: 'base' });
+  });
 
   var probe = _stgMatrixProbe[providerId] || {};
   var running = (probe.status === 'running');
@@ -350,7 +470,30 @@ function _renderAccessMatrix(providerId) {
   }
 
   var html = '<div class="stg-matrix" data-provider-id="' + escapeHtml(providerId) + '">' +
-    '<div class="stg-matrix-toolbar">' +
+    '<div class="stg-mx-manage">' +
+      (allRows.length
+        ? '<input id="stgMatrixSearch-' + escapeHtml(providerId) + '" class="stg-mx-search" type="search" ' +
+          'placeholder="' + escapeHtml(t('settings.matrixSearchPlaceholder')) + '" ' +
+          'value="' + escapeHtml(query) + '" data-provider-id="' + escapeHtml(providerId) + '" ' +
+          'data-tofu-action-input="_setMatrixQuery(this.dataset.providerId,this.value)">' +
+          '<div class="stg-mx-filters" role="group" aria-label="' + escapeHtml(t('settings.matrixFilterAria')) + '">' +
+            _mxFilterChip(providerId, filter, 'all', t('settings.matrixFilterAll'), counts.all) +
+            _mxFilterChip(providerId, filter, 'enabled', t('settings.matrixFilterEnabled'), counts.enabled) +
+            _mxFilterChip(providerId, filter, 'disabled', t('settings.matrixFilterDisabled'), counts.disabled) +
+            _mxFilterChip(providerId, filter, 'pending', t('settings.matrixFilterPending'), counts.pending) +
+          '</div>'
+        : '') +
+      '<button type="button" class="stg-btn-add stg-mx-addmodel" data-provider-id="' + escapeHtml(providerId) + '" ' +
+        'data-tofu-action="_openProviderModelPicker(this.dataset.providerId)">+ ' +
+        escapeHtml(t('settings.matrixAddModel')) + '</button>' +
+    '</div>';
+
+  if (!allRows.length) {
+    return html + '<p class="stg-mx-empty">' + escapeHtml(t('settings.matrixEmptyModels')) + '</p></div>';
+  }
+
+  if (credentials.length) {
+    html += '<div class="stg-matrix-toolbar">' +
       '<div class="stg-matrix-legend">' +
         '<span class="stg-mx-leg on"><span class="stg-mx-dot"></span>' + escapeHtml(t('settings.matrixLegendOn')) + '</span>' +
         '<span class="stg-mx-leg off"><span class="stg-mx-dot"></span>' + escapeHtml(t('settings.matrixLegendOff')) + '</span>' +
@@ -374,15 +517,25 @@ function _renderAccessMatrix(providerId) {
           escapeHtml(running ? t('settings.matrixProbing') : (hasResults ? t('settings.matrixRetest') : t('settings.matrixProbe'))) + '</button>' +
       '</div>' +
     '</div>' +
-    (statusTxt ? '<div class="stg-mx-status' + (running ? ' running' : (probe.status === 'error' ? ' error' : '')) + '">' + escapeHtml(statusTxt) + '</div>' : '') +
-    '<div class="stg-matrix-scroll"><table class="stg-matrix-table"><thead><tr>' +
-      '<th class="stg-mx-corner">' + escapeHtml(t('settings.matrixModelCol')) + '</th>';
+    (statusTxt ? '<div class="stg-mx-status' + (running ? ' running' : (probe.status === 'error' ? ' error' : '')) + '">' + escapeHtml(statusTxt) + '</div>' : '');
+  } else {
+    html += '<p class="stg-mx-nokeys">' + escapeHtml(t('settings.matrixNoKeysHint')) + '</p>';
+  }
+
+  html += '<div class="stg-matrix-scroll"><table class="stg-matrix-table"><thead><tr>' +
+    '<th class="stg-mx-corner">' + escapeHtml(t(credentials.length ? 'settings.matrixModelCol' : 'settings.matrixModelColSolo')) + '</th>';
 
   for (var ci = 0; ci < credentials.length; ci++) {
     var cred = credentials[ci].row;
+    var credKind = String(cred.kind || 'api_key');
+    // The masked recognition hint (sk-…•••…wxyz) is the only way to tell two
+    // same-kind credentials apart; fall back to the bare kind for hint-less
+    // rows (local identity, legacy oauth snapshots).
+    var credHint = String(cred.key_hint || '').trim();
     html += '<th class="stg-mx-keyhead" data-key-idx="' + ci + '">' +
       '<span class="stg-mx-credname">' + escapeHtml(t('settings.matrixCredentialN').replace('{n}', String(ci + 1))) + '</span>' +
-      '<span class="stg-mx-credkind">' + escapeHtml(cred.kind || 'api_key') + '</span>' +
+      '<span class="stg-mx-credkind" title="' + escapeHtml(credHint ? credKind + ' · ' + credHint : credKind) + '">' +
+        escapeHtml(credHint || credKind) + '</span>' +
       '<button type="button" class="stg-mx-zap col' + (_scopeCovers(providerId, 'col', ci) ? ' probing' : '') + '"' +
         (running ? ' disabled' : '') +
         ' data-provider-id="' + escapeHtml(providerId) + '"' +
@@ -392,18 +545,32 @@ function _renderAccessMatrix(providerId) {
   }
   html += '</tr></thead><tbody>';
 
+  if (!rows.length) {
+    html += '<tr><td class="stg-mx-nomatch" colspan="' + (credentials.length + 1) + '">' +
+      escapeHtml(t('settings.matrixNoMatch')) + '</td></tr>';
+  }
+
   for (var ri = 0; ri < rows.length; ri++) {
     var entry = rows[ri];
     var pool = _matrixRowPool(entry);
-    var groupOpen = pool.length > 1; // only bracket offerings that HAVE a pool
+    var displayCount = pool.length + entry.disabledWireIds.length;
+    var groupOpen = displayCount > 1; // only bracket offerings that HAVE a pool
     if (_matrixIsPureLogical(entry)) {
-      html += _renderMatrixRow(providerId, entry, entry.canonical, -1, pool.length, credentials, groupOpen);
+      html += _renderMatrixRow(providerId, entry, entry.canonical, -1, displayCount, credentials, groupOpen, false);
       for (var li = 0; li < pool.length; li++) {
-        html += _renderMatrixRow(providerId, entry, pool[li], li + 1, pool.length, credentials, groupOpen);
+        html += _renderMatrixRow(providerId, entry, pool[li], li + 1, displayCount, credentials, groupOpen, false);
+      }
+      for (var di = 0; di < entry.disabledWireIds.length; di++) {
+        html += _renderMatrixRow(providerId, entry, entry.disabledWireIds[di],
+          pool.length + 1 + di, displayCount, credentials, groupOpen, true);
       }
     } else {
       for (var wi = 0; wi < pool.length; wi++) {
-        html += _renderMatrixRow(providerId, entry, pool[wi], wi, pool.length, credentials, groupOpen);
+        html += _renderMatrixRow(providerId, entry, pool[wi], wi, displayCount, credentials, groupOpen, false);
+      }
+      for (var dj = 0; dj < entry.disabledWireIds.length; dj++) {
+        html += _renderMatrixRow(providerId, entry, entry.disabledWireIds[dj],
+          pool.length + dj, displayCount, credentials, groupOpen, true);
       }
     }
   }
@@ -411,7 +578,7 @@ function _renderAccessMatrix(providerId) {
   return html;
 }
 
-/** Render one matrix row. Two kinds:
+/** Render one matrix row. Kinds:
  *   - LOGICAL HEADER (``rowPos === -1``): the preset-facing canonical id of
  *     an offering whose wire pool never carries it. It carries the offering
  *     toggle and the wire-id count, but NO per-credential cells — the id is
@@ -419,13 +586,26 @@ function _renderAccessMatrix(providerId) {
  *     grant, deny, or probe.
  *   - WIRE ROW (``rowPos >= 0``): one concrete upstream id across
  *     credentials. ``rowPos`` is the 1-based index under a logical header,
- *     or 0 = root for a legacy-shape offering (canonical id IS a wire id). */
-function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, grouped) {
+ *     or 0 = root for a legacy-shape offering (canonical id IS a wire id).
+ *  ``wireDisabled`` marks a deployment whose enabled flag is off — freshly
+ *  added request names land in exactly this state until a probe passes. The
+ *  row stays visible (dimmed label, 未启用 chip, deletable) AND probeable:
+ *  the probe is the only way it can earn its enable (the backend refuses
+ *  enabled=true before a passed probe).
+ *  Root rows double as the supply manager: state chips (待确认/已下线),
+ *  capability/pricing/context meta line, and row actions (row probe, add
+ *  request name, remove offering). */
+function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, grouped, wireDisabled) {
   var isLogicalHead = (rowPos === -1);
   var isAlias = rowPos > 0;
   var underHead = _matrixIsPureLogical(entry);
   var isLastInGroup = underHead ? (rowPos === rowCount) : (rowPos === rowCount - 1);
   var globallyOff = (entry.offering.enabled === false);
+  // Hatched cells: no (credential × id) pair exists for grants or probes —
+  // logical preset heads and pending supplies (no ModelRef yet). A disabled
+  // request name is NOT hatched: not routed, but probeable so it can earn
+  // its enable.
+  var hatched = isLogicalHead || entry.pending;
   var brand = (typeof _modelBrand === 'function')
     ? _modelBrand(id, entry.offering && entry.offering.model && entry.offering.model.creator_id)
     : ((typeof _detectBrand === 'function') ? _detectBrand(id) : '');
@@ -434,7 +614,7 @@ function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, 
   // Row-scope probe button: probes exactly this wire id across every credential.
   var _rowProbe = _stgMatrixProbe[providerId] || {};
   var _rowRunning = (_rowProbe.status === 'running');
-  var rowProbeBtn = isLogicalHead ? '' : '<button type="button" class="stg-mx-zap row' +
+  var rowProbeBtn = (hatched || !credentials.length) ? '' : '<button type="button" class="stg-mx-zap row' +
       (_scopeCovers(providerId, 'row', null, id) ? ' probing' : '') + '"' +
     (_rowRunning ? ' disabled' : '') +
     ' data-provider-id="' + escapeHtml(providerId) + '"' +
@@ -448,25 +628,48 @@ function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, 
     // A distinct accent color per wire-id index, cycled, so two ids of the
     // same offering never look alike at a glance.
     var hue = (entry.offeringIndex * 47 + rowPos * 71) % 360;
+    var depIndex = entry.deploymentByWire[id];
     labelCell = '<td class="stg-mx-model alias' + (globallyOff ? ' model-off' : '') +
-        (isLastInGroup ? ' last' : '') + '" style="--alias-hue:' + hue + '">' +
+        (wireDisabled ? ' wire-off' : '') + (isLastInGroup ? ' last' : '') +
+        '" style="--alias-hue:' + hue + '">' +
       '<span class="stg-mx-tree">' + connector + '</span>' +
       '<span class="stg-mx-aliasidx">' + rowPos + '</span>' +
       '<span class="stg-mx-brand">' + brandSvg + '</span>' +
       '<span class="stg-mx-mid alias-id" title="' + escapeHtml(id) + '">' + escapeHtml(id) + '</span>' +
-      rowProbeBtn +
+      (wireDisabled
+        ? '<span class="stg-mx-chip off" title="' + escapeHtml(t('settings.matrixAliasOffHint')) + '">' +
+            escapeHtml(t('settings.matrixAliasOffChip')) + '</span>'
+        : '') +
+      '<span class="stg-mx-rowacts">' + rowProbeBtn +
+        (depIndex != null
+          ? '<button type="button" class="stg-mx-act del" title="' + escapeHtml(t('settings.matrixRemoveAliasHint')) + '" ' +
+            'data-tofu-action="event.stopPropagation();_removeV2Alias(' + depIndex + ')">×</button>'
+          : '') +
+      '</span>' +
     '</td>';
   } else {
-    var countBadge = rowCount > 0
+    var poolLen = entry.wireIds.length || 1;
+    var countBadge = (!entry.pending && poolLen > 1)
       ? '<span class="stg-mx-aliascount" title="' + escapeHtml(t('settings.matrixAliasCountHint')) + '">' +
-          rowCount + ' ' + escapeHtml(rowCount === 1 ? t('settings.matrixIdOne') : t('settings.matrixIdMany')) + '</span>'
+          poolLen + ' ' + escapeHtml(t('settings.matrixIdMany')) + '</span>'
       : '';
     var presetBadge = isLogicalHead
       ? '<span class="stg-mx-preset" title="' + escapeHtml(t('settings.matrixPresetHint')) + '">' +
           escapeHtml(t('settings.matrixPresetBadge')) + '</span>'
       : '';
+    var rootActs = '<span class="stg-mx-rowacts">' + rowProbeBtn +
+      '<button type="button" class="stg-mx-act add" title="' + escapeHtml(t('settings.matrixAddAliasHint')) + '" ' +
+        'data-provider-id="' + escapeHtml(providerId) + '" ' +
+        'data-tofu-action="event.stopPropagation();_addV2Alias(this.dataset.providerId,\'' +
+          escapeHtml(entry.offering.offering_id) + '\')">+</button>' +
+      '<button type="button" class="stg-mx-act del danger" title="' + escapeHtml(t('settings.matrixRemoveOfferingHint')) + '" ' +
+        'data-provider-id="' + escapeHtml(providerId) + '" ' +
+        'data-tofu-action="event.stopPropagation();_removeV2Offering(this.dataset.providerId,\'' +
+          escapeHtml(entry.offering.offering_id) + '\')">' + _MX_TRASH + '</button>' +
+      '</span>';
     labelCell = '<td class="stg-mx-model root' + (isLogicalHead ? ' logical' : '') +
-        (globallyOff ? ' model-off' : '') + '">' +
+        (globallyOff ? ' model-off' : '') + (entry.pending ? ' pending' : '') +
+        (entry.retired ? ' retired' : '') + '">' +
       '<label class="stg-toggle stg-mx-gtoggle" title="' + escapeHtml(t('settings.matrixGlobalToggle')) + '" data-tofu-action="event.stopPropagation();">' +
         '<input type="checkbox"' + (globallyOff ? '' : ' checked') +
           ' data-tofu-action-change="_setModelRoutingCollectionField(\'offerings\',' +
@@ -474,20 +677,27 @@ function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, 
         '<span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>' +
       '</label>' +
       '<span class="stg-mx-brand">' + brandSvg + '</span>' +
-      '<span class="stg-mx-mid" title="' + escapeHtml(id || '') + '">' + escapeHtml(id || '(unnamed)') + '</span>' +
+      '<span class="stg-mx-mid' + (entry.retired ? ' retired' : '') + '" title="' + escapeHtml(id || '') + '">' +
+        escapeHtml(id || '(unnamed)') + '</span>' +
+      _mxStateChips(entry) +
       presetBadge +
       countBadge +
-      rowProbeBtn +
+      rootActs +
+      _mxMetaHtml(entry) +
     '</td>';
   }
 
   var cls = 'stg-mx-row' + (globallyOff ? ' model-off' : '') +
     (isAlias ? ' is-alias' : ' is-root') + (isLogicalHead ? ' is-logical' : '') +
-    (grouped ? ' grouped' : '') + (isLastInGroup && grouped ? ' group-end' : '');
+    (grouped ? ' grouped' : '') + (isLastInGroup && grouped ? ' group-end' : '') +
+    (wireDisabled ? ' is-wire-off' : '') + (entry.pending ? ' is-pending' : '') +
+    (entry.retired ? ' is-retired' : '');
   var row = '<tr class="' + cls + '" data-offering="' + entry.offeringIndex + '" data-id="' + escapeHtml(id) + '">' + labelCell;
-  if (isLogicalHead) {
+  if (hatched) {
+    var hatchTitle = isLogicalHead ? '' :
+      ' title="' + escapeHtml(entry.pending ? t('settings.matrixPendingHint') : t('settings.matrixAliasOffHint')) + '"';
     for (var hk = 0; hk < credentials.length; hk++) {
-      row += '<td class="stg-mx-cell logical"></td>';
+      row += '<td class="stg-mx-cell logical"' + hatchTitle + '></td>';
     }
   } else {
     for (var k = 0; k < credentials.length; k++) {
@@ -574,7 +784,13 @@ function _toggleMatrixAccess(providerId, offeringIndex, credIdx) {
   var context = _modelRoutingProviderContext(providerId);
   if (!context) return;
   var offering = (_stgModelRouting.offerings || [])[offeringIndex];
-  var credential = (_stgModelRouting.credentials || [])[credIdx];
+  // credIdx is the column position inside THIS provider's matrix, not an
+  // index into the global credentials array — resolve through the
+  // provider-scoped context (its .row aliases the global object), or any
+  // access whose credentials don't start at global index 0 toggles a
+  // DIFFERENT provider's credential and its own dot never flips.
+  var credItem = context.credentials[credIdx];
+  var credential = credItem && credItem.row;
   if (!offering || !credential || !offering.model) return;
   if (!credential.authorization) credential.authorization = { connection_ids: [], models: [] };
   var grants = credential.authorization.models || [];
@@ -590,10 +806,26 @@ function _toggleMatrixAccess(providerId, offeringIndex, credIdx) {
   _rerenderMatrix(providerId);
 }
 
-/** Re-render the providers tab; open cards and the matrix view state are
- *  preserved by the tab renderer + ``_stgMatrixOpen``. */
+/** Re-render the providers tab; open cards and per-provider matrix state
+ *  are preserved by the tab renderer + ``_stgMatrixQuery``/``_stgMatrixFilter``.
+ *  The matrix search box keeps focus + caret across the rebuild so typing
+ *  doesn't drop the field on every keystroke. */
 function _rerenderMatrix(providerId) {
+  var refocus = null;
+  if (typeof document !== 'undefined' && document.activeElement) {
+    var active = document.activeElement;
+    if (active && active.id && String(active.id).indexOf('stgMatrixSearch-') === 0) {
+      refocus = { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+    }
+  }
   _renderProvidersTab();
+  if (refocus) {
+    var el = document.getElementById(refocus.id);
+    if (el && typeof el.focus === 'function') {
+      el.focus();
+      try { el.setSelectionRange(refocus.start, refocus.end); } catch (e) { /* non-text input */ }
+    }
+  }
   if (typeof _fitMatrixPanelWidth === 'function') _fitMatrixPanelWidth();
 }
 
@@ -660,30 +892,41 @@ function _reconcileProbeNonChat(providerId) {
 /** Enforce the strict proof contract in the browser as well as the server.
  * This is load-bearing during rolling deploys and for old persisted cache:
  * an old backend can still send ``ok + HTTP 400`` and the UI must never turn
- * that contradiction into a green pip. No-ops when the typed status helper
- * is absent (the server-side snapshot normalization then owns the rule). */
+ * that contradiction into a green pip. The legacy-status migration no-ops
+ * when the typed status helper is absent (the server-side snapshot
+ * normalization then owns the rule); the disabled-cell strip below is not
+ * part of that migration and always runs. */
 function _reconcileProbeProofContract(providerId) {
   var probe = _stgMatrixProbe[providerId];
-  if (!probe || !probe.cells || typeof runtimeScope.effectiveProbeStatus !== 'function') return;
+  if (!probe || !probe.cells) return;
+  var migrate = typeof runtimeScope.effectiveProbeStatus === 'function';
   var changed = false;
   Object.keys(probe.cells).forEach(function(k) {
     var c = probe.cells[k];
     if (!c) return;
-    var effective = runtimeScope.effectiveProbeStatus(c, probe.probe_schema_version || 1);
-    if (effective === c.status) return;
-    var previous = c.status;
-    c.status = effective;
-    c.recommend_disable = (effective === 'bad_request' ||
-      effective === 'invalid_response' || effective === 'error');
-    if (previous === 'ok' && effective === 'bad_request' &&
-        String(c.detail || '').indexOf('false-positive corrected') < 0) {
-      c.detail = (c.detail || 'HTTP 400') +
-        ' — legacy false-positive corrected; provider rejected the request';
-    } else if (previous === 'ok' && effective === 'unverified') {
-      c.detail = (c.detail || 'HTTP 2xx') +
-        ' — legacy result did not validate generated content; re-test required';
+    if (migrate) {
+      var effective = runtimeScope.effectiveProbeStatus(c, probe.probe_schema_version || 1);
+      if (effective !== c.status) {
+        var previous = c.status;
+        c.status = effective;
+        c.recommend_disable = (effective === 'bad_request' ||
+          effective === 'invalid_response' || effective === 'error');
+        if (previous === 'ok' && effective === 'bad_request' &&
+            String(c.detail || '').indexOf('false-positive corrected') < 0) {
+          c.detail = (c.detail || 'HTTP 400') +
+            ' — legacy false-positive corrected; provider rejected the request';
+        } else if (previous === 'ok' && effective === 'unverified') {
+          c.detail = (c.detail || 'HTTP 2xx') +
+            ' — legacy result did not validate generated content; re-test required';
+        }
+        changed = true;
+      }
     }
-    changed = true;
+    // Discovery probes of disabled request names stay non-actionable.
+    if (c.deployment_enabled === false && c.recommend_disable) {
+      c.recommend_disable = false;
+      changed = true;
+    }
   });
   if (changed) _mxRecountSummary(probe);
 }
@@ -722,6 +965,11 @@ function _pruneProbeCellsToGrid(providerId) {
     _matrixModelRows(context).forEach(function(entry) {
       var pool = _matrixRowPool(entry);
       for (var ri = 0; ri < pool.length; ri++) valid[_probeCellKey(ci, pool[ri])] = true;
+      // Disabled request names are probeable grid members too — their
+      // verdicts must survive the prune (they drive the auto-enable).
+      for (var di = 0; di < entry.disabledWireIds.length; di++) {
+        valid[_probeCellKey(ci, entry.disabledWireIds[di])] = true;
+      }
     });
   }
   var changed = false;
@@ -751,7 +999,42 @@ function _ingestProbeSnapshot(providerId, snap) {
   _reconcileProbeProofContract(providerId);
   _pruneProbeCellsToGrid(providerId);
   _reconcileProbeNonChat(providerId);
+  _stageProbePassedWireIds(providerId);
   return true;
+}
+
+/** Enable disabled request names whose probe just passed. A fresh 'ok'
+ *  verdict on any credential is the ONLY way a manually added wire id can
+ *  become routable — the domain authority rejects enabled=true without
+ *  probe_status='passed', and a confirmed offering additionally requires
+ *  high identity confidence — so the verdict is staged straight into the
+ *  routing document (the same enabled+passed+high shape the add-model
+ *  picker ships); the global 保存 commits it. */
+function _stageProbePassedWireIds(providerId) {
+  var context = _modelRoutingProviderContext(providerId);
+  var probe = _stgMatrixProbe[providerId];
+  if (!context || !probe || !probe.cells) return;
+  var okWires = {};
+  Object.keys(probe.cells).forEach(function(k) {
+    var c = probe.cells[k];
+    if (c && c.status === 'ok' && c.model_id) okWires[String(c.model_id)] = true;
+  });
+  var staged = 0;
+  (context.deployments || []).forEach(function(item) {
+    var row = item && item.row;
+    if (!row || row.enabled !== false) return;
+    var wire = String(row.wire_model_id || '').trim();
+    if (!wire || !okWires[wire]) return;
+    row.enabled = true;
+    row.probe_status = 'passed';
+    row.identity_confidence = 'high';
+    staged++;
+  });
+  if (!staged) return;
+  if (typeof showToast === 'function') {
+    showToast(t('settings.matrixWireProbePassed').replace('{n}', String(staged)), 'success');
+  }
+  _rerenderMatrix(providerId);
 }
 
 /** Start (or, when not forcing, resume) a background probe for a provider.
@@ -826,6 +1109,8 @@ function _resumeMatrixProbe(providerId) {
   // Don't clobber a live local run.
   if (_stgMatrixProbe[providerId] && _stgMatrixProbe[providerId].status === 'running'
       && _stgMatrixProbeTimers[providerId]) return;
+  if (typeof Api === 'undefined' || !Api.modelRouting
+      || typeof Api.modelRouting.probeCellsStatus !== 'function') return;
   Api.modelRouting.probeCellsStatus(providerId).then(function(snap) {
     if (_ingestProbeSnapshot(providerId, snap)) {
       _rerenderMatrix(providerId);
@@ -850,6 +1135,9 @@ function _applyMatrixRecommendations(providerId) {
   Object.keys(probe.cells).forEach(function(k) {
     var c = probe.cells[k];
     if (!c || !c.recommend_disable) return;
+    // Discovery probe of a not-yet-enabled request name: it is not routed,
+    // so its verdict can never be evidence against the offering's grant.
+    if (c.deployment_enabled === false) return;
     var entry = byRoot[c.root_model_id];
     if (!entry) return;
     // A non-chat model may only lose its grant on a verdict from its OWN

@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { build } from 'vite';
 import {
-  copyFile, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile,
+  copyFile, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, utimes,
+  writeFile,
 } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { composeRuntime } from './compose_frontend_runtime.mjs';
@@ -15,6 +16,10 @@ import {
   generateI18nContract,
   readI18nCatalog,
 } from './gen_i18n_contract.mjs';
+import {
+  planRetentionDeletions,
+  retentionPolicyFromEnvironment,
+} from './vite_asset_retention.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const liveDir = join(root, 'static', 'vite');
@@ -232,12 +237,48 @@ async function main() {
     // The manifest is the commit point: every path it names is present first.
     await publishManifest(join(liveDir, 'manifest.json'), nextManifest);
 
+    // Re-stamp the live graph: atomicCopy short-circuits existing names, so
+    // without the touch a dropped file would keep its first-publication
+    // mtime and lose most of its retention grace exactly when long-lived
+    // tabs start being the only consumers of that generation.
+    const buildTime = new Date();
+    for (const asset of nextAssets) {
+      await utimes(join(liveDir, asset), buildTime, buildTime).catch(() => {});
+    }
+
+    // The current and previous graphs stay pinned unconditionally; older
+    // dropped generations survive within the bounded retention window so a
+    // tab open across several rebuilds can still fetch its lazy chunks.
     const retained = new Set([...nextAssets, ...previousAssets].map((path) => path.slice('assets/'.length)));
+    const retentionCandidates = [];
     for (const file of await listFiles(assetsDir)) {
-      if (!retained.has(file)) await rm(join(assetsDir, ...file.split('/')), { force: true });
+      if (retained.has(file)) continue;
+      try {
+        const info = await stat(join(assetsDir, ...file.split('/')));
+        retentionCandidates.push({
+          name: file,
+          size: info.size,
+          mtimeMs: info.mtimeMs,
+        });
+      } catch (error) {
+        // A concurrent build may prune between the listing and the stat;
+        // an already-gone candidate needs no deletion plan entry.
+        if (!error || error.code !== 'ENOENT') throw error;
+      }
+    }
+    const deletions = planRetentionDeletions(
+      retentionCandidates,
+      Date.now(),
+      retentionPolicyFromEnvironment(),
+    );
+    for (const name of deletions) {
+      await rm(join(assetsDir, ...name.split('/')), { force: true });
     }
     await validateManifest(await readJson(join(liveDir, 'manifest.json')), liveDir);
-    process.stdout.write(`Published ${nextAssets.size} Vite assets; retained ${previousAssets.size} from the previous graph.\n`);
+    process.stdout.write(
+      `Published ${nextAssets.size} Vite assets; retained ${previousAssets.size} from the previous graph; `
+      + `kept ${retentionCandidates.length - deletions.length} older-generation files, pruned ${deletions.length}.\n`,
+    );
   } finally {
     delete process.env.TOFU_VITE_OUT_DIR;
     await rm(temporaryDir, { recursive: true, force: true });

@@ -200,14 +200,15 @@ def is_gpt(model: str) -> bool:
 
 
 def is_gpt5(model: str) -> bool:
-    """OpenAI GPT-5 family reasoning models (gpt-5, gpt-5.2, gpt-5.4, gpt-5.6,
-    including -mini / -nano / -pro / -codex variants).
+    """OpenAI GPT-5/6 reasoning generations (gpt-5, gpt-5.2, gpt-5.4, gpt-5.6,
+    gpt-6-astra, including -mini / -nano / -pro / -codex variants).
 
     These take the OpenAI-native ``reasoning_effort`` knob. Deliberately
-    excludes ``gpt-oss`` (no 'gpt-5' substring) and the o-series / gpt-4o
-    (which route through the plain-OpenAI branch unchanged).
+    excludes ``gpt-oss`` (no 'gpt-5'/'gpt-6' substring) and the o-series /
+    gpt-4o (which route through the plain-OpenAI branch unchanged). The
+    digit-boundary lookahead keeps a hypothetical 'gpt-50'/'gpt-65' out.
     """
-    return 'gpt-5' in model.lower()
+    return re.search(r'gpt-[56](?!\d)', model.lower()) is not None
 
 
 def is_gpt_56(model: str) -> bool:
@@ -216,19 +217,30 @@ def is_gpt_56(model: str) -> bool:
     effort tier. Older GPT-5.x models clamp ``ultra`` to their supported top
     rung.
 
-    Extracts the minor version from ``gpt-5``/``gpt-5.6``/``gpt-5.6-mini`` and
-    returns True iff minor >= 6 (``gpt-5`` alone == minor 0).
+    Parses ``(major, minor)`` and returns True iff the generation is at
+    least 5.6 — ``gpt-5`` alone == (5, 0), and the whole gpt-6 line
+    (``gpt-6-astra``, registry version gpt-6.0) qualifies.
     """
-    m = model.lower()
-    if 'gpt-5' not in m:
-        return False
-    match = re.search(r'gpt-5(?:[.\-](\d+))?', m)
+    match = re.search(r'gpt-(\d{1,2})(?!\d)(?:[.\-](\d{1,2})(?!\d))?',
+                      model.lower())
     if not match:
         return False
-    minor = int(match.group(1)) if match.group(1) else 0
-    return minor >= 6
+    major = int(match.group(1))
+    minor = int(match.group(2)) if match.group(2) else 0
+    return (major, minor) >= (5, 6)
 
 
 def is_deepseek(model: str) -> bool:
     """DeepSeek models (deepseek-v4-pro/-flash, deepseek-chat, deepseek-reasoner)."""
     return 'deepseek' in model.lower()
+
+
+def is_muse_spark(model: str) -> bool:
+    """Meta Muse Spark models (muse-spark-1.2/1.3, incl. -contributor SKUs).
+
+    Mandatory-reasoning models on the Meta Model API whose only knob is the
+    top-level ``reasoning_effort`` string — see
+    :func:`lib.model_info.muse_spark_reasoning_effort` for the rung contract.
+    Deliberately does NOT match OpenAI's ``gpt-5.3-codex-spark`` (no
+    'muse-spark' substring), which rides the GPT-5 branch."""
+    return 'muse-spark' in model.lower()

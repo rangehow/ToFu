@@ -86,6 +86,29 @@ def test_scores_are_keyed_by_exact_creator_model_identity():
     assert "provider" not in str(block).lower()
 
 
+def test_untested_variant_never_inherits_the_tested_models_score():
+    """AA benchmarked exactly one model; family variants stay scoreless."""
+    parsed = aa._parse_dataset({"data": [_AA_ROW]})
+    variants = [{
+        "creator_id": "deepseek",
+        "model_id": model_id,
+        "display_name": model_id,
+    } for model_id in (
+        "deepseek-v4-flash-0731",
+        "deepseek-v4-flash-vision-exp",
+        "deepseek-v4-flash-highspeed",
+    )]
+
+    block = aa._block(
+        variants,
+        {"status": "ok", "fetched_at": 1000.0, "models": parsed},
+        key_source="settings",
+        key_hint="•••-key",
+    )
+
+    assert block["scores"] == {}
+
+
 def test_same_model_name_from_another_creator_is_never_attached():
     other_creator = {
         **_AA_ROW,
@@ -105,6 +128,54 @@ def test_same_model_name_from_another_creator_is_never_attached():
     )
 
     assert block["scores"]["deepseek::deepseek-v4-flash"]["intelligence"] == 78.4
+
+
+def test_creator_brand_alias_matches_aa_creator_name():
+    kimi_row = {
+        "name": "Kimi K3 (max)",
+        "slug": "kimi-k3",
+        "model_creator": {"name": "Kimi"},
+        "evaluations": {"artificial_analysis_intelligence_index": 59.7},
+    }
+    parsed = aa._parse_dataset({"data": [kimi_row]})
+    models = [{
+        "creator_id": "moonshot",
+        "model_id": "kimi-k3",
+        "display_name": "Kimi K3",
+    }]
+
+    block = aa._block(
+        models,
+        {"status": "ok", "fetched_at": 1000.0, "models": parsed},
+        key_source="settings",
+        key_hint="•••-key",
+    )
+
+    assert block["scores"]["moonshot::kimi-k3"]["intelligence"] == 59.7
+
+
+def test_namespaced_model_id_matches_by_leaf_name():
+    kimi_row = {
+        "name": "Kimi K2.5 (Reasoning)",
+        "slug": "kimi-k2-5",
+        "model_creator": {"name": "Kimi"},
+        "evaluations": {"artificial_analysis_intelligence_index": 36.0},
+    }
+    parsed = aa._parse_dataset({"data": [kimi_row]})
+    models = [{
+        "creator_id": "moonshot",
+        "model_id": "kimi/kimi-k2.5",
+        "display_name": "kimi/kimi-k2.5",
+    }]
+
+    block = aa._block(
+        models,
+        {"status": "ok", "fetched_at": 1000.0, "models": parsed},
+        key_source="settings",
+        key_hint="•••-key",
+    )
+
+    assert block["scores"]["moonshot::kimi/kimi-k2.5"]["intelligence"] == 36.0
 
 
 def test_fetch_follows_bounded_api_pagination():

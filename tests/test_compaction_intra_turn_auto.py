@@ -161,9 +161,9 @@ def test_summary_dispatch_receives_durable_goal_separately_from_login_steer(
     assert captured['current_query'] == 'Unable to log in?'
     assert all(message.get('content') != original_goal
                for message in captured['old_messages'])
-    assert any(message.get('role') == 'user'
-               and message.get('content') == original_goal
-               for message in messages)
+    from lib.tasks_pkg.compaction._history import history_entries
+    assert any(entry['content'] == original_goal
+               for message in messages for entry in history_entries(message))
 
 
 def test_compact_repins_autopilot_objective_from_receipt(monkeypatch):
@@ -293,9 +293,8 @@ def test_NC_auto_without_fold_leaves_giant_turn_whole(stub_summary, monkeypatch)
     import lib.tasks_pkg.compaction._layer2._compact as compact_mod
 
     # Neuter: fold returns the region unchanged, no cold rounds extracted.
-    monkeypatch.setattr(compact_mod, '_fold_recent_intra_turn',
-                        lambda recent, hot_rounds=8, hot_budget_tokens=None:
-                        (list(recent), []))
+    monkeypatch.setattr(compact_mod, '_plan_cross_turn_tail',
+                        lambda messages, **kwargs: (1, list(messages[1:]), []))
 
     msgs = _giant_turn_api(n_rounds=40)
     before = _estimate_total_tokens(msgs)
@@ -507,7 +506,7 @@ def test_cache_negative_retry_floor_yields_when_cache_witness_cools(
     monkeypatch,
 ):
     """A broken/cold prefix invalidates the prior warm-cache proof at once."""
-    import lib.tasks_pkg.cache_tracking._state as cache_state
+    import lib.tasks_pkg.compaction._cache_evidence as cache_state
     import lib.tasks_pkg.compaction._tokens as tokens
 
     messages = [_sys(), _user('unchanged hot tail')]
@@ -532,7 +531,7 @@ def test_cache_negative_retry_floor_yields_when_cache_witness_cools(
         return 130_000, 'test'
 
     monkeypatch.setattr(tokens, '_count_tokens_authoritative', count)
-    monkeypatch.setattr(cache_state, 'get_warm_cache_read',
+    monkeypatch.setattr(cache_state, 'current_cache_read',
                         lambda *args, **kwargs: 0)
 
     measurement = {}
@@ -547,7 +546,7 @@ def test_cache_negative_retry_floor_holds_while_cache_witness_is_warm(
     monkeypatch,
 ):
     """Unchanged warm-cache evidence keeps the proven retry floor active."""
-    import lib.tasks_pkg.cache_tracking._state as cache_state
+    import lib.tasks_pkg.compaction._cache_evidence as cache_state
     import lib.tasks_pkg.compaction._tokens as tokens
 
     messages = [_sys(), _user('unchanged hot tail')]
@@ -572,7 +571,7 @@ def test_cache_negative_retry_floor_holds_while_cache_witness_is_warm(
         return 130_000, 'test'
 
     monkeypatch.setattr(tokens, '_count_tokens_authoritative', count)
-    monkeypatch.setattr(cache_state, 'get_warm_cache_read',
+    monkeypatch.setattr(cache_state, 'current_cache_read',
                         lambda *args, **kwargs: 120_000)
 
     measurement = {}
@@ -768,10 +767,13 @@ def test_dispatch_guard_uses_deterministic_receipt_when_summary_unavailable(
     assert meta['summaryFallbackReason'] == fallback_reason
     assert len(meta['summary_text']) <= layer2._DETERMINISTIC_RECOVERY_MAX_CHARS
     assert meta['turn_diff_included'] is False
-    assert any(message.get('content') == objective for message in messages)
+    from lib.tasks_pkg.compaction._history import history_entries
+    assert any(entry['content'] == objective
+               for message in messages for entry in history_entries(message))
     assert any(message.get('content') == 'Continue with the remaining tests.'
                for message in messages)
-    receipt_text = messages[-1]['content']
+    receipt_text = next(message['content'] for message in messages
+                        if message.get('name') == 'context_compact')
     assert '## Deterministic Compaction Recovery' in receipt_text
     assert '## TaskStateSnapshotV1' in receipt_text
     assert receipt_calls[-1]['implementation'] == (
@@ -1174,9 +1176,9 @@ def test_NC_count_only_hot_tail_leaves_projected_over_ceiling(stub_summary, monk
     import lib.tasks_pkg.compaction._reactive as reactive_mod
 
     monkeypatch.setattr(
-        compact_mod, '_fold_recent_intra_turn',
-        lambda recent, hot_rounds=8, hot_budget_tokens=None:
-        real_fold(recent, hot_rounds=hot_rounds, hot_budget_tokens=None))
+        compact_mod, '_plan_cross_turn_tail',
+        lambda messages, **kwargs:
+        (1, *real_fold(messages[1:], hot_rounds=8, hot_budget_tokens=None)))
     # Neuter: the convergence check calls this and drops nothing.
     monkeypatch.setattr(reactive_mod, '_head_truncate',
                         lambda *a, **k: 0)

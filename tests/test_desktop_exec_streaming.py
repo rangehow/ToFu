@@ -213,7 +213,9 @@ class TestAgentLoopStreaming:
                     stop.set()
                 return {'commands': []}
 
-        def fake_post(url, json=None, headers=None, timeout=None, proxies=None):
+        def fake_post(url, json=None, headers=None, timeout=None, proxies=None,
+                      allow_redirects=None, auth=None):
+            assert allow_redirects is False and callable(auth)
             bodies.append(json)
             return _Resp()
 

@@ -340,6 +340,115 @@ function _deriveChatModeFromFlags(conv) {
 }
 if (typeof window !== 'undefined') runtimeScope._deriveChatModeFromFlags = _deriveChatModeFromFlags;
 
+/* Provider preference chip: a real popover, not a native <select> — the
+ * OS popup ignores page styling entirely and rendered as an alien widget
+ * inside the polished panel. The menu lives on document.body so the
+ * scrolling list container can never clip it; one menu exists at a time. */
+let _providerMenuCleanup = null;
+
+function _closeProviderMenu() {
+  if (_providerMenuCleanup) {
+    _providerMenuCleanup();
+    _providerMenuCleanup = null;
+  }
+  const menu = document.getElementById('psProviderMenu');
+  if (menu) menu.remove();
+  document.querySelectorAll('.ps-dd-provider-chip[aria-expanded="true"]')
+    .forEach(chip => chip.setAttribute('aria-expanded', 'false'));
+}
+
+function _toggleProviderMenu(chip, model, selectedProvider) {
+  if (chip.getAttribute('aria-expanded') === 'true') {
+    _closeProviderMenu();
+    return;
+  }
+  _closeProviderMenu();
+  const menu = document.createElement('div');
+  menu.id = 'psProviderMenu';
+  menu.className = 'ps-dd-provider-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('aria-label', chip.getAttribute('aria-label') || '服务商偏好');
+  const options = [{ provider_id: '', provider_name: '自动服务商' }]
+    .concat(model.provider_options);
+  for (const option of options) {
+    const entry = document.createElement('button');
+    entry.type = 'button';
+    const isSelected = option.provider_id === selectedProvider;
+    entry.className = 'ps-dd-provider-menu-item' + (isSelected ? ' active' : '');
+    entry.setAttribute('role', 'option');
+    entry.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    const check = document.createElement('span');
+    check.className = 'ps-dd-provider-check';
+    check.setAttribute('aria-hidden', 'true');
+    if (isSelected) {
+      check.innerHTML = '<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    }
+    entry.appendChild(check);
+    const name = document.createElement('span');
+    name.className = 'ps-dd-provider-menu-label';
+    name.textContent = option.provider_name;
+    entry.appendChild(name);
+    entry.onclick = event => {
+      event.stopPropagation();
+      _closeProviderMenu();
+      selectModelRoute(option.provider_id ? {
+        ...model,
+        provider_id: option.provider_id,
+        provider_name: option.provider_name,
+        offering_id: option.offering_id,
+      } : model);
+    };
+    menu.appendChild(entry);
+  }
+  document.body.appendChild(menu);
+  chip.setAttribute('aria-expanded', 'true');
+  /* Position: prefer above the chip (the panel opens upward, so rows sit
+   * near the viewport top), flip below when there is no room. */
+  const rect = chip.getBoundingClientRect();
+  const menuWidth = menu.offsetWidth;
+  const menuHeight = menu.offsetHeight;
+  let top = rect.top - menuHeight - 5;
+  if (top < 8) {
+    top = Math.min(rect.bottom + 5, window.innerHeight - menuHeight - 8);
+  }
+  let left = rect.right - menuWidth;
+  if (left < 8) left = 8;
+  if (left + menuWidth > window.innerWidth - 8) {
+    left = window.innerWidth - menuWidth - 8;
+  }
+  menu.style.top = top + 'px';
+  menu.style.left = left + 'px';
+  const selected = menu.querySelector('.ps-dd-provider-menu-item.active');
+  if (selected) selected.focus({ preventScroll: true });
+  const onDocClick = event => {
+    if (!menu.contains(event.target) && !chip.contains(event.target)) {
+      _closeProviderMenu();
+    }
+  };
+  const onKey = event => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      _closeProviderMenu();
+      chip.focus();
+    }
+  };
+  /* The menu is body-anchored: a scroll elsewhere detaches it from the
+   * chip's row — close rather than float. */
+  const onScroll = event => {
+    if (!menu.contains(event.target)) _closeProviderMenu();
+  };
+  document.addEventListener('click', onDocClick, true);
+  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', _closeProviderMenu);
+  _providerMenuCleanup = () => {
+    document.removeEventListener('click', onDocClick, true);
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('scroll', onScroll, true);
+    window.removeEventListener('resize', _closeProviderMenu);
+  };
+}
+
 /* Project the owner v2 aggregate into model-first picker rows. Every confirmed
  * creator+model identity appears once; the Providers that can supply it are a
  * secondary preference on that row. Pending identities cannot safely join the
@@ -435,6 +544,7 @@ function _populateModelDropdown(models) {
   _registeredModels = models;
   _registeredModelsLoaded = true;
   dropdown.innerHTML = '';
+  _closeProviderMenu();
   if (models.length === 0) {
     if (typeof _applyImageGenAvailability === 'function') {
       _applyImageGenAvailability();
@@ -502,18 +612,30 @@ function _populateModelDropdown(models) {
    * credential kinds through the same modelGroupKey inputs the grouping
    * pass used, so a row's icon can never disagree with its own section
    * header. Empty brand keeps the legacy per-model detect (an aggregator
-   * group still shows each model's own vendor icon). */
+   * group still shows each model's own vendor icon).
+   *
+   * A v2 confirmed row carries its Creator id in m.brand (see
+   * _modelRoutingDropdownModels) — a CREATOR-namespace string, not a glyph
+   * key: 'anthropic'/'alibaba' have no MODEL_BRAND_ICONS entry and render
+   * the generic box while 'openai' coincidentally resolves. Route those
+   * rows through the shared modelBrand interface (Creator → glyph), the
+   * same resolution every Settings model surface uses. */
   const _row = (m, opts) => {
     opts = opts || {};
     const _rowBrand = (m.brand || '').trim();
     const _rowCredKind = (_rowBrand === 'oauth' || _rowBrand === 'adapter');
-    const brand = (_rowBrand && !_rowCredKind)
-      ? _rowBrand
-      : _rowCredKind
-        ? runtimeScope.modelGroupKey({ brand: m.brand, name: m.provider_name }, m)
-        : (typeof _modelBrand === 'function'
-          ? _modelBrand(m.model_id, m.creator_id)
-          : (typeof _detectBrand === 'function' ? _detectBrand(m.model_id) : 'generic'));
+    const _v2Confirmed = !!(m.routing_v2 && !m.pending_identity);
+    const brand = _v2Confirmed
+      ? (typeof _modelBrand === 'function'
+        ? _modelBrand(m.model_id, m.creator_id)
+        : (typeof _detectBrand === 'function' ? _detectBrand(m.model_id) : 'generic'))
+      : (_rowBrand && !_rowCredKind)
+        ? _rowBrand
+        : _rowCredKind
+          ? runtimeScope.modelGroupKey({ brand: m.brand, name: m.provider_name }, m)
+          : (typeof _modelBrand === 'function'
+            ? _modelBrand(m.model_id, m.creator_id)
+            : (typeof _detectBrand === 'function' ? _detectBrand(m.model_id) : 'generic'));
     const item = document.createElement('div');
     item.className = 'preset-dropdown-item' + (opts.sub ? ' ps-dd-sub-item' : '');
     item.setAttribute('data-value', m.model_id);
@@ -551,37 +673,35 @@ function _populateModelDropdown(models) {
     item.appendChild(iconSpan);
     item.appendChild(nameSpan);
     if (m.routing_v2 && !m.pending_identity && Array.isArray(m.provider_options)) {
-      const preference = document.createElement('select');
-      preference.className = 'ps-dd-provider-select';
-      preference.setAttribute('aria-label', label + ' 服务商偏好');
-      preference.title = '服务商偏好；自动模式会在同一模型的可用服务商间轮转';
-      const automaticOption = document.createElement('option');
-      automaticOption.value = '';
-      automaticOption.textContent = '自动服务商';
-      preference.appendChild(automaticOption);
-      for (const option of m.provider_options) {
-        const providerOption = document.createElement('option');
-        providerOption.value = option.provider_id;
-        providerOption.textContent = option.provider_name;
-        preference.appendChild(providerOption);
-      }
       const selectedProvider = m.model_id === (config.model || serverModel)
         ? (config.preferredProviderId || '') : '';
-      preference.value = m.provider_options.some(option =>
-        option.provider_id === selectedProvider) ? selectedProvider : '';
-      preference.onclick = event => event.stopPropagation();
-      preference.onkeydown = event => event.stopPropagation();
-      preference.onchange = event => {
+      const currentOption = m.provider_options.find(
+        option => option.provider_id === selectedProvider);
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'ps-dd-provider-chip';
+      chip.setAttribute('aria-haspopup', 'listbox');
+      chip.setAttribute('aria-expanded', 'false');
+      chip.setAttribute('aria-label', label + ' 服务商偏好');
+      chip.title = '服务商偏好；自动模式会在同一模型的可用服务商间轮转';
+      const chipLabel = document.createElement('span');
+      chipLabel.className = 'ps-dd-provider-chip-label';
+      chipLabel.textContent = currentOption
+        ? currentOption.provider_name : '自动服务商';
+      chip.appendChild(chipLabel);
+      const chipArrow = document.createElement('span');
+      chipArrow.className = 'ps-dd-provider-chip-arrow';
+      chipArrow.setAttribute('aria-hidden', 'true');
+      chipArrow.innerHTML = '<svg width="8" height="5" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      chip.appendChild(chipArrow);
+      chip.onclick = event => {
         event.stopPropagation();
-        const option = m.provider_options.find(row => row.provider_id === preference.value);
-        selectModelRoute(option ? {
-          ...m,
-          provider_id: option.provider_id,
-          provider_name: option.provider_name,
-          offering_id: option.offering_id,
-        } : m);
+        _toggleProviderMenu(chip, m, selectedProvider);
       };
-      item.appendChild(preference);
+      chip.onkeydown = event => {
+        if (event.key !== 'Escape') event.stopPropagation();
+      };
+      item.appendChild(chip);
     } else if (m.pending_identity) {
       const providerTag = document.createElement('span');
       providerTag.className = 'ps-dd-provider-tag';
@@ -821,23 +941,7 @@ function _reconcileConfigModelAvailability(chatModels) {
     ? serverModel
     : (config.model || serverModel);
   if (!currentModel || availableIds.has(currentModel)) return;
-  let fallback = '';
-  if (serverModel && availableIds.has(serverModel)) {
-    fallback = serverModel;
-  } else if (chatModels && chatModels.length > 0) {
-    /* Pick a random model so different users don't all land on the same one */
-    fallback = chatModels[Math.floor(Math.random() * chatModels.length)].model_id;
-  }
-  if (!fallback) return;
-  console.warn('[Config] Model "%s" not available in providers, falling back to "%s"', currentModel, fallback);
-  config.model = fallback;
-  /* A fallback equal to the server default is still a placeholder: persist
-   * it scrubbed (via _configForPersist) so the next boot flows from the
-   * server default silently. A non-default fallback (server default itself
-   * unavailable) persists explicitly so future boots heal without warning. */
-  config._modelIsProvisional = (fallback === serverModel);
-  try { localStorage.setItem("claude_client_config", JSON.stringify(_configForPersist())); }
-  catch (_e) { /* best-effort */ }
+  console.warn('[Config] Selected model is unavailable; keeping selection:', currentModel);
 }
 /* Load the model list from server config and populate the dropdown.
  * Falls back to default models if config doesn't include a models list. */
@@ -1040,6 +1144,7 @@ function togglePresetDropdown(e) {
     const closeHandler = function (ev) {
       if (!wrapper.contains(ev.target)) {
         wrapper.classList.remove("open");
+        _closeProviderMenu();
         document.removeEventListener("click", closeHandler);
       }
     };
@@ -1052,6 +1157,9 @@ function selectModel(modelId) {
   if (registered && registered.routing_v2) {
     return selectModelRoute(registered);
   }
+  config.modelRef = null;
+  config.preferredProviderId = '';
+  config.routing = {};
   _applyModelUI(modelId);
   /* Record the pick through the bounded recent-model controller. An isolated
    * fixture without the composition port simply omits the recents strip. */
@@ -1060,6 +1168,7 @@ function selectModel(modelId) {
   }
   try { localStorage.setItem("claude_client_config", JSON.stringify(_configForPersist())); }
   catch (e) { debugLog(`[selectModel] localStorage save failed: ${e.message}`, 'error'); }
+  commitComposerModel(getActiveConv(), captureComposerModel(config));
   captureActiveConversationSettings();
   const depthSuffix = _isThinkingCapable(config.model) && config.thinkingDepth
     ? ` [${config.thinkingDepth.toUpperCase()}]`
@@ -1085,6 +1194,7 @@ function selectModelRoute(modelRow) {
     ? { preferred_provider_id: config.preferredProviderId }
     : {};
   _applyModelUI(modelRow.model_id);
+  commitComposerModel(getActiveConv(), captureComposerModel(config));
   if (typeof runtimeScope.pushRecentModel === 'function') {
     runtimeScope.pushRecentModel(modelRow.model_id);
   }

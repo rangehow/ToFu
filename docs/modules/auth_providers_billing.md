@@ -61,6 +61,18 @@ CAS and secret writes use a separate encrypted operation, never plaintext JSON.
 `sanitise_extra_headers` rejects injected authorization, cookies, host/proxy
 selection, and framing headers.
 
+Credential secrets are sealed as a `tofu.credential-secret/v1` envelope
+(`api_key`/`oauth` plus encrypted `extra_headers`); dispatch decodes it at
+route materialization and presentation surfaces must never render the raw
+envelope as the key. `key_hint` derives from the usable key via
+`credential_secret_display_hint` (`headers` marks header-only credentials).
+`split_header_secrecy` decides where each provider header lives:
+credential-named or transport-reserved names stay inside the encrypted
+envelope, and plain routing headers are inspectable Connection
+`extra_headers`. Bootstrap's `_repair_credential_secrets` converges early-v2
+documents to that split idempotently — conflicted headers stay encrypted so
+the envelope-over-connection dispatch precedence is preserved.
+
 ## Egress boundary
 
 Every outbound use of a caller-controlled `base_url` passes
@@ -131,6 +143,12 @@ specified in [`../CODEX_ACCOUNT_USAGE.md`](../CODEX_ACCOUNT_USAGE.md).
 cost projection. Model rates come from `lib/pricing/`; do not add a second live
 rate table under billing. Static pricing import does not initialize the shared
 HTTP stack; only an explicit online refresh owns that lazy dependency.
+
+Model-id lookups must go through `lib.pricing.pricing_for_model` (or
+`lookup_pricing`), never a raw `MODEL_PRICING.get`: the seam folds one trailing
+dated-checkpoint stamp (`-MMDD` / `-YYYYMMDD`) so a pinned snapshot
+(`deepseek-v4-pro-0813`) inherits its rolling alias's row. A dated pin
+therefore needs no pricing row of its own — add the alias it folds to instead.
 
 For billed requests, `lib/billing/request_flow.py` owns the full sequence:
 

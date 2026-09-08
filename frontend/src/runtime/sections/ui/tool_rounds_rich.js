@@ -25,9 +25,8 @@ function _timerWatcherToggle(el, ev) {
   el.setAttribute('aria-expanded', String(expanded));
 }
 
-/* Checklist revisions collapse to one structured progress card. The display
- * projection remains in core because both timeline paths compact revisions;
- * only the optional rich card renderer lives here. */
+/* Each checklist occurrence keeps its explicit verdict and accepted state.
+ * Core derives accepted revision history; both timeline paths share this card. */
 function _renderTodoBlock(round, svg, q, badgeHtml) {
   const meta = (round.results || [])[0] || {};
   let todos = Array.isArray(meta.todos) ? meta.todos : null;
@@ -41,14 +40,16 @@ function _renderTodoBlock(round, svg, q, badgeHtml) {
   const done = todos.filter((x) => x && x.status === "completed").length;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const allDone = total > 0 && done === total;
-  const updateCount = Number(meta.todoDisplayUpdateCount || round.todoDisplayUpdateCount
-    || meta.todoUpdateCount || 1);
+  const updateCount = Number(meta.todoDisplayUpdateCount ?? round.todoDisplayUpdateCount
+    ?? meta.todoUpdateCount ?? (meta.todoRejected || meta.todoNoop ? 0 : 1));
   const breadcrumbs = Array.isArray(meta.todoBreadcrumbs) ? meta.todoBreadcrumbs : [];
   const displayHistory = Array.isArray(meta.todoDisplayHistory) ? meta.todoDisplayHistory : [];
 
-  const headLabel = total
-    ? _t("todo.head", "Checklist")
-    : _t("todo.cleared", "Checklist cleared");
+  const headLabel = meta.todoRejected
+    ? _t("todo.rejected", "Update rejected")
+    : meta.todoNoop
+      ? _t("todo.unchanged", "Checklist unchanged")
+      : total ? _t("todo.head", "Checklist") : _t("todo.cleared", "Checklist cleared");
 
   const _ICON = {
     completed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
@@ -88,10 +89,12 @@ function _renderTodoBlock(round, svg, q, badgeHtml) {
       ).join('<i>›</i>')}</div>`
     : "";
   let stateNotice = "";
-  if (meta.todoRejected || meta.todoNoop) {
-    /* Rejection reasons are model protocol (stable ids, sync/replan rules),
-     * not user copy. The human projection reports only the observable outcome
-     * and keeps rendering the last accepted checklist state. */
+  if (meta.todoRejected) {
+    // The explicit verdict owns the label; prose is detail, never a classifier.
+    const reason = meta.todoRejectReason || round.toolContent || "";
+    stateNotice = `<div class="ptool-todo-notice is-rejected">${escapeHtml(_t("todo.rejected", "Update rejected"))}</div>` +
+      `<pre class="ptool-todo-rejection-detail">${escapeHtml(String(reason))}</pre>`;
+  } else if (meta.todoNoop) {
     stateNotice = `<div class="ptool-todo-notice">${escapeHtml(_t("todo.unchanged", "Checklist unchanged"))}</div>`;
   } else if (Array.isArray(meta.todoAutoPopped) && meta.todoAutoPopped.length) {
     stateNotice = `<div class="ptool-todo-notice is-restored">${escapeHtml(_t("todo.parentRestored", "Child complete; returned to the parent checklist."))}</div>`;
@@ -1230,6 +1233,16 @@ const _MOTION_PURPOSE_I18N = {
   edit_slides:                   ["motionWhy.editSlides", "Re-authors ONE page of a produced deck from your plain-language instruction, then re-renders the preview and re-exports the PPTX."],
 };
 
+/* Per-tool source chip — the shared "Video" chip lied about three of the
+ * four produce_* cards (a slides job is not a video). Tools absent here keep
+ * the historical motionSrc chip (the motion_video_* family IS video work). */
+const _MOTION_SRC_I18N = {
+  produce_report:   ["motionSrcReport", "Report"],
+  produce_research: ["motionSrcResearch", "Research"],
+  produce_slides:   ["motionSrcSlides", "Slides"],
+  edit_slides:      ["motionSrcSlides", "Slides"],
+};
+
 /* The motion handler's meta.title is the bare stage name ("check" / "render")
  * — noisy inside the card, so the motion body never renders a snippet. The
  * produce handlers' note / quality_hint DO carry user-meaningful text. */
@@ -1425,6 +1438,7 @@ const _MOTION_BODY = {
   produce_video: _motionBodyProduce,
   produce_report: _motionBodyProduce,
   produce_research: _motionBodyProduce,
+  produce_slides: _motionBodyProduce,
 };
 
 function _renderMotionVideoBlock(round, svg, q, badgeHtml) {
@@ -1451,13 +1465,28 @@ function _renderMotionVideoBlock(round, svg, q, badgeHtml) {
   const emptyNote = (!bodyInner && !snippetHtml)
     ? `<div class="ptool-convmeta-empty">${escapeHtml(_t("tool.noContent", "No content returned."))}</div>` : "";
   const bodyHtml = `<div class="ptool-motion-body">${purposeHtml}${bodyInner}${snippetHtml}${emptyNote}${callLine}</div>`;
-  return `<details class="ptool-convmeta-block ptool-motion-block" data-rn="${round.roundNum}">
+  const srcEntry = _MOTION_SRC_I18N[tn];
+  const srcLabel = srcEntry ? _t(srcEntry[0], srcEntry[1]) : _t("motionSrc", "Video");
+  /* WorkUnit re-attach handle (docs/API_CONTRACT.md §2.18): the acceptance
+   * meta carries workUnitRef {taskId, kind}; the card renders the handle +
+   * an empty live region, and ui/workunit_tracker.js hydrates it in place.
+   * The handle is durable (persisted round meta), so a conversation
+   * re-render re-arms the same registration via the scan below. */
+  const wuRef = (meta && meta.workUnitRef && typeof meta.workUnitRef === "object")
+    ? meta.workUnitRef : null;
+  const wuTaskId = wuRef && wuRef.taskId ? String(wuRef.taskId) : "";
+  const wuAttrs = wuTaskId
+    ? ` data-wu-task="${escapeHtml(wuTaskId)}" data-wu-kind="${escapeHtml(String(wuRef.kind || ""))}"` : "";
+  const wuLive = wuTaskId ? `<div class="ptool-wu-live"></div>` : "";
+  if (wuTaskId && typeof _wuScanSoon === "function") _wuScanSoon();
+  return `<details class="ptool-convmeta-block ptool-motion-block" data-rn="${round.roundNum}"${wuAttrs}>
        <summary class="ptool-line ptool-convmeta-header">
          <span class="ptool-icon">${svg}</span>
          <span class="ptool-text">${escapeHtml(headLabel)}</span>
-         <span class="ptool-convmeta-src">${escapeHtml(_t("motionSrc", "Video"))}</span>
+         <span class="ptool-convmeta-src">${escapeHtml(srcLabel)}</span>
          ${badgeHtml}
        </summary>
        ${bodyHtml}
+       ${wuLive}
      </details>`;
 }

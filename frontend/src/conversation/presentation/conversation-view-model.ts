@@ -155,10 +155,12 @@ export interface InjectionsBlockViewModel extends ConversationBlockBase {
 /* Engine-authored intervention (SEG_SYSTEM_NOTE on the wire): the stall
  * nudge / todo-continuation reminder, carried as a first-class segment so it
  * renders at its true insertion position instead of a recomputed chip anchor.
- * `text` is the verbatim content the model was sent. */
+ * `text` records the action, without claiming model consumption. */
 export interface SystemNoteBlockViewModel extends ConversationBlockBase {
   kind: 'system-note';
-  noteKind: 'intent-stall' | 'todo-continuation';
+  noteKind: 'intent-stall' | 'todo-continuation' | 'system-intervention';
+  action?: 'prompt' | 'stop' | 'tool-policy' | 'continue';
+  reason?: string;
   text: string;
   llmRound: number | null;
 }
@@ -279,6 +281,12 @@ export interface QueueStatusBlockViewModel extends ConversationBlockBase {
     queueId: string;
     position: number;
     text: string;
+    /** True when this queued item began life as a steer ("insert now")
+     * choice but the live steer lane was unavailable, so it degraded to
+     * the durable queue — surfaces must say WHY it waits for the next
+     * turn instead of injecting mid-reply. */
+    steerFallback?: boolean;
+    backgroundCommand?: ConversationQueueItem['backgroundCommand'];
   };
 }
 
@@ -686,6 +694,8 @@ function blockFromSegment(
       identitySource,
       source: segment,
       noteKind: segment.noteKind,
+      action: segment.action ?? 'prompt',
+      reason: segment.reason,
       text: segment.text,
       llmRound: typeof segment.llmRound === 'number' ? segment.llmRound : null,
     };
@@ -1191,6 +1201,20 @@ function legacyGatewayValidationEntries(
   });
 }
 
+function toolRoundHasRejection(round: TurnToolRound): boolean {
+  const record = recordValue(round) ?? {};
+  if (record.rejection || record._rejected) return true;
+  const result = recordValue(record.result);
+  if (result && (result.rejection || result.rejected || result._rejected)) {
+    return true;
+  }
+  const results = Array.isArray(record.results) ? record.results : [];
+  const first = recordValue(results[0]);
+  return Boolean(
+    first && (first.rejection || first.rejected || first._rejected),
+  );
+}
+
 function visibleActivityEntries(
   timeline: TurnActivityTimeline | undefined,
   toolRounds: ReadonlyArray<TurnToolRound>,
@@ -1199,8 +1223,41 @@ function visibleActivityEntries(
    * status. A settled compaction receipt is the deliberate exception: it is a
    * durable context boundary with accounting + archive identity, not another
    * progress beat. Protocol adapters are excluded as a cold-replay defense. */
+  /* A pre-execution block is already owned by its tool row (badge + full
+   * reason inline); the timeline's blocked/unavailable row repeated the same
+   * text right under it. Drop the duplicate only when the matching round
+   * actually carries the rejection — a trimmed/absent round keeps the row as
+   * the last place the block is visible. */
+  const rejectedCallIds = new Set(
+    toolRounds.filter(toolRoundHasRejection)
+      .map((round) => round.toolCallId)
+      .filter((id): id is string => typeof id === 'string' && id !== ''),
+  );
+  /* A failed round likewise owns its terminal error inline (badge + the full
+   * tool content), while the timeline's `failed` row repeats a log-policy-
+   * bounded excerpt beneath it. Drop the duplicate only when the matching
+   * round actually renders the error lane — a trimmed/absent round keeps the
+   * row as the last visible record. execute_tools rows are exempt: they
+   * replay as actionable child-validation rows below. */
+  const errorCallIds = new Set(
+    toolRounds.filter((round) => round && round.status === 'error')
+      .map((round) => round.toolCallId)
+      .filter((id): id is string => typeof id === 'string' && id !== ''),
+  );
   return (timeline?.entries ?? []).flatMap((entry) => {
     if (!activityEntryIsVisible(entry)) return [];
+    if ((entry.summaryKey === 'activity.tool.blocked'
+        || entry.summaryKey === 'activity.tool.unavailable')
+        && typeof entry.toolCallId === 'string'
+        && rejectedCallIds.has(entry.toolCallId)) {
+      return [];
+    }
+    if (entry.summaryKey === 'activity.tool.failed'
+        && entry.toolName !== 'execute_tools'
+        && typeof entry.toolCallId === 'string'
+        && errorCallIds.has(entry.toolCallId)) {
+      return [];
+    }
     if (entry.toolName !== 'execute_tools') return [entry];
     return legacyGatewayValidationEntries(entry, toolRounds);
   });
@@ -1470,6 +1527,7 @@ function actionsFor(
   status: TurnStatus,
   taskId: string | undefined,
   requestInspectorEnabled: boolean,
+  backgroundCommandInjected: boolean,
 ): ConversationTurnActionViewModel[] {
   const disabled = Boolean(commandPending);
   if (laneId !== 'main') {
@@ -1481,10 +1539,15 @@ function actionsFor(
     ...(requestInspectorEnabled && taskId
       ? [{ action: 'inspect' as const, operation: taskId, disabled: false }]
       : []),
-    { action: 'edit', disabled },
+    /* A background-command completion turn is machine-authored evidence:
+     * editing would rewrite the injected payload and regenerating would
+     * re-run a notice, so only copy/inspect/delete stay meaningful. */
+    ...(backgroundCommandInjected ? [] : [{ action: 'edit' as const, disabled }]),
   ];
   if (actor === 'human') {
-    actions.push({ action: 'regenerate', disabled });
+    if (!backgroundCommandInjected) {
+      actions.push({ action: 'regenerate', disabled });
+    }
   } else {
     const resume = finish?.resumeOptions?.[0];
     if (resume?.operation) {
@@ -1571,12 +1634,12 @@ function liveAttemptPresentation(
   const reportedPhase = stringValue('phase');
   const fallbackPhase = durableStatus === 'pending'
     ? (taskBound ? 'executor_queued' : 'executor_preparing')
-    : 'worker_starting';
+    : 'waiting';
   const fallbackDetailKey = durableStatus === 'pending'
     ? (taskBound
       ? 'stream.phase.executorQueued'
       : 'stream.phase.executorPreparing')
-    : 'stream.phase.workerStarting';
+    : 'stream.phase.waitingWorkerStatus';
   return {
     kind: 'attempt',
     phase: reportedPhase || fallbackPhase,
@@ -1614,10 +1677,9 @@ function waitingPlaceholderRedundant(
   blocks: ReadonlyArray<ConversationBlockViewModel>,
 ): boolean {
   const isBareWaiting = liveStatus.phase === 'waiting'
-    && !liveStatus.detailKey;
-  const isWorkerEntryFallback = liveStatus.phase === 'worker_starting'
-    && liveStatus.detailKey === 'stream.phase.workerStarting';
-  if (!isBareWaiting && !isWorkerEntryFallback) return false;
+    && (!liveStatus.detailKey
+      || liveStatus.detailKey === 'stream.phase.waitingWorkerStatus');
+  if (!isBareWaiting) return false;
   if (liveStatus.detail || liveStatus.model
       || liveStatus.toolContext || liveStatus.tools?.length) return false;
   const tail = blocks[blocks.length - 1];
@@ -1824,6 +1886,8 @@ export function selectConversationViewModel(
               queueId: queueItem.queueId,
               position: Number(queueItem.position || 0),
               text: queueItem.text || '',
+              ...(queueItem.steerFallback ? { steerFallback: true } : {}),
+              ...(queueItem.backgroundCommand ? { backgroundCommand: queueItem.backgroundCommand } : {}),
             },
           });
         }
@@ -1910,6 +1974,7 @@ export function selectConversationViewModel(
             turn.actor, turn.laneId || laneId, commandPending, finish,
             metadata.translation, turn.status, taskId,
             Boolean(presentation.requestInspectorEnabled),
+            Boolean(turn.projection.backgroundCommand),
           ),
           blocks,
           branches,

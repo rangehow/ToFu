@@ -117,9 +117,8 @@ def _tool_result_artifact_read(session: Session,
         payload, "limit", default=8192, minimum=1,
         maximum=_TOOL_RESULT_RANGE_MAX_BYTES)
     row = session.fetch_one(
-        "SELECT content, media_type, size_bytes, expires_at_ms "
-        "FROM tool_result_artifacts WHERE user_id = ? AND content_sha256 = ? "
-        "AND expires_at_ms > ?",
+        "SELECT content, size_bytes FROM tool_result_artifacts "
+        "WHERE user_id = ? AND content_sha256 = ? AND expires_at_ms > ?",
         (user_id, digest, now),
     )
     if row is None:
@@ -146,9 +145,6 @@ def _tool_result_artifact_read(session: Session,
         "nextCursor": str(end) if end < len(encoded) else None,
         "truncated": end < len(encoded),
         "sizeBytes": int(row["size_bytes"] or len(encoded)),
-        "visibleBytes": len(visible.encode("utf-8")),
-        "mediaType": str(row["media_type"] or "text/plain"),
-        "expiresAtMs": int(row["expires_at_ms"] or 0),
     }
 
 
@@ -193,7 +189,6 @@ def _tool_result_artifact_search(session: Session,
         "nextCursor": str(position) if has_more else None,
         "truncated": has_more,
         "sizeBytes": int(row["size_bytes"] or 0),
-        "expiresAtMs": int(row["expires_at_ms"] or 0),
     }
 
 

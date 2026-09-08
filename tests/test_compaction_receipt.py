@@ -80,6 +80,10 @@ def test_proactive_head_truncate_archives_before_mutation(monkeypatch):
         return 'fallback-archive'
 
     def truncate(snapshot, _task, **_kwargs):
+        from lib.tasks_pkg.compaction._admission_budget import resolve_admission_budget
+        _, target = resolve_admission_budget(_task, round_num=3)
+        assert 0 < _kwargs['token_target'] <= target
+        assert 'reported_token_count' not in _kwargs
         del snapshot[1:3]
         return 2
 

@@ -153,7 +153,8 @@ def _emit_abnormal_retry_phase(
     )
 
 
-def _append_partial_stream_retry_context(messages, partial_content, model):
+def _append_partial_stream_retry_context(messages, partial_content, model, *,
+                                         task=None, round_num=None):
     """Preserve a cut response in model context for the next retry round.
 
     OpenAI-compatible models receive a trailing assistant prefill. Repeated
@@ -186,14 +187,11 @@ def _append_partial_stream_retry_context(messages, partial_content, model):
         return 'assistant_prefill'
 
     messages.append({'role': 'assistant', 'content': partial_content})
-    messages.append({
-        'role': 'user',
-        'content': _PARTIAL_STREAM_CONTINUATION_NUDGE,
-        # Engine-authored control, not a new human objective. Provider
-        # sanitization keeps the same role/text while turn/query policy treats
-        # the carrier as transparent.
-        '_isMeta': True,
-    })
+    from lib.tasks_pkg.context_composer import append_injection
+    append_injection(
+        messages, 'partial_stream_retry', _PARTIAL_STREAM_CONTINUATION_NUDGE,
+        task=task, round_num=round_num, action='continue',
+        reason='partial_stream_retry')
     return 'continuation_nudge'
 
 
@@ -221,7 +219,16 @@ def _handle_stream_anomaly(
             if '_premature_retry_count_phase' in task:
                 task['_premature_retry_count_phase'] = premature_retry_count
             continuation_mode = _append_partial_stream_retry_context(
-                messages, round_content, model)
+                messages, round_content, model, task=task, round_num=round_num)
+            if continuation_mode == 'assistant_prefill':
+                from lib.tasks_pkg.segments import record_injected_note
+                record_injected_note(
+                    task, llm_round=round_num, kind='system-intervention',
+                    action='continue', reason='partial_stream_retry',
+                    text=('The upstream stream ended before its finish marker. '
+                          'The partial reply is preserved as an assistant prefill '
+                          'for a bounded continuation attempt.'),
+                )
             backoff_seconds = _zero_byte_backoff_seconds(
                 premature_retry_count)
             logger.warning(
@@ -457,7 +464,6 @@ def _handle_empty_abnormal_stream(
     is_anomaly_empty = (
         not round_content.strip()
         and stream_anomaly
-        and (round_num > 0 or is_semantic_timeout)
         and not is_zero_byte
     )
     if not (is_classic_premature or is_anomaly_empty or is_zero_byte):
@@ -500,11 +506,10 @@ def _handle_empty_abnormal_stream(
             no_actionable_streak = retry_budget._record_no_actionable_retry(task)
         if '_premature_retry_count_phase' in task:
             task['_premature_retry_count_phase'] = phase_retry_count
-        backoff_s = (
-            _zero_byte_backoff_seconds(phase_retry_count)
-            if (is_zero_byte or is_classic_premature or is_semantic_timeout)
-            else 0.0
-        )
+        # Heartbeats and short reasoning prefixes are transport activity too.
+        # Their EOF needs the same pacing as a zero-byte/long-reasoning cut;
+        # neither SSE count nor round number proves an immediate retry is safe.
+        backoff_s = _zero_byte_backoff_seconds(phase_retry_count)
 
         # Avoid the just-failed pair once. Dispatch relaxes this hint only when
         # no same-model alternative exists, preserving strict-model authority.
@@ -635,6 +640,56 @@ def _handle_empty_abnormal_stream(
     return result
 
 
+def _handle_commentary_continuation(task, assistant_msg, messages, result, *,
+                                   tid, round_num):
+    """A completed Responses response can still be an intermediate update.
+
+    Two continuations per task bound paid work independently of its wording,
+    checklist, failed-tool history and the ordinary stream-recovery budget.
+    """
+    from lib.llm.responses_outbound._message_phase import is_commentary_only
+    from lib.tasks_pkg.stream_handler._intent_stall import _awaiting_human
+
+    content = assistant_msg.get('content') or ''
+    if (not is_commentary_only(assistant_msg)
+            or _awaiting_human(task, assistant_msg, content)):
+        return None
+    limit = 2
+    count = int(task.get('_commentary_continuation_count') or 0)
+    if count >= limit:
+        result.update(
+            action='break', last_finish_reason='abnormal_stop',
+            loop_exit_reason=f'commentary_continuation_exhausted_round_{round_num}')
+        logger.warning('[%s] Commentary continuation exhausted (%d/%d)',
+                       tid, count, limit)
+        return result
+
+    from lib.tasks_pkg.assistant_messages import append_assistant_prose_message
+    from lib.tasks_pkg.segments import record_continuation_prose
+
+    task['_commentary_continuation_count'] = count + 1
+    append_assistant_prose_message(messages, assistant_msg, task=task)
+    record_continuation_prose(
+        task, llm_round=round_num, content=content,
+        thinking=assistant_msg.get('reasoning_content') or '')
+    text = (
+        '[SYSTEM: INTERMEDIATE RESPONSE]\n'
+        'Your response was marked commentary, an intermediate progress update. '
+        'Continue the current authorized task using the preserved context. '
+        'When finished, provide the final answer. If essential user input or '
+        'authorization is required, state the specific blocker in the final '
+        'answer or use the available human-input tool. Do not repeat this update.'
+    )
+    from lib.tasks_pkg.context_composer import append_injection
+    append_injection(
+        messages, 'intermediate_response', text, task=task, round_num=round_num,
+        action='continue', reason='intermediate_response')
+    emit_phase(task, Phase.INTENT_STALL_NUDGE, attempt=count + 1, max=limit,
+               detail=f'模型仅返回进度说明，继续执行 ({count + 1}/{limit})…')
+    result['action'] = 'continue'
+    return result
+
+
 def analyse_stream_result(
     assistant_msg, last_finish_reason, task, tid, model,
     round_num, _premature_retry_count, messages, usage=None,
@@ -711,18 +766,24 @@ def analyse_stream_result(
             retry_budget._clear_no_actionable_retry_streak(task)
             return program_result
 
-        from lib.tasks_pkg.stream_handler._terminal_recovery import recover_abnormal_terminal
+
+        from lib.tasks_pkg.stream_handler._terminal_recovery import (
+            recover_abnormal_terminal,
+        )
         terminal_result = recover_abnormal_terminal(
-            assistant_msg, last_finish_reason, task, round_num=round_num,
-            model=model, result=result, usage=usage, messages=messages)
+            assistant_msg, last_finish_reason, task,
+            round_num=round_num, model=model, result=result, usage=usage,
+
+            messages=messages,
+        )
         if terminal_result is not None:
             return terminal_result
-
         # ── Detect PREMATURE STREAM CLOSE / ABNORMAL STOP ──
         # Two signatures:
         #   A) Classic premature close: no content, no tool_calls, large thinking (>1000)
-        #   B) Stream anomaly + empty content: gateway/proxy severed connection so
-        #      early that even thinking barely started (the mnbvo192q8u0zo pattern)
+        #   B) Stream anomaly + empty content: upstream closed before useful
+        #      output, including heartbeat-only streams and short reasoning.
+        # Both signatures can occur on the first round and must recover there.
         round_thinking = assistant_msg.get('reasoning_content', '') or ''
         round_content = assistant_msg.get('content', '') or ''
 
@@ -734,8 +795,7 @@ def analyse_stream_result(
 
         # Determine if this round looks like an abnormal termination:
         #   - (A) No content + substantial thinking  (classic premature close)
-        #   - (B) Stream anomaly flag + no content + at least 1 prior round
-        #         (proxy killed connection before model could produce anything)
+        #   - (B) Stream anomaly flag + no content, on any round
         # ── Zero-byte gateway anomaly (computed first, allowed on round 0) ──
         # The gateway opened the SSE connection and closed it before any
         # meaningful token came through.  No work was done, no tokens
@@ -1023,6 +1083,15 @@ def analyse_stream_result(
                 empty_stop=_empty_stop,
             )
 
+        # A transport-level stop ends one response, not necessarily the task.
+        # Explicit provider commentary is stronger evidence than prose shape.
+        # Aborts, errors, truncation and malformed streams retain precedence.
+        if last_finish_reason == 'stop':
+            commentary_result = _handle_commentary_continuation(
+                task, assistant_msg, messages, result, tid=tid, round_num=round_num)
+            if commentary_result is not None:
+                return commentary_result
+
         # ── Todo-continuation enforcer (Rec 2) ──
         # The model is about to end its turn with a genuine final answer. If it
         # declared a structured checklist (task['_todos']) that still has
@@ -1038,8 +1107,11 @@ def analyse_stream_result(
             _incomplete = incomplete_todos(_todos)
             _actionable = [item for item in _incomplete
                            if item.get('status') != 'blocked']
+            from lib.tasks_pkg.stream_handler._intent_stall import _awaiting_human
+            _declared_stop = _awaiting_human(task, assistant_msg, round_content)
             _nudges = int(task.get('_todo_continuation_count') or 0)
-            if _actionable and _todo_max and _nudges < _todo_max:
+            if (_actionable and not _declared_stop
+                    and _todo_max and _nudges < _todo_max):
                 task['_todo_continuation_count'] = _nudges + 1
                 from lib.tasks_pkg.assistant_messages import (
                     append_assistant_prose_message,
@@ -1057,34 +1129,27 @@ def analyse_stream_result(
                     task, llm_round=round_num, content=round_content,
                     thinking=round_thinking)
                 _todo_nudge_text = (
-                    '[SYSTEM: TODO CONTINUATION REQUIRED]\n'
-                    f'You have {len(_incomplete)} incomplete checklist '
-                    f'item(s):\n{render_todo_list(_todos)}\n\n'
-                    'Do NOT end your turn yet. Continue working and complete '
-                    'ALL items, updating the checklist with todo_write as you '
-                    'go. If the scope changed, use todo_write operation='
-                    '"replan" with a reason instead of silently deleting '
-                    'unfinished items. If an item is genuinely impossible, '
-                    'mark it blocked and explain the blocker; blocked work '
-                    'settles explicitly as incomplete, never as success.'
+                    '[SYSTEM: TODO STATUS RECONCILIATION]\n'
+                    f'The checklist still records {len(_incomplete)} unresolved '
+                    f'item(s):\n{render_todo_list(_incomplete)}\n\n'
+                    'Reconcile these statuses with the available evidence and '
+                    'the current user request. If work is already verified, '
+                    'mark it completed with todo_write and cite the evidence; '
+                    'do not repeat completed work. Continue only the remaining '
+                    'actionable work within the authorized scope. If scope '
+                    'changed, use todo_write operation="replan" with a reason '
+                    'instead of silently deleting unfinished items. For blocked '
+                    'work, record the blocker and explain what is needed.\n'
+                    'Do not override new user steering, a human handoff, or an '
+                    'approval requirement. If waiting on the user, end with '
+                    '[END_TURN: awaiting_human]; if blocked, use '
+                    '[END_TURN: blocked]. Unresolved or blocked work remains '
+                    'incomplete, not successful.'
                 )
-                messages.append({
-                    'role': 'user',
-                    # Provider-wire user role, but engine-authored continuation
-                    # control rather than a new human query/objective.
-                    '_isMeta': True,
-                    'content': _todo_nudge_text,
-                })
-                # Timeline visibility: the reminder becomes a system_note
-                # segment at this wire position (assemble_segments), so the
-                # settled turn shows the intervention instead of hiding it.
-                from lib.tasks_pkg.segments import (
-                    NOTE_TODO_CONTINUATION,
-                    record_injected_note,
-                )
-                record_injected_note(
-                    task, llm_round=round_num, kind=NOTE_TODO_CONTINUATION,
-                    text=_todo_nudge_text)
+                from lib.tasks_pkg.context_composer import append_injection
+                append_injection(
+                    messages, 'todo_incomplete', _todo_nudge_text, task=task,
+                    round_num=round_num, action='continue', reason='todo_incomplete')
                 logger.info(
                     '[%s] 📋 Todo-continuation enforcer: %d incomplete item(s) '
                     'at stop — re-driving loop (nudge %d/%d) round=%d',
@@ -1104,7 +1169,8 @@ def analyse_stream_result(
                 # task with declared unfinished work is reported as completed.
                 _only_blocked = not _actionable
                 task['_todo_blocked'] = {
-                    'reason': ('todo_items_blocked' if _only_blocked else
+                    'reason': ('todo_declared_stop' if _declared_stop else
+                               'todo_items_blocked' if _only_blocked else
                                'todo_continuation_budget_exhausted'),
                     'incomplete': len(_incomplete),
                     'continuations': _nudges,
@@ -1119,7 +1185,7 @@ def analyse_stream_result(
                 result['action'] = 'break'
                 result['last_finish_reason'] = 'incomplete'
                 result['loop_exit_reason'] = (
-                    f'todo_incomplete_budget_exhausted_round_{round_num}')
+                    f"{task['_todo_blocked']['reason']}_round_{round_num}")
                 return result
 
         # ── Intent-stall nudge () ──
@@ -1159,23 +1225,10 @@ def analyse_stream_result(
                 record_continuation_prose(
                     task, llm_round=round_num, content=round_content,
                     thinking=round_thinking)
-                messages.append({
-                    'role': 'user',
-                    'content': _stall_text,
-                    # The correction must not replace the task's real user
-                    # intent or split a productive read sequence next round.
-                    '_isMeta': True,
-                })
-                # Same timeline visibility as the todo lane: the nudge lands
-                # as a system_note segment at its wire position; the chip
-                # sidecar below stays the grouped-path/back-compat render.
-                from lib.tasks_pkg.segments import (
-                    NOTE_INTENT_STALL,
-                    record_injected_note,
-                )
-                record_injected_note(
-                    task, llm_round=round_num, kind=NOTE_INTENT_STALL,
-                    text=_stall_text)
+                from lib.tasks_pkg.context_composer import append_injection
+                append_injection(
+                    messages, 'intent_stall', _stall_text, task=task,
+                    round_num=round_num, action='continue', reason='intent_stall')
                 # DISPLAY-ONLY sidecar accumulation — the in-timeline chip.
                 # Unlike the peer / steer lanes this is emitted AT INJECTION
                 # rather than deferred until the next LLM call confirms

@@ -3,6 +3,9 @@
 Segment previews are reconstructible and may be coalesced or evicted under
 pressure.  A finalize/stamp/cancel terminal handoff is never dropped: it
 reserves room by evicting the oldest queued previews.
+Idle timeout and terminal consumption close admission atomically, so a retiring
+consumer cannot accept work it will never process. Rejection lets the caller
+use its existing fallback.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ class IncrementalOperationBuffer:
         self._condition = threading.Condition()
         self._items: deque[Any] = deque()
         self._terminal_queued = False
+        self._closed = False
         self._dropped_segments = 0
         self._peak_depth = 0
 
@@ -31,7 +35,7 @@ class IncrementalOperationBuffer:
         """
         item = ('segment', key, text)
         with self._condition:
-            if self._terminal_queued:
+            if self._closed or self._terminal_queued:
                 return -1
             for index in range(len(self._items) - 1, -1, -1):
                 existing = self._items[index]
@@ -61,7 +65,7 @@ class IncrementalOperationBuffer:
         (currently the final reasoning block) immediately before the handoff.
         """
         with self._condition:
-            if self._terminal_queued and not replace:
+            if self._closed or (self._terminal_queued and not replace):
                 return -1
             dropped = 0
             if replace:
@@ -96,8 +100,15 @@ class IncrementalOperationBuffer:
             ready = self._condition.wait_for(
                 lambda: bool(self._items), timeout=max(0.0, float(timeout)))
             if not ready:
+                # Consumer retirement and producer admission share this lock.
+                # A finalizer retaining the accumulator during registry cleanup
+                # must receive rejection, allowing the whole-turn fallback.
+                self._closed = True
                 raise queue.Empty
-            return self._items.popleft()
+            item = self._items.popleft()
+            if not (isinstance(item, tuple) and item[0] == 'segment'):
+                self._closed = True
+            return item
 
     def snapshot(self) -> dict[str, int | bool]:
         with self._condition:

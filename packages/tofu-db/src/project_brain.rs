@@ -1126,8 +1126,7 @@ fn merge_relinked_projections(
                 continue;
             };
             // Python max returns the first maximal candidate, so ties keep previous.
-            let authoritative = if work_authoritative_key(item) > work_authoritative_key(previous)
-            {
+            let authoritative = if work_authoritative_key(item) > work_authoritative_key(previous) {
                 item
             } else {
                 previous
@@ -1203,9 +1202,9 @@ fn merge_relinked_projections(
         Value::Array(bounded_work_items(&work_values)),
     );
 
-    let mut narrative_order: Vec<(String, String, u64, String, String)> = Vec::new();
-    let mut narratives: HashMap<(String, String, u64, String, String), Map<String, Value>> =
-        HashMap::new();
+    type NarrativeKey = (String, String, u64, String, String);
+    let mut narrative_order: Vec<NarrativeKey> = Vec::new();
+    let mut narratives: HashMap<NarrativeKey, Map<String, Value>> = HashMap::new();
     for projection in [destination, source] {
         let Some(items) = projection.get("narratives").and_then(Value::as_array) else {
             continue;
@@ -1341,7 +1340,10 @@ fn merge_relinked_projections(
                 None => true,
                 Some(current) => {
                     item.get("updatedAt").and_then(Value::as_u64).unwrap_or(0)
-                        >= current.get("updatedAt").and_then(Value::as_u64).unwrap_or(0)
+                        >= current
+                            .get("updatedAt")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0)
                 }
             };
             if replace {
@@ -1466,8 +1468,7 @@ pub(crate) fn relink_scope(
     )?;
 
     if let Some(destination_raw) = destination_raw {
-        let destination =
-            parse_stored_projection(&destination_raw, transaction, new_project_key)?;
+        let destination = parse_stored_projection(&destination_raw, transaction, new_project_key)?;
         let destination_updated = destination
             .get("_updatedAt")
             .and_then(Value::as_u64)
@@ -1484,10 +1485,7 @@ pub(crate) fn relink_scope(
         let checkpoint_sequence = head
             .checked_add(1)
             .ok_or_else(|| invalid_data("Project Brain checkpoint sequence overflow"))?;
-        merged.insert(
-            "headSequence".to_owned(),
-            Value::from(checkpoint_sequence),
-        );
+        merged.insert("headSequence".to_owned(), Value::from(checkpoint_sequence));
         merged.insert(
             "checkpointSequence".to_owned(),
             Value::from(checkpoint_sequence),
@@ -1562,12 +1560,8 @@ pub(crate) fn relink_scope(
         }
         let mut physical_sequence = u64::from_be_bytes(position[..8].try_into().unwrap());
         while physical_sequence < physical_end {
-            let (event, next_physical_sequence) = decode_event_chunks(
-                database,
-                transaction,
-                &old_stream,
-                physical_sequence,
-            )?;
+            let (event, next_physical_sequence) =
+                decode_event_chunks(database, transaction, &old_stream, physical_sequence)?;
             if event.get("ownerUserId").and_then(Value::as_u64) != Some(owner_user_id)
                 || event.get("projectKey").and_then(Value::as_str) != Some(old_project_key)
             {
@@ -1624,7 +1618,13 @@ pub(crate) fn relink_scope(
             return Err(invalid_data("Project Brain checkpoint ownership mismatch"));
         }
         checkpoint.insert("projectKey".to_owned(), Value::from(new_project_key));
-        save_checkpoint(database, transaction, new_project_key, &checkpoint, timestamp)?;
+        save_checkpoint(
+            database,
+            transaction,
+            new_project_key,
+            &checkpoint,
+            timestamp,
+        )?;
     }
     retire_scope_physical_state(database, transaction, old_project_key, old_updated)?;
     let mut document = old_projection;

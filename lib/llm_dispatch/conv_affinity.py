@@ -64,6 +64,7 @@ __all__ = [
     'conv_affinity',
     'get_preferred_key',
     'record_conv_key',
+    'conv_affinity_cleared',
     'record_pick_decision',
     'get_pick_decision',
 ]
@@ -220,6 +221,25 @@ def conv_affinity(conv_id: str | None):
         return
     prev = getattr(_state, 'conv_id', None)
     _state.conv_id = conv_id
+    try:
+        yield
+    finally:
+        _state.conv_id = prev
+
+
+@contextlib.contextmanager
+def conv_affinity_cleared():
+    """Temporarily unbind the current thread from any conversation.
+
+    Stateless auxiliary calls (translation) gain nothing from prompt-cache
+    affinity — every request carries a fresh payload, so there is no warm
+    prefix worth waiting for. Without a binding the picker is purely
+    score-based (a 429 rotates straight to whatever slot is healthy), the
+    warm-key hold never engages, and the call neither waits on nor rebinds
+    the conversation's sticky key. Restores the previous binding on exit.
+    """
+    prev = getattr(_state, 'conv_id', None)
+    _state.conv_id = None
     try:
         yield
     finally:

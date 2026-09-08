@@ -44,7 +44,7 @@ _REGIONAL_PREFIX = re.compile(
 _NAMESPACE_PREFIX = re.compile(
     r'^(?:anthropic|openai|xai|meta|google|deepseek(?:-ai)?|mistral(?:ai)?'
     r'|cohere|ai21|amazon|qwen|minimax(?:ai)?|moonshot(?:ai)?|nvidia'
-    r'|microsoft|bytedance|tencent|zhipu|zai(?:-org)?|alibaba|baai|ibm'
+    r'|microsoft|bytedance|tencent|zhipu|zai(?:-org)?|alibaba|baai|ibm|openbmb'
     r'|snowflake|liquid|upstage|stepfun(?:-ai)?|allenai'
     r'|nous(?:research)?|teknium|stability(?:ai)?)[./]', re.IGNORECASE)
 
@@ -64,6 +64,7 @@ _NAMESPACE_FAMILIES: dict[str, str] = {
     'bytedance': 'bytedance', 'tencent': 'tencent', 'zhipu': 'zhipu',
     'zai': 'zhipu', 'zai-org': 'zhipu', 'alibaba': 'alibaba',
     'upstage': 'upstage', 'stepfun': 'stepfun', 'stepfun-ai': 'stepfun',
+    'openbmb': 'openbmb',
 }
 _NAMESPACE_TOKEN = re.compile(r'^([a-z][a-z0-9-]*)[./]', re.IGNORECASE)
 

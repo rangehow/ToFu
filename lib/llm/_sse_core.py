@@ -66,6 +66,7 @@ from lib.context_telemetry import (
 from lib.llm_errors import (
     ModelLimitError,
     PromptTooLongError,
+    ProviderStreamError,
     RateLimitError,
     RetryableAPIError,
     _ERR_BODY_LIMIT,
@@ -73,6 +74,7 @@ from lib.llm_errors import (
     _classify_http_error,
     _has_outbound_credential,
     _is_prompt_too_long,
+    provider_error_http_status,
     repair_mojibake,
 )
 from lib.log import get_logger
@@ -225,7 +227,7 @@ class RequestPlan:
     """Everything a transport shell needs to open the stream."""
     url: str
     hdrs: dict
-    body: dict
+    body: Any  # AdmittedRequest in production; dict-compatible test plans.
     trace_id: str
     raw_dumper: RawSSEDumper
     wire_translator: Any
@@ -759,6 +761,13 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
     # a stateful translator rides the plan to convert the SSE stream back.
     wire_translator = None
     _responses_profile = ''
+    from lib.llm.body._admission import enforce_body_input_limit
+    from lib.llm.request import detach_input, semantic_request_id, seal_request
+    detach_input(body)
+    _admission_provider = str(body.get('_admission_provider_id') or '')
+    _input_tokens = enforce_body_input_limit(
+        body, model=body.get('model') or '', provider_id=_admission_provider)
+    _semantic_id = semantic_request_id(body)
     _responses_transport = 'sse'
     if api_protocol == 'responses':
         from lib.llm.responses_outbound import (
@@ -873,15 +882,21 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         # Strict OpenAI-compatible gateways (sankuai AIGC validation stage,
         # probed 2026-08-31 with MiniMax-M2) hard-reject list-form message
         # content with HTTP 400 even for a single text part — only bare
-        # strings pass. Collapse text-only part lists (no cache_control or
+        # strings pass. For those gateways collapse text-only part lists (no cache_control or
         # non-text keys) into one joined string; parts carrying markers or
         # multimodal blocks keep the list form. Build copies so the caller's
-        # canonical dict (reused on transport retries) stays untouched.
+        # canonical dict (reused on transport retries) stays untouched. Gateways
+        # honoring markers keep text lists even after their tail marker moves;
+        # otherwise the previous tail changes representation on the next call.
         _collapsed = False
         _new_messages = []
+        from lib.llm.cache import _gateway_honors_cache_markers
+        _preserve_text_parts = _gateway_honors_cache_markers(
+            body.get('model') or '')
         for _msg in body.get('messages') or ():
             _content = _msg.get('content') if isinstance(_msg, dict) else None
-            if (isinstance(_content, list) and _content and all(
+            if (not _preserve_text_parts
+                    and isinstance(_content, list) and _content and all(
                     isinstance(part, dict)
                     and part.get('type') == 'text'
                     and set(part) <= {'type', 'text'}
@@ -896,6 +911,22 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         if _collapsed:
             body['messages'] = _new_messages
         url = f'{base_url.rstrip("/")}/chat/completions' if base_url else chat_url()
+
+    if api_protocol == 'anthropic':
+        from lib.llm.request import recount_anthropic_input
+        _input_tokens = recount_anthropic_input(
+            body, model=body.get('model') or '', provider_id=_admission_provider)
+    if api_protocol == 'responses' and _responses_transport == 'websocket':
+        # WS streaming is inherent; seal the full effective response.create body.
+        body.pop('stream', None)
+        body['previous_response_id'] = None
+
+    _admitted_request = seal_request(
+        body, model=body.get('model') or '', provider_id=_admission_provider,
+        protocol=api_protocol, endpoint=url, input_tokens=_input_tokens,
+        semantic_id=_semantic_id)
+    # Diagnostics see the same detached projection the transport will send.
+    body = _admitted_request.wire_body()
 
     attempt_tag = f' (attempt {attempt+1})' if attempt > 0 else ''
     if log_prefix:
@@ -1125,7 +1156,8 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
         logger.debug('%s raw archive initialization failed: %s',
                      log_prefix, exc)
 
-    return RequestPlan(url=url, hdrs=hdrs, body=body, trace_id=trace_id,
+    raw_dumper.request_identity = _admitted_request.diagnostics()
+    return RequestPlan(url=url, hdrs=hdrs, body=_admitted_request, trace_id=trace_id,
                        raw_dumper=raw_dumper, wire_translator=wire_translator,
                        t0=t0, responses_transport=_responses_transport,
                        responses_state_key=_responses_state_key,
@@ -1210,7 +1242,7 @@ class SSEAccumulator:
                  url='', log_prefix='', on_thinking=None, on_content=None,
                  on_tool_call_ready=None, on_reasoning_progress=None,
                  on_actionable_output=None, progress=None,
-                 route_output_limit_key=''):
+                 route_output_limit_key='', credential_present=False):
         self.body = body
         self.trace_id = trace_id
         self.raw_dumper = raw_dumper
@@ -1219,6 +1251,7 @@ class SSEAccumulator:
         self.url = url
         self.log_prefix = log_prefix
         self.route_output_limit_key = str(route_output_limit_key or '')
+        self.credential_present = bool(credential_present)
         self.on_thinking = on_thinking
         self.on_content = on_content
         self.on_tool_call_ready = on_tool_call_ready
@@ -1385,8 +1418,15 @@ class SSEAccumulator:
                 1, ('invalid_payload: provider payload was not text',))
             return False
         if dump_raw:
-            self.raw_dumper.line(
-                f'data: <decoded payload chars={len(data_str)}>')
+            # Opt-in evidence preserves redacted payload structure. The
+            # bounded dumper omits unsafe/tool-input fragments even in debug;
+            # this is not a byte-exact replay of the provider stream.
+            if self.raw_dumper.enabled:
+                self.raw_dumper.line(f'data: {data_str}')
+            else:
+                self.raw_dumper.line(
+                    'data: [DONE]' if data_str == '[DONE]' else
+                    f'data: <decoded payload chars={len(data_str)}>')
         if count_event:
             self.progress.mark_sse_event()
         if data_str == '[DONE]':
@@ -1439,7 +1479,7 @@ class SSEAccumulator:
             self.record_malformed_frames(
                 1, ('invalid_json_shape: provider event was not an object',))
             return
-        if 'error' in chunk:
+        if chunk.get('error') is not None:
             self._handle_sse_error(chunk['error'])
 
         if chunk.get('usage'):
@@ -1462,6 +1502,11 @@ class SSEAccumulator:
                 1, ('invalid_choice: expected an object',))
             return
 
+        if 'message' in choice and 'delta' not in choice:
+            # An SSE snapshot is not an empty delta. Do not silently discard
+            # possible text/tools or invent snapshot accumulation semantics.
+            self.record_malformed_frames(
+                1, ('unexpected_message_snapshot: SSE choice lacks delta',))
         delta = choice.get('delta', {})
         if delta is None:
             delta = {}
@@ -1544,6 +1589,8 @@ class SSEAccumulator:
     def _handle_sse_error(self, eo):
         """Classify an SSE-embedded error object; always raises."""
         err_text = eo.get('message', '') if isinstance(eo, dict) else str(eo)
+        if not isinstance(err_text, str):
+            err_text = ''
         # This text is parsed straight from the SSE error JSON — unlike the
         # non-200 path it never passes through decode_error_body, so the
         # UPSTREAM_VENDOR double-encoding (2026-07-26) would sail through into
@@ -1554,6 +1601,19 @@ class SSEAccumulator:
         err_text = repair_mojibake(err_text)
         _err_lower = err_text.lower()
         _model_id = self.body.get('model', '')
+        structured_status = provider_error_http_status(eo)
+        if structured_status is not None:
+            # Preserve codes, billing/reset details and explicit gateway
+            # status. Message-only classification loses quota vs throttling
+            # and turns deterministic request/auth errors into network faults.
+            _classify_http_error(
+                structured_status,
+                repair_mojibake(json.dumps({'error': eo}, ensure_ascii=False)),
+                _model_id, self.log_prefix,
+                max_tokens=self.body.get('max_tokens', 0),
+                route_limit_key=self.route_output_limit_key,
+                credential_present=self.credential_present,
+            )
         _detected_limit = _parse_token_limit_from_error(err_text, _model_id)
         if _detected_limit:
             _learn_model_limit(
@@ -1635,13 +1695,13 @@ class SSEAccumulator:
                         f'http_code={_sse_http_code or "?"} '
                         f'model={self.body.get("model", "?")} '
                         f'trace={self.trace_id}')
-        raise Exception(f'SSE error: {err_text}')
+        raise ProviderStreamError(f'SSE error: {err_text}')
 
     def _handle_delta(self, delta):
         """Accumulate thinking / content / tool-call deltas from one chunk."""
         # Thinking / reasoning delta
         td = ''
-        for reasoning_key in ('thinking', 'reasoning_content'):
+        for reasoning_key in ('thinking', 'reasoning_content', 'reasoning'):
             reasoning_value = delta.get(reasoning_key)
             if reasoning_value is None:
                 continue
@@ -2361,7 +2421,7 @@ class SSEAccumulator:
         chunk_count = self.chunk_count
 
         # Diagnostics: detect premature stream close
-        if not aborted and not self.saw_done:
+        if not aborted and not self.saw_done and not self.saw_finish_reason:
             logger.warning(
                 '%s ⚠ PREMATURE STREAM CLOSE: Server never sent [DONE] marker. '
                 'M-TraceId=%s resp_trace=%s elapsed=%.1fs chunks_received=%d '
@@ -2441,7 +2501,7 @@ class SSEAccumulator:
             not aborted
             and self.saw_finish_reason
             and provider_finish_reason == 'stop'
-            and not content
+            and not content.strip()
             and not tool_calls_acc
         )
         if _empty_response:
@@ -2544,6 +2604,9 @@ class SSEAccumulator:
         # bytes) and carried on the RawSSEDumper. detect_cache_break reads these
         # to distinguish a PROVEN server-side miss (fingerprint identical to
         # last round) from a client-caused one (names the changed msg.field).
+        _request_identity = getattr(self.raw_dumper, 'request_identity', None)
+        if _request_identity:
+            usage['_request_identity'] = dict(_request_identity)
         _wfp = getattr(self.raw_dumper, 'wire_fp', None)
         if _wfp is not None:
             usage['_wire_fp'] = _wfp
@@ -2574,6 +2637,17 @@ class SSEAccumulator:
         if _wrouting is not None:
             usage['_wire_routing'] = _wrouting
 
+        self.raw_dumper.line(
+            'terminal: ' + json.dumps({
+                'state': stream_state.value,
+                'finish_reason': provider_finish_reason,
+                'saw_finish_reason': self.saw_finish_reason,
+                'saw_done': self.saw_done,
+                'malformed_frames': self._malformed_frame_count,
+                'content_chars': len(content),
+                'reasoning_chars': len(thinking_text),
+                'tool_calls': len(tool_calls_acc),
+            }))
         self.raw_dumper.finish(
             finish_reason=finish_reason,
             content_len=len(content),

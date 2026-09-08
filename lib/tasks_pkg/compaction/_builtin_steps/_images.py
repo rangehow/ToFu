@@ -12,15 +12,16 @@ from lib.log import get_logger
 from lib.tasks_pkg.compaction._steps import CompactionContext, register_step
 from lib.tasks_pkg.compaction._tokens import _human_size
 from lib.tasks_pkg.compaction._builtin_steps._shared import _log_id
+from lib.tasks_pkg.compaction._builtin_steps._toolresults import (
+    _newest_tool_batch_indices,
+)
 
 logger = get_logger(__name__)
 
 
 @register_step('strip_cold_images')
 def strip_cold_images(ctx: CompactionContext) -> int:
-    """Strip cold image tool results, keeping only the 2 most recent.
-    Images cost massive context (base64 data URLs) and can't be
-    re-searched, so a tight hot tail is safe."""
+    """Keep the two most recent images and all results not yet consumed."""
     _c = ctx.constants
     messages = ctx.messages
 
@@ -37,11 +38,12 @@ def strip_cold_images(ctx: CompactionContext) -> int:
     images_stripped = 0
     image_tokens_saved = 0
     total_image_chars = 0
+    unseen = _newest_tool_batch_indices(messages, image_tool_indices)
 
     if len(image_tool_indices) > _IMAGE_HOT_TAIL:
         cold_image_indices = image_tool_indices[:-_IMAGE_HOT_TAIL]
         for idx in cold_image_indices:
-            if ctx.is_in_cache_prefix(idx):
+            if idx in unseen or ctx.is_in_cache_prefix(idx):
                 continue
             msg = messages[idx]
             content = msg['content']

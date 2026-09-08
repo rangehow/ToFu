@@ -1,16 +1,6 @@
-"""tests/test_token_budget_reminder.py — Token-budget reminder unit tests.
+"""Budget diagnostics never enter model context; legacy meta carriers stay transparent.
 
-Covers the Codex-inspired additions (borrow list batch 1):
-
-  1. ``_maybe_inject_token_budget_reminder`` fires exactly once per context
-     window at the configured threshold, appends at the END of the message
-     list (cached-prefix safe), and marks the reminder ``_isMeta``.
-  2. ``_find_turn_boundary`` treats ``_isMeta`` user messages as transparent:
-     a trailing meta reminder must NOT become a turn boundary, or the real
-     current turn would lose its "always preserved whole" invariant.
-
-The token-estimate seam is monkeypatched on the ``_pipeline`` module
-namespace so the tests are deterministic and DB-free.
+The token-estimate seam is pinned for deterministic, DB-free tests.
 """
 
 from __future__ import annotations
@@ -30,7 +20,7 @@ _spec.loader.exec_module(_mod)
 del _spec, _mod, _importlib_util
 
 import lib.tasks_pkg.compaction._pipeline as _pipeline
-from lib.tasks_pkg.compaction._constants import _TOKEN_BUDGET_REMINDER_RATIO
+from lib.tasks_pkg.compaction._constants import _CONTEXT_BUDGET_DIAGNOSTIC_RATIO
 from lib.tasks_pkg.compaction._layer2._anchor import _find_turn_boundary
 
 _USABLE = 1000
@@ -61,59 +51,81 @@ class _EstimateSandbox(unittest.TestCase):
         return [{'role': 'user', 'content': 'do the thing'}]
 
 
-class TestTokenBudgetReminder(_EstimateSandbox):
+class TestContextBudgetDiagnostics(_EstimateSandbox):
 
-    def test_below_threshold_no_injection(self):
-        self._used = int(_USABLE * _TOKEN_BUDGET_REMINDER_RATIO) - 1
-        task = _task()
-        msgs = self._msgs()
-        _pipeline._maybe_inject_token_budget_reminder(msgs, task)
-        self.assertEqual(len(msgs), 1)
-        self.assertNotIn('_tokenBudgetReminderFired', task)
+    def setUp(self):
+        super().setUp()
+        from unittest.mock import patch
+        self.audit = patch.object(_pipeline, 'audit_log').start()
+        self.addCleanup(patch.stopall)
 
-    def test_fires_once_at_threshold(self):
-        self._used = int(_USABLE * _TOKEN_BUDGET_REMINDER_RATIO)
-        task = _task()
-        msgs = self._msgs()
-        _pipeline._maybe_inject_token_budget_reminder(msgs, task)
-        self.assertEqual(len(msgs), 2)
-        reminder = msgs[-1]
-        self.assertEqual(reminder['role'], 'user')
-        self.assertTrue(reminder.get('_isMeta'),
-                        'reminder must be marked _isMeta so compaction '
-                        'treats it as a context carrier, not a human turn')
-        self.assertIn('<token_budget>', reminder['content'])
-        self.assertTrue(task['_tokenBudgetReminderFired'])
-        # Second call: claim blocks a duplicate.
-        _pipeline._maybe_inject_token_budget_reminder(msgs, task)
-        self.assertEqual(len(msgs), 2)
+    def test_below_threshold_no_diagnostic(self):
+        self._used = int(_USABLE * _CONTEXT_BUDGET_DIAGNOSTIC_RATIO) - 1
+        task, msgs = _task(), self._msgs()
+        _pipeline._maybe_record_context_budget(msgs, task)
+        self.audit.assert_not_called()
+        self.assertNotIn('_contextBudgetDiagnosticRecorded', task)
+        self.assertEqual(msgs, self._msgs())
 
-    def test_reset_allows_one_fresh_reminder_per_window(self):
+    def test_threshold_is_content_free_and_bounded(self):
+        self._used = int(_USABLE * _CONTEXT_BUDGET_DIAGNOSTIC_RATIO)
+        task, msgs = _task(), self._msgs()
+        for current_round in range(4, 1004):
+            _pipeline._maybe_record_context_budget(
+                msgs, task, current_round=current_round)
+        self.audit.assert_called_once_with(
+            'context_budget', round=4, context_limit_tokens=1000,
+            usable_tokens=1000, used_tokens=700, remaining_tokens=300,
+            over_budget_tokens=0, remaining_usable_pct=30,
+            diagnostic_ratio=0.70, token_count_kind='estimated',
+            measurement_scope='working_messages',
+            capacity_owner='automatic_compaction')
+        self.assertEqual(msgs, self._msgs())
+        self.assertNotIn('_injected_notes', task)
+        self.assertEqual(set(task) - set(_task()),
+                         {'_contextBudgetDiagnosticRecorded', '_contextManifest'})
+        row = task['_contextManifest'][0]
+        self.assertEqual(row['registryId'], 'context_budget')
+        self.assertFalse(row['injected'])
+        self.assertEqual(row['tokens'], 0)
+        self.assertEqual(row['metrics']['usableTokens'], 1000)
+
+    def test_reset_allows_one_fresh_diagnostic_per_window(self):
         self._used = _USABLE - 50
-        task = _task()
-        msgs = self._msgs()
-        _pipeline._maybe_inject_token_budget_reminder(msgs, task)
-        self.assertEqual(len(msgs), 2)
-        # The pipeline resets the claim after a successful compaction.
-        task['_tokenBudgetReminderFired'] = False
-        _pipeline._maybe_inject_token_budget_reminder(msgs, task)
-        self.assertEqual(len(msgs), 3)
+        task, msgs = _task(), self._msgs()
+        _pipeline._maybe_record_context_budget(msgs, task)
+        task['_contextBudgetDiagnosticRecorded'] = False
+        _pipeline._maybe_record_context_budget(msgs, task)
+        self.assertEqual(self.audit.call_count, 2)
+        self.assertEqual(msgs, self._msgs())
 
     def test_no_task_is_noop(self):
-        self._used = _USABLE
         msgs = self._msgs()
-        _pipeline._maybe_inject_token_budget_reminder(msgs, None)
-        self.assertEqual(len(msgs), 1)
+        _pipeline._maybe_record_context_budget(msgs, None)
+        self.audit.assert_not_called()
+        self.assertEqual(msgs, self._msgs())
 
-    def test_over_limit_no_injection(self):
-        # remaining <= 0 → the L2 force path owns this situation, not the
-        # advisory reminder.
+    def test_over_limit_is_diagnostic_not_instruction(self):
         self._used = _USABLE + 10
-        task = _task()
-        msgs = self._msgs()
-        _pipeline._maybe_inject_token_budget_reminder(msgs, task)
-        self.assertEqual(len(msgs), 1)
-        self.assertNotIn('_tokenBudgetReminderFired', task)
+        task, msgs = _task(), self._msgs()
+        _pipeline._maybe_record_context_budget(msgs, task)
+        self.assertEqual(self.audit.call_args.kwargs['remaining_tokens'], 0)
+        self.assertEqual(self.audit.call_args.kwargs['over_budget_tokens'], 10)
+        self.assertEqual(msgs, self._msgs())
+
+    def test_telemetry_failure_does_not_affect_request_or_retry_unboundedly(self):
+        self._used = 900
+        self.audit.side_effect = RuntimeError('offline')
+        task, msgs = _task(), self._msgs()
+        _pipeline._maybe_record_context_budget(msgs, task)
+        _pipeline._maybe_record_context_budget(msgs, task)
+        self.audit.assert_called_once()
+        self.assertEqual(msgs, self._msgs())
+
+    def test_precomputed_measurement_is_reused(self):
+        task, msgs = _task(), self._msgs()
+        _pipeline._maybe_record_context_budget(msgs, task, used_tokens=800)
+        self.assertEqual(self.audit.call_args.kwargs['used_tokens'], 800)
 
 
 class TestMetaTurnBoundaryTransparency(unittest.TestCase):
@@ -144,7 +156,7 @@ class TestMetaTurnBoundaryTransparency(unittest.TestCase):
         self.assertEqual(boundary, 1)
 
 
-def test_pipeline_reuses_l2_measurement_for_noop_reminder(monkeypatch):
+def test_pipeline_reuses_l2_measurement_for_noop_diagnostic(monkeypatch):
     """The common no-compaction round performs no second transcript scan."""
     messages = [{'role': 'user', 'content': 'continue'}]
     task = {'id': 'tb-reuse', 'convId': 'cb-reuse',

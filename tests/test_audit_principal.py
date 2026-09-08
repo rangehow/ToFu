@@ -1,6 +1,6 @@
 """tests/test_audit_principal.py — audit_log auto-attaches the bound principal.
 
-docs/ENTERPRISE_READINESS_AUDIT.md (R11): principal identity rides the same
+docs/ENTERPRISE_EVOLUTION.md (Identity and authorization): principal identity rides the same
 ContextVar pattern as request_id, so every audit entry carries
 key_id/user_id without each event caller remembering to pass them.
 Explicit caller-supplied details always win over the bound principal.

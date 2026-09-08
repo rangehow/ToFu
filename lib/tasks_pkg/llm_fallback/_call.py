@@ -343,12 +343,23 @@ def _prepare_reactive_retry_body(task, body, model, messages, tool_list,
         reactive_compact(
             messages, task=task, error_text=str(cause),
             byte_target=byte_target)
+        from lib.tasks_pkg.context_composer.checklist import restore_checklist_context
+        # Reactive recovery bypasses ordinary round preparation and can drop
+        # the checklist even during LLM-free, byte-targeted head truncation.
+        # Restore before body accounting and selected-route token/memory
+        # admission; never re-enter paid compaction under memory pressure.
+        restore_checklist_context(messages, task=task, model=model)
         retry_body = build_body(
             model, messages,
             max_tokens=task.get('config', {}).get('maxTokens', 128000),
             temperature=body.get('temperature', 1.0),
             thinking_enabled=thinking_enabled,
             preset=preset,
+            # Recovery rebuilds the same request, not a new effort choice.
+            # Claude's canonical effort is already resolved; other families
+            # retain the raw user depth rather than re-mapping a wire rung.
+            thinking_depth=(body.get('effort')
+                            or (task.get('config') or {}).get('thinkingDepth')),
             tools=tool_list,
             response_format=body.get('response_format'),
             stream=True,

@@ -434,6 +434,10 @@ function _renderOAuthResetOffer(provider, offer, authenticated) {
     '<div class="oauth-reset-offer-copy">' + escapeHtml(detail) + '</div>' +
     (meta.length ? '<div class="oauth-reset-offer-meta">' +
       escapeHtml(meta.join(' · ')) + '</div>' : '') +
+    (offer.stale ? '' : '<div class="oauth-reset-offer-actions">' +
+      '<button type="button" class="btn-small btn-primary" ' +
+      'data-tofu-action="_oauthConsumeReset()">' +
+      escapeHtml(t('settings.oauthResetRedeemButton')) + '</button></div>') +
     '<div class="oauth-reset-offer-hint">' +
       escapeHtml(t('settings.oauthResetRedeemHint')) + '</div>';
   el.style.display = '';
@@ -991,6 +995,49 @@ async function _oauthLogout(provider) {
     });
 }
 
+var _oauthResetConsumeInFlight = false;
+function _oauthConsumeReset() {
+  if (_oauthResetConsumeInFlight) return;
+  var confirmed = typeof showConfirm === 'function'
+    ? showConfirm(t('settings.oauthResetRedeemConfirm'), {
+        okText: t('settings.oauthResetRedeemButton'),
+      })
+    : Promise.resolve(true);
+  confirmed.then(function(ok) {
+    if (!ok) return;
+    _oauthResetConsumeInFlight = true;
+    return Api.oauth.resetOfferConsume()
+      .then(function(resp) {
+        if (resp && typeof resp.json === 'function') {
+          return resp.json().catch(function() { return null; });
+        }
+        return resp;
+      })
+      .then(function(body) {
+        if (body && body.ok) {
+          showAlert(t('settings.oauthResetRedeemSuccess'));
+          return;
+        }
+        var code = body && body.error ? String(body.error) : '';
+        var key = 'settings.oauthResetRedeemFailed';
+        if (code === 'none_available' || code === 'nothing_to_reset' ||
+            code === 'already_redeemed') {
+          key = 'settings.oauthResetRedeemGone';
+        } else if (code === 'unresolved') {
+          key = 'settings.oauthResetRedeemUnresolved';
+        }
+        showAlert(t(key));
+      })
+      .catch(function(e) {
+        console.warn('[OAuth] reset consume failed:', e);
+        showAlert(t('settings.oauthResetRedeemFailed'));
+      })
+      .then(function() {
+        _oauthResetConsumeInFlight = false;
+        _loadOAuthStatus();
+      });
+  });
+}
 function _oauthCopyAuthLink(button, provider) {
   const capProvider = provider === 'codex' ? 'Codex' : 'Claude';
   const input = document.getElementById('oauth' + capProvider + 'AuthUrl');

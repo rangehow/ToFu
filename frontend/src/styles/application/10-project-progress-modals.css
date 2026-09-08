@@ -895,11 +895,11 @@
 .theme-option-label svg{flex-shrink:0}
 /* ── Theme picker: tofu overrides inside settings panel ── */
 .settings-panel .theme-picker{gap:8px}
-.settings-panel .theme-option{border:2px solid #1a1814;border-radius:0;background:#faf7f2;box-shadow:2px 2px 0 #1a1814;transition:transform .1s,box-shadow .1s,background .1s}
-.settings-panel .theme-option:hover{border-color:#1a1814;background:#f0ead6;transform:translate(-1px,-1px);box-shadow:3px 3px 0 #1a1814}
-.settings-panel .theme-option:active{transform:translate(2px,2px);box-shadow:0 0 0 #1a1814}
-.settings-panel .theme-option.active{border-color:#1a1814;background:#d4a850;box-shadow:2px 2px 0 #1a1814;transform:translate(1px,1px)}
-.settings-panel .theme-preview{border-radius:0;border:1.5px solid #1a1814}
+.settings-panel .theme-option{border:1px solid var(--s-line);border-radius:10px;background:var(--s-white);box-shadow:var(--s-shadow-xs);transition:transform .12s,box-shadow .12s,border-color .12s,background .12s}
+.settings-panel .theme-option:hover{border-color:var(--s-line-strong);background:var(--s-cream);transform:translateY(-1px);box-shadow:var(--s-shadow-sm)}
+.settings-panel .theme-option:active{transform:translateY(1px);box-shadow:none}
+.settings-panel .theme-option.active{border-color:rgba(201,153,63,.5);background:rgba(201,153,63,.14);box-shadow:0 0 0 1px rgba(201,153,63,.25);transform:none}
+.settings-panel .theme-preview{border-radius:6px;border:1px solid rgba(26,24,20,.14)}
 .settings-panel .theme-option span{color:#3a342a;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
 .settings-panel .theme-option.active span{color:#1a1814;font-weight:900}
 
@@ -912,10 +912,10 @@
 .lang-label{font-size:12px;font-weight:600;color:var(--text-secondary)}
 .lang-option.active .lang-label{color:var(--accent)}
 /* ── Language picker: tofu overrides ── */
-.settings-panel .lang-option{border:2px solid #1a1814;border-radius:0;background:#faf7f2;box-shadow:2px 2px 0 #1a1814;transition:transform .1s,box-shadow .1s,background .1s}
-.settings-panel .lang-option:hover{border-color:#1a1814;background:#f0ead6;transform:translate(-1px,-1px);box-shadow:3px 3px 0 #1a1814}
-.settings-panel .lang-option:active{transform:translate(2px,2px);box-shadow:0 0 0 #1a1814}
-.settings-panel .lang-option.active{border-color:#1a1814;background:#d4a850;box-shadow:2px 2px 0 #1a1814;transform:translate(1px,1px)}
+.settings-panel .lang-option{border:1px solid var(--s-line);border-radius:10px;background:var(--s-white);box-shadow:var(--s-shadow-xs);transition:transform .12s,box-shadow .12s,border-color .12s,background .12s}
+.settings-panel .lang-option:hover{border-color:var(--s-line-strong);background:var(--s-cream);transform:translateY(-1px);box-shadow:var(--s-shadow-sm)}
+.settings-panel .lang-option:active{transform:translateY(1px);box-shadow:none}
+.settings-panel .lang-option.active{border-color:rgba(201,153,63,.5);background:rgba(201,153,63,.14);box-shadow:0 0 0 1px rgba(201,153,63,.25);transform:none}
 .settings-panel .lang-label{color:#3a342a;font-weight:700}
 .settings-panel .lang-option.active .lang-label{color:#1a1814;font-weight:900}
 

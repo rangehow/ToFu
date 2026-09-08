@@ -61,6 +61,8 @@ export const CREATOR_TO_BRAND: Readonly<Record<string, string>> = Object.freeze(
   ai21: 'ai21',
   upstage: 'upstage',
   thinkingmachines: 'thinkingmachines',
+  openbmb: 'openbmb',
+  minicpm: 'openbmb',
 });
 
 /** Resolve an explicit Creator id to its brand glyph key, '' when unmapped. */
@@ -99,6 +101,7 @@ const MODEL_BRAND_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   [/phi[-.]|wizardlm|orca/i, 'microsoft'],
   [/stepfun|step[-.]/i, 'stepfun'],
   [/sonar([-./]|$)|perplexity/i, 'perplexity'],
+  [/minicpm|openbmb|面壁/i, 'openbmb'],
   // Creator families iconed 2026-08-31. Amazon/nova stay claimed by the
   // bedrock relay rule above (relay-first policy), so no amazon row here.
   [/bailing|^ring[-.]|^ling[-.]|antgroup|ant group|inclusionai|蚂蚁/i, 'antgroup'],

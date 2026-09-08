@@ -23,6 +23,7 @@ from lib.agent_core.run_contract import (
 )
 from lib.identity import PERSONAL_USER_ID, PrincipalContext
 from lib.log import get_logger
+from lib.turn_verdict import terminal_finish_reason
 from tofu_agent.models import (
     AgentClosedError,
     AgentConfigurationError,
@@ -230,8 +231,7 @@ class AgentExecution:
                     yield project_agent_event_evidence({
                         'type': self.status,
                         'taskId': self.task_id,
-                        'finishReason': (
-                            self._task.get('finishReason') or 'stop'),
+                        'finishReason': terminal_finish_reason(self._task),
                         'usage': self._task.get('usage') or {},
                         'error': self._task.get('error'),
                     })

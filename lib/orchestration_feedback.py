@@ -56,7 +56,8 @@ class OrchestrationFeedbackState:
             self._vu_progress = []
             self._verifier_tool_rounds = 0
 
-    def compose_shared_context(self, node_id: str, upstream: str) -> str:
+    def compose_shared_context(self, node_id: str, upstream: str, *,
+                               include_history: bool = True) -> str:
         """Compose bounded memory and pending control feedback for a producer."""
         with self._lock:
             prior = self._node_memory.get(node_id, '')
@@ -64,11 +65,11 @@ class OrchestrationFeedbackState:
             directive = self._pending_directive
 
         parts = [upstream] if upstream else []
-        if prior:
+        if prior and include_history:
             parts.append(
                 '## Your previous attempt\n' + prior[-self._attempt_chars:]
             )
-        if feedback:
+        if feedback and include_history:
             parts.append(
                 '## Reviewer feedback to address\n'
                 + feedback[-self._feedback_chars:]

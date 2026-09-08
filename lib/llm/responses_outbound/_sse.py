@@ -14,7 +14,7 @@ Extracted from ``lib/oauth/codex.py:CodexSSETranslator`` (2026-07-31, epic
      ``function_call_arguments.delta`` events; each delta is routed by its
      ``item_id`` to the slot allocated at ``output_item.added`` (the old
      "current index" routing concatenated parallel calls into one).
-  3. **terminal failures are errors, not silence** — ``response.failed`` /
+  3. **terminal failures are errors, not silence** — ``error`` / ``response.failed`` /
      ``response.error`` / ``response.incomplete``(non-token reasons) emit
      an OpenAI-shaped ``{'error': …}`` chunk so the accumulator's shared
      ``_handle_sse_error`` classifier (429 → RateLimitError, 5xx →
@@ -33,9 +33,11 @@ the finish chunk + the ``'[DONE]'`` sentinel — a Responses stream has no
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import time
 
+from lib.llm.responses_outbound._message_phase import capture_phase_messages
 from lib.log import get_logger
 from lib.llm.responses_outbound._to_responses import (
     _REPLAY_RESPONSE_ITEM_TYPES,
@@ -44,15 +46,6 @@ from lib.llm.responses_outbound._to_responses import (
 logger = get_logger(__name__)
 
 __all__ = ['ResponsesSSETranslator']
-
-#: Responses error ``code`` → the HTTP status the shared SSE classifier
-#: understands (``_handle_sse_error`` reads ``http_code`` first).
-_ERROR_HTTP = {
-    'rate_limit_exceeded': '429',
-    'insufficient_quota': '429',
-    'server_error': '500',
-    'overloaded': '529',
-}
 
 _CAPTURE_ITEM_TYPES = _REPLAY_RESPONSE_ITEM_TYPES | frozenset({'compaction'})
 _KNOWN_IGNORED_EVENTS = frozenset({
@@ -172,6 +165,11 @@ class ResponsesSSETranslator:
         # output_index is the stable routing key for deciding which deltas
         # belong on the user-visible assistant surface.
         self._hidden_text_output_indices: set[int] = set()
+        # Constant-size proof of already emitted visible text. Terminal
+        # snapshots may supply omitted deltas without retaining a second
+        # growing copy of the response or repeating an emitted prefix.
+        self._emitted_text_chars = 0
+        self._emitted_text_digest = hashlib.sha256()
         # Per-request {truncated: original} tool-name map, stamped by the
         # caller from the request converter's second return value — the
         # model echoes the TRUNCATED name and the executor's lookup would
@@ -240,6 +238,7 @@ class ResponsesSSETranslator:
                 if (isinstance(item, dict)
                     and item.get('type') in _CAPTURE_ITEM_TYPES)
             ]
+            self.response_items.extend(capture_phase_messages(items))
             self._response_item_positions.clear()
             return
         raw_indices = (
@@ -292,6 +291,10 @@ class ResponsesSSETranslator:
     def _chunk(self, delta: dict | None = None,
                finish_reason: str | None = None,
                usage: dict | None = None) -> dict:
+        text = (delta or {}).get('content')
+        if isinstance(text, str) and text:
+            self._emitted_text_chars += len(text)
+            self._emitted_text_digest.update(text.encode('utf-8'))
         chunk = {
             'id': 'chatcmpl-responses',
             'object': 'chat.completion.chunk',
@@ -303,6 +306,51 @@ class ResponsesSSETranslator:
         if usage:
             chunk['usage'] = usage
         return chunk
+
+    def _reconcile_terminal_text(self, output: list) -> tuple[list, str | None]:
+        """Append only a proven missing suffix of authoritative visible text."""
+        parts = []
+        snapshot_complete = True
+        for item in output:
+            if (item.get('type') != 'message'
+                    or not _multi_agent_message_is_user_visible(item)):
+                continue
+            content = item.get('content')
+            if content is None:
+                content = []
+            if not isinstance(content, list):
+                return [], 'terminal message content must be an array'
+            item_has_text_snapshot = False
+            for part in content:
+                if not isinstance(part, dict):
+                    return [], 'terminal message content part must be an object'
+                part_type = part.get('type')
+                if not isinstance(part_type, str):
+                    return [], 'terminal message part type must be text'
+                field = {'output_text': 'text', 'refusal': 'refusal'}.get(part_type)
+                if field is None:
+                    continue
+                text = part.get(field)
+                if text is None:
+                    snapshot_complete = False
+                    continue
+                if not isinstance(text, str):
+                    return [], 'terminal message text must be text or null'
+                item_has_text_snapshot = True
+                parts.append(text)
+            snapshot_complete = snapshot_complete and item_has_text_snapshot
+        # Some gateways send only message metadata at completion. Missing
+        # text is not an authoritative empty answer or a comparable prefix.
+        if not snapshot_complete or not parts:
+            return [], None
+        complete_text = ''.join(parts)
+        prefix = complete_text[:self._emitted_text_chars]
+        if (len(prefix) != self._emitted_text_chars
+                or hashlib.sha256(prefix.encode('utf-8')).digest()
+                != self._emitted_text_digest.digest()):
+            return [], 'terminal message contradicts the emitted text prefix'
+        suffix = complete_text[self._emitted_text_chars:]
+        return ([self._chunk(delta={'content': suffix})] if suffix else []), None
 
     def _slot_for(self, event: dict) -> tuple[int | None, str | None]:
         """Resolve a call slot without guessing across explicit identities."""
@@ -712,6 +760,10 @@ class ResponsesSSETranslator:
                 return self._protocol_error(complete_error)
             out.extend(completed)
             finish = 'tool_calls' if self._tc_count > 0 else 'stop'
+            text_chunks, text_error = self._reconcile_terminal_text(response_output)
+            if text_error:
+                return self._protocol_error(text_error)
+            out.extend(text_chunks)
             usage = _usage_to_openai(resp.get('usage') or {})
             if _program_needs_followup(response_output):
                 # OpenAI may deliver the final assistant message in the next
@@ -749,10 +801,13 @@ class ResponsesSSETranslator:
                 # content_filter & friends are failures, not finishes.
                 out.append({'error': {
                     'message': f'response.incomplete: {reason or "missing reason"}',
-                    'type': reason or 'server_error',
-                    'http_code': _ERROR_HTTP.get(reason, '')}})
+                    'type': reason or 'server_error'}})
             else:
                 finish = 'length'
+                text_chunks, text_error = self._reconcile_terminal_text(response_output)
+                if text_error:
+                    return self._protocol_error(text_error)
+                out.extend(text_chunks)
                 usage = _usage_to_openai(resp.get('usage') or {})
                 if _program_needs_followup(response_output):
                     usage['_program_pending'] = True
@@ -760,12 +815,13 @@ class ResponsesSSETranslator:
                                        usage=usage or None))
             out.append('[DONE]')
 
-        elif etype in ('response.failed', 'response.error'):
+        elif etype in ('error', 'response.failed', 'response.error'):
             resp = event.get('response')
             if resp is not None and not isinstance(resp, dict):
                 return self._protocol_error(
                     f'{etype}.response must be an object or null')
-            err = ((resp or {}).get('error') or event.get('error') or {})
+            err = ((resp or {}).get('error') or event.get('error')
+                   or (event if etype == 'error' else {}))
             if not isinstance(err, dict):
                 err = {}
             raw_code = err.get('code')
@@ -773,10 +829,9 @@ class ResponsesSSETranslator:
             code = raw_code if isinstance(raw_code, str) and raw_code else etype
             message = (raw_message
                        if isinstance(raw_message, str) and raw_message else etype)
-            out.append({'error': {
+            out.append({'error': {**err,
                 'message': f'{code}: {message}',
-                'type': code,
-                'http_code': _ERROR_HTTP.get(code, '')}})
+                'type': err.get('type') or code}})
 
         elif (etype and etype not in _KNOWN_IGNORED_EVENTS
               and not any(etype.startswith(prefix)

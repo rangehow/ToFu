@@ -22,6 +22,21 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 
+def _is_route_url(url: str) -> bool:
+    """Accept HTTP base URLs without embedded credentials or URL suffixes."""
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme in ('http', 'https') and bool(parts.hostname)
+                and parts.port != 0 and parts.username is None
+                and parts.password is None and not parts.query
+                and not parts.fragment
+                and not any(c.isspace() or ord(c) < 32 for c in url)
+                and '\\' not in url)
+    except (ValueError, TypeError):
+        return False
+
+
 def probe_server(url: str, timeout: float = 4.0) -> tuple[bool, str]:
     """Verify ``url`` is answered by Tofu. Returns ``(ok, reason)``.
 
@@ -35,16 +50,16 @@ def probe_server(url: str, timeout: float = 4.0) -> tuple[bool, str]:
     """
     import requests
     base = (url or '').strip().rstrip('/')
-    if not base:
+    if not base or not _is_route_url(base):
         return False, 'unreachable'
     try:
-        # no_proxy='*' — the SAME transport the poll loop uses (_run.py):
-        # requests would otherwise honor the system/env proxy (Windows
-        # registry included), so the probe could measure a route the poll
-        # never takes (or vice versa). Probe and poll must see ONE truth.
+        # Honor Requests' proxy/NO_PROXY and CA-bundle configuration. Health
+        # is only a reachability hint, never proof of server identity. Do not
+        # follow a gateway redirect or attach ambient .netrc credentials to
+        # a URL that may have come from unauthenticated LAN discovery.
         resp = requests.get(base + '/api/health', timeout=timeout,
-                            proxies={'no_proxy': '*'})
-    except requests.exceptions.ConnectTimeout as e:
+                            allow_redirects=False, auth=lambda request: request)
+    except requests.exceptions.Timeout as e:
         logger.debug('[Agent] server probe timed out: %s', e)
         return False, 'timeout'
     except requests.exceptions.ConnectionError as e:
@@ -72,11 +87,13 @@ def is_tofu_error_envelope(obj) -> bool:
 
     The poll loop's 401 handler must tell two refusals apart: Tofu's own
     401 (the bridge secret is wrong — fixable with a fresh connect line)
-    versus a gateway's 401 (the URL never reaches Tofu — the address is
-    wrong, and no secret will ever fix it). Tofu's envelope is
-    ``{"ok": false, "error": {...}}``; the measured SSO proxy answers
-    ``{"error": "Unauthorized"}`` (error as a STRING).
+    versus a gateway's 401. The bridge adapter returns the flat
+    ``{"error": "bridge_auth_required"}`` contract; other API boundaries
+    use ``{"ok": false, "error": {...}}``. A generic string error such as
+    ``Unauthorized`` is not the bridge contract. This is diagnostic
+    classification only: an error body cannot authenticate a server.
     """
     return (isinstance(obj, dict)
-            and obj.get('ok') is False
-            and isinstance(obj.get('error'), dict))
+            and (obj.get('error') == 'bridge_auth_required'
+                 or (obj.get('ok') is False
+                     and isinstance(obj.get('error'), dict))))

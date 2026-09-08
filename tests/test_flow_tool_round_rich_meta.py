@@ -265,10 +265,8 @@ def test_dispatch_tool_persists_result_meta_onto_tool_log_row():
     assert 'meta_sink' in dispatch_src
     assert 'flow_structured_result_meta' in dispatch_src
     single_src = inspect.getsource(agent_mod.SubAgent._execute_single_tool)
-    assert "tool_log_row['result_meta'] = meta_sink" in single_src
-    # Bounded checkpoint: the historical-row compaction reclaims prose bodies
-    # and heavy meta lists, but keeps args_brief (the settled card's command
-    # line) and the flat meta scalars (badge / exitCode / counters).
+    assert "tool_log_row['canonical_round'] = canonical_sink" in single_src
+    # Bounded checkpoint: historical rows reclaim prose and result list bodies
+    # while retaining canonical identity, status, args and scalar metadata.
     assert "historical['args_brief'] = ''" not in single_src
-    assert "historical.pop('result_meta', None)" not in single_src
-    assert "old_meta = historical.get('result_meta')" in single_src
+    assert "canonical = historical.get('canonical_round')" in single_src

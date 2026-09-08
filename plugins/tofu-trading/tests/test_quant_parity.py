@@ -4,7 +4,6 @@ to tofu_trading.* — proves the relocated quant core is functionally identical.
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 

@@ -69,6 +69,20 @@ function _nativeRegenerateInputOptions(resolved, inputEdit) {
   } : {};
 }
 
+/* Resume operations that reopen an interrupted attempt on the same lane.
+ * Mirrors the server-side _RESUME_MODEL_SWITCH_OPERATIONS set: only these
+ * may carry the contextSnapshot-only rebind that records a pause →
+ * switch-model → continue on the submitted turn's info rail. */
+const _RESUME_CTX_OPERATIONS = new Set([
+  'continue', 'checkpoint_resume', 'answer_guidance']);
+
+function _nativeResumeCtxOptions(operation) {
+  if (!_RESUME_CTX_OPERATIONS.has(operation)) return {};
+  if (typeof runtimeScope.buildTurnCtxSnapshot !== 'function'
+      || typeof resumeCtxInputUpdate !== 'function') return {};
+  const inputUpdate = resumeCtxInputUpdate(runtimeScope.buildTurnCtxSnapshot());
+  return inputUpdate ? { inputUpdate } : {};
+}
 async function _operateNativeTurn(conv, turnId, operation, inputEdit) {
   const resolved = _nativeTurnState(conv, turnId);
   if (!resolved || typeof runtimeScope.ConversationTurnStore === 'undefined') return false;
@@ -83,7 +97,8 @@ async function _operateNativeTurn(conv, turnId, operation, inputEdit) {
     const operationOptions = {
       commandId: `${operation}:${turnId}:${resolved.turn.projectionRevision || 0}`,
       ...(operation === 'regenerate'
-        ? _nativeRegenerateInputOptions(resolved, inputEdit) : {}),
+        ? _nativeRegenerateInputOptions(resolved, inputEdit)
+        : _nativeResumeCtxOptions(operation)),
     };
     const cfg = await _buildConvConfig(conv);
     await runtimeScope.ConversationTurnStore.operateConversation(
@@ -117,6 +132,7 @@ async function _answerHumanGuidanceLate(conv, turnId, responseText) {
     conv, turnId, 'answer_guidance', cfg, {
       commandId: `answer_guidance:${turnId}:${resolved.turn.projectionRevision || 0}`,
       humanResponse: responseText,
+      ..._nativeResumeCtxOptions('answer_guidance'),
     },
   );
 }
@@ -170,10 +186,22 @@ function _findRenderedNativeTurnNode(turnId) {
  * success.  Kept out of the view model on purpose — the surface only
  * re-renders the action bar when the action list changes, so a DOM-level
  * flash survives unrelated commits and harmlessly vanishes on a real one. */
-function _flashTurnCopyFeedback(turnId) {
+function _flashTurnCopyFeedback(turnId, blockId) {
   const turnNode = _findRenderedNativeTurnNode(turnId);
-  const button = turnNode?.querySelector?.(
-    'button[data-conversation-action="copy"]',
+  if (!turnNode) return;
+  let scope = turnNode;
+  let action = 'copy';
+  if (blockId) {
+    /* Block ids carry colons ('text:llm-1') — match by dataset, not by a
+     * CSS-escaped attribute selector. */
+    scope = Array.from(turnNode.querySelectorAll('[data-block-id]')).find(
+      node => node.dataset.blockId === blockId,
+    ) || null;
+    action = 'copy-block';
+    if (!scope) return;
+  }
+  const button = scope.querySelector?.(
+    `button[data-conversation-action="${action}"]`,
   );
   const icon = button?.querySelector?.('svg.msg-action-icon');
   if (!button || !icon) return;
@@ -605,7 +633,7 @@ async function _removeNativeQueueItem(conv, queueId) {
     const projection = response.inputTurn?.projection || {};
     const attachments = Array.isArray(projection.attachments)
       ? projection.attachments : [];
-    if (typeof _restoreCapturedComposerDraft === 'function') {
+    if (response.inputTurn && typeof _restoreCapturedComposerDraft === 'function') {
       _restoreCapturedComposerDraft({
         inputValue: projection.originalContent || projection.content || '',
         images: Array.isArray(projection.images) ? projection.images : [],
@@ -1043,6 +1071,9 @@ const _conversationSurfaceController = createConversationSurfaceController({
         { n: count },
       );
     },
+    blockLabel(count) {
+      return t('chat.loadEarlierBlocks', { n: count });
+    },
   },
   followLatest() {
     if (typeof scrollToBottom === 'function') scrollToBottom(true);
@@ -1185,6 +1216,31 @@ const _conversationSurfaceController = createConversationSurfaceController({
       _safeClipboardWrite(copyText)
         .then(() => _flashTurnCopyFeedback(intent.turnId))
         .catch(() => {});
+    }
+    else if (intent.type === 'copy-block' && intent.blockId
+        && typeof _safeClipboardWrite === 'function') {
+      /* Per-block copy: resolve the exact segment the button belongs to.
+       * The turn-level Copy above only reaches projection.content (the final
+       * answer); mid-turn prose lives on its own text segment. */
+      const segment = (projection.segments || []).find(item =>
+        item && item.blockId === intent.blockId && item.type === 'text');
+      if (segment) {
+        const actor = (resolved?.turn || transientTurn)?.actor;
+        const terminalish = Boolean(segment.terminal || segment.deliverable);
+        const authoritative = terminalish
+          ? (projection.content ?? segment.text) : segment.text;
+        const humanOriginal = actor === 'human' && terminalish
+          ? projection.originalContent : undefined;
+        const original = humanOriginal || authoritative || '';
+        const translated = humanOriginal ? authoritative
+          : (segment.translatedText
+            || (terminalish ? projection.translatedContent : undefined));
+        const blockText = intent.operation === 'copy-translated' && translated
+          ? translated : original;
+        _safeClipboardWrite(blockText)
+          .then(() => _flashTurnCopyFeedback(intent.turnId, intent.blockId))
+          .catch(() => {});
+      }
     }
     else if (intent.type === 'inspect' && intent.operation
         && typeof runtimeScope.openRequestInspectorForTask === 'function') {

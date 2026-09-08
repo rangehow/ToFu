@@ -45,8 +45,8 @@ export const loadFeatureFlags = _featureFlagsLoader.load;
 // BEGIN GENERATED RUNTIME ACTIONS — scripts/update_runtime_actions.mjs
 const runtimeActions = Object.freeze({
   _cmdBodyToggle,
-  _cmdHeaderToggle,
   _cmdInterruptClick,
+  _cmdOutputOpenToggle,
   _cmdOutputToggle,
   _downloadGenImage,
   _mobileCompactNow,
@@ -92,11 +92,12 @@ const runtimeActions = Object.freeze({
   resolvePreference,
   resolveWriteApproval,
   scrollChatToBottom,
+  selectBatchChoice,
   selectTheme,
-  selectThinkingDepth,
   sendMessage,
   setAgentMode,
   setChatMode,
+  submitBatchAnswers,
   submitHumanGuidanceChoice,
   submitHumanGuidanceFreeText,
   submitStdinEof,
@@ -115,7 +116,6 @@ const runtimeActions = Object.freeze({
   toggleSidebarSearch,
   toggleSubmenu,
   undoContextChange,
-  updateMobileDepth,
   updateMobileSheet,
   updateSubmenuCounts,
 });

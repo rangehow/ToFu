@@ -22,6 +22,9 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_GROUP_JS = native_module_path(
     '.native/model-group.js', ROOT / 'frontend/src/core/model-group.ts')
+BRAND_DETECTION_JS = native_module_path(
+    '.native/model-brand-detection.js',
+    ROOT / 'frontend/src/core/model-brand-detection.ts')
 TOOLBAR_JS = runtime_section_path('main/main_toolbar_ui.js')
 VISIBILITY_JS = runtime_section_path('settings/visibility_defaults.js')
 
@@ -204,6 +207,144 @@ def test_model_group_convergence():
         extra_targets=[TOOLBAR_JS, VISIBILITY_JS],
         expect_pass=22,
         label='model-group-convergence',
+    )
+
+
+_BODY_V2 = r'''
+const { setup } = require(process.env.JSDOM_HARNESS);
+const { document, window, check, report } = setup({
+  root: process.argv[3],
+  html: HTML_PLACEHOLDER,
+  targets: [process.argv[2], process.argv[4]],
+  globals: {
+    _detectBrand: () => 'generic',
+    _brandSvg: (b) => '<i data-b="' + b + '"></i>',
+    _modelShortName: (id) => id,
+    _modelPricingCache: {},
+    isChatModel: () => true,
+    _compareModelsByDisplayName: (a, b) => String(a).localeCompare(String(b)),
+    _sortModelsByDisplayName: (m) => m,
+    _sortModelEntriesByDisplayName: (m) => m,
+    _sortedBrandKeys: (g) => Object.keys(g).sort(),
+    _warnModelCapsMissing: () => {},
+    debugLog: () => {},
+    t: (k) => k,
+    config: { model: '' }, serverModel: '',
+    _hiddenModels: new Set(),
+    _registeredModels: [],
+    _getAllModels: null,
+    _serverConfig: {},
+    selectModel: () => {},
+  },
+});
+
+try {
+  /* Same wiring as the retained prelude: the shared resolver, explicit
+   * Creator hint wins. The picker must resolve v2 confirmed rows through
+   * this interface, exactly like every Settings model surface. */
+  const resolver = createModelBrandResolver({ lookupCreatorId: () => '' });
+  global._modelBrand = window._modelBrand = resolver.modelBrand;
+
+  const v2Document = {
+    contract_version: 'tofu.model-routing/v2',
+    providers: [
+      { provider_id: 'p_anthropic', name: 'Anthropic', brand: 'claude' },
+      { provider_id: 'p_alibaba', name: 'Alibaba', brand: 'qwen' },
+      { provider_id: 'p_openai', name: 'OpenAI', brand: 'openai' },
+      { provider_id: 'p_agg', name: 'OpenRouter', brand: 'openrouter' },
+    ],
+    provider_accesses: [
+      { provider_access_id: 'pa_anthropic', provider_id: 'p_anthropic',
+        display_name: 'Anthropic', enabled: true },
+      { provider_access_id: 'pa_alibaba', provider_id: 'p_alibaba',
+        display_name: 'Alibaba', enabled: true },
+      { provider_access_id: 'pa_openai', provider_id: 'p_openai',
+        display_name: 'OpenAI', enabled: true },
+      { provider_access_id: 'pa_agg', provider_id: 'p_agg',
+        display_name: 'OpenRouter', enabled: true },
+    ],
+    creators: [
+      { creator_id: 'anthropic', name: 'Anthropic' },
+      { creator_id: 'alibaba', name: 'Alibaba' },
+      { creator_id: 'openai', name: 'OpenAI' },
+    ],
+    models: [
+      { creator_id: 'anthropic', model_id: 'claude-opus-5' },
+      { creator_id: 'alibaba', model_id: 'qwen3-max' },
+      { creator_id: 'openai', model_id: 'gpt-5.6-sol' },
+    ],
+    deployments: [
+      { offering_id: 'of_1', enabled: true },
+      { offering_id: 'of_2', enabled: true },
+      { offering_id: 'of_3', enabled: true },
+      { offering_id: 'of_4', enabled: true },
+    ],
+    offerings: [
+      { offering_id: 'of_1', provider_access_id: 'pa_anthropic',
+        enabled: true, stale: false, identity_state: 'confirmed',
+        model: { creator_id: 'anthropic', model_id: 'claude-opus-5' },
+        capabilities: ['text'] },
+      { offering_id: 'of_2', provider_access_id: 'pa_alibaba',
+        enabled: true, stale: false, identity_state: 'confirmed',
+        model: { creator_id: 'alibaba', model_id: 'qwen3-max' },
+        capabilities: ['text'] },
+      { offering_id: 'of_3', provider_access_id: 'pa_openai',
+        enabled: true, stale: false, identity_state: 'confirmed',
+        model: { creator_id: 'openai', model_id: 'gpt-5.6-sol' },
+        capabilities: ['text'] },
+      { offering_id: 'of_4', provider_access_id: 'pa_agg',
+        enabled: true, stale: false, identity_state: 'pending',
+        pending_model_id: 'mystery-model-1', capabilities: ['text'] },
+    ],
+  };
+
+  const rows = _modelRoutingDropdownModels(v2Document);
+  check('v2_projects_three_confirmed_plus_one_pending', rows.length === 4);
+  (window._populateModelDropdown || _populateModelDropdown)(rows);
+  const dropdown = document.getElementById('presetDropdownList');
+  const rowBrand = (id) => {
+    const row = dropdown.querySelector(
+      '.preset-dropdown-item[data-value="' + id + '"]',
+    );
+    const icon = row && row.querySelector('.ps-dd-icon i');
+    return icon ? icon.getAttribute('data-b') : null;
+  };
+  /* Creator ids are NOT glyph keys: 'anthropic'/'alibaba' have no
+   * MODEL_BRAND_ICONS entry. Before the fix every non-openai confirmed row
+   * rendered the generic box while sitting under its vendor section. */
+  check('v2_anthropic_row_icon_is_claude',
+    rowBrand('claude-opus-5') === 'claude');
+  check('v2_alibaba_row_icon_is_qwen', rowBrand('qwen3-max') === 'qwen');
+  check('v2_openai_row_icon_stays_openai',
+    rowBrand('gpt-5.6-sol') === 'openai');
+  check('v2_pending_row_keeps_provider_glyph',
+    rowBrand('mystery-model-1') === 'openrouter');
+  check('creator_namespace_never_lands_as_glyph',
+    !['anthropic', 'alibaba', 'generic'].includes(rowBrand('claude-opus-5'))
+    && !['anthropic', 'alibaba', 'generic'].includes(rowBrand('qwen3-max')));
+} catch (error) {
+  check('harness_threw: ' + (error && error.message), false);
+} finally {
+  report();
+}
+'''
+
+
+def test_v2_picker_rows_resolve_creator_glyph():
+    """Preset-picker v2 rows share the Settings Creator → glyph resolution.
+
+    A confirmed v2 row carries its Creator id in ``m.brand``; rendering that
+    string verbatim as an icon key only resolves for creators whose id
+    coincides with a glyph key ('openai'). The row builder must route those
+    rows through the shared modelBrand interface instead.
+    """
+    body = _BODY_V2.replace('HTML_PLACEHOLDER', json.dumps(_HTML))
+    run_harness(
+        target_js=BRAND_DETECTION_JS,
+        body_js=body,
+        extra_targets=[TOOLBAR_JS],
+        expect_pass=6,
+        label='v2-picker-creator-glyph',
     )
 
 

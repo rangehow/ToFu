@@ -14,6 +14,10 @@ class FlowExecutionError(Exception):
     """Raised for structural problems discovered at execution time."""
 
 
+class FlowEventDeliveryError(Exception):
+    """An authoritative event sink failed; execution cannot safely continue."""
+
+
 class GraphNavigator:
     """Read-only topology queries over a flattened orchestration definition."""
 
@@ -157,4 +161,4 @@ class GraphNavigator:
         return 1 << 30
 
 
-__all__ = ['FlowExecutionError', 'GraphNavigator']
+__all__ = ['FlowExecutionError', 'FlowEventDeliveryError', 'GraphNavigator']

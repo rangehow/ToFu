@@ -9,7 +9,9 @@ storage, and model transport remain separate domains. The enabled `generate_imag
 |---|---|
 | PDF extraction and page policy | `lib/pdf_parser/` |
 | File-to-text routing | `lib/file_reader/`, parser packages |
-| Paper library and ingestion | `lib/paper/library.py`, `harvest.py`, paper routes |
+| Paper library and ingestion | `lib/paper/library.py`, `harvest.py`, paper routes; [research cycle contract](../RESEARCH_CYCLE.md) |
+
+| Research workbench | `lib/research/`, `frontend/src/features/research/`; [research cycle](../RESEARCH_CYCLE.md), [frontend boundaries](../FRONTEND_ARCHITECTURE.md). Reuses task execution, reader and owner-scoped workspace CAS. |
 | Paper reports/review/insight/QA | focused modules under `lib/paper/`; typed browser owners compose once through `frontend/src/features/paper/panel-owners.ts`; retained report/reader presentation lives only in manifest bundle `paper-reader-presenters` |
 | Paper podcast and browser media presentation | `lib/paper/podcast_engine/`, `podcast_runtime.py`; the same typed-owner composition boundary; retained podcast/video presentation lives only in manifest bundle `paper-media-presenters` |
 | Paper translation | `lib/paper/translate_engine.py`, `translate_runtime.py` |
@@ -22,7 +24,6 @@ storage, and model transport remain separate domains. The enabled `generate_imag
 | Durable artifacts | artifact/storage services, Sidecar domain operations |
 
 ## Ingest flow
-
 1. Validate type, size, and source authority before expensive work.
 2. Stream or stage bytes through the upload boundary; never trust a filename as a storage path.
 3. Select one parser through the file router.
@@ -50,6 +51,8 @@ deleted together only when neither surface retains it.
 
 New Turns carry at most 20 server-resolved refs in `projection.attachments` and at most 20 image refs in `projection.images`, never text, transcripts, frames, originals, or base64. Missing/foreign IDs are rejected. Frozen historical inline images are not rewritten: only the conversation `refs` view replaces eligible duplicate bytes with an authenticated, owner/revision/index-fenced lazy URL; `full`, persistence, and model reconstruction remain unchanged. Native MCP image results are owner-scoped `attachment` documents: each image is capped at 8 MiB, each Turn at 40 MiB, and persistence failure does not fail the tool's text result. Continue/checkpoint-resume preserves existing image refs; regenerate owns a fresh list.
 At model-request time, relevant text shares a 96k-character request budget while bounded document visuals/model-aware video frames become request-local blocks. `att_media_<document-id>` and `/api/v1/media/attachments/<id>/source` reopen owner-authorized content without exposing its disk path.
+
+Attachment text allowance is allocated in transcript order. Adding an attachment does not redistribute an older attachment's already-sent text. Exhaustion emits an explicit marker and recovery reference; the aggregate/per-document ceilings remain enforced. Completed-task replay retains admitted text and rechecks source availability before reuse. Tool screenshots use the same immutable media source store, with bounded `toolModelContent` references distinct from UI display text; model hydration checks the owner and returns a detached image block projection.
 
 Documents commit before `ready`. Videos reserve launch-probed worker capacity,
 TTL-reclaim scratch, and commit the original before analysis; turns may reference `processing` video. Frames/storyboard/transcript replace atomically; durable status survives worker registry expiry/restart. Transcript and storyboard calls each mint a bounded request-only model-routing v2 group for the attachment owner, hard-pin provider-only dispatch to that group, and dispose it after the background stage; they never borrow a process-global credential.
@@ -129,7 +132,7 @@ language-detection cascade dormant.
 Translation separates language/direction detection, segmentation, LLM work,
 validation, and durable commit. Segment caches key canonical content plus
 source/target language and relevant policy. A refusal, wrong-language result,
-truncation, or over-generation is a typed invalid result, not cacheable output.
+truncated or over-generated result is invalid and never cacheable. Incremental idle retirement and terminal consumption atomically close queue admission; late finalizers are rejected so the coordinator uses its whole-turn fallback instead of acknowledging work without a consumer.
 
 Settled-turn enrichment excludes translated/target-language/protected/cache hits and batches 16 segments or 6,000 source characters per call. The authoritative whole-turn translation commits and the user-visible task settles first; reconstructible segment enrichment is then re-admitted behind the owner's existing bounded translation queue with no independent durable lifecycle. It receives one shared 15-second wall budget, one upstream-429 attempt per call, and immediate-only shared-contention admission. Saturation may drop it; only a provider response that damages placeholder order/ownership may fall back to isolated validation, while dispatch/capacity failures skip the optional batch without fan-out and can never change the whole-turn task from success to failure.
 General, PPTX, settled-turn whole-output, and paper translation share one owner-fair lane (personal 1..2 workers/4..32 pending; distributed 16/128; idle retirement 60/600 seconds). The worker value FIFO-caps active MT/LLM calls across that lane, synchronous send work, and incremental accumulators; the queue value also caps provider waiters, with retryable fail-fast saturation and no local redispatch. Cache/identity/protected fast paths take no slot. Tasks remain `pending` until entry and queued abort frees capacity. A dispatch allows 4..8 actual rate-limit responses in personal mode (16 distributed, hard ceiling 64); capacity polls are free, exhaustion stops the workflow and later paper chunks. Non-terminal incremental previews additionally yield before transport to an already-active shared-contention gate; their call count and one-429 circuit live on the Task/Turn across idle accumulator retirement, while terminal reasoning, final/send translations, and interactive Agent dispatch retain their ordinary user-cancellable wait policy.
@@ -159,7 +162,6 @@ successful merely because it exited zero; required output and quality
 contracts must pass.
 
 ## Failure semantics
-
 - Unsupported/oversized/malformed input: reject before task creation.
 - Page parser failure: preserve page identity and surface diagnostics; follow
   the declared isolation/fallback policy.
@@ -171,7 +173,6 @@ contracts must pass.
   URL or phantom success.
 
 ## Invariants
-
 - One PDF extraction authority and one file-router decision point.
 - Owner identity is explicit for source rows, derived rows, and artifacts.
 - Shipped/default Paper tool results obey 8k/24k model-visible budgets without
@@ -191,7 +192,6 @@ contracts must pass.
 - Routes parse/project; pipeline and persistence semantics live in services.
 
 ## Change routing
-
 | Change | Start here | Verify |
 |---|---|---|
 | PDF extraction | `lib/pdf_parser/` | page isolation, layout policy, dependency contract |
@@ -204,7 +204,6 @@ contracts must pass.
 | Motion video | `lib/motion_video/` | plan, assets, quality gate, render settlement |
 
 ## Test map
-
 ```bash
 pytest -q tests/test_pdf_parser_page_isolation.py tests/test_pymupdf_layout_policy.py
 pytest -q tests/test_paper_ingest_persist.py tests/test_paper_upload_atomic.py tests/test_paper_hash_canonical.py
@@ -215,4 +214,6 @@ pytest -q tests/test_paper_podcast_api.py tests/test_paper_podcast_script.py
 pytest -q tests/test_translate_identity_invariant.py tests/test_translate_refusal_cache.py tests/test_translate_startup_boundary.py tests/test_translate_dispatch_deadline.py
 pytest -q tests/test_knowledge_data_layer.py tests/test_knowledge_enrichment_budget.py tests/test_knowledge_pdf_resource_budget.py tests/test_video_analysis.py tests/test_frontend_authoritative_composer.py
 pytest -q tests/test_motion_video_engine.py tests/test_motion_video_gate_verdict.py
+
+pytest -q tests/test_research_workspace.py tests/test_research_program_v1.py tests/test_research_reading_browser.py
 ```

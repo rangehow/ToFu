@@ -5,21 +5,20 @@ Extracted 2026-07-28 ( slice 12) from
 ``lib.tasks_pkg.orchestrator._run.run_task``. The two flushes run
 RIGHT AFTER a successful ``_llm_call_with_fallback`` return and
 BEFORE the stream loop reads the resolved model onto the task.
-They enforce the never-zero-and-never-double delivery invariants:
+They prefer recoverable delivery over premature acknowledgement:
 
 Peer flush
 ----------
 The LLM call succeeded, so a peer message injected into ``messages``
-this round WAS consumed by the model. NOW — atomically — emit the
+this round has positive provider-consumption evidence. Emit the
 ``PEER_INBOX_INJECT`` chip (the in-timeline arrival marker) AND
 delete the durable ``message_queue`` row(s) so ``dispatch_next_queued``
 can't later re-dispatch them as a redundant fresh turn. If the task
 aborted BEFORE this point, neither happened and the durable row
-SURVIVED → it is re-dispatched later as a fresh turn (delivered late,
-rendered exactly once — never zero, never double). Runs after a
-fallback too (delivery still happened). Best-effort: a delete failure
-only risks a rare double-delivery (reverse-race guard still applies),
-never a loss.
+SURVIVED → it is re-dispatched later as a fresh turn. A successful
+fallback can also acknowledge delivery. Emission and durable deletion are
+separate operations: delete failure or crash after consumption can redeliver.
+The reverse-race fence does not make these operations atomic.
 
 Steer flush
 -----------
@@ -34,7 +33,7 @@ synthetic row there breaks tool-turn continuation and shifts wire
 bytes). On an abort BEFORE this point the chip is never emitted and
 the undelivered steer is salvaged back to the durable
 ``message_queue`` by finalize (see ``_finalize.py``) → re-dispatched
-as a fresh turn, delivered exactly once.
+as a fresh turn. Recovery can redeliver after an uncertain acknowledgement.
 
 VU sub-task carrier
 -------------------
@@ -170,12 +169,15 @@ def flush_deferred_peer_and_steer(task: dict[str, Any], *,
     # ``task['_bgCommandInjects']`` sidecar, and delete the durable
     # message_queue row(s) by queueId so dispatch_next_queued can't later
     # re-dispatch them as a redundant fresh turn. On an abort before this
-    # point the row SURVIVES → fresh-turn dispatch delivers it exactly once.
+    # point the row survives for fresh-turn delivery; crash uncertainty may replay.
     _bgcmd_inject = task.pop('_bgcmd_inject_pending', None)
     if _bgcmd_inject:
         _bgcmd_previews = [{
             'commandId': str(_bit.get('commandId') or ''),
             'text': (_bit.get('value') or '')[:1200],
+            'textTruncated': len(_bit.get('value') or '') > 1200,
+            **({'backgroundCommand': _bit['backgroundCommand']}
+               if isinstance(_bit.get('backgroundCommand'), dict) else {}),
         } for _bit in _bgcmd_inject]
         try:
             append_event(task, build_event(

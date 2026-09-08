@@ -50,4 +50,21 @@ A fresh positive offer appears persistently in Settings and once as a global
 notification. Browser deduplication retains at most 16 opaque notification
 keys, so reloads, tabs, and account switches do not turn one credit into
 repeated noise. Tofu never redeems a reset automatically; consuming a one-time
-entitlement requires a separate explicitly confirmed, idempotent command.
+entitlement requires the explicitly confirmed, idempotent command
+`POST /api/v1/oauth/reset-offer/consume`, triggered from the "Reset now"
+button on the fresh available card (a browser confirm dialog guards the click;
+stale projections render no button). `consume_codex_usage_reset` re-reads the
+credit details under the owner/account refresh lock, spends the
+soonest-expiring available credit, and persists its `redeem_request_id` in
+the cache BEFORE the upstream POST so a retry of an ambiguous outcome
+(transport error or non-definitive status) reuses the same idempotency key
+instead of risking a second spend; the record is retained for 24 hours and
+only reused for the same credit. Definitive outcomes — success
+(`code=reset`), no-spend codes (`nothing_to_reset`/`already_redeemed`), and
+4xx rejections — clear the record. Every attempt ends with a forced refresh
+plus owner-scoped push so the card reconciles immediately, and the response
+carries that fresh `reset_offer` projection. Failure codes map to HTTP
+401 (`not_authenticated`), 409 (`account_changed`, `none_available`,
+`nothing_to_reset`, `already_redeemed`), and 502 (`unresolved`,
+`upstream_unavailable`, `upstream_rejected`); `unresolved` means the credit
+may have been spent and the refreshed projection is the reconciliation.

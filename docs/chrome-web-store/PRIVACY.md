@@ -72,6 +72,9 @@ WHAT IS STORED LOCALLY
 The extension stores in the browser's local extension storage only: the server
 URL the user entered, an optional "Bridge Secret" the user entered, and a
 randomly-generated client id used to route commands to the correct device.
+Session storage also holds at most four temporary search/research tab IDs and
+one hidden pairing-repair tab ID so worker restarts can reclaim owned tabs.
+These records contain no page content or URLs and expire with the browser session.
 None of this is transmitted to any third party.
 
 WHAT IS NOT COLLECTED

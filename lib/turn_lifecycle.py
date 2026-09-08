@@ -203,10 +203,10 @@ def _delta_text_fields(task: dict[str, Any],
     Mirrors the content/thinking rules of ``_task_projection`` without the
     structural fold (no toolRounds / segments / usage recomputation).
     """
-    cfg = task.get('config') or {}
     owns_visible_run_turns = bool(task.get('_turnVisibleRunTurnIds'))
+    # Same content rule as ``_task_projection`` — see its contentPrefix note.
     content = (previous.get('content', '') if owns_visible_run_turns else
-               (task.get('content') or cfg.get('contentPrefix') or ''))
+               (task.get('content') or ''))
     thinking = (previous.get('thinking', '') if owns_visible_run_turns else
                 (task.get('thinking') if task.get('thinking') is not None
                  else previous.get('thinking', '')))
@@ -349,10 +349,10 @@ def activate_queued_turn_pair(
 def cancel_queued_turn_pair(
     conversation_id: str, queue_id: str, *, user_id: Any,
 ) -> dict[str, Any]:
-    """Idempotently delete one pending queue row and its unexecuted pair."""
+    """Cancel pending delivery, deleting an unexecuted pair when present."""
     user_id = require_user_id(user_id, context='cancel queued turn pair')
     try:
-        return public_value_with_stable_segments(_turn_client(write=True).command(
+        result = public_value_with_stable_segments(_turn_client(write=True).command(
             'turn.queue.cancel',
             {
                 'conversation_id': conversation_id,
@@ -361,6 +361,12 @@ def cancel_queued_turn_pair(
             },
             command_id=f'turn-queue-cancel:{conversation_id}:{queue_id}',
         ))
+        if result.get('cancelled'):
+            # A completion can also have a live inbox twin. Fence late twin
+            # publication only after the owner-scoped durable cancel commits.
+            from lib.agent_inbox import consume_peer
+            consume_peer(conversation_id, [queue_id])
+        return result
     except StorageError as exc:
         if exc.code == 'database_not_found':
             raise LifecycleNotFound(str(exc)) from exc
@@ -377,7 +383,7 @@ def commit_user_steer(
     text: str,
     user_id: Any,
 ) -> dict[str, Any]:
-    """Durably append a pending injection block before waking the live worker."""
+    """Commit a bounded receipt; callers must wake the inbox before hydration."""
     user_id = require_user_id(user_id, context='commit user steer')
     try:
         return public_value_with_stable_segments(_turn_client(write=True).command(
@@ -397,6 +403,19 @@ def commit_user_steer(
         if exc.code in {'database_conflict', 'turn_in_progress'}:
             raise LifecycleConflict('steer_window_closed', str(exc)) from exc
         raise
+
+
+def hydrate_user_steer(
+    conversation_id: str, receipt: Mapping[str, Any], *, user_id: Any,
+) -> dict[str, Any]:
+    """Expand a committed steer only after its inbox wakeup has been published.
+
+    This owner-scoped read returns current authority, not a receipt snapshot.
+    Read failures must propagate outside the durable-commit inbox callback.
+    """
+    result = dict(receipt)
+    result['turn'] = get_turn(conversation_id, str(receipt['turnId']), user_id=user_id)
+    return result
 
 
 def append_settled_turn(
@@ -782,8 +801,14 @@ def _task_projection(
     # The per-node flow_iteration reset clears task['thinking'] as well, so
     # the first turn's committed thinking needs the same guard as content.
     owns_visible_run_turns = bool(task.get('_turnVisibleRunTurnIds'))
+    # cfg['contentPrefix'] is deliberately NOT a fallback here: it is a
+    # one-time display seed applied to task['content'] at resume hydration
+    # (apply_resume_state). Falling back to it re-projects the interrupted
+    # attempt's stale prose whenever _discard_pretool_prose empties the
+    # accumulator mid-run — the resumed turn then shows the old blob as its
+    # terminal answer until finalize (conv mto8xq9we7xc6o, 2026-09-05).
     content = (projection.get('content', '') if owns_visible_run_turns else
-               (task.get('content') or cfg.get('contentPrefix') or ''))
+               (task.get('content') or ''))
     checkpoint_rounds = (task.get('_checkpointToolRounds')
                          or cfg.get('checkpointToolRounds') or [])
     attempt_id = task.get('_attemptId') or task.get('attemptId') or ''
@@ -799,6 +824,8 @@ def _task_projection(
         task_id=task_id if attempt_id else '',
         overwrite=bool(attempt_id),
     )
+    if owns_visible_run_turns:
+        merged_rounds = previous.get('toolRounds') or []
     projected_rounds = [
         trim_tool_round_for_persist(dict(item))
         if isinstance(item, dict) else item
@@ -854,6 +881,10 @@ def _task_projection(
         # source for provider/model failover timelines after reload.
         ('_route_snapshot', 'routeSnapshot'),
     ):
+        if owns_visible_run_turns and source in {
+            'segments', 'modifiedFiles', 'modifiedFileList', 'todoState',
+        }:
+            continue
         if task.get(source) is not None:
             projection[target] = task[source]
     # Display-only injection records are copied and normalized independently:
@@ -1343,6 +1374,13 @@ def record_task_event(task: dict[str, Any], raw_event: dict[str, Any],
     standalone append.
     """
     with _task_projection_state_lock(task):
+        if task.get('_flowLiveTurn') and raw_event.get('type') not in _TERMINAL_EVENTS:
+            from lib.orchestration_chat_live_turn import project_live_flow_task
+            projected = project_live_flow_task(task)
+            try:
+                return _record_task_event_locked(projected, raw_event, task_event)
+            finally:
+                task['_flowLiveTurn']['projectionState'] = projected.get(_TURN_PROJECTION_STATE_KEY)
         return _record_task_event_locked(task, raw_event, task_event)
 
 
@@ -1367,6 +1405,11 @@ def _record_task_event_locked(
         # proves the attempt fence, so retain the small authoritative status
         # read on this lane. A superseded worker must never leak a late delta
         # merely because its projection baseline was cached.
+        if task.get('_flowRootAttemptId'):
+            root = get_attempt(task['_flowRootAttemptId'], user_id=user_id)
+            if root['status'] not in LIVE_ATTEMPT_STATUSES:
+                _signal_stale_attempt_abort(task, attempt_id, 'flow-root-not-live')
+                return False
         attempt = get_attempt(attempt_id, user_id=user_id)
         if attempt['status'] not in LIVE_ATTEMPT_STATUSES:
             _signal_stale_attempt_abort(task, attempt_id, 'attempt-not-live')
@@ -1407,6 +1450,14 @@ def _record_task_event_locked(
             and not _structural_fold_due(attempt_id)
         )
     )
+    if slim and not oversize_circuit_open:
+        content, thinking = _delta_text_fields(task, previous)
+        if ((content and not previous.get('content'))
+                or (thinking and not previous.get('thinking'))):
+            # The first nonempty channel creates a structural render block.
+            # Later tokens can patch only cumulative text; skipping this
+            # boundary leaves reasoning invisible until an unrelated tool.
+            slim = False
     if slim:
         content, thinking = _delta_text_fields(task, previous)
         projection = {'content': content, 'thinking': thinking}
@@ -1477,6 +1528,18 @@ def _record_task_event_locked(
         'error': error, 'event_type': event_type,
         'event_payload': event_payload, 'now': now,
     }
+    if terminal:
+        candidate = None
+        task['_modelReplayPublishStatus'] = 'not_completed'
+        if status in ('completed', 'truncated') and not task.get('_transientRuntime'):
+            try:
+                from lib.tasks_pkg.model_replay import prepare_completed_task
+                candidate = prepare_completed_task(task)
+            except Exception:
+                task['_modelReplayPublishStatus'] = 'unavailable'
+                logger.warning('[ModelReplay] preparation unavailable', exc_info=True)
+        command_payload['model_continuation'] = candidate or {
+            'status': task['_modelReplayPublishStatus']}
     if slim:
         command_payload['slim'] = True
         command_payload['content'] = content
@@ -1494,6 +1557,8 @@ def _record_task_event_locked(
         # Sidecar reuse that exact revision without re-normalizing it on the
         # next structural event; older producers omit it and safely fall back.
         command_payload['projection_segments_stable'] = True
+    if task.get('_flowRootAttemptId'):
+        command_payload['flow_root_attempt_id'] = task['_flowRootAttemptId']
     if task_event is not None:
         command_payload['task_event'] = task_event
     client = _turn_client(write=True)
@@ -1563,6 +1628,8 @@ def _record_task_event_locked(
         })
         command_payload.pop('projection_patch', None)
         command_payload.pop('projection_segments_stable', None)
+        if terminal:
+            command_payload['model_continuation'] = {'status': 'frame_over_budget'}
         slim = True
         try:
             result = client.command(
@@ -1638,6 +1705,8 @@ def _record_task_event_locked(
         _delta_throttle_clear(attempt_id)
         _structural_fold_clear(attempt_id)
     if applied and terminal:
+        task['_modelReplayPublishStatus'] = result.get(
+            'model_continuation_status', 'unavailable')
         _drain_queue_after_settlement(
             task, str(turn.get('conversationId') or ''), status)
     if applied and task_event is not None and result.get('task_event') is not None:
@@ -1663,10 +1732,12 @@ def sync_visible_run_turns(task: dict[str, Any], messages: list[dict[str, Any]],
     now = _now_ms()
     from lib.tasks_pkg.manager._registry import task_user_id
     user_id = task_user_id(task)
+    offset = max(0, min(int(task.get('_flowSyncedCount') or 0), len(messages) - 1))
     visible_result = _turn_client(write=True).command(
         'turn.visible.sync', {
             'conversation_id': conversation_id, 'attempt_id': attempt_id,
-            'root_turn_id': root_turn_id, 'messages': messages,
+            'root_turn_id': root_turn_id, 'messages': messages[offset:],
+            'start_index': offset,
             'user_id': user_id,
             'default_kind': default_kind,
             'run_id': (task.get('config') or {}).get('runId') or attempt_id,
@@ -1678,6 +1749,8 @@ def sync_visible_run_turns(task: dict[str, Any], messages: list[dict[str, Any]],
     )
     if visible_ids:
         task['_turnVisibleRunTurnIds'] = visible_ids
+        task['_flowSyncedCount'] = len(messages)
+        task.pop('_flowLiveTurn', None)
     return None
 
 
@@ -2101,7 +2174,8 @@ def _notify_abort_busy_projection(conversation_id: Any, user_id: Any) -> None:
 def abort_attempt(attempt_id: str, *, user_id: Any) -> dict[str, Any]:
     user_id = require_user_id(user_id, context='abort turn attempt')
     row = _turn_client().query(
-        'turn.attempt.get', {'attempt_id': attempt_id, 'user_id': user_id})
+        'turn.attempt.get', {'attempt_id': attempt_id, 'user_id': user_id,
+                             'resolve_executor': True})
     if row is None:
         raise LifecycleNotFound('Attempt not found')
     # The bound executor task id rides the attempt row (written by
@@ -2112,29 +2186,27 @@ def abort_attempt(attempt_id: str, *, user_id: Any) -> dict[str, Any]:
     status = row['status']
     if status not in LIVE_ATTEMPT_STATUSES:
         return {'attemptId': attempt_id, 'status': status, 'alreadyTerminal': True}
-    task = None
-    if task_id:
-        from lib.tasks_pkg.manager.runtime import chat_task_runtime
-        task = chat_task_runtime.get_owned(task_id, user_id=int(user_id))
-    if task is not None:
-        was_pending = str(task.get('status') or '') == 'pending'
-        chat_task_runtime.abort_owned(task_id, user_id=int(user_id))
-        chat_task_runtime.update_fields(
-            task_id,
-            fields={
-                'aborted': True,
-                '_abort_timestamp': time.time(),
-                '_abort_reason': 'turn_attempt_abort',
-            },
-        )
-        if was_pending:
-            from lib.tasks_pkg.spawn import cancel_queued_task
+    queue_binding = row.get('queueBinding')
+    if isinstance(queue_binding, dict) and queue_binding.get('queueId'):
+        # A queue-bound attempt has no executor task: stopping it withdraws
+        # the queued intent itself (queue-bar cancel semantics). Settling it
+        # 'interrupted' would orphan the durable queue row — undispatchable
+        # forever yet still counted by queue.depth (the composer badge).
+        cancelled = cancel_queued_turn_pair(
+            str(row['conversationId']), str(queue_binding['queueId']),
+            user_id=user_id)
+        return {
+            'attemptId': attempt_id,
+            'status': 'cancelled',
+            'queueId': str(queue_binding['queueId']),
+            'cancelled': bool(cancelled.get('cancelled')),
+            'deletedTurnIds': list(cancelled.get('deletedTurnIds') or []),
+        }
+    from lib.tasks_pkg.manager.cancellation import cancel_task
 
-            if cancel_queued_task(task_id):
-                from lib.tasks_pkg.manager import finalize_chat_task_aborted
-
-                finalize_chat_task_aborted(task)
-    else:
+    receipt = (cancel_task(task_id, user_id=user_id, source='turn_attempt_abort')
+               if task_id else {'found': False})
+    if not receipt['found']:
         # Registry miss (or no task bound yet): plant the durable abort
         # tombstone so a live-but-evicted worker's abort_check consumes it
         # at its next poll, then settle the attempt row.
@@ -2149,7 +2221,7 @@ def abort_attempt(attempt_id: str, *, user_id: Any) -> dict[str, Any]:
         turn = get_turn(row['conversationId'], row['turnId'], user_id=user_id)
         projection = turn.get('projection') or {}
         record_task_event(
-            {'_attemptId': attempt_id, '_userId': user_id,
+            {'_attemptId': row['attemptId'], '_userId': user_id,
              'id': '', 'status': 'aborted',
              'aborted': True, 'content': projection.get('content') or '',
              'thinking': projection.get('thinking') or '',
@@ -2214,8 +2286,14 @@ def build_api_messages(
             item for item in turns
             if item.get('laneId') == lane_id
             and item['ordinal'] <= target['ordinal'])
+    from lib.tasks_pkg.model_replay import restore_prefix
+    prefix_messages, covered = restore_prefix(
+        selected, config, conversation_id=conversation_id, user_id=owner_user_id)
+    logger.info('[ModelReplay] conv=%s restore=%s turns=%d messages=%d',
+                conversation_id[:8], config.get('_modelReplayStatus'),
+                covered, len(prefix_messages))
     raw = []
-    for row in selected:
+    for row in selected[covered:]:
         projection = dict(row.get('projection') or {})
         role = 'user' if row.get('actor') in {'human', 'virtual_user', 'critic'} else 'assistant'
         projection['role'] = role
@@ -2224,7 +2302,7 @@ def build_api_messages(
     from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
     return _transform_messages(
         raw, config, exclude_last=bool(config.get('excludeLast')),
-        user_id=owner_user_id)
+        user_id=owner_user_id, prefix_messages=prefix_messages)
 
 
 def backfill_turn_search_index(*, max_rounds: int = 100_000) -> dict[str, Any]:

@@ -83,6 +83,11 @@ def _extract_objective(messages: list) -> str:
     turns (``_isVirtualUser``) so the anchor is always the human's opening
     ask, never an autopilot-generated reply.  Returns '' when none found.
     """
+    from lib.tasks_pkg.compaction._history import history_entries, user_text
+    for message in messages or []:
+        for entry in history_entries(message):
+            if entry['kind'] == 'opening_request':
+                return user_text(entry).strip()
     for m in messages or []:
         if not isinstance(m, dict) or m.get('role') != 'user':
             continue

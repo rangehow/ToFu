@@ -20,6 +20,11 @@ This module owns:
   * ensure/status/stop task orchestration and the managed owner-scoped v2
     ``adapter_<id>`` ProviderAccess. Its Connection carries the validated
     ``adapter`` relay marker consumed by request-scoped dispatch.
+
+  * quota-opportunistic catalog refresh: every adapter codex answer carries
+    fresh x-codex-* quota headers, and that moment triggers a TTL-throttled
+    background model-list re-sync (lib/llm/{stream,chat,astream}.py call
+    ``note_adapter_quota_observed``).
 """
 
 from __future__ import annotations
@@ -59,6 +64,7 @@ __all__ = [
     'provision_provider',
     'deprovision_provider',
     'fetch_models',
+    'note_adapter_quota_observed',
     'AdapterEnsureCapacityError',
 ]
 
@@ -66,6 +72,7 @@ DEFAULT_PORT = 8317
 _POLICY_NAME = 'subscription_adapter.json'
 _STATUS_CACHE_TTL_S = 10
 _ENSURE_TTL_S = 600  # first run downloads ~20 MB through the user's network
+_QUOTA_SYNC_TTL_S = 3600  # one piggybacked catalog refresh per hour at most
 _CACHE_MAX_ENTRIES = 64
 _ENSURE_TASK_TTL_S = 3600
 _ENSURE_TASK_MAX_ENTRIES = 128
@@ -100,6 +107,11 @@ _accounts_cache = TTLCache(
     ttl=_STATUS_CACHE_TTL_S,
     max_size=_CACHE_MAX_ENTRIES,
     name='desktop_adapter_accounts',
+)
+_quota_sync_marks = TTLCache(
+    ttl=_QUOTA_SYNC_TTL_S,
+    max_size=_CACHE_MAX_ENTRIES,
+    name='desktop_adapter_quota_sync',
 )
 
 
@@ -320,6 +332,74 @@ def sync_provider(agent_id: str, agent_name: str = '', *,
         agent_id, agent_name, port, policy['api_key'], models,
         user_id=user_id)
     return {'provider_id': _provider_id(agent_id), 'models': len(models)}
+
+
+def note_adapter_quota_observed(agent_id: str, *, user_id: object) -> None:
+    """Piggyback a throttled catalog refresh on fresh adapter quota headers.
+
+    Every adapter codex answer already carries x-codex-* quota headers, so
+    that moment is the cheapest opportunity to notice upstream model
+    additions.  At most one attempt per TTL per (owner, agent); the worker
+    re-provisions only when the model set actually changed (a manual
+    disable or a confirmed identity must not be clobbered by a no-op
+    rewrite), and failures just wait for the next TTL window.
+    """
+    agent_id = str(agent_id or '')
+    if not agent_id:
+        return
+    cache_key = _owner_agent_key(agent_id, user_id)
+    if _quota_sync_marks.get(cache_key) is not None:
+        return
+    policy = policy_for(agent_id)
+    if not policy:
+        return
+    _quota_sync_marks.set(cache_key, time.time())
+
+    threading.Thread(
+        target=_quota_sync_worker,
+        args=(agent_id, policy),
+        kwargs={'user_id': user_id},
+        daemon=True,
+        name=f'adapter-quota-sync-{agent_id[:8]}',
+    ).start()
+
+
+def _quota_sync_worker(agent_id: str, policy: dict, *, user_id: object
+                       ) -> None:
+    """Best-effort catalog refresh behind :func:`note_adapter_quota_observed`."""
+    try:
+        port = int(policy.get('port') or DEFAULT_PORT)
+        models = fetch_models(agent_id, port, policy['api_key'],
+                              user_id=user_id)
+        from lib.model_routing import ModelRoutingRepository
+        document = ModelRoutingRepository().get(
+            _adapter_owner_boundary(user_id)).document
+        pid = _provider_id(agent_id)
+        prefix = '订阅适配器 · '
+        agent_name = ''
+        for row in document['providers']:
+            if row['provider_id'] == pid:
+                display = str(row.get('name') or '')
+                if display.startswith(prefix):
+                    agent_name = display[len(prefix):]
+        access_ids = {
+            row['provider_access_id']
+            for row in document['provider_accesses']
+            if row['provider_id'] == pid
+        }
+        current = {
+            str(row.get('model_id') or row.get('pending_model_id') or '')
+            for row in document['offerings']
+            if row['provider_access_id'] in access_ids
+        }
+        current.discard('')
+        if current and {str(m) for m in models} == current:
+            return
+        provision_provider(agent_id, agent_name, port,
+                           policy['api_key'], models, user_id=user_id)
+    except Exception as e:
+        logger.debug('[Adapter] quota-opportunity sync failed for %s: %s',
+                     agent_id[:8], e)
 
 
 def _adapter_provider_status(

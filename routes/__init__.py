@@ -127,6 +127,52 @@ def start_registered_background_services(app, *, process_role='all'):
             _log.warning(
                 'Scheduler worker start deferred (DB unavailable): %s', e)
 
+    # ── Reconcile subscription (OAuth) templates into model routing ──
+    if process_role_has(process_role, CAPABILITY_REQUEST_SERVICES):
+        try:
+            from runtime_guards import load_deployment_configuration
+
+            deployment = load_deployment_configuration()
+            if deployment.mode == 'personal':
+                # Template/spec updates (e.g. a newly shipped Claude model)
+                # must not wait for an OAuth page visit or re-login.
+                # Idempotent: an unchanged projection writes nothing; the
+                # codex side reads only the local catalogue cache here.
+                from lib.oauth.outbound import reconcile_oauth_providers
+                reconcile_oauth_providers()
+            else:
+                # TODO(enterprise): enumerate account owners through an
+                # owner-scoped OAuth repository before reconciling personal
+                # subscription providers in distributed deployments.
+                _log.info(
+                    'OAuth provider reconciliation disabled in distributed '
+                    'mode: no owner-scoped OAuth authority is configured')
+        except Exception as e:
+            _log.warning('OAuth provider reconciliation deferred: %s', e)
+    # ── Sync the world model catalogue into the registry ──
+    if process_role_has(process_role, CAPABILITY_REQUEST_SERVICES):
+        try:
+            from runtime_guards import load_deployment_configuration
+
+            deployment = load_deployment_configuration()
+            if deployment.mode == 'personal':
+                # The Model catalog tab lists models that EXIST, not models a
+                # configured provider supplies: newly shipped models must not
+                # wait for a provider bundle to carry them. Idempotent and
+                # insert-only except for template-retired identities, which
+                # are pruned — an unchanged catalogue writes nothing.
+                from lib.model_routing.world_catalog import (
+                    sync_world_model_catalog)
+                sync_world_model_catalog()
+            else:
+                # TODO(enterprise): enumerate account owners through an
+                # owner-scoped repository before syncing personal catalogues
+                # in distributed deployments.
+                _log.info(
+                    'World model catalogue sync disabled in distributed '
+                    'mode: no owner-scoped model-routing authority')
+        except Exception as e:
+            _log.warning('World model catalogue sync deferred: %s', e)
     # ── Refresh the authenticated Codex `/model` catalogue ──
     if process_role_has(process_role, CAPABILITY_REQUEST_SERVICES):
         try:

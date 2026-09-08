@@ -11,6 +11,7 @@ the objects in place under ``_lock``.
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from typing import Any
 
 from lib.log import get_logger
@@ -40,11 +41,19 @@ _lock = threading.Lock()
 #: Hard cap per task to prevent runaway memory if orchestrator stops draining.
 #: Items beyond this are dropped with a warning — the main agent will see fewer
 #: notifications, but at least the process won't OOM. Calibrated to ~500 KB
-#: assuming 2KB per swarm-update.
+#: assuming ~2KB per item.
 MAX_PER_TASK = 256
 
-#: Tombstone: task_ids whose owning task has ended.  Late-arriving sub-agents
-#: (a swarm worker that finished after ``clear()`` was called) will be
+#: Tombstone: keys whose owning task has ended.  Late-arriving producers
+#: (e.g. a swarm worker that finished after ``clear()`` was called) will be
 #: prevented from re-creating the inbox.  Bounded to avoid unbounded growth.
 _tombstones: set[str] = set()
 _TOMBSTONE_MAX = 1024
+
+
+#: Recent durable deliveries, keyed by the same task/conversation slot as inboxes.
+#: Queue IDs are unique: revival must not forget an already-delivered ID.
+#: FIFO retention is process-local and hard-bounded (no payloads retained).
+#: This is a late-publication fence, not durable delivery history.
+_CONSUMED_QUEUE_MAX = 16384
+_consumed_queue_ids: OrderedDict[tuple[str, str], None] = OrderedDict()

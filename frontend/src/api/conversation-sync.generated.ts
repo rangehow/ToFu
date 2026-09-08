@@ -50,6 +50,32 @@ export const CONVERSATION_SYNC_SCHEMAS = {
     ],
     "type": "object"
   },
+  "ActiveAttemptPhase": {
+    "additionalProperties": false,
+    "description": "Latest retained event's phase for the current running main-lane attempt, captured at the snapshot read head. Absent when that event clears or omits phase, exceeds the 32 KiB read budget, or is missing. Never reconstructed from historical timing traces or another attempt.",
+    "properties": {
+      "attemptId": {
+        "type": "string"
+      },
+      "phase": {
+        "$ref": "#/components/schemas/JsonObject"
+      },
+      "projectionRevision": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "turnId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "turnId",
+      "attemptId",
+      "projectionRevision",
+      "phase"
+    ],
+    "type": "object"
+  },
   "AppendSettledTurnRequest": {
     "additionalProperties": false,
     "properties": {
@@ -293,6 +319,40 @@ export const CONVERSATION_SYNC_SCHEMAS = {
     ],
     "type": "string"
   },
+  "BackgroundCommandCompletion": {
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "commandId": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "resultPreview": {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "resultTruncated": {
+        "type": "boolean"
+      },
+      "status": {
+        "enum": [
+          "completed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "commandId",
+      "status",
+      "command",
+      "resultPreview",
+      "resultTruncated"
+    ],
+    "type": "object"
+  },
   "BranchLaneDescriptor": {
     "additionalProperties": true,
     "properties": {
@@ -476,6 +536,9 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "attemptId": {
         "type": "string"
       },
+      "backgroundCommand": {
+        "$ref": "#/components/schemas/BackgroundCommandCompletion"
+      },
       "fromConv": {
         "type": "string"
       },
@@ -523,6 +586,9 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "sourceMessageId": {
         "type": "string"
       },
+      "steerFallback": {
+        "type": "boolean"
+      },
       "text": {
         "type": "string"
       },
@@ -557,6 +623,9 @@ export const CONVERSATION_SYNC_SCHEMAS = {
   "ConversationSyncSnapshot": {
     "additionalProperties": false,
     "properties": {
+      "activeAttemptPhase": {
+        "$ref": "#/components/schemas/ActiveAttemptPhase"
+      },
       "attempts": {
         "items": {
           "$ref": "#/components/schemas/AttemptRecord"
@@ -2321,6 +2390,9 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "queued": {
         "type": "boolean"
       },
+      "steerFallback": {
+        "type": "boolean"
+      },
       "steered": {
         "type": "boolean"
       },
@@ -2698,11 +2770,20 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "agentId": {
         "type": "string"
       },
+      "backgroundCommand": {
+        "$ref": "#/components/schemas/BackgroundCommandCompletion"
+      },
+      "commandId": {
+        "type": "string"
+      },
       "fromConv": {
         "type": "string"
       },
       "text": {
         "type": "string"
+      },
+      "textTruncated": {
+        "type": "boolean"
       }
     },
     "type": "object"
@@ -3273,6 +3354,9 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "maxItems": 20,
         "type": "array"
       },
+      "backgroundCommand": {
+        "$ref": "#/components/schemas/BackgroundCommandCompletion"
+      },
       "boardTaskId": {
         "type": "string"
       },
@@ -3830,6 +3914,16 @@ export const CONVERSATION_SYNC_SCHEMAS = {
   "TurnSystemNoteSegment": {
     "additionalProperties": true,
     "properties": {
+      "action": {
+        "default": "prompt",
+        "enum": [
+          "prompt",
+          "stop",
+          "tool-policy",
+          "continue"
+        ],
+        "type": "string"
+      },
       "attemptId": {
         "type": "string"
       },
@@ -3850,14 +3944,20 @@ export const CONVERSATION_SYNC_SCHEMAS = {
       "noteKind": {
         "enum": [
           "intent-stall",
-          "todo-continuation"
+          "todo-continuation",
+          "system-intervention"
         ],
+        "type": "string"
+      },
+      "reason": {
+        "maxLength": 160,
         "type": "string"
       },
       "taskId": {
         "type": "string"
       },
       "text": {
+        "maxLength": 16384,
         "type": "string"
       },
       "type": {
@@ -4666,6 +4766,15 @@ export const CONVERSATION_SYNC_SCHEMAS = {
         "type": "string"
       },
       "toolContent": {},
+      "toolModelContent": {
+        "description": "Exact bounded model blocks; image bodies use immutable owner-scoped media references.",
+        "items": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "maxItems": 41,
+        "type": "array"
+      },
       "toolName": {
         "type": "string"
       },
@@ -4905,6 +5014,9 @@ export type TurnToolRound = {
   "toolName"?: string;
   "toolArgs"?: unknown;
   "toolContent"?: unknown;
+  "toolModelContent"?: ReadonlyArray<{
+  [key: string]: unknown;
+}>;
   "toolResultEvidence"?: ToolResultEvidence;
   "query"?: string;
   "status"?: string;
@@ -5011,7 +5123,9 @@ export type TurnSystemNoteSegment = {
   "attemptId"?: string;
   "taskId"?: string;
   "text": string;
-  "noteKind": "intent-stall" | "todo-continuation";
+  "noteKind": "intent-stall" | "todo-continuation" | "system-intervention";
+  "action"?: "prompt" | "stop" | "tool-policy" | "continue";
+  "reason"?: string;
   "llmRound"?: (number) | (null);
   [key: string]: unknown;
 };
@@ -5102,6 +5216,9 @@ export type TurnConversationReference = {
 };
 
 export type TurnInjectionPreview = {
+  "commandId"?: string;
+  "backgroundCommand"?: BackgroundCommandCompletion;
+  "textTruncated"?: boolean;
   "text"?: string;
   "agentId"?: string;
   "fromConv"?: string;
@@ -5571,6 +5688,7 @@ export type TurnProjection = {
   "contextSnapshot"?: TurnContextSnapshot;
   "compaction"?: TurnCompaction;
   "rolledBack"?: ReadonlyArray<TurnRolledBackEntry>;
+  "backgroundCommand"?: BackgroundCommandCompletion;
   "_initiator"?: string;
   "_peerMessage"?: boolean;
   "_peerHuman"?: boolean;
@@ -5656,6 +5774,16 @@ export type ConversationQueueItem = {
   "inputTurnId"?: string;
   "outputTurnId"?: string;
   "attemptId"?: string;
+  "steerFallback"?: boolean;
+  "backgroundCommand"?: BackgroundCommandCompletion;
+};
+
+export type BackgroundCommandCompletion = {
+  "commandId": string;
+  "status": "completed";
+  "command": string;
+  "resultPreview": string;
+  "resultTruncated": boolean;
 };
 
 export type ThreadScope = {
@@ -5825,6 +5953,13 @@ export type SyncResetRequired = {
 
 export type ConversationSyncEvent = (ConversationChange) | (SyncHeartbeat) | (SyncResetRequired);
 
+export type ActiveAttemptPhase = {
+  "turnId": string;
+  "attemptId": string;
+  "projectionRevision": number;
+  "phase": JsonObject;
+};
+
 export type ConversationSyncSnapshot = {
   "ok": true;
   "contract": "tofu.conversation-sync.snapshot/v1";
@@ -5835,6 +5970,7 @@ export type ConversationSyncSnapshot = {
   "cursor": string;
   "serverBootId": string;
   "heartbeatIntervalMs": number;
+  "activeAttemptPhase"?: ActiveAttemptPhase;
   "settings": JsonObject;
   "turns": ReadonlyArray<TurnRecord>;
   "attempts": ReadonlyArray<AttemptRecord>;
@@ -5989,6 +6125,7 @@ export type TurnCommandResponse = {
   "cursor"?: string;
   "submittedTurn"?: TurnRecord;
   "turn"?: TurnRecord;
+  "steerFallback"?: boolean;
   "attempt"?: AttemptRecord;
   "idempotentReplay"?: boolean;
   "aborted"?: boolean;
@@ -6058,6 +6195,19 @@ function jsonValuesEqual(left: unknown, right: unknown): boolean {
       && jsonValuesEqual(leftObject[field], rightObject[field]));
 }
 
+// JSON Schema lengths count code points, not UTF-16 units; avoid allocating an array.
+function stringLength(schema: ContractSchema, value: string): number {
+  if (typeof schema.minLength !== 'number' && typeof schema.maxLength !== 'number') {
+    return value.length;
+  }
+  let length = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.codePointAt(index)! > 0xffff) index += 1;
+    length += 1;
+  }
+  return length;
+}
+
 function isValidNode(schemaValue: unknown, value: unknown): boolean {
   const schema = record(schemaValue) ?? {};
   const ref = typeof schema.$ref === 'string' ? schema.$ref : '';
@@ -6089,9 +6239,10 @@ function isValidNode(schemaValue: unknown, value: unknown): boolean {
   const kind = schema.type;
   if (kind === 'null') return value === null;
   if (kind === 'string') {
-    return typeof value === 'string'
-      && (typeof schema.minLength !== 'number' || value.length >= schema.minLength)
-      && (typeof schema.maxLength !== 'number' || value.length <= schema.maxLength)
+    if (typeof value !== 'string') return false;
+    const length = stringLength(schema, value);
+    return (typeof schema.minLength !== 'number' || length >= schema.minLength)
+      && (typeof schema.maxLength !== 'number' || length <= schema.maxLength)
       && (typeof schema.pattern !== 'string' || (new RegExp(schema.pattern)).test(value));
   }
   if (kind === 'integer' || kind === 'number') {
@@ -6171,10 +6322,11 @@ function validateNode(schemaValue: unknown, value: unknown, path: string): strin
   if (kind === 'null') return value === null ? [] : [`${path}: expected null`];
   if (kind === 'string') {
     if (typeof value !== 'string') return [`${path}: expected string`];
-    if (typeof schema.minLength === 'number' && value.length < schema.minLength) {
+    const length = stringLength(schema, value);
+    if (typeof schema.minLength === 'number' && length < schema.minLength) {
       return [`${path}: string is shorter than ${schema.minLength}`];
     }
-    if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) {
+    if (typeof schema.maxLength === 'number' && length > schema.maxLength) {
       return [`${path}: string is longer than ${schema.maxLength}`];
     }
     if (typeof schema.pattern === 'string' && !(new RegExp(schema.pattern)).test(value)) {

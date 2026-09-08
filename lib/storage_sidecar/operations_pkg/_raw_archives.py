@@ -31,6 +31,20 @@ _MAX_ARCHIVE_STORED_BYTES = 16 * 1024 * 1024
 _MAX_ARCHIVE_DECODED_PART_BYTES = 64 * 1024 * 1024
 _MAX_GLOBAL_BUDGET_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_READ_CHUNK_BYTES = 1024 * 1024
+_USAGE_META_KEY = "raw_archive_stored_bytes"
+
+# Metadata reads must never materialize the blobs: ``LENGTH(x)>0`` answers
+# presence from the record header without walking overflow pages (a ``SELECT
+# *`` re-read up to 16 MiB per put on the single writer — the 2026-09-05
+# writer-starvation incident).
+_METADATA_COLUMNS = (
+    "archive_id,user_id,conversation_id,turn_id,attempt_id,task_id,round_num,"
+    "transport_attempt,request_bytes,response_bytes,stored_bytes,"
+    "request_sha256,response_sha256,integrity,truncation_reason,summary_json,"
+    "created_at_ms,"
+    "LENGTH(request_blob)>0 AS request_blob,"
+    "LENGTH(response_blob)>0 AS response_blob"
+)
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TRUNCATION_REASONS = {
     "", "attempt_limit", "quota_exhausted", "secret_scrubbed",
@@ -78,6 +92,52 @@ def _summary(payload: Mapping[str, Any]) -> dict[str, Any]:
             "database_protocol_error", "Raw archive summary exceeds its budget"
         )
     return result
+
+
+def _stored_bytes_usage(session: Session) -> int:
+    row = session.fetch_one(
+        "SELECT meta_value FROM storage_meta WHERE meta_key=?",
+        (_USAGE_META_KEY,),
+    )
+    if row is not None:
+        return int(row["meta_value"])
+    # One-time bootstrap for authorities that predate the counter: the full
+    # SUM scan happens here once instead of on every put.
+    total_row = session.fetch_one(
+        "SELECT COALESCE(SUM(stored_bytes),0) AS total FROM storage_raw_archives"
+    )
+    total = int(total_row["total"] or 0) if total_row else 0
+    session.execute(
+        "INSERT INTO storage_meta(meta_key, meta_value) VALUES (?, ?)",
+        (_USAGE_META_KEY, str(total)),
+    )
+    return total
+
+
+def _charge_stored_bytes_usage(session: Session, delta: int) -> None:
+    session.execute(
+        "UPDATE storage_meta SET meta_value=? WHERE meta_key=?",
+        (str(_stored_bytes_usage(session) + int(delta)), _USAGE_META_KEY),
+    )
+
+
+def _debit_stored_bytes_for_delete(
+    session: Session, where: str, params: tuple[Any, ...]
+) -> None:
+    """Debit the usage counter for rows a companion DELETE is removing.
+
+    Callers pass the same literal WHERE predicate as their DELETE; the pair
+    runs inside the writer's single transaction, so the counter stays
+    byte-exact with the table.
+    """
+    row = session.fetch_one(
+        "SELECT COALESCE(SUM(stored_bytes),0) AS total "
+        "FROM storage_raw_archives WHERE " + where,
+        params,
+    )
+    total = int(row["total"] or 0) if row else 0
+    if total:
+        _charge_stored_bytes_usage(session, -total)
 
 
 def _public_metadata(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -165,7 +225,9 @@ def _raw_archive_put(session: Session, payload: Mapping[str, Any]) -> Any:
 
     session.lock_key("raw_archive_budget", "global")
     existing = session.fetch_one(
-        "SELECT * FROM storage_raw_archives WHERE archive_id=?", (archive_id,)
+        "SELECT " + _METADATA_COLUMNS
+        + " FROM storage_raw_archives WHERE archive_id=?",
+        (archive_id,),
     )
     if existing is not None:
         if (
@@ -188,11 +250,7 @@ def _raw_archive_put(session: Session, payload: Mapping[str, Any]) -> Any:
     if owner is None:
         raise StorageError("database_not_found", "Raw archive owner not found")
 
-    usage_row = session.fetch_one(
-        "SELECT COALESCE(SUM(stored_bytes),0) AS total "
-        "FROM storage_raw_archives"
-    )
-    current_usage = int(usage_row["total"] or 0) if usage_row else 0
+    current_usage = _stored_bytes_usage(session)
     attempt_usage_row = session.fetch_one(
         "SELECT COALESCE(SUM(stored_bytes),0) AS total "
         "FROM storage_raw_archives WHERE attempt_id=?",
@@ -239,9 +297,34 @@ def _raw_archive_put(session: Session, payload: Mapping[str, Any]) -> Any:
             _dump(summary), created_at_ms,
         ),
     )
-    row = session.fetch_one(
-        "SELECT * FROM storage_raw_archives WHERE archive_id=?", (archive_id,)
-    )
+    _charge_stored_bytes_usage(session, requested_stored_bytes)
+    # The fresh row is already fully in hand — re-selecting it would read
+    # back up to _MAX_ARCHIVE_STORED_BYTES of blobs on the single writer.
+    row = {
+        "archive_id": archive_id,
+        "user_id": user_id,
+        "conversation_id": conversation_id,
+        "turn_id": turn_id,
+        "attempt_id": attempt_id,
+        "task_id": task_id,
+        "round_num": round_num,
+        "transport_attempt": transport_attempt,
+        "request_blob": request_blob,
+        "response_blob": response_blob,
+        "request_bytes": request_bytes,
+        "response_bytes": response_bytes,
+        "stored_bytes": requested_stored_bytes,
+        "request_sha256": request_sha256,
+        "response_sha256": response_sha256,
+        "integrity": integrity,
+        "truncation_reason": truncation_reason,
+        # Plain bytes, exactly what a SQLite read-back of the JSONDOC column
+        # would produce: ``_public_metadata`` re-decodes through ``_load``,
+        # and orjson rejects the ``JsonBytes`` subclass it never sees off the
+        # database path.
+        "summary_json": bytes(_dump(summary)),
+        "created_at_ms": created_at_ms,
+    }
     return {**_public_metadata(row), "idempotentReplay": False}
 
 
@@ -334,6 +417,7 @@ def _raw_archive_read(session: Session, payload: Mapping[str, Any]) -> Any:
 
 
 __all__ = [
+    "_debit_stored_bytes_for_delete",
     "_raw_archive_list",
     "_raw_archive_put",
     "_raw_archive_read",

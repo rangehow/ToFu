@@ -239,6 +239,14 @@ function switchSettingsTab(tabId) {
   if (tabId === 'devices' && typeof _populateDevicesTab === 'function') {
     _populateDevicesTab();
   }
+  /* The 模型 tab is a read-only registry view: repaint on activation so it
+   * always reflects the current staged authority, even if a future flow
+   * mutates creators/models and forgets ``_renderModelRoutingTabs()``. The
+   * Providers tab must NOT do this — its cards hold unsaved credential input
+   * that a repaint would drop. */
+  if (tabId === 'models' && typeof _renderModelCatalogTab === 'function') {
+    _renderModelCatalogTab();
+  }
 }
 
 async function _loadServerConfig() {
@@ -300,7 +308,7 @@ function _refreshSubscriptionModelCatalog() {
   ]).then(function(results) {
     var cfg = results[0];
     if (!cfg) return null;
-    if (typeof _renderProvidersTab === 'function') _renderProvidersTab();
+    if (typeof _renderModelRoutingTabs === 'function') _renderModelRoutingTabs();
     if (typeof _renderPresetsTab === 'function') {
       _renderPresetsTab(cfg);
     }
@@ -315,13 +323,6 @@ function _refreshSubscriptionModelCatalog() {
 
 function openSettings() {
   // ── General tab: populate from local config ──
-  document.getElementById("settingTemp").value = config.temperature;
-  document.getElementById("tempVal").textContent = config.temperature;
-  document.getElementById("settingMaxTokens").value = config.maxTokens;
-  // imageMaxWidth: 0 = follow server policy (recommended). >0 = user override that
-  // can only TIGHTEN the server cap. Show 0 in the field for users on the new default.
-  document.getElementById("settingImageMaxWidth").value =
-    (typeof config.imageMaxWidth === 'number' ? config.imageMaxWidth : 0);
   document.getElementById("settingSystem").value = config.systemPrompt || "";
   var spModeSel = document.getElementById('settingSystemPromptMode');
   if (spModeSel) spModeSel.value = (config.systemPromptMode === 'replace') ? 'replace' : 'append';
@@ -477,7 +478,7 @@ function openSettings() {
       return;
     }
     _stgPresets = JSON.parse(JSON.stringify(cfg.presets || {}));
-    _renderProvidersTab();
+    if (typeof _renderModelRoutingTabs === 'function') _renderModelRoutingTabs();
     _renderPresetsTab(cfg);
     _populateSearchTab(cfg);
     _populateNetworkTab(cfg);
@@ -499,13 +500,18 @@ function openSettings() {
 // ══════════════════════════════════════════════════════
 /* ===== migrated source: settings/provider_render.js ===== */
 /*
- * Model-routing v2 Settings projection.
+ * 服务商 (Providers) settings tab — provider supply for model-routing v2.
  *
- * Responsibility: split the v2 authority at the browser boundary. The Model
- * feature receives a fresh Creator/Model-only projection; this retained owner
- * renders ProviderAccess supply and stages provider metadata edits. Model
- * supply (enable/alias/remove) is managed in the per-provider 模型管理
- * overlay. Legacy editors are migration input only.
+ * Responsibility: everything rendered into ``#settingsTab_api``
+ * (static/settings_panels/api.html): ProviderAccess cards with in-card
+ * Connection/Credential editors, staged provider metadata edits, and the
+ * add-model pickers. Per-offering supply (enable/alias/remove) is managed
+ * inline in the per-provider access matrix (settings/access_matrix.js).
+ * This file never renders the 模型 (Models) tab — the global, read-only
+ * Creator/Model registry lives in settings/model_catalog_tab.js; flows
+ * that reload the authority or change creators/models repaint both pages
+ * by name via ``_renderModelRoutingTabs()``. Legacy editors are migration
+ * input only.
  */
 
 function _setModelRoutingCollectionField(collection, index, field, value, kind) {
@@ -516,7 +522,6 @@ function _setModelRoutingCollectionField(collection, index, field, value, kind) 
   else if (kind === 'number') row[field] = Math.max(0, Number(value) || 0);
   else row[field] = String(value == null ? '' : value);
   _renderProvidersTab();
-  if (_stgProviderManagerId) _renderProviderManagerBody();
 }
 
 function _modelRoutingPriceLabel(pricing) {
@@ -525,6 +530,24 @@ function _modelRoutingPriceLabel(pricing) {
     Number(pricing.output || 0) + ' · 每百万 tokens';
 }
 
+var _MODEL_CAP_LABELS = {
+  text: '文本', thinking: '思考', vision: '视觉',
+  cheap: '低价', image_gen: '图像', embedding: '向量',
+};
+
+// 上下文窗口按惯例缩写：1000000 → 1M，128000 → 128K，8192 → 8.2K。
+function _modelRoutingContextLabel(tokens) {
+  var n = Number(tokens) || 0;
+  if (n >= 1000000) {
+    var m = n / 1000000;
+    return (m % 1 === 0 ? String(m) : String(Math.round(m * 10) / 10)) + 'M';
+  }
+  if (n >= 1000) {
+    var k = n / 1000;
+    return (k % 1 === 0 ? String(k) : String(Math.round(k * 10) / 10)) + 'K';
+  }
+  return String(n);
+}
 function _modelRoutingRefLabel(offering, modelNames) {
   if (offering.identity_state === 'pending_identity') {
     return offering.pending_model_id || offering.offering_id;
@@ -533,11 +556,6 @@ function _modelRoutingRefLabel(offering, modelNames) {
   var key = (ref.creator_id || '') + '::' + (ref.model_id || '');
   return modelNames[key] || ref.model_id || offering.offering_id;
 }
-
-let _stgProviderManagerId = '';
-let _stgProviderManagerQuery = '';
-let _stgProviderManagerLimit = 80;
-let _stgModelCatalogQuery = '';
 
 let _providerTemplateRecipes = null;
 
@@ -582,21 +600,32 @@ async function _stageModelRoutingProviderBundle(bundle, apiKey) {
     return !existingModels.has(row.creator_id + '::' + row.model_id);
   });
   var extraHeaders = bundle.credential_extra_headers || {};
-  var hasSecret = !!apiKey || Object.keys(extraHeaders).length > 0;
+  /* Static recipe headers are inspectable configuration: they belong on
+   * each connection's extra_headers (the 自定义请求头 editor), not folded
+   * into the encrypted credential envelope. */
+  (draft.connections || []).forEach(function(connection) {
+    connection.extra_headers = Object.assign(
+      {}, connection.extra_headers || {}, extraHeaders);
+  });
+  // The compile-only mirror field is not part of ProviderWriteRequest.
+  delete draft.credential_extra_headers;
   var secretCredential = (draft.credentials || []).find(function(row) {
     return row.kind !== 'local_identity';
   });
-  if (secretCredential && !hasSecret) {
-    showAlert('请填写 API Key；本地无密钥服务可直接添加。');
-    return false;
-  }
-  if (secretCredential) {
+  if (apiKey && secretCredential) {
     draft.credential_secrets = {};
     draft.credential_secrets[secretCredential.credential_id] = JSON.stringify({
       format: 'tofu.credential-secret/v1',
-      api_key: apiKey || '',
+      api_key: apiKey,
       oauth: '',
-      extra_headers: extraHeaders,
+      extra_headers: {},
+    });
+  } else {
+    /* Keyless add: a non-local credential without a secret_reference is
+     * rejected by the v2 domain, so drop the recipe's placeholder credential;
+     * the card's 「+ 添加密钥」 mints a real one with full model grants. */
+    draft.credentials = (draft.credentials || []).filter(function(row) {
+      return row.kind === 'local_identity';
     });
   }
   var created = await Api.modelRouting.createProvider(
@@ -604,7 +633,7 @@ async function _stageModelRoutingProviderBundle(bundle, apiKey) {
   if (!created || !created.provider) throw new Error('服务商接入未能保存');
   _stgModelRoutingRevision = Number(created.revision || _stgModelRoutingRevision);
   await _loadModelRoutingAuthority();
-  _renderProvidersTab();
+  _renderModelRoutingTabs();
   var card = Array.from(document.querySelectorAll('.stg-provider-card-v2')).find(function(candidate) {
     return candidate.dataset.providerId === String(bundle.provider.provider_id);
   });
@@ -612,7 +641,9 @@ async function _stageModelRoutingProviderBundle(bundle, apiKey) {
     card.open = true;
     card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-  showToast('已添加服务商和模型供给。');
+  showToast(apiKey
+    ? '已添加服务商和模型供给。'
+    : '已添加服务商和模型供给 — 在卡片里「+ 添加密钥」填入 API Key 即可调用。');
   return true;
 }
 
@@ -651,7 +682,7 @@ async function _showTemplateMenu(btn) {
       (tpl.offering_recipes || []).length + ' 个模型</span></span>';
     item.onclick = function() {
       menu.remove();
-      void _openTemplateWizard(tpl.key);
+      void _addTemplateProvider(tpl.key);
     };
     grid.appendChild(item);
   });
@@ -670,107 +701,19 @@ async function _showTemplateMenu(btn) {
   }, 0);
 }
 
-async function _openTemplateWizard(templateKey) {
-  var templates = await _loadProviderTemplateRecipes();
-  var template = templates.find(function(row) { return row.key === templateKey; });
-  if (!template) return;
-  var prior = document.getElementById('stgTplWizard');
-  if (prior) prior.remove();
-  var recipes = template.offering_recipes || [];
-  var overlay = document.createElement('div');
-  overlay.id = 'stgTplWizard';
-  overlay.className = 'stg-modal-overlay';
-  var modal = document.createElement('div');
-  modal.className = 'stg-modal stg-tpl-wizard';
-  modal.innerHTML = '<div class="stg-modal-header"><span class="stg-modal-title">' +
-    _brandSvg(template.brand || _detectBrand(template.name), 18) + ' ' +
-    escapeHtml(template.name) + '</span><button type="button" class="stg-modal-close">✕</button></div>' +
-    '<div class="stg-modal-body"><label class="stg-tpl-wizard-keylabel">API Key' +
-    '<input type="password" class="stg-tpl-wizard-key" autocomplete="new-password" ' +
-    'placeholder="仅加密保存，不写入接入配置"><span class="stg-tpl-wizard-keyhint">' +
-    '模板会创建接入点、模型供给和上游部署标识。</span></label>' +
-    '<div class="stg-tpl-wizard-toolbar"><input type="search" class="stg-tpl-wizard-search" ' +
-    'placeholder="搜索模型"><span class="stg-tpl-wizard-count"></span>' +
-    '<button type="button" class="stg-tpl-wizard-link" data-kind="all">全选</button>' +
-    '<button type="button" class="stg-tpl-wizard-link" data-kind="none">全不选</button></div>' +
-    '<div class="stg-tpl-wizard-list"></div></div>' +
-    '<div class="stg-modal-footer"><button type="button" class="stg-btn-secondary">取消</button>' +
-    '<button type="button" class="stg-btn-add">添加接入配置</button></div>';
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
-  if (template.category === 'local') {
-    var keyLabel = modal.querySelector('.stg-tpl-wizard-keylabel');
-    if (keyLabel) keyLabel.style.display = 'none';
+async function _addTemplateProvider(templateKey) {
+  /* Templates add directly: the resulting provider card exposes every
+   * editable item (keys, headers, base URL, model supply), so no wizard.
+   * The key lands via the card's 「+ 添加密钥」; compile with no
+   * selected_model_ids returns the full recipe set. */
+  try {
+    var result = await Api.providers.compileTemplate(templateKey);
+    if (!result || !result.provider_bundle) throw new Error('模板编译未返回接入配置');
+    await _stageModelRoutingProviderBundle(result.provider_bundle, '');
+  } catch (error) {
+    showAlert('添加模板失败：' + String(error && error.message || error));
   }
-  var list = modal.querySelector('.stg-tpl-wizard-list');
-  var boxes = [];
-  recipes.forEach(function(recipe) {
-    var row = document.createElement('label');
-    row.className = 'stg-tpl-wizard-row';
-    row.setAttribute('data-model-id', recipe.model_id);
-    var aliases = Array.from(new Set((recipe.request_ids || []).filter(function(requestId) {
-      return requestId && requestId !== recipe.model_id;
-    })));
-    row.setAttribute('data-search', [recipe.model_id].concat(aliases).join(' '));
-    row.innerHTML = '<input type="checkbox" checked><span class="stg-tpl-wizard-identity">' +
-      '<span class="stg-tpl-wizard-mid">' + escapeHtml(recipe.model_id) + '</span>' +
-      (aliases.length ? '<span class="stg-tpl-wizard-alias">alias · ' +
-        escapeHtml(aliases.join(' · ')) + '</span>' : '') + '</span>' +
-      '<span class="stg-tpl-wizard-meta">' +
-      escapeHtml((recipe.capabilities || []).join(' · ')) + '</span>';
-    list.appendChild(row);
-    boxes.push(row.querySelector('input'));
-  });
-  var counter = modal.querySelector('.stg-tpl-wizard-count');
-  var addButton = modal.querySelector('.stg-btn-add');
-  function refreshCount() {
-    var count = boxes.filter(function(box) { return box.checked; }).length;
-    counter.textContent = count + ' / ' + boxes.length;
-    addButton.disabled = count === 0;
-  }
-  boxes.forEach(function(box) { box.onchange = refreshCount; });
-  modal.querySelector('[data-kind="all"]').onclick = function() {
-    boxes.forEach(function(box) { box.checked = true; }); refreshCount();
-  };
-  modal.querySelector('[data-kind="none"]').onclick = function() {
-    boxes.forEach(function(box) { box.checked = false; }); refreshCount();
-  };
-  modal.querySelector('.stg-tpl-wizard-search').oninput = function(event) {
-    var query = event.target.value.trim().toLowerCase();
-    Array.from(list.children).forEach(function(row) {
-      row.style.display = !query || String(row.getAttribute('data-search')).toLowerCase().includes(query)
-        ? '' : 'none';
-    });
-  };
-  function close() { overlay.remove(); }
-  overlay.onclick = function(event) { if (event.target === overlay) close(); };
-  modal.querySelector('.stg-modal-close').onclick = close;
-  modal.querySelector('.stg-btn-secondary').onclick = close;
-  addButton.onclick = async function() {
-    var selected = boxes.map(function(box, index) {
-      return box.checked ? recipes[index].model_id : '';
-    }).filter(Boolean);
-    addButton.disabled = true;
-    addButton.textContent = '正在编译…';
-    try {
-      var result = await Api.providers.compileTemplate(template.key, selected);
-      if (!result || !result.provider_bundle) throw new Error('模板编译未返回接入配置');
-      if (await _stageModelRoutingProviderBundle(
-        result.provider_bundle,
-        modal.querySelector('.stg-tpl-wizard-key').value.trim())) {
-        close();
-      }
-    } catch (error) {
-      showAlert('添加模板失败：' + String(error && error.message || error));
-    } finally {
-      addButton.disabled = false;
-      addButton.textContent = '添加接入配置';
-    }
-  };
-  refreshCount();
-  modal.querySelector('.stg-tpl-wizard-key').focus();
 }
-
 async function addProvider() {
   var baseUrl = await showPrompt(
     '输入 OpenAI 兼容 API Base URL；Tofu 会先探测模型，再创建 v2 接入配置。',
@@ -828,6 +771,20 @@ function _modelRoutingProviderContext(providerId) {
         model.release_date;
     }
   });
+  var modelListPricing = {};
+  (documentValue.models || []).forEach(function(model) {
+    if (model.list_pricing) {
+      modelListPricing[(model.creator_id || '') + '::' + (model.model_id || '')] =
+        model.list_pricing;
+    }
+  });
+  var modelLifecycles = {};
+  (documentValue.models || []).forEach(function(model) {
+    if (model.lifecycle) {
+      modelLifecycles[(model.creator_id || '') + '::' + (model.model_id || '')] =
+        model.lifecycle;
+    }
+  });
   return {
     provider: provider,
     access: access,
@@ -837,6 +794,8 @@ function _modelRoutingProviderContext(providerId) {
     offerings: offerings,
     deployments: deployments,
     modelReleaseDates: modelReleaseDates,
+    modelListPricing: modelListPricing,
+    modelLifecycles: modelLifecycles,
     modelNames: modelNames,
   };
 }
@@ -853,37 +812,6 @@ function _modelRoutingProviderBrand(context) {
       (/claude|anthropic/i.test(evidence) ? 'claude' : brand);
   }
   return brand;
-}
-
-function _modelRoutingOfferingAliases(context, offering) {
-  if (!offering || offering.identity_state !== 'confirmed' || !offering.model) return [];
-  var canonicalModelId = String(offering.model.model_id || '');
-  return Array.from(new Set(context.deployments.filter(function(item) {
-    return item.row.offering_id === offering.offering_id;
-  }).map(function(item) {
-    return String(item.row.wire_model_id || '');
-  }).filter(function(wireModelId) {
-    return wireModelId && wireModelId !== canonicalModelId;
-  })));
-}
-
-function _modelRoutingOfferingAliasRows(context, offering) {
-  if (!offering || offering.identity_state !== 'confirmed' || !offering.model) return [];
-  var canonicalModelId = String(offering.model.model_id || '');
-  var seen = new Set();
-  return context.deployments.filter(function(item) {
-    if (item.row.offering_id !== offering.offering_id) return false;
-    var wireModelId = String(item.row.wire_model_id || '');
-    if (!wireModelId || wireModelId === canonicalModelId || seen.has(wireModelId)) return false;
-    seen.add(wireModelId);
-    return true;
-  }).map(function(item) {
-    return {
-      index: item.index,
-      wireModelId: String(item.row.wire_model_id || ''),
-      enabled: item.row.enabled !== false,
-    };
-  });
 }
 
 function _renderModelRoutingProvidersTab(list) {
@@ -954,8 +882,9 @@ function _renderModelRoutingProvidersTab(list) {
         '</div>' +
       _renderV2KeysSection(provider, context) +
       (primaryConnection ? _renderV2HeadersSection(primaryConnection) : '') +
+      '<div class="stg-provider-foot">' +
       (primaryConnection ? _renderV2ThinkingFormatField(primaryConnection) : '') +
-      '<div class="stg-field-row">' +
+      '<div class="stg-provider-foot-actions">' +
         '<div class="stg-toggle-row"><span>启用</span>' +
           '<label class="stg-toggle"><input type="checkbox"' + (access.enabled ? ' checked' : '') +
           ' data-tofu-action-change="_setModelRoutingCollectionField(\'provider_accesses\',' +
@@ -965,25 +894,8 @@ function _renderModelRoutingProvidersTab(list) {
         '<button type="button" class="stg-btn-danger" data-provider-id="' +
           escapeHtml(provider.provider_id) + '" ' +
           'data-tofu-action="_deleteModelRoutingProvider(this.dataset.providerId)">删除服务商</button>' +
-      '</div>' +
-      '<div class="stg-models-section">' +
-        '<div class="stg-models-header"><span class="stg-models-title">模型列表</span>' +
-        '<div class="stg-models-actions">' +
-        (modelCount ? '<button type="button" class="stg-btn-add stg-matrix-toggle' +
-          (_stgMatrixOpen[provider.provider_id] ? ' active' : '') + '" data-provider-id="' +
-          escapeHtml(provider.provider_id) + '" ' +
-          'data-tofu-action="_toggleMatrixView(this.dataset.providerId)" title="按凭证 × 模型查看授权矩阵">' +
-          (_stgMatrixOpen[provider.provider_id] ? '收起矩阵' : '访问矩阵') + '</button>' : '') +
-        (context.offerings.length ? '<button type="button" class="stg-btn-add" data-provider-id="' +
-          escapeHtml(provider.provider_id) + '" ' +
-          'data-tofu-action="_openProviderManager(this.dataset.providerId)">模型管理</button>' : '') +
-        '</div></div>' +
-      (_stgMatrixOpen[provider.provider_id]
-        ? _renderAccessMatrix(provider.provider_id)
-        : '<p class="stg-empty-sm">' + (context.offerings.length
-          ? '共 ' + context.offerings.length + ' 个模型供给 — 在「模型管理」中启用、配置别名或移除。'
-          : '尚无模型供给。') + '</p>') +
-      '</div>' +
+      '</div></div>' +
+      '<div class="stg-models-section">' + _renderAccessMatrix(provider.provider_id) + '</div>' +
       '</div>' +
       '</details>';
   });
@@ -1051,6 +963,7 @@ function _renderV2KeyCard(provider, item, order) {
       '<span class="stg-keys-idx">#' + (order + 1) + '</span>' +
       '<input class="stg-keys-input" type="text" readonly spellcheck="false" autocomplete="off" ' +
         'value="' + escapeHtml(display) + '" placeholder="sk-…" ' +
+        'size="' + Math.min(String(display).length + 1, 72) + '" ' +
         'data-masked="' + escapeHtml(display) + '" ' +
         'title="密文保存在服务端，默认只显示首尾识别位">' +
       (isApiKey && credentialId
@@ -1068,6 +981,20 @@ function _renderV2KeyCard(provider, item, order) {
   '</div>';
 }
 
+function _v2KeyDisplaySecret(secret) {
+  /* Credentials carrying encrypted extra_headers store a
+   * tofu.credential-secret/v1 envelope; the key card reveals only the
+   * usable key, never the envelope JSON chrome. */
+  try {
+    var decoded = JSON.parse(secret);
+    if (decoded && decoded.format === 'tofu.credential-secret/v1') {
+      var apiKey = String(decoded.api_key || '').trim();
+      if (apiKey) return apiKey;
+    }
+  } catch (error) { /* raw key secrets are not JSON */ }
+  return secret;
+}
+
 function _toggleV2KeyReveal(button) {
   if (!button || typeof button.closest !== 'function') return;
   var card = button.closest('.stg-key-card');
@@ -1075,6 +1002,7 @@ function _toggleV2KeyReveal(button) {
   if (!input) return;
   if (button.getAttribute('aria-pressed') === 'true') {
     input.value = input.getAttribute('data-masked') || '';
+    input.size = Math.min(String(input.value).length + 1, 72);
     button.setAttribute('aria-pressed', 'false');
     button.innerHTML = _V2_KEY_EYE_OPEN;
     return;
@@ -1089,7 +1017,9 @@ function _toggleV2KeyReveal(button) {
       showToast(t('settings.keyRevealFailed'));
       return;
     }
-    input.value = data.secret;
+    var display = _v2KeyDisplaySecret(data.secret);
+    input.value = display;
+    input.size = Math.min(display.length + 1, 72);
     button.setAttribute('aria-pressed', 'true');
     button.innerHTML = _V2_KEY_EYE_OFF;
   });
@@ -1214,24 +1144,23 @@ function _renderV2KeyCardStats(providerId, item) {
       escapeHtml(t('settings.keyStatLastError')) + '</span>';
   }
 
-  var rateTitle = total > 0
-    ? t('settings.keyStatRateTip', { succ: succ, total: total })
-    : t('settings.keyStatNoCallsTip');
-  var countChip = total > 0
-    ? '<span class="stg-keystat-count" title="' + escapeHtml(t('settings.keyStatCountTip')) + '">' +
-      escapeHtml(t('settings.keyStatCount', { n: total })) + '</span>'
-    : '<span class="stg-keystat-count" title="' + escapeHtml(t('settings.keyStatNoCallsTip')) + '">—</span>';
-
-  return '<span class="stg-keystat-metrics">' +
-      '<span class="stg-keystat-rate" title="' + escapeHtml(rateTitle) + '">' + srTxt + '</span>' +
-      countChip +
+  var metrics = total > 0
+    ? '<span class="stg-keystat-metrics">' +
+      '<span class="stg-keystat-rate" title="' +
+        escapeHtml(t('settings.keyStatRateTip', { succ: succ, total: total })) + '">' +
+        srTxt + '</span>' +
+      '<span class="stg-keystat-count" title="' + escapeHtml(t('settings.keyStatCountTip')) + '">' +
+        escapeHtml(t('settings.keyStatCount', { n: total })) + '</span>' +
       (fail > 0 ? '<span class="stg-keystat-fail" title="' + escapeHtml(t('settings.keyStatFailTip')) + '">' +
         escapeHtml(t('settings.keyStatFail', { n: fail })) + '</span>' : '') +
       (rl429 > 0 ? '<span class="stg-keystat-429" title="' + escapeHtml(t('settings.keyStat429Tip')) + '">' +
         escapeHtml(t('settings.keyStat429', { n: rl429 })) + '</span>' : '') +
       (gw > 0 ? '<span class="stg-keystat-gateway" title="' + escapeHtml(t('settings.keyStatGatewayTip')) + '">' +
         escapeHtml(t('settings.keyStatGateway', { n: gw })) + '</span>' : '') +
-    '</span>' +
+      '</span>'
+    : '<span class="stg-keystat-none">' + escapeHtml(t('settings.keyStatNoCallsTip')) + '</span>';
+
+  return metrics +
     badges +
     '<span class="stg-keystat-actions">' +
       '<label class="stg-toggle stg-key-toggle" title="' + escapeHtml(t('settings.keyStatToggleTip')) + '">' +
@@ -1387,7 +1316,6 @@ async function _deleteV2Credential(providerId, credentialIndex) {
     _stgModelRoutingRevision = Number(saved.revision || _stgModelRoutingRevision);
     await _loadModelRoutingAuthority();
     _renderProvidersTab();
-    if (_stgProviderManagerId) _renderProviderManagerBody();
     showToast('已删除密钥。');
   } catch (error) {
     showAlert('删除密钥失败：' + String(error && error.message || error));
@@ -1494,8 +1422,8 @@ function _renderV2ThinkingFormatField(connection) {
     ['reasoning_effort', 'reasoning_effort（Gemini 3.x 风格）'],
     ['none', '不发送思维参数'],
   ];
-  return '<div class="stg-field"><label>思维参数格式' +
-    ' <span class="stg-hint">（默认自动检测 — 仅当端点使用非标准格式时需配置）</span></label>' +
+  return '<div class="stg-field stg-thinking-field">' +
+    '<label title="默认自动检测 — 仅当端点使用非标准格式时需配置">思维参数格式</label>' +
     '<select data-tofu-action-change="_setModelRoutingCollectionField(\'connections\',' +
     connection.index + ',\'thinking_format\',this.value,\'string\')">' +
     options.map(function(option) {
@@ -1513,12 +1441,11 @@ function _removeV2Alias(deploymentIndex) {
     return candidate.offering_id === row.offering_id;
   });
   if (siblings.length <= 1) {
-    showAlert('每个模型供给至少保留一个上游标识；要移除整个模型请用卡片右下角的 ✕。');
+    showAlert('每个模型供给至少保留一个上游标识；要移除整个模型请用行尾的垃圾桶。');
     return;
   }
   deployments.splice(deploymentIndex, 1);
   _renderProvidersTab();
-  if (_stgProviderManagerId) _renderProviderManagerBody();
 }
 
 async function _addV2Alias(providerId, offeringId) {
@@ -1529,8 +1456,8 @@ async function _addV2Alias(providerId, offeringId) {
   });
   if (!offering) return;
   var alias = await showPrompt(
-    '输入该模型的别名（发给服务商的 request ID）。新别名先保持未启用，通过探测后才会参与路由。',
-    { title: '添加别名', placeholder: 'deepseek-v4-flash-tencent' });
+    '输入该模型的请求名（发给服务商的 request ID）。新请求名先保持未启用，通过探测后才会参与路由。',
+    { title: '添加请求名', placeholder: 'deepseek-v4-flash-tencent' });
   alias = String(alias || '').trim();
   if (!alias) return;
   var accessOfferingIds = new Set(context.offerings.map(function(item) {
@@ -1540,7 +1467,7 @@ async function _addV2Alias(providerId, offeringId) {
     return accessOfferingIds.has(row.offering_id) && row.wire_model_id === alias;
   });
   if (duplicate) {
-    showAlert('该别名已存在于本服务商。');
+    showAlert('该请求名已存在于本服务商。');
     return;
   }
   var connection = context.connections.find(function(item) {
@@ -1559,8 +1486,7 @@ async function _addV2Alias(providerId, offeringId) {
     probe_status: 'unprobed',
   });
   _renderProvidersTab();
-  if (_stgProviderManagerId) _renderProviderManagerBody();
-  showToast('已添加别名（未启用）— 保存并通过探测后参与路由。');
+  showToast('已添加请求名（未启用）— 保存后点探测，通过即自动启用（再保存生效）。');
 }
 
 async function _removeV2Offering(providerId, offeringId) {
@@ -1582,140 +1508,294 @@ async function _removeV2Offering(providerId, offeringId) {
     return row.offering_id !== offeringId;
   });
   _renderProvidersTab();
-  if (_stgProviderManagerId) _renderProviderManagerBody();
 }
-function _openProviderManager(providerId) {
-  _stgProviderManagerId = String(providerId || '');
-  _stgProviderManagerQuery = '';
-  _stgProviderManagerLimit = 80;
-  _renderProviderManager();
+/* ── 添加模型 picker：目录多选 + 自定义模型 ──
+ * Stages offerings + deployments into _stgModelRouting; the global 保存
+ * (Api.modelRouting.replace) persists them. New deployments ship
+ * enabled+passed so the model is usable immediately — same contract as
+ * discovered/local providers; the 访问矩阵 probe stays the way to verify
+ * real reachability afterwards. Confirmed offerings additionally need a
+ * credential authorization grant per existing credential (routing refuses
+ * ungranted refs), appended here deduped; revoke in the matrix.
+ */
+
+var _stgModelPickerProviderId = '';
+var _stgModelPickerQuery = '';
+var _stgModelPickerChecked = new Set();
+
+function _newV2StagedId(prefix) {
+  return prefix + '-' + String(Date.now()).toString(36) + '-' +
+    Math.random().toString(36).slice(2, 8);
 }
 
-function _closeProviderManager() {
-  _stgProviderManagerId = '';
-  var overlay = document.getElementById('stgProviderManagerOverlay');
-  if (overlay) overlay.remove();
+function _providerWireModelIds(context) {
+  var ids = new Set();
+  (context.deployments || []).forEach(function(item) {
+    ids.add(String(item.row.wire_model_id || ''));
+  });
+  return ids;
 }
 
-function _renderProviderManager() {
-  var prior = document.getElementById('stgProviderManagerOverlay');
-  if (prior) prior.remove();
-  if (!_stgProviderManagerId) return;
-  var context = _modelRoutingProviderContext(_stgProviderManagerId);
-  if (!context) { _stgProviderManagerId = ''; return; }
+function _providerAddableCatalogModels(context) {
+  var offered = new Set();
+  context.offerings.forEach(function(item) {
+    var row = item.row;
+    if (row.identity_state === 'confirmed' && row.model) {
+      offered.add((row.model.creator_id || '') + '::' + (row.model.model_id || ''));
+    }
+  });
+  return (_stgModelRouting.models || []).filter(function(model) {
+    if (model.lifecycle === 'retired') return false;
+    return !offered.has((model.creator_id || '') + '::' + (model.model_id || ''));
+  });
+}
+
+function _stageV2AddModels(providerId, catalogModels, customWireIds) {
+  var context = _modelRoutingProviderContext(providerId);
+  if (!context) return 0;
+  var connection = context.connections.find(function(item) {
+    return item.row.enabled !== false;
+  }) || context.connections[0];
+  if (!connection) {
+    showAlert('请先为该服务商配置 API 地址，再添加模型。');
+    return 0;
+  }
+  var wireIds = _providerWireModelIds(context);
+  var granted = new Set();
+  var added = 0;
+  var pushDeployment = function(offeringId, wireId, confidence) {
+    _stgModelRouting.deployments.push({
+      deployment_id: _newV2StagedId('deployment'),
+      offering_id: offeringId,
+      connection_id: connection.row.connection_id,
+      wire_model_id: wireId,
+      enabled: true,
+      identity_confidence: confidence,
+      probe_status: 'passed',
+      priority: 100,
+    });
+    wireIds.add(wireId);
+  };
+  var grantModel = function(ref) {
+    var grantKey = ref.creator_id + '::' + ref.model_id;
+    if (granted.has(grantKey)) return;
+    granted.add(grantKey);
+    context.credentials.forEach(function(item) {
+      var credential = item.row;
+      if (!credential.authorization) {
+        credential.authorization = { connection_ids: [], models: [] };
+      }
+      var grants = credential.authorization.models || [];
+      var exists = grants.some(function(candidate) {
+        return String(candidate.creator_id || '') === String(ref.creator_id) &&
+          String(candidate.model_id || '') === String(ref.model_id);
+      });
+      if (!exists) grants.push({ creator_id: ref.creator_id, model_id: ref.model_id });
+      credential.authorization.models = grants;
+    });
+  };
+  (catalogModels || []).forEach(function(model) {
+    var wireId = String(model.model_id || '');
+    if (!wireId || wireIds.has(wireId)) return;
+    var offeringId = _newV2StagedId('offering');
+    _stgModelRouting.offerings.push({
+      offering_id: offeringId,
+      provider_access_id: context.access.provider_access_id,
+      identity_state: 'confirmed',
+      model: { creator_id: model.creator_id, model_id: model.model_id },
+      enabled: true,
+      stale: false,
+      capabilities: (model.capabilities && model.capabilities.length
+        ? model.capabilities : ['text']).slice(),
+      context_window: model.context_window || 128000,
+      priority: 100,
+    });
+    pushDeployment(offeringId, wireId, 'high');
+    grantModel({ creator_id: model.creator_id, model_id: model.model_id });
+    added++;
+  });
+  (customWireIds || []).forEach(function(rawId) {
+    var wireId = String(rawId || '').trim();
+    if (!wireId || wireId.length > 256 || /[\u0000-\u001f]/.test(wireId)) return;
+    if (wireIds.has(wireId)) return;
+    var offeringId = _newV2StagedId('offering');
+    _stgModelRouting.offerings.push({
+      offering_id: offeringId,
+      provider_access_id: context.access.provider_access_id,
+      identity_state: 'pending_identity',
+      pending_model_id: wireId,
+      enabled: true,
+      stale: false,
+      capabilities: ['text'],
+      context_window: 128000,
+      priority: 100,
+    });
+    pushDeployment(offeringId, wireId, 'pending');
+    added++;
+  });
+  if (added) {
+    _renderProvidersTab();
+  }
+  return added;
+}
+
+function _openProviderModelPicker(providerId) {
+  var context = _modelRoutingProviderContext(providerId);
+  if (!context) return;
+  _closeProviderModelPicker();
+  _stgModelPickerProviderId = String(providerId);
+  _stgModelPickerQuery = '';
+  _stgModelPickerChecked = new Set();
   var overlay = document.createElement('div');
-  overlay.id = 'stgProviderManagerOverlay';
-  overlay.className = 'stg-v2-manager-overlay';
+  overlay.id = 'stgProviderModelPickerOverlay';
+  overlay.className = 'stg-v2-manager-overlay stg-v2-picker-overlay';
   overlay.setAttribute('role', 'presentation');
   var panel = document.createElement('section');
-  panel.className = 'stg-v2-manager';
+  panel.className = 'stg-v2-manager stg-v2-picker';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
-  panel.setAttribute('aria-label', '模型管理');
+  panel.setAttribute('aria-label', '添加模型');
   panel.innerHTML = '<header class="stg-v2-manager-head"><div class="stg-v2-manager-brand">' +
     _brandSvg(_modelRoutingProviderBrand(context), 22) + '<div><strong>' +
     escapeHtml(context.access.display_name || context.provider.name || context.provider.provider_id) +
-    '</strong><span>模型管理</span></div></div>' +
-    '<button type="button" class="stg-v2-close" data-tofu-action="_closeProviderManager()" aria-label="关闭">×</button></header>' +
-    '<div class="stg-v2-manager-body" id="stgProviderManagerBody"></div>';
+    '</strong><span>添加模型</span></div></div>' +
+    '<button type="button" class="stg-v2-close" data-tofu-action="_closeProviderModelPicker()" aria-label="关闭">×</button></header>' +
+    '<div class="stg-v2-manager-body">' +
+      '<div class="stg-v2-picker-custom"><label>自定义模型 ID</label>' +
+        '<div class="stg-v2-picker-custom-row">' +
+          '<input id="stgProviderModelCustomId" type="text" spellcheck="false" autocomplete="off" ' +
+            'placeholder="发给服务商的模型 ID，例如 deepseek-v4-flash-tencent">' +
+          '<button type="button" class="stg-btn-add" data-tofu-action="_stageV2CustomModelFromPicker()">添加</button>' +
+        '</div>' +
+        '<p class="stg-v2-picker-hint">自定义模型仅限本服务商显式调用，不参与官方路由。</p></div>' +
+      '<div class="stg-v2-picker-catalog"><label>从模型目录选择</label>' +
+        '<input class="stg-v2-picker-search" type="search" placeholder="搜索模型名称或 ID" ' +
+          'data-tofu-action-input="_filterProviderModelPicker(this.value)">' +
+        '<div class="stg-v2-picker-list" id="stgProviderModelPickerList"></div>' +
+        '<div class="stg-v2-picker-foot"><span id="stgProviderModelPickerCount">未选择模型</span>' +
+          '<button type="button" class="stg-btn-add" data-tofu-action="_stageV2CheckedCatalogModels()">添加所选</button></div>' +
+      '</div>' +
+    '</div>';
   overlay.appendChild(panel);
   document.body.appendChild(overlay);
-  overlay.onclick = function(event) { if (event.target === overlay) _closeProviderManager(); };
-  _renderProviderManagerBody();
+  overlay.onclick = function(event) { if (event.target === overlay) _closeProviderModelPicker(); };
+  var customInput = panel.querySelector('#stgProviderModelCustomId');
+  if (customInput) {
+    customInput.addEventListener('keydown', function(event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        _stageV2CustomModelFromPicker();
+      }
+    });
+  }
+  _renderProviderModelPickerList();
 }
 
-function _renderProviderManagerBody() {
-  var body = document.getElementById('stgProviderManagerBody');
-  var context = _modelRoutingProviderContext(_stgProviderManagerId);
-  if (!body || !context) return;
-  body.innerHTML = '<div class="stg-v2-toolbar"><input id="stgProviderModelSearch" type="search" ' +
-    'placeholder="搜索官方模型 ID 或别名" value="' + escapeHtml(_stgProviderManagerQuery) +
-    '" data-tofu-action-input="_filterProviderManagerModels(this.value)">' +
-    '<span>' + context.offerings.length + ' 个模型供给</span></div>' +
-    '<div class="stg-v2-list" id="stgProviderModelRows"></div>';
-  _renderProviderManagerModelRows(context);
+function _closeProviderModelPicker() {
+  _stgModelPickerProviderId = '';
+  var overlay = document.getElementById('stgProviderModelPickerOverlay');
+  if (overlay) overlay.remove();
 }
 
-function _renderProviderManagerModelRows(context) {
-  var list = document.getElementById('stgProviderModelRows');
-  if (!list) return;
-  var query = _stgProviderManagerQuery.trim().toLowerCase();
-  var filtered = context.offerings.filter(function(item) {
-    var row = item.row;
-    var label = _modelRoutingRefLabel(row, context.modelNames);
-    var aliases = _modelRoutingOfferingAliases(context, row);
-    return !query || (label + ' ' + (row.pending_model_id || '') + ' ' + aliases.join(' '))
-      .toLowerCase().includes(query);
+function _filterProviderModelPicker(value) {
+  _stgModelPickerQuery = String(value || '');
+  _renderProviderModelPickerList();
+}
+
+function _toggleProviderModelPick(key, checked) {
+  key = String(key || '');
+  if (!key) return;
+  if (checked) _stgModelPickerChecked.add(key);
+  else _stgModelPickerChecked.delete(key);
+  _renderProviderModelPickerCount();
+}
+
+function _renderProviderModelPickerCount() {
+  var count = document.getElementById('stgProviderModelPickerCount');
+  if (count) {
+    count.textContent = _stgModelPickerChecked.size
+      ? '已选择 ' + _stgModelPickerChecked.size + ' 个模型'
+      : '未选择模型';
+  }
+}
+
+function _renderProviderModelPickerList() {
+  var list = document.getElementById('stgProviderModelPickerList');
+  var context = _modelRoutingProviderContext(_stgModelPickerProviderId);
+  if (!list || !context) return;
+  var query = _stgModelPickerQuery.trim().toLowerCase();
+  var rows = _providerAddableCatalogModels(context).filter(function(model) {
+    var haystack = [model.display_name, model.model_id, model.creator_id].join(' ').toLowerCase();
+    return !query || haystack.includes(query);
   }).sort(function(left, right) {
-    return _modelRoutingRefLabel(left.row, context.modelNames).localeCompare(
-      _modelRoutingRefLabel(right.row, context.modelNames), undefined,
+    return String(left.display_name || left.model_id).localeCompare(
+      String(right.display_name || right.model_id), undefined,
       { numeric: true, sensitivity: 'base' });
   });
-  var visible = filtered.slice(0, _stgProviderManagerLimit);
-  list.innerHTML = visible.map(function(item) {
-    var row = item.row;
-    var pending = row.identity_state === 'pending_identity';
-    var aliasRows = _modelRoutingOfferingAliasRows(context, row);
-    var canonicalModelId = pending ? (row.pending_model_id || row.offering_id) : row.model.model_id;
-    var releaseDate = pending ? '' : (context.modelReleaseDates[
-      (row.model.creator_id || '') + '::' + (row.model.model_id || '')] || '');
-    return '<article class="stg-v2-model-row' + (pending ? ' is-pending' : '') +
-      (row.enabled ? '' : ' is-disabled') + '">' +
-      '<div class="stg-v2-model-identity"><strong>' +
-      escapeHtml(canonicalModelId) + '</strong><span>' +
-      (pending ? '待确认身份，仅限当前服务商' :
-        escapeHtml((row.model.creator_id || '') + '/' + (row.model.model_id || ''))) + '</span></div>' +
-      '<div class="stg-v2-model-detail">' +
-      '<div class="stg-v2-model-meta">' +
-      (row.capabilities || []).map(function(cap) {
-        return '<span class="stg-cap ' + escapeHtml(cap) + '">' + escapeHtml(cap) + '</span>';
-      }).join('') +
-      '<span class="stg-v2-model-stat">上下文 ' + escapeHtml(String(row.context_window || 0)) + '</span>' +
-      (releaseDate ? '<span class="stg-v2-model-stat">发布 ' + escapeHtml(releaseDate) + '</span>' : '') +
-      '</div>' +
-      '<div class="stg-v2-model-price">' + escapeHtml(_modelRoutingPriceLabel(row.actual_pricing)) + '</div>' +
-      '<div class="stg-v2-model-aliases">' +
-      (aliasRows.length ? '<span class="stg-aliases-label">别名：</span>' +
-        aliasRows.map(function(alias) {
-          return '<span class="stg-alias-chip' + (alias.enabled ? '' : ' pending') + '"' +
-            (alias.enabled ? '' : ' title="未通过探测，暂不参与路由"') + '>' +
-            escapeHtml(alias.wireModelId) +
-            '<span class="stg-alias-x" data-tofu-action="_removeV2Alias(' + alias.index +
-              ')" title="删除该别名">×</span></span>';
-        }).join('') : '') +
-      (pending ? '' : '<button type="button" class="stg-alias-add" data-provider-id="' +
-        escapeHtml(context.provider.provider_id) + '" data-offering-id="' +
-        escapeHtml(row.offering_id) + '" ' +
-        'data-tofu-action="_addV2Alias(this.dataset.providerId,this.dataset.offeringId)">+ 别名</button>') +
-      '</div></div>' +
-      '<div class="stg-v2-model-actions">' +
-      '<label class="stg-toggle" title="' + (row.enabled ? '点击停用该模型' : '点击启用该模型') + '">' +
-      '<input type="checkbox"' + (row.enabled ? ' checked' : '') +
-      ' data-tofu-action-change="_setModelRoutingCollectionField(\'offerings\',' +
-      item.index + ',\'enabled\',this.checked,\'boolean\')">' +
-      '<span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span></label>' +
-      '<button type="button" class="stg-btn-icon danger" data-provider-id="' +
-      escapeHtml(context.provider.provider_id) + '" data-offering-id="' +
-      escapeHtml(row.offering_id) + '" ' +
-      'data-tofu-action="_removeV2Offering(this.dataset.providerId,this.dataset.offeringId)" title="从该服务商移除该模型供给">✕</button>' +
-      '</div></article>';
-  }).join('') + (filtered.length > visible.length
-    ? '<button type="button" class="stg-v2-more" data-tofu-action="_showMoreProviderModels()">显示更多（剩余 ' +
-      (filtered.length - visible.length) + '）</button>' : '');
-  if (!visible.length) list.innerHTML = '<p class="stg-empty">没有匹配的模型供给。</p>';
+  var visible = rows.slice(0, 120);
+  list.innerHTML = visible.map(function(model) {
+    var key = (model.creator_id || '') + '::' + (model.model_id || '');
+    return '<label class="stg-v2-picker-row">' +
+      '<input type="checkbox" data-model-key="' + escapeHtml(key) + '"' +
+        (_stgModelPickerChecked.has(key) ? ' checked' : '') +
+        ' data-tofu-action-change="_toggleProviderModelPick(this.dataset.modelKey,this.checked)">' +
+      '<span class="stg-v2-picker-row-icon">' +
+        _brandSvg(typeof _modelBrand === 'function'
+          ? _modelBrand(model.model_id || '', model.creator_id)
+          : _detectBrand((model.creator_id || '') + ' ' + (model.model_id || '')), 16) + '</span>' +
+      '<span class="stg-v2-picker-row-id"><strong>' +
+        escapeHtml(model.display_name || model.model_id) + '</strong><span>' +
+        escapeHtml((model.creator_id || '') + '/' + (model.model_id || '')) + '</span></span>' +
+      '<span class="stg-v2-picker-row-price">' +
+        escapeHtml(model.list_pricing ? _modelRoutingPriceLabel(model.list_pricing) : '目录未挂牌') +
+      '</span></label>';
+  }).join('');
+  if (!visible.length) {
+    list.innerHTML = '<p class="stg-v2-picker-empty">' +
+      (rows.length ? '没有匹配的模型。' : '目录中的模型都已添加。') + '</p>';
+  }
+  _renderProviderModelPickerCount();
 }
 
-function _filterProviderManagerModels(value) {
-  _stgProviderManagerQuery = String(value || '');
-  _stgProviderManagerLimit = 80;
-  var context = _modelRoutingProviderContext(_stgProviderManagerId);
-  if (context) _renderProviderManagerModelRows(context);
+function _stageV2CustomModelFromPicker() {
+  var input = document.getElementById('stgProviderModelCustomId');
+  var wireId = input ? input.value.trim() : '';
+  if (!wireId) { if (input) input.focus(); return; }
+  var context = _modelRoutingProviderContext(_stgModelPickerProviderId);
+  if (!context) return;
+  if (wireId.length > 256 || /[\u0000-\u001f]/.test(wireId)) {
+    showAlert('模型 ID 无效。');
+    return;
+  }
+  if (_providerWireModelIds(context).has(wireId)) {
+    showAlert('该模型 ID 已存在于本服务商。');
+    return;
+  }
+  if (!_stageV2AddModels(_stgModelPickerProviderId, [], [wireId])) return;
+  input.value = '';
+  input.focus();
+  _renderProviderModelPickerList();
+  showToast('已添加自定义模型 — 随全局「保存」生效。');
 }
 
-function _showMoreProviderModels() {
-  _stgProviderManagerLimit += 80;
-  var context = _modelRoutingProviderContext(_stgProviderManagerId);
-  if (context) _renderProviderManagerModelRows(context);
+function _stageV2CheckedCatalogModels() {
+  if (!_stgModelPickerChecked.size) {
+    showToast('请先勾选要添加的模型。');
+    return;
+  }
+  var context = _modelRoutingProviderContext(_stgModelPickerProviderId);
+  if (!context) return;
+  var byKey = {};
+  _providerAddableCatalogModels(context).forEach(function(model) {
+    byKey[(model.creator_id || '') + '::' + (model.model_id || '')] = model;
+  });
+  var models = Array.from(_stgModelPickerChecked).map(function(key) {
+    return byKey[key];
+  }).filter(Boolean);
+  var added = _stageV2AddModels(_stgModelPickerProviderId, models, []);
+  _stgModelPickerChecked = new Set();
+  _renderProviderModelPickerList();
+  if (added) showToast('已添加 ' + added + ' 个模型 — 随全局「保存」生效。');
 }
 
 function _providerBundleForSave(context) {
@@ -1740,9 +1820,8 @@ async function _deleteModelRoutingProvider(providerId) {
   try {
     var result = await Api.modelRouting.deleteProvider(providerId, _stgModelRoutingRevision);
     if (result && result.revision != null) _stgModelRoutingRevision = Number(result.revision);
-    if (_stgProviderManagerId === String(providerId || '')) _closeProviderManager();
     await _loadModelRoutingAuthority();
-    _renderProvidersTab();
+    _renderModelRoutingTabs();
     showToast('已删除服务商。');
   } catch (error) {
     showAlert('删除服务商失败：' + String(error && error.message || error));
@@ -1787,11 +1866,53 @@ async function _saveNewProviderCredential(context, apiKey) {
     _stgModelRoutingRevision = Number(saved.revision || _stgModelRoutingRevision);
     await _loadModelRoutingAuthority();
     _renderProvidersTab();
-    if (_stgProviderManagerId) _renderProviderManagerBody();
     showToast('已添加凭证。');
   } catch (error) {
     showAlert('添加凭证失败：' + String(error && error.message || error));
   }
+}
+
+/**
+ * Repaint ONLY the Providers tab. The 模型 (Models) tab is not a side effect
+ * of this function — authority-reloading flows call ``_renderModelRoutingTabs()``
+ * (settings/model_catalog_tab.js) to repaint both pages by name.
+ */
+function _renderProvidersTab() {
+  var list = document.getElementById('stgProviderList');
+  if (list) _renderModelRoutingProvidersTab(list);
+}
+/* ===== migrated source: settings/model_catalog_tab.js ===== */
+/*
+ * 模型 (Models) settings tab — the global, read-only Creator/Model registry.
+ *
+ * Responsibility: own everything rendered into ``#settingsTab_models``
+ * (static/settings_panels/models.html). The page answers exactly one
+ * question: which official models exist, grouped by model developer
+ * (Creator). Provider supply, credentials, offerings, deployments, aliases,
+ * and routes never render here — the projection built below is a real data
+ * boundary, not a view convention: the typed Model feature
+ * (frontend/src/features/model-catalog/) receives only Creator/Model fields
+ * even though the staged authority document holds the rest.
+ *
+ * The 服务商 (Providers) tab is the mirror image: settings/provider_render.js
+ * owns provider supply and never re-renders this page. Flows that reload the
+ * v2 authority or mutate creators/models call ``_renderModelRoutingTabs()``
+ * so both pages repaint by name, not as a side effect.
+ */
+
+/** Search text staged by the page's search box (data-tofu-action-input in
+ *  static/settings_panels/models.html). Kept across re-renders so typing in
+ *  either tab never drops the query. */
+let _stgModelCatalogQuery = '';
+
+/** Repaint both model-routing settings tabs. Use this after any flow that
+ *  reloads the v2 authority or changes creators/models (settings open,
+ *  subscription sync, template bundle add, provider delete). Pure
+ *  provider-side edits (credentials, connections, offerings, matrix grants)
+ *  call ``_renderProvidersTab()`` alone — the registry does not change. */
+function _renderModelRoutingTabs() {
+  _renderProvidersTab();
+  _renderModelCatalogTab();
 }
 
 function _setModelCatalogSearch(value) {
@@ -1818,7 +1939,22 @@ function _renderModelCatalogTab() {
       return { creator_id: creator.creator_id, name: creator.name };
     }),
     models: (_stgModelRouting.models || []).map(function(model) {
+      // Derived vendor knowledge (release_date, official_pricing) is stamped
+      // by the backend at the read boundary; forward both verbatim so the
+      // typed feature can fall back to the official price table when the
+      // row carries no registered list_pricing.
       var pricing = model.list_pricing;
+      var official = model.official_pricing;
+      var copyPricing = function(source) {
+        return source ? {
+          input: source.input,
+          output: source.output,
+          currency: source.currency,
+          unit: source.unit,
+          cache_read: source.cache_read,
+          cache_write: source.cache_write,
+        } : undefined;
+      };
       return {
         creator_id: model.creator_id,
         model_id: model.model_id,
@@ -1826,15 +1962,9 @@ function _renderModelCatalogTab() {
         capabilities: (model.capabilities || []).slice(),
         context_window: model.context_window,
         quality_rank: model.quality_rank,
-        list_pricing: pricing ? {
         release_date: model.release_date || undefined,
-          input: pricing.input,
-          output: pricing.output,
-          currency: pricing.currency,
-          unit: pricing.unit,
-          cache_read: pricing.cache_read,
-          cache_write: pricing.cache_write,
-        } : undefined,
+        list_pricing: copyPricing(pricing),
+        official_pricing: copyPricing(official),
         lifecycle: model.lifecycle,
       };
     }),
@@ -1870,20 +2000,22 @@ function _renderModelCatalogTab() {
         '</strong><span>' + escapeHtml(model.creator_id + '/' + model.model_id) + '</span></div></article>';
     }).join('') + '</div>';
 }
-
-function _renderProvidersTab() {
-  var list = document.getElementById('stgProviderList');
-  if (list) _renderModelRoutingProvidersTab(list);
-  _renderModelCatalogTab();
-}
 /* ===== migrated source: settings/local_deploy.js ===== */
 /*
  * Local deployment Settings projection.
  *
- * Responsibility: the dedicated 本地部署 entry — engine preset chooser, batch
- * probe-and-stage of OpenAI-compatible local endpoints, and the managed
- * model-path handoff into a fresh chat armed with the local_serve tool flow.
- * Staging authority stays with provider_render.js (_stageModelRoutingProviderBundle).
+ * Responsibility: the dedicated 本地部署 page —
+ *   1. 智能推荐: live hardware probe + curated catalog ranked against it
+ *      (read-only /api/v1/local-serve/*), each card handing off to the chat
+ *      agent for download + managed deploy;
+ *   2. 云端替代: DeepSeek V4 Flash escape hatch when hardware is too weak,
+ *      deep-linking the DeepSeek provider template wizard;
+ *   3. 托管实例: ledger rows with live status; failed rows hand off to the
+ *      agent's diagnosis/repair flow;
+ *   4. 手动接入: engine preset endpoint probe-and-stage, managed model-path
+ *      handoff, and the fully custom provider path.
+ * Staging authority stays with provider_render.js (_stageModelRoutingProviderBundle);
+ * all deploy/stop/remove writes stay with the approval-gated local_serve agent tools.
  */
 
 var _LOCAL_DEPLOY_PRESETS = [
@@ -1908,12 +2040,324 @@ var _LOCAL_DEPLOY_PRESETS = [
     descKey: 'settings.localPresetCustomDesc' },
 ];
 
+var _LD_PURPOSES = ['', 'chat', 'coding', 'reasoning', 'vision', 'multilingual'];
+
+var _LD_TIER_CLASS = {
+  comfortable: 'is-comfortable', tight: 'is-tight',
+  extreme: 'is-extreme', cpu: 'is-cpu',
+};
+
+var _LD_TIER_LABEL_KEY = {
+  comfortable: 'settings.localRecFitComfortable',
+  tight: 'settings.localRecFitTight',
+  extreme: 'settings.localRecFitExtreme',
+  cpu: 'settings.localRecFitCpu',
+};
+
+var _LD_STATUS_LABEL_KEY = {
+  planned: 'settings.localStatusPlanned',
+  installing: 'settings.localStatusInstalling',
+  starting: 'settings.localStatusStarting',
+  running: 'settings.localStatusRunning',
+  stopped: 'settings.localStatusStopped',
+  failed: 'settings.localStatusFailed',
+};
+
 function _localDeployWireClose(overlay, modal) {
   function close() { overlay.remove(); }
   overlay.onclick = function(event) { if (event.target === overlay) close(); };
   modal.querySelector('.stg-modal-close').onclick = close;
   return close;
 }
+
+function _localDeployPresetTile(preset, overlay) {
+  var item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'stg-template-item stg-local-preset';
+  item.innerHTML = '<span class="stg-local-preset-icon">' +
+    _brandSvg(preset.icon, 22) + '</span>' +
+    '<span class="stg-template-info"><span class="stg-template-name">' +
+    escapeHtml(preset.nameKey ? t(preset.nameKey) : preset.name) +
+    '</span><span class="stg-template-models">' +
+    escapeHtml(t(preset.descKey)) + '</span></span>' +
+    '<span class="stg-local-preset-arrow"><svg viewBox="0 0 16 16" width="14" height="14" ' +
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+    'stroke-linejoin="round"><path d="M6 3.5 10.5 8 6 12.5"/></svg></span>';
+  item.onclick = function() {
+    overlay.remove();
+    if (preset.engine === 'managed') _openManagedDeployDialog();
+    else if (preset.custom) addProvider();
+    else _openLocalEndpointDialog(preset);
+  };
+  return item;
+}
+
+// ─────────────────────────── shared chat handoff ───────────────────────────
+
+function _ldStartChat(promptText) {
+  closeSettings();
+  // newChat() reads the current draft to archive the previous conversation,
+  // so the prompt must land in the input only after the new shell exists.
+  newChat();
+  var input = document.getElementById('userInput');
+  if (!input) return;
+  input.value = promptText;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  updateSendButton();
+  input.focus();
+}
+
+function _ldCopy(text, btn) {
+  function done() {
+    var prev = btn.textContent;
+    btn.textContent = t('settings.localRecCopied');
+    setTimeout(function() { btn.textContent = prev; }, 1500);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, function() {});
+  }
+}
+
+// ─────────────────────────── hardware card ───────────────────────────
+
+function _ldGib(n) {
+  return (typeof n === 'number' && isFinite(n)) ? (n / 1073741824).toFixed(1) : '?';
+}
+
+function _ldHardwareHtml(hw) {
+  var parts = [];
+  var gpus = (hw && hw.gpus) || [];
+  if (gpus.length) {
+    gpus.forEach(function(g) {
+      parts.push('<span class="stg-ld-hw-item">GPU' + escapeHtml(String(g.index)) + ' ' +
+        escapeHtml(String(g.name || '?')) + ' · ' +
+        escapeHtml(t('settings.localHwVram', {
+          free: _ldGib(g.vram_free_bytes), total: _ldGib(g.vram_total_bytes),
+        })) + '</span>');
+    });
+  } else {
+    parts.push('<span class="stg-ld-hw-item stg-ld-hw-warn">' +
+      escapeHtml(t('settings.localHwNoGpu')) + '</span>');
+  }
+  parts.push('<span class="stg-ld-hw-item">' +
+    escapeHtml(t('settings.localHwRam', {
+      free: _ldGib(hw && hw.ram_available_bytes),
+      total: _ldGib(hw && hw.ram_total_bytes),
+    })) + '</span>');
+  parts.push('<span class="stg-ld-hw-item">' +
+    escapeHtml(t('settings.localHwDisk', {
+      free: _ldGib(hw && hw.disk_free_bytes),
+    })) + '</span>');
+  return parts.join('');
+}
+
+function _ldLoadHardware(modal) {
+  var box = modal.querySelector('[data-ld="hardware"]');
+  if (!box) return;
+  box.innerHTML = '<span class="stg-ld-hw-item">' +
+    escapeHtml(t('settings.localRecLoading')) + '</span>';
+  Promise.resolve(Api.localServe.hardware()).then(function(data) {
+    if (!box.isConnected) return;
+    if (!data || !data.hardware) {
+      box.innerHTML = '<span class="stg-ld-hw-item stg-ld-hw-warn">' +
+        escapeHtml(t('settings.localRecError')) + '</span>';
+      return;
+    }
+    box.innerHTML = _ldHardwareHtml(data.hardware);
+  });
+}
+
+// ─────────────────────────── recommendations ───────────────────────────
+
+function _ldRecBrand(cand) {
+  var id = String((cand && cand.id) || '');
+  if (id.indexOf('qwen') === 0) return 'qwen';
+  if (id.indexOf('deepseek') === 0) return 'deepseek';
+  return 'local';
+}
+
+function _ldRecCard(cand) {
+  var best = cand.best || {};
+  var download = best.download || {};
+  var tier = String(cand.tier || 'comfortable');
+  var card = document.createElement('div');
+  card.className = 'stg-ld-rec';
+  card.innerHTML =
+    '<span class="stg-ld-rec-icon">' + _brandSvg(_ldRecBrand(cand), 22) + '</span>' +
+    '<span class="stg-ld-rec-main">' +
+      '<span class="stg-ld-rec-title"><strong>' + escapeHtml(String(cand.display || '')) +
+        '</strong><span class="stg-ld-fit ' + (_LD_TIER_CLASS[tier] || '') + '">' +
+        escapeHtml(t(_LD_TIER_LABEL_KEY[tier] || _LD_TIER_LABEL_KEY.comfortable)) +
+      '</span></span>' +
+      '<span class="stg-ld-rec-sub">' +
+        escapeHtml(t('settings.localRecSub', {
+          params: String(cand.params_b),
+          variant: String(best.variant || ''),
+          engine: String(best.engine || ''),
+          size: _ldGib(best.weight_bytes),
+        })) + '</span>' +
+      (cand.note ? '<span class="stg-ld-rec-note">' +
+        escapeHtml(String(cand.note)) + '</span>' : '') +
+      (download.hf_cmd ? '<span class="stg-ld-rec-cmd"><code>' +
+        escapeHtml(String(download.hf_cmd)) +
+        '</code><button type="button" class="stg-ld-copy">' +
+        escapeHtml(t('settings.localRecCopyCmd')) + '</button></span>' : '') +
+    '</span>' +
+    '<button type="button" class="stg-btn-add stg-ld-rec-go">' +
+      escapeHtml(t('settings.localRecDeploy')) + '</button>';
+  var copyBtn = card.querySelector('.stg-ld-copy');
+  if (copyBtn) {
+    copyBtn.onclick = function() { _ldCopy(String(download.hf_cmd || ''), copyBtn); };
+  }
+  card.querySelector('.stg-ld-rec-go').onclick = function() {
+    _ldStartChat(t('settings.localRecDeployPrompt', {
+      model: String(cand.display || ''),
+      variant: String(best.variant || ''),
+      engine: String(best.engine || ''),
+      cmd: String(download.hf_cmd || ''),
+    }));
+  };
+  return card;
+}
+
+function _ldCloudCard(alt) {
+  var pricing = (alt && alt.pricing) || {};
+  var card = document.createElement('div');
+  card.className = 'stg-ld-cloud';
+  card.innerHTML =
+    '<span class="stg-ld-rec-icon">' + _brandSvg('deepseek', 22) + '</span>' +
+    '<span class="stg-ld-rec-main">' +
+      '<span class="stg-ld-rec-title"><strong>' +
+        escapeHtml(t('settings.localCloudTitle', { name: String(alt.display || '') })) +
+      '</strong></span>' +
+      '<span class="stg-ld-rec-note">' + escapeHtml(String(alt.reason || '')) + '</span>' +
+      '<span class="stg-ld-rec-sub">' +
+        escapeHtml(t('settings.localCloudPrice', {
+          input: String(pricing.input), output: String(pricing.output),
+        })) + '</span>' +
+    '</span>' +
+    '<button type="button" class="stg-btn-add stg-ld-cloud-go">' +
+      escapeHtml(t('settings.localCloudAdd')) + '</button>';
+  card.querySelector('.stg-ld-cloud-go').onclick = function() {
+    var overlay = document.getElementById('stgLocalDeployModal');
+    if (overlay) overlay.remove();
+    void _addTemplateProvider(String(alt.template_key || 'deepseek'));
+  };
+  return card;
+}
+
+function _ldLoadRecommendations(modal, purpose) {
+  var box = modal.querySelector('[data-ld="recs"]');
+  if (!box) return;
+  box.innerHTML = '<div class="stg-ld-hint">' +
+    escapeHtml(t('settings.localRecLoading')) + '</div>';
+  Promise.resolve(Api.localServe.recommendations(purpose)).then(function(data) {
+    if (!box.isConnected) return;
+    box.innerHTML = '';
+    if (!data) {
+      box.innerHTML = '<div class="stg-ld-hint">' +
+        escapeHtml(t('settings.localRecError')) + '</div>';
+      return;
+    }
+    var candidates = data.candidates || [];
+    if (!candidates.length) {
+      box.innerHTML = '<div class="stg-ld-hint">' +
+        escapeHtml(t('settings.localRecEmpty')) + '</div>';
+    } else {
+      candidates.forEach(function(cand) { box.appendChild(_ldRecCard(cand)); });
+    }
+    if (data.cloud_alternative) box.appendChild(_ldCloudCard(data.cloud_alternative));
+  });
+}
+
+function _ldPurposeBar(modal) {
+  var bar = document.createElement('div');
+  bar.className = 'stg-ld-purposes';
+  _LD_PURPOSES.forEach(function(purpose) {
+    var chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'stg-ld-purpose' + (purpose === '' ? ' is-active' : '');
+    chip.textContent = t('settings.localRecPurpose' +
+      (purpose ? purpose.charAt(0).toUpperCase() + purpose.slice(1) : 'All'));
+    chip.onclick = function() {
+      bar.querySelectorAll('.stg-ld-purpose').forEach(function(row) {
+        row.classList.toggle('is-active', row === chip);
+      });
+      _ldLoadRecommendations(modal, purpose);
+    };
+    bar.appendChild(chip);
+  });
+  return bar;
+}
+
+// ─────────────────────────── managed instances ───────────────────────────
+
+function _ldInstanceRow(inst) {
+  var status = String(inst.status || '');
+  var labelKey = _LD_STATUS_LABEL_KEY[status];
+  var row = document.createElement('div');
+  row.className = 'stg-ld-inst';
+  var diagnosis = inst.diagnosis || null;
+  row.innerHTML =
+    '<span class="stg-ld-inst-main">' +
+      '<span class="stg-ld-rec-title"><strong>' +
+        escapeHtml(String(inst.served_name || inst.id || '')) +
+        '</strong><span class="stg-ld-state is-' + escapeHtml(status) + '">' +
+        escapeHtml(labelKey ? t(labelKey) : status) + '</span></span>' +
+      '<span class="stg-ld-rec-sub">' +
+        escapeHtml(String(inst.engine || '')) +
+        (inst.base_url ? ' · ' + escapeHtml(String(inst.base_url)) : '') +
+      '</span>' +
+      (diagnosis ? '<span class="stg-ld-rec-note">' +
+        escapeHtml(String(diagnosis.summary || '')) + '</span>' : '') +
+    '</span>';
+  if (status === 'failed') {
+    var repair = document.createElement('button');
+    repair.type = 'button';
+    repair.className = 'stg-btn-add stg-ld-inst-fix';
+    repair.textContent = t('settings.localManagedRepair');
+    repair.onclick = function() {
+      _ldStartChat(t('settings.localRepairPrompt', {
+        id: String(inst.id || ''),
+        model: String(inst.served_name || inst.model_path || ''),
+        engine: String(inst.engine || ''),
+      }));
+    };
+    row.appendChild(repair);
+  } else if (status === 'stopped' || status === 'planned') {
+    var start = document.createElement('button');
+    start.type = 'button';
+    start.className = 'stg-btn-add stg-ld-inst-start';
+    start.textContent = t('settings.localManagedStart');
+    start.onclick = function() {
+      _ldStartChat(t('settings.localStartPrompt', {
+        id: String(inst.id || ''),
+        model: String(inst.served_name || inst.model_path || ''),
+        engine: String(inst.engine || ''),
+      }));
+    };
+    row.appendChild(start);
+  }
+  return row;
+}
+
+function _ldLoadDeployments(modal) {
+  var box = modal.querySelector('[data-ld="instances"]');
+  if (!box) return;
+  Promise.resolve(Api.localServe.deployments()).then(function(data) {
+    if (!box.isConnected) return;
+    box.innerHTML = '';
+    var rows = (data && data.instances) || [];
+    if (!rows.length) {
+      box.innerHTML = '<div class="stg-ld-hint">' +
+        escapeHtml(t('settings.localManagedEmpty')) + '</div>';
+      return;
+    }
+    rows.forEach(function(inst) { box.appendChild(_ldInstanceRow(inst)); });
+  });
+}
+
+// ─────────────────────────── the page ───────────────────────────
 
 function addLocalProvider() {
   var prev = document.getElementById('stgLocalDeployModal');
@@ -1922,34 +2366,42 @@ function addLocalProvider() {
   overlay.id = 'stgLocalDeployModal';
   overlay.className = 'stg-modal-overlay';
   var modal = document.createElement('div');
-  modal.className = 'stg-modal stg-tpl-wizard';
+  modal.className = 'stg-modal stg-tpl-wizard stg-local-deploy';
   modal.innerHTML = '<div class="stg-modal-header"><span class="stg-modal-title">' +
     escapeHtml(t('settings.localPresetTitle')) +
     '</span><button type="button" class="stg-modal-close">✕</button></div>' +
     '<div class="stg-modal-body"><p class="stg-modal-desc">' +
     escapeHtml(t('settings.localPresetDesc')) + '</p>' +
-    '<div class="stg-template-grid"></div></div>';
+    '<div class="stg-local-group-label">' +
+    escapeHtml(t('settings.localRecGroupTitle')) + '</div>' +
+    '<div class="stg-ld-hw" data-ld="hardware"></div>' +
+    '<div data-ld="purposes"></div>' +
+    '<div class="stg-ld-recs" data-ld="recs"></div>' +
+    '<div class="stg-local-group-label">' +
+    escapeHtml(t('settings.localManagedGroup')) + '</div>' +
+    '<div class="stg-ld-instances" data-ld="instances"></div>' +
+    '<div class="stg-local-group-label">' +
+    escapeHtml(t('settings.localPresetGroupEngines')) + '</div>' +
+    '<div class="stg-template-grid" data-group="engines"></div>' +
+    '<div class="stg-local-group-label">' +
+    escapeHtml(t('settings.localPresetGroupOther')) + '</div>' +
+    '<div class="stg-template-grid" data-group="other"></div></div>';
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
-  var grid = modal.querySelector('.stg-template-grid');
+  modal.querySelector('[data-ld="purposes"]').appendChild(_ldPurposeBar(modal));
+  var enginesGrid = modal.querySelector('[data-group="engines"]');
+  var otherGrid = modal.querySelector('[data-group="other"]');
   _LOCAL_DEPLOY_PRESETS.forEach(function(preset) {
-    var item = document.createElement('button');
-    item.type = 'button';
-    item.className = 'stg-template-item';
-    item.innerHTML = _brandSvg(preset.icon, 22) +
-      '<span class="stg-template-info"><span class="stg-template-name">' +
-      escapeHtml(preset.nameKey ? t(preset.nameKey) : preset.name) +
-      '</span><span class="stg-template-models">' +
-      escapeHtml(t(preset.descKey)) + '</span></span>';
-    item.onclick = function() {
-      overlay.remove();
-      if (preset.engine === 'managed') _openManagedDeployDialog();
-      else if (preset.custom) addProvider();
-      else _openLocalEndpointDialog(preset);
-    };
-    grid.appendChild(item);
+    var tile = _localDeployPresetTile(preset, overlay);
+    // Managed + custom stay below the four inference engines (owner-ratified
+    // order 2026-07-25); grouping is purely visual.
+    if (preset.engine === 'managed' || preset.custom) otherGrid.appendChild(tile);
+    else enginesGrid.appendChild(tile);
   });
   _localDeployWireClose(overlay, modal);
+  _ldLoadHardware(modal);
+  _ldLoadRecommendations(modal, '');
+  _ldLoadDeployments(modal);
 }
 
 function _openLocalEndpointDialog(preset) {
@@ -2154,8 +2606,14 @@ function _startManagedDeployChat(path, engineLabel) {
    same window scope as every other runtime section. No imports needed.
    ═══════════════════════════════════════════════════════════════════ */
 
-/** Per-provider matrix view toggle state, keyed by provider_id. */
-var _stgMatrixOpen = {};
+/** Per-provider management-surface state (search text + status filter
+ *  chip), keyed by provider_id. The matrix is this provider's always-on
+ *  model-supply manager. It is deliberately provider-scoped: the global,
+ *  read-only Creator/Model registry is the 模型 (Models) tab
+ *  (settings/model_catalog_tab.js + frontend/src/features/model-catalog/),
+ *  which the matrix never renders. */
+var _stgMatrixQuery = {};
+var _stgMatrixFilter = {};
 
 /** Per-provider probe snapshot, keyed by provider_id. Shape:
  *  ``{ status: 'running'|'done'|'error', cells: { "<credIdx>::<wireId>":
@@ -2182,6 +2640,10 @@ var _stgMatrixProbeScope = {};
 
 /** Shared lightning-bolt glyph for every probe trigger (toolbar + scopes). */
 var _MX_BOLT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>';
+
+
+/** Trash glyph for the remove-offering row action. */
+var _MX_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>';
 
 /** Update the attempts setting for a provider from the toolbar selector. */
 function _setMatrixAttempts(providerId, val) {
@@ -2340,16 +2802,20 @@ function _fitMatrixPanelWidth() {
   });
 })();
 
-/** Flip between the model-list view and the access-matrix view. */
-function _toggleMatrixView(providerId) {
-  providerId = String(providerId || '');
-  if (!providerId) return;
-  _stgMatrixOpen[providerId] = !_stgMatrixOpen[providerId];
-  if (_stgMatrixOpen[providerId]) _stgMatrixProbeAttached[providerId] = false; // allow resume on (re)open
-  _renderProvidersTab();
+// ── v2 data derivation ──────────────────────────────────────────────────
+
+/** Update the matrix search text for a provider (input action). */
+function _setMatrixQuery(providerId, value) {
+  _stgMatrixQuery[providerId] = String(value || '');
+  _rerenderMatrix(providerId);
 }
 
-// ── v2 data derivation ──────────────────────────────────────────────────
+/** Switch the exclusive status bucket the matrix lists. */
+function _setMatrixFilter(providerId, value) {
+  _stgMatrixFilter[providerId] = ['all', 'enabled', 'disabled', 'pending'].indexOf(value) >= 0
+    ? value : 'all';
+  _rerenderMatrix(providerId);
+}
 
 /** The credential columns of the matrix: the access's credentials in
  *  document order — the SAME order the backend's probe plan uses, so cell
@@ -2358,44 +2824,72 @@ function _matrixCredentials(context) {
   return context ? context.credentials : [];
 }
 
-/** De-duplicated list of trimmed non-empty strings, order stable. */
-function _mxDedupe(list) {
-  var seen = {}, out = [];
-  for (var i = 0; i < (list || []).length; i++) {
-    var v = (typeof list[i] === 'string') ? list[i].trim() : '';
-    if (v && !seen[v]) { seen[v] = true; out.push(v); }
-  }
-  return out;
-}
-
-/** One matrix row-group per confirmed offering:
- *  ``{ offering, offeringIndex, canonical, wireIds, capabilities }``.
+/** One matrix row-group per offering (confirmed AND pending — the matrix
+ *  doubles as the supply manager):
+ *  ``{ offering, offeringIndex, canonical, pending, retired, releaseDate,
+ *      pricing, catalogPrice, wireIds, disabledWireIds, deploymentByWire,
+ *      capabilities }``.
  *  ``wireIds`` are the ENABLED deployments' upstream ids in document order
- *  (mirroring the backend probe plan); an offering without any enabled
- *  deployment falls back to probing its canonical model id, the same
- *  legacy shape the backend uses. */
+ *  (mirroring the backend probe plan); ``disabledWireIds`` are the rest —
+ *  rendered as dimmed sub-rows so freshly added request names (which the
+ *  backend refuses to enable before a passed probe) stay visible, probeable
+ *  and deletable. ``deploymentByWire`` maps either bucket's id to its GLOBAL
+ *  deployments-array index (what ``_removeV2Alias`` expects). An offering
+ *  without any enabled deployment falls back to probing its canonical
+ *  model id, the same legacy shape the backend uses. */
 function _matrixModelRows(context) {
   var out = [];
   if (!context) return out;
   context.offerings.forEach(function(item) {
     var offering = item.row;
-    if (offering.identity_state !== 'confirmed' || !offering.model) return;
-    var canonical = String(offering.model.model_id || '').trim();
+    var pending = offering.identity_state === 'pending_identity' || !offering.model;
+    var canonical = pending
+      ? String(offering.pending_model_id || offering.offering_id || '').trim()
+      : String(offering.model.model_id || '').trim();
     if (!canonical) return;
-    var wireIds = _mxDedupe(context.deployments.filter(function(dep) {
-      return dep.row.offering_id === offering.offering_id && dep.row.enabled !== false;
-    }).map(function(dep) {
-      return dep.row.wire_model_id;
-    }));
+    var wireIds = [], disabledWireIds = [], deploymentByWire = {};
+    context.deployments.forEach(function(dep) {
+      if (dep.row.offering_id !== offering.offering_id) return;
+      var wire = String(dep.row.wire_model_id || '').trim();
+      if (!wire) return;
+      var bucket = (dep.row.enabled !== false) ? wireIds : disabledWireIds;
+      if (bucket.indexOf(wire) < 0) {
+        bucket.push(wire);
+        deploymentByWire[wire] = dep.index;
+      }
+    });
+    var modelKey = pending
+      ? '' : (String(offering.model.creator_id || '') + '::' + canonical);
     out.push({
       offering: offering,
       offeringIndex: item.index,
       canonical: canonical,
+      pending: pending,
+      retired: !pending && context.modelLifecycles[modelKey] === 'retired',
+      releaseDate: pending ? '' : (context.modelReleaseDates[modelKey] || ''),
+      pricing: pending ? null
+        : (offering.actual_pricing || context.modelListPricing[modelKey] || null),
+      catalogPrice: !pending && !offering.actual_pricing &&
+        !!context.modelListPricing[modelKey],
       wireIds: wireIds,
+      disabledWireIds: disabledWireIds,
+      deploymentByWire: deploymentByWire,
       capabilities: (offering.capabilities || []).slice(),
     });
   });
   return out;
+}
+
+/** Exclusive-bucket status filter + substring match over every id the
+ *  group displays (canonical + enabled & disabled request names). */
+function _matrixGroupMatches(entry, query, filter) {
+  if (filter === 'enabled' && (entry.pending || entry.offering.enabled === false)) return false;
+  if (filter === 'disabled' && (entry.pending || entry.offering.enabled !== false)) return false;
+  if (filter === 'pending' && !entry.pending) return false;
+  if (!query) return true;
+  var hay = [entry.canonical].concat(entry.wireIds, entry.disabledWireIds)
+    .join(' ').toLowerCase();
+  return hay.indexOf(query) >= 0;
 }
 
 /** The wire-id pool the matrix renders/probes for one row-group. */
@@ -2417,6 +2911,7 @@ function _matrixIsPureLogical(entry) {
  *  authorization allow-list? The grant is per (credential × model), so
  *  every wire row of one offering shares the same state. */
 function _matrixCellOn(credentialRow, entry) {
+  if (!entry.offering || !entry.offering.model) return false; // pending: no ModelRef exists
   var grants = (credentialRow.authorization && credentialRow.authorization.models) || [];
   var creator = String(entry.offering.model.creator_id || '');
   var modelId = String(entry.offering.model.model_id || '');
@@ -2427,21 +2922,77 @@ function _matrixCellOn(credentialRow, entry) {
   return false;
 }
 
+/** Exclusive-bucket filter chip with a live count. */
+function _mxFilterChip(providerId, active, value, label, count) {
+  var on = active === value;
+  return '<button type="button" class="stg-v2-filter-chip' + (on ? ' active' : '') +
+    '" aria-pressed="' + (on ? 'true' : 'false') + '" data-provider-id="' + escapeHtml(providerId) +
+    '" data-tofu-action="_setMatrixFilter(this.dataset.providerId,\'' + value + '\')">' +
+    escapeHtml(label) + ' <em>' + count + '</em></button>';
+}
+
+/** 待确认 / 已下线 state chip for a root row (empty string when neither). */
+function _mxStateChips(entry) {
+  if (entry.pending) {
+    return '<span class="stg-mx-chip pending" title="' + escapeHtml(t('settings.matrixPendingHint')) + '">' +
+      escapeHtml(t('settings.matrixPendingChip')) + '</span>';
+  }
+  if (entry.retired) {
+    return '<span class="stg-mx-chip retired" title="' + escapeHtml(t('settings.matrixRetiredHint')) + '">' +
+      escapeHtml(t('settings.matrixRetiredChip')) + '</span>';
+  }
+  return '';
+}
+
+/** Compact meta line under a root row's id: capability chips + context
+ *  window + release date + pricing (catalog prices carry a 目录价 tag).
+ *  Pending rows render nothing — there is no catalog identity to describe. */
+function _mxMetaHtml(entry) {
+  if (entry.pending) return '';
+  var capLabels = (typeof _MODEL_CAP_LABELS === 'object' && _MODEL_CAP_LABELS) || {};
+  var caps = entry.capabilities.map(function(cap) {
+    return '<span class="stg-cap ' + escapeHtml(cap) + '" title="' + escapeHtml(cap) + '">' +
+      escapeHtml(capLabels[cap] || cap) + '</span>';
+  }).join('');
+  var bits = '';
+  if (entry.offering.context_window) {
+    var ctxLabel = (typeof _modelRoutingContextLabel === 'function')
+      ? _modelRoutingContextLabel(entry.offering.context_window)
+      : String(entry.offering.context_window);
+    bits += '<span class="stg-mx-meta-bit">' + escapeHtml(t('settings.matrixContextLabel')) + ' ' +
+      escapeHtml(ctxLabel) + '</span>';
+  }
+  if (entry.releaseDate) {
+    bits += '<span class="stg-mx-meta-bit">' + escapeHtml(t('settings.matrixReleaseLabel')) + ' ' +
+      escapeHtml(entry.releaseDate) + '</span>';
+  }
+  if (entry.pricing) {
+    bits += '<span class="stg-mx-meta-bit stg-mx-price" title="' + escapeHtml(t('settings.matrixPriceTitle')) + '">' +
+      '<span class="stg-v2-price-cur">' + escapeHtml(entry.pricing.currency || 'USD') + '</span>' +
+      '<span class="stg-v2-price-io">' + escapeHtml(t('settings.matrixPriceIn')) + '</span>' +
+      escapeHtml(String(Number(entry.pricing.input || 0))) +
+      '<span class="stg-v2-price-sep">/</span>' +
+      '<span class="stg-v2-price-io">' + escapeHtml(t('settings.matrixPriceOut')) + '</span>' +
+      escapeHtml(String(Number(entry.pricing.output || 0))) +
+      (entry.catalogPrice
+        ? '<span class="stg-v2-price-tag">' + escapeHtml(t('settings.matrixCatalogPrice')) + '</span>'
+        : '') +
+    '</span>';
+  }
+  if (!caps && !bits) return '';
+  return '<span class="stg-mx-meta">' + caps + bits + '</span>';
+}
+
 // ── Render ──────────────────────────────────────────────────────────────
 
-/** Build the full access-matrix table for a provider. */
+/** Build the full access-matrix table for a provider — the provider's
+ *  always-on model-supply manager: search + status buckets + add-model on
+ *  the manage row, probe tools on the second toolbar row. */
 function _renderAccessMatrix(providerId) {
   var context = _modelRoutingProviderContext(providerId);
   if (!context) return '';
   var credentials = _matrixCredentials(context);
-  var rows = _matrixModelRows(context);
-
-  if (credentials.length === 0) {
-    return '<div class="stg-matrix-empty">' + escapeHtml(t('settings.matrixNoKeys')) + '</div>';
-  }
-  if (rows.length === 0) {
-    return '<div class="stg-matrix-empty">' + escapeHtml(t('settings.noModels')) + '</div>';
-  }
+  var allRows = _matrixModelRows(context);
 
   // Lazily re-attach to a persisted/running probe the first time we render
   // this provider's matrix in a session.
@@ -2449,6 +3000,27 @@ function _renderAccessMatrix(providerId) {
     _stgMatrixProbeAttached[providerId] = true;
     setTimeout(function() { _resumeMatrixProbe(providerId); }, 0);
   }
+
+  // Exclusive status buckets + substring search over every displayed id.
+  var counts = { all: allRows.length, enabled: 0, disabled: 0, pending: 0 };
+  allRows.forEach(function(entry) {
+    if (entry.pending) { counts.pending++; return; }
+    if (entry.offering.enabled === false) counts.disabled++;
+    else counts.enabled++;
+  });
+  var query = String(_stgMatrixQuery[providerId] || '');
+  var filter = _stgMatrixFilter[providerId] || 'all';
+  var q = query.trim().toLowerCase();
+  var rows = allRows.filter(function(entry) {
+    return _matrixGroupMatches(entry, q, filter);
+  }).sort(function(left, right) {
+    // Disabled offerings sink below usable ones (pending counts as usable).
+    var rank = ((right.offering.enabled === false) ? 0 : 1) -
+               ((left.offering.enabled === false) ? 0 : 1);
+    if (rank) return rank;
+    return left.canonical.localeCompare(right.canonical, undefined,
+      { numeric: true, sensitivity: 'base' });
+  });
 
   var probe = _stgMatrixProbe[providerId] || {};
   var running = (probe.status === 'running');
@@ -2472,7 +3044,30 @@ function _renderAccessMatrix(providerId) {
   }
 
   var html = '<div class="stg-matrix" data-provider-id="' + escapeHtml(providerId) + '">' +
-    '<div class="stg-matrix-toolbar">' +
+    '<div class="stg-mx-manage">' +
+      (allRows.length
+        ? '<input id="stgMatrixSearch-' + escapeHtml(providerId) + '" class="stg-mx-search" type="search" ' +
+          'placeholder="' + escapeHtml(t('settings.matrixSearchPlaceholder')) + '" ' +
+          'value="' + escapeHtml(query) + '" data-provider-id="' + escapeHtml(providerId) + '" ' +
+          'data-tofu-action-input="_setMatrixQuery(this.dataset.providerId,this.value)">' +
+          '<div class="stg-mx-filters" role="group" aria-label="' + escapeHtml(t('settings.matrixFilterAria')) + '">' +
+            _mxFilterChip(providerId, filter, 'all', t('settings.matrixFilterAll'), counts.all) +
+            _mxFilterChip(providerId, filter, 'enabled', t('settings.matrixFilterEnabled'), counts.enabled) +
+            _mxFilterChip(providerId, filter, 'disabled', t('settings.matrixFilterDisabled'), counts.disabled) +
+            _mxFilterChip(providerId, filter, 'pending', t('settings.matrixFilterPending'), counts.pending) +
+          '</div>'
+        : '') +
+      '<button type="button" class="stg-btn-add stg-mx-addmodel" data-provider-id="' + escapeHtml(providerId) + '" ' +
+        'data-tofu-action="_openProviderModelPicker(this.dataset.providerId)">+ ' +
+        escapeHtml(t('settings.matrixAddModel')) + '</button>' +
+    '</div>';
+
+  if (!allRows.length) {
+    return html + '<p class="stg-mx-empty">' + escapeHtml(t('settings.matrixEmptyModels')) + '</p></div>';
+  }
+
+  if (credentials.length) {
+    html += '<div class="stg-matrix-toolbar">' +
       '<div class="stg-matrix-legend">' +
         '<span class="stg-mx-leg on"><span class="stg-mx-dot"></span>' + escapeHtml(t('settings.matrixLegendOn')) + '</span>' +
         '<span class="stg-mx-leg off"><span class="stg-mx-dot"></span>' + escapeHtml(t('settings.matrixLegendOff')) + '</span>' +
@@ -2496,15 +3091,25 @@ function _renderAccessMatrix(providerId) {
           escapeHtml(running ? t('settings.matrixProbing') : (hasResults ? t('settings.matrixRetest') : t('settings.matrixProbe'))) + '</button>' +
       '</div>' +
     '</div>' +
-    (statusTxt ? '<div class="stg-mx-status' + (running ? ' running' : (probe.status === 'error' ? ' error' : '')) + '">' + escapeHtml(statusTxt) + '</div>' : '') +
-    '<div class="stg-matrix-scroll"><table class="stg-matrix-table"><thead><tr>' +
-      '<th class="stg-mx-corner">' + escapeHtml(t('settings.matrixModelCol')) + '</th>';
+    (statusTxt ? '<div class="stg-mx-status' + (running ? ' running' : (probe.status === 'error' ? ' error' : '')) + '">' + escapeHtml(statusTxt) + '</div>' : '');
+  } else {
+    html += '<p class="stg-mx-nokeys">' + escapeHtml(t('settings.matrixNoKeysHint')) + '</p>';
+  }
+
+  html += '<div class="stg-matrix-scroll"><table class="stg-matrix-table"><thead><tr>' +
+    '<th class="stg-mx-corner">' + escapeHtml(t(credentials.length ? 'settings.matrixModelCol' : 'settings.matrixModelColSolo')) + '</th>';
 
   for (var ci = 0; ci < credentials.length; ci++) {
     var cred = credentials[ci].row;
+    var credKind = String(cred.kind || 'api_key');
+    // The masked recognition hint (sk-…•••…wxyz) is the only way to tell two
+    // same-kind credentials apart; fall back to the bare kind for hint-less
+    // rows (local identity, legacy oauth snapshots).
+    var credHint = String(cred.key_hint || '').trim();
     html += '<th class="stg-mx-keyhead" data-key-idx="' + ci + '">' +
       '<span class="stg-mx-credname">' + escapeHtml(t('settings.matrixCredentialN').replace('{n}', String(ci + 1))) + '</span>' +
-      '<span class="stg-mx-credkind">' + escapeHtml(cred.kind || 'api_key') + '</span>' +
+      '<span class="stg-mx-credkind" title="' + escapeHtml(credHint ? credKind + ' · ' + credHint : credKind) + '">' +
+        escapeHtml(credHint || credKind) + '</span>' +
       '<button type="button" class="stg-mx-zap col' + (_scopeCovers(providerId, 'col', ci) ? ' probing' : '') + '"' +
         (running ? ' disabled' : '') +
         ' data-provider-id="' + escapeHtml(providerId) + '"' +
@@ -2514,18 +3119,32 @@ function _renderAccessMatrix(providerId) {
   }
   html += '</tr></thead><tbody>';
 
+  if (!rows.length) {
+    html += '<tr><td class="stg-mx-nomatch" colspan="' + (credentials.length + 1) + '">' +
+      escapeHtml(t('settings.matrixNoMatch')) + '</td></tr>';
+  }
+
   for (var ri = 0; ri < rows.length; ri++) {
     var entry = rows[ri];
     var pool = _matrixRowPool(entry);
-    var groupOpen = pool.length > 1; // only bracket offerings that HAVE a pool
+    var displayCount = pool.length + entry.disabledWireIds.length;
+    var groupOpen = displayCount > 1; // only bracket offerings that HAVE a pool
     if (_matrixIsPureLogical(entry)) {
-      html += _renderMatrixRow(providerId, entry, entry.canonical, -1, pool.length, credentials, groupOpen);
+      html += _renderMatrixRow(providerId, entry, entry.canonical, -1, displayCount, credentials, groupOpen, false);
       for (var li = 0; li < pool.length; li++) {
-        html += _renderMatrixRow(providerId, entry, pool[li], li + 1, pool.length, credentials, groupOpen);
+        html += _renderMatrixRow(providerId, entry, pool[li], li + 1, displayCount, credentials, groupOpen, false);
+      }
+      for (var di = 0; di < entry.disabledWireIds.length; di++) {
+        html += _renderMatrixRow(providerId, entry, entry.disabledWireIds[di],
+          pool.length + 1 + di, displayCount, credentials, groupOpen, true);
       }
     } else {
       for (var wi = 0; wi < pool.length; wi++) {
-        html += _renderMatrixRow(providerId, entry, pool[wi], wi, pool.length, credentials, groupOpen);
+        html += _renderMatrixRow(providerId, entry, pool[wi], wi, displayCount, credentials, groupOpen, false);
+      }
+      for (var dj = 0; dj < entry.disabledWireIds.length; dj++) {
+        html += _renderMatrixRow(providerId, entry, entry.disabledWireIds[dj],
+          pool.length + dj, displayCount, credentials, groupOpen, true);
       }
     }
   }
@@ -2533,7 +3152,7 @@ function _renderAccessMatrix(providerId) {
   return html;
 }
 
-/** Render one matrix row. Two kinds:
+/** Render one matrix row. Kinds:
  *   - LOGICAL HEADER (``rowPos === -1``): the preset-facing canonical id of
  *     an offering whose wire pool never carries it. It carries the offering
  *     toggle and the wire-id count, but NO per-credential cells — the id is
@@ -2541,13 +3160,26 @@ function _renderAccessMatrix(providerId) {
  *     grant, deny, or probe.
  *   - WIRE ROW (``rowPos >= 0``): one concrete upstream id across
  *     credentials. ``rowPos`` is the 1-based index under a logical header,
- *     or 0 = root for a legacy-shape offering (canonical id IS a wire id). */
-function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, grouped) {
+ *     or 0 = root for a legacy-shape offering (canonical id IS a wire id).
+ *  ``wireDisabled`` marks a deployment whose enabled flag is off — freshly
+ *  added request names land in exactly this state until a probe passes. The
+ *  row stays visible (dimmed label, 未启用 chip, deletable) AND probeable:
+ *  the probe is the only way it can earn its enable (the backend refuses
+ *  enabled=true before a passed probe).
+ *  Root rows double as the supply manager: state chips (待确认/已下线),
+ *  capability/pricing/context meta line, and row actions (row probe, add
+ *  request name, remove offering). */
+function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, grouped, wireDisabled) {
   var isLogicalHead = (rowPos === -1);
   var isAlias = rowPos > 0;
   var underHead = _matrixIsPureLogical(entry);
   var isLastInGroup = underHead ? (rowPos === rowCount) : (rowPos === rowCount - 1);
   var globallyOff = (entry.offering.enabled === false);
+  // Hatched cells: no (credential × id) pair exists for grants or probes —
+  // logical preset heads and pending supplies (no ModelRef yet). A disabled
+  // request name is NOT hatched: not routed, but probeable so it can earn
+  // its enable.
+  var hatched = isLogicalHead || entry.pending;
   var brand = (typeof _modelBrand === 'function')
     ? _modelBrand(id, entry.offering && entry.offering.model && entry.offering.model.creator_id)
     : ((typeof _detectBrand === 'function') ? _detectBrand(id) : '');
@@ -2556,7 +3188,7 @@ function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, 
   // Row-scope probe button: probes exactly this wire id across every credential.
   var _rowProbe = _stgMatrixProbe[providerId] || {};
   var _rowRunning = (_rowProbe.status === 'running');
-  var rowProbeBtn = isLogicalHead ? '' : '<button type="button" class="stg-mx-zap row' +
+  var rowProbeBtn = (hatched || !credentials.length) ? '' : '<button type="button" class="stg-mx-zap row' +
       (_scopeCovers(providerId, 'row', null, id) ? ' probing' : '') + '"' +
     (_rowRunning ? ' disabled' : '') +
     ' data-provider-id="' + escapeHtml(providerId) + '"' +
@@ -2570,25 +3202,48 @@ function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, 
     // A distinct accent color per wire-id index, cycled, so two ids of the
     // same offering never look alike at a glance.
     var hue = (entry.offeringIndex * 47 + rowPos * 71) % 360;
+    var depIndex = entry.deploymentByWire[id];
     labelCell = '<td class="stg-mx-model alias' + (globallyOff ? ' model-off' : '') +
-        (isLastInGroup ? ' last' : '') + '" style="--alias-hue:' + hue + '">' +
+        (wireDisabled ? ' wire-off' : '') + (isLastInGroup ? ' last' : '') +
+        '" style="--alias-hue:' + hue + '">' +
       '<span class="stg-mx-tree">' + connector + '</span>' +
       '<span class="stg-mx-aliasidx">' + rowPos + '</span>' +
       '<span class="stg-mx-brand">' + brandSvg + '</span>' +
       '<span class="stg-mx-mid alias-id" title="' + escapeHtml(id) + '">' + escapeHtml(id) + '</span>' +
-      rowProbeBtn +
+      (wireDisabled
+        ? '<span class="stg-mx-chip off" title="' + escapeHtml(t('settings.matrixAliasOffHint')) + '">' +
+            escapeHtml(t('settings.matrixAliasOffChip')) + '</span>'
+        : '') +
+      '<span class="stg-mx-rowacts">' + rowProbeBtn +
+        (depIndex != null
+          ? '<button type="button" class="stg-mx-act del" title="' + escapeHtml(t('settings.matrixRemoveAliasHint')) + '" ' +
+            'data-tofu-action="event.stopPropagation();_removeV2Alias(' + depIndex + ')">×</button>'
+          : '') +
+      '</span>' +
     '</td>';
   } else {
-    var countBadge = rowCount > 0
+    var poolLen = entry.wireIds.length || 1;
+    var countBadge = (!entry.pending && poolLen > 1)
       ? '<span class="stg-mx-aliascount" title="' + escapeHtml(t('settings.matrixAliasCountHint')) + '">' +
-          rowCount + ' ' + escapeHtml(rowCount === 1 ? t('settings.matrixIdOne') : t('settings.matrixIdMany')) + '</span>'
+          poolLen + ' ' + escapeHtml(t('settings.matrixIdMany')) + '</span>'
       : '';
     var presetBadge = isLogicalHead
       ? '<span class="stg-mx-preset" title="' + escapeHtml(t('settings.matrixPresetHint')) + '">' +
           escapeHtml(t('settings.matrixPresetBadge')) + '</span>'
       : '';
+    var rootActs = '<span class="stg-mx-rowacts">' + rowProbeBtn +
+      '<button type="button" class="stg-mx-act add" title="' + escapeHtml(t('settings.matrixAddAliasHint')) + '" ' +
+        'data-provider-id="' + escapeHtml(providerId) + '" ' +
+        'data-tofu-action="event.stopPropagation();_addV2Alias(this.dataset.providerId,\'' +
+          escapeHtml(entry.offering.offering_id) + '\')">+</button>' +
+      '<button type="button" class="stg-mx-act del danger" title="' + escapeHtml(t('settings.matrixRemoveOfferingHint')) + '" ' +
+        'data-provider-id="' + escapeHtml(providerId) + '" ' +
+        'data-tofu-action="event.stopPropagation();_removeV2Offering(this.dataset.providerId,\'' +
+          escapeHtml(entry.offering.offering_id) + '\')">' + _MX_TRASH + '</button>' +
+      '</span>';
     labelCell = '<td class="stg-mx-model root' + (isLogicalHead ? ' logical' : '') +
-        (globallyOff ? ' model-off' : '') + '">' +
+        (globallyOff ? ' model-off' : '') + (entry.pending ? ' pending' : '') +
+        (entry.retired ? ' retired' : '') + '">' +
       '<label class="stg-toggle stg-mx-gtoggle" title="' + escapeHtml(t('settings.matrixGlobalToggle')) + '" data-tofu-action="event.stopPropagation();">' +
         '<input type="checkbox"' + (globallyOff ? '' : ' checked') +
           ' data-tofu-action-change="_setModelRoutingCollectionField(\'offerings\',' +
@@ -2596,20 +3251,27 @@ function _renderMatrixRow(providerId, entry, id, rowPos, rowCount, credentials, 
         '<span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>' +
       '</label>' +
       '<span class="stg-mx-brand">' + brandSvg + '</span>' +
-      '<span class="stg-mx-mid" title="' + escapeHtml(id || '') + '">' + escapeHtml(id || '(unnamed)') + '</span>' +
+      '<span class="stg-mx-mid' + (entry.retired ? ' retired' : '') + '" title="' + escapeHtml(id || '') + '">' +
+        escapeHtml(id || '(unnamed)') + '</span>' +
+      _mxStateChips(entry) +
       presetBadge +
       countBadge +
-      rowProbeBtn +
+      rootActs +
+      _mxMetaHtml(entry) +
     '</td>';
   }
 
   var cls = 'stg-mx-row' + (globallyOff ? ' model-off' : '') +
     (isAlias ? ' is-alias' : ' is-root') + (isLogicalHead ? ' is-logical' : '') +
-    (grouped ? ' grouped' : '') + (isLastInGroup && grouped ? ' group-end' : '');
+    (grouped ? ' grouped' : '') + (isLastInGroup && grouped ? ' group-end' : '') +
+    (wireDisabled ? ' is-wire-off' : '') + (entry.pending ? ' is-pending' : '') +
+    (entry.retired ? ' is-retired' : '');
   var row = '<tr class="' + cls + '" data-offering="' + entry.offeringIndex + '" data-id="' + escapeHtml(id) + '">' + labelCell;
-  if (isLogicalHead) {
+  if (hatched) {
+    var hatchTitle = isLogicalHead ? '' :
+      ' title="' + escapeHtml(entry.pending ? t('settings.matrixPendingHint') : t('settings.matrixAliasOffHint')) + '"';
     for (var hk = 0; hk < credentials.length; hk++) {
-      row += '<td class="stg-mx-cell logical"></td>';
+      row += '<td class="stg-mx-cell logical"' + hatchTitle + '></td>';
     }
   } else {
     for (var k = 0; k < credentials.length; k++) {
@@ -2696,7 +3358,13 @@ function _toggleMatrixAccess(providerId, offeringIndex, credIdx) {
   var context = _modelRoutingProviderContext(providerId);
   if (!context) return;
   var offering = (_stgModelRouting.offerings || [])[offeringIndex];
-  var credential = (_stgModelRouting.credentials || [])[credIdx];
+  // credIdx is the column position inside THIS provider's matrix, not an
+  // index into the global credentials array — resolve through the
+  // provider-scoped context (its .row aliases the global object), or any
+  // access whose credentials don't start at global index 0 toggles a
+  // DIFFERENT provider's credential and its own dot never flips.
+  var credItem = context.credentials[credIdx];
+  var credential = credItem && credItem.row;
   if (!offering || !credential || !offering.model) return;
   if (!credential.authorization) credential.authorization = { connection_ids: [], models: [] };
   var grants = credential.authorization.models || [];
@@ -2712,10 +3380,26 @@ function _toggleMatrixAccess(providerId, offeringIndex, credIdx) {
   _rerenderMatrix(providerId);
 }
 
-/** Re-render the providers tab; open cards and the matrix view state are
- *  preserved by the tab renderer + ``_stgMatrixOpen``. */
+/** Re-render the providers tab; open cards and per-provider matrix state
+ *  are preserved by the tab renderer + ``_stgMatrixQuery``/``_stgMatrixFilter``.
+ *  The matrix search box keeps focus + caret across the rebuild so typing
+ *  doesn't drop the field on every keystroke. */
 function _rerenderMatrix(providerId) {
+  var refocus = null;
+  if (typeof document !== 'undefined' && document.activeElement) {
+    var active = document.activeElement;
+    if (active && active.id && String(active.id).indexOf('stgMatrixSearch-') === 0) {
+      refocus = { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+    }
+  }
   _renderProvidersTab();
+  if (refocus) {
+    var el = document.getElementById(refocus.id);
+    if (el && typeof el.focus === 'function') {
+      el.focus();
+      try { el.setSelectionRange(refocus.start, refocus.end); } catch (e) { /* non-text input */ }
+    }
+  }
   if (typeof _fitMatrixPanelWidth === 'function') _fitMatrixPanelWidth();
 }
 
@@ -2782,30 +3466,41 @@ function _reconcileProbeNonChat(providerId) {
 /** Enforce the strict proof contract in the browser as well as the server.
  * This is load-bearing during rolling deploys and for old persisted cache:
  * an old backend can still send ``ok + HTTP 400`` and the UI must never turn
- * that contradiction into a green pip. No-ops when the typed status helper
- * is absent (the server-side snapshot normalization then owns the rule). */
+ * that contradiction into a green pip. The legacy-status migration no-ops
+ * when the typed status helper is absent (the server-side snapshot
+ * normalization then owns the rule); the disabled-cell strip below is not
+ * part of that migration and always runs. */
 function _reconcileProbeProofContract(providerId) {
   var probe = _stgMatrixProbe[providerId];
-  if (!probe || !probe.cells || typeof runtimeScope.effectiveProbeStatus !== 'function') return;
+  if (!probe || !probe.cells) return;
+  var migrate = typeof runtimeScope.effectiveProbeStatus === 'function';
   var changed = false;
   Object.keys(probe.cells).forEach(function(k) {
     var c = probe.cells[k];
     if (!c) return;
-    var effective = runtimeScope.effectiveProbeStatus(c, probe.probe_schema_version || 1);
-    if (effective === c.status) return;
-    var previous = c.status;
-    c.status = effective;
-    c.recommend_disable = (effective === 'bad_request' ||
-      effective === 'invalid_response' || effective === 'error');
-    if (previous === 'ok' && effective === 'bad_request' &&
-        String(c.detail || '').indexOf('false-positive corrected') < 0) {
-      c.detail = (c.detail || 'HTTP 400') +
-        ' — legacy false-positive corrected; provider rejected the request';
-    } else if (previous === 'ok' && effective === 'unverified') {
-      c.detail = (c.detail || 'HTTP 2xx') +
-        ' — legacy result did not validate generated content; re-test required';
+    if (migrate) {
+      var effective = runtimeScope.effectiveProbeStatus(c, probe.probe_schema_version || 1);
+      if (effective !== c.status) {
+        var previous = c.status;
+        c.status = effective;
+        c.recommend_disable = (effective === 'bad_request' ||
+          effective === 'invalid_response' || effective === 'error');
+        if (previous === 'ok' && effective === 'bad_request' &&
+            String(c.detail || '').indexOf('false-positive corrected') < 0) {
+          c.detail = (c.detail || 'HTTP 400') +
+            ' — legacy false-positive corrected; provider rejected the request';
+        } else if (previous === 'ok' && effective === 'unverified') {
+          c.detail = (c.detail || 'HTTP 2xx') +
+            ' — legacy result did not validate generated content; re-test required';
+        }
+        changed = true;
+      }
     }
-    changed = true;
+    // Discovery probes of disabled request names stay non-actionable.
+    if (c.deployment_enabled === false && c.recommend_disable) {
+      c.recommend_disable = false;
+      changed = true;
+    }
   });
   if (changed) _mxRecountSummary(probe);
 }
@@ -2844,6 +3539,11 @@ function _pruneProbeCellsToGrid(providerId) {
     _matrixModelRows(context).forEach(function(entry) {
       var pool = _matrixRowPool(entry);
       for (var ri = 0; ri < pool.length; ri++) valid[_probeCellKey(ci, pool[ri])] = true;
+      // Disabled request names are probeable grid members too — their
+      // verdicts must survive the prune (they drive the auto-enable).
+      for (var di = 0; di < entry.disabledWireIds.length; di++) {
+        valid[_probeCellKey(ci, entry.disabledWireIds[di])] = true;
+      }
     });
   }
   var changed = false;
@@ -2873,7 +3573,42 @@ function _ingestProbeSnapshot(providerId, snap) {
   _reconcileProbeProofContract(providerId);
   _pruneProbeCellsToGrid(providerId);
   _reconcileProbeNonChat(providerId);
+  _stageProbePassedWireIds(providerId);
   return true;
+}
+
+/** Enable disabled request names whose probe just passed. A fresh 'ok'
+ *  verdict on any credential is the ONLY way a manually added wire id can
+ *  become routable — the domain authority rejects enabled=true without
+ *  probe_status='passed', and a confirmed offering additionally requires
+ *  high identity confidence — so the verdict is staged straight into the
+ *  routing document (the same enabled+passed+high shape the add-model
+ *  picker ships); the global 保存 commits it. */
+function _stageProbePassedWireIds(providerId) {
+  var context = _modelRoutingProviderContext(providerId);
+  var probe = _stgMatrixProbe[providerId];
+  if (!context || !probe || !probe.cells) return;
+  var okWires = {};
+  Object.keys(probe.cells).forEach(function(k) {
+    var c = probe.cells[k];
+    if (c && c.status === 'ok' && c.model_id) okWires[String(c.model_id)] = true;
+  });
+  var staged = 0;
+  (context.deployments || []).forEach(function(item) {
+    var row = item && item.row;
+    if (!row || row.enabled !== false) return;
+    var wire = String(row.wire_model_id || '').trim();
+    if (!wire || !okWires[wire]) return;
+    row.enabled = true;
+    row.probe_status = 'passed';
+    row.identity_confidence = 'high';
+    staged++;
+  });
+  if (!staged) return;
+  if (typeof showToast === 'function') {
+    showToast(t('settings.matrixWireProbePassed').replace('{n}', String(staged)), 'success');
+  }
+  _rerenderMatrix(providerId);
 }
 
 /** Start (or, when not forcing, resume) a background probe for a provider.
@@ -2948,6 +3683,8 @@ function _resumeMatrixProbe(providerId) {
   // Don't clobber a live local run.
   if (_stgMatrixProbe[providerId] && _stgMatrixProbe[providerId].status === 'running'
       && _stgMatrixProbeTimers[providerId]) return;
+  if (typeof Api === 'undefined' || !Api.modelRouting
+      || typeof Api.modelRouting.probeCellsStatus !== 'function') return;
   Api.modelRouting.probeCellsStatus(providerId).then(function(snap) {
     if (_ingestProbeSnapshot(providerId, snap)) {
       _rerenderMatrix(providerId);
@@ -2972,6 +3709,9 @@ function _applyMatrixRecommendations(providerId) {
   Object.keys(probe.cells).forEach(function(k) {
     var c = probe.cells[k];
     if (!c || !c.recommend_disable) return;
+    // Discovery probe of a not-yet-enabled request name: it is not routed,
+    // so its verdict can never be evidence against the offering's grant.
+    if (c.deployment_enabled === false) return;
     var entry = byRoot[c.root_model_id];
     if (!entry) return;
     // A non-chat model may only lose its grant on a verdict from its OWN
@@ -4685,9 +5425,6 @@ async function _saveSettingsBody() {
   if (typeof _collectResponsesExperimentControls === 'function') {
     _collectResponsesExperimentControls();
   }
-  config.temperature = parseFloat(document.getElementById("settingTemp").value);
-  config.maxTokens = parseInt(document.getElementById("settingMaxTokens").value);
-  config.imageMaxWidth = parseInt(document.getElementById("settingImageMaxWidth").value) || 0;
   config.systemPrompt = document.getElementById("settingSystem").value;
   var spModeSel = document.getElementById('settingSystemPromptMode');
   if (spModeSel) config.systemPromptMode = (spModeSel.value === 'replace') ? 'replace' : 'append';
@@ -5743,6 +6480,10 @@ function _renderOAuthResetOffer(provider, offer, authenticated) {
     '<div class="oauth-reset-offer-copy">' + escapeHtml(detail) + '</div>' +
     (meta.length ? '<div class="oauth-reset-offer-meta">' +
       escapeHtml(meta.join(' · ')) + '</div>' : '') +
+    (offer.stale ? '' : '<div class="oauth-reset-offer-actions">' +
+      '<button type="button" class="btn-small btn-primary" ' +
+      'data-tofu-action="_oauthConsumeReset()">' +
+      escapeHtml(t('settings.oauthResetRedeemButton')) + '</button></div>') +
     '<div class="oauth-reset-offer-hint">' +
       escapeHtml(t('settings.oauthResetRedeemHint')) + '</div>';
   el.style.display = '';
@@ -6300,6 +7041,49 @@ async function _oauthLogout(provider) {
     });
 }
 
+var _oauthResetConsumeInFlight = false;
+function _oauthConsumeReset() {
+  if (_oauthResetConsumeInFlight) return;
+  var confirmed = typeof showConfirm === 'function'
+    ? showConfirm(t('settings.oauthResetRedeemConfirm'), {
+        okText: t('settings.oauthResetRedeemButton'),
+      })
+    : Promise.resolve(true);
+  confirmed.then(function(ok) {
+    if (!ok) return;
+    _oauthResetConsumeInFlight = true;
+    return Api.oauth.resetOfferConsume()
+      .then(function(resp) {
+        if (resp && typeof resp.json === 'function') {
+          return resp.json().catch(function() { return null; });
+        }
+        return resp;
+      })
+      .then(function(body) {
+        if (body && body.ok) {
+          showAlert(t('settings.oauthResetRedeemSuccess'));
+          return;
+        }
+        var code = body && body.error ? String(body.error) : '';
+        var key = 'settings.oauthResetRedeemFailed';
+        if (code === 'none_available' || code === 'nothing_to_reset' ||
+            code === 'already_redeemed') {
+          key = 'settings.oauthResetRedeemGone';
+        } else if (code === 'unresolved') {
+          key = 'settings.oauthResetRedeemUnresolved';
+        }
+        showAlert(t(key));
+      })
+      .catch(function(e) {
+        console.warn('[OAuth] reset consume failed:', e);
+        showAlert(t('settings.oauthResetRedeemFailed'));
+      })
+      .then(function() {
+        _oauthResetConsumeInFlight = false;
+        _loadOAuthStatus();
+      });
+  });
+}
 function _oauthCopyAuthLink(button, provider) {
   const capProvider = provider === 'codex' ? 'Codex' : 'Claude';
   const input = document.getElementById('oauth' + capProvider + 'AuthUrl');
@@ -7707,11 +8491,11 @@ runtimeScope._applyMatrixRecommendations = _applyMatrixRecommendations;
 runtimeScope._browserAccessDenyRead = _browserAccessDenyRead;
 runtimeScope._clearConvCacheFromSettings = _clearConvCacheFromSettings;
 runtimeScope._clearMatrixProbe = _clearMatrixProbe;
-runtimeScope._closeProviderManager = _closeProviderManager;
+runtimeScope._closeProviderModelPicker = _closeProviderModelPicker;
 runtimeScope._deleteModelRoutingProvider = _deleteModelRoutingProvider;
 runtimeScope._deleteV2Credential = _deleteV2Credential;
 runtimeScope._deleteV2HeaderRow = _deleteV2HeaderRow;
-runtimeScope._filterProviderManagerModels = _filterProviderManagerModels;
+runtimeScope._filterProviderModelPicker = _filterProviderModelPicker;
 runtimeScope._mcpApplyUpdate = _mcpApplyUpdate;
 runtimeScope._mcpCloseAddModal = _mcpCloseAddModal;
 runtimeScope._mcpCloseInstallModal = _mcpCloseInstallModal;
@@ -7732,6 +8516,7 @@ runtimeScope._mcpToggleTool = _mcpToggleTool;
 runtimeScope._mcpToggleToolsPanel = _mcpToggleToolsPanel;
 runtimeScope._mcpTransportChanged = _mcpTransportChanged;
 runtimeScope._mcpUninstall = _mcpUninstall;
+runtimeScope._oauthConsumeReset = _oauthConsumeReset;
 runtimeScope._oauthCopyAuthLink = _oauthCopyAuthLink;
 runtimeScope._oauthCopyDeviceCode = _oauthCopyDeviceCode;
 runtimeScope._oauthDeviceLogin = _oauthDeviceLogin;
@@ -7744,7 +8529,7 @@ runtimeScope._onV2HeaderRowEdit = _onV2HeaderRowEdit;
 runtimeScope._onV2KeyClearOverride = _onV2KeyClearOverride;
 runtimeScope._onV2KeyToggle = _onV2KeyToggle;
 runtimeScope._openActiveCompaction = _openActiveCompaction;
-runtimeScope._openProviderManager = _openProviderManager;
+runtimeScope._openProviderModelPicker = _openProviderModelPicker;
 runtimeScope._probeMatrixScope = _probeMatrixScope;
 runtimeScope._proxyBypassDelete = _proxyBypassDelete;
 runtimeScope._proxyBypassRefreshCount = _proxyBypassRefreshCount;
@@ -7755,24 +8540,29 @@ runtimeScope._proxyPoolTest = _proxyPoolTest;
 runtimeScope._proxyPoolToggleEditor = _proxyPoolToggleEditor;
 runtimeScope._proxyPoolToggleUrlVisibility = _proxyPoolToggleUrlVisibility;
 runtimeScope._proxyPoolUrlChanged = _proxyPoolUrlChanged;
+runtimeScope._refreshCostExperimentReport = _refreshCostExperimentReport;
 runtimeScope._removeV2Alias = _removeV2Alias;
 runtimeScope._removeV2Offering = _removeV2Offering;
 runtimeScope._runMatrixProbe = _runMatrixProbe;
 runtimeScope._searchProfileChanged = _searchProfileChanged;
 runtimeScope._setMatrixAttempts = _setMatrixAttempts;
+runtimeScope._setMatrixFilter = _setMatrixFilter;
+runtimeScope._setMatrixQuery = _setMatrixQuery;
 runtimeScope._setModelCatalogSearch = _setModelCatalogSearch;
 runtimeScope._setModelRoutingCollectionField = _setModelRoutingCollectionField;
-runtimeScope._showMoreProviderModels = _showMoreProviderModels;
 runtimeScope._showTemplateMenu = _showTemplateMenu;
+runtimeScope._stageV2CheckedCatalogModels = _stageV2CheckedCatalogModels;
+runtimeScope._stageV2CustomModelFromPicker = _stageV2CustomModelFromPicker;
 runtimeScope._startNewV2ApiKey = _startNewV2ApiKey;
 runtimeScope._switchMtProvider = _switchMtProvider;
+runtimeScope._syncCostExperimentUi = _syncCostExperimentUi;
 runtimeScope._syncResponsesExperimentUi = _syncResponsesExperimentUi;
 runtimeScope._testMtProvider = _testMtProvider;
 runtimeScope._testSearchBrowser = _testSearchBrowser;
 runtimeScope._toggleAllDropdownModels = _toggleAllDropdownModels;
 runtimeScope._toggleAllIgModels = _toggleAllIgModels;
 runtimeScope._toggleMatrixAccess = _toggleMatrixAccess;
-runtimeScope._toggleMatrixView = _toggleMatrixView;
+runtimeScope._toggleProviderModelPick = _toggleProviderModelPick;
 runtimeScope._toggleV2KeyReveal = _toggleV2KeyReveal;
 runtimeScope.addLocalProvider = addLocalProvider;
 runtimeScope.addProvider = addProvider;

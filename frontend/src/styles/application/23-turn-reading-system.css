@@ -898,6 +898,29 @@
 .conversation-surface .conversation-turn:focus-within .conversation-turn-actions {
   opacity: 1;
 }
+.conversation-surface .conversation-block--text {
+  position: relative;
+}
+
+/* Per-block copy sits on the block's top-right corner; revealed by hover or
+ * keyboard focus, same disclosure contract as the turn action shelf. */
+.conversation-surface .conversation-block-copy {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  z-index: 2;
+  min-height: 24px;
+  padding: 3px 5px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  opacity: 0;
+  transition: opacity .16s ease;
+}
+
+.conversation-surface .conversation-block--text:hover .conversation-block-copy,
+.conversation-surface .conversation-block--text:focus-within .conversation-block-copy {
+  opacity: 1;
+}
 
 .conversation-surface .msg-action-btn {
   display: inline-flex;
@@ -1165,6 +1188,9 @@
     scrollbar-width: none;
     opacity: 1;
   }
+  .conversation-surface .conversation-block-copy {
+    opacity: .6;
+  }
 
   .conversation-surface .conversation-turn-actions::-webkit-scrollbar {
     display: none;
@@ -1377,4 +1403,59 @@
   .conversation-surface .turn-inline-editor-btn {
     transition-duration: .01ms !important;
   }
+}
+
+
+/* Background-command completion turns: machine-authored evidence submitted
+   as turn input, not user prose — caption-sized label, quiet disclosure,
+   mono identifiers. */
+.conversation-surface .bgcmd-label {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+.conversation-surface .bgcmd-details {
+  border: 1px solid var(--turn-rule);
+  border-radius: 8px;
+  background: var(--turn-process-surface);
+  padding: 6px 10px;
+}
+
+.conversation-surface .bgcmd-summary {
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.conversation-surface .bgcmd-summary::marker {
+  color: var(--text-tertiary);
+}
+
+.conversation-surface .bgcmd-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.conversation-surface .bgcmd-command {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.conversation-surface .bgcmd-details .sw-card-raw-pre {
+  margin-top: 6px;
+}
+
+.conversation-surface .bgcmd-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }

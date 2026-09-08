@@ -29,7 +29,11 @@ function listeners() {
 
 const debuggerEvents = listeners();
 const operations = [];
+const runtimeCalls = {reload: 0};
 const debuggerCommands = [];
+const sessionData = mode === 'temporaryTabRecovery'
+  ? {temporarySearchTabIds: [19, 23]} : {};
+const removedTabIds = [];
 let currentUrl = 'about:blank';
 let nextTabId = 7;
 
@@ -68,7 +72,7 @@ const chrome = {
       return {id, url: currentUrl, title: 'Probe', status: 'complete'};
     },
     get: async (id) => ({id, url: currentUrl, title: 'Probe', status: 'complete'}),
-    remove: async () => { operations.push('tabs.remove'); },
+    remove: async (id) => { operations.push('tabs.remove'); removedTabIds.push(id); },
     query: async () => [],
   },
   scripting: {
@@ -95,12 +99,18 @@ const chrome = {
   runtime: {
     getManifest: () => ({version: 'test'}),
     getURL: (path) => path,
+    reload: () => { runtimeCalls.reload += 1; },
     onInstalled: listeners(),
     onStartup: listeners(),
     onMessage: listeners(),
   },
   alarms: {create() {}, onAlarm: listeners()},
   storage: {
+    session: {
+      async get(key) { return {[key]: sessionData[key]}; },
+      async set(values) { Object.assign(sessionData, values); },
+      async remove(key) { delete sessionData[key]; },
+    },
     local: {
       get(_keys, callback) {
         if (callback) callback({});
@@ -668,6 +678,55 @@ function paginationProbe() {
   return {wizard, semantic, clicked, crossOrigin, sameOrigin};
 }
 
+async function createTabDegradedProbe() {
+  vm.runInContext(
+    'waitForTabLoad = async () => {};\n' +
+    '_waitForCapturedPageSettle = async () => {};',
+    context,
+  );
+  // Fill every capture slot with a FRESH (unreapable) foreign entry so
+  // _startNetworkCapture hits the capacity guard.
+  const capacity = vm.runInContext('NETWORK_CAPTURE_MAX_ACTIVE', context);
+  vm.runInContext(`
+    for (let index = 0; index < ${capacity}; index += 1) {
+      _networkCaptures.set('wedged-' + index, {
+        captureId: 'wedged-' + index, tabId: 900 + index,
+        captureBodies: false, responses: [], pendingBodies: new Set(),
+        startedAt: Date.now(), lastActivityAt: Date.now(),
+        cdpAttached: false, stopping: false,
+      });
+    }
+  `, context);
+
+  // 1. Capacity exhaustion must not block navigation any more.
+  operations.length = 0;
+  const degradedResult = await vm.runInContext(
+    "cmdCreateTab({url: 'https://example.test/target', active: false, waitForLoad: true})",
+    context);
+  const degradedOps = operations.slice();
+
+  // 2. A navigation that itself fails must close the inert tab, not strand it.
+  const originalUpdate = chrome.tabs.update;
+  chrome.tabs.update = async () => {
+    operations.push('tabs.update:FAIL');
+    throw new Error('navigation blocked');
+  };
+  operations.length = 0;
+  let navFailError = '';
+  try {
+    await vm.runInContext(
+      "cmdCreateTab({url: 'https://example.test/blocked', active: false, waitForLoad: true})",
+      context);
+  } catch (error) {
+    navFailError = String(error && error.message);
+  } finally {
+    chrome.tabs.update = originalUpdate;
+  }
+  const navFailOps = operations.slice();
+
+  return {capacity, degradedResult, degradedOps, navFailError, navFailOps};
+}
+
 async function navigateGuardProbe() {
   vm.runInContext(`
     SERVER_URL = 'https://tofu.test';
@@ -716,8 +775,167 @@ async function navigateGuardProbe() {
           unpairedResult, unpairedOps};
 }
 
+async function temporaryTabTimeoutProbe() {
+  const timers = new Map();
+  let timerId = 0;
+  context.setTimeout = (callback, delay) => {
+    timers.set(++timerId, {callback, delay});
+    return timerId;
+  };
+  context.clearTimeout = (id) => timers.delete(id);
+  let finishBlockedOperation;
+  const blocked = () => new Promise((resolve) => { finishBlockedOperation = resolve; });
+  const phase = mode.split(':')[1] || 'attach';
+  const commandType = mode.split(':')[2] || 'fetch_url';
+  if (phase === 'attach') chrome.debugger.attach = blocked;
+  const sendCommand = chrome.debugger.sendCommand;
+  if (phase === 'enable' || phase === 'stop') {
+    chrome.debugger.sendCommand = (target, method) =>
+      method === (phase === 'enable' ? 'Network.enable' : 'Network.disable')
+        ? blocked() : sendCommand(target, method);
+  }
+  if (phase === 'extract') chrome.scripting.executeScript = blocked;
+  const create = chrome.tabs.create;
+  if (phase === 'create') chrome.tabs.create = async (opts) => { await blocked(); return create(opts); };
+  const fetch = context.fetch;
+  if (phase === 'probe') context.fetch = async (...args) => { await blocked(); return fetch(...args); };
+  vm.runInContext('waitForTabLoad = async () => {}; _waitForCapturedPageSettle = async () => {};', context);
+  let removed = false;
+  chrome.tabs.get = async (id) => {
+    if (removed) throw new Error('No tab with id');
+    return {id, url: currentUrl, status: 'complete'};
+  };
+  chrome.tabs.remove = async (id) => {
+    removed = true;
+    operations.push(`tabs.remove:${id}`);
+    chrome.debugger.onDetach.emit({tabId: id}, 'target_closed');
+    chrome.tabs.onRemoved.emit(id);
+  };
+  const execution = vm.runInContext(`executeAndReport({
+    id: 'search-fetch-timeout', type: '${commandType}',
+    params: {url: 'https://example.test/app'},
+  })`, context);
+  for (let i = 0; i < 100; i++) await Promise.resolve();
+  if (!finishBlockedOperation) throw new Error('Probe never reached ' + phase);
+  const timeout = Array.from(timers.values()).find((timer) => timer.delay === (commandType === 'research_url' ? 80000 : 35000));
+  timeout.callback();
+  await execution;
+  const removedAtTimeout = removed;
+  finishBlockedOperation();
+  for (let i = 0; i < 100; i++) await Promise.resolve();
+  return {
+    removedAtTimeout, removedEventually: removed, operations, sessionData,
+    results: vm.runInContext('_resultQueue.slice()', context),
+    captures: vm.runInContext('_networkCaptures.size', context),
+  };
+}
+
+async function temporaryTabCapacityProbe() {
+  const timers = new Map();
+  let timerId = 0;
+  context.setTimeout = (callback, delay) => {
+    timers.set(++timerId, {callback, delay});
+    return timerId;
+  };
+  context.clearTimeout = (id) => timers.delete(id);
+  const live = new Set();
+  let peakTabs = 0;
+  chrome.tabs.create = async () => {
+    const tab = {id: nextTabId++, url: 'about:blank'};
+    live.add(tab.id);
+    peakTabs = Math.max(peakTabs, live.size);
+    return tab;
+  };
+  chrome.tabs.get = async (id) => {
+    if (!live.has(id)) throw new Error('No tab with id');
+    return {id, url: currentUrl, status: 'complete'};
+  };
+  chrome.tabs.remove = async (id) => {
+    live.delete(id);
+    chrome.debugger.onDetach.emit({tabId: id}, 'target_closed');
+    chrome.tabs.onRemoved.emit(id);
+  };
+  chrome.debugger.attach = () => new Promise(() => {});
+  const executions = Array.from({length: 12}, (_, index) => vm.runInContext(
+    `executeAndReport({id: 'search-${index}', type: 'fetch_url', params: {url: 'https://example.test/app'}})`, context));
+  for (let i = 0; i < 200; i++) await Promise.resolve();
+  for (const timer of [...timers.values()]) if (timer.delay === 35000) timer.callback();
+  await Promise.all(executions);
+  const results = vm.runInContext('_resultQueue.slice()', context);
+  chrome.debugger.attach = async () => {};
+  vm.runInContext('waitForTabLoad = async () => {}; _waitForCapturedPageSettle = async () => {};', context);
+  await vm.runInContext(`executeAndReport({id: 'after-timeouts', type: 'fetch_url', params: {url: 'https://example.test/app'}})`, context);
+  return {
+    peakTabs, remainingTabs: live.size, sessionData,
+    results, recoveredResult: vm.runInContext('_resultQueue[_resultQueue.length - 1]', context),
+  };
+}
+
+async function fileProbeFailureProbe() {
+  context.fetch = async () => { throw new Error('probe unavailable'); };
+  await vm.runInContext(`executeAndReport({id: 'probe-failed', type: 'fetch_url', params: {url: 'https://example.test/app'}})`, context);
+  return {operations, result: vm.runInContext('_resultQueue[0]', context)};
+}
+
+async function temporaryTabFailureProbe() {
+  const phase = mode.split(':')[1];
+  const remove = chrome.tabs.remove;
+  chrome.tabs.remove = async (id) => {
+    if (phase === 'cleanup') throw new Error('Chrome refused cleanup');
+    await remove(id);
+    chrome.debugger.onDetach.emit({tabId: id}, 'target_closed');
+    chrome.tabs.onRemoved.emit(id);
+  };
+  if (phase === 'storage') chrome.storage.session.set = async () => { throw new Error('storage unavailable'); };
+  if (phase === 'navigation') chrome.tabs.update = async () => { throw new Error('navigation blocked'); };
+  vm.runInContext('waitForTabLoad = async () => {}; _waitForCapturedPageSettle = async () => {};', context);
+  await vm.runInContext(`executeAndReport({id: 'failed-operation', type: 'fetch_url', params: {url: 'https://example.test/app'}})`, context);
+  return {operations, sessionData, removedTabIds, result: vm.runInContext('_resultQueue[0]', context)};
+}
+
+async function selfUpdateProbe() {
+  // The harness manifest reports version 'test'; the on-disk copy is
+  // whatever this fetch stub serves.
+  const disk = {version: 'test'};
+  context.fetch = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({version: disk.version}),
+  });
+  const flush = async () => {
+    for (let index = 0; index < 60; index += 1) await Promise.resolve();
+  };
+
+  // Same version on disk → the watchdog stays put.
+  chrome.alarms.onAlarm.emit({name: 'keepAlive'});
+  await flush();
+  const sameVersionReloads = runtimeCalls.reload;
+
+  // Fresh ZIP unzipped over the loaded folder → version moved → reload.
+  disk.version = 'test+1';
+  chrome.alarms.onAlarm.emit({name: 'keepAlive'});
+  await flush();
+  const afterDiskUpgrade = runtimeCalls.reload;
+
+  // Queued results live only in worker memory → defer, never drop.
+  vm.runInContext(
+    "_resultQueue.push({id: 'held-result', result: {ok: true}});", context);
+  chrome.alarms.onAlarm.emit({name: 'keepAlive'});
+  await flush();
+  const busyDeferred = runtimeCalls.reload;
+  vm.runInContext('_resultQueue.splice(0, _resultQueue.length);', context);
+
+  return {sameVersionReloads, afterDiskUpgrade, busyDeferred};
+}
+
 const probes = {
+  selfUpdate: selfUpdateProbe,
+  fileProbeFailure: fileProbeFailureProbe,
+  temporaryTabCapacity: temporaryTabCapacityProbe,
+  temporaryTabRecovery: async () => ({removedTabIds, sessionData}),
+  temporaryTabTimeout: temporaryTabTimeoutProbe,
   diagnosticUrl: diagnosticUrlProbe,
+  createTabDegraded: createTabDegradedProbe,
   navigateGuard: navigateGuardProbe,
   fetch: fetchProbe,
   fileTransferCleanup: fileTransferCleanupProbe,
@@ -733,9 +951,15 @@ const probes = {
   pagination: paginationProbe,
 };
 
-Promise.resolve(probes[mode] && probes[mode]())
+Promise.resolve().then(async () => {
+  // Let startup storage reconciliation finish before a probe replaces timers.
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+  const probe = probes[mode] || (mode.startsWith('temporaryTabTimeout:') && temporaryTabTimeoutProbe)
+    || (mode.startsWith('temporaryTabFailure:') && temporaryTabFailureProbe);
+  if (!probe) throw new Error(`unknown probe mode: ${mode}`);
+  return probe();
+})
   .then((result) => {
-    if (!probes[mode]) throw new Error(`unknown probe mode: ${mode}`);
     process.stdout.write(JSON.stringify(result));
   })
   .catch((error) => {

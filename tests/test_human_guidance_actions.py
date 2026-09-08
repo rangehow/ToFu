@@ -112,6 +112,8 @@ installActionRegistry((name) => {
   if (name === 'submitHumanGuidanceFreeText') {
     return (element) => actions.submitFreeText(element);
   }
+  if (name === 'selectBatchChoice') return (element) => actions.selectBatchChoice(element);
+  if (name === 'submitBatchAnswers') return (element) => actions.submitBatch(element);
   return undefined;
 });
 async function flush() {
@@ -147,7 +149,7 @@ function freeRound(guidanceId) {
     && limits.choiceLabelUnits === 1024 && limits.responseUnits === 32768
     && limits.optionItems === 16 && Object.isFrozen(actions)
     && Object.keys(actions).sort().join(',') ===
-      'destroy,submitChoice,submitFreeText');
+      'destroy,selectBatchChoice,submitBatch,submitChoice,submitFreeText');
 
   const hostileId = "hg'\"] button{display:none}";
   const hostileLabel = "choice'\");globalThis.pwned=true;//";
@@ -425,6 +427,48 @@ function freeRound(guidanceId) {
     && card.querySelector('.hg-badge').textContent.trim()
       === 'expired-badge-local');
 
+  const batchRound = {
+    status: 'awaiting_human', toolName: 'ask_human', guidanceId: 'batch-id',
+    guidanceType: 'batch', guidanceQuestion: 'Two questions',
+    guidanceBatchQuestions: [
+      { question: 'Pick', response_type: 'choice', options: [{ label: 'A' }, { label: 'B' }] },
+      { question: 'Explain', response_type: 'free_text' },
+    ],
+  };
+  card = mount(batchRound);
+  const batchChoices = card.querySelectorAll('.hg-batch-choice');
+  const beforeBatch = requests.length;
+  batchChoices[0].click();
+  batchChoices[1].click();
+  check('batch_choice_only_selects_without_submitting',
+    requests.length === beforeBatch
+    && !batchChoices[0].classList.contains('hg-selected')
+    && batchChoices[1].classList.contains('hg-selected'));
+  card.querySelector('.hg-submit-btn').click();
+  await flush();
+  check('batch_empty_free_text_blocks_transport', requests.length === beforeBatch);
+  card.querySelector('.hg-batch-input').value = '  details  ';
+  submitBehavior = async () => ({ error: 'retry' });
+  card.querySelector('.hg-submit-btn').click();
+  await flush();
+  check('batch_failure_restores_retry_with_answers_intact',
+    !card.classList.contains('hg-submitting')
+    && batchChoices[1].classList.contains('hg-selected')
+    && card.querySelector('.hg-batch-input').value.trim() === 'details');
+  submitBehavior = () => new Promise((resolve) => { deferredResolve = resolve; });
+  const beforeBatchRetry = requests.length;
+  card.querySelector('.hg-submit-btn').click();
+  card.querySelector('.hg-submit-btn').click();
+  await flush();
+  check('batch_submits_indexed_answers_single_flight',
+    requests.length === beforeBatchRetry + 1
+    && requests.at(-1).guidanceId === 'batch-id'
+    && JSON.stringify(JSON.parse(requests.at(-1).responseText)) === JSON.stringify([
+      { index: 0, answer: 'B' }, { index: 1, answer: 'details' },
+    ]));
+  deferredResolve({ ok: true });
+  await flush();
+
   actions.destroy();
   const beforeDestroy = requests.length;
   card = mount(choiceRound('destroyed'));
@@ -432,6 +476,15 @@ function freeRound(guidanceId) {
   await flush();
   check('destroy_refuses_new_work_and_releases_single_flight_state',
     requests.length === beforeDestroy
+    && !card.classList.contains('hg-submitting'));
+  card = mount(batchRound);
+  card.querySelector('.hg-batch-choice').click();
+  card.querySelector('.hg-batch-input').value = 'after destroy';
+  card.querySelector('.hg-submit-btn').click();
+  await flush();
+  check('destroy_refuses_batch_selection_and_submission',
+    requests.length === beforeDestroy
+    && !card.querySelector('.hg-selected')
     && !card.classList.contains('hg-submitting'));
   check('diagnostics_are_injected_and_non_authoritative',
     logs.some((entry) => entry[0] === 'success')
@@ -449,6 +502,6 @@ def test_human_guidance_actions_contract():
         target_js=str(ACTIONS_JS),
         extra_targets=[str(PRESENTER_JS), str(REGISTRY_JS)],
         body_js=_HARNESS,
-        expect_pass=31,
+        expect_pass=36,
         label='Human Guidance actions',
     )

@@ -15,8 +15,11 @@ agent, not merely the correctness of its number. A test that only checked the
 number would still pass while the element was missing.
 
 Also pinned: the range check (a seconds epoch or a double-converted ms value is
-dropped instead of rendering a ~50-year / year-58000 elapsed), and the terminal
-path (a finished agent still renders its persisted `elapsed`).
+dropped instead of rendering a ~50-year / year-58000 elapsed), the clock-skew
+tolerance (a server-minted startedAt up to 5 min ahead of the client clock is
+clamped to local now, not dropped — a client behind the server would otherwise
+lose the running timer), and the terminal path (a finished agent still renders
+its persisted `elapsed`).
 """
 
 import os
@@ -121,6 +124,24 @@ check('future_epoch_not_adopted',
       agents.length === 1 && !agents[0]._startedAt);
 check('future_epoch_warns', warns.length > 0);
 
+/* ── Case 2b: client clock behind the server — skew within 5 min clamps ── */
+warns.length = 0;
+const skewed = { id: 'a3b', role: 'coder', status: 'running', objective: 'x',
+                 startedAt: NOW + 60000 };   // server clock 1 min ahead
+agents = _recoverSwarmAgents(roundWith(skewed), []);
+check('skewed_start_adopted_and_clamped',
+      agents.length === 1 &&
+      Math.abs(Number(agents[0]._startedAt) - NOW) < 30000);
+check('skewed_start_no_warn', warns.length === 0);
+
+warns.length = 0;
+const beyondSkew = { id: 'a3c', role: 'coder', status: 'running',
+                     objective: 'x', startedAt: NOW + 10 * 60 * 1000 };
+agents = _recoverSwarmAgents(roundWith(beyondSkew), []);
+check('beyond_skew_not_adopted',
+      agents.length === 1 && !agents[0]._startedAt);
+check('beyond_skew_warns', warns.length > 0);
+
 /* ── Case 3: a finished agent still renders its persisted elapsed ── */
 const done = { id: 'a4', role: 'coder', status: 'done', objective: 'x',
                elapsed: 12.5, tokens: 100, preview: 'ok' };
@@ -181,7 +202,8 @@ class TestSwarmTimerReattach(unittest.TestCase):
 
     def test_NEUTER_range_check_removed_adopts_seconds(self):
         src = open(PANEL_JS, encoding='utf-8').read()
-        anchor = 'rawStart > 1e12 && rawStart <= Date.now()'
+        anchor = ('rawStart > 1e12 &&\n'
+                  '          rawStart <= Date.now() + SWARM_START_SKEW_MS')
         self.assertIn(anchor, src, 'NEUTER anchor missing — re-point it')
         poisoned = src.replace(anchor, 'rawStart > 0', 1)
         with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False,

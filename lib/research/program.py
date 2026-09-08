@@ -19,6 +19,8 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
+from .decisions import normalize_portfolio, research_decision, manuscript_audit
+
 PROGRAM_CONTRACT_VERSION = 'tofu.research-program/v1'
 MAX_PROGRAM_BYTES = 640 * 1024
 MAX_SOURCE_FILES = 24
@@ -115,8 +117,9 @@ def _normalize_protocol(value: Any) -> dict[str, Any]:
         for key in (
             'primary_metric', 'baseline', 'dataset', 'falsifier', 'resources',
             'evaluation_protocol', 'environment',
+            'matched_budget', 'exploratory_plan', 'validation_plan',
         )
-    } | {'random_seeds': seeds, 'stop_conditions': stops}
+    } | normalize_portfolio(raw) | {'random_seeds': seeds, 'stop_conditions': stops}
 
 
 def _normalize_bindings(value: Any) -> list[dict[str, Any]]:
@@ -191,6 +194,13 @@ def _normalize_runs(value: Any) -> list[dict[str, Any]]:
             'backend': _text(row.get('backend'), 240),
             'remote_job_id': _text(row.get('remote_job_id'), 500),
             'spec_digest': _text(row.get('spec_digest'), 128),
+            'protocol_digest': _text(row.get('protocol_digest'), 64),
+            'hypothesis_digest': _text(row.get('hypothesis_digest'), 64),
+            'execution_status': (row.get('execution_status') if row.get('execution_status')
+                in {'planned', 'queued', 'running', 'completed', 'failed'} else
+                {'passed': 'completed', 'inconclusive': 'completed', 'failed': 'failed'}.get(status, status)),
+            'scientific_outcome': (row.get('scientific_outcome') if row.get('scientific_outcome')
+                in {'supported', 'refuted', 'inconclusive'} else 'inconclusive'),
             'task_id': _text(row.get('task_id'), 160),
             'notes': _text(row.get('notes')),
             'tool_receipts': _normalize_tool_receipts(row.get('tool_receipts')),
@@ -218,8 +228,14 @@ def _normalize_claims(value: Any) -> list[dict[str, Any]]:
         result.append({
             'id': _text(row.get('id'), 96) or f'claim-{index + 1}',
             'text': _text(row.get('text')),
+
+            **({'outcome_scope': row['outcome_scope']} if row.get('outcome_scope')
+               in {'supported', 'refuted', 'inconclusive'} else {}),
             'status': status,
             'evidence_refs': refs,
+            'protocol_digest': _text(row.get('protocol_digest'), 64),
+            'hypothesis_digest': _text(row.get('hypothesis_digest'), 64),
+            'evidence_digest': _text(row.get('evidence_digest'), 64),
         })
     return result
 
@@ -233,7 +249,7 @@ def _normalize_manuscript(value: Any) -> dict[str, str]:
             'limitations', 'introduction', 'related_work', 'experiments',
             'conclusion', 'ethics',
         )
-    }
+    } | {'scientific_dependency_digest': _text(raw.get('scientific_dependency_digest'), 64)}
 
 
 def _normalize_source_files(value: Any) -> list[dict[str, Any]]:
@@ -281,6 +297,9 @@ def default_program_fields() -> dict[str, Any]:
         'capability_bindings': [],
         'runs': [],
         'claims': [],
+
+        'decision': research_decision({}, []),
+        'manuscript_audit': manuscript_audit([], []),
         'manuscript': _normalize_manuscript({}),
         'source_files': [],
         'figures': [],
@@ -297,6 +316,70 @@ def default_program_fields() -> dict[str, Any]:
     }
 
 
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                    separators=(',', ':')).encode('utf-8')).hexdigest()
+
+
+def dependency_digests(program: Mapping[str, Any]) -> dict[str, str]:
+    """Canonical dependency identities; missing old snapshots stay unverified."""
+    return {'protocol_digest': _digest(_normalize_protocol(program.get('protocol'))),
+            'hypothesis_digest': _digest(_text(program.get('hypothesis')))}
+
+
+def claim_evidence_digest(claim: Mapping[str, Any], runs: list[dict]) -> str:
+    refs = set(claim.get('evidence_refs') or [])
+    linked = [row for row in runs if refs.intersection(
+        [row.get('id'), row.get('task_id'), row.get('artifact_ref')]
+        + list(row.get('artifact_refs') or []))]
+    return _digest({'text': claim.get('text'), 'refs': sorted(refs), 'runs': linked})
+
+
+def _validated_evidence(raw: Mapping[str, Any]) -> tuple[list[dict], list[dict]]:
+    dependencies = dependency_digests(raw)
+    runs = _normalize_runs(raw.get('runs'))
+    for run in runs:
+        run['validity'] = ('unverified' if not all(run.get(k) for k in dependencies)
+                           else 'current' if all(run[k] == v for k, v in dependencies.items())
+                           else 'stale')
+    claims = _normalize_claims(raw.get('claims'))
+    for claim in claims:
+        refs = set(claim['evidence_refs'])
+        supported_refs = set()
+        for run in runs:
+            if (run['validity'] == 'current' and run['execution_status'] == 'completed'
+                    and run['scientific_outcome'] == claim.get('outcome_scope', 'supported')
+                    and any(r['status'] == 'done' and r['result_digest']
+                            for r in run['tool_receipts'])):
+                supported_refs.update([run['id'], run['task_id'], run['artifact_ref']])
+                supported_refs.update(run['artifact_refs'])
+        missing = not all(claim.get(k) for k in (*dependencies, 'evidence_digest'))
+        current = (not missing and all(claim[k] == v for k, v in dependencies.items())
+                   and claim['evidence_digest'] == claim_evidence_digest(claim, runs)
+                   and bool(refs) and refs.issubset(supported_refs))
+        claim['validity'] = 'current' if current else 'unverified' if missing else 'stale'
+        claim['validity_reason'] = '' if current else (
+            'Missing dependency snapshot or verified support' if missing else
+            'Protocol, hypothesis, or supporting evidence changed or is not supportive')
+        if claim['status'] == 'supported' and not current:
+            claim['status'] = 'contested'
+    return runs, claims
+
+
+def scientific_dependency_digest(program: Mapping[str, Any]) -> str:
+    """Identify normalized science reviewed when a manuscript was generated.
+
+    Never infer this snapshot from source bytes or backfill legacy manuscripts.
+    Derived validity is recomputed so normalization does not change the digest.
+    """
+    runs, claims = _validated_evidence(program)
+    return _digest({
+        **dependency_digests(program),
+        'claims': [dict(claim, current_evidence_digest=claim_evidence_digest(claim, runs))
+                   for claim in claims],
+    })
+
+
 def normalize_program_fields(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     """Normalize the program-owned portion of a persisted workspace."""
     raw = raw if isinstance(raw, Mapping) else {}
@@ -306,6 +389,7 @@ def normalize_program_fields(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     publication = raw.get('publication') if isinstance(raw.get('publication'), Mapping) else {}
     publish_status = _text(publication.get('status'), 40)
     source_files = _normalize_source_files(raw.get('source_files'))
+    runs, claims = _validated_evidence(raw)
     compiled_digest = _text(compilation.get('source_digest'), 128)
     current_digest = source_tree_digest(source_files)
     if compile_status == 'passing' and compiled_digest != current_digest:
@@ -313,8 +397,11 @@ def normalize_program_fields(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         'protocol': _normalize_protocol(raw.get('protocol')),
         'capability_bindings': _normalize_bindings(raw.get('capability_bindings')),
-        'runs': _normalize_runs(raw.get('runs')),
-        'claims': _normalize_claims(raw.get('claims')),
+        'runs': runs,
+        'claims': claims,
+
+        'decision': research_decision(_normalize_protocol(raw.get('protocol')), runs),
+        'manuscript_audit': manuscript_audit(runs, claims),
         'manuscript': _normalize_manuscript(raw.get('manuscript')),
         'source_files': source_files,
         'figures': _normalize_visuals(raw.get('figures')),
@@ -348,10 +435,12 @@ def readiness(program: Mapping[str, Any]) -> dict[str, Any]:
     """Derive submission gates from evidence; never persist a percentage."""
     protocol = program.get('protocol') if isinstance(program.get('protocol'), Mapping) else {}
     manuscript = program.get('manuscript') if isinstance(program.get('manuscript'), Mapping) else {}
-    runs = list(program.get('runs') or [])
-    claims = list(program.get('claims') or [])
+    runs, claims = _validated_evidence(program)
     source_files = list(program.get('source_files') or [])
     digest = source_tree_digest(source_files)
+
+    manuscript_current = (manuscript.get('scientific_dependency_digest')
+                          == scientific_dependency_digest(program))
     compilation = program.get('compilation') if isinstance(program.get('compilation'), Mapping) else {}
     publication = program.get('publication') if isinstance(program.get('publication'), Mapping) else {}
     gates = [
@@ -363,7 +452,11 @@ def readiness(program: Mapping[str, Any]) -> dict[str, Any]:
         {
             'id': 'run_evidence',
             'ok': any(
-                isinstance(row, Mapping) and row.get('status') == 'passed'
+                row.get('execution_status') == 'completed'
+                and row.get('scientific_outcome') in {'supported', 'refuted', 'inconclusive'}
+                and row.get('validity') == 'current'
+                and any(r['status'] == 'done' and r['result_digest']
+                        for r in row['tool_receipts'])
                 and (row.get('artifact_ref') or row.get('artifact_refs'))
                 for row in runs),
         },
@@ -377,7 +470,7 @@ def readiness(program: Mapping[str, Any]) -> dict[str, Any]:
             'id': 'manuscript',
             'ok': all(_text(manuscript.get(key)) for key in (
                 'title', 'abstract', 'method', 'results', 'limitations'))
-                and bool(source_files),
+                and bool(source_files) and manuscript_current,
         },
         {
             'id': 'compile',
@@ -386,11 +479,16 @@ def readiness(program: Mapping[str, Any]) -> dict[str, Any]:
                 and compilation.get('source_digest') == digest,
         },
     ]
+    audit = manuscript_audit(runs, claims)
+    gates.extend(audit['checks'])
     return {
         'ready': all(row['ok'] for row in gates),
+
+        'decision': research_decision(protocol, runs),
+        'manuscript_audit': audit,
         'gates': gates,
         'source_digest': digest,
-        'published_current': bool(source_files)
+        'published_current': bool(source_files) and manuscript_current
             and publication.get('status') == 'published'
             and bool(digest)
             and publication.get('source_digest') == digest,
@@ -407,4 +505,5 @@ __all__ = [
     'MAX_SOURCE_FILES', 'MAX_VISUALS', 'PROGRAM_CONTRACT_VERSION',
     'default_program_fields', 'encoded_program_size', 'normalize_program_fields',
     'normalize_source_path', 'readiness', 'source_tree_digest',
+    'scientific_dependency_digest',
 ]

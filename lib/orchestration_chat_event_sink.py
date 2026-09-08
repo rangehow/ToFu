@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from typing import Callable
+from lib.orchestration_graph import FlowEventDeliveryError
 
 
 _TURN_META_KEYS = (
@@ -108,11 +109,14 @@ class OrchestrationChatTaskEventSink:
                             target[key] = event[key]
                 elif event_type == 'tool_complete':
                     target['toolContent'] = event.get('toolContent')
+                    if event.get('toolModelContent') is not None:
+                        target['toolModelContent'] = event['toolModelContent']
                     target['status'] = event.get('status') or (
                         'error' if event.get('isError') else 'done')
                 elif event_type == 'tool_compacted':
                     if event.get('compactedContent') is not None:
                         target['toolContent'] = event['compactedContent']
+                        target.pop('toolModelContent', None)
                     target['compactionLayer'] = (
                         event.get('compactionLayer') or 'L1')
                 if event.get('tEnd') is not None:
@@ -137,6 +141,8 @@ class OrchestrationChatTaskEventSink:
 
     def __call__(self, event: dict) -> None:
         event_type = str(event.get('type') or '')
+        if self._task.get('_flowTurnStartFailed') and event_type != 'flow_iteration':
+            raise RuntimeError('Flow phase has no writable Turn authority')
         if event_type == 'flow_iteration':
             self._task['_flow_phase'] = (
                 event.get('phase')
@@ -149,6 +155,19 @@ class OrchestrationChatTaskEventSink:
             }
             self._task['toolRounds'] = []
             self._reset_turn_content()
+            from lib.orchestration_chat_live_turn import begin_live_flow_turn
+            try:
+                begin_live_flow_turn(self._task, event)
+                self._task.pop('_flowTurnStartFailed', None)
+            except Exception as exc:
+                # A missing display authority must stop dispatch, never fall
+                # back to writing a later node over the committed root.
+                abort = self._task.get('abort_event')
+                if abort is not None:
+                    abort.set()
+                self._task['_flowTurnStartFailed'] = True
+                raise FlowEventDeliveryError(
+                    f'Could not admit the next Goal turn: {exc}') from exc
         elif event_type in _TOOL_EVENTS:
             self._apply_tool_event(event)
         elif event_type == 'delta':

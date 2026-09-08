@@ -213,7 +213,9 @@ def run_pre_compact_hooks(messages: list, task: dict) -> None:
         return
     for hook in _pre_compact_hooks:
         try:
-            hook(messages, task)
+            from lib.tasks_pkg.observer_snapshot import observer_snapshot
+            detached_messages, detached_task = observer_snapshot([messages, task])
+            hook(detached_messages, detached_task)
         except Exception as e:
             logger.warning('[Hooks] PreCompact %s failed: %s',
                            hook.__name__, e, exc_info=True)
@@ -230,7 +232,9 @@ def run_post_compact_hooks(info: dict, task: dict) -> None:
         return
     for hook in _post_compact_hooks:
         try:
-            hook(info, task)
+            from lib.tasks_pkg.observer_snapshot import observer_snapshot
+            detached_info, detached_task = observer_snapshot([info, task])
+            hook(detached_info, detached_task)
         except Exception as e:
             logger.warning('[Hooks] PostCompact %s failed: %s',
                            hook.__name__, e, exc_info=True)

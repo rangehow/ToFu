@@ -409,6 +409,24 @@ export function createToolResultPresentation(
     );
   }
 
+  const INLINE_FAILURE_REASON_LIMIT = 110;
+
+  /* A gate/executor refusal used to hide inside the collapsed <details> of
+     the failed edit, so a rejected edit_file looked identical to a running
+     one until expanded. Render a one-line truncation directly on the failed
+     row's summary line (and on the collapsed batch header) — the full text
+     stays in the title tooltip and the expanded detail block. */
+  function inlineFailureReasonHtml(reason: string): string {
+    const oneLine = reason.replace(/\s+/g, ' ').trim();
+    if (!oneLine) return '';
+    const shown = oneLine.length > INLINE_FAILURE_REASON_LIMIT
+      ? `${oneLine.slice(0, INLINE_FAILURE_REASON_LIMIT)}…`
+      : oneLine;
+    return `<span class="ptool-batch-fail-reason" title="${
+      escapeHtmlText(oneLine)
+    }">${escapeHtmlText(shown)}</span>`;
+  }
+
   function renderBatchEditResultHtml(
     round: UnknownRecord,
     resultMetadata: UnknownRecord,
@@ -438,6 +456,11 @@ export function createToolResultPresentation(
     const isMultiFile = editSummaries.some(
       (summary) => stringField(summary, 'path') !== firstPath,
     );
+
+    /* A structured refusal (outside-workspace) gets one brief notice under
+       the header; the per-item verbose model-facing text and the 110-char
+       truncated header reason are noise next to it. */
+    const refusal = writeGateRefusal.resolveRefusal(round, resultMetadata);
 
     // Failed edits carry no diff, but the tool still returned a per-edit
     // `[N] FAIL ...` line to the model. Recover those lines from the
@@ -515,11 +538,17 @@ export function createToolResultPresentation(
         }
       }
 
+      const returned = failed
+        ? failureLineByIndex.get(index + 1) || stringField(summary, 'detail')
+        : '';
+      const outsideWorkspace = summary.outsideWorkspace === true;
       let failureHtml = '';
       if (failed) {
-        const returned = failureLineByIndex.get(index + 1)
-          || stringField(summary, 'detail');
-        if (returned) {
+        if (outsideWorkspace) {
+          failureHtml = `<div class="ptool-batch-fail-detail"><code>${
+            escapeHtmlText(translate('tool.outsideWorkspaceItem'))
+          }</code></div>`;
+        } else if (returned) {
           const shown = returned.length > 2000
             ? `${returned.slice(0, 2000)}…`
             : returned;
@@ -536,10 +565,23 @@ export function createToolResultPresentation(
           ${operationPillHtml}
           <span class="ptool-batch-desc">${escapeHtmlText(description)}</span>
           ${pathHtml}
+          ${outsideWorkspace ? '' : inlineFailureReasonHtml(returned)}
         </summary>
         ${diffHtml}${failureHtml}
       </details>`;
     }).join('');
+
+    let headerFailureHtml = '';
+    if (!refusal) {
+      for (let index = 0; index < editSummaries.length; index += 1) {
+        if (stringField(editSummaries[index], 'status') !== 'fail') continue;
+        headerFailureHtml = inlineFailureReasonHtml(
+          failureLineByIndex.get(index + 1)
+            || stringField(editSummaries[index], 'detail'),
+        );
+        if (headerFailureHtml) break;
+      }
+    }
 
     return `<details class="ptool-batch-done-block" data-rn="${
       escapeHtmlText(round.roundNum)
@@ -550,6 +592,7 @@ export function createToolResultPresentation(
            ${header.rootPillHtml}
            <span class="ptool-text">${header.queryHtml}</span>
            ${header.badgeHtml}
+           ${headerFailureHtml}
          </summary>${writeGateNoticeHtml(round, resultMetadata)}
          <div class="ptool-batch-done-list">${itemsHtml}</div>
        </details>`;

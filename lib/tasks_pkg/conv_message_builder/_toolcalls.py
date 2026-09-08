@@ -12,6 +12,7 @@ from __future__ import annotations
 from lib.log import get_logger
 from lib.tool_round_identity import tool_round_batches
 from lib.tool_round_replay import (
+    model_tool_content,
     scan_replayable_tool_round_prefix,
 )
 
@@ -151,12 +152,8 @@ def _reconstruct_tool_call_messages(rounds: list[dict]) -> list[dict] | None:
     if not rounds:
         return None
 
-    # todo_write is a state-sync protocol, not a sequence of independent
-    # observations. Replaying 0/3 → 1/3 → 2/3 teaches the model to churn the
-    # checklist and wastes context. Keep the latest effective carrier on the
-    # model wire while the untouched persisted toolRounds remain the audit log.
-    from lib.tools.todo import compact_todo_rounds_for_replay
-    rounds = compact_todo_rounds_for_replay(rounds)
+    # Ordinary replay preserves every sent receipt, including todo revisions.
+    # State folding belongs at an explicit compaction boundary.
 
     # One durable Turn may contain several attempts whose counters all start
     # at zero.  Use the shared ordered identity helper so two attempts' R17s
@@ -194,7 +191,7 @@ def _reconstruct_tool_call_messages(rounds: list[dict]) -> list[dict] | None:
             tool_result = {
                 'role': 'tool',
                 'tool_call_id': tc_id,
-                'content': r['toolContent'] or '',
+                'content': model_tool_content(r),
             }
             if r.get('caller') is not None:
                 tool_result['caller'] = dict(r['caller'])

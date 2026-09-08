@@ -1,5 +1,23 @@
 # Changelog
 
+
+- Activated `queue.injection.ack` for Tofu-DB, closing the semantic port:
+  the full 335-operation storage catalog is now executable. One bounded
+  command drains at most 256 never-accepted peer/workflow inbox rows per
+  conversation — accepted Turn pairs are never cancelled — renumbers the
+  remaining positions, and publishes one revision-free `turn.upsert`
+  change carrying only the drained identities in legacy reporting order.
+  Building the differential probe exposed three pre-existing divergences,
+  now converged on legacy: real-message enqueues and kind clears
+  renumbered queue positions even when nothing was superseded or deleted,
+  and queue item projection dropped the bounded `backgroundCommand` and
+  `steerFallback` preview fields. The differential harness now invokes
+  cargo from the package directory so its `.cargo/config.toml` C
+  toolchain pin applies instead of silently falling back to a stale
+  prebuilt binary. Exhaustive syscall-error/short-write fault injection
+  recovers exactly one atomic prefix. SQLite differential scripts,
+  owner/validation/replay unit tests, `cargo test` (574), clippy
+  `-D warnings`, and `cargo fmt --check` all pass.
 - Activated all three `paper.podcast.*` operations for Tofu-DB. Large scripts
   and metadata are isolated from compact mutable status documents, so startup
   interruption never reads or rewrites generation payloads. An exact,

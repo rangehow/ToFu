@@ -52,7 +52,8 @@ PUBLIC_PROJECTION_FIELDS = frozenset({
     'images', 'attachments', 'videos', 'pdfTexts', 'convRefs', 'replyQuotes',
     '_branchLanes',
     'orchestration', 'provenance', '_inboxInjects', '_peerInjects',
-    '_userSteerInjects', '_stallNudges', 'origin', 'contextSnapshot',
+    '_userSteerInjects', '_bgCommandInjects', 'backgroundCommand',
+    '_stallNudges', 'origin', 'contextSnapshot',
     'compaction', 'imageGeneration', 'proposedPlan', 'planExecution',
     'activityTimeline', 'timingTrace', 'rolledBack',
 })
@@ -423,6 +424,8 @@ def normalize_projection_document(raw: Any) -> dict[str, Any]:
         return {'content': ''}
     source = dict(raw)
     result = dict(source)
+    from lib.background_command_projection import bound_projection_completion_previews
+    bound_projection_completion_previews(result)
     for identity_key in _PROJECTION_IDENTITY_KEYS:
         result.pop(identity_key, None)
     if result.get('providerId') is None and result.get('provider_id') is not None:

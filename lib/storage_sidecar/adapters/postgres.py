@@ -14,12 +14,14 @@ from typing import Any
 import psycopg
 from psycopg import errors as pg_errors
 from psycopg.rows import DictRow, dict_row
+from psycopg.adapt import Dumper
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from lib.storage.errors import StorageError
 from lib.log import get_logger
 from lib.storage_sidecar.adapters.base import Backend, Operation, receipt_cacheable
 from lib.storage_sidecar.config import SidecarConfig
+from lib.storage_sidecar.json_document import JsonBytes
 from lib.storage_sidecar.preflight import run_filesystem_preflight
 from lib.storage_sidecar.receipt_codec import (
     COMMAND_RECEIPT_LOOKUP_SQL,
@@ -159,6 +161,13 @@ class _PgPool:
 
     @staticmethod
     def _configure(connection: psycopg.Connection) -> None:
+        # JSONDOC columns are jsonb here but BLOB-affinity on SQLite, so the
+        # shared codecs hand the session bytes.  psycopg binds plain bytes as
+        # bytea, which has no assignment cast to jsonb (SQLSTATE 42804 on
+        # every document write); binding the JsonBytes marker with the jsonb
+        # OID makes the server run jsonb_in instead.  Plain bytes keep the
+        # bytea binding for genuinely binary BLOB columns.
+        connection.adapters.register_dumper(JsonBytes, _JsonBytesDumper)
         with connection.cursor() as cursor:
             cursor.execute('SET SESSION idle_in_transaction_session_timeout = 5000')
         connection.commit()
@@ -185,6 +194,15 @@ class _PgPool:
 
     def close(self) -> None:
         self.pool.close()
+
+
+class _JsonBytesDumper(Dumper):
+    """Bind the JsonBytes marker as a jsonb-typed text parameter."""
+
+    oid = 3802
+
+    def dump(self, obj: bytes) -> bytes:
+        return bytes(obj)
 
 
 def _map_postgres_error(exc: BaseException) -> StorageError:
@@ -281,7 +299,16 @@ class PostgresBackend(Backend):
                     connection.commit()
                 return result
             except BaseException as exc:
-                if not isinstance(exc, (StorageError, psycopg.Error)):
+                if isinstance(exc, psycopg.Error):
+                    # Never log SQL or parameters here.  The driver class and
+                    # SQLSTATE diagnose catalog/translation bugs without
+                    # exposing row data; without this the mapped StorageError
+                    # is the only trace and fresh-cluster failures are
+                    # undiagnosable.
+                    logger.error(
+                        'PostgreSQL failure type=%s sqlstate=%s',
+                        type(exc).__name__, exc.sqlstate)
+                elif not isinstance(exc, StorageError):
                     # Never log SQL or parameters here.  The exception class is
                     # enough to diagnose catalog bugs without exposing data.
                     logger.error(

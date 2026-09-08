@@ -166,7 +166,7 @@ def test_adapter_uses_exclusive_production_runtime_and_guest_exec(
     assert captured["start_kwargs"]["config"]["disableModelFallback"] is True
     access = captured["runtime_kwargs"]["model_routing"]
     assert access.model == {"creator_id": "moonshot", "model_id": "kimi-k3"}
-    assert access.routing == {"preferred_provider_id": "harbor-kimi"}
+    assert access.routing == {"preferred_provider_id": "harbor-benchmark"}
     assert captured["runtime_kwargs"]["model_routing_source"] == \
         "harbor-formal-kimi"
     assert captured["guest_exec"] == {

@@ -1,0 +1,13 @@
+{
+  "brand": "sambanova",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "sambanova",
+  "category": "relay",
+  "name": "SambaNova",
+  "base_url": "https://api.sambanova.ai/v1",
+  "offering_recipes": [
+    {"model_id": "DeepSeek-V3.2-Exp",                  "capabilities": ["text", "cheap"]},
+    {"model_id": "Llama-4-Maverick-17B-128E-Instruct", "capabilities": ["text", "vision", "cheap"]},
+    {"model_id": "gpt-oss-120b",                       "capabilities": ["text", "thinking", "cheap"]}
+  ]
+}

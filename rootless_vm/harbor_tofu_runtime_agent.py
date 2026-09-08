@@ -23,6 +23,7 @@ from harbor.models.agent.context import AgentContext
 from rootless_vm.trajectory import write_collected_trajectory
 from tofu_agent import AgentRuntime, ModelRoutingConfig, __version__
 from evaluations.swebench.tofu_kimi_runtime import (
+    TOFU_BENCHMARK_MODELS as _BENCHMARK_MODELS,
     TOFU_KIMI_HARBOR_SYSTEM_PROMPT as _SYSTEM_PROMPT,
     tofu_kimi_clean_tool_schemas,
     tofu_kimi_custom_tools,
@@ -38,18 +39,20 @@ _CUSTOM_TOOLS = tofu_kimi_custom_tools()
 
 
 def _harbor_model_routing(
-    *, base_url: str, api_key: str, thinking_format: str,
+    *, base_url: str, api_key: str, thinking_format: str, model: str,
 ) -> ModelRoutingConfig:
     """Build the benchmark's single, explicit v2 access authority.
 
-    Harbor owns one host-side credential and one fixed Kimi deployment.  Keep
-    that integration fact in the adapter, but express it through the same
-    creator/model/provider/access/connection graph as every other runtime.
-    This avoids reviving the removed inline-provider shortcut while keeping
-    the secret outside the serializable aggregate and benchmark artifacts.
+    Harbor owns one host-side credential and one fixed model deployment.
+    Keep that integration fact in the adapter, but express it through the
+    same creator/model/provider/access/connection graph as every other
+    runtime.  This avoids reviving the removed inline-provider shortcut
+    while keeping the secret outside the serializable aggregate and
+    benchmark artifacts.
     """
-    model_ref = {'creator_id': 'moonshot', 'model_id': 'kimi-k3'}
-    provider_id = 'harbor-kimi'
+    spec = _BENCHMARK_MODELS[str(model)]
+    model_ref = {'creator_id': spec['creator_id'], 'model_id': str(model)}
+    provider_id = 'harbor-benchmark'
     access_id = f'{provider_id}-access'
     connection_id = f'{provider_id}-connection'
     credential_id = f'{provider_id}-credential'
@@ -61,18 +64,18 @@ def _harbor_model_routing(
             'revision': 0,
             'creators': [{
                 'creator_id': model_ref['creator_id'],
-                'name': 'Moonshot AI',
+                'name': spec['creator_name'],
             }],
             'models': [{
                 **model_ref,
-                'display_name': 'Kimi K3',
+                'display_name': spec['display_name'],
                 'capabilities': ['text', 'thinking', 'tools'],
-                'context_window': 262_144,
+                'context_window': int(spec['context_window']),
                 'quality_rank': 10,
             }],
             'providers': [{
                 'provider_id': provider_id,
-                'name': 'Harbor Kimi host access',
+                'name': 'Harbor benchmark host access',
                 'scope': 'owner',
             }],
             'provider_accesses': [{
@@ -111,14 +114,14 @@ def _harbor_model_routing(
                 'model': dict(model_ref),
                 'enabled': True,
                 'capabilities': ['text', 'thinking', 'tools'],
-                'context_window': 262_144,
+                'context_window': int(spec['context_window']),
                 'priority': 0,
             }],
             'deployments': [{
                 'deployment_id': f'{provider_id}-deployment',
                 'offering_id': offering_id,
                 'connection_id': connection_id,
-                'wire_model_id': 'kimi-k3',
+                'wire_model_id': spec['wire_model_id'],
                 'enabled': True,
                 'identity_confidence': 'high',
                 'probe_status': 'passed',
@@ -275,6 +278,7 @@ def _atif(
     experiment_arm: str,
     runtime_config_sha256: str,
     prompt_contract_sha256: str,
+    model: str,
 ) -> dict[str, Any]:
     steps: list[dict[str, Any]] = [
         {"step_id": 1, "source": "system", "message": _SYSTEM_PROMPT},
@@ -284,7 +288,7 @@ def _atif(
         steps.append({
             "step_id": len(steps) + 1,
             "source": "agent",
-            "model_name": "kimi-k3",
+            "model_name": model,
             "message": "",
             "llm_call_count": 0,
             "tool_calls": [{
@@ -300,7 +304,7 @@ def _atif(
     steps.append({
         "step_id": len(steps) + 1,
         "source": "agent",
-        "model_name": "kimi-k3",
+        "model_name": model,
         "message": final_output,
         "llm_call_count": len(usage.get("apiRounds") or []),
         "metrics": {
@@ -315,7 +319,7 @@ def _atif(
         "agent": {
             "name": "tofu-kimi-runtime",
             "version": __version__,
-            "model_name": "kimi-k3",
+            "model_name": model,
             "tool_definitions": _clean_tool_schemas(),
             "extra": {
                 "credential_boundary": "harbor-host-only",
@@ -358,6 +362,7 @@ class TofuKimiRuntimeAgent(BaseAgent):
         experiment_arm: str,
         runtime_config: dict[str, Any],
         runtime_config_sha256: str,
+        model: str = "kimi-k3",
         reasoning_effort: str = "high",
         thinking_format: str = "",
         timeout_sec: int = 3600,
@@ -365,10 +370,17 @@ class TofuKimiRuntimeAgent(BaseAgent):
         **kwargs: Any,
     ) -> None:
         super().__init__(logs_dir=logs_dir, model_name=model_name, **kwargs)
-        if model_name != "kimi-k3":
+        if str(model) not in _BENCHMARK_MODELS:
             raise ValueError(
-                "TofuKimiRuntimeAgent requires model_name='kimi-k3'"
+                "TofuKimiRuntimeAgent model must be one of "
+                + ", ".join(sorted(_BENCHMARK_MODELS))
             )
+        if model_name != str(model):
+            raise ValueError(
+                "TofuKimiRuntimeAgent requires model_name to equal its "
+                "pinned benchmark model"
+            )
+        self._model = str(model)
         self._upstream_base_url_env = str(upstream_base_url_env)
         self._upstream_api_key_env = str(upstream_api_key_env)
         self._provider_face = str(provider_face)
@@ -492,6 +504,7 @@ class TofuKimiRuntimeAgent(BaseAgent):
             base_url=upstream,
             api_key=api_key,
             thinking_format=self._thinking_format,
+            model=self._model,
         )
         runtime_config = json.loads(json.dumps(self._runtime_config))
         runtime_config.update({
@@ -617,11 +630,12 @@ class TofuKimiRuntimeAgent(BaseAgent):
                 runtime_config_sha256=self._runtime_config_sha256,
                 prompt_contract_sha256=tofu_kimi_prompt_contract_sha256(
                     self._runtime_config),
+                model=self._model,
             ),
         )
         metadata = {
             "contractVersion": _HARBOR_EVIDENCE_SCHEMA,
-            "model": "kimi-k3",
+            "model": self._model,
             "tofuVersion": __version__,
             "providerFace": self._provider_face,
             "providerSlotId": self._provider_slot_id,

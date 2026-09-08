@@ -1,0 +1,14 @@
+{
+  "brand": "groq",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "groq",
+  "category": "relay",
+  "name": "Groq",
+  "base_url": "https://api.groq.com/openai/v1",
+  "offering_recipes": [
+    {"model_id": "openai/gpt-oss-120b",                          "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "openai/gpt-oss-20b",                           "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "meta-llama/llama-4-scout-17b-16e-instruct",    "capabilities": ["text", "vision", "cheap"]},
+    {"model_id": "meta-llama/llama-4-maverick-17b-128e-instruct", "capabilities": ["text", "vision", "cheap"]}
+  ]
+}

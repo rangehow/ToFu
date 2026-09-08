@@ -13,6 +13,13 @@ from lib.tasks_pkg.context_composer._models import (
 )
 from lib.tasks_pkg.context_composer._providers import collect_context_blocks
 from lib.tasks_pkg.context_composer._render import render_context
+from lib.tasks_pkg.context_composer.injections import (
+    append_injection, can_append_injection, record_injection_diagnostic,
+    record_manifest_rows,
+)
+from lib.tasks_pkg.context_composer.registry import (
+    INJECTION_REGISTRY, InjectionSpec, context_block, injection_spec,
+)
 from lib.tasks_pkg.context_composer.task_state import (
     TaskStateSnapshotV1,
     derive_task_state_snapshot,
@@ -89,10 +96,14 @@ def compose_task_context(
 
 
 def compose_context(messages: list[dict], request: ComposeRequest) -> ComposeResult:
+    record_manifest_rows(request.task, [
+        dict(message['_contextInjection']) for message in messages
+        if isinstance(message, dict) and isinstance(message.get('_contextInjection'), dict)
+    ])
     blocks = collect_context_blocks(messages, request)
     result = render_context(messages, blocks, request)
     if request.task is not None:
-        request.task['_contextManifest'] = result.manifest
+        record_manifest_rows(request.task, result.manifest)
         if result.plan is not None:
             from dataclasses import asdict
             request.task['_contextPlanV2'] = asdict(result.plan)
@@ -103,10 +114,7 @@ def append_context_blocks(messages: list[dict], blocks: list[ContextBlock],
                           request: ComposeRequest) -> ComposeResult:
     """Append round-scoped blocks without rewriting the stable task prefix."""
     result = render_context(messages, blocks, request, replace_managed=False)
-    if request.task is not None:
-        manifest = request.task.setdefault('_contextManifest', [])
-        manifest.extend(
-            row for row in result.manifest if row.get('appended'))
+    record_manifest_rows(request.task, result.manifest)
     return result
 
 
@@ -115,5 +123,7 @@ __all__ = [
     'ContextPlanV2', 'TaskStateSnapshotV1', 'compose_context',
     'compose_task_context', 'disabled_context_blocks',
     'append_context_blocks',
+    'INJECTION_REGISTRY', 'InjectionSpec', 'context_block', 'injection_spec',
+    'append_injection', 'can_append_injection', 'record_injection_diagnostic',
     'collect_context_blocks', 'derive_task_state_snapshot', 'render_context',
 ]

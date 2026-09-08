@@ -271,7 +271,12 @@ pub(crate) fn relink(
         LOGICAL_NAMESPACE,
         &old_logical_key,
     )?
-    .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Old path is not in recent projects"))?;
+    .ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "Old path is not in recent projects",
+        )
+    })?;
     let value = projected_value(&current, Some(old_path))?;
     let mut count = value["count"].as_u64().unwrap();
     let mut last_used = value["last_used"].as_u64().unwrap();

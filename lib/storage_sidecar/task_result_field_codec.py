@@ -26,6 +26,7 @@ import zlib
 import orjson
 
 from lib.storage.protocol import MAX_FRAME_BYTES, validate_finite_json_numbers
+from lib.storage_sidecar.json_document import JsonBytes
 from lib.storage_sidecar.projection_codec import (
     ProjectionCodecError,
     encode_projection_for_storage,
@@ -78,7 +79,7 @@ def _serialized_document(value: Any) -> bytes:
     validate_finite_json_numbers(value)
     try:
         storage_value = encode_projection_for_storage(value)
-        return orjson.dumps(storage_value, option=orjson.OPT_SORT_KEYS)
+        return JsonBytes(orjson.dumps(storage_value, option=orjson.OPT_SORT_KEYS))
     except ProjectionCodecError:
         raise
     except (TypeError, orjson.JSONEncodeError) as exc:

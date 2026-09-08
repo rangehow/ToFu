@@ -48,7 +48,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 from lib.runtime_paths import uploads_root  # noqa: E402
 # TODO(enterprise, I6): flat single-tenant directory — serve_image performs
 # no ownership check; namespace keys per principal and authorize reads.
-# docs/ENTERPRISE_READINESS_AUDIT.md
+# docs/ENTERPRISE_EVOLUTION.md
 UPLOAD_DIR = os.path.join(uploads_root(), 'images')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 

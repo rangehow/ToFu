@@ -215,8 +215,12 @@ def _assets_from_release_payload(doc, repo: str) -> list[dict]:
             continue
         row = {'name': name, 'url': url}
         size = a.get('size')
-        if isinstance(size, int) and size >= 0:
+        if size is not None:
             row['size'] = size
+        # Preserve the release service's digest, including malformed values:
+        # the acquisition boundary must reject them, not downgrade silently.
+        if a.get('digest') is not None:
+            row['digest'] = a['digest']
         out.append(row)
     return out
 

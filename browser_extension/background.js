@@ -1,5 +1,5 @@
 /**
- * Tofu Browser Bridge — Background Service Worker (v5.4.4)
+ * Tofu Browser Bridge — Background Service Worker (v5.5.2)
  *
  * Single-endpoint architecture:
  *   Every poll is a POST to /api/browser/poll with:
@@ -51,6 +51,21 @@ const BROWSER_CAPABILITIES = [
 // is tried at most once per REPAIR_TAB_COOLDOWN; a FOREGROUND tab only ever
 // opens from the popup's re-pair button (a real user gesture).
 const REPAIR_TAB_COOLDOWN = 30 * 60 * 1000;  // hidden-tab repair, twice/hour cap
+// chrome.storage.session survives a service-worker kill but not a browser
+// restart — exactly the ledger the hidden repair tab needs: the in-memory
+// ladder dies with the worker, and without this record the half-opened tab
+// id is forgotten and the tab stays blank forever.
+const REPAIR_TAB_SESSION_KEY = 'autoRepairHiddenTabId';
+// Search/research tabs are disposable command resources. Reserve before
+// tabs.create (including unresolved creates); retain only exact owned IDs
+// across MV3 worker restarts, never discover ownership from a blank URL.
+const TEMPORARY_TAB_MAX_ACTIVE = 4;
+const TEMPORARY_TAB_SESSION_KEY = 'temporarySearchTabIds';
+const TEMPORARY_TAB_CLEANUP_TIMEOUT_MS = 5000;
+const _temporaryTabIds = new Set();
+let _temporaryTabReservations = 0;
+let _temporaryTabLedgerTail = Promise.resolve();
+let _temporaryTabRecovery = null;
 
 // ══════════════════════════════════════════
 //  State
@@ -83,9 +98,10 @@ try {
 // the version it would serve in a fresh zip, which is what lets the panel
 // tell "installed and healthy" from "installed but outdated" — and, when a
 // poll dies at the bridge gate, "installed but locked out" from "never
-// installed" (the stranded-fleet fix, 2026-08-04). Side-loaded extensions
-// have no update channel, so this telemetry is the only way the panel can
-// point a stale install at its one-click cure.
+// installed" (the stranded-fleet fix, 2026-08-04). A side-loaded extension
+// has no STORE update channel, so this telemetry is how the panel points a
+// stale install at its cure — and _maybeReloadForSelfUpdate below is what
+// makes that cure land without a chrome://extensions visit.
 let EXT_VERSION = '';
 try { EXT_VERSION = (chrome.runtime.getManifest() || {}).version || ''; } catch (e) { /* */ }
 
@@ -153,7 +169,13 @@ const NETWORK_CAPTURE_MAX_TOTAL_BODY_CHARS = 1024 * 1024;
 const NETWORK_CAPTURE_HINT_RESERVE_CHARS = 256 * 1024;
 const NETWORK_CAPTURE_RECENT_TABS = 12;
 const NETWORK_CAPTURE_MAX_WEBSOCKET_FRAMES = 40;
-const NETWORK_CAPTURE_MAX_ACTIVE = 4;
+const NETWORK_CAPTURE_MAX_ACTIVE = 32;
+// Captures are normally released by their owning command's finally or by the
+// tab-close sweep. A command that wedges mid-flight (e.g. a hung CDP detach)
+// would otherwise hold its slot forever — the keep-alive alarm keeps this
+// service worker alive indefinitely, so the map never resets on its own.
+const NETWORK_CAPTURE_REAP_IDLE_MS = 5 * 60 * 1000;
+const NETWORK_CAPTURE_REAP_MAX_AGE_MS = 15 * 60 * 1000;
 const NETWORK_CAPTURE_SETTLE_MAX_MS = 4500;
 const NETWORK_CAPTURE_IDLE_MS = 650;
 const _networkCaptures = new Map(); // captureId -> owned transient capture
@@ -168,6 +190,7 @@ let _networkListenerInstalled = false;
 // from racing each other.
 const _cdpSessions = new Map(); // tabId -> {target, holders, attachPromise, tail}
 let _cdpLeaseSequence = 0;
+const CDP_SETTLE_TIMEOUT_MS = 5000;
 
 // Console/debugger state is transient and explicitly bounded. It is useful
 // only while diagnosing the page and is never written to extension storage.
@@ -220,6 +243,33 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 let commandsExecuted = 0;
 let commandsFailed = 0;
 
+// Self-update watchdog: Chrome re-reads an unpacked install folder on
+// chrome.runtime.reload(), so once a freshly downloaded ZIP is unzipped
+// OVER the loaded folder, the next keepAlive tick sees the on-disk manifest
+// version differ from the running one and reloads — no extensions-page
+// visit, no reload click. This also un-parks the 401/426 backoff states,
+// whose own retry cadence is minutes. The cache-buster forces Chrome to
+// serve the on-disk bytes rather than any install-time cache; a torn read
+// mid-unzip throws and simply retries next tick.
+async function _maybeReloadForSelfUpdate() {
+  if (!EXT_VERSION) return;
+  try {
+    const resp = await fetch(
+      chrome.runtime.getURL('manifest.json') + '?_selfUpdate=' + Date.now(),
+      { cache: 'no-store' });
+    if (!resp || !resp.ok) return;
+    const diskVersion = String(
+      ((await resp.json()) || {}).version || '').trim();
+    if (!diskVersion || diskVersion === EXT_VERSION) return;
+    // Queued results and executing commands live only in this worker's
+    // memory — defer one tick rather than drop them on the floor.
+    if (_resultQueue.length > 0 || _inflight.size > 0) return;
+    console.warn(`[Bridge] Extension files updated on disk ` +
+                 `(v${EXT_VERSION} → v${diskVersion}); reloading`);
+    chrome.runtime.reload();
+  } catch (e) { /* torn read mid-unzip — the next keepAlive tick retries */ }
+}
+
 // ══════════════════════════════════════════
 //  Lifecycle
 // ══════════════════════════════════════════
@@ -237,7 +287,10 @@ chrome.runtime.onStartup.addListener(() => {
 // Keep-alive: restart poll if Service Worker was killed and restarted
 chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'keepAlive' && !pollActive && SERVER_URL) {
+  if (alarm.name !== 'keepAlive') return;
+  _reapIdleNetworkCaptures();
+  _maybeReloadForSelfUpdate();
+  if (!pollActive && SERVER_URL) {
     console.log('[Bridge] Alarm keepAlive: restarting poll loop');
     startPolling();
   }
@@ -271,6 +324,10 @@ function adoptBridgePreseed(storageData) {
 }
 
 function init() {
+  _reapOrphanedRepairTab();
+  _recoverTemporaryTabs().catch((error) => {
+    console.warn('[TemporaryTabs] recovery failed:', _textForDiagnostic(error));
+  });
   // Generate or restore a stable client ID for per-device command routing.
   // Then adopt the download-time preseed (if any) BEFORE server detection,
   // so a freshly-installed package pairs with zero user input.
@@ -442,6 +499,38 @@ function _isOwnServerTab(tab) {
   return !!(tab && tab.url && SERVER_URL && tab.url.startsWith(SERVER_URL));
 }
 
+/* Worker-restart reconciliation for the hidden repair tab. init() runs on
+ * every service-worker (re)start, so a ladder that died mid-flight gets its
+ * recorded tab reaped here — unless it became a usable Tofu page (kept: the
+ * next ladder rung mints from it invisibly) or the user navigated it away
+ * (hands off). */
+async function _reapOrphanedRepairTab() {
+  let tabId = null;
+  try {
+    const data = await chrome.storage.session.get(REPAIR_TAB_SESSION_KEY);
+    tabId = data ? data[REPAIR_TAB_SESSION_KEY] : null;
+  } catch (_) { return; }
+  if (tabId == null) return;
+  try { await chrome.storage.session.remove(REPAIR_TAB_SESSION_KEY); } catch (_) {}
+  let tab = null;
+  try { tab = await chrome.tabs.get(tabId); } catch (_) { return; }
+  if (!tab) return;
+  // init() has not restored the module-level SERVER_URL yet — read the
+  // paired origin from storage so the own-server check holds on a restart.
+  let serverUrl = '';
+  try {
+    const cfg = await chrome.storage.local.get(['serverUrl']);
+    serverUrl = String((cfg && cfg.serverUrl) || '').replace(/\/+$/, '');
+  } catch (_) {}
+  const url = String(tab.url || '');
+  const isOwn = !!(serverUrl && url.startsWith(serverUrl));
+  if (isOwn && tab.status === 'complete') return;
+  const stillOurs = !url || url.startsWith('about:') ||
+    url.startsWith('chrome-error:') || isOwn;
+  if (!stillOurs) return;
+  try { await chrome.tabs.remove(tabId); } catch (_) {}
+}
+
 async function attemptAutoRepair(opts) {
   opts = opts || {};
   if (_repairInFlight || !SERVER_URL) return false;
@@ -475,6 +564,14 @@ async function attemptAutoRepair(opts) {
       return false;
     }
     _lastRepairTabAt = now;
+    if (!opts.forceTab) {
+      // Ledger for _reapOrphanedRepairTab: written before the first await
+      // that can outlive the worker — a kill mid-wait is the leak.
+      try {
+        await chrome.storage.session.set(
+          { [REPAIR_TAB_SESSION_KEY]: tab.id });
+      } catch (_) {}
+    }
     try {
       await waitForTabLoad(tab.id, 20000);
       const ok = await _mintKeyViaTab(tab.id).catch(() => false);
@@ -492,6 +589,7 @@ async function attemptAutoRepair(opts) {
     }
   } finally {
     _repairInFlight = false;
+    try { await chrome.storage.session.remove(REPAIR_TAB_SESSION_KEY); } catch (_) {}
   }
 }
 // ══════════════════════════════════════════
@@ -727,6 +825,7 @@ async function executeAndReport(cmd) {
   _inflight.add(cmd.id);
   let result = null;
   let error = null;
+  const temporaryTabs = _createTemporaryTabScope();
 
   try {
     console.log(`[Bridge] ▶ ${cmd.type} (${cmd.id.slice(0, 8)})`);
@@ -734,7 +833,7 @@ async function executeAndReport(cmd) {
 
     const timeoutMs = COMMAND_TIMEOUT_OVERRIDES[cmd.type] || COMMAND_TIMEOUT;
     result = await withTimeout(
-      executeCommand(cmd.type, cmd.params || {}),
+      executeCommand(cmd.type, cmd.params || {}, temporaryTabs),
       timeoutMs,
       `Command '${cmd.type}' timed out after ${timeoutMs / 1000}s`
     );
@@ -745,6 +844,18 @@ async function executeAndReport(cmd) {
     error = err.message || String(err);
     commandsFailed++;
     console.error(`[Bridge] ✗ ${cmd.type}: ${error}`);
+  } finally {
+    // Promise timeout alone cannot run a suspended handler's finally block.
+    // Close its resources independently before reporting settlement.
+    await temporaryTabs.close().catch((cleanupError) => {
+      console.warn('[TemporaryTabs] cleanup failed:', _textForDiagnostic(cleanupError));
+      if (!error) {
+        error = `Temporary browser tab cleanup failed: ${_textForDiagnostic(cleanupError)}`;
+        result = null;
+        commandsExecuted--;
+        commandsFailed++;
+      }
+    });
   }
 
   // Queue the result — it will be sent with the next poll
@@ -776,7 +887,7 @@ function withTimeout(promise, ms, timeoutMsg) {
 //  Command Router
 // ══════════════════════════════════════════
 
-async function executeCommand(type, params) {
+async function executeCommand(type, params, temporaryTabs) {
   switch (type) {
     case 'list_tabs':      return cmdListTabs(params);
     case 'read_tab':       return cmdReadTab(params);
@@ -804,9 +915,9 @@ async function executeCommand(type, params) {
     case 'get_app_state':  return cmdGetAppState(params);
     case 'download':       return cmdDownload(params);
     case 'notify':         return cmdNotify(params);
-    case 'fetch_url':      return cmdFetchUrl(params);
+    case 'fetch_url':      return cmdFetchUrl(params, temporaryTabs);
     case 'fetch_file_to_server': return cmdFetchFileToServer(params);
-    case 'research_url':   return cmdResearchUrl(params);
+    case 'research_url':   return cmdResearchUrl(params, temporaryTabs);
     case 'devtools':       return cmdDevtools(params);
     case 'page_state':     return cmdPageState(params);
     case 'page_snapshot':  return cmdPageSnapshot(params);
@@ -883,6 +994,12 @@ async function cmdReadTab(params) {
     const r = results[0].result;
     r.title = tab.title || '';
     r.url = tab.url || '';
+    try {
+      const snapshots = await chrome.scripting.executeScript({
+        target, func: _captureContentSnapshot, args: [maxChars, selector],
+      });
+      if (snapshots[0] && snapshots[0].result) r.contentSnapshot = snapshots[0].result;
+    } catch (_) { /* Optional enrichment must not break baseline HTML reads. */ }
     const network = _recentNetworkByTab.get(Number(tabId));
     if (network && network.pageUrl === (tab.url || '')) {
       r.network = network;
@@ -1807,7 +1924,15 @@ async function _acquireCdp(tabId, purpose) {
   for (;;) {
     let session = _cdpSessions.get(normalizedTabId);
     if (session && session.closing) {
-      await session.closing.catch(() => {});
+      await Promise.race([
+        session.closing.catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, CDP_SETTLE_TIMEOUT_MS)),
+      ]);
+      if (session.closing && _cdpSessions.get(normalizedTabId) === session) {
+        // The previous detach never settled — drop the wedged session record
+        // so a fresh attach attempt reports Chrome's real state.
+        _cdpSessions.delete(normalizedTabId);
+      }
       continue;
     }
     if (!session) {
@@ -1855,7 +1980,13 @@ async function _releaseCdp(lease) {
       _cdpSessions.get(lease.tabId) !== session) return;
   session.closing = (async () => {
     try {
-      await chrome.debugger.detach(session.target);
+      // A hung detach must not wedge this broker (or any capture slot waiting
+      // on the stop path) — give up waiting; onDetach reconciles the session
+      // whenever Chrome eventually settles the call.
+      await Promise.race([
+        chrome.debugger.detach(session.target),
+        new Promise((resolve) => setTimeout(resolve, CDP_SETTLE_TIMEOUT_MS)),
+      ]);
     } catch (_) {
       // Chrome may already have detached because the user opened DevTools or
       // closed the tab. Either way this broker no longer owns the target.
@@ -2727,14 +2858,28 @@ async function cmdCreateTab(params) {
   if (captureNavigation) {
     const timeoutMs = Math.max(1000, Math.min(30000, Number(params.timeoutMs) || 15000));
     try {
-      captureId = (await _startNetworkCapture({
-        tabId: tab.id, captureBodies: true,
-      }, { allowInertBlank: true })).captureId;
+      try {
+        captureId = (await _startNetworkCapture({
+          tabId: tab.id, captureBodies: true,
+        }, { allowInertBlank: true })).captureId;
+      } catch (captureError) {
+        // Capture is best-effort evidence; navigation is the point. Degrade
+        // to a plain load wait instead of failing the whole command.
+        console.warn('[CreateTab] capture unavailable; plain navigation:',
+                     _textForDiagnostic(captureError));
+      }
       await chrome.tabs.update(tab.id, { url: requestedUrl });
       await waitForTabLoad(tab.id, timeoutMs);
-      await _waitForCapturedPageSettle(tab.id, captureId, timeoutMs);
-      await _stopNetworkCaptureInternal(captureId, { remember: true });
-      captureId = null;
+      if (captureId) {
+        await _waitForCapturedPageSettle(tab.id, captureId, timeoutMs);
+        await _stopNetworkCaptureInternal(captureId, { remember: true });
+        captureId = null;
+      }
+    } catch (error) {
+      // Never strand the inert about:blank tab when the navigation itself
+      // could not be carried out.
+      try { await chrome.tabs.remove(tab.id); } catch (_) {}
+      throw error;
     } finally {
       if (captureId) {
         await _stopNetworkCaptureInternal(captureId, { remember: true }).catch(() => {});
@@ -2768,6 +2913,91 @@ async function cmdUpdateTab(params) {
 //  Fetch URL — background tab with user cookies
 // ══════════════════════════════════════════
 
+function _persistTemporaryTabs() {
+  const write = _temporaryTabLedgerTail.catch(() => {}).then(() =>
+    chrome.storage.session.set({[TEMPORARY_TAB_SESSION_KEY]: [..._temporaryTabIds]}));
+  _temporaryTabLedgerTail = write;
+  return withTimeout(write, TEMPORARY_TAB_CLEANUP_TIMEOUT_MS,
+                     'Temporary tab ownership storage timed out');
+}
+
+async function _removeTemporaryTab(tabId) {
+  await withTimeout(chrome.tabs.remove(tabId), TEMPORARY_TAB_CLEANUP_TIMEOUT_MS,
+                    'Temporary tab cleanup timed out').catch(async (error) => {
+    // A user may already have closed this exact tab. Keep the ledger if it
+    // still exists so another worker can retry cleanup after a Chrome error.
+    const tab = await withTimeout(chrome.tabs.get(tabId),
+      TEMPORARY_TAB_CLEANUP_TIMEOUT_MS, 'Temporary tab lookup timed out')
+      .catch((lookupError) => {
+        if (/No tab with id|Invalid tab ID/i.test(String(lookupError.message))) return null;
+        throw lookupError;
+      });
+    if (tab) throw error;
+  });
+  _temporaryTabIds.delete(tabId);
+  _recentNetworkByTab.delete(tabId);
+  await _persistTemporaryTabs();
+}
+
+function _recoverTemporaryTabs() {
+  if (!_temporaryTabRecovery) {
+    _temporaryTabRecovery = (async () => {
+      const data = await withTimeout(
+        chrome.storage.session.get(TEMPORARY_TAB_SESSION_KEY),
+        TEMPORARY_TAB_CLEANUP_TIMEOUT_MS, 'Temporary tab recovery timed out');
+      const ids = data && data[TEMPORARY_TAB_SESSION_KEY];
+      for (const id of (Array.isArray(ids) ? ids : []).slice(0, TEMPORARY_TAB_MAX_ACTIVE)) {
+        if (Number.isInteger(id) && id > 0) _temporaryTabIds.add(id);
+      }
+      await Promise.all([..._temporaryTabIds].map(_removeTemporaryTab));
+    })();
+  }
+  return _temporaryTabRecovery;
+}
+
+function _createTemporaryTabScope() {
+  let tab = null;
+  let closed = false;
+  let closing = null;
+  function assertActive() {
+    if (closed) throw new Error('Temporary browser command already settled');
+  }
+  function close() {
+    closed = true;
+    if (!tab) return Promise.resolve();
+    if (!closing) closing = _removeTemporaryTab(tab.id);
+    return closing;
+  }
+  return {
+    assertActive, close,
+    async create() {
+      await _recoverTemporaryTabs();
+      assertActive();
+      if (_temporaryTabIds.size + _temporaryTabReservations >= TEMPORARY_TAB_MAX_ACTIVE) {
+        throw new Error(`Temporary browser tab capacity reached (${TEMPORARY_TAB_MAX_ACTIVE} active tasks)`);
+      }
+      _temporaryTabReservations++;
+      try {
+        tab = await chrome.tabs.create({url: 'about:blank', active: false});
+        _temporaryTabIds.add(tab.id);
+      } finally {
+        _temporaryTabReservations--;
+      }
+      try {
+        // A timed-out create may resolve much later. Close that late tab
+        // immediately; never resume capture or navigation for the old command.
+        assertActive();
+        await _persistTemporaryTabs();
+        assertActive();
+        return tab;
+      } catch (error) {
+        await close().catch(() => {});
+        throw error;
+      }
+    },
+  };
+}
+
 /**
  * Opens a URL in a hidden background tab (inheriting the user's session/cookies),
  * extracts the text content, and closes the tab. This allows fetching pages that
@@ -2776,7 +3006,7 @@ async function cmdUpdateTab(params) {
  * params: { url, maxChars?, timeoutMs? }
  * returns: { text, title, url, textLength, truncated, meta }
  */
-async function cmdFetchUrl(params) {
+async function cmdFetchUrl(params, temporaryTabs = _createTemporaryTabScope()) {
   const url = params.url;
   if (!url) throw new Error('No url specified');
   const maxChars = params.maxChars || 50000;
@@ -2812,7 +3042,7 @@ async function cmdFetchUrl(params) {
   // capture can attach — exactly the SPA failure this command must solve.
   let tab;
   try {
-    tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+    tab = await temporaryTabs.create();
   } catch (e) {
     throw new Error(
       `Failed to create tab for ${_urlForDiagnostic(url)}: ${_textForDiagnostic(e)}`);
@@ -2823,6 +3053,7 @@ async function cmdFetchUrl(params) {
     captureId = (await _startNetworkCapture({
       tabId: tab.id, captureBodies: true,
     }, { allowInertBlank: true })).captureId;
+    temporaryTabs.assertActive();
     await chrome.tabs.update(tab.id, { url });
     // Wait for the tab to fully load
     await waitForTabLoad(tab.id, timeoutMs);
@@ -2861,12 +3092,12 @@ async function cmdFetchUrl(params) {
 
     return { text: '', title: tab.title || '', url: tab.url || '', error: 'No content extracted' };
   } finally {
+    // Close first: a wedged CDP stop must never hold a search tab open.
+    await temporaryTabs.close().catch(() => {});
     if (captureId) {
       await _stopNetworkCaptureInternal(
         captureId, { remember: false }).catch(() => {});
     }
-    // Always close the background tab, even on error
-    try { await chrome.tabs.remove(tab.id); } catch (_) {}
     _recentNetworkByTab.delete(Number(tab.id));
   }
 }
@@ -3181,23 +3412,120 @@ async function cmdFetchFileToServer(params) {
   }
 }
 
+// Self-contained for executeScript: never serialize subtree textContent (shadow CSS).
+function _captureContentSnapshot(maxChars, selector) {
+  const cap = Math.max(1000, Math.min(80000, Number(maxChars) || 50000));
+  const deadline = Date.now() + 80;
+  const entries = [];
+  let visited = 0;
+  let shadows = 0;
+  let scannedChars = 0;
+  const start = selector ? document.querySelector(selector) : document.body;
+  const walk = (root, scope = 0, card = null, depth = 0) => {
+    if (depth >= 80) return;
+    for (let node = root; node && visited < 5000 && Date.now() < deadline; node = node.nextSibling) {
+      visited++;
+      if (node.nodeType === 3) {
+        const text = String(node.nodeValue || '').slice(0, Math.max(0, cap * 2 - scannedChars)).replace(/[\t ]+/g, ' ').trim();
+        scannedChars += text.length;
+        if (text) entries.push({text, scope, card});
+        continue;
+      }
+      if (node.nodeType !== 1 && node.nodeType !== 11) continue;
+      const tag = String(node.tagName || '').toLowerCase();
+      const attr = name => node.getAttribute ? node.getAttribute(name) || '' : '';
+      const role = attr('role');
+      if (/^(script|style|noscript|template|svg|nav|aside|header|footer)$/.test(tag) ||
+          /^(navigation|complementary|banner|contentinfo)$/.test(role) ||
+          node.hidden || attr('aria-hidden') === 'true') continue;
+      if (node.nodeType === 1) {
+        const style = getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden') continue;
+      }
+      let region = scope;
+      if (tag === 'main' || role === 'main') region = Math.max(region, 2);
+      if (tag === 'article') region = Math.max(region, 1);
+      if ((tag === 'dialog' && node.open) || (role === 'dialog' && attr('aria-modal') === 'true')) region = 3;
+      let group = card;
+      if (/^(article|li|tr)$/.test(tag) || /^(listitem|row)$/.test(role) ||
+          /(?:^|[-_\s])card(?:[-_\s]|$)/i.test(attr('class'))) group = {url: '', title: ''};
+      if (tag === 'a') {
+        if (!group) group = {url: '', title: ''};
+        // The DOM-resolved href preserves signed query strings; never rebuild it.
+        const href = String(node.href || '');
+        if (!group.url && /^https?:\/\//i.test(href) && href.length <= 8192) group.url = href;
+        if (!group.title) group.title = attr('title').slice(0, 512);
+      }
+      if (/^(img|video|audio|picture)$/.test(tag)) entries.push({media: true, scope: region, card: group});
+      if (node.firstChild) walk(node.firstChild, region, group, depth + 1);
+      if (node.shadowRoot && shadows++ < 40) walk(node.shadowRoot.firstChild, region, group, depth + 1);
+    }
+  };
+  if (start) walk(start);
+  const preferred = entries.reduce((n, e) => Math.max(n, e.scope), 0);
+  const parts = [];
+  const groups = new Map();
+  let chars = 0;
+  let media_count = 0;
+  for (const entry of entries) {
+    if (entry.scope < preferred) continue;
+    if (entry.media) { media_count = Math.min(1000, media_count + 1); continue; }
+    if (chars < cap) {
+      const piece = entry.text.slice(0, cap - chars);
+      parts.push(piece); chars += piece.length + 1;
+    }
+    if (entry.card && (groups.has(entry.card) || groups.size < 100)) {
+      const old = groups.get(entry.card) || '';
+      groups.set(entry.card, (old + (old ? '\n' : '') + entry.text).slice(0, 2000));
+    }
+  }
+  const records = [];
+  const seen = new Set();
+  let recordChars = 0;
+  for (const [card, snippet] of groups) {
+    if (!card.url || !snippet || seen.has(card.url) || records.length >= 40) continue;
+    const title = (card.title || snippet.split('\n')[0]).slice(0, 512);
+    const size = card.url.length + title.length + snippet.length;
+    if (recordChars + size > cap) break;
+    seen.add(card.url); recordChars += size;
+    records.push({title, url: card.url, snippet});
+  }
+  // Text and records share the existing character budget, not two full captures.
+  const text = parts.join('\n').slice(0, Math.max(0, cap - recordChars));
+  const signalText = parts.join('\n').slice(0, 4000);
+  const blocked = signalText.length < 2000 && records.length === 0 &&
+    /(?:please (?:log in|sign in) to (?:continue|view|access)|verify (?:that )?you are human|complete the captcha|登录后(?:查看|继续)|请先登录)/i.test(signalText);
+  const empty = !blocked && media_count === 0 && records.length === 0 &&
+    (!signalText.trim() || /^(?:no (?:results|items|matches)(?: found)?[.!]?|暂无(?:结果|内容)|未找到相关结果)$/i.test(signalText.trim()));
+  return {text, records, media_count, empty, blocked};
+}
+
+function _mergeResearchSnapshot(accumulator, snapshot, maxChars) {
+  if (!snapshot) return 0;
+  if (!accumulator.snapshot) accumulator.snapshot = {text: '', records: [], media_count: 0, empty: true, blocked: false};
+  const out = accumulator.snapshot;
+  let added = 0;
+  for (const record of snapshot.records) {
+    if (out.records.length >= 40) break;
+    if (out.records.some(old => old.url === record.url)) continue;
+    const size = record.url.length + record.title.length + record.snippet.length;
+    if ((accumulator.recordChars || 0) + size > maxChars) break;
+    out.records.push(record);
+    accumulator.recordChars = (accumulator.recordChars || 0) + size;
+    added += size;
+  }
+  out.media_count = Math.max(out.media_count, snapshot.media_count);
+  out.blocked = snapshot.blocked;
+  out.empty = out.empty && snapshot.empty;
+  out.text = accumulator.lines.join('\n').slice(0, Math.max(0, maxChars - (accumulator.recordChars || 0)));
+  return added;
+}
+
 function _researchPageSignals(maxChars) {
   const cap = Math.max(1000, Math.min(30000, Number(maxChars) || 30000));
-  const textParts = [];
-  const bodyText = document.body ? (document.body.innerText || document.body.textContent || '') : '';
-  if (bodyText) textParts.push(bodyText);
-  // Open shadow roots are part of the user-visible page but are absent from
-  // document.body.innerText in several component libraries.
-  let shadowCount = 0;
-  let shadowScanned = 0;
-  for (const el of document.querySelectorAll('*')) {
-    if (shadowScanned++ >= 5000) break;
-    if (!el.shadowRoot || shadowCount >= 40) continue;
-    const shadowText = el.shadowRoot.innerText || el.shadowRoot.textContent || '';
-    if (shadowText) textParts.push(shadowText);
-    shadowCount++;
-  }
-  const fullText = textParts.join('\n');
+  // Clean visible text is supplied by the isolated, bounded DOM snapshot.
+  const fullText = '';
+  const shadowCount = 0;
   const stateNames = [
     '__INITIAL_STATE__', '__PRELOADED_STATE__', '__NEXT_DATA__', '__NUXT__',
     '__APOLLO_STATE__', '__REMIX_CONTEXT__',
@@ -3436,13 +3764,25 @@ async function _readResearchSignals(tabId, maxChars) {
       target: {tabId: Number(tabId)}, world: 'MAIN',
       func: _researchPageSignals, args: [maxChars],
     });
-    return results && results[0] && results[0].result || null;
+    const signals = results && results[0] && results[0].result || null;
+    if (!signals) return null;
+    const snapshots = await chrome.scripting.executeScript({
+      target: {tabId: Number(tabId)}, func: _captureContentSnapshot, args: [maxChars],
+    });
+    const snapshot = snapshots && snapshots[0] && snapshots[0].result;
+    if (snapshot) {
+      signals.contentSnapshot = snapshot;
+      signals.text = [snapshot.text, ...snapshot.records.map(r => r.snippet)].join('\n').slice(0, maxChars);
+      signals.textLength = snapshot.text.length;
+      signals.fingerprint += '|' + snapshot.text.slice(-400) + '|' + snapshot.records.map(r => r.url).join('|');
+    }
+    return signals;
   } catch (_) {
     return null;
   }
 }
 
-async function cmdResearchUrl(params) {
+async function cmdResearchUrl(params, temporaryTabs = _createTemporaryTabScope()) {
   const requestedUrl = String(params.url || '');
   if (!requestedUrl) throw new Error('No url specified');
   if (isProtectedUrl(requestedUrl)) {
@@ -3464,7 +3804,7 @@ async function cmdResearchUrl(params) {
   try { requestedOrigin = new URL(requestedUrl).origin; }
   catch (_) { throw new Error(`Invalid URL: ${requestedUrl}`); }
 
-  let tab = await chrome.tabs.create({url: 'about:blank', active: false});
+  let tab = await temporaryTabs.create();
   let captureId = null;
   const accumulator = {lines: [], seen: new Set(), chars: 0, truncated: false};
   let firstSignals = null;
@@ -3477,6 +3817,7 @@ async function cmdResearchUrl(params) {
     captureId = (await _startNetworkCapture({
       tabId: tab.id, captureBodies: true, captureHints: params.captureHints,
     }, { allowInertBlank: true })).captureId;
+    temporaryTabs.assertActive();
     await chrome.tabs.update(tab.id, {url: requestedUrl});
     await waitForTabLoad(tab.id, Math.min(20000, timeoutMs));
     await _waitForCapturedPageSettle(tab.id, captureId, Math.min(15000, timeoutMs));
@@ -3487,6 +3828,7 @@ async function cmdResearchUrl(params) {
     if (lastSignals) {
       seenFingerprints.add(String(lastSignals.fingerprint || ''));
       _appendResearchText(accumulator, lastSignals.text, maxChars);
+      _mergeResearchSnapshot(accumulator, lastSignals.contentSnapshot, maxChars);
     }
     if (initialOrigin !== requestedOrigin) {
       stopReason = 'cross_origin_redirect';
@@ -3494,13 +3836,15 @@ async function cmdResearchUrl(params) {
       for (let pageIndex = 0; pageIndex < maxPages && Date.now() < deadline; pageIndex++) {
         let stagnantScrolls = 0;
         for (let scrollIndex = 0; scrollIndex < maxScrolls && Date.now() < deadline; scrollIndex++) {
+          temporaryTabs.assertActive();
           const scrollResult = await chrome.scripting.executeScript({
             target: {tabId: tab.id}, world: 'MAIN', func: _researchScrollStep,
           });
           const scroll = scrollResult && scrollResult[0] && scrollResult[0].result || {};
           await _waitForCapturedPageSettle(tab.id, captureId, Math.min(5000, deadline - Date.now()));
           const signals = await _readResearchSignals(tab.id, maxChars);
-          const added = signals ? _appendResearchText(accumulator, signals.text, maxChars) : 0;
+          const added = signals ? _appendResearchText(accumulator, signals.text, maxChars) +
+            _mergeResearchSnapshot(accumulator, signals.contentSnapshot, maxChars) : 0;
           lastSignals = signals || lastSignals;
           scrollsCompleted++;
           stagnantScrolls = added > 0 ? 0 : stagnantScrolls + 1;
@@ -3511,6 +3855,7 @@ async function cmdResearchUrl(params) {
             (pageIndex + 1 >= maxPages ? 'page_limit' : 'scroll_complete');
           break;
         }
+        temporaryTabs.assertActive();
         const advanceRows = await chrome.scripting.executeScript({
           target: {tabId: tab.id}, world: 'MAIN', func: _researchAdvancePagination,
           args: [pagination],
@@ -3520,6 +3865,7 @@ async function cmdResearchUrl(params) {
           stopReason = advance.reason || 'no-next-page';
           break;
         }
+        temporaryTabs.assertActive();
         if (advance.kind === 'link') await chrome.tabs.update(tab.id, {url: advance.href});
         await waitForTabLoad(tab.id, Math.min(15000, Math.max(1000, deadline - Date.now())));
         await _waitForCapturedPageSettle(tab.id, captureId, Math.min(5000, deadline - Date.now()));
@@ -3532,7 +3878,8 @@ async function cmdResearchUrl(params) {
         }
         const signals = await _readResearchSignals(tab.id, maxChars);
         const fingerprint = String(signals && signals.fingerprint || '');
-        const added = signals ? _appendResearchText(accumulator, signals.text, maxChars) : 0;
+        const added = signals ? _appendResearchText(accumulator, signals.text, maxChars) +
+            _mergeResearchSnapshot(accumulator, signals.contentSnapshot, maxChars) : 0;
         if (!signals || (seenFingerprints.has(fingerprint) && added === 0)) {
           stopReason = 'pagination_stalled';
           break;
@@ -3553,6 +3900,7 @@ async function cmdResearchUrl(params) {
     return {
       requestedUrl, url: tab.url || '', title: tab.title || '',
       collectedText: accumulator.lines.join('\n'),
+      ...(accumulator.snapshot ? {contentSnapshot: accumulator.snapshot} : {}),
       textLength: accumulator.chars, truncated: accumulator.truncated,
       framework: (firstSignals && firstSignals.framework) ||
         (lastSignals && lastSignals.framework) || 'unknown',
@@ -3563,8 +3911,8 @@ async function cmdResearchUrl(params) {
         maxPages, maxScrolls, pagination, elapsedMs: timeoutMs - Math.max(0, deadline - Date.now())},
     };
   } finally {
+    await temporaryTabs.close().catch(() => {});
     if (captureId) await _stopNetworkCaptureInternal(captureId, {remember: false}).catch(() => {});
-    try { await chrome.tabs.remove(tab.id); } catch (_) {}
     if (tab && tab.id != null) _recentNetworkByTab.delete(Number(tab.id));
   }
 }
@@ -3593,17 +3941,24 @@ async function cmdNavigate(params) {
   let captureId = null;
   try {
     if (params.waitForLoad) {
-      captureId = (await cmdNetworkCaptureStart({
-        tabId, captureBodies: true,
-      })).captureId;
+      try {
+        captureId = (await cmdNetworkCaptureStart({
+          tabId, captureBodies: true,
+        })).captureId;
+      } catch (captureError) {
+        console.warn('[Navigate] capture unavailable; plain navigation:',
+                     _textForDiagnostic(captureError));
+      }
     }
     await chrome.tabs.update(tabId, { url });
 
     if (params.waitForLoad) {
       await waitForTabLoad(tabId, 15000);
-      await _waitForCapturedPageSettle(tabId, captureId, 15000);
-      await _stopNetworkCaptureInternal(captureId, { remember: true });
-      captureId = null;
+      if (captureId) {
+        await _waitForCapturedPageSettle(tabId, captureId, 15000);
+        await _stopNetworkCaptureInternal(captureId, { remember: true });
+        captureId = null;
+      }
     }
   } finally {
     if (captureId) {
@@ -4891,6 +5246,7 @@ async function _startNetworkCapture(params, { allowInertBlank = false } = {}) {
   if (captureBodies && priorBodyCapture) {
     await _stopNetworkCaptureInternal(priorBodyCapture, { remember: true });
   }
+  _reapIdleNetworkCaptures();
   if (_networkCaptures.size >= NETWORK_CAPTURE_MAX_ACTIVE) {
     throw new Error(
       `Network capture capacity reached (${NETWORK_CAPTURE_MAX_ACTIVE} active tasks)`);
@@ -4922,6 +5278,7 @@ async function _startNetworkCapture(params, { allowInertBlank = false } = {}) {
     try {
       capture.cdpLease = await _acquireCdp(
         capture.tabId, `network-capture:${capture.captureId}`);
+      if (capture.stopping) throw new Error('Network capture already stopped');
       capture.target = capture.cdpLease.target;
       capture.cdpAttached = true;
       capture.everCdpAttached = true;
@@ -4949,7 +5306,25 @@ async function _startNetworkCapture(params, { allowInertBlank = false } = {}) {
                    capture.attachError);
     }
   }
-  return {captureId, page: await cmdPageState(params)};
+  try {
+    if (capture.stopping) throw new Error('Network capture already stopped');
+    return {captureId, page: await cmdPageState(params)};
+  } catch (error) {
+    await _stopNetworkCaptureInternal(captureId, {remember: false}).catch(() => {});
+    throw error;
+  }
+}
+
+function _reapIdleNetworkCaptures(now = Date.now()) {
+  for (const capture of Array.from(_networkCaptures.values())) {
+    const idleFor = now - (capture.lastActivityAt || capture.startedAt || 0);
+    const age = now - (capture.startedAt || now);
+    if (idleFor < NETWORK_CAPTURE_REAP_IDLE_MS &&
+        age < NETWORK_CAPTURE_REAP_MAX_AGE_MS) continue;
+    console.warn('[NetworkCapture] reaping stuck capture:', capture.captureId,
+                 {tabId: capture.tabId, idleFor, age});
+    _stopNetworkCaptureInternal(capture.captureId, { remember: true }).catch(() => {});
+  }
 }
 
 async function _stopNetworkCaptureInternal(captureId, { remember = true } = {}) {

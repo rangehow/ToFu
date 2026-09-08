@@ -1,6 +1,13 @@
 {
+  "_artifactOrigin": {},
+  "_batchQueries": [],
+  "_batchUrls": [],
   "_contractError": {},
+  "_hiddenToolAdapter": true,
+  "_mcpLinks": {},
   "_rejected": {},
+  "_serverDownload": true,
+  "_swarm": true,
   "_toolRoot": "s",
   "agentId": "s",
   "assistantContent": "s",

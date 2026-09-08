@@ -45,6 +45,10 @@ _TOOL_NAME_ALIASES: dict[str, str] = {
     'open_file': 'read_files',
     'view_file': 'read_files',
     'view': 'read_files',
+
+    # Gemini CLI's batch reader ({paths: [...]} — the ``paths``→``reads``
+    # param alias already exists for read_files).
+    'read_many_files': 'read_files',
     # ── directory listing ──
     'ls': 'list_dir',
     'list_directory': 'list_dir',
@@ -76,6 +80,12 @@ _TOOL_NAME_ALIASES: dict[str, str] = {
     'str_replace_editor': 'apply_diff',
     'search_replace': 'apply_diff',
     'replace': 'apply_diff',
+    # Kimi CLI's file-edit tool is ``StrReplaceFile`` (verified in
+    # MoonshotAI/kimi-cli src/kimi_cli/tools/file/replace.py): payload
+    # ``{path, edit: {old, new, replace_all?} | [...]}``. The single-edit
+    # envelope unwrap lives in the apply_diff structural transform; in
+    # edit_file sessions the convergence set below routes it there.
+    'strreplacefile': 'apply_diff',
     'edits': 'apply_diffs',
     'multiedit': 'apply_diffs',  # Claude Code's batch-edit tool
     'insert': 'insert_content',
@@ -88,6 +98,27 @@ _TOOL_NAME_ALIASES: dict[str, str] = {
     'execute_command': 'run_command',
     'terminal': 'run_command',
     'command': 'run_command',
+
+    # Gemini CLI's shell tool (params ``{command, is_background?}`` —
+    # ``command`` is 1:1, the extra key is inert).
+    'run_shell_command': 'run_command',
+    # Codex CLI's unified-exec tool is ``exec_command`` (verified in
+    # openai/codex codex-rs/core/src/tools/handlers/shell_spec.rs): required
+    # ``cmd`` (a single string — the legacy ``shell`` tool's ``command: []``
+    # array form is gone), optional ``workdir`` / ``tty`` / ``yield_time_ms``
+    # / ``max_output_tokens`` — the optionals are inert here, ``cmd`` and
+    # ``workdir`` are covered by run_command's param aliases. Its session
+    # companion ``write_stdin`` has no equivalent and stays unmapped.
+    'exec_command': 'run_command',
+    # Amazon Q Developer CLI's shell tool is ``execute_bash`` (verified in
+    # aws/amazon-q-developer-cli
+    # crates/chat-cli/src/cli/chat/tools/tool_index.json): ``{command,
+    # summary?}`` — 1:1, ``summary`` is inert. Its file tools (``fs_read``'s
+    # mode-tagged ``operations`` array, ``fs_write``'s create/str_replace/
+    # insert/append command vocabulary) split across several canonical tools
+    # depending on the mode value and stay unmapped — same discipline as
+    # Codex's freeform ``apply_patch``.
+    'execute_bash': 'run_command',
     # ── fetch / search ──
     'fetch': 'fetch_url',
     'fetch_page': 'fetch_url',
@@ -96,6 +127,20 @@ _TOOL_NAME_ALIASES: dict[str, str] = {
     'open_url': 'fetch_url',
     'websearch': 'web_search',
     'google': 'web_search',
+
+    # Gemini CLI's search tool is literally ``google_web_search`` ({query}).
+    'google_web_search': 'web_search',
+    # Kimi CLI's web tools (verified in MoonshotAI/kimi-cli
+    # src/kimi_cli/tools/web/): ``SearchWeb`` ({query, limit?,
+    # include_content?} — query is 1:1, extras inert) and ``FetchURL``
+    # ({url} — 1:1).
+    'searchweb': 'web_search',
+    'fetchurl': 'fetch_url',
+    # Gemini CLI's fetch tool is ``web_fetch``: primary mode is prompt-based
+    # ({prompt: "...url..."} — unmappable), but it also accepts a direct
+    # {url}; prompt-only payloads fail closed at contract validation naming
+    # the required key.
+    'web_fetch': 'fetch_url',
     # Pre-2026-08 browser namespace migration. The argument contract is
     # compatible and the target must exist in the current task catalog.
     'download_url_to_server': 'browser_download_url_to_server',
@@ -104,6 +149,44 @@ _TOOL_NAME_ALIASES: dict[str, str] = {
     # always win above; this alias applies only in a catalog where that tool is
     # absent and the unambiguous continuation reader is available.
     'read_artifact': 'read_tool_artifact',
+    # ── images ──
+    # Codex CLI's ``view_image`` attaches a local image ({path}) — 1:1 with
+    # inspect_image's required key; its extra knobs stay optional.
+    'view_image': 'inspect_image',
+    # ── checklists ──
+    # Amazon Q Developer CLI's built-in checklist tool is literally named
+    # ``todo_list`` (verified in aws/amazon-q-developer-cli
+    # crates/chat-cli/src/cli/chat/tools/tool_index.json). Models trained on
+    # Q CLI transcripts emit it verbatim, and its fuzzy score against
+    # ``todo_write`` (0.737) sits below the typo gate. Its command-shaped
+    # payload is adapted by the ``todo_write`` structural transform plus the
+    # command interpreter in ``lib.tools.todo.apply_todo_operation``.
+    'todo_list': 'todo_write',
+    # Kimi CLI's built-in checklist tool is ``SetTodoList`` (verified in
+    # MoonshotAI/kimi-cli ``src/kimi_cli/tools/todo/__init__.py``): payload
+    # ``{todos: [{title, status: pending|in_progress|done}]}``, omit ``todos``
+    # to query. Kimi models blend their own harness vocabulary into calls
+    # here; the item vocabulary (``title`` / ``done`` / no ids) is adapted by
+    # the ``todo_write`` structural transform. Query mode (no ``todos`` key)
+    # intentionally falls through to honest contract validation.
+    'settodolist': 'todo_write',
+    # Claude Code's checklist tool is ``TodoWrite`` (items
+    # ``{content, status, activeForm}``, no ids) and OpenCode's is
+    # ``todowrite`` (items ``{content, status, priority}``, no ids, plus a
+    # ``cancelled`` status) — both casefold to this one key. Missing-item-id
+    # backfill and ``cancelled`` handling live in the todo_write structural
+    # transform.
+    'todowrite': 'todo_write',
+    # Gemini CLI's checklist tool is ``write_todos`` (verified in
+    # google-gemini/gemini-cli packages/core/src/tools/write-todos.ts): items
+    # ``{description, status: pending|in_progress|completed|cancelled}``
+    # (validator also accepts ``blocked``, which is native here).
+    'write_todos': 'todo_write',
+    # Codex CLI's plan tool is ``update_plan`` (verified in openai/codex
+    # codex-rs/core/src/tools/handlers/plan_spec.rs): envelope
+    # ``{plan: [{step, status: pending|in_progress|completed}], explanation?}``.
+    # The envelope reshape lives in the todo_write structural transform.
+    'update_plan': 'todo_write',
     # ── ask the user ──
     # Claude Code's native tool is ``AskUserQuestion`` (matched
     # case-insensitively). These only resolve when ``ask_human`` is in the
@@ -112,6 +195,21 @@ _TOOL_NAME_ALIASES: dict[str, str] = {
     'ask_user': 'ask_human',
     'ask_user_question': 'ask_human',
     'ask': 'ask_human',
+    # OpenCode's user-prompt tool is ``question`` with the same
+    # {questions: [...]} envelope as Claude Code's AskUserQuestion — the
+    # ask_human structural transform already unwraps it.
+    'question': 'ask_human',
+    # ── skills ──
+    # OpenCode's skill loader is ``skill`` ({name}) — 1:1 modulo the
+    # name→skill_id param alias on load_skill.
+    'skill': 'load_skill',
+    # ── subagents ──
+    # Claude Code ``Task``, OpenCode ``task`` and Kimi ``Agent`` share one
+    # single-subagent envelope {description, prompt, subagent_type?} — the
+    # spawn_agents structural transform unwraps it into a one-entry agents
+    # list. ``subagent_type`` has no native role mapping and stays inert.
+    'task': 'spawn_agents',
+    'agent': 'spawn_agents',
 }
 
 
@@ -160,7 +258,7 @@ def resolve_tool_name(name: str, known: set[str] | None = None) -> tuple[str, st
     if 'edit_file' in valid and name.lower() in {
         'apply_diff', 'apply_diffs', 'insert_content', 'insert_contents',
         'edit', 'str_replace', 'str_replace_editor', 'search_replace',
-        'replace', 'edits', 'multiedit', 'insert',
+        'replace', 'edits', 'multiedit', 'insert', 'strreplacefile',
     }:
         return 'edit_file', 'alias'
 

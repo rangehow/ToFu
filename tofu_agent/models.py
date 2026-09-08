@@ -268,13 +268,15 @@ class AgentResult:
             task_id=str(payload.get('task_id') or ''),
             model=str(payload.get('model') or ''),
             status=str(payload.get('status') or ''),
-            finish_reason=str(payload.get('finish_reason') or 'stop'),
+            finish_reason=str(payload.get('finish_reason') or ''),
             content=str(payload.get('content') or ''),
             thinking=str(payload.get('thinking') or ''),
             usage=dict(payload.get('usage') or {}),
             n_tool_rounds=int(payload.get('n_tool_rounds') or 0),
             error=(dict(payload['error'])
-                   if isinstance(payload.get('error'), Mapping) else None),
+                   if isinstance(payload.get('error'), Mapping)
+                   else {'kind': 'invalid_error', 'message': str(payload['error'])}
+                   if payload.get('error') else None),
             tool_calls=tuple(payload.get('tool_calls') or ()),
             provider_id=str(payload.get('provider_id') or ''),
             trajectory_format=str(payload.get('trajectory_format') or ''),
@@ -284,8 +286,18 @@ class AgentResult:
 
     @property
     def ok(self) -> bool:
-        return (self.status == 'done' and self.error is None
-                and self.finish_reason != 'incomplete')
+        from lib.turn_verdict import TurnStatus, derive_task_verdict
+
+        evidence = dict(self.raw)
+        evidence.update(status=self.status, finishReason=self.finish_reason,
+                        finish_reason=self.finish_reason, error=self.error)
+        # A tool handoff completes a provider round, not an autonomous run.
+        # Historical tool_calls may describe settled work, so only the finish
+        # marker (not the presence of that historical list) gates handoff.
+        if self.finish_reason in {'tool_calls', 'tool_use', 'function_call'}:
+            return False
+        return (self.status == 'done'
+                and derive_task_verdict(evidence).status is TurnStatus.COMPLETED)
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.raw)

@@ -27,6 +27,8 @@ caller should invalidate via ``invalidate(conv_id)``.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 from collections import OrderedDict
@@ -54,14 +56,14 @@ class _UsageEntry:
     # Number of messages at the time of the recording. Used to estimate
     # the delta for new messages appended since.
     message_count: int
-    # Signature of the tail (role + first 120 chars of content) so we
-    # can detect whether the tail changed vs. just grew.
+    # Full content digest of the measured prefix (legacy field name).
     tail_signature: str
     # Provider-reported hidden reasoning tokens produced by the successful
     # call but not present in that call's input count. They become input only
     # if the returned opaque reasoning block is appended and replayed on the
     # next request (Responses encrypted reasoning / Claude redacted thinking).
     opaque_replay_tokens: int = 0
+    envelope_signature: str = ''
 
 
 _lock = threading.Lock()
@@ -78,34 +80,25 @@ _cache_metrics = {
 }
 
 
-def _signature(
-    messages: list,
-    n_tail: int = 3,
-    *,
-    end: int | None = None,
-) -> str:
-    """Short signature of the last n_tail messages — used to detect
-    whether the tail changed (e.g. a regenerate or edit) vs. simply
-    had new messages appended."""
-    end_index = len(messages) if end is None else max(
-        0, min(len(messages), int(end)))
-    start_index = max(0, end_index - max(0, int(n_tail)))
-    parts = []
-    for m in messages[start_index:end_index]:
-        role = str(m.get('role') or '')[:_MAX_ROLE_CHARS]
-        content = m.get('content')
-        if isinstance(content, str):
-            s = content[:120]
-        elif isinstance(content, list):
-            s = ''
-            for blk in content:
-                if isinstance(blk, dict) and isinstance(blk.get('text'), str):
-                    s = blk['text'][:120]
-                    break
-        else:
-            s = ''
-        parts.append(f'{role}:{s}')
-    return '|'.join(parts)
+def _signature(messages: list, *, end: int | None = None) -> str:
+    """Digest the complete prefix, without copying it or tokenizing text.
+
+    Mutable containers cannot authorize reuse by identity or by a sampled tail:
+    an early edit (including tool/media/native reasoning fields) changes input.
+    Retain only a fixed-size digest, never historical prompt payloads.
+    """
+    digest = hashlib.sha256()
+    end_index = len(messages) if end is None else end
+    for index in range(end_index):
+        encoded = json.dumps(messages[index], sort_keys=True,
+                             ensure_ascii=False, separators=(',', ':'))
+        digest.update(encoded.encode('utf-8'))
+        digest.update(b'\0')
+    return digest.hexdigest()
+
+
+def _envelope_signature(system: Any, tools: Any) -> str:
+    return _signature([{'system': system or None, 'tools': tools or None}])
 
 
 def record_usage(conv_id: str, *,
@@ -113,7 +106,8 @@ def record_usage(conv_id: str, *,
                  model: str,
                  message_count: int,
                  messages: Optional[list] = None,
-                 opaque_replay_tokens: int = 0) -> None:
+                 opaque_replay_tokens: int = 0,
+                 system: Any = None, tools: Any = None) -> None:
     """Record a successful API call's ``prompt_tokens`` for ``conv_id``.
 
     Called from ``lib/llm/stream.py`` after each stream completes.
@@ -123,7 +117,13 @@ def record_usage(conv_id: str, *,
     if not conv_id or not isinstance(prompt_tokens, int) or prompt_tokens < 0:
         return
     try:
-        sig = _signature(messages or [])
+        if (not isinstance(messages, list) or not messages
+                or message_count != len(messages) or not model
+                or len(str(model)) > _MAX_MODEL_CHARS):
+            invalidate(conv_id)
+            return
+        sig = _signature(messages)
+        envelope_sig = _envelope_signature(system, tools)
         now = time.time()
         with _lock:
             replaced = _cache.pop(conv_id, None)
@@ -144,6 +144,7 @@ def record_usage(conv_id: str, *,
                 ts=now,
                 message_count=max(0, message_count),
                 tail_signature=sig,
+                envelope_signature=envelope_sig,
                 opaque_replay_tokens=max(0, int(opaque_replay_tokens or 0)),
             )
         logger.debug('[TokenCounter][UsageCache] conv=%s recorded %d tokens '
@@ -218,8 +219,8 @@ class UsageCacheCounter(TokenCounter):
       3. The new message list starts with the same historical messages
          (i.e. we're only appending new turns, not editing/regenerating).
 
-    When the tail signature of the first ``cached.message_count``
-    messages matches what we recorded, we trust the cached number
+    When the full digest of the first ``cached.message_count``
+    messages and the system/tools envelope match what we recorded, we trust the cached number
     for the prefix and use the heuristic only for the appended delta.
 
     Accuracy: within 1-2 % of the real number for normal append-only
@@ -244,47 +245,35 @@ class UsageCacheCounter(TokenCounter):
         if entry is None:
             return None
 
-        # Safety: if the model changed between rounds, the tokenizer
-        # changed too — our cached number is no longer trustworthy.
-        if entry.model and model and _family(entry.model) != _family(model):
-            logger.debug('[TokenCounter][UsageCache] model family changed '
-                         '%s → %s, invalidating cache for conv=%s',
-                         entry.model, model, conv_id[:8])
+        # Measurements bind the exact model and request envelope, not a
+        # tokenizer family or a conversation-wide historical yardstick.
+        if not model or entry.model != model:
             return None
-
-        # Safety: messages must be at least as long as at recording time.
         if not messages or len(messages) < entry.message_count:
             return None
-
-        # Safety: the tail of the recorded-at-time prefix must still
-        # match. We cheaply verify with a signature of the messages up
-        # to entry.message_count.
-        if _signature(messages, end=entry.message_count) != entry.tail_signature:
-            # The conversation was edited mid-flight — e.g. a message
-            # was regenerated or truncated. Don't trust the cache.
+        try:
+            if (entry.envelope_signature != _envelope_signature(system, tools)
+                    or _signature(messages, end=entry.message_count)
+                    != entry.tail_signature):
+                return None
+        except (TypeError, ValueError, OverflowError):
             return None
 
         # Estimate delta tokens for the appended suffix.
         from .heuristic import cheap_estimate_text
         suffix = messages[entry.message_count:]
+        from .base import count_images, _IMAGE_TOKENS_DEFAULT
         delta_tokens = sum(
             cheap_estimate_text(txt)
             for txt in iter_message_texts(suffix)
         )
+        delta_tokens += count_images(suffix) * _IMAGE_TOKENS_DEFAULT
         opaque_replay_tokens = (
             entry.opaque_replay_tokens
             if _suffix_replays_opaque_reasoning(suffix) else 0
         )
 
-        # IMPORTANT: do NOT add the tool-schema / system-prompt cost here.
-        # ``entry.prompt_tokens`` is the gateway's exact count for the
-        # PREVIOUS request, which ALREADY included that round's tools +
-        # system. The schema is virtually identical round-to-round (same
-        # enabled toolset), so counting it fresh and adding it on top would
-        # DOUBLE-count the entire tool schema — on a tool-heavy config that
-        # is tens of thousands of phantom tokens, firing compaction early.
-        # We only add the appended-suffix delta; tool/system drift between
-        # rounds is negligible vs. that double-count risk.
+        # The validated envelope is already included in the measured prefix.
         total = (entry.prompt_tokens + delta_tokens
                  + opaque_replay_tokens)
         logger.debug('[TokenCounter][UsageCache] conv=%s hit: %d (cached) + '

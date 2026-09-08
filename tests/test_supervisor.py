@@ -117,6 +117,66 @@ def test_deferred_restart_is_deduplicated_and_runs_after_ack_window():
     assert restarted.wait(timeout=2)
 
 
+def test_deferred_restart_waits_for_worker_quiescence(monkeypatch):
+    restarted = threading.Event()
+    polls = []
+
+    class _Manager:
+        def restart(self, *, source):
+            restarted.set()
+            return {'ok': True}
+
+    class _Server:
+        managers = {'/project': _Manager()}
+
+    states = iter([False, False, True])
+
+    def _probe(manager):
+        polls.append(time.monotonic())
+        return next(states)
+
+    monkeypatch.setattr(supervisor, '_worker_quiescence', _probe)
+    monkeypatch.setenv(supervisor.ENV_DEFER_QUIESCE_POLL_S, '0.01')
+    server = _Server()
+    assert supervisor.ManagerHTTPServer.schedule_deferred_restart(
+        server, '/project', source='pytest') is True
+    assert restarted.wait(timeout=5)
+    assert len(polls) == 3
+
+
+def test_await_worker_quiescence_outcomes(monkeypatch):
+    monkeypatch.setattr(
+        supervisor, '_worker_quiescence', lambda manager: False)
+    assert supervisor._await_worker_quiescence(
+        object(), max_wait_s=0.05, poll_s=0.01) == 'timeout'
+    monkeypatch.setattr(
+        supervisor, '_worker_quiescence', lambda manager: None)
+    assert supervisor._await_worker_quiescence(
+        object(), max_wait_s=5.0, poll_s=0.01) == 'unknown'
+    monkeypatch.setattr(
+        supervisor, '_worker_quiescence', lambda manager: True)
+    assert supervisor._await_worker_quiescence(
+        object(), max_wait_s=5.0, poll_s=0.01) == 'quiet'
+
+
+def test_worker_quiescence_probe_semantics(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    manager = SimpleNamespace(data_dir=tmp_path, port=15000)
+    monkeypatch.setattr(
+        supervisor, '_read_probe_json',
+        lambda url, *, timeout, context=None: (404, {'ok': False}))
+    assert supervisor._worker_quiescence(manager) is None
+    seen = []
+
+    def _probe(url, *, timeout, context=None):
+        seen.append(url)
+        return 200, {'ok': True, 'quiet': True, 'runningTasks': 0}
+
+    monkeypatch.setattr(supervisor, '_read_probe_json', _probe)
+    assert supervisor._worker_quiescence(manager) is True
+    assert seen[0].endswith('/health/quiescence')
+
+
 def test_is_allowed_requires_membership_and_scripts(tmp_path):
     proj = _make_project(tmp_path)
     allow = {os.path.realpath(str(proj))}

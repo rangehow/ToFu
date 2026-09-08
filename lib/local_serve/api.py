@@ -27,10 +27,12 @@ import threading
 from lib.identity import PERSONAL_USER_ID, require_user_id
 from lib.log import get_logger
 
+from . import _catalog as catalog
 from . import _process as proc
 from . import _probe as probe
 from . import _register as register
 from . import _store as store
+from ._diagnose import diagnose_failure
 from ._plan import ENGINE_SPECS, plan_launch
 
 logger = get_logger(__name__)
@@ -38,7 +40,7 @@ logger = get_logger(__name__)
 __all__ = ['prepare', 'create_deployment', 'start_deployment',
            'start_deployment_async', 'deployment_inflight',
            'stop_deployment', 'remove_deployment', 'deployment_status',
-           'list_deployments']
+           'list_deployments', 'recommend']
 
 #: Instances with a live background deploy thread in THIS process. The
 #: durable ledger statuses ('installing'/'starting') communicate progress to
@@ -112,6 +114,22 @@ def prepare(model_path: str, *, engine: str | None = None) -> dict:
                 'inspection': inspection, 'hardware': hardware}
     return {'ok': True, 'inspection': inspection, 'hardware': hardware,
             'plan': plan}
+
+
+def recommend(purpose: str | None = None, *, limit: int = 6) -> dict:
+    """Probe hardware and rank the curated open-model catalog. Read-only.
+
+    The chat agent narrates the returned candidates; the settings page
+    renders them directly. ``cloud_alternative`` is present exactly when
+    local hardware cannot comfortably run a capable model.
+    """
+    hardware = probe.probe_hardware()
+    candidates = catalog.evaluate_hardware(hardware, purpose=purpose,
+                                           limit=limit)
+    return {'ok': True, 'hardware': hardware, 'purpose': purpose or '',
+            'candidates': candidates,
+            'cloud_alternative': catalog.cloud_alternative(hardware,
+                                                           candidates)}
 
 
 def create_deployment(
@@ -251,6 +269,9 @@ def deployment_status(
             last_error='Tofu 服务重启导致部署中断；可重新发起部署')
         status = {**status, 'status': 'failed',
                   'last_error': 'Tofu 服务重启导致部署中断；可重新发起部署'}
+    if status.get('status') == 'failed':
+        status['diagnosis'] = diagnose_failure(
+            status, status.get('log_tail') or '')
     return status
 
 

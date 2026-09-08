@@ -17,6 +17,14 @@
   background:var(--bg-secondary);color:var(--text-muted);font:inherit;cursor:pointer;
 }
 
+.conversation-turn-blocks-earlier{display:flex;justify-content:center;margin:2px 0 6px}
+.conversation-turn-blocks-earlier[hidden]{display:none}
+.conversation-turn-blocks-earlier-button{
+  border:1px solid var(--border);border-radius:999px;padding:2px 10px;
+  background:var(--bg-secondary);color:var(--text-muted);font:inherit;
+  font-size:12px;cursor:pointer;
+}
+
 /* Native block defaults; retained message classes override these during the
    whole-turn compatibility phase. */
 .conversation-turn.message > .conversation-turn-header,
@@ -131,6 +139,11 @@ details.bilingual-block[open] .bilingual-toggle{transform:rotate(180deg)}
 .conversation-queue-status .queue-item-icon{display:inline-flex;color:var(--accent)}
 .conversation-queue-status__label{font-weight:650;letter-spacing:.02em}
 .conversation-queue-status .queue-item-cancel{margin-left:auto}
+.conversation-queue-status--fallback{background:rgba(217,164,65,.12)}
+.conversation-queue-status--fallback .queue-item-icon,
+.conversation-queue-item.queue-item--fallback .message-role{
+  color:var(--warning,#b8872f)
+}
 @media(max-width:720px){
   .conversation-queue-status{min-height:44px;padding:6px 8px 6px 10px}
   .conversation-queue-status .queue-item-cancel{min-width:44px;min-height:44px}

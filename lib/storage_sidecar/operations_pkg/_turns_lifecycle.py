@@ -10,6 +10,9 @@ from lib.storage_sidecar.operations_pkg._common import (
     _load,
     _required_text,
 )
+from lib.storage_sidecar.operations_pkg._raw_archives import (
+    _debit_stored_bytes_for_delete,
+)
 from lib.storage_sidecar.turn_projection_head import (
     discard_projection_cache_for_row,
     projection_from_turn_row,
@@ -147,6 +150,9 @@ def _delete_turn_row_set(
     now: int,
 ) -> list[str]:
     """Delete a prevalidated closure and emit delta-sync tombstones."""
+    from lib.storage_sidecar.operations_pkg._model_continuation import delete_conversation_continuations
+    if rows:
+        delete_conversation_continuations(session, conv_id, user_id)
     delete_ids = sorted(rows)
     _delete_turn_search_rows(session, rows)
     # Stay below SQLite's host-parameter ceiling while using set-wise deletes;
@@ -159,6 +165,11 @@ def _delete_turn_row_set(
         # attempt's potentially multi-MiB event back into the sync table.
         _expire_change_prefix_for_deleted_turns(
             session, conv_id, user_id, chunk)
+        _debit_stored_bytes_for_delete(
+            session,
+            "user_id=? AND turn_id IN (" + marks + ")",
+            tuple([user_id, *chunk]),
+        )
         session.execute(
             "DELETE FROM storage_raw_archives WHERE user_id=? AND turn_id IN ("
             + marks + ")",
@@ -656,6 +667,9 @@ def _turn_cleanup(session: Session, payload: Mapping[str, Any]) -> Any:
         (cutoff, limit),
     )
     for row in rows:
+        _debit_stored_bytes_for_delete(
+            session, "attempt_id=?", (row["attempt_id"],),
+        )
         session.execute(
             "DELETE FROM storage_raw_archives WHERE attempt_id=?",
             (row["attempt_id"],),

@@ -14,6 +14,7 @@ from collections.abc import Callable, Hashable
 import threading
 
 from lib.llm_errors import AbortedError
+from lib.swarm.liveness import notify_tool_progress
 from lib.swarm.resource_policy import (
     swarm_global_workers,
     swarm_max_parallel,
@@ -29,8 +30,11 @@ class OwnerFairExecutionGate:
     """Round-robin owner admission with finite active and waiting counts."""
 
     def __init__(self, *, capacity: int, waiter_capacity: int) -> None:
-        if capacity <= 0 or waiter_capacity <= 0:
+        if capacity < 0 or waiter_capacity <= 0:
             raise ValueError('swarm execution capacities must be positive')
+        # capacity == 0 → unlimited active permits; fairness rotation and
+        # the bounded waiter queue still apply so admission order stays
+        # owner-round-robin and abortable.
         self.capacity = int(capacity)
         self.waiter_capacity = int(waiter_capacity)
         self._condition = threading.Condition(threading.RLock())
@@ -89,7 +93,8 @@ class OwnerFairExecutionGate:
                 owner_turn = bool(
                     self._owner_cycle and self._owner_cycle[0] == owner_key)
                 ticket_turn = bool(owner_queue and owner_queue[0] is ticket)
-                if self._active < self.capacity and owner_turn and ticket_turn:
+                if ((self.capacity <= 0 or self._active < self.capacity)
+                        and owner_turn and ticket_turn):
                     owner_queue.popleft()
                     self._waiting -= 1
                     if owner_queue:
@@ -103,6 +108,11 @@ class OwnerFairExecutionGate:
                     self._peak_active = max(self._peak_active, self._active)
                     self._condition.notify_all()
                     return
+                # Queued behind other owners for a shared permit: this agent
+                # is alive, just backpressured. Heartbeat the liveness beacon
+                # (no-op without a bound sink) so a long gate wait is never
+                # misjudged as a stall.
+                notify_tool_progress('gate_admission_wait')
                 self._condition.wait(timeout=0.25 if abort_check else None)
 
     def _remove_waiter_locked(self, owner_key: Hashable, ticket: object) -> None:

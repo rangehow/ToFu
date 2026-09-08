@@ -42,7 +42,7 @@ def test_abort_marker_drops_turn_before_create(flask_client, conversation_comman
                                                monkeypatch):
     """A Stop landing mid-translate (marker newer than the request start)
     drops the turn: aborted ACK, no turn pair, no executor start."""
-    import lib.chat as chat_lib
+    import lib.chat.turn_builder as chat_lib
     import lib.conversation_sync.task_start as task_start_runtime
     from lib.turn_lifecycle import list_turns
 
@@ -426,3 +426,41 @@ def test_abort_by_task_id_cancels_and_settles_a_queued_task(
     finally:
         with tasks_lock:
             tasks.pop(task_id, None)
+
+
+@pytest.mark.parametrize('entry', ['v1', 'v3'])
+def test_abort_entries_signal_same_scoped_resources_once(
+        flask_client, conversation_command_authority, monkeypatch, entry):
+    import lib.conversation_sync.task_start as task_start_runtime
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    from lib.tasks_pkg.tool_runtime import context_for_task
+
+    task_id = f'scoped-abort-{entry}'
+    task = chat_task_runtime.create(user_id=1, task_id=task_id)
+    chat_task_runtime.mark_running(task_id)
+    monkeypatch.setattr(task_start_runtime, 'start_conversation_attempt_executor',
+                        _registered_start(task_id))
+    try:
+        ack = flask_client.post(
+            f'/api/v3/conversations/{CONV}/turns',
+            json={'commandId': f'cmd-scoped-{entry}',
+                  'inputTurn': {'content': 'run'}, 'config': {'model': 'gpt-4o'}})
+        assert ack.status_code == 200
+        attempt_id = ack.get_json()['attempt']['attemptId']
+        signals = []
+        for resource in ('process', 'child', 'tool'):
+            ctx = context_for_task(task, round_num=1, tool_call_id=resource,
+                                   tool_name='run_command', round_entry={})
+            ctx.register_cancel_callback(lambda resource=resource: signals.append(resource))
+        url = (f'/api/v1/chat/abort/{task_id}' if entry == 'v1'
+               else f'/api/v3/attempts/{attempt_id}/abort')
+        for _ in range(2):
+            response = flask_client.post(url)
+            assert response.status_code == 200
+            if entry == 'v3':
+                assert response.get_json()['status'] == 'abort_signaled'
+        assert sorted(signals) == ['child', 'process', 'tool']
+        assert task['abort_event'].is_set()
+        assert task['status'] == 'running'  # ACK is a signal, not settlement.
+    finally:
+        chat_task_runtime.discard(task_id)

@@ -337,8 +337,10 @@ fn read_summary(
         return Err(invalid_data("worker job queue summary is malformed"));
     }
     Ok(raw[SUMMARY_MAGIC.len()..]
-        .chunks_exact(8)
-        .map(|chunk| u64::from_be_bytes(chunk.try_into().unwrap()))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| u64::from_be_bytes(*chunk))
         .collect())
 }
 

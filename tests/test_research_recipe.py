@@ -84,7 +84,7 @@ class _Seams:
                 'results': [{'arxivId': a, 'status': 'parsed'} for a in self.harvest_ids]}
 
     def build_survey(self, direction, arxiv_ids, *, lang, user_id, folder_id,
-                     model=None, abort=None):
+                     model=None, abort=None, workdir=None):
         self.survey_calls.append({'direction': direction, 'arxiv_ids': list(arxiv_ids),
                                   'folder_id': folder_id, 'model': model})
         gm = dict(self.open_gaps)
@@ -665,3 +665,55 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def test_revision_result_is_published_and_checkpointed(tmp_path, monkeypatch):
+    import lib.research.recipe as rc
+    from copy import deepcopy
+    seams = _Seams()
+    restore = _install(seams)
+    reviews = []
+    def review(direction, result, **kwargs):
+        reviews.append(deepcopy(result))
+        issues = result.get('revision_issues') or []
+        return {'ok': True, 'usage': {'calls': 2},
+                'recommended_changes': [] if issues else [{
+                    'target': 'ideate', 'priority': 'high', 'change': 'Specify prediction',
+                    'evidence': 'Prediction absent'}],
+                'issue_resolutions': [{'issue_id': i['issue_id'], 'resolved': True,
+                    'evidence': 'Prediction specifies measured recall'} for i in issues]}
+    base_generate = seams.generate_ideas
+    def generate(direction, gaps, revision_context=None, **kwargs):
+        if revision_context is None:
+            return base_generate(direction, gaps, **kwargs)
+        out = deepcopy(revision_context['previous_ideas'])
+        out['accepted'][0]['falsifiable_prediction'] = 'Measured recall'
+        return {**out, 'ok': True, 'usage': {'calls': 1}}
+    try:
+        monkeypatch.setattr(rc, '_evaluate_result', review)
+        monkeypatch.setattr(rc, '_generate_ideas', generate)
+        result = rc.build_research_from_direction('direction', str(tmp_path), user_id=1)
+        assert result['research_cycle']['status'] == 'complete'
+        assert result['accepted'][0]['idea_version'] == 2
+        assert result['accepted'][0]['falsifiable_prediction'] == 'Measured recall'
+        assert len(reviews) == 2
+        published = seams.persist_ideate_calls[0]['artifact']
+        assert published['research_cycle'] == result['research_cycle']
+        assert published['accepted'] == result['accepted']
+        assert result['usage']['total']['calls'] == 5
+        again = rc.build_research_from_direction('direction', str(tmp_path), user_id=1)
+        assert again == result and len(reviews) == 2
+    finally:
+        restore()
+
+
+def test_review_stage_abort_is_not_degraded(monkeypatch):
+    import lib.research.recipe as rc
+    from lib.production.stages import StageAborted
+    def abort(*args, **kwargs):
+        raise StageAborted('owner cancelled')
+    monkeypatch.setattr(rc, '_evaluate_result', abort)
+    ctx = {'direction': 'direction', 'artifacts': {
+        'harvest': {}, 'survey': {}, 'ideate': {'accepted': [{'title': 'idea'}]}}}
+    with pytest.raises(StageAborted):
+        rc._run_evaluate(ctx)

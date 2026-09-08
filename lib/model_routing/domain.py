@@ -20,6 +20,7 @@ from lib.model_catalog._creator_identity import (
     strip_routing_decoration,
 )
 from lib.model_info import release_date as _release_date
+from lib.pricing import pricing_for_model as _pricing_for_model
 from lib.provider_headers import sanitise_extra_headers
 
 
@@ -408,10 +409,12 @@ def normalize_document(
                 field=f"models[{index}].quality_rank",
             )
         model["quality_rank"] = float(quality)
-        # release_date is derived vendor knowledge projected at read time by
-        # public_projection; never owner state — drop any client-echoed copy
-        # so a save round-trip cannot persist it into the aggregate.
+        # release_date / official_pricing are derived vendor knowledge
+        # projected at read time by public_projection; never owner state —
+        # drop any client-echoed copy so a save round-trip cannot persist
+        # them into the aggregate.
         model.pop("release_date", None)
+        model.pop("official_pricing", None)
         model_by_ref[ref] = model
 
     alias_map = _merge_trained_model_alias_rows(model_by_ref)
@@ -615,6 +618,15 @@ def normalize_document(
             )
 
     offering_by_id = _unique_index(offerings, "offering_id", "offerings")
+
+    # Pricing-tier tags (``cheap``, …) are owned by the dispatcher's pricing
+    # tables and re-synced from live prices; they describe what one provider
+    # CHARGES, not what the model CAN do.  A reseller pricing a model below
+    # the creator's own price book legitimately earns a tier tag the official
+    # row lacks, so tier tags stay outside the identity-subset invariant.
+    # Imported lazily: lib.llm_dispatch depends on lib.model_routing, not
+    # the reverse.
+    from lib.llm_dispatch.config._pricing import MANAGED_TIER_TAGS
     for index, offering in enumerate(offerings):
         access_id = _identifier(
             offering.get("provider_access_id"), f"offerings[{index}].provider_access_id")
@@ -649,7 +661,10 @@ def normalize_document(
                     f"offering references unknown model {source_ref.creator_id}/{source_ref.model_id}",
                     field=f"offerings[{index}].model",
                 )
-            unsupported = set(capabilities) - set(official["capabilities"])
+            unsupported = (
+                set(capabilities) - set(official["capabilities"])
+                - MANAGED_TIER_TAGS
+            )
             if unsupported:
                 raise ModelRoutingError(
                     f"offering claims capabilities absent from the official model: {sorted(unsupported)}",
@@ -781,6 +796,44 @@ def normalize_document(
     return result
 
 
+def _positive_list_pricing(pricing: object) -> bool:
+    if not isinstance(pricing, Mapping):
+        return False
+    for field in ("input", "output"):
+        try:
+            if float(pricing.get(field) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _official_pricing(model_id: str) -> dict[str, Any] | None:
+    row = _pricing_for_model(model_id)
+    if not isinstance(row, Mapping):
+        return None
+    try:
+        input_price = float(row.get("input") or 0)
+        output_price = float(row.get("output") or 0)
+    except (TypeError, ValueError):
+        return None
+    if input_price <= 0 and output_price <= 0:
+        return None
+    pricing: dict[str, Any] = {
+        "input": input_price,
+        "output": output_price,
+        "currency": "USD",
+        "unit": "per_million_tokens",
+    }
+    try:
+        cache_read_mul = float(row.get("cacheReadMul") or 0)
+    except (TypeError, ValueError):
+        cache_read_mul = 0.0
+    if input_price > 0 and cache_read_mul > 0:
+        pricing["cache_read"] = round(input_price * cache_read_mul, 6)
+    return pricing
+
+
 def public_projection(document: Mapping[str, Any]) -> dict[str, Any]:
     """Return the validated credential-metadata document.
 
@@ -793,12 +846,23 @@ def public_projection(document: Mapping[str, Any]) -> dict[str, Any]:
     :func:`lib.model_info.release_date` when the vendor date is known.  It is
     stamped here, on the read boundary only, and stripped again by
     :func:`normalize_document`, so it never becomes persisted owner state.
+
+    Unpriced rows additionally carry ``official_pricing`` projected from the
+    maintained :mod:`lib.pricing` tables — the vendor-authoritative price
+    source for officially covered creators (owner policy 2026-09-05).
+    Catalogue sync is insert-only, so rows inserted before a price was known
+    would otherwise stay unpriced forever.  A registered ``list_pricing``
+    always wins; the projection is stripped on write like ``release_date``.
     """
     projected = normalize_document(document)
     for model in projected["models"]:
         date = _release_date(model["model_id"])
         if date:
             model["release_date"] = date
+        if not _positive_list_pricing(model.get("list_pricing")):
+            official = _official_pricing(model["model_id"])
+            if official is not None:
+                model["official_pricing"] = official
     return projected
 
 

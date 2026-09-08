@@ -477,6 +477,46 @@ def test_extension_navigate_guard_protects_the_client_tab():
     assert 'redirectedToNewTab' not in probe['unpairedResult']
 
 
+def test_extension_create_tab_never_strands_blank_tabs():
+    """Incident 2026-09-04: wedged network captures filled
+    NETWORK_CAPTURE_MAX_ACTIVE; create_tab then threw after opening the
+    inert about:blank tab but before navigating, stranding blank tabs in
+    the user's browser. Capture is now best-effort — navigation proceeds
+    without it, and a failed navigation closes the inert tab."""
+    from tests._browser_extension_probe import run_extension_probe
+    probe = run_extension_probe('createTabDegraded')
+
+    # Capacity was genuinely exhausted by fresh (unreapable) wedged entries.
+    assert probe['capacity'] >= 4
+    # Navigation still happened — no stranded about:blank.
+    assert probe['degradedResult']['url'] == 'https://example.test/target'
+    assert probe['degradedOps'] == [
+        'tabs.create:about:blank',
+        'tabs.update:https://example.test/target',
+    ]
+    # A navigation that itself fails closes the inert tab and rethrows.
+    assert 'navigation blocked' in probe['navFailError']
+    assert probe['navFailOps'] == [
+        'tabs.create:about:blank',
+        'tabs.update:FAIL',
+        'tabs.remove',
+    ]
+
+
+def test_extension_self_update_watchdog_reloads_after_overwrite():
+    """Side-loaded extensions have no store update channel. The keepAlive
+    alarm doubles as a self-update watchdog: once a fresh download ZIP is
+    unzipped OVER the loaded folder, the on-disk manifest version differs
+    from the running one and the worker reloads itself — no
+    chrome://extensions visit. A busy worker defers rather than dropping
+    queued results."""
+    from tests._browser_extension_probe import run_extension_probe
+    probe = run_extension_probe('selfUpdate')
+    assert probe['sameVersionReloads'] == 0
+    assert probe['afterDiskUpgrade'] == 1
+    assert probe['busyDeferred'] == 1
+
+
 def test_extension_version_bumped_for_protocol_v2():
     import json as _json
     manifest = _json.loads(_ext_src('browser_extension/manifest.json'))

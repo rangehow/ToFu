@@ -94,6 +94,14 @@ function switchSettingsTab(tabId) {
   if (tabId === 'devices' && typeof _populateDevicesTab === 'function') {
     _populateDevicesTab();
   }
+  /* The 模型 tab is a read-only registry view: repaint on activation so it
+   * always reflects the current staged authority, even if a future flow
+   * mutates creators/models and forgets ``_renderModelRoutingTabs()``. The
+   * Providers tab must NOT do this — its cards hold unsaved credential input
+   * that a repaint would drop. */
+  if (tabId === 'models' && typeof _renderModelCatalogTab === 'function') {
+    _renderModelCatalogTab();
+  }
 }
 
 async function _loadServerConfig() {
@@ -155,7 +163,7 @@ function _refreshSubscriptionModelCatalog() {
   ]).then(function(results) {
     var cfg = results[0];
     if (!cfg) return null;
-    if (typeof _renderProvidersTab === 'function') _renderProvidersTab();
+    if (typeof _renderModelRoutingTabs === 'function') _renderModelRoutingTabs();
     if (typeof _renderPresetsTab === 'function') {
       _renderPresetsTab(cfg);
     }
@@ -170,13 +178,6 @@ function _refreshSubscriptionModelCatalog() {
 
 function openSettings() {
   // ── General tab: populate from local config ──
-  document.getElementById("settingTemp").value = config.temperature;
-  document.getElementById("tempVal").textContent = config.temperature;
-  document.getElementById("settingMaxTokens").value = config.maxTokens;
-  // imageMaxWidth: 0 = follow server policy (recommended). >0 = user override that
-  // can only TIGHTEN the server cap. Show 0 in the field for users on the new default.
-  document.getElementById("settingImageMaxWidth").value =
-    (typeof config.imageMaxWidth === 'number' ? config.imageMaxWidth : 0);
   document.getElementById("settingSystem").value = config.systemPrompt || "";
   var spModeSel = document.getElementById('settingSystemPromptMode');
   if (spModeSel) spModeSel.value = (config.systemPromptMode === 'replace') ? 'replace' : 'append';
@@ -332,7 +333,7 @@ function openSettings() {
       return;
     }
     _stgPresets = JSON.parse(JSON.stringify(cfg.presets || {}));
-    _renderProvidersTab();
+    if (typeof _renderModelRoutingTabs === 'function') _renderModelRoutingTabs();
     _renderPresetsTab(cfg);
     _populateSearchTab(cfg);
     _populateNetworkTab(cfg);

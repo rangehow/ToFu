@@ -75,14 +75,20 @@ _GPT_EFFORT_MAP = {
 }
 
 
-def _gpt5_minor(model: str) -> int:
-    match = re.search(r'gpt-5(?:[.\-](\d+))?', (model or '').lower())
-    return int(match.group(1)) if match and match.group(1) else 0
+def _gpt_generation(model: str) -> tuple[int, int]:
+    """``(major, minor)`` for a GPT id: gpt-5.6-sol → (5, 6),
+    gpt-6-astra → (6, 0), gpt-5 → (5, 0), non-GPT → (0, 0)."""
+    match = re.search(r'gpt-(\d{1,2})(?!\d)(?:[.\-](\d{1,2})(?!\d))?',
+                      (model or '').lower())
+    if not match:
+        return (0, 0)
+    return (int(match.group(1)),
+            int(match.group(2)) if match.group(2) else 0)
 
 
 def gpt_reasoning_effort(effort, thinking_enabled: bool = True,
                          model: str = '') -> str:
-    """Map a Tofu thinking-depth value to a GPT-5 ``reasoning_effort`` string.
+    """Map a Tofu thinking-depth value to a GPT-5/6 ``reasoning_effort`` string.
 
     Args:
         effort: Tofu depth ladder value (off/low/medium/high/xhigh/max/ultra)
@@ -96,27 +102,35 @@ def gpt_reasoning_effort(effort, thinking_enabled: bool = True,
         One of ``'none'`` / ``'minimal'`` / ``'low'`` / ``'medium'`` /
         ``'high'`` / ``'xhigh'`` / ``'max'``.
     """
-    minor = _gpt5_minor(model)
+    gen = _gpt_generation(model)
     # Spark's registry deliberately has no disabled/none rung: its accepted
     # set is low/medium/high/xhigh. Logs showed every reviewer fallback first
     # burning an HTTP 400 because the generic 5.3 mapping sent ``none`` when
     # the parent had thinking disabled. ``low`` is Spark's honest floor.
+    # GPT-6 Astra (CLIProxyAPI Codex registry, synced 2026-09-07) shares the
+    # 5.6 max top rung but its accepted set is low/medium/high/xhigh/max —
+    # like Spark it has NO ``none`` rung, so disabled reasoning floors at
+    # ``low`` instead of risking the same 400.
     is_spark = 'codex-spark' in (model or '').lower()
     if not thinking_enabled:
-        if is_spark:
+        if is_spark or gen >= (6, 0):
             return 'low'
-        return 'none' if minor >= 3 else 'minimal'
+        return 'none' if gen >= (5, 3) else 'minimal'
 
     requested = (effort or 'medium').lower()
     if is_spark and requested in {'off', 'minimal', 'none'}:
         return 'low'
-    if minor >= 6:
+    if gen >= (6, 0):
+        if requested in {'off', 'minimal', 'none'}:
+            return 'low'
+        return normalize_gpt56_reasoning_effort(requested)
+    if gen >= (5, 6):
         # GPT-5.6 public API and the current Codex registry share max as their
         # highest effort. ``ultra`` remains a Tofu product label but is never a
         # wire value; native multi-agent supplies the separate orchestration
         # behavior on eligible public-API tasks.
         return normalize_gpt56_reasoning_effort(requested)
-    if minor >= 3:
+    if gen >= (5, 3):
         return {
             'off': 'none', 'minimal': 'none', 'none': 'none',
             'low': 'low', 'medium': 'medium', 'high': 'high',
@@ -223,6 +237,45 @@ def glm_reasoning_effort(effort, thinking_enabled: bool = True,
     if v is not None and v >= (5, 3):
         return _GLM53_EFFORT_MAP.get(requested, 'high')
     return _GLM52_EFFORT_MAP.get(requested, 'medium')
+
+
+# Meta Muse Spark reasoning-effort ladder.
+#
+# Muse Spark (Meta Model API, dev.meta.ai/docs/models — 1.3 listed
+# 2026-09-02): reasoning is MANDATORY. The accepted top-level
+# ``reasoning_effort`` set is minimal/low/medium/high/xhigh (default
+# medium) with NO none/disabled rung, and 'max' exists only as a partner
+# limited preview at launch, so xhigh is the generally-available ceiling
+# and Tofu's max/ultra labels clamp DOWN to it. Depth 'off' degrades to
+# 'minimal' — the cheapest legal rung (Kimi K3 / GLM-5.3 precedent: a
+# forced-reasoning model gets its honest floor, never a 400).
+_MUSE_SPARK_EFFORT_MAP = {
+    'off': 'minimal', 'minimal': 'minimal', 'none': 'minimal',
+    'low': 'low',
+    'medium': 'medium',
+    'high': 'high',
+    'xhigh': 'xhigh', 'max': 'xhigh',
+    # 'ultra' is a GPT-5.6-only tier — Muse Spark's GA top rung is xhigh.
+    'ultra': 'xhigh',
+}
+
+
+def muse_spark_reasoning_effort(effort, thinking_enabled: bool = True) -> str:
+    """Map a Tofu thinking-depth value to a Muse Spark ``reasoning_effort``.
+
+    Args:
+        effort: Tofu depth ladder value (off/low/medium/high/xhigh/max/ultra)
+            or None (treated as the 'medium' default).
+        thinking_enabled: When False, return ``minimal`` — Muse Spark cannot
+            disable reasoning, so ``minimal`` is the cheapest legal rung.
+
+    Returns:
+        One of ``'minimal'`` / ``'low'`` / ``'medium'`` / ``'high'`` /
+        ``'xhigh'``.
+    """
+    if not thinking_enabled:
+        return 'minimal'
+    return _MUSE_SPARK_EFFORT_MAP.get((effort or 'medium').lower(), 'medium')
 
 
 

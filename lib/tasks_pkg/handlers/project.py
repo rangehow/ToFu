@@ -41,6 +41,14 @@ from lib.tools.result_projection import (
 logger = get_logger(__name__)
 
 
+# PROJECT_TOOL_NAMES is a schema/disclosure group, not an execution-owner set.
+# Background controls belong to code_exec even in project/remote sessions;
+# registering them here would evict those built-in exact bindings at import.
+PROJECT_HANDLER_TOOL_NAMES = frozenset(PROJECT_TOOL_NAMES) - {
+    'check_background_command', 'kill_background_command',
+}
+
+
 def _record_producer_result_metadata(fn_name, content, round_entry):
     """Carry producer-side omission evidence to the settlement boundary."""
     if fn_name != 'grep_search' or not isinstance(round_entry, dict):
@@ -211,7 +219,9 @@ def _execute_remote_run_command(task, tc_id, fn_args, rn, round_entry,
     cmd_id = _uuid.uuid4().hex
     try:
         bridge_timeout = min(
-            max(float(fn_args.get('timeout', 300)) + 30.0, 60.0), 3660.0)
+            max(float(fn_args.get('timeout_s',
+                                  fn_args.get('timeout', 300))) + 30.0, 60.0),
+            3660.0)
     except (TypeError, ValueError) as _e:
         logger.debug('execute remote run command: unexpected type/unparseable (%s)', _e)
         bridge_timeout = 330.0
@@ -253,6 +263,9 @@ def _execute_remote_run_command(task, tc_id, fn_args, rn, round_entry,
             stop.wait(0.25)  # 与 tool_progress 200ms 合并节奏同量级
 
     params = {k: v for k, v in fn_args.items() if k != 'content_ref'}
+    # Desktop protocol speaks `timeout`; translate the unit-suffixed key.
+    if 'timeout_s' in params and 'timeout' not in params:
+        params['timeout'] = params.pop('timeout_s')
     params['root'] = remote['root']
     logger.info('[Remote] run_command streaming @%s:%s cmd=%s (task=%s)',
                 remote['agent_id'][:8], remote['root'], cmd_id[:8],
@@ -324,13 +337,21 @@ def _execute_remote_project_tool(task, fn_name, tc_id, fn_args, rn,
             'Error: batch read_files (reads=[...]) is not supported on the '
             'remote worktree yet — read one path per call.',
             badge='remote unsupported')
+    if fn_name == 'write_file' and fn_args.get('append'):
+        # An agent on an older build would silently OVERWRITE — fail closed.
+        return _finish(
+            'Error: write_file append=true is not supported on the remote '
+            f'worktree ({remote["root"]}) yet.',
+            badge='remote unsupported')
 
     params = {k: v for k, v in fn_args.items() if k != 'content_ref'}
     params['root'] = remote['root']
     if fn_name == 'run_command':
         try:
             bridge_timeout = min(
-                max(float(fn_args.get('timeout', 300)) + 30.0, 60.0), 3660.0)
+                max(float(fn_args.get('timeout_s',
+                                        fn_args.get('timeout', 300))) + 30.0,
+                    60.0), 3660.0)
         except (TypeError, ValueError) as _e:
             logger.debug('execute remote project tool: unexpected type/unparseable (%s)', _e)
             bridge_timeout = 330.0
@@ -506,7 +527,7 @@ def _maybe_promote_write_to_artifact(task, fn_name, fn_args, project_path, meta)
                     description='Read one or more files (relative or absolute)')
 @tool_registry.tool('inspect_image', category='files',
                     description='Zoom/rotate/crop view of a local image')
-@tool_registry.tool_set(PROJECT_TOOL_NAMES, category='project',
+@tool_registry.tool_set(PROJECT_HANDLER_TOOL_NAMES, category='project',
                         description='Read/write/search project files')
 def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
     # ── content_ref resolution for write_file ──
@@ -538,6 +559,13 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
     _result_projection_items = [] if fn_name == 'read_files' else None
     _remote = remote_worktree_binding(cfg)
     if _remote:
+        if fn_name == 'run_command' and fn_args.get('background'):
+            tool_content = ('Error: explicit background commands are not supported '
+                            'by the remote-worktree transport; no command ran.')
+            meta = build_project_tool_meta(fn_name, fn_args, tool_content)
+            meta.update(notRun=True, exitCode='not-run', badge='unsupported')
+            _finalize_tool_round(task, rn, round_entry, [meta], status='error')
+            return tc_id, tool_content, False
         return _execute_remote_project_tool(
             task, fn_name, tc_id, fn_args, rn, round_entry, _remote)
 
@@ -732,6 +760,40 @@ def _handle_project_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg
                 _extra_kw['result_projection_items'] = _result_projection_items
             if fn_name in ('read_files', 'inspect_image'):
                 _extra_kw['task'] = task
+            if fn_name == 'run_command' and fn_args.get('background') and project_path:
+                from lib.tasks_pkg.background_commands import (
+                    background_command_result, start_background_command,
+                )
+                # Capture only execution inputs, never foreground presentation
+                # callbacks or task/round graphs in a long-lived closure.
+                background_args = dict(fn_args)
+                background_task_id = task['id']
+
+                def _execute_explicit_background(command_task):
+                    return execute_tool(
+                        'run_command', background_args, project_path,
+                        conv_id=_root_conv_id, task_id=background_task_id,
+                        task=command_task, stdin_callback=None, on_chunk=None,
+                        on_spawn=None, runtime_context=None,
+                    )
+
+                command_id = start_background_command(
+                    task=task, config=cfg,
+                    command=str(background_args.get('command') or ''),
+                    execute=_execute_explicit_background,
+                )
+                tool_content = background_command_result(
+                    str(background_args.get('command') or ''), command_id,
+                    has_conversation=bool(task.get('convId') and task.get('_userId')),
+                )
+                meta = build_project_tool_meta(fn_name, fn_args, tool_content)
+                meta.pop('notRun', None)
+                meta.pop('reason', None)
+                meta.update(exitCode='background', backgrounded=True,
+                            backgroundCommandId=command_id, badge='background',
+                            timedOut=False)
+                _finalize_tool_round(task, rn, round_entry, [meta])
+                return tc_id, tool_content, False
             if fn_name == 'run_command':
                 _cmd = fn_args.get('command', '') or ''
                 _stdin_cb = _make_stdin_callback(task, rn, round_entry, _cmd)

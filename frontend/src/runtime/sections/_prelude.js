@@ -72,6 +72,7 @@ import { TRANSLATION_CLAIMS } from '../core/translation-claim-registry';
 import {
   buildTurnSubmissionExtra,
   rebindTurnInputContext,
+  resumeCtxInputUpdate,
 } from '../core/turn-command';
 import { createConversationTurnRuntime } from '../core/turn-runtime';
 import { createConversationRefresh } from '../conversation/application/conversation-refresh';
@@ -97,6 +98,9 @@ import {
 import { createConversationCatalogRevisionGate } from '../conversation/application/conversation-catalog-revision-gate';
 import { createConversationSurfaceController } from '../conversation/application/conversation-surface-controller';
 import { createConversationStartup } from '../conversation/application/conversation-startup';
+import { createConversationProjectController } from '../conversation/application/conversation-project';
+import { createThinkingDepthSlider } from '../features/thinking-depth-slider';
+import { createConversationModelController, captureComposerModel, commitComposerModel } from '../conversation/application/conversation-model';
 import { createBranchComposerSession } from '../conversation/application/branch-composer';
 import {
   agentModeFlags,
@@ -392,6 +396,14 @@ function submitHumanGuidanceChoice(element) {
 
 function submitHumanGuidanceFreeText(element) {
   return humanGuidanceActions.submitFreeText(element);
+}
+
+function selectBatchChoice(element) {
+  return humanGuidanceActions.selectBatchChoice(element);
+}
+
+function submitBatchAnswers(element) {
+  return humanGuidanceActions.submitBatch(element);
 }
 
 const imageViewerActions = createImageViewerActionsController({ document });

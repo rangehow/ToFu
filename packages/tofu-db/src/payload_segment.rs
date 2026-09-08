@@ -3,10 +3,10 @@
 //! This module owns physical pack files; `payload_manifest` and `CONTROL` own
 //! membership publication. Normal engine open never scans this directory.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use uuid::Uuid;
 
@@ -23,6 +23,9 @@ const HEADER_BYTES: usize = 48;
 const INDEX_ENTRY_BYTES: usize = 48;
 const TRAILER_PREFIX_BYTES: usize = 28;
 const TRAILER_BYTES: usize = TRAILER_PREFIX_BYTES + 32;
+// Bounded syscall coalescing, not a storage page-size target. Large blocks
+// bypass this buffer; framing, checksums and all durability barriers are unchanged.
+const SEGMENT_WRITE_BUFFER_BYTES: usize = 256 * 1024;
 pub const MAX_SEGMENT_PAYLOAD_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_SEGMENT_BLOCKS: usize = 65_536;
 pub const MAX_SEGMENT_INDEX_BYTES: usize = MAX_SEGMENT_BLOCKS * INDEX_ENTRY_BYTES;
@@ -111,9 +114,98 @@ impl PayloadSegment {
     }
 }
 
+/// Default index-byte budget for the open-segment cache. Cached entries are
+/// verified (header, trailer layout, index digest) at open time; every
+/// payload fetch still re-verifies its own CRC32C and content hash, so the
+/// cache only elides repeated index reads and digest recomputation. The
+/// bound keeps parsed indexes inside the personal resource budget.
+const OPEN_SEGMENT_CACHE_BYTES: usize = 64 * 1024 * 1024;
+/// Count bound beside the byte budget: an all-tiny-segments catalog would
+/// otherwise hold one entry per catalog slot with negligible byte pressure.
+const OPEN_SEGMENT_CACHE_MAX_SEGMENTS: usize = crate::payload_manifest::MAX_PAYLOAD_SEGMENTS;
+
+/// Byte-bounded LRU over verified open segments, keyed by segment ID.
+/// Segments are immutable once sealed and IDs are fresh per creation, so a
+/// hit always describes the exact bytes the ID names; `remove_segment`
+/// evicts so a retired file is never resurrected through the cache.
+struct OpenSegmentCache {
+    entries: HashMap<Uuid, (Arc<PayloadSegment>, u64)>,
+    lru: VecDeque<(Uuid, u64)>,
+    resident_bytes: usize,
+    tick: u64,
+}
+
+impl OpenSegmentCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            lru: VecDeque::new(),
+            resident_bytes: 0,
+            tick: 0,
+        }
+    }
+
+    fn entry_bytes(segment: &PayloadSegment) -> usize {
+        segment.entries.len() * INDEX_ENTRY_BYTES
+    }
+
+    fn get(&mut self, segment_id: Uuid) -> Option<Arc<PayloadSegment>> {
+        let (segment, _) = self.entries.get(&segment_id)?;
+        let segment = Arc::clone(segment);
+        self.tick = self.tick.wrapping_add(1);
+        let tick = self.tick;
+        self.entries
+            .insert(segment_id, (Arc::clone(&segment), tick));
+        self.lru.push_back((segment_id, tick));
+        Some(segment)
+    }
+
+    fn insert(&mut self, segment: Arc<PayloadSegment>) {
+        let segment_id = segment.metadata.segment_id;
+        let bytes = Self::entry_bytes(&segment);
+        if bytes > OPEN_SEGMENT_CACHE_BYTES {
+            return;
+        }
+        if let Some((existing, _)) = self.entries.remove(&segment_id) {
+            self.resident_bytes -= Self::entry_bytes(&existing);
+        }
+        self.tick = self.tick.wrapping_add(1);
+        let tick = self.tick;
+        self.resident_bytes += bytes;
+        self.entries.insert(segment_id, (segment, tick));
+        self.lru.push_back((segment_id, tick));
+        self.evict_to_budget();
+    }
+
+    fn remove(&mut self, segment_id: Uuid) {
+        if let Some((segment, _)) = self.entries.remove(&segment_id) {
+            self.resident_bytes -= Self::entry_bytes(&segment);
+        }
+    }
+
+    fn evict_to_budget(&mut self) {
+        while self.resident_bytes > OPEN_SEGMENT_CACHE_BYTES
+            || self.entries.len() > OPEN_SEGMENT_CACHE_MAX_SEGMENTS
+        {
+            let Some((candidate, candidate_tick)) = self.lru.pop_front() else {
+                break;
+            };
+            match self.entries.get(&candidate) {
+                Some((_, tick)) if *tick == candidate_tick => {
+                    if let Some((segment, _)) = self.entries.remove(&candidate) {
+                        self.resident_bytes -= Self::entry_bytes(&segment);
+                    }
+                }
+                _ => continue,
+            }
+        }
+    }
+}
+
 pub struct PayloadSegmentStore {
     root: PathBuf,
     vfs: Arc<dyn Vfs>,
+    open_cache: RwLock<OpenSegmentCache>,
 }
 
 impl PayloadSegmentStore {
@@ -125,7 +217,11 @@ impl PayloadSegmentStore {
         let root = data_dir.join("payload-segments");
         vfs.create_dir(&root)?;
         sync_directory_barrier(vfs.as_ref(), data_dir)?;
-        Ok(Self { root, vfs })
+        Ok(Self {
+            root,
+            vfs,
+            open_cache: RwLock::new(OpenSegmentCache::new()),
+        })
     }
 
     pub fn open(data_dir: &Path) -> io::Result<Self> {
@@ -137,7 +233,11 @@ impl PayloadSegmentStore {
         if vfs.metadata(&root)? != FileKind::Directory {
             return Err(invalid_data("payload segment root is not a real directory"));
         }
-        Ok(Self { root, vfs })
+        Ok(Self {
+            root,
+            vfs,
+            open_cache: RwLock::new(OpenSegmentCache::new()),
+        })
     }
 
     pub fn create<F>(
@@ -189,6 +289,8 @@ impl PayloadSegmentStore {
 
             let mut entries = Vec::with_capacity(block_ids.len());
             let mut payload_bytes = 0_u64;
+            let mut write_buffer = Vec::with_capacity(SEGMENT_WRITE_BUFFER_BYTES);
+            let mut write_offset = HEADER_BYTES as u64;
             for block_id in block_ids {
                 let payload = read_payload(block_id)?;
                 if payload.len() > MAX_BLOCK_BYTES || BlockId::for_payload(&payload) != block_id {
@@ -205,7 +307,21 @@ impl PayloadSegmentStore {
                     ));
                 }
                 let payload_offset = HEADER_BYTES as u64 + payload_bytes - payload_len;
-                file.write_all_at(payload_offset, &payload)?;
+                if payload.len() > SEGMENT_WRITE_BUFFER_BYTES - write_buffer.len() {
+                    if !write_buffer.is_empty() {
+                        file.write_all_at(write_offset, &write_buffer)?;
+                        write_offset += write_buffer.len() as u64;
+                        write_buffer.clear();
+                    }
+                    if payload.len() > SEGMENT_WRITE_BUFFER_BYTES {
+                        file.write_all_at(write_offset, &payload)?;
+                        write_offset += payload_len;
+                    } else {
+                        write_buffer.extend_from_slice(&payload);
+                    }
+                } else {
+                    write_buffer.extend_from_slice(&payload);
+                }
                 entries.push(IndexEntry {
                     block_id,
                     payload_offset,
@@ -214,6 +330,9 @@ impl PayloadSegmentStore {
                 });
             }
 
+            if !write_buffer.is_empty() {
+                file.write_all_at(write_offset, &write_buffer)?;
+            }
             let header = encode_header(segment_id, entries.len() as u32, payload_bytes);
             file.write_all_at(0, &header)?;
             let index = encode_index(&entries);
@@ -299,6 +418,30 @@ impl PayloadSegmentStore {
         })
     }
 
+    /// Read-path open with a verified-segment cache. Behaves exactly like
+    /// `open_segment` on a miss; a hit replays the previously verified
+    /// metadata and index without touching the disk. Payload fetches through
+    /// the returned segment still verify CRC32C and content hash per read,
+    /// so integrity failures surface identically. GC admission, compaction,
+    /// and integrity tooling keep calling `open_segment` so they always
+    /// re-verify the on-disk framing.
+    pub fn open_segment_cached(&self, segment_id: Uuid) -> io::Result<Arc<PayloadSegment>> {
+        if let Some(segment) = self
+            .open_cache
+            .write()
+            .map_err(|_| io::Error::other("open segment cache lock was poisoned"))?
+            .get(segment_id)
+        {
+            return Ok(segment);
+        }
+        let segment = Arc::new(self.open_segment(segment_id)?);
+        self.open_cache
+            .write()
+            .map_err(|_| io::Error::other("open segment cache lock was poisoned"))?
+            .insert(Arc::clone(&segment));
+        Ok(segment)
+    }
+
     pub(crate) fn remove_segment(&self, segment_id: Uuid) -> io::Result<u64> {
         let path = self.path(segment_id);
         match self.vfs.metadata(&path) {
@@ -308,6 +451,10 @@ impl PayloadSegmentStore {
             }
             Err(error) => return Err(error),
         }
+        self.open_cache
+            .write()
+            .map_err(|_| io::Error::other("open segment cache lock was poisoned"))?
+            .remove(segment_id);
         let file_bytes = open_read(self.vfs.as_ref(), &path)?.len()?;
         if file_bytes > MAX_SEGMENT_FILE_BYTES {
             return Err(invalid_data("payload segment removal size exceeds bound"));
@@ -486,7 +633,7 @@ fn encode_index(entries: &[IndexEntry]) -> Vec<u8> {
 fn decode_index(index: &[u8], payload_bytes: u64) -> io::Result<Vec<IndexEntry>> {
     let mut entries = Vec::with_capacity(index.len() / INDEX_ENTRY_BYTES);
     let mut expected_offset = HEADER_BYTES as u64;
-    for encoded in index.chunks_exact(INDEX_ENTRY_BYTES) {
+    for encoded in index.as_chunks::<INDEX_ENTRY_BYTES>().0 {
         let entry = IndexEntry {
             block_id: BlockId(encoded[..32].try_into().unwrap()),
             payload_offset: u64::from_le_bytes(encoded[32..40].try_into().unwrap()),
@@ -574,6 +721,47 @@ mod tests {
             assert_eq!(segment.get(id).unwrap().unwrap(), payloads[&id]);
         }
         assert_eq!(segment.get(BlockId([9; 32])).unwrap(), None);
+    }
+
+    #[test]
+    fn coalesced_segment_writes_preserve_exact_bytes_and_bounded_calls() {
+        let vfs = DeterministicVfs::new(None);
+        let store = simulated_store(&vfs);
+        let payloads: BTreeMap<_, _> = (0..128_u32)
+            .map(|value| {
+                let mut payload = vec![7; 8192];
+                payload[..4].copy_from_slice(&value.to_le_bytes());
+                (BlockId::for_payload(&payload), payload)
+            })
+            .collect();
+        vfs.arm_fault(None).unwrap();
+        let segment = store
+            .create(
+                Uuid::from_bytes([19; 16]),
+                payloads.keys().copied().collect(),
+                |id| Ok(payloads[&id].clone()),
+            )
+            .unwrap();
+        let writes = vfs
+            .trace()
+            .unwrap()
+            .iter()
+            .filter(|op| **op == Operation::Write)
+            .count();
+        // Four coalesced payload writes plus two headers, index and trailer,
+        // versus 132 writes in the per-block implementation.
+        assert_eq!(writes, 8);
+        assert_eq!(
+            segment.metadata().file_bytes,
+            (HEADER_BYTES + 128 * 8192 + 128 * INDEX_ENTRY_BYTES + TRAILER_BYTES) as u64
+        );
+        drop(segment);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let segment = store.open_segment(Uuid::from_bytes([19; 16])).unwrap();
+        for (id, payload) in payloads {
+            assert_eq!(segment.get(id).unwrap().unwrap(), payload);
+        }
     }
 
     #[test]
@@ -716,7 +904,19 @@ mod tests {
     fn every_publish_fault_recovers_an_absent_or_complete_segment() -> io::Result<()> {
         let baseline_vfs = DeterministicVfs::new(None);
         let baseline = simulated_store(&baseline_vfs);
-        let (segment_id, ids, payloads) = fixture();
+        let (segment_id, _, mut payloads) = fixture();
+        // Exercise both buffer flushes and the larger-than-buffer direct path
+        // under every error, torn write and lost durability barrier.
+        for (byte, length) in [
+            (31, 130 * 1024),
+            (32, 140 * 1024),
+            (33, SEGMENT_WRITE_BUFFER_BYTES + 1),
+            (34, 120 * 1024),
+        ] {
+            let payload = vec![byte; length];
+            payloads.insert(BlockId::for_payload(&payload), payload);
+        }
+        let ids: Vec<_> = payloads.keys().copied().collect();
         baseline_vfs.arm_fault(None)?;
         baseline.create(segment_id, ids.clone(), |id| Ok(payloads[&id].clone()))?;
         let trace = baseline_vfs.trace()?;

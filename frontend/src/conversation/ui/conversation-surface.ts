@@ -103,12 +103,24 @@ export interface ScrollAnchorPort<Snapshot = unknown> {
 export const CONVERSATION_DOM_WINDOW_MAX_TURNS = 80;
 export const CONVERSATION_DOM_WINDOW_BATCH_TURNS = 20;
 export const CONVERSATION_HISTORY_PAGE_TURNS = 64;
+/* A single Turn can carry thousands of blocks (agentic loops accumulate one
+ * tool block plus one thinking block per round). The Turn-level window above
+ * does not bound that case: rendering every block of such a Turn froze the
+ * main thread for seconds on conversation switch (>100k DOM nodes). Cap the
+ * blocks mounted per Turn; earlier blocks expand in batches on demand. */
+export const CONVERSATION_BLOCK_WINDOW_MAX_BLOCKS = 200;
+export const CONVERSATION_BLOCK_WINDOW_BATCH_BLOCKS = 100;
+const CONVERSATION_BLOCK_WINDOW_HARD_CEILING = 500;
 
 export interface ConversationWindowOptions {
   /** A smaller value is allowed; the product hard ceiling remains 80. */
   maxTurns?: number;
   batchSize?: number;
+  /** Blocks mounted per Turn before the window collapses the tail-ward cap. */
+  maxBlocksPerTurn?: number;
+  blockBatchSize?: number;
   label?(direction: 'earlier' | 'later', count: number): string;
+  blockLabel?(count: number): string;
 }
 
 export interface ConversationWindowState {
@@ -156,7 +168,8 @@ function positiveInteger(value: unknown, fallback: number): number {
 
 function conversationWindowOptions(
   options: ConversationWindowOptions | undefined,
-): Required<Pick<ConversationWindowOptions, 'maxTurns' | 'batchSize'>> {
+): Required<Pick<ConversationWindowOptions,
+  'maxTurns' | 'batchSize' | 'maxBlocksPerTurn' | 'blockBatchSize'>> {
   const maxTurns = Math.min(
     positiveInteger(options?.maxTurns, CONVERSATION_DOM_WINDOW_MAX_TURNS),
     CONVERSATION_DOM_WINDOW_MAX_TURNS,
@@ -166,7 +179,20 @@ function conversationWindowOptions(
     maxTurns,
     CONVERSATION_DOM_WINDOW_BATCH_TURNS,
   );
-  return { maxTurns, batchSize };
+  const maxBlocksPerTurn = Math.min(
+    positiveInteger(
+      options?.maxBlocksPerTurn, CONVERSATION_BLOCK_WINDOW_MAX_BLOCKS,
+    ),
+    CONVERSATION_BLOCK_WINDOW_HARD_CEILING,
+  );
+  const blockBatchSize = Math.min(
+    positiveInteger(
+      options?.blockBatchSize, CONVERSATION_BLOCK_WINDOW_BATCH_BLOCKS,
+    ),
+    maxBlocksPerTurn,
+    CONVERSATION_BLOCK_WINDOW_HARD_CEILING,
+  );
+  return { maxTurns, batchSize, maxBlocksPerTurn, blockBatchSize };
 }
 
 /**
@@ -364,20 +390,28 @@ function directKeyedChildren(
   key: 'turnId' | 'presentationId' | 'blockId' | 'laneId' | 'queueId',
 ): Map<string, HTMLElement> {
   const result = new Map<string, HTMLElement>();
-  for (const child of Array.from(parent.children) as HTMLElement[]) {
-    const value = child.dataset[key];
-    if (!value) continue;
+  /* Walk element siblings directly: Array.from(parent.children) iterates the
+   * live HTMLCollection through its proxy, which engines with no indexed-access
+   * cache (and jsdom) serve as an O(n) lookup per index — quadratic on Turns
+   * that carry thousands of blocks. Capture the next sibling before a stale
+   * duplicate is removed, since removal detaches the walk cursor. */
+  let child = parent.firstElementChild;
+  while (child) {
+    const next = child.nextElementSibling;
+    const value = (child as HTMLElement).dataset[key];
+    if (!value) {
+      child = next;
+      continue;
+    }
     /* A keyed child is a singleton by contract. A stale asset transition or
      * interrupted live render can leave two DOM nodes carrying the same key.
      * Map.set alone retained only the last node and made every earlier copy an
      * untracked orphan, so authoritative renders could never remove it and a
      * single tool card appeared repeatedly. Keep the first managed node (and
      * its focus/disclosure state) and converge duplicate DOM on every commit. */
-    if (result.has(value)) {
-      child.remove();
-      continue;
-    }
-    result.set(value, child);
+    if (result.has(value)) child.remove();
+    else result.set(value, child as HTMLElement);
+    child = next;
   }
   return result;
 }
@@ -990,7 +1024,9 @@ function sameQueueItem(
     && previous.source.hasQuotes === current.source.hasQuotes
     && previous.source.isPeerMessage === current.source.isPeerMessage
     && previous.source.isPeerHuman === current.source.isPeerHuman
-    && previous.source.fromConv === current.source.fromConv;
+    && previous.source.fromConv === current.source.fromConv
+    && JSON.stringify(previous.source.backgroundCommand) === JSON.stringify(current.source.backgroundCommand)
+    && previous.source.steerFallback === current.source.steerFallback;
 }
 
 /** Construct one lifecycle-bound owner for a conversation container. */
@@ -1018,17 +1054,28 @@ export function createConversationSurface(
   }>();
   let laneBudgets = new Map<string, number>();
   let lanesById = new Map<string, ConversationLaneViewModel>();
+  /* presentationId → first mounted block index. Only Turns whose block count
+   * exceeds the window get an entry; a stored start can only widen the tail
+   * window (streaming appends stay visible), clicking the earlier-control
+   * rewinds it in batches. Cleared when the conversation changes. */
+  const blockWindows = new Map<string, number>();
 
   const emitIntent = (event: Event): void => {
     const target = event.target instanceof Element
       ? event.target.closest<HTMLElement>(
-        '[data-conversation-action], [data-conversation-window-action]',
+        '[data-conversation-action], [data-conversation-window-action],'
+        + ' [data-conversation-block-window-action]',
       ) : null;
     if (!target || !root.contains(target)) return;
     const windowAction = target.dataset.conversationWindowAction;
     if (windowAction === 'earlier' || windowAction === 'later') {
       event.preventDefault();
       moveWindow(windowAction, target.dataset.laneId || 'main');
+      return;
+    }
+    if (target.dataset.conversationBlockWindowAction === 'earlier') {
+      event.preventDefault();
+      expandBlockWindow(target.dataset.turnKey || '');
       return;
     }
     const turnNode = target.closest<HTMLElement>('[data-turn-id]');
@@ -1054,7 +1101,13 @@ export function createConversationSurface(
     turn: ConversationTurnViewModel,
   ): void => {
     const existing = directKeyedChildren(containerNode, 'blockId');
-    blocks.forEach((block, index) => {
+    /* placeAt's live-HTMLCollection item(index) is an O(index) walk per block,
+     * and every insertion invalidates the engine's collection cache, so a Turn
+     * carrying thousands of tool blocks converged quadratically (multi-second
+     * commits on long conversations). Blocks arrive in DOM order, so a cursor
+     * advanced once per block places each in O(1). */
+    let cursor: Element | null = containerNode.firstElementChild;
+    blocks.forEach((block) => {
       let node = existing.get(block.blockId) as ManagedBlockElement | undefined;
       if (!node) {
         node = containerNode.ownerDocument.createElement('section') as ManagedBlockElement;
@@ -1074,7 +1127,8 @@ export function createConversationSurface(
         node._tofuBlock = block;
         node._tofuBlockRenderer = renderer;
       }
-      placeAt(containerNode, node, index);
+      if (cursor === node) cursor = node.nextElementSibling;
+      else containerNode.insertBefore(node, cursor);
       existing.delete(block.blockId);
     });
     for (const node of existing.values()) node.remove();
@@ -1125,7 +1179,19 @@ export function createConversationSurface(
     turnsContainer.hidden = includeHeader && !lane.expanded;
     if (includeHeader) turnsContainer.className = 'conversation-lane-turns branch-messages';
     const existingTurns = directKeyedChildren(turnsContainer, 'presentationId');
-    visibleTurns.forEach((turn, index) => {
+    // Retire the outgoing window prefix before placement. Leaving it at the
+    // front moved every retained long-text subtree when just one new Turn
+    // entered the 80-Turn window, invalidating retained long-text subtrees.
+    const visibleIds = new Set(visibleTurns.map(
+      (turn) => turn.presentationId || turn.turnId,
+    ));
+    for (const [identity, node] of existingTurns) {
+      if (visibleIds.has(identity)) continue;
+      node.remove();
+      existingTurns.delete(identity);
+    }
+    let turnCursor: Element | null = turnsContainer.firstElementChild;
+    visibleTurns.forEach((turn) => {
       const presentationId = turn.presentationId || turn.turnId;
       let turnNode = existingTurns.get(
         presentationId,
@@ -1169,8 +1235,8 @@ export function createConversationSurface(
        * drop the rest, otherwise a stray flat footer would persist beside the
        * managed one and render the telemetry strip twice. */
       for (const part of [
-        'turn-header', 'turn-blocks', 'turn-plan-decision', 'turn-branches',
-        'turn-actions', 'turn-footer',
+        'turn-header', 'turn-blocks-earlier', 'turn-blocks',
+        'turn-plan-decision', 'turn-branches', 'turn-actions', 'turn-footer',
       ]) {
         const flatNode = directPart(turnNode, part);
         if (flatNode) {
@@ -1200,8 +1266,37 @@ export function createConversationSurface(
       }
       const blocksContainer = ensurePart(content, 'turn-blocks');
       blocksContainer.className = 'conversation-turn-blocks message-body';
-      renderBlocks(blocksContainer, turn.blocks, lane, turn);
+      const maxBlocks = windowOptions.maxBlocksPerTurn;
+      let blockStart = 0;
+      let blockTurnKey = '';
+      if (turn.blocks.length > maxBlocks) {
+        blockTurnKey = turn.presentationId || turn.turnId;
+        blockStart = Math.min(
+          blockWindows.get(blockTurnKey) ?? Number.POSITIVE_INFINITY,
+          Math.max(0, turn.blocks.length - maxBlocks),
+        );
+        blockWindows.set(blockTurnKey, blockStart);
+      }
+      renderBlocks(
+        blocksContainer, turn.blocks.slice(blockStart), lane, turn,
+      );
       blocksContainer.hidden = turn.blocks.length === 0;
+      const blocksEarlier = ensurePart(content, 'turn-blocks-earlier', 'nav');
+      blocksEarlier.hidden = blockStart === 0;
+      const blocksEarlierButton = ensurePart(
+        blocksEarlier, 'turn-blocks-earlier-button', 'button',
+      ) as HTMLButtonElement;
+      blocksEarlierButton.type = 'button';
+      blocksEarlierButton.disabled = blockStart === 0;
+      blocksEarlierButton.dataset.conversationBlockWindowAction = 'earlier';
+      blocksEarlierButton.dataset.turnKey = blockTurnKey;
+      const earlierCount = Math.min(
+        windowOptions.blockBatchSize, blockStart,
+      );
+      blocksEarlierButton.dataset.blockCount = String(earlierCount);
+      blocksEarlierButton.textContent = options.windowing?.blockLabel?.(
+        earlierCount,
+      ) ?? `Show ${earlierCount} earlier blocks`;
       const activePlanDecision = latestViewModel?.planDecision;
       let planDecisionNode = directPart(
         content, 'turn-plan-decision',
@@ -1276,6 +1371,7 @@ export function createConversationSurface(
        * remains above the turn's action and finish shelves. */
       let contentPartIndex = 0;
       placeManagedAt(content, header, contentPartIndex++);
+      placeManagedAt(content, blocksEarlier, contentPartIndex++);
       placeManagedAt(content, blocksContainer, contentPartIndex++);
       if (planDecisionNode) {
         placeManagedAt(content, planDecisionNode, contentPartIndex++);
@@ -1310,7 +1406,8 @@ export function createConversationSurface(
       placeAt(turnNode, avatar, 0);
       placeAt(turnNode, content, 1);
       placeAt(turnNode, contextRail, 2);
-      placeAt(turnsContainer, turnNode, index);
+      if (turnCursor === turnNode) turnCursor = turnNode.nextElementSibling;
+      else turnsContainer.insertBefore(turnNode, turnCursor);
       existingTurns.delete(presentationId);
     });
     for (const staleTurn of existingTurns.values()) staleTurn.remove();
@@ -1520,6 +1617,15 @@ export function createConversationSurface(
     if (anchor !== undefined) scrollAnchor?.restore(root, anchor);
   };
 
+  const expandBlockWindow = (turnKey: string): void => {
+    const current = blockWindows.get(turnKey);
+    if (current == null) return;
+    const next = Math.max(0, current - windowOptions.blockBatchSize);
+    if (next === current) return;
+    blockWindows.set(turnKey, next);
+    commit();
+  };
+
   const moveWindow = (
     direction: 'earlier' | 'later',
     laneId = 'main',
@@ -1562,6 +1668,7 @@ export function createConversationSurface(
       if (disposed) throw new Error('ConversationSurface is disposed.');
       const previous = latestViewModel;
       const reset = !previous || previous.conversationId !== viewModel.conversationId;
+      if (reset) blockWindows.clear();
       prepareLaneWindows(viewModel, reset);
       latestViewModel = viewModel;
       commit();

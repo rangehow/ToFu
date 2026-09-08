@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.4
+
+### Fixed
+- Default Web searches never discover or invoke native site adapters or XHS.
+  Explicit `engines=['Site:catalog']` and `engines=['Xiaohongshu']` remain
+  supported; XHS retains pacing, cache and risk-control backoff.
+- Explicit empty, unknown or unavailable selections fail closed with diagnostics.
+  Explicit selections never widen through generic retry/browser fallback.
+- Native site queries reject Web operators (including matching `site:`) and
+  freshness before navigation instead of silently dropping constraints.
+- Pure Web search skips site discovery; provider binding remains intact for
+  request-owned fetch identity. No automatic LLM routing or query rewriting.
+
 ## 0.10.3 — 2026-08-21
 
 ### Fixed

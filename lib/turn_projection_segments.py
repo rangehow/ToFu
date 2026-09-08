@@ -83,6 +83,31 @@ _SNAPSHOT_REFERENCE_MIN_SAVINGS = 64
 _SNAPSHOT_PROJECTION_MAX_REFERENCES = 4096
 
 
+def _preserved_notes(value: Any) -> list[dict[str, Any]]:
+    """Salvage display-only notes even when a sibling block needs rebuilding."""
+    from lib.tasks_pkg.segments._types import NOTE_KINDS, NOTE_ACTIONS
+    notes = []
+    seen = set()
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, Mapping) or item.get('type') != 'system_note':
+            continue
+        if not isinstance(item.get('text'), str):
+            continue
+        note = dict(item)
+        if note.get('noteKind') not in NOTE_KINDS:
+            note['noteKind'] = 'system-intervention'
+        if note.get('action', 'prompt') not in NOTE_ACTIONS:
+            note['action'] = 'prompt'
+        identity = note.get('blockId')
+        identity = identity if isinstance(identity, str) and identity else None
+        if identity and identity in seen:
+            continue
+        if identity:
+            seen.add(identity)
+        notes.append(note)
+    return notes
+
+
 def _valid_segments(value: Any) -> list[dict[str, Any]] | None:
     if not isinstance(value, list):
         return None
@@ -502,6 +527,10 @@ def _segment_result_from_round(round_record: Mapping[str, Any]) -> dict[str, Any
     has_status = isinstance(source, Mapping) and "status" in source
     if (explicitly_compacted or not has_content) and "toolContent" in round_record:
         result["content"] = round_record["toolContent"]
+    if round_record.get('toolModelContent') is not None and not explicitly_compacted:
+        result['modelContent'] = round_record['toolModelContent']
+    elif explicitly_compacted:
+        result.pop('modelContent', None)
     if (explicitly_compacted or not has_status) and "status" in round_record:
         result["status"] = round_record["status"]
     return result
@@ -569,6 +598,24 @@ def projection_with_stable_segments(
     normalized_actor = str(actor or "assistant")
     normalized_status = str(status or "")
     segments = _valid_segments(projection.get("segments"))
+    preserved_notes = _preserved_notes(projection.get('segments'))
+    if segments is not None:
+        notes_by_id = {
+            note['blockId']: note for note in preserved_notes
+            if isinstance(note.get('blockId'), str) and note['blockId']
+        }
+        seen_notes = set()
+        normalized_segments = []
+        for item in segments:
+            if item.get('type') == 'system_note':
+                identity = item.get('blockId')
+                identity = identity if isinstance(identity, str) and identity else None
+                if identity and identity in seen_notes:
+                    continue
+                seen_notes.add(identity)
+                item = notes_by_id.get(identity, item)
+            normalized_segments.append(item)
+        segments = normalized_segments
     if segments is not None and _segments_missing_tool_round(
         segments, projection.get("toolRounds"),
     ):
@@ -600,6 +647,16 @@ def projection_with_stable_segments(
                     if isinstance(projection.get("toolRounds"), list) else []),
         )
         segments = segments_to_json(assembled)
+        for note in preserved_notes:
+            lr = note.get('llmRound')
+            index = next((i for i, segment in enumerate(segments)
+                          if segment.get('terminal') or (
+                              isinstance(lr, int)
+                              and isinstance(segment.get('llmRound'), int)
+                              and segment['llmRound'] > lr
+                              and (not note.get('attemptId') or
+                                   note.get('attemptId') == segment.get('attemptId')))), len(segments))
+            segments.insert(index, note)
     _synchronize_terminal_blocks(
         segments,
         projection,

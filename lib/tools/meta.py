@@ -209,11 +209,13 @@ def _build_apply_diff(meta, fn_name, fn_args, tool_content, path):
         desc = fn_args.get('description', '')
         meta['snippet'] = (f'{len(paths)} file{"s" if len(paths) > 1 else ""}, '
                            f'{ok_n}/{total_n} edits' + (f'  {desc}' if desc else ''))
-        # No "Applied X/Y" header → the batch never produced a real result
-        # (gate refusal / hard error). "?/N edits" reads as gibberish on a
-        # red badge; say what it is. (Gate refusals override this badge
-        # downstream in handlers/project.py.)
-        meta['badge'] = f'{ok_n}/{total_n} edits' if m else 'failed'
+        # A real batch gets NO trailing badge: the expanded per-edit list
+        # already shows every edit's status, so a counted "18/18 edits"
+        # chip duplicated it (a partial failure still surfaces via the
+        # header's inline failure reason). Only a missing "Applied X/Y"
+        # header — gate refusal / hard error — earns a badge.
+        if not m:
+            meta['badge'] = 'failed'
         meta['writeOk'] = ok_n == total_n
         # Per-edit summaries for collapsible frontend display.
         # When the output is NOT a real batch result (no "Applied X/Y"
@@ -224,27 +226,35 @@ def _build_apply_diff(meta, fn_name, fn_args, tool_content, path):
         edit_lines = [l for l in tool_content.split('\n') if l.startswith('[')]
         default_status = 'ok' if m else 'fail'
         summaries = []
+        outside_flags = []
         for i, edit in enumerate(edits):
             if not isinstance(edit, dict):
                 continue
             # An edit with no corresponding result line did not succeed.
             status = default_status if i < len(edit_lines) else 'fail'
             detail = ''
+            outside = False
             if i < len(edit_lines):
                 line = edit_lines[i]
                 if '] FAIL' in line:
                     status = 'fail'
                     detail = line.split('FAIL', 1)[-1].strip().lstrip(': ')
+                    outside = _OUTSIDE_WORKSPACE_MARKER in line
                 elif '] OK' in line:
                     status = 'ok'
                     detail = line.split('OK', 1)[-1].strip().lstrip(': ')
-            summaries.append({
+            summary = {
                 'path': edit.get('path', '?'),
                 'description': edit.get('description', ''),
                 'status': status,
                 'detail': detail[:400],
-            })
+            }
+            if outside:
+                summary['outsideWorkspace'] = True
+            summaries.append(summary)
+            outside_flags.append(outside)
         meta['editSummaries'] = summaries
+        _stamp_outside_workspace(meta, summaries, outside_flags)
     else:
         desc = fn_args.get('description', '')
         ok = tool_content.lower().startswith('applied diff')
@@ -379,7 +389,10 @@ def _build_insert_content(meta, fn_name, fn_args, tool_content, path):
         else:
             label = f'{len(paths)} files ({ok_n}/{total_n} insertions)'
         meta['snippet'] = label + (f'  {desc}' if desc else '')
-        meta['badge'] = f'{ok_n}/{total_n} inserted' if m else 'failed'
+        # Same contract as _build_apply_diff: no counted badge on a real
+        # batch; only a missing "Inserted X/Y" header means hard failure.
+        if not m:
+            meta['badge'] = 'failed'
         meta['writeOk'] = ok_n == total_n
         # Per-edit summaries for collapsible frontend display.
         # See _build_apply_diff: default to 'fail' when the output is not a
@@ -389,26 +402,34 @@ def _build_insert_content(meta, fn_name, fn_args, tool_content, path):
         edit_lines = [l for l in tool_content.split('\n') if l.startswith('[')]
         default_status = 'ok' if m else 'fail'
         summaries = []
+        outside_flags = []
         for i, edit in enumerate(edits):
             if not isinstance(edit, dict):
                 continue
             status = default_status if i < len(edit_lines) else 'fail'
             detail = ''
+            outside = False
             if i < len(edit_lines):
                 line = edit_lines[i]
                 if '] FAIL' in line:
                     status = 'fail'
                     detail = line.split('FAIL', 1)[-1].strip().lstrip(': ')
+                    outside = _OUTSIDE_WORKSPACE_MARKER in line
                 elif '] OK' in line:
                     status = 'ok'
                     detail = line.split('OK', 1)[-1].strip().lstrip(': ')
-            summaries.append({
+            summary = {
                 'path': edit.get('path', '?'),
                 'description': edit.get('description', ''),
                 'status': status,
                 'detail': detail[:400],
-            })
+            }
+            if outside:
+                summary['outsideWorkspace'] = True
+            summaries.append(summary)
+            outside_flags.append(outside)
         meta['editSummaries'] = summaries
+        _stamp_outside_workspace(meta, summaries, outside_flags)
     else:
         desc = fn_args.get('description', '')
         ok = tool_content.lower().startswith('inserted ')
@@ -443,6 +464,23 @@ def _build_mcp_tool(meta, fn_name, fn_args, tool_content, path):
 # NOTE: 'read_file' (singular) is an obsolete tool name kept only for
 # backward compatibility with old persisted tool-round metadata in saved
 # conversations. New code always emits 'read_files' (plural).
+# Contract prefix of OutsideWorkspaceError (lib/project_mod/write_tools/_paths.py)
+# — stable machine signal inside the per-edit `[N] FAIL <path>: <err>` lines.
+# The full sentence stays model-facing (it carries the re-issue instructions);
+# the frontend renders only a brief localized refusal from this structured
+# stamp instead of dumping the verbose text / a truncated path fragment.
+_OUTSIDE_WORKSPACE_MARKER = 'outside every registered workspace root'
+
+
+def _stamp_outside_workspace(meta, summaries, flagged):
+    """Attach the structured refusal consumed by write-gate-refusal.ts."""
+    if not any(flagged) or 'refusal' in meta:
+        return
+    paths = list(dict.fromkeys(
+        s['path'] for s, flag in zip(summaries, flagged) if flag))
+    meta['refusal'] = {'kind': 'outside_workspace', 'paths': paths}
+
+
 _META_BUILDERS = {
     'read_file':    _build_read_files,   # legacy — persisted tool rounds only
     'read_files':   _build_read_files,

@@ -302,6 +302,65 @@ export function createToolHumanGuidancePresentation(
     </div>`;
   }
 
+  function renderBatchForm(
+    round: unknown,
+    guidanceIdHtml: string,
+    expired: boolean,
+  ): string {
+    const rawQuestions = field(round, 'guidanceBatchQuestions');
+    const questions: readonly unknown[] = Array.isArray(rawQuestions)
+      ? rawQuestions : [];
+    if (questions.length === 0) return '';
+
+    const sections = questions.map((q, qi) => {
+      const qRec = record(q);
+      const qText = boundedText(
+        safeText(field(qRec, 'question'))
+          || translatedText('toolHumanGuidance.defaultQuestion'),
+        QUESTION_UNITS,
+      );
+      const qType = safeText(field(qRec, 'response_type')) || 'free_text';
+      const qOptions = projectOptions(field(qRec, 'options'));
+      const qIndexHtml = String(qi);
+      let qInput = '';
+
+      if (qType === 'choice' && qOptions.options.length > 0) {
+        const optionButtons = qOptions.options.map((opt, oi) => {
+          const desc = opt.displayDescription.value
+            ? `<div class="hg-opt-desc">${trustedMarkdown(opt.displayDescription.value)}</div>`
+            : '';
+          const optIndexHtml = String(oi);
+          if (expired) {
+            return `<div class="hg-option-card hg-option-static hg-option-unavailable">
+              <div class="hg-opt-label">${escapeHtmlText(opt.displayLabel.value)}</div>${desc}</div>`;
+          }
+          return `<button class="hg-option-card hg-batch-choice" data-gid="${guidanceIdHtml}" data-batch-index="${qIndexHtml}" data-option-index="${optIndexHtml}" data-label="${escapeHtmlText(opt.originalLabel.value)}"
+                    data-tofu-action="event.stopPropagation();selectBatchChoice(this)">
+            <div class="hg-opt-label">${escapeHtmlText(opt.displayLabel.value)}</div>${desc}
+          </button>`;
+        }).join('');
+        qInput = `<div class="hg-options-grid" data-batch-index="${qIndexHtml}">${optionButtons}</div>`;
+      } else if (!expired) {
+        qInput = `<textarea class="hg-textarea hg-batch-input" data-gid="${guidanceIdHtml}" data-batch-index="${qIndexHtml}" rows="2" maxlength="${RESPONSE_UNITS}"
+          placeholder="${translatedHtml('project.hgTextareaPlaceholder')}"></textarea>`;
+      }
+
+      return `<div class="hg-batch-section" data-batch-index="${qIndexHtml}">
+        <div class="hg-batch-qnum">${translatedHtml('toolHumanGuidance.batchQuestionNumber', { n: qi + 1 })}</div>
+        <div class="hg-question">${trustedMarkdown(qText.value)}${qText.truncated ? limitHtml(QUESTION_UNITS) : ''}</div>
+        ${qInput}
+      </div>`;
+    }).join('');
+
+    const submitBtn = expired ? '' : `<div class="hg-batch-submit-wrap">
+      <button class="hg-submit-btn" data-gid="${guidanceIdHtml}" data-tofu-action="event.stopPropagation();submitBatchAnswers(this)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        ${translatedHtml('project.hgSubmitAll')}
+      </button>
+    </div>`;
+
+    return `<div class="hg-batch-form">${sections}${submitBtn}</div>`;
+  }
   function renderAwaitingCard(round: unknown): string {
     const guidanceId = boundedText(field(round, 'guidanceId'), IDENTIFIER_UNITS);
     if (!guidanceId.value) return '';
@@ -337,6 +396,8 @@ export function createToolHumanGuidancePresentation(
         'toolHumanGuidance.identifierLimit',
         { n: IDENTIFIER_UNITS },
       )}</div>`;
+    } else if (responseType === 'batch') {
+      inputHtml = renderBatchForm(round, guidanceIdHtml, !interactive);
     } else if (responseType === 'choice' && options.options.length > 0) {
       inputHtml = renderOptionCards(options, guidanceIdHtml, !interactive);
     } else if (interactive) {
@@ -349,14 +410,20 @@ export function createToolHumanGuidancePresentation(
     const lateAttributes = lateAnswerable && lateTurnId
       ? ` data-hg-late-answer="1" data-turn-id="${escapeHtmlText(lateTurnId.value)}"`
       : '';
+    /* A rendered batch form already presents each question inside its own
+     * section; the synthetic top-level summary would repeat every line. */
+    const batchSectionsShown = responseType === 'batch' && inputHtml !== '';
+    const questionBlock = batchSectionsShown
+      ? ''
+      : `<div class="hg-question">${questionHtml}${displayQuestion.truncated ? limitHtml(QUESTION_UNITS) : ''}</div>`;
     return `<div class="hg-card${expired && !lateAnswerable ? ' hg-expired' : ''}" data-gid="${guidanceIdHtml}"${lateAttributes}>
     <div class="hg-header">
       ${''}
       <span class="hg-title">${translatedHtml('project.hgPanelTitle')}</span>
       <span class="hg-badge">${translatedHtml(expired && !lateAnswerable ? 'project.hgExpired' : 'project.hgWaitingReply')}</span>
     </div>
-    ${translatingIndicator}
-    <div class="hg-question">${questionHtml}${displayQuestion.truncated ? limitHtml(QUESTION_UNITS) : ''}</div>
+    ${batchSectionsShown ? '' : translatingIndicator}
+    ${questionBlock}
     ${inputHtml}
   </div>`;
   }

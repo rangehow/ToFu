@@ -95,7 +95,7 @@ def _newest_tool_batch_indices(messages: list, tool_indices: list[int]) -> set[i
             # this batch. It is no longer the evidence for the immediately
             # following call and may be compacted under the ordinary budget.
             last_result = max(batch)
-            if any(messages[idx].get('role') in ('user', 'assistant')
+            if any(messages[idx].get('role') == 'assistant'
                    for idx in range(last_result + 1, len(messages))):
                 return set()
             return batch

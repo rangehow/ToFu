@@ -224,6 +224,7 @@ def test_interrupted_task_releases_heavy_terminal_state():
         'status': 'interrupted',
         'messages': [{'role': 'user', 'content': 'large context'}],
         '_flow_turns': [{'large': 'snapshot'}],
+        '_flowLiveTurn': {'projectionState': {'content': 'partial phase'}},
         '_tool_result_cache': {'receipt': {'content': 'large result'}},
         '_unchanged_tool_result_receipts': {'digest': {'toolCallId': 'tc1'}},
         '_settled_tool_results': {'tc1': 'large settled result'},
@@ -231,9 +232,10 @@ def test_interrupted_task_releases_heavy_terminal_state():
             'tc1': {'signature': 'sig', 'name': 'read_files', 'status': 'done'}},
     }
 
-    assert _release_heavy_task_state(task) == 6
+    assert _release_heavy_task_state(task) == 7
     assert task['messages'] is None
     assert task['_flow_turns'] is None
+    assert task['_flowLiveTurn'] is None
     assert task['_tool_result_cache'] is None
     assert task['_unchanged_tool_result_receipts'] is None
     assert task['_settled_tool_results'] is None

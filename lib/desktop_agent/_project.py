@@ -148,7 +148,7 @@ def _snapshot(root_real, abspath):
 def _atomic_write(abspath, content):
     os.makedirs(os.path.dirname(abspath), exist_ok=True)
     tmp = f'{abspath}.tofu-tmp-{os.getpid()}'
-    with open(tmp, 'w', encoding='utf-8') as f:
+    with open(tmp, 'w', encoding='utf-8', newline='') as f:
         f.write(content)
     os.replace(tmp, abspath)
 
@@ -296,7 +296,14 @@ def cmd_project_edit_file(params):
         if not isinstance(edits, list) or not edits:
             raise ProjectError('edits must be a non-empty array')
         edits = edits[:30]
+        from lib.project_mod.write_tools._ops import (
+            _ECHO_REPAIR_MAX_CHARS, _finalize_insertion, _py_syntax_guard,
+        )
         lines = []
+        # Bounded to 30 targets, only Python within the shared parser budget.
+        # Keep the first pre-image and last successful commit, not every edit.
+        syntax_states = {}
+        syntax_enabled = os.environ.get('TOFU_EDIT_SYNTAX_GUARD', '1') != '0'
         ok_count = 0
         fail_count = 0
         for i, edit in enumerate(edits, 1):
@@ -319,26 +326,16 @@ def cmd_project_edit_file(params):
                         f'edit_file edits an existing file — not found: '
                         f'{edit.get("path")!r}')
                 _check_write_allowed(target)
-                # Parity with the server-side tool_edit_file wrap gate
-                # (TOFU_EDIT_WRAP_GATE=0 disables both): a replace whose
-                # content keeps the anchor verbatim at a boundary is a pure
-                # insertion — refuse it pre-execution so the model re-issues
-                # with the insert vocabulary instead of learning nothing.
-                if (operation == 'replace' and not edit.get('replace_all')
-                        and os.environ.get('TOFU_EDIT_WRAP_GATE', '1') != '0'):
-                    from lib.project_mod.write_tools._ops import (
-                        _pure_wrap_insert)
-                    wrap = _pure_wrap_insert(anchor, content)
-                    if wrap:
-                        op_name, trimmed = wrap
-                        raise ProjectError(
-                            f'pure insertion rejected — re-issue as '
-                            f"operation='{op_name}' with ONLY the new text "
-                            f'({len(trimmed)} chars — do not repeat the '
-                            f'anchor)')
-                with open(target, 'r', encoding='utf-8', errors='replace') as f:
+                with open(target, 'r', encoding='utf-8', errors='replace',
+                          newline='' if operation == 'replace' else None) as f:
                     text = f.read()
                 matches = text.count(anchor)
+                if matches == 0 and operation == 'replace':
+                    # Read tools expose universal newlines. Try that existing
+                    # spelling only after exact matching, never before it.
+                    text = text.replace('\r\n', '\n').replace('\r', '\n')
+                    anchor = anchor.replace('\r\n', '\n').replace('\r', '\n')
+                    matches = text.count(anchor)
                 # Match the server backend: ignore replace_all for a unique
                 # insert, while keeping multi-site insertion unavailable.
                 replace_all = (operation == 'replace'
@@ -352,31 +349,21 @@ def cmd_project_edit_file(params):
                 if operation == 'replace':
                     new_text = (text.replace(anchor, content) if replace_all
                                 else text.replace(anchor, content, 1))
-                    # Parity with the server-side .py syntax guard
-                    # (TOFU_EDIT_SYNTAX_GUARD=0 disables both).
-                    from lib.project_mod.write_tools._ops import (
-                        _py_syntax_guard)
-                    _warn = _py_syntax_guard(
-                        edit.get('path', ''), text, new_text)
-                    extra = f' {_warn}' if _warn else ''
+                    extra = ''
                 else:
                     anchor_idx = text.index(anchor)
                     # Parity with the server-side boundary-echo auto-repair
                     # (TOFU_EDIT_ECHO_REPAIR=0 disables both): anchor/neighbour
                     # context echoed inside content is stripped when provably
                     # safe, and provably-contentless echo edits fail here.
-                    from lib.project_mod.write_tools._ops import (
-                        _finalize_insertion)
                     fin = _finalize_insertion(
                         text, anchor_idx, anchor, content,
                         'before' if operation == 'insert_before' else 'after',
-                        edit.get('path', ''))
+                        edit.get('path', ''), syntax_guard=False)
                     if not fin['ok']:
                         raise ProjectError(fin['error'])
                     new_text = fin['new_content']
                     extra = ''.join(f' [{n}]' for n in fin['notes'])
-                    if fin['warning']:
-                        extra += ' ' + fin['warning']
 
                 _snapshot(root_real, target)
                 _atomic_write(target, new_text)
@@ -384,10 +371,25 @@ def cmd_project_edit_file(params):
                 ok_count += 1
                 lines.append(
                     f'[{i}] OK {edit.get("path")} [{operation}]{extra}')
+                if syntax_enabled and edit.get('path', '').endswith('.py'):
+                    state = syntax_states.setdefault(target, {
+                        'path': edit['path'],
+                        'before': text if len(text) <= _ECHO_REPAIR_MAX_CHARS else None,
+                    })
+                    state['after'] = (new_text if len(new_text) <= _ECHO_REPAIR_MAX_CHARS
+                                      else None)
+                    state['line'] = len(lines) - 1
             except (ProjectError, OSError, UnicodeError) as exc:
                 fail_count += 1
                 path = edit.get('path', '?') if isinstance(edit, dict) else '?'
                 lines.append(f'[{i}] FAIL {path}: {exc}')
+
+        for state in syntax_states.values():
+            if state['before'] is None or state['after'] is None:
+                continue
+            warning = _py_syntax_guard(state['path'], state['before'], state['after'])
+            if warning:
+                lines[state['line']] += ' ' + warning
 
         header = f'Applied {ok_count}/{ok_count + fail_count} edits'
         if fail_count:

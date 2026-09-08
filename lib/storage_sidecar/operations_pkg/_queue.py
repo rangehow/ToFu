@@ -14,6 +14,8 @@ from lib.turn_source_queue_contract import (
     KIND_AUTOPILOT,
     KIND_GOAL_CONTINUATION,
     KIND_REAL,
+    KIND_PEER_MSG,
+    QUEUE_INJECTION_ACK_MAX_IDS,
     KIND_WORKFLOW,
     QUEUE_REAP_PROBE_CONTRACT,
     QUEUE_REAP_PROBE_CONVERSATIONS_FIELD,
@@ -203,6 +205,12 @@ def _queue_item(row: Mapping[str, Any]) -> dict[str, Any]:
                 "isPeerHuman": bool(payload.get("_peerHuman")),
             }
         )
+    from lib.background_command_projection import background_command_completion
+    completion = background_command_completion(payload)
+    if completion is not None:
+        result["backgroundCommand"] = completion
+    if payload.get("_steerFallback"):
+        result["steerFallback"] = True
     return result
 
 
@@ -307,6 +315,68 @@ def _queue_remove(session: Session, payload: Mapping[str, Any]) -> Any:
     if deleted:
         _queue_renumber(session, conv_id, user_id)
     return {"removed": bool(deleted)}
+
+
+def _queue_injection_ack(session: Session, payload: Mapping[str, Any]) -> Any:
+    """Acknowledge at most one inbox drain; never cancel accepted Turn pairs."""
+    conv_id = _queue_conv_id(payload)
+    user_id = _queue_owner(payload)
+    ids = payload.get("queue_ids")
+    if not isinstance(ids, list) or len(ids) > QUEUE_INJECTION_ACK_MAX_IDS:
+        raise StorageError("database_protocol_error", "Invalid injection queue IDs")
+    ids = sorted(set(_required_text({"id": value}, "id", 256) for value in ids))
+    if not ids:
+        return {"removed": 0, "removedQueueIds": []}
+    session.lock_key("queue-conversation", f"{user_id}:{conv_id}")
+    placeholders = ",".join("?" for _ in ids)
+    rows = session.fetch_all(
+        "SELECT id, kind, payload_json FROM storage_queue_items "
+        "WHERE conv_id=? AND user_id=? "
+        f"AND id IN ({placeholders}) "
+        "AND COALESCE(input_turn_id,'')='' "
+        "AND COALESCE(output_turn_id,'')='' AND COALESCE(attempt_id,'')='' "
+        "AND kind IN (?,?) ORDER BY position, id",
+        (conv_id, user_id, *ids, KIND_PEER_MSG, KIND_WORKFLOW),
+    )
+    removed_ids = []
+    for row in rows:
+        message = _load(row["payload_json"]) or {}
+        if not isinstance(message, Mapping) or message.get("_peerHuman"):
+            continue
+        completion_id = message.get("_backgroundCommand")
+        if (row["kind"] == KIND_PEER_MSG and message.get("_peerMessage")) or (
+            row["kind"] == KIND_WORKFLOW
+            and isinstance(completion_id, str) and completion_id
+        ):
+            removed_ids.append(str(row["id"]))
+    if removed_ids:
+        placeholders = ",".join("?" for _ in removed_ids)
+        session.execute(
+            "DELETE FROM storage_queue_items WHERE conv_id=? AND user_id=? "
+            f"AND id IN ({placeholders})",
+            (conv_id, user_id, *removed_ids),
+        )
+        _queue_renumber(session, conv_id, user_id)
+    return {"removed": len(removed_ids), "removedQueueIds": removed_ids}
+
+
+def _queue_injection_ack_capture(session, _operation_name, payload, result):
+    """Publish only actual removals in the same transaction as the batch."""
+    from lib.storage_sidecar.operations_pkg._turns_core import (
+        _append_conversation_change, _committed_event_notice,
+        _committed_events_result,
+    )
+
+    if not result["removedQueueIds"]:
+        return result
+    user_id = _queue_owner(payload)
+    event = _append_conversation_change(
+        session, conversation_id=_queue_conv_id(payload), user_id=user_id,
+        change_type="turn.upsert",
+        payload={"turns": [], "attempts": [],
+                 "removedQueueIds": result["removedQueueIds"]},
+    )
+    return _committed_events_result(result, [_committed_event_notice(event, user_id)])
 
 
 def _queue_clear(session: Session, payload: Mapping[str, Any]) -> Any:

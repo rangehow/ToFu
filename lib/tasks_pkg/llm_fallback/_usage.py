@@ -148,6 +148,12 @@ def _emit_round_usage(
         #   shape on purpose — the raw usage dict's ``_wire_*`` diagnostics
         #   are GiB-class bloat on durable rows (2026-08-20 measurement).
         if response_authoring:
+            route = _response_route_projection(model, usage)
+            task['_compactionCacheObservation'] = {
+                'taskId': task.get('id'), 'model': model,
+                'providerId': route.get('providerId', ''),
+                'cacheReadTokens': max(0, int(cr)),
+            }
             task['_lastRoundUsage'] = {
                 'round': round_num,
                 **_response_route_projection(model, usage),

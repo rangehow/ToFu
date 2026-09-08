@@ -884,6 +884,22 @@ def orchestrator_readiness_check():
     )
 
 
+@common_bp.route("/health/quiescence")
+def quiescence_check():
+    """In-flight agent work, for lifecycle owners deferring a worker restart.
+
+    Process-wide running-task count — the same judge as the update-restart
+    guard. A registry failure reports busy so a deferred restart keeps
+    waiting instead of killing work it cannot see.
+    """
+    try:
+        from lib.tasks_pkg.manager import list_running_tasks
+        running = len(list_running_tasks())
+    except Exception as exc:
+        logger.warning("[Health] quiescence probe could not list tasks: %s", exc)
+        return api_ok({"quiet": False, "runningTasks": None})
+    return api_ok({"quiet": running == 0, "runningTasks": running})
+
 @common_bp.route("/health/startup")
 def startup_check():
     """Startup completion probe; failure remains visible until restart."""

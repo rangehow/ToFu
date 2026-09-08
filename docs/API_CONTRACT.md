@@ -312,11 +312,17 @@ metadata/error or explicitly requested terminal fields it returns.
 `GET /api/v1/tasks/{taskId}/requests` folds ONE run's request rounds; a
 delegating run (Goal mode workers run as swarm agents) merges each
 `{taskId}#agent:{agentId}` child's rounds into the parent list. Merged rows
-carry `sourceTaskId`, and per-round payload/state/raw-archive reads for
-those rounds MUST address that child task id — the parent's own event log
-holds no snapshots for rounds it delegated. A run whose flow markers exist
-but whose round list is empty reports `coverage:full` (nothing ambiguous
-to disclose); `flow-untagged` requires actual untagged rows.
+carry `sourceTaskId`, and child request-list plus per-round
+payload/state/raw-archive reads MUST address that child task id — the parent's
+own event log holds no snapshots for rounds it delegated. Every inspector child
+route first verifies the authenticated owner against the durable parent and then
+verifies the exact child against persisted structural snapshot metadata; a
+string-shaped or foreign child ID is 404. Child merging is bounded to 32
+streams per fold; if more valid children exist the response explicitly reports
+`coverage:partial` with `coverageReason:child-limit` rather than presenting the
+truncated list as complete. A run whose flow markers exist but whose round list
+is empty reports `coverage:full` (nothing ambiguous to disclose);
+`flow-untagged` requires actual untagged rows.
 
 The per-round payload may include `rawArchives` metadata for provider-bound
 request/response evidence. Bodies remain lazy: consumers read one bounded
@@ -631,6 +637,19 @@ time, and scores keyed by exact `creator_id::model_id`; they never include the
 plaintext key or any ProviderAccess, Offering, Deployment, alias, or Route.
 Ordinary reads never wait on the external network: a bounded 24-hour public
 dataset cache is served while one background refresh refills stale data.
+OpenRouter pricing is a second external Model enrichment with an explicit
+write policy. `GET /api/v1/model-intelligence/openrouter-pricing` returns a
+read-only report that buckets each canonical Model as priced, fillable,
+official-covered, openrouter-free, unmatched, or drift (a priced Model whose
+USD list price disagrees with the OpenRouter row by more than 25% blended —
+a cross-check signal, never an auto-rewrite).
+`POST /api/v1/model-intelligence/openrouter-pricing/refresh` force-fetches
+the public keyless catalog and CAS-writes `list_pricing` only onto unpriced
+Models whose Creator has no official-direct coverage in the maintained
+pricing tables; officially priced Models are never rewritten, and all-zero
+OpenRouter rows never become a $0 list price (unknown stays unknown instead
+of impersonating an official free tier). The dataset shares the same bounded
+24-hour cache/background-refresh budget as the AA enrichment.
 
 ### 2.10 Compact MCP tool summary
 
@@ -900,6 +919,115 @@ Its stable v1 fields include `calls`, `agent_dispatches`, token/cache counts,
 `forced_final_reason`, and `budget_ignored`. Survey/Ideate retain the same
 fields inside their durable `usage` stage snapshots.
 
+### 2.18 WorkUnit projection (production tasks)
+
+Every non-`chat` task served by `GET /api/v1/tasks/{id}` carries an additive
+`workUnit` block — the SINGLE cross-surface lifecycle vocabulary for
+long-running work (chat tool rounds, background producers, and the task list
+all speak it). The block is projected server-side by the pure function
+`lib.production.work_unit.project_work_unit`; the client renders it verbatim
+and NEVER re-derives lifecycle state from raw `status` / event streams.
+
+Lifecycle enum (closed — a new runtime status MUST extend
+`_STATUS_MAP` in the same change; an unmapped status projects to `failed`
+because a status outside the contract IS a failure mode, never silently
+relabeled):
+
+    queued | running | retrying | done | degraded | failed | aborted
+
+Mapping from the runtime axis (`task.status`): `pending→queued`,
+`running→running`, `done→done`, `error→failed`, `aborted→aborted`.
+`degraded` is the product-quality axis outranking the delivery axis:
+`status='done'` + `artifact_quality.degraded` → `degraded` (status stays
+'done' by design — see `_public_task`). `retrying` is derived: a `running`
+unit whose active stage sits on attempt ≥ 2.
+
+Detail-view shape (list view `GET /api/v1/tasks` carries the same block
+minus `stages`/`stageTotal`/`links`/`artifacts`):
+
+```json
+{
+  "workUnit": {
+    "kind": "slides-deck",
+    "title": "…",
+    "status": "running",
+    "failureKind": null,
+    "stages": [{"name": "outline", "index": 1,
+                "state": "done|active|skipped|failed|pending",
+                "attempt": 1, "elapsedS": 4.24, "lastErrors": []}],
+    "stageTotal": 9,
+    "quality": {"degraded": true, "reason": "…"},
+    "failure": {"message": "…", "detail": "…", "hint": "…"},
+    "artifacts": [{"label": "pptx", "href": "/api/v1/slides/{id}/file",
+                   "bytes": 2450000, "pages": 12}],
+    "links": {"events": "/api/v1/tasks/{id}/events",
+              "abort": "/api/v1/tasks/{id}/abort"},
+    "convId": "…"
+  }
+}
+```
+
+Rules:
+
+* `stages` is rebuilt from the registered stage grammar (docs/EVENTS.md §1
+  carve-out); only observed stages appear — `stageTotal` lets the client
+  render the not-yet-started remainder. A leftover `active` stage settles
+  `failed` on a failed unit and `skipped` on any other terminal unit, so a
+  terminal card never shows a forever-spinning stage.
+* `artifacts` appears only for kinds with a published download path (today:
+  `slides-deck`) and only on `done|degraded`. A kind absent from the map
+  omits the slot — the server never invents a URL the capability did not
+  publish.
+* `failure` mirrors the task's error envelope (message/detail/hint) so the
+  card can render the exact user-facing diagnosis.
+* Tool rounds that ACCEPTED a background job carry the re-attach handle in
+  their result meta as `workUnitRef: {taskId, kind}` (see
+  `_PRODUCE_WORK_UNIT_KINDS` in `lib/tasks_pkg/handlers/motion_video.py`),
+  and their badge speaks the same enum (`queued` fresh, `running` deduped) —
+  legacy badges `started`/`joined` are retired.
+---
+
+### 2.19 Background-activity snapshot
+
+`GET /api/v1/activity/background` answers one chrome question — "is anything
+still executing now that the foreground turn has settled?" — for the
+authenticated owner. Sub-agent swarms routinely outlive their spawning turn
+(results arrive later as auto-dispatched inbox injects) and detached
+`run_command background=true` executions retain their originating `conv_id`.
+The snapshot remains owner-scoped; the conversation chip, tooltip and popover
+show only entries whose `conv_id` matches the active conversation. Switching
+conversations immediately reprojects the cached snapshot and closes the old
+popover, without waiting for a poll. No active conversation, missing ownership,
+and headless commands produce no conversation-local indicator.
+
+```json
+{
+  "swarms": [{"swarm_key": "…", "conv_id": "…",
+              "running": 1, "pending": 1, "completed": 2, "agent_count": 2,
+              "agents": [{"id": "…", "role": "coder", "objective": "…",
+                          "status": "running", "round": 3, "error": ""}],
+              "created_at": 1757100000.0}],
+  "backgroundCommands": [{"command_id": "bg_…", "conv_id": "…", "command": "…",
+                          "status": "running", "started_at": 1757100000.0,
+                          "elapsed_s": 10, "delivery_status": "not_applicable"}]
+}
+```
+
+Rules:
+
+* Owner-scoped on both halves; a session or command belonging to another
+  user is invisible, never redacted.
+* `swarms` lists only LIVE (non-terminated) sessions from the process-local
+  registry, keyed by the stable swarm key plus `conv_id` for deep-links —
+  deliberately not by task id, since the spawning task has usually settled.
+  Per-agent status is sampled outside the session-registry lock so a busy
+  session never stalls the reader; a session whose snapshot raises is logged
+  and skipped, not failed.
+* `backgroundCommands` lists only `status == "running"` detached commands.
+* Both lists are empty in the steady state; the payload is small and cheap
+  by design so chrome may poll it on a few-second cadence. Callers treat it
+  as a best-effort read (`onError:'null'`) — a transient failure must keep
+  the last known state on screen, never flap the UI.
 ---
 
 ## 3. Request parsing
@@ -935,7 +1063,7 @@ legal only if it appears here AND in `tests/test_api_contract_drift.py`'s
 | Anthropic compat | `routes/compat_anthropic.py` | Same — Anthropic protocol shape |
 | Device bridges | `routes/browser.py`, `routes/_bridge_caller.py`, `routes/desktop.py` | Owner-scoped long-poll protocols parsed by external browser/desktop devices; poll shape is locked outside this repo |
 | SSE streams | chat stream, agent-run, translate stream, compat streams | `text/event-stream` framing; use `sse_response()` for the canonical headers, never hand-set them |
-| Binary / raw payloads | artifact raw/view/export, paper PDF serving, attachment source, image bytes, podcast audio | Typed bytes with `Content-Disposition` / Range; JSON envelope impossible |
+| Binary / raw payloads | artifact raw/view/export, paper PDF serving, Overleaf live-preview PDF (`routes/api_v1/overleaf.py`), local LaTeX live-preview PDF (`routes/api_v1/latex.py`), attachment source, image bytes, podcast audio | Typed bytes with `Content-Disposition` / Range; JSON envelope impossible |
 | Multipart uploads | `/api/v1/media/attachments`, `/api/v1/videos/upload`, `/api/images/upload`, `/api/paper/upload`, `/api/pdf/parse`, … | FormData in, but the *response* still follows the envelope |
 | Bare-array legacy payloads | ALL known instances migrated 2026-08-01 (orchestrations / conversations list / providers-templates / chat active / translate poll-batch / folders ×2 / conv search / chat queue) | Enveloping an array (`{ok, items}`) changes the top-level type — never additive. The retirement path is the **coordinated front+back migration**: backend `api_ok({'items': …})` + the `Api.<domain>` seam unwraps `.items` with an `Array.isArray(d)` fallback for rolling-deploy skew. Unwrap semantics follow the CONSUMER: `|| []` only where empty is an explicitly acceptable degradation (orchestrations/queue/search), **failure-preserving** for durable folder catalogs so an outage cannot erase the last good projection, **null-preserving** for probes that must distinguish “zero results” from “probe failed” (chat active, translate poll-batch), and caller-side unwrap for Response-returning seams (config templates, chat activeResponse). Sites that genuinely cannot migrate register in the drift suite's `CARVE_OUT_SITES` with a reason — never a silent baseline remainder. New endpoints MUST wrap arrays in `api_ok({'items': …})` |
 
@@ -1127,6 +1255,23 @@ There are no compatibility aliases for the retired Project Brain model tools:
 
 ---
 
+## Durable Research run records
+
+`contracts/research_record_v1.schema.json` defines the additive snapshot.
+All routes require authentication; foreign/missing IDs return `record: null`.
+
+| Method | Path | Response |
+|---|---|---|
+| `GET` | `/api/v1/research/records?limit=50` | `{items,total}`; compact records without papers; 1–200 newest-created runs, sorted by update time within the page |
+| `GET` | `/api/v1/research/records/{task_id}` | `{record}`; includes captured `papers` metadata and `research_progress`; internal requests/checkpoint paths are never exposed |
+| `POST` | `/api/v1/research/records/{task_id}/resume` | `{task_id,deduped}`; explicit owner action for registry-missing interrupted/error/aborted runs; invalid or still-registered terminal runs return 400 |
+
+`status` reports `interrupted` when a persisted pending/running task has no live
+registry entry. `resumable` indicates explicit recovery eligibility, not automatic
+execution. Timestamps are epoch milliseconds. Existing artifact lookup/list and
+generic task APIs are unchanged. See [research cycle](RESEARCH_CYCLE.md) for
+write-failure, snapshot-size and checkpoint recovery boundaries.
+
 ## 10. Research Foundry program and actions
 
 The durable object authority is
@@ -1139,6 +1284,7 @@ newer experiment evidence.
 |---|---|---|
 | `GET` | `/api/v1/research/workspace?direction=&lang=` | `{workspace, readiness}`; an unknown direction is canonical revision zero |
 | `PUT` | `/api/v1/research/workspace` | `{direction, lang, expected_revision, workspace}` |
+| `POST` | `/api/v1/research/workspace/draft-protocol` | `{direction, lang, idea_id, model?}` → `{draft: {idea_id, hypothesis, protocol}}`; one bounded tool-less model call over persisted survey/gap/idea evidence, never persisted — the workspace PUT stays the write authority |
 | `GET` | `/api/v1/research/capabilities` | live MCP tools plus provider-neutral advisory capability matches |
 | `POST` | `/api/v1/research/manuscript/scaffold` | adds missing safe relative source files and commits one CAS revision |
 | `GET` | `/api/v1/research/manuscript/source.zip` | deterministic binary ZIP of the current normalized source tree |

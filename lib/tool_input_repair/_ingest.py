@@ -30,6 +30,7 @@ from lib.tool_input_repair._repair import schema_hint, validate_then_repair
 from lib.tool_input_repair._schema import RepairLog, _schemas
 from lib.tools.contracts import (
     ToolContractError,
+    clamp_tool_arguments_from_documents,
     validate_tool_arguments_from_documents,
 )
 
@@ -355,6 +356,19 @@ def ingest_tool_call(
             fn_args, repair_log = validate_then_repair(fn_name, fn_args, model=model)
         except Exception as e:
             logger.warning('[ingest] validate_then_repair failed for %s '
+                           '(passing args through): %s', fn_name, e)
+
+    # ── Stage 4.5: document-anchored bounds clamp (MCP / dynamic tools) ──
+    # The static repair index exempts server-dynamic (MCP) schemas; the
+    # request-owned contract document still knows their bounds, so clamp
+    # out-of-range numbers here, before Stage 5b rejects the call.
+    if parse_error is None and contract_documents_by_name is not None:
+        try:
+            fn_args, _clamp_log = clamp_tool_arguments_from_documents(
+                contract_documents_by_name, fn_name, fn_args)
+            repair_log.extend(_clamp_log)
+        except Exception as e:
+            logger.warning('[ingest] document bounds clamp failed for %s '
                            '(passing args through): %s', fn_name, e)
 
     # ── Stage 5b: authoritative ToolContractV2 execution validation ──

@@ -85,6 +85,10 @@ _pendingLogClean = null;
 imageGenMode = false;
 planMode = false;
 projectState = { active: false, path: null, extraRoots: [] };
+_conversationProjectController = { preservesDraft: () => false };
+config = {};
+captureComposerModel = value => ({model: value.model});
+commitComposerModel = () => {};
 conversations = [composerConv];
 activeConvId = composerConv.id;
 

@@ -169,20 +169,21 @@ def build_fetch_url_tool() -> dict:
         "Fetch and read one remote HTTP(S) URL (HTML, PDF, or text). Use it for "
         "a user-provided URL or a promising search result; follow only relevant "
         "returned Page Links. For local paths or file:// URIs use `read_files`. "
-        "Text-like assets (SVG/JSON/source) return inline; binary images, archives, "
-        "fonts, and Office files return a temporary server-staging path readable "
-        "with `read_files`. If server HTTP lacks the site's login but the selected "
-        "browser has it, bytes stream from that session to server staging, never "
-        "browser Downloads. Staging is not a requested final destination: copy/move "
-        "through an authorized filesystem tool and verify its own receipt before "
-        "claiming completion. Large HTML may use a relevance GATE keyed by "
-        "`reason` when the server setting enables it. The gate keeps or drops "
-        "the whole extracted page (`Failed to fetch`); it does not select "
-        "passages or summarize. Give an accurate, non-narrow reason. If the "
-        "gate is disabled, `reason` is accepted but ignored. PDFs, short pages, "
-        "and batches bypass the gate; large content is capped. For multiple "
-        "URLs use concurrent `urls:[{url}, ...]`; top-level `url` is ignored "
-        "and `reason` applies only to single-URL mode."
+        "Text-like assets (SVG/JSON/source) return inline; binaries (images, "
+        "archives, fonts, Office files) return a temporary server-staging path "
+        "readable with `read_files`. If server HTTP lacks the site's login but "
+        "the selected browser has it, bytes stream from that session to staging, "
+        "never browser Downloads. Staging is not a final destination: copy/move "
+        "through an authorized filesystem tool and verify receipt before claiming "
+        "completion. Large HTML may pass a relevance GATE keyed by `reason` that "
+        "keeps or drops the whole page (`Failed to fetch`) — it does not select "
+        "passages, so give an accurate, non-narrow reason (ignored when the gate "
+        "is disabled). PDFs, short pages, and batches bypass the gate; large "
+        "content is capped. Multiple URLs: concurrent `urls:[{url}, ...]` — "
+        "top-level `url` is then ignored and `reason` is single-mode only. "
+        "Set `extract` to answer a question about the page with one bounded "
+        "model pass instead of receiving the raw content (single mode only; "
+        "on extraction failure the raw content is returned)."
     )
 
     properties = {
@@ -198,6 +199,14 @@ def build_fetch_url_tool() -> dict:
         "description": (
             "Accurate whole-page relevance goal for the optional large-HTML "
             "keep/drop gate; single mode only."
+        ),
+    }
+    properties["extract"] = {
+        "type": "string",
+        "description": (
+            "Optional question or instruction about the page. When set, one "
+            "bounded model pass answers it against the fetched content "
+            "instead of returning the raw page. Single mode only."
         ),
     }
     properties["urls"] = {

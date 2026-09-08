@@ -19,6 +19,9 @@
     "selected_idea_id": {"type": "string", "maxLength": 160},
     "hypothesis": {"type": "string", "maxLength": 12000},
     "protocol": {"$ref": "#/$defs/protocol"},
+
+    "decision": {"$ref": "#/$defs/decision"},
+    "manuscript_audit": {"$ref": "#/$defs/audit"},
     "capability_bindings": {
       "type": "array",
       "maxItems": 24,
@@ -39,6 +42,11 @@
     "updated_at": {"type": "integer", "minimum": 0}
   },
   "$defs": {
+
+    "hypothesis": {"type":"object","additionalProperties":false,"required":["id","statement","prediction","scope"],"properties":{"id":{"type":"string","maxLength":2000},"statement":{"type":"string","maxLength":2000},"prediction":{"type":"string","maxLength":2000},"scope":{"type":"string","maxLength":2000}}},
+    "nextExperiment": {"type":"object","additionalProperties":false,"required":["id","hypothesis_ids","design","decision_rule","expected_information","expected_value","cost"],"properties":{"id":{"type":"string","maxLength":2000},"hypothesis_ids":{"type":"array","maxItems":16,"items":{"type":"string","maxLength":96}},"design":{"type":"string","maxLength":2000},"decision_rule":{"$ref":"#/$defs/longText"},"expected_information":{"type":"string","maxLength":2000},"expected_value":{"type":"string","maxLength":2000},"cost":{"$ref":"#/$defs/longText"},"priority":{"type":"integer","minimum":1,"maximum":16},"requires_confirmation":{"const":true}}},
+    "decision": {"type":"object","additionalProperties":false,"required":["status","reason","run_ids","scope","next_actions"],"properties":{"status":{"enum":["retain","refine","refute","inconclusive"]},"reason":{"$ref":"#/$defs/longText"},"scope":{"$ref":"#/$defs/longText"},"run_ids":{"type":"array","maxItems":32,"items":{"type":"string","maxLength":96}},"next_actions":{"type":"array","maxItems":16,"items":{"$ref":"#/$defs/nextExperiment"}}}},
+    "audit": {"type":"object","additionalProperties":false,"required":["passed","checks"],"properties":{"passed":{"type":"boolean"},"checks":{"type":"array","maxItems":5,"items":{"type":"object","additionalProperties":false,"required":["id","ok"],"properties":{"id":{"enum":["baseline_fairness","uncertainty","seeds","validation_split","claim_traceability"]},"ok":{"type":"boolean"}}}}}},
     "shortText": {"type": "string", "maxLength": 1000},
     "longText": {"type": "string", "maxLength": 12000},
     "protocol": {
@@ -56,6 +64,12 @@
         "resources": {"$ref": "#/$defs/longText"},
         "evaluation_protocol": {"$ref": "#/$defs/longText"},
         "environment": {"$ref": "#/$defs/longText"},
+        "matched_budget": {"$ref": "#/$defs/longText"},
+        "exploratory_plan": {"$ref": "#/$defs/longText"},
+        "validation_plan": {"$ref": "#/$defs/longText"},
+
+        "competing_hypotheses": {"type":"array","maxItems":16,"items":{"$ref":"#/$defs/hypothesis"}},
+        "discriminating_experiments": {"type":"array","maxItems":16,"items":{"$ref":"#/$defs/nextExperiment"}},
         "random_seeds": {"type": "array", "maxItems": 32, "items": {"type": "integer"}},
         "stop_conditions": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/shortText"}}
       }
@@ -112,6 +126,11 @@
         "backend": {"type": "string", "maxLength": 240},
         "remote_job_id": {"type": "string", "maxLength": 500},
         "spec_digest": {"type": "string", "maxLength": 128},
+        "protocol_digest": {"type": "string", "maxLength": 64},
+        "hypothesis_digest": {"type": "string", "maxLength": 64},
+        "execution_status": {"enum": ["planned", "queued", "running", "completed", "failed"]},
+        "scientific_outcome": {"enum": ["supported", "refuted", "inconclusive"]},
+        "validity": {"enum": ["current", "stale", "unverified"]},
         "task_id": {"type": "string", "maxLength": 160},
         "notes": {"$ref": "#/$defs/longText"},
         "tool_receipts": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/toolReceipt"}},
@@ -127,6 +146,13 @@
       "properties": {
         "id": {"type": "string", "maxLength": 96},
         "text": {"$ref": "#/$defs/longText"},
+        "protocol_digest": {"type": "string", "maxLength": 64},
+        "hypothesis_digest": {"type": "string", "maxLength": 64},
+        "evidence_digest": {"type": "string", "maxLength": 64},
+
+        "outcome_scope": {"enum":["supported","refuted","inconclusive"]},
+        "validity": {"enum": ["current", "stale", "unverified"]},
+        "validity_reason": {"type": "string", "maxLength": 1000},
         "status": {"enum": ["draft", "supported", "contested", "rejected"]},
         "evidence_refs": {"type": "array", "maxItems": 24, "items": {"type": "string", "maxLength": 1000}}
       }
@@ -134,11 +160,13 @@
     "manuscript": {
       "type": "object",
       "additionalProperties": false,
+
       "required": [
         "title", "venue", "abstract", "keywords", "method", "results", "limitations",
         "introduction", "related_work", "experiments", "conclusion", "ethics"
       ],
       "properties": {
+        "scientific_dependency_digest": {"type": "string", "maxLength": 64},
         "title": {"$ref": "#/$defs/longText"},
         "venue": {"$ref": "#/$defs/longText"},
         "abstract": {"$ref": "#/$defs/longText"},

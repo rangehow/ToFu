@@ -34,6 +34,9 @@ TURN_SOURCE_PRIORITY: Final = MappingProxyType({
 })
 UNKNOWN_TURN_SOURCE_PRIORITY: Final = 100
 
+# One inbox drain is capped at 256 items (agent_inbox.MAX_PER_TASK).
+QUEUE_INJECTION_ACK_MAX_IDS: Final = 256
+
 # Rolling-upgrade capability for the maintenance reaper's read-first path.
 # A new application skips the writer command only after a new Sidecar echoes
 # this exact contract alongside a boolean derived from the same bounded queue

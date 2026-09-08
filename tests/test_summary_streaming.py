@@ -471,3 +471,126 @@ def test_compact_push_failure_never_breaks_compaction(monkeypatch):
 
     res = man.compact_conversation_now('convX', user_id=1, config={}, task={'convId': 'convX'})
     assert res['ok'] is True, 'push failure must not break the compaction'
+
+
+# ── Stop-priority: a live task's summary shares the turn's abort signal ──
+
+
+def test_live_task_summary_streams_and_observes_abort_flag(monkeypatch):
+    """A summary inside a live task turn (task dict carries 'aborted') must
+    stream — the transport watchdog can interrupt generation mid-flight — and
+    receive a working abort_check wired to the live flag. This is the fix for
+    a user Stop being invisible-walled by compaction until the summary
+    completed."""
+    import lib.llm_dispatch as ld
+    import lib.tasks_pkg.compaction._layer2._summary as summ
+
+    task = {'convId': 'c1', '_userId': 1, 'aborted': False,
+            'config': {'model': 'm'}}
+    seen = {'chat': 0, 'stream': 0, 'abort_check': None}
+
+    def fake_chat(*_a, **_kw):
+        seen['chat'] += 1
+        return ('NONSTREAM', {})
+
+    def fake_stream(_body, **kw):
+        seen['stream'] += 1
+        seen['abort_check'] = kw.get('abort_check')
+        return ({'role': 'assistant', 'content': 'LIVE SUMMARY'}, 'stop',
+                {'prompt_tokens': 3, 'completion_tokens': 1})
+
+    monkeypatch.setattr(ld, 'dispatch_chat', fake_chat)
+    monkeypatch.setattr(ld, 'dispatch_stream', fake_stream)
+
+    result = summ._generate_query_aware_summary(
+        [{'role': 'user', 'content': 'q'}], 'q', conv_id='c1', task=task)
+
+    assert result == 'LIVE SUMMARY'
+    assert seen['chat'] == 0 and seen['stream'] == 1
+    abort_check = seen['abort_check']
+    assert callable(abort_check)
+    assert abort_check() is False
+    task['aborted'] = True
+    assert abort_check() is True
+
+
+def test_aborted_summary_never_falls_back_to_text_tier(monkeypatch):
+    """An abort raised mid-flight must skip the cheap→text retry ladder: the
+    turn is already unwinding, so a second paid call is pure abort latency."""
+    import lib.llm_dispatch as ld
+    import lib.tasks_pkg.compaction._layer2._summary as summ
+    from lib.llm_errors import AbortedError
+
+    calls = []
+
+    def fake_stream(_body, **kw):
+        calls.append(kw.get('capability'))
+        raise AbortedError('aborted mid-summary')
+
+    monkeypatch.setattr(ld, 'dispatch_stream', fake_stream)
+    monkeypatch.setattr(
+        ld, 'dispatch_chat',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError('live task used non-stream chat')))
+
+    result = summ._generate_query_aware_summary(
+        [{'role': 'user', 'content': 'q'}], 'q', conv_id='c1',
+        task={'convId': 'c1', '_userId': 1, 'aborted': False,
+              'config': {'model': 'm'}})
+
+    assert result is None
+    assert calls == ['cheap']
+
+
+def test_already_aborted_task_skips_summary_dispatch(monkeypatch):
+    """Preflight: a task aborted before the summary starts must not buy a
+    paid model call at all."""
+    import lib.llm_dispatch as ld
+    import lib.tasks_pkg.compaction._layer2._summary as summ
+
+    dispatched = {'chat': 0, 'stream': 0}
+    monkeypatch.setattr(ld, 'dispatch_chat',
+                        lambda *a, **k: dispatched.__setitem__(
+                            'chat', dispatched['chat'] + 1) or ('x', {}))
+    monkeypatch.setattr(ld, 'dispatch_stream',
+                        lambda *a, **k: dispatched.__setitem__(
+                            'stream', dispatched['stream'] + 1) or ('x', {}))
+
+    result = summ._generate_query_aware_summary(
+        [{'role': 'user', 'content': 'q'}], 'q', conv_id='c1',
+        task={'convId': 'c1', '_userId': 1, 'aborted': True,
+              'config': {'model': 'm'}})
+
+    assert result is None
+    assert dispatched == {'chat': 0, 'stream': 0}
+
+
+def test_synthetic_task_dict_keeps_nonstreaming_path(monkeypatch):
+    """The stream-on-live-task gate keys on the live 'aborted' flag: a
+    synthetic task dict (manual /compact, standalone callers) without that
+    key keeps the historical non-streaming dispatch_chat path and receives
+    no abort wire."""
+    import lib.llm_dispatch as ld
+    import lib.tasks_pkg.compaction._layer2._summary as summ
+
+    called = {'chat': 0, 'stream': 0}
+
+    def fake_chat(_messages, **kw):
+        called['chat'] += 1
+        assert kw.get('abort_check') is None
+        return ('NONSTREAM SUMMARY', {'prompt_tokens': 5,
+                                      'completion_tokens': 2})
+
+    def fake_stream(*_a, **_kw):
+        called['stream'] += 1
+        return ('x', 'stop', {})
+
+    monkeypatch.setattr(ld, 'dispatch_chat', fake_chat)
+    monkeypatch.setattr(ld, 'dispatch_stream', fake_stream)
+
+    result = summ._generate_query_aware_summary(
+        [{'role': 'user', 'content': 'q'}], 'q', conv_id='c1',
+        task={'convId': 'c1', '_userId': 1, 'config': {'model': 'm'}})
+
+    assert result == 'NONSTREAM SUMMARY'
+    assert called == {'chat': 1, 'stream': 0}

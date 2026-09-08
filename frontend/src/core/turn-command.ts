@@ -82,6 +82,31 @@ export function rebindTurnInputContext(
   return projection;
 }
 
+/**
+ * Build the contextSnapshot-only inputUpdate for a resume operation
+ * (continue / checkpoint_resume / answer_guidance).
+ *
+ * Resume never rewrites the submitted turn's content: the storage authority
+ * applies this surgically onto the current parent projection, so the
+ * info-rail facts (model, tools, …) reflect the configuration the resume was
+ * sent with. Returns null when no live snapshot exists so the caller omits
+ * inputUpdate entirely.
+ */
+export function resumeCtxInputUpdate(
+  currentSnapshot: unknown,
+): Record<string, unknown> | null {
+  if (!currentSnapshot || typeof currentSnapshot !== 'object'
+      || Array.isArray(currentSnapshot)) {
+    return null;
+  }
+  return {
+    contextSnapshot: {
+      blockId: 'turn-context',
+      snapshot: { ...currentSnapshot as Record<string, unknown> },
+    },
+  };
+}
+
 export function createTurnCommandId(): string {
   try {
     const id = globalThis.crypto?.randomUUID?.();

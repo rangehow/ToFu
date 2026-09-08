@@ -1,9 +1,9 @@
 # HOT_PATH
-"""Raw SSE diagnostic dumper — ring buffer + opt-in full transcript.
+"""Bounded SSE diagnostics — metadata ring + opt-in redacted payloads.
 
-Two output paths:
-- ``logs/raw_sse.log`` — opt-in full transcript (``LLM_DEBUG_RAW_SSE`` env).
-- ``logs/raw_sse_anomaly.log`` — always-on ring buffer flushed on anomaly.
+Two output paths (tool input fragments and unsafe payloads are always omitted):
+- ``logs/raw_sse.log`` — opt-in payload evidence (``LLM_DEBUG_RAW_SSE`` env).
+- ``logs/raw_sse_anomaly.log`` — ring flushed on anomaly; metadata by default.
 """
 
 import collections
@@ -14,7 +14,9 @@ import time
 
 from lib.log import LOG_DIR, get_logger
 from lib.log_policy import stream_backup_count, stream_max_bytes
-from lib.log_redaction import redact_text, sanitize_value
+from lib.log_redaction import (
+    redact_text, sanitize_value, sensitive_field_name,
+)
 from lib.log_retention import append_bytes_locked, copytruncate_if_oversize
 
 logger = get_logger(__name__)
@@ -83,6 +85,74 @@ def _raw_sse_enabled(model: str) -> bool:
     return _RAW_SSE_FILTER in (model or '')
 
 
+def _safe_payload_value(value, *, field_name='', event_type='', depth=0, budget=None):
+    """Bound one debug payload before serialization, never log tool arguments.
+
+    Tool arguments can carry credentials split across arbitrary deltas. Omitting
+    their values is safe without assembling another stateful copy of the stream.
+    JSON-encoded strings are decoded before redaction; malformed/deep values are
+    metadata only, never a raw fallback. This is diagnostic evidence, not replay.
+    """
+    if sensitive_field_name(field_name):
+        return '<redacted>'
+    if field_name in {'arguments', 'partial_json', 'input'} or (
+            field_name == 'delta' and 'function_call_arguments' in event_type):
+        size = len(value) if isinstance(value, (str, dict, list)) else 0
+        return f'<omitted tool input size={size}>'
+    if budget is None:
+        budget = [512]
+    budget[0] -= 1
+    if depth >= 10 or budget[0] < 0:
+        return '<diagnostic limit>'
+    if isinstance(value, str):
+        if value.lstrip().startswith(('{', '[', '"')):
+            try:
+                decoded = json.loads(value)
+            except (ValueError, RecursionError):
+                return f'<omitted encoded fragment chars={len(value)}>'
+            return _safe_payload_value(
+                decoded, field_name=field_name, event_type=event_type,
+                depth=depth + 1, budget=budget)
+        return redact_text(value, max_chars=_RAW_SSE_LINE_MAX_CHARS)
+    if isinstance(value, dict):
+        kind = value.get('type')
+        event_type = kind if isinstance(kind, str) else event_type
+        out = {}
+        for key, child in value.items():
+            if budget[0] <= 0:
+                out['<omitted>'] = 'diagnostic limit'
+                break
+            out[redact_text(key, max_chars=128)] = _safe_payload_value(
+                child, field_name=key, event_type=event_type,
+                depth=depth + 1, budget=budget)
+        return out
+    if isinstance(value, list):
+        out = []
+        for child in value:
+            if budget[0] <= 0:
+                out.append('<diagnostic limit>')
+                break
+            out.append(_safe_payload_value(
+                child, event_type=event_type, depth=depth + 1, budget=budget))
+        return out
+    return sanitize_value(value)
+
+
+def _safe_sse_line(line: str, *, capture_payload: bool) -> str:
+    if line.startswith('data:'):
+        payload = line[5:].lstrip(' ')
+        if payload == '[DONE]':
+            return 'data: [DONE]'
+        if not capture_payload or len(payload) > _RAW_SSE_LINE_MAX_CHARS:
+            return f'data: <omitted payload chars={len(payload)}>'
+        try:
+            value = json.loads(payload)
+        except (ValueError, RecursionError):
+            return f'data: <malformed payload chars={len(payload)}>'
+        line = 'data: ' + json.dumps(_safe_payload_value(value), ensure_ascii=False)
+    return redact_text(line, max_chars=_RAW_SSE_LINE_MAX_CHARS)
+
+
 class RawSSEDumper:
     """Captures raw SSE traffic for diagnostics.
 
@@ -132,6 +202,13 @@ class RawSSEDumper:
         _keys = ('model', 'thinking', 'effort', 'temperature', 'top_p',
                  'top_k', 'max_tokens', 'stream', 'reasoning_split')
         snapshot = {k: self.body.get(k) for k in _keys if k in self.body}
+        # The native Messages adapter moves effort out of the canonical
+        # top-level field. Keep just that scalar: output schemas may contain
+        # user data and do not belong in request diagnostics.
+        output_config = self.body.get('output_config')
+        if isinstance(output_config, dict) and output_config.get('effort') in (
+                'low', 'medium', 'high', 'xhigh', 'max'):
+            snapshot['output_config'] = {'effort': output_config['effort']}
         snapshot['_messages_count'] = len(self.body.get('messages', []))
         snapshot['_tools_count'] = len(self.body.get('tools', []) or [])
         safe = sanitize_value(
@@ -167,8 +244,11 @@ class RawSSEDumper:
     def line(self, sse_line: str):
         if sse_line is None:
             sse_line = ''
-        safe_line = redact_text(sse_line, max_chars=_RAW_SSE_LINE_MAX_CHARS)
+        safe_line = _safe_sse_line(sse_line, capture_payload=self.enabled)
         try:
+            if len(self._ring) == self._ring.maxlen:
+                evicted = self._ring.popleft()
+                self._ring_bytes -= len(evicted.encode('utf-8', errors='replace'))
             self._ring.append(safe_line)
             self._ring_bytes += len(safe_line.encode('utf-8', errors='replace'))
             while self._ring_bytes > _ANOMALY_RING_BYTES and self._ring:
@@ -183,6 +263,22 @@ class RawSSEDumper:
         with _RAW_SSE_WRITE_LOCK:
             if not self._fh:
                 return
+            # A single long debug-enabled request must not exceed the log
+            # lifecycle just because no later request arrives to rotate it.
+            # Rotate before taking the write flock (copytruncate takes its own
+            # lock and preserves this open O_APPEND descriptor).
+            try:
+                max_bytes = stream_max_bytes('raw_sse')
+                incoming = len(safe_line.encode('utf-8', errors='replace')) + 1
+                if os.fstat(self._fh.fileno()).st_size + incoming > max_bytes:
+                    copytruncate_if_oversize(
+                        self._fh.name if isinstance(self._fh.name, str) else
+                        os.path.join(LOG_DIR, 'raw_sse.log'),
+                        max_bytes=max_bytes,
+                        trigger_bytes=max(1, max_bytes - incoming),
+                        backup_count=stream_backup_count('raw_sse'))
+            except (OSError, ValueError) as error:
+                logger.debug('[RawSSE] rotation check failed: %s', error)
             _lock_raw_file(self._fh, acquire=True)
             try:
                 self._fh.write(safe_line)

@@ -10,15 +10,16 @@ use uuid::Uuid;
 
 use crate::block::{BlockId, BlockStore, BlockWriteMetrics, MAX_BLOCK_BYTES};
 use crate::control::{ControlFile, ControlState};
-use crate::history::{build_segments, decode_segment, HistoryManifest, HistorySegmentReference};
-use crate::payload_manifest::{
-    PayloadManifest, PayloadSegmentReference, MAX_PAYLOAD_SEGMENTS, MAX_PAYLOAD_SEGMENTS_PER_SHARD,
+use crate::history::{
+    decode_segment, segment_prefix_len, transaction_history_bytes, visit_segments, HistoryManifest,
+    HistorySegmentReference, HISTORY_SEGMENT_MAX_BYTES,
 };
+use crate::payload_manifest::{PayloadManifest, PayloadSegmentReference, MAX_PAYLOAD_SEGMENTS};
 use crate::payload_segment::{
     PayloadSegmentOrphanCandidate, PayloadSegmentOrphanPlan, MAX_SEGMENT_BLOCKS,
     MAX_SEGMENT_PAYLOAD_BYTES,
 };
-use crate::transaction::TransactionEnvelope;
+use crate::transaction::{TransactionEnvelope, MAX_CARRIED_PAYLOAD_BYTES};
 use crate::vfs::{sync_directory_barrier, FileKind, OpenRequest, RealVfs, Vfs, VfsFile};
 use crate::wal::{
     ActiveLog, MAX_GROUP_ENCODED_BYTES, MAX_GROUP_TRANSACTIONS, WAL_RECORD_OVERHEAD_BYTES,
@@ -30,14 +31,21 @@ pub struct Engine {
     _lease: Box<dyn VfsFile>,
     control: ControlFile,
     wal: ActiveLog,
-    blocks: BlockStore,
+    blocks: Arc<BlockStore>,
     vfs: Arc<dyn Vfs>,
     state: ControlState,
     history_manifest: Option<HistoryManifest>,
     payload_manifest: Option<PayloadManifest>,
     committed: Vec<CommittedTransaction>,
+    // Immutable full history segments prepared while their source WAL is
+    // still authoritative. Only checkpoint publishes these references.
+    staged_history: Vec<HistorySegmentReference>,
+    staged_history_transactions: usize,
+    unstaged_history_bytes: usize,
     rotation_threshold_bytes: u64,
     restart_required: bool,
+    control_dirty: bool,
+    background_pack_wait_rounds: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -57,6 +65,32 @@ pub struct PayloadCompactionMetrics {
     pub manifest_block_id: BlockId,
 }
 
+/// Working state for one checkpoint's pending-block materialization:
+/// the candidate catalog, staged payloads routed to segments, the spill
+/// set routed to loose files, and merged-away segment files to reclaim
+/// after the catalog publish is durable.
+struct CheckpointPackPlan {
+    references: Vec<PayloadSegmentReference>,
+    packed: BTreeSet<BlockId>,
+    fallback: BTreeSet<BlockId>,
+    merged_away: Vec<Uuid>,
+    changed: bool,
+}
+
+/// Default staged-payload byte budget for one incremental materialization
+/// step. Bounding each step's segment writes and fsyncs keeps foreground
+/// latency out of the 300 ms range when a large staged backlog accumulates;
+/// idle-time steps drain the backlog so the checkpoint path finds little or
+/// nothing left to pack. The budget is a soft target: every step routes at
+/// least one chunk so repeated calls always make progress.
+pub const MAX_CHECKPOINT_MATERIALIZE_BATCH_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Bounded wait for one in-flight background segment create before the
+/// checkpoint drain abandons the reservation and packs the same staged
+/// payloads synchronously (e.g. after a worker death).
+const BACKGROUND_PACK_WAIT_ROUND: std::time::Duration = std::time::Duration::from_millis(250);
+const BACKGROUND_PACK_DEFAULT_WAIT_ROUNDS: u32 = 240;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PayloadSegmentGcMetrics {
     pub retired_segment_id: Uuid,
@@ -70,7 +104,10 @@ pub struct PayloadSegmentGcMetrics {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommitStage {
-    BlockDurable(BlockId),
+    /// The loose block file is published (renamed into place) but not yet
+    /// fsynced; durability arrives with the WAL record that carries its
+    /// payload.
+    BlockPublished(BlockId),
     WalDurable(u64),
     ControlDurable(u64),
 }
@@ -94,6 +131,9 @@ pub(crate) struct PreparedBatchTransaction {
     block_payloads: Vec<Vec<u8>>,
     block_ids: Vec<BlockId>,
     encoded_envelope: Vec<u8>,
+    /// True when the envelope carries its block payloads (version 3) and the
+    /// loose files may be written without fsync.
+    deferred: bool,
     logical_payload_bytes: usize,
     resident_bytes: usize,
 }
@@ -129,12 +169,30 @@ impl BatchTransaction {
             .iter()
             .map(|payload| BlockId::for_payload(payload))
             .collect::<Vec<_>>();
-        let encoded_envelope = TransactionEnvelope {
+        let mut carried_bytes = 0_usize;
+        for payload in &self.block_payloads {
+            carried_bytes = carried_bytes.checked_add(payload.len()).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "transaction size overflow")
+            })?;
+        }
+        let deferred =
+            !self.block_payloads.is_empty() && carried_bytes <= MAX_CARRIED_PAYLOAD_BYTES;
+        let envelope = TransactionEnvelope {
             block_ids: block_ids.clone(),
             inline_payload: self.inline_payload,
             authority_state_update: None,
-        }
-        .encode()?;
+        };
+        let encoded_envelope = if deferred {
+            let carried = envelope
+                .block_ids
+                .iter()
+                .zip(&self.block_payloads)
+                .map(|(_, payload)| Some(payload.as_slice()))
+                .collect::<Vec<_>>();
+            envelope.encode_with_carried(&carried, None)?
+        } else {
+            envelope.encode()?
+        };
         let wal_encoded_bytes = encoded_envelope
             .len()
             .checked_add(WAL_RECORD_OVERHEAD_BYTES)
@@ -180,6 +238,7 @@ impl BatchTransaction {
             block_payloads: self.block_payloads,
             block_ids,
             encoded_envelope,
+            deferred,
             logical_payload_bytes,
             resident_bytes,
         })
@@ -205,6 +264,10 @@ pub struct CommittedTransaction {
     pub sequence: u64,
     pub record_hash: [u8; 32],
     pub envelope: TransactionEnvelope,
+    /// Exact bytes this transaction was durably logged with, carried payload
+    /// copies included, so history segments rebuild loose blocks the same way
+    /// WAL replay does without a re-encode at checkpoint time.
+    pub encoded_envelope: Vec<u8>,
 }
 
 fn acquire_lease(data_dir: &Path, vfs: &dyn Vfs) -> io::Result<Box<dyn VfsFile>> {
@@ -229,6 +292,18 @@ fn acquire_lease(data_dir: &Path, vfs: &dyn Vfs) -> io::Result<Box<dyn VfsFile>>
     Ok(lease)
 }
 
+impl Drop for Engine {
+    /// Clean shutdown catches a lagging CONTROL up when it is safe to do so,
+    /// restoring the strict fail-closed boundary for identifier-only records
+    /// and shortening the next replay. Failure only means the next open
+    /// replays the WAL, so the result is intentionally ignored; an ambiguous
+    /// earlier publication (restart_required) is never retried here.
+    fn drop(&mut self) {
+        if self.control_dirty && !self.restart_required {
+            let _ = self.flush_dirty_control();
+        }
+    }
+}
 impl Engine {
     pub fn initialize(data_dir: &Path) -> io::Result<Self> {
         if data_dir.exists() {
@@ -261,7 +336,7 @@ impl Engine {
         let authority = Uuid::new_v4();
         let mut control = ControlFile::initialize_with_vfs(data_dir, authority, Arc::clone(&vfs))?;
         let wal = ActiveLog::initialize_with_vfs(data_dir, Arc::clone(&vfs))?;
-        let blocks = BlockStore::initialize_with_vfs(data_dir, Arc::clone(&vfs))?;
+        let blocks = Arc::new(BlockStore::initialize_with_vfs(data_dir, Arc::clone(&vfs))?);
         sync_directory_barrier(vfs.as_ref(), data_dir)?;
         let state = control.read_current()?;
         Ok(Self {
@@ -275,8 +350,13 @@ impl Engine {
             history_manifest: None,
             payload_manifest: None,
             committed: Vec::new(),
+            staged_history: Vec::new(),
+            staged_history_transactions: 0,
+            unstaged_history_bytes: 0,
             rotation_threshold_bytes: ACTIVE_LOG_ROTATE_BYTES,
             restart_required: false,
+            control_dirty: false,
+            background_pack_wait_rounds: BACKGROUND_PACK_DEFAULT_WAIT_ROUNDS,
         })
     }
 
@@ -299,7 +379,7 @@ impl Engine {
             state.active_log_generation,
             Arc::clone(&vfs),
         )?;
-        let blocks = BlockStore::open_with_vfs(data_dir, Arc::clone(&vfs))?;
+        let blocks = Arc::new(BlockStore::open_with_vfs(data_dir, Arc::clone(&vfs))?);
         let payload_manifest = match state.payload_manifest_block_id {
             Some(manifest_block_id) => {
                 let manifest = PayloadManifest::decode(&blocks.get(manifest_block_id)?)?;
@@ -331,36 +411,98 @@ impl Engine {
         let mut keep_records = recovery.records.len();
         let mut committed = Vec::with_capacity(recovery.records.len());
         for (index, record) in recovery.records.iter().enumerate() {
-            let envelope = TransactionEnvelope::decode(&record.payload)?;
-            for block_id in &envelope.block_ids {
+            let (envelope, carried, authority_state_carried) =
+                TransactionEnvelope::decode_with_carried(&record.payload)?;
+            let mut truncate_here = false;
+            for (slot, block_id) in envelope.block_ids.iter().enumerate() {
                 match blocks.get(*block_id) {
                     Ok(_) => {}
                     Err(error)
                         if error.kind() == io::ErrorKind::NotFound
-                            && record.sequence > state.durable_sequence =>
+                            || error.kind() == io::ErrorKind::InvalidData =>
                     {
-                        keep_records = index;
-                        break;
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!(
-                                "durable transaction {} references a missing block",
-                                record.sequence
-                            ),
-                        ));
+                        match carried.get(slot).and_then(Option::as_ref) {
+                            // The WAL carries the payload, so the record
+                            // stays authoritative even though the loose file
+                            // never reached stable storage.
+                            Some(payload) => {
+                                let restored = blocks.restore_loose(payload)?;
+                                if restored != *block_id {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        "carried payload does not match its block reference",
+                                    ));
+                                }
+                            }
+                            None if record.sequence > state.durable_sequence => {
+                                keep_records = index;
+                                truncate_here = true;
+                                break;
+                            }
+                            None => {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "durable transaction {} references a missing block",
+                                        record.sequence
+                                    ),
+                                ));
+                            }
+                        }
                     }
                     Err(error) => return Err(error),
                 }
             }
-            if keep_records != recovery.records.len() {
+            if truncate_here {
                 break;
+            }
+            if let Some(Some(root)) = envelope.authority_state_update {
+                match blocks.get(root) {
+                    Ok(_) => {}
+                    Err(error)
+                        if error.kind() == io::ErrorKind::NotFound
+                            || error.kind() == io::ErrorKind::InvalidData =>
+                    {
+                        match authority_state_carried.as_ref() {
+                            Some(payload) => {
+                                let restored = blocks.restore_loose(payload)?;
+                                if restored != root {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::InvalidData,
+                                        "carried payload does not match its authority root",
+                                    ));
+                                }
+                            }
+                            None if record.sequence > state.durable_sequence => {
+                                keep_records = index;
+                                break;
+                            }
+                            None => {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "durable transaction {} references a missing authority root",
+                                        record.sequence
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                    Err(error) => return Err(error),
+                }
+                blocks.stage_pending_sync(root)?;
+            }
+            // Every replayed loose file may predate the last power event, so
+            // the next checkpoint re-fsyncs all of them before its CONTROL
+            // publication can retire these WAL records.
+            for block_id in &envelope.block_ids {
+                blocks.stage_pending_sync(*block_id)?;
             }
             committed.push(CommittedTransaction {
                 sequence: record.sequence,
                 record_hash: record.record_hash,
                 envelope,
+                encoded_envelope: record.payload.clone(),
             });
         }
         if keep_records != recovery.records.len() {
@@ -444,9 +586,14 @@ impl Engine {
             state,
             history_manifest,
             payload_manifest,
+            unstaged_history_bytes: committed.iter().map(transaction_history_bytes).sum(),
             committed,
+            staged_history: Vec::new(),
+            staged_history_transactions: 0,
             rotation_threshold_bytes: ACTIVE_LOG_ROTATE_BYTES,
             restart_required: false,
+            control_dirty: false,
+            background_pack_wait_rounds: BACKGROUND_PACK_DEFAULT_WAIT_ROUNDS,
         })
     }
 
@@ -460,6 +607,7 @@ impl Engine {
     }
 
     fn publish_control(&mut self, next: &ControlState) -> io::Result<()> {
+        crate::fsync_stats::note_publish_control();
         if let Err(error) = self.control.publish(next) {
             // A failed CONTROL write or fsync can have reached stable storage even
             // when the caller observes an error. The in-memory generation must not
@@ -472,6 +620,29 @@ impl Engine {
 
     pub fn is_restart_required(&self) -> bool {
         self.restart_required
+    }
+
+    /// Deferred commits advance the in-memory durable point without a CONTROL
+    /// publication. Structural transitions (WAL rotation, manifest changes)
+    /// must first catch the published durable point up in a standalone
+    /// ordinary publication so every CONTROL transition stays explicable
+    /// under the slot state-machine rules.
+    fn flush_dirty_control(&mut self) -> io::Result<()> {
+        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_FLUSH_DIRTY);
+        if !self.control_dirty {
+            return Ok(());
+        }
+        let next =
+            ControlState {
+                generation: self.state.generation.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
+                })?,
+                ..self.state.clone()
+            };
+        self.publish_control(&next)?;
+        self.state = next;
+        self.control_dirty = false;
+        Ok(())
     }
 
     pub fn commit(&mut self, payload: &[u8]) -> io::Result<u64> {
@@ -497,21 +668,47 @@ impl Engine {
     {
         self.require_usable_authority()?;
         let mut block_ids = Vec::with_capacity(block_payloads.len());
+        let mut carried: Vec<Option<Vec<u8>>> = Vec::with_capacity(block_payloads.len());
+        let mut carried_bytes = 0_usize;
         for payload in block_payloads {
-            let block_id = self.blocks.put(payload)?;
-            checkpoint(CommitStage::BlockDurable(block_id))?;
+            let (block_id, pending) = self.blocks.put_deferred(payload)?;
+            if pending {
+                carried_bytes = carried_bytes.checked_add(payload.len()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "transaction size overflow")
+                })?;
+                carried.push(Some(payload.to_vec()));
+            } else {
+                carried.push(None);
+            }
+            checkpoint(CommitStage::BlockPublished(block_id))?;
             block_ids.push(block_id);
         }
         let envelope = TransactionEnvelope {
             block_ids: block_ids.clone(),
             inline_payload: inline_payload.to_vec(),
             authority_state_update: None,
-        }
-        .encode()?;
+        };
+        let envelope = if carried_bytes > MAX_CARRIED_PAYLOAD_BYTES {
+            // Oversized commits spill: fsync the pending loose blocks now and
+            // log identifier-only references, exactly the pre-deferred
+            // behavior, instead of growing an unbounded WAL record.
+            self.flush_deferred_blocks()?;
+            envelope.encode()?
+        } else if carried_bytes > 0 {
+            let borrowed = carried
+                .iter()
+                .map(|slot| slot.as_deref())
+                .collect::<Vec<_>>();
+            envelope.encode_with_carried(&borrowed, None)?
+        } else {
+            envelope.encode()?
+        };
+        self.adopt_background_pack()?;
         self.checkpoint_if_needed(&envelope)?;
         let sequence = self.state.durable_sequence.checked_add(1).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "transaction sequence overflow")
         })?;
+        crate::fsync_stats::note_wal_append();
         let root_hash = match self.wal.append(sequence, self.state.root_hash, &envelope) {
             Ok(root_hash) => root_hash,
             Err(error) => {
@@ -523,10 +720,13 @@ impl Engine {
             }
         };
         checkpoint(CommitStage::WalDurable(sequence))?;
+        // The generation only advances when CONTROL is actually published;
+        // deferred commits move durable_sequence/root_hash in memory and let
+        // recovery replay the WAL when CONTROL lags, exactly the crash path
+        // exercised by the durability-boundary fault tests. Publication is
+        // amortized to checkpoint, manifest updates, and explicit flushes.
         let next = ControlState {
-            generation: self.state.generation.checked_add(1).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "CONTROL generation overflow")
-            })?,
+            generation: self.state.generation,
             durable_sequence: sequence,
             authority_uuid: self.state.authority_uuid,
             root_hash,
@@ -537,14 +737,17 @@ impl Engine {
             authority_state_root: self.state.authority_state_root,
             active_log_generation: self.state.active_log_generation,
         };
-        // A transaction is acknowledged only after both the log and the new
-        // CONTROL generation have reached durable storage.
-        self.publish_control(&next)?;
         self.state = next;
-        self.committed.push(CommittedTransaction {
+        self.control_dirty = true;
+        self.record_committed(CommittedTransaction {
             sequence,
             record_hash: root_hash,
-            envelope: TransactionEnvelope::decode(&envelope)?,
+            envelope: TransactionEnvelope {
+                block_ids: block_ids.clone(),
+                inline_payload: inline_payload.to_vec(),
+                authority_state_update: None,
+            },
+            encoded_envelope: envelope,
         });
         checkpoint(CommitStage::ControlDurable(sequence))?;
         Ok(CommitResult {
@@ -601,12 +804,13 @@ impl Engine {
             .iter()
             .map(|transaction| transaction.encoded_envelope.as_slice())
             .collect::<Vec<_>>();
+        self.stage_full_history_segment()?;
         if !self.committed.is_empty()
             && self
                 .wal
                 .batch_would_exceed(&encoded_envelopes, self.rotation_threshold_bytes)?
         {
-            self.checkpoint()?;
+            self.drain_staged_then_checkpoint()?;
         } else {
             // This also applies the encoded 8 MiB group admission bound before
             // immutable blocks are created when no checkpoint is needed.
@@ -616,7 +820,11 @@ impl Engine {
 
         for transaction in transactions {
             for payload in &transaction.block_payloads {
-                self.blocks.put(payload)?;
+                if transaction.deferred {
+                    self.blocks.put_deferred(payload)?;
+                } else {
+                    self.blocks.put(payload)?;
+                }
             }
         }
 
@@ -626,7 +834,8 @@ impl Engine {
         let authority_state_root = transactions.iter().try_fold(
             self.state.authority_state_root,
             |current, transaction| {
-                let envelope = TransactionEnvelope::decode(&transaction.encoded_envelope)?;
+                let envelope =
+                    TransactionEnvelope::decode_skipping_carried(&transaction.encoded_envelope)?;
                 Ok::<_, io::Error>(envelope.authority_state_update.map(Some).unwrap_or(current))
             },
         )?;
@@ -650,9 +859,7 @@ impl Engine {
             .last()
             .ok_or_else(|| io::Error::other("WAL returned an empty group"))?;
         let next = ControlState {
-            generation: self.state.generation.checked_add(1).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "CONTROL generation overflow")
-            })?,
+            generation: self.state.generation,
             durable_sequence: final_sequence,
             authority_uuid: self.state.authority_uuid,
             root_hash: final_hash,
@@ -663,16 +870,16 @@ impl Engine {
             authority_state_root,
             active_log_generation: self.state.active_log_generation,
         };
-        self.publish_control(&next)?;
-
         let mut results = Vec::with_capacity(transactions.len());
         for (index, (transaction, record_hash)) in transactions.iter().zip(hashes).enumerate() {
             let sequence = first_sequence + index as u64;
-            let envelope = TransactionEnvelope::decode(&transaction.encoded_envelope)?;
-            self.committed.push(CommittedTransaction {
+            let envelope =
+                TransactionEnvelope::decode_skipping_carried(&transaction.encoded_envelope)?;
+            self.record_committed(CommittedTransaction {
                 sequence,
                 record_hash,
                 envelope,
+                encoded_envelope: transaction.encoded_envelope.clone(),
             });
             results.push(CommitResult {
                 sequence,
@@ -680,6 +887,7 @@ impl Engine {
             });
         }
         self.state = next;
+        self.control_dirty = true;
         Ok(results)
     }
 
@@ -695,9 +903,269 @@ impl Engine {
         self.blocks.get(block_id)
     }
 
+    /// Shared-handle read for hot decoded-page loads; see
+    /// `BlockStore::get_shared`. Verification semantics match `read_block`.
+    pub(crate) fn read_block_shared(&self, block_id: BlockId) -> io::Result<Arc<Vec<u8>>> {
+        self.require_usable_authority()?;
+        self.blocks.get_shared(block_id)
+    }
+
     pub fn write_block(&self, payload: &[u8]) -> io::Result<BlockId> {
         self.require_usable_authority()?;
-        self.blocks.put(payload)
+        let (block_id, _) = self.blocks.put_deferred(payload)?;
+        Ok(block_id)
+    }
+
+    /// Materializes and fsyncs every pending staged block in one batch.
+    /// Called by oversized commits that spill back to identifier-only
+    /// references; the checkpoint path uses `materialize_deferred_blocks`.
+    fn flush_deferred_blocks(&self) -> io::Result<()> {
+        crate::fsync_stats::note_flush_deferred();
+        self.blocks.flush_pending()
+    }
+
+    /// Materializes pending staged blocks before WAL retirement. Sorted blocks
+    /// across hash shards share bounded segments, rather than one file per shard.
+    /// The extended catalog is durable before staged copies are retired. A full
+    /// catalog merges its oldest segment if the union fits; otherwise blocks
+    /// spill to the loose batch along with fsync-only recovery marks.
+    fn materialize_deferred_blocks(&mut self) -> io::Result<()> {
+        crate::fsync_stats::note_flush_deferred();
+        // The checkpoint retires the active WAL right after this call, so
+        // every staged payload must reach durable storage here: each step
+        // drains everything still owned by the foreground. Payloads owned by
+        // an in-flight background pack count as pending until their manifest
+        // reference is published; the drain adopts the finished segment,
+        // waits (bounded) while its create runs, and falls back to packing
+        // the same payloads synchronously once the wait budget runs out.
+        let mut wait_rounds = 0_u32;
+        loop {
+            self.adopt_background_pack()?;
+            let remaining = self.materialize_deferred_blocks_step(u64::MAX)?;
+            if remaining == 0 && !self.blocks.background_pack_creating()? {
+                return Ok(());
+            }
+            if remaining == 0 {
+                wait_rounds += 1;
+                if wait_rounds > self.background_pack_wait_rounds {
+                    self.blocks.fail_active_background_pack()?;
+                    continue;
+                }
+                self.blocks
+                    .wait_for_background_pack(BACKGROUND_PACK_WAIT_ROUND)?;
+            }
+        }
+    }
+
+    /// Publishes a background-packed payload segment, if one finished. Runs
+    /// on the commit path so the worker's segment-create cost never lands on
+    /// a rotation commit; publication itself is one manifest block plus a
+    /// CONTROL republish. Returns false when no pack had completed.
+    fn adopt_background_pack(&mut self) -> io::Result<bool> {
+        let Some((reference, packed)) = self.blocks.take_completed_background_pack()? else {
+            return Ok(false);
+        };
+        let existing = self
+            .payload_manifest
+            .as_ref()
+            .map_or(&[][..], |manifest| manifest.segments.as_slice());
+        let mut plan = CheckpointPackPlan {
+            references: existing.to_vec(),
+            packed: BTreeSet::new(),
+            fallback: BTreeSet::new(),
+            merged_away: Vec::new(),
+            changed: false,
+        };
+        if plan.references.len() < MAX_PAYLOAD_SEGMENTS {
+            plan.references.push(reference);
+            plan.packed = packed;
+            plan.changed = true;
+        } else {
+            // Catalog full: the pre-built segment cannot join. Re-route the
+            // same staged payloads through the synchronous merge/loose path;
+            // orphan GC reclaims the unused background segment file.
+            let chunk_ids: Vec<BlockId> = packed.iter().copied().collect();
+            self.materialize_checkpoint_chunk(&chunk_ids, reference.payload_bytes, &mut plan)?;
+        }
+        if plan.changed {
+            let manifest = PayloadManifest::new(plan.references)?;
+            self.publish_payload_manifest(manifest, &[])?;
+            for segment_id in plan.merged_away {
+                self.blocks
+                    .payload_segment_store()?
+                    .remove_segment(segment_id)?;
+            }
+            self.blocks.retire_staged_payloads(&plan.packed)?;
+        }
+        self.blocks.flush_pending_subset(&plan.fallback)?;
+        Ok(true)
+    }
+
+    /// Incremental checkpoint step: packs staged payloads into payload
+    /// segments until roughly `byte_budget` payload bytes have been routed,
+    /// publishes the extended catalog atomically through the CONTROL slots,
+    /// and retires the packed staged copies. Returns the staged payload
+    /// bytes still awaiting materialization. The active WAL is untouched,
+    /// so a crash anywhere in the step is recovered from the carried WAL
+    /// copies of the not-yet-packed payloads, while packed batches are
+    /// durable through their published manifest. Callers chasing a bounded
+    /// foreground latency can drain a large staged backlog with repeated
+    /// steps before checkpointing.
+    pub fn materialize_staged_blocks_step(&mut self, byte_budget: u64) -> io::Result<u64> {
+        self.require_usable_authority()?;
+        crate::fsync_stats::note_flush_deferred();
+        self.materialize_deferred_blocks_step(byte_budget)
+    }
+
+    fn materialize_deferred_blocks_step(&mut self, byte_budget: u64) -> io::Result<u64> {
+        let (payloads, _) = self.blocks.pending_checkpoint_snapshot()?;
+        let total_bytes = payloads
+            .iter()
+            .map(|(_, payload)| payload.len() as u64)
+            .sum::<u64>();
+        if payloads.is_empty() {
+            // Nothing staged: only fsync-only recovery marks can remain, and
+            // those always take the loose path because their files exist.
+            self.blocks.flush_pending_subset(&BTreeSet::new())?;
+            return Ok(0);
+        }
+        if self.blocks.payload_segment_store().is_err() {
+            // Legacy data directory without the payload-segments tree: the
+            // loose batch is the only materialization available.
+            self.blocks
+                .flush_pending_subset(&payloads.iter().map(|(id, _)| *id).collect())?;
+            return Ok(0);
+        }
+        let mut sorted: Vec<(BlockId, u64)> = payloads
+            .iter()
+            .map(|(id, payload)| (*id, payload.len() as u64))
+            .collect();
+        sorted.sort_unstable();
+        let existing = self
+            .payload_manifest
+            .as_ref()
+            .map_or(&[][..], |manifest| manifest.segments.as_slice());
+        let mut plan = CheckpointPackPlan {
+            references: existing.to_vec(),
+            packed: BTreeSet::new(),
+            fallback: BTreeSet::new(),
+            merged_away: Vec::new(),
+            changed: false,
+        };
+        let mut chunk_ids: Vec<BlockId> = Vec::new();
+        let mut chunk_bytes = 0_u64;
+        let mut processed_bytes = 0_u64;
+        for (id, len) in sorted {
+            if !chunk_ids.is_empty()
+                && (chunk_ids.len() >= MAX_SEGMENT_BLOCKS
+                    || chunk_bytes + len > MAX_SEGMENT_PAYLOAD_BYTES
+                    || processed_bytes + chunk_bytes >= byte_budget)
+            {
+                self.materialize_checkpoint_chunk(&chunk_ids, chunk_bytes, &mut plan)?;
+                processed_bytes += chunk_bytes;
+                chunk_ids.clear();
+                chunk_bytes = 0;
+                if processed_bytes >= byte_budget {
+                    // Budget spent: leave the remaining sorted payloads
+                    // staged; their WAL records still carry the bytes, and
+                    // the next step resumes where this one stopped.
+                    break;
+                }
+            }
+            chunk_ids.push(id);
+            chunk_bytes += len;
+        }
+        if !chunk_ids.is_empty() {
+            self.materialize_checkpoint_chunk(&chunk_ids, chunk_bytes, &mut plan)?;
+            processed_bytes += chunk_bytes;
+        }
+        if plan.changed {
+            let manifest = PayloadManifest::new(plan.references)?;
+            let _timer =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_STEP_MANIFEST);
+            self.publish_payload_manifest(manifest, &[])?;
+            drop(_timer);
+            for segment_id in plan.merged_away {
+                self.blocks
+                    .payload_segment_store()?
+                    .remove_segment(segment_id)?;
+            }
+            self.blocks.retire_staged_payloads(&plan.packed)?;
+        }
+        self.blocks.flush_pending_subset(&plan.fallback)?;
+        Ok(total_bytes.saturating_sub(processed_bytes))
+    }
+
+    /// Routes one chunk of staged payloads: a fresh payload segment while
+    /// the catalog has headroom, a merge with the oldest segment once the
+    /// catalog is full, or the loose batch when the union would exceed one
+    /// segment's bounds. Pending chunk payloads are disjoint from every
+    /// published segment because staging only happens when the durable read
+    /// path misses.
+    fn materialize_checkpoint_chunk(
+        &mut self,
+        chunk_ids: &[BlockId],
+        chunk_payload_bytes: u64,
+        plan: &mut CheckpointPackPlan,
+    ) -> io::Result<()> {
+        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_STEP_CHUNK);
+        let can_grow = plan.references.len() < MAX_PAYLOAD_SEGMENTS;
+        if can_grow {
+            let segment_id = Uuid::new_v4();
+            let segment = self.blocks.payload_segment_store()?.create(
+                segment_id,
+                chunk_ids.to_vec(),
+                |block_id| self.blocks.get(block_id),
+            )?;
+            let reference = PayloadSegmentReference::new(
+                segment.metadata(),
+                segment.first_block_id(),
+                segment.last_block_id(),
+            )?;
+            self.blocks.verify_payload_segment(&reference)?;
+            self.blocks.note_packed(chunk_ids)?;
+            plan.references.push(reference);
+            plan.packed.extend(chunk_ids.iter().copied());
+            plan.changed = true;
+            return Ok(());
+        }
+        if plan.references.is_empty() {
+            plan.fallback.extend(chunk_ids.iter().copied());
+            return Ok(());
+        }
+        let oldest = plan.references[0];
+        if oldest.block_count as usize + chunk_ids.len() > MAX_SEGMENT_BLOCKS
+            || oldest.payload_bytes + chunk_payload_bytes > MAX_SEGMENT_PAYLOAD_BYTES
+        {
+            plan.fallback.extend(chunk_ids.iter().copied());
+            return Ok(());
+        }
+        let oldest_segment = self
+            .blocks
+            .payload_segment_store()?
+            .open_segment(oldest.segment_id)?;
+        let mut merged_ids: Vec<BlockId> = oldest_segment.block_ids().collect();
+        merged_ids.extend_from_slice(chunk_ids);
+        merged_ids.sort_unstable();
+        let segment_id = Uuid::new_v4();
+        let segment =
+            self.blocks
+                .payload_segment_store()?
+                .create(segment_id, merged_ids, |block_id| self.blocks.get(block_id))?;
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )?;
+        self.blocks.verify_payload_segment(&reference)?;
+        // The merged-away segment's IDs were registered when first
+        // packed (or by the open-time filter rebuild); only the chunk is new.
+        self.blocks.note_packed(chunk_ids)?;
+        plan.references[0] = reference;
+        plan.merged_away.push(oldest.segment_id);
+        plan.packed.extend(chunk_ids.iter().copied());
+        plan.changed = true;
+        Ok(())
     }
 
     pub fn block_write_metrics(&self) -> BlockWriteMetrics {
@@ -706,6 +1174,18 @@ impl Engine {
 
     pub(crate) fn block_store(&self) -> &BlockStore {
         &self.blocks
+    }
+
+    /// Shared handle for the daemon's off-authority background pack worker.
+    /// The worker only builds segment files; every state transition still
+    /// happens on this authority.
+    pub fn block_store_shared(&self) -> Arc<BlockStore> {
+        Arc::clone(&self.blocks)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_background_pack_wait_rounds_for_test(&mut self, rounds: u32) {
+        self.background_pack_wait_rounds = rounds;
     }
 
     pub(crate) fn vfs(&self) -> Arc<dyn Vfs> {
@@ -791,11 +1271,14 @@ impl Engine {
     }
 
     pub(crate) fn plan_payload_segment_orphan(&self) -> io::Result<PayloadSegmentOrphanPlan> {
-        let referenced_ids = self
+        let mut referenced_ids = self
             .payload_segment_references()
             .iter()
             .map(|reference| reference.segment_id)
             .collect::<BTreeSet<_>>();
+        // A background-packed segment is durable but not yet referenced;
+        // its publication is pending on this authority.
+        referenced_ids.extend(self.blocks.unpublished_background_segment_ids()?);
         self.blocks
             .payload_segment_store()?
             .plan_orphan_file(&referenced_ids)
@@ -809,6 +1292,10 @@ impl Engine {
             self.payload_segment_references()
                 .iter()
                 .any(|reference| reference.segment_id == segment_id)
+        }) || candidate.segment_id.is_some_and(|segment_id| {
+            self.blocks
+                .unpublished_background_segment_ids()
+                .is_ok_and(|ids| ids.contains(&segment_id))
         }) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -855,24 +1342,11 @@ impl Engine {
                 "payload compaction victims contain duplicate block IDs",
             ));
         }
-        let shard = sorted_ids[0].0[0];
-        if sorted_ids.iter().any(|block_id| block_id.0[0] != shard) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "payload compaction victims must share one hash shard",
-            ));
-        }
         let existing_segments = self
             .payload_manifest
             .as_ref()
             .map_or(&[][..], |manifest| manifest.segments.as_slice());
-        if existing_segments.len() >= MAX_PAYLOAD_SEGMENTS
-            || existing_segments
-                .iter()
-                .filter(|reference| reference.shard == shard)
-                .count()
-                >= MAX_PAYLOAD_SEGMENTS_PER_SHARD
-        {
+        if existing_segments.len() >= MAX_PAYLOAD_SEGMENTS {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "payload compaction catalog capacity is exhausted",
@@ -906,6 +1380,7 @@ impl Engine {
             segment.last_block_id(),
         )?;
         self.blocks.verify_payload_segment(&reference)?;
+        self.blocks.note_packed(&sorted_ids)?;
         let mut references = existing_segments.to_vec();
         references.push(reference);
         let manifest = PayloadManifest::new(references)?;
@@ -1039,6 +1514,7 @@ impl Engine {
                 "payload manifest root overlaps its loose victim set",
             ));
         }
+        self.flush_dirty_control()?;
         self.blocks.put_loose(&encoded)?;
         let next =
             ControlState {
@@ -1050,6 +1526,7 @@ impl Engine {
             };
         self.publish_control(&next)?;
         self.state = next;
+        self.control_dirty = false;
         if let Err(error) = self.blocks.install_payload_manifest(manifest.clone()) {
             self.restart_required = true;
             return Err(error);
@@ -1081,6 +1558,9 @@ impl Engine {
                 }
             }
         }
+        for reference in &self.staged_history {
+            visitor(reference.block_id)?;
+        }
         for transaction in &self.committed {
             for block_id in &transaction.envelope.block_ids {
                 visitor(*block_id)?;
@@ -1100,6 +1580,7 @@ impl Engine {
             };
         self.publish_control(&next)?;
         self.state = next;
+        self.control_dirty = false;
         Ok(())
     }
 
@@ -1179,18 +1660,37 @@ impl Engine {
                 "checkpoint requires active committed transactions",
             ));
         }
-        let unstored = build_segments(&self.committed, self.state.checkpoint_hash)?;
-        let mut new_references = Vec::with_capacity(unstored.len());
-        for segment in unstored {
-            let block_id = self.blocks.put(&segment.encoded)?;
-            new_references.push(HistorySegmentReference {
-                block_id,
-                first_sequence: segment.first_sequence,
-                last_sequence: segment.last_sequence,
-                parent_hash: segment.parent_hash,
-                terminal_hash: segment.terminal_hash,
+        // Retiring the active WAL below makes history segments the only
+        // record of these transactions. Segments preserve the exact logged
+        // bytes (carried payloads included), but materializing staged blocks
+        // first keeps the block store authoritative on its own and bounds
+        // how long recovery would need the carried copies.
+        self.materialize_deferred_blocks()?;
+        self.flush_dirty_control()?;
+        crate::fsync_stats::note_checkpoint();
+        let _segments_timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_SEGMENTS);
+        let mut new_references = self.staged_history.clone();
+        let parent_hash = new_references
+            .last()
+            .map_or(self.state.checkpoint_hash, |reference| {
+                reference.terminal_hash
             });
+        let remaining = &self.committed[self.staged_history_transactions..];
+        if !remaining.is_empty() {
+            visit_segments(remaining, parent_hash, |segment| {
+                let block_id = self.blocks.put(&segment.encoded)?;
+                new_references.push(HistorySegmentReference {
+                    block_id,
+                    first_sequence: segment.first_sequence,
+                    last_sequence: segment.last_sequence,
+                    parent_hash: segment.parent_hash,
+                    terminal_hash: segment.terminal_hash,
+                });
+                Ok(())
+            })?;
         }
+        drop(_segments_timer);
         let mut segments = self
             .history_manifest
             .as_ref()
@@ -1201,12 +1701,16 @@ impl Engine {
             checkpoint_hash: self.state.root_hash,
             segments,
         };
-        let manifest_block_id = self.blocks.put(&manifest.encode()?)?;
+        let manifest_block_id = {
+            let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_MANIFEST);
+            self.blocks.put(&manifest.encode()?)?
+        };
         let next_active_generation = self
             .state
             .active_log_generation
             .checked_add(1)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WAL generation overflow"))?;
+        let _wal_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_WAL);
         let next_wal = match ActiveLog::initialize_generation_with_vfs(
             &self.data_dir,
             next_active_generation,
@@ -1245,13 +1749,24 @@ impl Engine {
                 authority_state_root: self.state.authority_state_root,
                 active_log_generation: next_active_generation,
             };
-        self.publish_control(&next)?;
+        drop(_wal_timer);
+        {
+            let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_CONTROL);
+            self.publish_control(&next)?;
+        }
+        self.control_dirty = false;
         self.wal = next_wal;
         self.state = next;
         self.history_manifest = Some(manifest);
         self.committed.clear();
-        if self.vfs.remove_file(&previous_wal_path).is_ok() {
-            let _ = self.vfs.sync_directory(&self.data_dir);
+        self.staged_history.clear();
+        self.staged_history_transactions = 0;
+        self.unstaged_history_bytes = 0;
+        {
+            let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_REMOVE);
+            if self.vfs.remove_file(&previous_wal_path).is_ok() {
+                let _ = self.vfs.sync_directory(&self.data_dir);
+            }
         }
         Ok(self.state.checkpoint_sequence)
     }
@@ -1317,6 +1832,7 @@ impl Engine {
             };
         self.publish_control(&next)?;
         self.state = next;
+        self.control_dirty = false;
         self.history_manifest = Some(manifest);
         Ok(HistoryCompactionMetrics {
             retained_first_sequence: self.retained_history_first_sequence().unwrap(),
@@ -1326,11 +1842,95 @@ impl Engine {
     }
 
     fn checkpoint_if_needed(&mut self, encoded_transaction: &[u8]) -> io::Result<()> {
+        self.stage_full_history_segment()?;
         if !self.committed.is_empty()
             && self
                 .wal
                 .would_exceed(encoded_transaction, self.rotation_threshold_bytes)?
         {
+            self.drain_staged_then_checkpoint()?;
+        }
+        Ok(())
+    }
+
+    fn record_committed(&mut self, transaction: CommittedTransaction) {
+        // Active WAL admission bounds the aggregate well below usize::MAX.
+        self.unstaged_history_bytes += transaction_history_bytes(&transaction);
+        self.committed.push(transaction);
+    }
+
+    /// Prepare at most one complete 4 MiB history segment per commit. This
+    /// moves encoding/hash/file-write work off the eventual rotation without
+    /// shortening the WAL or publishing any new recovery authority. No payload
+    /// copy is retained: the cache holds only bounded segment references.
+    fn stage_full_history_segment(&mut self) -> io::Result<()> {
+        if self.unstaged_history_bytes < HISTORY_SEGMENT_MAX_BYTES {
+            return Ok(());
+        }
+        // A full greedy segment contains at least half the maximum, unless
+        // the following transaction itself exceeds the format's hard bound.
+        // Thus the 64 MiB active WAL fits fewer than 64 staged references.
+        if self.staged_history.len() >= 64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "staged history limit exceeded",
+            ));
+        }
+        let remaining = &self.committed[self.staged_history_transactions..];
+        let count = segment_prefix_len(remaining);
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "one history transaction exceeds segment bound",
+            ));
+        }
+        let parent_hash = self
+            .staged_history
+            .last()
+            .map_or(self.state.checkpoint_hash, |reference| {
+                reference.terminal_hash
+            });
+        let mut reference = None;
+        visit_segments(&remaining[..count], parent_hash, |segment| {
+            let block_id = self.blocks.put(&segment.encoded)?;
+            reference = Some(HistorySegmentReference {
+                block_id,
+                first_sequence: segment.first_sequence,
+                last_sequence: segment.last_sequence,
+                parent_hash: segment.parent_hash,
+                terminal_hash: segment.terminal_hash,
+            });
+            Ok(())
+        })?;
+        self.unstaged_history_bytes -= remaining[..count]
+            .iter()
+            .map(transaction_history_bytes)
+            .sum::<usize>();
+        self.staged_history_transactions += count;
+        self.staged_history
+            .push(reference.expect("nonempty history prefix emits one segment"));
+        Ok(())
+    }
+
+    /// Bounds the foreground cost of a WAL rotation. A full checkpoint first
+    /// materializes every staged block; a large backlog made the triggering
+    /// commit stall for hundreds of milliseconds. Running one bounded
+    /// incremental step per commit spreads that work across the commits that
+    /// cross the soft threshold, and the checkpoint itself (which retires
+    /// the active WAL) runs only once the backlog is empty and its
+    /// materialize step is a no-op. The active WAL grows past the soft
+    /// rotation threshold while draining; every transaction in it stays
+    /// recoverable from its carried payload copies until the checkpoint
+    /// retires it, so durability semantics are unchanged.
+    fn drain_staged_then_checkpoint(&mut self) -> io::Result<()> {
+        self.adopt_background_pack()?;
+        let drained = {
+            let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_DRAIN_STEP);
+            self.materialize_deferred_blocks_step(MAX_CHECKPOINT_MATERIALIZE_BATCH_BYTES)?
+        };
+        if drained == 0 {
+            let _timer =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_MATERIALIZE);
             self.checkpoint()?;
         }
         Ok(())
@@ -1364,23 +1964,99 @@ impl Engine {
         authority_state_update: Option<Option<BlockId>>,
     ) -> io::Result<CommitResult> {
         self.require_usable_authority()?;
+        // Referenced blocks may still be pending (staged without fsync by
+        // write_block/put_deferred). Carrying their payloads in the WAL
+        // record keeps the record authoritative across a crash that loses
+        // the unsynced loose files; blocks that are already durable stay
+        // identifier-only. Hold shared handles until encoding completes rather
+        // than deep-copying every COW page and authority root into temporary
+        // buffers. These handles are transaction-local, not cache entries;
+        // the existing carried-byte admission and spill bounds still apply.
+        let _carried_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CARRIED);
+        let mut carried: Vec<Option<Arc<Vec<u8>>>> = Vec::with_capacity(block_ids.len());
+        let mut carried_bytes = 0_usize;
         for block_id in block_ids {
-            self.blocks.get(*block_id)?;
+            match self.blocks.pending_payload(*block_id)? {
+                Some(payload) => {
+                    carried_bytes = carried_bytes.checked_add(payload.len()).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "transaction size overflow")
+                    })?;
+                    carried.push(Some(payload));
+                }
+                None => {
+                    // Already-durable references stay identifier-only; the
+                    // read preserves commit-time detection of a missing
+                    // block.
+                    self.blocks.get(*block_id)?;
+                    carried.push(None);
+                }
+            }
         }
-        if let Some(Some(root)) = authority_state_update {
-            self.blocks.get(root)?;
+        let mut authority_state_carried = None;
+        // Entity commits already include their final root in block_ids. Replay
+        // restores those slots before resolving the authority root, so carrying
+        // that same immutable page again buys no durability. Keep the root
+        // identifier/witness, but charge and encode its bytes only once. A root
+        // outside block_ids still needs its independent carried slot.
+        if let Some(Some(root)) = authority_state_update
+            .filter(|root| root.is_some_and(|root| !block_ids.contains(&root)))
+        {
+            match self.blocks.pending_payload(root)? {
+                Some(payload) => {
+                    carried_bytes = carried_bytes.checked_add(payload.len()).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "transaction size overflow")
+                    })?;
+                    authority_state_carried = Some(payload);
+                }
+                None => {
+                    self.blocks.get(root)?;
+                }
+            }
         }
-        self.commit_envelope(TransactionEnvelope {
+        drop(_carried_timer);
+        let envelope = TransactionEnvelope {
             block_ids: block_ids.to_vec(),
             inline_payload: inline_payload.to_vec(),
             authority_state_update,
-        })
+        };
+        if carried_bytes > MAX_CARRIED_PAYLOAD_BYTES {
+            // Oversized references spill: fsync the pending loose blocks now
+            // and log identifier-only references instead of growing an
+            // unbounded WAL record.
+            self.flush_deferred_blocks()?;
+            self.commit_envelope(envelope, Vec::new(), None)
+        } else {
+            self.commit_envelope(envelope, carried, authority_state_carried)
+        }
     }
 
-    fn commit_envelope(&mut self, envelope: TransactionEnvelope) -> io::Result<CommitResult> {
-        let encoded = envelope.encode()?;
+    fn commit_envelope(
+        &mut self,
+        envelope: TransactionEnvelope,
+        carried: Vec<Option<Arc<Vec<u8>>>>,
+        authority_state_carried: Option<Arc<Vec<u8>>>,
+    ) -> io::Result<CommitResult> {
+        let encode_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_ENCODE);
+        let encoded = if carried.iter().any(Option::is_some) || authority_state_carried.is_some() {
+            let borrowed = carried
+                .iter()
+                .map(|slot| slot.as_deref().map(Vec::as_slice))
+                .collect::<Vec<_>>();
+            envelope.encode_with_carried(
+                &borrowed,
+                authority_state_carried.as_deref().map(Vec::as_slice),
+            )?
+        } else {
+            envelope.encode()?
+        };
+        drop(encode_timer);
+        let _checkpoint_timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CHECKPOINT_IF);
+        self.adopt_background_pack()?;
         self.checkpoint_if_needed(&encoded)?;
+        drop(_checkpoint_timer);
         let sequence = self.next_sequence()?;
+        let _wal_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL);
         let root_hash = match self.wal.append(sequence, self.state.root_hash, &encoded) {
             Ok(root_hash) => root_hash,
             Err(error) => {
@@ -1393,9 +2069,7 @@ impl Engine {
             }
         };
         let next = ControlState {
-            generation: self.state.generation.checked_add(1).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "CONTROL generation overflow")
-            })?,
+            generation: self.state.generation,
             durable_sequence: sequence,
             authority_uuid: self.state.authority_uuid,
             root_hash,
@@ -1409,12 +2083,15 @@ impl Engine {
                 .unwrap_or(self.state.authority_state_root),
             active_log_generation: self.state.active_log_generation,
         };
-        self.publish_control(&next)?;
+        let _tail_timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_COMMIT_TAIL);
         self.state = next;
-        self.committed.push(CommittedTransaction {
+        self.control_dirty = true;
+        self.record_committed(CommittedTransaction {
             sequence,
             record_hash: root_hash,
             envelope: envelope.clone(),
+            encoded_envelope: encoded,
         });
         Ok(CommitResult {
             sequence,
@@ -1488,6 +2165,127 @@ mod tests {
         let engine = Engine::open(directory.path()).unwrap();
         assert_eq!(engine.state().durable_sequence, 1);
         assert_eq!(engine.state().authority_uuid, authority);
+    }
+
+    fn history_staging_seed(vfs: Arc<DeterministicVfs>) -> Engine {
+        let mut engine = Engine::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        for index in 0..2_u8 {
+            let payload = vec![index; 2 * 1024 * 1024];
+            engine
+                .commit_transaction(&[index], &[&payload])
+                .unwrap();
+        }
+        vfs.arm_fault(None).unwrap();
+        engine
+    }
+
+    #[test]
+    fn history_staging_is_bounded_and_keeps_wal_authority_until_checkpoint() {
+        let vfs = prepared_simulated_vfs();
+        let mut engine = history_staging_seed(vfs.clone());
+        let before = engine.block_write_metrics();
+        let control = engine.state().clone();
+        let expected = engine.transaction_snapshot().unwrap();
+        engine.stage_full_history_segment().unwrap();
+        let after = engine.block_write_metrics();
+        assert_eq!(after.blocks_written - before.blocks_written, 1);
+        assert!(
+            after.bytes_written - before.bytes_written <= HISTORY_SEGMENT_MAX_BYTES as u64 + 128
+        );
+        assert_eq!(engine.state(), &control);
+        assert_eq!(engine.transaction_snapshot().unwrap(), expected);
+        let staged = engine.staged_history[0].block_id;
+        let mut retained = BTreeSet::new();
+        engine
+            .visit_retained_transaction_blocks(|block| {
+                retained.insert(block);
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            retained.contains(&staged),
+            "GC must retain unpublished segments"
+        );
+        engine.checkpoint().unwrap();
+        assert!(engine.history_segment_block_ids().contains(&staged));
+        assert!(engine.staged_history.is_empty());
+        assert_eq!(engine.unstaged_history_bytes, 0);
+        drop(engine);
+        vfs.crash().unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.transaction_snapshot().unwrap(), expected);
+    }
+
+    #[test]
+    fn history_staging_restarts_from_wal_after_an_unpublished_crash() {
+        let vfs = prepared_simulated_vfs();
+        let mut engine = history_staging_seed(vfs.clone());
+        let expected = engine.transaction_snapshot().unwrap();
+        engine.stage_full_history_segment().unwrap();
+        drop(engine);
+        vfs.crash().unwrap();
+        let mut reopened = Engine::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        assert_eq!(reopened.transaction_snapshot().unwrap(), expected);
+        assert!(reopened.staged_history.is_empty());
+        reopened.stage_full_history_segment().unwrap();
+        reopened.checkpoint().unwrap();
+        drop(reopened);
+        vfs.crash().unwrap();
+        assert_eq!(
+            Engine::open_with_vfs(Path::new("/data"), vfs)
+                .unwrap()
+                .transaction_snapshot()
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn history_staging_and_publication_faults_preserve_acknowledged_transactions() {
+        let baseline_vfs = prepared_simulated_vfs();
+        let mut baseline = history_staging_seed(baseline_vfs.clone());
+        baseline.stage_full_history_segment().unwrap();
+        baseline.checkpoint().unwrap();
+        let trace = baseline_vfs.trace().unwrap();
+        drop(baseline);
+        for (index, operation) in trace.iter().enumerate() {
+            let mut actions = vec![FaultAction::ErrorBefore(io::ErrorKind::Other)];
+            if matches!(operation, Operation::Write) {
+                actions.push(FaultAction::ShortWrite(3));
+            }
+            if is_sync(operation) {
+                actions.push(FaultAction::DropSync);
+            }
+            for action in actions {
+                let vfs = prepared_simulated_vfs();
+                let mut engine = history_staging_seed(vfs.clone());
+                vfs.arm_fault(Some(FaultRule {
+                    operation_number: index as u64 + 1,
+                    action,
+                }))
+                .unwrap();
+                let _ = engine
+                    .stage_full_history_segment()
+                    .and_then(|()| engine.checkpoint().map(|_| ()));
+                drop(engine);
+                vfs.crash().unwrap();
+                let mut reopened = Engine::open_with_vfs(Path::new("/data"), vfs)
+                    .unwrap_or_else(|error| panic!("fault {index} {operation:?}: {error}"));
+                let snapshot = reopened.transaction_snapshot().unwrap();
+                assert_eq!(snapshot.len(), 2, "fault {index} {operation:?}");
+                for (index, transaction) in snapshot.iter().enumerate() {
+                    assert_eq!(transaction.envelope.inline_payload, vec![index as u8]);
+                    assert_eq!(
+                        reopened
+                            .read_block(transaction.envelope.block_ids[0])
+                            .unwrap(),
+                        vec![index as u8; 2 * 1024 * 1024]
+                    );
+                }
+                reopened.commit(b"after-recovery").unwrap();
+                reopened.checkpoint().unwrap();
+            }
+        }
     }
 
     #[test]
@@ -1647,7 +2445,12 @@ mod tests {
     #[test]
     fn failed_control_publication_requires_reopen_before_more_authority_work() {
         let (baseline_vfs, mut baseline) = initialized_simulated_engine();
+        // Mirror the real run's pre-fault state exactly (a pending loose
+        // block changes the checkpoint's operation sequence).
+        baseline.write_block(b"existing").unwrap();
         baseline.commit(b"first").unwrap();
+        baseline_vfs.arm_fault(None).unwrap();
+        baseline.checkpoint().unwrap();
         let control_sync_operation = baseline_vfs
             .trace()
             .unwrap()
@@ -1658,13 +2461,14 @@ mod tests {
 
         let (vfs, mut engine) = initialized_simulated_engine();
         let existing_block = engine.write_block(b"existing").unwrap();
+        engine.commit(b"first").unwrap();
         vfs.arm_fault(Some(FaultRule {
             operation_number: control_sync_operation,
             action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
         }))
         .unwrap();
         assert_eq!(
-            engine.commit(b"first").unwrap_err().kind(),
+            engine.checkpoint().unwrap_err().kind(),
             io::ErrorKind::Interrupted
         );
         assert!(engine.is_restart_required());
@@ -1769,6 +2573,188 @@ mod tests {
         }
     }
 
+    /// Correlated loss: a single power failure can lose more than one sync
+    /// call. Every pair of sync operations in one commit is dropped in the
+    /// same crash window — including pairs that defeat both calls of one
+    /// double barrier. The certified outcome is never a torn state: reopen
+    /// either recovers a complete prefix (the full commit or the empty
+    /// pre-commit state) and keeps accepting new work, or fails closed.
+    #[test]
+    fn every_correlated_pair_of_lost_commit_syncs_recovers_a_complete_prefix() {
+        let (baseline_vfs, mut baseline) = initialized_simulated_engine();
+        baseline
+            .commit_transaction(b"turn.append", &[b"large result"])
+            .unwrap();
+        baseline.checkpoint().unwrap();
+        let trace = baseline_vfs.trace().unwrap();
+        let syncs: Vec<u64> = trace
+            .iter()
+            .enumerate()
+            .filter(|(_, operation)| is_sync(operation))
+            .map(|(index, _)| index as u64 + 1)
+            .collect();
+        assert!(syncs.len() >= 4, "trace: {trace:?}");
+
+        let mut recovered_full = 0_usize;
+        let mut recovered_empty = 0_usize;
+        let mut failed_closed = 0_usize;
+        for first in 0..syncs.len() {
+            for second in first + 1..syncs.len() {
+                let (vfs, mut engine) = initialized_simulated_engine();
+                vfs.arm_faults(&[
+                    FaultRule {
+                        operation_number: syncs[first],
+                        action: FaultAction::DropSync,
+                    },
+                    FaultRule {
+                        operation_number: syncs[second],
+                        action: FaultAction::DropSync,
+                    },
+                ])
+                .unwrap();
+                // DropSync reports success, so the commit itself acknowledges;
+                // durability is only decided by what survives the crash.
+                let _ = engine.commit_transaction(b"turn.append", &[b"large result"]);
+                let _ = engine.checkpoint();
+                drop(engine);
+                vfs.crash().unwrap();
+                vfs.arm_fault(None).unwrap();
+                let mut recovered = match Engine::open_with_vfs(Path::new("/data"), vfs) {
+                    Ok(engine) => engine,
+                    Err(_) => {
+                        failed_closed += 1;
+                        continue;
+                    }
+                };
+                let sequence = recovered.state().durable_sequence;
+                let checkpoint_sequence = recovered.state().checkpoint_sequence;
+                assert!(
+                    sequence <= 1,
+                    "pair ({}, {}) recovered an impossible sequence {sequence}",
+                    syncs[first],
+                    syncs[second]
+                );
+                assert!(checkpoint_sequence <= sequence);
+                // A manifest/block reference that did not survive the crash is
+                // refused at read time rather than projected as torn history:
+                // fail closed. A length mismatch would be a torn projection
+                // and stays a hard assertion.
+                let serve_result = (|| -> io::Result<()> {
+                    let snapshot = recovered.transaction_snapshot()?;
+                    assert_eq!(snapshot.len() as u64, sequence);
+                    if sequence == 1 {
+                        let transaction = &snapshot[0];
+                        assert_eq!(transaction.envelope.inline_payload, b"turn.append");
+                        assert_eq!(
+                            recovered.read_block(transaction.envelope.block_ids[0])?,
+                            b"large result"
+                        );
+                    }
+                    Ok(())
+                })();
+                if serve_result.is_err() {
+                    failed_closed += 1;
+                    continue;
+                }
+                if sequence == 1 {
+                    recovered_full += 1;
+                } else {
+                    recovered_empty += 1;
+                    assert_eq!(checkpoint_sequence, 0);
+                }
+                let next = recovered.commit(b"after recovery").unwrap();
+                assert_eq!(next, sequence + 1);
+                recovered.checkpoint().unwrap();
+            }
+        }
+        assert!(recovered_full > 0);
+        assert!(
+            recovered_empty > 0 || failed_closed > 0,
+            "double barriers must make some same-barrier pair observable"
+        );
+    }
+
+    /// Extended rotation: commit+checkpoint cycles chain WAL generations and
+    /// history segments. A long unfaulted chain certifies rotation mechanics;
+    /// then, for every rotation window, each single lost sync inside that
+    /// window must leave a reopenable store at a complete prefix, with the
+    /// rotation chain still able to advance afterwards.
+    #[test]
+    fn extended_rotation_chain_and_window_faults_recover_complete_prefixes() {
+        const ROTATIONS: u64 = 12;
+        // Unfaulted extended chain: every rotation publishes a new generation
+        // and the full history survives reopen.
+        let (vfs, mut engine) = initialized_simulated_engine();
+        for round in 1..=ROTATIONS {
+            engine.commit(format!("round-{round}").as_bytes()).unwrap();
+            assert_eq!(engine.checkpoint().unwrap(), round);
+            assert_eq!(engine.state().active_log_generation, round + 1);
+        }
+        drop(engine);
+        vfs.crash().unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.state().durable_sequence, ROTATIONS);
+        assert_eq!(reopened.state().checkpoint_sequence, ROTATIONS);
+        assert_eq!(
+            reopened.transaction_snapshot().unwrap().len() as u64,
+            ROTATIONS
+        );
+
+        // Faulted windows: for each rotation, replay the earlier rotations
+        // unfaulted, then drop each sync of the final commit+checkpoint in
+        // turn. Recovery must land on a complete prefix: the window's commit
+        // and checkpoint either both survived or neither partially advanced
+        // past the durable sequence.
+        for window in 1..=ROTATIONS {
+            let (baseline_vfs, mut baseline) = initialized_simulated_engine();
+            for round in 1..window {
+                baseline
+                    .commit(format!("round-{round}").as_bytes())
+                    .unwrap();
+                baseline.checkpoint().unwrap();
+            }
+            baseline_vfs.arm_fault(None).unwrap();
+            baseline
+                .commit(format!("round-{window}").as_bytes())
+                .unwrap();
+            baseline.checkpoint().unwrap();
+            let trace = baseline_vfs.trace().unwrap();
+
+            for (index, operation) in trace.iter().enumerate().filter(|(_, op)| is_sync(op)) {
+                let (vfs, mut engine) = initialized_simulated_engine();
+                for round in 1..window {
+                    engine.commit(format!("round-{round}").as_bytes()).unwrap();
+                    engine.checkpoint().unwrap();
+                }
+                vfs.arm_fault(Some(FaultRule {
+                    operation_number: index as u64 + 1,
+                    action: FaultAction::DropSync,
+                }))
+                .unwrap();
+                engine.commit(format!("round-{window}").as_bytes()).unwrap();
+                let _ = engine.checkpoint();
+                drop(engine);
+                vfs.crash().unwrap();
+                vfs.arm_fault(None).unwrap();
+                let mut recovered = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+                let durable_sequence = recovered.state().durable_sequence;
+                let checkpoint_sequence = recovered.state().checkpoint_sequence;
+                assert!(
+                    durable_sequence == window || durable_sequence == window - 1,
+                    "lost sync at {operation:?} in window {window} recovered sequence {durable_sequence}"
+                );
+                assert!(checkpoint_sequence <= durable_sequence);
+                assert_eq!(
+                    recovered.transaction_snapshot().unwrap().len() as u64,
+                    durable_sequence,
+                    "snapshot must be a complete prefix (window {window}, {operation:?})"
+                );
+                let next = recovered.commit(b"still rotating").unwrap();
+                assert_eq!(next, durable_sequence + 1);
+            }
+        }
+    }
+
     #[test]
     fn every_single_lost_checkpoint_sync_preserves_the_published_generation() {
         let (baseline_vfs, mut baseline) = initialized_simulated_engine();
@@ -1827,7 +2813,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let authority_root = {
             let engine = Engine::initialize(directory.path()).unwrap();
-            engine.write_block(b"authority-root").unwrap()
+            // The block must survive the drop: write_block only stages into
+            // the pending set, so use the durable loose path for this
+            // hand-crafted WAL fixture.
+            engine.blocks.put_loose(b"authority-root").unwrap()
         };
         {
             let mut wal = ActiveLog::open(directory.path()).unwrap();
@@ -1868,7 +2857,7 @@ mod tests {
     #[test]
     fn crashes_at_durability_boundaries_never_expose_partial_transaction() {
         for crash_stage in [
-            CommitStage::BlockDurable(BlockId([0; 32])),
+            CommitStage::BlockPublished(BlockId([0; 32])),
             CommitStage::WalDurable(1),
             CommitStage::ControlDurable(1),
         ] {
@@ -1881,9 +2870,10 @@ mod tests {
                         &[b"large result"],
                         |stage| {
                             let should_crash = match (crash_stage, stage) {
-                                (CommitStage::BlockDurable(_), CommitStage::BlockDurable(_)) => {
-                                    true
-                                }
+                                (
+                                    CommitStage::BlockPublished(_),
+                                    CommitStage::BlockPublished(_),
+                                ) => true,
                                 (expected, actual) => expected == actual,
                             };
                             if should_crash {
@@ -1901,7 +2891,7 @@ mod tests {
             }
             let engine = Engine::open(directory.path()).unwrap();
             let expected_sequence = match crash_stage {
-                CommitStage::BlockDurable(_) => 0,
+                CommitStage::BlockPublished(_) => 0,
                 CommitStage::WalDurable(_) | CommitStage::ControlDurable(_) => 1,
             };
             assert_eq!(engine.state().durable_sequence, expected_sequence);
@@ -1914,8 +2904,14 @@ mod tests {
         let block_id;
         {
             let mut engine = Engine::initialize(directory.path()).unwrap();
+            // Deferred blocks below the carried ceiling are rebuilt from the
+            // WAL payload on replay, so a missing loose file only fails
+            // closed for identifier-only records. Exceed the carried ceiling
+            // to force the spill path: blocks fsync up front, the WAL logs a
+            // bare reference, and replay has no copy to rebuild from.
+            let oversized = vec![0xAB; MAX_CARRIED_PAYLOAD_BYTES + 1];
             block_id = engine
-                .commit_transaction(b"turn.append", &[b"required block"])
+                .commit_transaction(b"turn.append", &[oversized.as_slice()])
                 .unwrap()
                 .block_ids[0];
         }
@@ -1931,6 +2927,25 @@ mod tests {
         let error = Engine::open(directory.path()).err().unwrap();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("references a missing block"));
+    }
+
+    #[test]
+    fn durable_transaction_with_carried_payload_rebuilds_missing_block() {
+        let directory = tempfile::tempdir().unwrap();
+        let block_id;
+        {
+            let mut engine = Engine::initialize(directory.path()).unwrap();
+            block_id = engine
+                .commit_transaction(b"turn.append", &[b"carried block"])
+                .unwrap()
+                .block_ids[0];
+        }
+        // The block was staged but never materialized (no checkpoint ran),
+        // so no loose file exists. The WAL envelope carries the payload for
+        // deferred blocks, so replay rebuilds it instead of failing closed.
+        let engine = Engine::open(directory.path()).unwrap();
+        assert_eq!(engine.state().durable_sequence, 1);
+        assert_eq!(engine.read_block(block_id).unwrap(), b"carried block");
     }
 
     #[test]
@@ -1972,7 +2987,6 @@ mod tests {
         let trace = baseline_vfs.trace().unwrap();
         assert!(trace.contains(&Operation::Write));
         assert!(trace.contains(&Operation::SyncData));
-        assert!(trace.contains(&Operation::SyncAll));
 
         for operation_number in 1..=trace.len() as u64 {
             let (vfs, mut engine) = initialized_simulated_engine();
@@ -1981,9 +2995,12 @@ mod tests {
                 action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
             }))
             .unwrap();
-            assert!(engine
-                .commit_transaction(b"turn.append", &[b"large result"])
-                .is_err());
+            let commit_result = engine.commit_transaction(b"turn.append", &[b"large result"]);
+            assert!(
+                commit_result.is_err(),
+                "operation_number={operation_number} of {}: commit unexpectedly succeeded",
+                trace.len()
+            );
             drop(engine);
             vfs.crash().unwrap();
             vfs.arm_fault(None).unwrap();
@@ -2044,7 +3061,7 @@ mod tests {
     }
 
     #[test]
-    fn sixty_four_transactions_share_one_wal_and_control_barrier() {
+    fn sixty_four_transactions_share_one_wal_barrier_without_control() {
         let (vfs, mut engine) = initialized_simulated_engine();
         let initial_generation = engine.state().generation;
         let results = engine.commit_batch(&batch(64)).unwrap();
@@ -2052,17 +3069,22 @@ mod tests {
         assert_eq!(results[0].sequence, 1);
         assert_eq!(results[63].sequence, 64);
         assert_eq!(engine.state().durable_sequence, 64);
-        assert_eq!(engine.state().generation, initial_generation + 1);
+        // CONTROL publication is deferred: the batch is acknowledged by one
+        // group WAL fsync, and the on-disk generation only advances when a
+        // structural transition (or crash recovery) catches it up.
+        assert_eq!(engine.state().generation, initial_generation);
         let trace = vfs.trace().unwrap();
-        assert_eq!(
-            trace
-                .iter()
-                .filter(|operation| operation == &&Operation::SyncData)
-                .count(),
-            2
-        );
+        let count = |kind: Operation| trace.iter().filter(|operation| operation == &&kind).count();
+        assert_eq!(count(Operation::SyncAll), 0);
+        assert_eq!(count(Operation::SyncData), 2);
 
+        // Clean shutdown performs the deferred catch-up publication: one
+        // double-barrier CONTROL sync and no extra WAL barrier.
         drop(engine);
+        let trace = vfs.trace().unwrap();
+        let count = |kind: Operation| trace.iter().filter(|operation| operation == &&kind).count();
+        assert_eq!(count(Operation::SyncAll), 2);
+        assert_eq!(count(Operation::SyncData), 2);
         vfs.crash().unwrap();
         vfs.arm_fault(None).unwrap();
         let recovered = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
@@ -2347,6 +3369,143 @@ mod tests {
         assert!(vfs.trace().unwrap().is_empty());
     }
 
+    #[test]
+    fn shared_reference_payloads_preserve_wal_bytes_and_release_handles() {
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let page = vec![7; 8 * 1024];
+        let root = vec![9; 8 * 1024];
+        let page_id = engine.write_block(&page).unwrap();
+        let root_id = engine.write_block(&root).unwrap();
+        let page_handle = engine.blocks.pending_payload(page_id).unwrap().unwrap();
+        let root_handle = engine.blocks.pending_payload(root_id).unwrap().unwrap();
+        let page_owners = Arc::strong_count(&page_handle);
+        let root_owners = Arc::strong_count(&root_handle);
+        engine
+            .commit_references_with_authority_state(b"turn.append", &[page_id], Some(root_id))
+            .unwrap();
+        assert_eq!(Arc::strong_count(&page_handle), page_owners);
+        assert_eq!(Arc::strong_count(&root_handle), root_owners);
+        let expected = TransactionEnvelope {
+            block_ids: vec![page_id],
+            inline_payload: b"turn.append".to_vec(),
+            authority_state_update: Some(Some(root_id)),
+        }
+        .encode_with_carried(&[Some(page.as_slice())], Some(root.as_slice()))
+        .unwrap();
+        assert_eq!(engine.committed[0].encoded_envelope, expected);
+        drop(engine);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.state().authority_state_root, Some(Some(root_id)));
+        assert_eq!(reopened.read_block(page_id).unwrap(), page);
+        assert_eq!(reopened.read_block(root_id).unwrap(), root);
+    }
+
+    #[test]
+    fn authority_root_reference_is_carried_once_across_create_append_and_reopen() {
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let mut expected_roots = Vec::new();
+        for (operation, byte) in [(b"conversation.create".as_slice(), 7), (b"turn.append", 9)] {
+            let root = vec![byte; 8 * 1024];
+            let id = engine.write_block(&root).unwrap();
+            engine
+                .commit_references_with_authority_state(operation, &[id], Some(id))
+                .unwrap();
+            let committed = engine.committed.last().unwrap();
+            let duplicate_encoding = committed
+                .envelope
+                .encode_with_carried(&[Some(root.as_slice())], Some(root.as_slice()))
+                .unwrap();
+            assert_eq!(
+                duplicate_encoding.len() - committed.encoded_envelope.len(),
+                8 * 1024
+            );
+            let (envelope, carried, authority) =
+                TransactionEnvelope::decode_with_carried(&committed.encoded_envelope).unwrap();
+            assert_eq!(envelope.block_ids, vec![id]);
+            assert_eq!(carried.iter().filter(|slot| slot.is_some()).count(), 1);
+            assert_eq!(carried[0].as_ref(), Some(&root));
+            assert!(authority.is_none());
+            expected_roots.push((id, root));
+        }
+        // No loose-file durability is assumed: both pages must recover from
+        // their sole WAL copies after an abrupt power event.
+        drop(engine);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let mut reopened = Engine::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        assert_eq!(reopened.state().durable_sequence, 2);
+        assert_eq!(
+            reopened.state().authority_state_root,
+            Some(Some(expected_roots[1].0))
+        );
+        for (id, payload) in &expected_roots {
+            assert_eq!(&reopened.read_block(*id).unwrap(), payload);
+        }
+        reopened.checkpoint().unwrap();
+        drop(reopened);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.state().durable_sequence, 2);
+        assert_eq!(
+            reopened.state().authority_state_root,
+            Some(Some(expected_roots[1].0))
+        );
+        for (id, payload) in expected_roots {
+            assert_eq!(reopened.read_block(id).unwrap(), payload);
+        }
+    }
+
+    #[test]
+    fn shared_reference_payloads_survive_every_commit_fault() {
+        let (baseline_vfs, mut baseline) = initialized_simulated_engine();
+        let id = baseline.write_block(&vec![7; 8 * 1024]).unwrap();
+        baseline_vfs.arm_fault(None).unwrap();
+        baseline
+            .commit_references_with_authority_state(b"create", &[id], Some(id))
+            .unwrap();
+        let trace = baseline_vfs.trace().unwrap();
+        assert!(trace.contains(&Operation::Write));
+        assert!(trace.contains(&Operation::SyncData));
+        for (index, operation) in trace.iter().enumerate() {
+            let mut actions = vec![FaultAction::ErrorBefore(io::ErrorKind::Interrupted)];
+            match operation {
+                Operation::Write => actions.push(FaultAction::ShortWrite(5)),
+                Operation::SyncData => actions.push(FaultAction::DropSync),
+                _ => {}
+            }
+            for action in actions {
+                let (vfs, mut engine) = initialized_simulated_engine();
+                let id = engine.write_block(&vec![7; 8 * 1024]).unwrap();
+                vfs.arm_fault(Some(FaultRule {
+                    operation_number: index as u64 + 1,
+                    action,
+                }))
+                .unwrap();
+                let acknowledged = engine
+                    .commit_references_with_authority_state(b"create", &[id], Some(id))
+                    .is_ok();
+                drop(engine);
+                vfs.crash().unwrap();
+                vfs.arm_fault(None).unwrap();
+                let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+                let sequence = reopened.state().durable_sequence;
+                assert!(sequence <= 1);
+                if acknowledged {
+                    assert_eq!(sequence, 1);
+                }
+                if sequence == 1 {
+                    assert_eq!(reopened.state().authority_state_root, Some(Some(id)));
+                    assert_eq!(reopened.read_block(id).unwrap(), vec![7; 8 * 1024]);
+                } else {
+                    assert_eq!(reopened.state().authority_state_root, Some(None));
+                }
+            }
+        }
+    }
+
     fn engine_with_compaction_victim() -> (Arc<DeterministicVfs>, Engine, BlockId) {
         let (vfs, mut engine) = initialized_simulated_engine();
         let result = engine
@@ -2449,9 +3608,25 @@ mod tests {
         );
     }
 
+    /// Compaction of a pending (never materialized) block reclaims only
+    /// memory; the fault-injection test below must exercise the loose-file
+    /// reclaim path, so this fixture spills an oversized commit to a loose
+    /// file and checkpoints to retire the WAL before arming the trace.
+    fn engine_with_loose_compaction_victim() -> (Arc<DeterministicVfs>, Engine, BlockId) {
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let oversized = vec![0xCD; MAX_CARRIED_PAYLOAD_BYTES + 1];
+        let result = engine
+            .commit_transaction(b"payload-reference", &[oversized.as_slice()])
+            .unwrap();
+        let block_id = result.block_ids[0];
+        engine.checkpoint().unwrap();
+        vfs.arm_fault(None).unwrap();
+        (vfs, engine, block_id)
+    }
+
     #[test]
     fn every_payload_compaction_fault_preserves_the_referenced_block() {
-        let (baseline_vfs, mut baseline, baseline_block) = engine_with_compaction_victim();
+        let (baseline_vfs, mut baseline, baseline_block) = engine_with_loose_compaction_victim();
         baseline.compact_payload_blocks(&[baseline_block]).unwrap();
         let trace = baseline_vfs.trace().unwrap();
         assert!(trace.contains(&Operation::Rename));
@@ -2479,7 +3654,7 @@ mod tests {
             }
         }
         for (operation_number, action) in cases {
-            let (vfs, mut engine, block_id) = engine_with_compaction_victim();
+            let (vfs, mut engine, block_id) = engine_with_loose_compaction_victim();
             vfs.arm_fault(Some(FaultRule {
                 operation_number,
                 action,
@@ -2493,7 +3668,7 @@ mod tests {
             assert_eq!(reopened.state().durable_sequence, 1);
             assert_eq!(
                 reopened.read_block(block_id).unwrap(),
-                b"large-agent-tool-payload"
+                vec![0xCD; MAX_CARRIED_PAYLOAD_BYTES + 1]
             );
         }
     }
@@ -2581,5 +3756,254 @@ mod tests {
             assert_eq!(reopened.state().durable_sequence, 1);
             assert_eq!(reopened.read_block(live_id).unwrap(), live_payload);
         }
+    }
+
+    /// Stages 1 MiB of distinct payloads across eight carried commits and
+    /// returns the (block id, payload) pairs in commit order.
+    fn stage_carried_blocks(engine: &mut Engine) -> Vec<(BlockId, Vec<u8>)> {
+        let mut expected = Vec::new();
+        for commit_index in 0..8_u8 {
+            let owned: Vec<Vec<u8>> = (0..4_u8)
+                .map(|slot| vec![commit_index * 4 + slot; 32 * 1024])
+                .collect();
+            let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+            let committed = engine.commit_transaction(b"turn.append", &refs).unwrap();
+            expected.extend(committed.block_ids.iter().copied().zip(owned));
+        }
+        expected
+    }
+
+    fn assert_manifest_segments_verify(engine: &Engine) {
+        let published = engine.state().payload_manifest_block_id.is_some();
+        let manifest = engine.payload_manifest.as_ref();
+        assert_eq!(published, manifest.is_some());
+        if let Some(manifest) = manifest {
+            for reference in &manifest.segments {
+                engine.blocks.verify_payload_segment(reference).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_materialize_steps_bound_work_and_preserve_blocks() {
+        // An unbounded step drains the whole staged set in one call, exactly
+        // like the checkpoint path.
+        let (check_vfs, mut check) = initialized_simulated_engine();
+        stage_carried_blocks(&mut check);
+        assert_eq!(check.materialize_staged_blocks_step(u64::MAX).unwrap(), 0);
+        drop(check);
+        drop(check_vfs);
+
+        // The same backlog drains in bounded steps.
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let expected = stage_carried_blocks(&mut engine);
+        let mut steps = 0_usize;
+        let mut remaining = engine.materialize_staged_blocks_step(256 * 1024).unwrap();
+        assert_eq!(remaining, (1024 - 256) * 1024);
+        while remaining > 0 {
+            let next = engine.materialize_staged_blocks_step(256 * 1024).unwrap();
+            assert!(next < remaining, "a bounded step made no progress");
+            remaining = next;
+            steps += 1;
+            assert!(steps <= 8, "1 MiB at 256 KiB steps needs four steps");
+        }
+        assert_eq!(steps, 3, "the budget must split the pack into four steps");
+        assert!(engine.payload_segment_count() >= 4);
+        assert_manifest_segments_verify(&engine);
+        for (id, payload) in &expected {
+            assert_eq!(&engine.read_block(*id).unwrap(), payload);
+        }
+        engine.checkpoint().unwrap();
+        assert_eq!(engine.state().durable_sequence, 8);
+        drop(engine);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.state().durable_sequence, 8);
+        assert_manifest_segments_verify(&reopened);
+        for (id, payload) in &expected {
+            assert_eq!(&reopened.read_block(*id).unwrap(), payload);
+        }
+    }
+
+    #[test]
+    fn incremental_materialize_step_survives_crash_at_every_operation() {
+        let (baseline_vfs, mut baseline) = initialized_simulated_engine();
+        stage_carried_blocks(&mut baseline);
+        baseline_vfs.arm_fault(None).unwrap();
+        baseline.materialize_staged_blocks_step(256 * 1024).unwrap();
+        let operation_count = baseline_vfs.trace().unwrap().len() as u64;
+
+        for operation_number in 1..=operation_count {
+            let (vfs, mut engine) = initialized_simulated_engine();
+            let expected = stage_carried_blocks(&mut engine);
+            vfs.arm_fault(Some(FaultRule {
+                operation_number,
+                action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+            }))
+            .unwrap();
+            let _ = engine.materialize_staged_blocks_step(256 * 1024);
+            drop(engine);
+            vfs.crash().unwrap();
+            vfs.arm_fault(None).unwrap();
+            let mut recovered = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+            // Whether the faulted step published or not, every block stays
+            // readable and the catalog matches the durable CONTROL root.
+            assert_manifest_segments_verify(&recovered);
+            for (id, payload) in &expected {
+                assert_eq!(
+                    &recovered.read_block(*id).unwrap(),
+                    payload,
+                    "lost block at operation {operation_number}"
+                );
+            }
+            // Draining the remainder and checkpointing after the crash must
+            // converge to the same durable state as an uninterrupted run.
+            while recovered
+                .materialize_staged_blocks_step(256 * 1024)
+                .unwrap()
+                > 0
+            {}
+            recovered.checkpoint().unwrap();
+            assert_eq!(recovered.state().durable_sequence, 8);
+            assert_manifest_segments_verify(&recovered);
+            for (id, payload) in &expected {
+                let read = recovered
+                    .read_block(*id)
+                    .unwrap_or_else(|error| panic!("op {operation_number}: {error:?}"));
+                assert_eq!(&read, payload, "lost block after recovery");
+            }
+        }
+    }
+    #[test]
+    fn incremental_materialize_step_makes_progress_with_zero_budget() {
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let expected = stage_carried_blocks(&mut engine);
+        // A zero budget still routes one chunk per call, so a caller that
+        // always passes a stale budget cannot starve the backlog.
+        let mut remaining = engine.materialize_staged_blocks_step(0).unwrap();
+        assert!(remaining < 1024 * 1024);
+        let mut calls = 0_usize;
+        while remaining > 0 {
+            remaining = engine.materialize_staged_blocks_step(0).unwrap();
+            calls += 1;
+            assert!(calls <= 32);
+        }
+        engine.checkpoint().unwrap();
+        drop(engine);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        for (id, payload) in &expected {
+            assert_eq!(&reopened.read_block(*id).unwrap(), payload);
+        }
+    }
+
+    /// Reserves the staged payloads and finishes the pack exactly the way
+    /// the background pack worker does, without spawning a thread: engine
+    /// tests stay deterministic and keep their fault-injection control.
+    fn build_and_complete_background_pack(engine: &Engine, payloads: &[&[u8]]) -> Vec<BlockId> {
+        let ids: Vec<BlockId> = payloads
+            .iter()
+            .map(|payload| engine.write_block(payload).unwrap())
+            .collect();
+        let store = engine.block_store_shared();
+        let (segment_id, reserved) = store
+            .begin_background_pack(1, MAX_CHECKPOINT_MATERIALIZE_BATCH_BYTES)
+            .unwrap()
+            .expect("staged payloads must be reservable");
+        assert_eq!(
+            reserved.iter().copied().collect::<BTreeSet<_>>(),
+            ids.iter().copied().collect::<BTreeSet<_>>()
+        );
+        let segment = store
+            .payload_segment_store()
+            .unwrap()
+            .create(segment_id, reserved.clone(), |id| store.get(id))
+            .unwrap();
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )
+        .unwrap();
+        store.verify_payload_segment(&reference).unwrap();
+        store.note_packed(&reserved).unwrap();
+        store
+            .complete_background_pack(segment_id, reference)
+            .unwrap();
+        ids
+    }
+
+    #[test]
+    fn commit_publishes_completed_background_pack() {
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let ids =
+            build_and_complete_background_pack(&engine, &[b"background-alpha", b"background-beta"]);
+        engine.commit(b"adopt").unwrap();
+        assert_eq!(engine.payload_segment_count(), 1);
+        // The staged copies were retired at publication, so the checkpoint
+        // drain has nothing left to pack into a duplicate segment.
+        engine.checkpoint().unwrap();
+        assert_eq!(engine.payload_segment_count(), 1);
+        drop(engine);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.payload_segment_count(), 1);
+        assert_eq!(reopened.read_block(ids[0]).unwrap(), b"background-alpha");
+        assert_eq!(reopened.read_block(ids[1]).unwrap(), b"background-beta");
+    }
+
+    #[test]
+    fn checkpoint_drain_reclaims_stalled_background_pack() {
+        let (vfs, mut engine) = initialized_simulated_engine();
+        let id = engine.write_block(b"stalled-background-pack").unwrap();
+        let store = engine.block_store_shared();
+        assert!(store
+            .begin_background_pack(1, MAX_CHECKPOINT_MATERIALIZE_BATCH_BYTES)
+            .unwrap()
+            .is_some());
+        // A dead worker never finishes the create; once the wait budget
+        // runs out the drain abandons the reservation and packs the same
+        // staged payloads synchronously.
+        engine.commit(b"stalled").unwrap();
+        engine.set_background_pack_wait_rounds_for_test(0);
+        engine.checkpoint().unwrap();
+        assert_eq!(engine.payload_segment_count(), 1);
+        assert!(!store.background_pack_creating().unwrap());
+        drop(engine);
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        assert_eq!(reopened.payload_segment_count(), 1);
+        assert_eq!(reopened.read_block(id).unwrap(), b"stalled-background-pack");
+    }
+
+    #[test]
+    fn orphan_planning_preserves_unpublished_background_segment() {
+        let (_vfs, engine) = initialized_simulated_engine();
+        build_and_complete_background_pack(&engine, &[b"unpublished-background-segment"]);
+        // The finished segment is durable but not yet manifest-referenced;
+        // orphan planning must not offer it for removal.
+        let plan = engine.plan_payload_segment_orphan().unwrap();
+        assert_eq!(plan.scanned_files, 1);
+        assert!(plan.candidate.is_none());
+        assert!(!plan.more_candidates);
+        let store = engine.block_store_shared();
+        let segment_id = store.unpublished_background_segment_ids().unwrap()[0];
+        let error = engine
+            .remove_payload_segment_orphan(&PayloadSegmentOrphanCandidate {
+                file_name: format!("{segment_id}.seg"),
+                segment_id: Some(segment_id),
+                file_bytes: 0,
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(engine
+            .plan_payload_segment_orphan()
+            .unwrap()
+            .candidate
+            .is_none());
     }
 }

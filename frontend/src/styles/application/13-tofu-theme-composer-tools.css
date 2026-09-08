@@ -394,47 +394,11 @@
   flex-shrink:0
 }
 
-/* ── Thinking depth bar — pixel inset capsule strip ── */
-[data-theme="tofu"] .thinking-depth-bar{
-  background:#E8E5DA;
-  border:1.5px solid #C2BCA4;
-  border-top-color:#A89878;
-  border-left-color:#A89878;
-  border-right-color:#FFFCF6;
-  border-bottom-color:#FFFCF6;
-  border-radius:4px;
-  box-shadow:inset 0 1px 3px rgba(74,63,47,0.08);
-  padding:2px 3px;
-  gap:2px
-}
-[data-theme="tofu"] .depth-btn{
-  font-family:var(--sans-body);
-  font-weight:600;
-  font-size:11px;
-  color:var(--text-secondary);
-  background:transparent;
-  border-radius:var(--radius-xs);
-  padding:2px 9px;
-  letter-spacing:0;
-  -webkit-font-smoothing:antialiased;
-  -moz-osx-font-smoothing:grayscale;
-  transition:color 0.15s,background 0.15s,box-shadow 0.15s
-}
-[data-theme="tofu"] .depth-btn:hover{
-  color:#2A2018;
-  background:rgba(196,149,106,0.1)
-}
-[data-theme="tofu"] .depth-btn.active{
-  background:rgba(196,149,106,0.22);
-  color:#2A1E10;
-  box-shadow:inset 0 1px 2px rgba(0,0,0,0.1);
-  border-radius:3px;
-  font-weight:800
-}
-[data-theme="tofu"] .depth-btn[data-depth="off"].active{
-  background:rgba(196,149,106,0.08);
-  color:#5C4A33;
-  box-shadow:none
+/* Warm cream depth card, shared by the model footer and mobile sheet. */
+[data-theme="tofu"] .depth-slider{
+  --depth-track:#E5DFD2;--depth-fill:#CFBDA3;
+  --depth-thumb:#FFFCF5;--depth-thumb-border:#A78360;
+  background:#FAF8F2;border-color:#DED6C5;color:#594A36;
 }
 
 /* ── Model selector — quiet token pill ── */
@@ -479,31 +443,67 @@
 [data-theme="tofu"] .preset-toggle .ps-arrow{opacity:0.5;color:#8A7A5A}
 
 [data-theme="tofu"] .preset-dropdown{
-  border-radius:4px;
-  border:2px solid #C2BCA4;
-  border-top-color:#FFFCF6;
-  border-left-color:#FFFCF6;
-  border-right-color:#A89878;
-  border-bottom-color:#A89878;
-  box-shadow:var(--clay-sm);
+  border-radius:12px;
+  border:1px solid #C2BCA4;
+  box-shadow:0 12px 32px rgba(90,74,52,0.18), 0 2px 6px rgba(90,74,52,0.10);
   background:#F4F2EB;
-  padding:4px;
+  padding:6px;
   overflow-y:auto;
   z-index:9999
 }
-[data-theme="tofu"] .ps-dd-depth-wrap{background:#F4F2EB;border-top-color:#C2BCA4}
+[data-theme="tofu"] .ps-dd-depth-wrap{background:#F4F2EB;border-top-color:#C2BCA4;bottom:-6px;margin-bottom:-6px}
 [data-theme="tofu"] .ps-dd-hint{border-top-color:#C2BCA4;color:#8A7A5A}
 [data-theme="tofu"] .ps-dd-hint:hover{color:#5C4A33}
 [data-theme="tofu"] .preset-dropdown-item{
-  border-radius:2px;
+  border-radius:8px;
   font-family:var(--sans-body);
   font-size:11px;
   font-weight:500;
   letter-spacing:0.02em;
-  color:#5C4A33
+  color:#5C4A33;
+  outline:none
 }
-[data-theme="tofu"] .preset-dropdown-item:hover{background:rgba(196,149,106,0.12)}
-[data-theme="tofu"] .preset-dropdown-item.selected{background:rgba(196,149,106,0.15);color:#4A3820}
+[data-theme="tofu"] .preset-dropdown-item:hover{background:rgba(196,149,106,0.10)}
+[data-theme="tofu"] .preset-dropdown-item.selected{background:rgba(196,149,106,0.16);color:#4A3820}
+/* Base marks the active model with a faint full-row outline (Linear-style
+ * selected band reads as a grey slab against the beige panel). Replace it
+ * with a warm tint + hairline inset accent — the clay theme's active card. */
+[data-theme="tofu"] .preset-dropdown-item.active{
+  background:rgba(196,149,106,0.22);
+  outline:none;
+  box-shadow:inset 0 0 0 1px rgba(138,116,80,0.28)
+}
+[data-theme="tofu"] .preset-dropdown-item.active .ps-dd-label{color:#3E2E18;font-weight:700}
+[data-theme="tofu"] .preset-dropdown-item .ps-dd-icon{color:#8A7A5A}
+[data-theme="tofu"] .preset-dropdown-item.active .ps-dd-icon{color:#9A6520}
+/* Per-row provider preference — a quiet cream chip whose popover mirrors
+ * the panel itself: warm tint + hairline inset ring on the active option. */
+[data-theme="tofu"] .ps-dd-provider-chip{
+  background:#FBF9F3;
+  border:1px solid #D6CFB8;
+  border-radius:8px;
+  color:#6E5E48;
+  padding:5px 9px;
+  transition:background .15s,border-color .15s
+}
+[data-theme="tofu"] .ps-dd-provider-chip:hover,
+[data-theme="tofu"] .ps-dd-provider-chip[aria-expanded="true"]{background:#FFFEFA;border-color:#B8AE90}
+[data-theme="tofu"] .ps-dd-provider-menu{
+  background:#F4F2EB;
+  border:1px solid #C2BCA4;
+  box-shadow:0 12px 32px rgba(90,74,52,0.18), 0 2px 6px rgba(90,74,52,0.10)
+}
+[data-theme="tofu"] .ps-dd-provider-menu-item{color:#5C4A33;font-weight:500;letter-spacing:0.02em}
+[data-theme="tofu"] .ps-dd-provider-menu-item:hover{background:rgba(196,149,106,0.10)}
+[data-theme="tofu"] .ps-dd-provider-menu-item.active{
+  background:rgba(196,149,106,0.22);
+  box-shadow:inset 0 0 0 1px rgba(138,116,80,0.28);
+  color:#3E2E18
+}
+[data-theme="tofu"] .ps-dd-provider-check{color:#9A6520}
+[data-theme="tofu"] .ps-dd-provider-tag{border-color:#D6CFB8;color:#A89B7B}
+[data-theme="tofu"] .ps-dd-search{background:#F4F2EB;border-bottom-color:#C2BCA4;color:#A89B7B;margin:-6px -6px 6px;top:-6px}
+[data-theme="tofu"] .ps-dd-section-label{color:#A89B7B;opacity:1;padding:7px 12px 3px}
 [data-theme="tofu"] .img-preview{border-radius:8px;border:1px solid rgba(90,78,64,0.3);box-shadow:0 2px 8px rgba(0,0,0,0.1)}
 
 /* ── User bubble: a gently tinted note — hairline, one soft shadow ── */
@@ -1448,6 +1448,13 @@
 [data-theme="tofu"] .hg-submit-btn:hover {
   background: #A8845E;
 }
+[data-theme="tofu"] .hg-batch-section {
+  border-color: rgba(187, 149, 114, 0.28);
+  background: rgba(187, 149, 114, 0.06);
+}
+[data-theme="tofu"] .hg-batch-qnum {
+  color: #A07D5A;
+}
 /* Also fix for light theme */
 [data-theme="light"] .hg-card {
   border-color: rgba(99, 102, 241, 0.30);
@@ -1499,6 +1506,13 @@
 }
 [data-theme="light"] .hg-opt-desc code {
   background: rgba(99, 102, 241, 0.08);
+  color: #4338ca;
+}
+[data-theme="light"] .hg-batch-section {
+  border-color: rgba(99, 102, 241, 0.22);
+  background: rgba(99, 102, 241, 0.04);
+}
+[data-theme="light"] .hg-batch-qnum {
   color: #4338ca;
 }
 

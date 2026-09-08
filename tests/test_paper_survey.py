@@ -21,12 +21,13 @@ citation verifier are monkeypatched, so no network / real model needed):
 
   4. ZERO-REPARSE — _load_paper_inputs reads paper_reports / paper_library
      stored text and NEVER calls parse_pdf (asserted via a parse_pdf spy that
-     must record zero calls), and prefers an existing report over parsed_text.
+     must record zero calls), and prefers original parsed_text over a generated report.
 
 Run standalone:  python tests/test_paper_survey.py
 Under pytest:    pytest tests/test_paper_survey.py -m unit
 """
 
+import json
 import os
 import sys
 import time
@@ -57,8 +58,8 @@ def test_survey_prompt_requires_a_per_paper_comparison_matrix():
     for lang in ('en', 'zh'):
         prompt = survey._survey_system_prompt(lang)
         assert 'method_matrix' in prompt
-        for field in ('compression_unit', 'selection_signal',
-                      'robustness_assumption', 'evaluation_tasks'):
+        for field in ('assumptions', 'budget', 'evaluation_tasks',
+                      'scoped_claim', 'counterevidence', 'falsifier'):
             assert field in prompt
 
 
@@ -121,13 +122,31 @@ def _seed_library_paper(arxiv_id, *, phash=None, parsed_text=None, report=None,
     return phash
 
 
+def _hierarchy_dispatch(survey_md, gap_map):
+    """Fake only the provider; exercise real extraction, hierarchy and gates."""
+    def dispatch(messages, **kwargs):
+        phase = messages[0]['content'].rsplit('Phase: ', 1)[-1]
+        assert phase in {'map', 'reduce', 'synthesis', 'entailment'}, phase
+        if phase == 'synthesis':
+            result = {'survey_md': survey_md, 'gap_map': gap_map}
+        elif phase == 'entailment':
+            payload = json.loads(messages[1]['content'])
+            result = {'assessments': [
+                {'card_id': card['card_id'], 'status': 'insufficient'}
+                for card in payload['cards']]}
+        else:
+            result = {'summary': 'Fixture summary', 'support': 'unknown',
+                      'counterevidence': 'unknown'}
+        return ({'role': 'assistant', 'content': json.dumps(result)}, 'stop', {})
+    return dispatch
+
+
 def _patch_synthesis(survey_md, gap_map):
-    """Patch survey._synthesize_survey to return a fixed (md, raw_gap_map),
-    bypassing the LLM. Returns restore()."""
+    """Replace the hierarchy's provider binding without bypassing its gates."""
     import lib.paper.survey as sv
-    orig = sv._synthesize_survey
-    sv._synthesize_survey = lambda inputs, direction, lang, **kw: (survey_md, gap_map)
-    return lambda: setattr(sv, '_synthesize_survey', orig)
+    orig = sv.dispatch_stream
+    sv.dispatch_stream = _hierarchy_dispatch(survey_md, gap_map)
+    return lambda: setattr(sv, 'dispatch_stream', orig)
 
 
 def _patch_citation_audit(fn):
@@ -313,15 +332,16 @@ def test_clean_citations_no_card():
     _ok('clean survey → citation_audit is None (card only on suspicion)')
 
 
-# ── Test 4: zero-reparse + report-first input loading ─────────────────────
+# ── Test 4: zero-reparse + original-source input loading ─────────────────────
 
-def test_load_inputs_never_reparses_and_prefers_report():
+def test_load_inputs_never_reparses_and_prefers_original_text():
     _load_app()
     import lib.paper.survey as sv
     import lib.pdf_parser.core as pdf_core
     folder = f'rf_{int(time.time())%100000}_r'
     # paper A has a generated report; paper B only parsed_text.
-    _seed_library_paper('2305.88888', folder_id=folder, report='REPORT-A body', lang='en')
+    _seed_library_paper('2305.88888', folder_id=folder, parsed_text='ORIGINAL-A body',
+                        report='REPORT-A body', lang='en')
     _seed_library_paper('2401.99999', folder_id=folder, parsed_text='PARSED-B body')
 
     # Spy: parse_pdf must never be called by the survey input path.
@@ -333,13 +353,16 @@ def test_load_inputs_never_reparses_and_prefers_report():
             ['2305.88888', '2401.99999'], lang='en', user_id=1)
         assert calls['n'] == 0, f'survey input load must NOT reparse, parse_pdf called {calls["n"]}x'
         by_id = {p['arxiv_id']: p for p in inputs}
-        assert by_id['2305.88888']['source'] == 'report', 'should prefer existing report'
-        assert 'REPORT-A' in by_id['2305.88888']['content']
+        assert by_id['2305.88888']['source'] == 'parsed_text'
+        assert by_id['2305.88888']['content'] == 'ORIGINAL-A body'
+        assert 'REPORT-A' not in by_id['2305.88888']['content']
+        assert by_id['2305.88888']['source_version'] == '2305.88888'
+        assert by_id['2305.88888']['paper_hash']
         assert by_id['2401.99999']['source'] == 'parsed_text', 'fallback to parsed_text'
         assert 'PARSED-B' in by_id['2401.99999']['content']
     finally:
         pdf_core.parse_pdf = orig_parse
-    _ok('input load reuses reports/parsed_text, prefers report, and NEVER reparses')
+    _ok('input load prefers original parsed_text over reports and NEVER reparses')
 
 
 def test_grounded_tier_keeps_gap_and_flags_low_confidence():
@@ -364,7 +387,7 @@ def test_grounded_tier_keeps_gap_and_flags_low_confidence():
 
 
 def test_library_tier_gap_is_high_confidence():
-    """A gap with at least one library-tier evidence id is NOT low_confidence."""
+    """Library-tier identity alone cannot establish scientific entailment."""
     import lib.paper.survey as sv
     raw = {'open_gaps': [{'id': 'g', 'gap': 'x',
                           'evidence': ['1111.00001', '2404.00002']}]}
@@ -372,10 +395,12 @@ def test_library_tier_gap_is_high_confidence():
                                      ground_fn=lambda aid: 'Real')  # 2404 grounded
     g = out['open_gaps'][0]
     assert g['library_evidence_count'] == 1 and g['grounded_evidence_count'] == 1
-    assert g['low_confidence'] is False, 'a library-backed gap is high confidence'
+    assert g['low_confidence'] is True, 'library existence does not establish entailment'
+    assert g['confidence'] == 'low'
+    assert g['entailment'] == 'unverified'
     assert g['evidence_tiers']['1111.00001'] == 'library'
     assert g['evidence_tiers']['2404.00002'] == 'grounded'
-    _ok('a gap with any library-tier evidence is high-confidence (low_confidence=False)')
+    _ok('library-tier identity remains low-confidence until entailment is assessed')
 
 
 def test_dict_shaped_ids_are_extracted_not_crash():
@@ -407,7 +432,7 @@ def test_dict_shaped_ids_are_extracted_not_crash():
         'salvaged matrix paper id should be normalized to the bare string'
     g = out['open_gaps'][0]
     assert g['evidence'] == ['2222.00002', '1111.00001'], g['evidence']
-    assert g['low_confidence'] is False
+    assert g['low_confidence'] is True  # salvaged identity is not entailment
     assert out['stripped_ids'], 'the id-less dict must be recorded as unverifiable'
     # _extract_survey_ids must not crash on the same shapes either.
     ids = sv._extract_survey_ids(out)
@@ -459,9 +484,13 @@ def test_verification_bounds_model_output_and_grounding_fanout():
 
     budget = out['verification_budget']
     assert len(probes) == budget['ground_probes'] == 20
-    assert budget['ground_probes_suppressed'] == 1_300
+    retained_matrix = min(100, sv.PAPER_SURVEY_MAX_MATRIX_ROWS)
+    assert budget['ground_probes_suppressed'] == (
+        (sv.PAPER_SURVEY_MAX_CLUSTERS + sv.PAPER_SURVEY_MAX_GAPS)
+        * sv.PAPER_SURVEY_MAX_IDS_PER_ENTRY + retained_matrix
+        - sv.PAPER_SURVEY_MAX_GROUND_PROBES)
     assert budget['clusters_truncated'] == 88
-    assert budget['method_matrix_rows_truncated'] == 60
+    assert budget['method_matrix_rows_truncated'] == 100 - retained_matrix
     assert budget['open_gaps_truncated'] == 80
     assert budget['references_truncated'] == 320
     assert len(out['clusters']) == 12
@@ -477,7 +506,7 @@ def test_build_survey_aborts_before_post_synthesis_grounding(monkeypatch):
         'arxiv_id': '2608.00001', 'paper_hash': 'h', 'title': 'Paper',
         'source': 'parsed_text', 'content': 'body',
     }])
-    monkeypatch.setattr(sv, '_synthesize_survey', lambda *args, **kwargs: (
+    monkeypatch.setattr(sv, 'dispatch_stream', _hierarchy_dispatch(
         '# survey', {
             'open_gaps': [{'id': 'g', 'gap': 'x',
                            'evidence': ['2608.99999']}],
@@ -537,7 +566,7 @@ def main():
         test_verify_against_library_is_pure_and_biting,
         test_fake_citation_flagged,
         test_clean_citations_no_card,
-        test_load_inputs_never_reparses_and_prefers_report,
+        test_load_inputs_never_reparses_and_prefers_original_text,
         test_grounded_tier_keeps_gap_and_flags_low_confidence,
         test_library_tier_gap_is_high_confidence,
         test_grounding_tier_NEUTER,

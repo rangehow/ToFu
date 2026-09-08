@@ -365,6 +365,11 @@ async function _submitComposerDraft() {
 
   let conv = getActiveConv();
   if (conv?._genStartCtrl) return;
+  const projectAtSend = projectState;
+  const modelAtSend = captureComposerModel(config);
+  const commitProjectAtSend = !!(projectAtSend.active && projectAtSend.path)
+    || _conversationProjectController.preservesDraft();
+  const selectedConvId = activeConvId;
   if (conv?._turnSnapshotRequired) {
     if (!runtimeScope.ConversationTurnStore) {
       throw new Error('Conversation turn runtime is unavailable.');
@@ -382,6 +387,9 @@ async function _submitComposerDraft() {
       );
     }
   }
+  // Navigation during hydration leaves the draft untouched rather than
+  // submitting it with another conversation's composer settings.
+  if (activeConvId !== selectedConvId) return;
   if (!conv) {
     const now = Date.now();
     conv = {
@@ -410,6 +418,15 @@ async function _submitComposerDraft() {
     renderConversationList();
   }
 
+  // Sending is an explicit context commit, unlike navigation/settings capture.
+  // Preserve a saved binding when a failed restore left the local bar empty.
+  if (commitProjectAtSend) {
+    const binding = _deriveConvPathsFromState(projectAtSend);
+    conv.projectPath = binding.allPaths[0] || '';
+    conv.projectPaths = binding.allPaths;
+    conv.readOnlyPaths = binding.roList;
+  }
+  commitComposerModel(conv, modelAtSend);
   const convId = conv.id;
   const capturedReplyQuotes = typeof getPendingReplyQuotes === 'function'
     ? [...(getPendingReplyQuotes() || [])] : [];
@@ -637,9 +654,16 @@ async function _submitComposerDraft() {
       if (typeof showToast === 'function') showToast(t('steer.injected'), 'success');
     } else if (acknowledgement.queued) {
       const position = Number(acknowledgement.position || 0);
-      debugLog('Message queued at position ' + position + '.', 'info');
+      const steerFallback = acknowledgement.steerFallback === true;
+      debugLog(steerFallback
+        ? 'Steer window closed; message queued at position ' + position + '.'
+        : 'Message queued at position ' + position + '.', 'info');
       if (typeof showToast === 'function') {
-        showToast(t('queue.queuedToast', { n: position }), 'info');
+        showToast(
+          t(steerFallback ? 'queue.steerFallbackToast' : 'queue.queuedToast',
+            { n: position }),
+          'info',
+        );
       }
     } else {
       debugLog('Turn accepted: ' + draft.commandId, 'success');

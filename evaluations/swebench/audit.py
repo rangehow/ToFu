@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from evaluations.codex_kimi_proxy.codex_contract import CODEX_VERSION
+from evaluations.opencode_contract import OPENCODE_VERSION
+from evaluations.opencode_proxy.projection import (
+    OpenCodeProjectionError,
+    project_opencode_trial,
+)
 from evaluations.long_agent_release.codex_projection import (
     CodexProjectionError,
     project_codex_trial,
@@ -19,6 +24,10 @@ from evaluations.long_agent_release.tofu_projection import (
 from .codex_kimi_runtime import (
     CODEX_KIMI_AGENT,
     CODEX_KIMI_RUNTIME_SCHEMA,
+)
+from .opencode_runtime import (
+    OPENCODE_AGENT,
+    OPENCODE_RUNTIME_SCHEMA,
 )
 from .tofu_kimi_runtime import (
     TOFU_KIMI_AGENT,
@@ -460,12 +469,204 @@ def _tofu_kimi_trial_evidence_checks(
     ]
 
 
+def _opencode_config_checks(
+    run_dir: Path, manifest: dict[str, Any], config: dict[str, Any]
+) -> list[AuditCheck]:
+    """Prove the OpenCode baseline shape without exposing secrets."""
+
+    formal = manifest.get("agent") == OPENCODE_AGENT
+    runtime = manifest.get("opencode_runtime")
+    if not formal and runtime is None:
+        return []
+    checks: list[AuditCheck] = []
+    sha = (
+        str(runtime.get("opencodeSha256") or "")
+        if isinstance(runtime, dict) else ""
+    )
+    runtime_valid = (
+        formal
+        and isinstance(runtime, dict)
+        and runtime.get("schema") == OPENCODE_RUNTIME_SCHEMA
+        and runtime.get("agentImport") == OPENCODE_AGENT
+        and runtime.get("opencodeVersion") == OPENCODE_VERSION
+        and runtime.get("providerFace") == manifest.get("provider_face")
+        and runtime.get("providerSlotId") == manifest.get("provider_slot_id")
+        and isinstance(runtime.get("providerFace"), str)
+        and bool(runtime.get("providerFace"))
+        and isinstance(runtime.get("providerSlotId"), str)
+        and bool(runtime.get("providerSlotId"))
+        and isinstance(runtime.get("agentTimeoutSeconds"), int)
+        and 1 <= runtime.get("agentTimeoutSeconds") <= 86_400
+        and runtime.get("listenHost") == "127.0.0.1"
+        and runtime.get("guestHost") == "10.0.2.101"
+        and runtime.get("requireTrialHeader") is True
+        and runtime.get("credentialBoundary") == "launcher-host-only"
+        and isinstance(runtime.get("model"), str)
+        and bool(runtime.get("model"))
+        and isinstance(runtime.get("opencodeCacheSeed"), dict)
+        and len(sha) == 64
+        and all(character in "0123456789abcdef" for character in sha)
+    )
+    checks.append(AuditCheck(
+        "opencode_runtime_manifest",
+        runtime_valid,
+        "pinned OpenCode + loopback-only required-header proxy",
+    ))
+    if not isinstance(runtime, dict):
+        return checks
+    agents = config.get("agents") or []
+    agent = agents[0] if isinstance(agents, list) and len(agents) == 1 \
+        and isinstance(agents[0], dict) else {}
+    kwargs = agent.get("kwargs") if isinstance(agent, dict) else {}
+    cache_seed = runtime.get("opencodeCacheSeed") or {}
+    expected_kwargs = {
+        "opencode_binary": runtime.get("opencodeBinary"),
+        "opencode_sha256": runtime.get("opencodeSha256"),
+        "opencode_cache_seed": cache_seed.get("path")
+        if isinstance(cache_seed, dict) else None,
+        "model": runtime.get("model"),
+        "proxy_trial_metrics_dir": runtime.get("trialMetricsDir"),
+        "proxy_service_name": runtime.get("guestServiceName"),
+        "context_tokens": runtime.get("contextTokens"),
+        "output_tokens": runtime.get("outputTokens"),
+        "timeout_sec": runtime.get("agentTimeoutSeconds"),
+        "version": OPENCODE_VERSION,
+    }
+    agent_valid = (
+        agent.get("name") == OPENCODE_AGENT
+        and agent.get("model_name") == runtime.get("model")
+        and kwargs == expected_kwargs
+        and not agent.get("env")
+        and not agent.get("extra_allowed_hosts")
+        and manifest.get("models") == [runtime.get("model")]
+        and manifest.get("secret_env_names") in ([], None)
+    )
+    checks.append(AuditCheck(
+        "opencode_agent_pin",
+        agent_valid,
+        "single pinned-model agent with exact binary/seed inputs, no guest env",
+    ))
+    environment = config.get("environment") or {}
+    environment_kwargs = environment.get("kwargs") or {}
+    routes = environment_kwargs.get("loopback_service_forwards") or []
+    route = routes[0] if isinstance(routes, list) and len(routes) == 1 \
+        and isinstance(routes[0], dict) else {}
+    route_valid = (
+        environment.get("import_path")
+        == "rootless_vm.harbor_environment:RootlessQemuEnvironment"
+        and route.get("name") == runtime.get("guestServiceName")
+        and route.get("guest_host") == runtime.get("guestHost")
+        and route.get("guest_port") == runtime.get("guestPort")
+        and route.get("host_port") == runtime.get("listenPort")
+    )
+    checks.append(AuditCheck(
+        "opencode_single_control_route",
+        route_valid,
+        "one fixed guest endpoint relayed to one host-loopback port",
+    ))
+    expected_names = [
+        runtime.get("upstreamBaseUrlEnv"), runtime.get("upstreamApiKeyEnv")
+    ]
+    boundary_valid = (
+        all(isinstance(name, str) and name for name in expected_names)
+        and manifest.get("host_only_secret_env_names") == expected_names
+    )
+    control_files = [
+        run_dir / "manifest.json",
+        run_dir / "job-config.json",
+        run_dir / "command.json",
+        run_dir / "launcher.log",
+    ]
+    leaked_names: list[str] = []
+    scanned_names: list[str] = []
+    if boundary_valid:
+        import os
+
+        for name in expected_names:
+            value = os.environ.get(str(name), "").encode("utf-8")
+            if value:
+                scanned_names.append(str(name))
+                if any(_contains_bytes(path, value) for path in control_files):
+                    leaked_names.append(str(name))
+    checks.append(AuditCheck(
+        "opencode_no_credential_persistence",
+        boundary_valid and not leaked_names,
+        "no guest credential fields; exact-value scans=" + str(scanned_names)
+        if not leaked_names else f"leaked environment names={leaked_names}",
+    ))
+    metrics_root = Path(str(runtime.get("trialMetricsDir") or ""))
+    metrics_owned = (
+        metrics_root == run_dir / "opencode-proxy" / "trials"
+        and metrics_root.is_dir()
+        and not metrics_root.is_symlink()
+        and metrics_root.stat().st_mode & 0o077 == 0
+    )
+    checks.append(AuditCheck(
+        "opencode_private_metrics_repository",
+        metrics_owned,
+        "run-owned owner-only per-trial proxy shards",
+    ))
+    return checks
+
+
+def _opencode_trial_evidence_checks(
+    manifest: dict[str, Any], trial_dirs: list[Path], expected: int
+) -> list[AuditCheck]:
+    if manifest.get("agent") != OPENCODE_AGENT:
+        return []
+    runtime = manifest.get("opencode_runtime") or {}
+    expected_sha = str(runtime.get("opencodeSha256") or "")
+    valid = 0
+    tokens: set[str] = set()
+    errors: list[str] = []
+    for trial_dir in trial_dirs:
+        agent_dir = trial_dir / "agent"
+        evidence = agent_dir / "opencode-evidence"
+        raw = evidence / "opencode-events.jsonl"
+        metrics = evidence / "proxy-metrics.jsonl"
+        trajectory = agent_dir / "trajectory.json"
+        try:
+            atif = _load_json(trajectory)
+            atif_agent = atif.get("agent")
+            if not isinstance(atif_agent, dict):
+                raise ValueError("ATIF agent metadata is invalid")
+            extra = atif_agent.get("extra") or {}
+            if not isinstance(extra, dict):
+                raise ValueError("ATIF extra metadata is invalid")
+            trial_token = str(extra.get("trial_token") or "")
+            if not trial_token:
+                raise ValueError("ATIF trial token is missing")
+            project_opencode_trial(
+                raw_events=raw,
+                proxy_metrics=metrics,
+                trial_token=trial_token,
+            )
+            if atif_agent.get("name") != "opencode-guest" \
+                    or atif_agent.get("version") != OPENCODE_VERSION \
+                    or extra.get("binary_sha256") != expected_sha:
+                raise ValueError("ATIF pin does not match raw evidence")
+            if trial_token in tokens:
+                raise ValueError("duplicate trial token")
+            tokens.add(trial_token)
+            valid += 1
+        except (OSError, ValueError, OpenCodeProjectionError) as exc:
+            if len(errors) < 5:
+                errors.append(f"{trial_dir.name}:{type(exc).__name__}")
+    return [AuditCheck(
+        "opencode_reconciled_trial_evidence",
+        valid == expected and len(tokens) == expected,
+        f"valid={valid}, unique_tokens={len(tokens)}, expected={expected}"
+        + (f", errors={errors}" if errors else ""),
+    )]
+
+
 def _audit_harbor(run_dir: Path, manifest: dict[str, Any], allow_errors: bool) -> list[AuditCheck]:
     checks = _artifact_checks(run_dir)
     config_path = Path(str(manifest.get("job_config") or run_dir / "job-config.json"))
     config = _load_json(config_path)
     checks.extend(_codex_kimi_config_checks(run_dir, manifest, config))
     checks.extend(_tofu_kimi_config_checks(run_dir, manifest, config))
+    checks.extend(_opencode_config_checks(run_dir, manifest, config))
     environment = config.get("environment") or {}
     import_path = environment.get("import_path")
     backend = environment.get("type")
@@ -567,7 +768,7 @@ def _audit_harbor(run_dir: Path, manifest: dict[str, Any], allow_errors: bool) -
         )
     )
     formal_identity = manifest.get("agent") in {
-        CODEX_KIMI_AGENT, TOFU_KIMI_AGENT,
+        CODEX_KIMI_AGENT, TOFU_KIMI_AGENT, OPENCODE_AGENT,
     }
     if formal_identity or manifest.get("harness_identity") is not None:
         harbor_binary = Path(str(manifest.get("harbor_binary") or ""))
@@ -682,6 +883,9 @@ def _audit_harbor(run_dir: Path, manifest: dict[str, Any], allow_errors: bool) -
     )
     checks.extend(
         _tofu_kimi_trial_evidence_checks(manifest, trial_dirs, expected)
+    )
+    checks.extend(
+        _opencode_trial_evidence_checks(manifest, trial_dirs, expected)
     )
     trial_pairs: list[tuple[str, str]] = []
     terminal_bench_task_refs: list[tuple[str, str, str]] = []

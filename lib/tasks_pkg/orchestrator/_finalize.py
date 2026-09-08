@@ -700,13 +700,11 @@ def _run_post_loop_fallback(
         'role': 'assistant',
         'content': "I've gathered the information. Let me analyze it.",
     })
-    fallback_messages.append({
-        'role': 'user',
-        'content': (
-            f'Here are fetched contents:\n\n{combined}\n\n'
-            'Provide a comprehensive answer. Cite sources.'
-        ),
-    })
+    from lib.tasks_pkg.context_composer import append_injection
+    append_injection(
+        fallback_messages, 'fallback_synthesis',
+        f'Here are fetched contents:\n\n{combined}\n\n'
+        'Provide a comprehensive answer. Cite sources.', task=task)
     try:
         snapshot = _strip_base64_for_snapshot(fallback_messages)
         append_event(task, build_event(
@@ -885,12 +883,15 @@ def _settle_post_loop_finish_reason(
                     'finished but BEFORE the response was fully rendered.',
                     tid, loop_exit_reason, model, pre_abort_finish,
                 )
+    elif (not task.get('error') and task.get('_toolLoopIncompleteStop')):
+        # A repeated successful check is not proof of task completion. Use the
+        # existing incomplete outcome so the user retains Continue.
+        last_finish_reason = 'incomplete'
     elif (last_finish_reason in ('tool_use', 'tool_calls')
             and not task.get('error')
             and task.get('_toolLoopCleanFinish')):
-        # The success-poll breaker ended the turn deliberately: the loop
-        # stopped on a tool round, but the verified state is the result,
-        # not a dangling tool call.
+        # Background acceptance deliberately ends on a tool round; its
+        # acknowledgement is not a dangling tool call.
         last_finish_reason = 'stop'
         logger.info(
             '[%s] Tool-loop breaker clean finish (%s) at round %s — '
@@ -1003,6 +1004,17 @@ def _log_terminal_runtime_stats(
         task.get('error') or 'none', model, elapsed, len(api_rounds),
         task.get('aborted', False), abort_detected_phase or 'n/a')
     return content_len, thinking_len, elapsed
+
+
+def _close_finalize_window(task):
+    """Retire the LATE-done latch after settlement and event delivery.
+
+    Continuation publication belongs to the lifecycle's successful settlement
+    boundary, before it releases queued successors or returns the done frame.
+    """
+    # The real done is queued. Readers can drain it normally; a reader that
+    # missed the queue can still synthesize LATE done from the terminal task.
+    task.pop('_finalize_started_at', None)
 
 
 def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, thinking_depth: str | None, cfg: dict[str, Any],
@@ -1702,11 +1714,7 @@ def _finalize_and_emit_done(task: dict[str, Any], *, model: str, preset: str, th
     # carrier close-on-exit backstop below, never leaking an armed carrier.
     try:
         append_event(task, done_evt)
-        # Finalize-window closed — the real done is now in the event queue, so
-        # a tick drains it as a normal event instead of needing the LATE-done
-        # synthesis. Clearing is safe even if a reader missed every event (the
-        # task is terminal and the latch is gone → LATE done resumes its role).
-        task.pop('_finalize_started_at', None)
+        _close_finalize_window(task)
     finally:
         if _ap_armed:
             try:

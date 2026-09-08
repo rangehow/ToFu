@@ -189,24 +189,18 @@
   scrollbar-width: thin;
   scrollbar-color: var(--s-skin) transparent;
 }
-/* Group labels — stamped dividers, echo .settings-section-title */
+/* Group labels — quiet captions (Linear/macOS sidebar register) */
 .settings-tab-group {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 11px 12px 5px;
+  padding: 14px 12px 6px;
   font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.14em;
+  font-weight: 800;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(26, 24, 20, 0.42);
+  color: rgba(26, 24, 20, 0.38);
   user-select: none;
-}
-.settings-tab-group::after {
-  content: '';
-  flex: 1;
-  height: 1.5px;
-  background: rgba(26, 24, 20, 0.14);
 }
 .settings-tab {
   display: flex;
@@ -236,17 +230,16 @@
   outline: 2px solid var(--s-gold-dim);
   outline-offset: 1px;
 }
-/* Active = raised white tile that merges with the content surface,
-   gold kintsugi strip inlaid on the left edge */
+/* Active = soft gold wash pill (macOS grouped-list selection) */
 .settings-tab.active {
-  background: var(--s-white);
-  border-color: var(--s-line-strong);
+  background: rgba(201, 153, 63, 0.14);
+  border-color: rgba(201, 153, 63, 0.30);
   color: var(--s-ink);
-  box-shadow: inset 3px 0 0 var(--s-gold), var(--s-shadow-xs);
+  box-shadow: none;
   font-weight: 700;
 }
 .settings-tab.active:active {
-  box-shadow: inset 3px 0 0 var(--s-gold), var(--s-shadow-xs);
+  box-shadow: none;
 }
 .settings-tab svg {
   flex-shrink: 0;
@@ -282,15 +275,16 @@
 .settings-tab-panel { display: none; }
 .settings-tab-panel.active { display: block; }
 
-/* ── Section titles — stamped like My Day section labels ── */
+/* ── Section titles — Stripe/Notion register: semibold sentence-case title
+   above the card it names; the gray .settings-desc under it carries the
+   explanation. No stamps, no letterspacing. ── */
 .settings-section-title {
-  font-size: 11px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
   color: var(--s-ink);
   padding: 0 2px;
-  margin-bottom: 12px;
+  margin: 0 0 6px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -336,23 +330,60 @@ input.settings-mono {
   transform: none;
 }
 
-/* ── Divider — thick line like My Day section border ── */
+/* ── Divider — hairline, spacing does the separating ── */
 .settings-divider {
-  height: 2px;
-  background: var(--s-ink);
-  margin: 18px 0 20px;
-  opacity: 0.12;
+  height: 1px;
+  background: var(--s-line);
+  margin: 20px 0;
 }
 
 /* ── Machine Translation provider styles moved to static/settings.css
       (translate settings page decoupling, 2026-07-18). ── */
 
 /* ── Settings groups & rows ── */
+/* ── Disclosure sections (<details>) — quiet card row with a rotating
+   chevron; the summary reads as a list row, the body as an inset group. ── */
+.settings-disclosure {
+  border: 1px solid var(--s-line);
+  border-radius: 12px;
+  background: var(--s-white);
+  box-shadow: var(--s-shadow-xs);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.settings-disclosure summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 16px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: 13px;
+  color: var(--s-ink);
+  transition: background 0.12s;
+}
+.settings-disclosure summary::-webkit-details-marker { display: none; }
+.settings-disclosure summary::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-left: 1px;
+  border-right: 1.8px solid var(--s-ink-soft);
+  border-bottom: 1.8px solid var(--s-ink-soft);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.settings-disclosure[open] summary::before { transform: rotate(45deg); }
+.settings-disclosure summary:hover { background: rgba(26, 24, 20, 0.03); }
+.settings-disclosure[open] summary { border-bottom: 1px solid var(--s-line); }
+.settings-disclosure-body { padding: 14px 16px 16px; }
 .settings-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .settings-group label { margin-bottom: 4px; }
 .settings-row {
@@ -376,27 +407,27 @@ input.settings-mono {
 .settings-panel .settings-field input,
 .settings-panel .settings-field select {
   width: 100%;
-  height: 38px;
+  height: 36px;
   padding: 0 12px;
   background: #fff;
-  border: 2px solid var(--s-ink);
-  border-radius: 0;
-  box-shadow: 2px 2px 0 var(--s-ink);
+  border: 1px solid var(--s-line-strong);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(26, 24, 20, 0.05);
   color: var(--s-ink);
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
   outline: none;
   margin-bottom: 10px;
-  transition: transform 0.1s, box-shadow 0.1s, background 0.1s;
+  transition: border-color 0.12s, box-shadow 0.12s, background 0.12s;
 }
 .settings-panel .settings-field input:focus,
 .settings-panel .settings-field select:focus {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--s-ink);
-  background: #fffef5;
+  border-color: var(--s-gold);
+  box-shadow: 0 0 0 3px var(--s-gold-glow);
+  background: #fff;
 }
 
-/* ── Toggle rows — card-style like My Day todo items ── */
+/* ── Toggle rows — quiet white cards (hairline border, soft lift) ── */
 .settings-toggle-row {
   display: flex;
   align-items: center;
@@ -404,13 +435,14 @@ input.settings-mono {
   padding: 12px 14px;
   gap: 16px;
   background: var(--s-white);
-  border: 1.5px solid var(--s-ink);
+  border: 1px solid var(--s-line);
+  border-radius: 12px;
   box-shadow: var(--s-shadow-xs);
-  transition: transform 0.1s, box-shadow 0.1s;
+  transition: transform 0.12s, box-shadow 0.12s;
 }
 .settings-toggle-row:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .settings-toggle-label {
   font-size: 13px;
@@ -428,7 +460,7 @@ input.settings-mono {
 .settings-hint-banner {
   padding: 8px 12px;
   margin-top: 6px;
-  border: 1.5px solid var(--s-gold);
+  border: 1px solid rgba(201, 153, 63, 0.45);
   background: rgba(212, 168, 80, 0.1);
   font-size: 11px;
   font-weight: 700;
@@ -440,8 +472,8 @@ input.settings-mono {
    About & Updates card (Settings › General)
    The update entry point moved here from the topbar — checking for updates
    is a rare, deliberate action. Built from the same primitives as
-   .settings-toggle-row (white card, hard ink border, offset shadow, lift on
-   hover) so it reads as a peer of the toggle rows rather than a new idiom.
+   .settings-toggle-row (white card, hairline border, soft shadow, gentle
+   lift on hover) so it reads as a peer of the toggle rows.
    ══════════════════════════════════════ */
 .stg-update-row {
   display: flex;
@@ -450,13 +482,14 @@ input.settings-mono {
   gap: 16px;
   padding: 12px 14px;
   background: var(--s-white);
-  border: 1.5px solid var(--s-ink);
+  border: 1px solid var(--s-line);
+  border-radius: 12px;
   box-shadow: var(--s-shadow-xs);
-  transition: transform 0.1s, box-shadow 0.1s;
+  transition: transform 0.12s, box-shadow 0.12s;
 }
 .stg-update-row:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .stg-update-info {
   display: flex;
@@ -472,9 +505,9 @@ input.settings-mono {
   align-items: center;
   justify-content: center;
   color: var(--s-ink);
-  background: var(--s-skin);
-  border: 1.5px solid var(--s-ink);
-  border-radius: var(--s-radius);
+  background: var(--s-cream);
+  border: 1px solid var(--s-line-strong);
+  border-radius: 9px;
 }
 .stg-update-text { min-width: 0; }
 /* Version sits on its own line so a long description never collides with it. */
@@ -497,20 +530,25 @@ input.settings-mono {
   font-weight: 900;
   font-family: inherit;
   color: var(--s-ink);
-  background: var(--s-gold);
-  border: var(--s-border);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
+  background: linear-gradient(180deg, #e3ba66 0%, #cfa14a 52%, #bd8f39 100%);
+  border: 1px solid #a87d2e;
   border-radius: var(--s-radius);
-  box-shadow: var(--s-shadow-xs);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 1px 2px rgba(26, 24, 20, 0.14), 0 4px 12px rgba(201, 153, 63, 0.26);
   cursor: pointer;
-  transition: transform 0.1s, box-shadow 0.1s;
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
 }
 .stg-update-btn:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--s-ink);
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, #ecc576 0%, #d8a951 52%, #c69840 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 2px 4px rgba(26, 24, 20, 0.15), 0 8px 20px rgba(201, 153, 63, 0.32);
 }
 .stg-update-btn:active {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--s-ink);
+  transform: translateY(1px);
+  background: linear-gradient(180deg, #c89940 0%, #bd8f39 100%);
+  box-shadow: inset 0 2px 5px rgba(122, 84, 20, 0.32), 0 1px 2px rgba(26, 24, 20, 0.10);
 }
 /* "New" pill — shown only when update.js found a newer release. */
 .stg-update-pill {
@@ -535,15 +573,16 @@ input.settings-mono {
 
 /* ══════════════════════════════════════
    Mobile-client download card (Settings › General › About & Update)
-   Same primitives as .stg-update-row above: white card, hard ink border,
-   offset shadow. Two platform rows — Android is an active download (version
-   badge served by the backend), iOS is inert until a real link exists.
+   Quiet-surface card like .stg-update-row above: hairline border, rounded
+   corners, soft shadow. Two platform rows — Android is an active download
+   (version badge served by the backend), iOS is inert until a real link exists.
    ══════════════════════════════════════ */
 .stg-mobile-card {
   padding: 12px 14px;
   background: var(--s-white);
-  border: 1.5px solid var(--s-ink);
-  box-shadow: var(--s-shadow-xs);
+  border: 1px solid var(--s-line);
+  border-radius: var(--s-radius-lg);
+  box-shadow: var(--s-shadow-sm);
 }
 .stg-mobile-head {
   display: flex;
@@ -567,21 +606,25 @@ input.settings-mono {
   font-size: 11px;
   font-weight: 900;
   color: var(--s-ink);
-  background: var(--s-skin);
-  border: var(--s-border);
+  background: linear-gradient(180deg, #ecdfc8 0%, #e4d6bf 55%, #d9c8ac 100%);
+  border: 1px solid rgba(26, 24, 20, 0.22);
   border-radius: var(--s-radius);
-  box-shadow: var(--s-shadow-xs);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 1px 2px rgba(26, 24, 20, 0.10),
+    0 3px 8px rgba(26, 24, 20, 0.05);
   text-decoration: none;
   cursor: pointer;
-  transition: transform 0.1s, box-shadow 0.1s;
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
 }
 .stg-mobile-row:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--s-ink);
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, #f1e5d0 0%, #eadcc4 55%, #dfcfb4 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.50), 0 2px 4px rgba(26, 24, 20, 0.12),
+    0 8px 18px rgba(26, 24, 20, 0.08);
 }
 .stg-mobile-row:active {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--s-ink);
+  transform: translateY(1px);
+  background: linear-gradient(180deg, #e0d0b4 0%, #d9c8ac 100%);
+  box-shadow: inset 0 2px 4px rgba(26, 24, 20, 0.10), 0 1px 2px rgba(26, 24, 20, 0.08);
 }
 .stg-mobile-platform { display: inline-flex; flex-shrink: 0; }
 .stg-mobile-name { flex-shrink: 0; }
@@ -608,6 +651,7 @@ input.settings-mono {
   cursor: default;
   opacity: 0.55;
   transform: none;
+  background: var(--s-skin);
   box-shadow: var(--s-shadow-xs);
 }
 .stg-mobile-soon {
@@ -632,14 +676,18 @@ input.settings-mono {
    into the surface (inset top shadow, bottom inner highlight); the thumb
    hovers above it (gradient + drop shadow) and the ON state fills the
    recess with dark cyan. Inner/outer shadows answer each other so knob
-   and capsule read as one physical whole. Geometry is var-driven so
-   compact variants (.stg-dv-toggle / .stg-key-toggle) only override vars.
+   and capsule read as one physical whole. Corners echo the card radius
+   language (8px track / 5px thumb) instead of a pill. Geometry is
+   var-driven so compact variants (.stg-dv-toggle / .stg-key-toggle)
+   only override vars.
    ══════════════════════════════════════ */
 .stg-toggle {
   --stg-toggle-width: 52px;
   --stg-toggle-height: 30px;
   --stg-toggle-thumb-size: 24px;
   --stg-toggle-thumb-gap: 3px;
+  --stg-toggle-track-radius: 8px;
+  --stg-toggle-thumb-radius: 5px;
   --stg-toggle-travel: calc(var(--stg-toggle-width) - var(--stg-toggle-thumb-size) - 2 * var(--stg-toggle-thumb-gap));
   position: relative;
   display: inline-flex;
@@ -667,7 +715,7 @@ input.settings-mono {
   width: var(--stg-toggle-width);
   height: var(--stg-toggle-height);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--stg-toggle-track-radius);
   background: linear-gradient(180deg, #ddd6c8 0%, #e9e3d6 100%);
   box-shadow:
     inset 0 1.5px 3px rgba(70, 58, 35, 0.22),
@@ -682,7 +730,7 @@ input.settings-mono {
   width: var(--stg-toggle-thumb-size);
   height: var(--stg-toggle-thumb-size);
   border: 0;
-  border-radius: 50%;
+  border-radius: var(--stg-toggle-thumb-radius);
   background: linear-gradient(180deg, #ffffff 0%, #f1ede4 100%);
   box-shadow:
     0 2px 5px rgba(50, 40, 20, 0.3),
@@ -785,8 +833,7 @@ input.settings-mono {
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
 }
-/* Brutalist data table: hard 2px outer border + hard shadow instead of the
- * browser's hairline default. */
+/* Data table: hairline outer border + whisper shadow. */
 .stg-table {
   width: 100%;
   border-collapse: collapse;
@@ -824,21 +871,24 @@ input.settings-mono {
   font-family: inherit;
   line-height: 1;
   color: var(--s-ink);
-  background: #fff;
-  border: var(--s-border);
+  background: linear-gradient(180deg, #ffffff 0%, #f6f1e3 100%);
+  border: 1px solid var(--s-line-strong);
   border-radius: 8px;
-  box-shadow: var(--s-shadow-xs);
+  box-shadow: inset 0 1px 0 #ffffff, 0 1px 2px rgba(26, 24, 20, 0.10), 0 3px 8px rgba(26, 24, 20, 0.06);
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.12s;
 }
 .stg-btn:hover:not(:disabled) {
-  background: #f5f0e4;
+  background: linear-gradient(180deg, #ffffff 0%, #faf5e9 100%);
   border-color: rgba(26, 24, 20, 0.24);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 #ffffff, 0 2px 4px rgba(26, 24, 20, 0.12), 0 8px 18px rgba(26, 24, 20, 0.09);
 }
 .stg-btn:active:not(:disabled) {
   transform: translateY(1px);
-  box-shadow: none;
+  background: linear-gradient(180deg, #f3eddd 0%, #efe8d6 100%);
+  box-shadow: inset 0 2px 4px rgba(26, 24, 20, 0.09), 0 1px 2px rgba(26, 24, 20, 0.08);
 }
 .stg-btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 
@@ -871,10 +921,6 @@ input.settings-mono {
   border-color: rgba(26, 24, 20, 0.24);
 }
 .btn-xs:active { transform: translateY(1px); box-shadow: none; }
-.btn-xs:active {
-  transform: translate(2px, 2px);
-  box-shadow: 0 0 0 var(--s-ink);
-}
 
 /* ── Section Actions (button group in section header) ── */
 .stg-section-actions { display: flex; gap: 6px; align-items: center; }
@@ -891,9 +937,13 @@ input.settings-mono {
   right: 0;
   top: 100%;
   z-index: 200;
+  /* Size to the two full columns — the containing block is only as wide as
+     the header button row, so an available-width cap would truncate names. */
+  width: max-content;
   min-width: 360px;
-  max-width: 460px;
+  max-width: min(600px, calc(100vw - 48px));
   max-height: 480px;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--s-white);
   border: var(--s-border);
@@ -942,21 +992,29 @@ input.settings-mono {
 /* ── Items grid (2-column for compact layout) ── */
 .stg-template-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  padding: 2px 6px 4px;
+  /* minmax(0, …): nowrap names set a min-content larger than a narrow menu,
+     which pushed the second column out of the clipped menu box. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px 8px 6px;
 }
 
 /* ── Individual item ── */
 .stg-template-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
+  gap: 10px;
+  padding: 8px 10px;
   cursor: pointer;
-  transition: background 0.1s, box-shadow 0.1s;
-  border-radius: 4px;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  border-radius: 9px;
   border: 1.5px solid transparent;
+  /* <button> UA defaults leak without these: gray buttonface tiles,
+     centered text, wrong font (local-preset already resets its own). */
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
 }
 .stg-template-item:hover {
   background: var(--s-cream);
@@ -1249,7 +1307,7 @@ input.settings-mono {
   top: -6px;
   background: var(--s-cream);
   z-index: 1;
-  border-bottom: 1.5px solid var(--s-ink);
+  border-bottom: 1px solid var(--s-line);
 }
 .stg-dv-item {
   display: flex;
@@ -1325,12 +1383,20 @@ input.settings-mono {
   border-radius: 8px;
   cursor: pointer;
   box-shadow: none;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition: background 0.12s, color 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.12s;
 }
 .stg-btn-danger:hover {
-  background: var(--s-danger);
-  border-color: var(--s-danger);
+  background: linear-gradient(180deg, #f26d6d 0%, #dc2626 55%, #c11f1f 100%);
+  border-color: #b91c1c;
   color: #fff;
+  text-shadow: 0 1px 0 rgba(122, 16, 16, 0.30);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.30), 0 1px 2px rgba(26, 24, 20, 0.14),
+    0 4px 12px rgba(220, 38, 38, 0.26);
+}
+.stg-btn-danger:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(122, 16, 16, 0.30);
 }
 
 /* ══════════════════════════════════════
@@ -1364,28 +1430,33 @@ input.settings-mono {
 }
 .stg-btn-balance {
   white-space: nowrap;
-  background: var(--s-gold);
-  border: 1px solid var(--s-gold-dim);
+  background: linear-gradient(180deg, #e3ba66 0%, #cfa14a 52%, #bd8f39 100%);
+  border: 1px solid #a87d2e;
   color: var(--s-ink);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
   font-size: 11px;
   font-weight: 800;
   padding: 0 18px;
   height: 38px;
   border-radius: 8px;
   cursor: pointer;
-  box-shadow: var(--s-shadow-xs);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 1px 2px rgba(26, 24, 20, 0.14), 0 4px 12px rgba(201, 153, 63, 0.26);
   transition: background 0.12s, color 0.12s, box-shadow 0.12s, transform 0.12s;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   line-height: 38px;
 }
 .stg-btn-balance:hover {
-  background: var(--s-gold-dim);
-  color: #fff;
+  background: linear-gradient(180deg, #ecc576 0%, #d8a951 52%, #c69840 100%);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 2px 4px rgba(26, 24, 20, 0.15), 0 8px 20px rgba(201, 153, 63, 0.32);
 }
 .stg-btn-balance:active {
   transform: translateY(1px);
-  box-shadow: none;
+  background: linear-gradient(180deg, #c89940 0%, #bd8f39 100%);
+  box-shadow: inset 0 2px 5px rgba(122, 84, 20, 0.32), 0 1px 2px rgba(26, 24, 20, 0.10);
 }
 
 /* ══════════════════════════════════════
@@ -1588,17 +1659,20 @@ input.settings-mono {
 
 /* ── Merged API-key card: editor row + today's runtime stats row ──
    Raised white row on the paper card: hairline border, soft elevation,
-   and a slim inset accent bar on the left that encodes health state. */
+   and a slim inset accent bar on the left that encodes health state.
+   Single line: #N chip, content-sized key text (size attribute driven),
+   eye/delete buttons, then today's stats pushed right; wraps when narrow. */
 .stg-key-card {
   position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
   background: #fff;
   border: 1px solid var(--s-line);
   box-shadow: var(--s-shadow-xs);
   border-radius: 10px;
-  padding: 10px 12px 10px 15px;
+  padding: 6px 10px 6px 14px;
   transition: border-color 0.14s ease, box-shadow 0.14s ease;
 }
 .stg-key-card:hover {
@@ -1610,8 +1684,8 @@ input.settings-mono {
   content: '';
   position: absolute;
   left: 0;
-  top: 10px;
-  bottom: 10px;
+  top: 8px;
+  bottom: 8px;
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: var(--s-skin);
@@ -1619,7 +1693,9 @@ input.settings-mono {
 .stg-key-card-edit {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex: 1 1 0;
+  min-width: 0;
 }
 .stg-key-card-stats {
   display: flex;
@@ -1628,10 +1704,7 @@ input.settings-mono {
   flex-wrap: wrap;
   min-width: 0;
   font-size: 12px;
-  /* Align metrics under the input, past the #N column (24px chip + 8px gap). */
-  padding-left: 32px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(26, 24, 20, 0.06);
+  margin-left: auto;
 }
 .stg-key-card--blank .stg-key-card-stats { display: none; }
 /* Round "i" info chip — quiet until hovered. */
@@ -1687,12 +1760,18 @@ input.settings-mono {
   border-radius: 6px;
   user-select: none;
 }
+/* Masked key hint fills the row like a real credential field: full-width
+   mono box (the server-held head…tail hint is much shorter than the actual
+   key, so a content-sized box reads toy-small), eye/delete actions anchored
+   at its right edge, stats pushed to the card's far right. */
 .stg-key-card-edit > input.stg-keys-input {
   flex: 1 1 0;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   font-family: ui-monospace, 'JetBrains Mono', monospace;
   font-size: 12px;
-  height: 32px;
+  height: 30px;
   padding: 0 10px;
   margin-bottom: 0;
   border: 1px solid var(--s-line);
@@ -1705,11 +1784,23 @@ input.settings-mono {
 }
 .stg-key-card-edit > input.stg-keys-input:hover {
   border-color: var(--s-line-strong);
+  background: #fff;
 }
 .stg-key-card-edit > input.stg-keys-input:focus {
   background: #fff;
   border-color: var(--s-gold);
   box-shadow: 0 0 0 3px var(--s-gold-glow);
+}
+.stg-key-card--new .stg-key-card-edit { flex: 1 1 0; }
+.stg-key-card--new .stg-key-card-edit > input.stg-keys-input {
+  flex: 1 1 0;
+  height: 32px;
+  padding: 0 10px;
+  border-color: var(--s-line);
+  background: #fdfcf8;
+}
+.stg-key-card--new .stg-key-card-edit > input.stg-keys-input:hover {
+  border-color: var(--s-line-strong);
 }
 .stg-keys-btn {
   flex: 0 0 auto;
@@ -1867,6 +1958,11 @@ input.settings-mono {
   min-width: 34px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
+}
+.stg-keystat-none {
+  color: var(--s-ink-soft);
+  font-size: 11px;
+  opacity: 0.75;
 }
 .stg-keystat-count {
   color: var(--s-ink-soft);

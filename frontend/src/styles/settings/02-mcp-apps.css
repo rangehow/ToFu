@@ -35,8 +35,8 @@
 }
 .mcp-search:focus {
   outline: none;
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 var(--s-ink);
+  border-color: var(--s-gold);
+  box-shadow: 0 0 0 3px var(--s-gold-glow);
 }
 .mcp-search::placeholder { color: var(--s-ink-soft); opacity: 0.7; }
 /* ── Category pills ── */
@@ -65,16 +65,16 @@
 .mcp-cat-pill:hover {
   background: var(--s-cream);
   color: var(--s-ink);
-  transform: translate(-1px, -1px);
-  box-shadow: 2px 2px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .mcp-cat-pill.active {
-  background: var(--s-ink);
-  color: var(--s-white);
-  border-color: var(--s-ink);
-  box-shadow: 2px 2px 0 var(--s-gold);
+  background: rgba(201, 153, 63, 0.14);
+  color: var(--s-ink);
+  border-color: rgba(201, 153, 63, 0.45);
+  box-shadow: none;
 }
-.mcp-cat-pill.active .mcp-cat-count { color: var(--s-gold); opacity: 1; }
+.mcp-cat-pill.active .mcp-cat-count { color: var(--s-gold-dim); opacity: 1; }
 .mcp-cat-count {
   font-weight: 700;
   font-size: 10px;
@@ -135,15 +135,15 @@
   transition: transform 0.1s, box-shadow 0.1s, border-color 0.1s, color 0.1s;
 }
 .skills-page-btn:hover:not([disabled]):not(.is-active) {
-  border-color: var(--s-ink);
+  border-color: var(--s-line-strong);
   color: var(--s-ink);
-  transform: translate(-1px, -1px);
-  box-shadow: 2px 2px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .skills-page-btn.is-active {
-  background: var(--s-ink);
-  color: var(--s-gold);
-  border-color: var(--s-ink);
+  background: rgba(201, 153, 63, 0.14);
+  color: var(--s-ink);
+  border-color: rgba(201, 153, 63, 0.45);
   cursor: default;
 }
 .skills-page-btn[disabled] { opacity: .35; cursor: not-allowed; }
@@ -168,15 +168,16 @@
   transition: transform 0.1s, box-shadow 0.1s;
 }
 .mcp-app-card:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
 .mcp-app-card.connected {
   background: linear-gradient(180deg, rgba(201, 153, 63, 0.05) 0%, var(--s-white) 60%);
-  box-shadow: 2px 2px 0 var(--s-gold), var(--s-shadow-xs);
+  border-color: rgba(201, 153, 63, 0.45);
+  box-shadow: var(--s-shadow-xs);
 }
 .mcp-app-card.connected:hover {
-  box-shadow: 3px 3px 0 var(--s-gold), 4px 4px 0 var(--s-ink);
+  box-shadow: var(--s-shadow-sm);
 }
 .mcp-app-card.installed { background: var(--s-cream); }
 /* Icon tile */
@@ -192,12 +193,12 @@
   border: var(--s-border-sm);
   border-radius: var(--s-radius);
   background: var(--s-cream);
-  box-shadow: 2px 2px 0 var(--s-ink);
+  box-shadow: none;
   line-height: 1;
 }
 .mcp-app-card.connected .mcp-app-icon {
   background: var(--s-white);
-  box-shadow: 2px 2px 0 var(--s-gold);
+  box-shadow: none;
 }
 .mcp-app-icon img,
 .mcp-app-icon svg {
@@ -668,9 +669,9 @@
 }
 .mcp-install-modal {
   background: var(--s-white);
-  border: 3px solid var(--s-ink);
-  border-radius: var(--s-radius);
-  box-shadow: 8px 8px 0 var(--s-ink);
+  border: 1px solid rgba(26, 24, 20, 0.18);
+  border-radius: var(--s-radius-lg);
+  box-shadow: 0 24px 70px rgba(26, 24, 20, 0.3), 0 6px 22px rgba(26, 24, 20, 0.14);
   width: 420px;
   max-width: 90vw;
   max-height: 90vh;
@@ -754,7 +755,7 @@
   background: var(--s-white);
   color: var(--s-ink);
 }
-.mcp-env-input:focus { outline: 2px solid var(--s-ink); outline-offset: -1px; }
+.mcp-env-input:focus { outline: none; border-color: var(--s-gold); box-shadow: 0 0 0 3px var(--s-gold-glow); }
 .mcp-env-select {
   width: 100%;
   padding: 5px 8px;
@@ -765,20 +766,20 @@
   background: var(--s-white);
   color: var(--s-ink);
 }
-.mcp-env-select:focus { outline: 2px solid var(--s-ink); outline-offset: -1px; }
+.mcp-env-select:focus { outline: none; border-color: var(--s-gold); box-shadow: 0 0 0 3px var(--s-gold-glow); }
 /* ── Skills Settings tab ── App-Store layout (brutalist tofu) ── */
 /* Header count badges — tofu stamp chips. Same markup lives in the MCP tab
  * header, so both store tabs get the same chip language here. (The shared
  * .stg-badge indigo/green pair in styles.css is for provider cards; the
  * store header overrides it — settings.css loads after styles.css.) */
 .mcp-store-header-title .stg-badge{border:var(--s-border-sm);background:var(--s-white);color:var(--s-ink-soft);box-shadow:none;border-radius:var(--s-radius);text-transform:none;letter-spacing:.02em}
-/* Scope segmented control — cream track + ink active block with the gold
- * offset shadow, echoing .mcp-cat-pill.active (one 'active' language per
- * panel). Shared with the MCP tab's scope control (same classes). */
+/* Scope segmented control — cream track + raised white active segment
+ * (macOS segmented-control register). Shared with the MCP tab's scope
+ * control (same classes). */
 .skills-scope-tabs{display:inline-flex;gap:3px;padding:3px;background:var(--s-cream);border:var(--s-border-sm);border-radius:var(--s-radius);box-shadow:var(--s-shadow-xs);align-items:center}
-.skills-scope-tab{padding:5px 14px;border:1.5px solid transparent;background:transparent;color:var(--s-ink-soft);font-size:11px;font-weight:800;letter-spacing:.03em;border-radius:var(--s-radius);cursor:pointer;transition:background .1s,color .1s,box-shadow .1s;font-family:inherit;line-height:1.2}
+.skills-scope-tab{padding:5px 14px;border:1px solid transparent;background:transparent;color:var(--s-ink-soft);font-size:11px;font-weight:800;letter-spacing:.03em;border-radius:var(--s-radius);cursor:pointer;transition:background .1s,color .1s,box-shadow .1s,border-color .1s;font-family:inherit;line-height:1.2}
 .skills-scope-tab:hover{color:var(--s-ink);background:var(--s-skin)}
-.skills-scope-tab.active{background:var(--s-ink);color:var(--s-white);border-color:var(--s-ink);box-shadow:2px 2px 0 var(--s-gold)}
+.skills-scope-tab.active{background:var(--s-white);color:var(--s-ink);border-color:var(--s-line-strong);box-shadow:var(--s-shadow-xs)}
 /* Cross-link to memory creation — a quiet secondary action, visually
  * separated from the scope control it used to masquerade as. */
 .skills-intro{margin:2px 0 10px}
@@ -786,7 +787,7 @@
  * lift, gold fill while a file is held over it. */
 .skills-drop-zone{display:flex;align-items:center;justify-content:center;gap:10px;padding:13px 18px;margin:2px 0 14px;border:1.5px dashed rgba(26,24,20,.35);border-radius:var(--s-radius);color:var(--s-ink-soft);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s ease;background:var(--s-white)}
 .skills-drop-zone svg{color:var(--s-gold-dim);flex-shrink:0}
-.skills-drop-zone:hover{border-color:var(--s-ink);color:var(--s-ink);background:var(--s-cream);transform:translate(-1px,-1px);box-shadow:var(--s-shadow-xs)}
+.skills-drop-zone:hover{border-color:var(--s-ink);color:var(--s-ink);background:var(--s-cream);transform:translateY(-1px);box-shadow:var(--s-shadow-xs)}
 .skills-drop-zone.is-dragging{border-style:solid;border-color:var(--s-gold-dim);background:var(--s-gold-glow);color:var(--s-ink);transform:none;box-shadow:var(--s-shadow-xs)}
 .skills-drop-zone-text{pointer-events:none}
 /* Skill card uses mcp-app-card as base; add skill-specific accents.
@@ -817,12 +818,12 @@
 .skill-env-state.is-missing{color:#b3462e}
 .skill-env-editor{display:flex;gap:6px;align-items:center;padding:4px 0 2px}
 .skill-env-input{flex:1;min-width:0;padding:5px 8px;font-size:11px;border:var(--s-border-sm);border-radius:var(--s-radius);background:var(--s-white);color:var(--s-ink)}
-.skill-env-input:focus{outline:2px solid var(--s-ink);outline-offset:-1px}
+.skill-env-input:focus{outline:none;border-color:var(--s-gold);box-shadow:0 0 0 3px var(--s-gold-glow)}
 /* Installed state — same gold language as .mcp-app-card.connected: the
  * card reads 'already yours' without the old green wash. */
-.mcp-app-card.is-installed{background:linear-gradient(180deg,rgba(201,153,63,.06) 0%,var(--s-white) 60%);box-shadow:2px 2px 0 var(--s-gold),var(--s-shadow-xs)}
-.mcp-app-card.is-installed:hover{box-shadow:3px 3px 0 var(--s-gold),4px 4px 0 var(--s-ink)}
-.mcp-app-card .skill-installed-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:var(--s-radius);background:var(--s-ink);color:var(--s-gold);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;align-self:center;font-family:'JetBrains Mono',monospace}
+.mcp-app-card.is-installed{background:linear-gradient(180deg,rgba(201,153,63,.06) 0%,var(--s-white) 60%);border-color:rgba(201,153,63,.45);box-shadow:var(--s-shadow-xs)}
+.mcp-app-card.is-installed:hover{box-shadow:var(--s-shadow-sm)}
+.mcp-app-card .skill-installed-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border:1px solid rgba(201,153,63,.4);border-radius:var(--s-radius);background:rgba(201,153,63,.14);color:var(--s-gold-dim);font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;align-self:center;font-family:'JetBrains Mono',monospace}
 /* Skills file browser list */
 .skills-files-modal{max-width:640px;max-height:80vh;max-height:calc(var(--vh100,100vh)*0.8);display:flex;flex-direction:column}
 .skills-files-list{flex:1;overflow-y:auto;margin:12px 0;padding:6px 0;border:var(--s-border-sm);border-radius:var(--s-radius);background:var(--s-white);max-height:50vh;max-height:calc(var(--vh100,100vh)*0.5)}

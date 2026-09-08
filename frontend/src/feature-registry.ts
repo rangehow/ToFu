@@ -58,7 +58,10 @@ export function getFeatureBinding(name: string): unknown {
 
 /** Read mutable retained state without letting a registered feature owner
  * shadow its live accessor. Use this only for state whose retained section is
- * still authoritative; feature commands continue to resolve via registry. */
+ * still authoritative in the app-runtime scope; feature commands continue to
+ * resolve via registry. Lazy-bundle retained state (e.g. the settings
+ * presenters' `_stgModelRouting`) lives in accessors on this registry, not in
+ * the app-runtime scope — read those through `featureRegistry` instead. */
 export function readLiveRuntimeBinding(name: string): unknown {
   return readRuntime(name);
 }

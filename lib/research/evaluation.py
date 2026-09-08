@@ -21,6 +21,7 @@ from statistics import mean, median
 from typing import Callable, Optional
 
 from lib.log import get_logger
+from lib.production.stages import StageAborted
 
 logger = get_logger(__name__)
 
@@ -95,7 +96,7 @@ def _clip(text, limit: int) -> str:
 def _idea_view(items) -> list:
     """Keep judge-relevant fields; omit duplicated prose and wire diagnostics."""
     keys = (
-        'title', 'kind', 'linked_gap_id', 'corpus_anchor_id', 'corpus_delta',
+        'idea_id', 'idea_version', 'title', 'kind', 'linked_gap_id', 'corpus_anchor_id', 'corpus_delta',
         'failure_cause', 'new_invariant',
         'intervention_level', 'core_mechanism', 'novelty_claim',
         'falsifiable_prediction', 'why_not_AB', 'scores', 'overall',
@@ -114,6 +115,9 @@ def _judge_messages(direction: str, result: dict) -> list[dict]:
         'rejected': _idea_view(result.get('rejected')),
         'threshold': result.get('threshold'),
         'gate_reached': result.get('gate_reached'),
+        'revision_issues': result.get('revision_issues') or [],
+        'retired': result.get('retired') or [],
+        'survey_version': result.get('survey_version', 1),
     }, ensure_ascii=False, separators=(',', ':'))
     payload = (
         f'## DIRECTION\n{direction}\n\n'
@@ -143,12 +147,25 @@ def _judge_messages(direction: str, result: dict) -> list[dict]:
         '"worth_following_up":boolean,"confidence":number 0..1,'
         '"strengths":[up to 3 strings],"failure_modes":[short snake_case strings],'
         '"recommended_changes":[{"target":"survey|retrieval|ideate|gate|prompt|parser",'
+        '"idea_id":"stable idea_id when applicable",'
+        '"gap_id":"affected gap id when applicable","target_version":"reviewed version",'
         '"priority":"high|medium|low","change":"specific mechanism change",'
         '"evidence":"artifact fact motivating it"}],'
         '"idea_assessments":[{"idea":"exact title of one accepted idea",'
         '"score":number 1..5,"verdict":"one-sentence judgement of THIS idea",'
         '"main_risk":"strongest objection to THIS idea"}],'
+        '"issue_resolutions":[{"issue_id":"provided issue id","resolved":boolean,'
+        '"evidence":"specific changed artifact fact proving resolution"}],'
         '"verdict":"concise verdict"}. '
+        'Re-review every supplied revision issue. Mark resolved only when the '
+        'current artifact demonstrates the requested change; silence, author '
+        'claims, and missing evidence are not resolution. '
+        'For retrieval/survey issues verify the current evidence and ALL dependent '
+        'gap links and candidate novelty claims. Explicit gap closure should retire '
+        'dependent candidates, not provoke cosmetic rewrites. Inability to verify '
+        'must remain unresolved. '
+        'Use target ideate only for actionable changes to idea content; '
+        'survey/retrieval/parser/prompt/gate problems require those targets. '
         'Produce exactly one idea_assessments entry per accepted idea, keyed by '
         'the exact idea title. When a strength, failure mode, verdict or '
         'recommended change concerns one specific idea, name that idea. '
@@ -211,6 +228,9 @@ def _clean_judgement(raw, *, model: str = '') -> Optional[dict]:
             priority = 'medium'
         changes.append({
             'target': target,
+            'idea_id': str(item.get('idea_id') or '').strip()[:160],
+            'gap_id': str(item.get('gap_id') or '').strip()[:160],
+            'target_version': str(item.get('target_version') or '').strip()[:160],
             'priority': priority,
             'change': str(item.get('change') or '').strip()[:600],
             'evidence': str(item.get('evidence') or '').strip()[:600],
@@ -240,6 +260,12 @@ def _clean_judgement(raw, *, model: str = '') -> Optional[dict]:
                           if str(x).strip()],
         'recommended_changes': changes,
         'idea_assessments': assessments,
+        'issue_resolutions': [
+            {'issue_id': str(row.get('issue_id') or '')[:160],
+             'resolved': row.get('resolved') is True,
+             'evidence': str(row.get('evidence') or '').strip()[:600]}
+            for row in (raw.get('issue_resolutions') or [])[:24]
+            if isinstance(row, dict)],
         'verdict': str(raw.get('verdict') or '').strip()[:1000],
         'model': model or '',
     }
@@ -269,6 +295,8 @@ def _call_judge(messages: list[dict], *, model: str, abort,
             context='research evaluation judge')
         msg = stream_result.message
         usage = stream_result.usage
+    except StageAborted:
+        raise
     except Exception as exc:
         logger.warning('[Research:Evaluate] judge dispatch failed: %s', exc,
                        exc_info=True)
@@ -329,7 +357,8 @@ def _aggregate(judges: list[dict], attempted: int, errors: list[str], usage) -> 
     strengths = []
     failure_modes = []
     changes = []
-    seen_changes = set()
+    seen_changes = {}
+    priority_rank = {'high': 0, 'medium': 1, 'low': 2}
     for judge in judges:
         for item in judge['strengths']:
             if item not in strengths:
@@ -338,10 +367,19 @@ def _aggregate(judges: list[dict], attempted: int, errors: list[str], usage) -> 
             if item not in failure_modes:
                 failure_modes.append(item)
         for item in judge['recommended_changes']:
-            key = (item['target'], item['change'].casefold())
+            key = (item['target'], item.get('idea_id', ''), item['change'].casefold())
             if key not in seen_changes:
-                seen_changes.add(key)
-                changes.append(item)
+                merged = {**item, 'evidence': str(item.get('evidence') or '')[:600]}
+                seen_changes[key] = merged
+                changes.append(merged)
+            else:
+                merged = seen_changes[key]
+                if priority_rank[item['priority']] < priority_rank[merged['priority']]:
+                    merged['priority'] = item['priority']
+                evidence = str(item.get('evidence') or '')[:600]
+                if evidence and evidence not in merged['evidence']:
+                    merged['evidence'] = '\n'.join(filter(None, (
+                        merged['evidence'], evidence)))[:600]
     assessments_by_idea: dict[str, list[dict]] = {}
     for judge in judges:
         for item in judge['idea_assessments']:
@@ -373,7 +411,7 @@ def _aggregate(judges: list[dict], attempted: int, errors: list[str], usage) -> 
         'confidence': round(mean(judge['confidence'] for judge in judges), 3),
         'disagreement': disagreement,
         'strengths': strengths[:5], 'failure_modes': failure_modes[:12],
-        'recommended_changes': changes[:8],
+        'recommended_changes': changes[:24],
         'idea_assessments': idea_assessments,
         'verdict': judges[-1]['verdict'],
         'judges': judges, 'errors': errors,
@@ -459,6 +497,18 @@ def evaluate_research_result(direction: str, result: dict, *, judges=None,
             errors.append(error)
 
     out = _aggregate(valid, attempted, errors, meter.snapshot())
+    # Resolution needs every valid independent judge, not a reviser's claim.
+    resolutions = []
+    if len(valid) >= 2:
+        for issue in (result.get('revision_issues') or [])[:24]:
+            issue_id = issue.get('issue_id')
+            votes = [next((row for row in judge.get('issue_resolutions', [])
+                           if row['issue_id'] == issue_id and row['resolved']
+                           and row['evidence']), None) for judge in valid]
+            if all(votes):
+                resolutions.append({'issue_id': issue_id, 'resolved': True,
+                                    'evidence': votes[0]['evidence']})
+    out['issue_resolutions'] = resolutions
     out['tiebreaker_used'] = bool(needs_tiebreak)
     logger.info('[Research:Evaluate] %.60s → score=%s follow_up=%s '
                 'judges=%d/%d consensus=%s', direction,

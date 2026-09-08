@@ -10,8 +10,17 @@ from unittest import mock
 import pytest
 
 import lib.oauth.codex_catalog as codex_catalog
+from lib.oauth.outbound import CODEX_CLIENT_VERSION
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _floor_client_version():
+    """Keep version resolution deterministic: no real cache file, no network."""
+    with mock.patch.object(codex_catalog, 'codex_client_version',
+                           return_value=CODEX_CLIENT_VERSION):
+        yield
 
 
 def _payload():
@@ -109,8 +118,7 @@ def test_refresh_uses_authenticated_codex_endpoint_and_writes_private_cache(tmp_
     assert [m['model_id'] for m in projected] == ['gpt-hidden', 'gpt-visible']
     url = get.call_args.args[0]
     headers = get.call_args.kwargs['headers']
-    assert url.endswith('/models?client_version=' +
-                        codex_catalog.CODEX_CLIENT_VERSION)
+    assert url.endswith('/models?client_version=' + CODEX_CLIENT_VERSION)
     assert headers['Authorization'] == 'Bearer live-token'
     assert headers['originator'] == 'codex-tui'
     assert stat.S_IMODE(os.stat(cache_path).st_mode) == 0o600

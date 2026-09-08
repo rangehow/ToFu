@@ -12,6 +12,15 @@ Goal/Autopilot execution pins every leaf to the conversation's selected model;
 its internal role tiers may shape the graph but cannot silently select another
 model. Non-Goal Studio flows retain explicit role-tier routing.
 
+The canonical Goal graph declares its model inputs through typed I/O. Every
+worker receives the original request, its full latest handoff and the full
+latest review; the verifier receives the original request and latest worker
+output. Unresolved first-iteration inputs are absent. Typed inputs suppress
+duplicate feedback/history injection while engine directives still apply.
+Workers carry essential findings, decisions, artifact locations and remaining
+work into each handoff. Durable transcript history remains intact; model input
+size depends on the latest handoffs rather than the number of iterations.
+
 Each leaf resolves that route once before dispatch and carries `modelRoute`
 (`selectedModel`, `resolvedModel`, `role`, `tier`, `kind`) through live phases
 and the durable visible Turn; a changed route is disclosed before the model

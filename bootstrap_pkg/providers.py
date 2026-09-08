@@ -19,119 +19,29 @@ from .env_reexec import BASE_DIR
 # ══════════════════════════════════════════════════════════
 #  Provider templates — reused from Settings UI
 # ══════════════════════════════════════════════════════════
-# The canonical list in static/js/settings.js is ~200 providers and far
-# too large to inline here. We ship a curated subset of the most common
-# public providers so the bootstrap "Configure API" flow has a usable
-# picker even when NO static/provider_templates/*.json file exists.
+# The template catalog is FILE-BACKED and HOT-RELOADED: every HTTP request
+# re-reads lib/model_info/data/*.json (package catalog) and
+# static/provider_templates/*.json (deployment overrides), merging by key in
+# that order, so template edits never require a restart.  The main Settings
+# loader (lib/provider_template_recipes.py) merges the same directories in
+# the same order, so bootstrap and Settings always offer identical providers.
 #
-# At runtime we ALSO merge in static/provider_templates/*.json (same
-# mechanism as the main Settings UI) so deployment templates dropped
-# alongside (e.g. a corp-gateway template) automatically appear in the
-# bootstrap picker too.
-#
-# Keep this list short + curated — the goal is unblocking installation,
-# not replicating all of Settings.
+# This Python list is NOT the catalog.  It only retains bootstrap-form
+# scaffolding that must exist even when no data file ships: the Anthropic
+# stub (overridden by static/provider_templates/anthropic.json, which carries
+# the native protocol) and the Custom-endpoint form placeholder.  Never add
+# real catalog entries here — author lib/model_info/data/<key>.json instead.
 _BUILTIN_PROVIDER_TEMPLATES = [
-    {'key': 'openai', 'brand': 'openai', 'category': 'official',
-     'name': 'OpenAI',
-     'base_url': 'https://api.openai.com/v1',
-     'protocol': 'responses',
-     'responses_profile': 'openai',
-     'models': [
-         {'model_id': 'gpt-5.6',       'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'gpt-5.6-sol',   'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'gpt-5.6-terra', 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gpt-5.6-luna',  'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gpt-5.4',      'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'o3',           'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'o4-mini',      'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gpt-4.1',      'capabilities': ['text', 'vision', 'cheap']},
-         {'model_id': 'gpt-4.1-mini', 'capabilities': ['text', 'vision', 'cheap']},
-     ]},
     {'key': 'anthropic', 'brand': 'claude', 'category': 'official',
      'name': 'Anthropic',
      'base_url': 'https://api.anthropic.com/v1',
      'models': [
+         {'model_id': 'fable-5.1',         'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'fable-5',           'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'claude-opus-4-8',   'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'claude-opus-4-7',   'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'claude-sonnet-4-6', 'capabilities': ['text', 'vision', 'thinking']},
          {'model_id': 'claude-haiku-4-5',  'capabilities': ['text', 'vision', 'cheap']},
-     ]},
-    {'key': 'deepseek', 'brand': 'deepseek', 'category': 'official',
-     'name': 'DeepSeek',
-     'base_url': 'https://api.deepseek.com',
-     'models': [
-         {'model_id': 'deepseek-v4-pro',   'capabilities': ['text', 'thinking', 'cheap']},
-         {'model_id': 'deepseek-v4-flash', 'capabilities': ['text', 'thinking', 'cheap']},
-     ]},
-    {'key': 'glm', 'brand': 'glm', 'category': 'official',
-     'name': 'GLM (Zhipu AI)',
-     'base_url': 'https://open.bigmodel.cn/api/paas/v4',
-     'models': [
-         {'model_id': 'glm-5.2',       'capabilities': ['text', 'thinking']},
-         {'model_id': 'glm-5.1',       'capabilities': ['text', 'thinking']},
-         {'model_id': 'glm-4.7',       'capabilities': ['text', 'thinking', 'cheap']},
-         {'model_id': 'glm-4.5-flash', 'capabilities': ['text', 'cheap']},
-     ]},
-    {'key': 'kimi', 'brand': 'kimi', 'category': 'official',
-     'name': 'Moonshot (Kimi)',
-     'base_url': 'https://api.moonshot.ai/v1',
-     'models': [
-         {'model_id': 'kimi-k3',          'capabilities': ['text', 'vision', 'video', 'thinking', 'cheap']},
-         {'model_id': 'kimi-k2.7-code',   'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'kimi-k2.7-code-highspeed', 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'kimi-k2.6',        'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-     ]},
-    {'key': 'qwen', 'brand': 'qwen', 'category': 'official',
-     'name': 'Qwen (DashScope)',
-     'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-     'models': [
-         {'model_id': 'qwen3-max',     'capabilities': ['text', 'thinking', 'cheap']},
-         {'model_id': 'qwen-plus',     'capabilities': ['text', 'thinking', 'cheap']},
-         {'model_id': 'qwen-flash',    'capabilities': ['text', 'cheap']},
-     ]},
-    {'key': 'gemini', 'brand': 'gemini', 'category': 'official',
-     'name': 'Google Gemini',
-     'base_url': 'https://generativelanguage.googleapis.com/v1beta/openai',
-     'models': [
-         {'model_id': 'gemini-3.1-pro-preview',        'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gemini-3.7-flash',               'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gemini-2.5-pro',                 'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'gemini-2.5-flash',               'capabilities': ['text', 'vision', 'cheap']},
-         {'model_id': 'gemini-3.1-flash-lite-preview',  'capabilities': ['text', 'cheap']},
-     ]},
-    {'key': 'xai', 'brand': 'grok', 'category': 'official',
-     'name': 'xAI (Grok)',
-     'base_url': 'https://api.x.ai/v1',
-     'models': [
-         {'model_id': 'grok-4.20',     'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'grok-4.1-mini', 'capabilities': ['text', 'vision', 'cheap']},
-     ]},
-    {'key': 'doubao', 'brand': 'doubao', 'category': 'official',
-     'name': 'Doubao (Volcengine)',
-     'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
-     'models': [
-         {'model_id': 'doubao-seed-2-0-pro-260215',  'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'doubao-seed-2-0-lite-260215', 'capabilities': ['text', 'cheap']},
-     ]},
-    {'key': 'bedrock', 'brand': 'bedrock', 'category': 'official',
-     'name': 'Amazon Bedrock (OpenAI-compat)',
-     'base_url': 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1',
-     'models': [
-         {'model_id': 'us.anthropic.claude-opus-4-7-v1:0',   'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'us.anthropic.claude-sonnet-4-6-v1:0', 'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'us.anthropic.claude-haiku-4-5-v1:0',  'capabilities': ['text', 'vision', 'cheap']},
-     ]},
-    {'key': 'openrouter', 'brand': 'openrouter', 'category': 'relay',
-     'name': 'OpenRouter',
-     'base_url': 'https://openrouter.ai/api/v1',
-     'models': [
-         {'model_id': 'anthropic/claude-sonnet-4.6',    'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'openai/gpt-5.4',                 'capabilities': ['text', 'vision', 'thinking']},
-         {'model_id': 'google/gemini-3.1-pro-preview',  'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'google/gemini-3.7-flash',        'capabilities': ['text', 'vision', 'thinking', 'cheap']},
-         {'model_id': 'deepseek/deepseek-chat',         'capabilities': ['text', 'cheap']},
      ]},
     {'key': 'custom', 'brand': 'custom', 'category': 'custom',
      'name': 'Custom (OpenAI-compatible)',

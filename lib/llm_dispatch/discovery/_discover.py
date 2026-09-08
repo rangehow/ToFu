@@ -240,8 +240,9 @@ def discover_models(base_url: str, api_key: str,
         if owned_by:
             entry['owned_by'] = owned_by
         # If MODEL_PRICING has real input/output, include them
-        from lib import MODEL_PRICING
-        mp = MODEL_PRICING.get(model_id)
+        # (dated-checkpoint pins fold to their rolling alias's row).
+        from lib.pricing import pricing_for_model
+        mp = pricing_for_model(model_id)
         if mp:
             entry['input_price'] = mp.get('input', 0)
             entry['output_price'] = mp.get('output', 0)

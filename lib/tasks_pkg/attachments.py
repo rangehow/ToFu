@@ -20,13 +20,10 @@ Why we CAN'T replicate Claude Code's full attachment system:
 
 What we CAN implement:
   1. Recently modified files reminder
-  2. Periodic TODO/next-step reminders
+  2. Checklist continuity (delegates to the required context projection)
 """
 
 from __future__ import annotations
-
-import hashlib
-import json
 
 from lib.log import get_logger
 
@@ -40,13 +37,6 @@ _WRITE_TOOLS = frozenset({
 
 # Marker that uniquely identifies a previously-injected reminder in history.
 _REMINDER_MARKER = '## Recently Modified Files'
-
-# Marker and versioned fingerprint for the task checklist that lives on the
-# host-side task dict.  L2 compaction deliberately drops tool-call-only
-# assistant messages, so without this carrier the canonical ``task['_todos']``
-# survives but becomes invisible to the model that must continue it.
-_TODO_REMINDER_MARKER = '## Active Task Checklist'
-_TODO_STATE_PREFIX = '<!-- chatui-todo-state:v1:'
 
 # Minimum number of messages that must separate the most recent write from
 # the conversation tail before the reminder fires. Small enough to nudge the
@@ -126,7 +116,14 @@ def _get_modified_files_attachment(messages: list, project_path: str) -> str | N
     from lib.tasks_pkg.compaction._layer2._anchor import (
         _extract_recently_accessed_files,
     )
-    files = _extract_recently_accessed_files(messages, max_files=5)
+    # The shared extractor intentionally includes reads for compaction. This
+    # reminder claims modifications, so keep only successful write calls while
+    # retaining their adjacent result objects for occurrence-aware matching.
+    write_history = [dict(message, tool_calls=[
+        call for call in message.get('tool_calls', []) or []
+        if (call.get('function') or {}).get('name') in _WRITE_TOOLS
+    ]) if message.get('role') == 'assistant' else message for message in messages]
+    files = _extract_recently_accessed_files(write_history, max_files=5)
     if not files:
         return None
 
@@ -145,128 +142,11 @@ def _get_modified_files_attachment(messages: list, project_path: str) -> str | N
 #  Attachment 2: Host-side checklist continuity after compaction
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _normalise_todo_state(raw) -> list[dict]:
-    """Return the same canonical shape persisted by ``todo_write``."""
-    from lib.tools.todo import _normalize_todos
-    return _normalize_todos(raw)
-
-
-def _todo_state_fingerprint(state) -> str:
-    payload = json.dumps(state, ensure_ascii=False, sort_keys=True,
-                         separators=(',', ':'))
-    return hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]
-
-
-def _message_text(msg: dict) -> str:
-    content = msg.get('content', '')
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return '\n'.join(
-            block.get('text', '') for block in content
-            if isinstance(block, dict) and block.get('type') == 'text'
-        )
-    return ''
-
-
-def _todo_args_state(tool_call: dict) -> list[dict] | None:
-    fn = tool_call.get('function') or {}
-    if fn.get('name') != 'todo_write':
-        return None
-    args = fn.get('arguments')
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except (TypeError, ValueError) as exc:
-            logger.debug('[Attachments] malformed todo_write arguments: %s', exc)
-            return []
-    if not isinstance(args, dict):
-        return []
-    return _normalise_todo_state(args.get('todos'))
-
-
-def _latest_visible_todo_matches(messages: list,
-                                 canonical: list[dict],
-                                 fingerprint: str,
-                                 *, require_stack_marker: bool = False) -> bool:
-    """Whether the newest visible checklist carrier matches host state.
-
-    Stop at the newest carrier instead of accepting any historical match: an
-    older checklist may coincidentally match after a later, now-stale reminder.
-    """
-    expected_marker = f'{_TODO_STATE_PREFIX}{fingerprint} -->'
-    for msg in reversed(messages):
-        text = _message_text(msg)
-        if _TODO_REMINDER_MARKER in text:
-            return expected_marker in text
-
-        calls = msg.get('tool_calls') or []
-        for tool_call in reversed(calls):
-            state = _todo_args_state(tool_call)
-            if state is not None:
-                return (not require_stack_marker) and state == canonical
-    return False
-
-
 def _get_todo_attachment(messages: list, task: dict) -> str | None:
-    """Restore canonical checklist visibility when compaction removed it.
-
-    ``todo_write`` persists to ``task['_todos']``.  That state is authoritative
-    but ordinarily reaches the model only through the tool call/result in
-    ``messages``.  L2 summary input excludes both, which caused the model to
-    repeatedly recreate its plan after each compaction.  Inject a deterministic
-    tail reminder only when no matching current-state carrier remains visible.
-    """
-    from lib.tools.todo import todo_state_from_task
-    has_versioned_state = isinstance((task or {}).get('_todoState'), dict)
-    state = todo_state_from_task(task)
-    stack = state.get('stack') or []
-    active = stack[-1] if stack else None
-    canonical = _normalise_todo_state(
-        active.get('todos') if active else (task or {}).get('_todos'))
-    if not canonical:
-        return None
-
-    fingerprint_payload = ({
-        'stack': [
-            {'checklist_id': frame.get('checklist_id'),
-             'revision': frame.get('revision'),
-             'parent_todo_id': frame.get('parent_todo_id')}
-            for frame in stack
-        ],
-        'todos': canonical,
-    } if has_versioned_state else canonical)
-    fingerprint = _todo_state_fingerprint(fingerprint_payload)
-    if _latest_visible_todo_matches(
-            messages, canonical, fingerprint,
-            require_stack_marker=has_versioned_state and len(stack) > 1):
-        return None
-
-    from lib.tools.todo import render_todo_list
-    checklist = render_todo_list(canonical)
-    breadcrumb = []
-    for idx, frame in enumerate(stack if has_versioned_state else []):
-        if idx == 0:
-            breadcrumb.append('Root task')
-            continue
-        parent = stack[idx - 1]
-        parent_id = frame.get('parent_todo_id')
-        item = next((t for t in parent.get('todos') or []
-                     if t.get('id') == parent_id), None)
-        breadcrumb.append((item or {}).get('content') or parent_id or 'Child task')
-    trail = ('Checklist path: ' + ' > '.join(breadcrumb) + '\n'
-             if len(breadcrumb) > 1 else '')
-    return (
-        '<system-reminder>\n'
-        f'{_TODO_REMINDER_MARKER}\n'
-        f'{_TODO_STATE_PREFIX}{fingerprint} -->\n'
-        'This is the authoritative checklist preserved by the task runtime. '
-        'Continue from its current state; do not recreate or restart the plan '
-        'merely because earlier todo_write calls were compacted.\n'
-        f'{trail}'
-        f'{checklist}\n'
-        '</system-reminder>'
-    )
+    """Delegate legacy attachment callers to the required context owner."""
+    from lib.tasks_pkg.context_composer.checklist import build_checklist_context_block
+    block = build_checklist_context_block(messages, task)
+    return block.content if block is not None else None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -283,8 +163,8 @@ def compute_turn_attachments(
 ) -> list[str]:
     """Compute all per-turn attachments to inject before the LLM call.
 
-    Returns a list of attachment text blocks.  The orchestrator appends these
-    to the last user message (or injects as a new user message).
+    Returns attachment text blocks for new tail user carriers. Checklist
+    state delegates to the required composer owner, not an advisory budget.
 
     Lightweight: no LLM calls, just state-based decisions.
     """
@@ -349,22 +229,25 @@ def inject_attachments(messages: list, attachments: list[str],
 
     from lib.tasks_pkg.context_composer import (
         ComposeRequest,
-        ContextBlock,
         append_context_blocks,
     )
 
-    combined = '\n\n'.join(attachments)
-    append_context_blocks(messages, [ContextBlock(
-        id=f'round_attachments_{round_num}',
-        source='orchestrator.attachments',
-        content=combined,
-        authority='ambient',
-        placement='tail',
-        stability='round',
-        lifecycle='round',
-        priority=10,
-        max_tokens=1600,
-        provenance={'round': round_num, 'count': len(attachments)},
-    )], ComposeRequest(
+    from lib.tasks_pkg.context_composer.registry import context_block
+    from lib.tasks_pkg.context_composer.checklist import (
+        CHECKLIST_HEADING, checklist_context_block,
+    )
+    blocks = []
+    optional = []
+    for attachment in attachments:
+        if attachment.startswith('<system-reminder>\n' + CHECKLIST_HEADING + '\n'):
+            blocks.append(checklist_context_block(attachment))
+        else:
+            optional.append(attachment)
+    if optional:
+        blocks.append(context_block(
+            'modified_files', '\n\n'.join(optional),
+            provenance={'round': round_num, 'count': len(optional)},
+        ))
+    append_context_blocks(messages, blocks, ComposeRequest(
         conv_id=conv_id or '', model=model, task=task,
     ))

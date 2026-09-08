@@ -50,15 +50,27 @@ def build_autopilot_definition(*, name: str = 'Autopilot',
             {'id': 'worker', 'type': 'role', 'role': worker,
              'params': _role_params(
                  worker, isolation='shared-context', emits='assistant',
+                 io={'inputs': [
+                     {'name': 'original_request', 'type': 'text', 'from': 'start'},
+                     {'name': 'previous_work', 'type': 'text', 'from': 'worker'},
+                     {'name': 'latest_review', 'type': 'text', 'from': 'vu'},
+                 ]},
                  objective=(
                      'Work the task in the conversation context. Make '
                      'concrete progress every turn; act, do not just '
-                     'analyze. ' + GOAL_POLICY_DIRECTIVE
+                     'analyze. Carry forward the essential findings, decisions, '
+                     'artifact locations and remaining work in your final handoff; '
+                     'the next iteration receives that handoff and the latest '
+                     'review alongside the original request. ' + GOAL_POLICY_DIRECTIVE
                  ),
              )},
             {'id': 'vu', 'type': 'role', 'role': 'virtual_user',
              'params': _role_params(
                  'virtual_user', emits='user',
+                 io={'inputs': [
+                     {'name': 'original_request', 'type': 'text', 'from': 'start'},
+                     {'name': 'latest_work', 'type': 'text', 'from': 'worker'},
+                 ]},
                  objective='Stand in for the human and drive the task to '
                  'completion per your virtual-user role. Emit [VERDICT: STOP] '
                  '(or [VU: TASK_DONE]) only when the objective is genuinely '

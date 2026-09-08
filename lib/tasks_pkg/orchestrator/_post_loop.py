@@ -164,6 +164,7 @@ def finalize_after_loop(
     #    snapshot, and the Flow critic never sees the worker's
     #    output.
     task['messages'] = messages
+    task['_messages_include_current_run'] = True
 
     # ── Post-loop finalization: fallback, done event, persist ──
     _finalize_and_emit_done(

@@ -34,6 +34,7 @@ __pycache__/
 # depend on a tool having initialized those directories successfully.
 /.venv/
 /venv/
+/.texlive/
 /.pytest_cache/
 /.hypothesis/
 
@@ -147,6 +148,8 @@ __pycache__/
 !/scripts/gen_tofudb_ir_contract.py
 !/scripts/gen_tofudb_unicode_casefold.py
 !/scripts/gen_tofudb_unicode_simple_fold.py
+!/scripts/tofudb_perf_compare.py
+!/scripts/tofudb_v2_client.py
 !/scripts/audit_tests.py
 !/scripts/bootstrap_rootless_qemu.sh
 !/scripts/rootless_qemu-conda-linux-64.lock
@@ -409,6 +412,8 @@ static/vite/
 build/
 dist/
 /packages/tofu-db/target/
+# tofu-db out-of-tree cargo target dirs (differential/perf/cert harnesses)
+/packages/tofu-db/target-*/
 *.spec.bak
 installer_output/
 static/icons/tofu.ico

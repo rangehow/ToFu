@@ -460,8 +460,9 @@ mod tests {
             .unwrap();
             assert_eq!(staged.transaction_block_ids.len(), 3);
             let metrics = engine.block_write_metrics();
-            assert_eq!(metrics.blocks_written, 3);
-            assert!(metrics.bytes_written < payload.len() as u64 / 10);
+            assert_eq!(metrics.blocks_staged, 3);
+            assert!(metrics.bytes_staged < payload.len() as u64 / 10);
+            assert_eq!(metrics.blocks_written, 0);
             assert!(BlobReader::open(&engine, 7, 11, staged.reference).is_err());
             reference = staged.commit(&mut engine, b"blob.attach").unwrap();
         }

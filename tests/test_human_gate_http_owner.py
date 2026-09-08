@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 
@@ -72,8 +73,30 @@ def owner_headers():
     )
 
 
-@pytest.mark.asyncio
-async def test_http_resolvers_cannot_cross_owner_boundary(
+def _run_async(coro):
+    """Drive an async test body on a private event loop.
+
+    Repo convention (tests/test_server_async.py): pytest-asyncio is not
+    loaded, so a bare ``@pytest.mark.asyncio`` test errors at collection
+    under ``--strict-markers`` (unregistered marker). Wrap the coroutine
+    instead.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def test_http_resolvers_cannot_cross_owner_boundary(
+    owner_http_app,
+    owner_headers,
+):
+    _run_async(_http_resolvers_cannot_cross_owner_boundary(
+        owner_http_app, owner_headers))
+
+
+async def _http_resolvers_cannot_cross_owner_boundary(
     owner_http_app,
     owner_headers,
 ):
@@ -140,7 +163,6 @@ async def test_http_resolvers_cannot_cross_owner_boundary(
             waiter.join(timeout=1)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(('path', 'body'), [
     ('/api/v1/chat/stdin-response', {
         'stdinId': 'stdin-invalid', 'input': {'not': 'text'},
@@ -157,7 +179,17 @@ async def test_http_resolvers_cannot_cross_owner_boundary(
         'approvalId': 'approval-invalid', 'approved': {'yes': True},
     }),
 ])
-async def test_human_gate_http_rejects_untyped_or_oversized_fields(
+def test_human_gate_http_rejects_untyped_or_oversized_fields(
+    owner_http_app,
+    owner_headers,
+    path,
+    body,
+):
+    _run_async(_human_gate_http_rejects_untyped_or_oversized_fields(
+        owner_http_app, owner_headers, path, body))
+
+
+async def _human_gate_http_rejects_untyped_or_oversized_fields(
     owner_http_app,
     owner_headers,
     path,

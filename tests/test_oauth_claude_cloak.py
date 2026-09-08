@@ -372,13 +372,14 @@ class TestCodexPlanGating(unittest.TestCase):
 
     def test_free_plan_gated_to_free_tier(self):
         ids = self._provision('free')
-        self.assertIn('gpt-5.4-mini', ids)
+        self.assertIn('gpt-5.5', ids)
         self.assertNotIn('gpt-5.3-codex-spark', ids)
-        self.assertNotIn('gpt-5.4', ids)
+        # Astra serves team and above in the upstream registry.
+        self.assertNotIn('gpt-6-astra', ids)
 
     def test_business_maps_to_team_tier(self):
         ids = self._provision('business')
-        self.assertIn('gpt-5.4', ids)
+        self.assertIn('gpt-6-astra', ids)
         self.assertIn('gpt-5.6-sol', ids)
         self.assertNotIn('gpt-5.3-codex-spark', ids)
 
@@ -390,10 +391,12 @@ class TestCodexPlanGating(unittest.TestCase):
             self.assertIn('gpt-5.6-luna', ids)
 
     def test_stale_codex_ids_retired(self):
-        # The pre-S1 list (gpt-5.2/5.1/5-codex) is not in CLIProxyAPI's current
-        # registry at any tier — provisioning must not resurrect it.
+        # The pre-S1 list (gpt-5.2/5.1/5-codex) and the 5.4 line (removed from
+        # the upstream registry 2026-09) are not in CLIProxyAPI's current
+        # registry at any tier — provisioning must not resurrect them.
         ids = self._provision('pro')
-        for stale in ('gpt-5.2-codex', 'gpt-5.1-codex', 'gpt-5-codex'):
+        for stale in ('gpt-5.2-codex', 'gpt-5.1-codex', 'gpt-5-codex',
+                      'gpt-5.4', 'gpt-5.4-mini'):
             self.assertNotIn(stale, ids)
 
 

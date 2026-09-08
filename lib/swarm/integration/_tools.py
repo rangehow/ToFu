@@ -69,6 +69,7 @@ def execute_swarm_tool(fn_name: str, fn_args: dict, task: dict | None = None,
                        thinking_enabled: bool = False,
                        search_mode: str = 'multi',
                        abort_check: Callable | None = None,
+                       pending_input_check: Callable[[], bool] | None = None,
                        on_event: Callable | None = None,
                        ) -> str:
     """Dispatch one swarm tool call.
@@ -106,7 +107,9 @@ def execute_swarm_tool(fn_name: str, fn_args: dict, task: dict | None = None,
             )
 
         if fn_name == 'await_agents':
-            return _handle_await_agents(fn_args, task_id=task_id, task=task)
+            return _handle_await_agents(
+                fn_args, task_id=task_id, task=task, abort_check=abort_check,
+                pending_input_check=pending_input_check)
 
         if fn_name == 'get_agent_result':
             return _handle_get_agent_result(fn_args, task_id=task_id, task=task)
@@ -359,7 +362,11 @@ def _handle_spawn_agents(fn_args: dict, *,
         if push_conv_id:
             try:
                 from lib.agent_core.push import push_event
-                push_event('swarm', push_conv_id, ev, user_id=owner_id)
+                push_event(
+                    'swarm', push_conv_id,
+                    {**ev, 'swarmId': session.task_id if session else task_id},
+                    user_id=owner_id,
+                )
             except Exception as e:
                 # The push mirror is the ONLY channel that survives the
                 # spawning turn's end. Its failure silently strands every
@@ -414,7 +421,11 @@ def _handle_spawn_agents(fn_args: dict, *,
             thinking_enabled=thinking_enabled,
             search_mode=cfg.get('search_mode', 'multi'),
             on_progress=_emit,
-            abort_check=abort_check,
+            # A session outlives its spawning turn. Never keep a generic
+            # "parent no longer running" predicate armed after normal finish.
+            abort_check=lambda: bool(task.get('aborted')) or (
+                task.get('status') not in ('done', 'completed', 'failed', 'error', 'cancelled')
+                and bool(abort_check and abort_check())),
             all_tools=all_tools,
             max_parallel=cfg['max_parallel'],
             max_retries=cfg['max_retries'],
@@ -505,7 +516,7 @@ def _handle_spawn_agents(fn_args: dict, *,
                 from lib.swarm import persistence
                 persistence.save_session(
                     swarm_key,
-                    conv_id=session.conv_id, task_id=task_id,
+                    conv_id=session.conv_id, task_id=session.task_id,
                     specs=[s.to_dict() for s in session.specs],
                     config=_persist_config(cfg, model, thinking_enabled,
                                            project_path, {},
@@ -537,6 +548,8 @@ def _handle_spawn_agents(fn_args: dict, *,
     handle = {
         'status':    'async_launched',
         'swarm_id':  task_id,
+        # Stable across follow-up turns; swarm_id remains the launch-task alias.
+        'swarm_run_id': session.task_id,
         # The conversation-scoped session key — the frontend stamps it onto
         # the swarm panel so its reconciler probes /api/v1/swarm/status with
         # the key that ALWAYS resolves (alias misses were a false-settle
@@ -602,7 +615,9 @@ def _handle_spawn_agents(fn_args: dict, *,
 # ═══════════════════════════════════════════════════════════
 
 def _handle_await_agents(fn_args: dict, *, task_id: str,
-                         task: dict | None = None) -> str:
+                         task: dict | None = None,
+                         abort_check: Callable | None = None,
+                         pending_input_check: Callable[[], bool] | None = None) -> str:
     # Resolve the conversation-scoped session (Option A): a "continue" turn
     # has a fresh task_id but the live swarm lives under the conv key.
     swarm_key = swarm_key_for(task) if task is not None else task_id
@@ -653,6 +668,10 @@ def _handle_await_agents(fn_args: dict, *, task_id: str,
         ids=[str(x) for x in ids_in] or None,
         mode=mode,
         timeout_seconds=timeout,
+
+        **({'abort_check': abort_check} if abort_check is not None else {}),
+        **({'pending_input_check': pending_input_check}
+           if pending_input_check is not None else {}),
     )
     result['status'] = 'ok'
     return json.dumps(result, ensure_ascii=False)

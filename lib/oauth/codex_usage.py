@@ -11,6 +11,11 @@ Public entry points
     missing or stale entry starts one daemon refresh and returns immediately.
 ``refresh_codex_usage_reset``
     Synchronous refresh used by the daemon and focused tests.
+``consume_codex_usage_reset``
+    The explicitly confirmed, idempotent redemption command.  One banked
+    credit is spent only through this function; its ``redeem_request_id``
+    is persisted before the upstream POST so an ambiguous retry reuses the
+    same idempotency key instead of risking a second spend.
 ``clear_codex_usage_reset_cache``
     Lifecycle cleanup for logout/account replacement.
 
@@ -24,10 +29,12 @@ they describe scheduled rolling-window rollover, not an earned reset credit.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import threading
 import time
 import datetime
+import uuid
 from typing import Any
 
 from lib.config_dir import config_path
@@ -40,6 +47,7 @@ CODEX_USAGE_RESET_TTL_S = 30 * 60
 CODEX_USAGE_RESET_FAILURE_RETRY_S = 60
 CODEX_USAGE_RESET_TIMEOUT_S = 5
 CODEX_USAGE_RESET_DETAILS_TIMEOUT_S = 5
+CODEX_USAGE_RESET_CONSUME_TIMEOUT_S = 15
 CODEX_USAGE_RESET_PUSH_CHANNEL = "oauth"
 CODEX_USAGE_RESET_PUSH_TASK_ID = "codex-reset"
 CODEX_USAGE_RESET_PUSH_EVENT_TYPE = "codex.reset_offer.updated"
@@ -54,6 +62,12 @@ _MAX_DETAILS = 16
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _MAX_TITLE_CHARS = 160
 _MAX_DESCRIPTION_CHARS = 400
+_PENDING_REDEEM_TTL_S = 24 * 60 * 60
+_PENDING_REQUEST_ID_CHARS = 64
+# A 200 with one of these codes is a definitive no-spend outcome; any other
+# 2xx shape is ambiguous and the persisted idempotency record is retained.
+_CONSUME_SUCCESS_CODE = "reset"
+_CONSUME_DEFINITIVE_CODES = frozenset({"nothing_to_reset", "already_redeemed"})
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 
 _state_lock = threading.Lock()
@@ -181,6 +195,18 @@ def _normalise_entry(raw: Any) -> dict[str, Any] | None:
         entry["title"] = title
     if description:
         entry["description"] = description
+    pending = raw.get("pending_redeem")
+    if isinstance(pending, dict):
+        pending_credit = _bounded_text(pending.get("credit_id"), 256)
+        pending_request = _bounded_text(
+            pending.get("redeem_request_id"), _PENDING_REQUEST_ID_CHARS)
+        pending_created = _timestamp(pending.get("created_at"))
+        if pending_credit and pending_request and pending_created is not None:
+            entry["pending_redeem"] = {
+                "credit_id": pending_credit,
+                "redeem_request_id": pending_request,
+                "created_at": pending_created,
+            }
     return entry
 
 
@@ -605,6 +631,229 @@ def refresh_codex_usage_reset(
         return _project(entry, now=current_time, refreshing=False)
 
 
+def _consume_url() -> str:
+    from lib.oauth.codex import CODEX_OAUTH_CONFIG
+
+    return (
+        f"{CODEX_OAUTH_CONFIG['account_api_base'].rstrip('/')}"
+        "/rate-limit-reset-credits/consume"
+    )
+
+
+def _authenticated_post(
+    url: str, payload: dict[str, Any], *, timeout: float, user_id: str,
+    affinity_key: str,
+) -> Any:
+    """POST one JSON control-plane command as the sole Codex identity owner.
+
+    Mirrors :func:`_authenticated_get` routing (direct vs pinned desktop
+    egress agent) but returns the raw response so the caller can distinguish
+    definitive 4xx rejections from ambiguous transport/5xx outcomes.
+    """
+    from lib.oauth.outbound import resolve_oauth_request
+
+    token, headers, _body = resolve_oauth_request(
+        "codex", {"_conv_id": f"codex-usage-reset:{affinity_key}"}, None,
+        user_id=user_id,
+    )
+    headers["Authorization"] = f"Bearer {token}"
+    headers["Accept"] = "application/json"
+    headers["Content-Type"] = "application/json"
+    body = json.dumps(payload).encode("utf-8")
+
+    from lib.desktop import egress as desktop_egress
+
+    route = desktop_egress.route_request(url, user_id=user_id)
+    if route == "direct":
+        from lib.http_client import http_post
+
+        return http_post(url, headers=headers, data=body, timeout=timeout)
+    return desktop_egress.egress_http(
+        url,
+        method="POST",
+        headers=headers,
+        body=body,
+        timeout=timeout,
+        user_id=user_id,
+        agent_id=route,
+    )
+
+
+def _consume_payload(response: Any) -> tuple[int, dict[str, Any] | None]:
+    status = int(getattr(response, "status_code", 0) or 0)
+    content = getattr(response, "content", b"") or b""
+    if len(content) > _MAX_RESPONSE_BYTES:
+        raise RuntimeError("Codex consume response exceeded 1 MiB")
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    return status, payload if isinstance(payload, dict) else None
+
+
+def _redeem_request_id(
+    entry: dict[str, Any] | None, credit_id: str, now: int
+) -> str:
+    """Reuse the persisted idempotency key for an unresolved retry.
+
+    A retry only borrows the original request id when it targets the SAME
+    credit within the bounded window; anything else mints a fresh key.
+    """
+    pending = (entry or {}).get("pending_redeem")
+    if isinstance(pending, dict):
+        created = _timestamp(pending.get("created_at")) or 0
+        if (pending.get("credit_id") == credit_id
+                and isinstance(pending.get("redeem_request_id"), str)
+                and 0 <= now - created < _PENDING_REDEEM_TTL_S):
+            return pending["redeem_request_id"]
+    return str(uuid.uuid4())
+
+
+def _write_pending_redeem(
+    identity: dict[str, str], pending: dict[str, Any] | None, *, now: int
+) -> None:
+    with locked_path(_cache_path() + ".write"):
+        entries = _read_entries()
+        entry = entries.get(identity["cache_key"])
+        if entry is None:
+            if pending is None:
+                return
+            # No projection row exists yet.  Idempotency persistence must
+            # not be skipped, so the record rides on a placeholder whose old
+            # captured_at keeps it immediately refresh-eligible.
+            entry = {
+                **identity,
+                "state": "unknown",
+                "available_count": None,
+                "captured_at": max(1, now - CODEX_USAGE_RESET_TTL_S - 1),
+            }
+        if pending is None:
+            entry.pop("pending_redeem", None)
+        else:
+            entry["pending_redeem"] = dict(pending)
+        entries[identity["cache_key"]] = entry
+        _write_entries(entries)
+
+
+def _consume_under_lock(
+    identity: dict[str, str], *, user_id: str, now: int
+) -> dict[str, Any]:
+    from lib.oauth.token_store import load_token
+
+    try:
+        details = _parse_credit_details(
+            _authenticated_get(
+                _details_url(),
+                timeout=CODEX_USAGE_RESET_DETAILS_TIMEOUT_S,
+                user_id=user_id,
+                affinity_key=identity["cache_key"],
+            )
+        )
+    except Exception as error:
+        logger.warning(
+            "[CodexUsageReset] consume pre-read failed: %s", error)
+        return {"ok": False, "error": "upstream_unavailable"}
+    if not details:
+        return {"ok": False, "error": "none_available"}
+    if _identity(load_token("codex") or {}, user_id) != identity:
+        return {"ok": False, "error": "account_changed"}
+
+    # Details arrive expiry-ascending, so the first row is the credit that
+    # would be lost soonest.
+    credit_id = details[0]["id"]
+    entry = _read_entries().get(identity["cache_key"])
+    request_id = _redeem_request_id(entry, credit_id, now)
+    # Persist the idempotency key BEFORE the spend: a retry after an
+    # ambiguous outcome reuses it instead of risking a second credit.
+    _write_pending_redeem(identity, {
+        "credit_id": credit_id,
+        "redeem_request_id": request_id,
+        "created_at": now,
+    }, now=now)
+
+    try:
+        response = _authenticated_post(
+            _consume_url(),
+            {"credit_id": credit_id, "redeem_request_id": request_id},
+            timeout=CODEX_USAGE_RESET_CONSUME_TIMEOUT_S,
+            user_id=user_id,
+            affinity_key=identity["cache_key"],
+        )
+        status, payload = _consume_payload(response)
+    except Exception as error:
+        logger.warning(
+            "[CodexUsageReset] consume outcome unknown; "
+            "idempotency record retained: %s", error)
+        return {"ok": False, "error": "unresolved"}
+
+    code = str((payload or {}).get("code") or "")
+    if status == 200 and code == _CONSUME_SUCCESS_CODE:
+        _write_pending_redeem(identity, None, now=now)
+        result: dict[str, Any] = {"ok": True, "code": code}
+        windows_reset = _integer(
+            (payload or {}).get("windows_reset"),
+            low=0, high=_MAX_AVAILABLE_COUNT)
+        if windows_reset is not None:
+            result["windows_reset"] = windows_reset
+        credit_body = (payload or {}).get("credit")
+        if isinstance(credit_body, dict):
+            redeemed_at = _bounded_text(credit_body.get("redeemed_at"), 64)
+            if redeemed_at:
+                result["redeemed_at"] = redeemed_at
+        logger.info(
+            "[CodexUsageReset] reset credit consumed for owner/account %s",
+            identity["cache_key"][:8])
+        return result
+    if status == 200 and code in _CONSUME_DEFINITIVE_CODES:
+        _write_pending_redeem(identity, None, now=now)
+        return {"ok": False, "error": code}
+    if 400 <= status < 500:
+        _write_pending_redeem(identity, None, now=now)
+        logger.info(
+            "[CodexUsageReset] consume definitively rejected with HTTP %s",
+            status)
+        return {"ok": False, "error": "upstream_rejected", "status": status}
+    logger.warning(
+        "[CodexUsageReset] consume outcome unresolved "
+        "(status=%s, code=%r); idempotency record retained", status, code)
+    return {"ok": False, "error": "unresolved"}
+
+
+def consume_codex_usage_reset(
+    *, user_id: str = "", now: float | None = None
+) -> dict[str, Any]:
+    """Redeem one banked reset credit as an explicitly confirmed command.
+
+    The owner/account singleflight lock serializes the spend with refreshes;
+    afterwards the cache is force-refreshed and the settled projection is
+    published so every surface reconciles immediately.  The returned dict
+    always carries ``ok`` plus a machine-readable ``error`` on failure and
+    the fresh ``reset_offer`` projection whenever the account was reachable.
+    """
+    from lib.oauth.token_store import load_token
+
+    current_time = int(time.time() if now is None else now)
+    stored = load_token("codex") or {}
+    if not stored.get("access_token"):
+        return {"ok": False, "error": "not_authenticated"}
+    identity = _identity(stored, user_id)
+    if identity is None:
+        return {"ok": False, "error": "account_identity_unavailable"}
+
+    refresh_lock_path = _refresh_lock_path(identity["cache_key"])
+    with locked_path(refresh_lock_path):
+        if _identity(load_token("codex") or {}, user_id) != identity:
+            outcome = {"ok": False, "error": "account_changed"}
+        else:
+            outcome = _consume_under_lock(
+                identity, user_id=user_id, now=current_time)
+
+    projection = refresh_codex_usage_reset(user_id=user_id, force=True)
+    _publish_codex_usage_reset_update(
+        user_id=user_id, reset_offer=projection)
+    outcome["reset_offer"] = projection
+    return outcome
+
 def _is_refreshing(cache_key: str) -> bool:
     with _state_lock:
         return cache_key in _refreshing_keys
@@ -786,8 +1035,10 @@ def _reset_codex_usage_state_for_tests() -> None:
 __all__ = [
     "CODEX_USAGE_RESET_TTL_S",
     "CODEX_USAGE_RESET_FAILURE_RETRY_S",
+    "CODEX_USAGE_RESET_CONSUME_TIMEOUT_S",
     "codex_usage_reset_status",
     "refresh_codex_usage_reset",
+    "consume_codex_usage_reset",
     "trigger_codex_usage_reset_refresh",
     "clear_codex_usage_reset_cache",
 ]

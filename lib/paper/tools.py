@@ -490,7 +490,7 @@ def build_paper_full_tool_epoch(*, owner_user_id=None, model='', cfg=None,
         )
 
 
-def apply_paper_tool_epoch_guidance(messages, epoch, *, lang='en'):
+def apply_paper_tool_epoch_guidance(messages, epoch, *, lang='en', task=None):
     """Append gateway guidance when this arm exposes the gateway."""
     wire_names = {_paper_schema_name(schema) for schema in epoch.wire_schemas}
     if 'search_tools' not in wire_names or 'execute_tools' not in wire_names:
@@ -509,8 +509,11 @@ def apply_paper_tool_epoch_guidance(messages, epoch, *, lang='en'):
     if any(guidance in str(message.get('content', ''))
            for message in messages or () if isinstance(message, dict)):
         return True
-    messages.append({'role': 'user', 'content': guidance, '_isMeta': True})
-    return True
+    from lib.tasks_pkg.context_composer import append_injection, can_append_injection
+    if not can_append_injection(messages):
+        return False
+    return append_injection(messages, 'paper_tool_guidance', guidance, task=task,
+                            flags={'_isPaperToolGuidance': True}) is not None
 
 
 def paper_effective_tool_name(fn_name):

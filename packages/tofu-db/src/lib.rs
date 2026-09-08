@@ -9,6 +9,8 @@
 mod artifact;
 pub mod authority;
 pub mod authority_gc;
+
+pub mod background_pack;
 pub mod backup;
 mod backup_gc;
 mod billing;
@@ -24,6 +26,8 @@ pub mod daemon;
 mod daily_cost;
 pub mod engine;
 pub mod entity;
+#[doc(hidden)]
+pub mod fsync_stats;
 pub mod generated_storage_operations;
 mod generated_storage_v2;
 pub mod generated_tofudb_ir;
@@ -37,6 +41,7 @@ pub mod listener;
 mod log_aggregate;
 pub mod logical_outbox;
 pub mod maintenance;
+mod model_continuation;
 mod model_routing;
 mod optimizer;
 mod orchestration;

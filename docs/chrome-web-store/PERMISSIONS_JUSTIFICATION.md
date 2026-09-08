@@ -56,7 +56,7 @@ Used to invalidate transient captured API data when the target tab navigates, ch
 ## `storage`
 
 ```
-Stores the user's own configuration locally: the Tofu server URL they enter, an optional Bridge Secret, and a generated per-client id used to route commands to the right device. Nothing in storage is transmitted to any third party.
+Stores the user's own configuration locally: the Tofu server URL they enter, an optional Bridge Secret, and a generated per-client id used to route commands to the right device. Session storage retains at most four temporary search/research tab IDs and one hidden pairing-repair tab ID for cleanup after a worker restart, without page content or URLs. Nothing in storage is transmitted to any third party.
 ```
 
 ## `cookies`

@@ -706,6 +706,27 @@ def test_goal_delegator_merges_multiple_agents(chat_sidecar):
         _cleanup(child_a, child_b, parent)
 
 
+
+def test_goal_delegator_reports_bounded_child_coverage(chat_sidecar):
+    """A bounded fold must never label omitted child evidence as complete."""
+    parent = f'ri-cap-{uuid.uuid4().hex[:8]}'
+    children = [f'{parent}#agent:agent-{index:02d}' for index in range(33)]
+    _seed(parent, [('flow_iteration', {'iteration': 0, 'phase': 'working'})])
+    for index, child in enumerate(children):
+        _seed(child, [('messages_snapshot', _snap_turn(
+            'swarm-agent', 1, content=f'agent-{index}',
+            agentId=f'agent-{index:02d}'))])
+    try:
+        from lib.tasks_pkg.request_inspector import fold_request_log
+        fold = fold_request_log(parent)
+        assert fold['requestCount'] == 32
+        assert fold['coverage'] == 'partial'
+        assert fold['coverageReason'] == 'child-limit'
+        assert {row['sourceTaskId'] for row in fold['requests']} == set(children[:32])
+    finally:
+        _cleanup(*children, parent)
+
+
 def test_empty_flow_delegator_is_not_flagged_untagged(chat_sidecar):
     """A pure delegator's flow marker with ZERO request rounds has nothing
     ambiguous to warn about — the flow-untagged chip requires ROWS that
@@ -801,7 +822,59 @@ def test_swarm_agent_emission_end_to_end(chat_sidecar):
         assert row['agentId'] == 'agent-research-x1'
         assert row['agentRole'] == 'research'
         assert row['model'] == 'm-agent'
+        # Sub-agent snapshots carry the round's tool schemas like the
+        # orchestrator's — the drawer's tool panel reads them.
+        assert row['toolsCount'] == 0  # rig has no tools attribute
+
         assert row['params']['maxTokens'] == 64000
+        assert row['params']['stream'] is True
+
+        agent.tools = [
+            {'type': 'function',
+             'function': {'name': 'read_files', 'parameters': {}}},
+            {'type': 'function',
+             'function': {'name': 'run_command', 'parameters': {}}},
+        ]
+        assert _emit_request_snapshot(agent, 2) == iid
+        fold = fold_request_log(iid)
+        assert fold['requestCount'] == 2
+        rows = {r['roundNum']: r for r in fold['requests']}
+        assert rows[2]['toolsCount'] == 2
+        # Rebuild resolves the toolsHash reference even when a later round
+        # stores the array only by hash (first carrier keeps it inline).
+        assert _emit_request_snapshot(agent, 3) == iid
+        from lib.tasks_pkg.request_inspector import get_request_payload
+        payload = get_request_payload(iid, 3, turn='swarm-agent')
+        names = [t['function']['name'] for t in payload['tools']]
+        assert names == ['read_files', 'run_command']
+
+
+        # A finalized request body is the diagnostics authority: model-aware
+        # normalization/injected builders may change messages, params or tools.
+        finalized = {
+            'model': 'm-wire',
+            'messages': [{'role': 'user', 'content': 'wire-message'}],
+            'tools': [{'type': 'function', 'function': {
+                'name': 'fetch_url', 'parameters': {}}}],
+            'max_tokens': 1234,
+            'temperature': 0.25,
+            'response_format': {'type': 'json_object'},
+            'stream': False,
+        }
+        assert _emit_request_snapshot(agent, 4, finalized) == iid
+        payload = get_request_payload(iid, 4, turn='swarm-agent')
+        assert payload['model'] == 'm-wire'
+        assert payload['messages'][0]['content'] == 'wire-message'
+        assert payload['params'] == {
+            'maxTokens': 1234,
+            'temperature': 0.25,
+            'thinkingEnabled': True,
+            'thinkingDepth': None,
+            'preset': '',
+            'responseFormat': {'type': 'json_object'},
+            'stream': False,
+        }
+        assert [t['function']['name'] for t in payload['tools']] == ['fetch_url']
         # parent log untouched — no snapshot leaked to the parent stream
         from lib.tasks_pkg.event_log import read_events
         assert read_events(parent_id) == []
@@ -872,6 +945,114 @@ def test_list_conv_tasks_includes_swarm_agents():
         assert rows[parent]['requestCount'] == 1
     finally:
         _cleanup(parent, agent_tid)
+
+
+@pytest.mark.auth_mode('multi-user')
+def test_route_parent_list_child_payload_owner_and_forgery(
+        flask_client, monkeypatch):
+    """The HTTP gate accepts only persisted children of an owned parent."""
+    from lib.api_keys import create_key
+    from routes.api_v1 import tasks as task_routes
+
+    conv = f'ri-route-{uuid.uuid4().hex[:8]}'
+    parent = f'ri-route-parent-{uuid.uuid4().hex[:8]}'
+    child = f'{parent}#agent:agent-worker-1'
+    forged = f'{parent}#agent:agent-forged'
+    foreign_parent = f'ri-route-foreign-{uuid.uuid4().hex[:8]}'
+    foreign_child = f'{foreign_parent}#agent:agent-worker-2'
+    now = int(time.time() * 1000)
+    _seed_task_result(parent, conv, now, user_id=1)
+    _seed_task_result(foreign_parent, conv, now, user_id=2)
+    _seed(child, [('messages_snapshot', _snap_turn(
+        'swarm-agent', 1, n_msgs=2, agentId='agent-worker-1'))])
+    _seed(foreign_child, [('messages_snapshot', _snap_turn(
+        'swarm-agent', 1, n_msgs=2, agentId='agent-worker-2'))])
+
+    _owner_row, owner_token = create_key(
+        'request-inspector-owner', scopes=['tasks'], owner_user_id=1)
+    _row, foreign_token = create_key(
+        'request-inspector-foreign', scopes=['tasks'], owner_user_id=2)
+    monkeypatch.setattr(task_routes, '_registries', lambda: {})
+
+    try:
+        owner_headers = {'Authorization': f'Bearer {owner_token}'}
+        parent_response = flask_client.get(
+            f'/api/v1/tasks/{parent}/requests', headers=owner_headers)
+        assert parent_response.status_code == 200
+        parent_body = parent_response.get_json()
+        child_row = next(row for row in parent_body['requests']
+                         if row.get('sourceTaskId') == child)
+
+
+        # Selecting the child row itself first loads its request list. The
+        # list, payload, and raw-archive routes must share one verified-child
+        # authorization boundary or the drawer renders a selectable shell
+        # whose technical details are blank.
+        child_list_response = flask_client.get(
+            f'/api/v1/tasks/{child}/requests', headers=owner_headers)
+        assert child_list_response.status_code == 200
+        child_list_body = child_list_response.get_json()
+        assert child_list_body['taskId'] == child
+        assert child_list_body['requestCount'] == 1
+        child_response = flask_client.get(
+            f"/api/v1/tasks/{child_row['sourceTaskId']}/requests/1"
+            '?turn=swarm-agent', headers=owner_headers)
+        assert child_response.status_code == 200
+        child_body = child_response.get_json()
+        assert child_body['taskId'] == child
+        assert child_body['roundNum'] == 1
+
+        # Raw request and response hydration use the same sourceTaskId gate.
+        # Stub only the archive storage read: authorization still consults the
+        # real persisted inspector summary seeded above.
+        calls = []
+        monkeypatch.setattr(
+            task_routes, 'get_raw_archive_chunk', None, raising=False)
+        from lib.tasks_pkg import request_inspector as inspector
+        monkeypatch.setattr(
+            inspector, 'get_raw_archive_chunk',
+            lambda task_id, archive_id, part, **kwargs: (
+                calls.append((task_id, archive_id, part, kwargs)) or {
+                    'archiveId': archive_id, 'part': part,
+                }))
+        for part in ('request', 'response'):
+            raw_response = flask_client.get(
+                f'/api/v1/tasks/{child}/raw-archives/archive-1/{part}',
+                headers=owner_headers)
+            assert raw_response.status_code == 200
+            assert raw_response.get_json()['part'] == part
+        assert [call[:3] for call in calls] == [
+            (child, 'archive-1', 'request'),
+            (child, 'archive-1', 'response'),
+        ]
+        assert all(call[3]['user_id'] == 1 for call in calls)
+
+        forged_list_response = flask_client.get(
+            f'/api/v1/tasks/{forged}/requests', headers=owner_headers)
+        assert forged_list_response.status_code == 404
+        forged_response = flask_client.get(
+            f'/api/v1/tasks/{forged}/requests/1?turn=swarm-agent',
+            headers=owner_headers)
+        assert forged_response.status_code == 404
+        forged_raw_response = flask_client.get(
+            f'/api/v1/tasks/{forged}/raw-archives/archive-1/request',
+            headers=owner_headers)
+        assert forged_raw_response.status_code == 404
+
+        foreign_list_response = flask_client.get(
+            f'/api/v1/tasks/{child}/requests',
+            headers={'Authorization': f'Bearer {foreign_token}'})
+        assert foreign_list_response.status_code == 404
+        foreign_response = flask_client.get(
+            f'/api/v1/tasks/{child}/requests/1?turn=swarm-agent',
+            headers={'Authorization': f'Bearer {foreign_token}'})
+        assert foreign_response.status_code == 404
+        foreign_raw_response = flask_client.get(
+            f'/api/v1/tasks/{child}/raw-archives/archive-1/response',
+            headers={'Authorization': f'Bearer {foreign_token}'})
+        assert foreign_raw_response.status_code == 404
+    finally:
+        _cleanup(parent, child, foreign_parent, foreign_child)
 
 
 def test_neuter_state_split_is_load_bearing(task_a):

@@ -122,6 +122,81 @@ def test_synchronous_worker_submission_failure_discards_bound_carrier(
     assert discarded == [('task-ownership', 'conv-ownership')]
 
 
+def test_resume_model_switch_emits_fallback_after_bind_before_spawn(
+    monkeypatch,
+    task_start_fixture,
+):
+    task_start, config, task, discarded = task_start_fixture
+    config['_resumeModelSwitchFrom'] = 'claude-opus-5'
+    config['model'] = 'kimi-k3'
+    bound = []
+    emitted = []
+    spawned = []
+
+    monkeypatch.setattr(
+        'lib.orchestration_chat_flow_runner.resolve_chat_flow_entry',
+        lambda _config: None,
+    )
+    monkeypatch.setattr(
+        'lib.tasks_pkg.manager.append_event',
+        lambda _task, event: emitted.append(event),
+    )
+    monkeypatch.setattr(
+        'lib.tasks_pkg.spawn.spawn_task',
+        lambda _task, **kwargs: spawned.append(_task['id']),
+    )
+
+    task_id, reason = task_start.start_conversation_attempt_executor(
+        'conv-ownership',
+        config,
+        on_task_registered=bound.append,
+    )
+
+    assert (task_id, reason) == ('task-ownership', None)
+    assert bound == ['task-ownership']
+    assert discarded == []
+    # The event lands after the durable bind and before the worker spawns.
+    assert [event['type'] for event in emitted] == ['model_fallback']
+    event = emitted[0]
+    assert event['fallbackFrom'] == 'claude-opus-5'
+    assert event['fallbackModel'] == 'kimi-k3'
+    assert event['fallbackKind'] == 'user_switch'
+    assert task['_fallback_from'] == 'claude-opus-5'
+    assert task['_fallback_model'] == 'kimi-k3'
+    assert task['_fallback_kind'] == 'user_switch'
+    assert spawned == ['task-ownership']
+
+
+def test_no_switch_marker_emits_no_fallback_event(
+    monkeypatch,
+    task_start_fixture,
+):
+    task_start, config, task, _discarded = task_start_fixture
+    emitted = []
+
+    monkeypatch.setattr(
+        'lib.orchestration_chat_flow_runner.resolve_chat_flow_entry',
+        lambda _config: None,
+    )
+    monkeypatch.setattr(
+        'lib.tasks_pkg.manager.append_event',
+        lambda _task, event: emitted.append(event),
+    )
+    monkeypatch.setattr(
+        'lib.tasks_pkg.spawn.spawn_task',
+        lambda _task, **kwargs: None,
+    )
+
+    task_id, reason = task_start.start_conversation_attempt_executor(
+        'conv-ownership',
+        config,
+        on_task_registered=lambda _task_id: None,
+    )
+
+    assert (task_id, reason) == ('task-ownership', None)
+    assert emitted == []
+    assert '_fallback_from' not in task
+
 @pytest.fixture()
 def clean_spawn_state():
     import lib.tasks_pkg.spawn as spawn

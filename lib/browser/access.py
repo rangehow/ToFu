@@ -374,7 +374,9 @@ def browser_tool_access(
     ):
         raise BrowserAccessDenied(
             'Browser client is not connected for this user')
-    if fn_name in ('browser_list_tabs', 'browser_close_tab'):
+    if fn_name in ('browser_list_tabs', 'browser_close_tab', 'browser_site'):
+        # Site discovery filters domains itself and declared operations own
+        # their policy-checked leases, not the unrelated current working tab.
         # list_tabs filters rows itself; closing is cleanup, not page access.
         return ''
     requires_write = browser_tool_requires_write(fn_name, fn_args)

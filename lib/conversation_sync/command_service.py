@@ -21,6 +21,9 @@ from lib.conversation_sync.dispatch_contract import (
     ATTEMPT_DISPATCH_REQUEST_STARTED_AT_MS_CONFIG_KEY,
     CONVERSATION_EXECUTOR_DISPATCH_MODE,
 )
+from lib.conversation_sync.dispatch_contract import (
+    RESUME_MODEL_SWITCH_FROM_CONFIG_KEY,
+)
 from lib.log import get_logger
 from lib.plan_contract import plan_execution_document
 from lib.tool_round_replay import (
@@ -37,6 +40,7 @@ from lib.turn_lifecycle import (
     bind_task,
     claim_attempt_start,
     commit_user_steer,
+    hydrate_user_steer,
     create_attempt,
     create_branch_lane,
     create_turn_pair,
@@ -64,6 +68,49 @@ def _durable_dispatch_config(
         max(0.0, float(request_started_at)) * 1000
     )
     return durable
+
+
+#: Operations that resume an interrupted attempt on the same lane. Only they
+#: can observe a pause → switch-model → continue sequence.
+_RESUME_MODEL_SWITCH_OPERATIONS = frozenset({
+    "continue", "checkpoint_resume", "answer_guidance"})
+
+
+def _resume_model_switch_from(
+    conversation_id: str,
+    turn_id: str,
+    user_id: Any,
+    new_model: str,
+) -> str:
+    """Submitted turn's recorded model when the resume carries a different one.
+
+    The submitted turn's contextSnapshot is the last model the user saw on
+    this lane; a resume whose config names another model means the user
+    deliberately switched while paused. This MUST be read before the storage
+    operation applies its contextSnapshot rebind — the rebind records the new
+    model and would erase the evidence. A missing rail snapshot or an
+    unchanged model yields no marker.
+    """
+    if not new_model:
+        return ""
+    turn = get_turn(conversation_id, turn_id, user_id=user_id) or {}
+    parent_id = str(turn.get("parentTurnId") or "")
+    if not parent_id:
+        return ""
+    parent = get_turn(conversation_id, parent_id, user_id=user_id) or {}
+    projection = parent.get("projection")
+    ctx = (
+        projection.get("contextSnapshot")
+        if isinstance(projection, Mapping) else None
+    )
+    snapshot = ctx.get("snapshot") if isinstance(ctx, Mapping) else None
+    previous = (
+        str(snapshot.get("model") or "").strip()
+        if isinstance(snapshot, Mapping) else ""
+    )
+    if previous and previous != new_model:
+        return previous
+    return ""
 
 
 def _without_client_plan_authority(
@@ -540,6 +587,13 @@ class ConversationTurnCommandService:
             ATTEMPT_DISPATCH_REQUEST_STARTED_AT_MS_CONFIG_KEY, None,
         )
         input_update = data.get("inputUpdate")
+        if operation in _RESUME_MODEL_SWITCH_OPERATIONS:
+            switch_from = _resume_model_switch_from(
+                conversation_id, turn_id, user_id,
+                str(config.get("model") or "").strip(),
+            )
+            if switch_from:
+                config[RESUME_MODEL_SWITCH_FROM_CONFIG_KEY] = switch_from
 
         if isinstance(input_update, Mapping):
             input_update = _without_client_plan_authority(input_update)
@@ -1095,6 +1149,7 @@ class ConversationTurnCommandService:
         inject_mode = str(data.get("injectMode") or "").strip().lower()
         if inject_mode not in {"steer", "queue"}:
             return None
+        steer_fallback_reason = ""
         user_message = (
             dict(input_projection) if isinstance(input_projection, Mapping) else None
         )
@@ -1113,7 +1168,9 @@ class ConversationTurnCommandService:
             command_id = str(data.get("commandId") or "")
             attempt_id = str(conflict.turn.get("currentAttemptId") or "")
             committed: dict[str, Any] | None = None
-            if attempt_id:
+            if not attempt_id:
+                steer_fallback_reason = "no_live_attempt"
+            else:
                 try:
                     enqueued, committed_value = enqueue_after_durable_commit(
                         conversation_id,
@@ -1137,20 +1194,47 @@ class ConversationTurnCommandService:
                     )
                     if enqueued and isinstance(committed_value, Mapping):
                         committed = dict(committed_value)
-                except (LifecycleConflict, LifecycleNotFound):
-                    committed = None
+                    elif not enqueued:
+                        # The conversation-keyed inbox slot is tombstoned.
+                        # Normally that means the running task is finalizing;
+                        # a STALE tombstone (prior turn's swarm teardown,
+                        # revived by the next task's turn prelude) puts the
+                        # slot here too — the steer must still not vanish.
+                        steer_fallback_reason = "inbox_tombstoned"
+                    else:
+                        steer_fallback_reason = "commit_not_persisted"
+                except LifecycleConflict:
+                    steer_fallback_reason = "steer_window_closed"
+                except LifecycleNotFound:
+                    steer_fallback_reason = "attempt_gone"
             if committed is not None:
+                # Acceptance and inbox publication have already succeeded.
+                # A presentation read must not report failure and invite a
+                # duplicate submission; the committed sync event repairs UI.
+                from lib.storage.errors import StorageError
+
+                try:
+                    committed = hydrate_user_steer(
+                        conversation_id, committed, user_id=user_id,
+                    )
+                except (StorageError, LifecycleNotFound):
+                    logger.warning(
+                        "Committed steer presentation unavailable conv=%s; "
+                        "retaining acceptance for sync recovery",
+                        conversation_id[:8],
+                    )
                 return {
                     "steered": True,
                     "injectionId": committed.get("injectionId") or command_id,
                     "blockId": committed.get("blockId"),
                     "conversationId": conversation_id,
                     "conversationRevision": committed["conversationRevision"],
-                    "latestTurn": committed["turn"],
+                    **({"latestTurn": committed["turn"]}
+                       if committed.get("turn") is not None else {}),
                 }
             logger.info(
-                "Conversation %s steer slot is closing; using durable queue",
-                conversation_id[:8],
+                "Conversation %s steer unavailable (%s); using durable queue",
+                conversation_id[:8], steer_fallback_reason or "unknown",
             )
 
         from lib.message_queue import (
@@ -1168,6 +1252,12 @@ class ConversationTurnCommandService:
         )
         if user_message is not None:
             queue_payload["_user_msg"] = user_message
+        if steer_fallback_reason:
+            # The human picked "insert into the live reply" but the steer
+            # lane was unavailable — mark the queued row so every surface
+            # (ACK toast, timeline queue chip, queue bar) can say WHY this
+            # message waits for the next turn instead of injecting.
+            queue_payload["_steerFallback"] = True
         queue_kind = (
             KIND_GOAL_CONTINUATION
             if trusted_goal_objective
@@ -1204,6 +1294,8 @@ class ConversationTurnCommandService:
         )
         queued_result["conversationId"] = conversation_id
         queued_result["latestTurn"] = conflict.turn
+        if steer_fallback_reason:
+            queued_result["steerFallback"] = True
         return _public_result(queued_result)
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from lib.log import get_logger
 from lib.model_profiles._catalog import configured_model_profiles
 
@@ -19,11 +21,19 @@ def _candidate_key(profile: dict, *, tier: str, role: str,
     blended = float(blended) if price_known and blended is not None else float('inf')
     is_parent = profile.get('modelId') == parent_model
 
-    # Capability is a gate, not the optimization target. Once a model clears
-    # the role tier, choose the least expensive proven candidate; quality only
-    # breaks equal-price ties. This prevents a routine heavy-role task from
-    # paying for frontier capacity when a heavy model already satisfies it.
-    return (0 if price_known else 1, blended, quality, not is_parent,
+    metrics = ('coding', 'intelligence') if role in {
+        'coder', 'reviewer', 'critic', 'worker',
+    } else ('agentic', 'intelligence') if role == 'browser' else ('intelligence',)
+    evidence = profile.get('aaScores') or {}
+    scores = [evidence.get(metric) for metric in metrics]
+    measured = evidence.get('match') == 'exact' and all(
+        isinstance(score, (int, float)) and not isinstance(score, bool)
+        and math.isfinite(score) for score in scores)
+    # Compare the original indices lexicographically, never mix incompatible
+    # scales or invent an AA-to-tier threshold. Price breaks quality ties.
+    measured_key = tuple(-float(score) for score in scores) if measured else (0,) * len(metrics)
+    return (not measured, measured_key, -quality,
+            0 if price_known else 1, blended, not is_parent,
             profile.get('providerId', ''), profile.get('modelId', ''))
 
 
@@ -41,6 +51,13 @@ def select_model_for_tier(tier: str, *, parent_model: str = '',
     """
     if tier not in _TIER_TARGET:
         return parent_model or ''
+    # Delegation is not consent to change the selected model. Inheritance
+    # also works for newly configured models without benchmark coverage;
+    # execution still enforces owner/provider eligibility independently.
+    if parent_model:
+        logger.debug('[ModelProfile] tier=%s role=%s inheriting parent=%s',
+                     tier, role or '-', parent_model)
+        return parent_model
     profiles = configured_model_profiles(
         providers=providers,
         provider_id=provider_id,
@@ -60,15 +77,6 @@ def select_model_for_tier(tier: str, *, parent_model: str = '',
                      'provider=%s; keeping parent=%s',
                      tier, role or '-', provider_id or '-', parent_model or '-')
         return parent_model or ''
-
-    # Never switch a standard task away from an explicitly chosen parent that
-    # is configured and proven. The role tiers are for light/heavy delegation,
-    # not for silently replacing the user's main model.
-    if tier == 'standard':
-        parent = next((p for p in eligible
-                       if p.get('modelId') == parent_model), None)
-        if parent is not None:
-            return parent_model
 
     chosen = min(eligible, key=lambda p: _candidate_key(
         p, tier=tier, role=role, parent_model=parent_model))

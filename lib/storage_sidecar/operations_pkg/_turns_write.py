@@ -602,6 +602,28 @@ def _turn_queue_cancel(session: Session, payload: Mapping[str, Any]) -> Any:
     input_turn_id = str(queue_row.get("input_turn_id") or "")
     output_turn_id = str(queue_row.get("output_turn_id") or "")
     attempt_id = str(queue_row.get("attempt_id") or "")
+    if not any((input_turn_id, output_turn_id, attempt_id)):
+        message = _load(queue_row.get("payload_json")) or {}
+        completion_id = message.get("_backgroundCommand") if isinstance(message, Mapping) else None
+        if queue_row.get("kind") == "workflow_step" and isinstance(completion_id, str) and completion_id:
+            now = int(time.time() * 1000)
+            if queue_row.get("lease_task_id") or int(queue_row.get("leased_until_ms") or 0) >= now:
+                raise StorageError("database_conflict", "Queue delivery is already being dispatched")
+            session.execute(
+                "DELETE FROM storage_queue_items WHERE id=? AND conv_id=? AND user_id=?",
+                (queue_id, conv_id, user_id),
+            )
+            renumber_queue_positions(session, conv_id, user_id)
+            revision = int(conversation["rev"] or 0) + 1
+            session.execute(
+                "UPDATE storage_conversations SET rev=?,updated_at_ms=? WHERE id=? AND user_id=?",
+                (revision, now, conv_id, user_id),
+            )
+            return {
+                "conversationId": conv_id, "conversationRevision": revision,
+                "queueId": queue_id, "cancelled": True,
+                "inputTurn": None, "deletedTurnIds": [],
+            }
     if not input_turn_id or not output_turn_id or not attempt_id:
         raise StorageError(
             "database_conflict", "Legacy queue rows use the compatibility cancel adapter"
@@ -727,16 +749,9 @@ def _turn_steer_commit(session: Session, payload: Mapping[str, Any]) -> Any:
         "steered": True,
         "injectionId": command_id,
         "blockId": block_id,
-        "turn": _turn_public(session, updated),
+        "conversationId": conv_id,
+        "turnId": str(row["turn_id"]),
         "conversationRevision": int(conversation["rev"] or 0),
-        "_conversationSyncTurnPatch": _projection_change(
-            turn_id=str(row["turn_id"]),
-            before=previous_projection,
-            after=next_projection,
-            base_revision=base_revision,
-            target_revision=target_revision,
-            updated_at=now,
-        ),
     }
 
 
@@ -942,6 +957,54 @@ def _validated_resume_option_anchors(
     return options, anchors
 
 
+_CTX_SNAPSHOT_MAX_BYTES = 16 * 1024
+
+
+def _resume_ctx_rebound_projection(
+    previous_projection: Mapping[str, Any], input_update: Any,
+) -> dict[str, Any]:
+    """Apply a contextSnapshot-only rebind onto the CURRENT submitted projection.
+
+    Resume operations (continue/checkpoint_resume/answer_guidance) may refresh
+    the info-rail facts recorded on the submitted turn — the user paused,
+    changed composer controls (e.g. the model), then resumed — but submitted
+    content stays immutable historical evidence; only regenerate replaces it.
+    The rebind merges into the stored projection instead of accepting a
+    client-shipped copy, so a stale client can never clobber fields written
+    after its last sync (translation, retained attachments). It needs no
+    revision fence: the resumed turn's own projection CAS already gates the
+    operation, and the rail snapshot is last-writer-wins display state.
+    """
+    if (not isinstance(input_update, Mapping)
+            or any(key != "contextSnapshot" for key in input_update)):
+        raise StorageError(
+            "database_conflict", "Only regenerate may edit its submitted turn."
+        )
+    next_projection = dict(previous_projection)
+    next_projection.pop("_ctx", None)
+    ctx_value = input_update.get("contextSnapshot")
+    if ctx_value is None:
+        next_projection.pop("contextSnapshot", None)
+        return next_projection
+    if (not isinstance(ctx_value, Mapping)
+            or not isinstance(ctx_value.get("snapshot"), Mapping)):
+        raise StorageError(
+            "database_protocol_error",
+            "contextSnapshot must carry a snapshot object.",
+        )
+    snapshot = dict(ctx_value["snapshot"])
+    if len(_dump(snapshot)) > _CTX_SNAPSHOT_MAX_BYTES:
+        raise StorageError(
+            "database_protocol_error",
+            "contextSnapshot exceeds its size budget.",
+        )
+    next_projection["contextSnapshot"] = {
+        "blockId": str(ctx_value.get("blockId") or "turn-context")[:80],
+        "snapshot": snapshot,
+    }
+    return next_projection
+
+
 def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
     conv_id, user_id = _turn_identity(payload)
     dispatch_mode = _attempt_dispatch_mode(payload)
@@ -1145,10 +1208,6 @@ def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
     submitted_projection_changes: list[dict[str, Any]] = []
     input_update = payload.get("input_update")
     if input_update is not None:
-        if operation != "regenerate":
-            raise StorageError(
-                "database_conflict", "Only regenerate may edit its submitted turn."
-            )
         parent_id = turn["parent_turn_id"]
         parent = (
             session.fetch_one(
@@ -1163,22 +1222,25 @@ def _turn_attempt_create(session: Session, payload: Mapping[str, Any]) -> Any:
                 "database_conflict",
                 "The generated turn has no editable submitted parent.",
             )
-        expected_input = payload.get("expected_input_projection_revision")
-        if expected_input is None or int(expected_input) != int(
-            parent["projection_revision"]
-        ):
-            raise StorageError(
-                "database_conflict", "The submitted turn changed since editing began."
-            )
-        updated_input = (
-            input_update
-            if isinstance(input_update, Mapping)
-            else {"content": str(input_update)}
-        )
         previous_input_projection = projection_from_turn_row(session, parent)
         if not isinstance(previous_input_projection, Mapping):
             previous_input_projection = {}
-        next_input_projection = dict(updated_input)
+        if operation == "regenerate":
+            expected_input = payload.get("expected_input_projection_revision")
+            if expected_input is None or int(expected_input) != int(
+                parent["projection_revision"]
+            ):
+                raise StorageError(
+                    "database_conflict", "The submitted turn changed since editing began."
+                )
+            next_input_projection = dict(
+                input_update
+                if isinstance(input_update, Mapping)
+                else {"content": str(input_update)}
+            )
+        else:
+            next_input_projection = _resume_ctx_rebound_projection(
+                previous_input_projection, input_update)
         parent_base_revision = int(parent["projection_revision"])
         parent_target_revision = parent_base_revision + 1
         changed_input = session.execute(

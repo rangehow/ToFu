@@ -15,6 +15,23 @@ spelling selects the canonical worker ⇄ virtual-user FlowExecutor graph; no
 environment flag or post-turn interpreter fallback exists. Its Studio template
 does not create a duplicate Agent Mode choice.
 
+Each sequential Goal phase after the first allocates its running Turn before
+dispatch. Deltas, reasoning and tools use that Turn's ordinary attempt patches,
+coalescing and keyed rendering; settlement updates the same identity. The root
+attempt remains the executor authority and retains the first phase's committed
+text, tools and segments. Child writes prove the live root in the same storage
+transaction. Stopping from any phase targets the executor; root settlement also
+settles its active child without discarding partial output. Reconnect reads the
+same Turn snapshots and ordered events as normal chat. Virtual-user close-out
+retains its explanation/reasoning/tools while stripping machine verdict tokens.
+
+Completed-phase persistence sends only the newly completed suffix, with stable
+offset identities and idempotent retry. It does not retransmit prior phase
+documents. The current live projection baseline is task-local and released at
+phase settlement or terminal task cleanup. `tests/test_goal_context_window.py`
+measures fixed-size input and linear transmission over the 64-iteration cap;
+the storage contract tests cover streaming, reload and cancellation parity.
+
 Goal Mode is a frontend surface, not an async background swarm. Every settled
 worker/virtual-user visible turn gets its own auto-translate trigger at the flow
 turn-persistence boundary (`schedule_settled_visible_turn_translations`, called
@@ -41,8 +58,8 @@ A settled Goal Mode turn is durable-rendered exactly like a normal chat
 turn. The `turn.visible.sync` write boundary assembles the segment timeline
 (narrative ⇄ tool_use interleaved, terminal text last) with the same
 assembler normal turns checkpoint through, instead of persisting an empty
-`segments` list that collapsed the settled surface into content plus a
- The flow projection's rounds are bounded previews
+`segments` list that collapsed the settled surface into content plus a trailing
+tool panel. Historical flow rounds may contain only bounded previews
 (`query` brief + result snippet, no `toolArgs`), so the boundary fill-only
 inherits the missing display fields (`toolArgs`, `toolContent`, timing,
 execution identity) from the root turn's live-checkpointed projection,

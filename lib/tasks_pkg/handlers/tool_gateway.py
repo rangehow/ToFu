@@ -325,16 +325,29 @@ def handle_search_tools(
         record_search_items(task, result.get('items'), catalog=catalog)
         if repeat >= 2:
             result['repeated_query'] = repeat
-            result['notice'] = (
-                f'This exact search has already run {repeat} times in this '
-                'task against an unchanged catalog — the outcome cannot '
-                'change. Break the loop: act on the results above, or treat '
-                'the capability as unavailable this turn and proceed without '
-                're-searching.')
-            logger.warning(
-                '[ToolSearch] repeated query x%d task=%s query=%.80r — '
-                're-searching a stable catalog cannot change the outcome',
-                repeat, task.get('id'), fn_args.get('query'))
+            exact_recovery = bool(
+                result.get('already_disclosed')
+                or result.get('already_visible')
+                or result.get('resolved_name'))
+            if exact_recovery:
+                # Re-reading one schema after compaction dropped it is a
+                # legitimate recovery, not a re-search loop: keep the
+                # recovery notice that says how to call the tool.
+                logger.info(
+                    '[ToolSearch] repeated exact-name recovery x%d task=%s '
+                    'query=%.80r', repeat, task.get('id'),
+                    fn_args.get('query'))
+            else:
+                result['notice'] = (
+                    f'This exact search has already run {repeat} times in this '
+                    'task against an unchanged catalog — the outcome cannot '
+                    'change. Break the loop: act on the results above, or treat '
+                    'the capability as unavailable this turn and proceed without '
+                    're-searching.')
+                logger.warning(
+                    '[ToolSearch] repeated query x%d task=%s query=%.80r — '
+                    're-searching a stable catalog cannot change the outcome',
+                    repeat, task.get('id'), fn_args.get('query'))
         if result.get('missing_name'):
             logger.info(
                 '[ToolSearch] exact-name miss task=%s query=%.80r total=%s',
@@ -713,38 +726,6 @@ def _execute_program(
             'tier': str(latch.get('tier') or ''),
         }
 
-    # PTC-local read-only contract, refreshed every round by the orchestrator
-    # (``task['_ptc_local']``).  While a programmatic round is active, program
-    # child calls may only reach the reviewed read-only tools plus
-    # ``search_tools`` discovery; anything else is a typed rejection so the
-    # model re-issues it as an ordinary direct call with normal admission and
-    # approval.  An absent latch leaves the generic Tool Search program path
-    # fully open.
-    latch = task.get('_ptc_local')
-    gate_active = isinstance(latch, dict) and bool(latch)
-    program_allowed = (
-        {str(name) for name in (latch.get('eligible') or ())}
-        if gate_active else set())
-    if gate_active:
-        run['ptcLocal'] = {
-            'tier': str(latch.get('tier') or ''),
-            'eligible': sorted(program_allowed),
-        }
-
-    def _assert_program_eligible(name: str) -> None:
-        if not gate_active:
-            return
-        if name in program_allowed or name == SEARCH_TOOLS_NAME:
-            return
-        raise ToolScriptError(
-            'tool_not_program_eligible',
-            f'Tool {name!r} is not eligible for this programmatic round.',
-            tool=name, eligible=sorted(program_allowed),
-            retry_hint=(
-                'Programs may only call the reviewed read-only tools and '
-                'search_tools in this round. Issue writes, approvals, and '
-                'other tools as ordinary direct calls instead.'))
-
     def search(query, namespace='', limit=8, cursor=''):
         from lib.tools.disclosure_state import disclosed_names_for_catalog
         return search_executable_catalog(
@@ -849,7 +830,13 @@ def _execute_program(
             source, search=search, call=call, call_many=call_many,
             aborted=lambda: bool(task.get('aborted')))
         run['status'] = 'completed'
-        run['result'] = value
+        # A program can legally return a live ToolScript object (``return
+        # tools.call`` yields a _Bound). Persisted as-is it makes the
+        # terminal json.dumps(meta) in persist_task_result raise TypeError,
+        # and the task's terminal metadata is then never persisted. The
+        # model-visible payload already stringifies via _json(default=str);
+        # store the same JSON-safe projection in the durable run record.
+        run['result'] = json.loads(_json(value))
         task['_toolScriptConsecutiveAuthoringFailures'] = 0
         stats['result_delivery'] = program_result_budget.stats()
         run['stats'] = stats

@@ -108,7 +108,7 @@ def _project_images_for_text_model(
     return total_images
 
 
-def _validate_image_blocks(messages: list) -> list:
+def _validate_image_blocks(messages: list, *, user_id: int | None = None) -> list:
     """Validate image_url blocks, replacing invalid ones with text placeholders.
 
     Handles:
@@ -151,6 +151,28 @@ def _validate_image_blocks(messages: list) -> list:
                 continue
             url = block.get('image_url', {}).get('url', '')
 
+            if url.startswith('tofu-media:'):
+                try:
+                    from lib.identity import require_user_id
+                    from lib.knowledge import read_source_path
+                    owner = require_user_id(user_id, context='model result image')
+                    path = read_source_path(url[len('tofu-media:'):], user_id=owner)
+                    if path is None:
+                        raise FileNotFoundError('image source unavailable')
+                    from lib.turn_image_transport import MAX_TURN_IMAGE_BYTES
+                    with path.open('rb') as stream:
+                        raw = stream.read(MAX_TURN_IMAGE_BYTES + 1)
+                    mime = _sniff_mime(raw)
+                    if len(raw) > MAX_TURN_IMAGE_BYTES or not mime:
+                        raise ValueError('invalid bounded image source')
+                    block['image_url']['url'] = f'data:{mime};base64,{_b64.b64encode(raw).decode("ascii")}'
+                    new_blocks.append(block)
+                except Exception as exc:
+                    logger.warning('[ImageValidation] retained image unavailable: %s', type(exc).__name__)
+                    new_blocks.append({'type': 'text', 'text':
+                        '[Image unavailable: the retained source cannot be accessed by this owner.]'})
+                continue
+
             # Case 1: Local /api/images/ URL
             _local_prefix = '/api/images/'
             _local_idx = url.find(_local_prefix)
@@ -161,7 +183,10 @@ def _validate_image_blocks(messages: list) -> list:
                 filepath = os.path.join(_IMAGES_DIR, filename)
                 try:
                     with open(filepath, 'rb') as f:
-                        raw = f.read()
+                        from lib.turn_image_transport import MAX_TURN_IMAGE_BYTES
+                        raw = f.read(MAX_TURN_IMAGE_BYTES + 1)
+                    if len(raw) > MAX_TURN_IMAGE_BYTES:
+                        raise ValueError('local image exceeds the byte budget')
                     mime = _sniff_mime(raw)
                     if not mime:
                         ext = os.path.splitext(filename)[1].lower()

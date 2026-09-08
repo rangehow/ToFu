@@ -58,6 +58,32 @@ never dumped wholesale into the next model request or logs.
 unique-anchor insert and never enables multi-site insertion; only `replace`
 grants batch semantics.
 
+`replace` applies the supplied replacement text even when it retains the
+anchor at either boundary, inside the text, or as a deliberate duplicate.
+Redundant argument characters are not a write error: no style-only retry,
+automatic conversion to line insertion, or new line breaks are introduced.
+Prefer insert operations for new lines; their existing boundary-echo repairs
+remain insertion-only and never rewrite replacement content. Root authority,
+read/freshness checks, unique matching and atomic writes remain mandatory.
+Exact replacement matches preserve existing CRLF and missing-final-newline
+bytes; line insertions retain their existing universal-newline behavior.
+
+Python syntax feedback from a unified edit batch compares each file's original
+text with its final successfully written text, once per file. Intermediate
+in-memory syntax errors that later edits repair do not trigger follow-up work.
+Warnings remain advisory and bounded to the existing Python parser budget;
+already-invalid files are not newly blamed, and failed writes produce no
+success warning. Desktop edits retain their sequential per-edit commits and
+use the final committed state for the same batch-level feedback.
+
+Restricted agent/API absolute reads and writes use the same conversation/task
+root registry as project-relative dispatch, including `execute_tools` children.
+The trusted dispatch identity binds that registry only for the call lifetime;
+a missing scoped registry denies access instead of borrowing global roots.
+Targets are checked after symlink resolution, so an in-project symlink cannot
+grant access outside the registered roots. A tool's requested cwd/path is not
+root-registration authority; the runtime must register its project first.
+
 Absolute-path writes outside every registered workspace root never silently
 expand the workspace. All model-facing write tools refuse with
 `OutsideWorkspaceError` before registry mutation. Only a reissued call carrying

@@ -20,7 +20,7 @@ from lib.api_response import (
 from lib.storage.errors import StorageError
 from lib.log import get_logger
 from lib.openapi import api_meta
-from lib.request_parser import BadRequest, async_parse_body
+from lib.request_parser import BadRequest, async_parse_body, parse_body
 
 from .auth import request_user_id, require_auth
 
@@ -179,6 +179,41 @@ async def research_workspace_put():
     return api_ok({'workspace': saved, 'readiness': readiness(saved)})
 
 
+@api_v1_research_bp.route('/api/v1/research/workspace/draft-protocol', methods=['POST'])
+@require_auth
+@api_meta(
+    summary='Draft a frozen experiment protocol from one accepted idea',
+    description=(
+        'One bounded, tool-less model call grounded in the persisted survey, '
+        'open-gap map and the selected accepted idea. The draft is a proposal '
+        'for the owner to review; nothing is persisted — authority stays with '
+        'the versioned workspace PUT. Sync handler so the blocking model call '
+        'runs off the event loop.'),
+    tags=['research'])
+def research_workspace_draft_protocol():
+    try:
+        body = parse_body(strict=True)
+    except BadRequest as exc:
+        return api_bad_request(str(exc))
+    direction = str(body.get('direction') or '').strip()
+    idea_id = str(body.get('idea_id') or '').strip()
+    if not direction or not idea_id:
+        return api_bad_request('direction and idea_id are required')
+    try:
+        from lib.research.draft import draft_protocol
+        draft = draft_protocol(
+            direction, str(body.get('lang') or 'en'), idea_id,
+            user_id=int(request_user_id()),
+            model=str(body.get('model') or ''))
+    except ValueError as exc:
+        return api_bad_request(str(exc))
+    except Exception as exc:
+        logger.error('[api_v1.research] protocol draft failed: %s',
+                     exc, exc_info=True)
+        return api_internal_error('internal_error')
+    return api_ok({'draft': draft})
+
+
 @api_v1_research_bp.route('/api/v1/research/capabilities', methods=['GET'])
 @require_auth
 @api_meta(
@@ -278,6 +313,38 @@ def research_manuscript_export():
         headers={'Content-Disposition':
                  'attachment; filename="tofu-research-source.zip"'},
     )
+
+
+@api_v1_research_bp.route('/api/v1/research/records', methods=['GET'])
+@require_auth
+@api_meta(summary='List durable Research run records', tags=['research'])
+def research_records_list():
+    from lib.research.records import list_records
+    try:
+        limit = max(1, min(200, int(request.args.get('limit') or 50)))
+    except ValueError:
+        return api_bad_request('limit must be an integer')
+    items = list_records(user_id=int(request_user_id()), limit=limit)
+    return api_ok({'items': items, 'total': len(items)})
+
+
+@api_v1_research_bp.route('/api/v1/research/records/<task_id>', methods=['GET'])
+@require_auth
+@api_meta(summary='Reopen a durable Research run snapshot', tags=['research'])
+def research_record_get(task_id):
+    from lib.research.records import load_record
+    return api_ok({'record': load_record(task_id, user_id=int(request_user_id()))})
+
+
+@api_v1_research_bp.route('/api/v1/research/records/<task_id>/resume', methods=['POST'])
+@require_auth
+@api_meta(summary='Explicitly resume interrupted Research checkpoints', tags=['research'])
+def research_record_resume(task_id):
+    from lib.research.records import resume_record
+    try:
+        return api_ok(resume_record(task_id, user_id=int(request_user_id())))
+    except ValueError as exc:
+        return api_bad_request(str(exc))
 
 
 __all__ = ['api_v1_research_bp']

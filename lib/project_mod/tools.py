@@ -91,6 +91,7 @@ from lib.project_mod.read_tools import (  # noqa: E402,F401
 # ── Re-export from write_tools (backward compat) ──
 from lib.project_mod.write_tools import (  # noqa: E402,F401
     _apply_one_diff,
+    _fail_tag,
     _find_closest_match,
     _insert_one,
     _resolve_write_path,
@@ -612,10 +613,13 @@ def _exec_write_file(fn_args, base_path, conv_id, task_id, kwargs):
                              fn_args.get('content', ''),
                              fn_args.get('description', ''),
                              conv_id=conv_id, task_id=task_id,
-                             allow_outside=bool(fn_args.get('allow_outside_workspace')))
+                             allow_outside=bool(fn_args.get('allow_outside_workspace')),
+                             append=bool(fn_args.get('append')))
     if result['ok']:
         msg = (f"File {'created' if result.get('created') else 'updated'}: {result['path']} "
                f"({result['lines']} lines, {_fmt_size(result['bytesWritten'])})")
+        if result.get('appended'):
+            msg += f" [appended {_fmt_size(result['appendedBytes'])}]"
         if result.get('syntaxWarning'):
             msg += ' ' + result['syntaxWarning']
         return msg
@@ -631,7 +635,8 @@ def _exec_apply_diff(fn_args, base_path, conv_id, task_id, kwargs):
         bp, rp = _rb(base_path, fn_args.get('path', ''))
     except ValueError as _rve:
         logger.debug('[tools] execute_tool caught %s: %s', type(_rve).__name__, _rve)
-        return f"Diff failed: {_rve}"  # 'Diff failed' prefix — read-gate contract
+        # 'Diff failed' prefix — read-gate contract; tag categorizes the failure.
+        return f"Diff failed [path-invalid]: {_rve}"
     result = tool_apply_diff(bp, rp,
                              fn_args.get('search', ''),
                              fn_args.get('replace', ''),
@@ -649,7 +654,7 @@ def _exec_apply_diff(fn_args, base_path, conv_id, task_id, kwargs):
             msg += ' ' + result['syntaxWarning']
         return msg
     else:
-        return f"Diff failed: {result['error']}"
+        return f"Diff failed{_fail_tag(result)}: {result['error']}"
 
 
 def _exec_apply_diffs(fn_args, base_path, conv_id, task_id, kwargs):
@@ -678,7 +683,8 @@ def _exec_insert_content(fn_args, base_path, conv_id, task_id, kwargs):
         bp, rp = _rb(base_path, fn_args.get('path', ''))
     except ValueError as _rve:
         logger.debug('[tools] execute_tool caught %s: %s', type(_rve).__name__, _rve)
-        return f"Insert failed: {_rve}"  # 'Insert failed' prefix — read-gate contract
+        # 'Insert failed' prefix — read-gate contract; tag categorizes the failure.
+        return f"Insert failed [path-invalid]: {_rve}"
     result = tool_insert_content(bp, rp,
                                  fn_args.get('anchor', ''),
                                  fn_args.get('content', ''),
@@ -697,7 +703,7 @@ def _exec_insert_content(fn_args, base_path, conv_id, task_id, kwargs):
             msg += ' ' + result['syntaxWarning']
         return msg
     else:
-        return f"Insert failed: {result['error']}"
+        return f"Insert failed{_fail_tag(result)}: {result['error']}"
 
 
 def _exec_insert_contents(fn_args, base_path, conv_id, task_id, kwargs):
@@ -794,6 +800,12 @@ def _exec_run_command(fn_args, base_path, conv_id, task_id, kwargs):
         sticky = get_conv_cwd(conv_id)
         if sticky:
             cwd = sticky
+
+    # Validate before fast-path readers, snapshots, and subprocess setup.
+    from lib.project_mod.run_command import validate_command_cwd
+    cwd_error = validate_command_cwd(cwd, fn_args.get('command', ''))
+    if cwd_error:
+        return cwd_error
 
     # cd-capture sink: after the command runs, remember the shell's final cwd
     #   (so a trailing `cd subdir` inside the command also sticks). Captured via
@@ -899,7 +911,8 @@ def _exec_run_command(fn_args, base_path, conv_id, task_id, kwargs):
 
     result = tool_run_command(cwd,
                               command_str,
-                              fn_args.get('timeout', None),
+                              fn_args.get('timeout_s',
+                                          fn_args.get('timeout', None)),
                               stdin_callback=kwargs.get('stdin_callback'),
                               task=kwargs.get('task'),
                               on_chunk=kwargs.get('on_chunk'),
@@ -1020,6 +1033,10 @@ def execute_standalone_command(fn_name, fn_args, working_dir=None, stdin_callbac
         directory_listing = (
             parse_safe_directory_listing_command(command)
             if os.environ.get('TOFU_RUN_LS_FASTPATH', '1') != '0' else None)
+        from lib.project_mod.run_command import validate_command_cwd
+        cwd_error = validate_command_cwd(working_dir, command)
+        if cwd_error:
+            return cwd_error
         if directory_listing is not None \
                 and _bounded_directory_fast_path_available(
                     working_dir, directory_listing['path']):
@@ -1050,7 +1067,8 @@ def execute_standalone_command(fn_name, fn_args, working_dir=None, stdin_callbac
                 ))
         result = tool_run_command(working_dir,
                                   command,
-                                  fn_args.get('timeout', None),
+                                  fn_args.get('timeout_s',
+                                              fn_args.get('timeout', None)),
                                   stdin_callback=stdin_callback,
                                   on_chunk=on_chunk,
                                   on_spawn=on_spawn,
@@ -1233,10 +1251,10 @@ def project_tool_display(fn_name, fn_args):
             # chars); the per-operation list ("replace, replace, …") carried
             # no information — every batch rendered the same words.
             desc = str(fn_args.get('description') or '').strip()
+            # No "(N edits)" count — the expanded round already lists every
+            # edit with its own status, so the header count duplicated it.
             label = (f'Edit {paths[0]}' if len(paths) == 1
                      else f'Edit {len(paths)} files')
-            if len(edits) > 1:
-                label += f' ({len(edits)} edits)'
             return label + (f' — {desc}' if desc else '')
         return 'Edit (empty)'
     elif fn_name == 'apply_diff':
@@ -1247,14 +1265,13 @@ def project_tool_display(fn_name, fn_args):
         edits = fn_args.get('edits')
         if edits and isinstance(edits, list):
             paths = list(dict.fromkeys(e.get('path', '?') for e in edits if isinstance(e, dict)))
-            n = len(edits)
             desc = fn_args.get('description', '')
             if len(paths) == 1:
-                label = f'Patch {paths[0]} ({n} edits)'
+                label = f'Patch {paths[0]}'
             elif len(paths) <= 3:
-                label = f'Patch {", ".join(paths)} ({n} edits)'
+                label = f'Patch {", ".join(paths)}'
             else:
-                label = f'Patch {len(paths)} files ({n} edits)'
+                label = f'Patch {len(paths)} files'
             return label + (f' — {desc}' if desc else '')
         return 'Patch (empty)'
     elif fn_name == 'insert_content':
@@ -1266,14 +1283,13 @@ def project_tool_display(fn_name, fn_args):
         edits = fn_args.get('edits')
         if edits and isinstance(edits, list):
             paths = list(dict.fromkeys(e.get('path', '?') for e in edits if isinstance(e, dict)))
-            n = len(edits)
             desc = fn_args.get('description', '')
             if len(paths) == 1:
-                label = f'Insert into {paths[0]} ({n} insertions)'
+                label = f'Insert into {paths[0]}'
             elif len(paths) <= 3:
-                label = f'Insert into {", ".join(paths)} ({n} insertions)'
+                label = f'Insert into {", ".join(paths)}'
             else:
-                label = f'Insert into {len(paths)} files ({n} insertions)'
+                label = f'Insert into {len(paths)} files'
             return label + (f' — {desc}' if desc else '')
         return 'Insert (empty)'
     elif fn_name == 'run_command':

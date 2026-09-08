@@ -406,6 +406,24 @@ def test_program_accepts_hosted_ptc_eligible_tool():
     assert payload['program']['status'] == 'ok'
 
 
+def test_program_returning_live_tool_object_persists_json_safe_run():
+    # 2026-09-06 incident: ``return tools.call`` yields a live ToolScript
+    # bound callable. Stored raw into ``programRuns`` it made the terminal
+    # json.dumps(meta) in persist_task_result raise TypeError, so the task's
+    # terminal metadata was never persisted and the run record was lost.
+    task = _mk_task()
+    payload = _run_program(task, "return tools.call;")
+
+    assert payload['program']['status'] == 'ok'
+    run = task['programRuns'][-1]
+    assert run['status'] == 'completed'
+    # The durable record holds the same JSON-safe projection the model sees.
+    assert isinstance(run['result'], str)
+    assert "name='call'" in run['result']
+    # The strict persist path (no default=str) must survive.
+    json.dumps(task['programRuns'])
+
+
 def test_program_uses_catalog_without_ptc_latch_or_search_receipt():
     task = _mk_task()
     payload = _run_program(
@@ -548,7 +566,8 @@ def test_wire_boundary_local_backend_chat_completions():
     assert 'program' not in execute['function']['parameters']['properties']
     # Provider projection must not append body-only guidance: it would vanish
     # from task history and break the next request's cache prefix.
-    assert plan.body['messages'] == [{'role': 'user', 'content': 'hi'}]
+    assert plan.body['messages'] == [
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'hi'}]}]
     assert 'read_files' not in execute['function']['description']
     # Internal PTC keys must never leak onto the verbatim OpenAI wire.
     for key in ('_programmatic_tool_calling', '_programmatic_stage',

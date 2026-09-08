@@ -15,6 +15,9 @@ Key design principles:
 """
 
 import hashlib
+
+import base64
+import binascii
 import json
 import os
 import re
@@ -30,6 +33,9 @@ from lib.agent_core.events import EventType, build_event
 from lib.agent_core.store import get_conversation_store
 from lib.llm import build_body as _default_build_body
 from lib.llm_dispatch import dispatch_stream as _default_dispatch_stream
+
+from lib.image_mime import sniff_image_mime
+from lib.log_redaction import sensitive_field_name
 from lib.llm_dispatch.retry_i18n import (
     RetryPhaseEventBudget,
     display_model_name,
@@ -136,7 +142,7 @@ def _next_request_snapshot_event_id(inspector_id: str,
         inspector_id, floor=max(0, int(round_num) - 1))
 
 
-def _emit_request_snapshot(agent, round_num: int) -> str:
+def _emit_request_snapshot(agent, round_num: int, body: dict | None = None) -> str:
     """Persist a Request Inspector snapshot for ONE sub-agent LLM round.
 
     Epic  (P4): sub-agent LLM calls bypass ``run_task``
@@ -149,7 +155,10 @@ def _emit_request_snapshot(agent, round_num: int) -> str:
     id without any live emission.
 
     ``kind='request'`` + the frozen params schema
-    (docs/FRONTEND_ARCHITECTURE.md §3.3) + ``turn='swarm-agent'``.
+    (docs/FRONTEND_ARCHITECTURE.md §3.3) + ``turn='swarm-agent'``. When the
+    finalized request ``body`` is available, messages, tools, model and wire
+    parameters are projected from it so diagnostics describe the request that
+    is actually dispatched rather than a second reconstruction.
     Returns the inspector id ('' on failure — NEVER raises:
     observability must not break the agent loop).
     """
@@ -162,33 +171,55 @@ def _emit_request_snapshot(agent, round_num: int) -> str:
         from lib.tasks_pkg.event_log import append_persistent_event, flush_pending
         from lib.tasks_pkg.manager._events import _strip_base64_for_snapshot
         from lib.tasks_pkg.wire_messages import apply_wire_sanitize
-        _wire = apply_wire_sanitize(
-            [dict(m) for m in agent.messages],
-            conv_id=(agent.parent_task or {}).get('convId', '') or '',
-            provider_id=(agent.parent_task or {}).get('provider_id') or '',
-            user_id=(agent.parent_task or {}).get('_userId') or None)
+        request_body = body if isinstance(body, dict) else None
+        prepared_messages = (
+            request_body.get('messages') if request_body is not None else None)
+        if isinstance(prepared_messages, list):
+            _wire = prepared_messages
+        else:
+            _wire = apply_wire_sanitize(
+                [dict(m) for m in agent.messages],
+                conv_id=(agent.parent_task or {}).get('convId', '') or '',
+                provider_id=(agent.parent_task or {}).get('provider_id') or '',
+                user_id=(agent.parent_task or {}).get('_userId') or None)
         snap = _strip_base64_for_snapshot(_wire)
         role = getattr(agent.spec, 'role', '') or ''
+        model = ((request_body or {}).get('model') or agent.model)
+        params = {
+            'maxTokens': ((request_body or {}).get('max_tokens', 64000)),
+            'temperature': ((request_body or {}).get('temperature')),
+            'thinkingEnabled': agent.thinking_enabled,
+            'thinkingDepth': None,
+            'preset': '',
+            'responseFormat': ((request_body or {}).get('response_format')),
+            'stream': ((request_body or {}).get('stream', True)),
+        }
         event = build_event(
                 EventType.MESSAGES_SNAPSHOT,
                 kind='request',
-                model=agent.model,
+                model=model,
                 turn='swarm-agent',
                 agentId=agent.agent_id,
                 agentRole=role,
-                params={
-                    'maxTokens': 64000,
-                    'temperature': 1.0,
-                    'thinkingEnabled': agent.thinking_enabled,
-                    'thinkingDepth': None,
-                    'preset': '',
-                    'responseFormat': None,
-                    'stream': True,
-                },
+                params=params,
                 roundNum=round_num,
                 label=f'[{role}] Round {round_num} 请求前 · {len(snap)}条',
                 messages=snap,
+                contextManifest=list(getattr(agent, 'context_task', {}).get('_contextManifest') or []),
             )
+        # Mirror the orchestrator's snapshot
+        # (orchestrator/_messages_snapshot.py): the Request Inspector's
+        # tool-schema section reads `tools` — without it every sub-agent
+        # round folds to toolsCount=0 and the round payload has no tool
+        # list. Prefer the finalized request body; the fallback supports
+        # failed-preflight/test callers. Persistence content-hash-dedups the
+        # array per inspector id, so only the first round stores it inline.
+        body_tools = ((request_body or {}).get('tools'))
+        tool_source = (body_tools if isinstance(body_tools, list)
+                       else (getattr(agent, 'tools', None) or []))
+        agent_tools = [t for t in tool_source if isinstance(t, dict)]
+        if agent_tools:
+            event['tools'] = agent_tools
         # This child stream has no TaskRuntime sequence owner.  Keep the tail
         # lookup and enqueue together so a resumed/duplicated in-process
         # worker cannot mint the same id.  The database tail makes this survive
@@ -251,18 +282,146 @@ def _tool_timeline_text(value) -> str:
     return value if isinstance(value, str) else str(value)
 
 
-#: Structured first-result meta keys each tool may contribute to its durable
-#: tool_log row. The swarm row otherwise keeps only the prose preview, so the
-#: flow chat projection cannot rebuild a tool's rich card — todo_write's
-#: checklist payload is exactly what lets a goal-mode turn render the
-#: localized progress card instead of the generic English receipt line.
-#: Heavy engine state (``todoState`` — full stack + history) is deliberately
-#: excluded: the card and the revision-collapser read only the flat keys.
-#: run_command contributes its settled command-card identity (command line,
-#: exit code, terminal badges) — without it a goal-mode shell round renders a
-#: bare ``$`` and an unknown-exit pill. ``output`` stays out: the prose
-#: preview already carries it and it is the heavy field the checkpoint budget
-#: reclaims first.
+_FLOW_ROUND_MAX_DEPTH = 6
+_FLOW_ROUND_MAX_ITEMS = 100
+_FLOW_ROUND_MAX_STRING_CHARS = SWARM_TOOL_TIMELINE_DETAIL_CHARS
+# Rich renderer payloads are durable, so their exceptional string allowance
+# needs an independent hard ceiling rather than the normal preview limit.
+_FLOW_ROUND_MAX_IMAGE_URI_CHARS = 2 * 1024 * 1024
+_FLOW_ROUND_MAX_IMAGE_URIS = 16
+_FLOW_PRIVATE_KEYS = frozenset({'todoState'})
+_FLOW_RICH_TEXT_KEYS = frozenset({'output', 'content'})
+_FLOW_IMAGE_LIST_KEYS = frozenset({'imageDataUris', 'qrImages'})
+_FLOW_CANONICAL_ROUND_KEYS = frozenset({
+    'taskId', 'roundNum', 'llmRound', 'agentId', 'toolCallId', 'toolName',
+    'toolArgs',
+    'query', 'results', 'status', 'error', 'toolContent', 'isError',
+    'tStart', 'tEnd', '_repaired', 'rejection', 'toolRejection',
+})
+_FLOW_DATA_IMAGE_RE = re.compile(
+    r'^data:(image/(?:avif|gif|jpeg|png|svg\+xml|webp));base64,([A-Za-z0-9+/]*={0,2})$',
+    re.IGNORECASE,
+)
+_FLOW_SNIFFED_IMAGE_MIMES = frozenset({
+    'image/gif', 'image/jpeg', 'image/png', 'image/webp',
+})
+
+
+def _safe_flow_image_uri(value) -> str | None:
+    """Validate one renderer image reference without fetching external data."""
+    if not isinstance(value, str) or not value:
+        return None
+    if value.startswith(('http://', 'https://', 'blob:', '/')):
+        return (value if len(value) <= _FLOW_ROUND_MAX_STRING_CHARS else None)
+    # Renderer also accepts ordinary relative paths; reject scheme-like and
+    # protocol-relative strings instead of accidentally widening that rule.
+    if not value.lower().startswith('data:'):
+        if (len(value) <= _FLOW_ROUND_MAX_STRING_CHARS
+                and '://' not in value and not value.startswith('//')
+                and not re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:', value)):
+            return value
+        return None
+    if len(value) > _FLOW_ROUND_MAX_IMAGE_URI_CHARS:
+        return None
+    match = _FLOW_DATA_IMAGE_RE.fullmatch(value)
+    if not match:
+        return None
+    media_type, encoded = match.groups()
+    if not encoded or len(encoded) % 4:
+        return None
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not raw:
+        return None
+    declared = media_type.lower()
+    if declared in _FLOW_SNIFFED_IMAGE_MIMES:
+        if sniff_image_mime(raw[:16]) != declared:
+            return None
+    # AVIF and SVG are renderer-supported but outside image_mime's raster
+    # authority. Require their cheap, unambiguous container signatures.
+    elif declared == 'image/avif':
+        if len(raw) < 12 or raw[4:8] != b'ftyp' or b'avif' not in raw[8:32]:
+            return None
+    elif declared == 'image/svg+xml':
+        head = raw[:1024].lstrip().lower()
+        if not (head.startswith(b'<svg')
+                or (head.startswith(b'<?xml') and b'<svg' in head)):
+            return None
+    return value
+
+
+def _sanitize_flow_public_value(value, *, depth: int = 0,
+                                field_name: str = ''):
+    """Return a bounded, context-aware JSON-safe public presentation copy."""
+    if sensitive_field_name(field_name):
+        return '<redacted>'
+    if field_name in _FLOW_IMAGE_LIST_KEYS:
+        if not isinstance(value, (list, tuple)):
+            return []
+        images = []
+        for item in value[:_FLOW_ROUND_MAX_IMAGE_URIS]:
+            if isinstance(item, str):
+                uri = _safe_flow_image_uri(item)
+                if uri:
+                    images.append(uri)
+                continue
+            if not isinstance(item, dict):
+                continue
+            uri_key = 'uri' if 'uri' in item else ('dataUrl' if 'dataUrl' in item else '')
+            uri = _safe_flow_image_uri(item.get(uri_key)) if uri_key else None
+            if not uri:
+                continue
+            descriptor = _sanitize_flow_public_value(
+                item, depth=depth + 1, field_name='')
+            if isinstance(descriptor, dict):
+                descriptor[uri_key] = uri
+                images.append(descriptor)
+        return images
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:_FLOW_ROUND_MAX_STRING_CHARS]
+    if depth >= _FLOW_ROUND_MAX_DEPTH:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [
+            _sanitize_flow_public_value(item, depth=depth + 1)
+            for item in value[:_FLOW_ROUND_MAX_ITEMS]
+        ]
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in list(value.items())[:_FLOW_ROUND_MAX_ITEMS]:
+            key = str(key)[:128]
+            if key in _FLOW_PRIVATE_KEYS or key.startswith('_runtime'):
+                continue
+            sanitized[key] = _sanitize_flow_public_value(
+                item, depth=depth + 1, field_name=key)
+        return sanitized
+    return str(value)[:_FLOW_ROUND_MAX_STRING_CHARS]
+
+
+def flow_canonical_public_round(round_entry: dict, *, agent_id: str,
+                                tool_call_id: str, tool_args: dict,
+                                tool_content='', task_id: str = '') -> dict:
+    """Snapshot executor-finalized public round fields under strict bounds."""
+    source = dict(round_entry or {})
+    source.update({
+        'llmRound': source.get('roundNum'),
+        'taskId': task_id,
+        'agentId': agent_id,
+        'toolCallId': tool_call_id,
+        'toolArgs': tool_args,
+        'toolContent': tool_content,
+    })
+    return {
+        key: _sanitize_flow_public_value(value, field_name=key)
+        for key, value in source.items()
+        if key in _FLOW_CANONICAL_ROUND_KEYS
+    }
+
+
 _FLOW_STRUCTURED_META_KEYS = {
     'todo_write': (
         'todos', 'todoOperation', 'todoNoop', 'todoRejected',
@@ -277,19 +436,14 @@ _FLOW_STRUCTURED_META_KEYS = {
 
 
 def flow_structured_result_meta(fn_name: str, results) -> dict:
-    """Harvest a tool's structured display payload off its finalized round.
-
-    ``results`` is the meta list the executor's ``_finalize_tool_round``
-    stamped onto the dispatch stub. Pure: unknown tools, malformed input,
-    and missing keys all harvest nothing.
-    """
+    """Compatibility helper for callers of the former per-tool projection."""
     keys = _FLOW_STRUCTURED_META_KEYS.get(fn_name)
-    if not keys or not isinstance(results, list) or not results:
+    if (not keys or not isinstance(results, list) or not results
+            or not isinstance(results[0], dict)):
         return {}
     meta = results[0]
-    if not isinstance(meta, dict):
-        return {}
-    return {key: meta[key] for key in keys if key in meta}
+    return {key: _sanitize_flow_public_value(meta[key])
+            for key in keys if key in meta}
 
 # Max parallel tool calls per round. Keep the swarm path on the same
 # deployment profile as the primary agent tool dispatcher.
@@ -302,6 +456,17 @@ except (TypeError, ValueError, OverflowError):
     MAX_PARALLEL_TOOLS = deployment_resource_default(
         'TOOL_MAX_PARALLEL_WORKERS', os.environ)
 MAX_PARALLEL_TOOLS = max(1, min(32, MAX_PARALLEL_TOOLS))
+
+# A detached sub-agent has no user to cancel a 429 wall: bound its upstream
+# retry cycling so a saturated credential fails the round and frees the
+# execution permit instead of spinning for hours (par-knowledge incident
+# 2026-09-04: 200+ cycles over 2 h holding a global slot).
+try:
+    SWARM_MAX_429_ATTEMPTS = int(
+        os.environ.get('TOFU_SWARM_MAX_429_ATTEMPTS', '') or 120)
+except (TypeError, ValueError, OverflowError):
+    SWARM_MAX_429_ATTEMPTS = 120
+SWARM_MAX_429_ATTEMPTS = max(1, min(4096, SWARM_MAX_429_ATTEMPTS))
 
 # File-edit tools whose touched path is recorded on this sub-agent's presence
 # peer (→ cross-peer overlap detection). Maps tool name → the action label
@@ -410,6 +575,14 @@ class SubAgent:
         # one small lock prevents same-name calls from attaching a result to a
         # sibling row and makes historical-detail compaction deterministic.
         self._tool_log_lock = threading.Lock()
+
+        # Request-scoped diagnostics belong to the child, never the parent's
+        # manifest. The small carrier is retained only for this worker.
+        self.context_task = {
+            'id': self.agent_id, 'model': self.model,
+            'config': {'systemPromptBlocks': dict(
+                (self.parent_task.get('config') or {}).get('systemPromptBlocks') or {})},
+        }
 
         # Internal message history
         self.messages = self._build_initial_messages(system_prompt_base)
@@ -543,9 +716,10 @@ class SubAgent:
         """Construct the initial messages for this agent."""
         role_suffix = get_role_system_suffix(self.spec.role)
 
-        system_content = self._strip_parent_prompt(system_prompt_base)
-        if role_suffix:
-            system_content += f'\n\n{role_suffix}'
+        from lib.tasks_pkg.context_composer.injections import append_injection
+
+        base_content = self._strip_parent_prompt(system_prompt_base)
+        system_content = f'\n\n{role_suffix}' if role_suffix else ''
 
         # Agent identity and constraints
         system_content += (
@@ -598,10 +772,12 @@ class SubAgent:
                 'this workstream.'
             )
 
+        policy_content = system_content
+        artifact_content = ''
         # Artifact store instructions
         if self.artifact_store is not None:
             existing_artifacts = self.artifact_store.list_keys()
-            system_content += (
+            artifact_content = (
                 '\n\n## Shared Artifact Store\n'
                 'You have access to a shared artifact store for inter-agent data sharing:\n'
                 '  • store_artifact(key, content) — save data for other agents\n'
@@ -610,17 +786,25 @@ class SubAgent:
                 'Use this to share important findings or data that other agents might need.'
             )
             if existing_artifacts:
-                system_content += (
-                    f'\n\nAvailable artifacts from previous agents: {", ".join(existing_artifacts)}'
+                artifact_hint = ', '.join(str(key)[:128] for key in existing_artifacts[:20])[:1600]
+                artifact_content += (
+                    f'\n\nAvailable artifacts from previous agents: {artifact_hint}'
+                    '\nUse list_artifacts for the complete index.'
                 )
 
-        messages = [{'role': 'system', 'content': system_content}]
+        messages = [{'role': 'system', 'content': base_content}]
+        append_injection(messages, 'worker_policy', policy_content,
+                         task=self.context_task)
 
         # User message with objective + context
         user_parts = [f'## Your Task\n{self.spec.objective}']
         if self.spec.context:
             user_parts.append(f'\n## Context\n{self.spec.context}')
         messages.append({'role': 'user', 'content': '\n'.join(user_parts)})
+
+        if artifact_content:
+            append_injection(messages, 'worker_artifacts', artifact_content,
+                             task=self.context_task)
 
         return messages
 
@@ -729,6 +913,18 @@ class SubAgent:
         from lib.tasks_pkg.manager import task_user_id
 
         return int(task_user_id(self.parent_task))
+
+    def _llm_owner_user_id(self) -> int | None:
+        """Owner scope for LLM dispatch (OAuth token tenancy, desktop egress).
+
+        ``None`` only for owner-less test rigs (``parent_task`` without
+        ``_userId``); production sub-agents always run inside a user-owned
+        task, and the dispatch layer needs that scope to resolve OAuth
+        slots and desktop-bridge routes for the right tenant.
+        """
+        if (self.parent_task or {}).get('_userId') is not None:
+            return self._presence_user_id()
+        return None
 
     def _presence_announce(self, phase: str = 'working') -> None:
         """Register this sub-agent as a live presence peer of the project root.
@@ -1069,7 +1265,7 @@ class SubAgent:
             # Request Inspector (P4): persist THIS round's LLM request
             #   under the agent's own inspector id — makes sub-agent calls
             #   visible without touching the parent stream (see helper).
-            _emit_request_snapshot(self, round_num)
+            _emit_request_snapshot(self, round_num, body)
 
             content_parts = []
             thinking_parts = []
@@ -1203,11 +1399,19 @@ class SubAgent:
                     prefer_model=body.get('model', ''),
                     log_prefix=f'[{self.agent_id}]',
                     on_retry=_on_dispatch_retry,
+                    max_429_attempts=SWARM_MAX_429_ATTEMPTS,
+                    owner_user_id=self._llm_owner_user_id(),
                 ))
                 msg = stream_result.message
                 stop_reason = stream_result.finish_reason
                 usage = stream_result.usage
             except Exception as e:
+                from lib.llm_errors import AbortedError
+                if isinstance(e, AbortedError) or self.abort_check():
+                    _flush_log()
+                    self.result.status = SubAgentStatus.CANCELLED.value
+                    self._extract_partial_answer(f'Agent cancelled at round {round_num}')
+                    raise _LlmFailed
                 logger.error('[%s] LLM call failed round %d: %s', self.agent_id, round_num, e, exc_info=True)
                 # Flush whatever we managed to stream before the error so
                 # the on-disk log isn't truncated.
@@ -1243,6 +1447,18 @@ class SubAgent:
                     f'\n--- Round {round_num} ---\n' +
                     ''.join(thinking_parts)[:2000]
                 )
+
+            from lib.llm.stream_result import ProviderStreamState
+            if (stream_result.state == ProviderStreamState.CLIENT_ABORTED
+                    or self.abort_check()):
+                self.result.status = SubAgentStatus.CANCELLED.value
+                partial = msg.get('content') or ''.join(content_parts)
+                if partial:
+                    self.result.final_answer = partial
+                else:
+                    self._extract_partial_answer(
+                        f'Agent cancelled at round {round_num}')
+                raise _LlmFailed
 
             # ── Premature-close poison guard ──
             # The gateway can sever the SSE stream without its terminal
@@ -1602,9 +1818,9 @@ class SubAgent:
         self._emit_stream_phase(
             'writing', 'Stopping — writing up findings so far…')
         try:
-            wrap_msgs = list(self.messages) + [{
-                'role': 'user',
-                'content': (
+            from lib.tasks_pkg.context_composer.injections import append_injection
+            wrap_msgs = list(self.messages)
+            append_injection(wrap_msgs, 'worker_wrapup', (
                     f'STOP: {reason}. Do not call any more tools.\n\n'
                     'Write your FINAL ANSWER now from what you have already '
                     'established. Report the findings you actually confirmed, '
@@ -1612,8 +1828,7 @@ class SubAgent:
                     'not get to — an honest partial report is useful, an '
                     'invented complete one is not.'
                     + (f'\n\n{guidance}' if guidance else '')
-                ),
-            }]
+                ), task=self.context_task, round_num=self.result.rounds_used + 1)
             body = self._build_body(
                 model=self.model,
                 messages=wrap_msgs,
@@ -1624,6 +1839,7 @@ class SubAgent:
             )
             body['_task_id'] = self.agent_id
             parts: list[str] = []
+            _emit_request_snapshot(self, self.result.rounds_used + 1, body)
             from lib.llm.stream_result import (
                 require_verified_provider_stream_result,
             )
@@ -1635,6 +1851,8 @@ class SubAgent:
                 abort_check=self.abort_check,
                 prefer_model=body.get('model', ''),
                 log_prefix=f'[{self.agent_id}:wrapup]',
+                max_429_attempts=SWARM_MAX_429_ATTEMPTS,
+                owner_user_id=self._llm_owner_user_id(),
                 ), context='swarm wrap-up')
             msg = stream_result.message
             usage = stream_result.usage
@@ -1898,6 +2116,8 @@ class SubAgent:
         # recycled by another Flow node. Mint one occurrence identity here and
         # persist it on the same row used for terminal replay.
         timeline_call_id = f'flow-tool-{uuid.uuid4().hex}'
+
+        tool_call['_timeline_call_id'] = timeline_call_id
         tool_start = time.time()
 
         # ── Unified tool-call ingestion ──
@@ -1999,19 +2219,22 @@ class SubAgent:
                     # args_brief survives: bounded by format_tool_args_brief
                     # (200 chars), it is the settled card's command line once
                     # the output body above is reclaimed.
-                    # Structured display payload: keep the flat scalars the
-                    # settled cards read (badge / exitCode / counters), drop
-                    # only the heavy list bodies (todos stack, breadcrumbs) —
-                    # same bounded-checkpoint rationale as the prose fields.
-                    old_meta = historical.get('result_meta')
-                    if isinstance(old_meta, dict):
-                        historical['result_meta'] = {
-                            key: value
-                            for key, value in old_meta.items()
-                            if value is None
-                            or isinstance(value, (bool, int, float))
-                            or (isinstance(value, str) and len(value) <= 512)
-                        }
+                    # Canonical rounds are already bounded value-by-value;
+                    # discard result list bodies on old rows while retaining
+                    # identity, status, args, timing and result metadata scalars.
+                    canonical = historical.get('canonical_round')
+                    if isinstance(canonical, dict):
+                        old_results = canonical.get('results')
+                        if isinstance(old_results, list):
+                            canonical['results'] = [
+                                {key: value for key, value in meta.items()
+                                 if value is None
+                                 or isinstance(value, (bool, int, float))
+                                 or (isinstance(value, str)
+                                     and len(value) <= 512)}
+                                for meta in old_results
+                                if isinstance(meta, dict)
+                            ]
 
         self._emit_tool_event(build_event(
             EventType.TOOL_START,
@@ -2064,7 +2287,20 @@ class SubAgent:
 
                 tool_log_row['status'] = status
                 tool_log_row['tool_content'] = _error_sent or _sent
-                structured_meta = dict(tool_log_row.get('result_meta') or {})
+                canonical_round = dict(
+                    tool_log_row.get('canonical_round') or {})
+                if canonical_round:
+                    canonical_round['status'] = (
+                        canonical_round.get('status')
+                        or ('done' if status == 'done' else 'error'))
+                    canonical_round['toolContent'] = _error_sent or _sent
+                    canonical_round['tEnd'] = int(time.time() * 1000)
+                    tool_log_row['canonical_round'] = canonical_round
+                structured_results = canonical_round.get('results') or []
+                structured_meta = (dict(structured_results[0])
+                                   if structured_results
+                                   and isinstance(structured_results[0], dict)
+                                   else {})
             terminal_status = 'done' if status == 'done' else 'error'
             result_meta = {
                 'toolName': fn_name,
@@ -2141,17 +2377,16 @@ class SubAgent:
         try:
             logger.debug('[Agent:%s] Dispatching tool %s args=%s',
                          self.agent_id, fn_name, str(fn_args)[:200])
-            meta_sink: dict = {}
+            canonical_sink: dict = {}
             with thread_progress_sink(self.progress_beacon, self.spec.id):
                 result = self._dispatch_tool(
                     tool_call, fn_name, fn_args, round_num,
-                    meta_sink=meta_sink)
-            if meta_sink:
-                # Persist the structured payload onto the durable row so the
-                # flow chat projection (and a reloaded panel) can rebuild the
-                # rich card — the proxy round it came from is discarded.
+                    meta_sink=canonical_sink)
+            if canonical_sink:
+                # Persist the executor-finalized public round once; projection
+                # must not reconstruct tool-specific metadata.
                 with self._tool_log_lock:
-                    tool_log_row['result_meta'] = meta_sink
+                    tool_log_row['canonical_round'] = canonical_sink
             truncated = self._truncate_tool_result(result)
             tool_elapsed = time.time() - tool_start
             logger.debug('[Agent:%s] Tool %s completed in %.2fs result_len=%d',
@@ -2445,8 +2680,16 @@ class SubAgent:
                 self.tools,
             )
             if meta_sink is not None:
-                meta_sink.update(flow_structured_result_meta(
-                    fn_name, round_entry.get('results')))
+                meta_sink.update(flow_canonical_public_round(
+                    round_entry,
+                    agent_id=self.agent_id,
+                    tool_call_id=str(tool_call.get('_timeline_call_id') or tc_id),
+                    tool_args=fn_args,
+                    task_id=str(task_proxy.get('id') or ''),
+                    tool_content=(tool_content if isinstance(tool_content, str)
+                                  else json.dumps(tool_content,
+                                                  ensure_ascii=False)),
+                ))
             if isinstance(tool_content, dict):
                 # Some tools (e.g. browser_screenshot) return dicts
                 return json.dumps(tool_content, ensure_ascii=False)

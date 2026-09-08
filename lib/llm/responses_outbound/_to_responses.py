@@ -41,6 +41,7 @@ import json
 import re
 import uuid
 
+from lib.llm.responses_outbound._message_phase import replay_phase_messages
 from lib.log import get_logger
 from lib.tool_history_pairing import adjacent_tool_call_result_pairs
 
@@ -719,7 +720,10 @@ def _messages_to_input(messages: list, reverse: dict, *,
 
         # An assistant message with no text payload emits no message item —
         # its tool calls below stand alone as function_call items.
-        if role != 'assistant' or content_parts:
+        phase_messages = replay_phase_messages(msg)
+        if phase_messages:
+            items.extend(phase_messages)
+        elif role != 'assistant' or content_parts:
             items.append({'type': 'message', 'role': api_role,
                           'content': content_parts})
 

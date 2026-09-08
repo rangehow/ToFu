@@ -74,6 +74,11 @@ The ASGI lifespan and request path consume prebuilt frontend artifacts and
 never invoke Node. Both validate the atomic published graph (entries, recursive
 references, safe paths, files, and manifest digest); the manifest is the commit
 point, so later source edits cannot withdraw it during recovery or hard refresh.
+
+Publication retains the pinned current and previous graphs plus dropped
+generations inside a bounded age/byte window
+(`scripts/vite_asset_retention.mjs`), so a long-lived tab's content-hashed
+chunk URLs keep resolving across rebuilds.
 Before a source-checkout `start`, approved `restart`, or cold manager launch,
 `serverctl.py` validates the manifest's SHA-256 over every authoring input and
 may rebuild once only for the owning frontend role with local Vite. Content
@@ -187,13 +192,9 @@ kernel call returns.
 
 ## Change rules
 
-- Add process-wide work through a named lifecycle handler with an idempotent
-  shutdown owner. Do not start work during module import.
-- Add an HTTP concern in `app_assembly.py`; add a loop-bound concern in
-  `serving_loop_lifecycle.py`; add a required boot phase in
-  `ProductionStartupSteps`.
-- Do not add a second app factory, readiness gate, task registry, push hub,
-  storage mode or error taxonomy.
+- Add process-wide work through a named lifecycle handler with an idempotent shutdown owner; never start work during module import.
+- Route HTTP concerns to `app_assembly.py`, loop-bound concerns to `serving_loop_lifecycle.py`, and required boot phases to `ProductionStartupSteps`.
+- Do not add a second app factory, readiness gate, task registry, push hub, storage mode or error taxonomy.
 - Keep blocking filesystem, subprocess and network work off the Quart event
   loop. Path lookup/read-only imports do not create directories, and one
   launch snapshot serves every flag from the same small config file.
@@ -210,11 +211,9 @@ Run the smallest relevant checks first:
 ```bash
 python3 scripts/check_architecture.py
 pytest -q tests/test_agent_core_boundary.py
-pytest -q tests/test_app_factory.py tests/test_app_assembly.py tests/test_app_lifecycle.py
+pytest -q tests/test_app_factory.py tests/test_app_assembly.py tests/test_quart_lifecycle_modernization.py
 pytest -q tests/test_production_lifecycle.py tests/test_serving_loop_lifecycle.py
 pytest -q tests/test_restart_smoke.py
 ```
 
-For a live startup failure, inspect lifecycle state under `app.extensions`
-before adding recovery behavior. The state records the current handler,
-completed startup phases, shutdown attempts and shutdown errors.
+For live startup failures, inspect `app.extensions` lifecycle state before adding recovery: it records the current handler, completed startup phases, shutdown attempts and errors.

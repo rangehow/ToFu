@@ -178,7 +178,7 @@ function _recoverSwarmAgents(round, allRounds) {
      fire-and-forget case) — so those agents render with their true outcome,
      not `unknown` stubs. See lib/swarm/snapshot.py. */
   const snap = round && round._swarmSnapshot;
-  if (snap && Array.isArray(snap.agents) && snap.agents.length > 0) {
+  if (snap && Array.isArray(snap.agents) && (snap.settled || snap.agents.length > 0)) {
     return snap.agents.map((a) => {
       const status = a.status || "unknown";
       /* Restore the tool timeline the backend persisted (see
@@ -199,8 +199,16 @@ function _recoverSwarmAgents(round, allRounds) {
          missing timer this restores. */
       let startedAt = 0;
       const rawStart = Number(a.startedAt);
-      if (Number.isFinite(rawStart) && rawStart > 1e12 && rawStart <= Date.now()) {
-        startedAt = rawStart;
+      /* The server mints startedAt from ITS clock; a client running behind
+         (VM drift, sleep/resume) would see it as "in the future" and the old
+         `<= Date.now()` check dropped the anchor — the running agent's timer
+         disappeared. Within a bounded skew window, clamp to local now so the
+         timer starts at ~0s and counts; only true wrong-magnitude values
+         (epoch seconds, double-converted ms) are still dropped. */
+      const SWARM_START_SKEW_MS = 5 * 60 * 1000;
+      if (Number.isFinite(rawStart) && rawStart > 1e12 &&
+          rawStart <= Date.now() + SWARM_START_SKEW_MS) {
+        startedAt = Math.min(rawStart, Date.now());
       } else if (a.startedAt != null && a.startedAt !== "") {
         console.warn("[Swarm] implausible startedAt for agent", a.id,
           "=", a.startedAt, "— timer anchor dropped");
@@ -319,7 +327,9 @@ function _buildSwarmPanelHTML(round, allRounds) {
      Reload path: that field is gone, so recover agents from the persisted
      handle JSON + sibling result rounds — otherwise the completed panel
      renders an empty body. */
-  let agents = round._swarmAgents || [];
+  let agents = round._swarmSnapshot?.settled
+    ? _recoverSwarmAgents(round, allRounds)
+    : (round._swarmAgents || []);
   if (agents.length === 0) {
     agents = _recoverSwarmAgents(round, allRounds);
   }
@@ -357,8 +367,10 @@ function _buildSwarmPanelHTML(round, allRounds) {
   const running = agents.filter(a => a.status === "running" || a.status === "thinking").length;
   const done = agents.filter(a => a.status === "done" || a.status === "completed").length;
   const failed = agents.filter(a => a.status === "failed" || a.status === "error").length;
-  const pending = total - done - failed - running;
-  const finished = done + failed;
+  const aborted = agents.filter(a => ["aborted", "cancelled", "canceled"].includes(a.status)).length;
+  const stalled = agents.filter(a => a.status === "stalled").length;
+  const pending = total - done - failed - aborted - stalled - running;
+  const finished = done + failed + aborted;
 
   /* ── Elapsed timer ── */
   let elapsed = "";
@@ -396,6 +408,9 @@ function _buildSwarmPanelHTML(round, allRounds) {
     if (isActive && running > 0) parts.push(`<span class="sw-cnt-running">${running} running</span>`);
     if (done > 0) parts.push(`<span class="sw-cnt-done">${done} done</span>`);
     if (failed > 0) parts.push(`<span class="sw-cnt-failed">${failed} failed</span>`);
+
+    if (aborted > 0) parts.push(`${aborted} aborted`);
+    if (stalled > 0) parts.push(`${stalled} stalled`);
     if (pending > 0 && isActive) parts.push(`${pending} queued`);
     headerSubtitle = `<span class="sw-header-subtitle">${parts.join(" · ")}</span>`;
   } else if (isActive) {
@@ -417,12 +432,15 @@ function _buildSwarmPanelHTML(round, allRounds) {
   } else if (round._swarmError) {
     /* Explicit driver failure outranks inferred agent counts. */
     statusPill = `<span class="sw-status-pill sw-pill-error" title="${escapeHtml(round._swarmError)}">${_SW_STATUS_SVG.failed} Failed</span>`;
+  } else if (aborted > 0) {
+    statusPill = `<span class="sw-status-pill sw-pill-error">${_SW_STATUS_SVG.failed} ${aborted === total ? "Aborted" : "Finished with interruptions"}</span>`;
+  } else if (stalled > 0) {
+    statusPill = `<span class="sw-status-pill sw-pill-stale">${_SW_STATUS_SVG.stale} Stalled</span>`;
   } else if (failed > 0 && done === 0) {
     statusPill = `<span class="sw-status-pill sw-pill-error">${_SW_STATUS_SVG.failed} Failed</span>`;
   } else if (failed > 0) {
     statusPill = `<span class="sw-status-pill sw-pill-error">${_SW_STATUS_SVG.failed} Completed with errors</span>`;
-  } else if (finished === 0 && total > 0
-             && !(round._swarmSnapshot && round._swarmSnapshot.settled)) {
+  } else if (finished < total || (total === 0 && !round._swarmSnapshot?.settled)) {
     /* No terminal agent or settled snapshot is never Complete. Deliberately
        ignore `_swarmEndTime`: reconciliation freezes it even when truth for
        every agent remains unknown. */
@@ -436,7 +454,7 @@ function _buildSwarmPanelHTML(round, allRounds) {
   let progressBar = "";
   if (total > 0) {
     const pctDone = Math.round((done / total) * 100);
-    const pctFailed = Math.round((failed / total) * 100);
+    const pctFailed = Math.round(((failed + aborted) / total) * 100);
     const pctRunning = Math.round((running / total) * 100);
     const fillStyle = (failed > 0 && done > 0) ? ` style="--ok-pct:${pctDone}%"` : "";
     const fillClass = failed > 0 && done > 0 ? " has-errors" : "";

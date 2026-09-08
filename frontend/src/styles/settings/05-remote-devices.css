@@ -85,7 +85,7 @@
   transition: transform 0.1s, box-shadow 0.1s;
 }
 .remote-root-add:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: var(--s-shadow-sm);
 }
-.remote-root-add:active { transform: translate(1px, 1px); box-shadow: none; }
+.remote-root-add:active { transform: translateY(1px); box-shadow: none; }

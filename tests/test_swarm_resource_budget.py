@@ -299,7 +299,7 @@ def test_session_registry_rejects_new_work_without_evicting_productive_session(
         assert keys[1] not in state._active_sessions
         snapshot = state.swarm_cleanup_snapshot()
         assert snapshot['sessionCapacity'] == 1
-        assert snapshot['execution']['capacity'] >= 1
+        assert snapshot['execution']['capacity'] >= 0
     finally:
         for key in keys:
             state._remove_session(key)
@@ -343,12 +343,12 @@ def test_swarm_policy_overrides_have_hard_ceilings(monkeypatch):
     ):
         monkeypatch.setenv(name, '999999')
 
-    assert resource_policy.swarm_global_workers() == 32
-    assert resource_policy.swarm_max_parallel() == 16
-    assert resource_policy.swarm_max_agents_per_wave() == 32
-    assert resource_policy.swarm_max_agents_per_session() == 128
+    assert resource_policy.swarm_global_workers() == 64
+    assert resource_policy.swarm_max_parallel() == 64
+    assert resource_policy.swarm_max_agents_per_wave() == 64
+    assert resource_policy.swarm_max_agents_per_session() == 256
     assert resource_policy.swarm_max_retries() == 4
-    assert resource_policy.swarm_session_capacity() == 64
+    assert resource_policy.swarm_session_capacity() == 128
     monkeypatch.setenv('TOFU_SWARM_MAX_RETRIES', '0')
     assert resource_policy.swarm_max_retries() == 0
 

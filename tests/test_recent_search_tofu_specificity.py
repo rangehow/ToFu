@@ -88,11 +88,18 @@ _RECENT_INPUT = _Elem(
 _GENERIC_INPUT = _Elem(
     'input', set(), theme='tofu', ancestors=[{'modal'}],
 )
+# The Settings panel + one of its inputs (2026-09-04: excluded from the
+# generic tofu modal shell/input rules — soft redesign owns Settings).
+_SETTINGS_PANEL = _Elem('div', {'modal', 'settings-panel'}, theme='tofu')
+_SETTINGS_INPUT = _Elem(
+    'input', set(), theme='tofu', ancestors=[{'modal', 'settings-panel'}],
+)
 
 _TOFU_INTENDED_BORDER = '2px solid #1a1814'          # authored blocky border
 _TOFU_BLEED_BORDER = '1px solid rgba(184,176,160,0.4)'  # the over-broad bleed
 _BLEED_SELECTOR = (
-    '[data-theme="tofu"] .modal:not(.memory-modal) input:not(.recent-search-input)'
+    '[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel) '
+    'input:not(.recent-search-input)'
 )
 
 
@@ -153,7 +160,7 @@ def test_specificity_math_authored_would_lose_without_exclusion():
     - bleed (no excl)`[data-theme=tofu] .modal:not(.memory-modal) input`      = (0,3,1) → would BEAT
       authored (0,3,0) — hence a plain !important-free authored rule is NOT
       enough; the source-exclusion is required.
-    - bleed (shipped, +:not) = (0,4,1) but no longer matches the input at all."""
+    - bleed (shipped, +:not ×2) = (0,5,1) but no longer matches the input at all."""
     authored = _specificity(
         '[data-theme="tofu"] .recent-search .recent-search-input')
     base = _specificity('.modal input')
@@ -167,7 +174,7 @@ def test_specificity_math_authored_would_lose_without_exclusion():
     assert bleed_no_excl > authored, (
         'the un-excluded bleed WOULD out-specify the authored rule (hence the '
         'source-exclusion, not an !important, is the correct fix)')
-    assert bleed_shipped == (0, 4, 1), bleed_shipped
+    assert bleed_shipped == (0, 5, 1), bleed_shipped
 
 
 # ─────────────────────────── 4. NO OVER-NARROWING (control) ───────────────────────────
@@ -183,11 +190,33 @@ def test_generic_tofu_modal_input_still_bleeds(css_text):
         f'stripped the theme from more than the recent-search input.')
 
 
+# ─────────────── 4b. SETTINGS-PANEL EXCLUSION (2026-09-04 soft redesign) ───────────────
+
+_TOFU_SHELL_RULE = '[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel)'
+
+
+def test_tofu_generic_modal_rules_do_not_match_settings_panel(css_text):
+    """The generic tofu modal shell (3px ink frame) and input bleed must NOT
+    match the settings panel — Settings owns the 2026-09-04 soft redesign in
+    every theme. Regression guard: if the :not(.settings-panel) carve-out is
+    reverted, the panel silently renders the rejected 3px ink frame and the
+    flattened 1px no-shadow input."""
+    assert not _selector_matches(_TOFU_SHELL_RULE, _SETTINGS_PANEL), (
+        'the tofu generic modal shell still matches .settings-panel — the '
+        '3px ink frame bleed is back')
+    assert not _selector_matches(_BLEED_SELECTOR, _SETTINGS_INPUT), (
+        'the tofu generic modal input bleed still matches settings inputs')
+    border = _resolve(css_text, _SETTINGS_INPUT, 'border')
+    assert border != _TOFU_BLEED_BORDER, (
+        f'settings input border resolved to the tofu bleed {border!r}')
+
+
 # ─────────────────────────── NC double-neuter (on-disk, subprocess) ───────────────────────────
 
 _NC_FIND = (
-    '[data-theme="tofu"] .modal:not(.memory-modal) input:not(.recent-search-input){')
-_NC_REPL = '[data-theme="tofu"] .modal:not(.memory-modal) input{'
+    '[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel) '
+    'input:not(.recent-search-input){')
+_NC_REPL = '[data-theme="tofu"] .modal:not(.memory-modal):not(.settings-panel) input{'
 
 
 def _subrun_resolve_recent_border() -> str:

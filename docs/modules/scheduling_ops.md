@@ -46,7 +46,7 @@ zero-LLM watcher, while instruction plus predicate remains hybrid and may
 auto-promote after agreement. Human-only restart/redeploy waits remain forbidden.
 
 Conversation-dispatched runs build their task config through
-`lib/scheduler/_shared.build_task_config`: the timer's `tools_config` wins on
+`build_task_config` in `lib/scheduler/_shared.py`: the timer's `tools_config` wins on
 conflict, otherwise conversation settings carry through — including the
 translation pair (`autoTranslate`, `uiLang`) that every translation trigger
 resolves from `task['config']` alone. A scheduled turn therefore translates
@@ -61,7 +61,7 @@ cannot be smuggled through timer payloads.
 
 The scheduler worker itself starts only with an explicit system principal
 carrying `scheduler:run`. Personal composition binds that principal to the
-personal owner and may install the four personal built-ins plus run the
+personal owner and may install the personal built-ins plus run the
 project/peer sweeps. Distributed composition is ownerless: it still claims
 durable task rows and rebuilds a least-privilege principal from each row's
 owner, but it does not invent owner 1, install personal built-ins, or perform
@@ -127,6 +127,8 @@ starts. Package-level compatibility exports must remain lazy so a storage-only
 consumer cannot accidentally initialize autonomous execution.
 
 ## Daily report
+
+Daily provider detection: see [model registration](../MODEL_REGISTRATION.md#daily-provider-detection).
 
 Daily-report readers gather owner-scoped state. Historical extraction bounds
 candidates before hydration, then derives statistics and its 800-character
@@ -203,9 +205,7 @@ timers. The retained panel now owns presentation only.
 | My Day cache/background | `features/myday/{report-cache,background-controller}.ts` | owner isolation, byte/entry ceilings, single probe/reminder, teardown |
 | Optimizer signal | analyzer | proposal determinism |
 | Auto-applied action | `actions/`, applier | write set, rollback, verification |
-
 ## Test map
-
 ```bash
 pytest -q tests/test_timer_parse_failure.py \
   tests/test_timer_poll_agent_loop.py tests/test_timer_resume_guardrails.py

@@ -24,6 +24,7 @@ from lib.llm._sse_core import (
     classify_status_error,
     prepare_request,
 )
+from lib.llm.request import transport_body
 from lib.llm._sse_framer import SSEFramer
 from lib.llm._transport import (
     MAX_STREAM_RETRIES,
@@ -46,6 +47,7 @@ from lib.llm_errors import (
     ModelLimitError,
     PermissionError_,
     PromptTooLongError,
+    PROVIDER_RESPONSE_ERRORS,
     RateLimitError,
     RetryableAPIError,
     _RETRYABLE,
@@ -119,7 +121,7 @@ async def _open_server_stream(plan, log_prefix: str = ''):
         try:
             async with client.stream(
                     'POST', plan.url, headers=plan.hdrs,
-                    json=plan.body) as resp:
+                    json=transport_body(plan.body)) as resp:
                 if not isinstance(getattr(resp, 'extensions', None), dict):
                     resp.extensions = {}
                 resp.extensions['tofu_network_route'] = route_metadata
@@ -144,7 +146,7 @@ async def _open_server_stream(plan, log_prefix: str = ''):
         attempted.add(route.route_id)
         client = get_async_client(route.async_proxy_url())
         stream_context = client.stream(
-            'POST', plan.url, headers=plan.hdrs, json=plan.body)
+            'POST', plan.url, headers=plan.hdrs, json=transport_body(plan.body))
         started = time.monotonic()
         try:
             response = await stream_context.__aenter__()
@@ -448,6 +450,7 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                 on_thinking=on_thinking, on_content=on_content,
                 on_tool_call_ready=on_tool_call_ready,
                 route_output_limit_key=plan.route_output_limit_key,
+                credential_present=getattr(plan, 'credential_present', False),
                 progress=_progress)
 
             # ── Idle watchdog (async idiom) ──
@@ -583,10 +586,7 @@ async def _async_stream_chat_once(body, *, on_thinking=None, on_content=None,
                     # Event-loop/task cancellation is caller control flow, not
                     # evidence that the selected network path is unhealthy.
                     raise
-                elif isinstance(_iter_e, (
-                        RateLimitError, PermissionError_, ContentFilterError,
-                        PromptTooLongError, ModelLimitError,
-                        RetryableAPIError)):
+                elif isinstance(_iter_e, PROVIDER_RESPONSE_ERRORS):
                     _report_network_outcome(True)
                     _annotate_network_error(_iter_e, 'provider_stream')
                     raise

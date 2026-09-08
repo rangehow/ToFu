@@ -107,7 +107,7 @@ Three long-term product constraints govern every change in this repo.
      a measurement/budget test and updates the owning operations contract.
 
 Keep this file short and stable; detailed rationale and audit results live in
-docs/ (see docs/ENTERPRISE_READINESS_AUDIT.md).
+docs/ (see docs/ENTERPRISE_EVOLUTION.md).
 
 # Directory guidance
 

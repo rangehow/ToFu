@@ -201,6 +201,48 @@ check('batch_operations_use_designed_enum_pills',
 const failedSegment = batchHtml.slice(batchHtml.indexOf('ptool-batch-fail'));
 check('failed_batch_edit_does_not_invent_a_diff',
   failedSegment && !failedSegment.includes('bdiff-block'));
+check('failed_edit_without_any_reason_stays_quiet',
+  !batchHtml.includes('ptool-batch-fail-reason'));
+
+const rejectedBatchHtml = presentation.renderWriteResultHtml({
+  roundNum: 22,
+  toolName: 'edit_file',
+  toolContent: 'Applied 0/1 edits (1 failed)\n'
+    + '[1] FAIL Refusing to write to path outside workspace roots without '
+    + 'allow_outside_workspace=true. Set allow_outside_workspace=true after '
+    + 'the user confirms this exact destination; it then registers as a new root.',
+  toolArgs: { edits: [{ operation: 'insert_after', anchor: 'x', content: 'y' }] },
+}, {
+  editSummaries: [{
+    path: '/mnt/outside/eh/c.smali',
+    description: 'Insert OAID rotation',
+    status: 'fail',
+    operation: 'insert_after',
+    detail: 'metadata fallback detail that must lose to the FAIL line',
+  }],
+}, header);
+check('rejected_batch_edit_renders_reason_inline_on_row_and_header',
+  rejectedBatchHtml.match(/ptool-batch-fail-reason/g).length === 2);
+check('inline_reason_prefers_authoritative_fail_line_and_truncates',
+  rejectedBatchHtml.includes(
+    'title="Refusing to write to path outside workspace roots without '
+    + 'allow_outside_workspace=true.')
+  && rejectedBatchHtml.includes('…</span>')
+  && !rejectedBatchHtml.includes('metadata fallback detail that must lose'));
+
+const fallbackBatchHtml = presentation.renderWriteResultHtml({
+  roundNum: 23,
+  toolName: 'edit_file',
+  toolArgs: { edits: [{ operation: 'replace', search: 'a', content: 'b' }] },
+}, {
+  editSummaries: [{
+    path: 'x.py', status: 'fail', operation: 'replace',
+    detail: 'gate refused <img src=x onerror=alert(1)>',
+  }],
+}, header);
+check('inline_reason_falls_back_to_metadata_detail_and_escapes_hostile_text',
+  fallbackBatchHtml.includes('gate refused &lt;img src=x onerror=alert(1)&gt;')
+  && !fallbackBatchHtml.includes('<img'));
 
 const legacyInsertHtml = presentation.renderWriteResultHtml({
   roundNum: 12,
@@ -734,7 +776,7 @@ check('empty_rounds_blank', renderToolRoundsHTML([], false) === '' &&
   check('knowledge_search_book_glyph', html.includes('M4 19.5A2.5 2.5'));
 }
 
-// ── 14. todo revisions project to one live checklist card ──
+// ── 14. checklist audit cards retain accepted revision history ──
 {
   const todoRound = (n, done, extra = {}) => ({
     roundNum: n, llmRound: n, toolName: 'todo_write', status: 'done',
@@ -753,16 +795,16 @@ check('empty_rounds_blank', renderToolRoundsHTML([], false) === '' &&
     todoRound(4, 2, { todoRevision: 3, rootCompleted: true }),
   ], false);
   const d = frag(html);
-  check('todo_revisions_one_card', d.querySelectorAll('.ptool-todo-block').length === 1);
+  check('todo_revisions_keep_audit_cards', d.querySelectorAll('.ptool-todo-block').length === 3);
   check('todo_revisions_latest_state', html.includes('2/2'));
   check('todo_revisions_counted_once', d.querySelector('.ptool-panel-body')
-    && d.querySelector('.ptool-panel-body').getAttribute('data-full-count') === '2');
+    && d.querySelector('.ptool-panel-body').getAttribute('data-full-count') === '4');
   check('todo_revision_history_chip', !!d.querySelector('.ptool-todo-revisions'));
   check('todo_revision_history_details', !!d.querySelector('.ptool-todo-history'));
   check('todo_non_todo_round_kept', html.includes('Read config'));
 }
 
-// ── 14b. rejected checklist protocol remains model/debug-only ──
+// ── 14b. rejected and no-op audit receipts remain distinguishable ──
 {
   const accepted = {
     roundNum: 1, llmRound: 1, toolName: 'todo_write', status: 'done',
@@ -780,16 +822,44 @@ check('empty_rounds_blank', renderToolRoundsHTML([], false) === '' &&
   };
   const html = renderToolRoundsHTML([accepted, rejected], false);
   const d = frag(html);
-  check('todo_rejection_still_projects_one_authoritative_card',
-    d.querySelectorAll('.ptool-todo-block').length === 1);
-  check('todo_rejection_reason_is_not_human_visible',
-    !html.includes('sync cannot remove unfinished')
-    && !html.includes('use replan with a reason'));
-  check('todo_rejection_has_neutral_human_outcome',
-    html.includes('todo.unchanged'));
+  check('todo_rejection_keeps_audit_cards',
+    d.querySelectorAll('.ptool-todo-block').length === 2);
+  check('todo_rejection_reason_is_complete',
+    d.querySelector('.ptool-todo-rejection-detail').textContent === rejected.results[0].todoRejectReason);
+  check('todo_rejection_has_distinct_collapsed_outcome',
+    d.querySelectorAll('.ptool-todo-header')[1].textContent.includes('todo.rejected'));
   check('todo_rejection_does_not_inflate_revision_count',
     !d.querySelector('.ptool-todo-revisions')
     && !d.querySelector('.ptool-todo-history'));
+}
+
+
+// Turn-native renders each occurrence directly through the same rich slot.
+// Explicit metadata wins even when result prose contains refusal vocabulary.
+{
+  const reason = 'missing <img src=x onerror=alert(1)> & unfinished IDs\n' + 'detail '.repeat(100);
+  const make = (n, meta) => ({ roundNum: n, toolName: 'todo_write', status: 'done',
+    toolCallId: `audit-${n}`, toolContent: 'Checklist update rejected: misleading legacy prose',
+    results: [{ todos: [{ id: 'a', content: '<script>unsafe</script>', status: 'pending' }],
+      todoUpdateCount: 0, ...meta }] });
+  const rejected = make(1, { todoRejected: true, todoNoop: false, todoRejectReason: reason });
+  const noop = make(2, { todoRejected: false, todoNoop: true });
+  const accepted = make(3, { todoRejected: false, todoNoop: false });
+  for (const [label, render] of [
+    ['classic', rounds => renderToolRoundsHTML(rounds, false)],
+    ['turn_native_slot', rounds => rounds.map(r => _renderToolSlot(r, rounds)).join('')],
+  ]) {
+    const rounds = [rejected, noop, accepted];
+    const before = JSON.stringify(rounds);
+    const d = frag(render(rounds));
+    const headers = [...d.querySelectorAll('.ptool-todo-header')].map(n => n.textContent);
+    check(label + '_three_verdicts', headers.length === 3
+      && headers[0].includes('todo.rejected') && headers[1].includes('todo.unchanged')
+      && !headers[2].includes('todo.rejected') && !headers[2].includes('todo.unchanged'));
+    check(label + '_full_safe_refusal', d.querySelector('.ptool-todo-rejection-detail').textContent === reason
+      && !d.querySelector('img, script') && !d.querySelector('.ptool-todo-revisions'));
+    check(label + '_audit_authority_immutable', JSON.stringify(rounds) === before);
+  }
 }
 
 // A specialized search card keeps its existing one-click disclosure. It may
@@ -843,7 +913,7 @@ def test_tool_result_owner_and_retained_round_adapter():
         line for line in owner_process.stdout.splitlines()
         if line.startswith('PASS ')
     ]
-    assert len(owner_passes) == 29, owner_process.stdout
+    assert len(owner_passes) == 33, owner_process.stdout
 
     run_harness(
         target_js=os.path.join(JS_DIR, 'ui', 'tool_rounds.js'),
@@ -852,6 +922,6 @@ def test_tool_result_owner_and_retained_round_adapter():
             os.path.join(JS_DIR, 'ui', 'streaming_swarm_panel.js'),
             os.path.join(JS_DIR, 'ui', 'tool_rounds_rich.js'),
         ],
-        expect_pass=86,
+        expect_pass=92,
         label='tool_rounds render',
     )

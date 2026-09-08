@@ -16,6 +16,18 @@ they are snapshotted into ``task[CONTINUATION_PROSE_FIELD]`` at nudge time
 list + continuation snapshots + terminal strings are a complete, lossless
 record.
 
+Mid-turn checkpoints add one live-window rule: while the TRAILING tool batch
+is still in flight (``LIVE_ROUND_STATUSES``) and its prose stamp has not
+landed yet — the window between the tool-card early announcement and
+dispatch-parse stamping, during which the narration still sits in the
+accumulators — emitting that prose at the tail would invert the wire order
+(prose AFTER the tool cards it preceded). In that window, and only then, the
+terminal prose is placed ahead of the trailing batch's first tool card,
+matching the wire and the live repair (``_append_missing_live_tool_segments``).
+A settled trailing batch (e.g. a prefetch round, never prose-stamped) keeps
+the accumulator prose at the tail, where it reads as the upcoming
+deliverable.
+
 ``deliverable`` rule (explicit, position-based): a ``text`` segment is
 ``deliverable=False`` iff it is the ``assistantContent`` of a tool-round batch;
 ``deliverable=True`` iff it is the terminal ``task['content']``.
@@ -42,7 +54,9 @@ from lib.tool_round_replay import (
 from lib.tasks_pkg.segments._types import (
     CONTINUATION_PROSE_FIELD,
     INJECTED_NOTES_FIELD,
+    LIVE_ROUND_STATUSES,
     NOTE_KINDS,
+    NOTE_ACTIONS, NOTE_REASON_LIMIT, NOTE_TEXT_LIMIT,
     SEG_SYSTEM_NOTE,
     SEG_THINKING, SEG_TEXT, SEG_TOOL_USE, RESUMABLE_FINISH_REASONS,
     is_synthetic_inbox_round,
@@ -99,6 +113,8 @@ def tool_use_segment_from_round(
                    'status': round_dict.get('status')},
         '_round': round_dict,
     }
+    if round_dict.get('toolModelContent') is not None:
+        segment['result']['modelContent'] = round_dict['toolModelContent']
     attempt_id, task_id = execution_identity(round_dict)
     if attempt_id:
         segment['attemptId'] = attempt_id
@@ -158,28 +174,29 @@ def record_injected_note(
     llm_round: Any,
     kind: Any,
     text: Any,
+    action: str = 'prompt',
+    reason: str | None = None,
 ) -> dict[str, Any] | None:
-    """Snapshot an engine-authored intervention (``_isMeta`` user message).
+    """Record a display-only intervention, never mutate provider messages.
 
-    The nudge itself rides the wire as a ``role='user'`` row appended at
-    injection time; this record lets ``assemble_segments`` place a
-    ``system_note`` segment at the SAME position so the durable timeline
-    shows the intervention where it happened instead of hiding it behind a
-    sidecar chip (or, for the todo-continuation lane, nothing at all).
-    ``kind`` is closed-vocabulary (``NOTE_KINDS``); ``text`` is the verbatim
-    injected content so the render shows exactly what the model was told.
+    ``prompt`` means context was appended, not that a model consumed it.
+    Identical records within one attempt/round are idempotent; other rounds
+    and retries with new attempt identities remain separate timeline events.
+    Bodies and reason codes are bounded by the public segment contract.
     """
     if not isinstance(task, dict):
         return None
     note_kind = kind if isinstance(kind, str) and kind in NOTE_KINDS else ''
-    body = text if isinstance(text, str) else ''
-    if not note_kind or not body.strip():
+    body = text[:NOTE_TEXT_LIMIT] if isinstance(text, str) else ''
+    if not note_kind or not body.strip() or action not in NOTE_ACTIONS:
         return None
     entry: dict[str, Any] = {
         'llmRound': (llm_round if isinstance(llm_round, int)
                      and not isinstance(llm_round, bool) else None),
         'kind': note_kind,
         'text': body,
+        'action': action,
+        **({'reason': reason[:NOTE_REASON_LIMIT]} if isinstance(reason, str) and reason else {}),
     }
     attempt_id = str(task.get('_attemptId') or task.get('attemptId') or '')
     task_id = str(task.get('id') or task.get('taskId') or '')
@@ -188,6 +205,14 @@ def record_injected_note(
         if task_id:
             entry['taskId'] = task_id
     entries = task.setdefault(INJECTED_NOTES_FIELD, [])
+    for previous in entries:
+        if isinstance(previous, dict) and all(
+            previous.get(key, 'prompt' if key == 'action' else None) == value
+            for key, value in entry.items()
+        ) and previous.get('reason') == entry.get('reason'):
+            return previous
+    scope = attempt_id or task_id
+    entry['blockId'] = f'system-note:{scope + ":" if scope else ""}{note_kind}-{len(entries)}'
     entries.append(entry)
     return entry
 
@@ -279,8 +304,10 @@ def _insert_injected_note_segments(
         kind = entry.get('kind')
         raw_text = entry.get('text')
         text = raw_text if isinstance(raw_text, str) else ''
-        if kind not in NOTE_KINDS or not text.strip():
+        if not isinstance(kind, str) or not text.strip():
             continue
+        if kind not in NOTE_KINDS:
+            kind = 'system-intervention'
         lr = entry.get('llmRound')
         if not isinstance(lr, int) or isinstance(lr, bool):
             lr = None
@@ -303,9 +330,12 @@ def _insert_injected_note_segments(
                     break
         segments[index:index] = [{
             'type': SEG_SYSTEM_NOTE,
-            'blockId': f'system-note:{kind}-{position}',
+            'blockId': entry.get('blockId') or f'system-note:{kind}-{position}',
             'text': text,
             'noteKind': kind,
+            'action': entry.get('action') if entry.get('action') in NOTE_ACTIONS else 'prompt',
+            **({'reason': entry['reason'][:NOTE_REASON_LIMIT]}
+               if isinstance(entry.get('reason'), str) else {}),
             'llmRound': lr,
             **identity_fields,
         }]
@@ -349,6 +379,11 @@ def assemble_segments(task: dict[str, Any],
     segments: list[dict[str, Any]] = []
     previous_batch_key: tuple[Any, ...] | None = None
     ordered_batch_keys = execution_batch_keys(rounds)
+    # Trailing-batch tracking for the live pre-tool window (see the terminal
+    # placement note at the bottom of this function).
+    trailing_first_tool: dict[str, Any] | None = None
+    trailing_batch_live = False
+    trailing_batch_prose = False
 
     for idx, r in enumerate(rounds):
         if not isinstance(r, dict):
@@ -379,7 +414,9 @@ def assemble_segments(task: dict[str, Any],
         # prose only within that contiguous batch, not across the whole Turn:
         # a legacy resumed attempt may restart at the same llmRound before
         # attemptId stamping existed.
-        if batch_key != previous_batch_key:
+        new_batch = batch_key != previous_batch_key
+        batch_emitted_prose = False
+        if new_batch:
             previous_batch_key = batch_key
             block_suffix = _round_block_suffix(r, idx)
             # Legacy projections had no attempt scope.  When their local round
@@ -416,9 +453,17 @@ def assemble_segments(task: dict[str, Any],
                     'deliverable': False, 'llmRound': lr,
                     **identity_fields,
                 })
+            batch_emitted_prose = bool(think or ac)
         # Every round entry becomes a tool_use segment with its result nested,
         # so a tool and its output are one renderable unit.
-        segments.append(tool_use_segment_from_round(r, idx))
+        tool_segment = tool_use_segment_from_round(r, idx)
+        segments.append(tool_segment)
+        if new_batch:
+            trailing_first_tool = tool_segment
+            trailing_batch_live = False
+            trailing_batch_prose = batch_emitted_prose
+        if r.get('status') in LIVE_ROUND_STATUSES:
+            trailing_batch_live = True
 
     # ── Interrupted final answers vetoed by continuation enforcers ──
     # Ordered before any later llmRound's segments (and before the terminal
@@ -437,8 +482,9 @@ def assemble_segments(task: dict[str, Any],
     # we assemble, so the deliverable segment captures it verbatim.
     raw_term_think = task.get('thinking')
     term_think = raw_term_think if isinstance(raw_term_think, str) else ''
+    terminal_segments: list[dict[str, Any]] = []
     if term_think:
-        segments.append({
+        terminal_segments.append({
             'type': SEG_THINKING, 'text': term_think,
             'blockId': 'thinking:terminal',
             'deliverable': False, 'terminal': True,
@@ -458,6 +504,29 @@ def assemble_segments(task: dict[str, Any],
         # time (status='running', no finishReason yet).
         if (task.get('finishReason') or '') in RESUMABLE_FINISH_REASONS:
             term_seg['resumable'] = True
-        segments.append(term_seg)
+        terminal_segments.append(term_seg)
+
+    # ── Live pre-tool window placement ──
+    # While the TRAILING batch is still in flight and its prose stamp has not
+    # landed (tool cards early-announced; the stamp lands at dispatch-parse
+    # time, right before the prelude's _discard_pretool_prose zeroes the
+    # accumulators), the accumulator prose IS that batch's pre-tool
+    # narration. Emitting it at the tail inverts the wire order — and the
+    # DELTA_RESET sync that follows the discard would then blank it until the
+    # round_end checkpoint re-assembles. Place it ahead of the batch's first
+    # tool card instead, matching the wire and the live repair
+    # (_append_missing_live_tool_segments). Gated on LIVE + UNSTAMPED: a
+    # settled trailing batch (e.g. prefetch, never prose-stamped) is not a
+    # narration owner, so the accumulator prose stays at the tail as the
+    # upcoming deliverable. The moved segments keep their terminal flags —
+    # every wire projection skips terminal segments by flag, not position.
+    if (terminal_segments and trailing_first_tool is not None
+            and trailing_batch_live and not trailing_batch_prose):
+        insert_at = next(
+            (i for i, seg in enumerate(segments) if seg is trailing_first_tool),
+            len(segments))
+        segments[insert_at:insert_at] = terminal_segments
+    else:
+        segments.extend(terminal_segments)
 
     return segments

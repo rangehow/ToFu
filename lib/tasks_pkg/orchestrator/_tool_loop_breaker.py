@@ -33,9 +33,8 @@ cannot see, all derived from the completed tool rows only:
   change (verification theatre).
 
 Each escalates the same way: one corrective user-lane message, a bounded
-grace window, then termination. Success polling terminates as a CLEAN
-finish (``_toolLoopCleanFinish`` settles finishReason=stop downstream): the
-verified state is the deliverable. Persistent failure stops with a tool_loop
+grace window, then termination. Success polling stops as incomplete: repeated
+verification does not establish that the user's goal is complete. Persistent failure stops with a tool_loop
 error. Classification always errs toward "the round did something real":
 any unrecognized shell command counts as a potential state change and
 resets the failure/poll streaks, so exploratory or unusual-but-productive
@@ -58,6 +57,9 @@ from typing import Any
 from lib.agent_core.events import EventType, build_event
 from lib.log import get_logger
 from lib.tasks_pkg.manager import append_event
+from lib.tasks_pkg import segments
+
+from lib.tasks_pkg.context_composer import append_injection
 from lib.tool_round_replay import is_superseded_provider_attempt_round
 
 logger = get_logger(__name__)
@@ -77,15 +79,6 @@ _WINDOW_ARGUMENT_KEYS = frozenset({
     'after', 'before', 'context_lines', 'cursor', 'end_line',
     'include_tool_details', 'limit', 'max_chars', 'max_results', 'offset',
     'page', 'page_size', 'raw', 'start_line', 'top_k',
-})
-_PROGRAMMATIC_SERIAL_READ_THRESHOLD = 3
-_PROGRAMMATIC_ADOPTION_NUDGE_MAX = 4
-_ROUND_TRIP_NUDGE_THRESHOLD = 6
-_ROUND_TRIP_EFFICIENCY_NUDGE_MAX = 4
-_ROUND_TRIP_EFFICIENCY_NUDGE_COOLDOWN = 24
-_ROUND_TRIP_ELIGIBLE_TOOLS = frozenset({
-    'run_command', 'code_exec', 'read_files', 'grep_search', 'find_files',
-    'fetch_url', 'web_search', 'list_dir',
 })
 
 # ── Extended stagnation detectors ────────────────────────────────────────
@@ -173,37 +166,6 @@ def _bounded_count(value: Any, maximum: int) -> int:
     except (TypeError, ValueError, OverflowError):
         return 0
     return max(0, min(maximum, count))
-
-
-def _nudge_evidence(task: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    """Return bounded, structurally valid persisted efficiency witnesses."""
-    rows = task.get(key)
-    if not isinstance(rows, list):
-        return []
-    valid = [row for row in rows if isinstance(row, dict)]
-    return valid[-_ROUND_TRIP_EFFICIENCY_NUDGE_MAX:]
-
-
-def _last_efficiency_nudge_round(task: dict[str, Any]) -> int:
-    """Recover the latest one-based completed-round witness across both lanes."""
-    rows = (
-        _nudge_evidence(task, '_programmaticAdoptionNudges')
-        + _nudge_evidence(task, '_toolRoundTripNudges')
-    )
-    return max(
-        (_bounded_count(row.get('afterRound'), 1_000_000_000)
-         for row in rows),
-        default=0,
-    )
-
-
-def _efficiency_nudge_cooldown_elapsed(
-    task: dict[str, Any], round_num: int,
-) -> bool:
-    last_round = _last_efficiency_nudge_round(task)
-    return (last_round == 0
-            or round_num + 1 - last_round
-            >= _ROUND_TRIP_EFFICIENCY_NUDGE_COOLDOWN)
 
 
 def _rows_for_round(task: dict[str, Any], round_num: int) -> list[dict[str, Any]]:
@@ -312,31 +274,6 @@ def _guard_state(task: dict[str, Any]) -> dict[str, Any]:
                 'read_evidence_ids', 'pending_artifacts_by_scope'):
         if not isinstance(state.get(key), dict):
             state[key] = {}
-    adoption_nudge_count = _bounded_count(
-        state.get('programmatic_adoption_nudge_count'),
-        _PROGRAMMATIC_ADOPTION_NUDGE_MAX,
-    )
-    adoption_evidence = _nudge_evidence(
-        task, '_programmaticAdoptionNudges')
-    adoption_nudge_count = max(
-        adoption_nudge_count,
-        min(_PROGRAMMATIC_ADOPTION_NUDGE_MAX, len(adoption_evidence)),
-    )
-    state['programmatic_adoption_nudge_count'] = adoption_nudge_count
-    round_trip_evidence = _nudge_evidence(task, '_toolRoundTripNudges')
-    recovered_shared_count = min(
-        _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-        len(adoption_evidence) + len(round_trip_evidence),
-    )
-    round_trip_nudge_count = max(
-        adoption_nudge_count,
-        recovered_shared_count,
-        _bounded_count(
-            state.get('round_trip_efficiency_nudge_count'),
-            _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-        ),
-    )
-    state['round_trip_efficiency_nudge_count'] = round_trip_nudge_count
     return state
 
 
@@ -685,7 +622,7 @@ def _nudge_text(task: dict[str, Any], reason: str) -> str:
         return (
             '[SYSTEM: IDENTICAL TOOL LOOP DETECTED]\n'
             'The same tool call has now returned the exact same outcome four '
-            'rounds in a row. Repeating it again cannot make progress.\n\n'
+            'rounds in a row. No new visible evidence has been observed from these repetitions.\n\n'
             'Change strategy now: inspect genuinely new evidence, use '
             'different arguments or another available tool, or finish and '
             'state the concrete blocker. Do not issue the identical call '
@@ -697,7 +634,7 @@ def _nudge_text(task: dict[str, Any], reason: str) -> str:
             'A large read returned a partial ToolResultEnvelopeV2 with an '
             'artifactRef, but subsequent calls kept re-reading the same '
             'resource with different window arguments while returning the '
-            'same model-visible projection. Those calls cannot recover the '
+            'same model-visible projection. Those calls have not exposed the '
             'evidence omitted from the prior envelope.\n\n'
             'Continue the latest result now with read_tool_artifact '
             '(artifact_ref=<artifactRef>, cursor=<cursor>) or '
@@ -735,7 +672,12 @@ def _inject_semantic_nudge(
 ) -> None:
     prompt = _nudge_text(task, reason)
     if messages is not None:
-        messages.append({'role': 'user', 'content': prompt, '_isMeta': True})
+        append_injection(messages, 'tool_progress', prompt,
+                         task=task, round_num=round_num, reason=reason)
+    else:
+        segments.record_injected_note(
+            task, llm_round=round_num, kind='system-intervention',
+            text=prompt, action='prompt', reason=reason)
     state['semantic_nudge_count'] += 1
     task.setdefault('_toolLoopNudges', []).append({
         'round': round_num + 2,
@@ -751,190 +693,6 @@ def _inject_semantic_nudge(
     )
 
 
-def _local_programmatic_eligible_tools(task: dict[str, Any]) -> set[str]:
-    """Return this round's reviewed local-PTC authority, or an empty set."""
-    latch = task.get('_ptc_local')
-    if not isinstance(latch, dict):
-        return set()
-    decisions = task.get('_toolOrchestrationDecisions')
-    latest = decisions[-1] if isinstance(decisions, list) and decisions else {}
-    if not isinstance(latest, dict) or latest.get('programmaticBackend') != 'local':
-        return set()
-    eligible = latch.get('eligible')
-    if not isinstance(eligible, (list, tuple, set, frozenset)):
-        return set()
-    return {str(name) for name in eligible if str(name)}
-
-
-def _inject_programmatic_adoption_nudge(
-    task: dict[str, Any], state: dict[str, Any], messages: list | None,
-    *, round_num: int, tid: str,
-) -> None:
-    """Nudge a proven local-PTC serial chain under the shared sparse budget."""
-    if messages is None:
-        return
-    adoption_nudge_count = _bounded_count(
-        state.get('programmatic_adoption_nudge_count'),
-        _PROGRAMMATIC_ADOPTION_NUDGE_MAX,
-    )
-    shared_nudge_count = _bounded_count(
-        state.get('round_trip_efficiency_nudge_count'),
-        _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-    )
-    if (adoption_nudge_count >= _PROGRAMMATIC_ADOPTION_NUDGE_MAX
-            or shared_nudge_count >= _ROUND_TRIP_EFFICIENCY_NUDGE_MAX):
-        return
-    if not _efficiency_nudge_cooldown_elapsed(task, round_num):
-        return
-    eligible = _local_programmatic_eligible_tools(task)
-    if not eligible:
-        return
-    from lib.tasks_pkg.tool_orchestration_policy import (
-        observed_programmatic_serial_chain,
-    )
-    chain = observed_programmatic_serial_chain(messages, eligible)
-    if len(chain) < _PROGRAMMATIC_SERIAL_READ_THRESHOLD:
-        return
-    if not _serial_chain_has_productive_receipts(
-            task, round_num=round_num, chain=chain):
-        return
-
-    # The existing correction remains useful language for the model, but the
-    # request-local candidate policy no longer relies on compliance alone.
-    # Latch one gateway-only request after the same authoritative receipts
-    # prove the chain was productive. The following request always restores
-    # the direct surface, so a model that does not adopt the gateway cannot
-    # turn this correction into a long-lived availability or cost regression.
-    from lib.tasks_pkg.programmatic_escalation import activate_serial_gateway
-    gateway_activated = activate_serial_gateway(
-        task, messages, round_num=round_num, chain=chain)
-
-    prompt = (
-        '[SYSTEM: SERIAL READ CHAIN DETECTED]\n'
-        'The last three model rounds each used one reviewed read-only tool '
-        'even though the local execute_tools gateway was available.\n\n'
-        'For the next evidence-gathering round, execute_tools is the only '
-        'visible tool. Use one call: use a program for dependent calls, or calls with '
-        'execution="parallel" for independent reads, and return compact JSON. '
-        'Every child still uses the normal schema, authority, and approval '
-        'pipeline; keep semantic judgment as a direct action. If '
-        'the evidence is already sufficient, finish this round without a tool. '
-        'The full direct tool surface returns on the following round.'
-    )
-    messages.append({'role': 'user', 'content': prompt, '_isMeta': True})
-    state['programmatic_adoption_nudge_count'] = adoption_nudge_count + 1
-    state['round_trip_efficiency_nudge_count'] = shared_nudge_count + 1
-    evidence = {
-        'afterRound': round_num + 1,
-        'targetRound': round_num + 2,
-        'reason': 'serial_direct_reads',
-        'chainLength': len(chain),
-        'tools': list(chain[-6:]),
-        'max': _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-    }
-    evidence_rows = task.get('_programmaticAdoptionNudges')
-    if not isinstance(evidence_rows, list):
-        evidence_rows = []
-        task['_programmaticAdoptionNudges'] = evidence_rows
-    evidence_rows.append(evidence)
-    del evidence_rows[:-_PROGRAMMATIC_ADOPTION_NUDGE_MAX]
-    logger.info(
-        '[%s] conv=%s Local PTC adoption correction injected after round %d: '
-        'serial_read_rounds=%d tools=%s count=%d/%d cooldown=%d',
-        tid, task.get('convId', ''), round_num + 1, len(chain), chain,
-        shared_nudge_count + 1, _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-        _ROUND_TRIP_EFFICIENCY_NUDGE_COOLDOWN,
-    )
-    if gateway_activated:
-        logger.info(
-            '[%s] conv=%s Local PTC serial gateway activated for round %d '
-            'after %d successful single-read rounds',
-            tid, task.get('convId', ''), round_num + 2, len(chain),
-        )
-
-
-def _serial_chain_has_productive_receipts(
-        task: dict[str, Any], *, round_num: int, chain: list[str]) -> bool:
-    """Verify one successful authoritative receipt for every chain round."""
-    first_round = round_num - len(chain) + 1
-    if first_round < 0:
-        return False
-    for expected_name, observed_round in zip(
-            chain, range(first_round, round_num + 1)):
-        rows = _rows_for_round(task, observed_round)
-        if (len(rows) != 1
-                or str(rows[0].get('toolName') or '') != expected_name
-                or _row_failed(rows[0])):
-            return False
-    return True
-
-
-def _inject_round_trip_efficiency_nudge(
-    task: dict[str, Any], state: dict[str, Any], messages: list | None,
-    *, round_num: int, tid: str,
-) -> None:
-    """Nudge a proven serial single-tool chain under the shared sparse budget."""
-    if messages is None:
-        return
-    nudge_count = _bounded_count(
-        state.get('round_trip_efficiency_nudge_count'),
-        _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-    )
-    if nudge_count >= _ROUND_TRIP_EFFICIENCY_NUDGE_MAX:
-        return
-    if not _efficiency_nudge_cooldown_elapsed(task, round_num):
-        return
-    from lib.tasks_pkg.tool_orchestration_policy import (
-        observed_single_tool_serial_chain,
-    )
-    chain = observed_single_tool_serial_chain(
-        messages,
-        set(_ROUND_TRIP_ELIGIBLE_TOOLS),
-        minimum=_ROUND_TRIP_NUDGE_THRESHOLD,
-        maximum=_ROUND_TRIP_NUDGE_THRESHOLD,
-    )
-    if (len(chain) != _ROUND_TRIP_NUDGE_THRESHOLD
-            or not _serial_chain_has_productive_receipts(
-                task, round_num=round_num, chain=chain)):
-        return
-
-    prompt = (
-        '[SYSTEM: SERIAL SINGLE-TOOL CHAIN DETECTED]\n'
-        'The last six model rounds each issued one inspection or command.\n\n'
-        'Reduce remaining round trips when safe: emit independent direct '
-        'tool calls together in one response; use dedicated batch arrays; '
-        'combine independent read-only shell inspections or related '
-        'verification in one bounded run_command. Keep dependencies, writes '
-        'or state changes, approvals, and long-running or polling commands '
-        'ordered and direct. If the evidence is sufficient, take the '
-        'substantive next action or finish.'
-    )
-    messages.append({'role': 'user', 'content': prompt, '_isMeta': True})
-    state['round_trip_efficiency_nudge_count'] = nudge_count + 1
-    evidence = {
-        'afterRound': round_num + 1,
-        'targetRound': round_num + 2,
-        'reason': 'serial_single_tool_rounds',
-        'chainLength': len(chain),
-        'tools': list(chain),
-        'max': _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-    }
-    evidence_rows = task.get('_toolRoundTripNudges')
-    if not isinstance(evidence_rows, list):
-        evidence_rows = []
-        task['_toolRoundTripNudges'] = evidence_rows
-    evidence_rows.append(evidence)
-    del evidence_rows[:-_ROUND_TRIP_EFFICIENCY_NUDGE_MAX]
-    logger.info(
-        '[%s] conv=%s Round-trip efficiency correction injected after '
-        'round %d: serial_single_tool_rounds=%d tools=%s count=%d/%d '
-        'cooldown=%d',
-        tid, task.get('convId', ''), round_num + 1, len(chain), chain,
-        nudge_count + 1, _ROUND_TRIP_EFFICIENCY_NUDGE_MAX,
-        _ROUND_TRIP_EFFICIENCY_NUDGE_COOLDOWN,
-    )
-
-
 def _force_stop(
     task: dict[str, Any], rs: Any, *, round_num: int, tid: str,
     reason: str, detail: str, raw: str,
@@ -944,6 +702,9 @@ def _force_stop(
         'model=%s',
         tid, task.get('convId', ''), reason, round_num + 1, rs.model,
     )
+    segments.record_injected_note(
+        task, llm_round=round_num, kind='system-intervention',
+        text=detail, action='stop', reason=reason)
     from lib.error_envelope import make_envelope
     task['error'] = make_envelope(
         'tool_loop', detail=detail, model=rs.model,
@@ -1159,7 +920,7 @@ def _update_stagnation_detectors(
     """Refresh streak bookkeeping; return the highest-priority trigger.
 
     Returns ``(detector, action)`` where action is 'nudge' / 'stop' /
-    'finish', or None.  Streaks update every round; nudge/stop flags are
+    or None.  Streaks update every round; nudge/stop flags are
     left to the executor so a competing correction in the same model turn
     can safely defer without consuming the budget.
     """
@@ -1235,7 +996,7 @@ def _update_stagnation_detectors(
         return ('poll', 'nudge')
     if (state['poll_nudged']
             and state['poll_after_nudge'] >= thresholds['poll_grace']):
-        return ('poll', 'finish')
+        return ('poll', 'stop')
     return None
 
 
@@ -1259,7 +1020,12 @@ def _inject_stagnation_nudge(
     tid: str,
 ) -> None:
     if messages is not None:
-        messages.append({'role': 'user', 'content': prompt, '_isMeta': True})
+        append_injection(messages, 'tool_stagnation', prompt,
+                         task=task, round_num=round_num, reason=detector)
+    else:
+        segments.record_injected_note(
+            task, llm_round=round_num, kind='system-intervention',
+            text=prompt, action='prompt', reason=detector)
     task.setdefault('_toolLoopNudges', []).append({
         'round': round_num + 2,
         'reason': detector,
@@ -1274,6 +1040,26 @@ def _inject_stagnation_nudge(
         'detector=%s signature=%s',
         tid, task.get('convId', ''), round_num + 1, detector, signature,
     )
+
+
+def _force_incomplete_stop(
+    task: dict[str, Any], rs: Any, *, round_num: int, tid: str,
+    reason: str, detail: str, signature: str,
+) -> bool:
+    """Stop repeated verification without asserting completion or user abort."""
+    task['_toolLoopIncompleteStop'] = {
+        'reason': reason, 'detail': detail, 'round': round_num + 1,
+    }
+    rs.exit_reason = reason
+    segments.record_injected_note(
+        task, llm_round=round_num, kind='system-intervention',
+        text=detail, action='stop', reason=reason)
+    _audit_stagnation(
+        task, detector='success_poll', action='stop',
+        signature=signature, round_num=round_num)
+    append_event(task, build_event(
+        EventType.ROUND_END, roundNum=round_num, reason=reason))
+    return True
 
 
 def _force_clean_finish(
@@ -1344,7 +1130,7 @@ def _execute_stagnation_action(
     # Isolated callers have no message lane to deliver a correction; mirror
     # the exact-repetition guard and fail fast at the first threshold.
     if kind == 'nudge' and messages is None:
-        kind = 'finish' if detector == 'poll' else 'stop'
+        kind = 'stop'
 
     if detector == 'fail_fp':
         signature = (f'fp={state["fail_fp"]} '
@@ -1397,27 +1183,27 @@ def _execute_stagnation_action(
                 '[SYSTEM: REPEATED IDENTICAL VERIFICATION DETECTED]\n'
                 f'The same command(s) have now succeeded '
                 f'{state["poll_streak"]} times in a row with no intervening '
-                'code change. Re-running them cannot produce new '
-                'information.\n\n'
+                'observed state change or new visible output. Further identical '
+                'checks may not advance the goal.\n\n'
                 'Proceed now: either take the next substantive action toward '
                 'the actual goal, or finish and summarize what was verified. '
                 'Do not poll the same check again; '
                 f'{thresholds["poll_grace"]} more identical re-run(s) will '
-                'end this turn automatically with the current verified state.'
+                'stop this turn as incomplete; you can Continue afterward.'
             )
             _inject_stagnation_nudge(
                 task, state, messages, detector='success_poll',
                 prompt=prompt, signature=signature, round_num=round_num,
                 tid=tid)
             return False
-        return _force_clean_finish(
+        return _force_incomplete_stop(
             task, rs, round_num=round_num, tid=tid,
-            reason='success_poll_finish',
+            reason='success_poll_incomplete',
             detail=(
                 'The same verification command(s) succeeded repeatedly with '
                 'no intervening change, including after an instruction to '
-                'proceed or finish. The turn was ended with the verified '
-                'state instead of spending more requests.'
+                'proceed or finish. The turn was stopped as incomplete, not as '
+                'proof that the goal was achieved. Use Continue to resume.'
             ),
             signature=signature,
         )
@@ -1793,8 +1579,7 @@ def handle_tool_loop_circuit_breaker(
         pending_stagnation = _update_stagnation_detectors(
             task, state, _rows_for_round(task, round_num),
             thresholds=thresholds)
-    # A safety correction and an adoption hint must never stack in one model
-    # turn. The former is more urgent and gets the sole user-lane carrier.
+    # Keep corrective prompts to one per model turn.
     if len(task.get('_toolLoopNudges') or ()) == corrective_nudges_before:
         if (pending_stagnation is not None
                 and _execute_stagnation_action(
@@ -1802,12 +1587,4 @@ def handle_tool_loop_circuit_breaker(
                     action=pending_stagnation, round_num=round_num, tid=tid,
                     thresholds=thresholds)):
             return True
-    if len(task.get('_toolLoopNudges') or ()) == corrective_nudges_before:
-        efficiency_nudges_before = state['round_trip_efficiency_nudge_count']
-        _inject_programmatic_adoption_nudge(
-            task, state, messages, round_num=round_num, tid=tid)
-        if (state['round_trip_efficiency_nudge_count']
-                == efficiency_nudges_before):
-            _inject_round_trip_efficiency_nudge(
-                task, state, messages, round_num=round_num, tid=tid)
     return False

@@ -54,6 +54,9 @@ def _static_limit(model):
     ('claude-opus-5', 'opus', (5, 0)),
     ('claude-fable-5', 'fable', (5, 0)),
     ('fable-5', 'fable', (5, 0)),
+    ('claude-fable-5-1', 'fable', (5, 1)),
+    ('fable-5.1', 'fable', (5, 1)),
+    ('us.anthropic.fable-5-1-v1:0', 'fable', (5, 1)),
     # dated snapshots: the 8-digit suffix is a DATE, never a minor version
     ('claude-sonnet-5-20250630', 'sonnet', (5, 0)),
     ('claude-opus-4-5-20251001', 'opus', (4, 5)),

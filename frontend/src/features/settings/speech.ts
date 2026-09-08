@@ -4,11 +4,7 @@
  * operation stores them through the encrypted repository boundary.
  */
 
-import {
-  featureRegistry,
-  readLiveRuntimeBinding,
-  writeLiveRuntimeBinding,
-} from '../../feature-registry';
+import { featureRegistry } from '../../feature-registry';
 import type { I18nKey } from '../../i18n';
 import { createLifecycleScope, type LifecycleScope } from '../../lifecycle';
 import type {
@@ -142,8 +138,10 @@ function translate(key: I18nKey, fallback: string): string {
 }
 
 function routingDocument(): RoutingDocument | null {
-  const value = readLiveRuntimeBinding('_stgModelRouting') as
-    RoutingDocument | null | undefined;
+  // The Settings lazy bundle owns this state and exposes it as live
+  // accessors on featureRegistry; readLiveRuntimeBinding would read the
+  // app-runtime scope, which never holds it.
+  const value = globals()._stgModelRouting;
   return value?.contract_version === 'tofu.model-routing/v2' ? value : null;
 }
 
@@ -390,9 +388,9 @@ async function reloadRoutingAuthority(api: ModelRoutingApi): Promise<void> {
   if (!authority?.model_routing) {
     throw new Error('model-routing v2 authority reload failed');
   }
-  writeLiveRuntimeBinding('_stgModelRouting', authority.model_routing);
-  writeLiveRuntimeBinding(
-    '_stgModelRoutingRevision', Number(authority.revision || 0));
+  const state = globals();
+  state._stgModelRouting = authority.model_routing;
+  state._stgModelRoutingRevision = Number(authority.revision || 0);
 }
 
 export async function persistSttProvider(): Promise<void> {
@@ -401,8 +399,7 @@ export async function persistSttProvider(): Promise<void> {
   if (!api || !documentValue) {
     throw new Error('model-routing v2 authority is not ready');
   }
-  const revision = Number(
-    readLiveRuntimeBinding('_stgModelRoutingRevision') || 0);
+  const revision = Number(globals()._stgModelRoutingRevision || 0);
   const existing = findSttProvider();
   const enabled = document.getElementById('settingSttEnabled');
   if (!(enabled instanceof HTMLInputElement) || !enabled.checked) {

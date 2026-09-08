@@ -12,6 +12,7 @@ import orjson
 
 from lib.log import get_logger
 from lib.storage.errors import StorageError
+from lib.storage_sidecar.json_document import JsonBytes
 from lib.storage_sidecar.projection_codec import (
     ProjectionCodecError,
     decode_projection_from_storage,
@@ -87,7 +88,7 @@ def _dump(value: Any) -> bytes:
     validate_finite_json_numbers(value)
     try:
         storage_value = encode_projection_for_storage(value)
-        return orjson.dumps(storage_value, option=orjson.OPT_SORT_KEYS)
+        return JsonBytes(orjson.dumps(storage_value, option=orjson.OPT_SORT_KEYS))
     except ProjectionCodecError as exc:
         raise StorageError(
             "database_protocol_error", "Projection storage encoding is invalid"
@@ -107,6 +108,12 @@ def _load(value: Any) -> Any:
     if isinstance(value, dict):
         decoded = value
     else:
+        if isinstance(value, JsonBytes):
+            # In-memory hand-offs of ``_dump`` output (validate-and-detach)
+            # never cross a database read; unwrap to the plain bytes a
+            # SQLite read-back would return.  orjson rejects bytes
+            # subclasses, so feeding the marker straight through fails.
+            value = bytes(value)
         if isinstance(value, memoryview):
             value = value.tobytes()
         if isinstance(value, str):

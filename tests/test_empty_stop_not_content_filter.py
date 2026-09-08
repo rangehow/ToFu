@@ -15,8 +15,8 @@ and stays terminal — that path is unchanged.
 These tests lock:
   1. ``_flag_empty_stop_for_retry`` sets the ``_empty_stop`` / ``_stream_anomaly``
      flags on an unflagged round-0 empty stop (whitespace-only body, or a
-     zero-chunk clean ``[DONE]``), and is a no-op on round > 0 / non-empty /
-     already-flagged.
+     zero-chunk clean ``[DONE]``) in any round, independently of earlier prose.
+     It is a no-op on real tool payloads, cancellation, non-empty or flagged data.
   2. End-to-end: the flagged usage, fed to ``analyse_stream_result``, yields
      ``action='continue'`` (retry) — NOT a terminal break.  This is the
      behaviour the old ``content_filter`` label prevented.
@@ -70,12 +70,12 @@ def test_already_flagged_by_stream_layer_is_noop():
         {'role': 'assistant', 'content': ''}, 'stop', _task(), 0, usage) is False
 
 
-def test_round_gt0_left_alone():
-    """Empty content after tool calls (round > 0) is legitimate — never flagged."""
+def test_round_gt0_empty_stop_flagged():
+    """Prior tools do not prove that this empty terminal is usable."""
     usage = {}
     assert _flag_empty_stop_for_retry(
-        {'role': 'assistant', 'content': ''}, 'stop', _task(), 2, usage) is False
-    assert usage == {}
+        {'role': 'assistant', 'content': ''}, 'stop', _task(), 2, usage) is True
+    assert usage['_empty_stop'] is True
 
 
 def test_non_empty_content_not_flagged():
@@ -84,13 +84,24 @@ def test_non_empty_content_not_flagged():
         {'role': 'assistant', 'content': 'hello'}, 'stop', _task(), 0, usage) is False
 
 
-def test_task_content_prefix_not_flagged():
-    """A Continue turn seeds task['content'] with the preserved prefix — that is
-    NOT an empty round, so the helper must leave it."""
+def test_task_content_prefix_does_not_mask_empty_current_round():
+    """Continue keeps the prefix but still needs current terminal evidence."""
     usage = {}
     task = {'content': 'preserved prefix', 'thinking': ''}
     assert _flag_empty_stop_for_retry(
-        {'role': 'assistant', 'content': ''}, 'stop', task, 0, usage) is False
+        {'role': 'assistant', 'content': ''}, 'stop', task, 0, usage) is True
+    assert task['content'] == 'preserved prefix'
+
+
+@pytest.mark.parametrize('task,assistant', [
+    ({'aborted': True}, {'content': ''}),
+    ({'error': {'kind': 'cancelled'}}, {'content': ''}),
+    ({}, {'content': '', 'tool_calls': [{'id': 'real-call'}]}),
+])
+def test_cancellation_and_real_tool_payload_not_flagged(task, assistant):
+    usage = {}
+    assert not _flag_empty_stop_for_retry(assistant, 'stop', task, 2, usage)
+    assert usage == {}
 
 
 def test_non_stop_finish_not_flagged():

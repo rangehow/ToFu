@@ -37,6 +37,9 @@ from lib.storage_sidecar.operations_pkg._common import (
     _load,
     _required_text,
 )
+from lib.storage_sidecar.operations_pkg._raw_archives import (
+    _debit_stored_bytes_for_delete,
+)
 from lib.storage_sidecar.operations_pkg._turns import (
     _mark_conversation_search_projection_dirty,
     _turn_public,
@@ -1631,6 +1634,8 @@ def _drop_active_conversation_rows(
     either while the conversation header and turns are absent.
     """
     _mark_conversation_search_projection_dirty(session, conv_id, user_id)
+    from lib.storage_sidecar.operations_pkg._model_continuation import delete_conversation_continuations
+    delete_conversation_continuations(session, conv_id, user_id)
     cached_turns = session.fetch_all(
         "SELECT turn_id,conversation_id,user_id,current_attempt_id "
         "FROM storage_conversation_turns WHERE conversation_id=? AND user_id=? "
@@ -1670,6 +1675,9 @@ def _drop_active_conversation_rows(
         "JOIN storage_conversation_turns AS t ON t.turn_id=a.turn_id "
         "WHERE t.conversation_id=? AND t.user_id=?)",
         (conv_id, user_id),
+    )
+    _debit_stored_bytes_for_delete(
+        session, "conversation_id=? AND user_id=?", (conv_id, user_id),
     )
     session.execute(
         "DELETE FROM storage_raw_archives "

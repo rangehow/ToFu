@@ -249,8 +249,8 @@ fn decode_run(encoded: &[u8]) -> io::Result<Vec<BlockId>> {
         return Err(invalid_data("backup GC run CRC32C mismatch"));
     }
     let mut block_ids = Vec::with_capacity(count);
-    for chunk in encoded[RUN_HEADER_BYTES..crc_offset].chunks_exact(32) {
-        block_ids.push(BlockId(chunk.try_into().unwrap()));
+    for chunk in encoded[RUN_HEADER_BYTES..crc_offset].as_chunks::<32>().0 {
+        block_ids.push(BlockId(*chunk));
     }
     if block_ids.windows(2).any(|pair| pair[0] >= pair[1]) {
         return Err(invalid_data("backup GC run is not strictly sorted"));
@@ -284,6 +284,59 @@ mod tests {
         assert!(metrics.spill_bytes > 0);
         assert_eq!(marks.live_for_shard(0).unwrap().len(), 35_000);
         assert_eq!(marks.live_for_shard(1).unwrap().len(), 35_000);
+        marks.cleanup().unwrap();
+    }
+
+    /// Release-tree certification at the full on-volume budget: exactly
+    /// MAX_RUNS × IDS_PER_RUN marks (33,488,896 ≈ 33.4 million) must fit the
+    /// default 1 GiB spill limit, read back exact per shard, and refuse one
+    /// more run. Ignored in the default suite because it writes 1 GiB;
+    /// run explicitly with `cargo test --release -- --ignored`.
+    #[test]
+    #[ignore = "full-budget certification writes 1 GiB of spill runs"]
+    fn spill_set_certifies_full_budget_scale() {
+        let directory = tempfile::tempdir().unwrap();
+        let backup = directory.path().join("backup");
+        std::fs::create_dir(&backup).unwrap();
+        std::fs::create_dir(backup.join("gc-runs")).unwrap();
+        let vfs = Arc::new(crate::vfs::RealVfs);
+        let mut marks = SpillMarkSet::initialize(&backup, vfs).unwrap();
+        let total = (IDS_PER_RUN * MAX_RUNS) as u64;
+        for value in 0..total {
+            let mut id = [0_u8; 32];
+            id[0] = (value % 256) as u8;
+            id[1..9].copy_from_slice(&value.to_be_bytes());
+            id[9..17].copy_from_slice(&(value ^ 0x5a5a_5a5a_5a5a_5a5a).to_be_bytes());
+            marks.insert(crate::block::BlockId(id)).unwrap();
+        }
+        let metrics = marks.finish().unwrap();
+        assert_eq!(metrics.references, total);
+        assert_eq!(metrics.run_count as usize, MAX_RUNS);
+        assert!(metrics.spill_bytes <= 1024 * 1024 * 1024);
+        assert!(
+            metrics.spill_bytes as usize > (MAX_RUNS - 1) * RUN_MAX_BYTES,
+            "full-budget run must actually spill near the 1 GiB ceiling"
+        );
+        for shard in [0_u8, 128, 255] {
+            let live = marks.live_for_shard(shard).unwrap();
+            let expected = total / 256;
+            assert_eq!(live.len() as u64, expected);
+            assert!(live.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(live.iter().all(|id| id.0[0] == shard));
+            let first_value = u64::from(shard);
+            assert_eq!(
+                u64::from_be_bytes(live[0].0[1..9].try_into().unwrap()),
+                first_value
+            );
+        }
+        // The budget is exact: one further full buffer cannot spill.
+        for value in 0..IDS_PER_RUN as u64 {
+            let mut id = [0xff_u8; 32];
+            id[1..9].copy_from_slice(&value.to_be_bytes());
+            marks.insert(crate::block::BlockId(id)).unwrap();
+        }
+        let error = marks.finish().err().unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         marks.cleanup().unwrap();
     }
 }

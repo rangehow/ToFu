@@ -32,6 +32,7 @@ from lib.tasks_pkg.manager._persist import (
     terminal_state_log_summary,
 )
 from lib.tasks_pkg.manager.runtime import chat_task_runtime
+from lib.tasks_pkg.segments._types import LIVE_ROUND_STATUSES
 
 
 logger = get_logger(__name__)
@@ -90,13 +91,7 @@ def _has_inflight_round(task: dict) -> bool:
     rounds = (task.get("_checkpointToolRounds") or []) + (
         task.get("toolRounds") or []
     )
-    live_statuses = {
-        "searching",
-        "executing",
-        "pending_approval",
-        "awaiting_human",
-        "awaiting_stdin",
-    }
+    live_statuses = LIVE_ROUND_STATUSES
     return any(
         isinstance(round_record, dict)
         and round_record.get("status") in live_statuses

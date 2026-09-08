@@ -327,11 +327,24 @@
 @keyframes presetDropIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 .preset-dropdown-item{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:8px;cursor:pointer;transition:background .15s;font-size:12px}
 .preset-dropdown-item:hover{background:var(--bg-hover)}
-.preset-dropdown-item.active{background:var(--bg-hover);outline:1.5px solid var(--border-light)}
+/* Active row: tint + hairline INSET ring (an outset outline on a rounded row
+ * reads as a misaligned rect; themes may restyle the tint, cf. tofu). */
+.preset-dropdown-item.active{background:var(--bg-hover);box-shadow:inset 0 0 0 1.5px var(--border-light);outline:none}
 .preset-dropdown-item .ps-dd-icon{font-size:16px;width:22px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .preset-dropdown-item .ps-dd-label{font-weight:700;font-family:'JetBrains Mono',monospace;font-size:11px;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ps-dd-provider-select{max-width:138px;min-width:104px;padding:4px 22px 4px 7px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-secondary);font:600 10px/1.2 inherit;cursor:pointer}
-.ps-dd-provider-select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.ps-dd-provider-chip{display:inline-flex;align-items:center;gap:5px;max-width:138px;min-width:0;padding:4px 7px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-secondary);font:600 10px/1.2 inherit;cursor:pointer;transition:border-color .15s,color .15s}
+.ps-dd-provider-chip:hover,.ps-dd-provider-chip[aria-expanded="true"]{border-color:var(--border-light);color:var(--text-primary)}
+.ps-dd-provider-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.ps-dd-provider-chip-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps-dd-provider-chip-arrow{display:flex;flex-shrink:0;opacity:0.55;transition:transform .15s}
+.ps-dd-provider-chip[aria-expanded="true"] .ps-dd-provider-chip-arrow{transform:rotate(180deg)}
+/* Body-anchored popover (escapes the scrolling list): same floating-panel
+ * language as the parent dropdown; active option = tint + inset ring. */
+.ps-dd-provider-menu{position:fixed;z-index:10000;min-width:128px;max-height:240px;overflow-y:auto;padding:4px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.3);animation:presetDropIn .12s ease}
+.ps-dd-provider-menu-item{display:flex;align-items:center;gap:6px;width:100%;padding:6px 9px;border:0;border-radius:6px;background:transparent;color:var(--text-secondary);font:600 10px/1.2 inherit;text-align:left;cursor:pointer;white-space:nowrap}
+.ps-dd-provider-menu-item:hover{background:var(--bg-hover);color:var(--text-primary)}
+.ps-dd-provider-menu-item.active{background:var(--bg-hover);box-shadow:inset 0 0 0 1.5px var(--border-light);color:var(--text-primary)}
+.ps-dd-provider-check{width:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .ps-dd-provider-tag{max-width:112px;padding:3px 6px;border:1px dashed var(--border-light);border-radius:5px;color:var(--text-tertiary);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .preset-dropdown-item[data-value="off"] .ps-dd-label{color:var(--text-tertiary)}
 .preset-dropdown-item[data-value="qwen"] .ps-dd-label{color:#a78bfa}
@@ -438,7 +451,7 @@
  * toolbar in the phone @media block (submenus → “···” sheet, sm-label hidden).
  * NOTE: .submenu-label is deliberately NOT hidden even on desktop — the
  * 增强/工具/模式 triggers have NO icon, so hiding it leaves a bare number badge. */
-@media(max-width:1024px) and (pointer:fine){.depth-btn{padding:3px 6px;font-size:10px}.thinking-depth-bar{gap:1px}.search-mode-toggle .sm-label{display:none}.submenu-arrow{display:none}.submenu-trigger{padding:4px 8px;gap:3px}}
+@media(max-width:1024px) and (pointer:fine){.search-mode-toggle .sm-label{display:none}.submenu-arrow{display:none}.submenu-trigger{padding:4px 8px;gap:3px}}
 /* ── Mobile breakpoint — see comprehensive version at end of file ── */
 .animation-slideUp{animation:slideUp .3s ease}
 .message-finish{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);user-select:none}.finish-tag,.token-tag{font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;padding:2px 8px;border-radius:10px;line-height:1.4;white-space:nowrap}.finish-tag{color:var(--text-tertiary);background:var(--bg-tertiary);border:1px solid var(--border)}.finish-tag.ok{color:#34d399;background:rgba(52,211,153,0.08);border-color:rgba(52,211,153,0.2)}.finish-tag.warn{color:var(--thinking-text);background:var(--thinking-bg);border-color:var(--thinking-border)}.finish-tag.err{color:var(--error-text);background:var(--error-bg);border-color:var(--error-border)}.finish-tag.terminal-failure{display:inline-flex;align-items:center;gap:4px;max-width:100%;white-space:normal;overflow-wrap:anywhere;cursor:help}.token-tag{color:var(--text-tertiary);background:transparent;border:1px solid var(--border);font-weight:500;letter-spacing:.02em}

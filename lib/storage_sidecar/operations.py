@@ -118,6 +118,8 @@ from lib.storage_sidecar.operations_pkg._queue import (
     _queue_enqueue as _queue_enqueue,
     _queue_list as _queue_list,
     _queue_remove as _queue_remove,
+    _queue_injection_ack as _queue_injection_ack,
+    _queue_injection_ack_capture as _queue_injection_ack_capture,
     _queue_clear as _queue_clear,
     _queue_kind_clear as _queue_kind_clear,
     _queue_dequeue as _queue_dequeue,

@@ -19,7 +19,7 @@ from urllib.parse import urlencode
 from lib.config_dir import config_path
 from lib.json_store import read_json, write_json_atomic
 from lib.log import get_logger
-from lib.oauth.outbound import CODEX_CLIENT_VERSION
+from lib.oauth.codex_version import codex_client_version
 
 logger = get_logger(__name__)
 
@@ -124,7 +124,7 @@ def _normalise_models(payload: dict) -> list[dict]:
 def _read_cache(*, current_account: bool = True) -> dict:
     cached = read_json(_cache_path(), default={}) or {}
     if (cached.get('schema_version') != _CACHE_SCHEMA_VERSION
-            or cached.get('client_version') != CODEX_CLIENT_VERSION):
+            or cached.get('client_version') != codex_client_version()):
         return {}
     if current_account:
         wanted = _account_fingerprint()
@@ -203,7 +203,7 @@ def _fetch_catalog(cache: dict, *, user_id: str = '') -> tuple[list[dict], str, 
         headers['If-None-Match'] = str(cache['etag'])
 
     from lib.oauth.codex import CODEX_OAUTH_CONFIG
-    query = urlencode({'client_version': CODEX_CLIENT_VERSION})
+    query = urlencode({'client_version': codex_client_version()})
     url = f"{CODEX_OAUTH_CONFIG['api_base'].rstrip('/')}/models?{query}"
 
     from lib.desktop import egress as _eg
@@ -238,7 +238,7 @@ def _write_cache(rows: list[dict], etag: str, account_fingerprint: str) -> dict:
         'fetched_at': _utc_now(),
         'fetched_at_unix': time.time(),
         'etag': etag or '',
-        'client_version': CODEX_CLIENT_VERSION,
+        'client_version': codex_client_version(),
         'account_fingerprint': account_fingerprint,
         'models': rows,
     }

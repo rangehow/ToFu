@@ -661,6 +661,11 @@ class TestPartialContentLosslessRetry(unittest.TestCase):
         self.assertTrue(messages[-1].get('_isMeta'))
         phase = [e for e in task['events'] if e.get('type') == 'phase'][-1]
         self.assertEqual(phase.get('continuationMode'), 'continuation_nudge')
+        note = task['_injected_notes'][-1]
+        self.assertEqual(note['text'], messages[-1]['content'])
+        self.assertEqual(note['action'], 'continue')
+        self.assertEqual(note['reason'], 'partial_stream_retry')
+        self.assertEqual(note['llmRound'], 0)
         self.assertEqual(task['content'], prefix)
 
     def test_exhausted_budget_is_failed_but_keeps_partial(self):
@@ -714,10 +719,9 @@ class TestPartialContentLosslessRetry(unittest.TestCase):
         self.assertTrue(
             task.get('_suppress_whole_turn_retry_to_preserve_partial'))
 
-    def test_no_content_anomaly_keeps_honest_error(self):
-        """Nothing streamed at all → there is no partial to preserve; the
-        abnormal_stop envelope (and its turn-level auto-retry) stays."""
-        task = _fresh_task()
+    def test_no_content_anomaly_keeps_honest_error_after_retry_exhaustion(self):
+        """An empty first-round cut retries, then keeps an honest error at cap."""
+        task = _fresh_task(phase_counter=_PREMATURE_RETRY_MAX_CLASSIC)
         msg = {'role': 'assistant', 'content': '',
                'reasoning_content': 'x' * 500}  # sub-classic threshold
         usage = {'_stream_anomaly': True, '_missing_done': True,
@@ -726,7 +730,8 @@ class TestPartialContentLosslessRetry(unittest.TestCase):
         d = analyse_stream_result(
             assistant_msg=msg, last_finish_reason='stop', task=task,
             tid='hard', model='kimi-k3', round_num=0,
-            _premature_retry_count=0, messages=[], usage=usage)
+            _premature_retry_count=_PREMATURE_RETRY_MAX_CLASSIC,
+            messages=[], usage=usage)
         self.assertEqual(d['action'], 'break')
         self.assertEqual(d['last_finish_reason'], 'abnormal_stop')
         self.assertIsNotNone(task['error'])

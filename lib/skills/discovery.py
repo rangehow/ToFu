@@ -26,6 +26,9 @@ def _normalized(value: object, *, max_chars: int = _FIELD_MAX_CHARS) -> str:
 def _tokens(value: object) -> set[str]:
     text = _normalized(value)
     tokens = set(_WORD_RE.findall(text))
+
+    # Keep exact identifiers while also matching their delimiter-separated words.
+    tokens.update(re.findall(r'[a-z0-9]+', text))
     cjk = ''.join(ch for ch in text if '\u3400' <= ch <= '\u9fff')
     tokens.update(cjk[index:index + 2] for index in range(len(cjk) - 1))
     return {token for token in tokens if token}
@@ -39,6 +42,10 @@ def _score(query: str, query_tokens: set[str], candidate: dict) -> int:
     tags = _normalized(' '.join(candidate.get('tags') or ()))
     category = _normalized(candidate.get('category'))
 
+    combined = _tokens(' '.join(
+        (skill_id, catalog_id, name, description, tags, category)))
+    if not query_tokens.intersection(combined):
+        return 0
     score = 0
     if query in {skill_id, catalog_id, name}:
         score += 240
@@ -65,7 +72,7 @@ def _score(query: str, query_tokens: set[str], candidate: dict) -> int:
             for key in ('skill_id', 'catalog_id', 'name', 'description')))
         if query_tokens <= combined:
             score += 35
-    if candidate.get('installed'):
+    if score and candidate.get('installed'):
         score += 4
     return score
 
@@ -256,6 +263,29 @@ def search_skills(
     }
 
 
+def _search_diagnostics(status: dict) -> str:
+    if not status.get('attempted'):
+        return ('Sources: installed + offline catalog; ClawHub not queried ('
+                + str(status.get('error') or 'online=false or empty query') + ').')
+    if not status.get('ok'):
+        retry = (f'; retry_after={status["retry_after"]}s'
+                 if status.get('retry_after') else '')
+        return ('Sources: installed + offline catalog; ClawHub unavailable: '
+                + str(status.get('error') or 'temporary_error') + retry + '.')
+    details = ['Sources: installed + offline catalog + ClawHub']
+    for key in ('candidate_count', 'relevance_rejected_count',
+                'verification_attempted_count', 'unavailable_count'):
+        if key in status:
+            details.append(f'{key}={status[key]}')
+    if len(status.get('queries') or []) > 1:
+        details.append('fallback_queries=' + repr(status['queries'][1:]))
+    if status.get('verification_errors'):
+        details.append('verification_errors=' + ','.join(status['verification_errors']))
+    if status.get('retry_after'):
+        details.append(f'retry_after={status["retry_after"]}s')
+    return '; '.join(details) + '.'
+
+
 def render_skill_search(
     query: str,
     matches: list[dict],
@@ -263,6 +293,8 @@ def render_skill_search(
     online_status: dict | None = None,
 ) -> str:
     """Render a compact model-facing result with exact next actions."""
+
+    diagnostics = _search_diagnostics(online_status or {})
     if not matches:
         status = online_status or {}
         if status.get('attempted') and not status.get('ok'):
@@ -270,11 +302,12 @@ def render_skill_search(
                 f'No local skill matched {query!r}. Online ClawHub discovery '
                 f'was unavailable ({status.get("error") or "temporary_error"}). '
                 'Do not invent a skill id; continue with available tools or '
-                'retry the short capability search later.')
+                'retry the short capability search later.\n' + diagnostics)
         return (
             f'No skill matched {query!r}. Do not invent a skill id; continue '
-            'with the available tools or explain the missing capability.')
-    lines = [f'Skill matches for {query!r}:']
+            'with the available tools or explain the missing capability.\n'
+            + diagnostics)
+    lines = [f'Skill matches for {query!r}:', diagnostics]
     for match in matches:
         if match.get('installed'):
             status = (

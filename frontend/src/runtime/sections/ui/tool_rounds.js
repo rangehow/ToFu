@@ -181,8 +181,14 @@ function _renderRejectedToolLine(round, svg) {
     : _t("tool.blockedTip", "A safety or authority check blocked this valid tool before execution.");
   const rawReason = [rej.reason, round.toolContent, meta.content, meta.reason]
     .find((value) => typeof value === "string" && value.trim()) || "";
-  const firstLine = rawReason.split("\n")[0].trim();
-  const shortReason = firstLine.length > 300 ? firstLine.slice(0, 300) + "…" : firstLine;
+  /* The clipped tail ("…cursor(str…") is exactly the part that explains what
+   * to fix — render the reason whole, line breaks included. */
+  let fullReason = rawReason.trim();
+  const kindCode = String(rej.kind || "").trim();
+  if (kindCode && kindCode !== "hallucinated" && !fullReason.includes(kindCode)) {
+    fullReason = fullReason ? `${fullReason}\n${kindCode}` : kindCode;
+  }
+  const reasonHtml = escapeHtml(fullReason).replace(/\n/g, "<br>");
   const tip = escapeHtml(rawReason || fallbackTip);
   let suggHtml = "";
   if (isHallucinated && sugg.length) {
@@ -197,7 +203,7 @@ function _renderRejectedToolLine(round, svg) {
        <span class="ptool-text${isHallucinated ? " ptool-reject-name" : ""}">${escapeHtml(attempted)}</span>
        <span class="ptool-badge ptool-badge-reject">${banSvg} ${badgeLabel}</span>
        ${suggHtml}
-       ${shortReason ? `<span class="ptool-error-reason">${escapeHtml(shortReason)}</span>` : ""}
+       ${reasonHtml ? `<span class="ptool-error-reason">${reasonHtml}</span>` : ""}
      </div>`;
 }
 
@@ -267,11 +273,8 @@ function _projectTodoRoundsForDisplay(rounds) {
   });
   if (todoIdx.length <= 1) return source;
   const keep = todoIdx[todoIdx.length - 1];
-  const todoSet = new Set(todoIdx);
-  /* A rejected/no-op call is protocol feedback for the model, not a new
-   * checklist revision for the person reading the conversation. Keep those
-   * receipts in Turn authority/debug history while deriving the visible
-   * revision history solely from accepted state transitions. */
+  /* Preserve every audit round, including rejected and unchanged attempts.
+   * Only accepted state transitions contribute to revision history. */
   const seenAcceptedRevisions = new Set();
   const history = todoIdx.flatMap((idx) => {
     const row = source[idx] || {};
@@ -293,14 +296,12 @@ function _projectTodoRoundsForDisplay(rounds) {
     }];
   });
   return source.reduce((out, r, i) => {
-    if (todoSet.has(i) && i !== keep) return out;
     if (i !== keep) {
       out.push(r);
       return out;
     }
     const latestResult = (r.results || [])[0] || {};
-    const acceptedUpdateCount = Number(latestResult.todoUpdateCount || 0)
-      || history.length || 1;
+    const acceptedUpdateCount = Number(latestResult.todoUpdateCount ?? history.length);
     const projected = { ...r, todoDisplayUpdateCount: acceptedUpdateCount };
     if (Array.isArray(r.results) && r.results.length) {
       projected.results = r.results.slice();
@@ -704,16 +705,17 @@ function _renderErrorRow(round, ctx) {
   const cmdText = _linkifyMcpLabels(
     escapeHtml(round.query || meta.title || td.label || round.toolName || "").replace(/\n/g, "<br>"),
     round);
-  const reason = (typeof round.toolContent === "string" ? round.toolContent : "")
-    .split("\n")[0].trim();
-  const short = escapeHtml(reason.length > 300 ? reason.slice(0, 300) + "…" : reason);
-  const tip = escapeHtml(reason || _t("tool.failedTip", "The tool failed — it did not complete successfully."));
+  /* The clipped tail is exactly the part that explains the failure — render
+   * the content whole, line breaks included, mirroring the rejected lane. */
+  const reason = (typeof round.toolContent === "string" ? round.toolContent : "").trim();
+  const full = escapeHtml(reason).replace(/\n/g, "<br>");
+  const tip = escapeHtml(reason.split("\n")[0] || _t("tool.failedTip", "The tool failed — it did not complete successfully."));
   return `<div class="ptool-line ptool-error" data-rn="${round.roundNum}" title="${tip}">
          <span class="ptool-icon">${svg}</span>
          ${rootPill}
          <span class="ptool-text">${cmdText}</span>
          <span class="ptool-badge ptool-badge-err">${escapeHtml(_t("tool.failed", "failed"))}</span>
-         ${short ? `<span class="ptool-error-reason">${short}</span>` : ""}
+         ${full ? `<span class="ptool-error-reason">${full}</span>` : ""}
        </div>`;
 }
 
@@ -913,6 +915,7 @@ function _cmdBodyToggle(el, ev) {
   if (!block) return;
   const open = !block.classList.contains('cmd-open');
   block.classList.toggle('cmd-open', open);
+  if (el.setAttribute) el.setAttribute('aria-expanded', String(open));
   const key = block.getAttribute('data-cmd-key') || '';
   if (key) {
     if (open) _cmdBodyExpanded.add(key);
@@ -925,17 +928,12 @@ function _cmdBodyToggle(el, ev) {
  * as _cmdBodyExpanded above. */
 const _cmdOutputExpanded = new Set();
 
-/* The command header toggles output only from its own non-control space. */
-function _cmdHeaderToggle(el, ev) {
+/* The output fold chip is the only output disclosure — the header row
+ * itself is inert, so no nested-control guard is needed here. */
+function _cmdOutputOpenToggle(el, ev) {
   if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
   const block = el && el.closest ? el.closest('.ptool-cmd-block') : null;
   if (!block || !block.classList.contains('ptool-cmd-hasoutput')) return;
-  const target = ev && ev.target;
-  if (target && typeof target.closest === 'function') {
-    const nestedAction = target.closest('[data-tofu-action]');
-    if (nestedAction && nestedAction !== el) return;
-    if (target.closest('button, a, input, select, textarea')) return;
-  }
   const open = !block.classList.contains('output-open');
   block.classList.toggle('output-open', open);
   if (el.setAttribute) el.setAttribute('aria-expanded', String(open));
@@ -967,17 +965,17 @@ function _openExternalAsset(button) {
 // chars → generic ✓ done).
 function _computeToolBadgeHtml(round, ctx) {
   const { meta, results } = ctx;
+  const isWrite =
+    round.toolName === "write_file" || round.toolName === "edit_file" ||
+    round.toolName === "apply_diff" || round.toolName === "apply_diffs" ||
+    round.toolName === "insert_content" ||
+    round.toolName === "insert_contents";
   let badgeHtml = "";
   if (meta.badge) {
     const refusal = _refusalInfo(round, meta);
     if (refusal) {
       badgeHtml = _renderGateRefusalBadgeHtml(refusal);
     } else {
-    const isWrite =
-      round.toolName === "write_file" || round.toolName === "edit_file" ||
-      round.toolName === "apply_diff" || round.toolName === "apply_diffs" ||
-      round.toolName === "insert_content" ||
-      round.toolName === "insert_contents";
     const ok = meta.writeOk !== false;
     /* A successful memory op (meta.memoryOk, set by the backend memory
      * handler) reads as a "save" — show the solid green OK badge, same as
@@ -997,14 +995,17 @@ function _computeToolBadgeHtml(round, ctx) {
       : "ptool-badge-info";
     badgeHtml = `<span class="ptool-badge ${cls}">${escapeHtml(meta.badge)}</span>`;
     }
-  } else if (round.toolTokens) {
+  } else if (round.toolTokens && !isWrite) {
     /* Per-tool token count — emitted by lib/tasks_pkg/tool_dispatch/_pipeline.py
-     * tool_complete event. Falls back to fetchedChars on older rounds. */
+     * tool_complete event. Falls back to fetchedChars on older rounds.
+     * Write tools are exempt: a batch edit that succeeded carries no meta.badge
+     * by design (the per-edit list is the status), and a token chip would just
+     * take the removed count badge's place. */
     const t = round.toolTokens;
     const txt = t >= 1000 ? (t / 1000).toFixed(t >= 10000 ? 0 : 1) + "k tok" : t + " tok";
     const fcTitle = meta.fetchedChars ? ` (${meta.fetchedChars.toLocaleString()} chars)` : "";
     badgeHtml = `<span class="ptool-badge ptool-badge-info" title="Tokens consumed by this tool result${fcTitle}">${txt}</span>`;
-  } else if (meta.fetchedChars) {
+  } else if (meta.fetchedChars && !isWrite) {
     const fc = meta.fetchedChars;
     const txt = fc > 1000 ? Math.round(fc / 1000) + "k chars" : fc + " chars";
     badgeHtml = `<span class="ptool-badge ptool-badge-info">${txt}</span>`;
@@ -1744,6 +1745,10 @@ function renderToolRoundsHTML(rounds, isStreaming, segments) {
    *   (translated-in-place) adjacent to its tools — so a translated turn does
    *   NOT clump its narration into one tail block when the segment-timeline
    *   toggle is OFF (or the timeline path fell back to grouped). */
+  /* Overleaf live preview: a newly settled mcp__overleaf__ edit round in a
+   * live stream recompiles the remote paper and scrolls the side panel to
+   * the edit. Pure scan; the lazy chunk loads only on a real candidate. */
+  _overleafPreviewObserveRounds(rounds, isStreaming);
   return _renderUnifiedGroup(rounds, segments);
 }
 

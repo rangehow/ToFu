@@ -363,10 +363,12 @@ def test_manager_carrier_delta_projects_snapshots_but_live_frame_stays_full(
     ]
     first = {
         'type': 'messages_snapshot', 'kind': 'request', 'roundNum': 1,
+        'model': 'test-model', 'label': 'request 1',
         'messages': first_messages, 'tools': tools,
     }
     second = {
         'type': 'messages_snapshot', 'kind': 'request', 'roundNum': 2,
+        'model': 'test-model', 'label': 'request 2',
         'messages': second_messages, 'tools': tools,
     }
     post_tool = dict(second, kind='state')
@@ -458,11 +460,15 @@ def test_manager_post_settlement_observer_uses_standalone_replay_only(
     monkeypatch.setattr(
         turn_service, 'record_task_event', record_task_event_spy)
     try:
-        manager.append_event(task, {
-            'type': event_type,
-            'snapshotId': 'snapshot-1',
-            'summary': 'learned preference',
+        event = ({
+            'type': event_type, 'taskId': task_id, 'snapshotId': 'snapshot-1',
+        } if event_type == 'round_committed' else {
+            'type': event_type, 'kind': 'reinforced',
+            'summary': 'learned preference', 'pending': False,
+            'id': 'change-1', 'change_id': 'change-1',
+            'item_id': 'item-1', 'context_type': 'response_preference',
         })
+        manager.append_event(task, event)
 
         assert authority_calls == []
         assert not task.get('aborted')

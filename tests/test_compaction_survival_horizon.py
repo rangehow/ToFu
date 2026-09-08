@@ -76,7 +76,7 @@ def test_adaptive_policy_keeps_its_explicit_expected_value_horizon():
 def test_longer_observed_compaction_window_invalidates_stale_economic_veto(
     monkeypatch,
 ):
-    import lib.tasks_pkg.cache_tracking._state as cache_state
+    import lib.tasks_pkg.compaction._cache_evidence as cache_evidence
     import lib.tasks_pkg.compaction._tokens as tokens
 
     def authoritative_count(_messages, _task, *, measurement_out=None):
@@ -92,7 +92,7 @@ def test_longer_observed_compaction_window_invalidates_stale_economic_veto(
     monkeypatch.setattr(
         tokens, '_count_tokens_authoritative', authoritative_count)
     monkeypatch.setattr(
-        cache_state, 'get_warm_cache_read', lambda *args, **kwargs: 120_000)
+        cache_evidence, 'current_cache_read', lambda *args, **kwargs: 120_000)
 
     def task() -> dict:
         return {
@@ -237,12 +237,12 @@ def test_successful_rewrite_cadence_is_bounded_and_idempotent():
 
 
 def test_cache_economics_resolves_before_and_after_pricing_tiers(monkeypatch):
-    import lib.tasks_pkg.cache_tracking._state as cache_state
+    import lib.tasks_pkg.compaction._cache_evidence as cache_evidence
     from lib.pricing import clear_provider_pricing, set_provider_pricing
     from lib.tasks_pkg.compaction._layer2 import _compact as layer2
 
     monkeypatch.setattr(
-        cache_state, 'get_warm_cache_read',
+        cache_evidence, 'current_cache_read',
         lambda *args, **kwargs: 280_000)
     set_provider_pricing('econ-provider', 'econ-model', {
         'contextTiers': [

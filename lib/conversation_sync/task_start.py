@@ -18,6 +18,9 @@ from lib.tasks_pkg.manager import (
     cleanup_old_tasks,
     create_task,
 )
+from lib.conversation_sync.dispatch_contract import (
+    RESUME_MODEL_SWITCH_FROM_CONFIG_KEY,
+)
 
 logger = get_logger(__name__)
 
@@ -41,6 +44,38 @@ def _throttled_cleanup_old_tasks():
             return
         _last_cleanup_ts = now
     cleanup_old_tasks()
+
+
+def _announce_resume_model_switch(
+    task: dict[str, Any], config: dict[str, Any],
+) -> None:
+    """Record a deliberate pause → switch-model → resume on the bound attempt.
+
+    The marker was stamped into the durable attempt config at acceptance, so
+    this fires identically on the live dispatch and on post-crash recovery.
+    The event goes out AFTER the durable attempt-to-task binding and BEFORE
+    the worker spawns: the fold lands in the attempt's activity timeline and
+    the live frame paints the in-bubble banner for the whole resumed stream.
+    Task stamps keep a cold reload able to repaint it.
+    """
+    switch_from = str(config.get(RESUME_MODEL_SWITCH_FROM_CONFIG_KEY) or '')
+    switch_to = str(config.get('model') or '').strip()
+    switch_from = switch_from.strip()
+    if not switch_from or not switch_to or switch_from == switch_to:
+        return
+    from lib.agent_core.events import EventType, build_event
+    from lib.tasks_pkg.manager import append_event
+    task['_fallback_from'] = switch_from
+    task['_fallback_model'] = switch_to
+    task['_fallback_kind'] = 'user_switch'
+    task['_fallback_reason'] = ''
+    append_event(task, build_event(
+        EventType.MODEL_FALLBACK,
+        fallbackModel=switch_to,
+        fallbackFrom=switch_from,
+        fallbackKind='user_switch',
+        fallbackReason='',
+    ))
 
 
 def _discard_unstarted_task(task_id: str, conv_id: str) -> None:
@@ -188,6 +223,7 @@ def start_conversation_attempt_executor(
             task_id[:8], conv_id[:8],
         )
         raise
+    _announce_resume_model_switch(task, config)
 
     if _flow_entry is not None:
         # The canonical flow task marker set is shared by every

@@ -51,6 +51,33 @@ continuations are exhausted, the turn settles as
 the partial projection remains durable (and prefill-capable models expose it to
 `continue`) and is never cleared by the whole-turn regeneration retry path.
 
+For single-agent Responses, an assistant output explicitly marked `commentary`
+is intermediate work even when the response closes with `stop`. With no tool
+calls, a valid unchanged phase replay triggers at most two continuations per
+task, independent of the failed-tool nudge and stream-retry budgets. The
+existing `intent_stall_nudge` phase and durable intervention note show the
+reason and limit. Exhaustion ends with `abnormal_stop`, never success.
+Cancellation, malformed streams, provider errors, token limits, pending human
+guidance and explicit end-turn declarations retain precedence. Unphased or
+`final_answer` output is never reclassified by matching prose.
+
+Repeated successful verification is not task-completion evidence. The root
+loop's repeated-verification stop settles with `providerFinishReason: incomplete`
+and the existing incomplete recovery semantics, while its display-only
+`system_note` explains why execution stopped. It must not reuse the normal
+completion marker for genuine background-task acceptance. TODO reminders also
+respect structured human/approval waits; unresolved checklist items remain
+incomplete when continuation is suppressed or its budget is exhausted.
+
+A clean blank `stop` response, or a tool-finish response without tool payload,
+uses at most two abnormal-terminal recoveries per task across all round/phase
+resets. Explicit compatibility-layer evidence of unresolved tool control text
+shares that budget. Recovery preserves prior operation receipts and disables
+whole-turn regeneration; exhaustion carries a typed `abnormal_stop` error,
+not normal completion. Real tool batches and protocol-defined program
+continuations do not consume this budget. This executor verdict remains
+separate from a benchmark verifier's pass/fail result.
+
 ## Single producer
 
 `lib/turn_lifecycle.py::_settlement` derives the document from the terminal
@@ -71,6 +98,37 @@ Consequences:
 - a stale or superseded executor cannot overwrite the current attempt;
 - reconnect and cold reload read the same settlement;
 - queue draining happens only after the terminal transaction frees the lane.
+
+## Explicit user cancellation
+
+A Stop acknowledgement means the owned attempt accepted a cancellation signal,
+not that its workers have exited or its Turn has settled. All chat Stop entry
+points delegate to the same owner-checked cancellation authority; a terminal or
+terminalizing attempt cannot be rewritten by a racing Stop.
+
+Explicit cancellation reaches the active child-agent session and tool resources
+without waiting for the parent model/tool loop to finalize. Ordinary parent
+completion and observer disconnect remain distinct: they do not cancel an
+accepted detached swarm. Conversation-scoped reuse must not bind a new active
+turn to a stale spawning-turn cancellation predicate.
+
+`await_agents` treats cancellation as an independent exit condition, not as a
+completion timeout and not as a requirement to wait for scheduler drain. Tool
+batch collection must observe cancellation even when no future completes;
+a blocking iterator or unconditional pool join cannot be its signal-delivery
+mechanism. Queued work is prevented from starting; running work receives
+cooperative cancellation. Resource callbacks send bounded signals only, outside
+the task-authority lock; they must not join workers or perform network cleanup.
+Already-running Python threads cannot be forcibly terminated: outstanding work
+must retain bounded resource ownership and late-result fences rather than be
+reported as physically stopped. Each visible tool occurrence settles once with
+its actual completed receipt or an explicit interruption, never an invented
+`Unknown tool` failure. Child cancellation is not a retryable provider failure
+and must preserve accumulated usage and committed child evidence.
+
+Regression tests must separately observe signal acceptance, wait release, child
+exit, and authoritative terminal settlement. A fast HTTP response or a released
+composer button alone is not a cancellation-latency test.
 
 ## Resume options
 

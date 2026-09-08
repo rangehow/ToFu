@@ -89,6 +89,7 @@ hidden_imports += [
     # Desktop package seams the launcher uses (function-level imports —
     # listed explicitly so a future analyzer regression can't drop them).
     'desktop.connect_ui', 'desktop._tk_theme', 'desktop.role_window',
+    'desktop.agent_connection',
     'desktop.post_install', 'desktop._tk_host',
 ]
 
@@ -131,8 +132,14 @@ _candidate_datas = [
     # modules derive from their own ``__file__`` when frozen.
     (os.path.join(ROOT, 'browser_extension'), 'browser_extension'),
 
-    # Provider template catalog and import-time GPT-5.6 contract live in
-    # package data, not static/. Preserve the loader's __file__-relative path.
+    # Provider template catalog (lib/model_info/data/*.json) — the
+    # file-backed hot-reloaded authority merged by both template loaders
+    # (bootstrap_pkg.providers + lib.provider_template_recipes), and the
+    # GPT-5.6 contract that lib.model_info._openai_gpt56 hard-requires at
+    # import time via __file__-relative lookup.  Without this entry the
+    # frozen app loses the entire provider picker AND crashes on any
+    # model_info import.  Deployment overrides in static/provider_templates
+    # ride along with the static/ entry above.
     (os.path.join(ROOT, 'lib', 'model_info', 'data'),
      os.path.join('lib', 'model_info', 'data')),
 ]

@@ -1,0 +1,15 @@
+{
+  "brand": "openbmb",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "openbmb",
+  "category": "official",
+  "name": "OpenBMB (ModelBest)",
+  "base_url": "https://api.modelbest.cn/v1",
+  "balance_url": "https://platform.modelbest.cn",
+  "offering_recipes": [
+    {"model_id": "MiniCPM-V-4.6-Thinking", "capabilities": ["text", "vision", "video", "thinking"]},
+    {"model_id": "MiniCPM-V-4.6-1B", "capabilities": ["text", "vision", "video"]},
+    {"model_id": "MiniCPM-V-4.5-9B", "capabilities": ["text", "vision", "video"]},
+    {"model_id": "MiniCPM-O-4.5-9B", "capabilities": ["text", "vision", "video"]}
+  ]
+}

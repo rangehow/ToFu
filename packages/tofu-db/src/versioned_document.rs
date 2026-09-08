@@ -237,6 +237,17 @@ pub(crate) fn materialize_stored_document(
     Ok((document.key, value))
 }
 
+/// Header-only projection: the document's logical key without decoding or
+/// fetching the value (blob-backed values included). Hot index paths that
+/// only need the identity avoid materializing the full JSON document.
+pub(crate) fn stored_document_logical_key(stored: &[u8], namespace: &str) -> io::Result<String> {
+    let document = Document::decode(stored)?;
+    if document.namespace != namespace {
+        return Err(invalid_data("versioned document identity mismatch"));
+    }
+    Ok(document.key)
+}
+
 pub(crate) fn stored_document_version(
     stored: &[u8],
     namespace: &str,
@@ -469,6 +480,22 @@ pub(crate) fn put(
     put_with_blob_owner(database, transaction, request, transaction.owner_user_id())
 }
 
+/// Owner-scoped envelope-returning variant of [`put`]; see
+/// [`put_with_blob_owner_bounded_returning_envelope`].
+pub(crate) fn put_returning_envelope(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    request: PutRequest,
+) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    put_with_blob_owner_bounded_returning_envelope(
+        database,
+        transaction,
+        request,
+        transaction.owner_user_id(),
+        MAX_TRANSACTION_IR_LITERAL_BYTES,
+    )
+}
+
 pub(crate) fn put_with_blob_owner(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -491,6 +518,29 @@ pub(crate) fn put_with_blob_owner_bounded(
     blob_owner_user_id: u64,
     maximum_bytes: usize,
 ) -> io::Result<Vec<u8>> {
+    Ok(put_with_blob_owner_bounded_returning_envelope(
+        database,
+        transaction,
+        request,
+        blob_owner_user_id,
+        maximum_bytes,
+    )?
+    .0)
+}
+
+/// Same mutation as [`put_with_blob_owner_bounded`], but also returns the
+/// exact stored envelope bytes. Hot callers that stage the envelope into a
+/// secondary index (turn lane/activity projections, conversation updated
+/// index) reuse it instead of re-reading the entity they just wrote; the
+/// bytes are identical by construction because the put is the only write to
+/// that key inside the transaction.
+pub(crate) fn put_with_blob_owner_bounded_returning_envelope(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    request: PutRequest,
+    blob_owner_user_id: u64,
+    maximum_bytes: usize,
+) -> io::Result<(Vec<u8>, Vec<u8>)> {
     let PutRequest {
         key,
         namespace,
@@ -538,22 +588,20 @@ pub(crate) fn put_with_blob_owner_bounded(
         };
         DocumentValue::Blob(reference)
     };
-    database.entity_put(
-        transaction,
-        key,
-        Document {
-            namespace,
-            key: logical_key.clone(),
-            version,
-            updated_at_ms,
-            value,
-        }
-        .encode()?,
-    )?;
-    serde_json::to_vec(
+    let stored_envelope = Document {
+        namespace,
+        key: logical_key.clone(),
+        version,
+        updated_at_ms,
+        value,
+    }
+    .encode()?;
+    database.entity_put(transaction, key, stored_envelope.clone())?;
+    let response = serde_json::to_vec(
         &json!({"key": logical_key, "version": version, "updated_at_ms": updated_at_ms}),
     )
-    .map_err(|_| invalid_data("versioned document response failed"))
+    .map_err(|_| invalid_data("versioned document response failed"))?;
+    Ok((response, stored_envelope))
 }
 
 pub(crate) fn delete(

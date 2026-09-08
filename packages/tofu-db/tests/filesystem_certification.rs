@@ -31,7 +31,7 @@ fn explicit_empty_path_survives_destructor_free_and_cross_process_reopens() {
     assert!(stdout.contains("payload_segment_random_read=true"));
     assert!(stdout.contains("payload_loose_reclaim=true"));
     assert!(stdout.contains("payload_segment_count=1"));
-    assert!(stdout.contains("payload_block_bytes=1048576"));
+    assert!(stdout.contains("payload_block_bytes=2097153"));
     assert!(stdout.contains("write_process_micros="));
     assert!(stdout.contains("first_reopen_micros="));
     assert!(stdout.contains("post_reopen_commit_micros="));

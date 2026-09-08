@@ -71,15 +71,15 @@ function formatPrice(value: unknown, currency: unknown): string {
   );
 }
 
-function formatPricing(pricing: ModelPricing | null): string {
-  if (!pricing) return '未登记';
+function formatPricingCompact(pricing: ModelPricing | null): string {
+  if (!pricing) return '—';
   const input = pricing.input == null ? '—' : formatPrice(pricing.input, pricing.currency);
   const output = pricing.output == null ? '—' : formatPrice(pricing.output, pricing.currency);
-  return `输入 ${input} · 输出 ${output}`;
+  return `${input} / ${output}`;
 }
 
 function formatContextWindow(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '未登记';
+  if (!Number.isFinite(value) || value <= 0) return '—';
   if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`;
   if (value >= 1000) return `${Math.round(value / 1000)}K`;
   return String(Math.round(value));
@@ -339,12 +339,7 @@ function renderModel(row: ModelCatalogRow): HTMLElement {
   const summary = element('summary', 'stg-mc-model-head');
   const title = element('div', 'stg-mc-model-title');
   title.innerHTML = brandIconHtml(row.brand, 21);
-  const titleText = element('div', 'stg-mc-model-title-text');
-  titleText.append(
-    element('strong', undefined, row.displayName),
-    element('span', 'stg-mc-model-id', identity),
-  );
-  title.appendChild(titleText);
+  title.appendChild(element('strong', 'stg-mc-model-name', row.displayName));
   const brief = element('div', 'stg-mc-model-brief');
   const intelligence = row.aa?.intelligence;
   if (intelligence !== null && intelligence !== undefined) {
@@ -357,7 +352,13 @@ function renderModel(row: ModelCatalogRow): HTMLElement {
   } else {
     brief.appendChild(element('span', 'stg-mc-score na', 'AA —'));
   }
-  brief.appendChild(element('span', 'stg-mc-brief-price', formatPricing(row.pricing)));
+  const context = element('span', 'stg-mc-meta', formatContextWindow(row.contextWindow));
+  context.title = '上下文窗口';
+  const release = element('span', 'stg-mc-meta', row.releaseDate || '—');
+  release.title = '发布时间';
+  const price = element('span', 'stg-mc-meta', formatPricingCompact(row.pricing));
+  price.title = '输入 / 输出 · 每 1M tokens';
+  brief.append(context, release, price);
   const caret = element('span', 'stg-mc-caret');
   caret.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>';
   summary.append(title, brief, caret);
@@ -365,11 +366,7 @@ function renderModel(row: ModelCatalogRow): HTMLElement {
   const detail = element('div', 'stg-mc-model-detail');
   const facts = element('div', 'stg-mc-model-facts');
   facts.append(
-    renderMetric('AA Intelligence Index', intelligence === null || intelligence === undefined
-      ? t('modelCatalog.aa.unscored') : String(Number(intelligence.toFixed(1))), 'quality'),
-    renderMetric('官方价格 / 1M', formatPricing(row.pricing), 'price'),
-    renderMetric('上下文', formatContextWindow(row.contextWindow)),
-    renderMetric('发布时间', row.releaseDate || '未登记'),
+    renderMetric('模型 ID', identity, 'id'),
     renderMetric('生命周期', row.lifecycle || 'stable'),
   );
   detail.appendChild(facts);

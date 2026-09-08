@@ -9,9 +9,9 @@ the zero-question server-discovery ladder + probe-first resume.
   user get asked — and then exactly once.
 
 * ``resume_attachment(url, secret)`` — probe-first resume for a SAVED
-  attachment: a dead saved route re-walks the attach bundle's candidate
-  list, then the ladder, KEEPING the token (a bearer credential does not
-  care which address reaches the server).
+  attachment: a dead saved route re-walks explicitly configured attach
+  candidates only. Unauthenticated discovery cannot authorize forwarding
+  an existing bearer credential to another server.
 
 The PAIRING-CODE exchange client that used to live here was removed
 2026-08-05 (owner decree: no user-typed codes, zero configuration
@@ -32,7 +32,7 @@ import subprocess
 import sys
 import time
 
-from lib.desktop_agent._probe import probe_server
+from lib.desktop_agent._probe import _is_route_url, probe_server
 from lib.log import get_logger
 
 logger = get_logger(__name__)
@@ -72,9 +72,10 @@ def lan_probe(timeout: float = 1.5, _factory=None) -> list:
     responder URLs that pass ``probe_server``.
 
     The responder's HMAC is unverifiable without a shared secret (the
-    server-side responder itself documents this), so trust-but-verify:
-    any URL offered is probed against ``/api/health`` before use — a
-    hostile LAN responder can at worst cost us one dropped probe.
+    server-side responder itself documents this). Health checks filter
+    non-Tofu services, but do NOT authenticate responders. Returned URLs
+    are discovery hints only and must not receive an existing credential
+    without explicit configuration/approval.
     ``_factory`` injects a fake socket for tests.
     """
     import socket as _socket
@@ -299,11 +300,14 @@ def _attach_candidates(saved_url: str) -> list:
     except Exception as e:
         logger.debug('[Agent] attach candidates unreadable: %s', e)
         return []
+    if not isinstance(raw, (list, tuple)):
+        return []
     out = []
-    for u in raw or []:
-        u = str(u or '').strip().rstrip('/')
-        if (u.startswith(('http://', 'https://')) and u != saved_url
-                and u not in out):
+    for u in raw:
+        if not isinstance(u, str):
+            continue
+        u = u.strip().rstrip('/')
+        if (_is_route_url(u) and u != saved_url and u not in out):
             out.append(u)
     return out
 
@@ -311,20 +315,16 @@ def _attach_candidates(saved_url: str) -> list:
 def resume_attachment(url: str, secret: str, log=_noop_log):
     """Probe-first resume for a SAVED attachment. Returns ``(url, secret)``.
 
-    The landmine this defuses (owner review 2026-08-03): a tunnel that won
-    during first-run discovery was a child of the agent process, and
-    ``_reap_tunnels`` (atexit) kills it — so a saved loopback URL is a dead
-    port on EVERY subsequent boot, while the launcher used to skip the
-    ladder whenever any URL was saved. Autostart-on-install meant the very
-    machine that paired fine on day one came up dead on day two.
+    Health's bootId is public liveness data, not a trust identity. Only
+    the saved URL and explicitly configured attach-bundle candidates are
+    authorized destinations for the saved bearer. Discovery (including
+    arbitrary SSH config hosts and loopback services) is not authority.
 
     Contract:
       * saved address answers → return it unchanged (zero action);
       * saved address dead → walk the attach bundle's persisted route
-        candidates, then re-run the ladder; when a live route turns up,
-        KEEP THE TOKEN (a bridge token is a bearer credential — it does not
-        care which address reaches the server) and persist the re-pointed
-        address only when it actually changed;
+        candidates; when an authorized live route turns up, keep the token
+        and persist the address only when it actually changed;
       * nothing answers → return the saved pair UNCHANGED. The server
         may simply be off right now; the poll loop keeps retrying and the
         tray link line says 'unreachable' honestly. Never bounce the user
@@ -333,7 +333,7 @@ def resume_attachment(url: str, secret: str, log=_noop_log):
     ok, _ = probe_server(url, timeout=3.0)
     if ok:
         return url, secret
-    log('Saved attachment %s is not answering — re-running discovery' % url)
+    log('Saved attachment %s is not answering — checking configured routes' % url)
     found = ''
     for cand in _attach_candidates(url):
         ok, reason = probe_server(cand, timeout=2.5)
@@ -343,8 +343,7 @@ def resume_attachment(url: str, secret: str, log=_noop_log):
             break
         log('Attach candidate %s not reachable: %s' % (cand, reason))
     if not found:
-        found = discover(log=log)
-    if not found:
+        log('No configured route answers; discovery cannot authorize token reuse')
         return url, secret
     if found != url:
         try:

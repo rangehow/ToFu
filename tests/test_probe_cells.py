@@ -23,12 +23,12 @@ class _FakeResp:
 
 class ProbeCellClassificationTest(unittest.TestCase):
 
-    def _probe(self, status_code, text=''):
+    def _probe(self, status_code, text='', protocol='openai'):
         import lib.provider_probe as probe
         with mock.patch('lib.http_client.http_post',
                         return_value=_FakeResp(status_code, text)):
             return probe.probe_one_cell(
-                'https://gw.example.com/v1', 'sk-x', 'modelX', {}, 5)
+                'https://gw.example.com/v1', 'sk-x', 'modelX', {}, 5, protocol)
 
     def test_200_is_ok(self):
         body = jsonlib.dumps({'choices': [{'message': {'content': 'OK'}}]})
@@ -63,6 +63,62 @@ class ProbeCellClassificationTest(unittest.TestCase):
             'message': {'role': 'assistant', 'content': '',
                         'reasoning': 'thinking about the prompt'}}]})
         self.assertEqual(self._probe(200, body)[0], 'ok')
+
+    def test_200_anthropic_thinking_block_is_ok(self):
+        # 2026-09-08 incident: thinking-native models on the Anthropic
+        # dialect (glm-4.6/5, MiniMax-M2.x, LongCat-Thinking — 25/339
+        # example-corp cells) exhaust the probe budget inside ONE thinking block
+        # (stop_reason=max_tokens, no text part) and were falsely red.
+        body = jsonlib.dumps({
+            'id': 'msg_x', 'type': 'message', 'role': 'assistant',
+            'content': [{'type': 'thinking',
+                         'thinking': 'The user wants exactly OK.'}],
+            'stop_reason': 'max_tokens'})
+        self.assertEqual(self._probe(200, body, 'anthropic')[0], 'ok')
+
+    def test_200_anthropic_redacted_thinking_is_ok(self):
+        body = jsonlib.dumps({
+            'id': 'msg_x', 'type': 'message', 'role': 'assistant',
+            'content': [{'type': 'redacted_thinking', 'data': 'EsigCkAI'}],
+            'stop_reason': 'max_tokens'})
+        self.assertEqual(self._probe(200, body, 'anthropic')[0], 'ok')
+
+    def test_200_anthropic_empty_content_stays_red(self):
+        # A 200 with NO blocks at all (observed: gemini-3.1-pro-preview via
+        # an Anthropic gateway buffers thinking and drops it on truncation)
+        # is genuinely no observable output — the red verdict is honest.
+        body = jsonlib.dumps({
+            'id': 'msg_x', 'type': 'message', 'role': 'assistant',
+            'content': [], 'stop_reason': 'max_tokens'})
+        status, detail = self._probe(200, body, 'anthropic')
+        self.assertEqual(status, 'invalid_response')
+        self.assertIn('no generated text', detail)
+
+    def test_200_responses_reasoning_item_is_ok(self):
+        # gpt-5/o-series under the tiny budget: output holds ONLY a
+        # reasoning item, summary not yet materialized.
+        body = jsonlib.dumps({
+            'status': 'incomplete',
+            'incomplete_details': {'reason': 'max_output_tokens'},
+            'output': [{'type': 'reasoning', 'id': 'rs_123', 'summary': []}]})
+        self.assertEqual(self._probe(200, body, 'responses')[0], 'ok')
+
+    def test_200_openai_thinking_content_part_is_ok(self):
+        # Gateways that map thinking blocks into message content parts.
+        body = jsonlib.dumps({'choices': [{
+            'finish_reason': 'length',
+            'message': {'role': 'assistant',
+                        'content': [{'type': 'thinking',
+                                     'thinking': 'hmm, exactly OK'}]}}]})
+        self.assertEqual(self._probe(200, body)[0], 'ok')
+
+    def test_sse_anthropic_thinking_delta_is_ok(self):
+        raw = (
+            'event: content_block_delta\n'
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"thinking_delta","thinking":"hmm OK"}}\n\n'
+            'data: [DONE]\n\n')
+        self.assertEqual(self._probe(200, raw, 'anthropic')[0], 'ok')
 
     def test_provider_error_detail_redacts_echoed_app_id(self):
         status, detail = self._probe(

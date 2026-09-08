@@ -454,6 +454,21 @@ class ProviderStreamResult:
             state=self.state,
             evidence=self.evidence,
         )
+        # Fixed-shape per-request evidence; no prompt, body or headers.
+        ev = self.evidence
+        normalized_usage['_stream_terminal'] = {
+            'state': self.state.value,
+            'provider_finish_reason': self.provider_finish_reason,
+            'finish_seen': ev.provider_finish_seen,
+            'done_seen': ev.done_seen,
+            'malformed_frames': ev.malformed_frame_count,
+            'transport_bytes': ev.transport_byte_count,
+            'sse_events': ev.sse_event_count,
+            'content_chars': ev.content_chars,
+            'reasoning_chars': ev.reasoning_chars,
+            'tool_calls': ev.tool_call_count,
+            'tool_argument_chars': ev.tool_argument_chars,
+        }
         return replace(self, usage=normalized_usage)
 
     def as_legacy_tuple(self) -> tuple[dict[str, Any], str, dict[str, Any] | None]:

@@ -319,15 +319,14 @@ def _start_computer_control(port: int, state: dict) -> None:
     if state.get('thread') and state['thread'].is_alive():
         return
     try:
-        from lib.desktop_agent import run_agent
         from lib.desktop_agent._permissions import safe_default
     except Exception as e:
         _log('Computer control unavailable (import failed): %s' % e)
         state['error'] = str(e)
         return
 
-    stop_event = threading.Event()
-    state['stop'] = stop_event
+    from desktop import agent_connection
+    state['remote'] = False
     state['error'] = None
     # Shared, live-mutable permissions dict. Created deny-all; the tray tier
     # toggles mutate it in place and run_agent picks up the change each poll.
@@ -345,35 +344,24 @@ def _start_computer_control(port: int, state: dict) -> None:
         from lib.desktop_agent.config import remote_server
         _rurl, _rsecret = remote_server()
         if _rurl:
-            server_url, bridge_secret = _rurl, _rsecret
+            server_url, bridge_secret = agent_connection.resume(_rurl, _rsecret, _log)
+            state['remote'] = True
     except Exception as e:
         _log('Could not read remote attachment, using local server: %s' % e)
     state['server_url'] = server_url
 
-    def _loop():
-        try:
-            run_agent(server_url, permissions, poll_interval=1.0,
-                      bridge_secret=bridge_secret, stop_event=stop_event)
-        except Exception as e:
-            _log('Computer-control agent crashed: %s' % e)
-            state['error'] = str(e)
-        finally:
-            state['enabled'] = False
-
-    t = threading.Thread(target=_loop, daemon=True, name='tofu-desktop-agent')
-    state['thread'] = t
-    state['enabled'] = True
-    t.start()
+    state['url'], state['secret'] = server_url, bridge_secret
+    if state['remote']:
+        agent_connection.ensure_relay(state, _log)
+    agent_connection.start(state, permissions, _log, remote=state['remote'])
     _log('Computer control ENABLED (read-only; perms=%s, agent polling %s)'
          % (permissions, server_url))
 
 
 def _stop_computer_control(state: dict) -> None:
     """Signal the in-process desktop-control agent to stop at the next poll."""
-    ev = state.get('stop')
-    if ev is not None:
-        ev.set()
-    state['enabled'] = False
+    from desktop import agent_connection
+    agent_connection.stop(state, _log)
     _log('Computer control DISABLED')
 
 
@@ -435,6 +423,7 @@ def _run_tray(port: int, proc: subprocess.Popen):
         _start_computer_control(port, _cc_state)
 
     def _shutdown():
+        _stop_computer_control(_cc_state)
         if proc.poll() is None:
             try:
                 proc.terminate()
@@ -466,6 +455,11 @@ def _run_tray(port: int, proc: subprocess.Popen):
 
     def on_open(icon, item):
         webbrowser.open(url)
+
+    def on_browser_relay(icon, item):
+        remote_url = _cc_state.get('url') if _cc_state.get('remote') else ''
+        if remote_url:
+            webbrowser.open(remote_url.rstrip('/') + '/#tofu-agent-relay')
 
     def on_update(icon, item):
         webbrowser.open(_RELEASES_PAGE)
@@ -600,6 +594,9 @@ def _run_tray(port: int, proc: subprocess.Popen):
             MenuItem(_tt('desktop.tray.permGui'), _toggle_perm('allow_gui'),
                      checked=_perm_checked('allow_gui'), enabled=_perm_enabled),
         )),
+        MenuItem(_tt('desktop.tray.browserRelay'), on_browser_relay,
+                 visible=lambda item: bool(_cc_state.get('remote') and
+                                           _cc_state.get('enabled'))),
         MenuItem(_tt('desktop.tray.installComponents'), on_components),
         # Which server the agent talks to. Keep attachment state observable
         # even though the installer configures it without user input.
@@ -652,7 +649,8 @@ def _import_preseed() -> None:
     agent-only build). ``_EXE_DIR`` is read at CALL time — the preseed
     suite monkeypatches it to an isolated dir.
     """
-    from desktop.connect_ui import import_preseed
+    from desktop.connect_ui import import_attach_bundle, import_preseed
+    import_attach_bundle(_EXE_DIR, _log)
     import_preseed(_EXE_DIR, _log)
 
 

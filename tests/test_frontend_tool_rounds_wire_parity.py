@@ -98,6 +98,8 @@ def test_battery_covers_every_dispatch_family():
         'awaiting_stdin',       # _renderStdinBlock
         'aborted',              # _renderAbortedRow
         'error-failed-tool',    # _renderErrorRow
+        'tool_contract_invalid',  # _renderRejectedToolLine (blocked)
+        'hallucinated',         # _renderRejectedToolLine (not a real tool)
         'run_command',          # typed command presenter + retained lifecycle
         'browser_execute_js',   # typed browser-execution presenter
         'search_tools',         # typed tool-catalog search presenter

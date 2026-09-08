@@ -354,6 +354,52 @@ def build_task_config(tools_config: dict, conv_settings: dict) -> dict:
     }
 
 
+def build_turn_ctx_snapshot(task_config: dict) -> dict | None:
+    """Build the per-turn context note (``_ctx``) for a scheduler-owned turn.
+
+    Human turns get this snapshot from the browser at send time
+    (``static/js/info-rail.js`` → ``payload['ctx']``); timer / proactive /
+    swarm-continuation turns never touch a browser, so the dispatch path
+    derives the same shape from the already-merged task config. Mirrors the
+    chip mapping of ``_collectTools()``/``_short()`` in info-rail.js; the
+    done frame's fact card (actualModel/actualDepth/actualModes) still
+    settles the note server-side. MCP/desktop chips are client-only state
+    and stay absent — the note records what THIS config guarantees.
+    """
+    tools = []
+    search_mode = str(task_config.get('searchMode') or 'off')
+    if search_mode != 'off':
+        tools.append({
+            'label': 'Search' if search_mode == 'single' else 'Search ×N',
+            'tone': 'search',
+        })
+    for key, label, tone in (
+        ('fetchEnabled', 'Fetch', 'net'),
+        ('browserEnabled', 'Browser', 'net'),
+        ('codeExecEnabled', 'Code Exec', 'code'),
+        ('memoryEnabled', 'Memory', 'ai'),
+        ('imageGenEnabled', 'Image Gen', 'ai'),
+        ('autoTranslate', 'Translate', 'ai'),
+    ):
+        if task_config.get(key):
+            tools.append({'label': label, 'tone': tone})
+    roots = []
+    project_path = str(task_config.get('projectPath') or '')
+    if project_path:
+        parts = [p for p in project_path.split('/') if p]
+        short = '/'.join(parts[-2:]) if len(parts) > 2 else project_path
+        roots.append({'short': short, 'path': project_path, 'ro': False})
+    model = str(task_config.get('model') or '')
+    if not tools and not roots and not model:
+        return None
+    return {
+        'roots': roots,
+        'tools': tools,
+        'modes': [],
+        'model': model,
+        'depth': '',
+    }
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  JSON decision parser
 # ═════════════════════════════════════════════════════════════════════════════

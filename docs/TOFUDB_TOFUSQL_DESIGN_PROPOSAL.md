@@ -122,8 +122,8 @@ that same operation.
   since the daemon answers through its live front).
 * **P1 — index and stream tables.** Lane/update/time indexes and event
   family streams become queryable; migration verification reports
-  (count/digest per domain) become SQL instead of bespoke code in
-  `scripts/tofudb_migrate.py`.
+  (count/digest per domain) become SQL instead of bespoke code in the
+  tofu-db migrator (currently on the `tofudb/integrate` branch).
 * **P2 — constrained joins.** Joins over documented identity columns
   (e.g. attempts ⋈ turns on `turn_id`) with both sides key-prefixed;
   costed against the same read ceiling.

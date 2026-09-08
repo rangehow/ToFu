@@ -97,6 +97,16 @@ the exact identifiers declared in the manifest and remains read-only.
 
 ## Verification
 
+
+`scripts/tofudb_perf_compare.py` compares disposable authorities through their
+client contracts, not raw database primitives. Legacy engine startup is
+sequential and scopes PostgreSQL DSN-file and other launch environment overrides
+to the child launch, restoring the caller environment even on failure. SQLite
+must not inherit a PostgreSQL test DSN or attach through a caller connection file;
+each engine retains its own runtime/client without replacing the global runtime.
+`tests/test_tofudb_perf_compare.py` covers both engine orders, inherited settings,
+and failure cleanup offline; PostgreSQL measurements require an explicitly
+provisioned disposable database, never a production authority.
 - `tests/test_storage_process_boundary.py` checks the client/route driver and
   path boundary.
 - `tests/test_storage_sidecar_contract.py` launches the real SQLite sidecar and

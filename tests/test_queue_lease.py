@@ -111,6 +111,42 @@ def test_expired_lease_is_reclaimed_and_redispatched(
     assert queue.get_queue(conversation_id, user_id=USER_ID) == []
 
 
+def test_pair_row_whose_attempt_settled_queue_bound_is_retired(
+    conversation_factory,
+):
+    """Retire, not re-lease, a pair whose attempt died while queue-bound.
+
+    A Stop racing the drain settled the queue-bound attempt (pre-fix abort
+    path); the durable queue row can never activate again. Treating the
+    resulting database_conflict as a transient lane-busy released the lease,
+    so every drain replayed the same conflict and queue.depth — the composer
+    send-button badge — stayed pinned at 1 forever.
+    """
+    from lib.turn_lifecycle import create_turn_pair, record_task_event
+
+    conversation_id = conversation_factory()
+    queue_id = f'queue-{time.time_ns()}'
+    queued = create_turn_pair(
+        conversation_id,
+        command_id=f'zombie-{time.time_ns()}',
+        input_projection={'content': 'zombie'},
+        config={'model': 'm'},
+        user_id=USER_ID,
+        queue_binding={'queueId': queue_id, 'message': {'text': 'zombie'}},
+    )
+    record_task_event({
+        '_attemptId': queued['attempt']['attemptId'], '_userId': USER_ID,
+        'id': '', 'status': 'aborted', 'aborted': True,
+        'content': '', 'thinking': '', 'toolRounds': [], 'segments': [],
+        'model': '',
+    }, {'type': 'aborted'})
+
+    assert queue.dispatch_next_queued(conversation_id, user_id=USER_ID) is None
+
+    assert queue.get_queue(conversation_id, user_id=USER_ID) == []
+    assert queue.dispatch_next_queued(conversation_id, user_id=USER_ID) is None
+
+
 def test_fresh_lease_is_invisible_until_released(
     conversation_factory, monkeypatch,
 ):

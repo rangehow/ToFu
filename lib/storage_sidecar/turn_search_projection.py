@@ -47,6 +47,18 @@ _BACKFILL_BYTES = 2_000_000
 # one-to-one invariant contributes the explicit hydration ratio below. This
 # probe therefore guarantees the decoded source still fits the 2 MiB page
 # budget before deriving a bounded 10 KiB search fragment.
+def _projection_units_expr(session: Session, column: str) -> str:
+    """Byte-size proxy for a stored projection document.
+
+    SQLite stores projection_json as BLOB bytes where ``length`` counts
+    bytes; PostgreSQL stores jsonb, which has no ``length`` — measure its
+    canonical text form instead.  Both are budget proxies, not checksums.
+    """
+    if session.backend == 'postgres':
+        return f'octet_length({column}::text)'
+    return f'length({column})'
+
+
 _SOURCE_TEXT_MAX_UNITS = (
     _BACKFILL_BYTES // (4 * STORAGE_PROJECTION_MAX_HYDRATION_RATIO)
 )
@@ -783,7 +795,9 @@ class TurnSearchProjectionRuntime:
         source = self._authority_query(
             'projection.turn_search.turn_source_size',
             lambda session: session.fetch_one(
-                "SELECT length(projection_json) AS projection_units "
+                'SELECT '
+                + _projection_units_expr(session, 'projection_json')
+                + ' AS projection_units '
                 "FROM storage_conversation_turns WHERE user_id=? AND turn_id=?",
                 (int(dirty['user_id']), str(dirty['entity_key'])),
             ),
@@ -879,9 +893,10 @@ class TurnSearchProjectionRuntime:
                 session,
                 cursor=cursor,
                 candidates=session.fetch_all(
-                    "SELECT t.user_id,t.conversation_id,t.turn_id,"
-                    "length(t.projection_json) AS projection_units,"
-                    "t.turn_id AS candidate_cursor "
+                    'SELECT t.user_id,t.conversation_id,t.turn_id,'
+                    + _projection_units_expr(session, 't.projection_json')
+                    + ' AS projection_units,'
+                    't.turn_id AS candidate_cursor '
                     "FROM storage_conversation_turns AS t "
                     "WHERE t.user_id=? AND t.conversation_id=? "
                     "AND t.lane_id='main' "
@@ -926,8 +941,9 @@ class TurnSearchProjectionRuntime:
 
         def read(session: Session) -> dict[str, Any]:
             candidates = session.fetch_all(
-                "SELECT t.user_id,t.conversation_id,t.turn_id,"
-                "length(t.projection_json) AS projection_units "
+                'SELECT t.user_id,t.conversation_id,t.turn_id,'
+                + _projection_units_expr(session, 't.projection_json')
+                + ' AS projection_units '
                 "FROM storage_conversation_turns AS t "
                 "WHERE t.lane_id='main' "
                 "AND t.status NOT IN ('pending','running') AND ("

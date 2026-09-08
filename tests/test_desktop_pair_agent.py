@@ -262,11 +262,13 @@ def test_resume_alive_is_zero_action(monkeypatch):
         'http://srv:15000', 'tok')
 
 
-def test_resume_dead_repoints_and_keeps_token(monkeypatch):
+def test_resume_dead_repoints_to_authorized_candidate_and_keeps_token(monkeypatch):
     monkeypatch.setattr(_pair, 'probe_server',
-                        lambda url, timeout=0: (False, 'unreachable'))
+                        lambda url, timeout=0: (url == 'http://10.0.0.9:15000', ''))
+    monkeypatch.setattr(_pair, '_attach_candidates',
+                        lambda url: ['http://10.0.0.9:15000'])
     monkeypatch.setattr(_pair, 'discover',
-                        lambda log=None: 'http://10.0.0.9:15000')
+                        lambda log=None: pytest.fail('discovery is not authority'))
     import lib.desktop_agent.config as cfg
     saved = []
     monkeypatch.setattr(cfg, 'save_remote_server',
@@ -302,22 +304,17 @@ def test_resume_nothing_found_keeps_attachment(monkeypatch):
         'http://127.0.0.1:15000', 'tok')
 
 
-def test_resume_triggers_tunnel_rebuild(monkeypatch):
-    """The landmine itself: saved loopback is dead after reboot, the ladder
-    re-runs, and the tunnel that comes back up is registered to stay alive."""
+def test_resume_does_not_rebuild_arbitrary_discovered_tunnel(monkeypatch):
+    """A dead loopback attachment does not authorize another SSH host."""
     monkeypatch.setattr(_pair, 'probe_server',
                         lambda url, timeout=0: (False, 'unreachable'))
-    proc = _FakePopen([None])
-
-    def fake_discover(log=None):
-        _pair._ACTIVE_TUNNELS.append(proc)  # what try_ssh_tunnel does on a win
-        return 'http://127.0.0.1:15000'
-
-    monkeypatch.setattr(_pair, 'discover', fake_discover)
-    url, secret = _pair.resume_attachment('http://127.0.0.1:15000', 'tok')
-    assert (url, secret) == ('http://127.0.0.1:15000', 'tok')
-    assert proc in _pair._ACTIVE_TUNNELS and proc.killed is False
-    _pair._ACTIVE_TUNNELS.remove(proc)
+    monkeypatch.setattr(_pair, '_attach_candidates', lambda url: [])
+    monkeypatch.setattr(_pair, 'discover',
+                        lambda log=None: pytest.fail('must not discover a bearer destination'))
+    before = list(_pair._ACTIVE_TUNNELS)
+    assert _pair.resume_attachment('http://127.0.0.1:15000', 'tok') == (
+        'http://127.0.0.1:15000', 'tok')
+    assert _pair._ACTIVE_TUNNELS == before
 
 
 # ── tunnel local-port candidates (owner hardening ③) ─────────────────────

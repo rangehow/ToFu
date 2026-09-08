@@ -79,7 +79,28 @@ function hasSwarm(turn: TurnRecord | null | undefined): boolean {
     Boolean(round && (round._swarm || round.toolName === 'spawn_agents')));
 }
 
+function swarmSettled(round: TurnToolRound): boolean {
+  return Boolean((round._swarmSnapshot as { settled?: boolean } | undefined)?.settled);
+}
+
+function swarmRunId(round: TurnToolRound): string {
+  const snapshot = round._swarmSnapshot as { swarm_id?: string } | undefined;
+  if (snapshot?.swarm_id) return snapshot.swarm_id;
+  try {
+    const payload = JSON.parse(String(round.toolContent ?? '{}'));
+    const handle = Array.isArray(payload.items)
+      ? payload.items.find((item: { agents?: unknown }) => Array.isArray(item?.agents))
+      : payload;
+    return String(handle?.swarm_run_id ?? handle?.swarm_id ?? round.taskId ?? '');
+  } catch {
+    return String(round.taskId ?? '');
+  }
+}
+
 function sameSwarmRound(left: TurnToolRound, right: TurnToolRound): boolean {
+
+  if (left.taskId && right.taskId && left.taskId !== right.taskId) return false;
+  if (left.attemptId && right.attemptId && left.attemptId !== right.attemptId) return false;
   if (left.toolCallId && right.toolCallId) {
     return left.toolCallId === right.toolCallId;
   }
@@ -127,23 +148,30 @@ function rebindSegments(projection: TurnProjection): void {
   const mutable = projection as MutableProjection;
   if (!Array.isArray(mutable.segments)
       || !Array.isArray(mutable.toolRounds)) return;
-  const roundsByCallId = new Map<string, TurnToolRound>();
+  const roundsByCallId = new Map<string, TurnToolRound[]>();
+  const consumed = new Set<TurnToolRound>();
   for (const round of mutable.toolRounds) {
     const callId = String(round?.toolCallId ?? '');
-    if (callId && !roundsByCallId.has(callId)) {
-      roundsByCallId.set(callId, round);
-    }
+    if (!callId) continue;
+    const matches = roundsByCallId.get(callId) ?? [];
+    matches.push(round);
+    roundsByCallId.set(callId, matches);
   }
   mutable.segments = mutable.segments.map((segment) => {
     if (!segment || segment.type !== 'tool_use') return segment;
     const callId = String(segment.id ?? '');
-    // llmRound is attempt-local and repeats after continue/regenerate. A
-    // durable call ID is therefore exclusive authority; round fallback exists
-    // only for id-less legacy data and only when its scoped match is unique.
+    // Provider call IDs can repeat, even within an attempt. Consume ordered
+    // occurrences only in this segment's execution scope; never borrow from
+    // another attempt or fall back to llmRound for an unmatched call ID.
     const round = callId
-      ? roundsByCallId.get(callId)
+      ? roundsByCallId.get(callId)?.find((candidate) =>
+        !consumed.has(candidate) && sameExecutionScope(segment, candidate))
       : uniqueLegacyRound(segment, mutable.toolRounds ?? []);
-    return round ? { ...segment, _round: round } : segment;
+    if (round) {
+      consumed.add(round);
+      return { ...segment, _round: round };
+    }
+    return segment;
   });
 }
 
@@ -186,6 +214,14 @@ function rebase(
     let targetIndex = projection.toolRounds?.findIndex(
       (candidate) => sameSwarmRound(candidate, previousRound),
     ) ?? -1;
+    if (targetIndex < 0 && !previousRound.toolCallId) {
+      // A provisional push panel has no call ID. Bind only to a unique
+      // durable launch in its execution; wait/result tools are not launches.
+      const launches = (projection.toolRounds ?? []).filter((candidate) =>
+        candidate.toolName === 'spawn_agents'
+        && (!previousRound.taskId || candidate.taskId === previousRound.taskId));
+      if (launches.length === 1) targetIndex = projection.toolRounds!.indexOf(launches[0]);
+    }
     if (targetIndex < 0) {
       // A push can narrowly precede the authoritative spawning-tool revision.
       targetIndex = Math.min(
@@ -200,7 +236,7 @@ function rebase(
       continue;
     }
     const target = projection.toolRounds?.[targetIndex];
-    if (!target) continue;
+    if (!target || swarmSettled(target)) continue;
     const merged: TurnToolRound = { ...target };
     const previousFields = previousRound as Record<string, unknown>;
     const mergedFields = merged as Record<string, unknown>;
@@ -422,8 +458,28 @@ export function createSwarmPushPresentationController(
     frame: SwarmPushFrame,
   ): TurnRecord | null => {
     const turns = candidates(conversation);
-    const existing = turns.find((turn) => hasSwarm(turn));
+    const swarmId = String(frame.swarmId ?? frame.swarm_id ?? '');
+    const agentId = String(frame.agentId ?? '');
+    // A known terminal execution is not an unmatched new launch. Check the
+    // durable snapshot before the completed-Turn fallback (or stale overlays)
+    // can create another active panel. New run IDs still admit follow-up waves
+    // and pushes that precede the authoritative tool-start/result revision.
+    const durableState = ports.readTurnState(conversation.id);
+    if (swarmId && durableState && newestAssistantTurns(durableState).some((turn) =>
+      (turn.projection.toolRounds ?? []).some((round) =>
+        swarmSettled(round) && swarmRunId(round) === swarmId))) return null;
+    const ownsFrame = (round: TurnToolRound): boolean => {
+      const snapshot = round._swarmSnapshot as { swarm_id?: string; agents?: { id: string }[] } | undefined;
+      if (swarmId && swarmRunId(round) !== swarmId) return false;
+      if (swarmId && !agentId) return !swarmSettled(round)
+        && Boolean(round._swarm || round.toolName === 'spawn_agents');
+      if (agentId) return [...((round._swarmAgents ?? []) as { id: string }[]), ...(snapshot?.agents ?? [])]
+        .some((agent) => agent.id === agentId);
+      return Boolean(round._swarm || round.toolName === 'spawn_agents') && !swarmSettled(round) && !round._swarmEndTime;
+    };
+    const existing = turns.find((turn) => (turn.projection.toolRounds ?? []).some(ownsFrame));
     if (existing) return existing;
+    if (agentId) return null;
     if (frame.type === 'swarm_phase'
         && ['planning', 'spawning', 'spawn_more'].includes(frame.phase ?? '')) {
       return turns.find((turn) =>
@@ -460,7 +516,7 @@ export function createSwarmPushPresentationController(
           (assistantProjection) => {
             const context: SwarmPresentationContext = {
               convId: conversationId,
-              taskId: conversationId,
+              taskId: String(frame.swarmId ?? frame.swarm_id ?? frame.taskId ?? conversationId),
               assistantProjection,
             };
             if (frame.type === 'swarm_phase') {

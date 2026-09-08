@@ -30,6 +30,8 @@ export interface OfficialModel {
   /** Vendor release date (``YYYY-MM[-DD]``), stamped by public_projection when known. */
   release_date?: string | null;
   list_pricing?: ModelPricing;
+  /** Official-table price stamped by public_projection while list_pricing is absent. */
+  official_pricing?: ModelPricing;
   lifecycle?: 'stable' | 'preview' | 'dated_snapshot' | 'retired';
 }
 

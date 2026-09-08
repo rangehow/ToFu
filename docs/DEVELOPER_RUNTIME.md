@@ -228,29 +228,64 @@ does not persist or mutate the runtime default.
 Admission is bounded by `max_inflight`. Overload, configuration, timeout,
 closed-runtime, and execution failures retain distinct public exception types.
 
-## Harness compatibility and terminal safety
+### Terminal success and diagnostics
 
-`run`, `serve` and `doctor` default to `--harness-profile auto`. Auto supplies
-full native registry exposure only when the caller did not configure exposure;
-it preserves Tool Search, programmatic calling and permission settings.
-`off` preserves caller exposure. Explicit `longcat_flash` uses full exposure
-and disables discovery/programmatic routing, but never enables permissions.
-Auto recognizes LongCat model names; opaque checkpoint aliases require an
-explicit profile until trusted model-family metadata is available.
+`AgentResult.ok` and `tofu-agent run`'s JSON `ok`/exit status share the canonical
+turn verdict. `status=done` only means execution settled, not success. A normal
+finish (`stop`, `done`, `completed`, `end_turn`) with no error or conflicting
+stream evidence succeeds; missing finish, truncation, cancellation, malformed
+streams and exhausted recovery do not. A provider tool handoff is not complete
+at this autonomous-run boundary. Failures retain content, tool receipts, usage
+and verifier-independent trajectory artifacts; callers must not discard partial
+work or rewrite benchmark rewards merely because runtime health failed.
 
-Empty stops and tool terminal states without payload receive at most two
-recoveries per task, preserving tool receipts and forbidding whole-turn replay.
-Unquoted LongCat protocol packets only request native-tool reissue; they are
-never parsed into executable operations. Cancellation and pending approvals
-have precedence. Exhaustion is an abnormal stop, not successful completion.
+The result optionally carries `stream_state` and `stream_diagnostics`: at most
+16 recent per-request parser receipts with trace/round, provider finish and DONE
+observations, malformed-frame count, transport bytes, SSE events and output
+character/tool counts. These are not summed usage flags and contain no request
+bodies, credentials or provider text. They distinguish a positively terminated
+empty response from a cut/malformed stream; missing historical receipts cannot
+prove which upstream component caused a previous empty response.
+ATIF uses explicit current-run transcript provenance;
+legacy input-only snapshots rebuild current native tool receipts after the human
+request boundary, so historical tools neither suppress nor duplicate this run.
 
-Transient/strict-model compaction has a cumulative 60-second summary budget
-(configurable via `compaction.summaryBudgetSeconds`, capped at 120 seconds).
-It does not switch models or silently truncate after summary failure. Dispatch
-continues only if the intact prompt still fits; otherwise the failure is typed.
-Desktop response-header waits honor cancellation without device failover.
-Restricted project tools use task-scoped registered roots, including absolute
-paths; absent scope, outside paths and symlink escapes remain denied.
+Empty-terminal recovery adds one explicit correction to the preserved history
+per attempt and shares a two-recovery whole-task budget. It never rewinds tool
+receipts or retries the whole turn after side effects. Cancellation, pending
+human interaction and real stream cuts retain their own existing policies.
+
+### Harness compatibility defaults
+
+`tofu-agent run|serve|doctor --harness-profile auto|off|longcat_flash` defaults to
+`auto`. Auto defaults to registry-backed full native exposure, preserving explicit
+exposure, Tool Search and programmatic-calling settings. LongCat marker recovery
+is selected automatically for LongCat model names; other models' text is untouched.
+Empty-terminal recovery and workspace safety fixes apply to every model, even off. Python callers can use
+`AgentRuntime.local(harness_profile='longcat_flash')` (also supported by the
+constructor); each run may override the process default with
+`config={'harnessProfile': 'off'}` or `'longcat_flash'`.
+
+The explicit `longcat_flash` profile selects registry-backed full native exposure,
+disables Tool Search wrapping, and disables programmatic calling. Common coding
+tools (find/search/read/edit/write/command and background command controls) are
+therefore direct definitions from the same enabled registry, not copied schemas.
+This does not enable disabled capabilities, relax permissions, change execution
+scope, or bypass input validation. Existing schema budgets still apply.
+
+LongCat terminal text beginning with `<longcat_tool_call>` or
+`<longcat_arg_key>` is classified as invalid protocol for native-tool reissue.
+The observed format does **not** establish a safe complete call grammar, typed
+argument encoding, or replay identity: this profile never executes XML text,
+even apparently complete packets. Quoted examples, code fences and prose are
+not normalized; malformed or truncated packets are never guessed. Native calls
+in the same response take precedence and suppress text-driven reissue to avoid
+duplicating side effects. The shared termination recovery owner controls the
+whole-task budget (at most two recovery rounds), not this profile helper.
+
+Desktop-relayed streams propagate cancellation through response-header waiting.
+Cancellation closes the pending relay and escapes without trying another device;
+this also bounds that wait when the transient compaction budget expires.
 
 ## Lightweight HTTP/SSE contract
 
@@ -332,15 +367,20 @@ Model-access durability does not imply task durability.
 Minimum gates for a public runtime change are:
 
 ```bash
-python3 scripts/check_developer_runtime_artifacts.py
 pytest -q tests/test_agent_provider_setup.py tests/test_public_agent_runtime.py \
   tests/test_headless_agent_server.py
 pytest -q tests/test_inprocess_facade.py tests/test_sdk_sse_parser.py
 npm run build --prefix clients/typescript
 uvx --from build --with 'setuptools==80.10.2' --with 'wheel==0.48.0' \
   pyproject-build --no-isolation
-python3 scripts/check_developer_runtime_artifacts.py dist/tofu_agent-0.17.0-*.whl
+python3 scripts/check_developer_runtime_artifacts.py dist/tofu_agent-*.whl
 ```
+
+Build from a clean checkout or an isolated setuptools `build_base`; an old
+`build/lib` can leak previously packaged application modules despite current
+package exclusions. Validate the actual artifact before installation or release.
+Stream-terminal changes also run `tests/test_harness_stream_end_to_end.py`:
+loopback HTTP recovery and exhaustion must preserve each completed tool receipt.
 
 The clean-wheel smoke installs only the wheel outside the repository, checks
 that database drivers and full-app assets are absent while setup assets are

@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESEARCH_VIEW_TS = os.path.join(
-    ROOT, 'frontend', 'src', 'features', 'paper', 'research-view.ts')
+    ROOT, 'frontend', 'src', 'features', 'research', 'components', 'view.ts')
 ESBUILD = os.path.join(ROOT, 'scripts', 'vite_test_bundle.mjs')
 
 
@@ -75,7 +75,8 @@ def test_survey_grounds_against_loaded_corpus_not_mutable_folder(monkeypatch):
     monkeypatch.setattr(survey, '_load_paper_inputs', lambda *a, **k: [{
         'arxiv_id': '2502.00299', 'paper_hash': 'h', 'title': 'ChunkKV',
         'source': 'parsed_text', 'content': 'paper text'}])
-    monkeypatch.setattr(survey, '_synthesize_survey', lambda *a, **k: (
+    from tests.test_paper_survey import _hierarchy_dispatch
+    monkeypatch.setattr(survey, 'dispatch_stream', _hierarchy_dispatch(
         '# Survey arXiv:2502.00299',
         {'schema_version': 1, 'clusters': [], 'method_matrix': [],
          'open_gaps': [{'id': 'g1', 'gap': 'x',
@@ -90,7 +91,10 @@ def test_survey_grounds_against_loaded_corpus_not_mutable_folder(monkeypatch):
     gap = got['open_gaps']['open_gaps'][0]
     assert gap['evidence_tiers']['2502.00299'] == 'library'
     assert gap['library_evidence_count'] == 1
-    assert gap['low_confidence'] is False
+    assert gap['low_confidence'] is True  # loaded identity is not scientific entailment
+    assert gap['reference_verification']['support'] == 'insufficient'
+    assert gap['evidence_assessments']
+    assert all(row['status'] == 'insufficient' for row in gap['evidence_assessments'])
     assert got['open_gaps']['surveyed_arxiv_ids'] == ['2502.00299']
 
 
@@ -134,7 +138,7 @@ _researchStream=st; _paintResearch();
 console.log(JSON.stringify({phase:st.phase,rounds:st.toolRounds,
   html:document.getElementById('researchViewer').innerHTML}));
 """
-    built = native_module_path('paper/research-view.js', RESEARCH_VIEW_TS)
+    built = native_module_path('research/components/view.js', RESEARCH_VIEW_TS)
     proc = subprocess.run(['node', '-e', harness, ROOT, str(built)], capture_output=True,
                           text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
@@ -147,3 +151,91 @@ console.log(JSON.stringify({phase:st.phase,rounds:st.toolRounds,
     assert '4.25 / 5' in got['html']
     assert 'thin_matrix' in got['html']
     assert 'Require matrix rows' in got['html']
+
+
+def test_survey_checkpoint_restores_all_usage_without_double_charging(tmp_path, monkeypatch):
+    from lib.research.survey_hierarchy import BoundedCalls
+    from lib.research.telemetry import ResearchUsageMeter
+    import lib.research.telemetry as telemetry
+
+    monkeypatch.setattr(telemetry, 'compute_cost', lambda *a, **k: {
+        'costUsd': 0.01, 'costCny': 0.07, 'pricingSource': 'default_estimate'})
+    attempts = []
+
+    def dispatch(*args, **kwargs):
+        attempts.append(1)
+        return ({'content': '{"summary":"saved"}'}, 'stop', {
+            'prompt_tokens': 100, 'completion_tokens': 20,
+            'model': 'fixture-model'})
+
+    def caller():
+        return BoundedCalls(dispatch, json.loads, ResearchUsageMeter('survey'),
+                            direction='resume', user_id=1, workdir=tmp_path)
+
+    original = caller()
+    original('map', {'x': 1})
+    before = original.meter.snapshot()
+    assert before['calls'] == before['priced_calls'] == 1
+    assert before['prompt_tokens'] == 100
+    assert before['completion_tokens'] == 20
+    assert before['cost_usd'] == 0.01
+    resumed = caller()
+    assert resumed.meter.snapshot() == before
+    for _ in range(2):
+        resumed('map', {'x': 1})
+    assert resumed.meter.snapshot() == before
+    resumed('map', {'x': 2})
+    assert resumed.meter.calls == len(attempts) == 2
+    assert resumed.meter.agent_tokens == 240
+    assert caller().meter.snapshot() == resumed.meter.snapshot()
+
+
+def test_survey_checkpoint_concurrent_instances_share_admission(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+    from lib.research.survey_hierarchy import BoundedCalls
+    from lib.research.telemetry import ResearchUsageMeter
+
+    attempts = []
+
+    def dispatch(*args, **kwargs):
+        attempts.append(1)
+        time.sleep(0.03)
+        return ({'content': '{"summary":"saved"}'}, 'stop', {})
+
+    def caller():
+        return BoundedCalls(dispatch, json.loads,
+                            ResearchUsageMeter('survey', dispatch_budget=2),
+                            direction='concurrent', user_id=1, workdir=tmp_path)
+
+    callers = [caller() for _ in range(4)]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda call: call('map', {'x': 1}), callers))
+    assert results == [{'summary': 'saved'}] * 4
+    assert len(attempts) == 1
+    assert sum(call.cache_hits for call in callers) == 3
+    callers[0]('map', {'x': 2})
+    with pytest.raises(RuntimeError, match='budget exhausted'):
+        callers[1]('map', {'x': 3})
+    assert len(attempts) == 2
+    assert caller().meter.calls == 2
+
+
+def test_survey_checkpoint_accounts_failed_responses_on_resume(tmp_path):
+    from lib.research.survey_hierarchy import BoundedCalls
+    from lib.research.telemetry import ResearchUsageMeter
+
+    def dispatch(*args, **kwargs):
+        raise RuntimeError('provider unavailable')
+
+    def caller():
+        return BoundedCalls(dispatch, json.loads, ResearchUsageMeter('survey'),
+                            direction='failure', user_id=1, workdir=tmp_path)
+
+    original = caller()
+    with pytest.raises(RuntimeError, match='provider unavailable'):
+        original('map', {})
+    resumed = caller()
+    assert resumed.meter.calls == resumed.meter.agent_dispatches == 1
+    assert resumed.meter.snapshot() == original.meter.snapshot()
+    assert resumed.reserved_tokens == original.reserved_tokens > 0

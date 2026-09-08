@@ -207,7 +207,7 @@ def _generate_query_aware_summary(messages: list, current_query: str,
     their managed slots are streaming-only. ``usage_out`` is an optional
     mutable dict populated with the successful summary call's raw usage so a
     proactive caller can account for the cost before committing a rewrite.
-    ``anchor_text`` is the bounded verbatim view of the earliest-request
+    ``anchor_text`` is the literal text of the earliest-request
     anchor (pulled out of the lossy region for live re-insertion, so the
     model would not see it otherwise); ``current_query`` is the newest user
     message, which lives in the preserved region rather than the summary

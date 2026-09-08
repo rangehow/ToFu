@@ -194,23 +194,21 @@ def test_model_authored_objective_is_never_overwritten():
         'Rewrite the report as a press release.')
 
 
-def test_missing_objective_section_falls_back_to_anchor():
+def test_missing_objective_does_not_invent_current_goal_from_opener():
     rendered = _ensure_summary_objective(
         '### Pending / Next Steps\nRetry SSO.',
         anchor_text='Download two skills and improve both MCP tools.')
 
-    assert rendered.startswith(
-        '### Objective\nDownload two skills and improve both MCP tools.')
+    assert _extract_summary_objective(rendered) == ''
     assert '### Pending / Next Steps\nRetry SSO.' in rendered
 
 
-def test_empty_objective_body_falls_back_to_anchor():
+def test_empty_objective_does_not_restore_stale_opener():
     rendered = _ensure_summary_objective(
         '### Objective\n\n### Pending / Next Steps\nRetry SSO.',
         anchor_text='Download two skills and improve both MCP tools.')
 
-    assert rendered.startswith(
-        '### Objective\nDownload two skills and improve both MCP tools.')
+    assert _extract_summary_objective(rendered) == ''
     assert '### Pending / Next Steps\nRetry SSO.' in rendered
 
 
@@ -228,7 +226,7 @@ def test_empty_objective_accepts_verbatim_replacement_syntax(anchor):
         anchor_text=anchor,
     )
 
-    assert _extract_summary_objective(rendered) == anchor
+    assert _extract_summary_objective(rendered) == ''
     assert '### Pending / Next Steps\nKeep working.' in rendered
 
 
@@ -245,10 +243,10 @@ def test_current_query_takes_the_newest_user_turn():
     assert _extract_current_query(msgs) == 'newest'
 
 
-def test_current_query_joins_text_blocks_and_truncates():
+def test_current_query_joins_text_blocks_without_losing_late_steering():
     msgs = [_u([{'type': 'text', 'text': 'a'}, {'type': 'text', 'text': 'b'}])]
     assert _extract_current_query(msgs) == 'a\nb'
-    assert len(_extract_current_query([_u('x' * 5000)])) == 500
+    assert _extract_current_query([_u('x' * 5000 + 'STOP')]).endswith('STOP')
 
 
 def test_current_query_empty_when_no_user_turn():

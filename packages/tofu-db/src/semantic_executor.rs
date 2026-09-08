@@ -47,6 +47,12 @@ use crate::transaction_ir::{
 };
 use crate::turn_search_projection::{ConversationSearchRequest, TurnSearchProjection};
 
+#[path = "semantic_search_backfill.rs"]
+pub(crate) mod search_backfill;
+
+#[path = "semantic_search_backfill_global.rs"]
+pub(crate) mod search_backfill_global;
+
 const DESKTOP_PREFERENCE_KEY: &[u8] = b"preference";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -824,9 +830,106 @@ fn compile_turn(
             command_effects: None,
         });
     }
+    if admitted.operation.name == "turn.search.backfill" {
+        // This command schedules a GLOBAL rebuild by enumerating real
+        // tenant/owner authorization scopes; it must never degenerate into
+        // an authenticated-owner rebuild, so any payload identity fails
+        // closed instead of narrowing or widening the sweep.
+        if let Some(value) = payload.get("user_id") {
+            if value.as_u64() != Some(admitted.request.owner_id) {
+                return Err(SemanticExecutionError::AuthorityScopeMismatch);
+            }
+            return Err(SemanticExecutionError::InvalidPayload);
+        }
+        if let Some(value) = payload.get("tenant_id") {
+            if value.as_u64() != Some(tenant_id) {
+                return Err(SemanticExecutionError::AuthorityScopeMismatch);
+            }
+            return Err(SemanticExecutionError::InvalidPayload);
+        }
+        let cursor = match payload.get("cursor") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::String(value))
+                if value.chars().count()
+                    <= search_backfill_global::MAX_GLOBAL_BACKFILL_CURSOR_BYTES =>
+            {
+                value.as_bytes().to_vec()
+            }
+            _ => return Err(SemanticExecutionError::InvalidPayload),
+        };
+        let max_rows = usize::try_from(optional_nonnegative_integer(&payload, "max_rows", 8)?)
+            .ok()
+            .filter(|limit| {
+                (1..=search_backfill_global::MAX_GLOBAL_BACKFILL_CLAIM_ROWS_PER_TRANSACTION)
+                    .contains(limit)
+            })
+            .ok_or(SemanticExecutionError::InvalidPayload)?;
+        let max_bytes = usize::try_from(optional_nonnegative_integer(
+            &payload,
+            "max_bytes",
+            2_000_000,
+        )?)
+        .ok()
+        .filter(|limit| {
+            (1..=search_backfill_global::MAX_GLOBAL_BACKFILL_SOURCE_BYTES_PER_TRANSACTION)
+                .contains(limit)
+        })
+        .ok_or(SemanticExecutionError::InvalidPayload)?;
+        return Ok(TransactionIr {
+            tenant_id,
+            owner_user_id: crate::conversation_header::TENANT_GLOBAL_OWNER_ID,
+            operation: admitted.operation.name,
+            operation_kind: admitted.operation.kind,
+            steps: vec![TransactionIrStep::TurnSearchBackfillGlobal {
+                request: search_backfill_global::GlobalBackfillRequest {
+                    cursor,
+                    max_rows,
+                    max_bytes,
+                },
+                slot: 0,
+            }],
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing:
+                    br#"{"scanned":0,"indexed":0,"failed":0,"nextCursor":"","remaining":false}"#
+                        .to_vec(),
+            },
+            command_effects: Some(command_effects(admitted, &payload, now_unix_ms)?),
+        });
+    }
     let user_id = positive_identity(&payload, "user_id")?;
     if user_id != admitted.request.owner_id {
         return Err(SemanticExecutionError::AuthorityScopeMismatch);
+    }
+    if admitted.operation.name == "turn.cleanup" {
+        let retention_ms =
+            optional_nonnegative_integer(&payload, "retention_ms", 6 * 60 * 60 * 1_000)?;
+        let limit = usize::try_from(optional_nonnegative_integer(&payload, "limit", 64)?)
+            .ok()
+            .filter(|limit| {
+                (1..=crate::generated_tofudb_ir::MAX_CLEANUP_ATTEMPTS_PER_TRANSACTION)
+                    .contains(limit)
+            })
+            .ok_or(SemanticExecutionError::InvalidPayload)?;
+        return Ok(TransactionIr {
+            tenant_id,
+            owner_user_id: user_id,
+            operation: admitted.operation.name,
+            operation_kind: admitted.operation.kind,
+            steps: vec![TransactionIrStep::TurnCleanup {
+                request: crate::turn::CleanupRequest {
+                    retention_ms,
+                    limit,
+                    now_ms: now_unix_ms,
+                },
+                slot: 0,
+            }],
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: b"null".to_vec(),
+            },
+            command_effects: Some(command_effects(admitted, &payload, now_unix_ms)?),
+        });
     }
     if admitted.operation.name == "turn.compact" {
         let conversation_id = required_text(&payload, "conversation_id", 256)?.to_owned();
@@ -1298,6 +1401,10 @@ fn compile_turn(
             operation_kind: admitted.operation.kind,
             steps: vec![TransactionIrStep::TurnEventRecord {
                 request: crate::turn::EventRecordRequest {
+                    model_continuation: payload
+                        .get("model_continuation")
+                        .cloned()
+                        .unwrap_or(Value::Null),
                     attempt_id,
                     task_id,
                     terminal,
@@ -2781,10 +2888,10 @@ fn compile_project_relink(
         .request
         .tenant_id
         .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?;
-    let old_path = required_text(&payload, "old_path", MAX_RECENT_PROJECT_PATH_CHARACTERS)?
-        .to_owned();
-    let new_path = required_text(&payload, "new_path", MAX_RECENT_PROJECT_PATH_CHARACTERS)?
-        .to_owned();
+    let old_path =
+        required_text(&payload, "old_path", MAX_RECENT_PROJECT_PATH_CHARACTERS)?.to_owned();
+    let new_path =
+        required_text(&payload, "new_path", MAX_RECENT_PROJECT_PATH_CHARACTERS)?.to_owned();
     if old_path == new_path {
         return Err(SemanticExecutionError::InvalidPayload);
     }
@@ -3560,12 +3667,10 @@ fn compile_paper_library(
     if owner_user_id != admitted.request.owner_id {
         return Err(SemanticExecutionError::AuthorityScopeMismatch);
     }
-    let optional_text = |field: &str, default: &str, maximum: usize| {
-        match payload.get(field) {
-            None => Ok(default.to_owned()),
-            Some(Value::String(value)) if value.chars().count() <= maximum => Ok(value.clone()),
-            _ => Err(SemanticExecutionError::InvalidPayload),
-        }
+    let optional_text = |field: &str, default: &str, maximum: usize| match payload.get(field) {
+        None => Ok(default.to_owned()),
+        Some(Value::String(value)) if value.chars().count() <= maximum => Ok(value.clone()),
+        _ => Err(SemanticExecutionError::InvalidPayload),
     };
     let unsigned = |field: &str, default: Option<u64>| {
         payload
@@ -3576,26 +3681,26 @@ fn compile_paper_library(
             .ok_or(SemanticExecutionError::InvalidPayload)
     };
     let request = match admitted.operation.name {
-        "paper.library.put" => crate::paper_library::Request::Put(Box::new(
-            crate::paper_library::PaperPut {
-            paper_id: required_text(&payload, "id", 256)?.to_owned(),
-            title: optional_text("title", "", 1_000)?,
-            pdf_url: optional_text("pdf_url", "", 10_000)?,
-            pdf_filename: optional_text("pdf_filename", "", 2_000)?,
-            arxiv_id: optional_text("arxiv_id", "", 256)?,
-            paper_hash: optional_text("paper_hash", "", 128)?,
-            parsed_text: optional_text("parsed_text", "", 20_000_000)?,
-            parser_version: optional_text("parser_version", "", 256)?,
-            qa_history_json: optional_text("qa_history", "[]", 10_000_000)?,
-            images_json: optional_text("images", "[]", 10_000_000)?,
-            babel_cache_json: optional_text("babel_cache", "{}", 10_000_000)?,
-            page_count: unsigned("page_count", Some(0))?,
-            folder_id: optional_text("folder_id", "", 512)?,
-            created_at: unsigned("created_at", None)?,
-            updated_at: unsigned("updated_at", None)?,
+        "paper.library.put" => {
+            crate::paper_library::Request::Put(Box::new(crate::paper_library::PaperPut {
+                paper_id: required_text(&payload, "id", 256)?.to_owned(),
+                title: optional_text("title", "", 1_000)?,
+                pdf_url: optional_text("pdf_url", "", 10_000)?,
+                pdf_filename: optional_text("pdf_filename", "", 2_000)?,
+                arxiv_id: optional_text("arxiv_id", "", 256)?,
+                paper_hash: optional_text("paper_hash", "", 128)?,
+                parsed_text: optional_text("parsed_text", "", 20_000_000)?,
+                parser_version: optional_text("parser_version", "", 256)?,
+                qa_history_json: optional_text("qa_history", "[]", 10_000_000)?,
+                images_json: optional_text("images", "[]", 10_000_000)?,
+                babel_cache_json: optional_text("babel_cache", "{}", 10_000_000)?,
+                page_count: unsigned("page_count", Some(0))?,
+                folder_id: optional_text("folder_id", "", 512)?,
+                created_at: unsigned("created_at", None)?,
+                updated_at: unsigned("updated_at", None)?,
                 physical_updated_at_ms: now_unix_ms,
-            },
-        )),
+            }))
+        }
         "paper.library.delete" => crate::paper_library::Request::Delete {
             paper_id: required_text(&payload, "id", 256)?.to_owned(),
         },
@@ -3604,11 +3709,9 @@ fn compile_paper_library(
             limit: usize::try_from(unsigned("limit", Some(40))?)
                 .map_err(|_| SemanticExecutionError::InvalidPayload)?,
         },
-        "paper.library.list" | "paper.library.summaries" => {
-            crate::paper_library::Request::List {
-                summaries_only: admitted.operation.name.ends_with("summaries"),
-            }
-        }
+        "paper.library.list" | "paper.library.summaries" => crate::paper_library::Request::List {
+            summaries_only: admitted.operation.name.ends_with("summaries"),
+        },
         "paper.library.get" | "paper.library.reader" => crate::paper_library::Request::Get {
             paper_id: required_text(&payload, "id", 256)?.to_owned(),
             include_babel_cache: admitted.operation.name.ends_with("get"),
@@ -3648,7 +3751,9 @@ fn compile_paper_library(
                 None | Some(Value::Null) => None,
                 Some(value) => Some(
                     usize::try_from(
-                        value.as_u64().ok_or(SemanticExecutionError::InvalidPayload)?,
+                        value
+                            .as_u64()
+                            .ok_or(SemanticExecutionError::InvalidPayload)?,
                     )
                     .map_err(|_| SemanticExecutionError::InvalidPayload)?,
                 ),
@@ -4082,12 +4187,10 @@ fn compile_knowledge(
     };
     let document_id = || required_text(&payload, "document_id", 128).map(str::to_owned);
     let window = |offset_default: u64| {
-        Ok::<(u64, u64), SemanticExecutionError>(
-            (
-                optional_nonnegative_integer(&payload, "offset", offset_default)?,
-                bounded_integer("limit", 80, 1..=200)?,
-            ),
-        )
+        Ok::<(u64, u64), SemanticExecutionError>((
+            optional_nonnegative_integer(&payload, "offset", offset_default)?,
+            bounded_integer("limit", 80, 1..=200)?,
+        ))
     };
     if name == "knowledge.search.candidates" {
         let raw_tokens = match payload.get("tokens") {
@@ -4097,9 +4200,10 @@ fn compile_knowledge(
         let mut tokens = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for value in raw_tokens.iter().take(32) {
-            let Some(raw) = value.as_str().filter(|raw| {
-                !raw.is_empty() && raw.chars().count() <= 128
-            }) else {
+            let Some(raw) = value
+                .as_str()
+                .filter(|raw| !raw.is_empty() && raw.chars().count() <= 128)
+            else {
                 return Err(SemanticExecutionError::InvalidPayload);
             };
             let folded = crate::artifact::python_casefold(raw);
@@ -4199,9 +4303,11 @@ fn compile_knowledge(
                 now_unix_ms,
             }
         }
-        "knowledge.document.find_digest" => crate::knowledge::KnowledgeRequest::DocumentFindDigest {
-            sha256: required_text(&payload, "sha256", 64)?.to_ascii_lowercase(),
-        },
+        "knowledge.document.find_digest" => {
+            crate::knowledge::KnowledgeRequest::DocumentFindDigest {
+                sha256: required_text(&payload, "sha256", 64)?.to_ascii_lowercase(),
+            }
+        }
         "knowledge.document.create" | "knowledge.document.replace" => {
             let document = crate::knowledge::validate_document(
                 payload
@@ -4210,9 +4316,9 @@ fn compile_knowledge(
             )
             .map_err(map_storage_error)?;
             if name == "knowledge.document.create" {
-            if required_text(&payload, "document_id", 128)? != document.id {
-                return Err(SemanticExecutionError::InvalidPayload);
-            }
+                if required_text(&payload, "document_id", 128)? != document.id {
+                    return Err(SemanticExecutionError::InvalidPayload);
+                }
                 crate::knowledge::KnowledgeRequest::DocumentCreate {
                     document,
                     now_unix_ms,
@@ -4244,9 +4350,7 @@ fn compile_knowledge(
         "knowledge.asset.get" => crate::knowledge::KnowledgeRequest::AssetGet {
             asset_id: required_text(&payload, "asset_id", 128)?.to_owned(),
         },
-        "knowledge.enrichment.activity" => {
-            crate::knowledge::KnowledgeRequest::EnrichmentActivity
-        }
+        "knowledge.enrichment.activity" => crate::knowledge::KnowledgeRequest::EnrichmentActivity,
         "knowledge.enrichment.owners" => crate::knowledge::KnowledgeRequest::EnrichmentOwners {
             limit: bounded_integer("limit", 512, 1..=512)?,
         },
@@ -5299,6 +5403,27 @@ fn compile_queue(
         "queue.clear" => crate::queue::Request::Clear {
             conversation_id: conversation_id()?,
         },
+        "queue.injection.ack" => {
+            let mut queue_ids = match payload.get("queue_ids") {
+                Some(Value::Array(values)) if values.len() <= 256 => values
+                    .iter()
+                    .map(|value| match value {
+                        Value::String(text) if !text.is_empty() && text.chars().count() <= 256 => {
+                            Ok(text.clone())
+                        }
+                        _ => Err(SemanticExecutionError::InvalidPayload),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                _ => return Err(SemanticExecutionError::InvalidPayload),
+            };
+            queue_ids.sort();
+            queue_ids.dedup();
+            crate::queue::Request::InjectionAck {
+                conversation_id: conversation_id()?,
+                queue_ids,
+                occurred_at_ms: now_unix_ms,
+            }
+        }
         "queue.kind.clear" => crate::queue::Request::KindClear {
             conversation_id: conversation_id()?,
             kind: queue_kind(true)?,
@@ -6889,6 +7014,64 @@ fn provider_physical_milliseconds(value: f64) -> u64 {
     ((value * 1_000.0) as u64).max(1)
 }
 
+fn compile_model_continuation(
+    admitted: AdmittedRequest<'_>,
+    now_unix_ms: u64,
+) -> Result<TransactionIr, SemanticExecutionError> {
+    let payload = payload_object(&admitted.request.payload)?;
+    let user_id = positive_identity(&payload, "user_id")?;
+    if user_id != admitted.request.owner_id {
+        return Err(SemanticExecutionError::AuthorityScopeMismatch);
+    }
+    let tenant_id = admitted
+        .request
+        .tenant_id
+        .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?;
+    let conversation_id = required_text(&payload, "conversation_id", 256)?.to_owned();
+    let lane_id = required_text(&payload, "lane_id", 256)?.to_owned();
+    let request = match admitted.operation.name {
+        "model_continuation.get" => crate::model_continuation::Request::Get {
+            conversation_id,
+            lane_id,
+        },
+        "model_continuation.put" => {
+            let projection = payload
+                .get("projection")
+                .and_then(Value::as_object)
+                .cloned()
+                .ok_or(SemanticExecutionError::InvalidPayload)?;
+            crate::model_continuation::Request::Put {
+                conversation_id,
+                lane_id,
+                projection,
+                updated_at_ms: now_unix_ms,
+            }
+        }
+        "model_continuation.delete" => crate::model_continuation::Request::Delete {
+            conversation_id,
+            lane_id,
+        },
+        _ => return Err(SemanticExecutionError::UnsupportedOperation),
+    };
+    let command_effects = admitted
+        .operation
+        .kind
+        .mutates_state()
+        .then(|| command_effects(admitted, &payload, now_unix_ms))
+        .transpose()?;
+    Ok(TransactionIr {
+        tenant_id,
+        owner_user_id: user_id,
+        operation: admitted.operation.name,
+        operation_kind: admitted.operation.kind,
+        steps: vec![TransactionIrStep::ModelContinuation { request, slot: 0 }],
+        result: TransactionIrResult::SlotOrLiteral {
+            slot: 0,
+            missing: b"null".to_vec(),
+        },
+        command_effects,
+    })
+}
 fn compile_model_routing(
     admitted: AdmittedRequest<'_>,
     now_unix_ms: u64,
@@ -8966,6 +9149,8 @@ fn execute_admitted_request_inner(
         compile_conversation(admitted, now_unix_ms)?
     } else if admitted.operation.name.starts_with("turn.") {
         compile_turn(admitted, now_unix_ms)?
+    } else if admitted.operation.name.starts_with("model_continuation.") {
+        compile_model_continuation(admitted, now_unix_ms)?
     } else if admitted.operation.name.starts_with("model_routing.") {
         compile_model_routing(admitted, now_unix_ms)?
     } else if admitted.operation.name.starts_with("provider.") {
@@ -9147,6 +9332,577 @@ mod tests {
     }
 
     #[test]
+    fn turn_cleanup_is_bounded_owner_scoped_receipted_and_reference_safe() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        // A superseded Attempt that is still its Turn's current attempt is
+        // referenced and must survive every cleanup round.
+        let seeded = execute(
+            &mut database,
+            &request(
+                "turn.append_settled",
+                11,
+                json!({
+                    "conversation_id": "cleanup-conversation",
+                    "user_id": 11,
+                    "command_id": "cleanup-seed",
+                    "actor": "assistant",
+                    "kind": "reply",
+                    "status": "superseded",
+                    "projection": {"content": "stale answer"},
+                    "settlement": {"outcome": "superseded", "cause": "regenerate", "resumeOptions": []},
+                    "turn_id": "cleanup-turn",
+                    "conversation_defaults": {"allowCreate": true, "title": "Cleanup"},
+                    "now": 1_000
+                }),
+                Some("cleanup-seed-receipt"),
+            ),
+            1_000,
+        )
+        .unwrap();
+        let superseded_attempt_id = seeded["attempt"]["attemptId"].as_str().unwrap().to_owned();
+        let cleanup_payload =
+            |retention_ms: u64| json!({"user_id": 11, "retention_ms": retention_ms, "limit": 8});
+
+        // The retention fence rejects candidates newer than the cutoff before
+        // any deletion is considered.
+        let retained = execute(
+            &mut database,
+            &request(
+                "turn.cleanup",
+                11,
+                cleanup_payload(10_000),
+                Some("cleanup-retained"),
+            ),
+            2_000,
+        )
+        .unwrap();
+        assert_eq!(retained["deletedAttempts"], 0);
+        assert_eq!(retained["moreCandidates"], false);
+        // An aged-out candidate is still fenced while a live Turn references
+        // it as its current attempt.
+        let referenced = execute(
+            &mut database,
+            &request(
+                "turn.cleanup",
+                11,
+                cleanup_payload(0),
+                Some("cleanup-referenced"),
+            ),
+            2_000,
+        )
+        .unwrap();
+        assert_eq!(referenced["deletedAttempts"], 0);
+        assert_eq!(referenced["skippedAttempts"], 1);
+
+        // Regeneration installs a fresh current Attempt; the superseded one
+        // is no longer referenced and becomes eligible.
+        let regenerated = execute(
+            &mut database,
+            &request(
+                "turn.attempt.create",
+                11,
+                json!({
+                    "conversation_id": "cleanup-conversation",
+                    "turn_id": "cleanup-turn",
+                    "user_id": 11,
+                    "command_id": "cleanup-regenerate",
+                    "operation": "regenerate",
+                    "target_actor": "assistant",
+                    "target_kind": "reply",
+                    "expected_projection_revision": 1,
+                    "config": {"model": "cleanup-model"}
+                }),
+                Some("cleanup-regenerate-receipt"),
+            ),
+            3_000,
+        )
+        .unwrap();
+        let current_attempt_id = regenerated["attempt"]["attemptId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(current_attempt_id, superseded_attempt_id);
+
+        let cleanup_request = request(
+            "turn.cleanup",
+            11,
+            cleanup_payload(0),
+            Some("cleanup-round-1"),
+        );
+        let cleaned = execute(&mut database, &cleanup_request, 4_000).unwrap();
+        assert_eq!(cleaned["deletedAttempts"], 1);
+        assert_eq!(cleaned["deletedAttemptIds"], json!([superseded_attempt_id]));
+        assert_eq!(cleaned["skippedAttempts"], 0);
+        assert_eq!(cleaned["moreCandidates"], false);
+        assert_eq!(cleaned["backend"], "tofu-db");
+        // The stored receipt makes the lost-ACK replay exact instead of
+        // re-executing the bounded deletion.
+        assert_eq!(
+            execute(&mut database, &cleanup_request, 9_000).unwrap(),
+            cleaned
+        );
+        let drained = execute(
+            &mut database,
+            &request(
+                "turn.cleanup",
+                11,
+                cleanup_payload(0),
+                Some("cleanup-round-2"),
+            ),
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(drained["deletedAttempts"], 0);
+        assert_eq!(drained["scannedIndexEntries"], 0);
+
+        // The Turn and its live Attempt are untouched; the deleted Attempt is
+        // gone while its tenant-global identity claim stays fenced.
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "turn.attempt.get",
+                    11,
+                    json!({"attempt_id": superseded_attempt_id, "user_id": 11}),
+                    None,
+                ),
+                5_001,
+            )
+            .unwrap(),
+            Value::Null,
+        );
+        let turn = execute(
+            &mut database,
+            &request(
+                "turn.get",
+                11,
+                json!({
+                    "conversation_id": "cleanup-conversation",
+                    "turn_id": "cleanup-turn",
+                    "user_id": 11
+                }),
+                None,
+            ),
+            5_002,
+        )
+        .unwrap();
+        assert_eq!(turn["currentAttemptId"], json!(current_attempt_id));
+        assert_eq!(turn["status"], "pending");
+
+        // Owner scoping and payload bounds fail before any deletion.
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "turn.cleanup",
+                    11,
+                    json!({"user_id": 12, "retention_ms": 0}),
+                    Some("cleanup-foreign-payload"),
+                ),
+                6_000,
+            )
+            .unwrap_err(),
+            SemanticExecutionError::AuthorityScopeMismatch,
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "turn.cleanup",
+                    11,
+                    json!({"user_id": 11, "limit": 5000}),
+                    Some("cleanup-too-wide"),
+                ),
+                6_000,
+            )
+            .unwrap_err(),
+            SemanticExecutionError::InvalidPayload,
+        );
+        let foreign = execute(
+            &mut database,
+            &request(
+                "turn.cleanup",
+                12,
+                json!({"user_id": 12, "retention_ms": 0}),
+                Some("cleanup-other-owner"),
+            ),
+            6_001,
+        )
+        .unwrap();
+        assert_eq!(foreign["deletedAttempts"], 0);
+        assert_eq!(foreign["scannedIndexEntries"], 0);
+    }
+
+    fn seeded_cleanup_scenario(
+        vfs: std::sync::Arc<DeterministicVfs>,
+    ) -> (AuthorityDatabase, String, String, Request) {
+        let mut database = simulated_database(vfs);
+        let pair = execute(
+            &mut database,
+            &request(
+                "turn.create_pair",
+                11,
+                json!({
+                    "conversation_id": "cleanup-fault-conversation",
+                    "user_id": 11,
+                    "command_id": "cleanup-fault-pair",
+                    "input_projection": {"content": "question"},
+                    "conversation_defaults": {"allowCreate": true},
+                    "now": 1_000
+                }),
+                Some("cleanup-fault-pair-receipt"),
+            ),
+            1_000,
+        )
+        .unwrap();
+        let superseded_attempt_id = pair["attempt"]["attemptId"].as_str().unwrap().to_owned();
+        let turn_id = pair["turn"]["turnId"].as_str().unwrap().to_owned();
+        let settled = execute(
+            &mut database,
+            &request(
+                "turn.event.record",
+                11,
+                json!({
+                    "attempt_id": superseded_attempt_id,
+                    "user_id": 11,
+                    "terminal": true,
+                    "status": "superseded",
+                    "settlement": {"outcome": "superseded", "cause": "regenerate", "resumeOptions": []},
+                    "now": 2_000
+                }),
+                Some("cleanup-fault-settle"),
+            ),
+            2_000,
+        )
+        .unwrap();
+        assert_eq!(settled["applied"], true);
+        let regenerated = execute(
+            &mut database,
+            &request(
+                "turn.attempt.create",
+                11,
+                json!({
+                    "conversation_id": "cleanup-fault-conversation",
+                    "turn_id": turn_id,
+                    "user_id": 11,
+                    "command_id": "cleanup-fault-regenerate",
+                    "operation": "regenerate",
+                    "target_actor": "assistant",
+                    "target_kind": "reply",
+                    "expected_projection_revision": 2,
+                    "config": {"model": "cleanup-fault-model"}
+                }),
+                Some("cleanup-fault-regenerate-receipt"),
+            ),
+            3_000,
+        )
+        .unwrap();
+        let current_attempt_id = regenerated["attempt"]["attemptId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // The terminal settlement's replay envelope fences the superseded
+        // Attempt through an exact sync reference; only expiring that replay
+        // data releases the fence and makes cleanup eligible.
+        let pruned = execute(
+            &mut database,
+            &request(
+                "turn.sync.prune",
+                11,
+                json!({"user_id": 11, "created_before_ms": 4_000, "max_rows": 512}),
+                Some("cleanup-fault-sync-prune"),
+            ),
+            3_500,
+        )
+        .unwrap();
+        assert!(pruned["deletedRows"].as_u64().unwrap() >= 1);
+        let command = request(
+            "turn.cleanup",
+            11,
+            json!({"user_id": 11, "retention_ms": 0, "limit": 8}),
+            Some("cleanup-fault-round"),
+        );
+        (database, superseded_attempt_id, current_attempt_id, command)
+    }
+
+    fn assert_turn_cleanup_replay_converges(
+        vfs: std::sync::Arc<DeterministicVfs>,
+        command: &Request,
+        superseded_attempt_id: &str,
+        current_attempt_id: &str,
+    ) {
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let mut recovered =
+            AuthorityDatabase::open_with_vfs(std::path::Path::new("/data"), vfs).unwrap();
+        recovered
+            .configure_logical_outbox(&[72; 32], 1024 * 1024, 128 * 1024)
+            .unwrap();
+        // Whether the faulted commit landed or not, replay converges to one
+        // complete cleanup: either the stored receipt or one re-execution.
+        let replayed = execute(&mut recovered, command, 4_000).unwrap();
+        assert_eq!(replayed["deletedAttempts"], 1);
+        assert_eq!(
+            execute(
+                &mut recovered,
+                &request(
+                    "turn.attempt.get",
+                    11,
+                    json!({"attempt_id": superseded_attempt_id, "user_id": 11}),
+                    None,
+                ),
+                4_001,
+            )
+            .unwrap(),
+            Value::Null,
+        );
+        assert_eq!(
+            execute(
+                &mut recovered,
+                &request(
+                    "turn.attempt.get",
+                    11,
+                    json!({"attempt_id": current_attempt_id, "user_id": 11}),
+                    None,
+                ),
+                4_002,
+            )
+            .unwrap()["attemptId"],
+            json!(current_attempt_id),
+        );
+        let drained = execute(
+            &mut recovered,
+            &request(
+                "turn.cleanup",
+                11,
+                json!({"user_id": 11, "retention_ms": 0, "limit": 8}),
+                Some("cleanup-fault-drain"),
+            ),
+            4_003,
+        )
+        .unwrap();
+        assert_eq!(drained["deletedAttempts"], 0);
+    }
+
+    #[test]
+    fn every_turn_cleanup_commit_fault_recovers_attempt_and_turn_atomically() {
+        let baseline_vfs = prepared_vfs();
+        let (mut baseline, _, _, command) = seeded_cleanup_scenario(baseline_vfs.clone());
+        execute(&mut baseline, &command, 4_000).unwrap();
+        let trace = baseline_vfs.trace().unwrap();
+        drop(baseline);
+
+        for operation_number in 1..=trace.len() as u64 {
+            let vfs = prepared_vfs();
+            let (mut database, superseded_attempt_id, current_attempt_id, command) =
+                seeded_cleanup_scenario(vfs.clone());
+            vfs.arm_fault(Some(FaultRule {
+                operation_number,
+                action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+            }))
+            .unwrap();
+            let _ = execute(&mut database, &command, 4_000);
+            drop(database);
+            assert_turn_cleanup_replay_converges(
+                vfs,
+                &command,
+                &superseded_attempt_id,
+                &current_attempt_id,
+            );
+        }
+        for (index, operation) in trace.iter().enumerate() {
+            if operation != &Operation::Write {
+                continue;
+            }
+            let vfs = prepared_vfs();
+            let (mut database, superseded_attempt_id, current_attempt_id, command) =
+                seeded_cleanup_scenario(vfs.clone());
+            vfs.arm_fault(Some(FaultRule {
+                operation_number: index as u64 + 1,
+                action: FaultAction::ShortWrite(7),
+            }))
+            .unwrap();
+            let _ = execute(&mut database, &command, 4_000);
+            drop(database);
+            assert_turn_cleanup_replay_converges(
+                vfs,
+                &command,
+                &superseded_attempt_id,
+                &current_attempt_id,
+            );
+        }
+    }
+
+    #[test]
+    fn turn_search_backfill_rejects_owner_scoped_payloads_without_authority_io() {
+        // A global rebuild must never be disguised as, or narrowed into, an
+        // authenticated-owner rebuild: any payload identity fails closed
+        // before touching storage.
+        let vfs = std::sync::Arc::new(DeterministicVfs::new(None));
+        vfs.create_dir(std::path::Path::new("/data")).unwrap();
+        vfs.sync_directory(std::path::Path::new("/")).unwrap();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone())
+                .unwrap();
+        vfs.arm_fault(None).unwrap();
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "turn.search.backfill",
+                    11,
+                    json!({"user_id": 13, "cursor": "", "max_rows": 8}),
+                    Some("backfill-foreign-owner"),
+                ),
+                1_000,
+            ),
+            Err(SemanticExecutionError::AuthorityScopeMismatch),
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "turn.search.backfill",
+                    11,
+                    json!({"tenant_id": 8}),
+                    Some("backfill-foreign-tenant"),
+                ),
+                1_000,
+            ),
+            Err(SemanticExecutionError::AuthorityScopeMismatch),
+        );
+        for payload in [
+            json!({"user_id": 11}),
+            json!({"tenant_id": 7}),
+            json!({"cursor": "x".repeat(1025)}),
+            json!({"max_rows": 0}),
+            json!({"max_rows": 65}),
+            json!({"max_bytes": 0}),
+        ] {
+            assert_eq!(
+                execute(
+                    &mut database,
+                    &request(
+                        "turn.search.backfill",
+                        11,
+                        payload,
+                        Some("backfill-invalid")
+                    ),
+                    1_000,
+                ),
+                Err(SemanticExecutionError::InvalidPayload),
+            );
+        }
+        assert!(
+            vfs.trace().unwrap().is_empty(),
+            "rejected backfill payloads performed authority IO"
+        );
+    }
+
+    #[test]
+    fn turn_search_backfill_enumerates_owner_scopes_beyond_the_caller() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        // Seed tenant-global conversation claims for two owners; the caller
+        // authenticates as owner 11 only.
+        let mut seed = database
+            .begin_with_identity_claim_scopes(7, crate::conversation_header::TENANT_GLOBAL_OWNER_ID)
+            .unwrap();
+        for (conversation_id, owner) in [("c00", 11u64), ("c01", 11), ("c02", 12)] {
+            database
+                .entity_put(
+                    &mut seed,
+                    EntityKey::new(
+                        7,
+                        crate::conversation_header::TENANT_GLOBAL_OWNER_ID,
+                        crate::generated_tofudb_ir::CONVERSATION_ID_CLAIM_NAMESPACE,
+                        conversation_id.as_bytes(),
+                    )
+                    .unwrap(),
+                    owner.to_be_bytes().to_vec(),
+                )
+                .unwrap();
+        }
+        database.commit(seed).unwrap();
+        let first = execute(
+            &mut database,
+            &request(
+                "turn.search.backfill",
+                11,
+                json!({"cursor": "", "max_rows": 2, "max_bytes": 2_000_000}),
+                Some("backfill-round-1"),
+            ),
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(first["scanned"], 2);
+        assert_eq!(first["nextCursor"], "c01");
+        assert_eq!(first["remaining"], true);
+        let second = execute(
+            &mut database,
+            &request(
+                "turn.search.backfill",
+                11,
+                json!({"cursor": "c01", "max_rows": 2, "max_bytes": 2_000_000}),
+                Some("backfill-round-2"),
+            ),
+            1_001,
+        )
+        .unwrap();
+        assert_eq!(second["scanned"], 1);
+        assert_eq!(second["remaining"], false);
+        // The sweep scheduled a real rebuild for owner 12 even though the
+        // authenticated caller is owner 11: global semantics, not an
+        // authenticated-owner rebuild.
+        let owner12 = search_backfill::load(&database, &mut database.begin(7, 12).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(owner12.generation, 1);
+        assert!(!owner12.complete);
+        assert!(
+            search_backfill::load(&database, &mut database.begin(7, 11).unwrap())
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            search_backfill::load(&database, &mut database.begin(8, 11).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        // The command is receipt-free: a lost-ACK retry with the consumed
+        // cursor re-executes as a no-op reporting the durable sweep position.
+        let retry = execute(
+            &mut database,
+            &request(
+                "turn.search.backfill",
+                11,
+                json!({"cursor": "c01", "max_rows": 2, "max_bytes": 2_000_000}),
+                Some("backfill-round-2-retry"),
+            ),
+            1_002,
+        )
+        .unwrap();
+        assert_eq!(retry["scanned"], 0);
+        assert_eq!(retry["nextCursor"], "c02");
+        assert_eq!(retry["remaining"], false);
+        // A cursor from the sweep's future fails closed.
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "turn.search.backfill",
+                    11,
+                    json!({"cursor": "c99"}),
+                    Some("backfill-stale"),
+                ),
+                1_003,
+            ),
+            Err(SemanticExecutionError::InvalidPayload),
+        );
+    }
+
+    #[test]
     fn turn_create_pair_is_atomic_queue_aware_and_command_replayable() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
@@ -9270,9 +10026,13 @@ mod tests {
         assert_eq!(activated["_needsStart"], true);
         assert_eq!(activated["conversationRevision"], 2);
         assert_eq!(activated["attempt"]["queueBinding"], Value::Null);
+        // `turn.queue.activate` is receipt-free per the canonical contract
+        // (`contracts/storage_operations_v1.json`), matching the legacy
+        // SQLite authority: a replayed activation re-executes the handler
+        // and the retired queue row yields `database_not_found`.
         assert_eq!(
-            execute(&mut database, &activate_request, 2_011).unwrap(),
-            activated
+            execute(&mut database, &activate_request, 2_011).unwrap_err(),
+            SemanticExecutionError::NotFound
         );
         let queue_after_activate = execute(
             &mut database,
@@ -9422,10 +10182,17 @@ mod tests {
         assert_eq!(cancelled["conversationRevision"], 2);
         assert_eq!(cancelled["inputTurn"], cancellable["submittedTurn"]);
         assert_eq!(cancelled["deletedTurnIds"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            execute(&mut database, &cancel_request, 2_031).unwrap(),
-            cancelled
-        );
+        // `turn.queue.cancel` is likewise receipt-free: a replay re-executes
+        // the handler, and the legacy authority answers the missing queue row
+        // with the not-cancelled idempotent shape at the current revision
+        // instead of the stored first response.
+        let cancel_replay = execute(&mut database, &cancel_request, 2_031).unwrap();
+        assert_eq!(cancel_replay["conversationId"], "cancelled-pair");
+        assert_eq!(cancel_replay["conversationRevision"], 2);
+        assert_eq!(cancel_replay["queueId"], "cancelled-pair-queue");
+        assert_eq!(cancel_replay["cancelled"], false);
+        assert_eq!(cancel_replay["inputTurn"], Value::Null);
+        assert_eq!(cancel_replay["deletedTurnIds"], json!([]));
         assert_eq!(
             execute(
                 &mut database,
@@ -9582,15 +10349,34 @@ mod tests {
         assert_eq!(steered["steered"], true);
         assert_eq!(steered["injectionId"], "operator-command");
         assert_eq!(steered["blockId"], "injection:user-steer:operator-command");
+        assert_eq!(steered["conversationId"], "steer-conversation");
         assert_eq!(steered["conversationRevision"], 3);
-        assert_eq!(steered["turn"]["projectionRevision"], 3);
-        let preview = steered["turn"]["projection"]["_userSteerInjects"][0]["previews"][0]["text"]
+        assert!(steered.get("turn").is_none());
+        let live_projection = |database: &mut AuthorityDatabase, at: u64| {
+            let turns = execute(
+                database,
+                &request(
+                    "turn.list",
+                    11,
+                    json!({"conversation_id":"steer-conversation", "user_id":11}),
+                    None,
+                ),
+                at,
+            )
+            .unwrap();
+            let output = turns.as_array().unwrap().last().unwrap();
+            assert_eq!(output["turnId"], steered["turnId"]);
+            output.clone()
+        };
+        let output = live_projection(&mut database, 1_021);
+        assert_eq!(output["projectionRevision"], 3);
+        let preview = output["projection"]["_userSteerInjects"][0]["previews"][0]["text"]
             .as_str()
             .unwrap();
         assert_eq!(preview.chars().count(), 1_200);
         assert!(preview.chars().all(|character| character == '界'));
         assert_eq!(
-            execute(&mut database, &steer_request, 1_021).unwrap(),
+            execute(&mut database, &steer_request, 1_022).unwrap(),
             steered
         );
 
@@ -9612,9 +10398,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(deduplicated["conversationRevision"], 4);
-        assert_eq!(deduplicated["turn"]["projectionRevision"], 4);
+        assert!(deduplicated.get("turn").is_none());
+        let output = live_projection(&mut database, 1_031);
+        assert_eq!(output["projectionRevision"], 4);
         assert_eq!(
-            deduplicated["turn"]["projection"]["_userSteerInjects"]
+            output["projection"]["_userSteerInjects"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -9632,7 +10420,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(changes["events"].as_array().unwrap().len(), 4);
-        assert_eq!(changes["events"][2]["type"], "turn.patch");
+        assert_eq!(changes["events"][2]["type"], "conversation.activity");
+        assert_eq!(changes["events"][2]["turnId"], steered["turnId"]);
+        assert_eq!(changes["events"][2]["payload"]["requiresSnapshot"], true);
+        assert_eq!(changes["events"][2]["payload"]["conversationRevision"], 3);
+        assert_eq!(changes["events"][3]["type"], "conversation.activity");
 
         assert_eq!(
             execute(
@@ -14902,6 +15694,94 @@ mod tests {
         );
         execute(&mut database, &update, 2_000).unwrap();
         assert_eq!(indexed_ids(&database), ["a", "z", "b", "aa"]);
+    }
+
+    #[test]
+    fn settled_turn_append_cow_write_footprint_stays_bounded_as_transcript_grows() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        execute(
+            &mut database,
+            &request(
+                "conversation.create",
+                11,
+                json!({"conv_id": "append-footprint", "user_id": 11,
+                    "title": "Turns", "settings": {}, "created_at": 1, "updated_at": 1}),
+                Some("append-footprint-create"),
+            ),
+            1_000,
+        )
+        .unwrap();
+
+        // Exercise the real receipted write path, not a synthetic single-key
+        // append. Keep IDs and projection sizes fixed while the transcript and
+        // all of its indexes grow. Count staged immutable blocks rather than
+        // elapsed time: fsync latency is not a deterministic regression oracle.
+        let mut early_bytes = 0;
+        for index in 0..256 {
+            let command_id = format!("append-footprint-{index:04}");
+            let turn_id = format!("turn-{index:04}");
+            let before = database.engine_mut_for_test().block_write_metrics();
+            let result = execute(
+                &mut database,
+                &request(
+                    "turn.append_settled",
+                    11,
+                    json!({"conversation_id": "append-footprint", "user_id": 11,
+                        "command_id": command_id, "actor": "assistant",
+                        "projection": {"content": "x".repeat(128)},
+                        "created_at": index + 2, "turn_id": turn_id}),
+                    Some(&command_id),
+                ),
+                2_000 + index * 1_000,
+            )
+            .unwrap();
+            assert_eq!(result["turn"]["ordinal"], index);
+            if index > 0 {
+                assert_eq!(
+                    result["turn"]["parentTurnId"],
+                    format!("turn-{:04}", index - 1)
+                );
+            }
+            let after = database.engine_mut_for_test().block_write_metrics();
+            let blocks = after.blocks_staged - before.blocks_staged;
+            let bytes = after.bytes_staged - before.bytes_staged;
+            // These ceilings allow page splits and ancestor growth, but not
+            // rewriting the accumulated transcript on each append.
+            assert!(blocks <= 64, "append {index}: {blocks} staged blocks");
+            assert!(bytes <= 512 * 1024, "append {index}: {bytes} staged bytes");
+            if index == 31 {
+                early_bytes = bytes;
+            }
+            if index == 255 {
+                assert!(
+                    bytes <= early_bytes * 3,
+                    "8x transcript growth: {early_bytes} -> {bytes} staged bytes"
+                );
+            }
+            if matches!(index, 0 | 31 | 127 | 255) {
+                eprintln!(
+                    "append footprint turns={} blocks={blocks} bytes={bytes}",
+                    index + 1
+                );
+            }
+        }
+        drop(database);
+        let mut database = AuthorityDatabase::open(directory.path()).unwrap();
+        let turn = execute(
+            &mut database,
+            &request(
+                "turn.get",
+                11,
+                json!({"conversation_id": "append-footprint", "user_id": 11,
+                    "turn_id": "turn-0255"}),
+                None,
+            ),
+            300_000,
+        )
+        .unwrap();
+        assert_eq!(turn["ordinal"], 255);
+        assert_eq!(turn["parentTurnId"], "turn-0254");
     }
 
     #[test]
@@ -25632,6 +26512,244 @@ mod tests {
         }
     }
 
+    #[test]
+    fn queue_injection_ack_drains_only_never_accepted_inbox_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        database
+            .configure_logical_outbox(&[95; 32], 4 * 1024 * 1024, 128 * 1024)
+            .unwrap();
+        execute(
+            &mut database,
+            &request(
+                "conversation.create",
+                11,
+                json!({"conv_id":"ack-conv","user_id":11,
+                       "created_at":1,"updated_at":1}),
+                Some("ack-conv-create"),
+            ),
+            1_000,
+        )
+        .unwrap();
+        let enqueue = |queue_id: &str, kind: &str, priority: u64, message: Value| {
+            request(
+                "queue.enqueue",
+                11,
+                json!({"conv_id":"ack-conv","user_id":11,"queue_id":queue_id,
+                       "kind":kind,"priority":priority,"message":message,
+                       "config":{},"created_at_ms":2}),
+                Some(&format!("ack-enqueue-{queue_id}")),
+            )
+        };
+        execute(
+            &mut database,
+            &enqueue(
+                "ack-workflow",
+                "workflow_step",
+                50,
+                json!({"text":"bg done","_backgroundCommand":"bg_1"}),
+            ),
+            1_001,
+        )
+        .unwrap();
+        execute(
+            &mut database,
+            &enqueue(
+                "ack-peer",
+                "peer_msg",
+                10,
+                json!({"_peerMessage":true,"_peerText":"hello","_fromConv":"other"}),
+            ),
+            1_002,
+        )
+        .unwrap();
+        execute(
+            &mut database,
+            &enqueue(
+                "ack-peer-human",
+                "peer_msg",
+                10,
+                json!({"_peerMessage":true,"_peerHuman":true,"_peerText":"hi"}),
+            ),
+            1_003,
+        )
+        .unwrap();
+        execute(
+            &mut database,
+            &enqueue(
+                "ack-workflow-plain",
+                "workflow_step",
+                40,
+                json!({"text":"plain"}),
+            ),
+            1_004,
+        )
+        .unwrap();
+        execute(
+            &mut database,
+            &enqueue("ack-real", "real", 10, json!({"text":"human"})),
+            1_005,
+        )
+        .unwrap();
+        // A bound Turn-pair queue row is never an inbox drain.
+        execute(
+            &mut database,
+            &request(
+                "turn.create_pair",
+                11,
+                json!({"conversation_id":"ack-conv","user_id":11,
+                       "command_id":"ack-pair-command",
+                       "input_projection":"queued",
+                       "dispatch_mode":"conversation_executor",
+                       "queue_binding":{"queueId":"ack-bound","kind":"real","priority":7},
+                       "conversation_defaults":{"allowCreate":false},"now":7}),
+                Some("ack-pair-receipt"),
+            ),
+            1_006,
+        )
+        .unwrap();
+        // A missing conversation acknowledges nothing.
+        let missing = execute(
+            &mut database,
+            &request(
+                "queue.injection.ack",
+                11,
+                json!({"conv_id":"ack-missing","user_id":11,"queue_ids":["ack-peer"]}),
+                Some("ack-missing-1"),
+            ),
+            1_007,
+        )
+        .unwrap();
+        assert_eq!(missing, json!({"removed":0,"removedQueueIds":[]}));
+        // Payload validation precedes authority work.
+        let mut oversized: Vec<String> = (0..=256).map(|index| format!("id-{index}")).collect();
+        oversized.dedup();
+        for payload in [
+            json!({"conv_id":"ack-conv","user_id":11}),
+            json!({"conv_id":"ack-conv","user_id":11,"queue_ids":"ack-peer"}),
+            json!({"conv_id":"ack-conv","user_id":11,"queue_ids":[""]}),
+            json!({"conv_id":"ack-conv","user_id":11,"queue_ids":[Value::Null]}),
+            json!({"conv_id":"ack-conv","user_id":11,"queue_ids":oversized}),
+        ] {
+            assert_eq!(
+                execute(
+                    &mut database,
+                    &request("queue.injection.ack", 11, payload, Some("ack-invalid")),
+                    1_008,
+                ),
+                Err(SemanticExecutionError::InvalidPayload),
+            );
+        }
+        let ack = execute(
+            &mut database,
+            &request(
+                "queue.injection.ack",
+                11,
+                json!({"conv_id":"ack-conv","user_id":11,"queue_ids":[
+                    "ack-peer","ack-workflow","ack-peer-human",
+                    "ack-workflow-plain","ack-real","ack-bound","ack-peer",
+                    "ack-unknown"]}),
+                Some("ack-1"),
+            ),
+            1_009,
+        )
+        .unwrap();
+        // Legacy (position, id) reporting order: positions stay in
+        // insertion order unless a synthetic continuation is superseded.
+        assert_eq!(
+            ack,
+            json!({"removed":2,"removedQueueIds":["ack-workflow","ack-peer"]})
+        );
+        let listed = execute(
+            &mut database,
+            &request(
+                "queue.list",
+                11,
+                json!({"conv_id":"ack-conv","user_id":11}),
+                None,
+            ),
+            1_010,
+        )
+        .unwrap();
+        let remaining: Vec<&str> = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["queueId"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            remaining,
+            [
+                "ack-bound",
+                "ack-peer-human",
+                "ack-real",
+                "ack-workflow-plain"
+            ]
+        );
+        for (index, item) in listed.as_array().unwrap().iter().enumerate() {
+            assert_eq!(item["position"], json!(index + 1));
+        }
+        // One turn.upsert change carries the drain; the header revision and
+        // the bound pair stay untouched.
+        let changes = execute(
+            &mut database,
+            &request(
+                "turn.sync.changes",
+                11,
+                json!({"conversation_id":"ack-conv","user_id":11,"after":0}),
+                None,
+            ),
+            1_011,
+        )
+        .unwrap();
+        let events = changes["events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["type"], "turn.upsert");
+        assert_eq!(
+            events[1]["payload"]["removedQueueIds"],
+            json!(["ack-workflow", "ack-peer"])
+        );
+        assert!(events[1]["payload"].get("conversationRevision").is_none());
+        let revision = execute(
+            &mut database,
+            &request(
+                "turn.revision",
+                11,
+                json!({"conversation_id":"ack-conv","user_id":11}),
+                None,
+            ),
+            1_012,
+        )
+        .unwrap();
+        assert_eq!(revision, json!(1));
+        // Re-ack is a stable no-op publishing no further change.
+        let again = execute(
+            &mut database,
+            &request(
+                "queue.injection.ack",
+                11,
+                json!({"conv_id":"ack-conv","user_id":11,
+                       "queue_ids":["ack-peer","ack-workflow"]}),
+                Some("ack-2"),
+            ),
+            1_013,
+        )
+        .unwrap();
+        assert_eq!(again, json!({"removed":0,"removedQueueIds":[]}));
+        let changes = execute(
+            &mut database,
+            &request(
+                "turn.sync.changes",
+                11,
+                json!({"conversation_id":"ack-conv","user_id":11,"after":0}),
+                None,
+            ),
+            1_014,
+        )
+        .unwrap();
+        assert_eq!(changes["events"].as_array().unwrap().len(), 2);
+    }
+
     fn seeded_turn_queue_fault_database(
         vfs: std::sync::Arc<DeterministicVfs>,
     ) -> AuthorityDatabase {
@@ -25833,6 +26951,158 @@ mod tests {
             "turn.queue.cancel",
             assert_turn_queue_cancel_recovers_atomic_prefix,
         );
+    }
+
+    fn seeded_queue_injection_ack_fault_database(
+        vfs: std::sync::Arc<DeterministicVfs>,
+    ) -> AuthorityDatabase {
+        let mut database = simulated_database(vfs.clone());
+        execute(
+            &mut database,
+            &request(
+                "conversation.create",
+                11,
+                json!({"conv_id":"fault-ack-conv","user_id":11,
+                       "created_at":1,"updated_at":1}),
+                Some("fault-ack-create"),
+            ),
+            1_000,
+        )
+        .unwrap();
+        for (queue_id, kind, priority, message, command) in [
+            (
+                "fault-ack-workflow",
+                "workflow_step",
+                50,
+                json!({"text":"done","_backgroundCommand":"bg_1"}),
+                "fault-ack-enqueue-1",
+            ),
+            (
+                "fault-ack-peer",
+                "peer_msg",
+                10,
+                json!({"_peerMessage":true,"_peerText":"hi"}),
+                "fault-ack-enqueue-2",
+            ),
+            (
+                "fault-ack-real",
+                "real",
+                10,
+                json!({"text":"human"}),
+                "fault-ack-enqueue-3",
+            ),
+        ] {
+            execute(
+                &mut database,
+                &request(
+                    "queue.enqueue",
+                    11,
+                    json!({"conv_id":"fault-ack-conv","user_id":11,
+                           "queue_id":queue_id,"kind":kind,"priority":priority,
+                           "message":message,"config":{},"created_at_ms":2}),
+                    Some(command),
+                ),
+                1_001,
+            )
+            .unwrap();
+        }
+        vfs.arm_fault(None).unwrap();
+        database
+    }
+
+    fn queue_injection_ack_fault_request() -> Request {
+        request(
+            "queue.injection.ack",
+            11,
+            json!({"conv_id":"fault-ack-conv","user_id":11,
+                   "queue_ids":["fault-ack-peer","fault-ack-workflow",
+                                "fault-ack-real"]}),
+            Some("fault-queue-injection-ack"),
+        )
+    }
+
+    fn assert_queue_injection_ack_recovers_atomic_prefix(vfs: std::sync::Arc<DeterministicVfs>) {
+        vfs.crash().unwrap();
+        vfs.arm_fault(None).unwrap();
+        let mut recovered =
+            AuthorityDatabase::open_with_vfs(std::path::Path::new("/data"), vfs).unwrap();
+        recovered
+            .configure_logical_outbox(&[72; 32], 1024 * 1024, 128 * 1024)
+            .unwrap();
+        let queue = execute(
+            &mut recovered,
+            &request(
+                "queue.list",
+                11,
+                json!({"conv_id":"fault-ack-conv","user_id":11}),
+                None,
+            ),
+            2_000,
+        )
+        .unwrap();
+        let changes = execute(
+            &mut recovered,
+            &request(
+                "turn.sync.changes",
+                11,
+                json!({"conversation_id":"fault-ack-conv","user_id":11,"after":0}),
+                None,
+            ),
+            2_001,
+        )
+        .unwrap();
+        let events = changes["events"].as_array().unwrap();
+        match queue.as_array().unwrap().len() {
+            3 => assert_eq!(events.len(), 0),
+            1 => {
+                assert_eq!(queue.as_array().unwrap()[0]["queueId"], "fault-ack-real");
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0]["type"], "turn.upsert");
+                assert_eq!(
+                    events[0]["payload"]["removedQueueIds"],
+                    json!(["fault-ack-workflow", "fault-ack-peer"])
+                );
+            }
+            count => panic!("partial injection acknowledgement recovered with {count} queue rows"),
+        }
+    }
+
+    #[test]
+    fn every_queue_injection_ack_commit_fault_recovers_one_atomic_prefix() {
+        let command = queue_injection_ack_fault_request();
+        let baseline_vfs = prepared_vfs();
+        let mut baseline = seeded_queue_injection_ack_fault_database(baseline_vfs.clone());
+        execute(&mut baseline, &command, 1_100).unwrap();
+        let trace = baseline_vfs.trace().unwrap();
+        drop(baseline);
+        assert_queue_injection_ack_recovers_atomic_prefix(baseline_vfs);
+        for operation_number in 1..=trace.len() as u64 {
+            let vfs = prepared_vfs();
+            let mut database = seeded_queue_injection_ack_fault_database(vfs.clone());
+            vfs.arm_fault(Some(FaultRule {
+                operation_number,
+                action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+            }))
+            .unwrap();
+            let _ = execute(&mut database, &command, 1_100);
+            drop(database);
+            assert_queue_injection_ack_recovers_atomic_prefix(vfs);
+        }
+        for (index, operation) in trace.iter().enumerate() {
+            if operation != &Operation::Write {
+                continue;
+            }
+            let vfs = prepared_vfs();
+            let mut database = seeded_queue_injection_ack_fault_database(vfs.clone());
+            vfs.arm_fault(Some(FaultRule {
+                operation_number: index as u64 + 1,
+                action: FaultAction::ShortWrite(7),
+            }))
+            .unwrap();
+            let _ = execute(&mut database, &command, 1_100);
+            drop(database);
+            assert_queue_injection_ack_recovers_atomic_prefix(vfs);
+        }
     }
 
     fn seeded_turn_steer_fault_database(
@@ -26906,13 +28176,13 @@ mod tests {
         .unwrap();
         assert_eq!(get["title"], "Recovered title");
         assert!(get.get("babelCache").is_none());
-        assert_eq!(reopened.logical_outbox_status(7, 11).unwrap().last_sequence, 2);
+        assert_eq!(
+            reopened.logical_outbox_status(7, 11).unwrap().last_sequence,
+            2
+        );
     }
 
-    fn assert_paper_library_fault_replay(
-        vfs: std::sync::Arc<DeterministicVfs>,
-        command: &Request,
-    ) {
+    fn assert_paper_library_fault_replay(vfs: std::sync::Arc<DeterministicVfs>, command: &Request) {
         vfs.crash().unwrap();
         vfs.arm_fault(None).unwrap();
         let mut recovered =
@@ -26930,7 +28200,10 @@ mod tests {
         assert_eq!(listed.as_array().unwrap().len(), 1);
         assert_eq!(listed[0]["id"], "library-primary");
         assert!(matches!(
-            recovered.logical_outbox_status(7, 11).unwrap().last_sequence,
+            recovered
+                .logical_outbox_status(7, 11)
+                .unwrap()
+                .last_sequence,
             1 | 2
         ));
     }
@@ -27871,6 +29144,557 @@ mod tests {
         );
     }
 
+    fn seed_completed_turn(
+        database: &mut AuthorityDatabase,
+        conversation_id: &str,
+        turn_id: &str,
+        parent_content: &str,
+    ) {
+        let mut seed = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        crate::turn::append_settled(
+            database,
+            &mut seed,
+            &crate::turn::AppendSettledRequest {
+                conversation_id: conversation_id.to_owned(),
+                actor: "assistant".to_owned(),
+                status: "completed".to_owned(),
+                projection_json: serde_json::to_vec(&json!({"content": parent_content})).unwrap(),
+                settlement_json: b"{}".to_vec(),
+                lane_id: "main".to_owned(),
+                command_id: format!("{turn_id}-seed"),
+                kind: "reply".to_owned(),
+                run_id: String::new(),
+                turn_id: turn_id.to_owned(),
+                attempt_id: None,
+                created_at_ms: 1_000,
+                committed_at_ms: 1_000,
+                defaults: crate::conversation_header::TurnDefaults {
+                    allow_create: true,
+                    title: "Continuation".to_owned(),
+                    settings_json: b"{}".to_vec(),
+                    created_at_ms: 1_000,
+                },
+            },
+        )
+        .unwrap();
+        database.commit(seed).unwrap();
+    }
+
+    fn continuation_witness(
+        database: &mut AuthorityDatabase,
+        conversation_id: &str,
+        turn_id: &str,
+    ) -> Value {
+        let turn = execute(
+            database,
+            &request(
+                "turn.get",
+                11,
+                json!({"conversation_id": conversation_id, "turn_id": turn_id, "user_id": 11}),
+                None,
+            ),
+            1_100,
+        )
+        .unwrap();
+        crate::model_continuation::settled_witness(turn.as_object().unwrap())
+    }
+
+    fn continuation_projection(messages: Value, turns: Vec<Value>) -> Value {
+        json!({"messages": messages, "turns": turns})
+    }
+
+    fn continuation_put_request(
+        conversation_id: &str,
+        projection: Value,
+        command_id: &str,
+    ) -> Request {
+        request(
+            "model_continuation.put",
+            11,
+            json!({
+                "user_id": 11,
+                "conversation_id": conversation_id,
+                "lane_id": "main",
+                "projection": projection,
+            }),
+            Some(command_id),
+        )
+    }
+
+    fn continuation_get_request(conversation_id: &str) -> Request {
+        request(
+            "model_continuation.get",
+            11,
+            json!({
+                "user_id": 11,
+                "conversation_id": conversation_id,
+                "lane_id": "main",
+            }),
+            None,
+        )
+    }
+
+    #[test]
+    fn model_continuation_is_owner_scoped_frontier_cas_idempotent_and_durable() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        seed_completed_turn(&mut database, "cont-conversation", "cont-turn", "answer");
+        let witness = continuation_witness(&mut database, "cont-conversation", "cont-turn");
+        let projection = continuation_projection(
+            json!([{"role": "user", "content": "q"}, {"role": "assistant", "content": "answer"}]),
+            vec![witness.clone()],
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_get_request("cont-conversation"),
+                1_200
+            )
+            .unwrap(),
+            Value::Null
+        );
+        // Malformed and foreign-witness candidates never replace state.
+        let mut malformed = projection.clone();
+        malformed["messages"] = json!([]);
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_put_request("cont-conversation", malformed, "cont-put-bad"),
+                1_201
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
+        let foreign = continuation_projection(
+            json!([{"role": "assistant", "content": "answer"}]),
+            vec![json!(["foreign-turn", witness[1].clone()])],
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_put_request("cont-conversation", foreign, "cont-put-foreign"),
+                1_202
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
+        // First write at frontier 1.
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_put_request("cont-conversation", projection.clone(), "cont-put-1"),
+                1_203
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_get_request("cont-conversation"),
+                1_204
+            )
+            .unwrap(),
+            projection
+        );
+        // Equal-frontier retry with the identical payload is a read-only
+        // idempotent acknowledgement; a diverging payload is rejected.
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_put_request("cont-conversation", projection.clone(), "cont-put-2"),
+                1_205
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        let mut diverged = projection.clone();
+        diverged["messages"][1]["content"] = json!("edited");
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_put_request("cont-conversation", diverged, "cont-put-3"),
+                1_206
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_get_request("cont-conversation"),
+                1_207
+            )
+            .unwrap(),
+            projection
+        );
+        // Owner scoping: another owner sees nothing and cannot write.
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "model_continuation.get",
+                    12,
+                    json!({"user_id": 12, "conversation_id": "cont-conversation", "lane_id": "main"}),
+                    None,
+                ),
+                1_208,
+            )
+            .unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &request(
+                    "model_continuation.get",
+                    12,
+                    json!({"user_id": 11, "conversation_id": "cont-conversation", "lane_id": "main"}),
+                    None,
+                ),
+                1_209,
+            ),
+            Err(SemanticExecutionError::AuthorityScopeMismatch)
+        );
+        // A second settled Turn advances the lane ordinal; frontier 2 admits
+        // the extended checkpoint, and the stale frontier-1 payload is rejected.
+        seed_completed_turn(
+            &mut database,
+            "cont-conversation",
+            "cont-turn-2",
+            "answer-2",
+        );
+        let witness_2 = continuation_witness(&mut database, "cont-conversation", "cont-turn-2");
+        let projection_2 = continuation_projection(
+            json!([{"role": "assistant", "content": "answer-2"}]),
+            vec![witness.clone(), witness_2],
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_put_request("cont-conversation", projection_2.clone(), "cont-put-4"),
+                1_210
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_put_request("cont-conversation", projection.clone(), "cont-put-5"),
+                1_211
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &continuation_get_request("cont-conversation"),
+                1_212
+            )
+            .unwrap(),
+            projection_2
+        );
+        // Durability across reopen.
+        drop(database);
+        let mut reopened = AuthorityDatabase::open(directory.path()).unwrap();
+        assert_eq!(
+            execute(
+                &mut reopened,
+                &continuation_get_request("cont-conversation"),
+                2_000
+            )
+            .unwrap(),
+            projection_2
+        );
+        // Delete reports whether a record existed.
+        let delete = request(
+            "model_continuation.delete",
+            11,
+            json!({"user_id": 11, "conversation_id": "cont-conversation", "lane_id": "main"}),
+            Some("cont-delete-1"),
+        );
+        assert_eq!(
+            execute(&mut reopened, &delete, 2_001).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            execute(
+                &mut reopened,
+                &continuation_get_request("cont-conversation"),
+                2_002
+            )
+            .unwrap(),
+            Value::Null
+        );
+        let delete_again = request(
+            "model_continuation.delete",
+            11,
+            json!({"user_id": 11, "conversation_id": "cont-conversation", "lane_id": "main"}),
+            Some("cont-delete-2"),
+        );
+        assert_eq!(
+            execute(&mut reopened, &delete_again, 2_003).unwrap(),
+            Value::Bool(false)
+        );
+        // A missing conversation never manufactures a record.
+        assert_eq!(
+            execute(
+                &mut reopened,
+                &continuation_get_request("missing-conversation"),
+                2_004
+            )
+            .unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn terminal_event_settles_continuation_atomically_without_manufactured_acks() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let attempt_id = "cont-settle-attempt".to_owned();
+        let mut seed = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        crate::turn::append_settled(
+            &database,
+            &mut seed,
+            &crate::turn::AppendSettledRequest {
+                conversation_id: "cont-settle-conversation".to_owned(),
+                actor: "assistant".to_owned(),
+                status: "pending".to_owned(),
+                projection_json: serde_json::to_vec(&json!({"content": "draft"})).unwrap(),
+                settlement_json: b"{}".to_vec(),
+                lane_id: "main".to_owned(),
+                command_id: "cont-settle-seed".to_owned(),
+                kind: "reply".to_owned(),
+                run_id: String::new(),
+                turn_id: "cont-settle-turn".to_owned(),
+                attempt_id: Some(attempt_id.clone()),
+                created_at_ms: 1_000,
+                committed_at_ms: 1_000,
+                defaults: crate::conversation_header::TurnDefaults {
+                    allow_create: true,
+                    title: "Settle".to_owned(),
+                    settings_json: b"{}".to_vec(),
+                    created_at_ms: 1_000,
+                },
+            },
+        )
+        .unwrap();
+        database.commit(seed).unwrap();
+        let mut bind = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        crate::turn::attempt_bind(
+            &database,
+            &mut bind,
+            &attempt_id,
+            "cont-settle-task",
+            "",
+            1_100,
+        )
+        .unwrap();
+        database.commit(bind).unwrap();
+
+        let terminal = request(
+            "turn.event.record",
+            11,
+            json!({
+                "attempt_id": attempt_id,
+                "task_id": "cont-settle-task",
+                "user_id": 11,
+                "terminal": true,
+                "status": "completed",
+                "slim": true,
+                "content": "final",
+                "thinking": "done",
+                "settlement": {"outcome": "completed", "cause": "finished", "resumeOptions": []},
+                "model_continuation": {
+                    "content": "final",
+                    "projection": {
+                        "messages": [{"role": "assistant", "content": "final"}],
+                        "turns": [["cont-settle-turn", "0000000000000000000000000000000000000000000000000000000000000000"]],
+                    },
+                },
+                "now": 1_300
+            }),
+            Some("cont-settle-terminal"),
+        );
+        let settled = execute(&mut database, &terminal, 1_300).unwrap();
+        assert_eq!(settled["model_continuation_status"], "stored");
+        let stored = execute(
+            &mut database,
+            &continuation_get_request("cont-settle-conversation"),
+            1_301,
+        )
+        .unwrap();
+        assert_eq!(
+            stored["messages"],
+            json!([{"role": "assistant", "content": "final"}])
+        );
+        let stored_witness = stored["turns"][0].as_array().unwrap();
+        assert_eq!(stored_witness[0], "cont-settle-turn");
+        assert_ne!(
+            stored_witness[1],
+            "0000000000000000000000000000000000000000000000000000000000000000"
+        );
+        assert_eq!(stored_witness[1].as_str().unwrap().len(), 64);
+        // The settled attempt rejects a second terminal command.
+        let second = request(
+            "turn.event.record",
+            11,
+            json!({
+                "attempt_id": attempt_id,
+                "task_id": "cont-settle-task",
+                "user_id": 11,
+                "terminal": true,
+                "status": "completed",
+                "slim": true,
+                "content": "final",
+                "thinking": "done",
+                "settlement": {"outcome": "completed", "cause": "finished", "resumeOptions": []},
+                "now": 1_400
+            }),
+            Some("cont-settle-terminal-2"),
+        );
+        assert_eq!(
+            execute(&mut database, &second, 1_400).unwrap(),
+            json!({"applied": false})
+        );
+    }
+
+    fn seeded_continuation_fault_database(
+        vfs: std::sync::Arc<DeterministicVfs>,
+    ) -> (AuthorityDatabase, Value) {
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone())
+                .unwrap();
+        seed_completed_turn(
+            &mut database,
+            "fault-cont-conversation",
+            "fault-cont-turn",
+            "durable",
+        );
+        let witness =
+            continuation_witness(&mut database, "fault-cont-conversation", "fault-cont-turn");
+        let projection = continuation_projection(
+            json!([{"role": "assistant", "content": "durable"}]),
+            vec![witness],
+        );
+        database
+            .configure_logical_outbox(&[72; 32], 1024 * 1024, 128 * 1024)
+            .unwrap();
+        vfs.arm_fault(None).unwrap();
+        (database, projection)
+    }
+
+    fn assert_continuation_fault_replay_converges(
+        vfs: std::sync::Arc<DeterministicVfs>,
+        projection: &Value,
+    ) {
+        vfs.arm_fault(None).unwrap();
+        let mut recovered =
+            AuthorityDatabase::open_with_vfs(std::path::Path::new("/data"), vfs).unwrap();
+        let stored = execute(
+            &mut recovered,
+            &continuation_get_request("fault-cont-conversation"),
+            2_000,
+        )
+        .unwrap();
+        assert!(
+            stored == Value::Null || &stored == projection,
+            "partial continuation record recovered: {stored}"
+        );
+        // Whether the faulted command committed or not, replaying it converges
+        // to the stored checkpoint without duplicating or skipping state.
+        assert_eq!(
+            execute(
+                &mut recovered,
+                &continuation_put_request(
+                    "fault-cont-conversation",
+                    projection.clone(),
+                    "fault-cont-put"
+                ),
+                2_001,
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            execute(
+                &mut recovered,
+                &continuation_get_request("fault-cont-conversation"),
+                2_002,
+            )
+            .unwrap(),
+            *projection
+        );
+    }
+
+    #[test]
+    fn every_model_continuation_put_commit_fault_recovers_one_atomic_prefix() {
+        let baseline_vfs = prepared_vfs();
+        let (mut baseline, projection) = seeded_continuation_fault_database(baseline_vfs.clone());
+        assert_eq!(
+            execute(
+                &mut baseline,
+                &continuation_put_request(
+                    "fault-cont-conversation",
+                    projection.clone(),
+                    "fault-cont-put"
+                ),
+                1_500,
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        let trace = baseline_vfs.trace().unwrap();
+        drop(baseline);
+        assert_continuation_fault_replay_converges(baseline_vfs, &projection);
+
+        for operation_number in 1..=trace.len() as u64 {
+            let vfs = prepared_vfs();
+            let (mut database, projection) = seeded_continuation_fault_database(vfs.clone());
+            vfs.arm_fault(Some(FaultRule {
+                operation_number,
+                action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+            }))
+            .unwrap();
+            let _ = execute(
+                &mut database,
+                &continuation_put_request(
+                    "fault-cont-conversation",
+                    projection.clone(),
+                    "fault-cont-put",
+                ),
+                1_500,
+            );
+            drop(database);
+            assert_continuation_fault_replay_converges(vfs, &projection);
+        }
+        for (index, operation) in trace.iter().enumerate() {
+            if operation != &Operation::Write {
+                continue;
+            }
+            let vfs = prepared_vfs();
+            let (mut database, projection) = seeded_continuation_fault_database(vfs.clone());
+            vfs.arm_fault(Some(FaultRule {
+                operation_number: index as u64 + 1,
+                action: FaultAction::ShortWrite(7),
+            }))
+            .unwrap();
+            let _ = execute(
+                &mut database,
+                &continuation_put_request(
+                    "fault-cont-conversation",
+                    projection.clone(),
+                    "fault-cont-put",
+                ),
+                1_500,
+            );
+            drop(database);
+            assert_continuation_fault_replay_converges(vfs, &projection);
+        }
+    }
     #[test]
     fn execution_rechecks_deadline_after_admission() {
         let directory = tempfile::tempdir().unwrap();

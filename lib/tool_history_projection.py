@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from lib.tool_round_replay import scan_replayable_tool_round_prefix
+from lib.tool_round_replay import model_tool_content, scan_replayable_tool_round_prefix
 
 
 def build_tool_history_round(batch: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
@@ -57,7 +57,7 @@ def build_tool_history_round(batch: Iterable[Mapping[str, Any]]) -> dict[str, An
 
         tool_result: dict[str, Any] = {
             "tool_call_id": round_entry.get("toolCallId"),
-            "content": round_entry.get("toolContent") or "",
+            "content": model_tool_content(round_entry),
         }
         if "caller" in round_entry and round_entry.get("caller") is not None:
             raw_caller = round_entry.get("caller")

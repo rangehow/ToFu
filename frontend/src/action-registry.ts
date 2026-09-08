@@ -157,6 +157,55 @@ function evaluateCondition(
   return Boolean(resolveValue(expression, event, element, resolve));
 }
 
+function balancedParens(text: string): boolean {
+  let depth = 0;
+  let quote = '';
+  let escaped = false;
+  for (const character of text) {
+    if (escaped) { escaped = false; continue; }
+    if (quote) {
+      if (character === '\\') escaped = true;
+      else if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === '(') depth += 1;
+    else if (character === ')') {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0 && !quote;
+}
+
+// A top-level `receiver.method(args)` split cannot be expressed as a single
+// regex: a greedy receiver misreads a nested call inside the argument list
+// (`this.setAttribute('x', this.a.contains('y'))` became `.contains(...)` on
+// an unresolvable receiver — the ptool-header expander silently dying), and
+// a non-greedy receiver misreads call-shaped receivers
+// (`this.closest('.x').remove()`). Take `.name(` boundaries from the end and
+// keep the first whose argument text is paren-balanced through the final
+// `)` — the only parse where the method call truly spans the statement.
+function splitMethodCall(source: string): [string, string, string] | null {
+  if (!source.endsWith(')')) return null;
+  const boundary = /\.([A-Za-z_$][\w$]*)\s*\(/g;
+  let match = boundary.exec(source);
+  const candidates: Array<[number, string]> = [];
+  while (match) {
+    candidates.push([match.index, match[1]]);
+    match = boundary.exec(source);
+  }
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const [dot, name] = candidates[index];
+    const open = source.indexOf('(', dot + 1 + name.length);
+    const args = source.slice(open + 1, -1);
+    if (balancedParens(args)) {
+      return [source.slice(0, dot), name, args];
+    }
+  }
+  return null;
+}
+
 function invokeCall(
   expression: string,
   event: Event,
@@ -171,8 +220,8 @@ function invokeCall(
     return callable(element, event);
   }
   const call = /^([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)$/.exec(source);
-  const method = /^([\s\S]+)\.([A-Za-z_$][\w$]*)\s*\(([\s\S]*)\)$/.exec(source);
-  const rawArgs = call?.[2] ?? method?.[3] ?? '';
+  const method = call ? null : splitMethodCall(source);
+  const rawArgs = call?.[2] ?? method?.[2] ?? '';
   const args = rawArgs.trim()
     ? splitTopLevel(rawArgs, ',').map((part) => resolveValue(part, event, element, resolve))
     : [];
@@ -182,10 +231,10 @@ function invokeCall(
     return callable(...args);
   }
   if (method) {
-    const receiver = resolveValue(method[1], event, element, resolve);
+    const receiver = resolveValue(method[0], event, element, resolve);
     const callable = receiver == null
-      ? undefined : (receiver as Record<string, unknown>)[method[2]];
-    if (typeof callable !== 'function') throw new Error(`Unknown action method: ${method[2]}`);
+      ? undefined : (receiver as Record<string, unknown>)[method[1]];
+    if (typeof callable !== 'function') throw new Error(`Unknown action method: ${method[1]}`);
     return callable.apply(receiver, args);
   }
   throw new Error(`Unsupported action expression: ${expression}`);

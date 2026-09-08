@@ -276,12 +276,35 @@ def test_a_normal_stop_is_untouched():
     assert '_intent_stall_nudge_count' not in task
 
 
+@pytest.mark.parametrize('status', ['pending_approval', 'awaiting_human', 'awaiting_stdin'])
+def test_live_structured_wait_suppresses_stall(status):
+    task = _task([_blocked_round(), {'toolName': 'run_command', 'status': status}])
+    assert should_nudge_intent_stall(task, {'content': _STALL_TEXT}, _STALL_TEXT) == (
+        False, 'awaiting_human')
+
+
+@pytest.mark.parametrize('reason', ['done', 'blocked', 'awaiting_human'])
+def test_end_turn_declaration_requires_closing_bracket(reason):
+    assert parse_end_turn_reason(f'Status. [END_TURN: {reason}') is None
+    assert parse_end_turn_reason(f'Status. [END_TURN: {reason}]') == reason
+
+
+def test_unknown_token_cannot_hide_later_explicit_handoff():
+    text = '[END_TURN: unknown] Status. [END_TURN: awaiting_human]'
+    assert parse_end_turn_reason(text) == 'awaiting_human'
+    assert should_nudge_intent_stall(
+        _task([_blocked_round()]), {'content': text}, text) == (False, 'awaiting_human')
+
+
 def test_the_nudge_names_the_structural_fact_and_teaches_the_contract():
     """The nudge must be actionable, and must tell the model how to opt out.
 
     Without the opt-out sentence D2 is undiscoverable — the model can only
     declare an end reason it has been told about.
     """
-    assert 'never executed' in NUDGE_TEXT or 'did not run' in NUDGE_TEXT.lower()
+    assert 'rejected or failed' in NUDGE_TEXT
+    assert 'may already have executed' in NUDGE_TEXT
+    assert 'do not blindly' in NUDGE_TEXT
+    assert 'so it never executed' not in NUDGE_TEXT
     for reason in ('awaiting_human', 'done', 'blocked'):
         assert f'{END_TURN_MARKER} {reason}]' in NUDGE_TEXT

@@ -35,6 +35,8 @@ from lib.http_client import http_get
 from lib.identity import require_user_id
 from lib.log import get_logger
 from lib.skills.installer import InstallerError, install_skill_package
+
+from lib.skills.search_policy import fallback_queries, prefix_only_match
 from lib.ttl_cache import TTLCache
 
 logger = get_logger(__name__)
@@ -503,6 +505,8 @@ def _verified_candidate(
     sentinel = object()
     if use_cache:
         cached = _VERIFY_CACHE.get(cache_key, sentinel)
+        if cached is sentinel:
+            cached = _FAILURE_CACHE.get(('verify', *cache_key), sentinel)
         if cached is not sentinel:
             return deepcopy(cached)
     result = dict(candidate)
@@ -532,9 +536,15 @@ def _verified_candidate(
             'verified': False,
             'installable': False,
             'unavailable_reason': str(exc),
+            'verification_error': exc.code,
+            'retry_after': exc.retry_after,
         })
-    if use_cache:
+    # Transient failures must not become five-minute negative verification hits.
+    if use_cache and result.get('verified'):
         _VERIFY_CACHE.set(cache_key, deepcopy(result))
+
+    elif use_cache:
+        _FAILURE_CACHE.set(('verify', *cache_key), deepcopy(result))
     return result
 
 
@@ -591,8 +601,30 @@ def search_online_skills(
             cache_hit = True
             candidates = deepcopy(candidates)
 
-        verify_rows = candidates[:min(
-            len(candidates), max(result_limit * 2, result_limit))]
+        queries = [normalized_query]
+        raw_count = len(candidates)
+        rejected_count = sum(prefix_only_match(normalized_query, row)
+                             for row in candidates)
+        candidates = [row for row in candidates
+                      if not prefix_only_match(normalized_query, row)]
+        # Recover only empty multi-concept searches. No fan-out on errors or
+        # rate limits; at most two extra searches and twelve candidates total.
+        if not candidates:
+            for fallback in fallback_queries(normalized_query):
+                queries.append(fallback)
+                extra = (_SEARCH_CACHE.get(fallback, sentinel)
+                         if use_cache else sentinel)
+                if extra is sentinel:
+                    extra = _fetch_search_candidates(fallback, getter=getter)
+                    if use_cache:
+                        _SEARCH_CACHE.set(fallback, deepcopy(extra))
+                raw_count += len(extra)
+                candidates = [row for row in extra
+                              if not prefix_only_match(fallback, row)]
+                rejected_count += len(extra) - len(candidates)
+                if candidates:
+                    break
+        verify_rows = candidates[:_RAW_SEARCH_LIMIT]
         if use_cache and len(verify_rows) > 1:
             with _executor_batch() as executor:
                 verified_rows = list(executor.map(
@@ -605,6 +637,13 @@ def search_online_skills(
                     row, getter=getter, use_cache=use_cache)
                 for row in verify_rows
             ]
+        verification_errors = [row.get('verification_error')
+                               for row in verified_rows
+                               if row.get('verification_error')]
+        retry_after = max((row.get('retry_after') or 0
+                           for row in verified_rows), default=0) or None
+        unavailable_count = sum(not row.get('installable')
+                                for row in verified_rows)
         if not include_unverified:
             verified_rows = [
                 row for row in verified_rows if row.get('installable')]
@@ -618,6 +657,14 @@ def search_online_skills(
                 'cached': cache_hit,
                 'query': normalized_query,
                 'result_count': len(rows),
+
+                'queries': queries,
+                'candidate_count': raw_count,
+                'relevance_rejected_count': rejected_count,
+                'verification_attempted_count': len(verify_rows),
+                'unavailable_count': unavailable_count,
+                'verification_errors': sorted(set(verification_errors)),
+                'retry_after': retry_after,
                 'verified_count': sum(
                     1 for row in rows if row.get('verified')),
             },

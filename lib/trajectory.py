@@ -214,73 +214,118 @@ def _to_tofu_native(task: dict) -> dict:
     }
 
 
+def _atif_messages(task: dict) -> list[dict]:
+    """Prefer a committed working transcript; reconstruct input-only snapshots.
+
+    ``run_task`` stamps provenance when writing back receipts and final prose.
+    Appending toolRounds to that transcript duplicates every execution. Input
+    history can contain old tools; only this run's evidence decides fallback.
+    """
+    messages = list(_input_messages(task))
+    includes_run = task.get('_messages_include_current_run')
+    if includes_run is None:
+        # Legacy snapshots lack provenance. Historical input tools are not
+        # current-run evidence, even if a provider recycles the same call ID.
+        last_user = max((i for i, m in enumerate(messages)
+                         if m.get('role') == 'user' and not m.get('_isMeta')),
+                        default=-1)
+        includes_run = any(m.get('role') == 'tool' or m.get('tool_calls')
+                           for m in messages[last_user + 1:])
+    if not includes_run:
+        rounds = task.get('toolRounds') or []
+        if any(isinstance(r, dict) and 'toolCallId' in r for r in rounds):
+            from lib.tasks_pkg.conv_message_builder._toolcalls import (
+                _reconstruct_tool_call_messages,
+            )
+            messages.extend(_reconstruct_tool_call_messages(rounds) or [])
+        else:
+            # Historical fixture/plugin format. Keep call/result adjacency,
+            # without treating display-only results as execution evidence.
+            for rnd in rounds:
+                if not isinstance(rnd, dict) or not rnd.get('tool_calls'):
+                    continue
+                messages.append({
+                    'role': 'assistant', 'content': rnd.get('assistantContent') or '',
+                    'tool_calls': rnd['tool_calls'],
+                })
+                messages.extend(_tool_messages({'toolRounds': [rnd]}))
+    # The working transcript's final prose is the authority, not task.content
+    # (which may aggregate earlier narration). Synthesize only when absent.
+    if not messages or messages[-1].get('role') != 'assistant' or messages[-1].get('tool_calls'):
+        final = _assistant_turn(task)
+        final.pop('tool_calls', None)  # these are historical, not pending calls
+        messages.append(final)
+    return messages
+
+
+def _atif_steps(messages: list[dict]) -> list[dict]:
+    """Map ordered call occurrences and their receipts, never tool text to user."""
+    import json
+
+    steps: list[dict] = []
+    pending: dict[str, list[dict]] = {}
+    for message in messages:
+        role = message.get('role', 'user')
+        if role == 'tool':
+            call_id = str(message.get('tool_call_id') or '')
+            candidates = pending.get(call_id) or []
+            result = {'content': _coerce_text(message.get('content'))}
+            if candidates:
+                step = candidates.pop(0)
+                result['source_call_id'] = call_id
+                step.setdefault('observation', {'results': []})['results'].append(result)
+            else:
+                # Keep the observation as an explicit orphan, not a fabricated
+                # user request or a link to a call that never appeared.
+                steps.append({
+                    'step_id': len(steps) + 1, 'source': 'agent', 'message': '',
+                    'observation': {'results': [result]},
+                    'extra': {'original_role': 'tool', 'orphan_call_id': call_id},
+                })
+            continue
+        step = {
+            'step_id': len(steps) + 1,
+            'source': ('agent' if role == 'assistant' else
+                       'system' if role in ('system', 'developer') else 'user'),
+            'message': _coerce_text(message.get('content')),
+        }
+        if role == 'assistant':
+            if message.get('reasoning_content'):
+                step['reasoning_content'] = _coerce_text(message['reasoning_content'])
+            calls = []
+            for tc in message.get('tool_calls') or []:
+                if not isinstance(tc, dict):
+                    continue
+                fn = tc.get('function') or {}
+                if not isinstance(fn, dict):
+                    continue
+                raw_args = fn.get('arguments')
+                try:
+                    args = json.loads(raw_args or '{}') if isinstance(raw_args, str) else raw_args
+                except (ValueError, TypeError):
+                    args = {'_raw': raw_args}
+                call_id = str(tc.get('id') or '')
+                calls.append({
+                    'tool_call_id': call_id,
+                    'function_name': str(fn.get('name') or ''),
+                    'arguments': args if isinstance(args, dict) else {'_raw': args},
+                })
+                if call_id:
+                    pending.setdefault(call_id, []).append(step)
+            if calls:
+                step['tool_calls'] = calls
+        steps.append(step)
+    return steps
+
+
 def _to_atif(task: dict) -> dict:
     """ATIF v1.3 — Agent Trajectory Interchange Format (harbor RFC 0001).
 
-    Steps: input messages become ``system`` / ``user`` steps; each tool
-    round becomes an ``agent`` step carrying its ``tool_calls`` and the
-    ``observation`` they produced; the terminal assistant message closes
-    the trajectory. Token usage lands in ``final_metrics`` (tofu tracks
-    usage per task, not per round, so per-step ``metrics`` stay absent).
+    Working transcript roles/order are retained; each tool receipt is attached
+    to its matching call occurrence. Native input-only snapshots reuse causal
+    replay. Token usage is task-level, so per-step metrics stay absent.
     """
-    import json as _json
-
-    steps: list[dict] = []
-    _sid = 0
-
-    def _next_id() -> int:
-        nonlocal _sid
-        _sid += 1
-        return _sid
-
-    for m in _input_messages(task):
-        role = m.get('role', 'user')
-        steps.append({
-            'step_id': _next_id(),
-            'source': 'system' if role == 'system' else 'user',
-            'message': _coerce_text(m.get('content')),
-        })
-
-    for rnd in (task.get('toolRounds') or []):
-        if not isinstance(rnd, dict):
-            continue
-        step: dict = {'step_id': _next_id(), 'source': 'agent', 'message': ''}
-        calls = []
-        for tc in (rnd.get('tool_calls') or []):
-            if not isinstance(tc, dict):
-                continue
-            fn = tc.get('function') or {}
-            try:
-                args = _json.loads(fn.get('arguments') or '{}')
-            except (ValueError, TypeError):
-                args = {}
-            calls.append({
-                'tool_call_id': tc.get('id') or '',
-                'function_name': fn.get('name') or '',
-                'arguments': args if isinstance(args, dict) else {'_raw': args},
-            })
-        if calls:
-            step['tool_calls'] = calls
-        results = []
-        for r in (rnd.get('results') or []):
-            if not isinstance(r, dict):
-                continue
-            results.append({
-                'source_call_id': r.get('tool_call_id') or r.get('id') or '',
-                'content': _coerce_text(r.get('result') or r.get('content') or ''),
-            })
-        if results:
-            step['observation'] = {'results': results}
-        steps.append(step)
-
-    final_step: dict = {
-        'step_id': _next_id(),
-        'source': 'agent',
-        'message': task.get('content') or '',
-    }
-    if task.get('thinking'):
-        final_step['reasoning_content'] = task['thinking']
-    steps.append(final_step)
+    steps = _atif_steps(_atif_messages(task))
 
     try:
         from lib.version import __version__ as _ver
@@ -292,10 +337,12 @@ def _to_atif(task: dict) -> dict:
 
     usage = task.get('usage') or {}
     final_metrics: dict = {'total_steps': len(steps)}
-    if usage.get('input_tokens') is not None:
-        final_metrics['total_prompt_tokens'] = usage['input_tokens']
-    if usage.get('output_tokens') is not None:
-        final_metrics['total_completion_tokens'] = usage['output_tokens']
+    prompt_tokens = usage.get('prompt_tokens', usage.get('input_tokens'))
+    completion_tokens = usage.get('completion_tokens', usage.get('output_tokens'))
+    if prompt_tokens is not None:
+        final_metrics['total_prompt_tokens'] = prompt_tokens
+    if completion_tokens is not None:
+        final_metrics['total_completion_tokens'] = completion_tokens
 
     return {
         'schema_version': 'ATIF-v1.3',

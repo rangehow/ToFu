@@ -430,6 +430,115 @@ class TestEnsureTask(unittest.TestCase):
         send.assert_not_called()
 
 
+class TestQuotaOpportunitySync(unittest.TestCase):
+    """note_adapter_quota_observed：额度快照时机触发的节流目录刷新。"""
+
+    def setUp(self):
+        from lib.model_routing import (
+            InMemoryModelRoutingRepository,
+            OwnerBoundary,
+            empty_document,
+        )
+        self._repo = InMemoryModelRoutingRepository()
+        self._boundary = OwnerBoundary.create(int(OWNER_ID))
+        self._repo.compare_and_swap(
+            self._boundary, empty_document(), expected_revision=0)
+        adapter._quota_sync_marks.clear()
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        patchers = [
+            mock.patch.object(
+                adapter, '_policy_path',
+                return_value=os.path.join(self._td.name, 'p.json')),
+            mock.patch('lib.model_routing.ModelRoutingRepository',
+                       return_value=self._repo),
+        ]
+        for patcher in patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self._real_provision = adapter.provision_provider
+
+    def _provision_into_repo(self, agent_id, agent_name, port, api_key,
+                             model_ids, *, user_id):
+        with mock.patch('lib.llm_dispatch.reset_dispatcher', lambda: None):
+            return self._real_provision(
+                agent_id, agent_name, port, api_key, model_ids,
+                user_id=user_id, repository=self._repo)
+
+    def _seed_provider(self, agent_id='agent-quota', agent_name='box',
+                       models=('m1', 'm2')):
+        adapter.policy_for(agent_id, create=True)
+        self._provision_into_repo(agent_id, agent_name, 8317, 'ta_key',
+                                  list(models), user_id=OWNER_ID)
+
+    def _worker(self, agent_id='agent-quota'):
+        adapter._quota_sync_worker(
+            agent_id, adapter.policy_for(agent_id), user_id=OWNER_ID)
+
+    def test_changed_models_reprovision_preserving_display_name(self):
+        self._seed_provider()
+        with mock.patch.object(adapter, 'fetch_models',
+                               return_value=['m1', 'm2', 'm3-new']), \
+             mock.patch.object(adapter, 'provision_provider',
+                               side_effect=self._provision_into_repo) as prov:
+            self._worker()
+        prov.assert_called_once()
+        self.assertEqual(prov.call_args[0][1], 'box')
+        document = self._repo.get(self._boundary).document
+        self.assertEqual(
+            sorted(row['pending_model_id'] for row in document['offerings']),
+            ['m1', 'm2', 'm3-new'])
+        provider = next(row for row in document['providers']
+                        if row['provider_id'] == 'adapter_agent-qu')
+        self.assertEqual(provider['name'], '订阅适配器 · box')
+
+    def test_unchanged_model_set_skips_reprovision(self):
+        self._seed_provider()
+        with mock.patch.object(adapter, 'fetch_models',
+                               return_value=['m2', 'm1']), \
+             mock.patch.object(adapter, 'provision_provider') as prov:
+            self._worker()
+        prov.assert_not_called()
+
+    def test_unprovisioned_agent_provisions_on_first_observation(self):
+        adapter.policy_for('agent-quota', create=True)
+        with mock.patch.object(adapter, 'fetch_models',
+                               return_value=['m1']), \
+             mock.patch.object(adapter, 'provision_provider',
+                               side_effect=self._provision_into_repo) as prov:
+            self._worker()
+        prov.assert_called_once()
+        document = self._repo.get(self._boundary).document
+        self.assertEqual(
+            [row['pending_model_id'] for row in document['offerings']],
+            ['m1'])
+
+    def test_worker_failure_is_swallowed(self):
+        self._seed_provider()
+        with mock.patch.object(adapter, 'fetch_models',
+                               side_effect=RuntimeError('agent offline')), \
+             mock.patch.object(adapter, 'provision_provider') as prov:
+            self._worker()
+        prov.assert_not_called()
+
+    def test_hook_throttles_one_attempt_per_ttl(self):
+        adapter.policy_for('agent-quota', create=True)
+        with mock.patch.object(threading, 'Thread') as thread_cls:
+            adapter.note_adapter_quota_observed(
+                'agent-quota', user_id=OWNER_ID)
+            adapter.note_adapter_quota_observed(
+                'agent-quota', user_id=OWNER_ID)
+            adapter.note_adapter_quota_observed(
+                'agent-other', user_id=OWNER_ID)
+        self.assertEqual(thread_cls.call_count, 1)
+        thread_cls.return_value.start.assert_called_once_with()
+
+    def test_hook_without_policy_starts_no_thread(self):
+        with mock.patch.object(threading, 'Thread') as thread_cls:
+            adapter.note_adapter_quota_observed(
+                'agent-never-seen', user_id=OWNER_ID)
+        thread_cls.assert_not_called()
+
 class TestRouteRegistration(unittest.TestCase):
 
     def test_blueprint_registered_in_v1(self):

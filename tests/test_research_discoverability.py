@@ -48,7 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESEARCH_VIEW_TS = os.path.join(
-    ROOT, 'frontend', 'src', 'features', 'paper', 'research-view.ts')
+    ROOT, 'frontend', 'src', 'features', 'research', 'components', 'view.ts')
 ESBUILD = os.path.join(ROOT, 'scripts', 'vite_test_bundle.mjs')
 pytestmark = pytest.mark.unit
 
@@ -282,6 +282,7 @@ const RESULT = {
   threshold: 4.0, gate_reached: 'accepted',
 };
 
+const SCENARIO = process.argv[3];
 const calls = { lookup: [], events: [], start: [] };
 global.Api = {
   tasks: {
@@ -289,18 +290,29 @@ global.Api = {
       calls.start.push([kind, payload]);
       return ({ ok: true, taskId: 'research_t1' });
     },
-    events: async (_taskId, cursor) => { calls.events.push(cursor); return ({
-      ok: true, id: 'research_t1', status: 'done', done: true,
-      cursor: { requested: cursor, next: 0, reset: false }, events: [],
-      createdAt: 1700000000000, updatedAt: 1700000900000,
-      artifact_quality: { degraded: false, reason: '' },
-      result: { accepted: RESULT.accepted, rejected: RESULT.rejected,
-                corpus_size: 18, gate_reached: 'accepted',
-                folder_id: 'research_t1' } }); },
+    events: async (_taskId, cursor) => { calls.events.push(cursor); return (
+      SCENARIO === 'error'
+        ? { ok: true, id: 'research_t1', status: 'error', done: true,
+            cursor: { requested: cursor, next: 0, reset: false }, events: [],
+            createdAt: 1700000000000, updatedAt: 1700000900000,
+            error: 'Upstream rate-limit attempt budget exhausted (8/8)',
+            artifact_quality: { degraded: false, reason: '' },
+            result: { accepted: [], rejected: [],
+                      corpus_size: 0, gate_reached: '',
+                      folder_id: 'research_t1' } }
+        : { ok: true, id: 'research_t1', status: 'done', done: true,
+            cursor: { requested: cursor, next: 0, reset: false }, events: [],
+            createdAt: 1700000000000, updatedAt: 1700000900000,
+            artifact_quality: { degraded: false, reason: '' },
+            result: { accepted: RESULT.accepted, rejected: RESULT.rejected,
+                      corpus_size: 18, gate_reached: 'accepted',
+                      folder_id: 'research_t1' } }); },
     abort: async () => ({ ok: true }),
   },
   research: {
-    lookup: async (d, l) => { calls.lookup.push([d, l]); return RESULT; },
+    lookup: async (d, l) => { calls.lookup.push([d, l]);
+      // An interrupted run persisted nothing — hydration finds no artifacts.
+      return SCENARIO === 'error' ? ({ ok: true, found: false }) : RESULT; },
   },
 };
 global.pushSubscribe = () => {}; global.pushUnsubscribe = () => {};
@@ -311,7 +323,6 @@ const src = fs.readFileSync(process.argv[4], 'utf8');
 
 (async () => {
   const out = { calls };
-  const SCENARIO = process.argv[3];
   if (SCENARIO === 'restore') {
     // The re-attach path: NO live job was ever started in this page. The panel
     // must rebuild itself purely from the durable store.
@@ -326,6 +337,36 @@ const src = fs.readFileSync(process.argv[4], 'utf8');
   }
   out.html = document.getElementById('researchViewer').innerHTML;
   out.text = document.getElementById('researchViewer').textContent;
+  if (SCENARIO === 'thread') {
+    const shell = document.querySelector('[data-research-shell]');
+    const kinds = () => [...document.querySelectorAll('.rs-thread-entry')]
+      .map((n) => n.getAttribute('data-rs-kind')).join(',');
+    out.thread = { kinds: kinds(),
+      chips: [...document.querySelectorAll('[data-rs-filter]')]
+        .map((n) => n.getAttribute('data-rs-filter')).join(','),
+      tabs: [...document.querySelectorAll('[data-rs-tab]')]
+        .map((n) => n.getAttribute('data-rs-tab')).join(',') };
+    const evidence = document.querySelector('[data-rs-kind="evidence"]');
+    _paintResearch();
+    out.thread.sameEvidenceNode = evidence
+      === document.querySelector('[data-rs-kind="evidence"]');
+    _filterResearchThread('evidence');
+    _paintResearch();
+    out.thread.filterAttr = shell.getAttribute('data-research-filter');
+    out.thread.filterChip = document.querySelector('[data-rs-filter="evidence"]')
+      .classList.contains('is-active');
+    out.thread.allChip = document.querySelector('[data-rs-filter="all"]')
+      .classList.contains('is-active');
+    _switchResearchTab('workspace');
+    out.thread.workspaceShown =
+      !document.querySelector('[data-rs-panel="workspace"]').hidden
+      && document.querySelector('[data-rs-thread]').hidden;
+    _switchResearchTab('thread');
+    out.thread.threadShown =
+      !document.querySelector('[data-rs-thread]').hidden
+      && document.querySelector('[data-rs-panel="workspace"]').hidden;
+    out.thread.filterAfterTab = shell.getAttribute('data-research-filter');
+  }
   console.log(JSON.stringify(out));
   if (typeof _stopResearchPoll === 'function') _stopResearchPoll();
   process.exit(0);
@@ -338,7 +379,7 @@ def _run_render(scenario='live'):
 
     with tempfile.TemporaryDirectory(prefix='tofu-research-render-') as temp_dir:
         h = os.path.join(temp_dir, 'research-render.js')
-        built = native_module_path('paper/research-view.js', RESEARCH_VIEW_TS)
+        built = native_module_path('research/components/view.js', RESEARCH_VIEW_TS)
         with open(h, 'w', encoding='utf-8') as f:
             f.write(_RENDER_HARNESS)
         r = subprocess.run(['node', h, ROOT, scenario, built],
@@ -409,6 +450,21 @@ def test_survey_markdown_and_gap_map_render():
 
 
 @requires_node
+def test_interrupted_run_does_not_claim_an_honest_zero():
+    """A 429-killed run has NO gate verdict. The empty candidate panel must
+    say the run was interrupted — the 2026-09-04 incident showed the
+    honest-zero copy on a pipeline that never reached the gate."""
+    out = _run_render('error')
+    text = out.get('text') or ''
+    assert 'paper.research.noIdeasRunFailed' in text, (
+        'an interrupted run must say so, not pose as a completed gate '
+        f'review; text was: {text[:400]}')
+    assert 'paper.research.noIdeasTitle' not in text, (
+        'the gate-rejection verdict copy must not appear on a run that never '
+        'reached the gate')
+
+
+@requires_node
 def test_panel_rebuilds_from_the_store_with_no_live_job():
     """★ The refresh criterion: no task was ever started on this page, so the
     panel can only be built from the durable lookup."""
@@ -441,6 +497,66 @@ def test_completed_workbench_exposes_pipeline_decision_and_reproducibility_ledge
     assert 'data-tofu-action="_copyResearchArtifact(\'idea\',0,this)"' in html, (
         'an accepted hypothesis cannot be copied into an experiment workflow')
 
+
+@requires_node
+def test_run_view_is_a_chronological_thread_with_filter_chips():
+    """Owner ruling: a run reads as ONE conversation thread in pipeline order
+    (evidence → ideas → ledger in this fixture), with kind filter chips and
+    workspace/paper as separate surfaces — not five competing tabs."""
+    out = _run_render('thread')
+    assert 'error' not in out, out.get('error')
+    thread = out.get('thread') or {}
+    assert thread.get('kinds') == 'papers,evidence,ideas,ledger', (
+        f'thread entries are not in pipeline order: {thread.get("kinds")}')
+    assert thread.get('chips') == 'all,papers,evidence,ideas,ledger', (
+        'filter chips must mirror the rendered kinds, one chip per entry: '
+        f'{thread.get("chips")}')
+    assert thread.get('tabs') == 'thread,workspace,paper', (
+        f'workspace/paper surfaces are missing from the nav: {thread.get("tabs")}')
+    assert thread.get('sameEvidenceNode') is True, (
+        'a telemetry repaint rebuilt the evidence entry — open disclosures '
+        'and scroll position are lost on every update')
+    assert thread.get('filterAttr') == 'evidence', (
+        'the evidence chip does not drive the shell filter state')
+    assert thread.get('filterChip') is True and thread.get('allChip') is False, (
+        'chip is-active state does not follow the applied filter')
+    assert thread.get('workspaceShown') is True, (
+        'the experiment surface did not replace the thread on tab switch')
+    assert thread.get('threadShown') is True, (
+        'switching back to the thread surface is broken')
+    assert thread.get('filterAfterTab') == 'evidence', (
+        'the kind filter must survive surface switches and repaints')
+
+
+def test_thread_filter_styles_hide_other_entries():
+    """Without per-kind hiding rules the filter chips are decorative."""
+    css_path = os.path.join(
+        ROOT, 'frontend/src/styles/application/03-paper-reader.css')
+    with open(css_path, encoding='utf-8') as handle:
+        css = handle.read()
+    for kind in ('papers', 'evidence', 'ideas', 'review', 'ledger'):
+        assert f'[data-research-filter="{kind}"]' in css, (
+            f'filter "{kind}" has no hiding rule — the chip would do nothing')
+
+
+def test_landing_stage_styles_exist_and_legacy_chrome_is_gone():
+    """The landing is a centered foundry stage (hero → composer → journey →
+    template gallery → resumable recent). Dropping one of these rules silently
+    degrades it back to a form-like card; reviving a legacy class means dead
+    chrome leaked back in. Neither raises an error on its own."""
+    css_path = os.path.join(
+        ROOT, 'frontend/src/styles/application/03-paper-reader.css')
+    with open(css_path, encoding='utf-8') as handle:
+        css = handle.read()
+    for selector in ('.rs-hero-title', '.rs-journey-step', '.rs-template-card',
+                     '.rs-recent-item', '.rs-composer:focus-within',
+                     '@keyframes rsLandingRise'):
+        assert selector in css, (
+            f'{selector} missing — the landing stage style regressed')
+    for legacy in ('.rs-template-chip', '.rs-direction-box', '.rs-composer-head',
+                   '.rs-brand-icon'):
+        assert legacy not in css, (
+            f'{legacy} resurfaced — legacy landing chrome leaked back')
 
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-x', '-q', '-m', 'unit']))

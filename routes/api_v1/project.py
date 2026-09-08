@@ -36,7 +36,7 @@ disables the buckets entirely on single-user installs.
 TODO(enterprise, I7): project selection, board, and charter state are
 instance-global behind bare ``@require_auth`` — any authenticated user can
 retarget the shared project root. Key all state by ``auth_ctx.user_id``.
-docs/ENTERPRISE_READINESS_AUDIT.md
+docs/ENTERPRISE_EVOLUTION.md
 """
 
 from __future__ import annotations

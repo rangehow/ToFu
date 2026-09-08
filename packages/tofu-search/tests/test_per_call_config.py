@@ -15,7 +15,6 @@ configure() produced results through both pool proxies.
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-import tofu_search.config as _config
 from tofu_search.config import bind_call_config, get_config
 from tofu_search.providers import submit_with_provider_context
 from tofu_search.search import orchestrator as orch

@@ -73,7 +73,7 @@ def test_local_wire_composes_execute_tools_and_read_only_swarm():
                  if (tool.get('function') or {}).get('name') == 'spawn_agents')
     assert spawn == SPAWN_AGENTS_TOOL
     assert plan.body['messages'] == [
-        {'role': 'user', 'content': 'compare modules'}]
+        {'role': 'user', 'content': [{'type': 'text', 'text': 'compare modules'}]}]
     assert decision_sink == {
         'programmaticBackend': 'local',
         'multiAgentBackend': 'local_swarm',

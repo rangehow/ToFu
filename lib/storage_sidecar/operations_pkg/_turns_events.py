@@ -131,15 +131,42 @@ def _turn_event_append(session: Session, payload: Mapping[str, Any]) -> Any:
     }
 
 
-def _turn_event_record(session: Session, payload: Mapping[str, Any]) -> Any:
+def _turn_event_record(session: Session, payload: Mapping[str, Any], *,
+                       settling_flow_parent: bool = False) -> Any:
     attempt_id = _required_text(payload, "attempt_id", 128)
     user_id = _integer(payload, "user_id", minimum=1)
+    if payload.get('terminal'):
+        identity = session.fetch_one(
+            'SELECT a.conversation_id FROM storage_generation_attempts a '
+            'JOIN storage_conversation_turns t ON t.turn_id=a.turn_id '
+            'WHERE a.attempt_id=? AND t.user_id=?', (attempt_id, user_id))
+        if identity is not None:
+            key = f'{user_id}:{identity["conversation_id"]}'
+            session.lock_key('conversation', key)
+            session.lock_key('turn_conversation', key)
+    # The declared root is only a lock-order hint; the immutable attempt
+    # config below must prove it. Ordinary chat pays no extra parent read.
+    flow_root_hint = str(payload.get("flow_root_attempt_id") or "")
+    if flow_root_hint:
+        session.lock_key("attempt_events", flow_root_hint)
     session.lock_key("attempt_events", attempt_id)
     attempt = session.fetch_one(
-        "SELECT * FROM storage_generation_attempts WHERE attempt_id=?", (attempt_id,)
-    )
+        "SELECT * FROM storage_generation_attempts WHERE attempt_id=?", (attempt_id,))
     if attempt is None or attempt["status"] not in ("pending", "running"):
         return {"applied": False}
+    flow_root = str((_load(attempt["config_json"]) or {}).get("flowRootAttemptId") or "")
+    if flow_root != flow_root_hint:
+        return {"applied": False}
+    if flow_root:
+        parent = session.fetch_one(
+            "SELECT a.status,t.current_attempt_id,t.user_id,a.conversation_id "
+            "FROM storage_generation_attempts a JOIN storage_conversation_turns t "
+            "ON t.turn_id=a.turn_id WHERE a.attempt_id=?", (flow_root,))
+        if (parent is None or int(parent["user_id"]) != user_id
+                or parent["conversation_id"] != attempt["conversation_id"]
+                or parent["current_attempt_id"] != flow_root
+                or (parent["status"] not in ("pending", "running") and not settling_flow_parent)):
+            return {"applied": False}
     turn = session.fetch_one(
         "SELECT turn_id,conversation_id,user_id,lane_id,parent_turn_id,"
         "ordinal,actor,kind,run_id,status,current_attempt_id,"
@@ -237,6 +264,11 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any]) -> Any:
         )
     previous_projection = (
         stored_projection if stored_projection_is_mapping else {})
+    wire_previous_projection = previous_projection
+    wire_matches_stored = stored_projection_matches_previous
+    # Application patches may be based on a normalized read. Replay must
+    # still start at the exact previous wire document, including missing
+    # segment placeholders; otherwise clients reject all following revisions.
 
     def current_stored_payload_bytes() -> int:
         nonlocal stored_payload_bytes
@@ -316,7 +348,8 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any]) -> Any:
                 "database_protocol_error", "Projection patch is invalid") from exc
         replay_projection_patch = dict(projection_patch)
     else:
-        projection = payload.get("projection") or {}
+        projection = (dict(previous_projection) if settling_flow_parent
+                      else payload.get("projection") or {})
     settlement = payload.get("settlement") or {}
     event_type = (
         "terminal_settlement"
@@ -388,16 +421,15 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any]) -> Any:
         # baseline, but normalize it once before the next structural patch.
         next_has_stable_segments = (
             projection_patch is not None and projection_segments_stable)
-    if replay_projection_patch is None:
+    if replay_projection_patch is None or normalization_changed:
         replay_projection_patch = build_projection_patch(
-            previous_projection,
+            wire_previous_projection,
             next_projection,
             base_revision=old_revision,
             target_revision=new_revision,
         )
     replay_patch_is_exact = (
-        not normalization_changed
-        and (projection_head.active or stored_projection_matches_previous)
+        projection_head.active or wire_matches_stored
     )
     projection_write = write_turn_projection_revision(
         session,
@@ -413,7 +445,7 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any]) -> Any:
         slim=slim,
         settlement=settlement,
         projection_value=projection,
-        previous_projection=previous_projection,
+        previous_projection=wire_previous_projection,
         next_projection=next_projection,
         projection_is_mapping=projection_is_mapping,
         physical_matches_previous=stored_projection_matches_previous,
@@ -461,7 +493,14 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any]) -> Any:
                 attempt_id,
             ),
         )
+    continuation_status = None
+    if terminal:
+        from ._model_continuation import settle_continuation
+        continuation_status = settle_continuation(
+            session, turn, payload.get('model_continuation'), status=status)
     event_payload = dict(payload.get("event_payload") or {})
+    if terminal:
+        event_payload['modelContinuationStatus'] = continuation_status
     # Compact durable transport (2026-08-23 wire-amplification root fix): the
     # full projection already landed transactionally on the turn row.  Store
     # the exact revision-to-revision patch for replay, including terminal
@@ -552,10 +591,31 @@ def _turn_event_record(session: Session, payload: Mapping[str, Any]) -> Any:
             projection_write.checkpoint_materialized_bytes,
             projection_write.inline_projection_released_bytes,
         )
+    child_terminal_events = []
+    if terminal and not flow_root and str(attempt["task_id"] or ""):
+        # At most one live sequential phase exists in chat. Keep the scan
+        # bounded even for older/custom graphs and preserve all partial facts.
+        children = session.fetch_all(
+            "SELECT attempt_id,config_json FROM storage_generation_attempts "
+            "WHERE conversation_id=? AND task_id=? AND status IN ('pending','running') LIMIT 4096",
+            (attempt["conversation_id"], attempt["task_id"]))
+        for child in children:
+            if (_load(child["config_json"]) or {}).get("flowRootAttemptId") != attempt_id:
+                continue
+            child_result = _turn_event_record(session, {
+                "attempt_id": child["attempt_id"], "user_id": user_id,
+                "flow_root_attempt_id": attempt_id,
+                "terminal": True, "status": status,
+                "settlement": {**settlement, "resumeOptions": []},
+                "error": payload.get("error") or {},
+                "event_type": "terminal_settlement", "event_payload": {"phase": None},
+            }, settling_flow_parent=True)
+            child_terminal_events.extend(child_result.get("_conversationSyncAttemptEvents") or [])
     return {
         "applied": True,
         "status": status,
         "projection_revision": new_revision,
         "task_event": task_event_result,
-        "_conversationSyncAttemptEvents": [event_result["event"]],
+        "model_continuation_status": continuation_status,
+        "_conversationSyncAttemptEvents": [event_result["event"]] + child_terminal_events,
     }

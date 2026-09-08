@@ -660,7 +660,7 @@ def _upsert_task_row(task, conv_id, *, content, thinking, status,
 # nulling the dict key here frees the bytes exactly when that daemon finishes,
 # not at task-TTL — strictly better.
 _HEAVY_TERMINAL_FIELDS = (
-    'messages', '_flow_turns', '_tool_result_cache',
+    'messages', '_flow_turns', '_flowLiveTurn', '_tool_result_cache',
     '_unchanged_tool_result_receipts', '_settled_tool_results',
     '_tool_call_id_receipts',
 )

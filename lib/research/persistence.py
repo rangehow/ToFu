@@ -200,8 +200,18 @@ def persist_ideate(direction: str, lang: str, artifact: dict, *,
             'gate_reached': art.get('gate_reached')}
     if isinstance(art.get('evaluation'), dict):
         meta['evaluation'] = art['evaluation']
+
+    if isinstance(art.get('research_cycle'), dict):
+        meta['research_cycle'] = art['research_cycle']
+
+    for key in ('candidate_audit', 'repair_records', 'retired'):
+        if isinstance(art.get(key), list):
+            meta[key] = art[key]
     if art.get('usage'):
         meta['usage'] = art['usage']
+
+    if isinstance(art.get('evaluation_usage'), dict):
+        meta['evaluation_usage'] = art['evaluation_usage']
     if art.get('degraded'):
         meta['degraded'] = True
         meta['degraded_reason'] = art.get('degraded_reason') or ''
@@ -343,10 +353,20 @@ def load_research_artifacts(
             out['gate_reached'] = meta.get('gate_reached') or ''
             out['degraded'] = bool(meta.get('degraded'))
             out['degraded_reason'] = meta.get('degraded_reason') or ''
+
+            if isinstance(meta.get('research_cycle'), dict):
+                out['research_cycle'] = meta['research_cycle']
+
+            for key in ('candidate_audit', 'repair_records', 'retired'):
+                if isinstance(meta.get(key), list):
+                    out[key] = meta[key]
             stage_usage['ideate'] = meta.get('usage') or {}
             if isinstance(meta.get('evaluation'), dict):
                 out['evaluation'] = meta['evaluation']
-                stage_usage['evaluate'] = meta['evaluation'].get('usage') or {}
+                stage_usage['evaluate'] = (
+                    meta.get('evaluation_usage')
+                    if isinstance(meta.get('evaluation_usage'), dict)
+                    else meta['evaluation'].get('usage') or {})
     if any(stage_usage.values()):
         from lib.research.telemetry import aggregate_research_usage
         out['usage'] = aggregate_research_usage(stage_usage['survey'],

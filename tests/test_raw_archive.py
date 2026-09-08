@@ -282,3 +282,204 @@ def test_raw_archive_is_owner_scoped_lazy_and_quota_explicit(chat_sidecar):
         })["archives"] == []
     finally:
         delete_conversation(conversation_id)
+
+
+class _RecordingSession:
+    backend = "sqlite"
+
+    def __init__(self, responses, *, meta_value=None):
+        self.responses = list(responses)
+        self.meta_value = meta_value
+        self.statements = []
+        self.executed = []
+
+    def lock_key(self, namespace, key):
+        pass
+
+    def fetch_one(self, sql, params=()):
+        self.statements.append(sql)
+        if "storage_meta" in sql:
+            return (
+                {"meta_value": self.meta_value}
+                if self.meta_value is not None else None
+            )
+        for marker, row in self.responses:
+            if marker in sql:
+                return row
+        return None
+
+    def execute(self, sql, params=()):
+        self.statements.append(sql)
+        self.executed.append((sql, params))
+        if "INSERT INTO storage_meta" in sql or "UPDATE storage_meta" in sql:
+            self.meta_value = params[-1] if "INSERT" in sql else params[0]
+        return 1
+
+
+def _unit_payload() -> dict:
+    request = b'{"messages":[{"role":"user","content":"hi"}]}'
+    response = b'data: {"choices":[]}\n\n'
+    return {
+        "archive_id": "raw-unit-" + uuid.uuid4().hex,
+        "user_id": 1,
+        "conversation_id": "conv",
+        "turn_id": "turn",
+        "attempt_id": "attempt",
+        "task_id": "task",
+        "round_num": 1,
+        "transport_attempt": 0,
+        "request_blob_b64": base64.b64encode(
+            zlib.compress(request, level=1)).decode("ascii"),
+        "response_blob_b64": base64.b64encode(
+            zlib.compress(response, level=1)).decode("ascii"),
+        "request_bytes": len(request),
+        "response_bytes": len(response),
+        "request_sha256": hashlib.sha256(request).hexdigest(),
+        "response_sha256": hashlib.sha256(response).hexdigest(),
+        "integrity": "complete",
+        "truncation_reason": "",
+        "summary": {"text": "Provider request/response"},
+        "budget_bytes": 1024 * 1024,
+        "min_free_bytes": 0,
+        "available_free_bytes": 0,
+    }
+
+
+def test_raw_archive_put_skips_blob_readback_and_global_scan():
+    """Writer-thread put stays byte-light (2026-09-05 starvation incident)."""
+    from lib.storage_sidecar.operations_pkg import _raw_archives
+
+    session = _RecordingSession(
+        [
+            ("storage_generation_attempts", {"attempt_id": "attempt"}),
+            ("SUM(stored_bytes)", {"total": 0}),
+        ],
+        meta_value="0",
+    )
+    stored = _raw_archives._raw_archive_put(session, _unit_payload())
+    assert stored["idempotentReplay"] is False
+    assert stored["requestAvailable"] is True
+    assert stored["storedBytes"] > 0
+    for sql in session.statements:
+        assert "SELECT *" not in sql
+        if "SUM(stored_bytes)" in sql:
+            assert "WHERE" in sql  # attempt-scoped only, never a global scan
+    assert any("UPDATE storage_meta" in sql for sql in session.statements)
+
+
+def test_raw_archive_usage_counter_bootstraps_from_table_once():
+    """Authorities predating the counter seed it from one SUM, then reuse."""
+    from lib.storage_sidecar.operations_pkg import _raw_archives
+
+    session = _RecordingSession(
+        [
+            ("storage_generation_attempts", {"attempt_id": "attempt"}),
+            ("SUM(stored_bytes)", {"total": 42}),
+        ],
+    )
+    stored = _raw_archives._raw_archive_put(session, _unit_payload())
+    inserts = [
+        params for sql, params in session.executed
+        if "INSERT INTO storage_meta" in sql
+    ]
+    assert inserts == [("raw_archive_stored_bytes", "42")]
+    updates = [
+        params for sql, params in session.executed
+        if "UPDATE storage_meta" in sql
+    ]
+    assert updates == [
+        (str(42 + stored["storedBytes"]), "raw_archive_stored_bytes"),
+    ]
+
+
+def test_raw_archive_delete_debits_usage_counter():
+    from lib.storage_sidecar.operations_pkg import _raw_archives
+
+    session = _RecordingSession(
+        [("SUM(stored_bytes)", {"total": 40})],
+        meta_value="100",
+    )
+    _raw_archives._debit_stored_bytes_for_delete(
+        session, "attempt_id=?", ("attempt",))
+    scans = [sql for sql in session.statements if "SUM(stored_bytes)" in sql]
+    assert scans and all("WHERE attempt_id=?" in sql for sql in scans)
+    updates = [
+        params for sql, params in session.executed
+        if "UPDATE storage_meta" in sql
+    ]
+    assert updates == [("60", "raw_archive_stored_bytes")]
+
+
+def test_raw_archive_budget_stays_exact_across_replay_and_delete(chat_sidecar):
+    from lib.storage import get_storage_client
+    from lib.turn_lifecycle import bind_task, create_turn_pair
+    from tests._seed import delete_conversation, seed_conversation
+
+    conversation_id = "raw-archive-" + uuid.uuid4().hex
+    seed_conversation(conversation_id, messages=[])
+    try:
+        created = create_turn_pair(
+            conversation_id,
+            command_id="raw-create-" + uuid.uuid4().hex,
+            input_projection={"content": "hello"},
+            config={"model": "gpt-4o"},
+            user_id=1,
+        )
+        bind_task(created["attempt"]["attemptId"], "raw-task", user_id=1)
+        client = get_storage_client(write=True)
+        archive_id = "raw-" + uuid.uuid4().hex
+        stored = client.command(
+            "raw_archive.put",
+            _archive_payload(created, archive_id, budget_bytes=1024 * 1024),
+            "put:" + archive_id,
+        )
+        assert stored["integrity"] == "complete"
+        stored_bytes = stored["storedBytes"]
+        assert stored_bytes > 1
+
+        replay = client.command(
+            "raw_archive.put",
+            _archive_payload(created, archive_id, budget_bytes=1024 * 1024),
+            "put-replay:" + archive_id,
+        )
+        assert replay["idempotentReplay"] is True
+
+        budget = stored_bytes + 1
+        follower = client.command(
+            "raw_archive.put",
+            _archive_payload(
+                created, "raw-" + uuid.uuid4().hex, budget_bytes=budget),
+            "put:follower-" + uuid.uuid4().hex,
+        )
+        assert follower["truncationReason"] == "quota_exhausted"
+
+        # A second live conversation owns the post-delete put: deleting the
+        # first conversation removes its attempt rows, and put validates
+        # attempt ownership.
+        conversation_id2 = "raw-archive-" + uuid.uuid4().hex
+        seed_conversation(conversation_id2, messages=[])
+        try:
+            created2 = create_turn_pair(
+                conversation_id2,
+                command_id="raw-create-" + uuid.uuid4().hex,
+                input_projection={"content": "hello"},
+                config={"model": "gpt-4o"},
+                user_id=1,
+            )
+            bind_task(created2["attempt"]["attemptId"], "raw-task", user_id=1)
+            client.command("conversation.delete", {
+                "conv_id": conversation_id, "user_id": 1,
+            }, "delete:" + conversation_id)
+            # The delete must debit exactly the rows it removed: neither the
+            # replay's double-charge nor a missing debit may linger.
+            after = client.command(
+                "raw_archive.put",
+                _archive_payload(
+                    created2, "raw-" + uuid.uuid4().hex, budget_bytes=budget),
+                "put:after-" + uuid.uuid4().hex,
+            )
+            assert after["integrity"] == "complete"
+        finally:
+            delete_conversation(conversation_id2)
+    finally:
+        delete_conversation(conversation_id)

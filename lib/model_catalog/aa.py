@@ -349,8 +349,41 @@ def refresh_scores(
         )
 
 
+def cached_routing_scores(models: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Read public AA evidence without credentials, refreshes, or fuzzy aliases.
+
+    Routing never turns a base-model benchmark into evidence for a different
+    variant. A stale cache is descriptive only and returns no routing scores.
+    """
+    with _lock:
+        dataset = _memo or _read_disk_cache()
+    if not dataset:
+        return {}
+    try:
+        fetched_at = float(dataset.get('fetched_at') or 0)
+    except (TypeError, ValueError, OverflowError):
+        return {}
+    if not 0 <= time.time() - fetched_at <= _ttl_seconds():
+        return {}
+    rows = dataset.get('models') or []
+    scores = {}
+    for model in models:
+        # Do not use display labels or prefix matching at this boundary.
+        identity = normalize_name(model.get('model_id'))
+        exact_rows = [row for row in rows if identity in row.get('_keys', ())]
+        matched = match_model({**model, 'display_name': ''}, exact_rows)
+        if matched is not None:
+            scores[_score_key(model)] = {
+                metric: matched.get(metric)
+                for metric in ('intelligence', 'coding', 'agentic')
+            } | {'source': AA_SOURCE_LABEL, 'match': 'exact',
+                 'fetched_at': fetched_at, 'aa_slug': matched.get('aa_slug')}
+    return scores
+
+
 __all__ = [
     "AA_API_URL",
     "aa_block_for_models",
+    "cached_routing_scores",
     "refresh_scores",
 ]

@@ -8,10 +8,16 @@ OPERATIONS = {
     # body; this mirrors the legacy lifecycle contract.
     'turn.create_pair': ops.OperationSpec(
         'command', False, ops._turn_create_pair, ops._turn_change_capture),
+    # Queue lifecycle commands return full Turn publics; an input Turn with
+    # inline images exceeds the 64 KiB stored-receipt cap, which used to roll
+    # the activation back on every drain tick and strand the queue forever.
+    # Both are idempotent by re-execution against the durable queue row
+    # (activate: a committed activation removes the row; cancel answers
+    # cancelled=False), matching the receipt-free attempt lifecycle commands.
     'turn.queue.activate': ops.OperationSpec(
-        'command', True, ops._turn_queue_activate, ops._turn_change_capture),
+        'command', False, ops._turn_queue_activate, ops._turn_change_capture),
     'turn.queue.cancel': ops.OperationSpec(
-        'command', True, ops._turn_queue_cancel, ops._turn_change_capture),
+        'command', False, ops._turn_queue_cancel, ops._turn_change_capture),
     'turn.steer.commit': ops.OperationSpec(
         'command', True, ops._turn_steer_commit, ops._turn_change_capture),
     'turn.append_settled': ops.OperationSpec(
@@ -47,7 +53,9 @@ OPERATIONS = {
         'command', False, ops._turn_delete, ops._turn_change_capture),
     'turn.recover': ops.OperationSpec(
         'command', False, ops._turn_recover, ops._turn_change_capture),
-    'turn.cleanup': ops.OperationSpec('command', False, ops._turn_cleanup),
+    # Bounded superseded-attempt cleanup is receipted so a lost-ACK retry
+    # replays the stored bounded-deletion receipt instead of re-executing.
+    'turn.cleanup': ops.OperationSpec('command', True, ops._turn_cleanup),
     'turn.search.backfill': ops.OperationSpec(
         'command', False, ops._turn_search_backfill),
     'turn.visible.sync': ops.OperationSpec(

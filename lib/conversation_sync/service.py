@@ -210,6 +210,8 @@ class ConversationSyncService:
             # shared authority read.
             "pushWithheld": False,
         }
+        if isinstance(stored.get("activeAttemptPhase"), dict):
+            response["activeAttemptPhase"] = stored["activeAttemptPhase"]
         if isinstance(stored.get("turnWindow"), dict):
             response["turnWindow"] = dict(stored["turnWindow"])
         if include_artifact_hint and isinstance(stored.get("hasArtifacts"), bool):

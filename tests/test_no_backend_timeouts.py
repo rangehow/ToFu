@@ -173,11 +173,11 @@ class TestRunCommandHasNoDefaultTimeout:
         passing small budgets defensively."""
         from lib.tools.project import PROJECT_TOOL_RUN_COMMAND
         fn = PROJECT_TOOL_RUN_COMMAND['function']
-        blob = fn['description'] + fn['parameters']['properties']['timeout']['description']
+        blob = fn['description'] + fn['parameters']['properties']['timeout_s']['description']
         assert '300s' not in blob and '60s for' not in blob, \
             'run_command schema still tells the model about the 60s/300s defaults'
         assert 'NO default timeout' in fn['description'] or \
-               'no timeout' in fn['parameters']['properties']['timeout']['description'].lower(), \
+               'unlimited' in fn['parameters']['properties']['timeout_s']['description'].lower(), \
             'the schema does not tell the model the default is now unbounded'
 
 

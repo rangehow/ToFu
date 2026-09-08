@@ -71,6 +71,7 @@ def test_snapshot_updates_the_canonical_turn_projection(
         conversations, 'notify_conv_changed', lambda *args, **kwargs: None)
 
     snapshot = {
+        'swarm_id': 'swarm-turn-native',
         'agents': [{'id': 'agent-a', 'status': 'done', 'tokens': 7}],
         'settled': True,
         'totalTokens': 7,

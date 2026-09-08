@@ -13,6 +13,8 @@ from lib.model_routing import (
 )
 from lib.model_routing import bootstrap as bootstrap_module
 
+from lib.secret_envelope import secret_hint
+
 
 pytestmark = pytest.mark.unit
 
@@ -173,3 +175,112 @@ def test_active_oauth_authority_recovers_missing_legacy_provider_without_loss(
     assert {row['protocol'] for row in yourprovider_connections} == {
         'openai', 'anthropic',
     }
+
+
+def _seed_leaked_envelope_authority(repository, boundary) -> None:
+    """Recreate the early-v2 storage shape the repair pass targets.
+
+    Writers of that era folded every provider header into the credential
+    envelope, left the connection bare, and stored a hint derived from the
+    whole envelope JSON.
+    """
+    plan = bootstrap_module.plan_legacy_migration({'providers': [{
+        'id': 'yourprovider',
+        'name': 'Default',
+        'brand': 'yourprovider',
+        'base_url': 'https://api.openai.com/v1/anthropic',
+        'protocol': 'anthropic',
+        'api_keys': ['22080658572602085409'],
+        'extra_headers': {
+            'X-Custom-Header': 'gray-release',
+            'api-key': 'gateway-secret',
+        },
+        'models': [{'model_id': 'LongCat-2.0', 'capabilities': ['text']}],
+    }]})
+    assert not plan.blocking_issues
+    old_envelope = json.dumps({
+        'format': 'tofu.credential-secret/v1',
+        'api_key': '22080658572602085409',
+        'oauth': '',
+        'extra_headers': {
+            'X-Custom-Header': 'gray-release',
+            'api-key': 'gateway-secret',
+        },
+    }, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+    repository.put_secret(
+        boundary, old_envelope,
+        secret_reference=plan._secrets[0].secret_reference)
+    document = plan.document
+    document['connections'][0]['extra_headers'] = {}
+    document['credentials'][0]['key_hint'] = '{"ap…ELL"'
+    repository.compare_and_swap(boundary, document, expected_revision=0)
+
+
+def test_bootstrap_repairs_envelope_storage_shape_and_hint(
+        tmp_path, monkeypatch):
+    repository = InMemoryModelRoutingRepository()
+    boundary = OwnerBoundary.create(75)
+    _seed_leaked_envelope_authority(repository, boundary)
+    monkeypatch.setattr(
+        bootstrap_module, '_legacy_sources', lambda _boundary: ({}, []))
+    monkeypatch.setattr(
+        bootstrap_module, '_pending_provider_path',
+        lambda: str(tmp_path / 'missing.json'))
+
+    result = bootstrap_module.bootstrap_owner_model_routing(
+        boundary, repository=repository)
+
+    assert result['status'] == 'already_active'
+    authority = repository.get(boundary)
+    assert authority.document['connections'][0]['extra_headers'] == {
+        'X-Custom-Header': 'gray-release'}
+    credential = authority.document['credentials'][0]
+    assert credential['key_hint'] == secret_hint('22080658572602085409')
+    envelope = json.loads(repository.resolve_secret(
+        boundary, credential['secret_reference']))
+    assert envelope['api_key'] == '22080658572602085409'
+    assert envelope['extra_headers'] == {'api-key': 'gateway-secret'}
+    assert 'gateway-secret' not in json.dumps(authority.public_document())
+
+    repaired_revision = authority.revision
+    replay = bootstrap_module.bootstrap_owner_model_routing(
+        boundary, repository=repository)
+    assert replay['status'] == 'already_active'
+    assert repository.get(boundary).revision == repaired_revision
+
+
+def test_bootstrap_repair_keeps_conflicted_headers_encrypted(
+        tmp_path, monkeypatch):
+    repository = InMemoryModelRoutingRepository()
+    boundary = OwnerBoundary.create(76)
+    _seed_leaked_envelope_authority(repository, boundary)
+    authority = repository.get(boundary)
+    overridden = authority.document
+    overridden['connections'][0]['extra_headers'] = {
+        'X-Custom-Header': 'user-override'}
+    repository.compare_and_swap(
+        boundary, overridden, expected_revision=authority.revision)
+    monkeypatch.setattr(
+        bootstrap_module, '_legacy_sources', lambda _boundary: ({}, []))
+    monkeypatch.setattr(
+        bootstrap_module, '_pending_provider_path',
+        lambda: str(tmp_path / 'missing.json'))
+
+    bootstrap_module.bootstrap_owner_model_routing(
+        boundary, repository=repository)
+
+    authority = repository.get(boundary)
+    # The user's connection-level override wins; the conflicted routing
+    # header stays encrypted so the credential keeps its
+    # envelope-over-connection dispatch precedence, and the hint is still
+    # re-derived from the usable key.
+    assert authority.document['connections'][0]['extra_headers'] == {
+        'X-Custom-Header': 'user-override'}
+    credential = authority.document['credentials'][0]
+    envelope = json.loads(repository.resolve_secret(
+        boundary, credential['secret_reference']))
+    assert envelope['extra_headers'] == {
+        'X-Custom-Header': 'gray-release',
+        'api-key': 'gateway-secret',
+    }
+    assert credential['key_hint'] == secret_hint('22080658572602085409')

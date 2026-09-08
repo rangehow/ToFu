@@ -77,6 +77,9 @@ var runtimeScope = {
   },
 };
 var config = {};
+var _conversationProjectController = { begin: () => () => true };
+var _conversationModelController = { begin: () => () => true };
+function _clearProjectStateLocal() {}
 var sessionStorage = { setItem() {} };
 var document = {
   getElementById() { return { textContent: '' }; },

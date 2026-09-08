@@ -242,7 +242,11 @@ AWAIT_AGENTS_TOOL = {
             "explicit ids to reread a full result. Hard cap is "
             "60 seconds; if more agents are still running when the timeout "
             "elapses, the call returns what's done plus a list of stragglers. "
-            "An identical retry with no new completion returns immediately."
+            "An identical retry with no new completion returns immediately. "
+            "Pending operator input or background-command completion can yield "
+            "the wait early with yield_reason=pending_input, without consuming "
+            "agent results or cancelling agents. Process that input before "
+            "waiting again."
         ),
         "parameters": {
             "type": "object",

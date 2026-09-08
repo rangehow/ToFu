@@ -31,6 +31,7 @@
     "build:frontend:raw": "vite build",
     "verify:frontend": "python3 scripts/verify_frontend_dist.py",
     "dev:frontend": "vite --host 127.0.0.1",
+    "check:research": "node --test frontend/src/features/research/testing/*.test.cjs",
     "check:frontend": "npm run check:runtime && npm run check:styles && npm run check:conversation-sync && npm run check:api-v4 && npm run check:api-v1-model-routing && npm run check:event-contract && npm run check:i18n && npm run check:actions && npm run typecheck:modules && npm run build:frontend"
   },
   "keywords": [],

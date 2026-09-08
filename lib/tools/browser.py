@@ -11,6 +11,30 @@ from lib.log import get_logger
 
 logger = get_logger(__name__)
 
+from lib.browser.content_contract import READ_TARGET_SCHEMA
+
+BROWSER_TOOL_SITE = {
+    'type': 'function',
+    'function': {
+        'name': 'browser_site',
+        'description': (
+            'Discover and run a connected website capability, not a general web engine. '
+            'Omit site to list sources; pass site to inspect its operation schemas; '
+            'pass site, operation and params to execute a declared read operation. '
+            'Xiaohongshu searches notes with native keywords; ModelPlaza looks up '
+            'model names/attributes. Do not send web operators or whole questions '
+            'to name-only fields. Uses the selected authenticated browser.'),
+        'parameters': {
+            'type': 'object', 'additionalProperties': False,
+            'properties': {
+                'site': {'type': 'string', 'maxLength': 64},
+                'operation': {'type': 'string', 'maxLength': 64},
+                'params': {'type': 'object', 'maxProperties': 16},
+            },
+        },
+    },
+}
+
 _TAB_ID_OPT = {
     "type": "integer",
     "description": "Tab ID; omit for the current working tab."
@@ -36,15 +60,18 @@ BROWSER_TOOL_READ_PAGE = {
     "function": {
         "name": "browser_read_page",
         "description": (
-            "Read the user's real, logged-in browser page. auto chooses useful "
-            "text/structure; text reads DOM text; data returns captured SPA APIs; "
+            "Read the user's logged-in page with target-aware extraction and coverage. "
+            "Set target kind/query/fields when known. auto selects useful content; "
+            "text reads DOM text; data selects relevant captured SPA data; "
             "elements lists controls; app_state extracts framework/chart state."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "tab_id": _TAB_ID_OPT,
+                "target": READ_TARGET_SCHEMA,
                 "mode": {
+
                     "type": "string",
                     "enum": ["auto", "text", "data", "elements", "app_state"],
                     "description": "What representation to return (default: auto)"
@@ -68,8 +95,9 @@ BROWSER_TOOL_RESEARCH_PAGE = {
         "name": "browser_research_page",
         "description": (
             "Deep-read an exact URL in the user's logged-in browser. Traverses "
-            "bounded same-origin pages and returns DOM plus ranked/redacted "
-            "API/state data and shapes. If the user names an internal service "
+            "bounded same-origin pages and returns target-relevant content with honest "
+            "coverage, not every captured API. Set target kind/query/fields when known. "
+            "If the user names an internal service "
             "without giving its URL, call browser_get_history with that name "
             "first and let the user-visible history identify the URL; never "
             "guess an internal hostname."
@@ -80,6 +108,7 @@ BROWSER_TOOL_RESEARCH_PAGE = {
                 "url": {
                     "type": "string"
                 },
+                "target": READ_TARGET_SCHEMA,
                 "mode": {
                     "type": "string",
                     "enum": ["both", "content", "analysis"],
@@ -517,6 +546,8 @@ BROWSER_TOOL_PREVIEW_PAGE = {
 PAGE_PREVIEW_TOOL_NAMES = frozenset({'browser_preview_page'})
 
 BROWSER_TOOLS = [
+
+    BROWSER_TOOL_SITE,
     BROWSER_TOOL_LIST_TABS,
     BROWSER_TOOL_READ_PAGE,
     BROWSER_TOOL_RESEARCH_PAGE,
@@ -532,6 +563,8 @@ BROWSER_TOOLS = [
     BROWSER_TOOL_GET_HISTORY,
 ]
 BROWSER_TOOL_NAMES = {
+
+    'browser_site',
     'browser_list_tabs', 'browser_read_page', 'browser_research_page',
     'browser_devtools', 'browser_execute_js',
     'browser_screenshot', 'browser_click', 'browser_type', 'browser_press_key',
@@ -540,6 +573,8 @@ BROWSER_TOOL_NAMES = {
 }
 
 __all__ = [
+
+    'BROWSER_TOOL_SITE',
     'BROWSER_TOOL_LIST_TABS', 'BROWSER_TOOL_READ_PAGE',
     'BROWSER_TOOL_RESEARCH_PAGE', 'BROWSER_TOOL_DEVTOOLS',
     'BROWSER_TOOL_EXECUTE_JS',

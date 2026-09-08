@@ -75,6 +75,21 @@ MODEL_PRICING = {
     'claude-opus-4.7':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.7'},
     'claude-opus-4.6':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.6'},
     'claude-sonnet-4.6':         {'input': 3.0,   'output': 15.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 4.6'},
+    'claude-opus-4.5':           {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.5'},
+    'claude-sonnet-4.5':         {'input': 3.0,   'output': 15.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 4.5'},
+    'claude-sonnet-4':           {'input': 3.0,   'output': 15.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 4'},
+    'claude-haiku-4.5':          {'input': 1.0,   'output': 5.0,   'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Haiku 4.5'},
+    # Meituan-gateway aws./azure. spellings — wire channel of the split
+    # identities above; cost keys on the raw gateway id (model_entry.py).
+    'aws.claude-opus-4.5':       {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.5'},
+    'aws.claude-sonnet-4.5':     {'input': 3.0,   'output': 15.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 4.5'},
+    'aws.claude-sonnet-4':       {'input': 3.0,   'output': 15.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 4'},
+    'aws.claude-haiku-4.5':      {'input': 1.0,   'output': 5.0,   'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Haiku 4.5'},
+    'claude-fable-5.1':          {'input': 10.0,  'output': 50.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.025, 'name': 'Fable 5.1'},
+    'azure.claude-fable-5.1':    {'input': 10.0,  'output': 50.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.025, 'name': 'Fable 5.1'},
+    # qwen3.5 (Meituan plaza, baidu channel) — 广场价隐含 ¥2.8/¥5.6 per 1M。
+    'qwen3.5':                   {'input': 0.39,  'output': 0.78,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Qwen 3.5'},
+    'qwen3.5-baidu':             {'input': 0.39,  'output': 0.78,  'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Qwen 3.5'},
     # Meituan-gateway yuju evaDaily models — raw gateway IDs stay on the wire; .name is the display channel.
     'yuju-claude-opus-5-evaDaily':   {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 5'},
     'yuju-claude-opus-4.8-evaDaily': {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.8'},
@@ -98,6 +113,11 @@ MODEL_PRICING = {
     'us.anthropic.claude-sonnet-4-20250514-v1:0': {'input': 3.0, 'output': 15.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Sonnet 4 (Bedrock)'},
     'openai.gpt-oss-120b-1:0':                  {'input': 0.15,  'output': 0.60,  'cacheWriteMul': 1.0,  'cacheReadMul': 0.50, 'name': 'GPT-OSS 120B (Bedrock)'},
     'openai.gpt-oss-20b-1:0':                   {'input': 0.07,  'output': 0.30,  'cacheWriteMul': 1.0,  'cacheReadMul': 0.50, 'name': 'GPT-OSS 20B (Bedrock)'},
+    # gpt-oss-* are open weights — OpenAI sells no first-party API, so no official
+    # card exists. Bare ids price at the OpenRouter cheapest-host list (2026-09-08):
+    # 120B $0.037/$0.17, 20B $0.03/$0.13 per 1M; cache mul follows the Bedrock twins.
+    'gpt-oss-120b':                           {'input': 0.037, 'output': 0.17,  'cacheWriteMul': 1.0,  'cacheReadMul': 0.50, 'name': 'GPT-OSS 120B'},
+    'gpt-oss-20b':                            {'input': 0.03,  'output': 0.13,  'cacheWriteMul': 1.0,  'cacheReadMul': 0.50, 'name': 'GPT-OSS 20B'},
     'aws.claude-opus-4.6':       {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.6'},
     'aws.claude-opus-4.6-b':    {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.6 (B)'},
     'vertex.claude-opus-4.6':   {'input': 5.0,   'output': 25.0,  'cacheWriteMul': 1.25, 'cacheReadMul': 0.10, 'name': 'Claude Opus 4.6 (Vertex)'},
@@ -141,6 +161,9 @@ MODEL_PRICING = {
     'qwen3.5-plus':              {'input': 0.11, 'output': 0.66, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Qwen 3.5 Plus'},  # ¥0.8/¥4.8 per 1M (≤128K)
     'qwen3.5-flash':             {'input': 0.03, 'output': 0.28, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Qwen 3.5 Flash'},  # ¥0.2/¥2 per 1M (≤128K)
     'qwen3-max':                 {'input': 0.35, 'output': 1.38, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Qwen3 Max'},  # ¥2.5/¥10 per 1M (≤32K)
+    # qwen3-max-preview (2025-09 launch, Alibaba Cloud Model Studio tiered card):
+    # ≤32K tier $0.861/$3.441 per 1M (32-128K $1.434/$5.735, 128-252K $2.151/$8.602).
+    'qwen3-max-preview':         {'input': 0.861, 'output': 3.441, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Qwen3 Max (Preview)'},
     # Qwen3.8 generation (2026-08, DashScope): native vision + thinking, 1M ctx.
     # 3.8-max ¥12/¥36 per 1M (cache hit ¥1.5 → cacheReadMul 0.125); 3.7-plus row uses the
     # >256K tier ¥6/¥24 (≤256K tier unverified); 3.8-flash ¥0.8/¥2.7 (read mul unverified —
@@ -246,6 +269,8 @@ MODEL_PRICING = {
     # publishes a separate card.
     'glm-5-turbo':               {'input': 0.69, 'output': 3.04, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-5 Turbo'},
     'glm-4.7':                   {'input': 0.69, 'output': 0.69, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-4.7'},
+    # glm-4.7-flash: no Zhipu card yet; per OpenRouter z-ai listing (2026-09-08).
+    'glm-4.7-flash':             {'input': 0.0605, 'output': 0.40, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-4.7 Flash'},
     'glm-4.5-air':               {'input': 0.28, 'output': 1.10, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'GLM-4.5 Air'},
     'glm-4.5-flash':             {'input': 0.0,  'output': 0.0,  'cacheWriteMul': 0,    'cacheReadMul': 0,    'name': 'GLM-4.5 Flash'},
     # ── Doubao (Volcengine) — converted from CNY at 7.24 ──
@@ -261,7 +286,11 @@ MODEL_PRICING = {
     # mistral-small-latest → Mistral Small 4 (26.03): $0.15/$0.60 per 1M.
     'mistral-small-latest':      {'input': 0.15, 'output': 0.60, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Mistral Small 4'},
     # codestral-latest: Codestral 25.01 is on Mistral's official deprecated list; the coding
-    # role moved to mistral-medium-latest (Medium 3.5, no public card yet). Do NOT re-add.
+    # role moved to mistral-medium-latest (Medium 3.5). Do NOT re-add.
+    # Medium 3 matches la plateforme ($0.40/$2.00); Medium 3.5 has no first-party
+    # card yet — priced per OpenRouter mistralai/mistral-medium-3-5 (2026-09-08).
+    'mistral-medium-3.5-128b':   {'input': 1.50, 'output': 7.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Mistral Medium 3.5'},
+    'mistral-medium-3-instruct': {'input': 0.40, 'output': 2.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Mistral Medium 3'},
     # ── xAI (Grok) ──
     'grok-3':                    {'input': 3.00, 'output': 15.0, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Grok 3'},
     'grok-3-mini':               {'input': 0.30, 'output': 0.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Grok 3 Mini'},
@@ -269,10 +298,20 @@ MODEL_PRICING = {
     'grok-4.6':                  {'input': 2.00, 'output': 6.00, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.25, 'name': 'Grok 4.6'},
     'grok-4.20':                 {'input': 1.25, 'output': 2.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Grok 4.20'},
     'grok-4.1-fast':             {'input': 0.20, 'output': 0.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Grok 4.1 Fast'},
+    # ── Meta (Muse Spark) — Meta Model API pricing (dev.meta.ai/docs/
+    # pricing-rate-limits; unchanged since 1.1, listed for 1.3 on 2026-09-02) ──
+    # Standard: $1.25/$4.25 per 1M, automatic prefix-cache read $0.15 → readMul 0.12.
+    # Contributor SKU: $0.10/$0.20 (cache read $0.002 → readMul 0.02) in
+    # exchange for Meta training on prompts/completions (vendor-documented).
+    'muse-spark-1.3':              {'input': 1.25, 'output': 4.25, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.12, 'name': 'Muse Spark 1.3'},
+    'muse-spark-1.3-contributor':  {'input': 0.10, 'output': 0.20, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.02, 'name': 'Muse Spark 1.3 (Contributor)'},
     # ── Moonshot (Kimi) — per OpenRouter (2026-04-20 release) ──
     # kimi-k3 (2026-07-17): ¥20/¥100 per 1M → $2.76/$13.81 @ 7.24; 1M context
     'kimi-k3':                   {'input': 2.76, 'output': 13.81,'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Kimi K3'},
     'kimi-k2.6':                 {'input': 0.60, 'output': 2.80, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Kimi K2.6'},
+    # kimi-k2-instruct-0905 (K2 0905 checkpoint pin): $0.60/$2.50 per 1M — matches
+    # OpenRouter moonshotai/kimi-k2-0905 (2026-09-08). Exact id wins over date-fold.
+    'kimi-k2-instruct-0905':     {'input': 0.60, 'output': 2.50, 'cacheWriteMul': 1.00, 'cacheReadMul': 0.10, 'name': 'Kimi K2 0905'},
     # kimi-k2.7-code (official platform.kimi.ai, verified 2026-09-03):
     # $0.95/$4.00 per 1M, cache hit $0.19 → readMul 0.20; 262K context.
     # highspeed is a gateway SKU billing 2× output (MiniMax highspeed pattern).

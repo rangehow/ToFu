@@ -115,7 +115,7 @@ backup API 分页复制，完成 `integrity_check`、fsync 后原子发布。夜
 | Project refresh 消费者 | summary/status/watch 各最多 2；个人空闲 30..300 秒后为 0 | owner+project/conv 合并和队列上限不变；submit 与超时退出同锁仲裁，后续事件按需补齐 worker |
 | 在线技能验证 | 并发搜索共享最多 4；最后一批结束为 0 | 批次 lease 阻止每请求复制线程池；异常残留在新代发布前有界排空，验证/安装信任边界不变 |
 | Codex 模型目录 | 登录/真实变化后 3 分钟；稳定时 6→12→24→48→60 分钟；未登录/分布式为 0 worker | ETag 与归一化行比较识别真实变化；失败保留 last-good 并同样退避，缓存新鲜度上限 60 分钟 |
-| 远程 provider 模型目录 | 变化/待删除确认 6 小时；无变化 12 小时；失败 6→12→24→48 小时 | 每 provider 持久化 next-attempt，重启不绕过；Settings Save 强制立即同步；空/失败响应保留 last-good |
+| 远程 provider 模型目录 | 与本地端点监控共享 1 个 worker；启动 600 秒后首跑，之后固定每 6 小时 | 严格只增：既有行不改不删，用户删除的同步模型记入 per-owner dismissed 台账（`data/config/model_catalog_sync.json`）永不复活；>200 条的聚合目录整体跳过，单 pass 每 provider 至多导入 32 条；`TOFU_MODEL_CATALOG_SYNC=0` 整体退出 |
 | 本地端点监控 | health + autodiscovery 共享 1 个 worker；空模型 HTTP 2→4→8→15 分钟 | TCP 拓扑仍每 2 分钟检查，新端口/Settings 变化立即全探测；`TOFU_LOCAL_AUTODISCOVER_MAX_INTERVAL` 最大硬限 3600 秒 |
 | Project presence TTL | 空注册表 0 个线程；首个 peer 1 个共享 sweeper；最后 peer 回收后回到 0；有项目任务运行期间另有 1 个 presence-keepalive | 启动不创建空闲 worker；25 秒 active/180 秒 idle TTL 与 owner 隔离不变，精确线程身份阻止旧批次释放新 owner；keepalive 由任务注册表驱动每 10 秒刷新，无项目任务即退休 |
 | Swarm 会话清理 | 活跃 session 共享 1 个 300 秒 timer；0 session 时为 0 | import 不启动线程；精确 timer 代次在最后 session 移除时取消，后续 session 按需重建 |

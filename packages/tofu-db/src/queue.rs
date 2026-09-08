@@ -24,6 +24,10 @@ use crate::generated_tofudb_ir::{
 use crate::versioned_document::{self, PutRequest};
 
 const CORE_LOGICAL_NAMESPACE: &str = "conversation_queue";
+/// Mirrors legacy `QUEUE_INJECTION_ACK_MAX_IDS`
+/// (lib/turn_source_queue_contract.py): one inbox drain acknowledges at most
+/// this many queue identities per command.
+const MAX_INJECTION_ACK_IDS: usize = 256;
 const REAP_PROBE_CONTRACT: &str = "tofu.queue.reap-probe/v1";
 const KINDS: [&str; 5] = [
     "real",
@@ -336,6 +340,51 @@ fn public_item(
             json!(python_truthy(payload.get("_peerHuman"))),
         );
     }
+    // Background-command completion preview: explicit producer metadata,
+    // display text bounded to the contract maxima (commandId 128,
+    // command/resultPreview 2000 characters) like the legacy projection.
+    if let Some(command_id) = payload
+        .get("_backgroundCommand")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        let metadata = payload
+            .get("_backgroundCommandCompletion")
+            .and_then(Value::as_object);
+        let metadata_text = |field: &str| -> String {
+            metadata
+                .and_then(|map| map.get(field))
+                .map(|value| match value {
+                    Value::String(text) => text.clone(),
+                    Value::Number(number) => number.to_string(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default()
+        };
+        let command = metadata_text("command");
+        let mut preview = metadata_text("resultPreview");
+        let mut truncated = metadata
+            .and_then(|map| map.get("resultTruncated"))
+            .is_some_and(|value| python_truthy(Some(value)));
+        let command: String = command.chars().take(2_000).collect();
+        if preview.chars().count() > 2_000 {
+            preview = preview.chars().take(2_000).collect();
+            truncated = true;
+        }
+        object.insert(
+            "backgroundCommand".into(),
+            json!({
+                "commandId": command_id.chars().take(128).collect::<String>(),
+                "status": "completed",
+                "command": command,
+                "resultPreview": preview,
+                "resultTruncated": truncated,
+            }),
+        );
+    }
+    if python_truthy(payload.get("_steerFallback")) {
+        object.insert("steerFallback".into(), json!(true));
+    }
     Ok(result)
 }
 fn bounded_response(value: &Value) -> io::Result<Option<Vec<u8>>> {
@@ -539,7 +588,11 @@ pub(crate) fn enqueue_item(
             remove_item(database, tx, item)?;
         }
         items.retain(|item| item.kind != "goal_continuation");
-        renumber(database, tx, &mut items)?;
+        // Legacy renumbers only when a synthetic continuation was actually
+        // superseded; a plain real-message enqueue keeps insertion positions.
+        if !removed.is_empty() {
+            renumber(database, tx, &mut items)?;
+        }
     }
     if request.dedupe_by_kind && matches!(request.kind.as_str(), "autopilot" | "goal_continuation")
     {
@@ -746,6 +799,11 @@ pub enum Request {
         conversation_id: String,
         queue_id: String,
     },
+    InjectionAck {
+        conversation_id: String,
+        queue_ids: Vec<String>,
+        occurred_at_ms: u64,
+    },
     Depth {
         conversation_id: String,
     },
@@ -809,6 +867,15 @@ impl Request {
                 conversation_id,
                 kind,
             } => valid_text(conversation_id, 256) && valid_kind(kind),
+            Self::InjectionAck {
+                conversation_id,
+                queue_ids,
+                ..
+            } => {
+                valid_text(conversation_id, 256)
+                    && queue_ids.len() <= MAX_INJECTION_ACK_IDS
+                    && queue_ids.iter().all(|id| valid_text(id, 256))
+            }
             Self::Dequeue {
                 conversation_id,
                 lease_ms,
@@ -1010,6 +1077,80 @@ pub(crate) fn execute(
             };
             bounded_response(&json!({key:found.is_some()}))
         }
+        Request::InjectionAck {
+            conversation_id,
+            queue_ids,
+            occurred_at_ms,
+        } => {
+            // Acknowledge at most one inbox drain; never cancel accepted Turn
+            // pairs.  Only never-accepted peer/workflow inbox rows are
+            // removable; every other identity is ignored, not an error.
+            let wanted: std::collections::BTreeSet<&str> =
+                queue_ids.iter().map(String::as_str).collect();
+            let mut items = rows(database, tx, conversation_id)?;
+            let mut matched: Vec<IndexIdentity> = Vec::new();
+            for identity in &items {
+                if !wanted.contains(identity.id.as_str()) {
+                    continue;
+                }
+                if identity.kind != "peer_msg" && identity.kind != "workflow_step" {
+                    continue;
+                }
+                let state = read_state(database, tx, identity)?;
+                if !state.input_turn_id.is_empty()
+                    || !state.output_turn_id.is_empty()
+                    || !state.attempt_id.is_empty()
+                {
+                    continue;
+                }
+                let core = read_core(database, tx, identity)?;
+                let message = core
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| invalid_data("queue payload is malformed"))?;
+                if python_truthy(message.get("_peerHuman")) {
+                    continue;
+                }
+                let removable = if identity.kind == "peer_msg" {
+                    python_truthy(message.get("_peerMessage"))
+                } else {
+                    message
+                        .get("_backgroundCommand")
+                        .and_then(Value::as_str)
+                        .is_some_and(|completion| !completion.is_empty())
+                };
+                if removable {
+                    matched.push(identity.clone());
+                }
+            }
+            if matched.is_empty() {
+                return bounded_response(&json!({"removed":0,"removedQueueIds":[]}));
+            }
+            // Legacy reports removals in (position, id) order; every
+            // mutation renumbers positions in priority order, so this sort
+            // is a defensive pin of the exact legacy reporting contract.
+            matched.sort_by(|left, right| {
+                left.position
+                    .cmp(&right.position)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            delete_summaries(database, tx, &items)?;
+            for item in &matched {
+                remove_item(database, tx, item)?;
+            }
+            items.retain(|item| !matched.contains(item));
+            renumber(database, tx, &mut items)?;
+            write_summaries(database, tx, &items)?;
+            let removed_ids: Vec<String> = matched.iter().map(|item| item.id.clone()).collect();
+            crate::turn::store_queue_injection_ack_sync_event(
+                database,
+                tx,
+                conversation_id,
+                &removed_ids,
+                *occurred_at_ms,
+            )?;
+            bounded_response(&json!({"removed":removed_ids.len(),"removedQueueIds":removed_ids}))
+        }
         Request::Clear { conversation_id }
         | Request::KindClear {
             conversation_id, ..
@@ -1030,7 +1171,10 @@ pub(crate) fn execute(
                 remove_item(database, tx, item)?;
             }
             items.retain(|v| kind.is_some_and(|k| v.kind != k));
-            renumber(database, tx, &mut items)?;
+            // Legacy renumbers only when rows were actually deleted.
+            if !removed.is_empty() {
+                renumber(database, tx, &mut items)?;
+            }
             write_summaries(database, tx, &items)?;
             bounded_response(&json!({"cleared":removed.len()}))
         }

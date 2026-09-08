@@ -47,6 +47,15 @@ class RetryableAPIError(Exception):
         self.status_code = status_code
 
 
+class ProviderStreamError(Exception):
+    """A valid provider error event whose retry/status meaning is unknown.
+
+    This is application evidence, not a socket failure. Preserve it without
+    guessing a transient HTTP status or penalizing the network route.
+    """
+
+
+
 class RateLimitError(Exception):
     """HTTP 429 — should NOT retry on the same key; bubble up to dispatch layer to switch keys.
 
@@ -496,6 +505,49 @@ _PERMISSION_STATUS_CODES = {401, 403}
 # without cooldowns, key_stats, or fallback consumption. 400 is absent on
 # purpose: it has its own typed taxonomy (BadRequestError & friends).
 _REQUEST_SCOPED_STATUS_CODES = {404, 422}
+
+# Application errors may arrive inside HTTP 200 SSE/WS envelopes. Normalize
+# structured vocabulary once, then reuse the HTTP classifier's quota, auth,
+# request, and gateway policy. Provider adapters preserve these fields.
+_PROVIDER_ERROR_STATUS = {
+    'rate_limit_exceeded': 429, 'rate_limit_error': 429,
+    'insufficient_quota': 429, 'usage_limit_reached': 429,
+    'server_error': 500, 'api_error': 500, 'internal_error': 500,
+    'overloaded': 529, 'overloaded_error': 529,
+    'invalid_api_key': 401, 'authentication_error': 401,
+    'permission_error': 403, 'permission_denied': 403,
+    'not_found_error': 404,
+    'invalid_request_error': 400, 'context_length_exceeded': 400,
+    'content_filter': 450, 'content_policy_violation': 450,
+    'request_too_large': 413,
+}
+
+PROVIDER_RESPONSE_ERRORS = (
+    ProviderStreamError, RateLimitError, PermissionError_, ContentFilterError,
+    PromptTooLongError, ModelLimitError, RetryableAPIError, BadRequestError,
+    RequestScopedError, InvalidImageError, StreamOnlyError,
+)
+
+
+def provider_error_http_status(error) -> int | None:
+    """Read explicit status before a provider's code/type, without text guesses."""
+    if not isinstance(error, dict):
+        return None
+    for field in ('http_code', 'status_code', 'status', 'code'):
+        value = error.get(field)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and 400 <= value <= 599:
+            return value
+        if (isinstance(value, str) and len(value) == 3
+                and value.isascii() and value.isdigit()
+                and 400 <= int(value) <= 599):
+            return int(value)
+    for field in ('code', 'type'):
+        value = error.get(field)
+        if isinstance(value, str) and value in _PROVIDER_ERROR_STATUS:
+            return _PROVIDER_ERROR_STATUS[value]
+    return None
 
 # Regex to detect embedded overload/rate-limit status codes in gateway error bodies.
 # Matches patterns like: "No matching constant for [529]", "status_code: 429"

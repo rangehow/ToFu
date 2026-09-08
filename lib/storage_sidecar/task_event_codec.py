@@ -52,6 +52,10 @@ def encode_task_event_payload(raw: bytes) -> bytes:
         raise StorageError(
             "database_protocol_error", "Task event encoding requires JSON bytes"
         )
+    # storage_events.event_json is a binary-capable BLOB column (compressed
+    # envelopes below), not a JSONDOC: strip the jsonb bind marker so
+    # PostgreSQL keeps the bytea parameter type.
+    raw = bytes(raw)
     if len(raw) > MAX_DECODED_TASK_EVENT_BYTES:
         raise StorageError(
             "database_protocol_error", "Task event exceeds its decoded byte budget"

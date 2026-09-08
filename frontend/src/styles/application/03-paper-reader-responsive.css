@@ -47,6 +47,17 @@
   .sidebar.paper-active .sidebar-header h1{display:none!important}
   .paper-sidebar-current{padding:14px 16px}
   .paper-sidebar-new-inline-btn{width:32px;height:32px}
+  /* In research mode the drawer likewise remains the record rail. */
+  .sidebar.research-active .research-sidebar-overlay{display:flex!important}
+  .sidebar.research-active .sidebar-action-row,
+  .sidebar.research-active .sidebar-search-wrapper,
+  .sidebar.research-active .folder-quickadd,
+  .sidebar.research-active .sidebar-body,
+  .sidebar.research-active .conversations-list{display:none!important}
+  .sidebar.research-active .sidebar-header h1{display:none!important}
+  .research-sidebar-current{padding:14px 16px}
+  .research-sidebar-new-inline-btn{width:32px;height:32px}
+  .research-record-item{padding:12px;min-height:48px}
   .paper-lib-item{padding:12px;min-height:48px}
   .paper-lib-item-del{display:flex;width:32px;height:32px}
   .paper-tab-btn{padding:10px 6px;font-size:12px;gap:4px}

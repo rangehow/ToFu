@@ -19,6 +19,27 @@ const MANIFEST_ENTRY_BYTES: usize = 32 + 8 + 8 + 32 + 32;
 pub const HISTORY_SEGMENT_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_HISTORY_SEGMENTS: usize = 32_768;
 
+pub(crate) fn transaction_history_bytes(transaction: &CommittedTransaction) -> usize {
+    TRANSACTION_HEADER_BYTES + transaction.encoded_envelope.len()
+}
+
+/// Largest prefix that fits one existing-format segment; sizing touches only
+/// transaction lengths, never copies or hashes the carried block payloads.
+pub(crate) fn segment_prefix_len(transactions: &[CommittedTransaction]) -> usize {
+    let mut bytes = SEGMENT_HEADER_BYTES;
+    transactions
+        .iter()
+        .take_while(|transaction| {
+            let entry_bytes = transaction_history_bytes(transaction);
+            if entry_bytes > HISTORY_SEGMENT_MAX_BYTES - bytes {
+                return false;
+            }
+            bytes += entry_bytes;
+            true
+        })
+        .count()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HistorySegmentReference {
     pub block_id: BlockId,
@@ -63,19 +84,48 @@ fn take<'a>(bytes: &'a [u8], offset: &mut usize, length: usize) -> io::Result<&'
     Ok(value)
 }
 
+#[cfg(test)]
 pub(crate) fn build_segments(
     transactions: &[CommittedTransaction],
     initial_parent_hash: [u8; 32],
 ) -> io::Result<Vec<UnstoredHistorySegment>> {
+    let mut segments = Vec::new();
+    visit_segments(transactions, initial_parent_hash, |segment| {
+        segments.push(segment);
+        Ok(())
+    })?;
+    Ok(segments)
+}
+
+/// Encode and consume at most one 4 MiB segment at a time. The callback must
+/// durably store it before returning; publication remains the engine's job.
+/// Exact sizing avoids reserving 4 MiB for every tiny checkpoint suffix.
+pub(crate) fn visit_segments<F>(
+    transactions: &[CommittedTransaction],
+    initial_parent_hash: [u8; 32],
+    mut consume: F,
+) -> io::Result<()>
+where
+    F: FnMut(UnstoredHistorySegment) -> io::Result<()>,
+{
     if transactions.is_empty() {
         return Err(invalid_input("cannot checkpoint empty active history"));
     }
-    let mut segments = Vec::new();
     let mut start = 0;
     let mut parent_hash = initial_parent_hash;
     while start < transactions.len() {
         let segment_parent = parent_hash;
-        let mut encoded = Vec::with_capacity(HISTORY_SEGMENT_MAX_BYTES);
+        let mut encoded_bytes = SEGMENT_HEADER_BYTES;
+        for transaction in &transactions[start..] {
+            let entry_bytes = TRANSACTION_HEADER_BYTES
+                .checked_add(transaction.encoded_envelope.len())
+                .ok_or_else(|| invalid_input("history transaction length overflow"))?;
+            if entry_bytes > HISTORY_SEGMENT_MAX_BYTES - encoded_bytes {
+                break;
+            }
+            encoded_bytes += entry_bytes;
+        }
+        let mut encoded = Vec::with_capacity(encoded_bytes);
         encoded.extend_from_slice(SEGMENT_MAGIC);
         encoded.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
         encoded.extend_from_slice(&transactions[start].sequence.to_le_bytes());
@@ -84,7 +134,7 @@ pub(crate) fn build_segments(
         let mut end = start;
         while end < transactions.len() {
             let transaction = &transactions[end];
-            let envelope = transaction.envelope.encode()?;
+            let envelope = transaction.encoded_envelope.as_slice();
             let entry_bytes = TRANSACTION_HEADER_BYTES
                 .checked_add(envelope.len())
                 .ok_or_else(|| invalid_input("history transaction length overflow"))?;
@@ -98,15 +148,14 @@ pub(crate) fn build_segments(
             if transaction.sequence != expected_sequence {
                 return Err(invalid_data("active history sequence is not contiguous"));
             }
-            let expected_hash =
-                calculate_record_hash(transaction.sequence, parent_hash, &envelope)?;
+            let expected_hash = calculate_record_hash(transaction.sequence, parent_hash, envelope)?;
             if transaction.record_hash != expected_hash {
                 return Err(invalid_data("active history record hash mismatch"));
             }
             encoded.extend_from_slice(&transaction.sequence.to_le_bytes());
             encoded.extend_from_slice(&transaction.record_hash);
             encoded.extend_from_slice(&(envelope.len() as u32).to_le_bytes());
-            encoded.extend_from_slice(&envelope);
+            encoded.extend_from_slice(envelope);
             parent_hash = transaction.record_hash;
             end += 1;
         }
@@ -118,16 +167,16 @@ pub(crate) fn build_segments(
         let count = u32::try_from(end - start)
             .map_err(|_| invalid_input("history segment transaction count overflow"))?;
         encoded[52..56].copy_from_slice(&count.to_le_bytes());
-        segments.push(UnstoredHistorySegment {
+        consume(UnstoredHistorySegment {
             encoded,
             first_sequence: transactions[start].sequence,
             last_sequence: transactions[end - 1].sequence,
             parent_hash: segment_parent,
             terminal_hash: transactions[end - 1].record_hash,
-        });
+        })?;
         start = end;
     }
-    Ok(segments)
+    Ok(())
 }
 
 pub(crate) fn decode_segment(
@@ -169,7 +218,7 @@ pub(crate) fn decode_segment(
             ));
         }
         let envelope_bytes = take(encoded, &mut offset, envelope_len)?;
-        let envelope = TransactionEnvelope::decode(envelope_bytes)?;
+        let envelope = TransactionEnvelope::decode_skipping_carried(envelope_bytes)?;
         if calculate_record_hash(sequence, previous_hash, envelope_bytes)? != record_hash {
             return Err(invalid_data("history transaction hash chain mismatch"));
         }
@@ -178,6 +227,10 @@ pub(crate) fn decode_segment(
             sequence,
             record_hash,
             envelope,
+            // Segments preserve the exact logged bytes, including carried
+            // payload copies, so a restored history rebuilds loose blocks
+            // the same way WAL replay does.
+            encoded_envelope: envelope_bytes.to_vec(),
         });
     }
     if offset != encoded.len()
@@ -314,7 +367,46 @@ mod tests {
             sequence,
             record_hash: calculate_record_hash(sequence, parent_hash, &encoded).unwrap(),
             envelope,
+            encoded_envelope: encoded,
         }
+    }
+
+    #[test]
+    fn streaming_history_is_exact_sized_and_stops_on_sink_failure() {
+        let mut transactions = Vec::new();
+        let mut parent = [0; 32];
+        for sequence in 1..=20 {
+            let mut transaction = transaction(sequence, parent);
+            transaction.envelope.inline_payload = vec![sequence as u8; 256 * 1024];
+            transaction.encoded_envelope = transaction.envelope.encode().unwrap();
+            transaction.record_hash =
+                calculate_record_hash(sequence, parent, &transaction.encoded_envelope).unwrap();
+            parent = transaction.record_hash;
+            transactions.push(transaction);
+        }
+        let expected = build_segments(&transactions, [0; 32]).unwrap();
+        assert_eq!(expected.len(), 2);
+        let mut index = 0;
+        visit_segments(&transactions, [0; 32], |segment| {
+            assert_eq!(segment.encoded, expected[index].encoded);
+            assert_eq!(segment.encoded.capacity(), segment.encoded.len());
+            assert!(segment.encoded.capacity() <= HISTORY_SEGMENT_MAX_BYTES);
+            index += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(index, 2);
+        let mut calls = 0;
+        let error = visit_segments(&transactions, [0; 32], |_| {
+            calls += 1;
+            Err(io::Error::new(io::ErrorKind::Interrupted, "sink fault"))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(calls, 1);
+        let tiny = build_segments(&[transaction(1, [0; 32])], [0; 32]).unwrap();
+        assert_eq!(tiny[0].encoded.capacity(), tiny[0].encoded.len());
+        assert!(tiny[0].encoded.capacity() < 256);
     }
 
     #[test]

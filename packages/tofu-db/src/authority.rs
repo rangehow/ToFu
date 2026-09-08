@@ -41,19 +41,18 @@ use crate::generated_tofudb_ir::{
     INTEGRATION_PROJECT_ACTIVE_CLAIM_NAMESPACE, INTEGRATION_PROJECT_UPDATED_INDEX_NAMESPACE,
     INTEGRATION_READY_INDEX_NAMESPACE, INTEGRATION_ROW_LOCATOR_NAMESPACE,
     INTEGRATION_ROW_SEQUENCE_NAMESPACE, INTEGRATION_WORKSPACE_COUNT_NAMESPACE,
-    KNOWLEDGE_ENRICHMENT_OWNER_INDEX_NAMESPACE,
-    INTEGRATION_WORKSPACE_NAMESPACE, ORCHESTRATION_DEFINITION_DOCUMENT_NAMESPACE,
-    ORCHESTRATION_DEFINITION_ID_CLAIM_NAMESPACE, ORCHESTRATION_GOAL_ACTIVE_CLAIM_NAMESPACE,
-    ORCHESTRATION_GOAL_CREATED_INDEX_NAMESPACE, ORCHESTRATION_RUN_CORE_NAMESPACE,
-    ORCHESTRATION_RUN_CREATED_INDEX_NAMESPACE, ORCHESTRATION_RUN_EVENT_DOCUMENT_NAMESPACE,
-    ORCHESTRATION_RUN_GLOBAL_ACTIVE_INDEX_NAMESPACE, ORCHESTRATION_RUN_ID_CLAIM_NAMESPACE,
-    ORCHESTRATION_RUN_ORCHESTRATION_CREATED_INDEX_NAMESPACE, ORCHESTRATION_RUN_STATE_NAMESPACE,
-    ORCHESTRATION_RUN_STATUS_CREATED_INDEX_NAMESPACE, PROVIDER_ID_CLAIM_NAMESPACE,
-    QUEUE_AUTOPILOT_MARKER_NAMESPACE, QUEUE_GLOBAL_AUTOPILOT_INDEX_NAMESPACE,
-    QUEUE_GLOBAL_CONVERSATION_INDEX_NAMESPACE, QUEUE_GLOBAL_LEASE_INDEX_NAMESPACE,
-    QUEUE_ITEM_CORE_NAMESPACE, QUEUE_ITEM_ID_CLAIM_NAMESPACE, QUEUE_ITEM_STATE_NAMESPACE,
-    SCHEDULER_POLL_SEQUENCE_NAMESPACE, SCHEDULER_TASK_DOCUMENT_NAMESPACE,
-    SCHEDULER_TASK_GLOBAL_CREATED_INDEX_NAMESPACE,
+    INTEGRATION_WORKSPACE_NAMESPACE, KNOWLEDGE_ENRICHMENT_OWNER_INDEX_NAMESPACE,
+    ORCHESTRATION_DEFINITION_DOCUMENT_NAMESPACE, ORCHESTRATION_DEFINITION_ID_CLAIM_NAMESPACE,
+    ORCHESTRATION_GOAL_ACTIVE_CLAIM_NAMESPACE, ORCHESTRATION_GOAL_CREATED_INDEX_NAMESPACE,
+    ORCHESTRATION_RUN_CORE_NAMESPACE, ORCHESTRATION_RUN_CREATED_INDEX_NAMESPACE,
+    ORCHESTRATION_RUN_EVENT_DOCUMENT_NAMESPACE, ORCHESTRATION_RUN_GLOBAL_ACTIVE_INDEX_NAMESPACE,
+    ORCHESTRATION_RUN_ID_CLAIM_NAMESPACE, ORCHESTRATION_RUN_ORCHESTRATION_CREATED_INDEX_NAMESPACE,
+    ORCHESTRATION_RUN_STATE_NAMESPACE, ORCHESTRATION_RUN_STATUS_CREATED_INDEX_NAMESPACE,
+    PROVIDER_ID_CLAIM_NAMESPACE, QUEUE_AUTOPILOT_MARKER_NAMESPACE,
+    QUEUE_GLOBAL_AUTOPILOT_INDEX_NAMESPACE, QUEUE_GLOBAL_CONVERSATION_INDEX_NAMESPACE,
+    QUEUE_GLOBAL_LEASE_INDEX_NAMESPACE, QUEUE_ITEM_CORE_NAMESPACE, QUEUE_ITEM_ID_CLAIM_NAMESPACE,
+    QUEUE_ITEM_STATE_NAMESPACE, SCHEDULER_POLL_SEQUENCE_NAMESPACE,
+    SCHEDULER_TASK_DOCUMENT_NAMESPACE, SCHEDULER_TASK_GLOBAL_CREATED_INDEX_NAMESPACE,
     SCHEDULER_TASK_GLOBAL_ENABLED_CREATED_INDEX_NAMESPACE, SCHEDULER_TASK_ID_CLAIM_NAMESPACE,
     SWARM_SESSION_KEY_CLAIM_NAMESPACE, TASK_RESULT_DOCUMENT_NAMESPACE,
     TASK_RESULT_HEADER_NAMESPACE, TENANT_USER_CREATED_INDEX_NAMESPACE,
@@ -349,12 +348,20 @@ impl AuthorityDatabase {
 
     #[cfg(test)]
     pub(crate) fn write_orphan_block_for_test(&self, payload: &[u8]) -> io::Result<BlockId> {
-        self.entities.engine().write_block(payload)
+        // Orphan fixtures need a real on-disk loose block that GC planning
+        // can discover by scanning shards; the deferred write path stages
+        // payloads in memory only, so it cannot model an orphan.
+        self.entities.engine().block_store().put_loose(payload)
     }
 
     #[cfg(test)]
     pub(crate) fn read_block_for_test(&self, block_id: BlockId) -> io::Result<Vec<u8>> {
         self.entities.engine().read_block(block_id)
+    }
+
+    /// Shared block-store handle for the daemon's background pack worker.
+    pub fn block_store_shared(&self) -> Arc<crate::block::BlockStore> {
+        self.entities.engine().block_store_shared()
     }
 
     #[cfg(test)]
@@ -1618,8 +1625,14 @@ impl AuthorityDatabase {
             prepared.stage_persisted_catalog(&self.entities, &mut entity)?;
             prepared_streams.push(prepared);
         }
-        let prepared_entity = self.entities.prepare_commit(entity)?;
+        let prepared_entity = {
+            let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_PREPARE);
+            self.entities.prepare_commit(entity)?
+        };
 
+        let engine_timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_ENGINE_COMMIT);
+        let builder_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_BUILDER);
         let mut builder = FamilyTransactionBuilder::default();
         if let Some(root_record) = prepared_entity.root_record() {
             builder.add_record(
@@ -1656,6 +1669,8 @@ impl AuthorityDatabase {
             ));
         }
         let envelope = builder.prepare()?;
+
+        drop(builder_timer);
         let committed = self
             .entities
             .engine_mut()
@@ -1664,6 +1679,8 @@ impl AuthorityDatabase {
                 &envelope.block_ids,
                 prepared_entity.authority_state_root(),
             )?;
+        drop(engine_timer);
+        let _apply_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_APPLY);
         self.entities
             .apply_prepared_commit(prepared_entity, committed.sequence)?;
         let stream_results = prepared_streams

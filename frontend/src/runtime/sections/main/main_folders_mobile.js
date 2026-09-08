@@ -665,20 +665,7 @@ if (typeof window !== "undefined") runtimeScope._mobileCompactNow = _mobileCompa
  * Shows/hides the section based on whether the model supports thinking depth.
  */
 function updateMobileDepth() {
-  const desktopBar = document.getElementById("thinkingDepthSection");
-  const mobileSection = document.getElementById("mobileDepthSection");
-  if (!mobileSection) return;
-  /* Show mobile depth section when desktop depth bar has display set to 'flex' by JS
-   * (on mobile, CSS hides it with display:none!important, but JS still sets .style.display) */
-  const isVisible = desktopBar && (desktopBar.style.display === "flex" || desktopBar.style.display === "");
-  mobileSection.style.display = isVisible ? "" : "none";
-  if (!isVisible) return;
-  /* Sync active button state */
-  const activeDesktop = desktopBar.querySelector(".depth-btn.active");
-  const activeDepth = activeDesktop ? activeDesktop.dataset.depth : "medium";
-  mobileSection.querySelectorAll(".mobile-depth-btn").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.depth === activeDepth);
-  });
+  _updateDepthButtons(config.thinkingDepth || config.defaultThinkingDepth);
 }
 
 /* ── Reflow toolbar on window resize / orientation change ── */

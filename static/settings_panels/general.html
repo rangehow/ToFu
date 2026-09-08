@@ -42,24 +42,7 @@
                switch." Third veto of mascot switching. -->
 
           <div class="settings-divider"></div>
-          <div class="settings-section-title" data-i18n="settings.modelParams">模型参数</div>
           <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-field">
-                <label data-i18n="settings.temperature">温度 (Temperature)</label>
-                <div class="range-row"><input type="range" id="settingTemp" min="0" max="1" step="0.05" value="0.7" data-tofu-action-input="_syncRangeOutput(this,'tempVal','')"><span class="range-value" id="tempVal">0.7</span></div>
-              </div>
-            </div>
-            <div class="settings-row two-col">
-              <div class="settings-field">
-                <label data-i18n="settings.maxTokens">最大 Token 数</label>
-                <input type="number" id="settingMaxTokens" value="128000">
-              </div>
-              <div class="settings-field">
-                <label data-i18n="settings.imageMaxWidth">图片最大宽度</label>
-                <input type="number" id="settingImageMaxWidth" value="0" placeholder="0=跟随服务器" data-i18n-placeholder="settings.imageMaxWidthPh">
-              </div>
-            </div>
             <div class="settings-row two-col">
               <div class="settings-field">
                 <label data-i18n="settings.defaultThinkingDepth">默认思维深度 (Thinking Depth)</label>
@@ -71,7 +54,13 @@
                   <option value="max" data-i18n="settings.thinkingMax">Max — 最大</option>
                   <option value="ultra" data-i18n="settings.thinkingUltra">Ultra — 兼容别名（GPT-5.6 实际发送 Max）</option>
                 </select>
-                <div class="settings-toggle-desc" data-i18n="settings.defaultThinkingDesc">新对话的默认思维深度级别</div>
+              </div>
+              <div class="settings-field">
+                <label data-i18n="settings.inputSendMode">输入框发送方式（Shift+Enter 始终插入换行）</label>
+                <select id="settingInputSendMode" style="max-width:340px">
+                  <option value="enter" data-i18n="settings.inputSendModeEnter">Enter 发送 · Ctrl+Enter 换行</option>
+                  <option value="ctrl_enter" data-i18n="settings.inputSendModeCtrlEnter">Ctrl+Enter 发送 · Enter 换行</option>
+                </select>
               </div>
             </div>
           </div>
@@ -113,7 +102,7 @@
                 <span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>
               </label>
             </div>
-            <div class="settings-toggle-row" style="margin-top:8px">
+            <div class="settings-toggle-row">
               <div>
                 <span class="settings-toggle-label" data-i18n="settings.pptxTranslateModule">PPT 翻译模块</span>
                 <div class="settings-toggle-desc" data-i18n="settings.pptxTranslateModuleDesc">上传 PPTX 文件进行全文翻译，保留原始格式</div>
@@ -136,7 +125,7 @@
                 <span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>
               </label>
             </div>
-            <div class="settings-toggle-row" style="margin-top:8px">
+            <div class="settings-toggle-row">
               <div>
                 <span class="settings-toggle-label" data-i18n="settings.optimizerModule">每日优化器</span>
                 <div class="settings-toggle-desc" data-i18n="settings.optimizerModuleDesc">每晚 03:30 分析当日日志并自动提出改进建议（如屏蔽垃圾搜索域名）。关闭后不再运行分析，顶栏 OPTIMIZER 徽章隐藏。已应用的改动会保留直到手动撤销。</div>
@@ -158,19 +147,6 @@
                 <input type="checkbox" id="settingAutoGenerateTitle">
                 <span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>
               </label>
-            </div>
-          </div>
-
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-field">
-                <label data-i18n="settings.inputSendMode">输入框发送方式</label>
-                <select id="settingInputSendMode" style="max-width:340px">
-                  <option value="enter" data-i18n="settings.inputSendModeEnter">Enter 发送 · Ctrl+Enter 换行</option>
-                  <option value="ctrl_enter" data-i18n="settings.inputSendModeCtrlEnter">Ctrl+Enter 发送 · Enter 换行</option>
-                </select>
-                <div class="settings-toggle-desc" data-i18n="settings.inputSendModeDesc">选择触发"发送消息"的按键。Shift+Enter 始终插入换行。</div>
-              </div>
             </div>
           </div>
 

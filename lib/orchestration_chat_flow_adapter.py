@@ -49,6 +49,7 @@ import uuid
 from collections.abc import Callable
 
 from lib.log import get_logger
+from lib.orchestration_graph import FlowEventDeliveryError
 from lib.orchestration._execution_projection import _PLANNER_ROLES
 from lib.orchestration_runner_result import normalize_orchestration_model_route
 from lib.orchestration_chat_flow_projection import (
@@ -122,6 +123,8 @@ class FlowEventAdapter:
             handler = getattr(self, f'_on_{etype}', None)
             if handler:
                 handler(ev)
+        except FlowEventDeliveryError:
+            raise
         except Exception as e:
             logger.debug('[FlowAdapter] handler %s failed: %s', etype, e)
 
@@ -205,14 +208,12 @@ class FlowEventAdapter:
         dispatch is in flight ("waiting for model…" / "retrying…" under a
         rate-limited strict_model — the 5-minute first-token stall that used
         to show a bare static pulse). Translated to the registered ``phase``
-        event the frontend already renders on the worker bubble (transient UI,
-        cleared by the first delta — never a content delta, so it can't
-        pollute the turn). Only forwarded for assistant-side producers: a
-        verifier (critic / virtual_user) renders user-side and its phase chip
-        would land on the wrong bubble, so we skip it there.
+        event on its owning live Turn. Goal verifiers own a live child, so
+        their waiting/retry status uses the same path. Other Flow verifiers
+        remain completion-only and do not publish a phase onto the producer.
         """
         emits = ev.get('emits') or self._derive_emits(ev.get('role') or '')
-        if emits == 'user':
+        if emits == 'user' and self._projection != 'autopilot':
             return
         self._stream(project_flow_phase_event(ev))
 
@@ -290,39 +291,12 @@ class FlowEventAdapter:
             # apart (_mark_user_side).
             next_phase = self._derive_next_phase(out)
             self._next_phase = next_phase
-            # Standalone goal mode treats TASK_DONE as control, not as words
-            # the synthetic user said: no DB row is appended and the eager
-            # live placeholder is removed. Preserve that contract for a graph
-            # virtual_user instead of persisting a visible sentinel turn.
+            # Settle the same visible verifier Turn, retaining its explanation,
+            # reasoning and tools. Machine verdict tokens stay control-only;
+            # even a textless close-out must settle its already-admitted phase.
             if role == 'virtual_user':
-                from lib.agent_verdict import classify_verdict, strip_machine_tokens
-                verdict = classify_verdict(
-                    out, verifier_role='virtual_user', loose_fallback=True)
-                if verdict.get('phase') == 'stop':
-                    self._stream({
-                        'type': 'flow_critic_msg',
-                        'iteration': self._iteration,
-                        'content': '',
-                        'thinking': '',
-                        'next_phase': 'stop',
-                        'discard': True,
-                        **self._turn_meta(role, emits),
-                    })
-                    self._vu_msg_id = ''
-                    return
+                from lib.agent_verdict import strip_machine_tokens
                 out = strip_machine_tokens(out)
-                if not out.strip():
-                    self._stream({
-                        'type': 'flow_critic_msg',
-                        'iteration': self._iteration,
-                        'content': '',
-                        'thinking': '',
-                        'next_phase': 'worker',
-                        'discard': True,
-                        **self._turn_meta(role, emits),
-                    })
-                    self._vu_msg_id = ''
-                    return
             msg = {
                 'role': 'user',
                 'content': out,
@@ -332,6 +306,7 @@ class FlowEventAdapter:
                 **round_fields,
                 **file_fields,
                 **error_fields,
+                '_flowLivePhase': True,
             }
             self._mark_user_side(msg, role, next_phase=next_phase)
             self._push(msg)
@@ -468,6 +443,8 @@ class FlowEventAdapter:
         if self._on_stream:
             try:
                 self._on_stream(ev)
+            except FlowEventDeliveryError:
+                raise
             except Exception as e:
                 logger.debug('[FlowAdapter] on_stream failed: %s', e)
 

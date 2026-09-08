@@ -12,7 +12,9 @@ from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 
 from lib.identity import require_user_id
-from lib.secret_envelope import open_secret, seal_secret, secret_hint
+from lib.secret_envelope import open_secret, seal_secret
+
+from .credential_envelope import credential_secret_display_hint
 
 from .domain import (
     MAX_DOCUMENT_BYTES,
@@ -257,7 +259,7 @@ class ModelRoutingRepository:
                 **boundary.payload(),
                 "secret_reference": reference,
                 "ciphertext": ciphertext,
-                "key_hint": secret_hint(value),
+                "key_hint": credential_secret_display_hint(value),
                 "updated_at": time.time(),
             },
             f"model_routing.secret.put:{reference}:{secrets.token_hex(8)}",
@@ -395,6 +397,21 @@ class InMemoryModelRoutingRepository:
                 }
             return self.get(boundary)
 
+    def mutate(
+        self,
+        boundary: OwnerBoundary,
+        mutation: Callable[[dict[str, Any]], Mapping[str, Any] | None],
+        *,
+        max_conflicts: int = 2,
+    ) -> StoredAuthority:
+        """In-memory mirror of ``ModelRoutingRepository.mutate``."""
+        authority = self.get(boundary)
+        working = copy.deepcopy(authority.document)
+        replacement = mutation(working)
+        candidate = working if replacement is None else replacement
+        return self.compare_and_swap(
+            boundary, candidate, expected_revision=authority.revision)
+
     def put_secret(
         self,
         boundary: OwnerBoundary,
@@ -411,7 +428,10 @@ class InMemoryModelRoutingRepository:
                     kind="model_routing_resource_budget_exceeded",
                 )
             self._secrets[(boundary, reference)] = value
-        return {"secret_reference": reference, "key_hint": secret_hint(value)}
+        return {
+            "secret_reference": reference,
+            "key_hint": credential_secret_display_hint(value),
+        }
 
     def resolve_secret(self, boundary: OwnerBoundary, secret_reference: str) -> str:
         try:
@@ -427,7 +447,7 @@ class InMemoryModelRoutingRepository:
             return [
                 {
                     "secret_reference": reference,
-                    "key_hint": secret_hint(value),
+                    "key_hint": credential_secret_display_hint(value),
                 }
                 for (owner, reference), value in self._secrets.items()
                 if owner == boundary

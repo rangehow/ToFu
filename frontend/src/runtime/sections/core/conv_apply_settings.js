@@ -11,8 +11,9 @@ function _applySettingsToConv(conv, settings) {
   if (!settings) return;
   if (settings.model || settings.effort || settings.preset)
     conv.model = settings.model || settings.preset || settings.effort;
-  if (settings.modelRef && typeof settings.modelRef === 'object')
-    conv.modelRef = Object.assign({}, settings.modelRef);
+  if (settings.modelRef !== undefined)
+    conv.modelRef = settings.modelRef && typeof settings.modelRef === 'object'
+      ? Object.assign({}, settings.modelRef) : null;
   if (settings.preferredProviderId !== undefined)
     conv.preferredProviderId = settings.preferredProviderId || '';
   /* The provider that actually served this conv (stamped server-side at

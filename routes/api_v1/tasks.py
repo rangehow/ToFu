@@ -29,6 +29,7 @@ from lib.api_response import (
     api_bad_request, api_conflict, api_internal_error, api_not_found, api_ok,
     sse_response,
 )
+from lib.production.work_unit import project_work_unit
 from lib.log import audit_log, get_logger
 from lib.openapi import api_meta
 from lib.request_parser import optional_bool, parse_body, require_str
@@ -284,6 +285,16 @@ def _public_task(task: dict) -> dict:
         # 500. Public metadata has explicit non-private mirrors on the task.
         if k in SKIP or k.startswith('_'):
             continue
+        if k == 'config' and isinstance(v, dict):
+            # The config bag is the same dict the tool builder uses as
+            # ``ctx.cfg``, so it accumulates process-private entries such as
+            # ``_mcpToolSearchTextByName`` (a MappingProxyType cache view).
+            # The leading-underscore convention applies here too: those
+            # values are both an authority leak and not JSON-serializable —
+            # one reached Quart's provider and 500'd GET /api/v1/tasks/{id}.
+            out[k] = {ck: cv for ck, cv in v.items()
+                      if not str(ck).startswith('_')}
+            continue
         if k == 'messages':
             # Don't dump the full prompt back; clients already have it.
             out['msg_count'] = len(v) if isinstance(v, list) else 0
@@ -341,7 +352,7 @@ def list_tasks():
         for t in tasks:
             if status and t.get('status') != status:
                 continue
-            items.append({
+            item = {
                 'id': t.get('id'),
                 'kind': t.get('kind') or k,
                 'status': t.get('status'),
@@ -353,7 +364,11 @@ def list_tasks():
                 'created_at': t.get('created_at'),
                 'finished_at': t.get('finished_at'),
                 'meta': t.get('meta') or {},
-            })
+            }
+            unit = project_work_unit(t, events=[], compact=True)
+            if unit is not None:
+                item['workUnit'] = unit
+            items.append(item)
     items.sort(key=lambda x: x.get('created_at') or 0, reverse=True)
     return api_ok({'tasks': items[:limit], 'total': len(items)})
 
@@ -402,6 +417,19 @@ def _task_accessible(task_id: str, *, user_id: int) -> bool:
         return False
 
 
+def _request_inspector_task_accessible(task_id: str, *, user_id: int) -> bool:
+    """Authorize a normal task or a persisted inspector child, fail closed."""
+    parent_task_id, marker, _agent_id = task_id.partition('#agent:')
+    if not marker:
+        return _task_accessible(task_id, user_id=user_id)
+    if not _task_accessible(parent_task_id, user_id=user_id):
+        return False
+    from lib.tasks_pkg.request_inspector import (
+        inspector_child_belongs_to_parent,
+    )
+    return inspector_child_belongs_to_parent(task_id, parent_task_id)
+
+
 @api_v1_tasks_bp.route('/api/v1/tasks/<task_id>', methods=['GET'])
 @require_scope('tasks')
 @api_meta(summary='Get task state', tags=['tasks'], scope='tasks',
@@ -431,7 +459,12 @@ def get_task(task_id):
         if snapshot is None:
             return api_not_found('Task not found')
         task = snapshot.public_task()
-    return api_ok(_public_task(task))
+    payload = _public_task(task)
+    if rt is not None and getattr(rt, 'kind', '') != 'chat':
+        unit = project_work_unit(task)
+        if unit is not None:
+            payload['workUnit'] = unit
+    return api_ok(payload)
 
 
 @api_v1_tasks_bp.route('/api/v1/tasks/<task_id>/events', methods=['GET'])
@@ -524,7 +557,9 @@ def task_requests(task_id):
     Returns 200 with ``eventsAvailable:false`` for expired (>6h) or
     unknown tasks so the UI can show an honest empty state."""
     from lib.tasks_pkg.request_inspector import fold_request_log
-    if not _task_accessible(task_id, user_id=int(request_user_id())):
+    owner_user_id = int(request_user_id())
+    if not _request_inspector_task_accessible(
+            task_id, user_id=owner_user_id):
         return api_not_found('Task not found')
     try:
         return api_ok(fold_request_log(task_id))
@@ -582,13 +617,15 @@ def task_request_payload(task_id, round_num):
     404 when the round has no matching snapshot (expired, wrong kind, or
     unknown)."""
     from lib.tasks_pkg.request_inspector import get_request_payload
-    if not _task_accessible(task_id, user_id=int(request_user_id())):
+    owner_user_id = int(request_user_id())
+    if not _request_inspector_task_accessible(
+            task_id, user_id=owner_user_id):
         return api_not_found('Task not found')
     try:
         payload = get_request_payload(
             task_id, round_num, turn=request.args.get('turn', ''),
             kind=request.args.get('kind', 'request'),
-            user_id=int(request_user_id()))
+            user_id=owner_user_id)
     except Exception as e:
         logger.error('[api_v1.tasks] request payload failed for task=%s '
                      'round=%s: %s', task_id[:8], round_num, e, exc_info=True)
@@ -607,7 +644,8 @@ def task_request_payload(task_id, round_num):
 def task_raw_archive_chunk(task_id, archive_id, part):
     """Lazily hydrate one bounded request/response body chunk."""
     owner_user_id = int(request_user_id())
-    if not _task_accessible(task_id, user_id=owner_user_id):
+    if not _request_inspector_task_accessible(
+            task_id, user_id=owner_user_id):
         return api_not_found('Task not found')
     if part not in {'request', 'response'}:
         return api_bad_request('part must be request or response')

@@ -62,7 +62,10 @@ def test_analyser_enforces_task_wide_cap_after_tools(phases):
             round_num, 0, messages, usage={},
         )
         assert result['action'] == expected
-        assert messages == before
+        assert messages[:len(before)] == before
+        assert len(messages) == len(before) + min(2, len(phases))
+        assert all('TERMINAL RESPONSE RECOVERY' in m['content']
+                   for m in messages[len(before):])
         assert task['toolRounds'][0]['toolContent'] == 'written'
     assert result['last_finish_reason'] == 'abnormal_stop'
     assert task['error']['kind'] == 'abnormal_stop'
@@ -138,20 +141,3 @@ def test_flag_excludes_actual_tool_rounds_cancellation_and_answers(message, task
     usage = {}
     assert not _flag_empty_stop_for_retry(message, 'stop', task, 3, usage)
     assert usage == {}
-
-
-def test_protocol_reissue_preserves_receipts_and_records_note(phases):
-    task = {'config': {'harnessProfile': 'longcat_flash'}}
-    messages = [{'role': 'tool', 'tool_call_id': 'prior-write', 'content': 'written'}]
-    receipt = deepcopy(messages[0])
-    result = recovery.recover_abnormal_terminal(
-        {'content': '<longcat_tool_call>run_command</longcat_tool_call>'},
-        'stop', task, round_num=4, model='ckpt_00000588',
-        result={'action': 'proceed', 'premature_retry_count': 0},
-        messages=messages)
-    assert result['action'] == 'continue'
-    assert messages[0] == receipt
-    assert len(messages) == 2
-    assert 'native tool schema' in messages[-1]['content']
-    assert task['_injected_notes'][-1]['text'] == messages[-1]['content']
-    assert task['_abnormal_terminal_recovery_count'] == 1

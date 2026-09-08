@@ -122,7 +122,10 @@ class TestSpawnCarriesSwarmKey(unittest.TestCase):
 
     def test_spawning_event_and_handle_carry_swarm_key(self):
         events: list[dict] = []
-        with _factory_for():
+        pushes: list[dict] = []
+        with _factory_for(), patch(
+                'lib.agent_core.push.push_event',
+                side_effect=lambda channel, key, payload, **kwargs: pushes.append(payload)):
             raw = execute_swarm_tool(
                 'spawn_agents',
                 {'agents': [{'id': 'k1', 'objective': 'probe the key'}]},
@@ -147,6 +150,11 @@ class TestSpawnCarriesSwarmKey(unittest.TestCase):
                     and e.get('phase') == 'spawning']
         self.assertTrue(spawning, 'no spawning event captured')
         self.assertEqual(spawning[0]['swarmKey'], self.conv_id)
+
+        self.assertTrue(pushes)
+        self.assertTrue(all(frame['swarmId'] == self.task_id for frame in pushes))
+        self.assertTrue(all('swarmId' not in event for event in events))
+        self.assertEqual(handle['swarm_run_id'], self.task_id)
 
 
 # ═════════════════════════════════════════════════════════

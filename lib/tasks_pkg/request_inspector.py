@@ -349,7 +349,7 @@ def _called_in_round(payload: dict, kind: str) -> int | None:
 _FOLD_CHILD_MERGE_MAX = 32
 
 
-def _child_snapshot_sources(task_id: str) -> tuple[list, bool]:
+def _child_snapshot_sources(task_id: str) -> tuple[list, bool, bool]:
     """Swarm-child task ids (``parent#agent:<id>``) holding snapshots.
 
     A delegating parent (Goal mode runs its worker as a swarm agent)
@@ -360,8 +360,8 @@ def _child_snapshot_sources(task_id: str) -> tuple[list, bool]:
     only, never payload bulk). ``ok=False`` marks a storage read FAILURE —
     callers surface readError rather than silently folding parent-only.
     """
-    if not task_id or '#agent:' in task_id:
-        return [], True
+    if (not task_id) or ('#agent:' in task_id):
+        return ([], True, False)
     try:
         from lib.storage import get_storage_client
 
@@ -371,7 +371,7 @@ def _child_snapshot_sources(task_id: str) -> tuple[list, bool]:
     except Exception as e:
         logger.warning('[RequestInspector] child discovery failed task=%s: %s',
                        task_id[:8], e)
-        return [], False
+        return [], False, False
     prefix = f'{task_id}#agent:'
     children = []
     for record in summary.get('records') or []:
@@ -382,10 +382,54 @@ def _child_snapshot_sources(task_id: str) -> tuple[list, bool]:
                      + int(record.get('state_count') or 0)
                      + int(record.get('legacy_count') or 0))
         if snapshots > 0:
-            children.append(child_id)
-    children.sort()
-    return children[:_FOLD_CHILD_MERGE_MAX], True
+            children.append((int(record.get('first_event_at_ms') or 0), child_id))
+    # Earliest observed execution first, with task id as deterministic tie
+    # breaker. The merge remains bounded, but callers are told when it omits
+    # valid child evidence instead of claiming complete coverage.
+    children.sort(key=lambda item: (item[0], item[1]))
+    truncated = len(children) > _FOLD_CHILD_MERGE_MAX
+    return ([child_id for _ts, child_id in
+             children[:_FOLD_CHILD_MERGE_MAX]], True, truncated)
 
+
+
+def inspector_child_belongs_to_parent(
+    child_task_id: str, parent_task_id: str,
+) -> bool:
+    """Verify a synthetic child through persisted inspector authority.
+
+    String shape alone is never authorization evidence.  The indexed summary
+    must contain a structural snapshot record whose exact task id is the child
+    and whose exact persisted parent prefix is ``parent_task_id``.  Storage
+    failure, malformed ids, empty agent ids, and missing records all deny.
+    Parent ownership is intentionally checked by the caller's normal task
+    ownership boundary before this helper is consulted.
+    """
+    if not isinstance(child_task_id, str) or not child_task_id:
+        return False
+    if not isinstance(parent_task_id, str) or not parent_task_id:
+        return False
+    parent, marker, agent_id = child_task_id.partition('#agent:')
+    if marker != '#agent:' or parent != parent_task_id or not agent_id:
+        return False
+    try:
+        from lib.storage import get_storage_client
+
+        summary = get_storage_client().query(
+            'event.inspector_summary', {'task_ids': [parent_task_id]},
+            deadline=30) or {}
+    except Exception as e:
+        logger.warning('[RequestInspector] child authorization failed task=%s: %s',
+                       child_task_id[:8], e)
+        return False
+    for record in summary.get('records') or []:
+        if str(record.get('task_id') or '') != child_task_id:
+            continue
+        snapshots = (int(record.get('request_count') or 0)
+                     + int(record.get('state_count') or 0)
+                     + int(record.get('legacy_count') or 0))
+        return snapshots > 0
+    return False
 
 def _fold_event_rows(events: list) -> tuple[list, bool]:
     """Fold ONE task's event log into request rows (+ the flow-seen bit).
@@ -518,7 +562,7 @@ def fold_request_log(task_id: str) -> dict:
     events, read_ok = _read_events(task_id, rebuild=False)
     requests, flow_seen = _fold_event_rows(events)
     events_available = bool(events)
-    child_ids, discovery_ok = _child_snapshot_sources(task_id)
+    child_ids, discovery_ok, child_limit_reached = _child_snapshot_sources(task_id)
     read_ok = read_ok and discovery_ok
     for child_id in child_ids:
         child_events, child_ok = _read_events(child_id, rebuild=False)
@@ -547,7 +591,10 @@ def fold_request_log(task_id: str) -> dict:
         # Read FAILURE, not an expired/empty log — the UI must offer retry
         # instead of the "records cleaned up" empty state.
         out['readError'] = True
-    if flow_seen and requests and not has_turn_tags:
+    if child_limit_reached:
+        out['coverage'] = 'partial'
+        out['coverageReason'] = 'child-limit'
+    elif flow_seen and requests and not has_turn_tags:
         # Untagged Flow log: planner/worker/critic rounds share numbers
         # with no phase tag — rows exist but cannot be told apart. An
         # EMPTY round list has nothing ambiguous to warn about (a pure
@@ -894,4 +941,4 @@ def list_conv_tasks(conv_id: str, *, user_id: int, limit: int = 30,
 
 
 __all__ = ['fold_request_log', 'get_request_payload', 'list_conv_tasks',
-           'invalidate_task_cache']
+           'inspector_child_belongs_to_parent', 'invalidate_task_cache']

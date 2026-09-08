@@ -28,6 +28,8 @@ import zlib
 
 import orjson
 
+from lib.storage_sidecar.json_document import JsonBytes
+
 from lib.storage.protocol import MAX_FRAME_BYTES
 from lib.storage_sidecar.projection_codec import (
     ProjectionCodecError,
@@ -150,9 +152,9 @@ def encode_archived_message_sequence_with_metrics(
             orjson.dumps(projected_messages, option=orjson.OPT_SORT_KEYS)
         )
         del projected_messages
-        stored_document = orjson.dumps(
+        stored_document = JsonBytes(orjson.dumps(
             stored_messages, option=orjson.OPT_SORT_KEYS
-        )
+        ))
     except (TypeError, orjson.JSONEncodeError) as exc:
         raise _codec_error("message sequence is not serializable") from exc
     return ArchivedMessageSequenceEncoding(

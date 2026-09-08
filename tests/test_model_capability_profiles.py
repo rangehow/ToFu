@@ -32,7 +32,7 @@ def test_gpt_56_product_hierarchy_is_explicit_and_proven():
     assert all(profile['autoSelectable'] for profile in profiles.values())
 
 
-def test_role_selection_uses_cheapest_model_that_clears_hard_tier():
+def test_role_selection_preserves_parent_instead_of_cheapest_heavy_model():
     from lib.model_profiles import select_model_for_tier
 
     providers = [{
@@ -46,7 +46,7 @@ def test_role_selection_uses_cheapest_model_that_clears_hard_tier():
     assert select_model_for_tier(
         'heavy', parent_model='frontier-expensive', role='coder',
         provider_id='supplier', providers=providers,
-    ) == 'heavy-cheap'
+    ) == 'frontier-expensive'
 
 
 def test_role_selection_never_uses_below_threshold_or_wrong_role():
@@ -114,7 +114,7 @@ def test_runtime_selection_reads_only_the_requested_owner_v2_authority():
         owner_user_id=41,
         tenant_id='tenant-a',
         repository=repository,
-    ) == 'gpt-5.6-terra'
+    ) == 'parent-model'
     assert select_model_for_tier(
         'heavy',
         parent_model='parent-model',

@@ -185,22 +185,42 @@ fn command_removes_an_abandoned_loose_block_temporary_before_other_gc() {
 fn command_plans_then_compacts_a_profitable_live_loose_shard() {
     let directory = tempfile::tempdir().unwrap();
     AuthorityDatabase::initialize(directory.path()).unwrap();
-    let mut payloads_by_shard = std::collections::BTreeMap::<u8, Vec<Vec<u8>>>::new();
-    let payloads = (0..1_000_000_u32)
-        .find_map(|value| {
-            let payload = format!("process-auto-compaction-{value}").into_bytes();
-            let shard = tofu_db::block::BlockId::for_payload(&payload).0[0];
-            let payloads = payloads_by_shard.entry(shard).or_default();
-            payloads.push(payload);
-            (payloads.len() == 128).then(|| std::mem::take(payloads))
-        })
-        .unwrap();
+    // Same-shard fixtures sized so one commit carrying all 128 exceeds the
+    // carried ceiling and spills every block to a loose file. Two passes
+    // keep memory bounded while a shard fills with ~17 KiB candidates.
+    let payload_len = tofu_db::transaction::MAX_CARRIED_PAYLOAD_BYTES / 128 + 1;
+    let fixture = |value: u32| {
+        let mut payload = Vec::with_capacity(payload_len);
+        payload.extend_from_slice(b"process-auto-compaction-");
+        payload.extend_from_slice(&value.to_le_bytes());
+        payload.resize(payload_len, (value % 251) as u8);
+        payload
+    };
+    let mut counts = [0_usize; 256];
+    let mut winning = None;
+    for value in 0..1_000_000_u32 {
+        let shard = tofu_db::block::BlockId::for_payload(&fixture(value)).0[0];
+        counts[shard as usize] += 1;
+        if counts[shard as usize] == 128 {
+            winning = Some((shard, value));
+            break;
+        }
+    }
+    let (shard, last) = winning.unwrap();
+    let payloads: Vec<Vec<u8>> = (0..=last)
+        .map(fixture)
+        .filter(|payload| tofu_db::block::BlockId::for_payload(payload).0[0] == shard)
+        .collect();
     let slices = payloads.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let mut engine = Engine::open(directory.path()).unwrap();
     let block_ids = engine
         .commit_transaction(b"process-compaction-fixture", &slices)
         .unwrap()
         .block_ids;
+    // The oversized commit spilled every block to a loose file up front; the
+    // checkpoint retires the WAL so the GC disk scan plans compaction from
+    // the loose shard alone.
+    engine.checkpoint().unwrap();
     drop(engine);
 
     let plan = Command::new(env!("CARGO_BIN_EXE_tofu-db"))

@@ -293,7 +293,7 @@ def test_extension_research_capture_is_pre_navigation_bounded_and_dynamic():
     assert result['network']['priorityReserveChars'] == 256 * 1024
     assert probe['limits']['hintReserveChars'] == 256 * 1024
     assert probe['limits']['websocketFrames'] == 40
-    assert probe['limits']['active'] == 4
+    assert probe['limits']['active'] == 32
     assert {'deep_collect', 'research_hints'} <= set(probe['limits']['capabilities'])
 
 

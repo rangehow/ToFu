@@ -1099,10 +1099,10 @@ def test_extension_contract_never_confuses_device_and_server_locations():
     assert 'sendPendingChunk' in export_block and 'pendingBytes' in export_block
     assert "location !== 'server_staging'" in export_block
     assert "location: 'device_downloads'" in source
-    assert source.index('await _refuseFileResponseBeforeNavigation',
-                        source.index('async function cmdFetchUrl')) < \
-        source.index("chrome.tabs.create({ url: 'about:blank'",
-                     source.index('async function cmdFetchUrl'))
+    from tests._browser_extension_probe import run_extension_probe
+    probe = run_extension_probe('fileProbeFailure')
+    assert 'Could not safely classify response before navigation' in probe['result']['error']
+    assert not any(op.startswith('tabs.create:') for op in probe['operations'])
 
     from lib.browser.protocol import ALL_CAPABILITIES
     assert 'file_export' in ALL_CAPABILITIES

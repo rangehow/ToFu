@@ -42,6 +42,10 @@ _DEFAULT_MAX_AGE_S = int(os.environ.get('TOFU_DESKTOP_DIST_MAX_AGE_S',
                                         6 * 3600))
 _ERROR_RETRY_S = 60.0
 
+# Per-file acquisition ceilings; sequential mirror owns at most one .part.
+_DOWNLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024
+_DOWNLOAD_MAX_SECONDS = 30 * 60
+
 _worker_lock = threading.Lock()
 _worker: threading.Thread | None = None
 
@@ -89,6 +93,27 @@ def _refresh_safe() -> None:
         store.mark_refresh('', error=f'crash: {e}')
 
 
+def _file_sha256(path: str) -> str:
+    with open(path, 'rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def _release_sha256(asset: dict) -> str:
+    """Validate an optional GitHub release digest; absence is legacy only.
+
+    This verifies bytes against HTTPS release metadata, not a publisher
+    signature, and must never be advertised as signed auto-update trust.
+    """
+    digest = asset.get('digest')
+    if digest is None:
+        return ''
+    import re
+    if not isinstance(digest, str) or not re.fullmatch(
+            r'sha256:[0-9a-fA-F]{64}', digest):
+        raise ValueError('invalid release SHA-256 digest')
+    return digest.split(':', 1)[1].lower()
+
+
 def refresh_now() -> bool:
     """One synchronous refresh. Returns True on full success.
 
@@ -131,12 +156,28 @@ def refresh_now() -> bool:
                            name)
             continue
         cur = existing.get(name)
-        if (cur and os.path.isfile(dest)
-                and asset.get('size') is not None
-                and cur.get('size') == asset.get('size')):
-            continue  # unchanged — do not re-download a 100+ MB file
         try:
+            expected_sha = _release_sha256(asset)
+            expected_size = asset.get('size')
+            if expected_size is not None and (
+                    type(expected_size) is not int or expected_size <= 0):
+                raise ValueError('invalid release asset size')
+            if (cur and os.path.isfile(dest)
+                    and expected_size is not None
+                    and cur.get('size') == expected_size
+                    and os.path.getsize(dest) == expected_size
+                    and (not expected_sha or (
+                        cur.get('sha256') == expected_sha
+                        and _file_sha256(dest) == expected_sha))):
+                if expected_sha:
+                    store.record_artifact(dict(cur, release_sha256=expected_sha,
+                                               integrity_source='github-api-digest'))
+                continue
             size, sha = _download(asset['url'], dest + '.part')
+            if expected_size is not None and size != expected_size:
+                raise ValueError('download size differs from release metadata')
+            if expected_sha and sha != expected_sha:
+                raise ValueError('download SHA-256 differs from release metadata')
             os.replace(dest + '.part', dest)
         except Exception as e:
             ok = False
@@ -151,6 +192,8 @@ def refresh_now() -> bool:
         store.record_artifact({
             'os': _os, 'arch': _arch, 'label': label, 'filename': name,
             'size': size, 'sha256': sha, 'source': 'mirrored',
+            'release_sha256': expected_sha,
+            'integrity_source': 'github-api-digest' if expected_sha else 'computed-only',
             'version': tag.lstrip('v'), 'kind': kind,
             'fetched_at': time.time(),
         })
@@ -195,6 +238,7 @@ def _download(url: str, dest_part: str) -> tuple:
     from lib.http_client import http_stream
     h = hashlib.sha256()
     size = 0
+    deadline = time.monotonic() + _DOWNLOAD_MAX_SECONDS
     with http_stream('GET', url, timeout=60,
                      headers={'Accept': 'application/octet-stream'}) as resp:
         if resp.status_code != 200:
@@ -203,6 +247,10 @@ def _download(url: str, dest_part: str) -> tuple:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if not chunk:
                     continue
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('installer download deadline exceeded')
+                if size + len(chunk) > _DOWNLOAD_MAX_BYTES:
+                    raise RuntimeError('installer download byte limit exceeded')
                 f.write(chunk)
                 h.update(chunk)
                 size += len(chunk)

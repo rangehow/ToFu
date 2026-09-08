@@ -270,6 +270,7 @@ os.environ.setdefault('TOFU_BROWSER_POLL_WAIT', '0.2')
 os.environ.setdefault('TOFU_DESKTOP_POLL_WAIT', '0.2')
 os.environ.setdefault('TOFU_DISABLE_SCHEDULER', '1')
 os.environ.setdefault('TOFU_MODEL_CATALOG_SYNC', '0')
+os.environ.setdefault('TOFU_TEMPLATE_FEED', '0')
 os.environ.setdefault('TOFU_NETPATH', 'off')
 os.environ['LLM_API_KEY'] = 'test-key-placeholder'
 os.environ['LLM_API_KEYS'] = 'test-key-placeholder'

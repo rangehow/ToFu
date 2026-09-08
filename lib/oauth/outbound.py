@@ -97,6 +97,9 @@ _CLAUDE_TOOLS_BETA = 'advanced-tool-use-2025-11-20'
 #: moved from codex_cli_rs to codex-tui (CLIProxyAPI
 #: ``codex_executor_request.go`` — drift alarm in test_oauth_cloaking_drift).
 _CODEX_ORIGINATOR = 'codex-tui'
+#: Floor only — the effective version tracks the latest @openai/codex npm
+#: release (lib.oauth.codex_version); a stale version hides new models from
+#: the backend's /models catalogue.
 CODEX_CLIENT_VERSION = '0.146.0'
 _CODEX_USER_AGENT = (f'codex-tui/{CODEX_CLIENT_VERSION} (Mac OS 26.5.0; arm64) '
                      f'iTerm.app/3.6.10 (codex-tui; {CODEX_CLIENT_VERSION})')
@@ -475,7 +478,8 @@ def resolve_oauth_request(oauth: str, body: dict, extra_headers: dict | None,
         account_id = stored.get('account_id', '')
         hdrs['OpenAI-Beta'] = 'responses=experimental'
         hdrs['originator'] = _CODEX_ORIGINATOR
-        hdrs['User-Agent'] = _CODEX_USER_AGENT
+        from lib.oauth.codex_version import codex_user_agent
+        hdrs['User-Agent'] = codex_user_agent()
         # Codex keeps these values stable for the lifetime of one thread and
         # uses the same lifetime for ``prompt_cache_key``.  A fresh session id
         # per round destroys backend cache affinity: a live Luna tool-call A/B
@@ -564,48 +568,42 @@ def _merge_betas(existing: str, has_tools: bool = False) -> str:
 # model-routing credentials contain only the OAuth provider marker.
 
 #: Codex model tables per subscription plan tier, ported from CLIProxyAPI
-#: ``internal/registry/models/models.json`` (v7, synced 2026-08-08).
+#: ``internal/registry/models/models.json`` (synced 2026-09-07; gpt-5.4 and
+#: gpt-5.4-mini were removed upstream, gpt-6-astra serves team and above).
 #: plus and pro share the full table upstream; team/business/go share the
 #: mid table; free is the reduced set. Unknown plans fall back to pro
 #: (CLIProxyAPI's default branch) so a NEW plan name is never a downgrade.
 _CODEX_MODEL_TIERS = {
     'free': [
-        'gpt-5.4-mini',
         'gpt-5.5',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'codex-auto-review',
     ],
     'team': [
-        'gpt-5.4',
-        'gpt-5.4-mini',
         'gpt-5.5',
+        'gpt-6-astra',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
-        'gpt-6-astra',
         'codex-auto-review',
     ],
     'plus': [
         'gpt-5.3-codex-spark',
-        'gpt-5.4',
-        'gpt-5.4-mini',
         'gpt-5.5',
+        'gpt-6-astra',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
-        'gpt-6-astra',
         'codex-auto-review',
     ],
     'pro': [
         'gpt-5.3-codex-spark',
-        'gpt-5.4',
-        'gpt-5.4-mini',
         'gpt-5.5',
+        'gpt-6-astra',
         'gpt-5.6-sol',
         'gpt-5.6-terra',
         'gpt-5.6-luna',
-        'gpt-6-astra',
         'codex-auto-review',
     ],
 }

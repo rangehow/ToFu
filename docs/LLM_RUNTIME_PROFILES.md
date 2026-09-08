@@ -4,6 +4,27 @@ This guide owns specialized runtime profiles referenced by the
 [LLM I/O domain map](modules/llm_io.md). They reuse the canonical dispatch and
 settlement owners rather than creating alternate provider semantics.
 
+## Sub-agent model inheritance and AA evidence
+
+`lib/model_profiles` preserves a non-empty parent model for all delegation
+roles and tiers. Delegation does not authorize a cheaper model substitution;
+normal dispatch still enforces the owner, provider pin, and route eligibility.
+Explicit per-agent overrides remain caller-owned.
+
+Without a parent, configured profiles retain tier/role gates and rank fresh,
+exact canonical-model AA evidence before price: Coding then Intelligence for
+coding/review roles, Agentic then Intelligence for browser work, Intelligence
+otherwise. Missing evidence is unknown, not zero. Original indices are compared
+lexicographically; they are not averaged or mapped to invented tier thresholds.
+Within unmeasured candidates, declared quality precedes price. These declared
+tiers are provisional, not benchmark measurements.
+
+The AA projection reads the existing public dataset cache without credentials,
+network calls, or refresh workers. Expired evidence and base/variant prefix
+matches cannot influence selection. Price is a tie-breaker, not the capability
+objective. Capacity, retry, and authorization remain with canonical dispatch;
+this policy does not add an independent health or cooldown system.
+
 ## Paired Kimi benchmark paths
 
 `evaluations/codex_kimi_proxy/` is a benchmark-only, one-request/one-Kimi-call
@@ -61,7 +82,26 @@ Managed host processes are deliberately personal-mode only. Distributed mode
 fails closed until the host has an owner-aware resource scheduler and ledger;
 this does not weaken the owner boundary of the v2 routing records.
 
-The Settings “模型路径托管” tile collects path and engine preference and hands
-off to a fresh chat with a prefilled `local_serve_*` instruction; it does not
-write routing authority client-side. llama.cpp remains a first-class endpoint
-preset on port 8080, pinned against backend `WELL_KNOWN_ENGINES` by parity tests.
+Two sibling modules serve the choose-and-repair experience around the pipeline:
+`_catalog` is the curated open-model shortlist (1.7B–32B, purpose tags, HF BF16
++ GGUF variants) whose `evaluate_hardware` ranks feasible models against one
+hardware snapshot and whose `cloud_alternative` recommends DeepSeek V4 Flash
+(pulling live pricing from `lib/pricing`) when the machine can't comfortably
+run a capable model; `_diagnose` classifies a failed deployment's
+`last_error` + bounded log tail into known failure kinds (OOM, CUDA driver,
+architecture, disk, port, network, timeout, interruption) with concrete next
+steps and a retryable verdict, embedded in `deployment_status` so the chat
+tool and the Settings page relay identical guidance. The read-only surface
+for all three facets is `routes/api_v1/local_serve.py` (hardware /
+recommendations / deployments); every write stays with the approval-gated
+tool family.
+
+The Settings 本地部署 page renders that surface directly: a live hardware
+strip, purpose-filtered recommendation cards whose deploy button hands a
+prefilled `local_serve_*` instruction to a fresh chat, the cloud escape hatch
+deep-linking the DeepSeek provider template wizard, and the managed-instance
+ledger where failed rows hand off to the agent's diagnosis-repair flow. The
+“模型路径托管” tile still collects path and engine preference for the same
+chat handoff; nothing writes routing authority client-side. llama.cpp remains
+a first-class endpoint preset on port 8080, pinned against backend
+`WELL_KNOWN_ENGINES` by parity tests.

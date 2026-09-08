@@ -95,6 +95,8 @@ READ_SKILL_RESOURCE_TOOL = {
                     'minimum': 1,
                     'maximum': 12000,
                     'default': 6000,
+                    'description': (
+                        'Max characters returned in this call (1–12000).'),
                 },
             },
             'required': ['skill_id', 'resource'],

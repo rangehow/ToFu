@@ -90,17 +90,15 @@ def parse_end_turn_reason(content: str) -> str | None:
     """
     if not content or END_TURN_MARKER not in content:
         return None
-    try:
-        tail = content.split(END_TURN_MARKER, 1)[1]
-        reason = tail.split(']', 1)[0].strip().lower()
-    except Exception as e:  # pragma: no cover — defensive
-        logger.debug('[IntentStall] end-turn parse failed: %s', e)
-        return None
-    if reason in _VALID_END_REASONS:
-        return reason
-    logger.debug('[IntentStall] unrecognised end-turn reason %r — ignoring',
-                 reason[:40])
-    return None
+    # Require a complete token: a truncated stream ending in e.g.
+    # '[END_TURN: done' is not a declaration. A later valid declaration must
+    # not be hidden by an earlier unknown token (e.g. a discussed example).
+    reason = None
+    for match in _END_TURN_TOKEN_RE.finditer(content):
+        candidate = match.group()[len(END_TURN_MARKER):-1].strip().lower()
+        if candidate in _VALID_END_REASONS:
+            reason = candidate
+    return reason
 
 
 def _ordered_rounds(task: dict[str, Any]) -> list:
@@ -254,7 +252,9 @@ def _round_failed(entry: dict[str, Any]) -> bool:
         if (res.get('type') or '') == 'error':
             return True
         code = res.get('exitCode')
-        if code not in (None, '', 0, '0') and str(code) != '0':
+        # A background receipt confirms launch, not a terminal exit. Do not
+        # exempt the whole result/round: other failure evidence still counts.
+        if code not in (None, '', 0, '0', 'background') and str(code) != '0':
             return True
     return False
 
@@ -300,9 +300,11 @@ def _awaiting_human(task: dict[str, Any], assistant_msg: dict[str, Any],
         if name in _HUMAN_HANDOFF_TOOLS:
             return True
     # D1b — a human-handoff tool was called in any earlier round of the turn.
-    for entry in (task.get('toolRounds') or []):
+    for entry in _ordered_rounds(task):
         if (entry.get('tool') or entry.get('toolName') or '') in _HUMAN_HANDOFF_TOOLS:
             return True
+        # Gateway/approval rows can represent a live handoff even when their
+        # tool name is not one of the dedicated human-input tools.
         if entry.get('status') in (
                 'awaiting_human', 'awaiting_stdin', 'pending_approval'):
             return True
@@ -361,11 +363,13 @@ def should_nudge_intent_stall(
 # same sentence; naming the STRUCTURAL fact (a tool failed, nothing ran since)
 # gives it something to act on.
 NUDGE_TEXT = (
-    '[SYSTEM: TOOL CALL DID NOT RUN]\n'
-    'Your previous tool call was rejected or failed, so it never executed, '
-    'and this turn ended without running any tool.\n\n'
-    'If you still intend to perform that action, issue the tool call now — '
-    'adjusting the arguments if the failure explained what was wrong.\n'
+    '[SYSTEM: UNRESOLVED TOOL FAILURE]\n'
+    'A previous tool call was rejected or failed, and no later tool result '
+    'has resolved that failure. This response contains no tool calls.\n\n'
+    'Inspect the failure evidence before deciding the next action. A failed '
+    'command may already have executed and changed state; do not blindly '
+    'repeat side effects. If recovery is needed, use an appropriate tool, '
+    'adjusting invalid arguments or checking existing state first.\n'
     'If you are waiting on the user, or the task is genuinely finished or '
     f'blocked, end your turn with {END_TURN_MARKER} awaiting_human], '
     f'{END_TURN_MARKER} done] or {END_TURN_MARKER} blocked] so this is not '

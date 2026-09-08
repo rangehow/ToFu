@@ -1,6 +1,16 @@
 /* ===== migrated source: ui/swarm_live_projection.js ===== */
 /* Ephemeral swarm progress projection for conversation-scoped push frames. */
 
+
+function _swarmFrameMatchesRound(ev, round) {
+  if (!round || round._swarmSnapshot?.settled) return false;
+  const swarmId = ev.swarmId || ev.swarm_id;
+  let handle = {};
+  try { handle = _swarmUnwrapResultPayload(JSON.parse(round.toolContent || "{}")) || {}; } catch (_) { /* launch not settled */ }
+  const roundId = round._swarmSnapshot?.swarm_id || handle.swarm_run_id || handle.swarm_id || round.taskId;
+  return !swarmId || !roundId || swarmId === roundId;
+}
+
 function _handleSwarmPhase(ev, c) {
   const convId = c.convId, taskId = c.taskId;
   const assistantProjection = c.assistantProjection;
@@ -18,7 +28,7 @@ function _handleSwarmPhase(ev, c) {
       const _mostRecentUnsettled = (m) => {
         const rounds = (m && m.toolRounds) || [];
         for (let i = rounds.length - 1; i >= 0; i--) {
-          if (rounds[i] && rounds[i]._swarm && !rounds[i]._swarmEndTime) return rounds[i];
+          if (_swarmFrameMatchesRound(ev, rounds[i]) && (rounds[i]._swarm || rounds[i].toolName === "spawn_agents") && !rounds[i]._swarmEndTime) return rounds[i];
         }
         return null;
       };
@@ -29,7 +39,7 @@ function _handleSwarmPhase(ev, c) {
            `_swarm` round, which could be a stale/empty (ghost) spawn round
            and would steal this swarm's events. */
         const inCurrent = (assistantProjection.toolRounds || []).find(
-          r => r._swarm && (rn ? r.roundNum === rn : (r._swarmActive || r._asyncRunning)));
+          r => _swarmFrameMatchesRound(ev, r) && !r._swarmEndTime && r._swarm && (rn ? r.roundNum === rn : (r._swarmActive || r._asyncRunning)));
         if (inCurrent) return inCurrent;
         return _mostRecentUnsettled(assistantProjection);
       };
@@ -50,6 +60,9 @@ function _handleSwarmPhase(ev, c) {
         }));
         if (sr) {
           sr.query = "Agent Swarm";
+
+          sr._swarm = true;
+          if (ev.swarmId || ev.swarm_id) sr.taskId = ev.swarmId || ev.swarm_id;
           sr._swarmActive = true;
           sr._swarmStartTime = sr._swarmStartTime || Date.now();
           /* Backend-authoritative session key (conv-scoped). The reconciler
@@ -73,6 +86,8 @@ function _handleSwarmPhase(ev, c) {
             results: null,
             status: "searching",
             toolName: "spawn_agents",
+
+            taskId: ev.swarmId || ev.swarm_id || undefined,
             _swarm: true,
             _swarmActive: true,
             _swarmStartTime: Date.now(),
@@ -148,7 +163,7 @@ function _handleSwarmPhase(ev, c) {
             /* After a driver error, an unreported agent stays 'unknown' —
                promoting it to done would be a false green over crashed work. */
             if (a.status === "pending" || a.status === "running") {
-              a.status = sr._swarmError ? "unknown" : "done";
+              a.status = "unknown";
               if (a.status === "unknown") a.phase = "unknown";
             }
             /* Advance phase in lockstep with status — otherwise an agent
@@ -181,7 +196,7 @@ function _handleSwarmAgent(ev, c) {
            progress events have no fallback below, so they were silently
            dropped — the panel showed agent cards but never the tool
            timeline. */
-        const rounds = assistantProjection.toolRounds || [];
+        const rounds = (assistantProjection.toolRounds || []).filter(r => _swarmFrameMatchesRound(ev, r) && !r._swarmEndTime);
         const owner = rounds.find(
           r => (r._swarmActive || r._swarm)
             && (r._swarmAgents || []).some(a => a.id === ev.agentId),

@@ -1082,6 +1082,8 @@ _SPECS: tuple[EventSpec, ...] = (
               fields={'roundNum': 'round index', 'toolCallId': 'tool-call id',
                       'toolName': 'canonical tool name',
                       'toolContent': 'final model-visible tool result',
+                      'toolModelContent': '(optional) bounded multimodal model '
+                                          'receipt, separate from display text',
                       'toolTokens': '(optional) real tokens of the final '
                                     'model-visible toolContent',
                       'compactionLayer': "(optional) 'L0'/'unchanged' when the "
@@ -1128,6 +1130,7 @@ _SPECS: tuple[EventSpec, ...] = (
                   FieldSpec('toolCallId', 'str', required=True),
                   FieldSpec('toolName', 'str', required=True),
                   FieldSpec('toolContent', 'str', required=True),
+                  FieldSpec('toolModelContent', 'list'),
                   FieldSpec('toolTokens', 'int'),
                   FieldSpec('compactionLayer', 'str'),
                   # The L0 lane assigns these via ``round_entry.get(...)`` —
@@ -1280,7 +1283,7 @@ _SPECS: tuple[EventSpec, ...] = (
                   FieldSpec('roundNum', 'int', required=True),
                   FieldSpec('llmRound', 'int | None'),
                   FieldSpec('programCallId', 'str', required=True),
-                  FieldSpec('result', 'str | dict | None', required=True),
+                  FieldSpec('result', 'str | dict | list | number | bool | None', required=True),
                   FieldSpec('status', 'str', required=True),
                   FieldSpec('childCallIds', 'list', required=True),
                   FieldSpec('childToolNames', 'list', required=True),
@@ -1521,8 +1524,9 @@ _SPECS: tuple[EventSpec, ...] = (
                       'toolCallId': 'ask_human tool-call id',
                       'guidanceId': 'reply correlation id',
                       'question': 'prompt text',
-                      'responseType': 'free_text|choice',
-                      'options': 'choice options (normalized dicts)'},
+                      'responseType': 'free_text|choice|batch',
+                      'options': 'choice options (normalized dicts)',
+                      'batchQuestions': 'batch-mode question list (optional)'},
               schema=(
                   FieldSpec('roundNum', 'int', required=True),
                   FieldSpec('toolCallId', 'str', required=True),
@@ -1530,6 +1534,7 @@ _SPECS: tuple[EventSpec, ...] = (
                   FieldSpec('question', 'str', required=True),
                   FieldSpec('responseType', 'str', required=True),
                   FieldSpec('options', 'list', required=True),
+                  FieldSpec('batchQuestions', 'list', required=False),
               )),
     EventSpec(EventType.WRITE_APPROVAL_REQUEST, _C.INTERACTION,
               'A write/exec tool needs explicit approval before running.',
@@ -2176,9 +2181,10 @@ _PHASE_SPECS: tuple[PhaseSpec, ...] = (
                       'incomplete': 'incomplete item count',
                       'detail': 'fallback label (zh)'}),
     PhaseSpec(Phase.INTENT_STALL_NUDGE, (_CHAT,),
-              'A prose-only stop right after a failed/rejected tool round was '
-              'nudged once (the intent-stall guard).',
-              fields={'attempt': 'nudge counter', 'max': 'nudge budget (1)',
+              'A prose-only stop after a failed tool, or an explicit provider '
+              'commentary-only response, received a bounded continuation.',
+              fields={'attempt': 'nudge counter',
+                      'max': 'nudge budget (failed tool: 1; commentary: 2)',
                       'detail': 'English fallback label',
                       'detailKey': 'i18n key'}),
     PhaseSpec(Phase.TOOL_HISTORY_RESTORED, (_CHAT,),

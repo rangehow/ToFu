@@ -19,10 +19,12 @@ from typing import Any
 
 from lib.log import audit_log, get_logger
 
+from lib.tools.contracts import NEVER_CLAMP_PARAMS, clamp_arguments_to_schema
 from lib.tool_input_repair._schema import (
     RepairLog,
     _expected_types,
     _required_keys,
+    _schemas,
 )
 from lib.tool_input_repair._salvage import _try_schema_array_salvage
 from lib.tool_input_repair._transform import (
@@ -337,6 +339,13 @@ def validate_then_repair(
                 repaired[key] = salvaged
                 log.append((key, 'schema_array_salvage'))
 
+    # ── Value-bounds pass: clamp out-of-range numbers, truncate allow-listed
+    # display strings. Runs AFTER the type walk so coerced values get bounded
+    # too. Identity/content strings are never truncated (see the allowlist).
+    if expected:
+        repaired, _bounds_log = _apply_value_bounds(tool_name, repaired)
+        log.extend(_bounds_log)
+
     if log:
         for path, pattern in log:
             audit_log(
@@ -353,6 +362,42 @@ def validate_then_repair(
 
     return repaired, log
 
+
+# Pure-DISPLAY string params whose over-long values are trimmed to the
+# declared maxLength instead of rejected: the value is UI chrome with no
+# addressable identity, so truncation loses nothing a later call can
+# reference. Identity/content strings (todo ids, edit anchors, file
+# content) must NEVER be listed — a truncated id silently breaks the next
+# sync; a truncated anchor silently edits the wrong span.
+_TRUNCATABLE_DISPLAY_FIELDS: dict[str, frozenset[str]] = {
+    'edit_file': frozenset({'description'}),
+}
+
+
+def _apply_value_bounds(
+    tool_name: str, repaired: dict[str, Any],
+) -> tuple[dict[str, Any], RepairLog]:
+    """Clamp out-of-range numbers + truncate allow-listed display strings.
+
+    Runs after the per-key type walk so coerced values get bounded too.
+    Anchored on the indexed schema; MCP/dynamic tools (no index entry) are
+    clamped instead at the document-anchored stage in the ingest/gateway
+    pipelines. Never raises.
+    """
+    params = _schemas().get(tool_name)
+    if not isinstance(params, dict):
+        return repaired, []
+    try:
+        out, log = clamp_arguments_to_schema(
+            repaired, params,
+            truncatable=_TRUNCATABLE_DISPLAY_FIELDS.get(
+                tool_name, frozenset()),
+            clamp_exempt=NEVER_CLAMP_PARAMS.get(tool_name, frozenset()))
+    except Exception as e:  # defensive; the clamp itself never raises
+        logger.warning('[ToolRepair] bounds pass failed for %s: %s',
+                       tool_name, e)
+        return repaired, []
+    return (out if isinstance(out, dict) else repaired), log
 
 def parse_and_repair_tool_args(
     tool_name: str,

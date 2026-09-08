@@ -117,39 +117,13 @@ def _build_project_or_code_exec(ctx: ToolContext) -> list[dict]:
     # detaching Project Brain changes the next assembled tool surface directly.
     from lib.tools.code_exec import CODE_EXEC_TOOL
     from lib.tools.project import project_tools_for_runtime
-    # create_project is contributed by its own searchable spec
-    # (``project_scaffold``) — the absolute-path-write auto-register made the
-    # eager resident schema near-dead weight, so it no longer rides the
-    # default project surface.
-    project_tools = [
-        tool for tool in project_tools_for_runtime()
-        if str((tool.get('function') or {}).get('name') or '')
-        != 'create_project'
-    ]
+    project_tools = project_tools_for_runtime()
     if ctx.project_ready:
         # Environment-specific routing guidance belongs in the context
         # composer's trailing user carrier. Tool declarations stay canonical
         # across local/remote and single/multi-root requests.
         return list(project_tools)
     return [CODE_EXEC_TOOL]
-
-
-def _build_project_scaffold(ctx: ToolContext) -> list[dict]:
-    # create_project — pre-create an empty workspace root / register an extra
-    # root. Only meaningful with a project attached (its handler refuses
-    # without a primary root); discoverable through Tool Search instead of
-    # resident on the wire.
-    if not ctx.project_ready:
-        return []
-    from lib.tools.project import PROJECT_TOOL_CREATE_PROJECT
-    tools = [PROJECT_TOOL_CREATE_PROJECT]
-    if ctx.project_remote:
-        from lib.tools.project import with_remote_hint
-        return with_remote_hint(tools)
-    if ctx.multiroot_active:
-        from lib.tools.project import with_multiroot_hint
-        return with_multiroot_hint(tools)
-    return tools
 
 
 def _build_browser(ctx: ToolContext) -> list[dict]:
@@ -658,7 +632,7 @@ def _register_builtins() -> None:
                  # (their display formatters remain for history rendering).
                  provides=frozenset({
                      'browser_navigate', 'browser_read_page', 'browser_list_tabs',
-                     'browser_research_page', 'browser_devtools',
+                     'browser_research_page', 'browser_devtools', 'browser_site',
                      'browser_close_tab', 'browser_click', 'browser_type',
                      'browser_press_key', 'browser_execute_js',
                      'browser_screenshot', 'browser_get_cookies',
@@ -675,7 +649,7 @@ def _register_builtins() -> None:
                  write_tools=frozenset({
                      'browser_navigate', 'browser_click', 'browser_type',
                      'browser_press_key', 'browser_execute_js',
-                     'browser_research_page', 'browser_devtools',
+                     'browser_research_page', 'browser_devtools', 'browser_site',
                      'browser_fill_form', 'browser_menu_click',
                      'browser_close_tab',
                  }),
@@ -963,9 +937,10 @@ def _register_builtins() -> None:
                  gate='常开（有任意基础工具即挂载）'),
         ToolSpec('local_serve', _build_local_serve, phase='capability',
                  provides=frozenset({
-                     'local_serve_prepare', 'local_serve_deploy',
-                     'local_serve_status', 'local_serve_list',
-                     'local_serve_stop', 'local_serve_remove',
+                     'local_serve_recommend', 'local_serve_prepare',
+                     'local_serve_deploy', 'local_serve_status',
+                     'local_serve_list', 'local_serve_stop',
+                     'local_serve_remove',
                  }),
                  # deploy spawns a background install+server; remove destroys
                  # the registration — both ALWAYS need a human click (receipt
@@ -980,7 +955,8 @@ def _register_builtins() -> None:
                      'local_serve_deploy', 'local_serve_remove',
                  }),
                  idempotent_tools=frozenset({
-                     'local_serve_prepare', 'local_serve_list',
+                     'local_serve_recommend', 'local_serve_prepare',
+                     'local_serve_list',
                  }),
                  # status reflects a live server; prepare re-probes hardware.
                  cacheable_tools=frozenset(),
@@ -988,6 +964,9 @@ def _register_builtins() -> None:
                  programmatic_tools=frozenset({'local_serve_list'}),
                  discovery_policy='searchable',
                  search_hints={
+                     'local_serve_recommend': (
+                         'recommend open source local model for hardware gpu '
+                         'vram choose 推荐 本地模型 开源 硬件 显卡 选择'),
                      'local_serve_prepare': (
                          'inspect local model path hardware plan deploy '
                          '本地模型 路径 检查 部署方案'),

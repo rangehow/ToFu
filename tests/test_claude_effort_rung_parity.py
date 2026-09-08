@@ -6,15 +6,11 @@ Regression class pinned
 Closes the last hole in the Opus 5 adaptation, and it sat on the DEFAULT rung.
 
 ``lib/llm/body/_build.py`` carried ``if _effort and _effort != 'medium'`` —
-``medium`` was explicitly excluded and never reached the wire. That exclusion
-was CORRECT when it was written: medium WAS the model default, so omitting it
-was a free optimization. Claude Opus 5 moved the default to ``high``, and the
-line's meaning silently changed from "save a few bytes" to "quietly upgrade
-the user's Med to High".
+``medium`` was explicitly excluded and never reached the wire. Anthropic's
+current API default is ``high``, so omission quietly upgrades Med to High;
+the older claim that Opus 5 first changed that default was incorrect.
 
-``index.html`` marks ``data-depth="medium"`` as ``active`` on BOTH the desktop
-(:795) and mobile (:1708) selectors — this is the rung most users ride on
-every single turn.
+The composer defaults to medium on desktop and mobile.
 
 LIVE gateway evidence (yuju-claude-opus-5-evaDaily via your-llm-gateway.example.com,
 identical prompt, max_tokens=8000, adaptive thinking, n=6 per arm,
@@ -44,10 +40,9 @@ two different wires — which is a bug outright, not a style difference.
 re-diverging; it is deliberately a cross-product over rungs x models rather
 than a spot check, because the last divergence hid on one single rung.
 
-Scope: pre-4.7 Claude keeps the byte-identical omit-medium wire. Those models
-really do still default to medium, so sending it changes nothing upstream, and
-the whole point of this suite is that a rung is only worth stating when
-omitting it would mean something ELSE.
+Scope: pre-4.7 Claude keeps the historical omit-medium wire. This compatibility
+assertion is not an official-default claim; supported older models also default
+to high, so explicit medium there remains a separate adaptation gap.
 
 Run:
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/test_claude_effort_rung_parity.py -v
@@ -66,7 +61,7 @@ pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit]
 # Adaptive generation — default effort is `high`, so EVERY rung must be stated.
 ADAPTIVE_MODELS = ('yuju-claude-opus-5-evaDaily', 'claude-opus-5',
                    'aws.claude-opus-4.7', 'aws.claude-opus-4.8')
-# Pre-adaptive Claude — default really is medium; omit-medium stays correct.
+# Older compatibility fixtures — preserve existing wire, not an API-default claim.
 LEGACY_CLAUDE_MODELS = ('aws.claude-opus-4.6', 'claude-3-5-sonnet-20241022')
 
 RUNGS = ('low', 'medium', 'high', 'xhigh', 'max')
@@ -119,17 +114,16 @@ def test_every_rung_reaches_the_wire(model, rung):
 
 @pytest.mark.parametrize('model', LEGACY_CLAUDE_MODELS)
 def test_pre_adaptive_claude_keeps_omit_medium_wire(model):
-    """Pre-4.7 Claude really does default to medium — omitting it means the
-    same thing, so the historical wire is preserved byte-for-byte."""
+    """Pin the historical wire without claiming it matches official defaults."""
     body = _build(model, 'medium')
     assert 'effort' not in body, (
         'model=%s gained effort=%r on the medium path; pre-adaptive Claude '
-        'defaults to medium already.' % (model, body.get('effort')))
+        'wire compatibility is deliberately unchanged.' % (model, body.get('effort')))
 
 
 @pytest.mark.parametrize('model', LEGACY_CLAUDE_MODELS)
 def test_pre_adaptive_claude_still_states_other_rungs(model):
-    """Only `medium` is a no-op on the old generation; other rungs still ship
+    """Only `medium` is omitted on the old generation; other rungs still ship
     (with xhigh downgraded to high, which those models don't support)."""
     assert _build(model, 'low').get('effort') == 'low'
     assert _build(model, 'max').get('effort') == 'max'

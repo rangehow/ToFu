@@ -74,6 +74,9 @@
     },
     {
       "path": "23-turn-reading-system.css"
+    },
+    {
+      "path": "24-overleaf-live-preview.css"
     }
   ]
 }

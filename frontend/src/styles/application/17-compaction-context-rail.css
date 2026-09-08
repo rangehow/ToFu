@@ -1102,8 +1102,26 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
    is bounded by the message box itself (`max-height:100%` resolves
    against the abspos containing block) and SCROLLS when the facts
    outgrow the turn — taller turns simply show more of their rail.
-   Being inside the message box, it can never spill over the NEXT
-   message either, so no paint-containment carve-out is needed.
+
+   ── Sticky travel (2026-09-08) ──
+   An input turn is often ONE line, so a purely box-bound rail scrolled
+   away with its bubble while the round's reply filled screens below it
+   (owner report: "when a conversation is scrolling, the turn ctx should
+   move along until it reaches the next round"). The follower in
+   info-rail.js re-implements sticky-header stacking WITHOUT a DOM
+   restructure: on scroll/resize it translates each rail down by
+   clamp(stickTop − hostTop, 0, nextRailTop − railHeight − hostTop) —
+   pinned to the pane's top inside its round, pushed out exactly when
+   the next round's rail arrives, in one continuous motion. The travel
+   carries the rail BEYOND its host's border box, which is why rail
+   hosts drop content-visibility's paint containment (the
+   `.message:has(> .turn-ctx)` carve-out below); the track it glides
+   through is empty gutter on every non-input turn. A turn with no rail
+   (legacy history) is not a boundary — the previous rail keeps its seat
+   until the next railed turn. `max-height:100%` still caps the PARKED
+   rail; while stuck the cap relaxes to 60vh (`.turn-ctx.tctx-stuck`) so
+   a long rail stays readable instead of being squeezed into a one-line
+   host.
 
    ── Why there is no hover overlay ──
    `.message` carries `content-visibility:auto`, which applies PAINT
@@ -1112,8 +1130,9 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
    carve-out that existed solely to let a hover panel spill out. Keeping the
    overlay would mean keeping the carve-out, so the overlay is gone: the rail
    renders its content permanently and inline, and expanding the tool list is
-   a CLICK that changes in-flow height (no escape needed). The carve-out is
-   therefore deleted, NOT weakened.
+   a CLICK that changes in-flow height (no escape needed). The carve-out
+   below exists for a DIFFERENT reason — sticky travel — and keeps
+   layout+style containment, dropping only paint.
 
    ── Drawer open → the rail leaves entirely ──
    With the inspector open the pane can be as narrow as 74px (has-rail
@@ -1144,6 +1163,16 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
    * guard in info-rail.js stopPropagations every click inside it. */
   pointer-events:auto;
 }
+/* Sticky travel carries the rail BEYOND its host's border box (see the
+ * block comment) — content-visibility:auto's paint containment would clip
+ * it at the host's edge, and bare .message sets no overflow clip, so paint
+ * is the only thing to drop. Rail hosts render eagerly (input turns are
+ * few and short); layout+style containment stays. `.cv-off` keeps its
+ * !important win. */
+.message:has(> .turn-ctx){ content-visibility:visible; contain:layout style; }
+/* While pinned to the pane top, the host-relative 100% cap would squeeze a
+ * long rail into a one-line input turn — relax it to a viewport share. */
+.turn-ctx.tctx-stuck{ max-height:60vh; }
 /* No rail track (narrow pane / drawer open) → the rail folds away. It is a
  * grid item in a zero-width track, so leaving it visible would smear it. */
 .chat-inner{ --rail-shown:0; }
@@ -1167,7 +1196,8 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar[data-zon
      * 132px `overflow:hidden` guillotine never allowed (it clipped ordinary
      * cards mid-WORKSPACE with no way to reach the facts — the 2026-07-28
      * complaint). (2) The rail's box is bounded by the MESSAGE's own
-     * height (max-height:100% in the base rule) and SCROLLS, so nothing
+     * height (max-height:100% in the base rule; 60vh while stuck) and
+     * SCROLLS, so nothing
      * is ever unreachable and — unlike the pre-2026-08-05 in-flow rail —
      * the turn's height is never driven by the rail, expanded or not
      * (guarded by the no-inflation assertion in
@@ -1409,4 +1439,170 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .ctx-health-bar{
   --ctx-counter-fg:#5a4a33;
   --ctx-counter-bg:#ecd5a2;
   --ctx-counter-ring:#fdf8e6;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   Background-activity chip (background-activity.js)
+
+   Sits in #convStatusStrip between the context gauge and the turn-nav.
+   Hidden (display:none, JS-driven) whenever nothing is executing in the
+   background; visible while any swarm sub-agent or detached run_command
+   is still working after the foreground turn settled. No ambient
+   animation: the single pulse on the dot runs only while the chip is
+   visible, i.e. only while real work exists.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.bg-activity-chip{
+  flex:0 1 auto;
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  min-width:0;
+  padding:5px 11px;
+  border-radius:999px;
+  user-select:none;
+  cursor:pointer;
+  font-size:12px;
+  line-height:1;
+  color:var(--text-secondary);
+  background:color-mix(in srgb, var(--accent) 10%, transparent);
+  border:1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  opacity:0;
+  animation:ctx-fade-in .35s ease-out forwards;
+}
+.bg-activity-chip:hover{
+  background:color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.bg-act-dot{
+  flex:0 0 auto;
+  width:7px;
+  height:7px;
+  border-radius:50%;
+  background:var(--accent);
+  animation:bg-act-pulse 1.6s ease-in-out infinite;
+}
+@keyframes bg-act-pulse{
+  0%,100%{ opacity:.45; }
+  50%    { opacity:1;   }
+}
+@media (prefers-reduced-motion: reduce){
+  .bg-act-dot{ animation:none; }
+}
+.bg-act-label{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+/* Popover — anchored fixed above the chip by JS, opens upward. */
+.bg-act-popover{
+  z-index:1000;
+  width:340px;
+  max-width:calc(100vw - 24px);
+  max-height:min(50vh, 420px);
+  overflow-y:auto;
+  border-radius:12px;
+  background:var(--bg-primary, #fff);
+  border:1px solid var(--border-color, rgba(0,0,0,.12));
+  box-shadow:0 8px 30px rgba(0,0,0,.18);
+  padding:10px 12px 12px;
+  font-size:12px;
+  color:var(--text-primary);
+}
+.bg-act-pop-head{
+  font-weight:600;
+  font-size:12.5px;
+  margin-bottom:6px;
+}
+.bg-act-pop-section{
+  margin:10px 0 4px;
+  font-size:11px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:var(--text-tertiary);
+}
+.bg-act-pop-section:first-of-type{ margin-top:2px; }
+.bg-act-swarm{
+  border-radius:8px;
+  padding:6px 8px;
+  margin-bottom:4px;
+  background:color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.bg-act-swarm.is-clickable{ cursor:pointer; }
+.bg-act-swarm.is-clickable:hover{
+  background:color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.bg-act-swarm-head{
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+  min-width:0;
+}
+.bg-act-swarm-conv{
+  font-weight:600;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.bg-act-swarm-summary{
+  color:var(--text-tertiary);
+  white-space:nowrap;
+}
+.bg-act-elapsed{
+  margin-left:auto;
+  flex:0 0 auto;
+  color:var(--text-tertiary);
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.bg-act-agent{
+  display:flex;
+  align-items:baseline;
+  gap:7px;
+  min-width:0;
+  margin-top:4px;
+  padding-left:2px;
+}
+.bg-act-agent-role{
+  flex:0 0 auto;
+  padding:1px 6px;
+  border-radius:6px;
+  font-size:10.5px;
+  font-weight:600;
+  background:color-mix(in srgb, var(--accent) 14%, transparent);
+  color:var(--accent);
+}
+.bg-act-agent-objective{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--text-secondary);
+}
+.bg-act-agent-status{
+  margin-left:auto;
+  flex:0 0 auto;
+  color:var(--text-tertiary);
+  white-space:nowrap;
+}
+.bg-act-agent[data-status="running"] .bg-act-agent-status{ color:var(--accent); }
+.bg-act-agent[data-status="failed"] .bg-act-agent-status,
+.bg-act-agent[data-status="error"]  .bg-act-agent-status{ color:#c44747; }
+.bg-act-cmd{
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+  min-width:0;
+  padding:5px 8px;
+  border-radius:8px;
+  margin-bottom:4px;
+  background:color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.bg-act-cmd-text{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-family:var(--font-mono, ui-monospace, monospace);
+  font-size:11.5px;
 }

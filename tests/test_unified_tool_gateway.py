@@ -196,7 +196,8 @@ def test_gateway_repairs_aliases_defaults_enums_arrays_and_top_level_call():
     alias_catalog = [_tool(
         'apply_diff', properties={
             'path': {'type': 'string'}, 'search': {'type': 'string'},
-            'replace': {'type': 'string'}},
+            'replace': {'type': 'string'},
+            'description': {'type': 'string'}},
         required=['path', 'search', 'replace'])]
     aliased = normalize_execute_request(
         {'calls': {'name': 'apply_diff', 'arguments': {
@@ -204,7 +205,8 @@ def test_gateway_repairs_aliases_defaults_enums_arrays_and_top_level_call():
         catalog=alias_catalog, namespace_by_name={}, gateway_call_id='repair-2')
     assert aliased['errors'] == []
     assert aliased['calls'][0]['_normalized_arguments'] == {
-        'path': 'a.py', 'search': 'x', 'replace': 'y'}
+        'path': 'a.py', 'search': 'x', 'replace': 'y',
+        'description': 'Edit a.py'}
     assert sum(row['kind'] == 'param_alias'
                for row in aliased['calls'][0]['_normalization_repairs']) == 3
 
@@ -233,6 +235,38 @@ def test_gateway_fuzzy_name_requires_high_confidence_and_clear_margin():
     assert call['id'].startswith('gw_')
 
 
+def test_gateway_resolves_unique_mcp_short_name():
+    catalog = [
+        _tool('mcp__llm__experiment_run',
+              properties={'ids': {'type': 'array'}}, required=['ids']),
+        _tool('mcp__llm__experiment_stop'),
+    ]
+    repaired = normalize_execute_request(
+        {'calls': {'name': 'experiment_run', 'arguments': {'ids': ['e1']}}},
+        catalog=catalog, namespace_by_name={}, gateway_call_id='mcp-short-1')
+    assert repaired['errors'] == []
+    call = repaired['calls'][0]
+    assert call['function']['name'] == 'mcp__llm__experiment_run'
+    repair = next(row for row in call['_normalization_repairs']
+                  if row['kind'] == 'mcp_short_tool_name')
+    assert repair['before'] == 'experiment_run'
+    assert repair['after'] == 'mcp__llm__experiment_run'
+
+
+def test_gateway_mcp_short_name_ambiguous_is_an_honest_error():
+    catalog = [
+        _tool('mcp__llm__experiment_run'),
+        _tool('mcp__other__experiment_run'),
+    ]
+    result = normalize_execute_request(
+        {'calls': {'name': 'experiment_run', 'arguments': {}}},
+        catalog=catalog, namespace_by_name={}, gateway_call_id='mcp-short-2')
+    assert result['calls'] == []
+    assert result['errors'][0]['code'] == 'ambiguous_tool_name'
+    assert result['errors'][0]['candidates'] == [
+        'mcp__llm__experiment_run', 'mcp__other__experiment_run']
+
+
 def test_gateway_repairs_tool_result_reader_name_and_ref_key_together():
     catalog = [_tool(
         'read_tool_artifact',
@@ -249,6 +283,120 @@ def test_gateway_repairs_tool_result_reader_name_and_ref_key_together():
     assert call['_normalized_arguments'] == {'artifact_ref': 'result-1'}
     assert {repair['kind'] for repair in call['_normalization_repairs']} >= {
         'alias_tool_name', 'param_alias'}
+
+
+def test_gateway_redirects_amazon_q_todo_list_to_todo_write():
+    """The original failure shape: a model emits Amazon Q's ``todo_list``
+    with a command payload. The gateway must alias the name AND adapt the
+    command shape so the schema-required ``todos`` passes validation; the
+    stateful merge happens later in lib.tools.todo (test_todo_list_compat).
+    """
+    from lib.tools.todo import TODO_WRITE_TOOL
+    result = normalize_execute_request(
+        {'calls': {'name': 'todo_list', 'arguments': {
+            'command': 'create', 'tasks': ['scan repo', 'patch'],
+            'todo_list_description': 'fix bug'}}},
+        catalog=[TODO_WRITE_TOOL], namespace_by_name={},
+        gateway_call_id='todo-list-1')
+
+    assert result['errors'] == []
+    call = result['calls'][0]
+    assert call['function']['name'] == 'todo_write'
+    args = call['_normalized_arguments']
+    assert args['todos'] == []
+    assert args['command'] == 'create'
+    assert args['tasks'] == ['scan repo', 'patch']
+    kinds = {row['kind'] for row in call['_normalization_repairs']}
+    assert 'alias_tool_name' in kinds
+    assert 'structural_transform' in kinds
+
+
+def test_gateway_redirects_kimi_settodolist_to_todo_write():
+    """Kimi CLI's built-in checklist tool is ``SetTodoList`` with items
+    ``{title, status: pending|in_progress|done}`` (MoonshotAI/kimi-cli
+    src/kimi_cli/tools/todo/__init__.py). The gateway must alias the name
+    AND adapt the item vocabulary (title→content, done→completed,
+    positional ids) so the payload passes the todo_write contract.
+    """
+    from lib.tools.todo import TODO_WRITE_TOOL
+    result = normalize_execute_request(
+        {'calls': {'name': 'SetTodoList', 'arguments': {'todos': [
+            {'title': 'scan repo', 'status': 'done'},
+            {'title': 'patch bug', 'status': 'in_progress'},
+        ]}}},
+        catalog=[TODO_WRITE_TOOL], namespace_by_name={},
+        gateway_call_id='settodo-1')
+
+    assert result['errors'] == []
+    call = result['calls'][0]
+    assert call['function']['name'] == 'todo_write'
+    assert call['_normalized_arguments']['todos'] == [
+        {'id': '1', 'content': 'scan repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch bug', 'status': 'in_progress'},
+    ]
+    kinds = {row['kind'] for row in call['_normalization_repairs']}
+    assert 'alias_tool_name' in kinds
+    assert 'structural_transform' in kinds
+
+
+def test_gateway_redirects_codex_update_plan_to_todo_write():
+    """Codex CLI's plan tool is ``update_plan`` with envelope ``{plan:
+    [{step, status}], explanation?}`` (openai/codex
+    codex-rs/core/src/tools/handlers/plan_spec.rs). The gateway must alias
+    the name AND reshape the envelope + item vocabulary (plan→todos,
+    step→content, positional ids) so the payload passes the todo_write
+    contract.
+    """
+    from lib.tools.todo import TODO_WRITE_TOOL
+    result = normalize_execute_request(
+        {'calls': {'name': 'update_plan', 'arguments': {
+            'explanation': 'shipping the fix',
+            'plan': [{'step': 'scan repo', 'status': 'completed'},
+                     {'step': 'patch bug', 'status': 'in_progress'}]}}},
+        catalog=[TODO_WRITE_TOOL], namespace_by_name={},
+        gateway_call_id='update-plan-1')
+
+    assert result['errors'] == []
+    call = result['calls'][0]
+    assert call['function']['name'] == 'todo_write'
+    args = call['_normalized_arguments']
+    assert 'plan' not in args
+    assert args['todos'] == [
+        {'id': '1', 'content': 'scan repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch bug', 'status': 'in_progress'},
+    ]
+    kinds = {row['kind'] for row in call['_normalization_repairs']}
+    assert 'alias_tool_name' in kinds
+    assert 'structural_transform' in kinds
+
+
+def test_gateway_redirects_gemini_write_todos_to_todo_write():
+    """Gemini CLI's checklist tool is ``write_todos`` with items
+    ``{description, status}`` plus a ``cancelled`` status (google-gemini/
+    gemini-cli packages/core/src/tools/write-todos.ts). The gateway must
+    alias the name AND map the item vocabulary — description→content,
+    cancelled items dropped, positional ids.
+    """
+    from lib.tools.todo import TODO_WRITE_TOOL
+    result = normalize_execute_request(
+        {'calls': {'name': 'write_todos', 'arguments': {'todos': [
+            {'description': 'scan repo', 'status': 'completed'},
+            {'description': 'dropped work', 'status': 'cancelled'},
+            {'description': 'patch bug', 'status': 'in_progress'},
+        ]}}},
+        catalog=[TODO_WRITE_TOOL], namespace_by_name={},
+        gateway_call_id='write-todos-1')
+
+    assert result['errors'] == []
+    call = result['calls'][0]
+    assert call['function']['name'] == 'todo_write'
+    assert call['_normalized_arguments']['todos'] == [
+        {'id': '1', 'content': 'scan repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch bug', 'status': 'in_progress'},
+    ]
+    kinds = {row['kind'] for row in call['_normalization_repairs']}
+    assert 'alias_tool_name' in kinds
+    assert 'structural_transform' in kinds
 
 
 def test_execute_program_wins_with_warning_and_disabled_tool_is_rejected():

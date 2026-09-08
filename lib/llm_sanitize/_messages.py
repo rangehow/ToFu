@@ -370,7 +370,12 @@ def _merge_consecutive_same_role(messages: list) -> list:
         if (role == prev_role
                 and role in ('user', 'assistant')
                 and not msg.get('tool_calls')
-                and not merged[-1].get('tool_calls')):
+                and not merged[-1].get('tool_calls')
+                # Native assistant state belongs to this exact message. A
+                # prose merge drops the right side's phases/reasoning and
+                # invalidates the left side's replay-content witness.
+                and not msg.get('_responses_items')
+                and not merged[-1].get('_responses_items')):
             # Merge content by concatenation
             prev_content = merged[-1].get('content', '') or ''
             new_content = msg.get('content', '') or ''

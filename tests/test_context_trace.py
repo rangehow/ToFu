@@ -77,6 +77,7 @@ def _assemble(**over):
         search_enabled=False,
         has_real_tools=True,
         conv_id='ctxtrace1',
+        tool_names={'spawn_agents', 'execute_tools'},
         task={},
         model='gpt-4o',
     )
@@ -218,7 +219,7 @@ def test_suppressed_seam_logs_reason(caplog):
     rows = {row['id']: row for row in task['_contextManifest']}
     memory = rows['memory_guidance']
     assert memory['injected'] is False
-    assert memory['reason'] == 'memory_disabled_or_no_tools'
+    assert memory['reason'] == 'memory_disabled'
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -277,5 +278,5 @@ def test_logging_failure_cannot_break_assembly(monkeypatch):
     # The static + memory + swarm blocks still landed.
     txt = _system_text(messages) + '\n' + _carrier_text(messages)
     assert 'NEVER generate or guess URLs' in txt  # static block present
-    assert '<memory_accumulation>' in txt
+    assert 'verified reusable lessons' in txt
     assert '<parallel_execution>' in txt

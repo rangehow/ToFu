@@ -375,6 +375,11 @@ html:not([data-theme="tofu"]) .scene-switch-btn{display:none}
 .proactive-banner{background:linear-gradient(135deg,rgba(168,85,247,0.08),rgba(139,92,246,0.04));border:1px solid rgba(168,85,247,0.2);border-radius:8px;padding:8px 12px;margin-bottom:8px;font-size:12px;display:flex;align-items:center;gap:8px}
 .proactive-banner .pb-text{color:var(--text-secondary);font-size:11px}
 .proactive-banner .pb-name{color:#a855f7;font-weight:700}
+
+[data-theme="light"] .proactive-banner{background:rgba(124,58,237,0.07);border-color:rgba(124,58,237,0.28)}
+[data-theme="light"] .proactive-banner .pb-name{color:#6d28d9}
+[data-theme="tofu"] .proactive-banner{background:rgba(124,92,184,0.10);border-color:rgba(124,92,184,0.32)}
+[data-theme="tofu"] .proactive-banner .pb-name{color:#5b4a8a}
 /* Model-fallback banner inside the streaming bubble — painted the moment the
    backend switches models (llm_fallback model_fallback SSE event). Amber warn
    variant of .proactive-banner; NOT a toast. */

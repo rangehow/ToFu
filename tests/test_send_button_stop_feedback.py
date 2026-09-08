@@ -79,21 +79,27 @@ function makeClassList() {
 }
 function makeButton(id) {
   const attributes = Object.create(null);
-  return {
+  const btn = {
     id,
     tagName:'BUTTON',
     type:'button',
     className:'',
-    innerHTML:'',
     title:'',
     hidden:false,
     style:{},
     onclick:null,
     parentElement:null,
+    markupWrites:0,
     setAttribute(name, value) { attributes[name] = String(value); },
     getAttribute(name) { return attributes[name] ?? null; },
     removeAttribute(name) { delete attributes[name]; },
   };
+  let markup = '';
+  Object.defineProperty(btn, 'innerHTML', {
+    get() { return markup; },
+    set(value) { btn.markupWrites += 1; markup = String(value); },
+  });
+  return btn;
 }
 const elements = Object.create(null);
 const actionRight = {
@@ -178,6 +184,11 @@ global.ConversationTurnRead = {
    * mid-turn stays on the Enter key path). */
   composerInput.value = 'follow up while streaming';
   composerInput.emit('input');
+  const writesBeforeTyping = button.markupWrites;
+  for (const extra of ['!', '?', '…']) {
+    composerInput.value += extra;
+    composerInput.emit('input');
+  }
   const busyDraft = {
     sendClass:button.className,
     sendTitle:button.title,
@@ -186,6 +197,8 @@ global.ConversationTurnRead = {
     parentClass:actionRight.classList.contains('composer-dual-actions'),
     separateStopAbsent:separateStopAbsent(),
     inputListenerCount:composerInput.listenerCount('input'),
+    writesBeforeTyping:writesBeforeTyping,
+    writesWhileTyping:button.markupWrites - writesBeforeTyping,
   };
   button.onclick();
   const stopping = {
@@ -208,6 +221,7 @@ global.ConversationTurnRead = {
     sendClass:button.className,
     parentClass:actionRight.classList.contains('composer-dual-actions'),
     separateStopAbsent:separateStopAbsent(),
+    markupWrites:button.markupWrites,
   };
 
   pendingImages.push({name:'draft.png'});
@@ -226,6 +240,7 @@ global.ConversationTurnRead = {
     title:button.title,
     ariaLabel:button.getAttribute('aria-label'),
     separateStopAbsent:separateStopAbsent(),
+    markupWrites:button.markupWrites,
   };
 
   const main = {
@@ -330,6 +345,10 @@ def test_stop_click_feedback_and_idempotency():
             'parentClass': False,
             'separateStopAbsent': True,
             'inputListenerCount': 1,
+            # Typing refreshes the control on every keystroke; the markup
+            # (and with it the badge's CSS pop animation) must not replay.
+            'writesBeforeTyping': 1,
+            'writesWhileTyping': 0,
         },
         'sendCalls': 0,
         'aborted': ['a1'],
@@ -348,6 +367,7 @@ def test_stop_click_feedback_and_idempotency():
             'sendClass': 'send-btn stop-btn',
             'parentClass': False,
             'separateStopAbsent': True,
+            'markupWrites': 3,
         },
         'attachmentDraft': {
             'sendClass': 'send-btn stop-btn',
@@ -358,6 +378,7 @@ def test_stop_click_feedback_and_idempotency():
             'title': 'Send (Enter)',
             'ariaLabel': 'Send',
             'separateStopAbsent': True,
+            'markupWrites': 4,
         },
         'warned': True,
         'hydrated': ['main'],

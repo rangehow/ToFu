@@ -40,6 +40,12 @@ pub struct ControlState {
 pub struct ControlFile {
     path: PathBuf,
     file: Box<dyn VfsFile>,
+    /// Last state known to be on stable storage. `publish` is the only writer
+    /// after open, so a populated cache is authoritative and commits skip
+    /// re-reading and re-verifying both slots. `None` forces a disk read;
+    /// the cache is dropped whenever a write or barrier fails because the
+    /// on-disk outcome is then ambiguous.
+    current: Option<ControlState>,
 }
 
 fn invalid_data(message: &str) -> io::Error {
@@ -223,7 +229,11 @@ impl ControlFile {
         file.set_len((SLOT_BYTES * SLOT_COUNT) as u64)?;
         file.write_all_at(0, &encode(&initial))?;
         sync_all_barrier(file.as_mut())?;
-        Ok(Self { path, file })
+        Ok(Self {
+            path,
+            file,
+            current: Some(initial),
+        })
     }
 
     pub fn open(data_dir: &Path) -> io::Result<Self> {
@@ -243,7 +253,11 @@ impl ControlFile {
         if file.len()? != (SLOT_BYTES * SLOT_COUNT) as u64 {
             return Err(invalid_data("CONTROL has an invalid fixed size"));
         }
-        Ok(Self { path, file })
+        Ok(Self {
+            path,
+            file,
+            current: None,
+        })
     }
 
     pub fn read_current(&mut self) -> io::Result<ControlState> {
@@ -270,11 +284,15 @@ impl ControlFile {
         {
             return Err(invalid_data("conflicting CONTROL slots at one generation"));
         }
+        self.current = Some(newest.clone());
         Ok(newest)
     }
 
     pub fn publish(&mut self, next: &ControlState) -> io::Result<()> {
-        let current = self.read_current()?;
+        let current = match &self.current {
+            Some(state) => state.clone(),
+            None => self.read_current()?,
+        };
         if next.generation
             != current
                 .generation
@@ -342,9 +360,18 @@ impl ControlFile {
             }
         }
         let slot_index = ((next.generation - 1) as usize) % SLOT_COUNT;
-        self.file
-            .write_all_at((slot_index * SLOT_BYTES) as u64, &encode(next))?;
-        sync_all_barrier(self.file.as_mut())
+        if let Err(error) = self
+            .file
+            .write_all_at((slot_index * SLOT_BYTES) as u64, &encode(next))
+            .and_then(|()| sync_all_barrier(self.file.as_mut()))
+        {
+            // The torn/complete outcome of this publication is unknown, so
+            // the cache can no longer describe stable storage.
+            self.current = None;
+            return Err(error);
+        }
+        self.current = Some(next.clone());
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
@@ -440,15 +467,12 @@ mod tests {
         let mut baseline = simulated_control(&baseline_vfs, authority);
         baseline_vfs.arm_fault(None)?;
         baseline.publish(&next)?;
+        // The initialized ControlFile already holds its current state in
+        // memory, so the publication hot path performs no slot Read.
         let trace = baseline_vfs.trace()?;
         assert_eq!(
             trace,
-            vec![
-                Operation::Read,
-                Operation::Write,
-                Operation::SyncAll,
-                Operation::SyncAll
-            ]
+            vec![Operation::Write, Operation::SyncAll, Operation::SyncAll]
         );
 
         for operation_number in 1..=trace.len() as u64 {

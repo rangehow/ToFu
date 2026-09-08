@@ -100,7 +100,8 @@ PROJECT_TOOL_WRITE_FILE = {
             "(/etc, /usr, $HOME itself) are refused outright. Give exactly one "
             "source: content (an empty "
             "string creates an empty file) or content_ref to reuse all/a slice of a "
-            "previous tool result."
+            "previous tool result. Set append=true to append to the end of the "
+            "file instead of replacing it (a missing file is created)."
         ),
         "parameters": {
             "type": "object",
@@ -135,6 +136,13 @@ PROJECT_TOOL_WRITE_FILE = {
                     },
                     "required": ["tool_round"]
                 },
+                "append": {
+                    "type": "boolean",
+                    "description": (
+                        "Append content to the end of the file instead of "
+                        "replacing it. Default false."
+                    )
+                },
                 "allow_outside_workspace": {
                     "type": "boolean",
                     "description": (
@@ -167,18 +175,15 @@ PROJECT_TOOL_APPLY_DIFF = {
         "name": "apply_diff",
         "description": (
             "Apply a single search-and-replace edit to a file. The 'search' string "
-            "must match EXACTLY (including whitespace/indentation) in the file. Use "
-            "read_files first to get the exact content.\n\n"
-            "**Read-before-edit is enforced.** apply_diff is REJECTED when the target "
-            "file has not been read (or written) earlier in the conversation. A "
-            "sibling ``read_files`` issued in the SAME parallel batch as this "
-            "apply_diff does NOT satisfy the gate — its result is not visible to this "
-            "tool call. To edit a file you have not yet read: issue read_files this "
-            "turn, then issue apply_diff in the NEXT turn.\n\n"
-            "**Use apply_diff for small, targeted edits.** For new files or whole-file "
-            "rewrites use write_file; for purely additive changes (adding a new function "
-            "next to existing code without modifying it) prefer insert_content.\n\n"
-            "For MULTIPLE edits in one call, use **apply_diffs** instead."
+            "must match EXACTLY (including whitespace/indentation) — use read_files "
+            "first to get the exact content.\n\n"
+            "**Read-before-edit gate**: REJECTED unless the target file was read or "
+            "written in an earlier turn; a read_files call in the SAME batch does "
+            "not count. To edit an unread file: read_files this turn, apply_diff "
+            "the NEXT.\n\n"
+            "**Use for small, targeted edits.** New files or whole-file rewrites: "
+            "write_file; purely additive changes: insert_content. MULTIPLE edits "
+            "in one call: **apply_diffs**."
         ),
         "parameters": {
             "type": "object",
@@ -206,17 +211,15 @@ PROJECT_TOOL_APPLY_DIFFS = {
     "function": {
         "name": "apply_diffs",
         "description": (
-            "apply_diffs: Apply multiple search-and-replace edits in one call. Edits "
-            "are applied sequentially so later edits see earlier changes. Much faster "
-            "than multiple separate apply_diff calls.\n\n"
-            "**Read-before-edit is enforced.** Every target file must have been read "
-            "(or written) earlier in the conversation. A sibling ``read_files`` issued "
-            "in the SAME parallel batch does NOT satisfy the gate.\n\n"
-            "**Failure semantics**: if one edit fails (search not found, ambiguous "
-            "match), the remaining edits STILL RUN — failures do not halt the batch "
-            "and successful edits already applied are NOT rolled back. The summary "
-            "reads ``Applied X/(X+Y) edits`` with per-edit OK/FAIL lines. After a "
-            "partial failure, re-read the affected files before retrying."
+            "apply_diffs: Apply multiple search-and-replace edits in one call, "
+            "sequentially — later edits see earlier changes.\n\n"
+            "**Read-before-edit gate**: every target file must have been read or "
+            "written in an earlier turn; a read_files call in the SAME batch does "
+            "not count.\n\n"
+            "**Failure semantics**: a failed edit (search not found, ambiguous) "
+            "does NOT halt the batch and applied edits are NOT rolled back. The "
+            "summary reads ``Applied X/(X+Y) edits`` with per-edit OK/FAIL lines; "
+            "re-read affected files before retrying."
         ),
         "parameters": {
             "type": "object",
@@ -254,21 +257,16 @@ PROJECT_TOOL_INSERT_CONTENT = {
         "description": (
             "Insert new content before or after an anchor string in a file. Unlike "
             "apply_diff (search-and-replace), this tool ADDS content without removing "
-            "the anchor.\n\n"
-            "**Read-before-edit is enforced.** insert_content is REJECTED when the "
-            "target file has not been read (or written) earlier in the conversation. "
-            "A sibling ``read_files`` issued in the SAME parallel batch does NOT "
-            "satisfy the gate. To edit a file you have not yet read: issue read_files "
-            "this turn, then issue insert_content in the NEXT turn.\n\n"
-            "**Prefer insert_content over apply_diff when the change is purely "
-            "additive** (adding new lines without modifying existing ones). Examples: "
-            "adding an import, appending a new function/method/block before or after "
-            "existing code, inserting a config entry. insert_content is simpler — no "
-            "need to repeat the anchor in both search and replace — and less error-prone.\n\n"
-            "The 'anchor' string must match EXACTLY once in the file (like apply_diff's "
-            "search). If it matches multiple locations, the tool errors — make the "
-            "anchor more specific.\n\n"
-            "For MULTIPLE insertions in one call, use **insert_contents** instead."
+            "the anchor. Prefer it over apply_diff for purely additive changes "
+            "(imports, new functions, config entries) — no need to repeat the "
+            "anchor in search and replace.\n\n"
+            "**Read-before-edit gate**: REJECTED unless the target file was read or "
+            "written in an earlier turn; a read_files call in the SAME batch does "
+            "not count. To edit an unread file: read_files this turn, insert_content "
+            "the NEXT.\n\n"
+            "The 'anchor' must match EXACTLY once — on multiple matches the tool "
+            "errors; make the anchor more specific. MULTIPLE insertions in one "
+            "call: **insert_contents**."
         ),
         "parameters": {
             "type": "object",
@@ -300,18 +298,16 @@ PROJECT_TOOL_INSERT_CONTENTS = {
     "function": {
         "name": "insert_contents",
         "description": (
-            "insert_contents: Insert content at multiple locations in one call. Each "
-            "insertion adds content before or after an anchor string. Insertions are "
-            "applied sequentially so later ones see earlier changes. Much faster than "
-            "multiple separate insert_content calls.\n\n"
-            "**Read-before-edit is enforced.** Every target file must have been read "
-            "(or written) earlier in the conversation. A sibling ``read_files`` issued "
-            "in the SAME parallel batch does NOT satisfy the gate.\n\n"
-            "**Failure semantics**: if one insertion fails (anchor not found, ambiguous "
-            "match), the remaining insertions STILL RUN — failures do not halt the "
-            "batch and successful insertions are NOT rolled back. The summary reads "
-            "``Inserted X/(X+Y) edits`` with per-edit OK/FAIL lines. After a partial "
-            "failure, re-read the affected files before retrying."
+            "insert_contents: Insert content at multiple locations in one call, "
+            "sequentially — later insertions see earlier changes. Each insertion "
+            "adds content before or after an anchor string.\n\n"
+            "**Read-before-edit gate**: every target file must have been read or "
+            "written in an earlier turn; a read_files call in the SAME batch does "
+            "not count.\n\n"
+            "**Failure semantics**: a failed insertion (anchor not found, ambiguous) "
+            "does NOT halt the batch and applied insertions are NOT rolled back. "
+            "The summary reads ``Inserted X/(X+Y) edits`` with per-edit OK/FAIL "
+            "lines; re-read affected files before retrying."
         ),
         "parameters": {
             "type": "object",
@@ -356,13 +352,12 @@ PROJECT_TOOL_EDIT_FILE = {
     "function": {
         "name": "edit_file",
         "description": (
-            "Apply 1–30 ordered anchored edits after reading/writing each target "
-            "in an earlier round. Use insert_after/insert_before when the anchor "
-            "stays; content is only new text—do not repeat its anchor or neighbor "
-            "lines. Example: add B between A/C with insert_after, anchor A, content "
-            "B. Safe insertion echoes are stripped; pure echoes and a replace that "
-            "merely wraps its unchanged anchor are rejected as insertions. Use "
-            "replace only to change/remove the anchor. Anchors match exactly once; "
+            "Apply 1–30 ordered anchored edits; read/write targets in an earlier round. "
+            "Replace uses full content even when it retains the anchor; never adds "
+            "line breaks. Prefer insert_after/insert_before for new lines: content is "
+            "only new text; do not repeat anchor/neighbor lines. Example: add B between "
+            "A/C: anchor A, content B. Safe insertion echoes are stripped; pure echoes "
+            "rejected. Anchors match exactly once; "
             "replace_all permits multiple matches only for replace. Later edits see "
             "earlier changes; one failure neither rolls back nor stops the others."
         ),
@@ -373,7 +368,9 @@ PROJECT_TOOL_EDIT_FILE = {
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 120,
-                    "description": "Short pre-edit intent shown before execution.",
+                    "description": (
+                        "Short pre-edit intent shown before execution "
+                        "(max 120 chars)."),
                 },
                 "edits": {
                     "type": "array",
@@ -390,7 +387,7 @@ PROJECT_TOOL_EDIT_FILE = {
                             "operation": {
                                 "type": "string",
                                 "enum": ["insert_after", "insert_before", "replace"],
-                                "description": "Insert keeps anchor; replace changes/removes it.",
+                                "description": "Insert keeps anchor; replace substitutes it with content.",
                             },
                             "anchor": {
                                 "type": "string",
@@ -399,7 +396,7 @@ PROJECT_TOOL_EDIT_FILE = {
                             },
                             "content": {
                                 "type": "string",
-                                "description": "Only inserted/replacement text; do not echo context.",
+                                "description": "Insert: only new text. Replace: full replacement, empty to delete.",
                             },
                             "replace_all": {
                                 "type": "boolean",
@@ -432,7 +429,7 @@ PROJECT_TOOL_RUN_COMMAND = {
         "description": (
             "Run a shell command for builds, tests, lint, installs, Git, or a "
             "pipeline, returning stdout/stderr. There is NO default timeout; use "
-            "`timeout` only when the work should be abandoned. User Stop remains "
+            "`timeout_s` only when the work should be abandoned. User Stop remains "
             "available. If the operator sends a message during a long wait, the "
             "command may move to the background and its result will arrive "
             "automatically. Avoid commands that wait for stdin.\n\n"
@@ -459,9 +456,13 @@ PROJECT_TOOL_RUN_COMMAND = {
                     "type": "string",
                     "description": "Short user-language caption: what runs and why."
                 },
-                "timeout": {
+                "timeout_s": {
                     "type": "integer",
-                    "description": "Optional seconds before abandonment; omit or use 0 for unlimited."
+                    "description": (
+                        "Optional SECONDS before abandonment; omit or use 0 "
+                        "for unlimited. (The legacy `timeout` spelling is "
+                        "still accepted and means the same.)"
+                    )
                 },
                 "working_dir": {
                     "type": "string",
@@ -478,12 +479,66 @@ PROJECT_TOOL_RUN_COMMAND = {
                     "items": {"type": "string"},
                     "maxItems": 16
                 }
+,
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "Start in background and return command_id. Conversation "
+                        "completion arrives automatically; do other work or end "
+                        "this turn without claiming command success. "
+                        "check_background_command reads status; "
+                        "kill_background_command stops it."
+                    )
+                }
             },
             "required": ["command"]
         }
     }
 }
 
+PROJECT_TOOL_CHECK_BACKGROUND = {
+    "type": "function",
+    "function": {
+        "name": "check_background_command",
+        "description": (
+            "Poll a background command started with run_command(background=true). "
+            "Returns status (running/completed), result (if done), and elapsed time."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command_id": {
+                    "type": "string",
+                    "description": "The command_id returned by run_command(background=true)."
+                }
+            },
+            "required": ["command_id"]
+        }
+    }
+}
+
+PROJECT_TOOL_KILL_BACKGROUND = {
+    "type": "function",
+    "function": {
+        "name": "kill_background_command",
+        "description": (
+            "Kill a running background command by its command_id. "
+            "The process tree receives SIGTERM then SIGKILL."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command_id": {
+                    "type": "string",
+                    "description": "The command_id to kill."
+                }
+            },
+            "required": ["command_id"]
+        }
+    }
+}
+
+# NOTE: read_files is NOT a project-scoped tool
 # NOTE: read_files is NOT a project-scoped tool — it's registered globally
 #   in lib/tasks_pkg/model_config.py (and timer.py) so the model can read
 #   absolute local paths (images, PDFs, Office docs, text files) even when no
@@ -568,6 +623,7 @@ PROJECT_TOOLS_UNIFIED = [
     PROJECT_TOOL_GREP, PROJECT_TOOL_FIND,
     PROJECT_TOOL_WRITE_FILE, PROJECT_TOOL_EDIT_FILE,
     PROJECT_TOOL_RUN_COMMAND,
+    PROJECT_TOOL_CHECK_BACKGROUND, PROJECT_TOOL_KILL_BACKGROUND,
 ]
 
 PROJECT_TOOLS_LEGACY = [
@@ -604,7 +660,7 @@ PROJECT_TOOL_NAMES = {
     'list_dir', 'grep_search', 'find_files',
     'write_file', 'edit_file', 'apply_diff', 'apply_diffs',
     'insert_content', 'insert_contents',
-    'run_command',
+    'run_command', 'check_background_command', 'kill_background_command',
 }
 
 __all__ = [

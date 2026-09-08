@@ -146,6 +146,26 @@ def _get_json(client, path, **query):
 
 # ── 1. ★ The decisive criterion ────────────────────────────────────────────
 
+def test_durable_run_http_reopens_after_registry_loss(client, fresh_db, tmp_path):
+    from lib.research.records import persist_record
+    from lib.research.runtime import _new_research_task, _research_task_id, _research_runtime
+    task_id = _research_task_id()
+    task = _new_research_task(task_id, direction='Database run', workdir=str(tmp_path),
+                              lang='en', user_id=TEST_OWNER_USER_ID)
+    persist_record(task, event={'type': 'paper_done', 'result': {
+        'arxivId': '2401.00001', 'title': 'Durable captured title', 'status': 'parsed'}})
+    assert _research_runtime.remove_owned(task_id, user_id=TEST_OWNER_USER_ID)
+    status, body = _get_json(client, '/api/v1/research/records/' + task_id)
+    assert status == 200
+    record = body['record']
+    assert record['status'] == 'interrupted'
+    assert record['papers'][0]['title'] == 'Durable captured title'
+    assert record['resumable'] is True
+    status, body = _get_json(client, '/api/v1/research/records')
+    assert status == 200
+    assert any(item['task_id'] == task_id for item in body['items'])
+
+
 def test_direction_lookup_works_with_no_live_task_at_all(client, seeded):
     """A finished job must stay readable after its task is gone.
 

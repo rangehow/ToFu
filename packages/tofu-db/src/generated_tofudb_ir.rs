@@ -62,7 +62,7 @@ pub const OBSERVED_HISTORY_RETAINED_SEGMENTS: usize = 64;
 pub const LEAN_HISTORY_RETAINED_SEGMENTS: usize = 16;
 pub const MAX_HISTORY_RETAINED_SEGMENTS: usize = 64;
 pub const TOOL_RESULT_PRUNE_ROWS_PER_MAINTENANCE_ROUND: usize = 128;
-pub const FILESYSTEM_CERTIFICATION_PAYLOAD_BLOCK_BYTES: usize = 1048576;
+pub const FILESYSTEM_CERTIFICATION_PAYLOAD_BLOCK_BYTES: usize = 2097153;
 pub const FILESYSTEM_CERTIFICATION_MAXIMUM_RETAINED_ENTRIES: usize = 4096;
 pub const MAX_AUTHORITY_GC_VICTIM_BYTES: u64 = 268435456;
 pub const MAX_AUTHORITY_GC_TEMPORARY_BYTES: u64 = 1073741824;
@@ -615,6 +615,9 @@ pub const ATTEMPT_CLAIM_LOCATOR_VERSION: u32 = 1;
 pub const TURN_UPDATED_INDEX_NAMESPACE: &str = "turns_by_updated";
 pub const TURN_TOMBSTONE_NAMESPACE: &str = "turn_tombstones";
 pub const TURN_TOMBSTONE_AGE_INDEX_NAMESPACE: &str = "turn_tombstones_by_age";
+pub const ATTEMPT_SUPERSEDED_INDEX_NAMESPACE: &str = "generation_attempts_by_superseded";
+pub const MAX_CLEANUP_ATTEMPTS_PER_TRANSACTION: usize = 64;
+pub const MAX_CLEANUP_INDEX_SCAN_ROWS_PER_TRANSACTION: usize = 256;
 pub const MAX_DESKTOP_AGENT_ID_CHARACTERS: usize = 128;
 pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "artifact.create",
@@ -730,6 +733,9 @@ pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "knowledge.settings.patch",
     "log_aggregate.flush",
     "log_aggregate.query",
+    "model_continuation.delete",
+    "model_continuation.get",
+    "model_continuation.put",
     "model_routing.commit",
     "model_routing.get",
     "model_routing.migration_receipt",
@@ -833,6 +839,7 @@ pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "queue.dequeue",
     "queue.enqueue",
     "queue.finalize",
+    "queue.injection.ack",
     "queue.kind.clear",
     "queue.lease.bind",
     "queue.lease.release",
@@ -913,6 +920,7 @@ pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "turn.attempt.start",
     "turn.branch.create",
     "turn.branch.delete",
+    "turn.cleanup",
     "turn.compact",
     "turn.create_pair",
     "turn.delete",
@@ -931,6 +939,7 @@ pub static EXECUTABLE_STORAGE_OPERATIONS: &[&str] = &[
     "turn.recover",
     "turn.related.announce",
     "turn.revision",
+    "turn.search.backfill",
     "turn.steer.commit",
     "turn.sync.changes",
     "turn.sync.page",

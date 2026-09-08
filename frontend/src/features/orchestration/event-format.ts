@@ -75,6 +75,22 @@ export function formatOrchestrationEventLines(
           n: event.nodes == null ? 0 : event.nodes,
         })}`));
       break;
+    case 'goal_run_started':
+      rows.push(line(`${icon('flag')} <b>${text('orch.ev.goalStarted')}</b>${
+        dim(event.objective, 160)}`));
+      break;
+    case 'goal_run_transition': { // eslint-disable-line no-case-declarations
+      const status = event.status === 'cancelled' ? 'aborted' : event.status;
+      const statusLabel = localizedCode(
+        'orch.ev.status.', status, 'orch.ev.status.unknown');
+      const statusClass = status === 'completed' || status === 'done'
+        ? 'is-done' : status === 'failed' || status === 'error'
+          ? 'is-err' : status === 'aborted' ? 'is-warn' : 'is-active';
+      rows.push(line(`${icon('flag')} ${text('orch.ev.goalTransition', {
+        status: statusLabel,
+      })}`, statusClass));
+      break;
+    }
     case 'step_start':
       rows.push(line(`${icon('bot')} <b>${escape(
         event.name || event.role || translate('orch.ev.stepFallback'))

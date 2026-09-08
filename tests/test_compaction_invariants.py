@@ -502,12 +502,11 @@ class TestReactiveArchiveBackfill:
              patch.object(_cmod, '_get_context_limit', return_value=128000), \
              patch.object(_cmod, '_usable_context', return_value=100000), \
              patch.object(_cmod, '_extract_current_query', return_value='q'), \
-             patch.object(_cmod, '_find_turn_boundary', return_value=3), \
+             patch.object(_cmod, '_plan_cross_turn_tail',
+                          side_effect=lambda source, **_kwargs:
+                          (3, list(source[3:]), [])), \
              patch.object(_cmod, '_objective_anchor_index',
                           return_value=None), \
-             patch.object(_cmod, '_fold_recent_intra_turn',
-                          side_effect=lambda recent, **_kwargs:
-                          (list(recent), [])), \
              patch.object(_cmod, '_generate_query_aware_summary',
                           return_value='SUMMARY'), \
              patch.object(_cmod, '_extract_recently_accessed_files',
@@ -567,12 +566,11 @@ class TestReactiveArchiveBackfill:
              patch.object(_cmod, '_get_context_limit', return_value=128000), \
              patch.object(_cmod, '_usable_context', return_value=100000), \
              patch.object(_cmod, '_extract_current_query', return_value='q'), \
-             patch.object(_cmod, '_find_turn_boundary', return_value=3), \
+             patch.object(_cmod, '_plan_cross_turn_tail',
+                          side_effect=lambda source, **_kwargs:
+                          (3, list(source[3:]), [])), \
              patch.object(_cmod, '_objective_anchor_index',
                           return_value=None), \
-             patch.object(_cmod, '_fold_recent_intra_turn',
-                          side_effect=lambda recent, **_kwargs:
-                          (list(recent), [])), \
              patch.object(_cmod, '_generate_query_aware_summary',
                           return_value='SUMMARY'), \
              patch.object(_cmod, '_extract_recently_accessed_files',

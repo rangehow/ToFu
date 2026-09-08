@@ -230,10 +230,12 @@
    *   • `rail` (`.turn-ctx`) — a DIRECT CHILD of `.message`, absolutely
    *     positioned into the third track the pane owns (`.chat-inner`), so
    *     it can never overflow the viewport AND — being out of flow —
-   *     never inflates the turn's height; its box is bounded by the
-   *     message box and scrolls. Shows model + depth + mode badges + tool
-   *     chips + workspace paths permanently. Visible only when the
-   *     container query grants the track.
+   *     never inflates the turn's height; its box starts at the message
+   *     top and the sticky follower (below) glides it down the track as
+   *     the conversation scrolls, until the next railed turn arrives.
+   *     Shows model + depth + mode badges + tool chips + workspace paths
+   *     permanently. Visible only when the container query grants the
+   *     track.
    *   • `fold` (`.tctx-fold`) — the same facts compressed to ONE line,
    *     spliced INSIDE `.message-content` between the header and the body
    *     (in-flow — its `margin-bottom` is meaningless anywhere else). Shown
@@ -361,6 +363,127 @@
       }
     }
     ev.stopPropagation();
+    /* The toggle just changed the rail's height — re-clamp any pinned
+     * travel so it never grows over the next round's rail. */
+    _scheduleRailFollow();
+  }
+
+  /* ── Sticky rail follower ─────────────────────────────────────────
+   * The rail is absolutely positioned at the TOP of its own turn's box
+   * (out of flow so it never inflates the row). That box is short — an
+   * input turn is often one line — so the turn's context used to scroll
+   * away with the bubble while the round's reply filled screens below it
+   * (2026-09-08 owner report: "when a conversation is scrolling, the turn
+   * ctx should move along until it reaches the next round").
+   *
+   * The follower re-implements sticky-header stacking WITHOUT a DOM
+   * restructure: on scroll/resize it translates each rail down by
+   *     off = clamp(stickTop − hostTop, 0, nextRailTop − railHeight − hostTop)
+   * — pinned to the pane's top inside its round, pushed out exactly when
+   * the next round's rail arrives, in one continuous motion. The travel
+   * carries the rail BEYOND its host's border box, which is why the host
+   * message drops content-visibility's paint containment (see
+   * `.message:has(> .turn-ctx)` in 17-compaction-context-rail.css); the
+   * rail track it glides through is empty gutter on every non-input turn.
+   * A turn with no rail (legacy history) is not a boundary — the previous
+   * rail keeps its seat until the next railed turn.
+   *
+   * Geometry is measured entirely from UNTRANSFORMED boxes (the host
+   * message's rect; rail height is transform-independent), so a
+   * previously applied translation never feeds back into the next one.
+   * Runs at most once per animation frame; the reads force layout, which
+   * is clean on pure scrolls and already dirty while streaming. */
+  const _RAIL_STICK_PAD_PX = 6;
+  let _railFollowScheduled = false;
+  let _railFollowObserved = [];
+  let _railFollowRO = null;
+
+  function _updateRailFollow() {
+    const containers = document.querySelectorAll('.chat-container');
+    for (const cont of containers) {
+      const rails = cont.querySelectorAll('.turn-ctx');
+      if (!rails.length) continue;
+      const contR = cont.getBoundingClientRect();
+      const stickTop = contR.top + _RAIL_STICK_PAD_PX;
+      /* Bottom of the scrollable content in VIEW coordinates: the last
+       * rail may pin until its round's tail leaves the pane. */
+      const contentBottom = contR.top + (cont.scrollHeight - cont.scrollTop);
+      const live = [];
+      for (const rail of rails) {
+        if (rail.offsetParent === null || rail.hidden) {
+          /* Fold mode / empty rail: park any travel so a re-granted track
+           * never resurrects a stale offset. */
+          if (rail.style.transform) rail.style.transform = '';
+          rail.classList.remove('tctx-stuck');
+          continue;
+        }
+        live.push(rail);
+      }
+      for (let i = 0; i < live.length; i++) {
+        const rail = live[i];
+        const hostTop = rail.parentElement.getBoundingClientRect().top;
+        const railH = rail.getBoundingClientRect().height;
+        const nextTop = (i + 1 < live.length)
+          ? live[i + 1].parentElement.getBoundingClientRect().top
+          : contentBottom;
+        let off = stickTop - hostTop;
+        const limit = nextTop - railH - hostTop;
+        if (off > limit) off = limit;
+        if (!(off > 0.5)) off = 0;
+        if (off > 0) {
+          const y = 'translateY(' + off.toFixed(1) + 'px)';
+          if (rail.style.transform !== y) rail.style.transform = y;
+          rail.classList.add('tctx-stuck');
+        } else {
+          if (rail.style.transform) rail.style.transform = '';
+          rail.classList.remove('tctx-stuck');
+        }
+      }
+    }
+    _railFollowReobserve();
+  }
+
+  /* Scroll alone doesn't cover the follower's triggers: streaming grows
+   * the content under a pinned rail, and the sidebar/inspector drawer
+   * resize the pane. chat-inner's box tracks both; a rail's own growth
+   * (the "+N" toggle) re-clamps via the click handler above. Transforms
+   * never change these observed boxes, so the observer can't self-feed. */
+  function _railFollowReobserve() {
+    if (typeof ResizeObserver === 'undefined') return;
+    const nodes = [];
+    document.querySelectorAll('.chat-container').forEach((c) => {
+      nodes.push(c);
+      const inner = c.querySelector('.chat-inner');
+      if (inner) nodes.push(inner);
+    });
+    const same = nodes.length === _railFollowObserved.length
+      && nodes.every((n, i) => n === _railFollowObserved[i]);
+    if (same) return;
+    if (_railFollowRO) _railFollowRO.disconnect();
+    else _railFollowRO = new ResizeObserver(_scheduleRailFollow);
+    _railFollowObserved = nodes;
+    nodes.forEach((n) => _railFollowRO.observe(n));
+  }
+
+  function _scheduleRailFollow() {
+    if (_railFollowScheduled) return;
+    _railFollowScheduled = true;
+    if (typeof requestAnimationFrame !== 'function') {
+      _railFollowScheduled = false;
+      _updateRailFollow();
+      return;
+    }
+    requestAnimationFrame(() => {
+      _railFollowScheduled = false;
+      _updateRailFollow();
+    });
+  }
+
+  function _onRailFollowScroll(ev) {
+    const t = ev.target;
+    if (t && t.classList && t.classList.contains('chat-container')) {
+      _scheduleRailFollow();
+    }
   }
 
   /* Fact-card fields on the done frame the reconcile MAY overwrite. Kept as
@@ -423,9 +546,13 @@
   runtimeScope.reconcileTurnCtxCapsule = reconcileTurnCtxCapsule;
   runtimeScope.applyMcpToolSummary = applyMcpToolSummary;
 
-  /* The click listener is the rail's only browser lifecycle. MCP state arrives
-   * through existing responses and never installs a boot hook of its own. */
+  /* Browser lifecycle: clicks (delegated), pane scrolls (captured —
+   * element scrolls don't bubble), one boot pass, and a ResizeObserver
+   * (re)bound by every pass for streaming growth / pane resizes. MCP
+   * state arrives through existing responses and installs no hook. */
   if (typeof document !== 'undefined') {
     document.addEventListener('click', _onTctxClick);
+    document.addEventListener('scroll', _onRailFollowScroll, { capture: true, passive: true });
+    _scheduleRailFollow();
   }
 })();

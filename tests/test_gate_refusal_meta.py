@@ -178,8 +178,11 @@ def test_meta_badge_failed_when_no_batch_header():
     meta = build_project_tool_meta('insert_contents', edits, 'Error: something exploded')
     assert meta['badge'] == 'failed'
     assert meta['writeOk'] is False
-    # A real batch header keeps the counted badge.
+    # A real batch header gets NO counted badge — the expanded per-edit
+    # list already shows every edit's status, so "1/2 edits" duplicated it
+    # (partial failures surface via the header's inline failure reason).
     meta = build_project_tool_meta(
         'apply_diffs', edits,
         'Applied 1/2 edits (1 failed)\n[1] OK a.py: 1 lines changed\n[2] FAIL b.py: nope')
-    assert meta['badge'] == '1/2 edits'
+    assert 'badge' not in meta
+    assert meta['writeOk'] is False

@@ -511,7 +511,7 @@ export function createToolInjectionPresentation(
   function bgCommandResultText(value: unknown): BoundedText {
     const raw = safeText(value);
     const match = raw.match(
-      /<background-command\s[^>]*>([\s\S]*?)<\/background-command>/,
+      /<background-command\s[^>]*>([\s\S]*?)(?:<\/background-command>|$)/,
     );
     return boundedText(
       (match ? match[1] : raw).trim(),
@@ -534,11 +534,17 @@ export function createToolInjectionPresentation(
         field(previewValue, 'commandId'),
         IDENTIFIER_UNITS,
       ).value;
-      const text = bgCommandResultText(field(previewValue, 'text'));
+      const completion = field(previewValue, 'backgroundCommand');
+      const text = completion
+        ? boundedText(field(completion, 'resultPreview'), 2000)
+        : bgCommandResultText(field(previewValue, 'text'));
+      const truncated = text.truncated || (completion
+        ? field(completion, 'resultTruncated') === true
+        : field(previewValue, 'textTruncated') === true);
       const headHtml = commandId
         ? `<div class="sw-card-head"><span class="sw-card-agent">${escapeHtmlText(commandId)}</span><span class="ptool-badge ptool-badge-ok sw-card-status">completed</span></div>`
         : '';
-      bodyHtml += `<div class="sw-card sw-bgcmd-card-item">${headHtml}<pre class="sw-card-raw-pre">${escapeHtmlText(text.value)}</pre>${text.truncated ? contentLimitHtml(RAW_TEXT_UNITS) : ''}</div>`;
+      bodyHtml += `<div class="sw-card sw-bgcmd-card-item">${headHtml}<pre class="sw-card-raw-pre">${escapeHtmlText(text.value)}</pre>${truncated ? contentLimitHtml(completion ? 2000 : RAW_TEXT_UNITS) : ''}</div>`;
     }
     if (previews.length === 0) {
       bodyHtml = `<div class="sw-inbox-row-empty">${translatedHtml(

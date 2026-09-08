@@ -29,6 +29,11 @@ reaper (:func:`reap_expired_queue_leases`, riding the manager maintenance
 tick) reclaims rows whose lease expired without a live task in the registry
 and re-dispatches them. A crash or exception mid-dispatch therefore triggers
 an automatic retry instead of silently losing the queued message.
+ The one
+exception: permanently undispatchable rows — a materialized pair whose
+attempt settled while queue-bound, or whose pair turns were deleted — are
+retired on the next drain instead of being re-leased into an infinite
+conflict loop.
 """
 
 import json
@@ -38,6 +43,7 @@ import time
 import uuid
 
 from lib.log import get_logger
+from lib.storage.errors import StorageError
 from lib.turn_source_queue_contract import (
     KIND_AUTOPILOT,
     KIND_GOAL_CONTINUATION,
@@ -122,7 +128,13 @@ def enqueue_message(
     Returns:
         Dict with queueId, position, and kind.
     """
-    queue_id = str(uuid.uuid4())
+    completion_id = message_data.get('_backgroundCommand')
+    queue_id = (
+        str(uuid.uuid5(uuid.NAMESPACE_URL,
+                       f'tofu:background:{int(user_id)}:{conv_id}:{completion_id}'))
+        if kind == KIND_WORKFLOW and isinstance(completion_id, str) and completion_id
+        else str(uuid.uuid4())
+    )
     result = _queue_client(write=True).command(
         "queue.enqueue",
         {
@@ -133,7 +145,10 @@ def enqueue_message(
             "config": config,
             "kind": kind,
             "priority": _priority_for_kind(kind),
-            "created_at_ms": int(time.time() * 1000),
+            "created_at_ms": (
+                int(message_data.get('timestamp') or 0) if completion_id
+                else int(time.time() * 1000)
+            ),
         },
         command_id=queue_id,
     )
@@ -770,6 +785,11 @@ _QUEUE_PREVIEW_KEYS = (
     "inputTurnId",
     "outputTurnId",
     "attemptId",
+    # Present (True) when a steer ("insert now") degraded to the durable
+    # queue — the queue bar must be able to explain why this row waits
+    # for the next turn instead of injecting mid-reply.
+    "steerFallback",
+    "backgroundCommand",
 )
 
 
@@ -843,30 +863,40 @@ def dedup_inbox_durable_rows(
     row's ``queueId``. When the orchestrator's round-boundary drain injects
     the twin and the post-LLM flush confirms consumption, it calls THIS to
     delete the matching durable row(s) so ``dispatch_next_queued`` can never
-    later pop them as a redundant fresh turn = zero double-delivery. The
+    later pop acknowledged rows as redundant fresh turns. The
     REVERSE race (durable row dispatched first) is closed symmetrically by
     :func:`lib.agent_inbox.consume_peer` at dispatch time.
 
-    Best-effort — a delete failure logs and is skipped (the reverse-race guard
-    still protects against a double delivery). Returns the number removed.
+    Best-effort: a delete failure logs and preserves rows for redelivery.
+    Model consumption and this storage transaction are not atomic.
+    Returns the number removed.
     """
-    ids = [q for q in (queue_ids or []) if q]
-    if not conv_id or not ids:
+    from itertools import islice
+    from lib.turn_source_queue_contract import QUEUE_INJECTION_ACK_MAX_IDS
+
+    if not conv_id:
         return 0
-    removed = 0
-    for qid in ids:
-        try:
-            if remove_from_queue(conv_id, qid, user_id=user_id):
-                removed += 1
-        except Exception as e:
-            logger.warning(
-                "[Queue] peer durable-row de-dup failed conv=%s "
-                "queueId=%s: %s — the row may re-dispatch as a "
-                "duplicate",
-                conv_id[:8],
-                str(qid)[:8],
-                e,
-            )
+    try:
+        # Bound iteration too: malformed/unbounded callers cannot allocate an
+        # unbounded ID list or silently acknowledge only part of a drain.
+        batch = list(islice(queue_ids or [], QUEUE_INJECTION_ACK_MAX_IDS + 1))
+        if len(batch) > QUEUE_INJECTION_ACK_MAX_IDS:
+            raise ValueError("Injection acknowledgement exceeds inbox capacity")
+        ids = sorted(set(q for q in batch if q))
+        if not ids:
+            return 0
+        result = _queue_client(write=True).command(
+            "queue.injection.ack",
+            {"conv_id": conv_id, "user_id": int(user_id), "queue_ids": ids},
+            command_id=f"queue-injection-ack:{uuid.uuid4()}",
+        )
+        removed = int(result.get("removed", 0))
+    except Exception as e:
+        logger.warning(
+            "[Queue] injection durable-row de-dup failed conv=%s: %s "
+            "— the rows may re-dispatch as duplicates", conv_id[:8], e,
+        )
+        return 0
     if removed:
         logger.info(
             "[Queue] forward de-dup removed %d peer durable row(s) for "
@@ -1174,6 +1204,19 @@ def _dispatch_queued_turn(
                 str(item["queueId"])[:8], conv_id[:8],
             )
             return None
+        if linked_turn_pair and exc.code != "lane_busy":
+            # The materialized pair can never activate again: its attempt
+            # settled while queue-bound (a Stop raced the drain). That is
+            # permanent, not a lane race — retire the row, or every drain
+            # replays this conflict and queue.depth (the composer badge)
+            # stays pinned at 1.
+            _finalize_queue_dispatch(
+                conv_id, item["queueId"], user_id=user_id)
+            logger.warning(
+                "[Queue] retired undispatchable queued pair %s conv=%s (%s)",
+                str(item["queueId"])[:8], conv_id[:8], exc.code,
+            )
+            return None
         # The lane filled between the settlement hook and this drain (a
         # human submit wins, an autopilot/continuation successor claimed it,
         # …). Release the row; the occupying attempt's own settlement hook
@@ -1198,6 +1241,22 @@ def _dispatch_queued_turn(
     except Exception as exc:
         # The queue-id command key makes retry safe even if the command
         # committed and only its acknowledgement was lost.
+        if (
+            linked_turn_pair
+            and isinstance(exc, StorageError)
+            and exc.code == "database_integrity"
+        ):
+            # The pair turns are gone (e.g. the user deleted the queued
+            # turns) while the queue row survived: it can never activate, so
+            # retire it instead of releasing the lease into an infinite
+            # conflict loop.
+            _finalize_queue_dispatch(
+                conv_id, item["queueId"], user_id=user_id)
+            logger.warning(
+                "[Queue] retired queued row %s conv=%s: pair turns missing",
+                item["queueId"][:8], conv_id[:8],
+            )
+            return None
         _release_queue_lease(item["queueId"], user_id=user_id)
         logger.error(
             "[Queue] queued command failed conv=%s row=%s: %s",

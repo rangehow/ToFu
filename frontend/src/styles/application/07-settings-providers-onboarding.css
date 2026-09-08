@@ -25,7 +25,7 @@
 .settings-panel select.settings-input:focus {
   background: var(--s-white);
   border-color: var(--s-gold);
-  box-shadow: inset 2px 2px 0 var(--s-gold-glow);
+  box-shadow: 0 0 0 3px var(--s-gold-glow);
 }
 
 /* Scope checkboxes — wrap as flowing chips */
@@ -56,7 +56,7 @@
 }
 .settings-table tbody td {
   padding: 8px 10px;
-  border-bottom: 1.5px dashed rgba(26, 24, 20, 0.18);
+  border-bottom: 1px solid var(--s-line);
   vertical-align: middle;
   color: var(--s-ink);
 }
@@ -66,11 +66,24 @@
 /* Revoke button — .btn-danger has no global rule; give it one inside
    the settings panel so destructive actions read as red. */
 .settings-panel .btn-danger {
-  background: var(--s-blocked);
+  background: linear-gradient(180deg, #f26d6d 0%, #dc2626 55%, #c11f1f 100%);
   color: var(--s-white);
-  border: var(--s-border-sm);
+  border: 1px solid #b91c1c;
+  text-shadow: 0 1px 0 rgba(122, 16, 16, 0.30);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.30), 0 1px 2px rgba(26, 24, 20, 0.14),
+    0 4px 12px rgba(220, 38, 38, 0.26);
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
 }
-.settings-panel .btn-danger:hover { background: #dc2626; }
+.settings-panel .btn-danger:hover {
+  background: linear-gradient(180deg, #f57f7f 0%, #e23232 55%, #c92424 100%);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34), 0 2px 4px rgba(26, 24, 20, 0.15),
+    0 8px 20px rgba(220, 38, 38, 0.32);
+}
+.settings-panel .btn-danger:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 5px rgba(122, 16, 16, 0.32), 0 1px 2px rgba(26, 24, 20, 0.10);
+}
 
 /* ── Add / discover buttons ── */
 .stg-btn-add {
@@ -160,7 +173,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 18px 12px;
-  border-bottom: 2px solid var(--s-ink);
+  border-bottom: 1px solid var(--s-line);
 }
 .stg-modal-title {
   font-size: 15px;
@@ -330,38 +343,51 @@
   border-color: var(--s-blocked);
 }
 .stg-btn-secondary {
-  background: var(--s-white);
-  border: var(--s-border-sm);
+  background: linear-gradient(180deg, #ffffff 0%, #f6f1e3 100%);
+  border: 1px solid var(--s-line-strong);
   color: var(--s-ink);
   font-size: 11px;
   font-weight: 700;
   padding: 5px 12px;
   border-radius: var(--s-radius);
   cursor: pointer;
-  box-shadow: var(--s-shadow-xs);
-  transition: transform 0.1s, box-shadow 0.1s, background 0.1s;
+  box-shadow: inset 0 1px 0 #ffffff, 0 1px 2px rgba(26, 24, 20, 0.10), 0 3px 8px rgba(26, 24, 20, 0.06);
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s, border-color 0.12s;
 }
 .stg-btn-secondary:hover {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--s-ink);
-  background: var(--s-cream);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 #ffffff, 0 2px 4px rgba(26, 24, 20, 0.12), 0 8px 18px rgba(26, 24, 20, 0.09);
+  background: linear-gradient(180deg, #ffffff 0%, #faf5e9 100%);
+}
+.stg-btn-secondary:active {
+  transform: translateY(1px);
+  background: linear-gradient(180deg, #f3eddd 0%, #efe8d6 100%);
+  box-shadow: inset 0 2px 4px rgba(26, 24, 20, 0.09), 0 1px 2px rgba(26, 24, 20, 0.08);
 }
 .stg-btn-primary {
-  background: var(--s-gold);
-  border: var(--s-border-sm);
+  background: linear-gradient(180deg, #e3ba66 0%, #cfa14a 52%, #bd8f39 100%);
+  border: 1px solid #a87d2e;
   color: var(--s-ink);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
   font-size: 11px;
   font-weight: 800;
   padding: 5px 14px;
   border-radius: var(--s-radius);
   cursor: pointer;
-  box-shadow: var(--s-shadow-xs);
-  transition: transform 0.1s, box-shadow 0.1s, background 0.1s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 1px 2px rgba(26, 24, 20, 0.14), 0 4px 12px rgba(201, 153, 63, 0.26);
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s, border-color 0.12s;
 }
 .stg-btn-primary:hover {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--s-ink);
-  background: var(--s-gold-dim);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.44), inset 0 -1px 0 rgba(122, 84, 20, 0.20),
+    0 2px 4px rgba(26, 24, 20, 0.15), 0 8px 20px rgba(201, 153, 63, 0.32);
+  background: linear-gradient(180deg, #ecc576 0%, #d8a951 52%, #c69840 100%);
+}
+.stg-btn-primary:active {
+  transform: translateY(1px);
+  background: linear-gradient(180deg, #c89940 0%, #bd8f39 100%);
+  box-shadow: inset 0 2px 5px rgba(122, 84, 20, 0.32), 0 1px 2px rgba(26, 24, 20, 0.10);
 }
 
 .stg-empty, .stg-loading {
@@ -428,29 +454,18 @@
 }
 
 /* ══════════════════════════════════════
-   Footer — thick top border like stats bar
+   Footer — cream strip separated by a hairline
    ══════════════════════════════════════ */
 .settings-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 14px 24px;
-  border-top: 3px solid var(--s-ink);
+  border-top: 1px solid var(--s-line);
   background: var(--s-cream);
   flex-shrink: 0;
   gap: 12px;
   position: relative;
-}
-/* Gold kintsugi line above footer */
-.settings-footer::before {
-  content: '';
-  position: absolute;
-  top: -2px;
-  left: 20px;
-  right: 20px;
-  height: 2px;
-  background: var(--s-gold);
-  opacity: 0.4;
 }
 .settings-footer-hint {
   font-size: 11px;
@@ -467,7 +482,10 @@
 
 .settings-footer-actions .btn { min-width: 88px; box-sizing: border-box; text-align: center; }
 
-/* ── Footer buttons — tofu blocks ── */
+/* ── Footer buttons — raised tactile blocks, effective in non-tofu themes.
+     In the tofu theme the global neo-brutalist `.btn-primary`/`.btn-secondary`
+     blocks in 12-tofu-theme-project-controls.css govern instead (2026-09-07
+     owner direction: same button language as the project modal's action row). ── */
 .settings-footer .btn {
   flex: 1;
   padding: 10px 22px;
@@ -475,45 +493,50 @@
   font-weight: 900;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border: var(--s-border);
+  border: 1px solid var(--s-line-strong);
   border-radius: var(--s-radius);
   cursor: pointer;
-  box-shadow: var(--s-shadow-sm);
-  transition: transform 0.1s, box-shadow 0.1s, background 0.1s;
+  background: linear-gradient(180deg, #ffffff 0%, #f6f1e3 100%);
+  box-shadow: inset 0 1px 0 #ffffff, 0 1px 2px rgba(26, 24, 20, 0.10), 0 3px 8px rgba(26, 24, 20, 0.06);
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s, border-color 0.12s;
   font-family: inherit;
 }
 .settings-footer .btn:hover {
-  transform: translate(1px, 1px);
-  box-shadow: 2px 2px 0 var(--s-ink);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 #ffffff, 0 2px 4px rgba(26, 24, 20, 0.12), 0 8px 18px rgba(26, 24, 20, 0.09);
 }
 .settings-footer .btn:active {
-  transform: translate(3px, 3px);
-  box-shadow: 0 0 0 var(--s-ink);
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(26, 24, 20, 0.09), 0 1px 2px rgba(26, 24, 20, 0.08);
 }
 .settings-footer .btn-secondary {
-  background: var(--s-white);
+  background: linear-gradient(180deg, #ffffff 0%, #f6f1e3 100%);
   color: var(--s-ink);
 }
 .settings-footer .btn-primary {
-  background: var(--s-gold);
+  background: linear-gradient(180deg, #e3ba66 0%, #cfa14a 52%, #bd8f39 100%);
+  border-color: #a87d2e;
   color: var(--s-ink);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.26);
 }
 .settings-footer .btn-primary:hover {
-  background: var(--s-gold-dim);
+  background: linear-gradient(180deg, #ecc576 0%, #d8a951 52%, #c69840 100%);
 }
 .settings-footer .btn:disabled {
   opacity: 0.55;
   cursor: wait;
   transform: none;
-  box-shadow: var(--s-shadow-sm);
+  box-shadow: none;
+  text-shadow: none;
 }
 
-/* ── Override modal base styles inside settings panel ── */
+/* ── Override modal base styles inside settings panel: same soft shell as
+   06's .settings-panel (this selector only exists to beat the .modal base). ── */
 .settings-panel.modal {
   background: var(--s-white);
-  border: 3px solid var(--s-ink);
-  border-radius: 0;
-  box-shadow: 8px 8px 0 var(--s-ink);
+  border: 1px solid rgba(26, 24, 20, 0.18);
+  border-radius: var(--s-radius-lg);
+  box-shadow: 0 24px 70px rgba(26, 24, 20, 0.32), 0 6px 22px rgba(26, 24, 20, 0.14);
 }
 .settings-panel label {
   font-size: 10px;

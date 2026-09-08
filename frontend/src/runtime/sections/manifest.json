@@ -1065,6 +1065,10 @@
           "path": "settings/provider_render.js"
         },
         {
+          "source": "settings/model_catalog_tab.js",
+          "path": "settings/model_catalog_tab.js"
+        },
+        {
           "source": "settings/local_deploy.js",
           "path": "settings/local_deploy.js"
         },
@@ -1104,6 +1108,7 @@
       "runtimeExports": [
         "_applyDebugModeVisibility",
         "_applyTradingVisibility",
+        "_oauthConsumeReset",
         "_oauthLogin",
         "_renderMcpCatalog",
         "_renderPresetsTab",
@@ -1965,8 +1970,16 @@
       "path": "ui/tool_rounds.js"
     },
     {
+      "source": "overleaf-preview-hook.js",
+      "path": "overleaf-preview-hook.js"
+    },
+    {
       "source": "ui/tool_rounds_rich.js",
       "path": "ui/tool_rounds_rich.js"
+    },
+    {
+      "source": "ui/workunit_tracker.js",
+      "path": "ui/workunit_tracker.js"
     },
     {
       "source": "ui/turn_nav.js",
@@ -2047,6 +2060,10 @@
     {
       "source": "context-bar.js",
       "path": "context-bar.js"
+    },
+    {
+      "source": "background-activity.js",
+      "path": "background-activity.js"
     },
     {
       "source": "presence.js",

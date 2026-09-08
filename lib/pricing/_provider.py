@@ -24,7 +24,7 @@ import threading
 from lib.log import get_logger
 
 from lib.pricing._peak import peak_multiplier
-from lib.pricing._tables import MODEL_PRICING, QWEN_PRICING_CNY
+from lib.pricing._tables import MODEL_PRICING, QWEN_PRICING_CNY, pricing_for_model
 
 logger = get_logger(__name__)
 
@@ -262,7 +262,7 @@ def lookup_pricing(model_id, provider_id=None, at=None, prompt_tokens=None):
                 info = dict(prov[model_id])
                 source = 'provider_override'
     if info is None:
-        row = MODEL_PRICING.get(model_id)
+        row = pricing_for_model(model_id)
         info = dict(row) if row else None
         if info is not None:
             source = 'model_table'

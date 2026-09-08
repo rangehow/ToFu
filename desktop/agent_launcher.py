@@ -27,7 +27,6 @@ Two disciplines copied from desktop/launcher.py because they bit us there:
 
 import os
 import sys
-import threading
 import time
 
 from lib.log import get_logger
@@ -265,73 +264,14 @@ def _smoke_main() -> None:
 #  Agent lifecycle + tray
 # ═══════════════════════════════════════════════════════════════════
 def _start_agent(state: dict, perms: dict) -> None:
-    """Start the polling agent in a daemon thread (the tray stays main)."""
-    url, secret = state['url'], state['secret']
-    if not url:
-        # Unattached (no bundle, nothing discovered): stay IDLE, not dead —
-        # the link line says 'unconfigured' and a later Connect starts us.
-        state['last_status'] = {'state': 'unconfigured'}
-        state['stop'] = None
-        state['thread'] = None
-        _log('No server attachment — agent idle until Connect…')
-        return
-    from lib.desktop_agent import run_agent
-    stop = threading.Event()
-    state['stop'] = stop
-
-    def _on_status(st: dict) -> None:
-        state['last_status'] = st
-        _log('Link status: %s' % st)
-
-    def _route_repair():
-        """The poll loop's self-heal hook (owner incident 2026-08-06): a
-        route that stays dead (proxy-intercepted / unreachable) re-walks
-        the persisted attach candidates + the discovery ladder THROUGH
-        resume_attachment — which persists the re-point itself — and a
-        live replacement is handed back so the loop rebinds in place.
-        Returns None when nothing better answered (the loop keeps the
-        honest dead-state line and retries after the cooldown)."""
-        cur_url = state.get('url') or ''
-        if not cur_url:
-            return None
-        try:
-            from lib.desktop_agent._pair import resume_attachment
-            new_url, new_secret = resume_attachment(
-                cur_url, state.get('secret') or '', log=_log)
-        except Exception as e:
-            _log('Route repair walk failed: %s' % e)
-            logger.warning('Route repair walk failed: %s', e)
-            return None
-        if new_url and new_url != cur_url:
-            state['url'], state['secret'] = new_url, new_secret
-            return new_url, new_secret
-        return None
-
-    def _loop():
-        try:
-            run_agent(url, perms, poll_interval=1.0,
-                      bridge_secret=secret, stop_event=stop,
-                      on_status=_on_status, route_repair=_route_repair,
-                      browser_relay=state.get('browser_relay'))
-        except Exception as e:
-            _log('Agent loop crashed: %s' % e)
-            logger.error('Agent loop crashed: %s', e, exc_info=True)
-
-    t = threading.Thread(target=_loop, daemon=True, name='tofu-agent')
-    state['thread'] = t
-    t.start()
-    _log('Agent started (polling %s, perms=%s)' % (url, perms))
+    """Start the shared polling lifecycle without importing the full launcher."""
+    from desktop import agent_connection
+    agent_connection.start(state, perms, _log)
 
 
 def _restart_agent(state: dict, perms: dict) -> None:
-    """Re-point the agent at a new attachment (stop → join → start)."""
-    ev = state.get('stop')
-    if ev is not None:
-        ev.set()
-    t = state.get('thread')
-    if t and t.is_alive():
-        t.join(timeout=5)
-    _start_agent(state, perms)
+    from desktop import agent_connection
+    agent_connection.restart(state, perms, _log)
 
 
 def _link_status_text(state: dict) -> str:
@@ -483,9 +423,8 @@ def _run_tray(state: dict, perms: dict) -> None:
             _log('Menu refresh failed after autostart toggle: %s' % e)
 
     def on_quit(icon, item):
-        ev = state.get('stop')
-        if ev is not None:
-            ev.set()
+        from desktop import agent_connection
+        agent_connection.stop(state, _log)
         icon.stop()
         os._exit(0)
 
@@ -651,8 +590,8 @@ def main():
         # the ladder re-run only when the saved address is dead, and the
         # token rides along (bearer, address-independent).
         try:
-            from lib.desktop_agent._pair import resume_attachment
-            url, secret = resume_attachment(url, secret, log=_log)
+            from desktop import agent_connection
+            url, secret = agent_connection.resume(url, secret, _log)
         except Exception as e:
             _log('Attachment resume probe skipped: %s' % e)
     if not url:
@@ -700,59 +639,24 @@ def main():
     state = {'url': url, 'secret': secret, 'stop': None, 'thread': None,
              'browser_relay': None}
 
-    # A web-only Codelab / VS Code proxy is reachable only in a browser that
-    # owns the gateway login cookie.  The loopback broker lets that already-
-    # authenticated Tofu tab carry polls without ever exporting its cookies.
-    # Direct/LAN deployments simply never use this optional transport.
-    try:
-        from lib.desktop_agent._browser_relay import BrowserRelay
+    from desktop import agent_connection
 
-        def _relay_urls():
-            urls = [state.get('url') or '']
-            try:
-                from lib.desktop_agent.config import load_config
-                urls.extend(load_config().get('attach_candidates') or [])
-            except Exception as e:
-                _log('Browser-relay candidate read failed: %s' % e)
-            return urls
+    def _on_pushed_attach(payload, origin):
+        from lib.desktop_agent._push_attach import handle_pushed_attach
+        ok, reason, url, transport = handle_pushed_attach(payload, origin, log=_log)
+        if ok:
+            # Never keep the previous credential if config readback fails.
+            saved_url, saved_secret = remote_server()
+            state['url'], state['secret'] = saved_url or url, saved_secret
+            _restart_agent(state, perms)
+        return ok, reason, url, transport
 
-        # ── Browser-pushed zero-config attach (macOS/Linux parity) ──
-        # The personalized installer is a Windows-only artifact, so a
-        # generic DMG/tarball carries no credential.  While UNATTACHED the
-        # broker opens /v1/attach: the signed-in Local Control tab the user
-        # just downloaded from pushes the routes + a fresh bridge token,
-        # _push_attach validates and persists them, and the poll loop
-        # (re)starts on the fresh route — the same user-visible outcome as
-        # the Windows .exe (download → run → attached; nothing typed).
-        def _attach_state():
-            return bool(state.get('url'))
-
-        def _on_pushed_attach(payload, origin):
-            from lib.desktop_agent._push_attach import handle_pushed_attach
-            ok, reason, url, transport = handle_pushed_attach(
-                payload, origin, log=_log)
-            if ok:
-                try:
-                    from lib.desktop_agent.config import remote_server
-                    saved_url, saved_secret = remote_server()
-                    state['url'] = saved_url or url
-                    state['secret'] = saved_secret
-                except Exception as e:
-                    _log('Post-attach config readback failed: %s' % e)
-                    state['url'] = url
-                _restart_agent(state, perms)
-            return ok, reason, url, transport
-
-        relay = BrowserRelay(_relay_urls, log=_log,
-                             attach_handler=_on_pushed_attach,
-                             attach_state=_attach_state)
-        if relay.start():
-            state['browser_relay'] = relay
-    except Exception as e:
-        _log('Browser relay unavailable: %s' % e)
-        logger.warning('Browser relay unavailable: %s', e)
+    agent_connection.ensure_relay(state, _log, _on_pushed_attach)
     _start_agent(state, perms)
-    _run_tray(state, perms)
+    try:
+        _run_tray(state, perms)
+    finally:
+        agent_connection.stop(state, _log)
 
 
 if __name__ == '__main__':

@@ -43,6 +43,9 @@ def snapshot_turn_input(task) -> None:
     preserved across every retry attempt (see _maybe_auto_retry_turn).
     Skipped for Flow-managed tasks (the Flow executor owns its turn boundary).
     """
+    # ATIF must not confuse historical input tools with this run's receipts.
+    # The post-loop owner flips this only after writing its working transcript.
+    task['_messages_include_current_run'] = False
     if not task.get('_flow_managed') and '_turn_input_messages' not in task:
         task['_turn_input_messages'] = list(task.get('messages') or [])
 

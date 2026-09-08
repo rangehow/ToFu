@@ -311,6 +311,130 @@ def test_queue_activation_reuses_the_pending_attempt(chat_sidecar):
     assert get_queue(conversation_id, user_id=7) == []
     assert claim_attempt_start(activated['attempt']['attemptId'], user_id=7) is True
 
+def test_abort_of_queue_bound_attempt_cancels_the_queued_pair(chat_sidecar):
+    """Stop on a never-started queued pair withdraws the queued intent.
+
+    Settling the queue-bound attempt 'interrupted' instead orphaned the
+    durable queue row: every drain's activate rejected it as
+    no-longer-pending, the row was re-leased forever, and queue.depth
+    pinned the composer send-button badge at 1 (2026-09-07 zombie row).
+    """
+    from lib.message_queue import get_queue
+    from lib.turn_lifecycle import (
+        abort_attempt,
+        create_turn_pair,
+        list_turns,
+    )
+
+    conversation_id = _new_conversation_id('queue-abort')
+    active = _create(conversation_id, user_id=7)
+    queue_id = f'queue-{uuid.uuid4().hex}'
+    queued = create_turn_pair(
+        conversation_id,
+        command_id=f'abort-{uuid.uuid4().hex}',
+        input_projection={'content': 'stop me before I start'},
+        config={'model': 'gpt-4o'},
+        user_id=7,
+        queue_binding={
+            'queueId': queue_id,
+            'message': {'text': 'stop me before I start'},
+        },
+    )
+
+    result = abort_attempt(queued['attempt']['attemptId'], user_id=7)
+
+    assert result['status'] == 'cancelled'
+    assert result['queueId'] == queue_id
+    assert result['cancelled'] is True
+    assert set(result['deletedTurnIds']) == {
+        queued['submittedTurn']['turnId'], queued['turn']['turnId'],
+    }
+    assert get_queue(conversation_id, user_id=7) == []
+    remaining = {turn['turnId']
+                 for turn in list_turns(conversation_id, user_id=7)['turns']}
+    assert queued['turn']['turnId'] not in remaining
+    assert queued['submittedTurn']['turnId'] not in remaining
+    assert active['turn']['turnId'] in remaining
+
+    from lib.turn_lifecycle import LifecycleNotFound
+    with pytest.raises(LifecycleNotFound):
+        abort_attempt(queued['attempt']['attemptId'], user_id=7)
+
+
+def test_queued_pair_with_inline_image_activates_and_cancels(chat_sidecar):
+    """Queue lifecycle commands commit responses too large for a receipt.
+
+    turn.queue.activate/cancel return full Turn publics; a queued input Turn
+    holding an inline image exceeds the 64 KiB stored-receipt cap even after
+    compression. Requiring a receipt rolled the command back on every drain
+    tick and stranded the queue row forever.
+    """
+    import base64
+    import os
+
+    from lib.message_queue import get_queue
+    from lib.storage.errors import StorageError
+    from lib.storage_sidecar.receipt_codec import encode_receipt_response
+    from lib.turn_lifecycle import (
+        activate_queued_turn_pair,
+        bind_task,
+        cancel_queued_turn_pair,
+        create_turn_pair,
+        record_task_event,
+    )
+
+    image_data_url = 'data:image/png;base64,' + base64.b64encode(
+        os.urandom(128 * 1024)).decode('ascii')
+
+    def queue_image_pair(conversation_id):
+        queue_id = f'queue-{uuid.uuid4().hex}'
+        queued = create_turn_pair(
+            conversation_id,
+            command_id=f'image-command-{uuid.uuid4().hex}',
+            input_projection={
+                'content': 'what is in this image?',
+                'images': [{'dataUrl': image_data_url}],
+            },
+            config={'model': 'gpt-4o'},
+            user_id=7,
+            queue_binding={
+                'queueId': queue_id,
+                'message': {'text': 'what is in this image?'},
+            },
+        )
+        return queue_id, queued
+
+    conversation_id = _new_conversation_id('queue-image-activate')
+    active = _create(conversation_id, user_id=7)
+    bind_task(active['attempt']['attemptId'], 'settle-before-image', user_id=7)
+    assert record_task_event({
+        '_attemptId': active['attempt']['attemptId'],
+        '_userId': 7,
+        'id': 'settle-before-image',
+        'status': 'done',
+        'finishReason': 'stop',
+        'content': 'done',
+        'thinking': '',
+        'toolRounds': [],
+        'config': {'model': 'gpt-4o'},
+    }, {'type': 'done', 'finishReason': 'stop'})
+    queue_id, queued = queue_image_pair(conversation_id)
+    activated = activate_queued_turn_pair(conversation_id, queue_id, user_id=7)
+    assert activated['turn']['turnId'] == queued['turn']['turnId']
+    assert activated['_needsStart'] is True
+    assert get_queue(conversation_id, user_id=7) == []
+    with pytest.raises(StorageError, match='too large for a receipt'):
+        encode_receipt_response(activated)
+
+    conversation_id = _new_conversation_id('queue-image-cancel')
+    _create(conversation_id, user_id=7)
+    queue_id, _queued = queue_image_pair(conversation_id)
+    cancelled = cancel_queued_turn_pair(conversation_id, queue_id, user_id=7)
+    assert cancelled['cancelled'] is True
+    assert get_queue(conversation_id, user_id=7) == []
+    with pytest.raises(StorageError, match='too large for a receipt'):
+        encode_receipt_response(cancelled)
+
 
 def test_terminal_frame_overflow_falls_back_to_slim_settlement(
         chat_sidecar, monkeypatch):
@@ -1073,6 +1197,183 @@ def test_lossless_continue_keeps_terminal_lanes_seamless(chat_sidecar):
     assert 'rolledBack' not in projection
 
 
+def test_resume_ctx_only_input_update_rebinds_submitted_rail(chat_sidecar):
+    """Pause → switch-model → continue refreshes ONLY the rail snapshot.
+
+    Submitted content stays immutable historical evidence; the
+    contextSnapshot rebind applies surgically onto the CURRENT parent
+    projection (legacy ``_ctx`` dropped), and any other key stays
+    regenerate-only.
+    """
+    from lib.storage import StorageError
+    from lib.turn_lifecycle import (
+        abort_attempt,
+        bind_task,
+        create_attempt,
+        get_turn,
+        record_task_event,
+        update_turn_projection,
+    )
+
+    conversation_id = _new_conversation_id('resume-ctx')
+    created = _create(conversation_id)
+    attempt_id = created['attempt']['attemptId']
+    turn_id = created['turn']['turnId']
+    task_id = 'resume-ctx-task'
+    bind_task(attempt_id, task_id, user_id=1)
+    task = _running_task(attempt_id, task_id, content='partial answer')
+    assert record_task_event(task, {'type': 'tool_result'}) is True
+    assert abort_attempt(attempt_id, user_id=1)['status'] == 'abort_signaled'
+
+    settled = get_turn(conversation_id, turn_id, user_id=1)
+    parent_id = settled['parentTurnId']
+    parent = get_turn(conversation_id, parent_id, user_id=1)
+    seeded = dict(parent['projection'])
+    seeded['_ctx'] = {'model': 'gpt-4o'}
+    update_turn_projection(
+        conversation_id,
+        parent_id,
+        projection=seeded,
+        expected_projection_revision=parent['projectionRevision'],
+        user_id=1,
+    )
+    parent = get_turn(conversation_id, parent_id, user_id=1)
+
+    from lib.turn_lifecycle import LifecycleConflict
+    with pytest.raises(LifecycleConflict) as conflict:
+        create_attempt(
+            conversation_id,
+            turn_id,
+            command_id=f'resume-ctx-edit-{conversation_id}',
+            operation='continue',
+            expected_projection_revision=settled['projectionRevision'],
+            input_update={'content': 'rewritten'},
+            user_id=1,
+        )
+    assert conflict.value.code == 'database_conflict'
+
+    rail = {
+        'blockId': 'turn-context',
+        'snapshot': {'model': 'kimi-k3', 'toolsLabel': 'Tools'},
+    }
+    resumed = create_attempt(
+        conversation_id,
+        turn_id,
+        command_id=f'resume-ctx-{conversation_id}',
+        operation='continue',
+        expected_projection_revision=settled['projectionRevision'],
+        input_update={'contextSnapshot': rail},
+        user_id=1,
+    )
+    submitted = resumed['submittedTurn']['projection']
+    assert submitted['content'] == 'hello'
+    assert submitted['contextSnapshot'] == rail
+    assert '_ctx' not in submitted
+    assert resumed['submittedTurn']['projectionRevision'] == (
+        parent['projectionRevision'] + 1
+    )
+
+
+def _settled_abort(conversation_id, *, content='partial answer'):
+    from lib.turn_lifecycle import (
+        abort_attempt,
+        bind_task,
+        get_turn,
+        record_task_event,
+        update_turn_projection,
+    )
+
+    created = _create(conversation_id)
+    attempt_id = created['attempt']['attemptId']
+    turn_id = created['turn']['turnId']
+    bind_task(attempt_id, f'{conversation_id}-task', user_id=1)
+    task = _running_task(attempt_id, f'{conversation_id}-task', content=content)
+    assert record_task_event(task, {'type': 'tool_result'}) is True
+    assert abort_attempt(attempt_id, user_id=1)['status'] == 'abort_signaled'
+    settled = get_turn(conversation_id, turn_id, user_id=1)
+    parent_id = settled['parentTurnId']
+    parent = get_turn(conversation_id, parent_id, user_id=1)
+    seeded = dict(parent['projection'])
+    seeded['contextSnapshot'] = {
+        'blockId': 'turn-context',
+        'snapshot': {'model': 'gpt-4o'},
+    }
+    update_turn_projection(
+        conversation_id,
+        parent_id,
+        projection=seeded,
+        expected_projection_revision=parent['projectionRevision'],
+        user_id=1,
+    )
+    return get_turn(conversation_id, turn_id, user_id=1)
+
+
+def _command_service_with_starts(starts):
+    from lib.conversation_sync.command_service import (
+        ConversationTurnCommandService,
+    )
+
+    def start_task(conv_id, config, _data, abort_after, on_registered):
+        task_id = f'started-{conv_id}'
+        starts.append(dict(config))
+        on_registered(task_id)
+        return task_id, None
+
+    return ConversationTurnCommandService(
+        build_user_message=lambda *args: {},
+        was_aborted_after=lambda *args: False,
+        start_task=start_task,
+    )
+
+
+def test_resume_with_switched_model_stamps_durable_config_marker(chat_sidecar):
+    """The marker is stamped BEFORE the storage rebind erases the evidence."""
+    conversation_id = _new_conversation_id('switch-mark')
+    settled = _settled_abort(conversation_id)
+    starts = []
+    service = _command_service_with_starts(starts)
+
+    outcome = service.create_attempt(
+        conversation_id,
+        settled['turnId'],
+        1,
+        {
+            'commandId': f'switch-{conversation_id}',
+            'operation': 'continue',
+            'expectedProjectionRevision': settled['projectionRevision'],
+            'config': {'model': 'kimi-k3'},
+        },
+        request_started_at=123.0,
+    ).value
+
+    assert outcome['attempt']['operation'] == 'continue'
+    assert len(starts) == 1
+    assert starts[0]['_resumeModelSwitchFrom'] == 'gpt-4o'
+    assert starts[0]['model'] == 'kimi-k3'
+
+
+def test_resume_with_unchanged_model_stamps_no_marker(chat_sidecar):
+    conversation_id = _new_conversation_id('switch-same')
+    settled = _settled_abort(conversation_id)
+    starts = []
+    service = _command_service_with_starts(starts)
+
+    service.create_attempt(
+        conversation_id,
+        settled['turnId'],
+        1,
+        {
+            'commandId': f'same-{conversation_id}',
+            'operation': 'continue',
+            'expectedProjectionRevision': settled['projectionRevision'],
+            'config': {'model': 'gpt-4o'},
+        },
+        request_started_at=123.0,
+    )
+
+    assert len(starts) == 1
+    assert '_resumeModelSwitchFrom' not in starts[0]
+
 def test_rolled_back_normalization_is_fail_closed():
     from lib.turn_projection_patch import normalize_projection_document
 
@@ -1801,3 +2102,30 @@ def test_projection_folds_mcp_delta_and_path_change_provenance():
     steady = _task_projection({"content": "answer", "config": {}}, {})
     assert "mcpToolsDelta" not in (steady.get("provenance") or {})
     assert "projectPathChange" not in (steady.get("provenance") or {})
+
+
+def test_projection_never_resurrects_content_prefix_after_resume_discard():
+    """Restart-resume regression (conv mto8xq9we7xc6o, 2026-09-05).
+
+    cfg['contentPrefix'] is a one-time display seed: apply_resume_state
+    copies it into task['content'] at hydration, and each tool round's
+    _discard_pretool_prose then empties the accumulator. Projection paths
+    must NOT consult cfg['contentPrefix'] again — otherwise the interrupted
+    attempt's stale prose is re-projected as content for the whole resumed
+    run and _synchronize_terminal_blocks pins it as the terminal answer."""
+    from lib.turn_lifecycle import _delta_text_fields, _task_projection
+
+    resumed = {
+        'id': 'task-resumed',
+        'status': 'running',
+        'content': '',
+        'thinking': '',
+        'toolRounds': [],
+        'config': {'model': 'gpt-4o', 'contentPrefix': 'stale blob'},
+    }
+    assert _task_projection(resumed, {})['content'] == ''
+    assert _delta_text_fields(resumed, {}) == ('', '')
+
+    resumed['content'] = 'fresh round prose'
+    assert _task_projection(resumed, {})['content'] == 'fresh round prose'
+    assert _delta_text_fields(resumed, {}) == ('fresh round prose', '')

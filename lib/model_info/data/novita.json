@@ -1,0 +1,14 @@
+{
+  "brand": "novita",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "novita",
+  "category": "relay",
+  "name": "Novita AI",
+  "base_url": "https://api.novita.ai/v3/openai",
+  "offering_recipes": [
+    {"model_id": "deepseek/deepseek-v3.2-exp",        "capabilities": ["text", "cheap"]},
+    {"model_id": "zai-org/glm-5.3",                   "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "moonshotai/kimi-k2.6",              "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "qwen/qwen3.5-397b-a17b-instruct",   "capabilities": ["text", "thinking", "cheap"]}
+  ]
+}

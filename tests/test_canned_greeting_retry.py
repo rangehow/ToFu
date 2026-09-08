@@ -356,6 +356,97 @@ def test_congruent_greeting_with_tail_reminder_never_retried():
                for e in task['events'] if isinstance(e, dict))
 
 
+# ─────────────────────────────────────────────────────────────────────
+# 2c) The 2026-09-08 false positive: Context Composer managed blocks are
+#     wrapped in <!-- tofu-context:ID:start/end --> envelopes and ride as
+#     a SEPARATE trailing user message (``_append_tail``). The markers
+#     survive <system-reminder> stripping, so a bare "hi" turn misread as
+#     non-small-talk and its legitimate 30-char greeting was retried (2/2).
+# ─────────────────────────────────────────────────────────────────────
+
+def _composer_tail(*block_ids):
+    """A managed tail carrier in the production envelope shape."""
+    return {'role': 'user', '_isMeta': True, '_contextComposer': True,
+            'content': [{'type': 'text', 'text': (
+                f'<!-- tofu-context:{bid}:start -->\n'
+                '<system-reminder>\n'
+                '[Context authority: ambient; source: test]\n'
+                'payload\n'
+                '</system-reminder>\n'
+                f'<!-- tofu-context:{bid}:end -->')} for bid in block_ids]}
+
+
+def test_composer_tail_after_hi_not_canned():
+    """The screenshot shape: user said 'hi', the composer appended its
+    managed tail as a separate user message → greeting stays legitimate."""
+    msgs = [{'role': 'user', 'content': 'hi'},
+            _composer_tail('current_date', 'relevant_memories')]
+    assert last_user_is_smalltalk(msgs) is True
+    assert is_canned_greeting_reply(INCIDENT_TEXT, msgs) is False
+
+
+def test_composer_tail_does_not_shield_real_work():
+    """The carrier is no small-talk alibi: a greeting answering real tool
+    work behind a composer tail is still the artifact → retry."""
+    msgs = [*_WORK_TAIL, _composer_tail('current_date')]
+    assert last_user_is_smalltalk(msgs) is False
+    assert is_canned_greeting_reply(INCIDENT_TEXT, msgs) is True
+
+
+def test_project_context_envelope_without_reminder_not_canned():
+    """project_context envelopes carry raw text (no <system-reminder>
+    inside); the whole envelope must still be discounted."""
+    msgs = [{'role': 'user', 'content': '在吗'},
+            {'role': 'user', '_contextComposer': True, 'content': [
+                {'type': 'text', 'text': (
+                    '<!-- tofu-context:project_context:start -->\n'
+                    '[PROJECT CO-PILOT MODE]\n'
+                    'lots of project prose\n'
+                    '<!-- tofu-context:project_context:end -->')}]}]
+    assert last_user_is_smalltalk(msgs) is True
+    assert is_canned_greeting_reply('你好！今天我能为您做些什么？', msgs) is False
+
+
+def test_sanitized_wire_copy_without_flags_not_canned():
+    """Provider-neutral sanitization strips private fields on the wire
+    copy; envelope-stripping alone must still skip the carrier."""
+    msgs = [{'role': 'user', 'content': 'hey'},
+            {'role': 'user', 'content': [
+                {'type': 'text', 'text': (
+                    '<!-- tofu-context:current_date:start -->\n'
+                    '<system-reminder>\nCurrent date: 2026-09-08\n'
+                    '</system-reminder>\n'
+                    '<!-- tofu-context:current_date:end -->')}]}]
+    assert last_user_is_smalltalk(msgs) is True
+    assert is_canned_greeting_reply(INCIDENT_TEXT, msgs) is False
+
+
+def test_only_carriers_no_user_words_still_canned():
+    """Carriers alone are not a user turn: greeting stays an artifact."""
+    msgs = [_composer_tail('current_date')]
+    assert last_user_is_smalltalk(msgs) is False
+    assert is_canned_greeting_reply(INCIDENT_TEXT, msgs) is True
+
+
+def test_congruent_greeting_with_composer_tail_never_retried():
+    """Analyse-level replay of the screenshot: 'hi' + managed tail carrier,
+    model answered a 30-char greeting → NOT a canned artifact, no retry."""
+    task = _fresh_task(phase_counter=0)
+    decision = analyse_stream_result(
+        assistant_msg=_greeting_msg(),
+        last_finish_reason='stop',
+        task=task, tid='canned', model='claude-opus-5',
+        round_num=0, _premature_retry_count=0,
+        messages=[{'role': 'user', 'content': 'hi'},
+                  _composer_tail('relevant_memories', 'current_date')],
+        usage=_usage(),
+    )
+    assert decision['action'] == 'break'
+    assert decision['premature_retry_count'] == 0
+    assert all(e.get('bucket') != 'canned_greeting'
+               for e in task['events'] if isinstance(e, dict))
+
+
 def test_canned_greeting_retry_resets_round_text():
     """The canned bucket is the ONLY retry bucket whose discarded round HAS
     content — the retry MUST drop the poisoned text (backend accumulators +

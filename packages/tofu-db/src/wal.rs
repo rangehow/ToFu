@@ -34,6 +34,10 @@ pub struct Recovery {
 pub struct ActiveLog {
     path: PathBuf,
     file: Box<dyn VfsFile>,
+    /// Cached logical length of the active log. Appends are the only writers
+    /// after open, so the in-memory value is authoritative and the hot path
+    /// avoids an fstat syscall per record.
+    len: u64,
 }
 
 fn invalid_data(message: impl Into<String>) -> io::Error {
@@ -141,7 +145,7 @@ impl ActiveLog {
         )?;
         sync_all_barrier(file.as_mut())?;
         sync_directory_barrier(vfs.as_ref(), data_dir)?;
-        Ok(Self { path, file })
+        Ok(Self { path, file, len: 0 })
     }
 
     pub fn open(data_dir: &Path) -> io::Result<Self> {
@@ -166,10 +170,11 @@ impl ActiveLog {
                 ..OpenRequest::default()
             },
         )?;
-        if file.len()? > ACTIVE_LOG_MAX_BYTES {
+        let len = file.len()?;
+        if len > ACTIVE_LOG_MAX_BYTES {
             return Err(invalid_data("active WAL exceeds the 64 MiB recovery bound"));
         }
-        Ok(Self { path, file })
+        Ok(Self { path, file, len })
     }
 
     pub fn append(
@@ -179,7 +184,7 @@ impl ActiveLog {
         payload: &[u8],
     ) -> io::Result<[u8; 32]> {
         let (record, hash) = encode(sequence, parent_hash, payload)?;
-        let current_len = self.file.len()?;
+        let current_len = self.len;
         let next_len = current_len
             .checked_add(record.len() as u64)
             .ok_or_else(|| invalid_data("active WAL length overflow"))?;
@@ -188,6 +193,7 @@ impl ActiveLog {
         }
         self.file.write_all_at(current_len, &record)?;
         sync_data_barrier(self.file.as_mut())?;
+        self.len = next_len;
         Ok(hash)
     }
 
@@ -228,7 +234,7 @@ impl ActiveLog {
             hashes.push(hash);
             parent = hash;
         }
-        let current_len = self.file.len()?;
+        let current_len = self.len;
         let next_len = current_len
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| invalid_data("active WAL length overflow"))?;
@@ -237,6 +243,7 @@ impl ActiveLog {
         }
         self.file.write_all_at(current_len, &bytes)?;
         sync_data_barrier(self.file.as_mut())?;
+        self.len = next_len;
         Ok(hashes)
     }
 
@@ -329,6 +336,7 @@ impl ActiveLog {
             self.file.set_len(offset as u64)?;
             sync_all_barrier(self.file.as_mut())?;
         }
+        self.len = offset as u64;
         Ok(Recovery {
             records,
             truncated_bytes,
@@ -340,7 +348,7 @@ impl ActiveLog {
     }
 
     pub fn is_empty(&self) -> io::Result<bool> {
-        self.file.is_empty()
+        Ok(self.len == 0)
     }
 
     pub fn would_exceed(&self, payload: &[u8], limit: u64) -> io::Result<bool> {
@@ -350,11 +358,21 @@ impl ActiveLog {
                 "active WAL admission limit is invalid",
             ));
         }
-        let (record, _) = encode(1, [0; 32], payload)?;
+        // The record length is fully determined by the payload length
+        // (encode appends a fixed overhead), so admission must not pay for
+        // framing, CRC32C, and BLAKE3 over the whole payload on the hot path.
+        if payload.len() > MAX_TRANSACTION_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "transaction exceeds 8 MiB",
+            ));
+        }
+        let record_bytes = WAL_RECORD_OVERHEAD_BYTES
+            .checked_add(payload.len())
+            .ok_or_else(|| invalid_data("WAL record length overflow"))?;
         Ok(self
-            .file
-            .len()?
-            .checked_add(record.len() as u64)
+            .len
+            .checked_add(record_bytes as u64)
             .is_none_or(|next| next > limit))
     }
 
@@ -372,11 +390,15 @@ impl ActiveLog {
             ));
         }
         let mut encoded_bytes = 0_usize;
-        let mut parent = [0; 32];
-        for (index, payload) in payloads.iter().enumerate() {
-            let (record, hash) = encode(index as u64 + 1, parent, payload)?;
+        for payload in payloads {
+            if payload.len() > MAX_TRANSACTION_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "transaction exceeds 8 MiB",
+                ));
+            }
             encoded_bytes = encoded_bytes
-                .checked_add(record.len())
+                .checked_add(WAL_RECORD_OVERHEAD_BYTES + payload.len())
                 .ok_or_else(|| invalid_data("WAL group length overflow"))?;
             if encoded_bytes > MAX_GROUP_ENCODED_BYTES {
                 return Err(io::Error::new(
@@ -384,24 +406,24 @@ impl ActiveLog {
                     "WAL group exceeds 8 MiB encoded bound",
                 ));
             }
-            parent = hash;
         }
         Ok(self
-            .file
-            .len()?
+            .len
             .checked_add(encoded_bytes as u64)
             .is_none_or(|next| next > limit))
     }
 
     pub fn truncate(&mut self, end_offset: u64) -> io::Result<()> {
-        if end_offset > self.file.len()? {
+        if end_offset > self.len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "WAL truncation offset exceeds file length",
             ));
         }
         self.file.set_len(end_offset)?;
-        sync_all_barrier(self.file.as_mut())
+        sync_all_barrier(self.file.as_mut())?;
+        self.len = end_offset;
+        Ok(())
     }
 }
 
@@ -462,15 +484,12 @@ mod tests {
     fn append_faults_recover_only_absent_or_complete_record() {
         let (baseline_vfs, mut baseline) = durable_simulated_log();
         baseline.append(1, [0; 32], b"one").unwrap();
+        // Append sizes the write from the cached in-memory length, so no
+        // Metadata syscall appears on the record hot path.
         let trace = baseline_vfs.trace().unwrap();
         assert_eq!(
             trace,
-            vec![
-                Operation::Metadata,
-                Operation::Write,
-                Operation::SyncData,
-                Operation::SyncData
-            ]
+            vec![Operation::Write, Operation::SyncData, Operation::SyncData]
         );
 
         for operation_number in 1..=trace.len() as u64 {

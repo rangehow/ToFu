@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, SyncSender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -135,6 +136,24 @@ struct Shared {
     state: Mutex<QueueState>,
     ready: Condvar,
     space: Condvar,
+    /// Submitters between `submit` entry and queue push. The worker consults
+    /// this before waiting for batch-mates: with no submission in flight the
+    /// batch delay would be pure latency for a sequential client, so the
+    /// group commits immediately. A racy under-count only yields a smaller
+    /// group, never weaker durability.
+    in_flight_submissions: AtomicUsize,
+}
+
+struct InFlightSubmission<'a> {
+    shared: &'a Shared,
+}
+
+impl Drop for InFlightSubmission<'_> {
+    fn drop(&mut self) {
+        self.shared
+            .in_flight_submissions
+            .fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 fn state(shared: &Shared) -> io::Result<MutexGuard<'_, QueueState>> {
@@ -243,6 +262,9 @@ fn fill_group(shared: &Shared, group: &mut Vec<Request>, deadline: Instant) -> i
                 break;
             }
             if guard.closed {
+                return Ok(());
+            }
+            if shared.in_flight_submissions.load(Ordering::Acquire) == 0 {
                 return Ok(());
             }
             let now = Instant::now();
@@ -369,6 +391,7 @@ impl CommitSequencer {
             }),
             ready: Condvar::new(),
             space: Condvar::new(),
+            in_flight_submissions: AtomicUsize::new(0),
         });
         let worker_shared = Arc::clone(&shared);
         let worker = thread::Builder::new()
@@ -398,6 +421,12 @@ impl CommitSequencer {
     }
 
     pub fn submit(&self, transaction: BatchTransaction) -> io::Result<CommitResult> {
+        self.shared
+            .in_flight_submissions
+            .fetch_add(1, Ordering::AcqRel);
+        let _in_flight = InFlightSubmission {
+            shared: self.shared.as_ref(),
+        };
         // Hashing and envelope encoding occur on the caller, outside the
         // single-writer worker and its short durability critical section.
         let transaction = transaction.prepare()?;
@@ -443,6 +472,12 @@ impl CommitSequencer {
         guard.metrics.peak_queued_bytes = guard.metrics.peak_queued_bytes.max(guard.queued_bytes);
         drop(guard);
         self.shared.ready.notify_one();
+        // The request is visible in the queue now, so the in-flight window
+        // (submit entry → queue push) ends here. Keeping it through the
+        // response wait would count a sequential client's own queued
+        // request as a pending batch-mate and make every solo commit wait
+        // the full batch delay.
+        drop(_in_flight);
         response_receiver
             .recv()
             .map_err(|_| terminal_error_for(self.shared.as_ref()).into_error())?
@@ -530,6 +565,7 @@ mod tests {
             }),
             ready: Condvar::new(),
             space: Condvar::new(),
+            in_flight_submissions: AtomicUsize::new(0),
         });
         (shared, receivers)
     }

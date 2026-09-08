@@ -10,7 +10,6 @@ aggregate without reconstructing a legacy provider row.
 from __future__ import annotations
 
 from lib.identity import require_user_id
-from lib.llm_dispatch.discovery import discover_models
 from lib.log import audit_log, get_logger
 from lib.model_routing import (
     ModelRoutingError,
@@ -45,6 +44,18 @@ def _rebuild_slots() -> None:
     _rebuild_dispatcher_slots()
 
 
+def _default_discover(url: str):
+    from lib.llm_dispatch.discovery import discover_models
+
+    return discover_models(
+        url,
+        "",
+        timeout=5,
+        return_effective=True,
+        quiet_not_found=True,
+    )
+
+
 def register_instance(
     record: dict,
     *,
@@ -62,15 +73,7 @@ def register_instance(
     except (TypeError, ValueError) as exc:
         return {"ok": False, "error": "实例缺少有效 owner_user_id: %s" % exc}
     register_no_proxy_url(base_url)
-    discover = discover or (
-        lambda url: discover_models(
-            url,
-            "",
-            timeout=5,
-            return_effective=True,
-            quiet_not_found=True,
-        )
-    )
+    discover = discover or _default_discover
     try:
         models, effective = discover(base_url)
     except Exception as exc:

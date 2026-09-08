@@ -108,15 +108,15 @@ def _provisional_result(command: str, command_id: str) -> str:
     return (
         f'$ {command}\n\n'
         f'{BACKGROUND_COMMAND_MARKER} {command_id}. The command is still '
-        'running; its completion will be injected automatically as soon as it '
-        'finishes — do not poll for it.]'
+        'running; its completion will be delivered automatically at the next '
+        'safe model boundary — do not poll for it.]'
     )
 
 
 def _completion_payload(command_id: str, command: str, result: str) -> str:
     return (
         f'<background-command id="{command_id}" status="completed">\n'
-        'A command that was moved aside for an operator message has finished. '
+        'A background command has finished. '
         'This is its authoritative result; do not rerun it merely to obtain '
         'the exit status.\n\n'
         f'{result or f"$ {command}\\n\\n[no result returned]"}\n'
@@ -135,14 +135,14 @@ def _delivery_config(config: dict | None) -> dict:
 
 
 def _queue_completion(*, task: dict[str, Any], config: dict | None,
-                      command_id: str, command: str, result: str) -> None:
+                      command_id: str, command: str, result: str) -> bool:
     """Durably enqueue, then opportunistically wake an idle conversation."""
     conv_id = str(task.get('convId') or '')
     if not conv_id:
         logger.warning(
             '[BackgroundCommand:%s] no conversation; completion retained only '
             'in logs', command_id)
-        return
+        return False
     try:
         from lib.message_queue import (
             KIND_WORKFLOW,
@@ -154,17 +154,27 @@ def _queue_completion(*, task: dict[str, Any], config: dict | None,
 
         owner_user_id = int(task_user_id(task))
         text = _completion_payload(command_id, command, result)
+        completion = {
+            'commandId': command_id[:128],
+            'status': 'completed',
+            'command': command[:2000],
+            'resultPreview': result[:2000],
+            'resultTruncated': len(result) > 2000,
+        }
         user_msg = stamp_initiator({
             'role': 'user',
             'content': text,
+            'backgroundCommand': completion,
             'timestamp': int(time.time() * 1000),
         }, INITIATOR_PROACTIVE)
-        queued = enqueue_message(
-            conv_id,
+        from lib.background_command_delivery import publish_completion
+        queued = publish_completion(
+            enqueue_message, conv_id,
             {
                 'text': text,
                 '_user_msg': user_msg,
                 '_backgroundCommand': command_id,
+                '_backgroundCommandCompletion': completion,
                 'timestamp': int(time.time() * 1000),
             },
             _delivery_config(config),
@@ -191,6 +201,7 @@ def _queue_completion(*, task: dict[str, Any], config: dict | None,
                     'queueId': queue_id,
                     'commandId': command_id,
                     'command': command,
+                    'backgroundCommand': completion,
                 },
             )
         except Exception as exc:
@@ -200,11 +211,17 @@ def _queue_completion(*, task: dict[str, Any], config: dict | None,
         # If the steered task is still live this is a cheap no-op; its normal
         # settlement drain owns the row. If it already ended, this closes the
         # enqueue-after-finalize race and starts the completion turn now.
-        dispatch_next_queued(conv_id, user_id=owner_user_id)
+        try:
+            dispatch_next_queued(conv_id, user_id=owner_user_id)
+        except Exception as exc:
+            logger.warning('[BackgroundCommand:%s] wake failed; durable result '
+                           'remains queued: %s', command_id, exc)
+        return True
     except Exception as exc:
         logger.error(
             '[BackgroundCommand:%s] durable completion delivery failed: %s',
             command_id, exc, exc_info=True)
+        return False
 
 
 def run_with_steer_handoff(

@@ -1,0 +1,12 @@
+{
+  "brand": "ai21",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "ai21",
+  "category": "official",
+  "name": "AI21 (Jamba)",
+  "base_url": "https://api.ai21.com/studio/v1",
+  "offering_recipes": [
+    {"model_id": "jamba-1.7-large", "capabilities": ["text", "cheap"]},
+    {"model_id": "jamba-1.7-mini",  "capabilities": ["text", "cheap"]}
+  ]
+}

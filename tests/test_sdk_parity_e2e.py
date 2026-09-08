@@ -322,7 +322,7 @@ class SDKParityE2ETest(unittest.TestCase):
         pl.audit_log = fake_audit
         task = {'id': 'tpc-002', 'convId': 'cpc-002',
                 '_userId': _TEST_OWNER_USER_ID, 'config': {},
-                '_tokenBudgetReminderFired': True}
+                '_contextBudgetDiagnosticRecorded': True}
         try:
             from lib.tasks_pkg.compaction.api import run_compaction_pipeline
 
@@ -354,8 +354,8 @@ class SDKParityE2ETest(unittest.TestCase):
         self.assertEqual(len(compact_audits), 1,
                          'one context_compact audit event per compaction')
         self.assertIn('reduction_pct', compact_audits[0])
-        self.assertFalse(task['_tokenBudgetReminderFired'],
-                         'a fresh window must earn one fresh reminder')
+        self.assertFalse(task['_contextBudgetDiagnosticRecorded'],
+                         'a fresh window must earn one fresh diagnostic')
 
     # 4. ── retired config extras remain backward-compatible ─────
 

@@ -102,6 +102,10 @@ _RULES: tuple[tuple[str, str], ...] = (
     ('longcat-2-0', '2026-06'),
     ('longcat-flash-omni-2603', '2026-03'),
     ('longcat-flash-thinking-2601', '2026-01'),
+    # ── Meta ─────────────────────────────────────────────────────
+    # muse-spark-1.3 was listed on the Meta Model API catalogue
+    # 2026-09-02 (standard + contributor SKUs same day).
+    ('muse-spark-1-3', '2026-09-02'),
     # ── xAI ──────────────────────────────────────────────────────
     ('grok-4-6', '2026-08'),
     ('grok-4-20', '2026-06'),

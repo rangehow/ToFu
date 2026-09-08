@@ -45,6 +45,8 @@ def _handle_skill_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry,
         or fn_args.get('query') or '')
     status = 'done'
 
+    search_badge = None
+
     try:
         from lib.identity import require_user_id
         owner_user_id = require_user_id(
@@ -63,6 +65,13 @@ def _handle_skill_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry,
                 extra_paths=extras,
                 owner_user_id=owner_user_id,
             )
+            matches = list(search_result.get('matches') or ())
+            online_status = dict(search_result.get('online') or {})
+            degraded = (online_status.get('ok') is False
+                        or bool(online_status.get('verification_errors')))
+            search_badge = ('⚠️ partial' if degraded else
+                            f'🔎 {len(matches)} matches' if matches else
+                            '🔎 no matches')
             content = render_skill_search(
                 query,
                 list(search_result.get('matches') or ()),
@@ -153,6 +162,9 @@ def _handle_skill_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry,
         'Skill operation failed:',
     ))
     meta = _result_meta(fn_name, title, content, ok=ok)
+
+    if search_badge is not None:
+        meta['badge'] = search_badge
     if status != 'done':
         meta['writeOk'] = False
     _finalize_tool_round(

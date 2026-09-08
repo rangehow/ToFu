@@ -14,6 +14,11 @@ provider row here.
 - Agent surface: `tool_defs.py` schemas + `lib/tasks_pkg/handlers/local_serve.py`
   + the `local_serve` spec in `lib/tools/registry/_build.py`; install/start are
   approval-gated in `lib/tasks_pkg/tool_dispatch/_approval.py`.
+- Choose/repair around the pipeline: `_catalog.py` ranks the curated open-model
+  shortlist against one hardware snapshot (+ DeepSeek V4 Flash cloud fallback),
+  `_diagnose.py` classifies failed deploys into known kinds with retryable
+  verdicts; both surface read-only via `routes/api_v1/local_serve.py` and the
+  `local_serve_recommend` / `local_serve_status` tools.
 - Durable vs reconstructible: the ledger (`data/config/local_serve.json`) is
   durable; envs/logs under `data/local_serve/` are reclaimable. Managed host
   processes are personal-mode only until an enterprise host-resource scheduler
@@ -25,4 +30,5 @@ Verify:
 pytest -q tests/test_local_serve_probe.py tests/test_local_serve_plan.py \
   tests/test_local_serve_process.py tests/test_local_serve_env_store_register.py \
   tests/test_local_serve_tools.py
+ tests/test_local_serve_recommend.py
 ```

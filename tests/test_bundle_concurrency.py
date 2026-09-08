@@ -72,7 +72,9 @@ def test_live_and_previous_manifests_reference_present_files():
 def test_cleanup_retains_the_current_and_previous_graphs():
     source = _source()
     assert 'new Set([...nextAssets, ...previousAssets]' in source
-    assert "if (!retained.has(file)) await rm(" in source
+    # Older dropped generations are retention-planner territory; see
+    # tests/test_frontend_vite_asset_retention.py for the bounded window.
+    assert 'if (retained.has(file)) continue;' in source
 
 
 def test_server_import_and_request_paths_never_build_frontend_code():

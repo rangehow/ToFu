@@ -159,7 +159,7 @@ paths:
         - $ref: '#/components/parameters/QueueId'
       responses:
         '200':
-          description: Idempotently removed one not-yet-running queued Turn pair.
+          description: Idempotently removed pending background result delivery or one not-yet-running queued Turn pair.
           content:
             application/json:
               schema:
@@ -652,6 +652,11 @@ components:
         toolName: {type: string}
         toolArgs: {}
         toolContent: {}
+        toolModelContent:
+          type: array
+          maxItems: 41
+          items: {type: object, additionalProperties: true}
+          description: Exact bounded model blocks; image bodies use immutable owner-scoped media references.
         toolResultEvidence: {$ref: '#/components/schemas/ToolResultEvidence'}
         query: {type: string}
         status: {type: string}
@@ -806,10 +811,15 @@ components:
         blockId: {type: string}
         attemptId: {type: string}
         taskId: {type: string}
-        text: {type: string}
+        text: {type: string, maxLength: 16384}
         noteKind:
           type: string
-          enum: [intent-stall, todo-continuation]
+          enum: [intent-stall, todo-continuation, system-intervention]
+        action:
+          type: string
+          enum: [prompt, stop, tool-policy, continue]
+          default: prompt
+        reason: {type: string, maxLength: 160}
         llmRound:
           oneOf: [{type: integer, minimum: 0}, {type: 'null'}]
     TurnContentSegment:
@@ -912,6 +922,9 @@ components:
       type: object
       additionalProperties: true
       properties:
+        commandId: {type: string}
+        backgroundCommand: {$ref: '#/components/schemas/BackgroundCommandCompletion'}
+        textTruncated: {type: boolean}
         text: {type: string}
         agentId: {type: string}
         fromConv: {type: string}
@@ -1617,6 +1630,7 @@ components:
         # Deprecated legacy origin/context/compaction inputs. They are named so
         # old clients receive a deterministic migration path, then normalized
         # into the typed documents above before public output.
+        backgroundCommand: {$ref: '#/components/schemas/BackgroundCommandCompletion'}
         _initiator: {type: string}
         _peerMessage: {type: boolean}
         _peerHuman: {type: boolean}
@@ -1763,7 +1777,26 @@ components:
         inputTurnId: {type: string}
         outputTurnId: {type: string}
         attemptId: {type: string}
+        # True when the human picked "insert into the live reply" (steer) but
+        # the steer lane was unavailable (slot closing / inbox tombstoned /
+        # no live attempt), so the message degraded to the durable queue and
+        # waits for the next turn. Lets every queue surface explain WHY this
+        # item is queued instead of injected mid-reply.
+        steerFallback: {type: boolean}
+        backgroundCommand:
+          $ref: '#/components/schemas/BackgroundCommandCompletion'
+    BackgroundCommandCompletion:
+      type: object
+      additionalProperties: false
+      required: [commandId, status, command, resultPreview, resultTruncated]
+      properties:
+        commandId: {type: string, maxLength: 128}
+        status: {type: string, enum: [completed]}
+        command: {type: string, maxLength: 2000}
+        resultPreview: {type: string, maxLength: 2000}
+        resultTruncated: {type: boolean}
     ThreadScope:
+
       type: object
       additionalProperties: false
       required: [kind, ownerId, threadId]
@@ -2072,6 +2105,20 @@ components:
         - $ref: '#/components/schemas/ConversationChange'
         - $ref: '#/components/schemas/SyncHeartbeat'
         - $ref: '#/components/schemas/SyncResetRequired'
+    ActiveAttemptPhase:
+      type: object
+      additionalProperties: false
+      required: [turnId, attemptId, projectionRevision, phase]
+      description: >-
+        Latest retained event's phase for the current running main-lane
+        attempt, captured at the snapshot read head. Absent when that event
+        clears or omits phase, exceeds the 32 KiB read budget, or is missing.
+        Never reconstructed from historical timing traces or another attempt.
+      properties:
+        turnId: {type: string}
+        attemptId: {type: string}
+        projectionRevision: {type: integer, minimum: 0}
+        phase: {$ref: '#/components/schemas/JsonObject'}
     ConversationSyncSnapshot:
       type: object
       additionalProperties: false
@@ -2099,6 +2146,8 @@ components:
         cursor: {type: string}
         serverBootId: {type: string}
         heartbeatIntervalMs: {type: integer, minimum: 1000}
+        activeAttemptPhase:
+          $ref: '#/components/schemas/ActiveAttemptPhase'
         settings: {$ref: '#/components/schemas/JsonObject'}
         turns:
           type: array
@@ -2356,9 +2405,20 @@ components:
         cursor: {type: string}
         submittedTurn: {$ref: '#/components/schemas/TurnRecord'}
         turn: {$ref: '#/components/schemas/TurnRecord'}
+        # Present (true) only on queue-path ACKs where the human had chosen
+        # steer ("insert immediately") but the live steer lane was
+        # unavailable and the message fell back to the durable queue.
+        steerFallback: {type: boolean}
         attempt: {$ref: '#/components/schemas/AttemptRecord'}
         idempotentReplay: {type: boolean}
         aborted: {type: boolean}
+        # Steer commits a bounded identity/revision receipt and atomic snapshot
+        # invalidation, independent of projection/injection history size. The
+        # live inbox is woken before owner-scoped latestTurn hydration; a failed
+        # hydration cannot undo delivery or turn acceptance into an error:
+        # omit latestTurn on read failure and recover through the committed
+        # snapshot invalidation. latestTurn is current authority, not a
+        # historical snapshot retained in the command receipt.
         steered: {type: boolean}
         injectionId: {type: string}
         blockId: {type: string}

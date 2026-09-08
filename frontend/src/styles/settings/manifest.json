@@ -24,6 +24,9 @@
 ,
     {
       "path": "07-access-matrix.css"
+    },
+    {
+      "path": "08-local-deploy.css"
     }
   ]
 }

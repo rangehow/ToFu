@@ -12,10 +12,11 @@ This domain turns durable conversation/project state, memory, tool history, and 
 | Model context-window policy | `lib/context_limits/` |
 | Token counting | `lib/token_counter/` |
 | Automatic compaction | `lib/tasks_pkg/compaction/` |
-| Rebuildable task-state projection | `lib/tasks_pkg/context_composer/task_state.py` |
+| Task-state projection / required checklist restoration | `lib/tasks_pkg/context_composer/task_state.py`, `checklist.py` |
 | Persistent manual compaction | `lib/tasks_pkg/compaction/_manual.py`, `_persist/` |
 | Long-term memory retrieval/injection; My Context proposal/undo UI | `lib/memory/`; `frontend/src/features/memory/preference-actions.ts` |
 | Conversation message construction | `lib/tasks_pkg/conv_message_builder/` |
+| Completed-task model view recovery | `lib/tasks_pkg/model_replay.py`, `lib/storage/model_continuation.py` |
 | Cost experiments and trace | `lib/cost_experiments.py`, context trace modules |
 | Price tiers and per-round cost aggregation | `lib/pricing/`, `lib/cost.py` |
 
@@ -31,9 +32,9 @@ This domain turns durable conversation/project state, memory, tool history, and 
 4. The token counter resolves the model-specific counter, with an explicit heuristic fallback when no exact counter exists.
 5. Context-limit policy computes the usable input budget after output and safety reserves.
 6. Compaction removes, folds, or summarizes only through registered steps.
-7. The final request body is built once by the LLM body builder.
+7. The final request body is built once by the LLM body builder. Budget pressure is **telemetry only**: `context_budget` records content-free working-message estimates and their full/usable-window denominators once per compaction window. It never appends a model message or records an intervention `system_note`. Automatic compaction and final-wire admission remain the capacity authorities; a budget diagnostic is not a task deadline.
 
-Tool-round continuations preserve round-zero provider/model binding and stable prefix order; providers do not silently reread mutable globals later.
+Tool-round continuations preserve round-zero provider/model binding and stable prefix order; providers do not silently reread mutable globals later. Responses assistant phase replay and scoped task/authorization continuity follow [the context contract](../CONTEXT_COMPACTION.md#assistant-phase-and-task-continuity); regression and budget checks: `tests/test_responses_message_phase.py`.
 
 Cache-stable prefix layout: the operator/user-authored base system message and
 canonical included tool declarations are never rewritten by runtime context.
@@ -49,11 +50,27 @@ a tombstone. No composer pass deletes and rebuilds surviving carriers.
   multi-agent routing guidance also lives in the tail. Included tool schemas
   retain their canonical descriptions; a schema budget may omit an optional
   tool but never strip annotations from an included tool.
-- The wire `tools` array freezes at the session's first tool selection: MCP server disconnects/reconnects and newly discovered tools no longer mutate it. Schemas of tools that appear after the freeze are injected at the tail `mcp_tools_delta` block (name + description + input schema, bounded) and are callable through `execute_tools`. An unchanged reachable set reuses the existing bytes; a changed set appends a new version, and losing the last delta appends one retraction tombstone. Turns where the reachable set actually changed vs the frozen wire carry a `mcpToolsDelta` provenance chip (added/removed names, capped at 8 each).
+- The wire `tools` array freezes at the session's first tool selection: MCP server disconnects/reconnects and newly discovered tools no longer mutate it. Tools that appear after the freeze are advertised by the tail `mcp_tools_delta` block (at most eight names and short capability hints, only when schema discovery is available). Complete schemas are obtained on demand through `search_tools` and tools are callable through `execute_tools`; truncated JSON is never presented as an executable schema. An unchanged reachable set reuses the existing bytes; a changed set appends a new version, and losing the last delta appends one retraction tombstone. Turns where the reachable set actually changed vs the frozen wire carry a `mcpToolsDelta` provenance chip (added/removed names, capped at 8 each).
 - Programmatic and multi-agent wire projection is latched from the task's first orchestration decision. Observed fan-out, later round numbers, retries, serial-gateway experiments, and ToolScript fallback state may update telemetry or execution behavior, but cannot add/remove tools or switch an existing tool schema mid-task. Local programmatic projection remains additive.
 Both transition chips ride the existing task-sidecar → turn-projection `provenance` lane (declared in `contracts/conversation_sync_v3.yaml`) and render in the turn-provenance strip (`frontend/src/conversation/presentation/turn-provenance.ts`); they appear only on the turn that observed the change.
 
 ### Runtime message-mutation boundary
+
+Ordinary completed chat tasks prepare their final model view before settlement and publish it atomically with Turn terminal state. The next task validates owner, lane, Turn content witnesses, model/system/permission/experiment settings and attachment availability before restoring it and appending new Turns.
+This preserves composer carrier positions, hook-filtered text, L1 placeholders and L2 summaries without rewriting durable Turns; only the new suffix goes through same-role merging.
+Edits, fresh plans, incompatible policies, missing media and unsupported recovery modes rebuild from authority, never an unvalidated checkpoint. Restart and disposable-cache eviction preserve the Sidecar-owned continuation.
+Text-only history may cross a model/route change when every non-route policy witness matches: old composer carriers are removed, current rules recomposed, and model-specific wire latches not restored. Multimodal, reasoning-bearing and unknown private provider state remains conservatively nonportable, not silently discarded.
+Same-policy recovery restores frozen MCP declarations and the orchestration wire decision after restart; current gateway permissions remain authoritative and active MCP selections are never overwritten.
+
+Text tool receipts retain the exact L0/V2-bounded model text, including results over 50,000 characters. Ordinary replay and Continue retain every todo receipt. Screenshot
+receipts separate display text from `toolModelContent`; images reuse the existing owner-scoped immutable media store and its per-turn count/byte budgets.
+Missing/foreign/unretained images produce explicit unavailable markers. Media-store failure permits at most 256 KiB of inline image text per image and 1 MiB per Turn; larger images remain visible live and have an explicit unavailable cold-replay marker.
+Reconstruction returns detached blocks. Request-local image normalization pins the first observed
+bytes, so later tool rounds do not reread mutable local paths. The image L1 step protects the entire latest unconsumed batch, including when a context carrier or user
+steer follows it. Only a subsequent model response proves consumption. Strict string gateways and marker-capable gateways each keep a consistent final text representation
+as cache markers move.
+
+Read-only compaction hooks and context providers receive detached nested JSON containers; mutation or late completion cannot edit live history/config. The bounded continuation lifecycle is in [`STORAGE.md`](../STORAGE.md). Publication/restore report missing base, unsupported/resume mode, absent checkpoint, failed settlement, changed content and unavailable storage. Tests: `tests/test_model_replay_stability.py`, `tests/test_model_continuation_policy.py`, `tests/test_model_continuation_store.py`.
 
 The durable Turn transcript is immutable during automatic execution. The
 orchestrator deep-copies its nested message projection before context
@@ -110,7 +127,7 @@ Required blocks lock first; permission, priority, freshness, access value, and t
 Its manifest records selection/suppression, hashes, token counts, recovery handles, stable segment hashes, and cache epoch. Per-block `max_tokens` remains a hard ceiling but cannot bypass the global budget. Multi-agent task shapes receive only a bounded tail trigger/discipline block; the canonical `spawn_agents` schema is never rewritten with per-round stage or capacity prose.
 
 `TaskStateSnapshotV1` is rebuilt from turn/tool events: goal, hard constraints, decisions, completed work, files, tests, errors, open questions, TODOs, evidence IDs, observation time, and world version.
-It is a request projection, never a second transcript authority; assistant prose cannot mark work complete.
+It is a request projection, never a second transcript authority; assistant prose cannot mark work complete. Independent required checklist restoration follows [the continuity contract](../CONTEXT_COMPACTION.md#authoritative-checklist-restoration); specs: `tests/test_checklist_context.py`.
 
 The static prompt profile resolves once here. Kimi `auto` remains the full control contract; `lean` and named ablations require explicit experiment policy.
 Every request stamps bounded `tofu.prompt-profile/v1` evidence—requested/resolved/effective profile, status/reason, model, character/token counts, SHA-256, and disabled blocks—on the task, `platform_static` provenance, and each round snapshot.
@@ -169,6 +186,10 @@ A bounded launch-probed LRU may retain recursively frozen parsed frontmatter onl
 - Required `ContextPlanV2` blocks cannot be evicted by optional evidence.
 - Mutable facts carry observation/world-version metadata and are revalidated
   before a claim depends on their freshness.
+- Provider usage reuse requires a complete measured-prefix digest, exact model,
+  and unchanged system/tool envelope. A historical count cannot downclamp a
+  newly reconstructed request. Selected-route input above its hard window is
+  refused locally before transport and enters the existing compaction recovery.
 - Per-round measurement uses the shared local token authority. Its bounded
   digest entries carry encoding-scoped BPE and entropy counts without prompt
   text under a launch-probed 4,096-entry ceiling. Admission may hand off 4,096

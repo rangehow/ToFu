@@ -936,9 +936,11 @@ def test_turn_lifecycle_sidecar_create_read_and_event_sequence(storage, monkeypa
         'by_type']['projection_updated']
     assert projection_metrics['projection_blob_write_deferrals'] >= 1
     assert projection_metrics['projection_blob_write_deferred_bytes'] > 0
-    assert projection_metrics['projection_checkpoint_materializations'] >= 1
-    assert projection_metrics['projection_checkpoint_materialized_bytes'] > 0
-    assert projection_metrics['projection_inline_released_bytes'] > 0
+    # Normalization is now carried in the exact wire patch, so these small
+    # updates need no forced checkpoint just to reconcile different bases.
+    assert projection_metrics['projection_checkpoint_materializations'] == 0
+    assert projection_metrics['projection_checkpoint_materialized_bytes'] == 0
+    assert projection_metrics['projection_inline_released_bytes'] == 0
 
     task['content'] = 'done'
     task['status'] = 'done'
@@ -6082,3 +6084,115 @@ def test_turn_image_query_is_owner_revision_and_index_scoped(storage):
         'stale': True,
         'projectionRevision': turn['projectionRevision'],
     }
+
+
+@pytest.mark.parametrize("stop_source", ["root_event", "child_abort"])
+def test_goal_phases_stream_and_settle_on_their_own_turn(storage, monkeypatch, stop_source):
+    """A slow second phase is visible before completion and survives reload."""
+    from lib.turn_lifecycle import create_turn_pair, get_turn, record_task_event, sync_visible_run_turns
+    from lib.orchestration_chat_event_sink import OrchestrationChatTaskEventSink
+    monkeypatch.setattr('lib.storage.get_storage_client', lambda write=False: storage.client)
+    monkeypatch.setenv('TOFU_TURN_DELTA_RECORD_MIN_INTERVAL_S', '0')
+    conv_id = 'goal-live-phases'
+    created = create_turn_pair(
+        conv_id, command_id='goal-live-create', user_id=1,
+        input_projection={'content': 'Implement and verify'}, config={},
+        conversation_defaults={'allowCreate': True, 'title': 'Goal', 'createdAt': 1, 'settings': {}})
+    task = {'id': 'goal-live-task', '_attemptId': created['attempt']['attemptId'],
+            '_turnId': created['turn']['turnId'], '_userId': 1, 'convId': conv_id,
+            'config': {}, 'content': '', 'thinking': ''}
+    storage.client.command('turn.attempt.bind', {
+        'attempt_id': task['_attemptId'], 'user_id': 1, 'task_id': task['id'],
+    }, 'goal-live-bind')
+    sink = OrchestrationChatTaskEventSink(task, lambda owner, event: record_task_event(owner, event))
+    sink({'type': 'flow_iteration', 'flowProjection': 'autopilot', 'iteration': 1, 'phase': 'working', 'turnRole': 'worker', 'emits': 'assistant'})
+    sink({'type': 'delta', 'content': 'First worker answer'})
+    messages = [{'role': 'assistant', 'content': 'First worker answer'}]
+    task['_flow_turns'] = messages
+    sync_visible_run_turns(task, messages)
+    sink({'type': 'flow_iteration', 'flowProjection': 'autopilot', 'iteration': 1, 'phase': 'reviewing', 'turnRole': 'virtual_user', 'emits': 'user'})
+    child_id = task['_flowLiveTurn']['turnId']
+    child_attempt = task['_flowLiveTurn']['attemptId']
+    sink({'type': 'delta', 'content': 'Checking the actual files', 'thinking': 'Verify carefully'})
+    sink({'type': 'tool_start', 'roundNum': 1, 'llmRound': 1,
+          'toolCallId': 'goal-verify-tool', 'toolName': 'run_command',
+          'toolArgs': {'command': 'pytest -q'}, 'query': 'pytest -q',
+          'status': 'running', 'tStart': 100})
+    sink({'type': 'tool_result', 'roundNum': 1, 'toolCallId': 'goal-verify-tool',
+          'results': [{'toolName': 'run_command', 'source': 'Project',
+                       'command': 'pytest -q', 'exitCode': 0}]})
+    sink({'type': 'tool_complete', 'roundNum': 1, 'toolCallId': 'goal-verify-tool',
+          'toolContent': '2 passed', 'status': 'done', 'tEnd': 200})
+    child = get_turn(conv_id, child_id, user_id=1)
+    assert child['status'] == 'running'
+    assert child['actor'] == 'virtual_user'
+    assert child['projection']['content'] == 'Checking the actual files'
+    assert get_turn(conv_id, task['_turnId'], user_id=1)['projection']['content'] == 'First worker answer'
+    # Snapshot/reconnect sees exactly the same ordinary Turn projection.
+    snapshot = storage.client.query('turn.sync.snapshot', {'conversation_id': conv_id, 'user_id': 1})
+    reloaded = next(turn for turn in snapshot['turns'] if turn['turnId'] == child_id)
+    assert reloaded['projection']['content'] == child['projection']['content']
+    assert reloaded['projection']['thinking'] == child['projection']['thinking']
+    assert reloaded['currentAttemptId'] == child_attempt
+    messages.append({'role': 'user', '_isVirtualUser': True, '_flowLivePhase': True,
+                     'content': 'Fix the remaining test',
+                     'toolRounds': [{'roundNum': 1, 'toolCallId': 'goal-verify-tool',
+                                     'toolName': 'run_command', 'status': 'done'}]})
+    sync_visible_run_turns(task, messages)
+    settled = get_turn(conv_id, child_id, user_id=1)
+    assert settled['currentAttemptId'] == child_attempt
+    assert settled['status'] == 'completed'
+    assert settled['projection']['content'] == 'Fix the remaining test'
+    assert settled['projection']['toolRounds'][0]['toolArgs'] == {'command': 'pytest -q'}
+    assert settled['projection']['toolRounds'][0]['toolContent'] == '2 passed'
+    assert get_turn(conv_id, task['_turnId'], user_id=1)['projection']['toolRounds'] == []
+    assert '_flowLiveTurn' not in task
+    # New worker owns another Turn. Parent cancellation atomically settles it
+    # with partial content intact, and its late events cannot regain authority.
+    sink({'type': 'flow_iteration', 'flowProjection': 'autopilot', 'iteration': 2, 'phase': 'working', 'turnRole': 'worker', 'emits': 'assistant'})
+    worker_id = task['_flowLiveTurn']['turnId']
+    worker_attempt = task['_flowLiveTurn']['attemptId']
+    sink({'type': 'delta', 'content': 'Partial correction'})
+    if stop_source == 'child_abort':
+        from lib.turn_lifecycle import abort_attempt
+        monkeypatch.setattr('lib.tasks_pkg.manager.cancellation.cancel_task', lambda *a, **k: {'found': False})
+        monkeypatch.setattr('lib.tasks_pkg.manager.plant_abort_tombstone', lambda *a, **k: None)
+        monkeypatch.setattr('lib.turn_lifecycle._notify_abort_busy_projection', lambda *a, **k: None)
+        abort_attempt(worker_attempt, user_id=1)
+    else:
+        result = storage.client.command('turn.event.record', {
+            'attempt_id': task['_attemptId'], 'user_id': 1, 'terminal': True,
+            'status': 'interrupted', 'projection': get_turn(conv_id, task['_turnId'], user_id=1)['projection'],
+            'settlement': {'outcome': 'interrupted', 'cause': 'user_abort', 'resumeOptions': []},
+        }, 'goal-live-abort')
+        assert result['applied']
+    interrupted = get_turn(conv_id, worker_id, user_id=1)
+    assert interrupted['status'] == 'interrupted'
+    assert interrupted['projection']['content'] == 'Partial correction'
+    late = storage.client.command('turn.event.record', {
+        'attempt_id': worker_attempt, 'user_id': 1, 'projection': {'content': 'late'},
+    }, 'goal-live-late')
+    assert late['applied'] is False
+    # Replay exactly what a patch-aware browser receives, beginning at the
+    # creation event. Serve-time normalization must never invent the patch
+    # base: otherwise first-token segments are missing and every child waits
+    # behind an unrecoverable revision gap until a full snapshot is fetched.
+    from lib.turn_projection_patch import apply_projection_patch
+    changes = storage.client.query('turn.sync.changes', {
+        'conversation_id': conv_id, 'user_id': 1, 'after': 0})['events']
+    replayed = {}
+    for change in changes:
+        payload = change['payload']
+        if change['type'] == 'turn.upsert':
+            replayed.update({row['turnId']: row for row in payload['turns']})
+        elif change['type'] == 'attempt.event':
+            event = payload['event']
+            body = event['payload']
+            target = replayed[event['turnId']]
+            patch = body['projectionPatch']
+            assert patch['baseRevision'] == target['projectionRevision']
+            target['projection'] = apply_projection_patch(target['projection'], patch)
+            target['projectionRevision'] = patch['targetRevision']
+            replayed.update({row['turnId']: row for row in body.get('turns', [])})
+    assert replayed[child_id]['projection']['content'] == 'Fix the remaining test'
+    assert replayed[worker_id]['projection']['content'] == 'Partial correction'

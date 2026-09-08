@@ -42,6 +42,33 @@ def _fmt(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=1)
 
 
+#: Runtime ``kind`` for each background producer, bound in ONE place. The
+#: literals are pinned against the runtime definitions by
+#: tests/test_motion_video_p4.py (drift = red), so they double as the
+#: public work-unit kind vocabulary (docs/API_CONTRACT.md §2.18).
+_PRODUCE_WORK_UNIT_KINDS = {
+    PRODUCE_VIDEO_TOOL_NAME: 'motion-video',
+    PRODUCE_REPORT_TOOL_NAME: 'longform-report',
+    PRODUCE_SLIDES_TOOL_NAME: 'slides-deck',
+    PRODUCE_RESEARCH_TOOL_NAME: 'research',
+}
+
+
+def _work_unit_ref(result: dict, fn_name: str) -> dict | None:
+    """meta extra carrying the durable work-unit handle for the rich card.
+
+    The card re-attaches to ``/api/v1/tasks/{id}`` by this handle instead of
+    re-parsing the tool payload; absent when no job was accepted.
+    """
+    if not isinstance(result, dict) or result.get('ok') is not True:
+        return None
+    task_id = str(result.get('task_id') or '')[:80]
+    kind = _PRODUCE_WORK_UNIT_KINDS.get(fn_name)
+    if not task_id or not kind:
+        return None
+    return {'workUnitRef': {'taskId': task_id, 'kind': kind}}
+
+
 def _mark_background_task_accepted(task: dict, fn_name: str,
                                    result: dict, round_num: int) -> None:
     """Stamp the explicit post-dispatch terminal contract for root chat.
@@ -357,7 +384,7 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
                       'poll': f'/api/v1/motion/videos/poll/{job_id}',
                       'note': 'Video is generating in the background; watch the '
                               'video panel for progress. ' + quality_hint}
-            badge = 'started'
+            badge = 'queued'
         except Exception as e:
             logger.error('[Produce] failed to start video job: %s', e, exc_info=True)
             result = {'ok': False, 'detail': str(e)}
@@ -368,7 +395,7 @@ def _handle_produce_video(task, tc, fn_name, tc_id, fn_args, rn,
     meta = _build_simple_meta(
         fn_name, tool_content, source='Produce', title='video',
         snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
-        badge=badge)
+        badge=badge, extra=_work_unit_ref(result, fn_name))
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, tool_content, False
 
@@ -412,7 +439,7 @@ def _handle_produce_report(task, tc, fn_name, tc_id, fn_args, rn,
                       'poll': f'/api/v1/tasks/{tid}',
                       'note': 'Report is generating in the background; it will '
                               'be published as a markdown artifact.'}
-            badge = 'joined' if started.get('deduped') else 'started'
+            badge = 'running' if started.get('deduped') else 'queued'
         except Exception as e:
             logger.error('[Produce] failed to start report job: %s', e,
                          exc_info=True)
@@ -424,7 +451,7 @@ def _handle_produce_report(task, tc, fn_name, tc_id, fn_args, rn,
     meta = _build_simple_meta(
         fn_name, tool_content, source='Produce', title='report',
         snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
-        badge=badge)
+        badge=badge, extra=_work_unit_ref(result, fn_name))
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, tool_content, False
 
@@ -489,7 +516,7 @@ def _handle_produce_slides(task, tc, fn_name, tc_id, fn_args, rn,
                       'note': 'The deck is generating in the background; '
                               'poll for progress, then download the PPTX '
                               'from the download URL.'}
-            badge = 'joined' if started.get('deduped') else 'started'
+            badge = 'running' if started.get('deduped') else 'queued'
         except SlidesRuntimeUnavailable as e:
             logger.error('[Produce] slides runtime is unavailable: %s', e)
             result = e.tool_result()
@@ -505,7 +532,7 @@ def _handle_produce_slides(task, tc, fn_name, tc_id, fn_args, rn,
     meta = _build_simple_meta(
         fn_name, tool_content, source='Produce', title='slides',
         snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
-        badge=badge)
+        badge=badge, extra=_work_unit_ref(result, fn_name))
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, tool_content, False
 
@@ -626,7 +653,7 @@ def _handle_produce_research(task, tc, fn_name, tc_id, fn_args, rn,
                       'note': 'Research is running in the background: the '
                               'literature corpus is harvested and surveyed '
                               'first, then ideas are scored against it.'}
-            badge = 'joined' if started.get('deduped') else 'started'
+            badge = 'running' if started.get('deduped') else 'queued'
         except Exception as e:
             logger.error('[Produce] failed to start research job: %s', e,
                          exc_info=True)
@@ -638,6 +665,6 @@ def _handle_produce_research(task, tc, fn_name, tc_id, fn_args, rn,
     meta = _build_simple_meta(
         fn_name, tool_content, source='Produce', title='research',
         snippet=tool_content.split('\n', 1)[0][:120] if tool_content else '',
-        badge=badge)
+        badge=badge, extra=_work_unit_ref(result, fn_name))
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, tool_content, False

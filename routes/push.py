@@ -277,8 +277,8 @@ async def push_ws():
         # push routing never knows or guesses this identity.
         from lib.identity import PERSONAL_USER_ID
         _user_id = PERSONAL_USER_ID
-    # Bind identity so audit_log auto-attaches it (ENTERPRISE_READINESS_AUDIT
-    # R11); the HTTP path does the same in auth_before_request.
+    # Bind identity so audit_log auto-attaches it (ENTERPRISE_EVOLUTION.md,
+    # Identity and authorization); the HTTP path does the same in auth_before_request.
     set_principal(getattr(_ctx, 'key_id', '') or '', _user_id)
 
     client = PushClient(user_id=_user_id, req_id=_rid)

@@ -32,7 +32,10 @@ def _emit(task: dict, event: dict) -> None:
     try:
         _append_research_event(task, event)
     except Exception as e:
-        logger.debug('[Research] emit failed: %s', e)
+        if task.get('_research_record_enabled'):
+            task['_research_persistence_error'] = e
+            task['abort_event'].set()
+        logger.warning('[Research] progress persistence failed: %s', e)
 
 
 #: Task fields persisted so a crashed process can re-spawn this job.
@@ -45,6 +48,9 @@ def _write_manifest(task: dict, state: str) -> None:
     from lib.production.jobs import write_manifest
     write_manifest(task.get('workdir') or '', task, fields=_MANIFEST_FIELDS,
                    kind='research', state=state, log_label='Research')
+    if task.get('_research_record_enabled'):
+        from lib.research.records import persist_record
+        persist_record(task)
 
 
 def run_research_task(task: dict) -> None:
@@ -54,8 +60,13 @@ def run_research_task(task: dict) -> None:
 
     task_id = task['task_id']
     try:
+        if not _research_runtime.mark_running(task_id):
+            return
+        if task['abort_event'].is_set():
+            _research_runtime.finish(task_id)
+            _write_manifest(task, task['status'])
+            return
         _write_manifest(task, 'running')
-        _research_runtime.mark_running(task_id)
         _emit(task, build_phase(Phase.START,
                                 direction=task.get('direction', '')))
         from lib.llm_dispatch.conv_affinity import conv_affinity
@@ -72,20 +83,33 @@ def run_research_task(task: dict) -> None:
                 abort_event=task.get('abort_event'),
                 emit=lambda ev: _emit(task, {'type': 'stage', **ev}))
 
-        task['result'] = result
+        if task.get('_research_persistence_error'):
+            raise task['_research_persistence_error']
+        if task['abort_event'].is_set():
+            _research_runtime.finish(task_id)
+            _write_manifest(task, task['status'])
+            return
         # A degraded run produced a VALID artifact from a SICK pipeline — it is
         # neither a clean success nor an error. Settling it as 'done' is what
         # made the R3 total-wipe bug invisible (state=done, accepted 0).
         _degraded = bool(result.get('degraded'))
-        _write_manifest(task, 'degraded' if _degraded else 'done')
+
         _emit(task, {'type': 'final', 'accepted': len(result.get('accepted', [])),
                      'rejected': len(result.get('rejected', [])),
                      'corpus_size': result.get('corpus_size', 0),
                      'gate_reached': result.get('gate_reached'),
                      'degraded': _degraded,
                      'degraded_reason': result.get('degraded_reason', '')})
+        if task.get('_research_persistence_error'):
+            raise task['_research_persistence_error']
+        if task.get('_research_record_enabled'):
+            from lib.research.records import persist_record
+            persist_record(task, status='degraded' if _degraded else 'done', result=result)
+
         _research_runtime.finish(task_id, result=result, degraded=_degraded,
                                  degraded_reason=result.get('degraded_reason', ''))
+
+        _write_manifest(task, task['status'])
         if _degraded:
             logger.error('[Research] %s DEGRADED — %s', task_id,
                          result.get('degraded_reason'))
@@ -96,8 +120,16 @@ def run_research_task(task: dict) -> None:
                     result.get('gate_reached'))
     except Exception as e:
         logger.error('[Research] task %s failed: %s', task_id, e, exc_info=True)
-        _write_manifest(task, 'error')
-        _research_runtime.finish(task_id, error=e, error_context='research:engine')
+        if task.get('_research_persistence_error'):
+            task['abort_event'].clear()
+        if task['abort_event'].is_set():
+            _research_runtime.finish(task_id)
+        else:
+            _research_runtime.finish(task_id, error=e, error_context='research:engine')
+        try:
+            _write_manifest(task, task['status'])
+        except Exception:
+            logger.exception('[Research] failed to persist terminal record for %s', task_id)
 
 
 def resume_interrupted_research() -> int:
@@ -120,6 +152,13 @@ def resume_interrupted_research() -> int:
             seed_arxiv_ids=request.seed_arxiv_ids,
             model=request.model,
             conv_id=m.get('conv_id') or '', user_id=user_id)
+        from lib.research.records import load_record, persist_record
+        task['_research_record_enabled'] = True
+        record = load_record(task_id, user_id=user_id, internal=True)
+        if record:
+            task['_durable_research_record'] = record
+            task['research_progress'] = record.get('research_progress')
+        persist_record(task)
         _research_runtime.spawn(task_id, run_research_task, task)
 
     return resume_running_jobs(
@@ -162,6 +201,9 @@ def produce_research(direction: str, *, lang: str = 'en', n_ideas: int = 6,
         return {'task_id': existing, 'deduped': True}
     try:
         os.makedirs(wd, exist_ok=True)
+        from lib.research.records import persist_record
+        task['_research_record_enabled'] = True
+        persist_record(task)
         _research_runtime.spawn(tid, run_research_task, task)
     except Exception as exc:
         _research_runtime.finish(

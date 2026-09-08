@@ -886,11 +886,11 @@ fn store_header(
     header: serde_json::Map<String, Value>,
     expected_physical_version: u64,
     committed_at_ms: u64,
-) -> io::Result<()> {
+) -> io::Result<Vec<u8>> {
     let key = document_key(transaction, conversation_id)?;
     let value_json = serde_json::to_vec(&Value::Object(header))
         .map_err(|_| invalid_data("conversation header cannot be encoded"))?;
-    crate::versioned_document::put(
+    let (_, stored_envelope) = crate::versioned_document::put_returning_envelope(
         database,
         transaction,
         crate::versioned_document::PutRequest {
@@ -902,7 +902,7 @@ fn store_header(
             updated_at_ms: committed_at_ms,
         },
     )?;
-    Ok(())
+    Ok(stored_envelope)
 }
 
 fn stored_document_envelope(
@@ -1061,6 +1061,134 @@ pub(crate) fn advance_for_turns(
         conversation_id,
     )?;
     Ok(revision)
+}
+
+/// Fused hot-path equivalent of `ensure_for_turn` + `execution_epoch` +
+/// `advance_for_turn` for `turn.append_settled`: the conversation header is
+/// loaded and stored once per append when the conversation already exists
+/// and carries no settings merge. Creation and settings merges fall back to
+/// the legacy three-call sequence so version/CAS outcomes stay identical on
+/// those paths. Returns `(execution_epoch, revision)`.
+pub(crate) fn advance_for_turn_append(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    defaults: &TurnDefaults,
+    now_ms: u64,
+    committed_at_ms: u64,
+    increment_message_count: bool,
+) -> io::Result<(u64, u64)> {
+    let Some((mut header, mut physical_version)) =
+        load_header(database, transaction, conversation_id)?
+    else {
+        ensure_for_turn(
+            database,
+            transaction,
+            conversation_id,
+            defaults,
+            now_ms,
+            committed_at_ms,
+        )?;
+        let epoch = execution_epoch(database, transaction, conversation_id)?;
+        let revision = advance_for_turn(
+            database,
+            transaction,
+            conversation_id,
+            now_ms,
+            committed_at_ms,
+            increment_message_count,
+        )?;
+        return Ok((epoch, revision));
+    };
+    let epoch = execution_epoch(database, transaction, conversation_id)?;
+    let incoming = serde_json::from_slice::<Value>(&defaults.settings_json)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .ok_or_else(|| invalid_data("turn conversation defaults are malformed"))?;
+    if !incoming.is_empty() {
+        // Preserve the legacy two-store version sequence for settings merges.
+        let mut settings = header
+            .get("settings")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(|| invalid_data("conversation settings are malformed"))?;
+        settings.extend(incoming);
+        settings.remove("activeTaskId");
+        header.insert("settings".to_owned(), Value::Object(settings));
+        store_header(
+            database,
+            transaction,
+            conversation_id,
+            header.clone(),
+            physical_version,
+            committed_at_ms,
+        )?;
+        physical_version = physical_version
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("conversation document version overflow"))?;
+    }
+    let previous_updated_at_ms = header
+        .get("updated_at")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_data("conversation update timestamp is malformed"))?;
+    let created_at_ms = header
+        .get("created_at")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid_data("conversation create timestamp is malformed"))?;
+    let revision = header
+        .get("rev")
+        .and_then(Value::as_u64)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| invalid_data("conversation revision overflow"))?;
+    let message_count = header
+        .get("msg_count")
+        .and_then(Value::as_u64)
+        .and_then(|value| value.checked_add(u64::from(increment_message_count)))
+        .ok_or_else(|| invalid_data("conversation message count overflow"))?;
+    header.insert("rev".to_owned(), Value::from(revision));
+    header.insert("msg_count".to_owned(), Value::from(message_count));
+    header.insert("updated_at".to_owned(), Value::from(now_ms));
+    // The stored envelope comes straight from the put instead of a second
+    // read of the entity the put just wrote; bytes are identical.
+    let index_value = store_header(
+        database,
+        transaction,
+        conversation_id,
+        header,
+        physical_version,
+        committed_at_ms,
+    )?;
+    let tenant_id = transaction.tenant_id();
+    let owner_user_id = transaction.owner_user_id();
+    database.entity_delete(
+        transaction,
+        updated_index_key(
+            tenant_id,
+            owner_user_id,
+            previous_updated_at_ms,
+            conversation_id,
+        )?,
+    )?;
+    database.entity_put(
+        transaction,
+        updated_index_key(tenant_id, owner_user_id, now_ms, conversation_id)?,
+        index_value,
+    )?;
+    rekey_activity_candidate_if_maintained(
+        database,
+        transaction,
+        conversation_id,
+        created_at_ms,
+        previous_updated_at_ms,
+        now_ms,
+    )?;
+    crate::search_dirty::mark(
+        database,
+        transaction,
+        CONVERSATION_SEARCH_DIRTY_NAMESPACE,
+        conversation_id,
+    )?;
+    Ok((epoch, revision))
 }
 
 pub(crate) fn advance_for_turn_delete(
@@ -1232,11 +1360,11 @@ pub(crate) fn create(
         CONVERSATION_DOCUMENT_NAMESPACE,
         request.conversation_id.as_bytes(),
     )?;
-    crate::versioned_document::put(
+    let (_, index_value) = crate::versioned_document::put_returning_envelope(
         database,
         transaction,
         crate::versioned_document::PutRequest {
-            key: document_key.clone(),
+            key: document_key,
             namespace: "conversations".to_owned(),
             logical_key: request.conversation_id.clone(),
             value_json: document_json,
@@ -1244,9 +1372,6 @@ pub(crate) fn create(
             updated_at_ms: request.committed_at_ms,
         },
     )?;
-    let index_value = database
-        .entity_get(transaction, &document_key)?
-        .ok_or_else(|| invalid_data("staged conversation document disappeared"))?;
     database.entity_put(transaction, claim_key, owner_user_id.to_be_bytes().to_vec())?;
     database.entity_put(transaction, count_key, next_count.to_le_bytes().to_vec())?;
     database.entity_put(
@@ -1851,12 +1976,8 @@ pub(crate) fn relink_project_settings(
     )?;
     let mut page_start = trash_start;
     loop {
-        let rows = database.entity_scan(
-            transaction,
-            &page_start,
-            &trash_end,
-            INDEX_SCAN_PAGE_ROWS,
-        )?;
+        let rows =
+            database.entity_scan(transaction, &page_start, &trash_end, INDEX_SCAN_PAGE_ROWS)?;
         if rows.is_empty() {
             break;
         }
@@ -1866,27 +1987,24 @@ pub(crate) fn relink_project_settings(
             let conversation_id = std::str::from_utf8(row_key.key_bytes())
                 .map_err(|_| invalid_data("conversation trash identity is not UTF-8"))?
                 .to_owned();
-            let settings = match read_trash_settings_overlay(
-                database,
-                transaction,
-                &conversation_id,
-            )? {
-                Some(overlay) => overlay,
-                None => {
-                    let pin_id = trash_pin_id(transaction, &conversation_id);
-                    let mut trash = database
-                        .begin_persistent_snapshot(tenant_id, owner_user_id, &pin_id)?
-                        .ok_or_else(|| invalid_data("conversation trash capsule is missing"))?;
-                    let (header, _) = load_header(database, &mut trash, &conversation_id)?
-                        .ok_or_else(|| invalid_data("conversation trash header is missing"))?;
-                    drop(trash);
-                    header
-                        .get("settings")
-                        .and_then(Value::as_object)
-                        .cloned()
-                        .ok_or_else(|| invalid_data("conversation settings are malformed"))?
-                }
-            };
+            let settings =
+                match read_trash_settings_overlay(database, transaction, &conversation_id)? {
+                    Some(overlay) => overlay,
+                    None => {
+                        let pin_id = trash_pin_id(transaction, &conversation_id);
+                        let mut trash = database
+                            .begin_persistent_snapshot(tenant_id, owner_user_id, &pin_id)?
+                            .ok_or_else(|| invalid_data("conversation trash capsule is missing"))?;
+                        let (header, _) = load_header(database, &mut trash, &conversation_id)?
+                            .ok_or_else(|| invalid_data("conversation trash header is missing"))?;
+                        drop(trash);
+                        header
+                            .get("settings")
+                            .and_then(Value::as_object)
+                            .cloned()
+                            .ok_or_else(|| invalid_data("conversation settings are malformed"))?
+                    }
+                };
             if replace_project_path_references(&settings, old_path, new_path).is_some() {
                 total += 1;
                 if total > MAX_PROJECT_RELINK_CONVERSATION_CANDIDATES {
@@ -1964,8 +2082,9 @@ pub(crate) fn relink_project_settings(
         database.entity_put(
             transaction,
             trash_settings_overlay_key(transaction, conversation_id)?,
-            serde_json::to_vec(&Value::Object(rewritten))
-                .map_err(|_| invalid_data("conversation trash settings overlay cannot be encoded"))?,
+            serde_json::to_vec(&Value::Object(rewritten)).map_err(|_| {
+                invalid_data("conversation trash settings overlay cannot be encoded")
+            })?,
         )?;
     }
     Ok((active_candidates.len(), trashed_candidates.len()))
@@ -2636,7 +2755,7 @@ pub(crate) fn list(
         .title_contains
         .as_ref()
         .map(|value| value.to_lowercase());
-    let mut documents = Vec::with_capacity(request.limit.min(1_000));
+    let mut documents: Vec<Vec<u8>> = Vec::with_capacity(request.limit.min(1_000));
     let mut response_bytes = 2_usize;
 
     'pages: for page_number in 0..MAX_INDEX_SCAN_PAGES {
@@ -2707,13 +2826,10 @@ pub(crate) fn list(
                 document["messages"] = Value::Array(messages);
                 document["metadata"]["msg_count"] = Value::from(total_count as u64);
             }
+            let document_bytes = serde_json::to_vec(&document)
+                .map_err(|_| invalid_data("conversation list cannot be encoded"))?;
             response_bytes = response_bytes
-                .checked_add(
-                    serde_json::to_vec(&document)
-                        .map_err(|_| invalid_data("conversation list cannot be encoded"))?
-                        .len()
-                        + usize::from(!documents.is_empty()),
-                )
+                .checked_add(document_bytes.len() + usize::from(!documents.is_empty()))
                 .filter(|bytes| {
                     *bytes <= crate::generated_tofudb_ir::MAX_TRANSACTION_IR_LITERAL_BYTES
                 })
@@ -2723,7 +2839,7 @@ pub(crate) fn list(
                         "conversation list response exceeds 8 MiB",
                     )
                 })?;
-            documents.push(document);
+            documents.push(document_bytes);
             if documents.len() == request.limit {
                 break 'pages;
             }
@@ -2739,8 +2855,17 @@ pub(crate) fn list(
         }
         start = continuation;
     }
-    let response = serde_json::to_vec(&documents)
-        .map_err(|_| invalid_data("conversation list cannot be encoded"))?;
+    // Serialize each row once; joining with commas is byte-identical to
+    // serializing the array, and response_bytes tracked the same total.
+    let mut response = Vec::with_capacity(response_bytes);
+    response.push(b'[');
+    for (index, document_bytes) in documents.iter().enumerate() {
+        if index > 0 {
+            response.push(b',');
+        }
+        response.extend_from_slice(document_bytes);
+    }
+    response.push(b']');
     if response.len() > crate::generated_tofudb_ir::MAX_TRANSACTION_IR_LITERAL_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::OutOfMemory,
@@ -2777,6 +2902,175 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    fn legacy_append_sequence(
+        database: &mut AuthorityDatabase,
+        conversation_id: &str,
+        defaults: &TurnDefaults,
+        now_ms: u64,
+        increment: bool,
+    ) -> (u64, u64) {
+        let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        ensure_for_turn(
+            database,
+            &mut transaction,
+            conversation_id,
+            defaults,
+            now_ms,
+            now_ms,
+        )
+        .unwrap();
+        let epoch = execution_epoch(database, &mut transaction, conversation_id).unwrap();
+        let revision = advance_for_turn(
+            database,
+            &mut transaction,
+            conversation_id,
+            now_ms,
+            now_ms,
+            increment,
+        )
+        .unwrap();
+        database.commit(transaction).unwrap();
+        (epoch, revision)
+    }
+
+    fn fused_append_sequence(
+        database: &mut AuthorityDatabase,
+        conversation_id: &str,
+        defaults: &TurnDefaults,
+        now_ms: u64,
+        increment: bool,
+    ) -> (u64, u64) {
+        let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        let outcome = advance_for_turn_append(
+            database,
+            &mut transaction,
+            conversation_id,
+            defaults,
+            now_ms,
+            now_ms,
+            increment,
+        )
+        .unwrap();
+        database.commit(transaction).unwrap();
+        outcome
+    }
+
+    fn header_state(
+        database: &mut AuthorityDatabase,
+        conversation_id: &str,
+    ) -> (serde_json::Map<String, Value>, u64) {
+        let mut read = database.begin(7, 11).unwrap();
+        load_header(database, &mut read, conversation_id)
+            .unwrap()
+            .expect("fixture conversation exists")
+    }
+
+    #[test]
+    fn advance_for_turn_append_matches_the_legacy_three_call_sequence() {
+        let defaults = TurnDefaults {
+            allow_create: false,
+            title: "Fixture".to_owned(),
+            settings_json: b"{}".to_vec(),
+            created_at_ms: 100,
+        };
+        let mut legacy =
+            AuthorityDatabase::initialize(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut fused = AuthorityDatabase::initialize(tempfile::tempdir().unwrap().path()).unwrap();
+        let mut seed = legacy.begin_with_identity_claim_scopes(7, 11).unwrap();
+        create_fixture(&legacy, &mut seed, "conversation", 100);
+        legacy.commit(seed).unwrap();
+        let mut seed = fused.begin_with_identity_claim_scopes(7, 11).unwrap();
+        create_fixture(&fused, &mut seed, "conversation", 100);
+        fused.commit(seed).unwrap();
+
+        // Empty-settings appends take the fused single-store path.
+        for (now, increment) in [(200u64, true), (300, true), (400, false)] {
+            let expected =
+                legacy_append_sequence(&mut legacy, "conversation", &defaults, now, increment);
+            let actual =
+                fused_append_sequence(&mut fused, "conversation", &defaults, now, increment);
+            assert_eq!(expected, actual);
+        }
+        assert_eq!(
+            header_state(&mut legacy, "conversation"),
+            header_state(&mut fused, "conversation"),
+            "fused header state diverged from the legacy sequence"
+        );
+
+        // Settings merges fall back to the legacy two-store version sequence.
+        let merge_defaults = TurnDefaults {
+            allow_create: false,
+            title: "Fixture".to_owned(),
+            settings_json: br#"{"activeTaskId":"task-9","projectPath":"/perf"}"#.to_vec(),
+            created_at_ms: 100,
+        };
+        let expected =
+            legacy_append_sequence(&mut legacy, "conversation", &merge_defaults, 500, true);
+        let actual = fused_append_sequence(&mut fused, "conversation", &merge_defaults, 500, true);
+        assert_eq!(expected, actual);
+        let (legacy_header, fused_header) = (
+            header_state(&mut legacy, "conversation"),
+            header_state(&mut fused, "conversation"),
+        );
+        assert_eq!(legacy_header, fused_header);
+        let settings = fused_header
+            .0
+            .get("settings")
+            .and_then(Value::as_object)
+            .unwrap();
+        assert_eq!(
+            settings.get("projectPath").and_then(Value::as_str),
+            Some("/perf")
+        );
+        assert!(!settings.contains_key("activeTaskId"));
+
+        // Missing conversation without allow_create is a NotFound in both paths.
+        let missing_defaults = TurnDefaults {
+            allow_create: false,
+            ..defaults.clone()
+        };
+        let mut fused_missing = fused.begin_with_identity_claim_scopes(7, 11).unwrap();
+        let error = advance_for_turn_append(
+            &fused,
+            &mut fused_missing,
+            "missing",
+            &missing_defaults,
+            600,
+            600,
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+
+        // Missing conversation with allow_create creates exactly like the
+        // legacy sequence (create revision 1, then advance to 2).
+        let create_defaults = TurnDefaults {
+            allow_create: true,
+            title: "Created".to_owned(),
+            settings_json: b"{}".to_vec(),
+            created_at_ms: 100,
+        };
+        let expected = legacy_append_sequence(
+            &mut legacy,
+            "created-conversation",
+            &create_defaults,
+            700,
+            true,
+        );
+        let actual = fused_append_sequence(
+            &mut fused,
+            "created-conversation",
+            &create_defaults,
+            700,
+            true,
+        );
+        assert_eq!(expected, actual);
+        assert_eq!(
+            header_state(&mut legacy, "created-conversation"),
+            header_state(&mut fused, "created-conversation"),
+        );
     }
 
     #[test]

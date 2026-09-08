@@ -13,6 +13,13 @@ CONVERSATION_EXECUTOR_DISPATCH_MODE = "conversation_executor"
 ATTEMPT_DISPATCH_REQUEST_STARTED_AT_MS_CONFIG_KEY = (
     "_dispatchRequestStartedAtMs"
 )
+#: Model recorded on the submitted turn when a resume arrives carrying a
+#: different one (pause → switch → continue). Stamped into the durable
+#: attempt config at acceptance — BEFORE the submitted projection is
+#: rebound — so a crashed dispatch still emits the switch banner on
+#: recovery, and stamped before the rebind precisely because the rebind
+#: would otherwise erase the evidence.
+RESUME_MODEL_SWITCH_FROM_CONFIG_KEY = "_resumeModelSwitchFrom"
 ATTEMPT_DISPATCH_MODES = frozenset({"", CONVERSATION_EXECUTOR_DISPATCH_MODE})
 
 
@@ -25,6 +32,7 @@ def normalize_attempt_dispatch_mode(value: object) -> str:
 
 __all__ = [
     "ATTEMPT_DISPATCH_REQUEST_STARTED_AT_MS_CONFIG_KEY",
+    "RESUME_MODEL_SWITCH_FROM_CONFIG_KEY",
     "ATTEMPT_DISPATCH_MODES",
     "CONVERSATION_EXECUTOR_DISPATCH_MODE",
     "normalize_attempt_dispatch_mode",

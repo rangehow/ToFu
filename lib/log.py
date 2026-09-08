@@ -218,7 +218,7 @@ def set_principal(key_id: str = '', user_id: object = '') -> None:
     Mirrors the request-id ContextVar pattern above: the auth middleware
     (``routes/api_v1/auth.py``) and the push-WS handshake (``routes/push.py``)
     call this once per connection so ``audit_log`` attaches ``key_id`` /
-    ``user_id`` automatically (docs/ENTERPRISE_READINESS_AUDIT.md, R11) —
+    ``user_id`` automatically (docs/ENTERPRISE_EVOLUTION.md, Identity and authorization) —
     event callers no longer need to remember identity by hand.
     """
     _principal_var.set((_bounded_context_scalar(key_id, 128),
@@ -640,8 +640,8 @@ def audit_log(event: str, **details) -> None:
     }
     if rid:
         entry['request_id'] = redact_text(rid, max_chars=128)[:64]
-    # Auto-attach the authenticated principal (ENTERPRISE_READINESS_AUDIT
-    # R11): explicit caller-supplied key_id/user_id always win, and empty
+    # Auto-attach the authenticated principal (ENTERPRISE_EVOLUTION.md,
+    # Identity and authorization): explicit caller-supplied key_id/user_id always win, and empty
     # synthetic identities attach nothing.
     if 'key_id' not in entry or 'user_id' not in entry:
         p_key_id, p_user_id = principal()

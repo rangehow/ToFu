@@ -1,34 +1,11 @@
 #!/usr/bin/env python3
-"""Compaction gate must decide on the REAL (provider-measured) yardstick, not
-on unbounded estimates — the 2026-08-01 conv=mrxinirv misfire (epic
-pt_18e9f7a6db664ff3).
+"""Compaction counts must describe the current request, not historical usage.
 
-Measured incident (app.log 2026-08-01 20:10:18): the gate counted
-2,198,193 tokens ``via tiktoken+heuristic_floor`` and force-compacted a
-5119-message conversation down to 33 — while the REAL prompt size one minute
-earlier was 215,552 (CacheStats input=215552, hit=100%), i.e. ~22% of the
-1M window. Two compounding defects:
-
-  F0  ``record_usage`` in manager/_stream.py stored the UNCACHED RESIDUAL
-      (``_prompt_tokens``) instead of the normalized FULL prompt
-      (``_total_prompt_tokens``). On Anthropic-convention providers
-      (input_tokens excludes cache) the usage_cache tier then reports ~2K on
-      a 99%-hit warm round — the proactive gate can NEVER fire there
-      (the "ball at 100% but no compaction" bug class).
-  F1  When the exact tier cannot validate (task cold start / post-compaction
-      prefix rewrite), estimate tiers take over and BOTH can diverge from
-      reality ~10x on CJK-heavy content. Fix: (a) cap the heuristic floor at
-      ``heuristic_floor_max_ratio()`` x the estimate count (the floor only
-      exists to cover tiktoken's proven 0.66x under-count — nothing more);
-      (b) clamp estimate-tier counts to the conversation's last REAL measured
-      prompt x (1 + slack) — over-triggering destroys context lossily,
-      under-triggering is bounded by the next round's fresh usage + L3.
-
-Failing-first: test_record_usage_stores_total_not_residual,
-test_mrxinirv_2010_misfire_repro, test_heuristic_floor_capped_at_ratio.
-
-Run DIRECTLY (env-guarded):
-    PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python tests/test_compaction_gate_real_anchor.py
+Normalized provider input includes cache reads. Exact prefix evidence can
+reuse that count; a cold-rebuilt or edited request must use a fresh estimate.
+The retired historical-anchor clamp hid a 2,183,576-token estimate behind a
+68,037-token prior request and is explicitly forbidden by these regressions.
+Heuristic floors remain bounded relative to the current tokenizer result.
 """
 
 from __future__ import annotations
@@ -201,10 +178,9 @@ def test_mrxinirv_2010_misfire_repro():
         _patch_anchor(mp, 215_552, 'usage_cache')
         fired = t._should_force_compact([{'role': 'user', 'content': 'x'}],
                                         _task(conv))
-        assert fired is False, (
-            'gate must trust the provider-measured anchor (215K real) over a '
-            '10x-inflated estimate (2.19M) — the 20:10 misfire reproduces '
-            'otherwise')
+        assert fired is True, (
+            'a historical measurement without current-prefix evidence must '
+            'not suppress the hard-window gate')
     finally:
         mp.undo()
 
@@ -302,8 +278,8 @@ def test_anchor_flows_from_real_usage_cache_entry():
         _patch_estimate(mp, 2_198_193)
         total, method = t._count_tokens_authoritative(
             [{'role': 'user', 'content': 'x'}], _task())
-        assert total == int(215_552 * 1.5), total
-        assert 'anchor:usage_cache' in method, method
+        assert total == 2_198_193, total
+        assert 'anchor:' not in method, method
     finally:
         mp.undo()
 

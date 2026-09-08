@@ -43,7 +43,9 @@ const memoryEntries = new Set([
 const skillsEntries = new Set([
   '_populateSkillsTab', '_skillsSetScope', '_skillsFilter', '_skillsInstallFromInput',
 ]);
-const paperEntries = new Set(['togglePaperMode', 'toggleResearchMode']);
+const paperEntries = new Set(['togglePaperMode']);
+const overleafEntries = new Set(['_overleafPreviewRounds']);
+const researchEntries = new Set(['toggleResearchMode']);
 const imageEntries = new Set([
   'enterImageGenMode', 'exitImageGenMode', 'generateImageDirect', 'selectIgAspect',
   'selectIgCount', 'selectIgModel', 'selectIgResolution', 'toggleIgModelDropdown',
@@ -76,7 +78,8 @@ const compactionViewerEntries = new Set(['openCompactionViewer']);
 const miscEntries = new Set([
   'resolveWriteApproval', 'submitStdinInput', 'submitStdinEof',
   'submitHumanGuidanceChoice',
-  'submitHumanGuidanceFreeText', 'undoConvModifications', 'undoAllModifications',
+  'submitHumanGuidanceFreeText', 'selectBatchChoice', 'submitBatchAnswers',
+  'undoConvModifications', 'undoAllModifications',
   'redoConvModifications', 'openApplyModal', 'closeApplyModal', 'confirmApplyCode',
   '_toggleCostPopover',
 ]);
@@ -86,7 +89,8 @@ const routedFeatureEntries = new Set([
   ...projectBrainEntries, ...mydayEntries, ...utilityPanelEntries,
   ...knowledgeEntries, ...projectEntries, ...localControlEntries,
   ...diagnosticsPresenterEntries, ...compactionViewerEntries,
-  ...miscEntries, ...paperEntries,
+  ...miscEntries, ...paperEntries, ...researchEntries,
+  ...overleafEntries,
   'openOrchestration', 'openTaskMode', '_wireConvSyncPush',
 ]);
 
@@ -94,7 +98,9 @@ function domainLoader(name: string): () => Promise<DomainModule> {
   if (settingsEntries.has(name)) return () => import('./features/settings');
   if (memoryEntries.has(name)) return () => import('./features/memory');
   if (skillsEntries.has(name)) return () => import('./features/skills');
+  if (researchEntries.has(name)) return () => import('./features/research');
   if (paperEntries.has(name)) return () => import('./features/paper');
+  if (overleafEntries.has(name)) return () => import('./features/overleaf');
   if (imageEntries.has(name)) return () => import('./features/image');
   if (projectBrainEntries.has(name)) return () => import('./features/project-brain');
   if (mydayEntries.has(name)) return () => import('./features/myday');
@@ -256,13 +262,42 @@ const preloadUtilityPanels = (): void => {
     console.warn('[modules] utility panels preload failed', error);
   });
 };
-const preloadIdleFeatures = (): void => {
-  preloadBackground();
-  preloadUtilityPanels();
-};
 const idleCallback = (window as Window & {
   requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
 }).requestIdleCallback;
+const scheduleIdle = (callback: () => void, timeout: number): void => {
+  if (idleCallback) idleCallback(callback, { timeout });
+  else globalThis.setTimeout(callback, Math.min(timeout, 2000));
+};
+
+/* Warm every routed feature domain during idle. A chunk already resolved in
+ * the browser module map cannot fail at click time — where a failed dynamic
+ * import would be cached for the document's whole lifetime — and keeps working
+ * even after a rebuild prunes that generation from disk. Domain loads run a
+ * few names per idle slice so the sweep never competes with first paint or an
+ * active conversation; a module-load failure still owns its bounded reload
+ * through loadDomain's recovery seam.
+ */
+const FEATURE_PREFETCH_SLICE = 4;
+const prefetchFeatureDomains = (): void => {
+  const pending = [...routedFeatureEntries].filter(
+    (name) => name !== 'openUpdateDialog');
+  const step = (): void => {
+    for (const name of pending.splice(0, FEATURE_PREFETCH_SLICE)) {
+      void loadDomain(name).catch((error: unknown) => {
+        console.warn('[modules] idle feature prefetch failed', name, error);
+      });
+    }
+    if (pending.length > 0) scheduleIdle(step, 2000);
+  };
+  scheduleIdle(step, 2000);
+};
+
+const preloadIdleFeatures = (): void => {
+  preloadBackground();
+  preloadUtilityPanels();
+  prefetchFeatureDomains();
+};
 if (idleCallback) {
   idleCallback(preloadIdleFeatures, { timeout: 5000 });
 } else {

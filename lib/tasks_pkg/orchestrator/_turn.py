@@ -15,6 +15,8 @@ from __future__ import annotations
 from typing import Any
 
 from lib.log import get_logger
+
+from lib.tasks_pkg.context_composer import append_injection, can_append_injection
 from lib.turn_verdict import terminal_finish_reason
 
 logger = get_logger(__name__)
@@ -59,24 +61,16 @@ def drain_peer_messages_into(task: dict[str, Any],
     try:
         from lib.agent_inbox import drain as _drain_inbox
         from lib.swarm.integration import swarm_key_for as _swarm_key_for
-        _last = messages[-1] if messages else None
-        if (_last and _last.get('role') == 'assistant'
-                and _last.get('tool_calls')):
+        if not can_append_injection(messages):
             return 0  # unmatched tool_call — defer to the next boundary
         _key = task.get('_peer_drain_key') or _swarm_key_for(task)
         _peer_items = _drain_inbox(_key, modes=['peer-msg'])
         _peer_items = [it for it in _peer_items if it.get('value')]
         if not _peer_items:
             return 0
-        messages.append({
-            'role': 'user',
-            'content': '\n\n'.join(it['value'] for it in _peer_items),
-            # Match the main round-boundary inbox projection. Peer evidence is
-            # transparent to human-turn/query extraction; this driver lane
-            # never drains user-steer items.
-            '_isInboxInject': True,
-            '_containsHumanSteer': False,
-        })
+        append_injection(
+            messages, 'inbox_delivery', '\n\n'.join(it['value'] for it in _peer_items),
+            task=task, round_num=round_label, contains_human_steer=False)
         task.setdefault('_peer_inject_pending', []).extend(_peer_items)
         logger.info('[Task %s] driver-loop injected %d peer message(s) at '
                     'iteration %s', task.get('id', '?')[:8], len(_peer_items),

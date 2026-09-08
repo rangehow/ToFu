@@ -1,0 +1,13 @@
+{
+  "brand": "cerebras",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "cerebras",
+  "category": "relay",
+  "name": "Cerebras",
+  "base_url": "https://api.cerebras.ai/v1",
+  "offering_recipes": [
+    {"model_id": "gpt-oss-120b",                    "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "llama-4-scout-17b-16e-instruct",  "capabilities": ["text", "vision", "cheap"]},
+    {"model_id": "qwen-3.5-397b-a17b-instruct",     "capabilities": ["text", "thinking", "cheap"]}
+  ]
+}

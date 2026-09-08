@@ -5,6 +5,46 @@ protocol for a conversation. The canonical wire source is
 `contracts/conversation_sync_v3.yaml`; generated Python and TypeScript files
 must never be hand-edited.
 
+
+String `minLength` and `maxLength` constraints count Unicode code points, not
+UTF-16 code units or UTF-8 bytes. Generated browser validation must agree with
+Python for supplementary characters (including emoji), including nested
+background-command previews in snapshots and history pages. A valid 2,000-code-point
+preview must not prevent opening its conversation. Canonical projection normalization
+bounds historical background-command `command` and `resultPreview` display text
+using the schema limits, including `_bgCommandInjects[*].previews[*]`, and marks
+clipped output `resultTruncated`. It copies metadata without changing stored history
+or full model-facing text. Identity, status, malformed types, and other invalid
+wire values still fail validation; do not bypass snapshot validation to recover
+from a presentation-field error.
+
+## Goal phase execution
+
+`turn.visible.sync` accepts a bounded `start_index` plus message suffix; `live`
+admits one Goal phase before dispatch. Stable phase identities reuse the first
+command Turn and mint child attempts thereafter, with a hard 4,096-phase
+ceiling beneath the executor's tighter budget. Completed rows are replay-safe;
+an existing live child settles through `turn.event.record`. The child's durable
+`flowRootAttemptId` config must match the write's `flow_root_attempt_id` lock
+hint and a current, owner-matching root. Parent-before-child attempt locking,
+root terminal propagation and sync publication share the transaction.
+`turn.attempt.get(resolve_executor=true)` resolves the same relationship for
+stop commands, including registry-miss recovery. No browser schema or alternate
+stream is introduced.
+
+Projection normalization must remain visible in the revision patch: its base
+is the exact previous wire document, even when an application read has already
+repaired missing segment placeholders. The first nonempty content/reasoning
+channel forces one structural write before later deltas use text-only patches.
+Otherwise a missing block can cause a render gap or a full-snapshot loop.
+
+A completed Goal phase keeps its canonical `toolRounds` as the detail/debug
+authority. When the bounded visible-phase message omits rich fields, stable
+`toolCallId` joins restore missing arguments, result content, timestamps, and
+attempt/task identity from that phase's live projection before durable segment
+assembly. The completed message's own values always win; unmatched rounds are
+not guessed.
+
 ## One authority
 
 ```text
@@ -86,6 +126,46 @@ the normalized target interaction mode in that same transaction. Plan produces
 produce `assistant`/`reply`. The command response and first attempt event carry
 the migrated identity, so the initiating Store, peer replay, and later snapshot
 all converge without presentation-layer role overrides.
+
+## Background-command completion evidence
+
+`BackgroundCommandCompletion` is bounded presentation of an existing durable
+result, not a second execution state machine. `ConversationQueueItem`,
+`TurnProjection`, and injection previews carry the same command ID, finished
+status, command, result preview, and truncation flag. Finished does not imply
+exit success. Queue membership means delivery is not yet confirmed. Model-facing
+content remains unchanged; the browser renders typed evidence instead of its
+notification wrapper. Both queue-list and snapshot readers use the shared pure
+`lib/background_command_projection.py` projection. Specs include
+`test_background_completion_queue_projection.py` and `test_background_completion_ui.py`.
+
+A pending background completion does not block immediate user insertion: a
+`steer` submission commits its own injection on the live Turn and leaves the
+completion's durable queue row and inbox twin pending. The API boundary is
+covered by `test_conversation_command_inject_mode.py`.
+
+The v3 queue-cancel command also accepts pending background completion rows
+without a Turn pair. It removes only delivery intent, returns `inputTurn: null`
+and no deleted Turns, and atomically publishes `removedQueueIds` for replay.
+Already-leased delivery conflicts rather than claiming to stop dispatched work.
+After commit, the application removes/fences the process-local inbox twin;
+completed command execution evidence and unrelated queued inputs are preserved.
+Specs: `test_background_completion_cancel.py`.
+
+Completion publication retries transient storage errors at most three times
+with a frozen payload and owner/conversation/command-derived queue identity.
+A lost ACK replays the same durable receipt. Retry sleeps total at most two
+seconds, without another worker or retry queue. Explicit command queries expose
+`delivery_status`: pending, queued, failed, or not_applicable. Before the first
+durable commit, process failure can lose the result; exhausted steer-handoff
+publication is logged, not restart-recoverable. Deferred acknowledgement requires
+positive verified provider completion, never an error-dictionary return.
+
+The process-local inbox fences the last 16,384 `(slot, queue ID)` pairs in FIFO
+order without payloads. Dispatch fences even an absent twin; enqueue rejects
+late publication under the same lock. Clear/revival preserve fences. Protection
+ends at FIFO eviction or process shutdown, and retains the existing slot
+ownership boundary. This is not durable delivery history.
 
 ## Snapshot boundary
 
@@ -566,6 +646,15 @@ reconnects derives `pending + taskId` as “waiting for a server Agent execution
 slot.” A pending attempt without a task binding is still in dispatch
 preparation, and a running attempt has acquired a worker. Transient phase
 frames may add detail but never redefine those durable meanings.
+
+`activeAttemptPhase` optionally restores the latest retained event's phase for
+the current running main-lane attempt at the snapshot's read head. The read
+adds at most one indexed event lookup and decodes at most 32 KiB; a missing,
+cleared, phase-less or oversized latest event yields no phase, with no scan
+of older history. The browser accepts it only on a full snapshot with matching
+Turn/attempt identity, running status and a covered projection revision.
+Terminal/superseded attempts and historical timing traces never restore a
+live label. Unknown phase copy does not assert transport recovery.
 
 Only operations marked `x-tofu-idempotent-retry` retry automatically. The
 generated client reuses the validated request document and command ID for

@@ -12,9 +12,10 @@ For every owner-scoped v2 ProviderAccess tagged as local it:
      managed bundles) refreshes observed models through the same revision-CAS
      registration service that created the ProviderAccess.
 
-Cloud providers are NOT polled — that would waste quota and leak hosts. The
-same cancellable loop also schedules the well-known-port discovery job in
-``autodiscover_local.py``; discovery no longer retains a second idle thread.
+Cloud providers are NOT health-polled — that would waste quota and leak
+hosts. The same cancellable loop also schedules the well-known-port
+discovery job in ``autodiscover_local.py`` and the remote catalog refresh
+in ``provider_catalog_sync.py``; neither retains a second idle thread.
 """
 
 import os
@@ -557,10 +558,41 @@ def _loop():
             # well-known-port pass has a programmer or network failure.
             logger.error('[AutoDiscover] sweep failed: %s', e, exc_info=True)
 
+        catalog_delay = None
+        try:
+            from .provider_catalog_sync import poll_if_due as catalog_poll
+            catalog_stats = catalog_poll(now=now)
+            raw_delay = catalog_stats.get('next_poll_s')
+            if raw_delay is not None:
+                catalog_delay = max(0.0, float(raw_delay))
+        except Exception as e:
+            # Local-provider health must continue even if the optional
+            # remote-catalog pass has a programmer or network failure.
+            logger.error('[CatalogSync] sweep failed: %s', e, exc_info=True)
+
+        supply_delay = None
+        try:
+            from lib.model_routing.template_supply import (
+                poll_if_due as supply_poll,
+            )
+            supply_stats = supply_poll(now=now)
+            raw_delay = supply_stats.get('next_poll_s')
+            if raw_delay is not None:
+                supply_delay = max(0.0, float(raw_delay))
+        except Exception as e:
+            # Local-provider health must continue even if the optional
+            # template-supply pass has a programmer or network failure.
+            logger.error('[TemplateSupply] sweep failed: %s', e,
+                         exc_info=True)
+
         now = time.monotonic()
         waits = [max(0.0, next_health_at - now)]
         if discovery_delay is not None:
             waits.append(discovery_delay)
+        if catalog_delay is not None:
+            waits.append(catalog_delay)
+        if supply_delay is not None:
+            waits.append(supply_delay)
         timeout = max(0.01, min(waits))
         if _wake_event.wait(timeout):
             _wake_event.clear()

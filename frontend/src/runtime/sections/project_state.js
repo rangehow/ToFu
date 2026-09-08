@@ -53,6 +53,7 @@ function _updateAutoApplyUI() {
 // Per-conversation project path helpers
 
 function _saveConvProjectPath(path, extraPaths, readOnlyPaths) {
+  _conversationProjectController.begin();
   const conv = getActiveConv();
   if (conv) {
     conv.projectPath = path || "";
@@ -119,7 +120,10 @@ function _applyRemoteProjectState(conv, pseudo) {
     scanProgress: "",
     scanDetail: "",
     scannedAt: Date.now(),
-    extraRoots: [],
+    readOnly: (conv.readOnlyPaths || []).includes(pseudo),
+    extraRoots: (conv.projectPaths || []).filter(path => path !== pseudo).map(path => ({
+      path, readOnly: (conv.readOnlyPaths || []).includes(path),
+    })),
   };
   debugLog("Remote worktree active for conversation: " + pseudo, "info");
   _updateProjectUI();
@@ -144,102 +148,35 @@ function _clearProjectStateLocal() {
   _updateProjectUI();
 }
 
-async function _restoreConvProject(conv) {
-  const savedPath = _getConvProjectPath(conv);
-  if (!savedPath) {
-    // This conversation has no project — clear UI
-    _clearProjectStateLocal();
-    return;
-  }
-  // RWA: remote worktree pseudo-path — server-side project machinery
-  // (setPaths/scan) must never touch it; render the synthetic bar state.
-  if (_isRemotePath(savedPath)) {
-    _applyRemoteProjectState(conv, savedPath);
-    return;
-  }
-  // Gather all saved paths (primary + extras) from the conversation
-  const allPaths = (Array.isArray(conv.projectPaths) && conv.projectPaths.length)
-    ? conv.projectPaths
-    : [savedPath];
-  const hasExtras = allPaths.length > 1;
-  // If already active on the same primary path with same extras, just update UI
-  const currentExtras = (projectState.extraRoots || []).map(r => typeof r === 'string' ? r : r.path);
-  const savedExtras = allPaths.slice(1);
-  const extrasMatch = savedExtras.length === currentExtras.length &&
-    savedExtras.every(p => currentExtras.includes(p));
-  if (projectState.active && projectState.path === savedPath && extrasMatch) {
-    _updateProjectUI();
-    return;
-  }
-  // Need to set/restore this project on server
-  _clearProjectStateLocal();
-  const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
-    .filter(p => allPaths.includes(p));
-  try {
-    // ALWAYS reconcile via the pruning multi-path endpoint — never the
-    //   single-path setPath. set_project()'s `same_primary` guard PRESERVES
-    //   any stale extra roots left in the process-global _roots registry by a
-    //   PRIOR conversation (or a background task's absolute-path write
-    //   auto-register), so setPath(chatui) would leave e.g. `tofu-search`
-    //   showing on a chatui-only conversation. setPaths([chatui], []) prunes
-    //   every global extra not in THIS conversation's saved set, making the
-    //   conversation the single source of truth for the project bar.
-    const resp = await Api.project.setPaths(
-      allPaths, savedReadOnly, [savedPath],
-    );
-    const data = resp ? await resp.json().catch(() => ({})) : {};
-    /* Stale-switch guard — BEFORE any paint or persist. A slow setPaths
-     * response belongs to the conv that ISSUED it; after a rapid A→B switch
-     * the late response must neither repaint B's project bar nor demote B's
-     * dial. onProjectCleared below persists onto the ACTIVE conv — running
-     * it on a stale response would write the demotion into the wrong
-     * conversation's stored settings. */
-    if (activeConvId !== conv.id || !conversations.some(x => x && x.id === conv.id)) return;
-    if (resp && resp.ok) {
-      _applyProjectData(data);
-      // setPaths touched the restored primary in the same successful request,
-      // so recent history cannot be committed for an invalid project.
-      /* FIX: Sync conv.projectPath from the server response.
-       * _restoreConvProject only reads conv.projectPath — it never writes it
-       * back after a successful /api/project/set.  If conv.projectPath was
-       * undefined (e.g. new conv inherited from projectState, or loaded from
-       * cache without settings), it stays undefined even though the project
-       * is now active.  This caused "UI shows project, backend gets no path"
-       * because startAssistantResponse reads conv.projectPath (undefined → ""). */
-      conv.projectPath = data.path || savedPath;
-      debugLog("Project restored for conversation: " + savedPath, "success");
-    } else {
-      debugLog("Saved project path no longer valid: " + savedPath, "warn");
-      // Clear the invalid path from conversation
-      conv.projectPath = "";
-      /* FIX: Pass null — clearing a stale project path is a metadata-only
-       * change, NOT new conversation activity.  Passing conv.id bumps
-       * updatedAt = Date.now(), making the conversation jump to the top
-       * of the sidebar just because its saved project path was invalid. */
-      reconcileConversationCatalogMetadata(null);
-      /* A project-less chat is never Studio — the bar was already cleared
-       * by the pre-fetch _clearProjectStateLocal, so the dial must not keep
-       * claiming Studio. Demote AND persist (guarded above: only when THIS
-       * conv is still the active one). */
-      if (typeof onProjectCleared === 'function') onProjectCleared();
-    }
-  } catch (e) {
-    debugLog("Project restore failed: " + e.message, "warn");
-    /* Transient failure (network/cross-DC): the bar is already cleared, so the
-     * dial must follow it down — but ONLY if this conv is still the active
-     * one (the throw can land long after a rapid switch). conv.projectPath is
-     * deliberately RETAINED so the next switch retries the restore. */
-    if (activeConvId === conv.id && conversations.some(x => x && x.id === conv.id)
-        && typeof onProjectCleared === 'function') {
-      onProjectCleared();
-    }
-  }
+// Temporary retained adapter; delete when project presentation moves to TypeScript.
+function _hasProjectComposerDraft() {
+  // Cleanup suggestions are derived from a past paste, not sendable draft
+  // content. A late suggestion can outlive an emptied textarea; counting it
+  // independently blocks both model and project restoration on navigation.
+  return !!(document.getElementById('userInput')?.value.trim()
+    || pendingImages.length || pendingPdfTexts.length
+    || (typeof pendingVideos !== 'undefined' && pendingVideos.length));
+}
+const _conversationProjectController = createConversationProjectController({
+  activeId: () => activeConvId,
+  exists: id => conversations.some(conv => conv && conv.id === id),
+  hasDraft: _hasProjectComposerDraft,
+  selection: () => projectState,
+  clear: _clearProjectStateLocal,
+  remote: _applyRemoteProjectState,
+  apply: _applyProjectData,
+  setPaths: (paths, readOnly, recent) => Api.project.setPaths(paths, readOnly, recent),
+  warn: message => debugLog(message, 'warn'),
+});
+function _restoreConvProject(conv, eligible) {
+  return _conversationProjectController.restore(conv, eligible);
 }
 
 
 let _projectBarFolders = [];
 
 async function clearProject() {
+  _conversationProjectController.begin();
   await Api.project.clear().catch(e => debugLog(`[clearProject] ${e.message}`, 'warn'));
   _saveConvProjectPath("");
   projectState = {
@@ -448,129 +385,8 @@ async function toggleProjectBarReadOnly(index, event) {
 
 
 async function loadProjectStatus() {
-  // Per-conversation: restore project for the active conversation
+  // Cold shells restore only after authoritative settings hydration.
   const conv = getActiveConv();
-  const savedPath = _getConvProjectPath(conv);
-  if (!savedPath) {
-    // Active conv has no project — check if server still has one active (from before),
-    // and clear it since we don't need it for this conv
-    _clearProjectStateLocal();
-    return;
-  }
-  // Try to check server status first — CONV-SCOPED so a background task's
-  // global-registry mutation can never paint another conversation's bar.
-  try {
-    const data = await Api.project.status(conv && conv.id);
-    if (!data) return;
-    /* Stale-switch guard — BEFORE any paint or persist (same contract as
-     * _restoreConvProject): a boot-time status response must never paint or
-     * persist onto a conv the user has already switched away from. */
-    if (activeConvId !== conv.id || !conversations.some(x => x && x.id === conv.id)) return;
-    if (data.path && data.path === savedPath) {
-      // Server already has this project active — check extras too
-      const allPaths = (Array.isArray(conv.projectPaths) && conv.projectPaths.length)
-        ? conv.projectPaths : [savedPath];
-      const savedExtras = allPaths.slice(1);
-      const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
-        .filter(p => allPaths.includes(p));
-      const currentExtras = (data.extraRoots || []).map(r => typeof r === 'string' ? r : r.path);
-      const extrasMatch = savedExtras.length === currentExtras.length &&
-        savedExtras.every(p => currentExtras.includes(p));
-      // Detect read-only drift: the server's RO set must match what the
-      //   conversation saved, else the locks vanish after a reload / server
-      //   restart. Build the server's current RO set from get_state().
-      const currentRO = [];
-      if (data.readOnly && data.path) currentRO.push(data.path);
-      for (const r of (data.extraRoots || [])) {
-        if (r && typeof r === 'object' && r.readOnly) currentRO.push(r.path);
-      }
-      const roMatch = savedReadOnly.length === currentRO.length &&
-        savedReadOnly.every(p => currentRO.includes(p));
-      if (!extrasMatch || !roMatch) {
-        // Primary matches but extras or read-only policy don't. The server's
-        // in-memory RO flag is ephemeral (reset on restart), so the durable
-        // per-conv readOnlyPaths is the authority here — paint the bar from it
-        // IMMEDIATELY, then re-hydrate the server in the BACKGROUND so the load
-        // isn't gated on the slow setPaths round-trip (fs isdir + cross-DC probe).
-        _applyProjectData({
-          path: allPaths[0],
-          readOnly: savedReadOnly.includes(allPaths[0]),
-          extraRoots: allPaths.slice(1).map(p => ({ path: p, readOnly: savedReadOnly.includes(p) })),
-          crossDC: data.crossDC || null,
-        });
-        debugLog("Re-hydrating server read-only policy in background", "info");
-        Api.project.setPaths(allPaths, savedReadOnly)
-          .then(fixResp => fixResp && fixResp.ok
-            ? fixResp.json().catch(() => null) : null)
-          .then(fixData => {
-            if (fixData && activeConvId === conv.id
-                && conversations.some(x => x && x.id === conv.id)) {
-              _applyProjectData(fixData);
-            }
-          })
-          .catch(e2 => debugLog("Background RO re-hydrate failed: " + e2.message, "warn"));
-      } else {
-        _applyProjectData(data);
-      }
-      /* FIX: Ensure conv.projectPath is set — same reason as _restoreConvProject fix. */
-      if (conv) conv.projectPath = data.path || savedPath;
-
-    } else {
-      // Server has no project or a different one — restore from conv
-      debugLog("Restoring project from conversation: " + savedPath, "info");
-      try {
-        // Use multi-path API when conversation has extra roots OR any
-        //   read-only root (read-only is only expressible via setPaths).
-        const allPaths = (Array.isArray(conv.projectPaths) && conv.projectPaths.length)
-          ? conv.projectPaths : [savedPath];
-        const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
-          .filter(p => allPaths.includes(p));
-        const hasExtras = allPaths.length > 1;
-        // Always use the pruning multi-path endpoint (see _restoreConvProject):
-        //   setPath's `same_primary` guard would preserve stale global extras.
-        const setResp = await Api.project.setPaths(allPaths, savedReadOnly);
-        const setData = setResp ? await setResp.json().catch(() => ({})) : {};
-        /* Stale-switch guard — see the status guard above. */
-        if (activeConvId !== conv.id || !conversations.some(x => x && x.id === conv.id)) return;
-        if (setResp && setResp.ok) {
-          _applyProjectData(setData);
-          /* FIX: Sync conv.projectPath after successful restore. */
-          if (conv) conv.projectPath = setData.path || savedPath;
-          debugLog("Project restored: " + savedPath + (hasExtras ? ` + ${allPaths.length - 1} extras` : ''), "success");
-        } else {
-          debugLog("Saved project path no longer valid, clearing", "warn");
-          if (conv) {
-            conv.projectPath = "";
-            reconcileConversationCatalogMetadata(conv.id);
-          }
-          _clearProjectStateLocal();
-          /* A project-less chat is never Studio — demote the dial AND
-           * persist (guarded above: only when THIS conv is still the active
-           * one). Mirrors _restoreConvProject's invalid-path branch. */
-          if (typeof onProjectCleared === 'function') onProjectCleared();
-        }
-      } catch (e2) {
-        debugLog("Project restore failed: " + e2.message, "warn");
-        /* Transient failure — same contract as _restoreConvProject's catch:
-         * the bar is already cleared, so the dial must follow it down, but
-         * ONLY if this conv is still active. conv.projectPath is RETAINED
-         * so the next switch/boot retries the restore. */
-        if (activeConvId === conv.id && conversations.some(x => x && x.id === conv.id)
-            && typeof onProjectCleared === 'function') {
-          onProjectCleared();
-        }
-      }
-    }
-  } catch (e) {
-    debugLog("Project status load failed", "warn");
-    /* The status probe itself failed (e.g. network down at boot): the bar
-     * stays hidden while the conv restore already painted Studio — demote
-     * under the same ownership guard so the dial never claims a project the
-     * boot could not attach. conv.projectPath is retained for the retry. */
-    if (conv && activeConvId === conv.id
-        && conversations.some(x => x && x.id === conv.id)
-        && typeof onProjectCleared === 'function') {
-      onProjectCleared();
-    }
-  }
+  if (conv?._turnSnapshotRequired) return;
+  return _restoreConvProject(conv);
 }

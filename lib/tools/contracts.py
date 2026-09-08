@@ -205,10 +205,16 @@ def _validate(value: Any, schema: Mapping[str, Any], *, path: str) -> Any:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
             raise ToolContractError(
-                "invalid_argument_value", f"Value below minimum at {path}.", path=path)
+                "invalid_argument_value",
+                f"Value below minimum at {path} "
+                f"(got {value}; allowed >= {schema['minimum']}).",
+                path=path)
         if "maximum" in schema and value > schema["maximum"]:
             raise ToolContractError(
-                "invalid_argument_value", f"Value above maximum at {path}.", path=path)
+                "invalid_argument_value",
+                f"Value above maximum at {path} "
+                f"(got {value}; allowed <= {schema['maximum']}).",
+                path=path)
     if isinstance(value, list):
         if "minItems" in schema and len(value) < int(schema["minItems"]):
             raise ToolContractError(
@@ -366,6 +372,139 @@ def validate_tool_arguments_from_documents(
     return validated
 
 
+def _clamp_walk(value: Any, schema: Any, path: str,
+                log: list[tuple[str, str]], truncatable: frozenset[str],
+                top_key: str) -> Any:
+    if isinstance(value, bool) or not isinstance(schema, Mapping):
+        return value
+    if isinstance(value, (int, float)):
+        lo, hi = schema.get("minimum"), schema.get("maximum")
+        if isinstance(lo, (int, float)) and not isinstance(lo, bool) \
+                and value < lo:
+            log.append((path, "clamp_minimum"))
+            return lo
+        if isinstance(hi, (int, float)) and not isinstance(hi, bool) \
+                and value > hi:
+            log.append((path, "clamp_maximum"))
+            return hi
+        return value
+    if isinstance(value, str):
+        hi = schema.get("maxLength")
+        if top_key in truncatable and isinstance(hi, int) \
+                and not isinstance(hi, bool) and len(value) > hi:
+            log.append((path, "truncate_max_length"))
+            return value[:hi]
+        return value
+    if isinstance(value, list):
+        items = schema.get("items")
+        if isinstance(items, Mapping):
+            walked = [_clamp_walk(item, items, f"{path}[{index}]", log,
+                                  truncatable, top_key)
+                      for index, item in enumerate(value)]
+            if any(new is not old for new, old in zip(walked, value)):
+                return walked
+        return value
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, Mapping):
+            changed = False
+            out = dict(value)
+            for key, child in properties.items():
+                if key in out and isinstance(child, Mapping):
+                    new = _clamp_walk(out[key], child, f"{path}.{key}",
+                                      log, truncatable, top_key)
+                    if new is not out[key]:
+                        changed = True
+                        out[key] = new
+            return out if changed else value
+        return value
+    return value
+
+
+def clamp_arguments_to_schema(
+    value: Any,
+    schema: Mapping[str, Any],
+    *,
+    truncatable: frozenset[str] = frozenset(),
+    clamp_exempt: frozenset[str] = frozenset(),
+) -> tuple[Any, list[tuple[str, str]]]:
+    """Clamp numeric arguments to their declared bounds, returning repairs.
+
+    An out-of-range ``limit``/``max_chars``/``cursor`` is a sizing wish,
+    never identity data: the schema already states the only sensible value,
+    so clamping loses no information and saves a full rejection round-trip.
+    Strings over ``maxLength`` are truncated ONLY for top-level keys in
+    ``truncatable`` (pure-display captions); identity/content strings (todo
+    ids, edit anchors, file content) must never be truncated. Top-level keys
+    in ``clamp_exempt`` are skipped entirely (see NEVER_CLAMP_PARAMS).
+    Returns ``(clamped, [(json_path, pattern), ...])``; the ORIGINAL object
+    is returned unchanged when nothing was repaired, so no-op callers keep
+    object identity. Never raises — any internal error returns the input
+    untouched so fail-closed validation behaves exactly as before this pass
+    existed.
+    """
+    log: list[tuple[str, str]] = []
+    try:
+        if not isinstance(value, dict) or not isinstance(schema, Mapping):
+            return value, log
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            return value, log
+        changed = False
+        out = dict(value)
+        for key, child in properties.items():
+            if key not in out or key in clamp_exempt \
+                    or not isinstance(child, Mapping):
+                continue
+            new = _clamp_walk(out[key], child, f"$.{key}", log,
+                              truncatable, key)
+            if new is not out[key]:
+                changed = True
+                out[key] = new
+        return (out if changed else value), log
+    except Exception:
+        return value, []
+
+
+# Top-level parameters whose out-of-range values are SEMANTIC errors, not
+# sizing wishes: silently moving a navigation cursor would answer a
+# different question than the model asked, so rejection must preserve the
+# chance to re-derive the intended position. (get_conversation.before=-1 is
+# pinned rejected by tests; its before=0 sibling is a measured
+# non-destructive sentinel repaired by a dedicated omission pass upstream.)
+NEVER_CLAMP_PARAMS: dict[str, frozenset[str]] = {
+    "get_conversation": frozenset({"before"}),
+}
+
+
+def clamp_tool_arguments_from_documents(
+    documents_by_name: Mapping[str, Any] | None,
+    tool_name: str,
+    value: Any,
+) -> tuple[Any, list[tuple[str, str]]]:
+    """Bounds-clamp one call against its request-owned contract document.
+
+    The static repair index exempts server-dynamic (MCP) schemas; the
+    request-owned ToolContractV2 document still knows their bounds, so the
+    execution pipeline can clamp them before validation rejects the call.
+    Unknown/missing/malformed documents pass through untouched — validation
+    downstream remains the fail-closed authority for those cases.
+    """
+    if documents_by_name is None:
+        return value, []
+    document = documents_by_name.get(tool_name)
+    if not isinstance(document, Mapping):
+        return value, []
+    if document.get("contractVersion") != "tofu.tool-contract/v2":
+        return value, []
+    schema = document.get("arguments_schema")
+    if not isinstance(schema, Mapping):
+        return value, []
+    return clamp_arguments_to_schema(
+        value, schema,
+        clamp_exempt=NEVER_CLAMP_PARAMS.get(tool_name, frozenset()))
+
+
 def contract_json(contract: ToolContractV2) -> str:
     """Canonical contract document used for hashing and generated docs."""
     return json.dumps(contract.search_document(), ensure_ascii=False,
@@ -374,6 +513,8 @@ def contract_json(contract: ToolContractV2) -> str:
 
 __all__ = [
     "ToolContractError", "ToolContractV2", "ToolErrorContract",
-    "adapt_legacy_tool_contract", "compile_execution_contract_documents",
+    "adapt_legacy_tool_contract", "clamp_arguments_to_schema",
+    "clamp_tool_arguments_from_documents", "NEVER_CLAMP_PARAMS",
+    "compile_execution_contract_documents",
     "contract_json", "validate_tool_arguments_from_documents",
 ]

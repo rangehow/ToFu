@@ -45,6 +45,7 @@
       "priority": 1,
       "queueId": "s",
       "sourceMessageId": "s",
+      "steerFallback": true,
       "text": "s",
       "timestamp": 1
     }
@@ -87,6 +88,23 @@
       "presentationId": "s",
       "projection": {
         "_autopilotRunId": "s",
+        "_bgCommandInjects": [
+          {
+            "agentIds": [
+              "s"
+            ],
+            "blockId": "s",
+            "count": 1,
+            "previews": [
+              {
+                "agentId": "s",
+                "fromConv": "s",
+                "text": "s"
+              }
+            ],
+            "round": 1
+          }
+        ],
         "_boardTaskId": "s",
         "_brainDispatch": true,
         "_brainEpic": {},
@@ -753,6 +771,9 @@
             "toolArgs": {},
             "toolCallId": "s",
             "toolContent": {},
+            "toolModelContent": [
+              {}
+            ],
             "toolName": "s",
             "toolResultEvidence": {
               "artifactRef": "s",

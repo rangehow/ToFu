@@ -216,6 +216,8 @@ def render_research_payload(
     analysis: dict | None = None,
     prior_observation: dict | None = None,
     current_observation: dict | None = None,
+    target=None,
+    content_receipt: dict | None = None,
 ) -> str:
     """Render one already-authorized deep-capture result for model context."""
     budget = _bounded_int(
@@ -236,28 +238,43 @@ def render_research_payload(
             analysis_text += '\n\n' + promotion_text
     if mode == 'analysis':
         return analysis_text[:budget]
-    page_text = str(
-        payload.get('collectedText') or payload.get('text') or '').strip()
-    initial_text = _render_initial_state(payload)
-    if initial_text:
-        page_text = (
-            (page_text + '\n\n--- Captured initial page state ---\n' + initial_text)
-            if page_text else initial_text)
-    network_text = render_network_evidence(
-        payload, owner_user_id=owner_user_id, max_chars=budget)
-    content = merge_page_and_network(
-        page_text, network_text, max_chars=budget)
+    from .content import collect_content, render_content
+    content_receipt = content_receipt or collect_content(
+        payload, owner_user_id=owner_user_id, target=target, max_chars=budget)
     if mode == 'content':
-        return content or analysis_text[:budget]
-    separator = '\n\n--- Collected content ---\n'
-    remaining = max(0, budget - len(analysis_text) - len(separator))
-    if not content or remaining <= 0:
-        return analysis_text[:budget]
-    return (analysis_text + separator + content[:remaining])[:budget]
+        return render_content(content_receipt, max_chars=budget)
+    # Evidence first. Diagnostics cannot evict the content they describe.
+    analysis_budget = min(2000, budget // 4)
+    content = render_content(content_receipt, max_chars=budget - analysis_budget)
+    separator = '\n\n--- Collection diagnostics ---\n'
+    return (content + separator + analysis_text[:analysis_budget - len(separator)])[:budget]
+
+
+def _content_observation_outcome(content: dict, analysis: dict, prior: dict | None) -> str:
+    status = content['status']
+    if status == 'blocked':
+        return ('policy_denied' if 'policy' in content['coverage']['stop_reason']
+                else 'auth_challenge')
+    if status == 'empty':
+        return 'not_found'
+    if status not in ('ok', 'partial') or not (content['content'] or content['records']):
+        return 'not_observed'
+    capture = analysis['network'].get('capture') or {}
+    if prior and int(capture.get('priority_hint_count') or 0) and not int(
+            capture.get('priority_body_matches') or 0):
+        return 'structure_mismatch'
+    return 'success'
 
 
 def research_page(fn_args: dict, runtime) -> str:
     """Execute the extension's bounded background research command."""
+
+    from .content_contract import ReadTarget
+    try:
+        target = ReadTarget.from_value(fn_args.get('target'))
+    except ValueError as exc:
+        return f'Error: {exc}'
+    operation = 'research' if target.kind == 'auto' else 'research_' + target.kind
     url = str(fn_args.get('url') or '').strip()
     if not url:
         return 'Error: url is required.'
@@ -275,7 +292,7 @@ def research_page(fn_args: dict, runtime) -> str:
         logger.debug('[BrowserResearch] requested URL policy failed: %s', exc)
         return 'Error: browser research URL was denied by domain policy.'
     from .site_observations import load_site_observation
-    prior_observation = load_site_observation(runtime.owner_user_id, url)
+    prior_observation = load_site_observation(runtime.owner_user_id, url, operation=operation)
     max_chars = _bounded_int(
         fn_args.get('maxChars'), default=60_000,
         minimum=1_000, maximum=_MAX_CONTEXT_CHARS)
@@ -327,6 +344,9 @@ def research_page(fn_args: dict, runtime) -> str:
             command_params['captureHints'] = wire_hints
     result, error = runtime.send('research_url', command_params, timeout=80)
     if error:
+        from .site_observations import record_site_observation
+        record_site_observation(runtime.owner_user_id, url, operation=operation,
+                                outcome='transient_failure')
         return f'Error researching URL: {error}'
     if not isinstance(result, dict):
         return 'Error: browser returned an invalid research result.'
@@ -346,14 +366,24 @@ def research_page(fn_args: dict, runtime) -> str:
             from .site_observations import record_site_observation
 
             record_site_observation(
-                runtime.owner_user_id, url, outcome='auth_challenge')
+                runtime.owner_user_id, url, operation=operation, outcome='auth_challenge')
             return (
                 'Error: the page redirected to a sign-in screen. Finish '
                 f'signing in at {final_url}, then retry this research call.')
     except Exception as exc:
         logger.debug('[BrowserResearch] login-wall classification degraded: %s', exc)
+    from .content import collect_content
+    content_receipt = collect_content(
+        result, owner_user_id=runtime.owner_user_id, target=target, max_chars=max_chars)
     analysis = analyze_research_payload(
         result, owner_user_id=runtime.owner_user_id)
+    # Persist only sources that actually supplied accepted target content.
+    accepted_urls = {row['url'] for row in content_receipt['evidence']}
+    analysis['network']['candidates'] = [
+        row for row in analysis['network']['candidates'] if row.get('url') in accepted_urls]
+    if content_receipt['evidence']:
+        analysis['strategy'] = content_receipt['evidence'][0]['strategy']
+    outcome = _content_observation_outcome(content_receipt, analysis, prior_observation)
     from .site_observations import (
         distill_site_observation,
         record_site_observation,
@@ -363,10 +393,11 @@ def research_page(fn_args: dict, runtime) -> str:
         research_stats.get('elapsedMs') if isinstance(research_stats, dict) else 0,
         default=0, minimum=0, maximum=120_000)
     try:
-        observation = distill_site_observation(analysis, elapsed_ms=elapsed_ms)
+        observation = (distill_site_observation(analysis, elapsed_ms=elapsed_ms)
+                       if outcome == 'success' else None)
         current_observation = record_site_observation(
             runtime.owner_user_id, url, observation=observation,
-            outcome='success')
+            operation=operation, outcome=outcome)
     except Exception as exc:
         # Site observations are reconstructible advisory state. A malformed
         # extension payload or unavailable cache must not hide live page data.
@@ -376,7 +407,8 @@ def research_page(fn_args: dict, runtime) -> str:
         result, owner_user_id=runtime.owner_user_id,
         mode=mode, max_chars=max_chars, analysis=analysis,
         prior_observation=prior_observation,
-        current_observation=current_observation)
+        current_observation=current_observation, target=target,
+        content_receipt=content_receipt)
 
 
 __all__ = [

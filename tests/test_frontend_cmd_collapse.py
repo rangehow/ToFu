@@ -3,15 +3,18 @@
 The render contract (owner directive, 2026-08-01): users read the one-line
 DESCRIPTION, not the exact shell string — so when a command card carries a
 description AND the command is long enough to be visual noise (multi-line or
-> 100 chars), the ``$ command`` <pre> starts COLLAPSED behind the description
-itself (click to expand in place — no chevron glyph since 2026-08-02).
-Pinned behaviours:
+> 100 chars), the ``$ command`` <pre> starts COLLAPSED. Since the 2026-09-05
+owner call each collapsible pane gets an EXPLICIT fold chip on the header row
+(``ptool-cmd-fold-cmd`` for the command body, ``ptool-cmd-fold-output`` for
+the result) — superseding the 2026-08-02 "description is the toggle" and
+2026-08-27 "header is the disclosure" invisible hit areas. The header row
+itself is inert. Pinned behaviours:
 
   1. Done block: description + long/multi-line command ⇒ collapsed markup
-     (``ptool-cmd-collapsible`` pre + ``ptool-cmd-desc-toggle`` header), and
-     the command text is still IN the DOM (hidden via class, not dropped).
+     (``ptool-cmd-collapsible`` pre + ``ptool-cmd-fold-cmd`` chip), and the
+     command text is still IN the DOM (hidden via class, not dropped).
   2. Short one-liner (``npm test``) ⇒ stays visible — collapsing saves
-     nothing and would add a click to a glanceable row.
+     nothing and would add a click to a glanceable row; no cmd fold chip.
   3. No description ⇒ stays visible — the command is the card's only
      identity; collapsing would anonymize it.
   4. Running block: same collapse rule; the live-output pane stays visible
@@ -85,16 +88,17 @@ const doneLong = {
 };
 const html1 = _renderUnifiedToolLine(doneLong, false);
 check('done_long_collapsible_pre', html1.includes('ptool-cmd-collapsible'));
-check('done_long_desc_toggle', html1.includes('ptool-cmd-desc-toggle'));
+check('done_long_cmd_fold_chip', html1.includes('ptool-cmd-fold ptool-cmd-fold-cmd'));
 check('done_long_toggle_onclick', html1.includes('_cmdBodyToggle(this,event)'));
-check('done_long_no_chevron', !html1.includes('ptool-cmd-chev'));
+check('done_long_desc_is_plain_text', !html1.includes('ptool-cmd-desc-toggle'));
 check('done_long_cmd_key', html1.includes('data-cmd-key="call-long-1"'));
 check('done_long_not_open', !html1.includes('ptool-cmd-block ptool-cmd-ok cmd-open'));
 check('done_long_cmd_still_in_dom', html1.includes('baseline tightened')); // output AND/OR cmd
 check('done_long_cmd_pre_kept', html1.includes('$ grep -c'));
-check('done_long_output_toggle_kept', html1.includes('ptool-cmd-hasoutput')
-  && html1.includes('data-tofu-action="_cmdHeaderToggle(this,event)"')
-  && html1.includes('role="button"'));
+check('done_long_output_fold_chip', html1.includes('ptool-cmd-hasoutput')
+  && html1.includes('ptool-cmd-fold-output')
+  && html1.includes('data-tofu-action="_cmdOutputOpenToggle(this,event)"'));
+check('done_long_header_is_inert', !html1.includes('role="button"'));
 
 // ── 2. Done: short one-liner ⇒ stays visible ──
 const doneShort = {
@@ -105,8 +109,9 @@ const doneShort = {
 };
 const html2 = _renderUnifiedToolLine(doneShort, false);
 check('done_short_not_collapsed', !html2.includes('ptool-cmd-collapsible'));
-check('done_short_no_toggle', !html2.includes('ptool-cmd-desc-toggle'));
+check('done_short_no_cmd_fold', !html2.includes('ptool-cmd-fold-cmd'));
 check('done_short_pre_visible', html2.includes('<pre class="ptool-cmd-code"><code>$ npm test</code></pre>'));
+check('done_short_output_fold_kept', html2.includes('ptool-cmd-fold-output'));
 
 // ── 3. Done: NO description + long command ⇒ stays visible (identity) ──
 const doneNoDesc = {
@@ -116,7 +121,7 @@ const doneNoDesc = {
 };
 const html3 = _renderUnifiedToolLine(doneNoDesc, false);
 check('done_nodesc_not_collapsed', !html3.includes('ptool-cmd-collapsible'));
-check('done_nodesc_no_toggle', !html3.includes('ptool-cmd-desc-toggle'));
+check('done_nodesc_no_cmd_fold', !html3.includes('ptool-cmd-fold-cmd'));
 
 // ── 4. Running: same collapse rule; live output stays visible ──
 const runLong = {
@@ -128,41 +133,43 @@ const runLong = {
 };
 const html4 = _renderUnifiedToolLine(runLong, true);
 check('running_long_collapsible_pre', html4.includes('ptool-cmd-collapsible'));
-check('running_long_desc_toggle', html4.includes('ptool-cmd-desc-toggle'));
+check('running_long_cmd_fold_chip', html4.includes('ptool-cmd-fold-cmd'));
 check('running_live_output_visible', html4.includes('ptool-cmd-output-live'));
 
 // ── 5. Toggle flips cmd-open + persists via toolCallId across re-renders ──
 const host = document.createElement('div');
 host.innerHTML = html1;
-const descEl = host.querySelector('.ptool-cmd-desc-toggle');
-check('toggle_el_present', !!descEl);
-_cmdBodyToggle(descEl, { stopPropagation() {} });
+const cmdFoldEl = host.querySelector('.ptool-cmd-fold-cmd');
+check('cmd_fold_el_present', !!cmdFoldEl && cmdFoldEl.tagName === 'BUTTON');
+_cmdBodyToggle(cmdFoldEl, { stopPropagation() {} });
 const blockEl = host.querySelector('.ptool-cmd-block');
 check('toggle_adds_cmd_open', blockEl.classList.contains('cmd-open'));
+check('toggle_sets_aria_expanded', cmdFoldEl.getAttribute('aria-expanded') === 'true');
 // Persistence is keyed by toolCallId inside the module — assert it
 // BEHAVIOURALLY: a re-render (sync / progress tick) restores the state.
 const html1b = _renderUnifiedToolLine(doneLong, false);  // re-render (sync/progress)
 check('rerender_restores_open', html1b.includes('ptool-cmd-ok cmd-open'));
-_cmdBodyToggle(descEl, { stopPropagation() {} });
+_cmdBodyToggle(cmdFoldEl, { stopPropagation() {} });
 check('untoggle_removes_cmd_open', !blockEl.classList.contains('cmd-open'));
 const html1c = _renderUnifiedToolLine(doneLong, false);
 check('rerender_collapses_again', !html1c.includes('ptool-cmd-ok cmd-open'));
 
-// ── 5b. Output pane toggle: the command HEADER is the ARIA button and its
-// named action is `_cmdHeaderToggle` (no `var`, no ternaries in the restricted
-// data-tofu-action grammar). The output pane visibility rides `output-open` on
-// the block and `aria-expanded` on the header. ──
-const outHeader = host.querySelector('.ptool-cmd-header[role="button"]');
-check('output_toggle_el_present', !!outHeader);
-check('output_toggle_named_action', html1.includes('data-tofu-action="_cmdHeaderToggle(this,event)"'));
+// ── 5b. Output pane toggle: the dedicated output fold chip is a native
+// <button> whose named action is `_cmdOutputOpenToggle` (no `var`, no
+// ternaries in the restricted data-tofu-action grammar). The output pane
+// visibility rides `output-open` on the block and `aria-expanded` on the
+// chip. ──
+const outFoldEl = host.querySelector('.ptool-cmd-fold-output');
+check('output_fold_el_present', !!outFoldEl && outFoldEl.tagName === 'BUTTON');
+check('output_toggle_named_action', html1.includes('data-tofu-action="_cmdOutputOpenToggle(this,event)"'));
 check('output_toggle_no_inline_var', !html1.includes('var w=this.parentElement'));
-_cmdHeaderToggle(outHeader, { stopPropagation() {}, target: {} });
+_cmdOutputOpenToggle(outFoldEl, { stopPropagation() {}, target: outFoldEl });
 const outBlock = host.querySelector('.ptool-cmd-block');
 check('output_toggle_expands', outBlock.classList.contains('output-open'));
-check('output_toggle_aria_expanded', outHeader.getAttribute('aria-expanded') === 'true');
-_cmdHeaderToggle(outHeader, { stopPropagation() {}, target: {} });
+check('output_toggle_aria_expanded', outFoldEl.getAttribute('aria-expanded') === 'true');
+_cmdOutputOpenToggle(outFoldEl, { stopPropagation() {}, target: outFoldEl });
 check('output_toggle_collapses', !outBlock.classList.contains('output-open'));
-check('output_toggle_aria_collapsed', outHeader.getAttribute('aria-expanded') === 'false');
+check('output_toggle_aria_collapsed', outFoldEl.getAttribute('aria-expanded') === 'false');
 
 // Search/timer disclosure rows contain nested source/copy controls, so they
 // use an ARIA button rather than invalid nested <button> markup. The shared
@@ -191,7 +198,7 @@ const ceLong = {
 };
 const html6 = _renderUnifiedToolLine(ceLong, false);
 check('code_exec_collapsible', html6.includes('ptool-cmd-collapsible'));
-check('code_exec_desc_toggle', html6.includes('ptool-cmd-desc-toggle'));
+check('code_exec_cmd_fold_chip', html6.includes('ptool-cmd-fold-cmd'));
 
 console.log(out.join('\n'));
 // Exit explicitly: tool_rounds.js / jsdom may leave a timer handle open.
@@ -233,7 +240,8 @@ def test_cmd_collapse_css_rules_present():
     assert '.ptool-cmd-collapsible' in css
     assert '.ptool-cmd-block.cmd-open .ptool-cmd-collapsible' in css
     assert '.ptool-cmd-chev' not in css  # chevron glyph removed (owner call 2026-08-02)
-    assert '.ptool-cmd-desc-toggle' in css
+    assert '.ptool-cmd-fold' in css
+    assert '.ptool-cmd-desc-toggle' not in css  # retired 2026-09-05: explicit chips
 
 
 if __name__ == '__main__':

@@ -53,13 +53,19 @@ class SecretEnvelopeError(RuntimeError):
 
 
 def secret_hint(value: str) -> str:
-    """Return a recognition hint that is insufficient to use as a secret."""
+    """Return a recognition hint that is insufficient to use as a secret.
+
+    The hidden middle keeps the real character count (capped at 40 so the
+    hint stays inside the 64-character contract ceiling) — a row of masks
+    then reflects the actual key lengths.
+    """
     normalized = str(value or "").strip()
     if not normalized:
         return ""
     if len(normalized) <= 8:
         return "****"
-    return f"{normalized[:4]}…{normalized[-4:]}"
+    hidden = min(len(normalized) - 8, 40)
+    return f"{normalized[:4]}{'*' * hidden}{normalized[-4:]}"
 
 
 def _read_or_create_personal_key() -> bytes:

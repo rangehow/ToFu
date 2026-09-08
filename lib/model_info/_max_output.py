@@ -22,6 +22,7 @@ from lib.model_info._family import (
     is_kimi,
     is_longcat,
     is_minimax,
+    is_muse_spark,
     is_qwen,
 )
 from lib.model_info._openai_gpt56 import (
@@ -181,6 +182,11 @@ _MODEL_MAX_OUTPUT = {
     'gpt':     (is_gpt,     _gpt_max_output),
     'glm':     (is_glm,     131072),
     'deepseek': (is_deepseek, _deepseek_max_output),  # per-model lookup
+
+    # Muse Spark: vendor max completion 943,718 = exactly 90% of the
+    # 1,048,576 context window (Meta Model API docs, 2026-09). Both SKUs
+    # (standard / -contributor) share the same ceiling.
+    'muse_spark': (is_muse_spark, 943718),
     # Claude: 128000 output limit — matches build_body's default. Listed
     # EXPLICITLY (rather than relying on no-clamp passthrough) so Claude is
     # NOT swept into the conservative unknown-family default below — long-form

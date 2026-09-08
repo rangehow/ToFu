@@ -406,7 +406,8 @@ def _structural_gate(idea: dict, valid_gap_ids: set) -> Optional[str]:
 # ── Gate ②: forced-neighbor-retrieval novelty prior set ────────────────────
 
 def _novelty_prior_set(idea: dict, *, k: int = IDEATE_NOVELTY_RETRIEVAL_K,
-                       batch_terms=None, retrieval_cache: Optional[dict] = None) -> dict:
+                       batch_terms=None, retrieval_cache: Optional[dict] = None,
+                       excluded_ids=None) -> dict:
     """Build the neighbor set the novelty judge MUST use (owner pin #1).
 
     ALWAYS runs ``search_arxiv`` on a SANITIZED term query and takes the top-k
@@ -519,11 +520,18 @@ def _novelty_prior_set(idea: dict, *, k: int = IDEATE_NOVELTY_RETRIEVAL_K,
                 tuple(dict(row) for row in out), outcome, wire_query)
         return out, outcome, wire_query
 
+    excluded_ids = {_norm_id(aid) for aid in (excluded_ids or [])}
+    inspiration = {}
     query, query_mode, retrieved = '', 'all', []
     for _ident, _dom, _field, _mode in attempts:
         if not (_ident or _dom):
             continue
         retrieved, _outcome, _wire = _search(_ident, _dom, _field)
+        for row in retrieved:
+            if row['arxiv_id'] in excluded_ids:
+                inspiration[row['arxiv_id']] = row
+        retrieved = [row for row in retrieved
+                     if row['arxiv_id'] not in excluded_ids]
         query, query_mode = _wire, _mode
         if retrieved:
             break
@@ -548,6 +556,7 @@ def _novelty_prior_set(idea: dict, *, k: int = IDEATE_NOVELTY_RETRIEVAL_K,
                 'basis=%s mode=%s query=%r (%s)', title, len(retrieved_ids),
                 len(self_reported), basis, query_mode, query, query_source)
     return {'retrieved': retrieved, 'retrieved_ids': retrieved_ids,
+            'cross_domain_inspiration': list(inspiration.values()),
             'self_reported_ids': self_reported, 'retrieval_query': query,
             'query_source': query_source, 'query_mode': query_mode,
             'novelty_basis': basis}
@@ -611,7 +620,7 @@ def _judge_evidence_prompt(idea: dict, prior_set: dict, gap: dict) -> str:
         neigh_lines.append(
             f"- arXiv:{row['arxiv_id']}  {row['title']}\n    {row['summary']}")
     neighbors = '\n'.join(neigh_lines) or '(retrieval returned nothing)'
-    gap_txt = f"{gap.get('id')}: {gap.get('gap','')}" if gap else '(no linked gap)'
+    gap_txt = _compact_gaps({'open_gaps': [gap]}) if gap else '(no linked gap)'
     idea_txt = (f"title: {idea.get('title')}\nkind: {idea.get('kind')}\n"
                 f"corpus_anchor_id: {idea.get('corpus_anchor_id')}\n"
                 f"corpus_delta: {idea.get('corpus_delta')}\n"
@@ -876,7 +885,7 @@ def _score_prepared_ideas(rows: list[_PreparedIdeaJudge], *, lang: str,
 
 def _generate_raw_ideas(direction, open_gaps, reader_context, lang, *,
                         n_ideas=6, model=None, abort=None, on_tool_event=None,
-                        usage_meter=None, user_id=None) -> list:
+                        usage_meter=None, user_id=None, revision_context: Optional[dict] = None) -> list:
     """Generate raw (un-gated) ideas anchored to R2's open_gaps.
 
     Single seam tests monkeypatch (``ideate._generate_raw_ideas``) to drive the
@@ -902,6 +911,17 @@ def _generate_raw_ideas(direction, open_gaps, reader_context, lang, *,
     system = date_anchor_clause(lang) + _ideate_system_prompt(lang, n_ideas)
     gaps_json = _compact_gaps(open_gaps)
     parts = [f'## RESEARCH DIRECTION\n{direction}']
+    if revision_context is not None:
+        import json
+        parts.append('## REVISION CONTEXT (feedback, not a replacement direction)\n'
+                     'Address supported criticisms; do not invent evidence or assume prior '
+                     'scores establish novelty. Preserve the research direction above. '
+                     'Return exactly one candidate for EVERY previous accepted/rejected idea; '
+                     'copy its idea_id unchanged. Do not invent, drop or merge lineage IDs. '
+                     'An unchanged or refuted candidate must still be returned for the gate. '
+                     'Do not copy scores, original_candidate, repair_records or nested history; '
+                     'return only scientific fields plus idea_id.\n'
+                     + json.dumps(revision_context, ensure_ascii=False))
     if reader_context:
         parts.append(reader_context)
     parts.append('## OPEN GAPS (from the survey — every idea MUST link to one of these ids)\n'
@@ -1009,8 +1029,91 @@ def _compact_gaps(open_gaps: dict) -> str:
             gaps.append({'id': g['id'], 'gap': g.get('gap', ''),
                          'why_open': g.get('why_open', ''),
                          'kind_hint': g.get('kind_hint', ''),
-                         'evidence': list(g.get('evidence') or [])})
+                         'evidence': list(g.get('evidence') or []),
+                         **{key: g[key] for key in (
+                             'low_confidence', 'confidence', 'evidence_confidence',
+                             'evidence_tiers', 'library_evidence_count',
+                             'grounded_evidence_count', 'counterevidence',
+                             'counter_evidence', 'failure_cause') if key in g}})
     return json.dumps({'open_gaps': gaps}, ensure_ascii=False)
+
+
+def _excluded_corpus_ids(open_gaps: dict) -> set:
+    """Explicit survey exclusions are inspiration, never direct novelty evidence."""
+    rows = open_gaps.get('excluded_corpus_ids', []) or []
+    rows = list(rows) + list(open_gaps.get('excluded_papers', []) or [])
+    return {_norm_id(row.get('arxiv_id') if isinstance(row, dict) else row)
+            for row in rows} - {''}
+
+
+def _repair_candidate(raw, open_gaps: dict) -> dict:
+    """One bounded metadata pass. No fuzzy IDs or inferred semantic gap links.
+
+    An absent anchor may be recovered only from a unique explicit citation in
+    the candidate's corpus_delta that is already verified gap evidence. A wrong
+    explicit anchor is never overwritten just because a gap has one paper.
+    """
+    import copy
+    import json
+    import re
+
+    def bounded(value, depth=0):
+        if isinstance(value, str):
+            return value[:4000]
+        if depth >= 3:
+            return '[nested value omitted]'
+        if isinstance(value, dict):
+            return {str(k)[:120]: bounded(v, depth + 1)
+                    for k, v in list(value.items())[:40]
+                    if k not in {'original_candidate', 'candidate_audit', 'repair_records'}}
+        if isinstance(value, (list, tuple)):
+            return [bounded(v, depth + 1) for v in value[:24]]
+        return value if value is None or isinstance(value, (bool, int, float)) else str(type(value).__name__)
+
+    original = bounded(raw)
+    digest = hashlib.sha256(json.dumps(
+        original, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:20]
+    idea = copy.deepcopy(original) if isinstance(original, dict) else {'raw_candidate': original}
+    idea['candidate_id'] = 'idea_' + digest
+    idea['original_candidate'] = original
+    records = []
+
+    def change(field, value, reason):
+        before = idea.get(field)
+        if before != value:
+            records.append({'field': field, 'before': before, 'after': value,
+                            'reason': reason})
+            idea[field] = value
+
+    if isinstance(raw, dict):
+        kind, changed = _normalize_kind(idea.get('kind'))
+        change('kind', kind, 'template metadata normalization')
+        if changed:
+            idea['kind_normalized'] = True
+        gid = idea.get('linked_gap_id')
+        if isinstance(gid, str):
+            # Case-only repair is safe only if exactly one declared ID matches.
+            matches = [g['id'] for g in open_gaps.get('open_gaps', [])
+                       if isinstance(g, dict) and isinstance(g.get('id'), str)
+                       and g['id'].strip().casefold() == gid.strip().casefold()]
+            if len(matches) == 1:
+                change('linked_gap_id', matches[0], 'unique exact ID formatting match')
+        gap = _gap_by_id(open_gaps, idea.get('linked_gap_id')) or {}
+        evidence = {_norm_id(a) for a in gap.get('evidence', [])} - {''}
+        anchor = idea.get('corpus_anchor_id')
+        if isinstance(anchor, str) and anchor.strip():
+            normalized = _norm_id(anchor)
+            if normalized in evidence:
+                change('corpus_anchor_id', normalized, 'verified anchor ID normalization')
+        elif not anchor:
+            citations = {_norm_id(a) for a in re.findall(
+                r'(?<![\w.])\d{4}\.\d{4,5}(?:v\d+)?(?!\d)',
+                str(idea.get('corpus_delta') or ''))}
+            if len(citations) == 1 and citations <= evidence:
+                change('corpus_anchor_id', next(iter(citations)),
+                       'unique explicit corpus_delta citation verified in linked gap')
+    idea['repair_records'] = records
+    return idea
 
 
 def _valid_gap_ids(open_gaps: dict) -> set:
@@ -1095,11 +1198,14 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
                    threshold: Optional[float] = None, model: Optional[str] = None,
                    abort: Optional[Callable[[], bool]] = None,
                    on_tool_event: Optional[Callable[[dict], None]] = None,
-                   user_id: Optional[int] = None) -> dict:
+                   user_id: Optional[int] = None,
+                   revision_context: Optional[dict] = None) -> dict:
     """Generate ideas from R2's open-gap map and run the anti-A+B gate.
 
     Args:
         direction: the research direction.
+        revision_context: optional structured feedback for generation only; never
+            replaces the direction used for research identity or tool scope.
         open_gaps: the library-verified gap map from R2 (survey.build_survey's
             ``open_gaps`` — schema_version 1). Its ``open_gaps[].id`` set is the
             basis for the structural gate.
@@ -1152,6 +1258,8 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
         # old monkeypatch seam. Production recipes always provide an owner.
         if user_id is not None:
             generation_kwargs['user_id'] = user_id
+        if revision_context is not None:
+            generation_kwargs['revision_context'] = revision_context
         raw_result = _generate_raw_ideas(
             direction, open_gaps, reader_context, lang, **generation_kwargs)
     except Exception as e:
@@ -1168,13 +1276,24 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
     # The requested output count is also the downstream cost ceiling. A model
     # can ignore its prompt and return a much larger list; never fan that excess
     # into title probes, retrievals, and one rubric LLM call per row.
+    overflow_audit = []
     if isinstance(raw_result, (list, tuple)):
         offered_ideas = len(raw_result)
         raw = list(raw_result[:n_ideas])
+        overflow_audit = [dict(_repair_candidate(row, open_gaps),
+                               reject_stage='budget',
+                               reject_reason='candidate exceeds requested judging budget')
+                          for row in raw_result[n_ideas:n_ideas + 12]]
     else:
         raw = list(islice(raw_result or (), n_ideas + 1))
+        overflow_audit = [dict(_repair_candidate(row, open_gaps),
+                               reject_stage='budget',
+                               reject_reason='candidate exceeds requested judging budget')
+                          for row in raw[n_ideas:]]
         offered_ideas = len(raw)
         raw = raw[:n_ideas]
+        # Generation normally returns a finite list; arbitrary iterators are
+        # intentionally read only through the existing one-row lookahead.
     truncated_ideas = max(0, offered_ideas - len(raw))
     if truncated_ideas:
         logger.warning('[Paper:Ideate] model returned %d idea(s), requested %d; '
@@ -1208,16 +1327,9 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
     # contract/model output and die with the job; no cross-owner state exists.
     _ground_title_cache = {}
     _retrieval_cache = {}
-    for raw_index, idea in enumerate(raw):
-        if not isinstance(idea, dict):
-            continue
-        # `kind` is template metadata, not a validity verdict — coerce it into
-        # the frozen enum BEFORE any gate sees it, and record the coercion so
-        # the normalization is auditable rather than silent.
-        _kind, _kind_changed = _normalize_kind(idea.get('kind'))
-        idea['kind'] = _kind
-        if _kind_changed:
-            idea['kind_normalized'] = True
+    excluded_ids = _excluded_corpus_ids(open_gaps)
+    for raw_index, raw_idea in enumerate(raw):
+        idea = _repair_candidate(raw_idea, open_gaps)
         # Gate ① — structural (free, first)
         reason = _structural_gate(idea, valid_gaps)
         if reason:
@@ -1231,7 +1343,7 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
                         ((gap or {}).get('evidence') or [])}
         evidence_ids.discard('')
         anchor_id = _norm_id(idea.get('corpus_anchor_id'))
-        if evidence_ids and anchor_id not in evidence_ids:
+        if (evidence_ids and anchor_id not in evidence_ids) or anchor_id in excluded_ids:
             reason = (f'corpus_anchor_id {anchor_id!r} is not evidence for linked gap '
                       f'{idea.get("linked_gap_id")!r}')
             rejected_indexed.append((
@@ -1248,7 +1360,8 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
         # Gate ② — forced-neighbor retrieval prior set
         prior_set = _novelty_prior_set(
             idea, batch_terms=_batch_terms,
-            retrieval_cache=_retrieval_cache)
+            retrieval_cache=_retrieval_cache, excluded_ids=excluded_ids)
+        idea['cross_domain_inspiration'] = prior_set.get('cross_domain_inspiration', [])
         prepared_judges.append(_PreparedIdeaJudge(
             raw_index=raw_index, idea=idea, prior_set=prior_set, gap=gap,
             prior_art_dropped=dropped))
@@ -1291,6 +1404,17 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
             }))
             logger.error('[Paper:Ideate] REJECT(novelty_basis) %.50s — empty basis',
                          idea.get('title'))
+            continue
+        if _norm_id(verdict.get('closest_neighbor')) not in prior_set['retrieved_ids']:
+            rejected_indexed.append((raw_index, {
+                **idea, **verdict, 'reject_stage': 'novelty_basis',
+                'reject_reason': 'closest_neighbor is not in the direct retrieved basis',
+                'retrieved_ids': prior_set['retrieved_ids'],
+                'self_reported_ids': prior_set['self_reported_ids'],
+                'retrieval_query': prior_set['retrieval_query'],
+                'query_source': prior_set['query_source'],
+                'query_mode': prior_set['query_mode'],
+                'novelty_basis': prior_set['novelty_basis']}))
             continue
         # R2/R3 seam v2 — a gap resting ONLY on grounded-but-unharvested papers
         # (low_confidence) is a weaker foundation: R3 must not fully trust that
@@ -1335,6 +1459,8 @@ def generate_ideas(direction: str, open_gaps: dict, *, lang: str = 'en',
     out = {'ok': True, 'direction': direction, 'lang': lang, 'accepted': accepted,
            'rejected': rejected, 'threshold': thr,
            'usage': usage_meter.snapshot(), 'error': ''}
+    out['candidate_audit'] = [record for _index, record in sorted(
+        accepted_indexed + rejected_indexed)] + overflow_audit
     if truncated_ideas:
         out['generated_truncated'] = truncated_ideas
 

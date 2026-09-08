@@ -24,6 +24,13 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
     from lib.ids import short_id
     from lib.tasks_pkg.human_guidance import request_human_guidance
 
+    # Batch mode: questions[] takes precedence over single-question fields.
+    questions = fn_args.get('questions')
+    if isinstance(questions, list) and len(questions) >= 2:
+        return _handle_ask_human_batch(
+            task, tc, fn_name, tc_id, fn_args, rn, round_entry,
+            cfg, project_path, project_enabled, questions)
+
     question = fn_args.get('question', '')
     response_type = fn_args.get('response_type', 'free_text')
     options = fn_args.get('options', [])
@@ -220,6 +227,219 @@ def _handle_ask_human(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
             'guidanceId': guidance_id,
             'question': question,
             'responseType': response_type,
+            'userResponse': user_response,
+        },
+    )
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
+
+
+def _normalize_batch_questions(questions):
+    """Validate and normalize the questions[] array for batch mode."""
+    normalized = []
+    for i, q in enumerate(questions):
+        if not isinstance(q, dict):
+            logger.warning('[Executor] ask_human batch: dropping non-dict '
+                           'question at index %d', i)
+            continue
+        question_text = str(q.get('question') or '').strip()
+        if not question_text:
+            logger.warning('[Executor] ask_human batch: dropping empty '
+                           'question at index %d', i)
+            continue
+        rt = q.get('response_type', 'free_text')
+        if rt not in ('free_text', 'choice'):
+            rt = 'free_text'
+        opts = q.get('options') or []
+        if isinstance(opts, str):
+            try:
+                import json as _json
+                opts = _json.loads(opts)
+            except (ValueError, TypeError):
+                opts = []
+        if not isinstance(opts, list):
+            opts = []
+        norm_opts = []
+        for o in opts:
+            if isinstance(o, dict):
+                norm_opts.append(o)
+            elif isinstance(o, str):
+                norm_opts.append({'label': o})
+        normalized.append({
+            'question': question_text,
+            'response_type': rt,
+            'options': norm_opts,
+        })
+    return normalized
+
+
+def _handle_ask_human_batch(task, tc, fn_name, tc_id, fn_args, rn,
+                            round_entry, cfg, project_path, project_enabled,
+                            raw_questions):
+    """Handle ask_human batch mode — block until user answers all questions."""
+    from lib.ids import short_id
+    from lib.tasks_pkg.human_guidance import request_human_guidance
+
+    questions = _normalize_batch_questions(raw_questions)
+    if len(questions) < 2:
+        # Fall back to single-question mode with the first valid question.
+        fn_args = {key: value for key, value in fn_args.items()
+                   if key != 'questions'}
+        if questions:
+            fn_args['question'] = questions[0]['question']
+            fn_args['response_type'] = questions[0]['response_type']
+            fn_args['options'] = questions[0]['options']
+        return _handle_ask_human(
+            task, tc, fn_name, tc_id, fn_args, rn, round_entry,
+            cfg, project_path, project_enabled)
+
+    guidance_id = short_id('hg_', 12)
+    logger.info('[Executor] ask_human batch: %d questions, guidance_id=%s, '
+                'task=%s', len(questions), guidance_id,
+                task.get('id', '?')[:8])
+
+    # Use a synthetic top-level question that summarizes the batch.
+    summary = 'Multiple questions (batch form):'
+    for i, q in enumerate(questions):
+        summary += f'\n{i + 1}. {q["question"][:200]}'
+
+    round_entry['status'] = 'awaiting_human'
+    round_entry['guidanceId'] = guidance_id
+    round_entry['guidanceQuestion'] = summary
+    round_entry['guidanceType'] = 'batch'
+    round_entry['guidanceBatchQuestions'] = questions
+    round_entry['guidanceOptions'] = []
+    append_event(task, {
+        'type': 'human_guidance_request',
+        'roundNum': rn,
+        'toolCallId': tc_id,
+        'guidanceId': guidance_id,
+        'question': summary,
+        'responseType': 'batch',
+        'batchQuestions': questions,
+        'options': [],
+    })
+
+    from lib.tasks_pkg.autopilot import is_autopilot_enabled, run_virtual_user
+    if is_autopilot_enabled(task):
+        logger.info('[Executor] ask_human batch → routed to Autopilot VU '
+                    '(no human wait): guidance_id=%s, task=%s',
+                    guidance_id, task.get('id', '?')[:8])
+        _vu_task = task
+        try:
+            _orig_msgs = list(task.get('messages') or [])
+            _augmented = list(_orig_msgs)
+            _augmented.append({'role': 'assistant', 'content': summary})
+            _vu_task = dict(task)
+            _vu_task['messages'] = _augmented
+        except Exception as _e:
+            logger.debug('[Executor] ask_human batch VU augmentation failed '
+                         '(falling back to raw history): %s', _e)
+        vu_reply = run_virtual_user(_vu_task)
+        if vu_reply is None:
+            user_response = None
+        else:
+            from lib.agent_verdict import strip_machine_tokens
+            user_response = strip_machine_tokens(
+                vu_reply.get('text') or '') or '(no further input)'
+            append_event(task, {
+                'type': 'human_guidance_response',
+                'roundNum': rn,
+                'guidanceId': guidance_id,
+                'response': user_response,
+                'isVirtualUser': True,
+            })
+    elif not task.get('_attended'):
+        logger.warning('[Executor] ask_human batch in an unattended execution '
+                       'mode — returning sentinel: guidance_id=%s, task=%s',
+                       guidance_id, task.get('id', '?')[:8])
+        user_response = None
+        tool_content = ('Cannot ask the user in this execution mode — no '
+                        'interactive session is available to answer. Proceed '
+                        'with your best assumption or use the tools available '
+                        'to you to find the answer yourself.')
+        round_entry['status'] = 'unanswerable'
+        meta = _build_simple_meta(
+            fn_name, tool_content, source='HumanGuidance',
+            title=summary[:200],
+            snippet='No interactive session — proceeding without an answer',
+            badge='unanswerable',
+            extra={
+                'guidanceId': guidance_id,
+                'question': summary,
+                'responseType': 'batch',
+                'batchQuestions': questions,
+                'unanswerable': True,
+            },
+        )
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, tool_content, False
+    else:
+        logger.info('[Executor] ask_human batch blocking indefinitely for '
+                    'user response: guidance_id=%s, task=%s',
+                    guidance_id, task.get('id', '?')[:8])
+        user_response = request_human_guidance(guidance_id, task=task)
+
+    if task.get('aborted') or user_response is None:
+        logger.warning('[Executor] ask_human batch aborted/cancelled: '
+                       'guidance_id=%s, task=%s, aborted=%s — round left '
+                       'awaiting_human so the turn settlement keeps '
+                       'offering the answer_guidance late-answer resume',
+                       guidance_id, task.get('id', '?')[:8],
+                       task.get('aborted', False))
+        return tc_id, '[Task was aborted while waiting for human guidance]', False
+
+    # Parse the batch response JSON.
+    import json as _json
+    answers = None
+    try:
+        parsed = _json.loads(user_response)
+        if isinstance(parsed, list):
+            answers = parsed
+    except (ValueError, TypeError):
+        pass
+
+    if answers is None:
+        # User submitted a single text response for the whole batch.
+        answers = [{'index': i, 'answer': user_response}
+                   for i in range(len(questions))]
+
+    # Build the tool result from the answers.
+    result_parts = []
+    for i, q in enumerate(questions):
+        answer_entry = next(
+            (a for a in answers
+             if isinstance(a, dict) and a.get('index') == i),
+            None,
+        )
+        answer_text = (answer_entry.get('answer', '')
+                       if answer_entry else '(no answer)')
+        result_parts.append(f'Q{i + 1}: {q["question"][:200]}')
+        result_parts.append(f'A{i + 1}: {answer_text}')
+        result_parts.append('')
+
+    tool_content = 'Human responses (batch):\n' + '\n'.join(result_parts)
+    logger.info('[Executor] ask_human batch received %d answers: '
+                'guidance_id=%s, task=%s',
+                len(answers), guidance_id, task.get('id', '?')[:8])
+
+    _FULL_LIMIT = 2000
+    def _clip(s):
+        if not s:
+            return s
+        return s if len(s) <= _FULL_LIMIT else s[:_FULL_LIMIT - 1] + '…'
+
+    meta = _build_simple_meta(
+        fn_name, tool_content, source='HumanGuidance',
+        title=_clip(summary),
+        snippet=_clip(user_response or 'No response'),
+        badge='answered' if user_response else 'aborted',
+        extra={
+            'guidanceId': guidance_id,
+            'question': summary,
+            'responseType': 'batch',
+            'batchQuestions': questions,
+            'batchAnswers': answers,
             'userResponse': user_response,
         },
     )

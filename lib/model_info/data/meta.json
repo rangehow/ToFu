@@ -1,0 +1,11 @@
+{
+  "brand": "meta",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "meta",
+  "category": "official",
+  "name": "Meta (Muse Spark)",
+  "base_url": "https://api.meta.ai/v1",
+  "offering_recipes": [
+    {"model_id": "muse-spark-1.3", "request_ids": ["muse-spark-1.3", "muse-spark-1.3-contributor"], "capabilities": ["text", "vision", "video", "thinking", "cheap"]}
+  ]
+}

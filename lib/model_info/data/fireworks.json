@@ -1,0 +1,14 @@
+{
+  "brand": "fireworks",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "fireworks",
+  "category": "relay",
+  "name": "Fireworks AI",
+  "base_url": "https://api.fireworks.ai/inference/v1",
+  "offering_recipes": [
+    {"model_id": "accounts/fireworks/models/deepseek-v3.2-exp", "capabilities": ["text", "cheap"]},
+    {"model_id": "accounts/fireworks/models/glm-5.3",           "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "accounts/fireworks/models/kimi-k2.6",         "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "accounts/fireworks/models/gpt-oss-120b",      "capabilities": ["text", "thinking", "cheap"]}
+  ]
+}

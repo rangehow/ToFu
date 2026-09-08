@@ -79,7 +79,7 @@ def _validated_scheduler_process_principal(
 # lib.SCHEDULER_ALLOW_CODE_EXEC. 'prompt'/'agent' are LLM-only;
 # System task types ignore their informational command field.
 _CODE_EXEC_TASK_TYPES = frozenset({"command", "python"})
-_ASYNC_TASK_TYPES = frozenset({'daily_report_backfill', 'storage_backup'})
+_ASYNC_TASK_TYPES = frozenset({'daily_report_backfill', 'storage_backup', 'provider_probe_daily'})
 
 
 def _application_managed_storage_backups_enabled() -> bool:
@@ -646,6 +646,19 @@ class ScheduledTaskManager:
                 )
                 return False, "Storage backup error (see logs)"
 
+        elif task_type == 'provider_probe_daily':
+            try:
+                from lib.model_routing.probe_automation import run_daily_probe
+                summary = run_daily_probe(
+                    principal=_task_process_principal(task, system_scope='providers'),
+                    max_runtime=max_runtime,
+                    cancel_event=getattr(self, '_stop_event', None),
+                )
+                return True, json.dumps(summary, sort_keys=True)
+            except Exception:
+                logger.exception('[Scheduler] daily provider probe failed')
+                return False, 'Daily provider probe failed; recommendations not applied (see logs)'
+
         elif task_type == 'daily_report_backfill':
             # Daily reports are owner-scoped durable state. The command is
             # informational; execution rebuilds only reports:maintain for the
@@ -1158,6 +1171,16 @@ class ScheduledTaskManager:
                 e,
             )
 
+    def _ensure_default_provider_probe_task(self):
+        from lib.model_routing.probe_automation import DAILY_PROBE_MAX_RUNTIME
+        return self._ensure_default_task(
+            system_key='daily-provider-probe', name='Daily Provider Detection',
+            schedule='0 8 * * *', command='Fresh detection and recommended grant removal',
+            task_type='provider_probe_daily',
+            description='Daily 08:00 server-local detection and automatic recommended disables.',
+            max_runtime=DAILY_PROBE_MAX_RUNTIME, enabled=True, reconcile_enabled=False,
+        )[0]
+
     def _ensure_default_daily_report_task(self):
         """Install the durable six-hour report backfill for this owner."""
         try:
@@ -1363,6 +1386,7 @@ def start_scheduler_worker(*, principal: PrincipalContext):
     bootstraps = []
     if principal.owner_user_id is not None:
         bootstraps.append(mgr._ensure_default_daily_report_task)
+        bootstraps.append(mgr._ensure_default_provider_probe_task)
         bootstraps.append(mgr._ensure_default_optimizer_task)
         if _application_managed_storage_backups_enabled():
             bootstraps.append(mgr._ensure_default_storage_backup_task)

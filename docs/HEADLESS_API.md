@@ -596,6 +596,24 @@ does not resubmit the agent request after a transport loss.
 | `openai-finetune`  | `{messages:[{role,content,tool_calls?}]}`    |
 | `anthropic`        | `{system?, messages:[{role,content:[…]}]}`   |
 | `tofu-native`      | Full event log + final state (lossless)      |
+| `atif`             | ATIF-v1.3 `{agent, steps, final_metrics}`    |
+
+ATIF uses the ordered working message history when tool exchanges are present:
+assistant messages remain agent steps and tool results become observations on
+their matching call step, never user prompts. It does not append the same
+`toolRounds` and final response again. If only input messages were retained,
+native `toolName/toolCallId/toolArgs/toolContent` rounds use the shared causal
+replay projector; legacy `tool_calls/results` rows remain readable. Missing or
+orphan results are never fabricated as successful execution. Standalone orphan
+observations are explicitly marked with their original role/call ID. Equal calls
+in separate occurrences remain separate. This is a normalized working-context
+export, not byte-exact provider traffic or a promise to undo prior compaction.
+`final_metrics` accepts canonical `prompt_tokens/completion_tokens` as well as
+historical `input_tokens/output_tokens` names.
+
+The embeddable SDK and CLI terminal-success/diagnostic contract is documented in
+[DEVELOPER_RUNTIME.md](DEVELOPER_RUNTIME.md#terminal-success-and-diagnostics).
+A settled run may contain valid partial work and an error at the same time.
 
 #### 3.7.3 New scopes
 
@@ -783,6 +801,29 @@ durations and real overlap transition fields. The final file clock always
 remains the spoken/SRT program duration even when visual handles are rendered
 for `xfade`.
 
+### 3.10 Local Android APK distribution — `/api/v1/mobile/*`
+
+Serves the repo-built release APK (`./gradlew assembleRelease`, same signing
+config as the GitHub-published artifact) straight from this server, so a
+phone on the same network installs the exact local build — no GitHub
+round-trip, no remote/local divergence. The APK path defaults to the
+in-repo Gradle output; point it elsewhere with `TOFU_ANDROID_APK_PATH`.
+
+```text
+GET /api/v1/mobile/android        — scan-me HTML page (QR + status)
+GET /api/v1/mobile/android/link   — {available, url, tokenEmbedded, qr,
+                                    sizeBytes?, modifiedMs?}
+GET /api/v1/mobile/android/apk    — the APK attachment
+                                    (application/vnd.android.package-archive)
+```
+
+All three require auth. The URL returned by `link` (and encoded in the QR)
+carries the caller's own credential via the `?token=` first-link transport
+when one was presented (the session cookie stores the raw token, so a normal
+browser session always embeds one); the phone's first hit installs its own
+session cookie through the standard query-token redirect. A 404 on `apk`
+means no local build exists yet — run `./gradlew assembleRelease` in
+`android/` first.
 ---
 
 ## 4. Compatibility adapters

@@ -7,6 +7,8 @@ OPERATIONS = {
     'queue.enqueue': ops.OperationSpec('command', True, ops._queue_enqueue),
     'queue.list': ops.OperationSpec('query', False, ops._queue_list),
     'queue.remove': ops.OperationSpec('command', True, ops._queue_remove),
+    'queue.injection.ack': ops.OperationSpec(
+        'command', True, ops._queue_injection_ack, ops._queue_injection_ack_capture),
     'queue.clear': ops.OperationSpec('command', True, ops._queue_clear),
     'queue.kind.clear': ops.OperationSpec(
         'command', True, ops._queue_kind_clear),

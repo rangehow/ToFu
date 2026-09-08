@@ -224,7 +224,7 @@ class TestBreaker:
         assert task['_tool_loop_guard']['identical_repeat_count'] == 0
         assert task['_tool_loop_guard']['exact_nudge_digest'] == ''
 
-    def test_productive_serial_reads_get_one_local_ptc_adoption_nudge(self):
+    def test_productive_serial_reads_do_not_nudge_or_force_gateway(self):
         task, rs = _task(), _rs()
         task['_ptc_local'] = {
             'tier': 'program',
@@ -266,22 +266,11 @@ class TestBreaker:
             message for message in messages
             if 'SERIAL READ CHAIN DETECTED' in str(message.get('content'))
         ]
-        assert len(nudges) == 1
-        assert nudges[0]['_isMeta'] is True
-        assert len(task['_programmaticAdoptionNudges']) == 1
-        assert task['_programmaticAdoptionNudges'][0] == {
-            'afterRound': 3,
-            'targetRound': 4,
-            'reason': 'serial_direct_reads',
-            'chainLength': 3,
-            'tools': ['read_files', 'read_files', 'read_files'],
-            'max': 4,
-        }
-        from lib.tasks_pkg.manager._persist import build_result_meta
-        assert build_result_meta(task)['programmaticAdoptionNudges'] == (
-            task['_programmaticAdoptionNudges']
-        )
+        assert not nudges
+        assert not any(message.get('_isMeta') for message in messages)
+        assert '_programmaticAdoptionNudges' not in task
         assert '_toolRoundTripNudges' not in task
+        assert '_programmaticSerialGateway' not in task
 
     @pytest.mark.parametrize(
         ('damaged_field', 'damaged_value'),
@@ -326,9 +315,7 @@ class TestBreaker:
                 task, rs, messages=messages,
                 round_num=rn, tid='abcdef12') is False
 
-        assert task['_tool_loop_guard'][
-            'programmatic_adoption_nudge_count'] == 1
-        assert len(task['_programmaticAdoptionNudges']) == 1
+        assert not any(message.get('_isMeta') for message in messages)
 
     def test_native_ptc_projection_does_not_get_local_adoption_nudge(self):
         task, rs = _task(), _rs()
@@ -496,7 +483,7 @@ class TestBreaker:
         )
         assert '_programmaticAdoptionNudges' not in task
 
-    def test_six_productive_single_tool_rounds_get_one_efficiency_nudge(self):
+    def test_six_plus_productive_single_tool_rounds_do_not_nudge(self):
         task, rs = _task(), _rs()
         messages = [{'role': 'user', 'content': 'inspect the repository'}]
 
@@ -513,21 +500,10 @@ class TestBreaker:
             if 'SERIAL SINGLE-TOOL CHAIN DETECTED'
             in str(message.get('content'))
         ]
-        assert len(nudges) == 1
-        assert nudges[0]['_isMeta'] is True
-        assert task['_toolRoundTripNudges'] == [{
-            'afterRound': 6,
-            'targetRound': 7,
-            'reason': 'serial_single_tool_rounds',
-            'chainLength': 6,
-            'tools': ['run_command'] * 6,
-            'max': 4,
-        }]
-        from lib.tasks_pkg.manager._persist import build_result_meta
-        assert build_result_meta(task)['toolRoundTripNudges'] == (
-            task['_toolRoundTripNudges'])
+        assert not nudges
+        assert '_toolRoundTripNudges' not in task
 
-    def test_efficiency_nudge_rearms_sparsely_and_caps_at_four(self):
+    def test_long_productive_serial_chain_never_nudges(self):
         task, rs = _task(), _rs()
         messages = [{'role': 'user', 'content': 'inspect the repository'}]
 
@@ -537,23 +513,8 @@ class TestBreaker:
                 task, rs, messages=messages,
                 round_num=rn, tid='abcdef12') is False
 
-        evidence = task['_toolRoundTripNudges']
-        assert [row['afterRound'] for row in evidence] == [6, 30, 54, 78]
-        assert all(row['max'] == 4 for row in evidence)
-        assert task['_tool_loop_guard'][
-            'round_trip_efficiency_nudge_count'] == 4
-        prompts = [
-            message for message in messages
-            if 'SERIAL SINGLE-TOOL CHAIN DETECTED'
-            in str(message.get('content'))
-        ]
-        assert len(prompts) == 4
-        retained_bytes = sum(
-            len(message['content'].encode('utf-8')) for message in prompts
-        ) + len(json.dumps(
-            evidence, ensure_ascii=False, separators=(',', ':'),
-        ).encode('utf-8'))
-        assert retained_bytes <= 3 * 1024
+        assert '_toolRoundTripNudges' not in task
+        assert not any(message.get('_isMeta') for message in messages)
 
     def test_persisted_efficiency_witness_recovers_remaining_budget(self):
         task, rs = _task(), _rs()
@@ -574,10 +535,9 @@ class TestBreaker:
                 round_num=rn, tid='abcdef12') is False
 
         assert [row['afterRound'] for row in task['_toolRoundTripNudges']] == [
-            6, 30,
+            6,
         ]
-        assert task['_tool_loop_guard'][
-            'round_trip_efficiency_nudge_count'] == 2
+        assert not any(message.get('_isMeta') for message in messages)
 
     def test_five_single_tool_rounds_do_not_get_efficiency_nudge(self):
         task, rs = _task(), _rs()
@@ -622,7 +582,7 @@ class TestBreaker:
                 task, rs, messages=messages,
                 round_num=rn, tid='abcdef12') is False
 
-        assert len(task['_toolRoundTripNudges']) == 1
+        assert '_toolRoundTripNudges' not in task
         assert '_programmaticAdoptionNudges' not in task
 
     def test_parallel_round_breaks_single_tool_efficiency_chain(self):
@@ -705,9 +665,7 @@ class TestBreaker:
                 task, rs, messages=messages,
                 round_num=rn, tid='abcdef12') is False
 
-        assert task['_tool_loop_guard'][
-            'round_trip_efficiency_nudge_count'] == 1
-        assert len(task['_toolRoundTripNudges']) == 1
+        assert not any(message.get('_isMeta') for message in messages)
 
     def test_changed_args_reset_the_counter(self):
         task, rs = _task(), _rs()
@@ -1437,7 +1395,7 @@ class TestFailureFingerprint:
 
 
 class TestSuccessPollDetector:
-    def test_nudges_then_clean_finishes(self):
+    def test_nudges_then_stops_incomplete(self):
         task, rs, messages = _task(), _rs(), []
         thresholds = _stagnation_thresholds(poll_nudge=3, poll_grace=2)
         with registered_chat_task(task):
@@ -1455,12 +1413,13 @@ class TestSuccessPollDetector:
                 if rn < 4:
                     assert result is False, rn
         assert result is True
-        assert rs.exit_reason == 'success_poll_finish'
+        assert rs.exit_reason == 'success_poll_incomplete'
         # The registered runtime adoption adds an ``error: None`` key; the
         # production invariant is that no envelope was ever attached.
         assert not task.get('error')
-        finish = task['_toolLoopCleanFinish']
-        assert finish['reason'] == 'success_poll_finish'
+        assert '_toolLoopCleanFinish' not in task
+        finish = task['_toolLoopIncompleteStop']
+        assert finish['reason'] == 'success_poll_incomplete'
         nudges = [
             message for message in messages
             if 'REPEATED IDENTICAL VERIFICATION'
@@ -1469,10 +1428,10 @@ class TestSuccessPollDetector:
         assert len(nudges) == 1
         assert nudges[0]['_isMeta'] is True
         audit = task['_toolLoopBreakerAudit']
-        assert [row['action'] for row in audit] == ['nudge', 'finish']
+        assert [row['action'] for row in audit] == ['nudge', 'stop']
         assert all(row['detector'] == 'success_poll' for row in audit)
         assert any(e.get('type') == 'round_end'
-                   and e.get('reason') == 'success_poll'
+                   and e.get('reason') == 'success_poll_incomplete'
                    for e in task['events'])
 
     def test_edit_resets_the_poll_streak(self):
@@ -1529,7 +1488,7 @@ class TestSuccessPollDetector:
                 task, rs, round_num=1, tid='abcdef12',
                 stagnation_thresholds=thresholds,
                 max_consecutive_identical=99) is True
-        assert rs.exit_reason == 'success_poll_finish'
+        assert rs.exit_reason == 'success_poll_incomplete'
         # The registered runtime adoption adds an ``error: None`` key; the
         # production invariant is that no envelope was ever attached.
         assert not task.get('error')
@@ -1686,11 +1645,11 @@ class TestCleanFinishSettlement:
             _settle_post_loop_finish_reason)
         task = {
             'aborted': False,
-            '_toolLoopCleanFinish': {'reason': 'success_poll_finish',
+            '_toolLoopCleanFinish': {'reason': 'background_task_accepted',
                                      'round': 5},
         }
         assert _settle_post_loop_finish_reason(
-            task, 'tool_use', loop_exit_reason='success_poll_finish',
+            task, 'tool_use', loop_exit_reason='background_task_accepted',
             abort_detected_phase=None, model='m', tid='t') == 'stop'
         assert 'error' not in task
 
@@ -1702,3 +1661,33 @@ class TestCleanFinishSettlement:
             task, 'tool_use', loop_exit_reason='length',
             abort_detected_phase=None, model='m', tid='t') == 'error'
         assert task['error']['kind'] == 'internal'
+
+
+@pytest.mark.parametrize('finish', ['tool_use', 'tool_calls', 'stop', None])
+def test_verification_stop_settles_incomplete(finish):
+    from lib.tasks_pkg.orchestrator._finalize import _settle_post_loop_finish_reason
+    task = {'aborted': False, '_toolLoopIncompleteStop': {'reason': 'success_poll_incomplete'}}
+    assert _settle_post_loop_finish_reason(
+        task, finish, loop_exit_reason='success_poll_incomplete',
+        abort_detected_phase=None, model='m', tid='t') == 'incomplete'
+    assert not task.get('error')
+
+
+def test_retained_noop_prompt_and_stop_are_recorded(monkeypatch):
+    from lib.tasks_pkg import segments
+    records = []
+    monkeypatch.setattr(segments, 'record_injected_note',
+                        lambda task, **kwargs: records.append(kwargs))
+    task, rs, messages = _task(), _rs(), []
+    with registered_chat_task(task):
+        for rn in range(2):
+            _round(task, rn, args='{"command":"true"}')
+            stopped = handle_tool_loop_circuit_breaker(
+                task, rs, messages=messages, round_num=rn, tid='t')
+            assert stopped is (rn == 1)
+    assert [r['action'] for r in records] == ['prompt', 'stop']
+    assert [r['llm_round'] for r in records] == [0, 1]
+    assert all(r['kind'] == 'system-intervention' for r in records)
+    assert [r['reason'] for r in records] == ['explicit_noop', 'semantic_noop_tool_loop']
+    assert records[0]['text'] == messages[0]['content']
+    assert len(messages) == 1  # The stop is display-only, never model input.

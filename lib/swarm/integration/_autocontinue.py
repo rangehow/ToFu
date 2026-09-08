@@ -60,6 +60,25 @@ def _maybe_autocontinue(
             )
             return
 
+        # All-failed gate: an unattended continuation exists to INTEGRATE
+        # completed sub-agent results. When every pending update is a
+        # failure/cancellation there is nothing to integrate — the model
+        # can only re-report errors, and the failure payloads stay queued
+        # for the next human turn (same posture as the chain ceiling).
+        # Fail-closed: an update without a stamped status is not proof of
+        # a completed result.
+        updates = agent_inbox.pending_items(swarm_key, modes=['swarm-update'])
+        if updates and not any(
+                item.get('status') == 'completed' for item in updates):
+            logger.info(
+                "[Swarm:%s] auto-continuation skipped: no completed sub-agent "
+                "result to integrate (%d failed/cancelled update(s) left for "
+                "the next human turn)",
+                swarm_key,
+                len(updates),
+            )
+            return
+
         with _autocontinue_lock:
             if swarm_key in _autocontinue_inflight:
                 return

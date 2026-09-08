@@ -292,6 +292,25 @@ DeepSeek 公布的 V4 Flash TB 2.1 分数使用 DeepSeek Harness Minimal preset�
 标为 Tofu-harness 结果，不能把两者当作同一实验。模型温度、`top_p` 和 reasoning effort 已按
 官方公开配置对齐，并不消除 harness 差异。
 
+## OCI 归档完整性
+
+镜像下载后、归档前逐个校验 `blobs/sha256`，拒绝损坏内容、非普通文件、符号链接
+和空目录。GNU tar 的并发修改检查仍保持启用；出现 `file changed as we read it`
+时不能忽略其退出码。可用既有 `--archive-tool /absolute/path/bsdtar` 做兼容性对照，
+但发布前应另核对 ISO 中归档的 blob 字节摘要，不能仅以替代工具退出零判定正确。
+离线校验规格：`tests/test_oci_blob_validation.py`。
+
+## OpenCode 本地接入合同（尚未完成 runner）
+
+`evaluations/opencode_contract.py` 固定 OpenCode 1.18.29 的 guest argv 和模型配置。
+该版本用 `run --auto`，不使用 Harbor 旧命令中的
+`--dangerously-skip-permissions`。主模型与 small model 必须指向同一个显式 wire ID；
+仅允许 benchmark provider，关闭自动更新和分享，不启用 thinking 文本输出。
+配置只接受既有 QEMU control-plane IP `10.0.2.101` 的显式 HTTP 端口，不能包含
+上游密钥。该合同尚未连接完整 guest runner 或 host proxy，不能据此声称
+OpenCode trial 已可运行或发布比较分数。离线规格为
+`tests/test_opencode_benchmark_contract.py`。
+
 ## 产物和搜索隔离
 
 默认产物位于仓库外。每个 root/run 目录都是 mode 0700，并自带拒绝递归的 `.gitignore` 和

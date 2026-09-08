@@ -88,20 +88,14 @@ _SUMMARY_TRIGGER_RATIO = 0.90
 Layer 2 summary is lossy; delay firing until we're truly close to the wall.
 With 1M context that's still 100k tokens of headroom."""
 
-_TOKEN_BUDGET_REMINDER_RATIO = 0.70
-"""Fraction of usable context at which a ONE-SHOT budget reminder is injected.
+_CONTEXT_BUDGET_DIAGNOSTIC_RATIO = 0.70
+"""Usable-window pressure threshold for content-free audit telemetry.
 
-Codex-inspired (codex-rs ``token_budget_context.rs``): the model is told its
-remaining token budget BEFORE the wall so it can plan — finish the current
-step, avoid starting large new explorations, and move durable findings into
-files/artifacts. Ours fires once per context window at 0.70 of usable (the
-L2 force trigger is 0.90), appended at the END of the message list as an
-``_isMeta`` user message so the cached prefix is never disturbed and the
-turn-boundary / query-extraction logic treats it as transparent.
-
-Introduced 2026-08-21 (§10.1 sign-off: owner-mandated Codex-infrastructure
-borrowing batch, ). The claim resets after every
-successful compaction (a fresh window gets one fresh reminder)."""
+Automatic compaction owns capacity: this never injects a model reminder.
+A task latch bounds emission to once per context window and resets after
+successful L2 compaction. This diagnostic threshold is not a compaction
+trigger or a task deadline.
+"""
 
 _USER_VERBATIM_BUDGET_TOKENS = 4096
 """Token budget for VERBATIM user-message retention across an L2 summary.

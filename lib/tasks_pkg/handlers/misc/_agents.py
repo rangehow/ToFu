@@ -85,8 +85,14 @@ def _handle_swarm_tool(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, 
     # Custom executor closes over task/cfg/all_tools to preserve the full swarm API
     def _run_swarm(_fn_name, _fn_args):
         from lib.swarm.integration import execute_swarm_tool
+        from lib.agent_inbox import has_pending
+        conv_id = task.get('convId', '')
         return execute_swarm_tool(
             _fn_name, _fn_args, task,
+            abort_check=lambda: bool(task.get('aborted')),
+            pending_input_check=(
+                lambda: has_pending(conv_id, modes=['user-steer', 'background-command'])
+            ) if conv_id else None,
             on_event=lambda ev: append_event(task, ev),
             project_path=project_path,
             project_enabled=project_enabled,
@@ -154,6 +160,12 @@ def _build_await_post_build():
         n_done = len(completed)
         n_total = n_done + len(still_running)
         timed_out = bool(data.get('timed_out'))
+        if data.get('yield_reason') == 'pending_input':
+            meta['badge'] = 'yielded · pending input'
+            meta['awaitYieldReason'] = 'pending_input'
+            if still_running:
+                meta['awaitStillRunning'] = still_running
+            return
         if timed_out:
             # Amber warning badge (via awaitTimedOut) — partial result, wait cut short.
             meta['badge'] = f'timed out · {n_done}/{n_total} done'

@@ -113,6 +113,7 @@ def _dispatch_translation_candidate(
         max_429_attempts=None, defer_on_shared_contention=False):
     """Run one translation attempt and normalize stream/non-stream results."""
     from lib.llm_dispatch import dispatch_chat, dispatch_stream, smart_chat
+    from lib.llm_dispatch.conv_affinity import conv_affinity_cleared
     from lib.key_stats import strict_billing_stop_admission
     from lib.translate.model_gate import translation_model_slot
     from lib.translate.policy import translation_max_429_attempts
@@ -120,29 +121,34 @@ def _dispatch_translation_candidate(
     if max_429_attempts is None:
         max_429_attempts = translation_max_429_attempts()
 
+    # Translation is stateless: every request carries a fresh payload, so a
+    # conversation's sticky key / warm-key hold buys nothing and only stalls
+    # 429 failover (up to seconds per dispatch). Dispatch unbound — the
+    # picker is purely score-based and a 429 rotates to whatever is healthy.
     if progress_cb is None and not stream:
         with strict_billing_stop_admission():
             with translation_model_slot(abort_check=deadline_exceeded):
-                dispatch = dispatch_chat if strict_model else smart_chat
-                model_arguments = (
-                    {'prefer_model': prefer_model, 'strict_model': strict_model}
-                    if strict_model else {'model': prefer_model}
-                )
-                return dispatch(
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    capability=capability,
-                    log_prefix=f'[Translate{chunk_label}]',
-                    timeout=min(float(timeout),
-                                max(0.1, remaining_deadline_seconds())),
-                    max_retries=max_retries,
-                    exclude_models=excluded_models or None,
-                    abort_check=deadline_exceeded,
-                    max_429_attempts=max_429_attempts,
-                    defer_on_shared_contention=defer_on_shared_contention,
-                    **model_arguments,
-                )
+                with conv_affinity_cleared():
+                    dispatch = dispatch_chat if strict_model else smart_chat
+                    model_arguments = (
+                        {'prefer_model': prefer_model, 'strict_model': strict_model}
+                        if strict_model else {'model': prefer_model}
+                    )
+                    return dispatch(
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        capability=capability,
+                        log_prefix=f'[Translate{chunk_label}]',
+                        timeout=min(float(timeout),
+                                    max(0.1, remaining_deadline_seconds())),
+                        max_retries=max_retries,
+                        exclude_models=excluded_models or None,
+                        abort_check=deadline_exceeded,
+                        max_429_attempts=max_429_attempts,
+                        defer_on_shared_contention=defer_on_shared_contention,
+                        **model_arguments,
+                    )
 
     stream_buffer = []
 
@@ -163,21 +169,22 @@ def _dispatch_translation_candidate(
     from lib.llm.stream_result import require_verified_provider_stream_result
     with strict_billing_stop_admission():
         with translation_model_slot(abort_check=deadline_exceeded):
-            stream_result = require_verified_provider_stream_result(dispatch_stream(
-                messages,
-                on_content=on_content_delta,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                capability=capability,
-                prefer_model=prefer_model,
-                strict_model=strict_model,
-                log_prefix=f'[Translate{chunk_label}]',
-                max_retries=max_retries,
-                exclude_models=excluded_models or None,
-                abort_check=deadline_exceeded,
-                max_429_attempts=max_429_attempts,
-                defer_on_shared_contention=defer_on_shared_contention,
-            ), context='streaming translation candidate')
+            with conv_affinity_cleared():
+                stream_result = require_verified_provider_stream_result(dispatch_stream(
+                    messages,
+                    on_content=on_content_delta,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    capability=capability,
+                    prefer_model=prefer_model,
+                    strict_model=strict_model,
+                    log_prefix=f'[Translate{chunk_label}]',
+                    max_retries=max_retries,
+                    exclude_models=excluded_models or None,
+                    abort_check=deadline_exceeded,
+                    max_429_attempts=max_429_attempts,
+                    defer_on_shared_contention=defer_on_shared_contention,
+                ), context='streaming translation candidate')
     stream_message = stream_result.message
     finish_reason = stream_result.provider_finish_reason
     usage = stream_result.usage

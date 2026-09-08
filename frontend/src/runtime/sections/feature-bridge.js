@@ -84,6 +84,7 @@ function _installFeatureStub(name) {
 
 const _FEATURE_ENTRY_POINTS = [
   'openOrchestration', 'openTaskMode', 'togglePaperMode',
+  '_overleafPreviewRounds',
  'toggleResearchMode',
   'enterImageGenMode', 'exitImageGenMode', 'generateImageDirect',
   'selectIgAspect', 'selectIgCount', 'selectIgModel', 'selectIgResolution',
@@ -100,6 +101,7 @@ const _FEATURE_ENTRY_POINTS = [
   'openCompactionViewer',
   'resolveWriteApproval', 'submitStdinInput', 'submitStdinEof',
   'submitHumanGuidanceChoice', 'submitHumanGuidanceFreeText',
+  'selectBatchChoice', 'submitBatchAnswers',
   'openApplyModal', 'closeApplyModal', 'confirmApplyCode',
   '_toggleCostPopover',
   'openUpdateDialog', 'toggleTimerPanel', 'toggleOptimizerPanel',

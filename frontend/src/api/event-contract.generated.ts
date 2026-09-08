@@ -540,6 +540,8 @@ export interface ToolCompleteEvent {
   toolName: string;
   /** final model-visible tool result */
   toolContent: string;
+  /** (optional) bounded multimodal model receipt, separate from display text */
+  toolModelContent?: unknown[];
   /** (optional) real tokens of the final model-visible toolContent */
   toolTokens?: number;
   /** (optional) 'L0'/'unchanged' when the result was budget-enveloped or receipt-replaced before first entering context */
@@ -697,7 +699,7 @@ export interface ProgramOutputEvent {
   /** program call id */
   programCallId: string;
   /** program aggregate result */
-  result: string | Record<string, unknown> | null;
+  result: string | Record<string, unknown> | unknown[] | number | boolean | null;
   /** completed, incomplete, or error */
   status: string;
   /** final nested function-call ids */
@@ -930,10 +932,12 @@ export interface HumanGuidanceRequestEvent {
   guidanceId: string;
   /** prompt text */
   question: string;
-  /** free_text|choice */
+  /** free_text|choice|batch */
   responseType: string;
   /** choice options (normalized dicts) */
   options: unknown[];
+  /** batch-mode question list (optional) */
+  batchQuestions?: unknown[];
 }
 
 /** A write/exec tool needs explicit approval before running. */

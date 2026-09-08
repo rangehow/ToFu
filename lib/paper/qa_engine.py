@@ -74,7 +74,7 @@ def _run_qa_task(task, messages):
     task['toolEpochV2'] = paper_epoch.telemetry()
     paper_tools = list(paper_epoch.wire_schemas)
     apply_paper_tool_epoch_guidance(
-        messages, paper_epoch, lang=task.get('lang') or 'en')
+        messages, paper_epoch, lang=task.get('lang') or 'en', task=task)
     _exec_shim = make_paper_exec_shim(task_id=task['task_id'],
                                       abort=abort_signal.is_set,
                                       owner_user_id=task.get('_userId'),

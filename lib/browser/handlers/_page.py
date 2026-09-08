@@ -77,10 +77,15 @@ def _handle_read_page(fn_args, runtime):
     from lib.browser._resolve import resolve_work_tab
     from ._interact import _read_elements
     from ._tabs import (
-        _extract_best_text, _read_tab, _render_read_result,
+        _read_tab, _render_read_result,
         _result_url_allowed,
     )
 
+    from lib.browser.content_contract import ReadTarget
+    try:
+        target = ReadTarget.from_value(fn_args.get('target'))
+    except ValueError as exc:
+        return f'Error: {exc}'
     tab_id = resolve_work_tab(
         fn_args, route_key=runtime.route_key, send=runtime.send)
     if tab_id is None:
@@ -113,7 +118,7 @@ def _handle_read_page(fn_args, runtime):
             return 'Error: browser read result was denied by domain policy'
         from lib.browser.network_evidence import render_network_evidence
         evidence = render_network_evidence(
-            result, owner_user_id=runtime.owner_user_id,
+            result, owner_user_id=runtime.owner_user_id, target=target,
             max_chars=fn_args.get('maxChars', 30_000))
         return evidence or (
             'No business-data API response was captured for this page. '
@@ -141,21 +146,18 @@ def _handle_read_page(fn_args, runtime):
     if not _result_url_allowed(result, runtime):
         return 'Error: browser read result was denied by domain policy'
     if isinstance(result, dict) and not result.get('error') and not result.get('elements'):
-        text, _method = _extract_best_text(result)
-        from lib.browser.network_evidence import render_network_evidence
+        from lib.browser.content import collect_content, render_content
         max_chars = fn_args.get('maxChars', 30_000)
-        network_text = render_network_evidence(
-            result, owner_user_id=runtime.owner_user_id,
-            max_chars=max_chars)
-        if len((text or '').strip()) >= _AUTO_SPARSE_CHARS or network_text:
-            return _render_read_result(
-                result, tab_id, network_text=network_text,
-                max_chars=max_chars)
+        content = collect_content(result, owner_user_id=runtime.owner_user_id,
+                                  target=target, max_chars=max_chars)
+        if content['status'] in ('ok', 'partial', 'empty', 'blocked'):
+            return render_content(content, max_chars=max_chars)
+        text = content['content']
         # Sparse: the page is likely Canvas/SVG/SPA — attach the structural
         # summary (framework, forms, canvas count) so the model gets the
         # diagnosis instead of having to make it.
         summary = _summarize_page({'tabId': tab_id}, runtime)
-        body = _render_read_result(result, tab_id)
+        body = render_content(content, max_chars=max_chars)
         return (
             f'Text extraction is sparse ({len((text or "").strip())} chars) — '
             f'the page is likely Canvas/SVG/SPA-rendered.\n'

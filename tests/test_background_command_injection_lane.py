@@ -105,6 +105,13 @@ def test_completion_dual_writes_durable_row_and_inbox_twin(monkeypatch):
     assert twin[0]['queueId'] == 'q-1'
     assert twin[0]['commandId'] == 'bg_1'
     assert twin[0]['command'] == 'pytest'
+    from lib.background_command_projection import background_command_completion
+    from lib.turn_projection_patch import normalize_projection_document
+    completion = background_command_completion(enqueued[0][1])
+    assert completion == twin[0]['backgroundCommand']
+    assert completion['resultTruncated'] is False
+    assert normalize_projection_document(
+        enqueued[0][1]['_user_msg'])['backgroundCommand'] == completion
     assert '<background-command id="bg_1"' in twin[0]['value']
 
 
@@ -153,7 +160,7 @@ def test_flush_confirms_consumption_and_deletes_durable_row(monkeypatch):
     assert sidecar[0]['round'] == 3
     assert sidecar[0]['count'] == 1
     assert sidecar[0]['previews'] == [
-        {'commandId': 'bg_1', 'text': PAYLOAD[:1200]},
+        {'commandId': 'bg_1', 'text': PAYLOAD[:1200], 'textTruncated': False},
     ]
     assert dedup_calls == [(CONV, ['q-1'], 7)]
     assert len(events) == 1

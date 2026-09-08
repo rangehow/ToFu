@@ -316,7 +316,7 @@ struct SimulatedState {
     durable_directories: BTreeSet<PathBuf>,
     locked_files: BTreeSet<PathBuf>,
     operation_count: u64,
-    fault: Option<FaultRule>,
+    faults: Vec<FaultRule>,
     trace: Vec<Operation>,
 }
 
@@ -348,8 +348,9 @@ fn before(state: &mut SimulatedState, operation: Operation) -> io::Result<Option
         .ok_or_else(|| io::Error::other("VFS operation counter overflow"))?;
     state.trace.push(operation);
     let action = state
-        .fault
-        .filter(|fault| fault.operation_number == state.operation_count)
+        .faults
+        .iter()
+        .find(|fault| fault.operation_number == state.operation_count)
         .map(|fault| fault.action);
     if let Some(FaultAction::ErrorBefore(kind)) = action {
         return Err(io::Error::new(kind, "deterministic VFS injected error"));
@@ -386,7 +387,7 @@ impl DeterministicVfs {
                 durable_directories: BTreeSet::from([root]),
                 locked_files: BTreeSet::new(),
                 operation_count: 0,
-                fault,
+                faults: fault.into_iter().collect(),
                 trace: Vec::new(),
             })),
         }
@@ -402,10 +403,22 @@ impl DeterministicVfs {
     }
 
     pub fn arm_fault(&self, fault: Option<FaultRule>) -> io::Result<()> {
+        self.arm_faults(fault.as_slice())
+    }
+
+    /// Arms several faults at once for correlated-loss certification: each
+    /// rule fires when the operation counter reaches its number, so two
+    /// dropped syncs in one crash window model a power failure that loses
+    /// more than one barrier call. Rules are stored sorted by operation
+    /// number; duplicate numbers collapse to the first rule.
+    pub fn arm_faults(&self, faults: &[FaultRule]) -> io::Result<()> {
         let mut state = state(&self.shared)?;
         state.operation_count = 0;
         state.trace.clear();
-        state.fault = fault;
+        let mut rules = faults.to_vec();
+        rules.sort_by_key(|rule| rule.operation_number);
+        rules.dedup_by_key(|rule| rule.operation_number);
+        state.faults = rules;
         Ok(())
     }
 

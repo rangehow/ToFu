@@ -19,17 +19,19 @@ use crate::generated_tofudb_ir::{
     ATTEMPT_CLAIM_LOCATOR_VERSION, ATTEMPT_COMMAND_NAMESPACE, ATTEMPT_DISPATCHABLE_INDEX_NAMESPACE,
     ATTEMPT_EVENT_HEAD_NAMESPACE, ATTEMPT_EVENT_NAMESPACE, ATTEMPT_EVENT_RETENTION_INDEX_NAMESPACE,
     ATTEMPT_EVENT_SYNC_REFERENCE_NAMESPACE, ATTEMPT_ID_CLAIM_NAMESPACE,
-    ATTEMPT_RECOVERY_INDEX_NAMESPACE, ATTEMPT_TIMING_CONVERSATION_INDEX_NAMESPACE,
-    ATTEMPT_TIMING_TASK_INDEX_NAMESPACE, ATTEMPT_TURN_COUNT_NAMESPACE,
-    ATTEMPT_TURN_DIRECTORY_NAMESPACE, CONVERSATION_EXECUTION_EPOCH_NAMESPACE,
-    CONVERSATION_SYNC_AGE_INDEX_NAMESPACE, CONVERSATION_SYNC_EVENT_NAMESPACE,
-    CONVERSATION_SYNC_HEAD_NAMESPACE, GENERATION_ATTEMPT_NAMESPACE, MAX_ATTEMPTS_PER_TURN,
+    ATTEMPT_RECOVERY_INDEX_NAMESPACE, ATTEMPT_SUPERSEDED_INDEX_NAMESPACE,
+    ATTEMPT_TIMING_CONVERSATION_INDEX_NAMESPACE, ATTEMPT_TIMING_TASK_INDEX_NAMESPACE,
+    ATTEMPT_TURN_COUNT_NAMESPACE, ATTEMPT_TURN_DIRECTORY_NAMESPACE,
+    CONVERSATION_EXECUTION_EPOCH_NAMESPACE, CONVERSATION_SYNC_AGE_INDEX_NAMESPACE,
+    CONVERSATION_SYNC_EVENT_NAMESPACE, CONVERSATION_SYNC_HEAD_NAMESPACE,
+    GENERATION_ATTEMPT_NAMESPACE, MAX_ATTEMPTS_PER_TURN,
     MAX_ATTEMPT_EVENT_PRUNE_ATTEMPTS_PER_TRANSACTION, MAX_ATTEMPT_EVENT_PRUNE_MATERIALIZED_BYTES,
     MAX_ATTEMPT_EVENT_PRUNE_ROWS_PER_TRANSACTION, MAX_ATTEMPT_TOMBSTONE_BYTES,
-    MAX_ATTEMPT_TURN_DIRECTORY_BYTES, MAX_DISPATCHABLE_ATTEMPTS_PER_QUERY,
-    MAX_RECOVERY_INDEX_ROWS_PER_OWNER, MAX_SYNC_PRUNE_MATERIALIZED_BYTES,
-    MAX_SYNC_PRUNE_ROWS_PER_TRANSACTION, MAX_TIMING_TRACE_CLIENT_OBSERVATIONS,
-    MAX_TIMING_TRACE_COUNTER, MAX_TIMING_TRACE_PERSISTED_BYTES, MAX_TIMING_TRACE_ROWS_PER_QUERY,
+    MAX_ATTEMPT_TURN_DIRECTORY_BYTES, MAX_CLEANUP_INDEX_SCAN_ROWS_PER_TRANSACTION,
+    MAX_DISPATCHABLE_ATTEMPTS_PER_QUERY, MAX_RECOVERY_INDEX_ROWS_PER_OWNER,
+    MAX_SYNC_PRUNE_MATERIALIZED_BYTES, MAX_SYNC_PRUNE_ROWS_PER_TRANSACTION,
+    MAX_TIMING_TRACE_CLIENT_OBSERVATIONS, MAX_TIMING_TRACE_COUNTER,
+    MAX_TIMING_TRACE_PERSISTED_BYTES, MAX_TIMING_TRACE_ROWS_PER_QUERY,
     MAX_TIMING_TRACE_TASK_CANDIDATES, MAX_TRANSACTION_IR_LITERAL_BYTES,
     MAX_TURN_COMPACTION_MATERIALIZED_BYTES, MAX_TURN_COMPACTION_METADATA_ROWS,
     MAX_TURN_COMPACTION_PROJECTION_BYTES, MAX_TURN_COMPACTION_PROJECTION_UPDATES,
@@ -326,6 +328,13 @@ pub struct SyncPruneRequest {
 }
 
 #[derive(Clone, Debug)]
+pub struct CleanupRequest {
+    pub retention_ms: u64,
+    pub limit: usize,
+    pub now_ms: u64,
+}
+
+#[derive(Clone, Debug)]
 pub struct CompactProjectionUpdate {
     pub turn_id: String,
     pub expected_projection_revision: u64,
@@ -356,6 +365,7 @@ pub struct PerceptionRecordRequest {
 
 #[derive(Clone, Debug)]
 pub struct EventRecordRequest {
+    pub model_continuation: Value,
     pub attempt_id: String,
     pub task_id: String,
     pub terminal: bool,
@@ -2046,6 +2056,51 @@ fn tombstone_age_index_key(
     entity_key(transaction, TURN_TOMBSTONE_AGE_INDEX_NAMESPACE, &encoded)
 }
 
+fn attempt_superseded_index_key(
+    transaction: &AuthorityTransaction,
+    superseded_at_ms: u64,
+    conversation_id: &str,
+    attempt_id: &str,
+) -> io::Result<EntityKey> {
+    let mut encoded = Vec::with_capacity(12 + conversation_id.len() + attempt_id.len());
+    encoded.extend_from_slice(&superseded_at_ms.to_be_bytes());
+    push_text_key(&mut encoded, conversation_id)?;
+    push_text_key(&mut encoded, attempt_id)?;
+    entity_key(transaction, ATTEMPT_SUPERSEDED_INDEX_NAMESPACE, &encoded)
+}
+
+fn decode_superseded_index_key(key: &EntityKey) -> io::Result<(u64, String, String)> {
+    let encoded = key.key_bytes();
+    if encoded.len() < 12 {
+        return Err(invalid_data("attempt superseded index key is malformed"));
+    }
+    let superseded_at_ms = u64::from_be_bytes(encoded[..8].try_into().unwrap());
+    let mut offset = 8;
+    let read_text = |offset: &mut usize| -> io::Result<String> {
+        let length_end = offset
+            .checked_add(2)
+            .filter(|end| *end <= encoded.len())
+            .ok_or_else(|| invalid_data("attempt superseded index key is malformed"))?;
+        let length = u16::from_be_bytes(encoded[*offset..length_end].try_into().unwrap()) as usize;
+        *offset = length_end;
+        let value_end = offset
+            .checked_add(length)
+            .filter(|end| *end <= encoded.len())
+            .ok_or_else(|| invalid_data("attempt superseded index key is malformed"))?;
+        let value = std::str::from_utf8(&encoded[*offset..value_end])
+            .map(str::to_owned)
+            .map_err(|_| invalid_data("attempt superseded index identity is not UTF-8"))?;
+        *offset = value_end;
+        Ok(value)
+    };
+    let conversation_id = read_text(&mut offset)?;
+    let attempt_id = read_text(&mut offset)?;
+    if offset != encoded.len() || conversation_id.is_empty() || attempt_id.is_empty() {
+        return Err(invalid_data("attempt superseded index key is malformed"));
+    }
+    Ok((superseded_at_ms, conversation_id, attempt_id))
+}
+
 fn encode_updated_index_value(turn_id: &str, projection_revision: u64) -> io::Result<Vec<u8>> {
     let mut encoded = Vec::with_capacity(18 + turn_id.len());
     encoded.extend_from_slice(UPDATED_INDEX_MAGIC);
@@ -2933,6 +2988,63 @@ fn store_turn_upsert_sync_event(
     database.entity_put(transaction, head_key, sequence.to_le_bytes().to_vec())
 }
 
+/// `queue.injection.ack` publishes one `turn.upsert` change whose payload
+/// carries only the drained inbox identities — matching the legacy capture,
+/// it deliberately carries no `conversationRevision` because the command
+/// never advances the conversation header revision.
+pub(crate) fn store_queue_injection_ack_sync_event(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    removed_queue_ids: &[String],
+    occurred_at_ms: u64,
+) -> io::Result<()> {
+    let head_key = entity_key(
+        transaction,
+        CONVERSATION_SYNC_HEAD_NAMESPACE,
+        &conversation_prefix(conversation_id)?,
+    )?;
+    let sequence = decode_u64(
+        database.entity_get(transaction, &head_key)?,
+        "conversation sync head is malformed",
+    )?
+    .checked_add(1)
+    .ok_or_else(|| invalid_data("conversation sync sequence overflow"))?;
+    let payload = json!({
+        "turns": [],
+        "attempts": [],
+        "removedQueueIds": serde_json::to_value(removed_queue_ids)
+            .map_err(|_| invalid_data("removed queue identities cannot be encoded"))?,
+    });
+    let event = conversation_sync_event(
+        conversation_id,
+        sequence,
+        "turn.upsert",
+        occurred_at_ms,
+        payload,
+        None,
+        None,
+    );
+    let logical_key = format!("{conversation_id}\u{1f}{sequence:020}");
+    let mut encoded_key = conversation_prefix(conversation_id)?;
+    encoded_key.extend_from_slice(&sequence.to_be_bytes());
+    crate::versioned_document::put(
+        database,
+        transaction,
+        crate::versioned_document::PutRequest {
+            key: entity_key(transaction, CONVERSATION_SYNC_EVENT_NAMESPACE, &encoded_key)?,
+            namespace: SYNC_DOCUMENT_IDENTITY.to_owned(),
+            logical_key,
+            value_json: serde_json::to_vec(&event)
+                .map_err(|_| invalid_data("sync event cannot be encoded"))?,
+            expected_version: Some(0),
+            updated_at_ms: occurred_at_ms.max(1),
+        },
+    )?;
+    store_sync_retention_indexes(database, transaction, &event)?;
+    database.entity_put(transaction, head_key, sequence.to_le_bytes().to_vec())
+}
+
 fn store_delete_sync_event(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -3558,6 +3670,7 @@ pub(crate) fn append_settled(
     transaction: &mut AuthorityTransaction,
     request: &AppendSettledRequest,
 ) -> io::Result<Vec<u8>> {
+    let _semantic_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_SEMANTIC);
     let turn_claim_key =
         global_identity_claim_key(transaction, TURN_ID_CLAIM_NAMESPACE, &request.turn_id)?;
     if database.entity_get(transaction, &turn_claim_key)?.is_some() {
@@ -3576,18 +3689,19 @@ pub(crate) fn append_settled(
         }
     }
     let claim_owner = transaction.owner_user_id().to_be_bytes().to_vec();
-    crate::conversation_header::ensure_for_turn(
+    // Fused ensure + epoch + advance: one header load/store per append on the
+    // hot path (see conversation_header::advance_for_turn_append). The
+    // revision is consumed by the sync event and response below; the
+    // transaction aborts atomically if any later step fails, so performing
+    // the advance here is equivalent to the legacy end-of-function call.
+    let (execution_epoch, revision) = crate::conversation_header::advance_for_turn_append(
         database,
         transaction,
         &request.conversation_id,
         &request.defaults,
         request.created_at_ms,
         request.committed_at_ms,
-    )?;
-    let execution_epoch = crate::conversation_header::execution_epoch(
-        database,
-        transaction,
-        &request.conversation_id,
+        request.lane_id == "main",
     )?;
     let head_key = entity_key(
         transaction,
@@ -3629,11 +3743,19 @@ pub(crate) fn append_settled(
         {
             None => Value::Null,
             Some((_, previous)) => {
-                let previous = materialize_turn(database, transaction, &previous)?;
+                // The predecessor's turn identity is the logical key of the
+                // stored envelope ("{conversation}\u{1f}{turn_id}"), so the
+                // parent lookup avoids materializing the full document (and
+                // its blob, when large) just to read one field.
+                let logical_key = crate::versioned_document::stored_document_logical_key(
+                    &previous,
+                    DOCUMENT_IDENTITY,
+                )?;
+                let prefix = format!("{}\u{1f}", request.conversation_id);
                 Value::String(
-                    previous
-                        .get("turnId")
-                        .and_then(Value::as_str)
+                    logical_key
+                        .strip_prefix(prefix.as_str())
+                        .filter(|turn_id| !turn_id.is_empty())
                         .ok_or_else(|| invalid_data("turn predecessor identity is malformed"))?
                         .to_owned(),
                 )
@@ -3672,7 +3794,7 @@ pub(crate) fn append_settled(
     let document_json =
         serde_json::to_vec(&document).map_err(|_| invalid_data("turn cannot be encoded"))?;
     let document_key = turn_key(transaction, &request.conversation_id, &request.turn_id)?;
-    crate::versioned_document::put(
+    let (_, stored) = crate::versioned_document::put_returning_envelope(
         database,
         transaction,
         crate::versioned_document::PutRequest {
@@ -3685,9 +3807,6 @@ pub(crate) fn append_settled(
         },
     )?;
     database.entity_put(transaction, turn_claim_key, claim_owner.clone())?;
-    let stored = database
-        .entity_get(transaction, &document_key)?
-        .ok_or_else(|| invalid_data("staged turn document disappeared"))?;
     database.entity_put(
         transaction,
         updated_index_key(
@@ -3730,20 +3849,15 @@ pub(crate) fn append_settled(
         TURN_SEARCH_DIRTY_NAMESPACE,
         &request.conversation_id,
     )?;
-    let revision = crate::conversation_header::advance_for_turn(
-        database,
-        transaction,
-        &request.conversation_id,
-        request.created_at_ms,
-        request.committed_at_ms,
-        request.lane_id == "main",
-    )?;
-    let turn = public_turn(
-        decode_turn_value(serde_json::to_vec(&document).unwrap().as_slice())?,
-        execution_epoch,
-    )?;
+    // Move the document map into the public projection instead of a
+    // serialize + re-parse round trip.
+    let document_map = match document {
+        Value::Object(map) => map,
+        _ => return Err(invalid_data("turn document is not an object")),
+    };
+    let turn = public_turn(document_map, execution_epoch)?;
     let attempt = request.attempt_id.as_ref().map(|attempt_id| {
-        json!({
+        let mut document = json!({
             "attemptId": attempt_id,
             "conversationId": request.conversation_id,
             "turnId": request.turn_id,
@@ -3756,7 +3870,17 @@ pub(crate) fn append_settled(
             "createdAt": request.created_at_ms,
             "startedAt": request.created_at_ms,
             "settledAt": request.created_at_ms
-        })
+        });
+        if request.status == "superseded" {
+            document
+                .as_object_mut()
+                .expect("attempt literal is an object")
+                .insert(
+                    "supersededAt".to_owned(),
+                    Value::from(request.created_at_ms),
+                );
+        }
+        document
     });
     if let (Some(attempt_id), Some(attempt)) = (&request.attempt_id, &attempt) {
         let command_key =
@@ -3785,6 +3909,18 @@ pub(crate) fn append_settled(
                     attempt_event_retention_index_value(attempt_document, 1)?,
                 )?;
             }
+        }
+        if request.status == "superseded" {
+            database.entity_put(
+                transaction,
+                attempt_superseded_index_key(
+                    transaction,
+                    request.created_at_ms,
+                    &request.conversation_id,
+                    attempt_id,
+                )?,
+                Vec::new(),
+            )?;
         }
         append_attempt_turn_directory(
             database,
@@ -3873,7 +4009,7 @@ fn stage_created_turn(
         return Err(conflict("turn identity already exists"));
     }
     let key = turn_key(transaction, conversation_id, turn_id)?;
-    crate::versioned_document::put(
+    let (_, stored) = crate::versioned_document::put_returning_envelope(
         database,
         transaction,
         crate::versioned_document::PutRequest {
@@ -3891,9 +4027,6 @@ fn stage_created_turn(
         claim,
         transaction.owner_user_id().to_be_bytes().to_vec(),
     )?;
-    let stored = database
-        .entity_get(transaction, &key)?
-        .ok_or_else(|| invalid_data("staged Turn disappeared"))?;
     database.entity_put(
         transaction,
         lane_index_key(transaction, conversation_id, lane_id, ordinal)?,
@@ -4852,7 +4985,7 @@ pub(crate) fn steer_commit(
         updated_at_ms: request.updated_at_ms,
         committed_at_ms: request.committed_at_ms,
     };
-    let staged = stage_projection_update(
+    stage_projection_update(
         database,
         transaction,
         &projection_request,
@@ -4866,20 +4999,22 @@ pub(crate) fn steer_commit(
         request.committed_at_ms,
         false,
     )?;
-    store_projection_sync_event(
+    // Both the public Turn and the injection-array patch grow with history;
+    // peers hydrate the post-commit snapshot from one tiny invalidation.
+    store_activity_sync_event(
         database,
         transaction,
-        &projection_request,
-        &staged.before,
-        &staged.after,
+        &request.conversation_id,
+        &projection_request.turn_id,
         conversation_revision,
-        &[],
+        request.committed_at_ms,
     )?;
     encode_response(&json!({
         "steered": true,
         "injectionId": request.command_id,
         "blockId": block_id,
-        "turn": staged.turn,
+        "conversationId": request.conversation_id,
+        "turnId": projection_request.turn_id,
         "conversationRevision": conversation_revision
     }))
 }
@@ -6353,11 +6488,11 @@ fn prune_expired_tombstones(
     Ok(pruned)
 }
 
-fn store_compaction_sync_event(
+fn store_activity_sync_event(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     conversation_id: &str,
-    summary_turn_id: &str,
+    turn_id: &str,
     revision: u64,
     occurred_at_ms: u64,
 ) -> io::Result<()> {
@@ -6378,7 +6513,7 @@ fn store_compaction_sync_event(
         "conversation.activity",
         occurred_at_ms,
         json!({"requiresSnapshot": true, "conversationRevision": revision}),
-        Some(summary_turn_id),
+        Some(turn_id),
         None,
     );
     let mut encoded_key = conversation_prefix(conversation_id)?;
@@ -6391,7 +6526,7 @@ fn store_compaction_sync_event(
             namespace: SYNC_DOCUMENT_IDENTITY.to_owned(),
             logical_key: format!("{conversation_id}\u{1f}{sequence:020}"),
             value_json: serde_json::to_vec(&event)
-                .map_err(|_| invalid_data("compaction sync event cannot be encoded"))?,
+                .map_err(|_| invalid_data("activity sync event cannot be encoded"))?,
             expected_version: Some(0),
             updated_at_ms: occurred_at_ms,
         },
@@ -6830,7 +6965,7 @@ pub(crate) fn compact(
     if revision != request.expected_conversation_revision + 1 {
         return Err(invalid_data("Turn compaction revision differs"));
     }
-    store_compaction_sync_event(
+    store_activity_sync_event(
         database,
         transaction,
         &request.conversation_id,
@@ -10971,6 +11106,94 @@ fn merge_terminal_client_trace(
     Ok(())
 }
 
+// Native subset of _model_continuation.settle_continuation. Validation and
+// negative settlement outcomes are unchanged; a valid candidate is handed to
+// the durable checkpoint path whose ordinal-frontier CAS is atomic with the
+// settlement transaction. A stored value is acknowledged only after the
+// frontier admits it.
+fn terminal_continuation_candidate<'a>(
+    status: &str,
+    candidate: &'a Value,
+    turn_id: &str,
+    projection: &Map<String, Value>,
+) -> Result<&'a Map<String, Value>, &'a str> {
+    if status != "completed" {
+        return Err("not_completed");
+    }
+    let Some(candidate) = candidate.as_object() else {
+        return Err("unavailable");
+    };
+    let Some(value) = candidate.get("projection") else {
+        return Err(match candidate.get("status").and_then(Value::as_str) {
+            Some("stored") => "unavailable",
+            Some(reason) if reason.chars().count() <= 64 => reason,
+            _ => "invalid",
+        });
+    };
+    let valid = value.as_object().is_some_and(|value| {
+        let messages_valid =
+            value
+                .get("messages")
+                .and_then(Value::as_array)
+                .is_some_and(|messages| {
+                    !messages.is_empty()
+                        && messages.len() <= 16_384
+                        && messages.iter().all(Value::is_object)
+                        && messages
+                            .last()
+                            .and_then(|message| message.get("role"))
+                            .and_then(Value::as_str)
+                            == Some("assistant")
+                });
+        let turns_valid = value
+            .get("turns")
+            .and_then(Value::as_array)
+            .is_some_and(|turns| {
+                !turns.is_empty()
+                    && turns.len() <= 4_096
+                    && turns.iter().all(|witness| {
+                        witness.as_array().is_some_and(|witness| {
+                            witness.len() == 2
+                                && witness[0]
+                                    .as_str()
+                                    .is_some_and(|id| !id.is_empty() && id.chars().count() <= 256)
+                                && witness[1].as_str().is_some_and(|digest| {
+                                    digest.len() == 64
+                                        && digest.bytes().all(|byte| {
+                                            byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                                        })
+                                })
+                        })
+                    })
+            });
+        messages_valid && turns_valid
+    });
+    struct EncodingBudget(usize);
+    impl io::Write for EncodingBudget {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.len() > self.0 {
+                return Err(io::Error::other("continuation exceeds encoding budget"));
+            }
+            self.0 -= bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    if !valid || serde_json::to_writer(EncodingBudget(8 * 1024 * 1024), value).is_err() {
+        return Err("invalid_or_over_budget");
+    }
+    let witness = value["turns"].as_array().unwrap().last().unwrap();
+    if witness[0].as_str() != Some(turn_id)
+        || candidate.get("content").unwrap_or(&Value::Null)
+            != projection.get("content").unwrap_or(&Value::Null)
+    {
+        return Err("authority_changed");
+    }
+    Ok(value.as_object().unwrap())
+}
+
 pub(crate) fn event_record(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -11131,6 +11354,9 @@ pub(crate) fn event_record(
             )
         })?;
         attempt.insert("status".to_owned(), Value::String(request.status.clone()));
+        if request.status == "superseded" {
+            attempt.insert("supersededAt".to_owned(), Value::from(request.now_ms));
+        }
         attempt.insert("error".to_owned(), Value::Object(request.error.clone()));
         attempt.insert(
             "_timingTrace".to_owned(),
@@ -11149,6 +11375,18 @@ pub(crate) fn event_record(
             &loaded_attempt,
             &attempt,
             request.now_ms,
+        )?;
+    }
+    if request.terminal && request.status == "superseded" {
+        database.entity_put(
+            transaction,
+            attempt_superseded_index_key(
+                transaction,
+                request.now_ms,
+                &loaded_attempt.conversation_id,
+                &request.attempt_id,
+            )?,
+            Vec::new(),
         )?;
     }
 
@@ -11354,6 +11592,43 @@ pub(crate) fn event_record(
         .map_err(|_| invalid_data("Turn projection cannot be encoded"))?
         .len();
     let mut event_payload = request.event_payload.clone();
+
+    let continuation_status = if request.terminal {
+        Some(
+            match terminal_continuation_candidate(
+                &request.status,
+                &request.model_continuation,
+                &turn_id,
+                &next_projection,
+            ) {
+                Ok(candidate_projection) => {
+                    let mut settled_turn = turn.clone();
+                    settled_turn.insert(
+                        "projection".to_owned(),
+                        Value::Object(next_projection.clone()),
+                    );
+                    crate::model_continuation::settle(
+                        database,
+                        transaction,
+                        &loaded_attempt.conversation_id,
+                        ordinal,
+                        &settled_turn,
+                        candidate_projection,
+                        request.now_ms,
+                    )?
+                }
+                Err(reason) => reason,
+            },
+        )
+    } else {
+        None
+    };
+    if request.terminal {
+        event_payload.insert(
+            "modelContinuationStatus".to_owned(),
+            json!(continuation_status),
+        );
+    }
     event_payload.remove("projection");
     event_payload.insert("projectionPatch".to_owned(), Value::Object(replay_patch));
     event_payload.insert("status".to_owned(), Value::String(request.status.clone()));
@@ -11408,7 +11683,8 @@ pub(crate) fn event_record(
         "applied": true,
         "status": request.status,
         "projection_revision": next_revision,
-        "task_event": task_event
+        "task_event": task_event,
+        "model_continuation_status": continuation_status
     }))
 }
 
@@ -12351,6 +12627,252 @@ pub(crate) fn sync_prune(
     }))
 }
 
+enum CleanupCandidate {
+    Delete {
+        loaded: LoadedAttemptForUpdate,
+        turn_id: String,
+        directory_position: usize,
+        entries: Vec<Map<String, Value>>,
+    },
+    Skip,
+    Stale,
+}
+
+/// Validates one superseded-index entry against current authority. Anything
+/// that no longer proves the Attempt is superseded, unreferenced, and intact
+/// fails closed: the entry is either pruned as stale (the Attempt or its
+/// supersession evidence is gone) or retained while the candidate is skipped.
+fn cleanup_candidate(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    attempt_id: &str,
+    superseded_at_ms: u64,
+) -> io::Result<CleanupCandidate> {
+    let Some(loaded) = load_attempt_for_update(database, transaction, attempt_id)? else {
+        return Ok(CleanupCandidate::Stale);
+    };
+    if loaded.conversation_id != conversation_id {
+        return Ok(CleanupCandidate::Stale);
+    }
+    let document = &loaded.document;
+    if document.get("status").and_then(Value::as_str) != Some("superseded")
+        || document.get("supersededAt").and_then(Value::as_u64) != Some(superseded_at_ms)
+    {
+        return Ok(CleanupCandidate::Stale);
+    }
+    let turn_id = document
+        .get("turnId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("attempt turn identity is malformed"))?
+        .to_owned();
+    // A live Turn whose current attempt is this Attempt still references it;
+    // a missing Turn is an integrity anomaly because Turn deletion removes
+    // every owned Attempt. Neither may delete anything.
+    let Some(stored_turn) = database.entity_get(
+        transaction,
+        &turn_key(transaction, conversation_id, &turn_id)?,
+    )?
+    else {
+        return Ok(CleanupCandidate::Skip);
+    };
+    let turn = materialize_turn(database, transaction, &stored_turn)?;
+    if turn.get("currentAttemptId").and_then(Value::as_str) == Some(attempt_id) {
+        return Ok(CleanupCandidate::Skip);
+    }
+    // Retained conversation-sync replay data may still reference the Attempt;
+    // only turn.sync.prune may release those fences.
+    let reference_prefix = attempt_sync_reference_prefix(attempt_id)?;
+    let (reference_start, reference_end) = EntityKey::prefix_range(
+        transaction.tenant_id(),
+        transaction.owner_user_id(),
+        ATTEMPT_EVENT_SYNC_REFERENCE_NAMESPACE,
+        &reference_prefix,
+    )?;
+    if !database
+        .entity_scan(transaction, &reference_start, &reference_end, 1)?
+        .is_empty()
+    {
+        return Ok(CleanupCandidate::Skip);
+    }
+    let entries = load_attempt_turn_directory(
+        database,
+        transaction,
+        conversation_id,
+        &turn_id,
+        Some(attempt_id),
+    )?;
+    let Some(directory_position) = entries
+        .iter()
+        .position(|entry| directory_entry_text(entry, "attemptId").ok() == Some(attempt_id))
+    else {
+        return Ok(CleanupCandidate::Skip);
+    };
+    Ok(CleanupCandidate::Delete {
+        loaded,
+        turn_id,
+        directory_position,
+        entries,
+    })
+}
+
+/// Deletes one validated superseded Attempt with its derived indexes, event
+/// range, and exact Turn directory/count repair. The tenant-global Attempt
+/// identity claim and creation-command idempotency records are retained so a
+/// later create cannot ABA a deleted identity.
+#[allow(clippy::too_many_arguments)]
+fn delete_superseded_attempt(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    attempt_id: &str,
+    loaded: LoadedAttemptForUpdate,
+    turn_id: &str,
+    directory_position: usize,
+    mut entries: Vec<Map<String, Value>>,
+) -> io::Result<()> {
+    let entry = entries.remove(directory_position);
+    remove_directory_entry_indexes(database, transaction, conversation_id, &entry)?;
+    store_attempt_turn_directory(database, transaction, conversation_id, turn_id, &entries)?;
+    let count_key = attempt_turn_count_key(transaction, conversation_id, turn_id)?;
+    let count = decode_u64(
+        database.entity_get(transaction, &count_key)?,
+        "turn attempt count is malformed",
+    )?;
+    let remaining = count
+        .checked_sub(1)
+        .ok_or_else(|| invalid_data("turn attempt count underflow"))?;
+    if remaining == 0 {
+        database.entity_delete(transaction, count_key)?;
+    } else {
+        database.entity_put(transaction, count_key, remaining.to_le_bytes().to_vec())?;
+    }
+    database.entity_delete(
+        transaction,
+        attempt_event_head_key(transaction, attempt_id)?,
+    )?;
+    let event_prefix = attempt_event_prefix(attempt_id)?;
+    let (event_start, event_end) = EntityKey::prefix_range(
+        transaction.tenant_id(),
+        transaction.owner_user_id(),
+        ATTEMPT_EVENT_NAMESPACE,
+        &event_prefix,
+    )?;
+    database.entity_retire_range(transaction, &event_start, &event_end)?;
+    crate::versioned_document::delete(
+        database,
+        transaction,
+        loaded.key,
+        "generation_attempts",
+        attempt_id,
+        Some(loaded.physical_version),
+    )?;
+    Ok(())
+}
+
+/// Bounded owner-scoped superseded-Attempt cleanup. The persistent
+/// age-leading superseded index is scanned oldest-first; every candidate is
+/// revalidated against the live Attempt, its owning Turn, and retained replay
+/// fences before anything is written, and the whole round commits as one
+/// authority transaction.
+pub(crate) fn cleanup(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    request: &CleanupRequest,
+) -> io::Result<Vec<u8>> {
+    let cutoff_ms = request.now_ms.saturating_sub(request.retention_ms);
+    let (start, end) = EntityKey::prefix_range(
+        transaction.tenant_id(),
+        transaction.owner_user_id(),
+        ATTEMPT_SUPERSEDED_INDEX_NAMESPACE,
+        &[],
+    )?;
+    let rows = database.entity_scan(
+        transaction,
+        &start,
+        &end,
+        MAX_CLEANUP_INDEX_SCAN_ROWS_PER_TRANSACTION,
+    )?;
+    let mut scanned = 0_usize;
+    let mut deleted_attempt_ids = Vec::new();
+    let mut skipped = 0_usize;
+    let mut pruned = 0_usize;
+    let mut removed_archive_bytes = 0_u64;
+    let mut limited = false;
+    for (key, _) in &rows {
+        let (superseded_at_ms, conversation_id, attempt_id) = decode_superseded_index_key(key)?;
+        if superseded_at_ms > cutoff_ms {
+            break;
+        }
+        scanned += 1;
+        if deleted_attempt_ids.len() >= request.limit {
+            limited = true;
+            break;
+        }
+        match cleanup_candidate(
+            database,
+            transaction,
+            &conversation_id,
+            &attempt_id,
+            superseded_at_ms,
+        )? {
+            CleanupCandidate::Stale => {
+                database.entity_delete(transaction, key.clone())?;
+                pruned += 1;
+            }
+            CleanupCandidate::Skip => {
+                skipped += 1;
+            }
+            CleanupCandidate::Delete {
+                loaded,
+                turn_id,
+                directory_position,
+                entries,
+            } => {
+                // Raw archives are removed with a strict row budget; an
+                // over-budget Attempt is left untouched for the next round.
+                let Some(archive_bytes) = crate::raw_archive::delete_attempt(
+                    database,
+                    transaction,
+                    &conversation_id,
+                    &attempt_id,
+                    MAX_CLEANUP_INDEX_SCAN_ROWS_PER_TRANSACTION,
+                )?
+                else {
+                    skipped += 1;
+                    continue;
+                };
+                delete_superseded_attempt(
+                    database,
+                    transaction,
+                    &conversation_id,
+                    &attempt_id,
+                    loaded,
+                    &turn_id,
+                    directory_position,
+                    entries,
+                )?;
+                database.entity_delete(transaction, key.clone())?;
+                removed_archive_bytes = removed_archive_bytes
+                    .checked_add(archive_bytes)
+                    .ok_or_else(|| invalid_data("cleanup archive byte total overflow"))?;
+                deleted_attempt_ids.push(attempt_id);
+            }
+        }
+    }
+    let deleted = deleted_attempt_ids.len();
+    encode_response(&json!({
+        "deletedAttempts": deleted,
+        "deletedAttemptIds": deleted_attempt_ids,
+        "skippedAttempts": skipped,
+        "prunedIndexEntries": pruned,
+        "scannedIndexEntries": scanned,
+        "removedRawArchiveBytes": removed_archive_bytes,
+        "moreCandidates": limited || rows.len() == MAX_CLEANUP_INDEX_SCAN_ROWS_PER_TRANSACTION,
+        "backend": "tofu-db",
+    }))
+}
+
 fn attempts_for_turns(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -12722,8 +13244,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn continuation_settlement_validates_candidates_without_false_storage_ack() {
+        let projection = json!({"content": "final"}).as_object().unwrap().clone();
+        let check = |status: &str, candidate: Value, expected: &str| {
+            assert_eq!(
+                terminal_continuation_candidate(status, &candidate, "turn", &projection).err(),
+                Some(expected)
+            );
+        };
+        check("completed", Value::Null, "unavailable");
+        check("failed", json!({"projection": {}}), "not_completed");
+        check("cancelled", Value::Null, "not_completed");
+        check("completed", json!({"status": "over_budget"}), "over_budget");
+        check("completed", json!({"status": "stored"}), "unavailable");
+        check("completed", json!({"status": "x".repeat(65)}), "invalid");
+        check(
+            "completed",
+            json!({"projection": {}}),
+            "invalid_or_over_budget",
+        );
+        let candidate = json!({"content": "final", "projection": {
+            "messages": [{"role": "assistant"}], "turns": [["turn", "a".repeat(64)]]
+        }});
+        assert!(
+            terminal_continuation_candidate("completed", &candidate, "turn", &projection).is_ok()
+        );
+        let mut changed = candidate.clone();
+        changed["content"] = json!("stale");
+        check("completed", changed, "authority_changed");
+        let mut foreign = candidate.clone();
+        foreign["projection"]["turns"][0][0] = json!("foreign-turn");
+        check("completed", foreign, "authority_changed");
+        let mut malformed = candidate.clone();
+        malformed["projection"]["turns"][0][1] = json!("A".repeat(64));
+        check("completed", malformed, "invalid_or_over_budget");
+        let mut multibyte = candidate.clone();
+        multibyte["projection"]["padding"] = json!("中".repeat(3 * 1024 * 1024));
+        check("completed", multibyte, "invalid_or_over_budget");
+        let mut too_many_messages = candidate.clone();
+        too_many_messages["projection"]["messages"] =
+            json!(vec![json!({"role": "assistant"}); 16_385]);
+        check("completed", too_many_messages, "invalid_or_over_budget");
+        let mut too_many_witnesses = candidate.clone();
+        too_many_witnesses["projection"]["turns"] =
+            json!(vec![json!(["turn", "a".repeat(64)]); 4_097]);
+        check("completed", too_many_witnesses, "invalid_or_over_budget");
+        let mut oversized = candidate;
+        oversized["projection"]["padding"] = json!("x".repeat(8 * 1024 * 1024));
+        check("completed", oversized, "invalid_or_over_budget");
+    }
+
     fn live_projection_request(attempt_id: &str, content: &str, now_ms: u64) -> EventRecordRequest {
         EventRecordRequest {
+            model_continuation: Value::Null,
             attempt_id: attempt_id.to_owned(),
             task_id: "projection-head-task".to_owned(),
             terminal: false,
@@ -13019,7 +13593,11 @@ mod tests {
         .unwrap()
         .clone();
         let mut terminal = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        event_record(&database, &mut terminal, &terminal_request).unwrap();
+        let result: Value = serde_json::from_slice(
+            &event_record(&database, &mut terminal, &terminal_request).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["model_continuation_status"], "unavailable");
         database.commit(terminal).unwrap();
 
         let mut verify = database.begin(7, 11).unwrap();
@@ -14635,5 +15213,138 @@ mod tests {
                 .unwrap()
                 .is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod append_settled_hotpath_tests {
+    use super::*;
+
+    fn append(
+        database: &mut AuthorityDatabase,
+        conversation_id: &str,
+        turn_id: &str,
+        projection: Value,
+        created_at_ms: u64,
+    ) -> Value {
+        let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        let response = append_settled(
+            database,
+            &mut transaction,
+            &AppendSettledRequest {
+                conversation_id: conversation_id.to_owned(),
+                actor: "human".to_owned(),
+                status: "completed".to_owned(),
+                projection_json: serde_json::to_vec(&projection).unwrap(),
+                settlement_json:
+                    br#"{"outcome":"completed","cause":"ingested","resumeOptions":[]}"#.to_vec(),
+                lane_id: "main".to_owned(),
+                command_id: format!("{turn_id}-command"),
+                kind: "message".to_owned(),
+                run_id: String::new(),
+                turn_id: turn_id.to_owned(),
+                attempt_id: None,
+                created_at_ms,
+                committed_at_ms: created_at_ms,
+                defaults: TurnDefaults {
+                    allow_create: true,
+                    title: "Hot path".to_owned(),
+                    settings_json: b"{}".to_vec(),
+                    created_at_ms: 1_000,
+                },
+            },
+        )
+        .unwrap();
+        database.commit(transaction).unwrap();
+        serde_json::from_slice(&response).unwrap()
+    }
+
+    #[test]
+    fn append_settled_parent_identity_and_lane_index_come_from_stored_envelopes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let first = append(
+            &mut database,
+            "conversation",
+            "turn-a",
+            json!({"content": "first"}),
+            2_000,
+        );
+        assert_eq!(first["turn"]["parentTurnId"], Value::Null);
+        assert_eq!(first["conversationRevision"], 1);
+        let second = append(
+            &mut database,
+            "conversation",
+            "turn-b",
+            json!({"content": "second"}),
+            3_000,
+        );
+        assert_eq!(second["turn"]["parentTurnId"], "turn-a");
+        assert_eq!(second["turn"]["ordinal"], 1);
+        assert_eq!(second["conversationRevision"], 2);
+
+        // The lane index value must be byte-identical to the stored document
+        // envelope (the hot path reuses the put's envelope instead of a
+        // re-read; this pins the equivalence).
+        let mut inspect = database.begin(7, 11).unwrap();
+        let document_key = turn_key(&inspect, "conversation", "turn-b").unwrap();
+        let document = database
+            .entity_get(&mut inspect, &document_key)
+            .unwrap()
+            .expect("turn document exists");
+        let lane_prefix = lane_prefix("conversation", "main").unwrap();
+        let mut lane_key_bytes = lane_prefix.clone();
+        lane_key_bytes.extend_from_slice(&1_u64.to_be_bytes());
+        let lane_index_key =
+            entity_key(&inspect, TURN_LANE_INDEX_NAMESPACE, &lane_key_bytes).unwrap();
+        let lane_value = database
+            .entity_get(&mut inspect, &lane_index_key)
+            .unwrap()
+            .expect("lane index entry exists");
+        assert_eq!(document, lane_value);
+        assert_eq!(
+            crate::versioned_document::stored_document_logical_key(&lane_value, DOCUMENT_IDENTITY)
+                .unwrap(),
+            "conversation\u{1f}turn-b",
+        );
+    }
+
+    #[test]
+    fn append_settled_parent_identity_skips_blob_materialization() {
+        // A large projection pushes the predecessor document behind a blob
+        // reference; the parent lookup reads only the stored envelope header,
+        // so it must still resolve the exact turn identity.
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let large = "x".repeat(64 * 1024);
+        append(
+            &mut database,
+            "conversation",
+            "turn-large",
+            json!({"content": large}),
+            2_000,
+        );
+        {
+            let mut inspect = database.begin(7, 11).unwrap();
+            let large_key = turn_key(&inspect, "conversation", "turn-large").unwrap();
+            let stored = database
+                .entity_get(&mut inspect, &large_key)
+                .unwrap()
+                .expect("large turn document exists");
+            assert!(
+                crate::versioned_document::stored_blob_reference(&stored)
+                    .unwrap()
+                    .is_some(),
+                "fixture projection must be blob-backed for this test to mean anything"
+            );
+        }
+        let follower = append(
+            &mut database,
+            "conversation",
+            "turn-follower",
+            json!({"content": "after large"}),
+            3_000,
+        );
+        assert_eq!(follower["turn"]["parentTurnId"], "turn-large");
     }
 }

@@ -94,7 +94,7 @@ def test_one_generic_token_is_not_treated_as_an_identifier(monkeypatch):
     ({'phase': 'done', 'selected': 0}, True),
     ({'phase': 'skipped', 'reason': 'no_memories'}, False),
 ])
-def test_composer_guidance_reuses_prefetch_availability(
+def test_composer_guidance_never_rescans_or_repeats_memory_inventory(
         monkeypatch, prefetch_state, expected):
     import lib.memory.injection as injection
     from lib.tasks_pkg.context_composer._models import ComposeRequest
@@ -115,9 +115,10 @@ def test_composer_guidance_reuses_prefetch_availability(
         task={'_memoryPrefetch': prefetch_state},
     ))
 
-    assert observed == [expected]
-    assert 'memory_accumulation' in guidance
-    assert ('known memory hint' in guidance) is expected
+    assert observed == []
+    assert 'verified reusable lessons' in guidance
+    assert 'known memory hint' not in guidance
+    assert len(guidance) < 650
 
 
 def test_todo_identifiers_can_raise_confidence(monkeypatch):

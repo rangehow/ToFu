@@ -25,7 +25,7 @@ def test_cleanup_timer_is_shared_retired_and_generation_safe(monkeypatch):
     state.stop_swarm_cleanup_timer(timeout=0.5)
     monkeypatch.setattr(state, '_CLEANUP_INTERVAL', 60)
     monkeypatch.setattr(persistence, 'delete_session', lambda _key: None)
-    monkeypatch.setattr(state.agent_inbox, 'clear', lambda _key: None)
+    monkeypatch.setattr(state.agent_inbox, 'clear', lambda _key, **_kw: None)
     keys = ('cleanup-life-1', 'cleanup-life-2', 'cleanup-life-3')
     owned_timers = []
 

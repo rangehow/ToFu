@@ -1564,9 +1564,11 @@ class TestAutoContinueGuardrails(unittest.TestCase):
             self.integ._autocontinue_chain.pop(self.key, None)
             self.integ._autocontinue_inflight.discard(self.key)
 
-    def _enqueue(self):
+    def _enqueue(self, status='completed'):
+        extra = {'status': status} if status is not None else None
         agent_inbox.enqueue(self.key, '<swarm-update>x</swarm-update>',
-                            priority='later', mode='swarm-update', agent_id='a1')
+                            priority='later', mode='swarm-update', agent_id='a1',
+                            extra=extra)
 
     def test_fires_when_idle_with_pending(self):
         self._enqueue()
@@ -1587,6 +1589,42 @@ class TestAutoContinueGuardrails(unittest.TestCase):
         start.assert_not_called()
 
     def test_skips_when_inbox_empty(self):
+        with patch.object(self.integ, '_key_is_live', return_value=False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key, 7, source_id='source-task')
+        start.assert_not_called()
+
+    def test_skips_when_every_pending_update_failed(self):
+        # The reported incident: all four sub-agents failed/cancelled, yet
+        # the settle hook still spawned an unattended "integrate the
+        # completed swarm results" turn. With nothing completed there is
+        # nothing to integrate — leave the failure payloads for the next
+        # human turn instead.
+        self._enqueue(status='failed')
+        self._enqueue(status='cancelled')
+        with patch.object(self.integ, '_key_is_live', return_value=False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key, 7, source_id='source-task')
+        start.assert_not_called()
+        self.assertEqual(self.integ._autocontinue_chain.get(self.key, 0), 0)
+        self.assertEqual(agent_inbox.peek(self.key), 2)
+
+    def test_fires_when_at_least_one_update_completed(self):
+        self._enqueue(status='failed')
+        self._enqueue(status='completed')
+        with patch.object(self.integ, '_key_is_live', return_value=False), \
+             patch.object(self.integ, '_start_autocontinue_turn',
+                          return_value=True) as start:
+            self.integ._maybe_autocontinue(self.key, 7, source_id='source-task')
+        start.assert_called_once_with(
+            self.key, 7, command_id='swarm-autocontinue:source-task')
+
+    def test_update_without_status_is_not_proof_of_completion(self):
+        # Fail-closed: a legacy/unstamped update must not spawn an
+        # unattended turn on the assumption that something succeeded.
+        self._enqueue(status=None)
         with patch.object(self.integ, '_key_is_live', return_value=False), \
              patch.object(self.integ, '_start_autocontinue_turn',
                           return_value=True) as start:

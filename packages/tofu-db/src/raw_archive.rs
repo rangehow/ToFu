@@ -905,6 +905,154 @@ pub(crate) fn delete_conversation(
     Ok(())
 }
 
+/// Removes every raw archive owned by one Attempt, repairing the exact
+/// owner, conversation, Attempt, and tenant counters in the same transaction.
+/// Returns `Ok(None)` without writing when the Attempt owns more than
+/// `maximum_rows` archives so callers can retry with a fresh budget instead
+/// of committing a partial removal.
+pub(crate) fn delete_attempt(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    attempt_id: &str,
+    maximum_rows: usize,
+) -> io::Result<Option<u64>> {
+    let prefix = attempt_index_prefix(attempt_id)?;
+    let (start, end) = EntityKey::prefix_range(
+        transaction.tenant_id(),
+        transaction.owner_user_id(),
+        RAW_ARCHIVE_ATTEMPT_INDEX_NAMESPACE,
+        &prefix,
+    )?;
+    let indexed = database.entity_scan(transaction, &start, &end, maximum_rows + 1)?;
+    if indexed.len() > maximum_rows {
+        return Ok(None);
+    }
+    let mut documents = Vec::with_capacity(indexed.len());
+    let mut removed_bytes = 0_u64;
+    for (attempt_key, archive_id_bytes) in &indexed {
+        let archive_id = std::str::from_utf8(archive_id_bytes)
+            .map_err(|_| invalid_data("raw archive Attempt index identity is not UTF-8"))?;
+        let document = load_document(database, transaction, archive_id)?
+            .ok_or_else(|| invalid_data("raw archive Attempt index has no document"))?;
+        if document.attempt_id != attempt_id || document.conversation_id != conversation_id {
+            return Err(invalid_data("raw archive Attempt index target differs"));
+        }
+        removed_bytes = removed_bytes
+            .checked_add(document.stored_bytes)
+            .ok_or_else(|| invalid_data("raw archive Attempt removal bytes overflow"))?;
+        documents.push((attempt_key.clone(), document));
+    }
+    let removed_count = documents.len() as u64;
+    for (attempt_key, document) in documents {
+        let archive_claim_key = claim_key(transaction, &document.archive_id)?;
+        let claim_owner = database
+            .entity_get(transaction, &archive_claim_key)?
+            .ok_or_else(|| invalid_data("raw archive identity claim is missing"))?;
+        if claim_owner.as_slice() != transaction.owner_user_id().to_be_bytes() {
+            return Err(invalid_data("raw archive identity claim owner differs"));
+        }
+        versioned_document::delete(
+            database,
+            transaction,
+            document_key(transaction, &document.archive_id)?,
+            "raw_archives",
+            &document.archive_id,
+            None,
+        )?;
+        database.entity_delete(transaction, archive_claim_key)?;
+        let task_prefix = index_prefix(&document.task_id, None)?;
+        let round_prefix = index_prefix(&document.task_id, Some(document.round_num))?;
+        let conversation_prefix = conversation_index_prefix(&document.conversation_id)?;
+        for key in [
+            index_key(
+                transaction,
+                RAW_ARCHIVE_TASK_INDEX_NAMESPACE,
+                &task_prefix,
+                document.created_at_ms,
+                &document.archive_id,
+            )?,
+            index_key(
+                transaction,
+                RAW_ARCHIVE_TASK_ROUND_INDEX_NAMESPACE,
+                &round_prefix,
+                document.created_at_ms,
+                &document.archive_id,
+            )?,
+            attempt_key,
+            index_key(
+                transaction,
+                RAW_ARCHIVE_CONVERSATION_INDEX_NAMESPACE,
+                &conversation_prefix,
+                document.created_at_ms,
+                &document.archive_id,
+            )?,
+        ] {
+            database.entity_delete(transaction, key)?;
+        }
+    }
+    if removed_count == 0 {
+        return Ok(Some(0));
+    }
+    let attempt_usage_key = counter_key(
+        transaction,
+        RAW_ARCHIVE_ATTEMPT_USAGE_NAMESPACE,
+        attempt_id.as_bytes(),
+    )?;
+    let attempt_usage = read_u64(database, transaction, &attempt_usage_key, "Attempt usage")?;
+    let attempt_remaining = attempt_usage
+        .checked_sub(removed_bytes)
+        .ok_or_else(|| invalid_data("raw archive Attempt usage underflow"))?;
+    if attempt_remaining == 0 {
+        database.entity_delete(transaction, attempt_usage_key)?;
+    } else {
+        write_u64(database, transaction, attempt_usage_key, attempt_remaining)?;
+    }
+    let tenant_key = global_key(transaction, RAW_ARCHIVE_TENANT_USAGE_NAMESPACE, b"bytes")?;
+    let tenant_usage = read_u64(database, transaction, &tenant_key, "tenant usage")?;
+    write_u64(
+        database,
+        transaction,
+        tenant_key,
+        tenant_usage
+            .checked_sub(removed_bytes)
+            .ok_or_else(|| invalid_data("raw archive tenant usage underflow"))?,
+    )?;
+    let owner_key = counter_key(transaction, RAW_ARCHIVE_OWNER_COUNT_NAMESPACE, b"count")?;
+    let owner_count = read_u64(database, transaction, &owner_key, "owner count")?;
+    write_u64(
+        database,
+        transaction,
+        owner_key,
+        owner_count
+            .checked_sub(removed_count)
+            .ok_or_else(|| invalid_data("raw archive owner count underflow"))?,
+    )?;
+    let (conversation_count, conversation_bytes) =
+        read_conversation_stats(database, transaction, conversation_id)?;
+    let next_count = conversation_count
+        .checked_sub(removed_count)
+        .ok_or_else(|| invalid_data("raw archive conversation count underflow"))?;
+    let next_bytes = conversation_bytes
+        .checked_sub(removed_bytes)
+        .ok_or_else(|| invalid_data("raw archive conversation usage underflow"))?;
+    if next_count == 0 {
+        database.entity_delete(
+            transaction,
+            conversation_stats_key(transaction, conversation_id)?,
+        )?;
+    } else {
+        write_conversation_stats(
+            database,
+            transaction,
+            conversation_id,
+            next_count,
+            next_bytes,
+        )?;
+    }
+    Ok(Some(removed_bytes))
+}
+
 fn decode_part(encoded: &str) -> io::Result<Vec<u8>> {
     if encoded.is_empty() {
         return Ok(Vec::new());

@@ -72,6 +72,7 @@ import { TRANSLATION_CLAIMS } from '../core/translation-claim-registry';
 import {
   buildTurnSubmissionExtra,
   rebindTurnInputContext,
+  resumeCtxInputUpdate,
 } from '../core/turn-command';
 import { createConversationTurnRuntime } from '../core/turn-runtime';
 import { createConversationRefresh } from '../conversation/application/conversation-refresh';
@@ -97,6 +98,9 @@ import {
 import { createConversationCatalogRevisionGate } from '../conversation/application/conversation-catalog-revision-gate';
 import { createConversationSurfaceController } from '../conversation/application/conversation-surface-controller';
 import { createConversationStartup } from '../conversation/application/conversation-startup';
+import { createConversationProjectController } from '../conversation/application/conversation-project';
+import { createThinkingDepthSlider } from '../features/thinking-depth-slider';
+import { createConversationModelController, captureComposerModel, commitComposerModel } from '../conversation/application/conversation-model';
 import { createBranchComposerSession } from '../conversation/application/branch-composer';
 import {
   agentModeFlags,
@@ -392,6 +396,14 @@ function submitHumanGuidanceChoice(element) {
 
 function submitHumanGuidanceFreeText(element) {
   return humanGuidanceActions.submitFreeText(element);
+}
+
+function selectBatchChoice(element) {
+  return humanGuidanceActions.selectBatchChoice(element);
+}
+
+function submitBatchAnswers(element) {
+  return humanGuidanceActions.submitBatch(element);
 }
 
 const imageViewerActions = createImageViewerActionsController({ document });
@@ -2324,8 +2336,9 @@ function _applySettingsToConv(conv, settings) {
   if (!settings) return;
   if (settings.model || settings.effort || settings.preset)
     conv.model = settings.model || settings.preset || settings.effort;
-  if (settings.modelRef && typeof settings.modelRef === 'object')
-    conv.modelRef = Object.assign({}, settings.modelRef);
+  if (settings.modelRef !== undefined)
+    conv.modelRef = settings.modelRef && typeof settings.modelRef === 'object'
+      ? Object.assign({}, settings.modelRef) : null;
   if (settings.preferredProviderId !== undefined)
     conv.preferredProviderId = settings.preferredProviderId || '';
   /* The provider that actually served this conv (stamped server-side at
@@ -3992,6 +4005,12 @@ if (typeof window !== 'undefined') {
   // paper_reports, so it keeps working forever — it is what makes a finished
   // research job re-openable at all. `found:false` is a normal answer.
   const research = {
+    records: (limit) =>
+      get('/api/v1/research/records', { query: { limit: limit || 50 } }),
+    record: (taskId) =>
+      get(`/api/v1/research/records/${encodeURIComponent(taskId)}`),
+    resumeRecord: (taskId) =>
+      post(`/api/v1/research/records/${encodeURIComponent(taskId)}/resume`, {}),
     lookup: (direction, lang) =>
       get('/api/v1/research/lookup',
           { query: { direction: direction || '', lang: lang || 'en' },
@@ -4008,6 +4027,10 @@ if (typeof window !== 'undefined') {
           { query: { direction: direction || '', lang: lang || 'en' } }),
     saveWorkspace: (payload) =>
       put('/api/v1/research/workspace', payload),
+    // One-shot LLM draft of the frozen protocol, grounded in the persisted
+    // survey/gap/idea. A proposal only — the workspace PUT stays the authority.
+    draftProtocol: (payload) =>
+      post('/api/v1/research/workspace/draft-protocol', payload),
     capabilities: () =>
       get('/api/v1/research/capabilities'),
     scaffoldManuscript: (payload) =>
@@ -4025,6 +4048,16 @@ if (typeof window !== 'undefined') {
     reject:    (id, reason)   => post(`/api/v1/optimizer/proposals/${encodeURIComponent(id)}/reject`, { reason: reason || '' }),
     revert:    (id)           => post(`/api/v1/optimizer/proposals/${encodeURIComponent(id)}/revert`, undefined),
     runNow:    (opts)         => post('/api/v1/optimizer/run-now', Object.assign({ dry_run: false, window_hours: 24 }, opts || {})),
+  };
+
+  // overleaf live preview (chat TeX edit → compile + SyncTeX locate) ------
+  const overleaf = {
+    preview: (body)         => post('/api/v1/overleaf/preview', body || {}),
+  };
+
+  // local LaTeX live preview (workspace .tex edit → compile + SyncTeX) --
+  const latex = {
+    preview: (body)         => post('/api/v1/latex/preview', body || {}),
   };
 
   // compactions (per-conversation snapshots) ------------------------
@@ -4383,6 +4416,17 @@ if (typeof window !== 'undefined') {
       post(`/api/v1/swarm/abort/${encodeURIComponent(taskId)}`, {}, { onError: 'null' }),
   };
 
+  // background activity (cross-surface "still working" snapshot) ----------
+  // background: GET — {swarms:[{swarm_key, conv_id, running, pending,
+  //   completed, agents:[…], created_at}], backgroundCommands:[{command_id,
+  //   command, status, started_at, elapsed_s, delivery_status}]}
+  // Polled by the convStatusStrip background-activity chip on a few-second
+  // cadence; both lists are empty in the steady state.
+  const activity = {
+    background: () => get('/api/v1/activity/background',
+      { onError: 'null', coalesce: true, priority: 'background' }),
+  };
+
   // desktop bridge (RWA Devices page) ----------------------------------
   const desktop = {
     /* `arch` is the architecture the CLIENT resolved for itself via
@@ -4502,6 +4546,17 @@ if (typeof window !== 'undefined') {
            { onError: 'null' }),
   };
 
+  // local deployment (Settings → 本地部署; read-only — writes stay with the
+  // approval-gated local_serve agent tools)
+  const localServe = {
+    hardware: () => get('/api/v1/local-serve/hardware', { onError: 'null' }),
+    recommendations: (purpose) => get(
+      '/api/v1/local-serve/recommendations' +
+        (purpose ? '?purpose=' + encodeURIComponent(purpose) : ''),
+      { onError: 'null' }),
+    deployments: () => get('/api/v1/local-serve/deployments', { onError: 'null' }),
+  };
+
   // Canonical owner-scoped model/provider access authority. Credential
   // plaintext is written only through the dedicated secret operation.
   const modelRouting = {
@@ -4577,6 +4632,7 @@ if (typeof window !== 'undefined') {
     deviceLoginGet:  (provider)     =>
       request('/api/v1/oauth/device-login',
               { method: 'GET', query: { provider }, parse: 'response', onError: 'null' }),
+    resetOfferConsume: ()           => post('/api/v1/oauth/reset-offer/consume', {}, { onError: 'null', parse: 'response' }),
     egressAgentGet: ()              => get('/api/v1/oauth/egress-agent', { onError: 'null' }),
     egressAgentSet: (agentId)       => post('/api/v1/oauth/egress-agent', { agent_id: agentId }, { onError: 'null', parse: 'response' }),
   };
@@ -5232,12 +5288,13 @@ if (typeof window !== 'undefined') {
     pageRequestId,    // the correlation prefix every request of this page shares
     // domains
     folders, paperFolders, orchestrations, memory, skills, profile, userContext, timer, scheduler, optimizer, compactions,
+    overleaf, latex,
     conversations, text, translate, chat, images, pdf, doc, media, audio, videos, artifacts,
     health, pricing, clientError, serverConfig, costExperiments, network, browser, project, daily, paper,
     desktop,
-    features, providers, modelRouting, dispatch, oauth, mcp, update, trading, authSources,
+    features, providers, localServe, modelRouting, dispatch, oauth, mcp, update, trading, authSources,
     privateHosts, credentials,
-    swarm, logs, motion, tasks, users, research, tools, knowledge,
+    swarm, activity, logs, motion, tasks, users, research, tools, knowledge,
   };
 
   global.Api = Api;
@@ -5999,6 +6056,7 @@ function _installFeatureStub(name) {
 
 const _FEATURE_ENTRY_POINTS = [
   'openOrchestration', 'openTaskMode', 'togglePaperMode',
+  '_overleafPreviewRounds',
  'toggleResearchMode',
   'enterImageGenMode', 'exitImageGenMode', 'generateImageDirect',
   'selectIgAspect', 'selectIgCount', 'selectIgModel', 'selectIgResolution',
@@ -6015,6 +6073,7 @@ const _FEATURE_ENTRY_POINTS = [
   'openCompactionViewer',
   'resolveWriteApproval', 'submitStdinInput', 'submitStdinEof',
   'submitHumanGuidanceChoice', 'submitHumanGuidanceFreeText',
+  'selectBatchChoice', 'submitBatchAnswers',
   'openApplyModal', 'closeApplyModal', 'confirmApplyCode',
   '_toggleCostPopover',
   'openUpdateDialog', 'toggleTimerPanel', 'toggleOptimizerPanel',
@@ -10197,8 +10256,14 @@ function _renderRejectedToolLine(round, svg) {
     : _t("tool.blockedTip", "A safety or authority check blocked this valid tool before execution.");
   const rawReason = [rej.reason, round.toolContent, meta.content, meta.reason]
     .find((value) => typeof value === "string" && value.trim()) || "";
-  const firstLine = rawReason.split("\n")[0].trim();
-  const shortReason = firstLine.length > 300 ? firstLine.slice(0, 300) + "…" : firstLine;
+  /* The clipped tail ("…cursor(str…") is exactly the part that explains what
+   * to fix — render the reason whole, line breaks included. */
+  let fullReason = rawReason.trim();
+  const kindCode = String(rej.kind || "").trim();
+  if (kindCode && kindCode !== "hallucinated" && !fullReason.includes(kindCode)) {
+    fullReason = fullReason ? `${fullReason}\n${kindCode}` : kindCode;
+  }
+  const reasonHtml = escapeHtml(fullReason).replace(/\n/g, "<br>");
   const tip = escapeHtml(rawReason || fallbackTip);
   let suggHtml = "";
   if (isHallucinated && sugg.length) {
@@ -10213,7 +10278,7 @@ function _renderRejectedToolLine(round, svg) {
        <span class="ptool-text${isHallucinated ? " ptool-reject-name" : ""}">${escapeHtml(attempted)}</span>
        <span class="ptool-badge ptool-badge-reject">${banSvg} ${badgeLabel}</span>
        ${suggHtml}
-       ${shortReason ? `<span class="ptool-error-reason">${escapeHtml(shortReason)}</span>` : ""}
+       ${reasonHtml ? `<span class="ptool-error-reason">${reasonHtml}</span>` : ""}
      </div>`;
 }
 
@@ -10283,11 +10348,8 @@ function _projectTodoRoundsForDisplay(rounds) {
   });
   if (todoIdx.length <= 1) return source;
   const keep = todoIdx[todoIdx.length - 1];
-  const todoSet = new Set(todoIdx);
-  /* A rejected/no-op call is protocol feedback for the model, not a new
-   * checklist revision for the person reading the conversation. Keep those
-   * receipts in Turn authority/debug history while deriving the visible
-   * revision history solely from accepted state transitions. */
+  /* Preserve every audit round, including rejected and unchanged attempts.
+   * Only accepted state transitions contribute to revision history. */
   const seenAcceptedRevisions = new Set();
   const history = todoIdx.flatMap((idx) => {
     const row = source[idx] || {};
@@ -10309,14 +10371,12 @@ function _projectTodoRoundsForDisplay(rounds) {
     }];
   });
   return source.reduce((out, r, i) => {
-    if (todoSet.has(i) && i !== keep) return out;
     if (i !== keep) {
       out.push(r);
       return out;
     }
     const latestResult = (r.results || [])[0] || {};
-    const acceptedUpdateCount = Number(latestResult.todoUpdateCount || 0)
-      || history.length || 1;
+    const acceptedUpdateCount = Number(latestResult.todoUpdateCount ?? history.length);
     const projected = { ...r, todoDisplayUpdateCount: acceptedUpdateCount };
     if (Array.isArray(r.results) && r.results.length) {
       projected.results = r.results.slice();
@@ -10720,16 +10780,17 @@ function _renderErrorRow(round, ctx) {
   const cmdText = _linkifyMcpLabels(
     escapeHtml(round.query || meta.title || td.label || round.toolName || "").replace(/\n/g, "<br>"),
     round);
-  const reason = (typeof round.toolContent === "string" ? round.toolContent : "")
-    .split("\n")[0].trim();
-  const short = escapeHtml(reason.length > 300 ? reason.slice(0, 300) + "…" : reason);
-  const tip = escapeHtml(reason || _t("tool.failedTip", "The tool failed — it did not complete successfully."));
+  /* The clipped tail is exactly the part that explains the failure — render
+   * the content whole, line breaks included, mirroring the rejected lane. */
+  const reason = (typeof round.toolContent === "string" ? round.toolContent : "").trim();
+  const full = escapeHtml(reason).replace(/\n/g, "<br>");
+  const tip = escapeHtml(reason.split("\n")[0] || _t("tool.failedTip", "The tool failed — it did not complete successfully."));
   return `<div class="ptool-line ptool-error" data-rn="${round.roundNum}" title="${tip}">
          <span class="ptool-icon">${svg}</span>
          ${rootPill}
          <span class="ptool-text">${cmdText}</span>
          <span class="ptool-badge ptool-badge-err">${escapeHtml(_t("tool.failed", "failed"))}</span>
-         ${short ? `<span class="ptool-error-reason">${short}</span>` : ""}
+         ${full ? `<span class="ptool-error-reason">${full}</span>` : ""}
        </div>`;
 }
 
@@ -10929,6 +10990,7 @@ function _cmdBodyToggle(el, ev) {
   if (!block) return;
   const open = !block.classList.contains('cmd-open');
   block.classList.toggle('cmd-open', open);
+  if (el.setAttribute) el.setAttribute('aria-expanded', String(open));
   const key = block.getAttribute('data-cmd-key') || '';
   if (key) {
     if (open) _cmdBodyExpanded.add(key);
@@ -10941,17 +11003,12 @@ function _cmdBodyToggle(el, ev) {
  * as _cmdBodyExpanded above. */
 const _cmdOutputExpanded = new Set();
 
-/* The command header toggles output only from its own non-control space. */
-function _cmdHeaderToggle(el, ev) {
+/* The output fold chip is the only output disclosure — the header row
+ * itself is inert, so no nested-control guard is needed here. */
+function _cmdOutputOpenToggle(el, ev) {
   if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
   const block = el && el.closest ? el.closest('.ptool-cmd-block') : null;
   if (!block || !block.classList.contains('ptool-cmd-hasoutput')) return;
-  const target = ev && ev.target;
-  if (target && typeof target.closest === 'function') {
-    const nestedAction = target.closest('[data-tofu-action]');
-    if (nestedAction && nestedAction !== el) return;
-    if (target.closest('button, a, input, select, textarea')) return;
-  }
   const open = !block.classList.contains('output-open');
   block.classList.toggle('output-open', open);
   if (el.setAttribute) el.setAttribute('aria-expanded', String(open));
@@ -10983,17 +11040,17 @@ function _openExternalAsset(button) {
 // chars → generic ✓ done).
 function _computeToolBadgeHtml(round, ctx) {
   const { meta, results } = ctx;
+  const isWrite =
+    round.toolName === "write_file" || round.toolName === "edit_file" ||
+    round.toolName === "apply_diff" || round.toolName === "apply_diffs" ||
+    round.toolName === "insert_content" ||
+    round.toolName === "insert_contents";
   let badgeHtml = "";
   if (meta.badge) {
     const refusal = _refusalInfo(round, meta);
     if (refusal) {
       badgeHtml = _renderGateRefusalBadgeHtml(refusal);
     } else {
-    const isWrite =
-      round.toolName === "write_file" || round.toolName === "edit_file" ||
-      round.toolName === "apply_diff" || round.toolName === "apply_diffs" ||
-      round.toolName === "insert_content" ||
-      round.toolName === "insert_contents";
     const ok = meta.writeOk !== false;
     /* A successful memory op (meta.memoryOk, set by the backend memory
      * handler) reads as a "save" — show the solid green OK badge, same as
@@ -11013,14 +11070,17 @@ function _computeToolBadgeHtml(round, ctx) {
       : "ptool-badge-info";
     badgeHtml = `<span class="ptool-badge ${cls}">${escapeHtml(meta.badge)}</span>`;
     }
-  } else if (round.toolTokens) {
+  } else if (round.toolTokens && !isWrite) {
     /* Per-tool token count — emitted by lib/tasks_pkg/tool_dispatch/_pipeline.py
-     * tool_complete event. Falls back to fetchedChars on older rounds. */
+     * tool_complete event. Falls back to fetchedChars on older rounds.
+     * Write tools are exempt: a batch edit that succeeded carries no meta.badge
+     * by design (the per-edit list is the status), and a token chip would just
+     * take the removed count badge's place. */
     const t = round.toolTokens;
     const txt = t >= 1000 ? (t / 1000).toFixed(t >= 10000 ? 0 : 1) + "k tok" : t + " tok";
     const fcTitle = meta.fetchedChars ? ` (${meta.fetchedChars.toLocaleString()} chars)` : "";
     badgeHtml = `<span class="ptool-badge ptool-badge-info" title="Tokens consumed by this tool result${fcTitle}">${txt}</span>`;
-  } else if (meta.fetchedChars) {
+  } else if (meta.fetchedChars && !isWrite) {
     const fc = meta.fetchedChars;
     const txt = fc > 1000 ? Math.round(fc / 1000) + "k chars" : fc + " chars";
     badgeHtml = `<span class="ptool-badge ptool-badge-info">${txt}</span>`;
@@ -11760,6 +11820,10 @@ function renderToolRoundsHTML(rounds, isStreaming, segments) {
    *   (translated-in-place) adjacent to its tools — so a translated turn does
    *   NOT clump its narration into one tail block when the segment-timeline
    *   toggle is OFF (or the timeline path fell back to grouped). */
+  /* Overleaf live preview: a newly settled mcp__overleaf__ edit round in a
+   * live stream recompiles the remote paper and scrolls the side panel to
+   * the edit. Pure scan; the lazy chunk loads only on a real candidate. */
+  _overleafPreviewObserveRounds(rounds, isStreaming);
   return _renderUnifiedGroup(rounds, segments);
 }
 
@@ -11836,6 +11900,169 @@ function _demandToolElapsedTicker() {
    Don't dump 30-100k+ chars of thinking text into the DOM
    on every render — inject it only when the user expands.
    This prevents DevTools / Elements tab from choking.      */
+/* ===== migrated source: overleaf-preview-hook.js ===== */
+/* ===== LaTeX live preview — retained scanner =====
+ *
+ * renderToolRoundsHTML calls _overleafPreviewObserveRounds on every paint.
+ * The scan is pure and cheap; only a NEWLY settled TeX edit round during a
+ * LIVE stream loads the lazy preview chunk (through the routed feature
+ * stub). History re-renders (isStreaming=false) never compile.
+ *
+ * Two edit sources feed the same preview panel:
+ *   - Overleaf MCP edits (mcp__overleaf__edit_file / rewrite_file /
+ *     update_section) → remote compile via /api/v1/overleaf/preview.
+ *   - LOCAL workspace .tex edits (write_file / edit_file / apply_diff(s) /
+ *     insert_content(s)) → local compile via /api/v1/latex/preview. This is
+ *     the default when the user never mentioned Overleaf.
+ */
+
+const _OVERLEAF_EDIT_TOOL_NAMES = new Set([
+  'mcp__overleaf__edit_file',
+  'mcp__overleaf__rewrite_file',
+  'mcp__overleaf__update_section',
+]);
+const _LOCAL_TEX_EDIT_TOOL_NAMES = new Set([
+  'write_file',
+  'edit_file',
+  'apply_diff',
+  'apply_diffs',
+  'insert_content',
+  'insert_contents',
+]);
+const _TEX_SUFFIX_RE = /\.(tex|ltx)$/i;
+/* Dedupe is bounded: toolCallIds are append-only per tab session. */
+const _overleafPreviewSeen = new Set();
+const _OVERLEAF_PREVIEW_SEEN_MAX = 256;
+const _OVERLEAF_NEEDLE_MAX = 1200;
+
+function _overleafPreviewRoundBlocked(round) {
+  /* Only a settled success compiles: mid-run rounds have no stable content
+   * yet; a rejected/refused edit changed nothing on disk or the remote. */
+  return !round || round._rejected || round.rejection || round.refusal
+    || round.status !== 'done';
+}
+
+function _overleafPreviewMarkSeen(toolCallId) {
+  _overleafPreviewSeen.add(toolCallId);
+  if (_overleafPreviewSeen.size > _OVERLEAF_PREVIEW_SEEN_MAX) {
+    const keep = Array.from(_overleafPreviewSeen).slice(-128);
+    _overleafPreviewSeen.clear();
+    for (const id of keep) _overleafPreviewSeen.add(id);
+  }
+}
+
+function _overleafPreviewParseArgs(round) {
+  let args = round && round.toolArgs;
+  if (typeof args === 'string') {
+    try { args = JSON.parse(args); } catch (_) { args = null; }
+  }
+  return args && typeof args === 'object' ? args : null;
+}
+
+function _overleafRoundCandidate(round) {
+  const name = round && typeof round.toolName === 'string' ? round.toolName : '';
+  if (!_OVERLEAF_EDIT_TOOL_NAMES.has(name)) return null;
+  if (_overleafPreviewRoundBlocked(round)) return null;
+  const id = typeof round.toolCallId === 'string' ? round.toolCallId : '';
+  if (!id || _overleafPreviewSeen.has(id)) return null;
+  const args = _overleafPreviewParseArgs(round);
+  if (!args) return null;
+  const projectId = typeof args.project_id === 'string' ? args.project_id : '';
+  if (!/^[0-9a-f]{24}$/.test(projectId)) return null;
+  const file = typeof args.file_path === 'string' ? args.file_path : '';
+  /* The SyncTeX needle: edit_file → the inserted text, update_section →
+   * its title, rewrite_file → the new content head (server bounds it). */
+  let needle = '';
+  if (typeof args.new_string === 'string' && args.new_string.trim()) {
+    needle = args.new_string;
+  } else if (typeof args.section_title === 'string') {
+    needle = args.section_title;
+  } else if (typeof args.content === 'string') {
+    needle = args.content.slice(0, 800);
+  }
+  return {
+    toolCallId: id,
+    toolName: name,
+    source: 'overleaf',
+    projectId,
+    file,
+    needle: needle.slice(0, _OVERLEAF_NEEDLE_MAX),
+  };
+}
+
+/* Model-emitted args are verbatim (the repair layer renames only its
+ * execution copy), so tolerate the foreign-harness aliases here too. */
+function _localTexStr(value) {
+  return typeof value === 'string' ? value : '';
+}
+
+function _localTexPushCandidate(out, id, name, rawPath, needle) {
+  const path = _localTexStr(rawPath).trim();
+  if (!path || !_TEX_SUFFIX_RE.test(path)) return;
+  out.push({
+    toolCallId: id,
+    toolName: name,
+    source: 'local',
+    path,
+    needle: _localTexStr(needle).slice(0, _OVERLEAF_NEEDLE_MAX),
+  });
+}
+
+function _localTexRoundCandidates(round) {
+  const name = round && typeof round.toolName === 'string' ? round.toolName : '';
+  if (!_LOCAL_TEX_EDIT_TOOL_NAMES.has(name)) return null;
+  if (_overleafPreviewRoundBlocked(round)) return null;
+  const id = typeof round.toolCallId === 'string' ? round.toolCallId : '';
+  if (!id || _overleafPreviewSeen.has(id)) return null;
+  const args = _overleafPreviewParseArgs(round);
+  if (!args) return null;
+  const out = [];
+  if (name === 'write_file') {
+    _localTexPushCandidate(out, id, name,
+      _localTexStr(args.path) || _localTexStr(args.file_path),
+      _localTexStr(args.content) || _localTexStr(args.file_text));
+  } else if (name === 'apply_diff') {
+    _localTexPushCandidate(out, id, name,
+      _localTexStr(args.path) || _localTexStr(args.file_path),
+      _localTexStr(args.replace) || _localTexStr(args.new_string));
+  } else if (name === 'insert_content') {
+    _localTexPushCandidate(out, id, name,
+      _localTexStr(args.path) || _localTexStr(args.file_path),
+      _localTexStr(args.content));
+  } else {
+    /* edit_file / apply_diffs / insert_contents: batch edits=[{path,…}]. */
+    const edits = Array.isArray(args.edits) ? args.edits : [];
+    for (const edit of edits) {
+      if (!edit || typeof edit !== 'object') continue;
+      _localTexPushCandidate(out, id, name,
+        _localTexStr(edit.path) || _localTexStr(edit.file_path),
+        _localTexStr(edit.replace) || _localTexStr(edit.new_string)
+          || _localTexStr(edit.content));
+    }
+  }
+  return out.length ? out : null;
+}
+
+function _overleafPreviewObserveRounds(rounds, isStreaming) {
+  if (!isStreaming || !Array.isArray(rounds)) return;
+  let latest = null;
+  for (const round of rounds) {
+    const overleaf = _overleafRoundCandidate(round);
+    const locals = overleaf ? null : _localTexRoundCandidates(round);
+    const candidates = overleaf ? [overleaf] : locals;
+    if (!candidates || !candidates.length) continue;
+    _overleafPreviewMarkSeen(candidates[0].toolCallId);
+    /* A batch edit touching several .tex files previews the last one — the
+     * trailing-latest pump collapses bursts to the newest anyway. */
+    latest = candidates[candidates.length - 1];
+  }
+  if (!latest) return;
+  const entry = runtimeScope._overleafPreviewRounds;
+  if (typeof entry !== 'function') return;
+  try { entry([latest]); } catch (e) {
+    console.warn('[OverleafPreview] observe dispatch failed:', e && e.message);
+  }
+}
 /* ===== migrated source: ui/tool_rounds_rich.js ===== */
 /* ui/tool_rounds_rich.js — retained rich tool-round renderers, split out of
  * ui/tool_rounds.js for a bounded model context and composed immediately after
@@ -11863,9 +12090,8 @@ function _timerWatcherToggle(el, ev) {
   el.setAttribute('aria-expanded', String(expanded));
 }
 
-/* Checklist revisions collapse to one structured progress card. The display
- * projection remains in core because both timeline paths compact revisions;
- * only the optional rich card renderer lives here. */
+/* Each checklist occurrence keeps its explicit verdict and accepted state.
+ * Core derives accepted revision history; both timeline paths share this card. */
 function _renderTodoBlock(round, svg, q, badgeHtml) {
   const meta = (round.results || [])[0] || {};
   let todos = Array.isArray(meta.todos) ? meta.todos : null;
@@ -11879,14 +12105,16 @@ function _renderTodoBlock(round, svg, q, badgeHtml) {
   const done = todos.filter((x) => x && x.status === "completed").length;
   const pct = total ? Math.round((done / total) * 100) : 0;
   const allDone = total > 0 && done === total;
-  const updateCount = Number(meta.todoDisplayUpdateCount || round.todoDisplayUpdateCount
-    || meta.todoUpdateCount || 1);
+  const updateCount = Number(meta.todoDisplayUpdateCount ?? round.todoDisplayUpdateCount
+    ?? meta.todoUpdateCount ?? (meta.todoRejected || meta.todoNoop ? 0 : 1));
   const breadcrumbs = Array.isArray(meta.todoBreadcrumbs) ? meta.todoBreadcrumbs : [];
   const displayHistory = Array.isArray(meta.todoDisplayHistory) ? meta.todoDisplayHistory : [];
 
-  const headLabel = total
-    ? _t("todo.head", "Checklist")
-    : _t("todo.cleared", "Checklist cleared");
+  const headLabel = meta.todoRejected
+    ? _t("todo.rejected", "Update rejected")
+    : meta.todoNoop
+      ? _t("todo.unchanged", "Checklist unchanged")
+      : total ? _t("todo.head", "Checklist") : _t("todo.cleared", "Checklist cleared");
 
   const _ICON = {
     completed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
@@ -11926,10 +12154,12 @@ function _renderTodoBlock(round, svg, q, badgeHtml) {
       ).join('<i>›</i>')}</div>`
     : "";
   let stateNotice = "";
-  if (meta.todoRejected || meta.todoNoop) {
-    /* Rejection reasons are model protocol (stable ids, sync/replan rules),
-     * not user copy. The human projection reports only the observable outcome
-     * and keeps rendering the last accepted checklist state. */
+  if (meta.todoRejected) {
+    // The explicit verdict owns the label; prose is detail, never a classifier.
+    const reason = meta.todoRejectReason || round.toolContent || "";
+    stateNotice = `<div class="ptool-todo-notice is-rejected">${escapeHtml(_t("todo.rejected", "Update rejected"))}</div>` +
+      `<pre class="ptool-todo-rejection-detail">${escapeHtml(String(reason))}</pre>`;
+  } else if (meta.todoNoop) {
     stateNotice = `<div class="ptool-todo-notice">${escapeHtml(_t("todo.unchanged", "Checklist unchanged"))}</div>`;
   } else if (Array.isArray(meta.todoAutoPopped) && meta.todoAutoPopped.length) {
     stateNotice = `<div class="ptool-todo-notice is-restored">${escapeHtml(_t("todo.parentRestored", "Child complete; returned to the parent checklist."))}</div>`;
@@ -13068,6 +13298,16 @@ const _MOTION_PURPOSE_I18N = {
   edit_slides:                   ["motionWhy.editSlides", "Re-authors ONE page of a produced deck from your plain-language instruction, then re-renders the preview and re-exports the PPTX."],
 };
 
+/* Per-tool source chip — the shared "Video" chip lied about three of the
+ * four produce_* cards (a slides job is not a video). Tools absent here keep
+ * the historical motionSrc chip (the motion_video_* family IS video work). */
+const _MOTION_SRC_I18N = {
+  produce_report:   ["motionSrcReport", "Report"],
+  produce_research: ["motionSrcResearch", "Research"],
+  produce_slides:   ["motionSrcSlides", "Slides"],
+  edit_slides:      ["motionSrcSlides", "Slides"],
+};
+
 /* The motion handler's meta.title is the bare stage name ("check" / "render")
  * — noisy inside the card, so the motion body never renders a snippet. The
  * produce handlers' note / quality_hint DO carry user-meaningful text. */
@@ -13263,6 +13503,7 @@ const _MOTION_BODY = {
   produce_video: _motionBodyProduce,
   produce_report: _motionBodyProduce,
   produce_research: _motionBodyProduce,
+  produce_slides: _motionBodyProduce,
 };
 
 function _renderMotionVideoBlock(round, svg, q, badgeHtml) {
@@ -13289,15 +13530,302 @@ function _renderMotionVideoBlock(round, svg, q, badgeHtml) {
   const emptyNote = (!bodyInner && !snippetHtml)
     ? `<div class="ptool-convmeta-empty">${escapeHtml(_t("tool.noContent", "No content returned."))}</div>` : "";
   const bodyHtml = `<div class="ptool-motion-body">${purposeHtml}${bodyInner}${snippetHtml}${emptyNote}${callLine}</div>`;
-  return `<details class="ptool-convmeta-block ptool-motion-block" data-rn="${round.roundNum}">
+  const srcEntry = _MOTION_SRC_I18N[tn];
+  const srcLabel = srcEntry ? _t(srcEntry[0], srcEntry[1]) : _t("motionSrc", "Video");
+  /* WorkUnit re-attach handle (docs/API_CONTRACT.md §2.18): the acceptance
+   * meta carries workUnitRef {taskId, kind}; the card renders the handle +
+   * an empty live region, and ui/workunit_tracker.js hydrates it in place.
+   * The handle is durable (persisted round meta), so a conversation
+   * re-render re-arms the same registration via the scan below. */
+  const wuRef = (meta && meta.workUnitRef && typeof meta.workUnitRef === "object")
+    ? meta.workUnitRef : null;
+  const wuTaskId = wuRef && wuRef.taskId ? String(wuRef.taskId) : "";
+  const wuAttrs = wuTaskId
+    ? ` data-wu-task="${escapeHtml(wuTaskId)}" data-wu-kind="${escapeHtml(String(wuRef.kind || ""))}"` : "";
+  const wuLive = wuTaskId ? `<div class="ptool-wu-live"></div>` : "";
+  if (wuTaskId && typeof _wuScanSoon === "function") _wuScanSoon();
+  return `<details class="ptool-convmeta-block ptool-motion-block" data-rn="${round.roundNum}"${wuAttrs}>
        <summary class="ptool-line ptool-convmeta-header">
          <span class="ptool-icon">${svg}</span>
          <span class="ptool-text">${escapeHtml(headLabel)}</span>
-         <span class="ptool-convmeta-src">${escapeHtml(_t("motionSrc", "Video"))}</span>
+         <span class="ptool-convmeta-src">${escapeHtml(srcLabel)}</span>
          ${badgeHtml}
        </summary>
        ${bodyHtml}
+       ${wuLive}
      </details>`;
+}
+/* ===== migrated source: ui/workunit_tracker.js ===== */
+/* ui/workunit_tracker.js — WorkUnit live hydration for produce_* cards.
+ *
+ * docs/API_CONTRACT.md §2.18: the server projects every production task into
+ * ONE workUnit block; this tracker is its only client-side consumer. A
+ * produce_* tool round's ACCEPTANCE (badge queued|running + meta.workUnitRef)
+ * is all the card knows at render time — the model's turn has ended by
+ * design, so everything after acceptance (stage progress, retries, degraded
+ * quality, the download link) arrives HERE, never via another LLM message.
+ *
+ * Rendering semantics: the card's HTML string carries only the re-attach
+ * handle (data-wu-task / data-wu-kind) and an empty .ptool-wu-live region;
+ * this tracker hydrates that region in place, mirroring the fingerprint-gate
+ * in-place updates of _tickTimerCountdowns. A conversation re-render simply
+ * re-arms the scan (the handle is durable in the persisted round meta), and
+ * the next poll re-hydrates from the server-projected snapshot — the client
+ * NEVER derives lifecycle state itself.
+ *
+ * Residency: demand-scoped. Cards call _wuScanSoon() while their HTML string
+ * is being built; a debounced scan registers [data-wu-task] elements and
+ * starts ONE shared poll loop (chained setTimeout, never setInterval): 2s
+ * cadence backing off towards 5s while nothing changes, ticks skipped while
+ * the tab is hidden, loop stops when the registry empties. No boot listener,
+ * no SSE channel — terminal truth is the task snapshot, never an event.
+ */
+
+const _WU_TERMINAL = { done: 1, degraded: 1, failed: 1, aborted: 1 };
+const _WU_DELAY_MIN = 2000;
+const _WU_DELAY_MAX = 5000;
+
+/* taskId → { kind, fp, seen } — `fp` fingerprints the last applied snapshot
+ * so unchanged polls skip DOM writes and drive the backoff. */
+const _wuRegistry = new Map();
+let _wuScanTimer = null;
+let _wuPollTimer = null;
+let _wuDelay = _WU_DELAY_MIN;
+
+function _wuT(k, d) {
+  return (typeof t === 'function') ? t(k, d) : (d || k);
+}
+
+/* Debounced scan entry — called by _renderMotionVideoBlock while the card
+ * string is being built (before it reaches the DOM). */
+/* Registry probes — the registry itself stays a module-local const (eval
+ * scopes it away from tests); these function declarations are the readable
+ * surface for the jsdom harness and console debugging. */
+function _wuTrackedCount() { return _wuRegistry.size; }
+function _wuTracked(taskId) { return _wuRegistry.has(taskId); }
+
+function _wuScanSoon() {
+  if (_wuScanTimer) return;
+  _wuScanTimer = setTimeout(function () {
+    _wuScanTimer = null;
+    _wuScanNow();
+  }, 50);
+}
+
+function _wuScanNow() {
+  if (typeof document === 'undefined' || !document.querySelectorAll) return;
+  const els = document.querySelectorAll('[data-wu-task]');
+  for (const el of els) {
+    const id = el.getAttribute('data-wu-task');
+    if (!id || _wuTracked(id)) continue;
+    _wuRegistry.set(id, {
+      kind: el.getAttribute('data-wu-kind') || '',
+      fp: '',
+    });
+  }
+  if (_wuTrackedCount()) _wuEnsureLoop();
+}
+
+function _wuTasksApi() {
+  return (typeof Api !== 'undefined' && Api && Api.tasks &&
+    typeof Api.tasks.get === 'function') ? Api.tasks : null;
+}
+
+function _wuEnsureLoop() {
+  if (_wuPollTimer) return;
+  _wuPollTimer = setTimeout(_wuTick, _wuDelay);
+}
+
+/* One tick polls every registered (non-terminal) unit, applies changed
+ * snapshots, and reschedules. The loop self-terminates when the registry
+ * empties (all units terminal or their cards gone). */
+function _wuTick() {
+  _wuPollTimer = null;
+  if (!_wuTrackedCount()) return;
+  if (typeof document !== 'undefined' && document.hidden) {
+    _wuEnsureLoop();
+    return;
+  }
+  const api = _wuTasksApi();
+  if (!api) { _wuEnsureLoop(); return; }
+  /* Cards whose element left the DOM (conversation deleted, fingerprint
+   * re-render in flight) are NOT dropped here — a re-render re-arms the scan
+   * and the same taskId re-registers; a truly gone card's unit still reaches
+   * terminal state and is then forgotten. */
+  const ids = Array.from(_wuRegistry.keys());
+  let changed = false;
+  let pending = ids.length;
+  const settle = function () {
+    pending -= 1;
+    if (pending > 0) return;
+    _wuDelay = changed ? _WU_DELAY_MIN
+      : Math.min(_WU_DELAY_MAX, _wuDelay + 1500);
+    if (_wuTrackedCount()) _wuEnsureLoop();
+  };
+  for (const id of ids) {
+    Promise.resolve(api.get(id)).then(function (snap) {
+      if (snap && snap.workUnit) {
+        if (_wuApply(id, snap.workUnit)) changed = true;
+      }
+      /* null (onError:'null' / 404 after TTL sweep): keep the registration;
+       * a restarted server re-serves the unit by id via the durable path. */
+    }).catch(function () { /* transient — next tick retries */ })
+      .then(settle);
+  }
+}
+
+/* Apply one server-projected workUnit to every card carrying the handle.
+ * Returns true when the snapshot differed from the last applied one. */
+function _wuApply(taskId, unit) {
+  const entry = _wuRegistry.get(taskId);
+  if (!entry || !unit || typeof unit !== 'object') return false;
+  const stages = Array.isArray(unit.stages) ? unit.stages : [];
+  const fp = JSON.stringify([
+    unit.status, unit.stageTotal || 0,
+    stages.map(function (s) {
+      return [s.name, s.state, s.attempt, s.elapsedS,
+        (s.lastErrors || []).length];
+    }),
+    unit.quality || null, unit.failure || null,
+    (Array.isArray(unit.artifacts) ? unit.artifacts : []).length,
+  ]);
+  if (fp === entry.fp) return false;
+  entry.fp = fp;
+  const html = _wuLiveHtml(unit);
+  const cards = document.querySelectorAll('[data-wu-task="' + taskId + '"]');
+  for (const card of cards) {
+    const live = card.querySelector('.ptool-wu-live');
+    if (live) live.innerHTML = html;
+    const badge = card.querySelector('.ptool-convmeta-header .ptool-badge');
+    if (badge) {
+      badge.textContent = _wuStatusLabel(unit.status);
+      badge.className = 'ptool-badge ptool-wu-badge-' +
+        (_WU_TERMINAL[unit.status] || unit.status === 'running' ||
+         unit.status === 'queued' || unit.status === 'retrying'
+          ? unit.status : 'failed');
+    }
+  }
+  if (_WU_TERMINAL[unit.status]) {
+    _wuRegistry.delete(taskId);
+    _wuAnnounce(unit);
+  }
+  return true;
+}
+
+function _wuStatusLabel(status) {
+  return _wuT('wu.status.' + status, status || '');
+}
+
+function _wuEsc(s) {
+  return (typeof escapeHtml === 'function')
+    ? escapeHtml(String(s == null ? '' : s)) : String(s == null ? '' : s);
+}
+
+function _wuIcon(name, size) {
+  return (typeof Icon === 'function') ? Icon(name, size || 12) : '';
+}
+
+/* The .ptool-wu-live region: a stage stepper (observed stages + the
+ * not-yet-started remainder implied by stageTotal) plus, for terminal units,
+ * ONE honest outcome line — download links for done/degraded, the failure
+ * envelope (message + hint) for failed, muted for aborted. */
+function _wuLiveHtml(unit) {
+  const stages = Array.isArray(unit.stages) ? unit.stages : [];
+  const total = Number(unit.stageTotal || 0);
+  let html = '<div class="ptool-wu-stages">';
+  for (const s of stages) {
+    if (!s || typeof s !== 'object') continue;
+    const state = (s.state === 'done' || s.state === 'active' ||
+      s.state === 'skipped' || s.state === 'failed') ? s.state : 'pending';
+    const icon = state === 'done' ? _wuIcon('check')
+      : state === 'active' ? '<span class="ptool-spinner"></span>'
+      : state === 'skipped' ? _wuIcon('chevronDown')
+      : state === 'failed' ? _wuIcon('x')
+      : _wuIcon('clock');
+    const attempt = (Number(s.attempt || 0) > 1)
+      ? '<span class="ptool-wu-attempt">' + _wuEsc(
+        _wuT('wu.attempt', 'attempt {n}').replace('{n}', Number(s.attempt))) +
+        '</span>'
+      : '';
+    const elapsed = (s.elapsedS != null && state !== 'pending')
+      ? '<span class="ptool-wu-elapsed">' + _wuEsc(Number(s.elapsedS)) + 's</span>'
+      : '';
+    const lastErr = (Array.isArray(s.lastErrors) && s.lastErrors.length &&
+      (state === 'failed' || Number(s.attempt || 0) > 1))
+      ? '<span class="ptool-wu-stage-err">' + _wuEsc(
+        String(s.lastErrors[s.lastErrors.length - 1]).slice(0, 120)) + '</span>'
+      : '';
+    html += '<div class="ptool-wu-stage ptool-wu-stage-' + state + '">' +
+      '<span class="ptool-wu-stage-icon">' + icon + '</span>' +
+      '<span class="ptool-wu-stage-name">' + _wuEsc(s.name || '') + '</span>' +
+      attempt + elapsed + lastErr + '</div>';
+  }
+  for (let i = stages.length; i < total; i++) {
+    html += '<div class="ptool-wu-stage ptool-wu-stage-pending">' +
+      '<span class="ptool-wu-stage-icon">' + _wuIcon('clock') + '</span>' +
+      '<span class="ptool-wu-stage-name">' + _wuEsc(
+        _wuT('wu.stagePending', 'stage {n}').replace('{n}', i + 1)) +
+      '</span></div>';
+  }
+  html += '</div>';
+
+  const artifacts = Array.isArray(unit.artifacts) ? unit.artifacts : [];
+  const links = artifacts.map(function (a) {
+    if (!a || !a.href) return '';
+    const bits = [a.label || 'file'];
+    if (a.pages != null) bits.push(_wuT('wu.pages', '{n} pages')
+      .replace('{n}', a.pages));
+    if (a.bytes) bits.push(_wuFmtBytes(a.bytes));
+    return '<a class="ptool-wu-download" href="' + _wuEsc(a.href) +
+      '" download>' + _wuIcon('save', 12) + '<span>' + _wuEsc(
+        _wuT('wu.download', 'Download {label}')
+          .replace('{label}', bits.join(' · '))) + '</span></a>';
+  }).join('');
+
+  if (unit.status === 'done' || unit.status === 'degraded') {
+    const degraded = unit.status === 'degraded';
+    const reason = degraded && unit.quality && unit.quality.reason
+      ? '<span class="ptool-wu-line-note">' + _wuEsc(unit.quality.reason) +
+        '</span>' : '';
+    html += '<div class="ptool-wu-line ' +
+      (degraded ? 'ptool-wu-line-warn' : 'ptool-wu-line-ok') + '">' +
+      _wuIcon(degraded ? 'alertTriangle' : 'check', 13) +
+      '<span>' + _wuEsc(degraded
+        ? _wuT('wu.degradedLine', 'Finished with reduced quality')
+        : _wuT('wu.doneLine', 'Finished')) + '</span>' + reason +
+      links + '</div>';
+  } else if (unit.status === 'failed') {
+    const f = unit.failure || {};
+    const msg = f.message ? '<span class="ptool-wu-line-note">' +
+      _wuEsc(String(f.message).slice(0, 200)) + '</span>' : '';
+    const hint = f.hint ? '<div class="ptool-wu-hint">' +
+      _wuEsc(String(f.hint).slice(0, 300)) + '</div>' : '';
+    html += '<div class="ptool-wu-line ptool-wu-line-err">' +
+      _wuIcon('x', 13) +
+      '<span>' + _wuEsc(_wuT('wu.failedLine', 'Job failed')) + '</span>' +
+      msg + '</div>' + hint;
+  } else if (unit.status === 'aborted') {
+    html += '<div class="ptool-wu-line ptool-wu-line-muted">' +
+      _wuIcon('ban', 13) +
+      '<span>' + _wuEsc(_wuT('wu.abortedLine', 'Stopped')) + '</span></div>';
+  }
+  return html;
+}
+
+function _wuFmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v >= 1048576) return (v / 1048576).toFixed(1) + ' MB';
+  if (v >= 1024) return Math.round(v / 1024) + ' KB';
+  return v + ' B';
+}
+
+/* Ephemeral completion notice — the durable record is the card itself; the
+ * toast only catches a user reading further down the transcript. */
+function _wuAnnounce(unit) {
+  if (typeof showToast !== 'function') return;
+  const title = _wuStatusLabel(unit.status);
+  const body = unit.title || '';
+  try { showToast('', title, body, 2600); } catch (e) { /* cosmetic only */ }
 }
 /* ===== migrated source: ui/turn_nav.js ===== */
 /* Stable TurnStore navigation for the conversation rail.
@@ -13464,6 +13992,16 @@ function updateActiveTurn() {
 /* ===== migrated source: ui/swarm_live_projection.js ===== */
 /* Ephemeral swarm progress projection for conversation-scoped push frames. */
 
+
+function _swarmFrameMatchesRound(ev, round) {
+  if (!round || round._swarmSnapshot?.settled) return false;
+  const swarmId = ev.swarmId || ev.swarm_id;
+  let handle = {};
+  try { handle = _swarmUnwrapResultPayload(JSON.parse(round.toolContent || "{}")) || {}; } catch (_) { /* launch not settled */ }
+  const roundId = round._swarmSnapshot?.swarm_id || handle.swarm_run_id || handle.swarm_id || round.taskId;
+  return !swarmId || !roundId || swarmId === roundId;
+}
+
 function _handleSwarmPhase(ev, c) {
   const convId = c.convId, taskId = c.taskId;
   const assistantProjection = c.assistantProjection;
@@ -13481,7 +14019,7 @@ function _handleSwarmPhase(ev, c) {
       const _mostRecentUnsettled = (m) => {
         const rounds = (m && m.toolRounds) || [];
         for (let i = rounds.length - 1; i >= 0; i--) {
-          if (rounds[i] && rounds[i]._swarm && !rounds[i]._swarmEndTime) return rounds[i];
+          if (_swarmFrameMatchesRound(ev, rounds[i]) && (rounds[i]._swarm || rounds[i].toolName === "spawn_agents") && !rounds[i]._swarmEndTime) return rounds[i];
         }
         return null;
       };
@@ -13492,7 +14030,7 @@ function _handleSwarmPhase(ev, c) {
            `_swarm` round, which could be a stale/empty (ghost) spawn round
            and would steal this swarm's events. */
         const inCurrent = (assistantProjection.toolRounds || []).find(
-          r => r._swarm && (rn ? r.roundNum === rn : (r._swarmActive || r._asyncRunning)));
+          r => _swarmFrameMatchesRound(ev, r) && !r._swarmEndTime && r._swarm && (rn ? r.roundNum === rn : (r._swarmActive || r._asyncRunning)));
         if (inCurrent) return inCurrent;
         return _mostRecentUnsettled(assistantProjection);
       };
@@ -13513,6 +14051,9 @@ function _handleSwarmPhase(ev, c) {
         }));
         if (sr) {
           sr.query = "Agent Swarm";
+
+          sr._swarm = true;
+          if (ev.swarmId || ev.swarm_id) sr.taskId = ev.swarmId || ev.swarm_id;
           sr._swarmActive = true;
           sr._swarmStartTime = sr._swarmStartTime || Date.now();
           /* Backend-authoritative session key (conv-scoped). The reconciler
@@ -13536,6 +14077,8 @@ function _handleSwarmPhase(ev, c) {
             results: null,
             status: "searching",
             toolName: "spawn_agents",
+
+            taskId: ev.swarmId || ev.swarm_id || undefined,
             _swarm: true,
             _swarmActive: true,
             _swarmStartTime: Date.now(),
@@ -13611,7 +14154,7 @@ function _handleSwarmPhase(ev, c) {
             /* After a driver error, an unreported agent stays 'unknown' —
                promoting it to done would be a false green over crashed work. */
             if (a.status === "pending" || a.status === "running") {
-              a.status = sr._swarmError ? "unknown" : "done";
+              a.status = "unknown";
               if (a.status === "unknown") a.phase = "unknown";
             }
             /* Advance phase in lockstep with status — otherwise an agent
@@ -13644,7 +14187,7 @@ function _handleSwarmAgent(ev, c) {
            progress events have no fallback below, so they were silently
            dropped — the panel showed agent cards but never the tool
            timeline. */
-        const rounds = assistantProjection.toolRounds || [];
+        const rounds = (assistantProjection.toolRounds || []).filter(r => _swarmFrameMatchesRound(ev, r) && !r._swarmEndTime);
         const owner = rounds.find(
           r => (r._swarmActive || r._swarm)
             && (r._swarmAgents || []).some(a => a.id === ev.agentId),
@@ -16514,6 +17057,7 @@ function _updateAutoApplyUI() {
 // Per-conversation project path helpers
 
 function _saveConvProjectPath(path, extraPaths, readOnlyPaths) {
+  _conversationProjectController.begin();
   const conv = getActiveConv();
   if (conv) {
     conv.projectPath = path || "";
@@ -16580,7 +17124,10 @@ function _applyRemoteProjectState(conv, pseudo) {
     scanProgress: "",
     scanDetail: "",
     scannedAt: Date.now(),
-    extraRoots: [],
+    readOnly: (conv.readOnlyPaths || []).includes(pseudo),
+    extraRoots: (conv.projectPaths || []).filter(path => path !== pseudo).map(path => ({
+      path, readOnly: (conv.readOnlyPaths || []).includes(path),
+    })),
   };
   debugLog("Remote worktree active for conversation: " + pseudo, "info");
   _updateProjectUI();
@@ -16605,102 +17152,35 @@ function _clearProjectStateLocal() {
   _updateProjectUI();
 }
 
-async function _restoreConvProject(conv) {
-  const savedPath = _getConvProjectPath(conv);
-  if (!savedPath) {
-    // This conversation has no project — clear UI
-    _clearProjectStateLocal();
-    return;
-  }
-  // RWA: remote worktree pseudo-path — server-side project machinery
-  // (setPaths/scan) must never touch it; render the synthetic bar state.
-  if (_isRemotePath(savedPath)) {
-    _applyRemoteProjectState(conv, savedPath);
-    return;
-  }
-  // Gather all saved paths (primary + extras) from the conversation
-  const allPaths = (Array.isArray(conv.projectPaths) && conv.projectPaths.length)
-    ? conv.projectPaths
-    : [savedPath];
-  const hasExtras = allPaths.length > 1;
-  // If already active on the same primary path with same extras, just update UI
-  const currentExtras = (projectState.extraRoots || []).map(r => typeof r === 'string' ? r : r.path);
-  const savedExtras = allPaths.slice(1);
-  const extrasMatch = savedExtras.length === currentExtras.length &&
-    savedExtras.every(p => currentExtras.includes(p));
-  if (projectState.active && projectState.path === savedPath && extrasMatch) {
-    _updateProjectUI();
-    return;
-  }
-  // Need to set/restore this project on server
-  _clearProjectStateLocal();
-  const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
-    .filter(p => allPaths.includes(p));
-  try {
-    // ALWAYS reconcile via the pruning multi-path endpoint — never the
-    //   single-path setPath. set_project()'s `same_primary` guard PRESERVES
-    //   any stale extra roots left in the process-global _roots registry by a
-    //   PRIOR conversation (or a background task's absolute-path write
-    //   auto-register), so setPath(chatui) would leave e.g. `tofu-search`
-    //   showing on a chatui-only conversation. setPaths([chatui], []) prunes
-    //   every global extra not in THIS conversation's saved set, making the
-    //   conversation the single source of truth for the project bar.
-    const resp = await Api.project.setPaths(
-      allPaths, savedReadOnly, [savedPath],
-    );
-    const data = resp ? await resp.json().catch(() => ({})) : {};
-    /* Stale-switch guard — BEFORE any paint or persist. A slow setPaths
-     * response belongs to the conv that ISSUED it; after a rapid A→B switch
-     * the late response must neither repaint B's project bar nor demote B's
-     * dial. onProjectCleared below persists onto the ACTIVE conv — running
-     * it on a stale response would write the demotion into the wrong
-     * conversation's stored settings. */
-    if (activeConvId !== conv.id || !conversations.some(x => x && x.id === conv.id)) return;
-    if (resp && resp.ok) {
-      _applyProjectData(data);
-      // setPaths touched the restored primary in the same successful request,
-      // so recent history cannot be committed for an invalid project.
-      /* FIX: Sync conv.projectPath from the server response.
-       * _restoreConvProject only reads conv.projectPath — it never writes it
-       * back after a successful /api/project/set.  If conv.projectPath was
-       * undefined (e.g. new conv inherited from projectState, or loaded from
-       * cache without settings), it stays undefined even though the project
-       * is now active.  This caused "UI shows project, backend gets no path"
-       * because startAssistantResponse reads conv.projectPath (undefined → ""). */
-      conv.projectPath = data.path || savedPath;
-      debugLog("Project restored for conversation: " + savedPath, "success");
-    } else {
-      debugLog("Saved project path no longer valid: " + savedPath, "warn");
-      // Clear the invalid path from conversation
-      conv.projectPath = "";
-      /* FIX: Pass null — clearing a stale project path is a metadata-only
-       * change, NOT new conversation activity.  Passing conv.id bumps
-       * updatedAt = Date.now(), making the conversation jump to the top
-       * of the sidebar just because its saved project path was invalid. */
-      reconcileConversationCatalogMetadata(null);
-      /* A project-less chat is never Studio — the bar was already cleared
-       * by the pre-fetch _clearProjectStateLocal, so the dial must not keep
-       * claiming Studio. Demote AND persist (guarded above: only when THIS
-       * conv is still the active one). */
-      if (typeof onProjectCleared === 'function') onProjectCleared();
-    }
-  } catch (e) {
-    debugLog("Project restore failed: " + e.message, "warn");
-    /* Transient failure (network/cross-DC): the bar is already cleared, so the
-     * dial must follow it down — but ONLY if this conv is still the active
-     * one (the throw can land long after a rapid switch). conv.projectPath is
-     * deliberately RETAINED so the next switch retries the restore. */
-    if (activeConvId === conv.id && conversations.some(x => x && x.id === conv.id)
-        && typeof onProjectCleared === 'function') {
-      onProjectCleared();
-    }
-  }
+// Temporary retained adapter; delete when project presentation moves to TypeScript.
+function _hasProjectComposerDraft() {
+  // Cleanup suggestions are derived from a past paste, not sendable draft
+  // content. A late suggestion can outlive an emptied textarea; counting it
+  // independently blocks both model and project restoration on navigation.
+  return !!(document.getElementById('userInput')?.value.trim()
+    || pendingImages.length || pendingPdfTexts.length
+    || (typeof pendingVideos !== 'undefined' && pendingVideos.length));
+}
+const _conversationProjectController = createConversationProjectController({
+  activeId: () => activeConvId,
+  exists: id => conversations.some(conv => conv && conv.id === id),
+  hasDraft: _hasProjectComposerDraft,
+  selection: () => projectState,
+  clear: _clearProjectStateLocal,
+  remote: _applyRemoteProjectState,
+  apply: _applyProjectData,
+  setPaths: (paths, readOnly, recent) => Api.project.setPaths(paths, readOnly, recent),
+  warn: message => debugLog(message, 'warn'),
+});
+function _restoreConvProject(conv, eligible) {
+  return _conversationProjectController.restore(conv, eligible);
 }
 
 
 let _projectBarFolders = [];
 
 async function clearProject() {
+  _conversationProjectController.begin();
   await Api.project.clear().catch(e => debugLog(`[clearProject] ${e.message}`, 'warn'));
   _saveConvProjectPath("");
   projectState = {
@@ -16909,131 +17389,10 @@ async function toggleProjectBarReadOnly(index, event) {
 
 
 async function loadProjectStatus() {
-  // Per-conversation: restore project for the active conversation
+  // Cold shells restore only after authoritative settings hydration.
   const conv = getActiveConv();
-  const savedPath = _getConvProjectPath(conv);
-  if (!savedPath) {
-    // Active conv has no project — check if server still has one active (from before),
-    // and clear it since we don't need it for this conv
-    _clearProjectStateLocal();
-    return;
-  }
-  // Try to check server status first — CONV-SCOPED so a background task's
-  // global-registry mutation can never paint another conversation's bar.
-  try {
-    const data = await Api.project.status(conv && conv.id);
-    if (!data) return;
-    /* Stale-switch guard — BEFORE any paint or persist (same contract as
-     * _restoreConvProject): a boot-time status response must never paint or
-     * persist onto a conv the user has already switched away from. */
-    if (activeConvId !== conv.id || !conversations.some(x => x && x.id === conv.id)) return;
-    if (data.path && data.path === savedPath) {
-      // Server already has this project active — check extras too
-      const allPaths = (Array.isArray(conv.projectPaths) && conv.projectPaths.length)
-        ? conv.projectPaths : [savedPath];
-      const savedExtras = allPaths.slice(1);
-      const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
-        .filter(p => allPaths.includes(p));
-      const currentExtras = (data.extraRoots || []).map(r => typeof r === 'string' ? r : r.path);
-      const extrasMatch = savedExtras.length === currentExtras.length &&
-        savedExtras.every(p => currentExtras.includes(p));
-      // Detect read-only drift: the server's RO set must match what the
-      //   conversation saved, else the locks vanish after a reload / server
-      //   restart. Build the server's current RO set from get_state().
-      const currentRO = [];
-      if (data.readOnly && data.path) currentRO.push(data.path);
-      for (const r of (data.extraRoots || [])) {
-        if (r && typeof r === 'object' && r.readOnly) currentRO.push(r.path);
-      }
-      const roMatch = savedReadOnly.length === currentRO.length &&
-        savedReadOnly.every(p => currentRO.includes(p));
-      if (!extrasMatch || !roMatch) {
-        // Primary matches but extras or read-only policy don't. The server's
-        // in-memory RO flag is ephemeral (reset on restart), so the durable
-        // per-conv readOnlyPaths is the authority here — paint the bar from it
-        // IMMEDIATELY, then re-hydrate the server in the BACKGROUND so the load
-        // isn't gated on the slow setPaths round-trip (fs isdir + cross-DC probe).
-        _applyProjectData({
-          path: allPaths[0],
-          readOnly: savedReadOnly.includes(allPaths[0]),
-          extraRoots: allPaths.slice(1).map(p => ({ path: p, readOnly: savedReadOnly.includes(p) })),
-          crossDC: data.crossDC || null,
-        });
-        debugLog("Re-hydrating server read-only policy in background", "info");
-        Api.project.setPaths(allPaths, savedReadOnly)
-          .then(fixResp => fixResp && fixResp.ok
-            ? fixResp.json().catch(() => null) : null)
-          .then(fixData => {
-            if (fixData && activeConvId === conv.id
-                && conversations.some(x => x && x.id === conv.id)) {
-              _applyProjectData(fixData);
-            }
-          })
-          .catch(e2 => debugLog("Background RO re-hydrate failed: " + e2.message, "warn"));
-      } else {
-        _applyProjectData(data);
-      }
-      /* FIX: Ensure conv.projectPath is set — same reason as _restoreConvProject fix. */
-      if (conv) conv.projectPath = data.path || savedPath;
-
-    } else {
-      // Server has no project or a different one — restore from conv
-      debugLog("Restoring project from conversation: " + savedPath, "info");
-      try {
-        // Use multi-path API when conversation has extra roots OR any
-        //   read-only root (read-only is only expressible via setPaths).
-        const allPaths = (Array.isArray(conv.projectPaths) && conv.projectPaths.length)
-          ? conv.projectPaths : [savedPath];
-        const savedReadOnly = (Array.isArray(conv.readOnlyPaths) ? conv.readOnlyPaths : [])
-          .filter(p => allPaths.includes(p));
-        const hasExtras = allPaths.length > 1;
-        // Always use the pruning multi-path endpoint (see _restoreConvProject):
-        //   setPath's `same_primary` guard would preserve stale global extras.
-        const setResp = await Api.project.setPaths(allPaths, savedReadOnly);
-        const setData = setResp ? await setResp.json().catch(() => ({})) : {};
-        /* Stale-switch guard — see the status guard above. */
-        if (activeConvId !== conv.id || !conversations.some(x => x && x.id === conv.id)) return;
-        if (setResp && setResp.ok) {
-          _applyProjectData(setData);
-          /* FIX: Sync conv.projectPath after successful restore. */
-          if (conv) conv.projectPath = setData.path || savedPath;
-          debugLog("Project restored: " + savedPath + (hasExtras ? ` + ${allPaths.length - 1} extras` : ''), "success");
-        } else {
-          debugLog("Saved project path no longer valid, clearing", "warn");
-          if (conv) {
-            conv.projectPath = "";
-            reconcileConversationCatalogMetadata(conv.id);
-          }
-          _clearProjectStateLocal();
-          /* A project-less chat is never Studio — demote the dial AND
-           * persist (guarded above: only when THIS conv is still the active
-           * one). Mirrors _restoreConvProject's invalid-path branch. */
-          if (typeof onProjectCleared === 'function') onProjectCleared();
-        }
-      } catch (e2) {
-        debugLog("Project restore failed: " + e2.message, "warn");
-        /* Transient failure — same contract as _restoreConvProject's catch:
-         * the bar is already cleared, so the dial must follow it down, but
-         * ONLY if this conv is still active. conv.projectPath is RETAINED
-         * so the next switch/boot retries the restore. */
-        if (activeConvId === conv.id && conversations.some(x => x && x.id === conv.id)
-            && typeof onProjectCleared === 'function') {
-          onProjectCleared();
-        }
-      }
-    }
-  } catch (e) {
-    debugLog("Project status load failed", "warn");
-    /* The status probe itself failed (e.g. network down at boot): the bar
-     * stays hidden while the conv restore already painted Studio — demote
-     * under the same ownership guard so the dial never claims a project the
-     * boot could not attach. conv.projectPath is retained for the retry. */
-    if (conv && activeConvId === conv.id
-        && conversations.some(x => x && x.id === conv.id)
-        && typeof onProjectCleared === 'function') {
-      onProjectCleared();
-    }
-  }
+  if (conv?._turnSnapshotRequired) return;
+  return _restoreConvProject(conv);
 }
 /* ===== migrated source: main/conversation_turn_store.js ===== */
 let _roleAvatarIcons = null;
@@ -17106,6 +17465,20 @@ function _nativeRegenerateInputOptions(resolved, inputEdit) {
   } : {};
 }
 
+/* Resume operations that reopen an interrupted attempt on the same lane.
+ * Mirrors the server-side _RESUME_MODEL_SWITCH_OPERATIONS set: only these
+ * may carry the contextSnapshot-only rebind that records a pause →
+ * switch-model → continue on the submitted turn's info rail. */
+const _RESUME_CTX_OPERATIONS = new Set([
+  'continue', 'checkpoint_resume', 'answer_guidance']);
+
+function _nativeResumeCtxOptions(operation) {
+  if (!_RESUME_CTX_OPERATIONS.has(operation)) return {};
+  if (typeof runtimeScope.buildTurnCtxSnapshot !== 'function'
+      || typeof resumeCtxInputUpdate !== 'function') return {};
+  const inputUpdate = resumeCtxInputUpdate(runtimeScope.buildTurnCtxSnapshot());
+  return inputUpdate ? { inputUpdate } : {};
+}
 async function _operateNativeTurn(conv, turnId, operation, inputEdit) {
   const resolved = _nativeTurnState(conv, turnId);
   if (!resolved || typeof runtimeScope.ConversationTurnStore === 'undefined') return false;
@@ -17120,7 +17493,8 @@ async function _operateNativeTurn(conv, turnId, operation, inputEdit) {
     const operationOptions = {
       commandId: `${operation}:${turnId}:${resolved.turn.projectionRevision || 0}`,
       ...(operation === 'regenerate'
-        ? _nativeRegenerateInputOptions(resolved, inputEdit) : {}),
+        ? _nativeRegenerateInputOptions(resolved, inputEdit)
+        : _nativeResumeCtxOptions(operation)),
     };
     const cfg = await _buildConvConfig(conv);
     await runtimeScope.ConversationTurnStore.operateConversation(
@@ -17154,6 +17528,7 @@ async function _answerHumanGuidanceLate(conv, turnId, responseText) {
     conv, turnId, 'answer_guidance', cfg, {
       commandId: `answer_guidance:${turnId}:${resolved.turn.projectionRevision || 0}`,
       humanResponse: responseText,
+      ..._nativeResumeCtxOptions('answer_guidance'),
     },
   );
 }
@@ -17207,10 +17582,22 @@ function _findRenderedNativeTurnNode(turnId) {
  * success.  Kept out of the view model on purpose — the surface only
  * re-renders the action bar when the action list changes, so a DOM-level
  * flash survives unrelated commits and harmlessly vanishes on a real one. */
-function _flashTurnCopyFeedback(turnId) {
+function _flashTurnCopyFeedback(turnId, blockId) {
   const turnNode = _findRenderedNativeTurnNode(turnId);
-  const button = turnNode?.querySelector?.(
-    'button[data-conversation-action="copy"]',
+  if (!turnNode) return;
+  let scope = turnNode;
+  let action = 'copy';
+  if (blockId) {
+    /* Block ids carry colons ('text:llm-1') — match by dataset, not by a
+     * CSS-escaped attribute selector. */
+    scope = Array.from(turnNode.querySelectorAll('[data-block-id]')).find(
+      node => node.dataset.blockId === blockId,
+    ) || null;
+    action = 'copy-block';
+    if (!scope) return;
+  }
+  const button = scope.querySelector?.(
+    `button[data-conversation-action="${action}"]`,
   );
   const icon = button?.querySelector?.('svg.msg-action-icon');
   if (!button || !icon) return;
@@ -17642,7 +18029,7 @@ async function _removeNativeQueueItem(conv, queueId) {
     const projection = response.inputTurn?.projection || {};
     const attachments = Array.isArray(projection.attachments)
       ? projection.attachments : [];
-    if (typeof _restoreCapturedComposerDraft === 'function') {
+    if (response.inputTurn && typeof _restoreCapturedComposerDraft === 'function') {
       _restoreCapturedComposerDraft({
         inputValue: projection.originalContent || projection.content || '',
         images: Array.isArray(projection.images) ? projection.images : [],
@@ -18080,6 +18467,9 @@ const _conversationSurfaceController = createConversationSurfaceController({
         { n: count },
       );
     },
+    blockLabel(count) {
+      return t('chat.loadEarlierBlocks', { n: count });
+    },
   },
   followLatest() {
     if (typeof scrollToBottom === 'function') scrollToBottom(true);
@@ -18222,6 +18612,31 @@ const _conversationSurfaceController = createConversationSurfaceController({
       _safeClipboardWrite(copyText)
         .then(() => _flashTurnCopyFeedback(intent.turnId))
         .catch(() => {});
+    }
+    else if (intent.type === 'copy-block' && intent.blockId
+        && typeof _safeClipboardWrite === 'function') {
+      /* Per-block copy: resolve the exact segment the button belongs to.
+       * The turn-level Copy above only reaches projection.content (the final
+       * answer); mid-turn prose lives on its own text segment. */
+      const segment = (projection.segments || []).find(item =>
+        item && item.blockId === intent.blockId && item.type === 'text');
+      if (segment) {
+        const actor = (resolved?.turn || transientTurn)?.actor;
+        const terminalish = Boolean(segment.terminal || segment.deliverable);
+        const authoritative = terminalish
+          ? (projection.content ?? segment.text) : segment.text;
+        const humanOriginal = actor === 'human' && terminalish
+          ? projection.originalContent : undefined;
+        const original = humanOriginal || authoritative || '';
+        const translated = humanOriginal ? authoritative
+          : (segment.translatedText
+            || (terminalish ? projection.translatedContent : undefined));
+        const blockText = intent.operation === 'copy-translated' && translated
+          ? translated : original;
+        _safeClipboardWrite(blockText)
+          .then(() => _flashTurnCopyFeedback(intent.turnId, intent.blockId))
+          .catch(() => {});
+      }
     }
     else if (intent.type === 'inspect' && intent.operation
         && typeof runtimeScope.openRequestInspectorForTask === 'function') {
@@ -18486,12 +18901,12 @@ runtimeScope.requestAuthoritativeConversationRender = function (
  */
 
 function newChat() {
+  _conversationModelController.begin();
   _purgeEmptyConvs();
   const prevConv = getActiveConv();
   if (prevConv) {
     /* Never persist a provisional model paint. */
-    if (!config._modelIsProvisional && config.model) prevConv.model = config.model;
-    prevConv.thinkingDepth = config.thinkingDepth;
+    // Navigation does not commit a draft's model to the outgoing conversation.
     prevConv.searchMode = searchMode || "multi";
     prevConv.fetchEnabled = !!fetchEnabled;
     prevConv.codeExecEnabled = !!codeExecEnabled;
@@ -18509,17 +18924,12 @@ function newChat() {
       prevConv.imageGenResolution = _igSelectedResolution || '1K';
     }
     prevConv.autoTranslate = !!autoTranslate;
-    /* Preserve inherited project binding when leaving an unopened shell. */
-    if (projectState.active && projectState.path) {
-      prevConv.projectPath = projectState.path;
-    }
+    /* Navigation never commits the composer's possibly unrelated project. */
   }
-  const hasInput =
-    document.getElementById("userInput").value.trim() ||
-    pendingImages.length > 0 ||
-    pendingPdfTexts.length > 0 ||
-    (_pendingLogClean && _pendingLogClean.originalText);
+  const hasInput = _hasProjectComposerDraft();
+  _conversationProjectController.begin();
   activeConvId = null;
+  runtimeScope.updateBackgroundActivity?.();
   sessionStorage.removeItem('tofu_activeConvId');
   runtimeScope.ConversationTurnStore?.reconcileConversationActivity?.(
     prevConv?.id,
@@ -18560,6 +18970,8 @@ function newChat() {
   if (typeof runtimeScope.updateContextBar === 'function') runtimeScope.updateContextBar();
 }
 function loadConversation(id) {
+  let projectRestoreEligible = _conversationProjectController.begin();
+  const modelRestoreEligible = _conversationModelController.begin();
   _purgeEmptyConvs();
   // ── Exit branch mode when switching conversations ──
   if (typeof closeBranchPanel === "function" && typeof isBranchModeActive === "function" && isBranchModeActive()) {
@@ -18574,8 +18986,7 @@ function loadConversation(id) {
     /* See captureActiveConversationSettings: switching AWAY from a conv must not stamp a
      *   provisional default paint onto it. This is the exact path that turned
      *   a mispainted composer into persisted corruption. */
-    if (!config._modelIsProvisional && config.model) prevConv.model = config.model;
-    prevConv.thinkingDepth = config.thinkingDepth;
+    // Navigation does not commit a draft's model to the outgoing conversation.
     prevConv.searchMode = searchMode || "multi";
     prevConv.fetchEnabled = !!fetchEnabled;
     prevConv.codeExecEnabled = !!codeExecEnabled;
@@ -18599,20 +19010,11 @@ function loadConversation(id) {
     if (!_prevTaskActive) {
       prevConv.autoTranslate = !!autoTranslate;
     }
-    if (projectState.active && projectState.path) {
-      prevConv.projectPath = projectState.path;
-      const allPaths = [projectState.path];
-      if (projectState.extraRoots?.length) {
-        for (const r of projectState.extraRoots) {
-          const p = typeof r === 'string' ? r : r.path;
-          if (p && !allPaths.includes(p)) allPaths.push(p);
-        }
-      }
-      prevConv.projectPaths = allPaths;
-    }
+    /* Project bindings change only through explicit selection or send. */
     _needsDeferredSave = true;
   }
   activeConvId = id;
+  runtimeScope.updateBackgroundActivity?.();
   sessionStorage.setItem('tofu_activeConvId', id);
   runtimeScope.ConversationTurnStore?.reconcileConversationActivity?.(
     prevConv?.id, id,
@@ -18643,6 +19045,10 @@ function loadConversation(id) {
    * preserves its own scroll anchor while Turn data converges. */
   if (c._turnSnapshotRequired) {
     runtimeScope.requestAuthoritativeConversationRender(c.id);
+    if (projectRestoreEligible()) {
+      _clearProjectStateLocal();
+      projectRestoreEligible = _conversationProjectController.begin();
+    }
     void (async () => {
       if (typeof hydrateConversationRuntime !== 'function') {
         console.error('[loadConversation] conversation turn runtime is unavailable');
@@ -18656,8 +19062,8 @@ function loadConversation(id) {
         await hydrateConversationRuntime(c.id);
         if (activeConvId === id) {
           runtimeScope.requestAuthoritativeConversationRender(c.id);
-          if (typeof restoreConversationSettingsToComposer === 'function') restoreConversationSettingsToComposer(c);
-          _restoreConvProject(c);
+          if (typeof restoreConversationSettingsToComposer === 'function') restoreConversationSettingsToComposer(c, modelRestoreEligible);
+          _restoreConvProject(c, projectRestoreEligible);
         }
         _resumePendingTranslations(id);
       } catch (error) {
@@ -18698,9 +19104,9 @@ function loadConversation(id) {
    * after Turn hydration above; restoring the shell copy here as well raced an
    * identical setPaths request, rotated the server undo session, and warmed
    * the same tree index twice. Warm opens already own exact settings. */
-  if (!c._turnSnapshotRequired) _restoreConvProject(c);
+  if (!c._turnSnapshotRequired) _restoreConvProject(c, projectRestoreEligible);
   /* Restore settings only after the authoritative Turn snapshot is ready. */
-  if (!c._turnSnapshotRequired) restoreConversationSettingsToComposer(c);
+  if (!c._turnSnapshotRequired) restoreConversationSettingsToComposer(c, modelRestoreEligible);
 
   /* Persist outgoing settings after the new conversation is interactive.
    * setTimeout(0) keeps the settings PATCH off the critical paint path. */
@@ -19136,6 +19542,8 @@ async function _buildConvSettings(conv) {
 
 async function _buildConvSubmission(conv) {
   const configInputs = _buildConvConfigInputs(conv);
+  configInputs.overrides.model = conv.model || configInputs.overrides.model;
+  configInputs.overrides.thinkingDepth = conv.thinkingDepth;
   return _conversationSettingsResolution.resolveSubmission(
     configInputs,
     _buildConvSettingsInputs(conv, configInputs.overrides),
@@ -19508,6 +19916,11 @@ async function _submitComposerDraft() {
 
   let conv = getActiveConv();
   if (conv?._genStartCtrl) return;
+  const projectAtSend = projectState;
+  const modelAtSend = captureComposerModel(config);
+  const commitProjectAtSend = !!(projectAtSend.active && projectAtSend.path)
+    || _conversationProjectController.preservesDraft();
+  const selectedConvId = activeConvId;
   if (conv?._turnSnapshotRequired) {
     if (!runtimeScope.ConversationTurnStore) {
       throw new Error('Conversation turn runtime is unavailable.');
@@ -19525,6 +19938,9 @@ async function _submitComposerDraft() {
       );
     }
   }
+  // Navigation during hydration leaves the draft untouched rather than
+  // submitting it with another conversation's composer settings.
+  if (activeConvId !== selectedConvId) return;
   if (!conv) {
     const now = Date.now();
     conv = {
@@ -19553,6 +19969,15 @@ async function _submitComposerDraft() {
     renderConversationList();
   }
 
+  // Sending is an explicit context commit, unlike navigation/settings capture.
+  // Preserve a saved binding when a failed restore left the local bar empty.
+  if (commitProjectAtSend) {
+    const binding = _deriveConvPathsFromState(projectAtSend);
+    conv.projectPath = binding.allPaths[0] || '';
+    conv.projectPaths = binding.allPaths;
+    conv.readOnlyPaths = binding.roList;
+  }
+  commitComposerModel(conv, modelAtSend);
   const convId = conv.id;
   const capturedReplyQuotes = typeof getPendingReplyQuotes === 'function'
     ? [...(getPendingReplyQuotes() || [])] : [];
@@ -19780,9 +20205,16 @@ async function _submitComposerDraft() {
       if (typeof showToast === 'function') showToast(t('steer.injected'), 'success');
     } else if (acknowledgement.queued) {
       const position = Number(acknowledgement.position || 0);
-      debugLog('Message queued at position ' + position + '.', 'info');
+      const steerFallback = acknowledgement.steerFallback === true;
+      debugLog(steerFallback
+        ? 'Steer window closed; message queued at position ' + position + '.'
+        : 'Message queued at position ' + position + '.', 'info');
       if (typeof showToast === 'function') {
-        showToast(t('queue.queuedToast', { n: position }), 'info');
+        showToast(
+          t(steerFallback ? 'queue.steerFallbackToast' : 'queue.queuedToast',
+            { n: position }),
+          'info',
+        );
       }
     } else {
       debugLog('Turn accepted: ' + draft.commandId, 'success');
@@ -20423,6 +20855,115 @@ function _deriveChatModeFromFlags(conv) {
 }
 if (typeof window !== 'undefined') runtimeScope._deriveChatModeFromFlags = _deriveChatModeFromFlags;
 
+/* Provider preference chip: a real popover, not a native <select> — the
+ * OS popup ignores page styling entirely and rendered as an alien widget
+ * inside the polished panel. The menu lives on document.body so the
+ * scrolling list container can never clip it; one menu exists at a time. */
+let _providerMenuCleanup = null;
+
+function _closeProviderMenu() {
+  if (_providerMenuCleanup) {
+    _providerMenuCleanup();
+    _providerMenuCleanup = null;
+  }
+  const menu = document.getElementById('psProviderMenu');
+  if (menu) menu.remove();
+  document.querySelectorAll('.ps-dd-provider-chip[aria-expanded="true"]')
+    .forEach(chip => chip.setAttribute('aria-expanded', 'false'));
+}
+
+function _toggleProviderMenu(chip, model, selectedProvider) {
+  if (chip.getAttribute('aria-expanded') === 'true') {
+    _closeProviderMenu();
+    return;
+  }
+  _closeProviderMenu();
+  const menu = document.createElement('div');
+  menu.id = 'psProviderMenu';
+  menu.className = 'ps-dd-provider-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('aria-label', chip.getAttribute('aria-label') || '服务商偏好');
+  const options = [{ provider_id: '', provider_name: '自动服务商' }]
+    .concat(model.provider_options);
+  for (const option of options) {
+    const entry = document.createElement('button');
+    entry.type = 'button';
+    const isSelected = option.provider_id === selectedProvider;
+    entry.className = 'ps-dd-provider-menu-item' + (isSelected ? ' active' : '');
+    entry.setAttribute('role', 'option');
+    entry.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+    const check = document.createElement('span');
+    check.className = 'ps-dd-provider-check';
+    check.setAttribute('aria-hidden', 'true');
+    if (isSelected) {
+      check.innerHTML = '<svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4l2.5 2.5L9 1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    }
+    entry.appendChild(check);
+    const name = document.createElement('span');
+    name.className = 'ps-dd-provider-menu-label';
+    name.textContent = option.provider_name;
+    entry.appendChild(name);
+    entry.onclick = event => {
+      event.stopPropagation();
+      _closeProviderMenu();
+      selectModelRoute(option.provider_id ? {
+        ...model,
+        provider_id: option.provider_id,
+        provider_name: option.provider_name,
+        offering_id: option.offering_id,
+      } : model);
+    };
+    menu.appendChild(entry);
+  }
+  document.body.appendChild(menu);
+  chip.setAttribute('aria-expanded', 'true');
+  /* Position: prefer above the chip (the panel opens upward, so rows sit
+   * near the viewport top), flip below when there is no room. */
+  const rect = chip.getBoundingClientRect();
+  const menuWidth = menu.offsetWidth;
+  const menuHeight = menu.offsetHeight;
+  let top = rect.top - menuHeight - 5;
+  if (top < 8) {
+    top = Math.min(rect.bottom + 5, window.innerHeight - menuHeight - 8);
+  }
+  let left = rect.right - menuWidth;
+  if (left < 8) left = 8;
+  if (left + menuWidth > window.innerWidth - 8) {
+    left = window.innerWidth - menuWidth - 8;
+  }
+  menu.style.top = top + 'px';
+  menu.style.left = left + 'px';
+  const selected = menu.querySelector('.ps-dd-provider-menu-item.active');
+  if (selected) selected.focus({ preventScroll: true });
+  const onDocClick = event => {
+    if (!menu.contains(event.target) && !chip.contains(event.target)) {
+      _closeProviderMenu();
+    }
+  };
+  const onKey = event => {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      _closeProviderMenu();
+      chip.focus();
+    }
+  };
+  /* The menu is body-anchored: a scroll elsewhere detaches it from the
+   * chip's row — close rather than float. */
+  const onScroll = event => {
+    if (!menu.contains(event.target)) _closeProviderMenu();
+  };
+  document.addEventListener('click', onDocClick, true);
+  document.addEventListener('keydown', onKey, true);
+  document.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', _closeProviderMenu);
+  _providerMenuCleanup = () => {
+    document.removeEventListener('click', onDocClick, true);
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('scroll', onScroll, true);
+    window.removeEventListener('resize', _closeProviderMenu);
+  };
+}
+
 /* Project the owner v2 aggregate into model-first picker rows. Every confirmed
  * creator+model identity appears once; the Providers that can supply it are a
  * secondary preference on that row. Pending identities cannot safely join the
@@ -20518,6 +21059,7 @@ function _populateModelDropdown(models) {
   _registeredModels = models;
   _registeredModelsLoaded = true;
   dropdown.innerHTML = '';
+  _closeProviderMenu();
   if (models.length === 0) {
     if (typeof _applyImageGenAvailability === 'function') {
       _applyImageGenAvailability();
@@ -20585,18 +21127,30 @@ function _populateModelDropdown(models) {
    * credential kinds through the same modelGroupKey inputs the grouping
    * pass used, so a row's icon can never disagree with its own section
    * header. Empty brand keeps the legacy per-model detect (an aggregator
-   * group still shows each model's own vendor icon). */
+   * group still shows each model's own vendor icon).
+   *
+   * A v2 confirmed row carries its Creator id in m.brand (see
+   * _modelRoutingDropdownModels) — a CREATOR-namespace string, not a glyph
+   * key: 'anthropic'/'alibaba' have no MODEL_BRAND_ICONS entry and render
+   * the generic box while 'openai' coincidentally resolves. Route those
+   * rows through the shared modelBrand interface (Creator → glyph), the
+   * same resolution every Settings model surface uses. */
   const _row = (m, opts) => {
     opts = opts || {};
     const _rowBrand = (m.brand || '').trim();
     const _rowCredKind = (_rowBrand === 'oauth' || _rowBrand === 'adapter');
-    const brand = (_rowBrand && !_rowCredKind)
-      ? _rowBrand
-      : _rowCredKind
-        ? runtimeScope.modelGroupKey({ brand: m.brand, name: m.provider_name }, m)
-        : (typeof _modelBrand === 'function'
-          ? _modelBrand(m.model_id, m.creator_id)
-          : (typeof _detectBrand === 'function' ? _detectBrand(m.model_id) : 'generic'));
+    const _v2Confirmed = !!(m.routing_v2 && !m.pending_identity);
+    const brand = _v2Confirmed
+      ? (typeof _modelBrand === 'function'
+        ? _modelBrand(m.model_id, m.creator_id)
+        : (typeof _detectBrand === 'function' ? _detectBrand(m.model_id) : 'generic'))
+      : (_rowBrand && !_rowCredKind)
+        ? _rowBrand
+        : _rowCredKind
+          ? runtimeScope.modelGroupKey({ brand: m.brand, name: m.provider_name }, m)
+          : (typeof _modelBrand === 'function'
+            ? _modelBrand(m.model_id, m.creator_id)
+            : (typeof _detectBrand === 'function' ? _detectBrand(m.model_id) : 'generic'));
     const item = document.createElement('div');
     item.className = 'preset-dropdown-item' + (opts.sub ? ' ps-dd-sub-item' : '');
     item.setAttribute('data-value', m.model_id);
@@ -20634,37 +21188,35 @@ function _populateModelDropdown(models) {
     item.appendChild(iconSpan);
     item.appendChild(nameSpan);
     if (m.routing_v2 && !m.pending_identity && Array.isArray(m.provider_options)) {
-      const preference = document.createElement('select');
-      preference.className = 'ps-dd-provider-select';
-      preference.setAttribute('aria-label', label + ' 服务商偏好');
-      preference.title = '服务商偏好；自动模式会在同一模型的可用服务商间轮转';
-      const automaticOption = document.createElement('option');
-      automaticOption.value = '';
-      automaticOption.textContent = '自动服务商';
-      preference.appendChild(automaticOption);
-      for (const option of m.provider_options) {
-        const providerOption = document.createElement('option');
-        providerOption.value = option.provider_id;
-        providerOption.textContent = option.provider_name;
-        preference.appendChild(providerOption);
-      }
       const selectedProvider = m.model_id === (config.model || serverModel)
         ? (config.preferredProviderId || '') : '';
-      preference.value = m.provider_options.some(option =>
-        option.provider_id === selectedProvider) ? selectedProvider : '';
-      preference.onclick = event => event.stopPropagation();
-      preference.onkeydown = event => event.stopPropagation();
-      preference.onchange = event => {
+      const currentOption = m.provider_options.find(
+        option => option.provider_id === selectedProvider);
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'ps-dd-provider-chip';
+      chip.setAttribute('aria-haspopup', 'listbox');
+      chip.setAttribute('aria-expanded', 'false');
+      chip.setAttribute('aria-label', label + ' 服务商偏好');
+      chip.title = '服务商偏好；自动模式会在同一模型的可用服务商间轮转';
+      const chipLabel = document.createElement('span');
+      chipLabel.className = 'ps-dd-provider-chip-label';
+      chipLabel.textContent = currentOption
+        ? currentOption.provider_name : '自动服务商';
+      chip.appendChild(chipLabel);
+      const chipArrow = document.createElement('span');
+      chipArrow.className = 'ps-dd-provider-chip-arrow';
+      chipArrow.setAttribute('aria-hidden', 'true');
+      chipArrow.innerHTML = '<svg width="8" height="5" viewBox="0 0 8 5" fill="none"><path d="M1 1l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      chip.appendChild(chipArrow);
+      chip.onclick = event => {
         event.stopPropagation();
-        const option = m.provider_options.find(row => row.provider_id === preference.value);
-        selectModelRoute(option ? {
-          ...m,
-          provider_id: option.provider_id,
-          provider_name: option.provider_name,
-          offering_id: option.offering_id,
-        } : m);
+        _toggleProviderMenu(chip, m, selectedProvider);
       };
-      item.appendChild(preference);
+      chip.onkeydown = event => {
+        if (event.key !== 'Escape') event.stopPropagation();
+      };
+      item.appendChild(chip);
     } else if (m.pending_identity) {
       const providerTag = document.createElement('span');
       providerTag.className = 'ps-dd-provider-tag';
@@ -20904,23 +21456,7 @@ function _reconcileConfigModelAvailability(chatModels) {
     ? serverModel
     : (config.model || serverModel);
   if (!currentModel || availableIds.has(currentModel)) return;
-  let fallback = '';
-  if (serverModel && availableIds.has(serverModel)) {
-    fallback = serverModel;
-  } else if (chatModels && chatModels.length > 0) {
-    /* Pick a random model so different users don't all land on the same one */
-    fallback = chatModels[Math.floor(Math.random() * chatModels.length)].model_id;
-  }
-  if (!fallback) return;
-  console.warn('[Config] Model "%s" not available in providers, falling back to "%s"', currentModel, fallback);
-  config.model = fallback;
-  /* A fallback equal to the server default is still a placeholder: persist
-   * it scrubbed (via _configForPersist) so the next boot flows from the
-   * server default silently. A non-default fallback (server default itself
-   * unavailable) persists explicitly so future boots heal without warning. */
-  config._modelIsProvisional = (fallback === serverModel);
-  try { localStorage.setItem("claude_client_config", JSON.stringify(_configForPersist())); }
-  catch (_e) { /* best-effort */ }
+  console.warn('[Config] Selected model is unavailable; keeping selection:', currentModel);
 }
 /* Load the model list from server config and populate the dropdown.
  * Falls back to default models if config doesn't include a models list. */
@@ -21123,6 +21659,7 @@ function togglePresetDropdown(e) {
     const closeHandler = function (ev) {
       if (!wrapper.contains(ev.target)) {
         wrapper.classList.remove("open");
+        _closeProviderMenu();
         document.removeEventListener("click", closeHandler);
       }
     };
@@ -21135,6 +21672,9 @@ function selectModel(modelId) {
   if (registered && registered.routing_v2) {
     return selectModelRoute(registered);
   }
+  config.modelRef = null;
+  config.preferredProviderId = '';
+  config.routing = {};
   _applyModelUI(modelId);
   /* Record the pick through the bounded recent-model controller. An isolated
    * fixture without the composition port simply omits the recents strip. */
@@ -21143,6 +21683,7 @@ function selectModel(modelId) {
   }
   try { localStorage.setItem("claude_client_config", JSON.stringify(_configForPersist())); }
   catch (e) { debugLog(`[selectModel] localStorage save failed: ${e.message}`, 'error'); }
+  commitComposerModel(getActiveConv(), captureComposerModel(config));
   captureActiveConversationSettings();
   const depthSuffix = _isThinkingCapable(config.model) && config.thinkingDepth
     ? ` [${config.thinkingDepth.toUpperCase()}]`
@@ -21168,6 +21709,7 @@ function selectModelRoute(modelRow) {
     ? { preferred_provider_id: config.preferredProviderId }
     : {};
   _applyModelUI(modelRow.model_id);
+  commitComposerModel(getActiveConv(), captureComposerModel(config));
   if (typeof runtimeScope.pushRecentModel === 'function') {
     runtimeScope.pushRecentModel(modelRow.model_id);
   }
@@ -22332,20 +22874,7 @@ if (typeof window !== "undefined") runtimeScope._mobileCompactNow = _mobileCompa
  * Shows/hides the section based on whether the model supports thinking depth.
  */
 function updateMobileDepth() {
-  const desktopBar = document.getElementById("thinkingDepthSection");
-  const mobileSection = document.getElementById("mobileDepthSection");
-  if (!mobileSection) return;
-  /* Show mobile depth section when desktop depth bar has display set to 'flex' by JS
-   * (on mobile, CSS hides it with display:none!important, but JS still sets .style.display) */
-  const isVisible = desktopBar && (desktopBar.style.display === "flex" || desktopBar.style.display === "");
-  mobileSection.style.display = isVisible ? "" : "none";
-  if (!isVisible) return;
-  /* Sync active button state */
-  const activeDesktop = desktopBar.querySelector(".depth-btn.active");
-  const activeDepth = activeDesktop ? activeDesktop.dataset.depth : "medium";
-  mobileSection.querySelectorAll(".mobile-depth-btn").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.depth === activeDepth);
-  });
+  _updateDepthButtons(config.thinkingDepth || config.defaultThinkingDepth);
 }
 
 /* ── Reflow toolbar on window resize / orientation change ── */
@@ -22990,7 +23519,7 @@ function _purgeEmptyConvs() {
 /* ── Brand detection for model_id — typed owner alias from _prelude.js ── */
 const _DEPTH_ICONS  = { off: '', medium: '', high: '', xhigh: '', max: '', ultra: '' };
 const _DEPTH_ICON_FALLBACK = '';
-const _DEPTH_LABELS = { off: 'Off', medium: 'Med', high: 'High', xhigh: 'xHigh', max: 'Max', ultra: 'Ultra' };
+const _DEPTH_LABELS = { off: 'Off', low: 'Low', medium: 'Med', high: 'High', xhigh: 'xHigh', max: 'Max', ultra: 'Max' };
 /* Models whose model_id indicates thinking/depth support.
  * Uses server-provided thinking_default from _registeredModels;
  * falls back to regex before server config loads. */
@@ -23023,6 +23552,10 @@ var _hiddenIgModels = new Set();  // shared with image-gen.js
 let _lastAppliedModelId = null;
 let _lastAppliedIsThinking = null;
 
+const _conversationModelController = createConversationModelController({
+  hasDraft: () => _hasProjectComposerDraft(),
+  selection: () => captureComposerModel(config),
+});
 function _applyModelUI(modelId) {
   /* SINGLE RESOLVER. This function — and ONLY this function — decides what
    *   to paint when a conversation has no stored model. Callers MUST pass the
@@ -23373,21 +23906,21 @@ function selectThinkingDepth(depth) {
    * before the user sends, it clobbers config.thinkingDepth back to
    * conv.thinkingDepth
    * → backend receives the stale depth → no thinking generated. */
+  commitComposerModel(getActiveConv(), captureComposerModel(config));
   captureActiveConversationSettings();
   try { localStorage.setItem("claude_client_config", JSON.stringify(_configForPersist())); }
+
   catch (e) { debugLog(`[selectThinkingDepth] localStorage save failed: ${e.message}`, 'error'); }
 }
 
+// Narrow retained adapter; remove with the remaining composer model UI migration.
+const _thinkingDepthSlider = createThinkingDepthSlider({
+  document, translate: (key) => t(key), commit: (depth) => selectThinkingDepth(depth),
+});
+retainedCompositionLifecycle.add(() => _thinkingDepthSlider.destroy());
 function _updateDepthButtons(activeDepth) {
-  /* PERF: Cache the depth button NodeList and use a for-loop instead of
-   * querySelectorAll + forEach on every call.  During rapid conv switching,
-   * this avoids repeated DOM queries + closure allocation. */
-  const buttons = _depthButtonsCache || (_depthButtonsCache = document.querySelectorAll('.depth-btn'));
-  for (let i = 0, len = buttons.length; i < len; i++) {
-    buttons[i].classList.toggle('active', buttons[i].getAttribute('data-depth') === activeDepth);
-  }
+  _thinkingDepthSlider.sync(activeDepth, _isThinkingCapable(config.model));
 }
-let _depthButtonsCache = null;
 function _applySearchModeUI(mode) {
   // 'single' is a retired mode — fold legacy values into 'multi'.
   if (mode === "single") mode = "multi";
@@ -23560,14 +24093,7 @@ function captureActiveConversationSettings() {
    *   model. Only a value the user actually chose (or one restored from the
    *   conv itself) is durable. A conv with no model simply keeps none — the
    *   composer still renders the default, it just stops being written down. */
-  if (!config._modelIsProvisional && config.model) {
-    conv.model = config.model;
-    if (config.modelRef && typeof config.modelRef === 'object') {
-      conv.modelRef = Object.assign({}, config.modelRef);
-      conv.preferredProviderId = config.preferredProviderId || '';
-    }
-  }
-  conv.thinkingDepth = config.thinkingDepth;
+  // Model identity is committed only by explicit model/depth selection or send.
   /* FIX: Track the selected image gen model separately so pure image-gen
    * conversations accurately record which model was actually used, without
    * polluting the chat model field (which _applyModelUI reads on restore). */
@@ -23592,31 +24118,8 @@ function captureActiveConversationSettings() {
   conv.humanGuidanceEnabled = !!humanGuidanceEnabled;
   conv.chatMode = chatMode || 'chat';
   conv.planMode = !!planMode;
-  /* FIX: Sync projectPath from the UI-visible projectState to the conv object.
-   * Without this, conv.projectPath can diverge from projectState when:
-   *  (a) A new conv is created (has no projectPath property at all)
-   *  (b) _restoreConvProject succeeds (updates projectState but not conv.projectPath)
-   *  (c) The conv was loaded from cache/server without projectPath in settings
-   * This divergence causes the bug: "UI shows project B active, but backend gets
-   * no project path" because startAssistantResponse reads conv.projectPath (empty)
-   * while projectState.path still shows the project. */
-  /* Only sync conv.projectPath when projectState is actively showing a project.
-   * Do NOT clear conv.projectPath when projectState.active is false, because
-   * _restoreConvProject temporarily clears projectState during its async fetch.
-   * If we cleared here, a toggle during that gap would destroy the saved path.
-   * Explicit clearing is handled by clearProject() → _saveConvProjectPath(""). */
-  if (projectState.active && projectState.path) {
-    conv.projectPath = projectState.path;
-    // Also sync multi-root paths if present
-    const allPaths = [projectState.path];
-    if (projectState.extraRoots?.length) {
-      for (const r of projectState.extraRoots) {
-        const p = typeof r === 'string' ? r : r.path;
-        if (p && !allPaths.includes(p)) allPaths.push(p);
-      }
-    }
-    conv.projectPaths = allPaths;
-  }
+  /* Tool/settings capture is not a project selection. A draft may deliberately
+   * carry a different composer project across conversation navigation. */
   /* Do not overwrite autoTranslate on a conversation with an active Turn.
    * The autoTranslate state is frozen at send-time. If the user toggles it OFF
    * while viewing this conversation, its running attempt must still use the
@@ -23657,7 +24160,7 @@ function scheduleConversationSettingsPersist(conv, delayMs = 1500) {
   }, delayMs));
 }
 
-function restoreConversationSettingsToComposer(conv) {
+function restoreConversationSettingsToComposer(conv, modelEligible) {
   /* Old/local snapshots may predate Plan Mode's exclusivity contract and carry
    * incompatible execution modes at the same time. Normalize the painted
    * runtime without writing during restore; the backend independently
@@ -23671,6 +24174,7 @@ function restoreConversationSettingsToComposer(conv) {
   const _restoredPlanMode = _restoredInteraction.agentMode === 'plan';
   const _restoredWorkflowMode = _restoredInteraction.agentMode !== 'standard'
     || !!_restoredInteraction.activeFlow;
+  if (modelEligible ? modelEligible() : !_hasProjectComposerDraft()) {
   config.thinkingDepth = conv.thinkingDepth || null;   // ← restore depth BEFORE model UI (let _applyModelUI normalize)
   config.modelRef = (conv.modelRef && typeof conv.modelRef === 'object')
     ? Object.assign({}, conv.modelRef) : null;
@@ -23681,6 +24185,7 @@ function restoreConversationSettingsToComposer(conv) {
    * that stored nothing must reach _applyModelUI as falsy so the default it
    * paints is marked provisional and never written back. */
   _applyModelUI(conv.model || conv.preset || conv.effort);
+  }
   _applySearchModeUI(conv.searchMode || "multi");
   _applyFetchEnabledUI(true);  // always on
   _applyCodeExecUI(!!conv.codeExecEnabled);
@@ -25591,6 +26096,474 @@ function loadCompactionHistory(conversationId) {
     updateContextBar();
   }
 })();
+/* ===== migrated source: background-activity.js ===== */
+/* ═══════════════════════════════════════════════════════════════════
+   background-activity.js — "still working" chip in the convStatusStrip
+
+   Answers the question a settled foreground turn leaves behind: are any
+   sub-agents (spawn_agents swarms) or detached background commands still
+   executing right now? The spawning turn has usually ENDED by the time
+   this matters — swarm results arrive later as auto-dispatched inbox
+   injects. This chip filters by the active conversation's conv_id while it
+   polls the owner-scoped snapshot `GET /api/v1/activity/background`
+   and lives in the conversation-status strip directly above the composer
+   (same in-flow host as the context gauge, inserted before #turnNav).
+
+   Contract: docs/API_CONTRACT.md §2.19 + routes/api_v1/activity.py. Both
+   lists are empty in the steady state — the chip is display:none then
+   and the poll backs off to a slow idle cadence.
+
+   Anti-flicker invariants (same discipline as context-bar.js):
+   1. The chip node is CREATED ONCE in `_ensureChip()`; steady-state
+      updates only set textContent / title / visibility.
+   2. The popover list is rebuilt ONLY when its data signature changes —
+      a live poll must never collapse a row the user is reading.
+   3. ONE chained-setTimeout poll loop (never setInterval): ~3s while
+      anything is active, ~10s idle, ticks skipped while the tab is
+      hidden (no pending timeout), and an immediate tick on visibility return.
+
+   Public API:
+     runtimeScope.updateBackgroundActivity() — force one snapshot tick.
+   ═══════════════════════════════════════════════════════════════════ */
+(function () {
+  'use strict';
+
+  const _TICK_ACTIVE_MS = 3000;
+  const _TICK_IDLE_MS = 10000;
+
+  /* _state: cached chip nodes (see context-bar.js for the pattern). */
+  let _state = null;
+  let _pollTimer = null;
+  let _inflight = false;
+
+  let _disposed = false;
+  /* Last applied snapshot + its repaint signature. */
+  let _last = { swarms: [], backgroundCommands: [] };
+  let _lastSig = '';
+  let _popover = null;   // { el, bodyNode, sig }
+
+  function _tt(key, fallback, vars) {
+    if (typeof t === 'function') return t(key, vars);
+    if (!vars) return fallback;
+    return String(fallback).replace(/\{(\w+)\}/g,
+      (m, name) => (name in vars ? String(vars[name]) : m));
+  }
+
+  function _ensureChip() {
+    if (_state && _state.el && _state.el.isConnected) return _state;
+    const host = document.getElementById('convStatusStrip');
+    if (!host) return null;
+    const existing = document.getElementById('bgActivityChip');
+    const el = existing || document.createElement('aside');
+    if (!existing) {
+      el.id = 'bgActivityChip';
+      el.className = 'bg-activity-chip';
+      el.setAttribute('aria-live', 'polite');
+      /* Left-to-right strip order: context gauge (prepended), this chip,
+       * then the turn-nav right cell. */
+      host.insertBefore(el, document.getElementById('turnNav') || null);
+    }
+    if (!el.querySelector('.bg-act-dot')) {
+      const dot = document.createElement('span');
+      dot.className = 'bg-act-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      const label = document.createElement('span');
+      label.className = 'bg-act-label';
+      el.appendChild(dot);
+      el.appendChild(label);
+    }
+    el.style.display = 'none';
+    _state = {
+      el,
+      labelNode: el.querySelector('.bg-act-label'),
+      lastLabel: '',
+      lastTitle: '',
+      visible: null,
+    };
+    el.addEventListener('click', _onChipClick);
+    return _state;
+  }
+
+  /* ── Snapshot → chip ──────────────────────────────────────────── */
+
+  function _summarize(data) {
+    const convId = typeof activeConvId !== 'undefined' ? activeConvId : null;
+    const belongs = item => !!convId && item.conv_id === convId;
+    const swarms = (Array.isArray(data && data.swarms) ? data.swarms : []).filter(belongs);
+    const commands = (Array.isArray(data && data.backgroundCommands)
+      ? data.backgroundCommands : []).filter(belongs);
+    let agentsActive = 0;
+    for (const s of swarms) {
+      agentsActive += (Number(s.running) || 0) + (Number(s.pending) || 0);
+    }
+    return { swarms, commands, agentsActive, commandsActive: commands.length };
+  }
+
+  function _chipLabel(sum) {
+    const parts = [];
+    if (sum.agentsActive > 0) {
+      parts.push(_tt(
+        sum.agentsActive === 1 ? 'bgActivity.chip.agentOne'
+                               : 'bgActivity.chip.agentMany',
+        sum.agentsActive === 1 ? '{count} sub-agent running'
+                               : '{count} sub-agents running',
+        { count: sum.agentsActive }));
+    }
+    if (sum.commandsActive > 0) {
+      parts.push(_tt(
+        sum.commandsActive === 1 ? 'bgActivity.chip.cmdOne'
+                                 : 'bgActivity.chip.cmdMany',
+        sum.commandsActive === 1 ? '{count} background command running'
+                                 : '{count} background commands running',
+        { count: sum.commandsActive }));
+    }
+    return parts.join(' · ');
+  }
+
+  function _chipTitle(sum) {
+    const lines = [_tt('bgActivity.title', 'Background activity')];
+    for (const s of sum.swarms) {
+      lines.push('· ' + _tt('bgActivity.swarmSummary',
+        '{running} running · {pending} queued · {completed} done',
+        { running: s.running || 0, pending: s.pending || 0,
+          completed: s.completed || 0 }));
+    }
+    for (const c of sum.commands) {
+      lines.push('· $ ' + (c.command || ''));
+    }
+    return lines.join('\n');
+  }
+
+  function _apply(sum) {
+    const s = _ensureChip();
+    if (!s) return;
+    const active = sum.agentsActive > 0 || sum.commandsActive > 0;
+    if (s.visible !== active) {
+      s.el.style.display = active ? '' : 'none';
+      s.visible = active;
+    }
+    if (!active) {
+      _closePopover();
+      return;
+    }
+    const label = _chipLabel(sum);
+    if (s.lastLabel !== label) {
+      s.labelNode.textContent = label;
+      s.lastLabel = label;
+    }
+    const tip = _chipTitle(sum);
+    if (s.lastTitle !== tip) {
+      s.el.title = tip;
+      s.lastTitle = tip;
+    }
+    if (_popover) _renderPopoverBody(sum);
+  }
+
+  /* ── Popover ──────────────────────────────────────────────────── */
+
+  function _fmtElapsed(totalSeconds) {
+    const sec = Math.max(0, Math.round(Number(totalSeconds) || 0));
+    if (sec < 60) return sec + 's';
+    const m = Math.floor(sec / 60);
+    const r = sec % 60;
+    if (m < 60) return m + 'm ' + String(r).padStart(2, '0') + 's';
+    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  }
+
+  function _swarmElapsed(swarm) {
+    const created = Number(swarm.created_at) || 0;
+    if (!created) return '';
+    return _fmtElapsed(Date.now() / 1000 - created);
+  }
+
+  function _convLabel(convId) {
+    if (!convId) return '';
+    if (typeof getConvById === 'function') {
+      const conv = getConvById(convId);
+      const title = conv && (conv.title || conv.summary);
+      if (title) return title;
+    }
+    return convId;
+  }
+
+  function _sigOf(sum) {
+    /* Only fields that affect the popover body — chip text follows the
+     * same signature cheaply via label/title guards. */
+    return JSON.stringify([
+      sum.swarms.map(s => [s.swarm_key, s.conv_id, _convLabel(s.conv_id),
+        s.created_at, s.running, s.pending, s.completed,
+        (s.agents || []).map(a => [a.id, a.role, a.objective, a.status, a.round])]),
+      sum.commands.map(c => [c.command_id, c.command, c.status]),
+    ]);
+  }
+
+  function _closePopover() {
+    if (_popover && _popover.el) {
+      try { _popover.el.remove(); } catch (e) { /* detached */ }
+    }
+    _popover = null;
+    document.removeEventListener('click', _onDocClick, true);
+  }
+
+  function _onDocClick(e) {
+    if (_popover && _popover.el && !_popover.el.contains(e.target)
+        && _state && _state.el && !_state.el.contains(e.target)) {
+      _closePopover();
+    }
+  }
+
+  function _onChipClick(e) {
+    e.stopPropagation();
+    _togglePopover();
+  }
+
+  function _togglePopover() {
+    if (_popover) { _closePopover(); return; }
+    const s = _ensureChip();
+    if (!s || !s.visible) return;
+    const el = document.createElement('div');
+    el.id = 'bgActivityPopover';
+    el.className = 'bg-act-popover';
+    const head = document.createElement('div');
+    head.className = 'bg-act-pop-head';
+    head.textContent = _tt('bgActivity.title', 'Background activity');
+    const body = document.createElement('div');
+    body.className = 'bg-act-pop-body';
+    el.appendChild(head);
+    el.appendChild(body);
+    document.body.appendChild(el);
+    const r = s.el.getBoundingClientRect();
+    el.style.position = 'fixed';
+    el.style.left = Math.round(r.left) + 'px';
+    /* Opens UPWARD — the strip sits directly above the composer. */
+    el.style.bottom = Math.round(window.innerHeight - r.top + 6) + 'px';
+    _popover = { el, bodyNode: body, sig: '', swarmClocks: [], commandClocks: [] };
+    _renderPopoverBody(_summarize(_last), true);
+    document.addEventListener('click', _onDocClick, true);
+  }
+
+  function _renderPopoverBody(sum, force) {
+    if (!_popover) return;
+    const sig = _sigOf(sum);
+    if (!force && sig === _popover.sig) {
+      // Update only clock leaves: preserve open rows, selection and scroll.
+      _popover.swarmClocks.forEach(({ node, index }) => {
+        const text = _swarmElapsed(sum.swarms[index]);
+        if (node.textContent !== text) node.textContent = text;
+      });
+      _popover.commandClocks.forEach((node, index) => {
+        const text = _fmtElapsed(sum.commands[index].elapsed_s);
+        if (node.textContent !== text) node.textContent = text;
+      });
+      return;
+    }
+    _popover.swarmClocks = [];
+    _popover.commandClocks = [];
+    _popover.sig = sig;
+    const body = _popover.bodyNode;
+    body.textContent = '';
+
+    if (sum.swarms.length) {
+      const secTitle = document.createElement('div');
+      secTitle.className = 'bg-act-pop-section';
+      secTitle.textContent = _tt('bgActivity.sectionAgents', 'Sub-agents');
+      body.appendChild(secTitle);
+      sum.swarms.forEach((swarm, index) => {
+        const row = _swarmRow(swarm);
+        const node = row.querySelector('.bg-act-elapsed');
+        if (node) _popover.swarmClocks.push({ node, index });
+        body.appendChild(row);
+      });
+    }
+    if (sum.commands.length) {
+      const secTitle = document.createElement('div');
+      secTitle.className = 'bg-act-pop-section';
+      secTitle.textContent = _tt('bgActivity.sectionCommands', 'Background commands');
+      body.appendChild(secTitle);
+      for (const cmd of sum.commands) {
+        const row = _commandRow(cmd);
+        _popover.commandClocks.push(row.querySelector('.bg-act-elapsed'));
+        body.appendChild(row);
+      }
+    }
+  }
+
+  function _swarmRow(swarm) {
+    const row = document.createElement('div');
+    row.className = 'bg-act-swarm';
+    const head = document.createElement('div');
+    head.className = 'bg-act-swarm-head';
+    const label = document.createElement('span');
+    label.className = 'bg-act-swarm-conv';
+    label.textContent = _convLabel(swarm.conv_id) || swarm.swarm_key || '';
+    head.appendChild(label);
+    const summary = document.createElement('span');
+    summary.className = 'bg-act-swarm-summary';
+    summary.textContent = _tt('bgActivity.swarmSummary',
+      '{running} running · {pending} queued · {completed} done',
+      { running: swarm.running || 0, pending: swarm.pending || 0,
+        completed: swarm.completed || 0 });
+    head.appendChild(summary);
+    const elapsed = _swarmElapsed(swarm);
+    if (elapsed) {
+      const el = document.createElement('span');
+      el.className = 'bg-act-elapsed';
+      el.textContent = elapsed;
+      head.appendChild(el);
+    }
+    row.appendChild(head);
+    for (const agent of (swarm.agents || [])) {
+      row.appendChild(_agentRow(agent));
+    }
+    /* Deep-link: the swarm outlives its spawning turn, but its
+     * conversation is where the auto-dispatched results will land. */
+    if (swarm.conv_id && typeof loadConversation === 'function') {
+      row.classList.add('is-clickable');
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _closePopover();
+        loadConversation(swarm.conv_id);
+      });
+    }
+    return row;
+  }
+
+  function _agentRow(agent) {
+    const row = document.createElement('div');
+    row.className = 'bg-act-agent';
+    row.dataset.status = agent.status || 'pending';
+    const role = document.createElement('span');
+    role.className = 'bg-act-agent-role';
+    role.textContent = agent.role || 'agent';
+    row.appendChild(role);
+    const objective = document.createElement('span');
+    objective.className = 'bg-act-agent-objective';
+    objective.textContent = agent.objective || agent.id || '';
+    row.appendChild(objective);
+    const status = document.createElement('span');
+    status.className = 'bg-act-agent-status';
+    let text = agent.status || 'pending';
+    if (agent.status === 'running' && Number(agent.round) > 0) {
+      text += ' · ' + _tt('bgActivity.agentRound', 'round {round}',
+                          { round: agent.round });
+    }
+    status.textContent = text;
+    row.appendChild(status);
+    return row;
+  }
+
+  function _commandRow(cmd) {
+    const row = document.createElement('div');
+    row.className = 'bg-act-cmd';
+    const text = document.createElement('code');
+    text.className = 'bg-act-cmd-text';
+    text.textContent = cmd.command || '';
+    row.appendChild(text);
+    const elapsed = document.createElement('span');
+    elapsed.className = 'bg-act-elapsed';
+    elapsed.textContent = _fmtElapsed(cmd.elapsed_s);
+    row.appendChild(elapsed);
+    return row;
+  }
+
+  /* ── Poll loop ────────────────────────────────────────────────── */
+
+  function _schedule(ms) {
+    _clearPoll();
+    if (_disposed || document.hidden || _inflight) return;
+    _pollTimer = setTimeout(_tick, ms);
+  }
+
+  function _tick() {
+    _pollTimer = null;
+    if (_disposed || document.hidden || _inflight) return;
+    const api = (typeof Api !== 'undefined' && Api && Api.activity) || null;
+    if (!api) { _schedule(_TICK_IDLE_MS); return; }
+    _inflight = true;
+    Promise.resolve().then(() => api.background()).then((data) => {
+      _inflight = false;
+      if (_disposed) return;
+      if (data) {
+        _last = data;
+        const sum = _summarize(data);
+        const sig = _sigOf(sum);
+        const active = sum.agentsActive > 0 || sum.commandsActive > 0;
+        if (sig !== _lastSig) {
+          _lastSig = sig;
+          _apply(sum);
+        } else if (active) {
+          /* Elapsed strings age even when the set is unchanged. */
+          _apply(sum);
+        }
+        _schedule(active ? _TICK_ACTIVE_MS : _TICK_IDLE_MS);
+      } else {
+        /* Transient read failure — keep the last known state on screen,
+         * back off rather than flap the chip. */
+        _schedule(_TICK_IDLE_MS);
+      }
+    }).catch(() => {
+      _inflight = false;
+      _schedule(_TICK_IDLE_MS);
+    });
+  }
+
+  function updateBackgroundActivity() {
+
+    if (_disposed) return;
+    _closePopover();
+    const sum = _summarize(_last);
+    _lastSig = _sigOf(sum);
+    _apply(sum);
+    _schedule(0);
+  }
+
+  runtimeScope.updateBackgroundActivity = updateBackgroundActivity;
+
+  function _clearPoll() {
+    if (_pollTimer !== null) clearTimeout(_pollTimer);
+    _pollTimer = null;
+  }
+
+  function _onVisibilityChange() {
+    if (document.hidden) _clearPoll();
+    else {
+      _apply(_summarize(_last));
+      _schedule(0);
+    }
+  }
+
+  function _onReady() {
+    // Never clobber an explicit pre-DCL immediate refresh or active flight.
+    if (_pollTimer === null) _schedule(1200);
+  }
+
+  function _dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _clearPoll();
+    _closePopover();
+    document.removeEventListener('visibilitychange', _onVisibilityChange);
+    document.removeEventListener('DOMContentLoaded', _onReady);
+    if (_state) {
+      _state.el.removeEventListener('click', _onChipClick);
+      _state.el.remove();
+    }
+    _state = null;
+    _last = { swarms: [], backgroundCommands: [] };
+  }
+
+  if (typeof retainedCompositionLifecycle !== 'undefined') {
+    retainedCompositionLifecycle.add(_dispose);
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', _onVisibilityChange);
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', _onReady, { once: true });
+    } else {
+      _onReady();
+    }
+  }
+})();
 /* ===== migrated source: presence.js ===== */
 /* Project collaboration bar derived only from the Project Brain projection.
  * Presence/peer state is intentionally absent: work ownership never transfers,
@@ -25951,10 +26924,12 @@ function loadCompactionHistory(conversationId) {
    *   • `rail` (`.turn-ctx`) — a DIRECT CHILD of `.message`, absolutely
    *     positioned into the third track the pane owns (`.chat-inner`), so
    *     it can never overflow the viewport AND — being out of flow —
-   *     never inflates the turn's height; its box is bounded by the
-   *     message box and scrolls. Shows model + depth + mode badges + tool
-   *     chips + workspace paths permanently. Visible only when the
-   *     container query grants the track.
+   *     never inflates the turn's height; its box starts at the message
+   *     top and the sticky follower (below) glides it down the track as
+   *     the conversation scrolls, until the next railed turn arrives.
+   *     Shows model + depth + mode badges + tool chips + workspace paths
+   *     permanently. Visible only when the container query grants the
+   *     track.
    *   • `fold` (`.tctx-fold`) — the same facts compressed to ONE line,
    *     spliced INSIDE `.message-content` between the header and the body
    *     (in-flow — its `margin-bottom` is meaningless anywhere else). Shown
@@ -26082,6 +27057,127 @@ function loadCompactionHistory(conversationId) {
       }
     }
     ev.stopPropagation();
+    /* The toggle just changed the rail's height — re-clamp any pinned
+     * travel so it never grows over the next round's rail. */
+    _scheduleRailFollow();
+  }
+
+  /* ── Sticky rail follower ─────────────────────────────────────────
+   * The rail is absolutely positioned at the TOP of its own turn's box
+   * (out of flow so it never inflates the row). That box is short — an
+   * input turn is often one line — so the turn's context used to scroll
+   * away with the bubble while the round's reply filled screens below it
+   * (2026-09-08 owner report: "when a conversation is scrolling, the turn
+   * ctx should move along until it reaches the next round").
+   *
+   * The follower re-implements sticky-header stacking WITHOUT a DOM
+   * restructure: on scroll/resize it translates each rail down by
+   *     off = clamp(stickTop − hostTop, 0, nextRailTop − railHeight − hostTop)
+   * — pinned to the pane's top inside its round, pushed out exactly when
+   * the next round's rail arrives, in one continuous motion. The travel
+   * carries the rail BEYOND its host's border box, which is why the host
+   * message drops content-visibility's paint containment (see
+   * `.message:has(> .turn-ctx)` in 17-compaction-context-rail.css); the
+   * rail track it glides through is empty gutter on every non-input turn.
+   * A turn with no rail (legacy history) is not a boundary — the previous
+   * rail keeps its seat until the next railed turn.
+   *
+   * Geometry is measured entirely from UNTRANSFORMED boxes (the host
+   * message's rect; rail height is transform-independent), so a
+   * previously applied translation never feeds back into the next one.
+   * Runs at most once per animation frame; the reads force layout, which
+   * is clean on pure scrolls and already dirty while streaming. */
+  const _RAIL_STICK_PAD_PX = 6;
+  let _railFollowScheduled = false;
+  let _railFollowObserved = [];
+  let _railFollowRO = null;
+
+  function _updateRailFollow() {
+    const containers = document.querySelectorAll('.chat-container');
+    for (const cont of containers) {
+      const rails = cont.querySelectorAll('.turn-ctx');
+      if (!rails.length) continue;
+      const contR = cont.getBoundingClientRect();
+      const stickTop = contR.top + _RAIL_STICK_PAD_PX;
+      /* Bottom of the scrollable content in VIEW coordinates: the last
+       * rail may pin until its round's tail leaves the pane. */
+      const contentBottom = contR.top + (cont.scrollHeight - cont.scrollTop);
+      const live = [];
+      for (const rail of rails) {
+        if (rail.offsetParent === null || rail.hidden) {
+          /* Fold mode / empty rail: park any travel so a re-granted track
+           * never resurrects a stale offset. */
+          if (rail.style.transform) rail.style.transform = '';
+          rail.classList.remove('tctx-stuck');
+          continue;
+        }
+        live.push(rail);
+      }
+      for (let i = 0; i < live.length; i++) {
+        const rail = live[i];
+        const hostTop = rail.parentElement.getBoundingClientRect().top;
+        const railH = rail.getBoundingClientRect().height;
+        const nextTop = (i + 1 < live.length)
+          ? live[i + 1].parentElement.getBoundingClientRect().top
+          : contentBottom;
+        let off = stickTop - hostTop;
+        const limit = nextTop - railH - hostTop;
+        if (off > limit) off = limit;
+        if (!(off > 0.5)) off = 0;
+        if (off > 0) {
+          const y = 'translateY(' + off.toFixed(1) + 'px)';
+          if (rail.style.transform !== y) rail.style.transform = y;
+          rail.classList.add('tctx-stuck');
+        } else {
+          if (rail.style.transform) rail.style.transform = '';
+          rail.classList.remove('tctx-stuck');
+        }
+      }
+    }
+    _railFollowReobserve();
+  }
+
+  /* Scroll alone doesn't cover the follower's triggers: streaming grows
+   * the content under a pinned rail, and the sidebar/inspector drawer
+   * resize the pane. chat-inner's box tracks both; a rail's own growth
+   * (the "+N" toggle) re-clamps via the click handler above. Transforms
+   * never change these observed boxes, so the observer can't self-feed. */
+  function _railFollowReobserve() {
+    if (typeof ResizeObserver === 'undefined') return;
+    const nodes = [];
+    document.querySelectorAll('.chat-container').forEach((c) => {
+      nodes.push(c);
+      const inner = c.querySelector('.chat-inner');
+      if (inner) nodes.push(inner);
+    });
+    const same = nodes.length === _railFollowObserved.length
+      && nodes.every((n, i) => n === _railFollowObserved[i]);
+    if (same) return;
+    if (_railFollowRO) _railFollowRO.disconnect();
+    else _railFollowRO = new ResizeObserver(_scheduleRailFollow);
+    _railFollowObserved = nodes;
+    nodes.forEach((n) => _railFollowRO.observe(n));
+  }
+
+  function _scheduleRailFollow() {
+    if (_railFollowScheduled) return;
+    _railFollowScheduled = true;
+    if (typeof requestAnimationFrame !== 'function') {
+      _railFollowScheduled = false;
+      _updateRailFollow();
+      return;
+    }
+    requestAnimationFrame(() => {
+      _railFollowScheduled = false;
+      _updateRailFollow();
+    });
+  }
+
+  function _onRailFollowScroll(ev) {
+    const t = ev.target;
+    if (t && t.classList && t.classList.contains('chat-container')) {
+      _scheduleRailFollow();
+    }
   }
 
   /* Fact-card fields on the done frame the reconcile MAY overwrite. Kept as
@@ -26144,10 +27240,14 @@ function loadCompactionHistory(conversationId) {
   runtimeScope.reconcileTurnCtxCapsule = reconcileTurnCtxCapsule;
   runtimeScope.applyMcpToolSummary = applyMcpToolSummary;
 
-  /* The click listener is the rail's only browser lifecycle. MCP state arrives
-   * through existing responses and never installs a boot hook of its own. */
+  /* Browser lifecycle: clicks (delegated), pane scrolls (captured —
+   * element scrolls don't bubble), one boot pass, and a ResizeObserver
+   * (re)bound by every pass for streaming growth / pane resizes. MCP
+   * state arrives through existing responses and installs no hook. */
   if (typeof document !== 'undefined') {
     document.addEventListener('click', _onTctxClick);
+    document.addEventListener('scroll', _onRailFollowScroll, { capture: true, passive: true });
+    _scheduleRailFollow();
   }
 })();
 /* ===== migrated source: local-control-state.js ===== */
@@ -27406,7 +28506,7 @@ function _recoverSwarmAgents(round, allRounds) {
      fire-and-forget case) — so those agents render with their true outcome,
      not `unknown` stubs. See lib/swarm/snapshot.py. */
   const snap = round && round._swarmSnapshot;
-  if (snap && Array.isArray(snap.agents) && snap.agents.length > 0) {
+  if (snap && Array.isArray(snap.agents) && (snap.settled || snap.agents.length > 0)) {
     return snap.agents.map((a) => {
       const status = a.status || "unknown";
       /* Restore the tool timeline the backend persisted (see
@@ -27427,8 +28527,16 @@ function _recoverSwarmAgents(round, allRounds) {
          missing timer this restores. */
       let startedAt = 0;
       const rawStart = Number(a.startedAt);
-      if (Number.isFinite(rawStart) && rawStart > 1e12 && rawStart <= Date.now()) {
-        startedAt = rawStart;
+      /* The server mints startedAt from ITS clock; a client running behind
+         (VM drift, sleep/resume) would see it as "in the future" and the old
+         `<= Date.now()` check dropped the anchor — the running agent's timer
+         disappeared. Within a bounded skew window, clamp to local now so the
+         timer starts at ~0s and counts; only true wrong-magnitude values
+         (epoch seconds, double-converted ms) are still dropped. */
+      const SWARM_START_SKEW_MS = 5 * 60 * 1000;
+      if (Number.isFinite(rawStart) && rawStart > 1e12 &&
+          rawStart <= Date.now() + SWARM_START_SKEW_MS) {
+        startedAt = Math.min(rawStart, Date.now());
       } else if (a.startedAt != null && a.startedAt !== "") {
         console.warn("[Swarm] implausible startedAt for agent", a.id,
           "=", a.startedAt, "— timer anchor dropped");
@@ -27547,7 +28655,9 @@ function _buildSwarmPanelHTML(round, allRounds) {
      Reload path: that field is gone, so recover agents from the persisted
      handle JSON + sibling result rounds — otherwise the completed panel
      renders an empty body. */
-  let agents = round._swarmAgents || [];
+  let agents = round._swarmSnapshot?.settled
+    ? _recoverSwarmAgents(round, allRounds)
+    : (round._swarmAgents || []);
   if (agents.length === 0) {
     agents = _recoverSwarmAgents(round, allRounds);
   }
@@ -27585,8 +28695,10 @@ function _buildSwarmPanelHTML(round, allRounds) {
   const running = agents.filter(a => a.status === "running" || a.status === "thinking").length;
   const done = agents.filter(a => a.status === "done" || a.status === "completed").length;
   const failed = agents.filter(a => a.status === "failed" || a.status === "error").length;
-  const pending = total - done - failed - running;
-  const finished = done + failed;
+  const aborted = agents.filter(a => ["aborted", "cancelled", "canceled"].includes(a.status)).length;
+  const stalled = agents.filter(a => a.status === "stalled").length;
+  const pending = total - done - failed - aborted - stalled - running;
+  const finished = done + failed + aborted;
 
   /* ── Elapsed timer ── */
   let elapsed = "";
@@ -27624,6 +28736,9 @@ function _buildSwarmPanelHTML(round, allRounds) {
     if (isActive && running > 0) parts.push(`<span class="sw-cnt-running">${running} running</span>`);
     if (done > 0) parts.push(`<span class="sw-cnt-done">${done} done</span>`);
     if (failed > 0) parts.push(`<span class="sw-cnt-failed">${failed} failed</span>`);
+
+    if (aborted > 0) parts.push(`${aborted} aborted`);
+    if (stalled > 0) parts.push(`${stalled} stalled`);
     if (pending > 0 && isActive) parts.push(`${pending} queued`);
     headerSubtitle = `<span class="sw-header-subtitle">${parts.join(" · ")}</span>`;
   } else if (isActive) {
@@ -27645,12 +28760,15 @@ function _buildSwarmPanelHTML(round, allRounds) {
   } else if (round._swarmError) {
     /* Explicit driver failure outranks inferred agent counts. */
     statusPill = `<span class="sw-status-pill sw-pill-error" title="${escapeHtml(round._swarmError)}">${_SW_STATUS_SVG.failed} Failed</span>`;
+  } else if (aborted > 0) {
+    statusPill = `<span class="sw-status-pill sw-pill-error">${_SW_STATUS_SVG.failed} ${aborted === total ? "Aborted" : "Finished with interruptions"}</span>`;
+  } else if (stalled > 0) {
+    statusPill = `<span class="sw-status-pill sw-pill-stale">${_SW_STATUS_SVG.stale} Stalled</span>`;
   } else if (failed > 0 && done === 0) {
     statusPill = `<span class="sw-status-pill sw-pill-error">${_SW_STATUS_SVG.failed} Failed</span>`;
   } else if (failed > 0) {
     statusPill = `<span class="sw-status-pill sw-pill-error">${_SW_STATUS_SVG.failed} Completed with errors</span>`;
-  } else if (finished === 0 && total > 0
-             && !(round._swarmSnapshot && round._swarmSnapshot.settled)) {
+  } else if (finished < total || (total === 0 && !round._swarmSnapshot?.settled)) {
     /* No terminal agent or settled snapshot is never Complete. Deliberately
        ignore `_swarmEndTime`: reconciliation freezes it even when truth for
        every agent remains unknown. */
@@ -27664,7 +28782,7 @@ function _buildSwarmPanelHTML(round, allRounds) {
   let progressBar = "";
   if (total > 0) {
     const pctDone = Math.round((done / total) * 100);
-    const pctFailed = Math.round((failed / total) * 100);
+    const pctFailed = Math.round(((failed + aborted) / total) * 100);
     const pctRunning = Math.round((running / total) * 100);
     const fillStyle = (failed > 0 && done > 0) ? ` style="--ok-pct:${pctDone}%"` : "";
     const fillClass = failed > 0 && done > 0 ? " has-errors" : "";
@@ -29071,8 +30189,8 @@ export const loadFeatureFlags = _featureFlagsLoader.load;
 // BEGIN GENERATED RUNTIME ACTIONS — scripts/update_runtime_actions.mjs
 const runtimeActions = Object.freeze({
   _cmdBodyToggle,
-  _cmdHeaderToggle,
   _cmdInterruptClick,
+  _cmdOutputOpenToggle,
   _cmdOutputToggle,
   _downloadGenImage,
   _mobileCompactNow,
@@ -29118,11 +30236,12 @@ const runtimeActions = Object.freeze({
   resolvePreference,
   resolveWriteApproval,
   scrollChatToBottom,
+  selectBatchChoice,
   selectTheme,
-  selectThinkingDepth,
   sendMessage,
   setAgentMode,
   setChatMode,
+  submitBatchAnswers,
   submitHumanGuidanceChoice,
   submitHumanGuidanceFreeText,
   submitStdinEof,
@@ -29141,7 +30260,6 @@ const runtimeActions = Object.freeze({
   toggleSidebarSearch,
   toggleSubmenu,
   undoContextChange,
-  updateMobileDepth,
   updateMobileSheet,
   updateSubmenuCounts,
 });

@@ -7,7 +7,6 @@ resources such as subprocess groups.
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from lib.log import get_logger
@@ -47,21 +46,30 @@ def cancel_task(task_id: str, *, user_id: int,
     was_pending = str(task.get('status') or '') == 'pending'
     already_cancelled = bool(task.get('aborted')) or bool(
         task.get('abort_event') and task['abort_event'].is_set())
-    signalled = chat_task_runtime.abort_owned(task_id, user_id=owner_user_id)
-    task['aborted'] = True
-    task.setdefault('_abort_timestamp', time.time())
-    task.setdefault('_abortSource', str(source or 'unknown'))
-    # Keep update_fields for TaskRuntime implementations that snapshot fields
-    # independently of the dict returned by get_owned.
-    chat_task_runtime.update_fields(
-        task_id,
-        fields={
-            'aborted': True,
-            '_abort_timestamp': task['_abort_timestamp'],
-            '_abortSource': task['_abortSource'],
-        },
-    )
+    signalled = chat_task_runtime.abort_owned(
+        task_id, user_id=owner_user_id, source=source, expected_task=task)
+    if not signalled:
+        # finish() may have claimed settlement after get_owned(). Never
+        # rewrite its outcome or cancel resources after that decision.
+        return {
+            'found': True, 'task': task,
+            'alreadyCancelled': already_cancelled, 'signalled': False,
+            'queuedCancelled': False, 'resourceCallbacks': 0,
+            'resourceCallbackErrors': 0,
+        }
 
+    # A conversation-scoped swarm may originate in an earlier, normally
+    # completed turn. Signal it now rather than waiting for this turn's
+    # finalizer or for an await_agents call to bridge the new parent.
+    from lib.swarm.integration import get_active_session, swarm_key_for
+
+    session = get_active_session(swarm_key_for(task))
+    if session is not None and session.user_id == owner_user_id:
+        session.abort()
+
+    # Synchronous, signal-only callbacks: no joins, provider/network waits or
+    # terminal settlement here. Resource owners perform bounded cleanup in
+    # their workers. Never run callbacks under TaskRuntime's authority lock.
     callbacks, callback_errors = cancel_task_contexts(task)
     if callback_errors:
         logger.warning(

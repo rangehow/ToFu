@@ -444,6 +444,132 @@ def test_consolidation_auto_applies_new_preference(tmp_data_dir, monkeypatch):
     assert up.load_pending() == []
 
 
+# ───────── durable-signal gate: noise out, explicit facts in ─────────
+
+_NEUTRAL_PADDING = (
+    '请帮忙看一下这份材料，重点是方法和实验部分，结论也要看，顺便检查图表引用'
+    '是否有问题，数据是否合理，论证是否充分，格式要求不高，能把问题讲清楚就可'
+    '以，如果发现有遗漏的对比实验也请指出来，这份材料比较急，今天内看完即可，'
+    '看完之后把问题列成清单发在对话里，严重程度从高到低排序，页码也标上，方便'
+    '后续逐条核对修改，引用的会议记录编号也顺带确认一下年份，附件里参考链接失'
+    '效的两处也标出来。')
+
+
+def test_consolidation_drops_one_off_task_instruction(tmp_data_dir, monkeypatch):
+    """Observed garbage: a task-scoped style ask (\"审阅一下这篇论文\") was saved
+    as a response_preference because verbatim grounding alone passed. The
+    durable-signal gate must reject it — the source message has no durable
+    marker."""
+    import json as _json
+    import lib.memory.user_profile as up
+    import lib.memory.profile_consolidate as pc
+
+    called = {'n': 0}
+
+    def _fake_dispatch(messages, **kw):
+        called['n'] += 1
+        return (_json.dumps({'actions': [
+            {'kind': 'new', 'type': 'response_preference',
+             'text': '像资深研究者一样简练审阅论文',
+             'evidence': '像资深研究者一样简练审阅一下这篇论文'}]}), {})
+
+    monkeypatch.setattr('lib.llm_dispatch.dispatch_chat', _fake_dispatch)
+    msgs = [
+        {'role': 'user',
+         'content': '像资深研究者一样简练审阅一下这篇论文。' + _NEUTRAL_PADDING},
+        {'role': 'assistant', 'content': '好的，我来看。'},
+    ]
+    learned = pc.run_profile_consolidation(msgs)
+    assert called['n'] == 1  # the long message was reviewed, then rejected
+    assert learned == []
+    assert up.load_context()['items'] == []
+
+
+def test_consolidation_learns_short_identity_statement(tmp_data_dir, monkeypatch):
+    """The UI's own example — a standalone 我来自美团 — must clear the review
+    gate (short message + durable signal) and land as an identity item."""
+    import json as _json
+    import lib.memory.user_profile as up
+    import lib.memory.profile_consolidate as pc
+
+    called = {'n': 0}
+
+    def _fake_dispatch(messages, **kw):
+        called['n'] += 1
+        return (_json.dumps({'actions': [
+            {'kind': 'new', 'type': 'identity',
+             'text': '来自美团', 'evidence': '我来自美团'}]}), {})
+
+    monkeypatch.setattr('lib.llm_dispatch.dispatch_chat', _fake_dispatch)
+    msgs = [
+        {'role': 'user', 'content': '我来自美团'},
+        {'role': 'assistant', 'content': '了解了。'},
+    ]
+    learned = pc.run_profile_consolidation(msgs)
+    assert called['n'] == 1  # the short explicit fact triggered a review
+    assert learned and learned[0]['kind'] == 'added'
+    items = up.load_context()['items']
+    assert [i['type'] for i in items] == ['identity']
+    assert items[0]['text'] == '来自美团'
+
+
+def test_consolidation_learns_bare_buyao_preference(tmp_data_dir, monkeypatch):
+    """A standalone 不要… style directive is a durable preference signal."""
+    import json as _json
+    import lib.memory.user_profile as up
+    import lib.memory.profile_consolidate as pc
+
+    def _fake_dispatch(messages, **kw):
+        return (_json.dumps({'actions': [
+            {'kind': 'new', 'type': 'response_preference',
+             'text': '不要出现大模型表述风格',
+             'evidence': '不要出现大模型表述风格'}]}), {})
+
+    monkeypatch.setattr('lib.llm_dispatch.dispatch_chat', _fake_dispatch)
+    msgs = [
+        {'role': 'user', 'content': '不要出现大模型表述风格'},
+        {'role': 'assistant', 'content': '收到。'},
+    ]
+    learned = pc.run_profile_consolidation(msgs)
+    assert learned and learned[0]['kind'] == 'added'
+    items = up.load_context()['items']
+    assert [i['type'] for i in items] == ['response_preference']
+
+
+def test_consolidation_update_needs_no_durable_signal(tmp_data_dir, monkeypatch):
+    """Corrections to an EXISTING item carry their own intent — the gate only
+    applies to brand-new items."""
+    import json as _json
+    import lib.memory.user_profile as up
+    import lib.memory.profile_consolidate as pc
+
+    seeded = up.create_context_item(
+        {'type': 'response_preference', 'text': 'Reply in Chinese'},
+        source='manual')
+    assert seeded['saved']
+    item_id = up.load_context()['items'][0]['id']
+
+    def _fake_dispatch(messages, **kw):
+        return (_json.dumps({'actions': [
+            {'kind': 'update', 'item_id': item_id,
+             'type': 'response_preference',
+             'text': 'Reply in Chinese with bullet points',
+             'evidence': 'reply in Chinese with bullet points'}]}), {})
+
+    monkeypatch.setattr('lib.llm_dispatch.dispatch_chat', _fake_dispatch)
+    msgs = [
+        {'role': 'user',
+         'content': 'about the note from before: make it reply in Chinese with '
+         'bullet points. this adjusts how answers should look in this workspace '
+         'for the work done here day to day across topics and threads, thanks '
+         'a lot for the help with this.'},
+        {'role': 'assistant', 'content': 'updated.'},
+    ]
+    learned = pc.run_profile_consolidation(msgs)
+    assert learned and learned[0]['kind'] == 'reinforced'
+    items = up.load_context()['items']
+    assert items[0]['text'] == 'Reply in Chinese with bullet points'
+
 # ───────── REQUIRED: consolidation is OFF the synchronous done path ─────────
 
 def test_consolidation_spawn_does_not_block_done(monkeypatch):

@@ -15,7 +15,7 @@ from lib.turn_initiation import (
     stamp_initiator,
 )
 from lib.log import get_logger
-from lib.scheduler._shared import build_task_config
+from lib.scheduler._shared import build_task_config, build_turn_ctx_snapshot
 from lib.storage import get_storage_client
 from lib.turn_lifecycle import LifecycleConflict, LifecycleNotFound
 
@@ -88,6 +88,10 @@ def dispatch_scheduled_turn(
         kind = turn_kind
     task_config = build_task_config(parsed_tools, settings)
     task_config.update(dict(config_overrides or {}))
+    if '_ctx' not in projection and 'contextSnapshot' not in projection:
+        ctx_snapshot = build_turn_ctx_snapshot(task_config)
+        if ctx_snapshot is not None:
+            projection['_ctx'] = ctx_snapshot
 
     try:
         outcome = conversation_turn_commands.create_turn(

@@ -71,7 +71,7 @@ _TABLES = (
     CREATE TABLE IF NOT EXISTS storage_records (
         namespace TEXT NOT NULL,
         record_key TEXT NOT NULL,
-        value_json BLOB NOT NULL,
+        value_json JSONDOC NOT NULL,
         version BIGINT NOT NULL,
         updated_at_ms BIGINT NOT NULL,
         PRIMARY KEY (namespace, record_key)
@@ -2117,13 +2117,16 @@ def _optimizer_ownership_is_current(session: Session) -> bool:
 
 def _sql_for_backend(session: Session, sql: str) -> str:
     """Render logical types and backend-specific physical table options."""
+    # Type tokens appear both space-delimited (``payload JSONDOC NOT NULL``)
+    # and comma-delimited (``backup_json JSONDOC,``), so a plain
+    # space-anchored replace silently leaks the logical token into PostgreSQL
+    # DDL and fresh-cluster bootstrap fails with ``type "jsondoc" does not
+    # exist``.  Word-boundary substitution covers every delimiter.
     if session.backend == 'postgres':
-        return (
-            sql.replace(' BLOB ', ' BYTEA ')
-            .replace(' JSONDOC ', ' JSONB ')
-            .replace(' WITHOUT ROWID', '')
-        )
-    return sql.replace(' JSONDOC ', ' TEXT ')
+        return re.sub(r'\bJSONDOC\b', 'JSONB',
+                      re.sub(r'\bBLOB\b', 'BYTEA', sql)).replace(
+                          ' WITHOUT ROWID', '')
+    return re.sub(r'\bJSONDOC\b', 'TEXT', sql)
 
 
 def initialize_schema(session: Session) -> None:

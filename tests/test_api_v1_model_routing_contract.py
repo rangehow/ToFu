@@ -18,6 +18,8 @@ import asyncio
 import re
 import unittest
 
+from unittest import mock
+
 import pytest
 
 from lib.api_v1_model_routing_generated import OPERATIONS, decode_response
@@ -243,6 +245,233 @@ class LiveConformanceTest(unittest.TestCase):
 
         _new_loop_run(go())
 
+
+class DispatcherHotReloadTest(unittest.TestCase):
+    """Committed authority mutations hot-reload the dispatcher slot pool.
+
+    Regression pin for the provider-template card: saving the disable toggle
+    (PUT /api/v1/model-routing) committed the v2 authority but left the
+    cached slot pool untouched until process restart.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from quart import Quart
+        cls.app = Quart(__name__, static_folder=None)
+        cls.app.config.setdefault('PROVIDE_AUTOMATIC_OPTIONS', True)
+        cls.app.config['TESTING'] = True
+        from routes.api_v1.auth import (
+            attach_rate_headers, bearer_auth_before_request,
+        )
+        cls.app.before_request(bearer_auth_before_request)
+        cls.app.after_request(attach_rate_headers)
+
+        from routes.api_v1.providers import api_v1_providers_bp
+        cls.app.register_blueprint(api_v1_providers_bp)
+
+        from lib.api_keys import create_key
+        _row, cls.token = create_key(
+            owner_user_id=OWNER, name='hot-reload', scopes=['providers'])
+
+    def setUp(self):
+        clear_test_model_routing(owner_user_id=OWNER)
+        import lib.llm_dispatch.health_local as health_local
+        self.rebuilds = []
+        patcher = mock.patch.object(
+            health_local,
+            '_rebuild_dispatcher_slots',
+            lambda: self.rebuilds.append(True))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def _authority(self, cli, headers):
+        response = await cli.get('/api/v1/model-routing', headers=headers)
+        self.assertEqual(response.status_code, 200)
+        return await response.get_json()
+
+    def test_put_model_routing_rebuilds_slots(self):
+        async def go():
+            cli = self.app.test_client()
+            headers = {'Authorization': f'Bearer {self.token}'}
+            data = await self._authority(cli, headers)
+            replaced = await cli.put(
+                '/api/v1/model-routing',
+                headers=headers,
+                json={
+                    'expected_revision': data['revision'],
+                    'model_routing': data['model_routing'],
+                },
+            )
+            self.assertEqual(
+                replaced.status_code, 200,
+                await replaced.get_data(as_text=True))
+            self.assertEqual(len(self.rebuilds), 1)
+
+        _new_loop_run(go())
+
+    def test_rejected_put_does_not_rebuild(self):
+        async def go():
+            cli = self.app.test_client()
+            headers = {'Authorization': f'Bearer {self.token}'}
+            data = await self._authority(cli, headers)
+
+            conflict = await cli.put(
+                '/api/v1/model-routing',
+                headers=headers,
+                json={
+                    'expected_revision': data['revision'] + 1,
+                    'model_routing': data['model_routing'],
+                },
+            )
+            self.assertEqual(conflict.status_code, 409)
+
+            invalid = await cli.put(
+                '/api/v1/model-routing',
+                headers=headers,
+                json={'model_routing': data['model_routing']},
+            )
+            self.assertEqual(invalid.status_code, 400)
+
+            self.assertEqual(self.rebuilds, [])
+
+        _new_loop_run(go())
+
+    def test_provider_and_secret_mutations_rebuild(self):
+        async def go():
+            cli = self.app.test_client()
+            headers = {'Authorization': f'Bearer {self.token}'}
+            data = await self._authority(cli, headers)
+            revision = data['revision']
+
+            created = await cli.post(
+                '/api/v1/providers',
+                headers=headers,
+                json=native_test_provider_bundle(
+                    expected_revision=revision,
+                    provider_id='hot-reload',
+                    base_url='http://127.0.0.1:1/v1'),
+            )
+            self.assertEqual(
+                created.status_code, 201,
+                await created.get_data(as_text=True))
+            body = await created.get_json()
+            revision = body['revision']
+            self.assertEqual(len(self.rebuilds), 1)
+
+            bundle = body['provider']
+            updated = await cli.patch(
+                '/api/v1/providers/hot-reload',
+                headers=headers,
+                json={
+                    'expected_revision': revision,
+                    'provider': bundle['provider'],
+                    'provider_access': bundle['provider_access'],
+                    'connections': bundle['connections'],
+                    'credentials': bundle['credentials'],
+                    'offerings': bundle['offerings'],
+                    'deployments': bundle['deployments'],
+                },
+            )
+            self.assertEqual(
+                updated.status_code, 200,
+                await updated.get_data(as_text=True))
+            revision = (await updated.get_json())['revision']
+            self.assertEqual(len(self.rebuilds), 2)
+
+            rotated = await cli.put(
+                '/api/v1/model-routing/credentials/'
+                'hot-reload-credential/secret',
+                headers=headers,
+                json={
+                    'expected_revision': revision,
+                    'secret': 'sk-rotated-secret',
+                },
+            )
+            self.assertEqual(
+                rotated.status_code, 200,
+                await rotated.get_data(as_text=True))
+            revision = (await rotated.get_json())['revision']
+            self.assertEqual(len(self.rebuilds), 3)
+
+            deleted = await cli.delete(
+                '/api/v1/providers/hot-reload',
+                headers=headers,
+                json={'expected_revision': revision},
+            )
+            self.assertEqual(
+                deleted.status_code, 200,
+                await deleted.get_data(as_text=True))
+            self.assertEqual(len(self.rebuilds), 4)
+
+        _new_loop_run(go())
+
+
+class LegacyKeyHintRefreshTest(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        from quart import Quart
+        cls.app = Quart(__name__, static_folder=None)
+        cls.app.config.setdefault('PROVIDE_AUTOMATIC_OPTIONS', True)
+        cls.app.config['TESTING'] = True
+        from routes.api_v1.auth import (
+            attach_rate_headers, bearer_auth_before_request,
+        )
+        cls.app.before_request(bearer_auth_before_request)
+        cls.app.after_request(attach_rate_headers)
+
+        from routes.api_v1.providers import api_v1_providers_bp
+        cls.app.register_blueprint(api_v1_providers_bp)
+
+        from lib.api_keys import create_key
+        _row, cls.token = create_key(
+            owner_user_id=OWNER, name='hint-refresh', scopes=['providers'])
+
+    def setUp(self):
+        clear_test_model_routing(owner_user_id=OWNER)
+
+    def test_get_lazily_reseals_legacy_ellipsis_key_hints(self):
+        async def go():
+            cli = self.app.test_client()
+            headers = {'Authorization': f'Bearer {self.token}'}
+            authority = await cli.get('/api/v1/model-routing', headers=headers)
+            revision = (await authority.get_json())['revision']
+            created = await cli.post(
+                '/api/v1/providers',
+                headers=headers,
+                json=native_test_provider_bundle(
+                    expected_revision=revision,
+                    provider_id='hint-refresh',
+                    base_url='http://127.0.0.1:1/v1',
+                    secret='sk-internal-secret'),
+            )
+            self.assertEqual(
+                created.status_code, 201,
+                await created.get_data(as_text=True))
+
+            # Simulate a credential persisted before the asterisk mask format.
+            from lib.model_routing import ModelRoutingRepository, OwnerBoundary
+            repository = ModelRoutingRepository()
+            boundary = OwnerBoundary.create(OWNER)
+            stale = repository.get(boundary)
+            document = stale.document
+            document['credentials'][0]['key_hint'] = 'sk-i…cret'
+            repository.compare_and_swap(
+                boundary, document, expected_revision=stale.revision)
+
+            expected = 'sk-i' + '*' * 10 + 'cret'
+            served = await cli.get('/api/v1/model-routing', headers=headers)
+            self.assertEqual(served.status_code, 200)
+            body = await served.get_json()
+            hints = [
+                row.get('key_hint')
+                for row in body['model_routing']['credentials']
+            ]
+            self.assertEqual(hints, [expected])
+            persisted = repository.get(boundary).document['credentials'][0]
+            self.assertEqual(persisted['key_hint'], expected)
+
+        _new_loop_run(go())
 
 if __name__ == '__main__':
     unittest.main()

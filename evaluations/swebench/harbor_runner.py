@@ -14,6 +14,8 @@ from evaluations.codex_kimi_proxy.supervisor import (
     CodexKimiProxySupervisor,
     reserve_loopback_port,
 )
+from evaluations.opencode_contract import OPENCODE_VERSION
+from evaluations.opencode_proxy.supervisor import OpenCodeProxySupervisor
 
 from .artifacts import (
     atomic_write_json,
@@ -37,6 +39,10 @@ from .codex_kimi_runtime import (
     CODEX_KIMI_AGENT,
     CodexKimiBaselineSettings,
 )
+from .opencode_runtime import (
+    OPENCODE_AGENT,
+    OpenCodeBaselineSettings,
+)
 from .tofu_kimi_runtime import (
     TOFU_KIMI_AGENT,
     TofuKimiCandidateSettings,
@@ -48,6 +54,7 @@ _ROOTLESS_CREDENTIAL_SAFE_AGENTS = {
     "rootless_vm.harbor_tofu_agent:TofuHostAgent",
     TOFU_KIMI_AGENT,
     CODEX_KIMI_AGENT,
+    OPENCODE_AGENT,
     "oracle",
 }
 
@@ -75,6 +82,7 @@ class HarborRunSpec:
     rootless_qemu: RootlessQemuSettings | None = None
     codex_kimi: CodexKimiBaselineSettings | None = None
     tofu_kimi: TofuKimiCandidateSettings | None = None
+    opencode: OpenCodeBaselineSettings | None = None
     release_run_root: Path | None = None
 
     @property
@@ -182,9 +190,9 @@ class HarborRunSpec:
             if self.backend != "rootless-qemu":
                 raise ValueError(
                     "Tofu Kimi candidate requires backend='rootless-qemu'")
-            if self.models != ("kimi-k3",):
+            if self.models != (self.tofu_kimi.model,):
                 raise ValueError(
-                    "Tofu Kimi candidate requires exactly model 'kimi-k3'")
+                    "Tofu Kimi candidate requires exactly its frozen model")
             if self.agent_version != self.tofu_kimi.agent_version:
                 raise ValueError(
                     "Tofu Kimi agent version differs from frozen settings")
@@ -208,10 +216,55 @@ class HarborRunSpec:
                 raise ValueError(
                     "Tofu Kimi candidate forbids guest control-plane services")
             self.tofu_kimi.validate()
+        elif self.agent == OPENCODE_AGENT:
+            if self.opencode is None:
+                raise ValueError(
+                    "OpenCode baseline requires its pinned runtime settings")
+            if self.codex_kimi is not None or self.tofu_kimi is not None:
+                raise ValueError(
+                    "OpenCode and Kimi runtime settings are mutually exclusive")
+            if self.backend != "rootless-qemu":
+                raise ValueError(
+                    "OpenCode baseline requires backend='rootless-qemu'")
+            if self.models != (self.opencode.model,):
+                raise ValueError(
+                    "OpenCode baseline requires exactly its pinned model")
+            if self.agent_version != OPENCODE_VERSION:
+                raise ValueError(
+                    f"OpenCode baseline requires agent version {OPENCODE_VERSION}"
+                )
+            if self.reasoning_effort is not None:
+                raise ValueError(
+                    "OpenCode baseline runs stock defaults; reasoning_effort "
+                    "would be silently ignored"
+                )
+            if self.timeout_multiplier != 1.0:
+                raise ValueError(
+                    "OpenCode formal runs require timeout_multiplier=1.0"
+                )
+            if self.secret_env or self.agent_hosts:
+                raise ValueError(
+                    "OpenCode credentials and upstream routes are launcher-owned"
+                )
+            if self.max_retries != 0:
+                raise ValueError(
+                    "OpenCode formal runs disable Harbor's evidence-erasing "
+                    "internal retries; preregister maxInfrastructureRetries=0")
+            if self.release_run_root is not None:
+                raise ValueError(
+                    "OpenCode runs are not release-evidence tracked")
+            assert self.rootless_qemu is not None
+            if self.rootless_qemu.loopback_services:
+                raise ValueError(
+                    "OpenCode baseline reserves the only guest control-plane route"
+                )
+            self.opencode.validate(verify_binary=False)
         elif self.codex_kimi is not None:
             raise ValueError("Codex Kimi runtime settings require the formal agent import")
         elif self.tofu_kimi is not None:
             raise ValueError("Tofu Kimi runtime settings require the formal agent import")
+        elif self.opencode is not None:
+            raise ValueError("OpenCode runtime settings require the formal agent import")
         elif self.release_run_root is not None:
             raise ValueError(
                 "release attempt tracking requires codex-kimi or tofu-kimi")
@@ -251,6 +304,7 @@ def build_job_config(
     run_dir: Path,
     run_id: str,
     codex_proxy_host_port: int | None = None,
+    opencode_proxy_host_port: int | None = None,
 ) -> dict:
     spec.validate()
     env_templates = {name: "${" + name + "}" for name in spec.secret_env}
@@ -275,6 +329,8 @@ def build_job_config(
             agent_kwargs.update(spec.codex_kimi.agent_kwargs(run_dir))
         if spec.tofu_kimi is not None:
             agent_kwargs.update(spec.tofu_kimi.agent_kwargs())
+        if spec.opencode is not None:
+            agent_kwargs.update(spec.opencode.agent_kwargs(run_dir))
         if agent_kwargs:
             agent["kwargs"] = agent_kwargs
         agents.append(agent)
@@ -289,6 +345,17 @@ def build_job_config(
                 loopback_services=(
                     spec.codex_kimi.service_forward(
                         host_port=int(codex_proxy_host_port)
+                    ),
+                ),
+            )
+        if spec.opencode is not None:
+            if opencode_proxy_host_port is None:
+                raise ValueError("OpenCode job config requires a bound proxy port")
+            rootless_settings = replace(
+                rootless_settings,
+                loopback_services=(
+                    spec.opencode.service_forward(
+                        host_port=int(opencode_proxy_host_port)
                     ),
                 ),
             )
@@ -402,7 +469,10 @@ def start_harbor_run(spec: HarborRunSpec, *, dry_run: bool = False) -> tuple[int
         spec.codex_kimi.child_environment_exclusions
         if spec.codex_kimi is not None else (
             spec.tofu_kimi.credential_environment_names
-            if spec.tofu_kimi is not None else ()
+            if spec.tofu_kimi is not None else (
+                spec.opencode.child_environment_exclusions
+                if spec.opencode is not None else ()
+            )
         )
     )
     if spec.codex_kimi is not None:
@@ -416,14 +486,21 @@ def start_harbor_run(spec: HarborRunSpec, *, dry_run: bool = False) -> tuple[int
         if not dry_run:
             spec.tofu_kimi.credentials_from_environment()
     project_revision = _git_revision(unset_env=credential_exclusions)
+    if spec.opencode is not None:
+        spec.opencode.validate(verify_binary=True)
+        if not dry_run:
+            # Same launcher-owned secret discipline as the Codex Kimi proxy arm.
+            spec.opencode.credentials_from_environment()
+    project_revision = _git_revision(unset_env=credential_exclusions)
     project_dirty = _git_dirty(unset_env=credential_exclusions)
-    if (spec.codex_kimi is not None or spec.tofu_kimi is not None) \
+    if (spec.codex_kimi is not None or spec.tofu_kimi is not None
+            or spec.opencode is not None) \
             and not dry_run and (
         project_dirty is not False
         or project_revision in {"", "unknown"}
     ):
         raise ValueError(
-            "formal Kimi release execution requires a clean pinned "
+            "formal baseline execution requires a clean pinned "
             "runner revision before any paid trial starts"
         )
     run_id = validate_run_id(spec.run_id) if spec.run_id else make_run_id("harbor")
@@ -431,11 +508,12 @@ def start_harbor_run(spec: HarborRunSpec, *, dry_run: bool = False) -> tuple[int
     resolved_executable = resolve_executable(spec.harbor_bin)
     executable = resolved_executable or spec.harbor_bin
     if resolved_executable is None and dry_run \
-            and spec.codex_kimi is None and spec.tofu_kimi is None:
+            and spec.codex_kimi is None and spec.tofu_kimi is None \
+            and spec.opencode is None:
         harbor_binary, harbor_binary_sha256 = "unresolved", ""
     else:
         harbor_binary, harbor_binary_sha256 = _executable_identity(executable)
-    proxy: CodexKimiProxySupervisor | None = None
+    proxy: CodexKimiProxySupervisor | OpenCodeProxySupervisor | None = None
     proxy_port: int | None = None
     dispatch_started = False
     manifest: dict | None = None
@@ -448,12 +526,21 @@ def start_harbor_run(spec: HarborRunSpec, *, dry_run: bool = False) -> tuple[int
                 spec.codex_kimi.proxy_config(run_dir), port=0
             ).start()
             proxy_port = proxy.port
+    if spec.opencode is not None:
+        if dry_run:
+            proxy_port = reserve_loopback_port()
+        else:
+            proxy = OpenCodeProxySupervisor(
+                spec.opencode.proxy_config(run_dir), port=0
+            ).start()
+            proxy_port = proxy.port
     try:
         config = build_job_config(
             spec,
             run_dir=run_dir,
             run_id=run_id,
             codex_proxy_host_port=proxy_port,
+            opencode_proxy_host_port=proxy_port,
         )
         config_path = run_dir / "job-config.json"
         atomic_write_json(config_path, config)
@@ -508,7 +595,10 @@ def start_harbor_run(spec: HarborRunSpec, *, dry_run: bool = False) -> tuple[int
                 list(spec.codex_kimi.child_environment_exclusions)
                 if spec.codex_kimi is not None else (
                     list(spec.tofu_kimi.credential_environment_names)
-                    if spec.tofu_kimi is not None else []
+                    if spec.tofu_kimi is not None else (
+                        list(spec.opencode.child_environment_exclusions)
+                        if spec.opencode is not None else []
+                    )
                 )
             ),
             "harbor_version": _harbor_version(
@@ -546,6 +636,13 @@ def start_harbor_run(spec: HarborRunSpec, *, dry_run: bool = False) -> tuple[int
             manifest["experiment_arm"] = spec.tofu_kimi.experiment_arm
             manifest["tofu_kimi_runtime"] = (
                 spec.tofu_kimi.manifest_record())
+        if spec.opencode is not None:
+            assert proxy_port is not None
+            manifest["provider_face"] = spec.opencode.provider_face
+            manifest["provider_slot_id"] = spec.opencode.provider_slot_id
+            manifest["opencode_runtime"] = spec.opencode.manifest_record(
+                run_dir, host_port=proxy_port
+            )
         manifest_path = run_dir / "manifest.json"
         manifest["release_evidence_eligible"] = False
         if spec.release_run_root is not None and not dry_run:
@@ -590,8 +687,9 @@ def start_harbor_run(spec: HarborRunSpec, *, dry_run: bool = False) -> tuple[int
                 log_path=run_dir / "launcher.log",
                 env=prepare_runtime_environment(spec.backend, run_dir),
                 unset_env=(
-                    spec.codex_kimi.child_environment_exclusions
-                    if spec.codex_kimi is not None else ()
+                    credential_exclusions
+                    if spec.codex_kimi is not None or spec.opencode is not None
+                    else ()
                 ),
             )
             if proxy is not None:
@@ -721,14 +819,14 @@ def _validated_resume_tofu_runtime(
         if formal_agent:
             raise ValueError("formal Tofu Kimi run is missing its runtime manifest")
         return None
+    settings = TofuKimiCandidateSettings.from_manifest_record(value)
     if not formal_agent or manifest.get("backend") != "rootless-qemu" \
-            or manifest.get("models") != ["kimi-k3"]:
+            or manifest.get("models") != [settings.model]:
         raise ValueError("Tofu Kimi runtime is attached to an incompatible run")
     if rootless_qemu is None:
         raise ValueError("Tofu Kimi runtime requires rootless QEMU settings")
     if rootless_qemu.loopback_services:
         raise ValueError("Tofu Kimi guest must not receive control-plane services")
-    settings = TofuKimiCandidateSettings.from_manifest_record(value)
     if manifest.get("agent_version") != settings.agent_version \
             or manifest.get("provider_face") != settings.provider_face \
             or manifest.get("provider_slot_id") != settings.provider_slot_id \
@@ -745,7 +843,7 @@ def _validated_resume_tofu_runtime(
         and len(agents) == 1
         and isinstance(agents[0], dict)
         and agents[0].get("name") == TOFU_KIMI_AGENT
-        and agents[0].get("model_name") == "kimi-k3"
+        and agents[0].get("model_name") == settings.model
         and agents[0].get("kwargs") == expected_kwargs
         and not agents[0].get("env")
         and not agents[0].get("extra_allowed_hosts")
@@ -765,6 +863,66 @@ def _validated_resume_tofu_runtime(
     if upstream in serialized or api_key in serialized:
         raise ValueError("Tofu Kimi credential value leaked into persisted config")
     return settings
+
+
+def _validated_resume_opencode_runtime(
+    *,
+    run_dir: Path,
+    manifest: dict,
+    config: dict,
+    rootless_qemu: RootlessQemuSettings | None,
+) -> tuple[OpenCodeBaselineSettings, int] | None:
+    value = manifest.get("opencode_runtime")
+    formal_agent = manifest.get("agent") == OPENCODE_AGENT
+    if value is None:
+        if formal_agent:
+            raise ValueError("formal OpenCode run is missing its runtime manifest")
+        return None
+    if rootless_qemu is None:
+        raise ValueError("OpenCode runtime requires rootless QEMU settings")
+    settings, host_port = OpenCodeBaselineSettings.from_manifest_record(
+        value, run_dir=run_dir
+    )
+    if not formal_agent or manifest.get("backend") != "rootless-qemu" \
+            or manifest.get("models") != [settings.model] \
+            or manifest.get("agent_version") != OPENCODE_VERSION:
+        raise ValueError("OpenCode runtime is attached to an incompatible run")
+    if manifest.get("provider_face") != settings.provider_face \
+            or manifest.get("provider_slot_id") != settings.provider_slot_id:
+        raise ValueError("OpenCode provider/slot binding drifted")
+    expected_service = settings.service_forward(host_port=host_port)
+    if rootless_qemu.loopback_services != (expected_service,):
+        raise ValueError("OpenCode guest control-plane route drifted")
+    expected_kwargs: dict[str, object] = {
+        "version": OPENCODE_VERSION,
+        **settings.agent_kwargs(run_dir),
+    }
+    agents = config.get("agents") if isinstance(config, dict) else None
+    valid_agent = (
+        isinstance(agents, list)
+        and len(agents) == 1
+        and isinstance(agents[0], dict)
+        and agents[0].get("name") == OPENCODE_AGENT
+        and agents[0].get("model_name") == settings.model
+        and agents[0].get("kwargs") == expected_kwargs
+        and not agents[0].get("env")
+        and not agents[0].get("extra_allowed_hosts")
+    )
+    if not valid_agent:
+        raise ValueError("OpenCode agent config drifted from the pinned baseline")
+    if manifest.get("secret_env_names") not in ([], None) \
+            or manifest.get("host_only_secret_env_names") \
+            != list(settings.child_environment_exclusions):
+        raise ValueError("OpenCode credential-boundary metadata drifted")
+    upstream, api_key = settings.credentials_from_environment()
+    serialized = json.dumps(
+        {"manifest": manifest, "config": config},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    if upstream in serialized or api_key in serialized:
+        raise ValueError("OpenCode credential value leaked into persisted config")
+    return settings, host_port
 
 
 def resume_harbor_run(
@@ -800,11 +958,13 @@ def resume_harbor_run(
         config_path = Path(
             str(manifest.get("job_config") or run_dir / "job-config.json")
         )
-        if manifest.get("agent") in {CODEX_KIMI_AGENT, TOFU_KIMI_AGENT} and (
+        if manifest.get("agent") in {
+            CODEX_KIMI_AGENT, TOFU_KIMI_AGENT, OPENCODE_AGENT,
+        } and (
             config_path.is_symlink()
             or config_path.expanduser().resolve() != (run_dir / "job-config.json").resolve()
         ):
-            raise ValueError("formal Kimi job config must be run-owned")
+            raise ValueError("formal benchmark job config must be run-owned")
         config = json.loads(config_path.read_text(encoding="utf-8"))
         environment = config.get("environment") or {}
         if environment.get("import_path") != (
@@ -867,6 +1027,29 @@ def resume_harbor_run(
             raise ValueError(
                 "formal Kimi resume requires the same clean runner revision"
             )
+    opencode_runtime = _validated_resume_opencode_runtime(
+        run_dir=run_dir,
+        manifest=manifest,
+        config=config,
+        rootless_qemu=rootless_qemu,
+    )
+    if codex_runtime is not None or tofu_runtime is not None \
+            or opencode_runtime is not None:
+        exclusions = (
+            codex_runtime[0].child_environment_exclusions
+            if codex_runtime is not None else (
+                opencode_runtime[0].child_environment_exclusions
+                if opencode_runtime is not None
+                else tofu_runtime.credential_environment_names
+            )
+        )
+        if manifest.get("project_dirty") is not False \
+                or _git_dirty(unset_env=exclusions) is not False \
+                or _git_revision(unset_env=exclusions) \
+                != manifest.get("project_revision"):
+            raise ValueError(
+                "formal baseline resume requires the same clean runner revision"
+            )
     checks = harbor_checks(
         backend=backend,
         benchmark=str(manifest.get("benchmark") or DEFAULT_BENCHMARK),
@@ -887,21 +1070,29 @@ def resume_harbor_run(
         raise FileNotFoundError(f"Harbor job directory is missing: {job_dir}")
     executable = resolve_executable(harbor_bin) or harbor_bin
     harbor_binary, harbor_binary_sha256 = _executable_identity(executable)
-    if manifest.get("agent") in {CODEX_KIMI_AGENT, TOFU_KIMI_AGENT} and (
+    if manifest.get("agent") in {
+        CODEX_KIMI_AGENT, TOFU_KIMI_AGENT, OPENCODE_AGENT,
+    } and (
         manifest.get("harbor_binary") != harbor_binary
         or manifest.get("harbor_binary_sha256") != harbor_binary_sha256
     ):
-        raise ValueError("formal Kimi Harbor executable identity drifted")
+        raise ValueError("formal benchmark Harbor executable identity drifted")
     command = [executable, "job", "resume", "--job-path", str(job_dir)]
     with (run_dir / ".launcher.lock").open("w", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        proxy: CodexKimiProxySupervisor | None = None
+        proxy: CodexKimiProxySupervisor | OpenCodeProxySupervisor | None = None
         exclusions: tuple[str, ...] = ()
         dispatch_started = False
         try:
             if codex_runtime is not None:
                 settings, host_port = codex_runtime
                 proxy = CodexKimiProxySupervisor(
+                    settings.proxy_config(run_dir), port=host_port
+                ).start()
+                exclusions = settings.child_environment_exclusions
+            if opencode_runtime is not None:
+                settings, host_port = opencode_runtime
+                proxy = OpenCodeProxySupervisor(
                     settings.proxy_config(run_dir), port=host_port
                 ).start()
                 exclusions = settings.child_environment_exclusions

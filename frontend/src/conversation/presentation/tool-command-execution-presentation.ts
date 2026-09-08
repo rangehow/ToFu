@@ -11,6 +11,7 @@
 import { escapeHtmlText } from '../../html-safety';
 import type { Translator } from '../../i18n';
 import { safeImageSource } from './image-source-policy';
+import { TOOL_ROUND_CHEVRON_RIGHT_SVG } from './tool-round-icons';
 import { plainToolStatus } from './tool-round-presentation';
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
@@ -24,6 +25,7 @@ type BoundedText = Readonly<{
 type CommandArgumentsProjection = Readonly<{
   command: BoundedText;
   description: BoundedText;
+  workingDirectory: BoundedText;
   serializedArgumentsExceeded: boolean;
 }>;
 
@@ -104,6 +106,7 @@ const EMPTY_BOUNDED_TEXT: BoundedText = {
 const EMPTY_ARGUMENTS: CommandArgumentsProjection = {
   command: EMPTY_BOUNDED_TEXT,
   description: EMPTY_BOUNDED_TEXT,
+  workingDirectory: EMPTY_BOUNDED_TEXT,
   serializedArgumentsExceeded: false,
 };
 
@@ -153,6 +156,7 @@ function projectArguments(value: unknown): CommandArgumentsProjection {
   }
   return {
     command: boundedText(field(candidate, 'command'), COMMAND_UNITS),
+    workingDirectory: boundedText(field(candidate, 'working_dir'), 4096),
     description: boundedText(
       field(candidate, 'description'),
       DESCRIPTION_UNITS,
@@ -281,16 +285,37 @@ export function createToolCommandExecutionPresentation(
     ))}</div>`;
   }
 
-  function descriptionHtml(
-    description: BoundedText,
-    collapsible: boolean,
-  ): string {
+  function descriptionHtml(description: BoundedText): string {
     if (!description.value) return '';
     const escaped = escapeHtmlText(description.value);
-    if (!collapsible) {
-      return `<span class="ptool-cmd-desc-inline" title="${escaped}">${escaped}</span>`;
-    }
-    return `<span class="ptool-cmd-desc-inline ptool-cmd-desc-toggle" title="${escaped}" data-tofu-action="_cmdBodyToggle(this,event)">${escaped}</span>`;
+    return `<span class="ptool-cmd-desc-inline" title="${escaped}">${escaped}</span>`;
+  }
+
+  /* One explicit fold chip per collapsible pane (owner call 2026-09-05:
+   * visible controls replace the old invisible split hit area, where the
+   * description toggled the command and the rest of the header toggled the
+   * output). Chevron direction and the open tint are pure CSS off the
+   * block's cmd-open/output-open classes, so the chips never need JS-driven
+   * label or glyph swaps on re-render. */
+  function foldChipHtml(kind: 'cmd' | 'output', open: boolean): string {
+    /* The receiver name must sit inside the same literal as data-tofu-action=:
+     * scripts/runtime_action_analysis.mjs only scans complete attribute
+     * literals, so an interpolated action name never reaches the generated
+     * runtime action table. */
+    const label = kind === 'cmd'
+      ? translate('toolCmd.foldCommand')
+      : translate('toolCmd.foldOutput');
+    const inner = `${TOOL_ROUND_CHEVRON_RIGHT_SVG}<span>${escapeHtmlText(label)}</span>`;
+    const ariaExpanded = open ? 'true' : 'false';
+    return kind === 'cmd'
+      ? `<button type="button" class="ptool-cmd-fold ptool-cmd-fold-cmd" aria-expanded="${ariaExpanded}" data-tofu-action="_cmdBodyToggle(this,event)">${inner}</button>`
+      : `<button type="button" class="ptool-cmd-fold ptool-cmd-fold-output" aria-expanded="${ariaExpanded}" data-tofu-action="_cmdOutputOpenToggle(this,event)">${inner}</button>`;
+  }
+
+  function workingDirectoryHtml(projection: CommandArgumentsProjection): string {
+    const directory = projection.workingDirectory;
+    if (!directory.value) return '';
+    return `<div class="ptool-cmd-reason"><code>working_dir: ${escapeHtmlText(directory.value)}${directory.truncated ? '…' : ''}</code></div>`;
   }
 
   function grepInterceptBadgeHtml(round: unknown, metadata?: unknown): string {
@@ -374,19 +399,18 @@ export function createToolCommandExecutionPresentation(
       : '';
 
     const progressStatus = progressStatusOf(round);
-    const runningLabel = progressStatus === 'running'
-      ? translate('toolCommandExecution.running')
-      : progressStatusLabel(progressStatus);
+    const statusLabel = progressStatusLabel(progressStatus);
     return `<div class="ptool-cmd-block ptool-cmd-running${bodyOpen ? ' cmd-open' : ''}"${collapsible ? ` data-cmd-key="${escapeHtmlText(key)}"` : ''} data-progress-status="${escapeHtmlText(progressStatus)}">
            <div class="ptool-cmd-header">
              <span class="ptool-cmd-icon">${header.iconHtml}</span>
              ${header.rootPillHtml}
-             ${descriptionHtml(description, collapsible)}
+             ${descriptionHtml(description)}
              ${grepInterceptBadgeHtml(round)}
-             <span class="ptool-cmd-label">${escapeHtmlText(runningLabel)}</span>
+             ${collapsible ? foldChipHtml('cmd', bodyOpen) : ''}
+             ${statusLabel ? `<span class="ptool-cmd-label">${escapeHtmlText(statusLabel)}</span>` : ''}
              ${header.timerHtml}${header.interruptHtml}
              <span class="ptool-spinner"></span>
-           </div>${argumentsLimitHtml}${descriptionLimitHtml}
+           </div>${argumentsLimitHtml}${descriptionLimitHtml}${workingDirectoryHtml(argumentsProjection)}
            <pre class="ptool-cmd-code${collapsible ? ' ptool-cmd-collapsible' : ''}"><code>$ ${escapeHtmlText(command.value)}</code></pre>${commandLimitHtml}
            ${qrStripHtml(round)}${liveOutputHtml}
          </div>`;
@@ -445,6 +469,8 @@ export function createToolCommandExecutionPresentation(
         && !interrupted
       );
     if (notRun && exitCode === '?') exitCode = 'not-run';
+    const backgrounded = !notRun && !interrupted && !timedOut
+      && exitCode === 'background';
     const isOk = !notRun && (exitCode === '0' || exitCode === 0);
     const statusClassName = notRun
       ? 'ptool-cmd-notrun'
@@ -452,16 +478,16 @@ export function createToolCommandExecutionPresentation(
         ? 'ptool-cmd-interrupted'
         : timedOut
           ? 'ptool-cmd-timeout'
-          : isOk
-            ? 'ptool-cmd-ok'
-            : 'ptool-cmd-err';
+          : backgrounded
+            ? 'ptool-cmd-background'
+            : isOk ? 'ptool-cmd-ok' : 'ptool-cmd-err';
     const metadataBadge = stringField(metadata, 'badge');
     const notRunBadge = metadataBadge
       && field(metadata, 'recovered') !== true
       && metadataBadge !== `exit ${exitCode}`
       ? metadataBadge
       : translate('toolCommandExecution.notRun');
-    const hasRealExit = !notRun && !interrupted && !timedOut
+    const hasRealExit = !backgrounded && !notRun && !interrupted && !timedOut
       && exitCode !== '?' && exitCode !== null;
     const finishChipHtml = hasRealExit
       ? `<span class="ptool-cmd-finish">${escapeHtmlText(
@@ -477,7 +503,8 @@ export function createToolCommandExecutionPresentation(
         )
         : timedOut
           ? translate('toolCommandExecution.timeout')
-          : translate('toolCommandExecution.exitCode', { code: exitCode });
+          : (backgrounded ? translate('bgCommand.moved')
+            : translate('toolCommandExecution.exitCode', { code: exitCode }));
     const reasonProjection = notRun
       ? boundedText(
         stringField(metadata, 'reason') || output || rawContent,
@@ -522,14 +549,15 @@ export function createToolCommandExecutionPresentation(
       : '';
 
     return `<div class="ptool-cmd-block ${statusClassName}${bodyOpen ? ' cmd-open' : ''}${hasOutput ? ' ptool-cmd-hasoutput' : ''}${outputOpen ? ' output-open' : ''}" data-rn="${escapeHtmlText(field(round, 'roundNum'))}"${collapsible ? ` data-cmd-key="${escapeHtmlText(key)}"` : ''}${hasOutput ? ` data-output-key="${escapeHtmlText(key)}"` : ''}>
-         <div class="ptool-cmd-header"${hasOutput ? ` role="button" aria-expanded="${outputOpen ? 'true' : 'false'}" data-tofu-action="_cmdHeaderToggle(this,event)"` : ''}>
+         <div class="ptool-cmd-header">
            <span class="ptool-cmd-icon">${header.iconHtml}</span>
            ${header.rootPillHtml}
-           ${descriptionHtml(description, collapsible)}
+           ${descriptionHtml(description)}
             ${grepInterceptBadgeHtml(round, metadata)}
+            ${collapsible ? foldChipHtml('cmd', bodyOpen) : ''}${hasOutput ? foldChipHtml('output', outputOpen) : ''}
             <span class="ptool-cmd-chips">${finishChipHtml}<span class="ptool-cmd-status">${escapeHtmlText(statusLabel)}</span></span>
             ${header.rightControlsHtml}
-         </div>${argumentsLimitHtml}${descriptionLimitHtml}
+         </div>${argumentsLimitHtml}${descriptionLimitHtml}${workingDirectoryHtml(argumentsProjection)}
          <pre class="ptool-cmd-code${collapsible ? ' ptool-cmd-collapsible' : ''}"><code>$ ${escapeHtmlText(command.value)}</code></pre>${commandLimitHtml}
          ${qrStripHtml(metadata)}${outputHtml}
        </div>`;

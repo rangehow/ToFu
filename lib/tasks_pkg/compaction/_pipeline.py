@@ -8,7 +8,7 @@ Public surface:
 """
 
 from lib.log import audit_log, get_logger
-from lib.tasks_pkg.compaction._constants import _TOKEN_BUDGET_REMINDER_RATIO
+from lib.tasks_pkg.compaction._constants import _CONTEXT_BUDGET_DIAGNOSTIC_RATIO
 from lib.tasks_pkg.compaction._layer1 import micro_compact
 from lib.tasks_pkg.compaction._layer2 import force_compact_if_needed
 from lib.tasks_pkg.compaction._tokens import (
@@ -18,22 +18,6 @@ from lib.tasks_pkg.compaction._tokens import (
 )
 
 logger = get_logger(__name__)
-
-_CONFIG_AUDIT_LATCH = {'done': False}
-
-
-def _audit_token_budget_constant_once() -> None:
-    """One-time §10.1 audit entry for the reminder hyperparameter."""
-    if _CONFIG_AUDIT_LATCH['done']:
-        return
-    _CONFIG_AUDIT_LATCH['done'] = True
-    try:
-        audit_log('config_change', change='token_budget_reminder',
-                  reminder_ratio=_TOKEN_BUDGET_REMINDER_RATIO,
-                  approved_by='user')
-    except Exception as e:
-        logger.debug('[TokenBudget] config_change audit skipped: %s', e)
-
 
 def _emit_compaction_analytics(task: dict, current_round: int,
                                tokens_before: int, msgs_before: int,
@@ -72,53 +56,64 @@ def _emit_compaction_analytics(task: dict, current_round: int,
     return tokens_after
 
 
-def _maybe_inject_token_budget_reminder(
+def _maybe_record_context_budget(
     messages: list,
     task: dict | None,
     *,
     used_tokens: int | None = None,
+    current_round: int | None = None,
 ) -> None:
-    """Codex-style budget visibility: tell the model its remaining window.
+    """Record content-free budget pressure, never model-facing instructions.
 
-    Fires at most once per context window (claim flag on the task dict; the
-    pipeline resets it after every successful compaction). The reminder is
-    APPENDED at the end of the message list — the cached prefix is never
-    disturbed — and marked ``_isMeta`` so turn-boundary and query-extraction
-    logic treat it as a synthetic context carrier, not a human turn.
+    Automatic compaction owns capacity. Emit at most once per context window
+    through the existing best-effort audit seam; retain only one task latch.
+    Counts describe this working-message estimate, not final wire admission
+    or the UI's last provider-reported prompt divided by the full window.
     """
-    if not task or task.get('_tokenBudgetReminderFired'):
+    if not task or task.get('_contextBudgetDiagnosticRecorded'):
         return
     try:
         used = (int(used_tokens) if used_tokens is not None
                 else _estimate_total_tokens(messages))
-        usable = _usable_context(_get_context_limit(task))
+        context_limit = _get_context_limit(task)
+        usable = _usable_context(context_limit)
     except Exception as e:
         logger.debug('[TokenBudget] estimate failed: %s', e)
         return
     if usable <= 0:
         return
     remaining = usable - used
-    if remaining <= 0 or used < int(usable * _TOKEN_BUDGET_REMINDER_RATIO):
+    if used < int(usable * _CONTEXT_BUDGET_DIAGNOSTIC_RATIO):
         return
-    _audit_token_budget_constant_once()
-    task['_tokenBudgetReminderFired'] = True
-    pct = max(0, round(remaining * 100 / usable))
-    messages.append({
-        'role': 'user',
-        'content': (
-            '<token_budget>\n'
-            f'Context budget notice: about {remaining:,} tokens remain '
-            f'(~{pct}% of the usable window). Compaction will run '
-            'automatically near the limit. Finish the current step before '
-            'starting large new explorations; keep durable findings in '
-            'files or artifacts rather than relying on long in-context '
-            'retention.\n'
-            '</token_budget>'
-        ),
-        '_isMeta': True,
-    })
-    logger.info('[TokenBudget] Reminder injected: %d tokens remaining '
-                '(%d%% of usable)', remaining, pct)
+    task['_contextBudgetDiagnosticRecorded'] = True
+    from lib.tasks_pkg.context_composer.injections import record_injection_diagnostic
+    record_injection_diagnostic(task, 'context_budget',
+        reason='automatic_compaction_owns_capacity; estimate=working_messages',
+        metrics={
+            'contextLimitTokens': context_limit, 'usableTokens': usable,
+            'usedTokens': used, 'remainingTokens': max(0, remaining),
+            'overBudgetTokens': max(0, -remaining),
+            'diagnosticRatio': _CONTEXT_BUDGET_DIAGNOSTIC_RATIO,
+        })
+    try:
+        audit_log(
+            'context_budget',
+            round=(current_round if isinstance(current_round, int)
+                   and not isinstance(current_round, bool)
+                   and current_round > 0 else None),
+            context_limit_tokens=context_limit,
+            usable_tokens=usable,
+            used_tokens=used,
+            remaining_tokens=max(0, remaining),
+            over_budget_tokens=max(0, -remaining),
+            remaining_usable_pct=max(0, round(remaining * 100 / usable)),
+            diagnostic_ratio=_CONTEXT_BUDGET_DIAGNOSTIC_RATIO,
+            token_count_kind='estimated',
+            measurement_scope='working_messages',
+            capacity_owner='automatic_compaction',
+        )
+    except Exception as e:
+        logger.debug('[TokenBudget] diagnostic audit skipped: %s', e)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -294,8 +289,8 @@ def run_compaction_pipeline(
     if compacted:
         recompose_context_after_compaction(messages, task=task)
         if task is not None:
-            # A fresh context window earns one fresh budget reminder.
-            task['_tokenBudgetReminderFired'] = False
+            # A fresh context window earns one fresh budget diagnostic.
+            task['_contextBudgetDiagnosticRecorded'] = False
             _post_l2_tokens = _emit_compaction_analytics(
                 task, current_round,
                 int(_l2_measurement.get('message_tokens') or 0),
@@ -368,16 +363,16 @@ def run_compaction_pipeline(
         except Exception as e:
             logger.debug('[Pipeline] notify_compaction failed: %s', e)
 
-    # Codex-style budget visibility (append-only, cache-prefix safe): one
-    # reminder per context window once usage crosses the threshold. Runs
+    # Content-free telemetry: one diagnostic per context window. Runs
     # AFTER every mutation step above so the estimate reflects the final
     # per-round context, and AFTER a successful compaction resets the claim.
     if adv_saved > 0:
-        _reminder_tokens = None
+        _diagnostic_tokens = None
     elif compacted:
-        _reminder_tokens = _post_l2_tokens
+        _diagnostic_tokens = _post_l2_tokens
     else:
         _measured = _l2_measurement.get('message_tokens')
-        _reminder_tokens = int(_measured) if _measured is not None else None
-    _maybe_inject_token_budget_reminder(
-        messages, task, used_tokens=_reminder_tokens)
+        _diagnostic_tokens = int(_measured) if _measured is not None else None
+    _maybe_record_context_budget(
+        messages, task, used_tokens=_diagnostic_tokens,
+        current_round=current_round)

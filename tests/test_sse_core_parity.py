@@ -181,7 +181,8 @@ class _FakeRequestsResp:
         pass
 
 
-def _run_sync(lines, model='gpt-4', status=200, raw_chunks=None):
+def _run_sync(lines, model='gpt-4', status=200, raw_chunks=None, protocol='openai',
+              base_url=None, api_key=None):
     import lib.llm.stream as smod
 
     def fake_post(url, **kw):
@@ -202,7 +203,8 @@ def _run_sync(lines, model='gpt-4', status=200, raw_chunks=None):
     try:
         body = {'model': model, 'messages': [{'role': 'user', 'content': 'hi'}],
                 'max_tokens': 100}
-        return smod._stream_chat_once(body, log_prefix='[test]')
+        return smod._stream_chat_once(body, log_prefix='[test]', api_protocol=protocol,
+                                     base_url=base_url, api_key=api_key)
     finally:
         smod.get_sync_session = orig
         _egmod.route_request = orig_route
@@ -260,7 +262,8 @@ class _FakeAsyncClient:
             self._lines, status=self._status, raw_chunks=self._raw_chunks)
 
 
-def _run_async(lines, model='gpt-4', status=200, raw_chunks=None):
+def _run_async(lines, model='gpt-4', status=200, raw_chunks=None, protocol='openai',
+               base_url=None, api_key=None):
     import lib.llm.astream as amod
     import lib.desktop.egress as _egmod
 
@@ -275,7 +278,8 @@ def _run_async(lines, model='gpt-4', status=200, raw_chunks=None):
         body = {'model': model, 'messages': [{'role': 'user', 'content': 'hi'}],
                 'max_tokens': 100}
         return asyncio.run(
-            amod._async_stream_chat_once(body, log_prefix='[test]'))
+            amod._async_stream_chat_once(body, log_prefix='[test]', api_protocol=protocol,
+                                        base_url=base_url, api_key=api_key))
     finally:
         amod.get_async_client = orig
         _egmod.route_request = orig_route

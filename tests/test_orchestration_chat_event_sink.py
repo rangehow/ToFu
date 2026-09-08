@@ -11,6 +11,38 @@ pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_failed_phase_admission_stops_dispatch_and_never_falls_back_to_root(monkeypatch):
+    import threading
+    from lib import orchestration_chat_live_turn
+    from lib.orchestration_graph import FlowEventDeliveryError
+    def fail(*args):
+        raise RuntimeError('storage unavailable')
+    monkeypatch.setattr(orchestration_chat_live_turn, 'begin_live_flow_turn', fail)
+    task = {'abort_event': threading.Event()}
+    forwarded = []
+    sink = OrchestrationChatTaskEventSink(task, lambda *args: forwarded.append(args))
+    with pytest.raises(FlowEventDeliveryError, match='storage unavailable'):
+        sink({'type': 'flow_iteration', 'flowProjection': 'autopilot'})
+    assert task['abort_event'].is_set()
+    with pytest.raises(RuntimeError, match='no writable Turn'):
+        sink({'type': 'delta', 'content': 'late'})
+    assert forwarded == []
+    from lib.orchestration._builtin_definitions import build_autopilot_definition
+    from lib.orchestration_chat_flow_adapter import FlowEventAdapter
+    from lib.orchestration_engine import FlowExecutor
+    task['abort_event'].clear()
+    task.pop('_flowTurnStartFailed')
+    adapter = FlowEventAdapter(on_stream=sink, projection='autopilot')
+    calls = []
+    outcome = FlowExecutor(
+        build_autopilot_definition(), on_event=adapter.on_event,
+        agent_runner=lambda *args: calls.append(args),
+    ).run(initial_context='Keep the original goal')
+    assert outcome['status'] == 'failed'
+    assert 'storage unavailable' in outcome['error']
+    assert calls == []
+
+
 class _TrackingLock:
     def __init__(self):
         self.entries = 0

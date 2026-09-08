@@ -1,14 +1,29 @@
-"""lib/agent_inbox — Per-task model-facing inbox for async swarm updates.
+"""lib/agent_inbox — Per-key model-facing inbox for async notifications.
 
 This is the **model's** inbox (distinct from ``lib/push.py`` which is the UI's
-push channel). When a sub-agent finishes in async swarm mode, its summary is
-formatted as ``<swarm-update>...</swarm-update>`` XML and enqueued here. The
-main task's orchestrator drains the inbox **between rounds** and prepends each
-entry as a synthetic ``user`` message, so the main agent sees sub-agent results
-naturally on its next turn — no polling, no busy-waiting.
+push channel). Producers enqueue XML payloads under a lane tag (``mode``);
+the main task's orchestrator drains the inbox **between rounds** and coalesces
+the entries into one synthetic ``user`` message, so the main agent sees async
+results naturally on its next turn — no polling, no busy-waiting.
+
+The bucket is SHARED across lanes, each with its own producer and delivery
+discipline:
+
+  * ``swarm-update`` — sub-agent completions (``<swarm-update>`` XML),
+    produced by the swarm master's worker threads.
+  * ``background-command`` — detached ``run_command`` completions; the inbox
+    item is the volatile fast-path twin of a durable ``message_queue`` row.
+  * ``user-steer`` — operator interjections into a live turn (committed
+    durable-before-wakeup via :func:`enqueue_after_durable_commit`).
+  * ``peer-msg`` — Pillar #6 peer messages (dual-written with the durable
+    queue; de-duped via :func:`consume_peer`).
+
+Lane tags let every lifecycle owner drain/clear ONLY the lane it owns (see
+the ``modes=`` / ``exclude_modes=`` filters on ``drain`` / ``clear`` /
+``has_pending`` / ``pending_items``).
 
 Design borrows from Claude Code's ``messageQueueManager.ts`` (priority-sorted
-single queue) but is scoped per task_id to avoid cross-task contamination.
+single queue) but is scoped per key to avoid cross-task contamination.
 
 This package was split from a single ``lib/agent_inbox.py`` module while keeping
 the public import path byte-identical — ``from lib.agent_inbox import X`` and
@@ -43,8 +58,9 @@ Usage::
     clear(task_id)
 
 Concurrency: every public function is thread-safe. The orchestrator runs
-``drain()`` on the main task thread; ``enqueue()`` is called from the swarm
-scheduler's worker threads.
+``drain()`` on the main task thread; ``enqueue()`` is called from producer
+threads (swarm scheduler workers, the background-command daemon, sync
+request handlers).
 """
 
 from __future__ import annotations
@@ -72,6 +88,7 @@ from ._queue import (
     has_pending,
     is_tombstoned,
     peek,
+    pending_items,
     reset_for_test,
     stats,
     untombstone,
@@ -93,6 +110,7 @@ __all__ = [
     'consume',
     'consume_peer',
     'peek',
+    'pending_items',
     'has_pending',
     'is_tombstoned',
     'clear',

@@ -28,7 +28,7 @@ def test_edit_file_label_headlines_description_not_op_enums():
              'anchor': 'e', 'content': 'f'},
         ],
     })
-    assert label == ('Edit ui/tool_rounds_rich.js (3 edits) — '
+    assert label == ('Edit ui/tool_rounds_rich.js — '
                      'refactor the display labels')
     assert 'replace' not in label.split(' — ')[0]
 
@@ -50,14 +50,14 @@ def test_edit_file_label_single_edit_and_multi_file_and_no_description():
             {'path': 'b.py', 'operation': 'replace',
              'anchor': 'x', 'content': 'y'},
         ],
-    }) == 'Edit 2 files (2 edits) — rename the helper'
+    }) == 'Edit 2 files — rename the helper'
 
     assert project_tool_display('edit_file', {
         'edits': [{'path': 'a.py', 'operation': 'replace',
                    'anchor': 'x', 'content': 'y'},
                   {'path': 'a.py', 'operation': 'replace',
                    'anchor': 'z', 'content': 'w'}],
-    }) == 'Edit a.py (2 edits)'
+    }) == 'Edit a.py'
 
 
 # ── conversation reference: title over id ────────────────────────────────

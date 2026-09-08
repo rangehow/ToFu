@@ -29,7 +29,6 @@ from lib.tasks_pkg.compaction._constants import (
     _SUMMARY_TRIGGER_RATIO,
     _summary_cooldowns,
     heuristic_floor_max_ratio,
-    real_anchor_slack,
 )
 
 logger = get_logger(__name__)
@@ -305,33 +304,10 @@ def _count_tokens_authoritative(
         auth_tokens = heuristic_tokens
         method = f'{method}+heuristic_floor'
 
-    # REAL-anchor clamp (estimate tiers only; 2026-08-01, ).
-    #   When no exact tier could validate (task cold start / the message list
-    #   was just REWRITTEN by a compaction — the usage_cache signature never
-    #   matches again), estimates are the only input, and on CJK-heavy
-    #   content BOTH can sit an order of magnitude above reality. Clamp the
-    #   count DOWN to the conversation's last provider-MEASURED prompt ×
-    #   (1 + slack). Down-only: over-triggering destroys context lossily and
-    #   irreversibly, while under-triggering is bounded by the next round's
-    #   fresh usage recording and the L3 reactive net.
-    if _is_estimate:
-        _anchor, _anchor_src = 0, 'none'
-        try:
-            from lib.tasks_pkg.compaction._real_anchor import real_prompt_anchor
-            _anchor, _anchor_src = real_prompt_anchor(conv_id, task)
-        except Exception as _ae:
-            logger.debug('[Compact] real anchor lookup failed: %s', _ae)
-        if _anchor > 0:
-            _slack = real_anchor_slack()
-            _anchor_cap = int(_anchor * (1.0 + _slack))
-            if auth_tokens > _anchor_cap:
-                logger.info('[Compact] estimate count %d (via %s) clamped to '
-                            'real anchor %d × (1+%.2f) = %d (src=%s) conv=%s '
-                            '— provider-measured yardstick wins over estimate',
-                            auth_tokens, method, _anchor, _slack, _anchor_cap,
-                            _anchor_src, conv_id[:8] if conv_id else '?')
-                auth_tokens = _anchor_cap
-                method = f'{method}+anchor:{_anchor_src}'
+    # A historical provider input is not an upper bound on a reconstructed
+    # request. Only UsageCacheCounter may reuse it, after validating the full
+    # prefix/model/envelope and adding the suffix. A cache miss must never
+    # regain authority through an unvalidated conversation/durable anchor.
     if isinstance(measurement_out, dict):
         measurement_out.update({
             'message_tokens': int(message_tokens),
@@ -930,12 +906,8 @@ def _should_force_compact(
             if (not retry_witness_invalidated
                     and witnessed_cache_read > 0 and conv_id):
                 try:
-                    from lib.tasks_pkg.cache_tracking._state import (
-                        get_warm_cache_read,
-                    )
-                    from lib.tasks_pkg.manager import task_user_id
-                    current_cache_read = int(get_warm_cache_read(
-                        conv_id, user_id=task_user_id(task)) or 0)
+                    from lib.tasks_pkg.compaction._cache_evidence import current_cache_read as read_cache
+                    current_cache_read = read_cache(task)
                     retry_witness_invalidated = (
                         current_cache_read < witnessed_cache_read)
                     if retry_witness_invalidated:

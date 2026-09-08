@@ -1091,5 +1091,178 @@ def test_terminal_result_keeps_only_the_owned_segment_home(monkeypatch):
     assert captured[-1]['segments_json']
 
 
+class TestLivePretoolWindowPlacement:
+    """Mid-turn checkpoint ordering (2026-09-05 reversed-prose report).
+
+    While the TRAILING tool batch is still live (tool cards early-announced)
+    and its prose stamp has not landed yet, the narration sits in the
+    accumulators. A checkpoint assembly in that window must place the
+    accumulator prose AHEAD of the batch's first tool card (wire order) —
+    emitting it at the tail renders the thinking/narration BELOW the tool
+    rows it preceded, and the DELTA_RESET that follows the prelude discard
+    then blanks it until the round_end checkpoint.
+    """
+
+    @staticmethod
+    def _round(status='executing', **kw):
+        r = {
+            'roundNum': 1, 'llmRound': 0,
+            'toolName': 'web_search', 'toolCallId': 'call_1',
+            'toolArgs': '{"q": "fable 5.1"}', 'toolContent': None,
+            'status': status,
+        }
+        r.update(kw)
+        return r
+
+    @staticmethod
+    def _task(rounds, **over):
+        task = {
+            'id': 'task_livewindow',
+            'convId': 'conv_livewindow',
+            'toolRounds': rounds,
+            'content': '',
+            'thinking': '',
+        }
+        task.update(over)
+        return task
+
+    def test_live_unstamped_trailing_batch_pulls_accumulator_prose_before_tools(self):
+        from lib.tasks_pkg.segments import assemble_segments
+        task = self._task(
+            [self._round('executing')],
+            thinking='先查证发布信息',
+            content='我先查证 Fable 5.1 的发布信息。',
+        )
+        segs = assemble_segments(task)
+        assert [s['type'] for s in segs] == ['thinking', 'text', 'tool_use']
+        assert segs[0]['terminal'] is True
+        assert segs[0]['blockId'] == 'thinking:terminal'
+        assert segs[1]['terminal'] is True and segs[1]['deliverable'] is True
+        assert segs[1]['text'] == '我先查证 Fable 5.1 的发布信息。'
+
+    def test_wire_view_stays_pure_when_terminal_prose_moves_before_tools(self):
+        from lib.tasks_pkg.segments import assemble_segments
+        from lib.tasks_pkg.segments._derive import _rounds_view_from_segments
+        task = self._task(
+            [self._round('executing')],
+            content='我先查证 Fable 5.1 的发布信息。',
+        )
+        segs = assemble_segments(task)
+        view = _rounds_view_from_segments(segs)
+        assert len(view) == 1
+        assert 'assistantContent' not in view[0]
+        assert view[0].get('toolCallId') == 'call_1'
+
+    def test_settled_trailing_batch_keeps_accumulator_prose_at_tail(self):
+        """A completed prefetch-style batch is never prose-stamped: the
+        accumulator prose is the upcoming deliverable and stays at the tail
+        (pre-change behavior preserved)."""
+        from lib.tasks_pkg.segments import assemble_segments
+        task = self._task(
+            [self._round('completed')],
+            thinking='收尾思考',
+            content='最终答复',
+        )
+        segs = assemble_segments(task)
+        assert [s['type'] for s in segs] == ['tool_use', 'thinking', 'text']
+        assert segs[1]['terminal'] is True and segs[2]['terminal'] is True
+
+    def test_stamped_live_batch_keeps_accumulator_prose_at_tail(self):
+        """Defensive: stamp already landed AND accumulators still hold prose
+        (should not happen — the prelude discard pairs them — but the gate
+        must not duplicate/reorder)."""
+        from lib.tasks_pkg.segments import assemble_segments
+        task = self._task(
+            [self._round('executing',
+                         assistantContent='我先查证 Fable 5.1 的发布信息。')],
+            content='后续补充',
+        )
+        segs = assemble_segments(task)
+        assert [s['type'] for s in segs] == ['text', 'tool_use', 'text']
+        assert segs[0]['text'] == '我先查证 Fable 5.1 的发布信息。'
+        assert segs[0].get('terminal') is None
+        assert segs[2]['terminal'] is True
+
+    def test_live_batch_without_accumulator_prose_is_unchanged(self):
+        from lib.tasks_pkg.segments import assemble_segments
+        task = self._task([self._round('executing')])
+        segs = assemble_segments(task)
+        assert [s['type'] for s in segs] == ['tool_use']
+
+
+class TestPostParseSegmentMirrorRefresh:
+    """parse_tool_calls heals the at-rest segment mirror after the prelude
+    discard: the batch's prose is stamped onto its first round entry at parse
+    time, so the mirror can render the narration ahead of the tool cards
+    immediately instead of staying blank until the round_end checkpoint."""
+
+    @staticmethod
+    def _task():
+        import threading
+        return {
+            'id': 'task_parserefresh',
+            'convId': 'conv_parserefresh',
+            '_userId': 1,
+            'model': 'test-model',
+            'events': [],
+            'events_lock': threading.Lock(),
+            'toolRounds': [],
+            'aborted': False,
+            'content': '',
+            'thinking': '',
+            '_tool_schema': [
+                {'type': 'function',
+                 'function': {'name': 'fake_lookup', 'parameters': {}}},
+            ],
+            # The stale mirror left by the pre-parse checkpoint: accumulator
+            # prose rendered as a terminal segment (blanked by the DELTA_RESET
+            # that followed the discard).
+            'segments': [{
+                'type': 'text', 'text': '我先查证 Fable 5.1 的发布信息。',
+                'blockId': 'text:terminal',
+                'deliverable': True, 'terminal': True,
+            }],
+        }
+
+    @staticmethod
+    def _assistant_msg():
+        return {
+            'content': '我先查证 Fable 5.1 的发布信息。',
+            'tool_calls': [{
+                'id': 'call_1', 'type': 'function',
+                'function': {'name': 'fake_lookup', 'arguments': '{}'},
+            }],
+        }
+
+    def test_parse_refreshes_mirror_so_narration_precedes_tool_cards(self):
+        from lib.tasks_pkg.tool_dispatch.api import parse_tool_calls
+        task = self._task()
+        parsed, _ = parse_tool_calls(
+            self._assistant_msg(), task, round_num=0, tool_round_num=0,
+            project_enabled=False)
+        assert len(parsed) == 1
+        # The stamp landed on the round entry ...
+        assert (task['toolRounds'][0].get('assistantContent')
+                == '我先查证 Fable 5.1 的发布信息。')
+        # ... and the mirror immediately reflects it AHEAD of the tool card.
+        segs = task['segments']
+        assert [s['type'] for s in segs] == ['text', 'tool_use']
+        assert segs[0]['text'] == '我先查证 Fable 5.1 的发布信息。'
+        assert segs[0].get('terminal') is None
+        assert all(not s.get('terminal') for s in segs)
+
+    def test_parse_skips_refresh_while_accumulators_still_hold_prose(self):
+        """No discard ran (defensive state) ⇒ the live terminal blocks own
+        the narration; the mirror must be left untouched."""
+        from lib.tasks_pkg.tool_dispatch.api import parse_tool_calls
+        task = self._task()
+        task['content'] = '仍在叙述'
+        stale = task['segments']
+        parsed, _ = parse_tool_calls(
+            self._assistant_msg(), task, round_num=0, tool_round_num=0,
+            project_enabled=False)
+        assert len(parsed) == 1
+        assert task['segments'] is stale
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v', '-s'])

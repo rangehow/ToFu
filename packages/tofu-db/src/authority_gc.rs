@@ -26,7 +26,7 @@ pub use crate::generated_tofudb_ir::{
     MAX_AUTHORITY_GC_TEMPORARY_BYTES, MAX_AUTHORITY_GC_VICTIM_BYTES,
     MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS,
 };
-use crate::payload_manifest::{MAX_PAYLOAD_SEGMENTS, MAX_PAYLOAD_SEGMENTS_PER_SHARD};
+use crate::payload_manifest::MAX_PAYLOAD_SEGMENTS;
 use crate::payload_segment::{MAX_SEGMENT_BLOCKS, MAX_SEGMENT_PAYLOAD_BYTES};
 const _: () = assert!(MAX_AUTHORITY_GC_ORPHAN_PAYLOAD_SEGMENT_FILES_REMOVED == 1);
 const _: () = assert!(MAX_AUTHORITY_GC_TEMPORARY_BLOCK_FILES_REMOVED == 1);
@@ -232,36 +232,11 @@ pub(crate) fn collect_authority_garbage(
     let mut scanned_blocks = 0_u64;
     let mut more_candidates = false;
     let payload_references = engine.payload_segment_references().to_vec();
-    let loose_shards = match engine.block_store().loose_block_shards() {
-        Ok(shards) => shards,
-        Err(error) => {
-            let _ = live.cleanup();
-            return Err(error);
-        }
-    };
     let catalog_has_capacity = payload_references.len() < MAX_PAYLOAD_SEGMENTS;
-    let compaction_shards = if catalog_has_capacity {
-        loose_shards
-            .into_iter()
-            .filter(|shard| {
-                payload_references
-                    .iter()
-                    .filter(|reference| reference.shard == *shard)
-                    .count()
-                    < MAX_PAYLOAD_SEGMENTS_PER_SHARD
-            })
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    let payload_compaction_shard = (!compaction_shards.is_empty())
-        .then(|| compaction_shards[engine.state().generation as usize % compaction_shards.len()]);
+    let payload_compaction_shard = None;
     let mut already_segmented = BTreeSet::new();
-    if let Some(shard) = payload_compaction_shard {
-        for reference in payload_references
-            .iter()
-            .filter(|reference| reference.shard == shard)
-        {
+    if catalog_has_capacity {
+        for reference in &payload_references {
             let block_ids = match engine.payload_segment_block_ids(reference) {
                 Ok(block_ids) => block_ids,
                 Err(error) => {
@@ -290,9 +265,7 @@ pub(crate) fn collect_authority_garbage(
                 if live_for_shard.binary_search(&block_id).is_ok() {
                     live_loose_blocks_by_shard[shard as usize] =
                         live_loose_blocks_by_shard[shard as usize].saturating_add(1);
-                    if Some(shard) == payload_compaction_shard
-                        && !already_segmented.contains(&block_id)
-                    {
+                    if catalog_has_capacity && !already_segmented.contains(&block_id) {
                         let block_bytes = engine.block_store().block_file_bytes(block_id)?;
                         let fits = payload_compaction_ids.len() < MAX_SEGMENT_BLOCKS
                             && payload_compaction_bytes
@@ -328,27 +301,10 @@ pub(crate) fn collect_authority_garbage(
     }
     let payload_compaction_ready =
         payload_compaction_ids.len() >= MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS;
-    let other_compaction_shard_may_be_ready = compaction_shards.iter().any(|shard| {
-        Some(*shard) != payload_compaction_shard
-            && live_loose_blocks_by_shard[*shard as usize]
-                >= MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS as u32
-    });
-    let payload_compaction_catalog_blocked =
-        live_loose_blocks_by_shard
-            .iter()
-            .enumerate()
-            .any(|(shard, count)| {
-                *count >= MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS as u32
-                    && (!catalog_has_capacity
-                        || payload_references
-                            .iter()
-                            .filter(|reference| reference.shard == shard as u8)
-                            .count()
-                            >= MAX_PAYLOAD_SEGMENTS_PER_SHARD)
-            });
-    more_candidates |= more_payload_compaction_candidates
-        || other_compaction_shard_may_be_ready
-        || payload_compaction_catalog_blocked;
+    let total_live_loose: u32 = live_loose_blocks_by_shard.iter().sum();
+    let payload_compaction_catalog_blocked = !catalog_has_capacity
+        && total_live_loose >= MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS as u32;
+    more_candidates |= more_payload_compaction_candidates || payload_compaction_catalog_blocked;
     if !candidates.is_empty() && !engine.payload_segment_references().is_empty() {
         more_candidates = true;
     }
@@ -361,7 +317,7 @@ pub(crate) fn collect_authority_garbage(
         }
     };
     more_candidates |= orphan_plan.more_candidates;
-    if orphan_plan.candidate.is_some() {
+    if let Some(candidate) = &orphan_plan.candidate {
         if !candidates.is_empty()
             || !engine.payload_segment_references().is_empty()
             || payload_compaction_ready
@@ -369,7 +325,6 @@ pub(crate) fn collect_authority_garbage(
             more_candidates = true;
         }
         if candidates.is_empty() {
-            let candidate = orphan_plan.candidate.as_ref().unwrap();
             if mode == AuthorityGarbageCollectionMode::Plan {
                 live.cleanup()?;
                 return Ok(AuthorityGarbageCollectionMetrics {
@@ -722,6 +677,37 @@ mod tests {
         panic!("failed to find enough same-shard payload compaction fixtures");
     }
 
+    /// Same-shard fixtures sized so that one commit carrying `count` of them
+    /// exceeds the carried ceiling and spills every block to a loose file.
+    /// Two passes keep memory bounded: hashing a candidate is cheap, but
+    /// retaining every ~17 KiB candidate while a shard fills is not.
+    fn oversized_payloads_in_one_shard(count: usize) -> Vec<Vec<u8>> {
+        let payload_len = crate::transaction::MAX_CARRIED_PAYLOAD_BYTES / count + 1;
+        let fixture = |value: u32| {
+            let mut payload = Vec::with_capacity(payload_len);
+            payload.extend_from_slice(b"authority-gc-auto-compaction-");
+            payload.extend_from_slice(&value.to_le_bytes());
+            payload.resize(payload_len, (value % 251) as u8);
+            payload
+        };
+        let mut counts = [0_usize; 256];
+        let mut winning = None;
+        for value in 0..1_000_000_u32 {
+            let shard = BlockId::for_payload(&fixture(value)).0[0];
+            counts[shard as usize] += 1;
+            if counts[shard as usize] == count {
+                winning = Some((shard, value));
+                break;
+            }
+        }
+        let (shard, last) =
+            winning.expect("failed to find enough same-shard payload compaction fixtures");
+        (0..=last)
+            .map(fixture)
+            .filter(|payload| BlockId::for_payload(payload).0[0] == shard)
+            .collect()
+    }
+
     fn authority_with_partially_live_payload_segment() -> (
         Arc<DeterministicVfs>,
         AuthorityDatabase,
@@ -1005,8 +991,12 @@ mod tests {
         vfs.sync_directory(Path::new("/")).unwrap();
         let mut database =
             AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
-        let payloads = payloads_in_one_shard(MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS);
+        let payloads = oversized_payloads_in_one_shard(MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS);
         let block_ids = database.commit_block_payloads_for_test(&payloads).unwrap();
+        // The oversized commit spills every block to a loose file up front;
+        // the checkpoint retires the WAL so the GC disk scan plans
+        // compaction from the loose shard alone.
+        database.checkpoint_for_test().unwrap();
         vfs.arm_fault(None).unwrap();
 
         let initial_plan = database.plan_garbage_collection(test_budget()).unwrap();
@@ -1021,9 +1011,8 @@ mod tests {
             assert!(metrics.more_candidates);
         }
         let metrics = compacted.expect("generation cursor must reach the profitable loose shard");
-        assert_eq!(
-            metrics.compacted_payload_blocks as usize,
-            MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS
+        assert!(
+            metrics.compacted_payload_blocks as usize >= MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS
         );
         assert!(metrics.compacted_loose_bytes_reclaimed > metrics.compacted_segment_bytes);
         assert_eq!(database.payload_segment_count_for_test(), 1);

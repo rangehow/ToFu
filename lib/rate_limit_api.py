@@ -86,7 +86,7 @@ class RateDecision:
 
 # TODO(enterprise, R5): per-process token buckets make every quota ×N behind
 # replicas; re-key onto lib.runtime_state_store counters.
-# docs/ENTERPRISE_READINESS_AUDIT.md
+# docs/ENTERPRISE_EVOLUTION.md
 # ── Storage: per-key bucket pair, keyed by key_id ──
 _lock = threading.Lock()
 _state: OrderedDict[str, dict] = OrderedDict()

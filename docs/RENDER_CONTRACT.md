@@ -4,6 +4,40 @@ This document defines the current browser rendering invariants. The storage
 and wire authority is [CONVERSATION_SYNC_V3.md](CONVERSATION_SYNC_V3.md); the
 frontend module boundary is [FRONTEND_ARCHITECTURE.md](FRONTEND_ARCHITECTURE.md).
 
+Command cards show the supplied `working_dir` argument separately from command
+text in both running and settled states. It is escaped and capped at 4,096
+characters; missing arguments do not invent a directory. This is requested
+execution context, not evidence that a process started or resolved that path.
+
+## Composer selection on navigation
+
+An empty composer restores the selected conversation's saved model and project;
+turn provenance is historical evidence, not a replacement settings source.
+Draft protection counts sendable textarea content and pending attachments, not
+log-cleanup suggestions derived from an earlier paste. Those asynchronous
+suggestions can outlive the input and must not suppress both selection restores.
+The sidebar regression harness `tests/conversation_composer_switch.test.cjs`
+executes the retained pointer handler, lifecycle and restore adapters for warm
+and cold opens, and verifies that real text/attachment drafts remain protected.
+
+## System interventions
+
+Engine-authored interventions use the existing `system_note` segment and
+`system-note` block, never assistant prose or synthetic tool executions.
+The canonical fields/actions live in `contracts/conversation_sync_v3.yaml`.
+Records carry stable attempt-scoped identities, their insertion round, a reason
+code, and plain-text details. Actions distinguish appended context, requested
+continuation, tool-policy changes, and execution stops. Appending a prompt is
+not evidence of provider delivery or model consumption.
+
+Blocks are collapsed by default; labels are localized and dynamic reason/body
+text uses `textContent`. Live snapshots, settled repairs and reload preserve
+ordered notes without duplicating stable IDs. Unknown historical kinds fall
+back to a generic note. Display records never become assistant replay content.
+New records bound bodies to 16,384 characters and reasons to 160; producers
+retain their bounded trigger/retry budgets. Retired serial-efficiency prompts
+are not reconstructed for old turns that retained only content-free witnesses.
+
 ## Authority
 
 The browser renders an immutable projection of the v3 turn snapshot:
@@ -43,6 +77,17 @@ The implementation owners are:
 | image/external-asset source allowlist | `frontend/src/conversation/presentation/image-source-policy.ts` |
 | composition | `frontend/src/core/turn-runtime.ts` |
 
+Command-tool settlement is not subprocess completion: a provisional
+`exitCode='background'` receipt says **Moved to background**, without a failure
+class, numeric-exit label, or invented terminal outcome. The later durable
+completion carries `BackgroundCommandCompletion` evidence in queue snapshots,
+fresh-turn input, and mid-turn injection previews. Queue membership means
+**delivery unconfirmed**, not a still-running process. Cards show escaped,
+expandable output bounded to 2,000 characters with explicit truncation and
+**Cancel delivery** wording. Mid-turn receipts acknowledge model delivery only
+after verified provider completion; fresh-turn evidence says submitted as input.
+Snapshot/replay/reload use the same fields, not a browser command-state registry.
+
 ## Identity and ordering
 
 - `turnId` is the only durable rendered identity.
@@ -55,6 +100,12 @@ The implementation owners are:
   full snapshot.
 - Delta snapshots are patch authorities only. They cannot authorize deletion
   of identities they omit.
+- The default Surface mounts at most 80 turns per lane. When the tail window
+  advances, remove outgoing turns before placing new ones; retained subtrees
+  stay in place. Advancing by one turn costs one removal and one insertion,
+  not 79 DOM moves and repeated long-text layout. Windowing never deletes
+  durable history. `test_surface_tail_window_keeps_retained_turns_in_place`
+  verifies this mutation budget alongside the existing history/scroll tests.
 
 ## Revision rules
 
@@ -86,13 +137,30 @@ a newly adopted attempt when the carried `turnState` proves the transition.
 Events are idempotent by `(attemptId, seq)`. Events arriving before their turn
 snapshot are buffered by `turnId` and replayed after the turn appears.
 
-Live phase text rides event payloads and is cleared by terminal settlement. It
-is not durable turn projection state, so a stale “thinking” or “running tool”
-label cannot survive reload. Independently, the timing-trace projector keeps a
+Live phase text rides event payloads and is cleared by terminal settlement. A
+full snapshot may restore `activeAttemptPhase` from the latest retained event
+of its current running main-lane attempt at the same read head. It is not
+durable turn projection state. Independently, the timing-trace projector keeps a
 bounded historical receipt of each phase transition (`detailKey/detailArgs`,
 interval, repeat count) for postmortem inspection. That history is diagnostic
 evidence only: it never repopulates live phase state or renders as a chat
 timeline row.
+
+A running Turn with no live phase does not prove worker startup or transport
+recovery: older snapshots omit phases and semantic deltas clear them. Its
+fallback says “Waiting for an execution status update…”, never claims a
+resynchronization, and never uses `workerStarting`; that label requires an
+explicit worker-entry phase. A streaming text/thinking tail suppresses the
+empty-phase placeholder. Pending task binding still distinguishes scheduler
+preparation from executor queue residence.
+
+`llm_thinking` denotes an opened model-generation round, not evidence of
+reasoning-channel output. Its live row preserves localized `detailKey` and
+`detailArgs` (generating a reply or analyzing tool results), then raw detail or
+label; a bare phase falls back to localized “Generating response…”. It never
+gets a thinking character counter or thinking-specific styling. The distinct
+`thinking_active` content-stream status uses the same “Thinking…” wording as
+an active reasoning disclosure.
 
 When an authored Flow role tier resolves to a model other than the one selected
 for the conversation, every producer phase carries the structured
@@ -111,6 +179,14 @@ never competes for or consumes the durable Turn's phase. In particular, an
 optimistic human echo followed by `transient:send-preparation` may render below
 an already-running assistant, but that assistant must retain its status block
 and may not become a header-only row during send/translation preparation.
+
+Goal virtual-user settlement follows the same single-Turn rule. A terminal
+backend segment timeline is authoritative chronology and must not be replaced
+by stale live thinking/text segments. If the terminal payload omits rich tool
+rounds, the transient overlay retains and settles its canonical rounds so tool
+names, result bodies, Request Inspector identity, and timing remain available;
+only a terminal payload with no segment timeline may synthesize segments from
+those retained rounds.
 
 ## Projection and DOM rules
 
@@ -206,19 +282,28 @@ and may not become a header-only row during send/translation preparation.
   Protocol repair text
   is not automatically browser copy. For `todo_write`, the model receipt keeps
   stable item IDs and exact `sync`/`replan` rejection reasons; the browser card
-  renders the structured current checklist, labels rejected/no-op attempts only
-  as “checklist unchanged,” and counts/history-lists accepted revisions only.
-  A rejection never replaces the last accepted state or exposes remediation
-  jargon such as missing IDs to the person reading the conversation.
+  renders the structured current checklist in both retained and turn-native
+  paths. Explicit `todoRejected` / `todoNoop` metadata distinguishes “Update
+  rejected” from valid “Checklist unchanged” no-ops in the collapsed label;
+  accepted changes retain their checklist progress label. Every audit round
+  remains visible, while revision counts/history include accepted changes only.
+  Rejections never replace accepted state. Their expanded card preserves the
+  full refusal reason as escaped text; result prose never overrides an explicit
+  verdict.
 - Conversation-scoped swarm push frames are presentation telemetry only. Their
   agent phase and bounded tool-call timeline are rebased onto the latest
   authoritative Turn on every Surface render; a cached swarm overlay never
   replaces that Turn or hides newer parent content/tool revisions. Terminal
   swarm presentation hydrates authority before the overlay is released. The
-  overlay rebinds each `tool_use` segment to rich round data by exact
-  `toolCallId`; `llmRound` is attempt-local and can repeat after continue or
-  regenerate, so it is only an id-less legacy fallback when the match is unique
-  within the segment's attempt/task scope. The durable snapshot keeps each
+  overlay rejects telemetry naming a durably settled swarm execution before
+  unmatched launch fallback can create a provisional panel. A new execution ID
+  still admits planning, spawning, and follow-up `spawn_more`, including pushes
+  before tool settlement and launches on a completed parent Turn. The overlay
+  rebinds each `tool_use` segment to rich round data by exact `toolCallId` and
+  ordered occurrence within its execution scope (attempt ID first, otherwise
+  task ID; unscoped pairs match only unscoped pairs). `llmRound` is attempt-local
+  and can repeat after continue or regenerate, so it is only an id-less legacy
+  fallback when the match is unique within the segment's attempt/task scope. The durable snapshot keeps each
   child's complete final answer, but its
   reconstructible tool timeline keeps at most 30 rows and 32 KiB of serialized
   row/detail data per agent; recent evidence wins and every row/detail elision

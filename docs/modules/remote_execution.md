@@ -60,6 +60,38 @@ state machine.
 There is no environment switch that disables addressing. Feature switches may
 hide remote-worktree UX, but cannot weaken bridge authority.
 
+## Client execution and connection lifecycle
+
+`desktop/agent_connection.py` owns polling-worker start/stop/restart for both
+launchers. Remote full-app control receives the same status, configured-route
+repair and browser-relay hooks as agent-only control. Local full-app control
+retains its process capability and never discovers remote destinations. A
+worker still alive after a five-second stop join remains tracked; restart
+refuses to overlap it. This does not promise cancellation of all local work.
+
+The agent executes ordinary commands and egress streams outside the poll
+thread. Running and completed IDs share a process-local, 65,536-entry replay
+ledger; reaching the ceiling refuses new execution until restart rather than
+evicting protection. It is not restart-durable exactly-once execution.
+Concurrency derives once from the shared resource probe (effective CPU and
+memory headroom): 1–4 workers, lean fallback 1, with
+`TOFU_DESKTOP_EXECUTION_WORKERS` clamped to 1–4. Result transport is bounded at
+512 items/16 MiB and stream transport at 256 items/2 MiB. Producers wait for
+acknowledgement capacity rather than dropping queued frames. The entire
+response command batch is validated before uploaded outbox prefixes are
+acknowledged; HTML login pages and malformed envelopes retain those prefixes.
+Retry waits are jittered, capped at 60 seconds and interruptible by stop.
+
+Direct probes and polls honor Requests proxy/NO_PROXY and CA settings, suppress
+ambient netrc credentials, and do not follow redirects. Authentication errors
+include the actual flat `bridge_auth_required` envelope. Existing credentials
+may fail over only to explicitly configured attach candidates: LAN health,
+public boot IDs and arbitrary discovered SSH hosts do not authorize bearer
+reuse. Discovery is still available for initial setup. Rebuilding a lost SSH
+tunnel automatically requires an explicitly authorized destination, not an
+inferred server identity. Browser-assisted SSO transport depends on a live,
+authenticated page; unattended service needs a gateway-supported device route.
+
 ## Permissions
 
 The agent reconstructs its permission floor on startup. Read, write, execute,
@@ -126,6 +158,11 @@ managed v2 bundle only after the owning device confirms the stop. Bring-up reuse
 launch-probed task concurrency budget with a hard two-worker ceiling and no
 pending queue; saturation returns a retryable `503` rather than creating
 another ten-minute download thread.
+Catalog refreshes are event-driven rather than periodic: OAuth completion,
+account deletion, bring-up, and the settings status poll each re-sync, and
+every adapter codex answer carrying fresh x-codex-* quota headers
+opportunistically triggers a TTL-throttled (1 h) background re-sync that
+re-provisions only when the upstream model set actually changed.
 
 ## Pairing and distribution
 
@@ -173,6 +210,21 @@ Chromium before checking and packaging its graph.
 Startup role selection and tray strings are shared code with parity tests.
 Installers may differ by platform, but artifact kind, version, checksum,
 architecture, and attachment behavior remain explicit metadata.
+
+Mirrored downloads are checked against the advertised byte count and, when
+present, the release API's `sha256:` digest before atomic publication. Invalid
+or mismatched metadata keeps the previous installer intact. A changed digest
+invalidates same-name/same-size reuse. Releases lacking digest metadata remain
+legacy downloads, not signature-verified updates: a locally computed checksum
+alone is not publisher authentication. This distribution cache is not an
+installed-client automatic updater; platform signing and install/upgrade/
+rollback certification remain separate release requirements.
+
+The cache records `integrity_source` as `github-api-digest` or `computed-only`
+and retains `release_sha256` separately from the measured hash. Digest-bearing
+cache hits hash the local bytes to catch same-size corruption. Acquisition is
+sequential with a 2 GiB per-file ceiling and a 30-minute deadline checked while
+streaming (individual network reads retain their timeout).
 
 ## Failure semantics
 

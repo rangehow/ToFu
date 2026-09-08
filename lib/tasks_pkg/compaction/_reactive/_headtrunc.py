@@ -1,7 +1,7 @@
 """Phase 4 last-resort head truncation — drop oldest non-system messages.
 
 Byte-target and token-target variants both honour the objective anchor (the
-first real user message / north-star goal) via ``_objective_anchor_index``
+opening-request evidence, not necessarily the current goal) via ``_objective_anchor_index``
 from the ``_layer2`` sub-package.
 
 TOOL-PAIRING SAFETY (2026-07): head truncation drops the oldest messages, and
@@ -22,7 +22,12 @@ malformed head — so this net can NEVER itself produce a 400.
 import json
 
 from lib.log import audit_log, get_logger
-from lib.tasks_pkg.compaction._layer2._anchor import _objective_anchor_index
+from lib.tasks_pkg.compaction._constants import _COMPACT_TOOL_NAME
+from lib.tasks_pkg.compaction._history import history_entries, is_human_message
+from lib.tasks_pkg.compaction._layer2._anchor import (
+    _apiform_tool_rounds, _objective_anchor_index,
+)
+from lib.tool_history_pairing import adjacent_tool_call_result_pairs
 from lib.tasks_pkg.compaction._reactive._measure import _estimate_wire_bytes
 from lib.tasks_pkg.compaction._tokens import (
     _estimate_msg_tokens,
@@ -71,6 +76,10 @@ def _strip_leading_orphan_tools(messages: list, system_end: int) -> int:
     # user row) so we only strip tool results that would actually be orphaned.
     while i < n and isinstance(messages[i], dict) \
             and messages[i].get('role') != 'tool':
+        # Reaching a real call starts an adjacent result run, not an orphan
+        # prefix. Never walk past its parent and delete the valid results.
+        if messages[i].get('role') == 'assistant' and messages[i].get('tool_calls'):
+            return 0
         i += 1
     while i < len(messages) and isinstance(messages[i], dict) \
             and messages[i].get('role') == 'tool':
@@ -109,22 +118,35 @@ def _head_truncate(messages: list, task: dict | None = None,
         else:
             break
 
-    # OBJECTIVE ANCHOR — the first real user message (the north-star goal)
-    #   must survive even a last-resort head-truncate.  Compute the drop
-    #   position that SKIPS it: normally we pop the oldest non-system message
-    #   (``system_end``); if that is the anchor, pop the one AFTER it instead so
-    #   the goal is never discarded.  A tiny helper keeps both trim loops
-    #   (byte-target and token-target) honouring the anchor identically.
+    # Floors are structural, not a decree that the opening ask is still the
+    # task. Never truncate the latest human steering while protecting history.
+    anchor = _objective_anchor_index(messages)
+    current = next((i for i in range(len(messages) - 1, -1, -1)
+                    if is_human_message(messages[i])), None)
+    protected = {id(message) for i, message in enumerate(messages)
+                 if i in (anchor, current) or history_entries(message)}
+    newest_complete = False
+    for start, end in reversed(_apiform_tool_rounds(messages)):
+        calls = messages[start]['tool_calls']
+        complete = (len(adjacent_tool_call_result_pairs(messages[start:end]))
+                    == len(calls) == end - start - 1)
+        synthetic = all(call.get('function', {}).get('name') == _COMPACT_TOOL_NAME
+                        for call in calls)
+        if not complete or (not newest_complete and not synthetic):
+            protected.update(id(message) for message in messages[start:end])
+            if complete:
+                newest_complete = True
+
     def _drop_pos() -> int:
-        anchor = _objective_anchor_index(messages)
-        if anchor == system_end and len(messages) > system_end + 1:
-            return system_end + 1  # protect the anchor; drop the next-oldest
-        return system_end
+        return next((i for i in range(system_end, len(messages))
+                     if id(messages[i]) not in protected), len(messages))
 
     def _pop_block(pos: int) -> list:
         """Pop the pairing-safe unit at ``pos`` and return the popped messages
         (a whole tool-call round when ``pos`` starts on assistant.tool_calls,
         else the single message)."""
+        if pos >= len(messages):
+            return []
         end = _round_block_end(messages, pos)
         block = messages[pos:end]
         del messages[pos:end]
@@ -176,7 +198,7 @@ def _head_truncate(messages: list, task: dict | None = None,
         est_before = max(1, _estimate_total_tokens(messages))
         frac_to_drop = (reported_token_count - target) / reported_token_count
         heuristic_target = int(est_before * (1 - frac_to_drop))
-        logger.warning('[HeadTruncate] Using upstream-reported count: '
+        logger.warning('[HeadTruncate] Using supplied count: '
                        'reported=%d target=%d → shed %.0f%% '
                        '(heuristic %d → %d)',
                        reported_token_count, target, frac_to_drop * 100,
@@ -202,7 +224,7 @@ def _head_truncate(messages: list, task: dict | None = None,
 
     if dropped:
         logger.warning('[HeadTruncate] Dropped %d oldest messages to fit context '
-                       '(tokens now ~%d, target ~%d, reported_api=%s)',
+                       '(tokens now ~%d, target ~%d, supplied_count=%s)',
                        dropped, cur_tokens, target_measure,
                        f'{reported_token_count:,}' if reported_token_count else 'n/a')
         audit_log(event_name,

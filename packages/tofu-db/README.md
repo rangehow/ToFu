@@ -37,8 +37,8 @@ AAD. Clear payloads are capped at 4 MiB and never appear in encoded records.
 `authority.rs` now captures one record with each configured business commit,
 uses owner-scoped OCC metadata for continuous logical sequences and pending-byte
 backpressure, spills records above 4 KiB to atomically referenced blobs, and
-deletes them only through ordered, idempotent ACK transactions. Aggregate
-multi-owner admission and the semantic executor are still absent.
+deletes them only through ordered, idempotent ACK transactions. Semantic execution uses the authenticated owner/tenant boundary described below;
+application authority selection remains prohibited.
 `outbox_publisher.rs` validates complete contiguous batches before external I/O,
 caps each batch at 64 records/8 MiB, releases the database boundary before sink
 calls, accepts only identity-matched durable receipts, and records content-free
@@ -69,9 +69,13 @@ Application wiring is still absent.
 Explicit incremental
 backup checkpoints the source, copies only missing reachable immutable blocks,
 publishes a checksummed generation manifest last, and can rebuild an empty
-offline target after a bounded capacity preflight, using a durable generation-pinned resumable marker. Retention GC uses restartable plans and at most 1 GiB of on-volume sorted mark runs instead of a database-sized in-memory set. It does **not** implement the remaining 112 Tofu semantic operations, general query
-execution, migration, GC spill scale certification, signed release packaging,
-or Supervisor selection path.
+offline target after a bounded capacity preflight, using a durable generation-pinned resumable marker. Retention GC uses restartable plans and at most 1 GiB of on-volume sorted mark runs instead of a database-sized in-memory set. The generated `contracts/tofudb_ir_v1.json` currently declares all 331
+operations executable.
+General query execution, complete migration/cutover certification, signed release
+packaging, and Supervisor selection remain release work. The certification gates
+in `docs/STORAGE.md` still prohibit production selection; there is no mandatory
+calendar-duration shadow run. Passing local tests or selected benchmarks does
+not waive correctness, durability, migration/rollback, or resource checks.
 
 `protocol.rs` implements the transport-only `storage.v2` machine contract in
 `contracts/storage_v2.json`: canonical flat MessagePack, fixed numeric fields,
@@ -84,9 +88,9 @@ frozen operations, matches envelope identity against an authenticated owner and
 tenant scope, enforces negotiated schema/deadline limits, and requires a
 command ID for every command or maintenance operation independently of legacy
 receipt policy. Authenticated connections may assemble one identity-bound
-artifact request from at most 20 ordered 1 MiB chunks and retain every chunk's
+artifact or task-result checkpoint request from at most 64 ordered 1 MiB chunks and retain every chunk's
 share of the process-wide frame budget through dispatch; single-frame requests
-remain capped at 8 MiB. Successful responses above 1 MiB use at most 20
+remain capped at 8 MiB. Successful responses above 1 MiB use at most 64
 identity-bound chunks followed by an empty success terminator, and the Python
 differential client validates and transparently reassembles the same sequence.
 `server.rs` fixes authenticated owner/tenant authority for one
@@ -125,9 +129,8 @@ rotate. Readiness exposes only these aggregate observations and selected bounds.
 `contracts/tofudb_ir_v1.json` is the generated machine authority for Schema IR
 and Transaction IR bounds. `transaction_ir.rs` interprets owner-scoped entity
 reads, conditional writes, result projections, receipts, and logical outbox
-capture in one OCC transaction. `semantic_executor.rs` compiles or routes 86
-artifact, compaction-archive, conversation, Turn, model-routing, provider,
-worker-job, desktop, record, system, and indexed-event operations into that IR with
+capture in one OCC transaction. `semantic_executor.rs` and its domain modules compile or route the executable
+operations declared by that generated contract into the IR with
 storage.v1 JSON, Unicode character, owner, timestamp, receipt, retention, and
 error semantics. Conversation creation commits its blob-capable header, exact
 owner count, search-dirty marker, receipt/outbox, and tenant-global ID claim
@@ -338,15 +341,106 @@ publication, and crashes. Block publication, `CONTROL`, the active WAL, and the
 authority lease share this seam. End-to-end commits enumerate I/O errors and
 short writes; paired durability barriers prove acknowledged recovery when any
 one file or directory sync silently reports success without persisting.
-Correlated multi-sync loss and barrier-latency optimization remain
-certification gates.
+Correlated multi-sync loss is certified: every enumerated pair of dropped
+commit+checkpoint syncs recovers the complete acknowledged prefix or fails
+closed. Barrier-latency optimization remains a certification gate.
 
 The compatibility baseline is generated at
 `contracts/storage_operations_v1.json`; the same generator owns the sorted Rust
 metadata projection. Promotion requires the semantic,
-fault-injection, migration, shadow-run, platform, and performance gates in
+fault-injection, migration, platform, and performance gates in
 `docs/STORAGE.md`; adding an application selection switch before those gates is
 a contract violation.
+
+The decoded-page cache retains verified immutable pages only. Repeated hits compact
+stale recency records once they exceed twice the resident page count, preserving
+LRU eviction order; disabling the cache releases its recency allocation. A
+100,000-hit regression covers this metadata bound independently of payload bytes.
+Settled-append regression measures staged blocks/bytes across 256 appends and
+checks transcript identity after reopen; it is not a wall-clock superiority gate.
+
+Reference commits share transaction-local pending page/root payload handles until
+WAL encoding instead of deep-copying those buffers. Exact-envelope and injected
+commit-fault regressions preserve recovery and handle release; this does not
+populate the verified-read cache or remove any durability barrier.
+
+A root already present in the reference list is carried once, not again in the
+authority-root slot; an independent root keeps its own payload. Byte-exact and
+crash/reopen regressions cover both paths.
+
+Payload segments coalesce small writes through at most 256 KiB of scratch space;
+larger blocks bypass that buffer. The 128 × 8 KiB regression reduces writes from
+132 to 8 with identical encoded bytes and unchanged sync/rename barriers.
+Checkpoint history encodes and stores one ≤4 MiB segment at a time, with exact
+capacity for short suffixes instead of retaining the entire checkpoint encoding.
+
+A supervised background packer (`background_pack.rs`) reserves staged payloads
+of at least 1 MiB, builds and fsyncs the 8 MiB segment file without holding the
+authority mutex, and hands the finished segment back; the commit path publishes
+its manifest reference and retires the staged copies. Rotation commits therefore
+never stall on a full segment write + fsync: medium-scale conversation creation
+and settled Turn append p99 fell from ~20 ms to ~6 ms. Every worker failure
+leaves payloads staged, so the synchronous bounded checkpoint drain remains the
+complete deterministic fallback; an in-flight create that outlives its wait
+budget is abandoned and repacked synchronously. Setting
+`TOFU_DB_DISABLE_BACKGROUND_PACK` restores the pre-worker behavior (checkpoint
+drain only) as an operations escape hatch.
+
+The internal search-backfill checkpoint persists an owner/tenant-scoped generation
+and at most 1,024 cursor bytes, with exact-observation OCC and atomic dirty-token
+progress. Explicit Rust `schedule_owner_search_backfill` schedules one supplied
+scope; the existing worker consumes at most eight header rows after dirty work
+drains, atomically enqueues invalidations and advances the cursor. Completion
+means invalidations are enqueued, not that the projection is published. No startup
+scan or automatic scheduling occurs. The legacy global RPC remains unavailable
+until authorized global scope enumeration is implemented and certified.
+
+Turn event recording reports continuation status in responses and terminal replay
+payloads. Candidate validation is bounded to 8 MiB. Native continuation
+persistence stores one latest checkpoint per owner/conversation/lane through
+`model_continuation.get`/`put`/`delete`: the settled Turn ordinal plus one is
+the monotonic CAS frontier, the model-visible witness fences edited or foreign
+writers, and equal-frontier retries are read-only so no candidate can
+manufacture a stored acknowledgement. Terminal settlement persists a valid
+candidate atomically inside the settlement transaction and reports `stored` or
+`rejected`; absent-candidate settlement matches the legacy authority. Commit
+fault-injection regressions prove every put recovers one atomic prefix and
+replays to the same checkpoint.
+
+`scripts/tofudb_perf_compare.py` compares eight sequential client-stack workloads.
+Rust/SQLite authorities are disposable; PostgreSQL requires an explicitly created
+disposable database supplied through `--postgres-dsn`, never a live authority.
+Legacy drivers own separate runtimes/clients and restore startup
+environment overrides, so starting PostgreSQL cannot replace SQLite's runtime.
+Select a freshly built release binary with `TOFUDB_PERF_BIN`; report mean and tail
+latencies separately. Single-run wins do not certify durability, sustained load,
+or production cutover. Conversation creation and settled Turn append are no
+longer deficits (background packer above). `conversation.search` is a bounded
+linear scan over the indexed owner corpus — its latency tracks projection
+completeness, so a run measured while the search worker is still draining a
+write burst reports artificially low latencies over a stale projection; a fully
+drained medium corpus scans at ~4–7 ms per query. A real inverted index is the
+follow-up if that cost becomes user-visible.
+
+`--workloads turn_append_burst` (comma list) restricts the comparison to named
+workloads for focused iteration. For in-process attribution of the settled Turn
+append hot path (no loopback socket), run
+`cargo run --release --example turn_append_bench -- [iterations]`: it drives the
+same `TransactionIrStep::TurnAppendSettled` IR the semantic executor emits —
+command effects included — against a disposable on-disk authority and prints
+per-window p50/p95/max so history-dependent growth (entity copy-on-write page
+rewrite amplification as namespaces widen) is visible alongside the median.
+
+Reports include p99 and maximum latency as well as mean/p50/p95. A skipped engine
+or failed workload makes the command exit nonzero while retaining the report;
+an incomplete comparison must not be counted as a passing benchmark. Reports
+record binary SHA-256, engine order, Python version and timing scope. At most ten
+chronological latency windows expose growth within a workload. Empty/duplicate
+engine selections and invalid explicit binary paths fail rather than silently
+changing the comparison. Rust startup bounds its readiness line to 4 KiB/120 s
+and cleans disposable resources on failure. Current conversation-open rows have
+empty transcripts; the mixed workload is 80% point reads, 10% writes and 10%
+sidebar reads. These results do not cover long transcript opens or contention.
 
 For local engine work:
 

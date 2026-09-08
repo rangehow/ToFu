@@ -2,8 +2,7 @@
 
 The foundation of the horizontal scale-out work (board epics
 ``` Epic C + ``` Epic B). See the
-ratified design in ``docs/ENTERPRISE_READINESS_AUDIT.md`` §0 (Build Order) /
-§5 (lease-TTL primitive) and ``docs/ENTERPRISE_READINESS_AUDIT.md`` §4.2.
+ratified design in ``docs/ENTERPRISE_EVOLUTION.md`` (Runtime and scale-out).
 
 **Why this module exists.** Every per-process runtime cap (the admission
 ceiling in ``lib/agent_core/admission.py`` and the per-principal SSE semaphore

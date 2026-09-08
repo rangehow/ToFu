@@ -33,6 +33,9 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
       - Qwen/LongCat: enable_thinking = True/False
       - Gemini 3.x: reasoning_effort = 'minimal'/'low'/'medium'/'high'
       - Kimi K3:    reasoning_effort = 'low'/'high'/'max', NO temperature
+
+      - Muse Spark: reasoning_effort = 'minimal'..'xhigh', NO none rung,
+                  NO sampling params
       - Kimi K2:    thinking.type = 'enabled'/'disabled'
 
     When dispatch swaps the model (e.g. Claude → Doubao), the body may carry
@@ -41,7 +44,7 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
     """
     from lib.llm import (
         is_claude, is_doubao, is_gemini, is_glm, is_gpt5, is_kimi,
-        is_kimi_k3, is_longcat, is_minimax, is_qwen,
+        is_kimi_k3, is_longcat, is_minimax, is_muse_spark, is_qwen,
     )
 
     # Detect current thinking state from the body
@@ -133,6 +136,12 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
     elif not _tf and is_gpt5(new_model):
         from lib.llm import gpt_reasoning_effort
         body['reasoning_effort'] = gpt_reasoning_effort(effort, is_enabled, new_model)
+    elif not _tf and is_muse_spark(new_model):
+        # Lockstep with the Muse Spark branch in build_body() — mandatory
+        # reasoning, no none rung, GA ceiling xhigh.
+        from lib.llm import muse_spark_reasoning_effort
+        body['reasoning_effort'] = muse_spark_reasoning_effort(
+            effort, is_enabled)
     elif _tf == 'reasoning_effort' or (not _tf and is_gemini(new_model)):
         from lib.llm import gemini_reasoning_effort
         body['reasoning_effort'] = gemini_reasoning_effort(effort, is_enabled)
@@ -188,7 +197,7 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
             # Effort rung -- kept in lockstep with build_body(). The adaptive
             # generation states EVERY rung (its default is `high`, so an
             # omitted `medium` would be a silent upgrade); pre-4.7 Claude
-            # still defaults to medium and keeps the omit wire. The two paths
+            # keeps the historical omit wire (not an API-default claim). The paths
             # diverged on exactly this rung before
             # tests/test_claude_effort_rung_parity.py pinned them together.
             _omit_medium = not is_claude_opus_47(new_model)
@@ -225,6 +234,13 @@ def _readjust_thinking_params(body: dict, new_model: str, thinking_format: str):
                    'frequency_penalty'):
             body.pop(_k, None)
 
+    # ── Muse Spark's verified reasoning contract has no sampling knobs ──
+    # Same omit policy as build_body's branch: strip stale values a swap
+    # carried over from the previous family (e.g. Qwen's temperature=0.7).
+    if is_muse_spark(new_model):
+        for _k in ('temperature', 'top_p'):
+            body.pop(_k, None)
+
     # Observability: which dialect actually landed on the wire? Debug
     # level so production logs stay quiet; flip the logger when
     # diagnosing dialect mismatches across slot swaps.
@@ -252,6 +268,8 @@ def _adapt_stream_body_for_slot(slot, body_or_messages, is_body, *,
     """
     from lib.llm import build_body
     from lib.token_counter.evidence import ADMITTED_INPUT_TOKENS_KEY
+
+    from lib.llm.body._admission import enforce_body_input_limit
     if is_body:
         body = dict(body_or_messages)
         source_model = body.get('model')
@@ -281,6 +299,11 @@ def _adapt_stream_body_for_slot(slot, body_or_messages, is_body, *,
         )
         if mutates_messages and isinstance(body.get('messages'), list):
             body['messages'] = copy.deepcopy(body['messages'])
+        reuse_admission = (
+            source_model == slot.model
+            and not mutates_messages
+            and (tools is None or tools is body.get('tools'))
+        )
         if tools is not None:
             body['tools'] = tools
         if 'max_tokens' in body:
@@ -333,11 +356,20 @@ def _adapt_stream_body_for_slot(slot, body_or_messages, is_body, *,
         if (slot.protocol or '') == 'responses':
             body['_responses_feature_profile'] = (
                 getattr(slot, 'responses_profile', '') or 'compatible')
+        enforce_body_input_limit(
+            body, model=slot.model,
+            provider_id=(getattr(slot, 'routing_provider_id', '')
+                         or slot.provider_id or ''),
+            reuse_admission=reuse_admission,
+        )
         return body
     body = build_body(
         slot.model, body_or_messages,
         max_tokens=max_tokens, temperature=temperature,
         thinking_enabled=thinking_enabled, preset=effort or preset,
+
+        thinking_depth=effort if effort in (
+            'off', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra') else None,
         tools=tools, stream=True,
         thinking_format=slot.thinking_format or '',
         provider_id=(getattr(slot, 'routing_provider_id', '')
@@ -362,6 +394,11 @@ def _adapt_stream_body_for_slot(slot, body_or_messages, is_body, *,
     if (slot.protocol or '') == 'responses':
         body['_responses_feature_profile'] = (
             getattr(slot, 'responses_profile', '') or 'compatible')
+    enforce_body_input_limit(
+        body, model=slot.model,
+        provider_id=(getattr(slot, 'routing_provider_id', '')
+                     or slot.provider_id or ''),
+    )
     return body
 
 

@@ -40,6 +40,8 @@ from .capabilities import build_capability_catalog, validate_bindings
 from .manuscript import scaffold_source_files
 from .program import (
     normalize_program_fields,
+    dependency_digests,
+    claim_evidence_digest,
     normalize_source_path,
     readiness,
     source_tree_digest,
@@ -194,21 +196,8 @@ def build_action_tool_epoch(
 
 
 def _bounded_workspace_context(workspace: Mapping[str, Any], action: str) -> dict:
-    context = copy.deepcopy(dict(workspace))
-    context.pop('publication', None)
-    if action not in {'manuscript', 'compile', 'publish'}:
-        context.pop('source_files', None)
-    elif action == 'manuscript':
-        remaining = 160_000
-        files = []
-        for row in list(context.get('source_files') or []):
-            if remaining <= 0 or not isinstance(row, Mapping):
-                break
-            content = str(row.get('content') or '')[:remaining]
-            remaining -= len(content)
-            files.append({'path': row.get('path'), 'content': content})
-        context['source_files'] = files
-    return context
+    from .context import project_workspace
+    return project_workspace(workspace, action)
 
 
 def _research_context(direction: str, lang: str, user_id: int) -> dict:
@@ -221,8 +210,13 @@ def _research_context(direction: str, lang: str, user_id: int) -> dict:
         logger.warning('[ResearchAction] artifact context unavailable: %s', exc)
         return {}
     return {
-        'survey_markdown': str(artifacts.get('survey_markdown') or '')[:60_000],
-        'gap_map': list(artifacts.get('gap_map') or [])[:24],
+        'survey_markdown': str(artifacts.get('survey_md') or '')[:16_000],
+        'gap_map': list((artifacts.get('open_gaps') or {}).get('open_gaps') or [])[:20],
+        'coverage': (artifacts.get('open_gaps') or {}).get('coverage') or {},
+        'research_cycle': {
+            key: (artifacts.get('research_cycle') or {}).get(key)
+            for key in ('status', 'issues', 'next_action')
+        },
         'accepted': list(artifacts.get('accepted') or [])[:12],
         'corpus_size': artifacts.get('corpus_size'),
         'updated_at': artifacts.get('updated_at'),
@@ -236,6 +230,18 @@ def _action_instructions(action: str) -> str:
         'claims falsifiable and distinguish observed evidence from inference. '
         'Use only tools visible in this request. A tool call is not evidence '
         'until its result returns successfully. '
+        'Execution completion is not scientific support. Report scientific_outcome '
+        'as supported, refuted, or inconclusive only from measured results. '
+
+        'Claims must declare outcome_scope (supported/refuted/inconclusive): a '
+        'negative result supports only a scoped negative claim, not the original '
+        'hypothesis. Follow the current decision and prioritized next_actions; '
+        'never execute a follow-up without owner confirmation. Structured result '
+        'scientific_audit checks baseline_fairness, uncertainty, seeds and '
+        'validation_split require status verified plus evidence_refs; prose is not proof. '
+        'Compare a baseline and a falsifier under matched budgets including '
+        'detector, tool, token, compute and wall-time costs. Separate exploratory '
+        'tuning from held-out validation; do not tune on validation results. '
     )
     instructions = {
         'experiment': (
@@ -301,7 +307,7 @@ def _tool_receipts(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
     observed_at = int(time.time())
     for row in rounds[:64]:
         excerpt = str(row.get('toolContent') or '')[:4_000]
-        status = str(row.get('status') or '')
+        status = str(row.get('status') or '').strip().lower()
         try:
             structured = json.loads(excerpt)
         except (TypeError, ValueError):
@@ -316,12 +322,14 @@ def _tool_receipts(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         if status == 'rejected':
             normalized_status = 'rejected'
-        elif structured_error or excerpt.lower().startswith((
+        elif status in {'error', 'failed', 'aborted', 'cancelled', 'canceled'} or structured_error or excerpt.lower().startswith((
                 'error:', 'error ', 'mcp tool error:', 'unknown tool:',
                 'failed:', 'failure:')):
             normalized_status = 'error'
-        else:
+        elif status == 'done':
             normalized_status = 'done'
+        else:
+            normalized_status = 'pending'
         digest = hashlib.sha256(excerpt.encode('utf-8')).hexdigest()
         output_artifact = row.get('outputArtifact')
         output_artifact = output_artifact if isinstance(output_artifact, Mapping) else {}
@@ -340,6 +348,37 @@ def _tool_receipts(rounds: list[dict[str, Any]]) -> list[dict[str, Any]]:
             'observed_at': observed_at,
         })
     return receipts
+
+
+def _receipt_execution_status(receipt: Mapping[str, Any], *, remote: bool) -> str:
+    """Transport success is not remote job completion."""
+    if receipt.get('status') in {'error', 'rejected'}:
+        return 'failed'
+    if receipt.get('status') != 'done':
+        return 'planned'
+    try:
+        observed = json.loads(str(receipt.get('result_excerpt') or ''))
+    except (TypeError, ValueError):
+        observed = None
+    states = {
+        'queued': 'queued', 'pending': 'queued', 'submitted': 'queued',
+        'accepted': 'queued', 'running': 'running', 'in_progress': 'running',
+        'completed': 'completed', 'done': 'completed', 'succeeded': 'completed',
+        'failed': 'failed', 'error': 'failed', 'rejected': 'failed',
+        'cancelled': 'failed', 'canceled': 'failed', 'aborted': 'failed',
+    }
+    if isinstance(observed, Mapping):
+        # Prefer explicit job fields over an outer API status such as "success".
+        candidates = [observed.get(key) for key in ('job', 'result', 'data')]
+        candidates.append(observed)
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            for key in ('execution_status', 'job_status', 'state', 'status'):
+                value = str(candidate.get(key) or '').strip().lower()
+                if value in states:
+                    return states[value]
+    return 'planned' if remote else 'completed'
 
 
 def _merge_by_id(existing: Any, proposed: Any, *, prefix: str) -> list[dict]:
@@ -457,8 +496,7 @@ def apply_action_result(
     now = int(time.time())
     done = [row for row in receipts if row.get('status') == 'done']
     if action == 'experiment':
-        if isinstance(payload.get('protocol'), Mapping):
-            draft['protocol'] = dict(draft.get('protocol') or {}) | dict(payload['protocol'])
+        # Execution cannot silently revise the owner-confirmed frozen protocol.
         proposed = payload.get('run') if isinstance(payload.get('run'), Mapping) else {}
         evidence_tool_names = {'run_command'} | {
             str(binding.get('tool') or '') for binding in bindings
@@ -468,9 +506,25 @@ def apply_action_result(
                 'evaluation.run',
             }
         }
-        evidence_receipts = [
-            row for row in done if row.get('tool') in evidence_tool_names
+        remote_tool_names = {
+            str(binding.get('tool') or '') for binding in bindings
+            if binding.get('capability') in {'compute.submit', 'compute.status',
+                                             'experiment.status'}
+        }
+        execution_receipts = [
+            row for row in receipts if row.get('tool') in evidence_tool_names
         ]
+        execution_states = [
+            _receipt_execution_status(row, remote=row.get('tool') in remote_tool_names)
+            for row in execution_receipts
+        ]
+        execution_status = execution_states[-1] if execution_states else 'planned'
+        evidence_receipts = [
+            row for row, state in zip(execution_receipts, execution_states)
+            if state == 'completed' and row.get('status') == 'done'
+        ]
+        if execution_status != 'completed':
+            evidence_receipts = []
         evidence_refs = [
             str(row.get('artifact_ref')) for row in evidence_receipts
             if row.get('artifact_ref')
@@ -496,13 +550,26 @@ def apply_action_result(
             'label': proposed.get('label'),
         }, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()
         remote_job_id = _observed_reference(
-            proposed.get('remote_job_id'), evidence_receipts)
+            proposed.get('remote_job_id'), execution_receipts)
         backend = next((
-            str(row.get('tool') or '') for row in evidence_receipts
+            str(row.get('tool') or '') for row in execution_receipts
             if row.get('tool')), '')
+        outcomes = set()
+        for receipt in evidence_receipts:
+            try:
+                observed = json.loads(str(receipt.get('result_excerpt') or ''))
+            except (ValueError, TypeError):
+                continue
+            if isinstance(observed, Mapping) and observed.get('scientific_outcome') in {
+                    'supported', 'refuted', 'inconclusive'}:
+                outcomes.add(observed['scientific_outcome'])
+        outcome = next(iter(outcomes)) if len(outcomes) == 1 else 'inconclusive'
         run = dict(proposed) | {
             'id': run_id,
             'status': requested_status,
+            **dependency_digests(workspace),
+            'execution_status': execution_status,
+            'scientific_outcome': outcome,
             'artifact_ref': evidence_refs[0] if evidence_refs else '',
             'artifact_refs': evidence_refs,
             'task_id': task_id,
@@ -510,7 +577,7 @@ def apply_action_result(
             'remote_job_id': remote_job_id,
             'spec_digest': spec_digest,
             'tool_receipts': receipts,
-            'finished_at': now if evidence_receipts else 0,
+            'finished_at': now if execution_status in {'completed', 'failed'} else 0,
             'updated_at': now,
         }
         draft['runs'] = _merge_by_id(draft.get('runs'), [run], prefix='run')
@@ -545,6 +612,10 @@ def apply_action_result(
         draft['stage'] = 'evidence'
     elif action == 'manuscript':
         proposed = payload.get('manuscript')
+        from .program import scientific_dependency_digest
+
+        reviewed = isinstance(proposed, Mapping) and any(
+            key != 'scientific_dependency_digest' for key in proposed)
         if isinstance(proposed, Mapping):
             draft['manuscript'] = dict(draft.get('manuscript') or {}) | dict(proposed)
         current = {
@@ -557,12 +628,18 @@ def apply_action_result(
                 continue
             path = normalize_source_path(row.get('path'))
             if path:
+                reviewed = True
                 current[path] = {
                     'path': path, 'content': str(row.get('content') or ''),
                     'updated_at': now,
                 }
         draft['source_files'] = list(current.values())
         draft['source_files'] = scaffold_source_files(draft)
+
+        # Snapshot is application-owned, never accepted from model output.
+        draft['manuscript']['scientific_dependency_digest'] = (
+            scientific_dependency_digest(draft) if reviewed else
+            (workspace.get('manuscript') or {}).get('scientific_dependency_digest', ''))
         draft['stage'] = 'writing'
     elif action == 'compile':
         compile_binding = next((
@@ -610,6 +687,14 @@ def apply_action_result(
             'detail': str(payload.get('detail') or payload.get('summary') or ''),
         }
         draft['stage'] = 'submission'
+    if action in {'experiment', 'analyze'}:
+        # Stamp only newly reviewed proposals, never rebind existing claims on edit.
+        proposed_ids = {str(c.get('id') or '') for c in claims}
+        normalized_runs = normalize_program_fields(draft)['runs']
+        for claim in draft.get('claims') or []:
+            if claim.get('id') in proposed_ids:
+                claim.update(dependency_digests(draft))
+                claim['evidence_digest'] = claim_evidence_digest(claim, normalized_runs)
     normalized = normalize_program_fields(draft)
     for key, value in normalized.items():
         draft[key] = value
@@ -638,6 +723,9 @@ def _run_agent(task: dict, workspace: Mapping[str, Any], epoch: PaperToolEpochV2
         fallback_model=model_name)
 
     def dispatch(round_index, tools):
+        from .context import admit_messages, output_budget
+        max_output = output_budget(model_name)
+        admit_messages(messages, model=model_name, tools=tools, max_output=max_output)
         return ensure_provider_stream_result(dispatch_stream(
             messages,
             on_content=lambda text: append_action_event(task, {
@@ -647,7 +735,7 @@ def _run_agent(task: dict, workspace: Mapping[str, Any], epoch: PaperToolEpochV2
             abort_check=abort.is_set,
             prefer_model=model_name if task.get('model') else None,
             strict_model=bool(task.get('model')),
-            tools=tools, max_tokens=64_000, temperature=0,
+            tools=tools, max_tokens=max_output, temperature=0,
             thinking_enabled=False, log_prefix='[ResearchAction]',
         ))
 
@@ -747,9 +835,13 @@ def run_research_action(task: dict) -> None:
             task, build_phase(Phase.AGENT, action=task['action'],
                               toolCount=len(epoch.executable_schemas)))
         payload, receipts = _run_agent(task, workspace, epoch, bindings)
+        if task['abort_event'].is_set():
+            raise AbortedError('research action aborted before applying result')
         updated = apply_action_result(
             action=task['action'], workspace=workspace, payload=payload,
             receipts=receipts, task_id=task_id, bindings=bindings)
+        if task['abort_event'].is_set():
+            raise AbortedError('research action aborted before saving workspace')
         saved = save_workspace(
             task['direction'], task['lang'], updated,
             expected_revision=int(task['expected_revision']),

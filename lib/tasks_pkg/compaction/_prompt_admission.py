@@ -17,8 +17,9 @@ from lib.llm_errors import ContextCompactionError, PromptTooLongError
 from lib.log import audit_log, get_logger
 from lib.tasks_pkg.compaction._layer2 import force_compact_if_needed
 from lib.tasks_pkg.compaction._pipeline import recompose_context_after_compaction
+
+from lib.tasks_pkg.context_composer.checklist import restore_checklist_context
 from lib.tasks_pkg.compaction._tokens import (
-    _compaction_trigger_threshold,
     _count_tokens_authoritative,
 )
 from lib.token_counter.base import (
@@ -27,8 +28,6 @@ from lib.token_counter.base import (
 
 logger = get_logger(__name__)
 
-_FIRST_DISPATCH_MAX_CEILING_TOKENS = 256_000
-_FIRST_DISPATCH_TARGET_RATIO = 120_000 / 128_000
 _MIN_SUMMARY_PRESERVE_TOKENS = 8_000
 _MAX_SUMMARY_PRESERVE_TOKENS = 32_000
 _MEASUREMENT_VERSION = 'tofu.prompt-admission/v2'
@@ -69,16 +68,8 @@ def _resolved_ceiling(task: dict[str, Any], *, round_num: int) -> tuple[int, int
     128K working set while allowing a provider-declared cheaper tier to select
     a larger, still-bounded first window.
     """
-    effective, window_threshold, working_set = _compaction_trigger_threshold(task)
-    configured = effective if working_set > 0 else window_threshold
-    hard_ceiling = max(1, min(window_threshold, configured))
-    proactive_target = hard_ceiling
-    if round_num == 0:
-        hard_ceiling = min(
-            hard_ceiling, _FIRST_DISPATCH_MAX_CEILING_TOKENS)
-        proactive_target = max(
-            1, int(hard_ceiling * _FIRST_DISPATCH_TARGET_RATIO))
-    return hard_ceiling, proactive_target
+    from lib.tasks_pkg.compaction._admission_budget import resolve_admission_budget
+    return resolve_admission_budget(task, round_num=round_num)
 
 
 def _measure(
@@ -181,6 +172,9 @@ def enforce_dispatch_prompt_limit(
     internal compaction call whose own input is independently capped; this
     function controls the subsequent main agent call.
     """
+    # Required execution state must be present even at round zero/Continue.
+    # Optional per-round attachments run earlier and can be skipped or folded.
+    restore_checklist_context(messages, task=task, model=model)
     hard_ceiling, target = _resolved_ceiling(task, round_num=round_num)
     before = _measure(
         messages,
@@ -240,6 +234,9 @@ def enforce_dispatch_prompt_limit(
         recompose_context_after_compaction(messages, task=task)
         task['_lastCompactionRound'] = int(round_num)
 
+    # Inspect the actual resulting projection, not the compactor's boolean:
+    # partial/fallback transformations may remove a carrier even on False.
+    restore_checklist_context(messages, task=task, model=model)
     after_summary = _measure(
         messages,
         tools,

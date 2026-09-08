@@ -299,3 +299,74 @@ def test_deterministic_dispatch_rejection_has_no_outer_retry(
 
     assert calls['n'] == 1
     assert sleeps == []
+
+
+def test_translation_dispatch_drops_conversation_affinity(monkeypatch):
+    """Stateless translation never waits on / rebinds a conv's sticky key."""
+    from lib.llm_dispatch import conv_affinity
+    from lib.translate.engine import _engine
+
+    monkeypatch.setattr('lib.mt_provider.is_mt_configured', lambda: False)
+    monkeypatch.setattr(
+        'lib.llm_dispatch.factory.get_dispatcher', lambda: object())
+
+    def fake_smart_chat(*_args, **_kwargs):
+        assert conv_affinity.get_conv_affinity() is None
+        return '这是忠实翻译。', {
+            '_dispatch': {'model': 'translator', 'key': 'k1'},
+        }
+
+    monkeypatch.setattr('lib.llm_dispatch.smart_chat', fake_smart_chat)
+    conv_affinity.set_conv_affinity('convsticky123')
+    try:
+        translated, _usage = _engine._translate_one_chunk(
+            'This sentence needs a Chinese translation.',
+            'Translate faithfully.',
+            source='English',
+            target='Chinese',
+            overall_deadline=10.0,
+            use_cache=False,
+        )
+        # The worker thread's binding is restored for the rest of the turn.
+        assert conv_affinity.get_conv_affinity() == 'convsticky123'
+    finally:
+        conv_affinity.clear_conv_affinity()
+
+    assert translated == '这是忠实翻译。'
+
+
+def test_translation_stream_dispatch_drops_conversation_affinity(monkeypatch):
+    from lib.llm_dispatch import conv_affinity
+    from lib.translate.engine import _engine
+
+    monkeypatch.setattr('lib.mt_provider.is_mt_configured', lambda: False)
+    monkeypatch.setattr(
+        'lib.llm_dispatch.factory.get_dispatcher', lambda: object())
+
+    def fake_dispatch_stream(*_args, **_kwargs):
+        assert conv_affinity.get_conv_affinity() is None
+        return (
+            {'role': 'assistant', 'content': '这是忠实翻译。'},
+            'stop',
+            {'_dispatch': {'model': 'translator', 'key': 'k1'}},
+        )
+
+    monkeypatch.setattr(
+        'lib.llm_dispatch.dispatch_stream', fake_dispatch_stream)
+    conv_affinity.set_conv_affinity('convsticky123')
+    try:
+        translated, _usage = _engine._translate_one_chunk(
+            'This sentence needs a Chinese translation.',
+            'Translate faithfully.',
+            source='English',
+            target='Chinese',
+            overall_deadline=10.0,
+            use_cache=False,
+            stream=True,
+            progress_cb=lambda _preview: None,
+        )
+        assert conv_affinity.get_conv_affinity() == 'convsticky123'
+    finally:
+        conv_affinity.clear_conv_affinity()
+
+    assert translated == '这是忠实翻译。'

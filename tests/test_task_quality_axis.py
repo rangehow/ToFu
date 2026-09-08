@@ -216,6 +216,39 @@ def test_running_task_detail_omits_private_set_state(api):
     assert body['status'] == 'pending'
 
 
+def test_task_detail_drops_private_config_entries(api):
+    """The config bag aliases the tool builder's ``ctx.cfg``, so it picks up
+    process-private entries — including a MappingProxyType cache view that
+    Quart's JSON provider cannot serialize (live 500 on GET /api/v1/tasks/{id},
+    task 89c6f953, 2026-09-05). Private entries must be dropped, public ones
+    kept, and the response must round-trip through real JSON."""
+    from types import MappingProxyType
+
+    app, rt = api
+    task = rt.create(user_id=1)
+    task['config'] = {
+        'model': 'kimi-k3',
+        'mcpToolExposure': 'auto',
+        '_mcpAllowedToolCatalog': [{'function': {'name': 'mcp__x__y'}}],
+        '_mcpToolSearchTextByName': MappingProxyType({'mcp__x__y': 'search text'}),
+        '_mcpActiveToolNames': ['mcp__x__y'],
+    }
+
+    async def go():
+        response = await app.test_client().get(
+            f'/api/v1/tasks/{task["id"]}')
+        assert response.status_code == 200, (
+            'private config state must not turn task detail into HTTP 500')
+        return await response.get_json()
+
+    body = _run(go())
+    config = body.get('config') or {}
+    assert config.get('model') == 'kimi-k3', 'public config must survive'
+    assert config.get('mcpToolExposure') == 'auto'
+    assert not any(str(key).startswith('_') for key in config), (
+        f'private config keys leaked to the API: {sorted(config)}')
+
+
 def test_task_detail_replaces_event_bodies_with_cursor_summary(api):
     app, rt = api
     task = rt.create(user_id=1)

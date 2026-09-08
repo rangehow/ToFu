@@ -5,18 +5,143 @@
   "category": "official",
   "name": "DeepSeek",
   "base_url": "https://api.deepseek.com",
+  "retired_model_ids": [
+    "deepseek-chat",
+    "deepseek-reasoner"
+  ],
   "offering_recipes": [
     {
       "model_id": "deepseek-v4-pro",
-      "capabilities": ["text", "thinking", "cheap"],
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
       "rpm": 30,
       "context_window": 1000000
     },
     {
       "model_id": "deepseek-v4-flash",
-      "capabilities": ["text", "thinking", "cheap"],
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
       "rpm": 60,
       "context_window": 1000000
+    },
+    {
+      "model_id": "deepseek-chat-v3.1",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 128000,
+      "pricing": {
+        "input": 0.55,
+        "output": 1.65,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "deepseek-r1",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 64000,
+      "pricing": {
+        "input": 0.7,
+        "output": 2.5,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "deepseek-r1-distill-llama-70b",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 8192,
+      "pricing": {
+        "input": 0.8,
+        "output": 0.8,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "deepseek-v3.1-terminus",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 128000,
+      "pricing": {
+        "input": 0.27,
+        "output": 1.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "deepseek-v3.2",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 128000,
+      "pricing": {
+        "input": 0.269,
+        "output": 0.4,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "deepseek-v3.2-exp",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 128000,
+      "pricing": {
+        "input": 0.27,
+        "output": 0.41,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "deepseek-v4-flash-vision-exp",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 1000000,
+      "pricing": {
+        "input": 0.22,
+        "output": 0.66,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
     }
   ]
 }

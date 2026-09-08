@@ -32,6 +32,7 @@ from lib.pricing._tables import (  # noqa: E402,F401
     DEFAULT_USD_DISPLAY_RATES,
     MODEL_PRICING,
     QWEN_PRICING_CNY,
+    pricing_for_model,
 )
 
 # ── Provider-scoped pricing registry ──
@@ -71,6 +72,7 @@ __all__ = [
     'DEFAULT_USD_DISPLAY_RATES',
     'MODEL_PRICING',
     'QWEN_PRICING_CNY',
+    'pricing_for_model',
     # provider registry
     'PROVIDER_PRICING',
     'set_provider_pricing',

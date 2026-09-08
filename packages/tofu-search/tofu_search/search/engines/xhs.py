@@ -13,7 +13,7 @@ returns ``[]`` immediately — it never blocks the multi-engine pipeline.
 Account-risk guard
 ------------------
 XHS polices automated access at the ACCOUNT level (限流 / 滑块 / 封号), and
-this engine fires on EVERY web search while connected — without pacing, the
+this engine runs only when explicitly selected — without pacing, the
 user's chat frequency becomes the request rate against their logged-in
 session. :class:`_RiskGuard` applies the three cross-project consensus
 mitigations for a read-only search scenario (see sibling MCP/crawler

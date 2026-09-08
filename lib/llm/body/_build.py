@@ -38,9 +38,11 @@ from lib.model_info import (
     is_kimi_k27_code,
     is_longcat,
     is_minimax,
+    is_muse_spark,
     is_qwen,
     kimi_k3_reasoning_effort,
     model_supports_vision,
+    muse_spark_reasoning_effort,
 )
 
 from lib.llm.body._clamp import _clamp_completion_to_context_window
@@ -70,6 +72,10 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     Handles provider-specific parameters automatically:
       - Claude:   thinking.type='adaptive', effort param, cache breakpoints
       - Kimi K3:  top-level reasoning_effort (low/high/max), no temperature
+
+      - Muse Spark: top-level reasoning_effort
+                  (minimal/low/medium/high/xhigh), no none rung, no
+                  sampling params
       - Kimi K2:  thinking.type='enabled'/'disabled', fixed temp
       - GLM:      thinking.type='enabled'/'disabled', temperature clamped
                   to (0, 1); GLM-5.2+ adds reasoning_effort + preserved
@@ -101,7 +107,7 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     _effort = (thinking_depth if thinking_depth and thinking_depth != 'off'
                else None)
     _effort = (_effort
-               or (effort if effort not in _MODEL_PRESETS else None)
+               or (effort if effort == 'low' or effort not in _MODEL_PRESETS else None)
                or (preset if preset not in _MODEL_PRESETS else None)
                or 'medium')
     logger.debug('build_body: model=%s effort=%s thinking_enabled=%s (thinking_depth=%s effort=%s preset=%s)',
@@ -323,6 +329,18 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
     elif not _tf and is_minimax(model):
         body['temperature'] = temperature or 0.7
         body['reasoning_split'] = True
+
+    elif not _tf and is_muse_spark(model):
+        # Meta Muse Spark is a mandatory-reasoning model driven by the
+        # top-level ``reasoning_effort`` string: minimal/low/medium/high/
+        # xhigh (default medium), NO none rung — depth 'off' degrades to
+        # 'minimal', and 'max' is partner-preview only so it clamps to
+        # xhigh (muse_spark_reasoning_effort owns the ladder). Sampling
+        # params are not part of the verified contract (Kimi K3 / GPT-5
+        # reasoning precedent), so temperature is omitted rather than
+        # risk a 400 on the first call.
+        body['reasoning_effort'] = muse_spark_reasoning_effort(
+            _effort, thinking_enabled)
     elif not _tf and is_gpt5(model):
         # OpenAI GPT-5 family is a reasoning model driven by the native
         # ``reasoning_effort`` string. Current Codex models use ``none`` when
@@ -337,19 +355,11 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
             body['thinking']['display'] = 'summarized'
         else:
             body['temperature'] = 1.0
-        # Effort rung. On the ADAPTIVE generation (Opus 4.7+) EVERY rung is
-        # stated, including ``medium``. That exclusion used to be correct --
-        # medium WAS the model default, so omitting it was a free byte saving.
-        # Opus 5 moved the default to ``high``, which silently turned the
-        # omission into an UPGRADE of the user's explicit choice. Measured on
-        # the example-corp gateway (yuju-claude-opus-5-evaDaily, identical prompt,
-        # n=6, 2026-07-26): effort dropped -> median 2812.5 completion tokens,
-        # effort=medium -> median 1855.0 (~1.52x). index.html ships
-        # data-depth="medium" as the ACTIVE default on both the desktop (:795)
-        # and mobile (:1708) selectors, so this is the common path.
-        #
-        # Pre-4.7 Claude still defaults to medium, so omitting it there means
-        # the same thing -- that wire stays byte-identical.
+        # Opus 4.7+ states every rung, including the product default medium:
+        # Anthropic's API default is high, so omission is not equivalent.
+        # The older-family omit-medium wire stays for compatibility only;
+        # it is NOT a claim that the official pre-4.7 default is medium.
+        # tests/test_claude_effort_rung_parity.py pins builder/swap parity.
         _omit_medium = not is_claude_opus_47(model)
         if _effort and not (_omit_medium and _effort == 'medium'):
             if _effort == 'xhigh' and not is_claude_opus_47(model):

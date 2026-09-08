@@ -63,6 +63,91 @@ def conversation_sync_db(chat_sidecar, monkeypatch):
             )
 
 
+def test_snapshot_restores_only_current_committed_bounded_attempt_phase(
+    conversation_sync_db, monkeypatch,
+):
+    from lib.conversation_sync.repository import SidecarConversationSyncRepository
+    from lib.conversation_sync.service import (
+        ConversationSyncNotFound, ConversationSyncService,
+    )
+    from lib.turn_lifecycle import (
+        bind_task, claim_attempt_start, create_attempt, create_turn_pair,
+        get_turn, mark_task_started, record_task_event,
+    )
+
+    client = conversation_sync_db
+    monkeypatch.setenv('TOFU_TURN_DELTA_RECORD_MS', '0')
+    service = ConversationSyncService(SidecarConversationSyncRepository(
+        client_factory=lambda write=False: client,
+    ))
+    created = create_turn_pair(
+        'conv-sync-a', command_id='phase-snapshot-create',
+        input_projection={'content': 'question'}, config={'model': 'test'},
+        user_id=1,
+    )
+    attempt_id = created['attempt']['attemptId']
+    turn_id = created['turn']['turnId']
+    assert claim_attempt_start(attempt_id, user_id=1)
+    bind_task(attempt_id, 'phase-snapshot-task', user_id=1)
+    mark_task_started(attempt_id, 'phase-snapshot-task', user_id=1)
+    phase = {
+        'phase': 'stream_stalled', 'detailKey': 'stream.phase.streamStalled',
+        'detailArgs': {'elapsed': 600, 'idle': 470, 'model': 'test'},
+        'emittedAt': 123456,
+    }
+    task = {
+        '_attemptId': attempt_id, '_userId': 1, 'id': 'phase-snapshot-task',
+        'status': 'running', 'content': '', 'thinking': '', 'toolRounds': [],
+        'segments': [], 'config': {'model': 'test'}, 'phase': phase,
+    }
+    assert record_task_event(task, {'type': 'phase', **phase})
+    for options in ({}, {'turn_limit': 1, 'segment_payload': 'refs'}):
+        snapshot = service.snapshot('conv-sync-a', 1, **options)
+        active = snapshot['activeAttemptPhase']
+        assert active['turnId'] == turn_id
+        assert active['attemptId'] == attempt_id
+        assert active['phase'] == phase
+        turn = next(t for t in snapshot['turns'] if t['turnId'] == turn_id)
+        assert active['projectionRevision'] == turn['projectionRevision']
+        assert 'phase' not in turn['projection']
+    with pytest.raises(ConversationSyncNotFound):
+        service.snapshot('conv-sync-a', 2)
+
+    # A content event explicitly retires the stage. Never search backward to
+    # revive the previous warning; the streaming content is now the evidence.
+    task['phase'] = None
+    task['content'] = 'new output'
+    assert record_task_event(task, {'type': 'delta', 'content': 'new output'})
+    assert 'activeAttemptPhase' not in service.snapshot('conv-sync-a', 1)
+
+    # The optional presentation adds no scan or unbounded event decode. A
+    # large latest event cannot expose an older, smaller phase instead.
+    task['phase'] = {**phase, 'detail': 'x' * 33000}
+    assert record_task_event(task, {'type': 'phase', **task['phase']})
+    assert 'activeAttemptPhase' not in service.snapshot('conv-sync-a', 1)
+
+    task['phase'] = phase
+    assert record_task_event(task, {'type': 'phase', **phase})
+    assert 'activeAttemptPhase' in service.snapshot('conv-sync-a', 1)
+    task['status'] = 'done'
+    assert record_task_event(task, {'type': 'done'})
+    assert 'activeAttemptPhase' not in service.snapshot('conv-sync-a', 1)
+
+    settled = get_turn('conv-sync-a', turn_id, user_id=1)
+    next_attempt = create_attempt(
+        'conv-sync-a', turn_id, command_id='phase-snapshot-regenerate',
+        operation='regenerate',
+        expected_projection_revision=settled['projectionRevision'],
+        config={'model': 'test'}, user_id=1,
+    )
+    next_id = next_attempt['attempt']['attemptId']
+    assert next_id != attempt_id
+    assert claim_attempt_start(next_id, user_id=1)
+    bind_task(next_id, 'phase-snapshot-next', user_id=1)
+    mark_task_started(next_id, 'phase-snapshot-next', user_id=1)
+    assert 'activeAttemptPhase' not in service.snapshot('conv-sync-a', 1)
+
+
 def test_generated_conversation_sync_contract_is_current_and_shippable():
     generator = ROOT / "scripts/gen_conversation_sync_contract.py"
     assert generator.is_file()

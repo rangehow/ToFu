@@ -1,6 +1,6 @@
 """tests/test_request_user_id_multi_user.py — multi-user fail-closed gate.
 
-docs/ENTERPRISE_READINESS_AUDIT.md (I1): in multi-user auth mode an
+docs/ENTERPRISE_EVOLUTION.md (Identity and authorization): in multi-user auth mode an
 authenticated context WITHOUT a bound user_id must not silently fall into
 the shared user-1 pool — canonical ``request_user_id`` raises PermissionError.
 open/private personal installs map a resolved local principal to owner 1 at

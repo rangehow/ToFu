@@ -38,11 +38,17 @@ TITLE_MAX_CHARS = 60
 # pass this set as ``exclude_models=`` to ``dispatch_chat``. Zero schema
 # change; the dispatcher already honors the parameter.
 #
-# INVARIANT: this set MUST equal every model with BOTH `cheap` AND
-# `thinking` capabilities in bootstrap._BUILTIN_PROVIDER_TEMPLATES.
-# tests/test_title_gen_robust.py::test_constant_matches_bootstrap_derivation
-# guards this at CI time — any new such model added to bootstrap without
-# updating this constant will flip that test red.
+# Mechanism: ``_thinking_models_to_exclude()`` derives the exclusion set
+# from the LIVE provider template catalog (lib/model_info/data/*.json +
+# static/provider_templates/*.json) on every call, so hot-updated templates
+# apply without a restart — including corp-gateway templates a
+# hand-maintained list could never see (the static list below had silently
+# missed 22 cheap+thinking models before this derivation existed).
+#
+# The frozenset below is only the static floor for the
+# catalog-unreadable case (e.g. a template file mid-write); it must stay
+# non-empty and within the catalog derivation.
+# tests/test_title_gen_robust.py guards both invariants.
 _THINKING_MODELS_TO_EXCLUDE = frozenset({
     # OpenAI (cheap + thinking)
     'o3',
@@ -61,14 +67,19 @@ _THINKING_MODELS_TO_EXCLUDE = frozenset({
     'kimi-k2.7-code',
     'kimi-k2.7-code-highspeed',
     'kimi-k2.6',
-    # Qwen (max/plus are cheap+thinking; flash is cheap-only)
+    # Qwen (all five builtin rows are cheap+thinking)
     'qwen3-max',
-    'qwen-plus',
-    # Gemini (3.1-pro & 2.5-pro are cheap+thinking; 2.5-flash & 3.1-flash-lite are cheap-only)
+    'qwen3.6-plus',
+    'qwen3.5-flash',
+    'qwen3-coder-plus',
+    'qwen3-vl-plus',
+    # Gemini (3.1-pro, 3.8/3.7-flash & 2.5-pro are cheap+thinking;
+    # 2.5-flash & 3.1-flash-lite are cheap-only)
     'gemini-3.1-pro-preview',
     'gemini-2.5-pro',
-    # Gemini 3.7 Flash (2026-08-13 release; cheap+thinking in both the
-    # builtin Gemini template and the OpenRouter relay)
+    # Gemini 3.8/3.7 Flash (cheap+thinking in both the builtin Gemini
+    # template and the OpenRouter relay)
+    'gemini-3.8-flash',
     'gemini-3.7-flash',
     # xAI (grok-4.20 is cheap+thinking; 4.1-mini is cheap-only)
     'grok-4.20',
@@ -78,7 +89,35 @@ _THINKING_MODELS_TO_EXCLUDE = frozenset({
     # builtin template)
     'google/gemini-3.1-pro-preview',
     'google/gemini-3.7-flash',
+    'google/gemini-3.8-flash',
+    'deepseek/deepseek-v4-pro',
 })
+
+
+def _thinking_models_to_exclude() -> frozenset[str]:
+    """Every live-catalog model carrying BOTH `cheap` AND `thinking`.
+
+    Derived from the hot-reloaded template catalog on each call so template
+    edits apply without a restart. Falls back to the static floor when the
+    catalog cannot be loaded — title generation must never crash on a
+    template-file problem.
+    """
+    try:
+        from lib.provider_template_recipes import load_provider_templates
+        templates = load_provider_templates()
+    except Exception as exc:
+        logger.warning('[TitleGen] template catalog unreadable — using '
+                       'static thinking-model floor: %s', exc)
+        return _THINKING_MODELS_TO_EXCLUDE
+    result: set[str] = set()
+    for template in templates:
+        for row in template.get('offering_recipes') or []:
+            capabilities = set(row.get('capabilities') or [])
+            model_id = str(row.get('model_id') or '')
+            if model_id and {'cheap', 'thinking'} <= capabilities:
+                result.add(model_id)
+    return frozenset(result)
+
 
 _SYSTEM_PROMPT_BASE = (
     'You write a concise, information-dense title for a chat conversation, '
@@ -307,7 +346,7 @@ def generate_conversation_title(messages: list, lang: str | None = None) -> str:
     # ONCE with the offending model added to exclude_models. Two failures →
     # fall back to _fallback_title. Explicit `for attempt in range(2):`
     # loop (per owner: no recursion + private kwargs).
-    excluded_this_call: set[str] = set(_THINKING_MODELS_TO_EXCLUDE)
+    excluded_this_call: set[str] = set(_thinking_models_to_exclude())
     title = ''
     last_content = ''
     started = time.time()

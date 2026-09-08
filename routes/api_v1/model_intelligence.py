@@ -21,6 +21,11 @@ from lib.config_dir import config_path
 from lib.json_store import read_json, update_json_atomic
 from lib.log import audit_log
 from lib.model_catalog.aa import aa_block_for_models, refresh_scores
+from lib.model_catalog.openrouter import (
+    fill_document_list_pricing,
+    pricing_block_for_models,
+    refresh_pricing_block,
+)
 from lib.model_routing import ModelRoutingError, ModelRoutingRepository, OwnerBoundary
 from lib.openapi import api_meta
 from lib.request_parser import parse_body
@@ -150,6 +155,84 @@ def refresh_aa_scores():
         return api_not_found("Model intelligence settings not found")
     except Exception as exc:
         return api_internal_error(exc, context="api_v1.model_intelligence.aa.refresh")
+
+
+@api_v1_model_intelligence_bp.route(
+    "/api/v1/model-intelligence/openrouter-pricing", methods=["GET"])
+@require_scope("providers")
+@api_meta(
+    summary="Read the OpenRouter pricing cross-check report",
+    description=(
+        "Projects public OpenRouter list prices onto canonical Models as a "
+        "policy-bucketed report (fillable / official-covered / openrouter-free "
+        "/ unmatched / drift). Read-only; never writes the authority."
+    ),
+    tags=["models"],
+    scope="providers",
+)
+def get_openrouter_pricing():
+    try:
+        boundary = _boundary()
+        if boundary is None:
+            raise LookupError("Model intelligence settings not found")
+        repository = _repository()
+        block = pricing_block_for_models(_models(repository, boundary))
+        return api_ok(openrouter_pricing=block)
+    except LookupError:
+        return api_not_found("Model intelligence settings not found")
+    except Exception as exc:
+        return api_internal_error(
+            exc, context="api_v1.model_intelligence.openrouter_pricing.get")
+
+
+@api_v1_model_intelligence_bp.route(
+    "/api/v1/model-intelligence/openrouter-pricing/refresh", methods=["POST"])
+@require_scope("providers")
+@api_meta(
+    summary="Refresh OpenRouter pricing and fill uncovered Model list prices",
+    description=(
+        "Force-fetches the public OpenRouter catalog, then CAS-writes "
+        "list_pricing onto unpriced Models that have no official-direct "
+        "coverage. Officially priced Models are never rewritten; all-zero "
+        "OpenRouter rows never become a $0 list price."
+    ),
+    tags=["models"],
+    scope="providers",
+)
+def refresh_openrouter_pricing():
+    try:
+        boundary = _boundary()
+        if boundary is None:
+            raise LookupError("Model intelligence settings not found")
+        repository = _repository()
+        block = refresh_pricing_block(_models(repository, boundary))
+        fillable = block.get("fillable") or {}
+        applied: list[str] = []
+        revision = repository.get(boundary).revision
+        if block.get("status") == "ok" and fillable:
+            holder: dict[str, list[str]] = {"applied": []}
+
+            def mutation(working: dict[str, Any]) -> dict[str, Any]:
+                holder["applied"] = fill_document_list_pricing(working, fillable)
+                return working
+
+            committed = repository.mutate(boundary, mutation)
+            applied = holder["applied"]
+            revision = committed.revision
+        audit_log(
+            "model_intelligence_openrouter_pricing_refresh",
+            status=block.get("status"),
+            applied=len(applied),
+        )
+        return api_ok(
+            openrouter_pricing=block, applied=applied, revision=revision)
+    except ModelRoutingError as exc:
+        return api_bad_request(str(exc), kind=getattr(exc, "kind", "model_routing_error"))
+    except LookupError:
+        return api_not_found("Model intelligence settings not found")
+    except Exception as exc:
+        return api_internal_error(
+            exc, context="api_v1.model_intelligence.openrouter_pricing.refresh")
 
 
 @api_v1_model_intelligence_bp.route(

@@ -28,6 +28,65 @@ def _fn(name, **extra):
             **extra}
 
 
+class TestGptRootCombinatorProjection:
+    """2026-09-06 incident: OpenAI's tool-parameter validator rejects any
+    root combinator ("schema must have type 'object' and not have 'oneOf'/
+    'anyOf'/'allOf'/'enum'/'const'/'not' at the top level"), so write_file's
+    canonical root ``oneOf`` (content | content_ref) hard-400'd every gpt-*
+    dispatch. The provider projection applies the same sound root relaxation
+    Kimi gets; the MFJS dialect rewrites stay Kimi-only."""
+
+    def test_real_write_file_root_oneof_projected_for_gpt(self):
+        from lib.tools.gateway import _normalize_provider_tool_schema
+        from lib.tools.project import PROJECT_TOOL_WRITE_FILE
+
+        canonical = PROJECT_TOOL_WRITE_FILE['function']['parameters']
+        assert 'oneOf' in canonical  # canonical contract unchanged
+
+        out, repairs, error = _normalize_provider_tool_schema(
+            PROJECT_TOOL_WRITE_FILE, model='gpt-4.1')
+
+        assert error == ''
+        assert repairs == ('$.function.parameters.oneOf',)
+        projected = out['function']['parameters']
+        assert projected is not canonical
+        assert projected.get('type') == 'object'
+        for combinator in ('oneOf', 'anyOf', 'allOf', 'enum', 'const', 'not'):
+            assert combinator not in projected
+        # Union of branch properties; requirements that hold for EVERY branch.
+        properties = projected.get('properties') or {}
+        assert 'content' in properties
+        assert 'content_ref' in properties
+        assert set(projected.get('required') or []) == {'description', 'path'}
+        # The caller's canonical catalog is not mutated.
+        assert 'oneOf' in PROJECT_TOOL_WRITE_FILE['function']['parameters']
+
+    def test_root_oneof_untouched_for_non_gpt_non_kimi(self):
+        from lib.tools.gateway import _normalize_provider_tool_schema
+        tool = _fn('write_file')
+        tool['function']['parameters'] = {
+            'type': 'object',
+            'properties': {'path': {'type': 'string'}},
+            'required': ['path'],
+            'oneOf': [{'required': ['a']}, {'required': ['b']}],
+        }
+        out, repairs, error = _normalize_provider_tool_schema(
+            tool, model='claude-fable-5-1')
+        assert out is tool
+        assert repairs == ()
+        assert error == ''
+
+    def test_clean_object_root_keeps_identity_for_gpt(self):
+        # The hot path must not pay a rebuild when nothing is wrong.
+        from lib.tools.gateway import _normalize_provider_tool_schema
+        tool = _fn('read_files')
+        out, repairs, error = _normalize_provider_tool_schema(
+            tool, model='gpt-5.5')
+        assert out is tool
+        assert repairs == ()
+        assert error == ''
+
+
 class TestSanitizeWireTools:
     def test_clean_list_passes_through_by_identity(self):
         tools = [_fn('a'), _fn('b')]
@@ -125,7 +184,9 @@ class TestSanitizeWireTools:
         }
         original = copy.deepcopy(dynamic)
 
-        with caplog.at_level(logging.WARNING):
+        # Provider projection is a bounded DEBUG diagnostic by design (see
+        # sanitize_wire_tools: only producer defects warn).
+        with caplog.at_level(logging.DEBUG):
             normalized_tools = sanitize_wire_tools(
                 [dynamic], model='kimi-k3')
 
@@ -142,7 +203,7 @@ class TestSanitizeWireTools:
             branch['properties']['kind']['enum'][0]
             for branch in nested['anyOf']
         ] == ['a', 'b']
-        assert 'repaired_schema' in caplog.text
+        assert 'provider-compatible tool schemas' in caplog.text
         assert 'dynamic_choice' in caplog.text
 
         before = Draft7Validator(original['function']['parameters'])
@@ -213,7 +274,10 @@ class TestSanitizeWireTools:
         assert 'does not permit object tool arguments' in diagnostics[0][
             'detail']
 
-    def test_non_kimi_keeps_strict_root_union_by_identity(self):
+    def test_non_projected_provider_keeps_strict_root_union_by_identity(self):
+        # gpt-* and kimi-* both get the sound root relaxation (their
+        # validators reject root combinators); every other provider receives
+        # the canonical schema byte-identical.
         dynamic = _fn('strict_elsewhere')
         dynamic['function']['parameters']['anyOf'] = [
             {'properties': {'mode': {'enum': ['a']}}},
@@ -221,7 +285,7 @@ class TestSanitizeWireTools:
         ]
         tools = [dynamic]
 
-        assert sanitize_wire_tools(tools, model='gpt-5.6') is tools
+        assert sanitize_wire_tools(tools, model='deepseek-v4-pro') is tools
 
     def test_already_mfjs_clean_kimi_catalog_keeps_identity(self):
         tools = [_fn('clean_mfjs')]

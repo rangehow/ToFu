@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 from lib.log import get_logger
 from lib.tools.contracts import (
     ToolContractError,
+    clamp_tool_arguments_from_documents,
     validate_tool_arguments_from_documents,
 )
 from lib.tools.discovery_vocabulary import CAPABILITY_SEARCH_CONCEPTS
@@ -84,7 +85,10 @@ def search_tools_schema() -> dict[str, Any]:
                     },
                     'limit': {'type': 'integer', 'minimum': 1,
                               'maximum': LOCAL_TOOL_SEARCH_MAX_LIMIT,
-                              'default': LOCAL_TOOL_SEARCH_DEFAULT_LIMIT},
+                              'default': LOCAL_TOOL_SEARCH_DEFAULT_LIMIT,
+                              'description': (
+                                  f'Max results per call '
+                                  f'(1–{LOCAL_TOOL_SEARCH_MAX_LIMIT}).')},
                     'cursor': {
                         'type': 'string',
                         'maxLength': LOCAL_TOOL_SEARCH_MAX_CURSOR_CHARS,
@@ -111,14 +115,20 @@ def execute_tools_schema(*, include_program: bool = True) -> dict[str, Any]:
     description = (
             'Run task-available tools with calls or program; search_tools is '
             'optional when the exact name and schema are already known. Use '
-            'calls for ordinary or independent work; program only for '
-            'data-dependent calls. Do not wrap a call you also invoke '
+            'calls for independent work; program chains data-dependent calls '
+            'in ONE model round trip: call, check status, extract output, '
+            'call the next tool, return a compact result. Do not wrap a call you also invoke '
             'directly in the same response; choose one lane per action. '
             'ToolScript is bounded, not JavaScript. '
             'ToolScript supports '
             'let/const, return, if/else, for..of, while, arrays, objects, '
-            'lambdas, operators; catalog.search; tools.call, tools.callMany, '
-            'tools.parallel; '
+            'lambdas, operators; catalog.search({query,namespace?,limit?,cursor?}) '
+            '(also search(query,namespace,limit,cursor)); '
+            'tools.call(name,arguments), tools.callMany(calls), tools.parallel(calls). '
+            'Child receipts have status, output or error; require status=="done" '
+            'and !output_truncated before using output (JSON.parse if JSON text). '
+            'Failed prerequisites must not feed dependent calls. '
+            'Supports '
             'array map/filter/reduce/slice/join/push/includes; string '
             'includes/startsWith/endsWith/slice/split/trim/case conversion; '
             'JSON.parse/stringify; Object.keys/values. Calls are synchronous; '
@@ -825,9 +835,16 @@ def _normalize_provider_tool_schema(
     tool: Mapping[str, Any], *, model: str = '',
 ) -> tuple[Mapping[str, Any], tuple[str, ...], str]:
     """Return the model-specific provider projection for one tool schema."""
-    from lib.model_info import is_kimi
+    from lib.model_info import is_gpt, is_kimi
 
-    if not is_kimi(model):
+    kimi = is_kimi(model)
+    # OpenAI's tool-parameter validator rejects any root combinator outright
+    # ("schema must have type 'object' and not have 'oneOf'/'anyOf'/'allOf'/
+    # 'enum'/'const'/'not' at the top level") — write_file's root oneOf
+    # hard-400'd every gpt-* slot. The same sound root relaxation used for
+    # Kimi applies; only the MFJS dialect rewrites stay Kimi-specific.
+    gpt = is_gpt(model)
+    if not (kimi or gpt):
         return tool, (), ''
     function = tool.get('function')
     if isinstance(function, Mapping):
@@ -870,18 +887,23 @@ def _normalize_provider_tool_schema(
         parameters, path=path)
     if error:
         return tool, root_repairs, error
-    normalized, nested_repairs, error = (
-        _normalize_provider_schema_anyof_types(root, path=path)
-    )
-    repairs = (*root_repairs, *nested_repairs)
-    if error:
-        return tool, repairs, error
-    from lib.tools.moonshot_schema import project_mfjs_schema
-    normalized, subset_repairs, error = project_mfjs_schema(
-        normalized, path=path)
-    repairs = (*repairs, *subset_repairs)
-    if error or normalized is parameters:
-        return tool, repairs, error
+    normalized = root
+    repairs = root_repairs
+    if kimi:
+        normalized, nested_repairs, error = (
+            _normalize_provider_schema_anyof_types(root, path=path)
+        )
+        repairs = (*repairs, *nested_repairs)
+        if error:
+            return tool, repairs, error
+        from lib.tools.moonshot_schema import project_mfjs_schema
+        normalized, subset_repairs, error = project_mfjs_schema(
+            normalized, path=path)
+        repairs = (*repairs, *subset_repairs)
+        if error:
+            return tool, repairs, error
+    if normalized is parameters:
+        return tool, repairs, ''
     normalized_tool = dict(tool)
     if function is not None:
         normalized_function = dict(function)
@@ -1834,6 +1856,29 @@ def _cursor_encode(offset: int) -> str:
 # re-searching can never make a missing tool appear).
 _NAME_SHAPED_RE = re.compile(r'[a-z][a-z0-9_]+')
 
+
+# An MCP short-name query (`experiment_run` for `mcp__llm__experiment_run`,
+# hyphens included) is the same single-tool lookup intent one prefix level
+# down; a required separator keeps one-word capability searches on the broad
+# BM25 path.
+_MCP_SHORT_NAME_RE = re.compile(r'[a-z][a-z0-9_-]+')
+
+
+def _mcp_tail_name(name: str) -> str:
+    """Return the tool part of an ``mcp__<server>__<tool>`` catalog name."""
+    if not name.startswith('mcp__'):
+        return ''
+    parts = name.split('__', 2)
+    return parts[2] if len(parts) == 3 else ''
+
+
+def _ambiguous_suffix_notice(query_text: str, matches: list[str]) -> str:
+    shown = ', '.join(matches[:8])
+    return (
+        f"Short name '{query_text}' matches {len(matches)} tools in this "
+        f"task's catalog: {shown}. Call execute_tools with one full name, "
+        'or search one full name to see its schema. Do not search the '
+        'short name again.')
 _SEARCH_NOTICE = ("Call execute_tools with a result's exact name and "
                   'arguments matching arguments_schema.')
 
@@ -2054,6 +2099,19 @@ def search_executable_catalog(
                 legacy_lookup_name = query_text
         except Exception as exc:
             logger.debug('[ToolGateway] exact alias lookup failed: %s', exc)
+
+    suffix_lookup_name = ''
+    ambiguous_suffix_names: list[str] = []
+    if exact_lookup_name is None and ('_' in qlower or '-' in qlower) \
+            and _MCP_SHORT_NAME_RE.fullmatch(qlower):
+        tail_matches = sorted({
+            name for name in name_case.values()
+            if _mcp_tail_name(name).lower() == qlower})
+        if len(tail_matches) == 1:
+            exact_lookup_name = tail_matches[0]
+            suffix_lookup_name = query_text
+        elif len(tail_matches) > 1:
+            ambiguous_suffix_names = tail_matches
     already_visible_name = (
         exact_lookup_name if exact_lookup_name in visible_name_set else '')
     already_disclosed_name = (
@@ -2096,7 +2154,7 @@ def search_executable_catalog(
     hint_ns = ''
     if '_' in qlower and _NAME_SHAPED_RE.fullmatch(qlower):
         exact = exact_lookup_name
-        if exact is None:
+        if exact is None and not ambiguous_suffix_names:
             missing_name = query_text
         elif ns_filter and not already_disclosed_name \
                 and all(row[0] != exact for row in docs):
@@ -2113,7 +2171,11 @@ def search_executable_catalog(
             out['missing_name'] = missing_name
         if already_visible_name:
             out['already_visible'] = already_visible_name
-        if disclosed_name_set:
+        if ambiguous_suffix_names:
+            out['ambiguous_names'] = ambiguous_suffix_names[:8]
+            out['notice'] = _ambiguous_suffix_notice(
+                query_text, ambiguous_suffix_names)
+        elif disclosed_name_set:
             out['notice'] += _DISCLOSED_OMITTED_HINT
         return out
 
@@ -2238,6 +2300,19 @@ def search_executable_catalog(
                 f"'{exact_lookup_name}'. Use the canonical name with "
                 'execute_tools. ' + _SEARCH_NOTICE)
 
+    if suffix_lookup_name and exact_lookup_name \
+            and not already_visible_name and not already_disclosed_name \
+            and not hint_ns:
+        out['resolved_name'] = exact_lookup_name
+        out['notice'] = (
+            f"Short name '{suffix_lookup_name}' uniquely matches "
+            f"'{exact_lookup_name}' in this task's catalog. Call it through "
+            'execute_tools with the full name and the arguments_schema '
+            'shown. ' + _SEARCH_NOTICE)
+    if ambiguous_suffix_names:
+        out['ambiguous_names'] = ambiguous_suffix_names[:8]
+        out['notice'] = _ambiguous_suffix_notice(
+            query_text, ambiguous_suffix_names)
     # Pagination is also a hard output budget: remove the lowest-ranked tail
     # until the complete JSON envelope fits, then point the cursor at the first
     # item not returned. Argument names/required fields are never truncated.
@@ -2324,6 +2399,26 @@ def _resolve_catalog_name_detail(
             }
     except Exception as exc:
         logger.debug('[ToolGateway] curated alias resolution failed: %s', exc)
+
+    # MCP short name: the tail of exactly one ``mcp__<server>__<tool>``
+    # member. A unique tail is identity, not similarity, so it outranks the
+    # fuzzy typo gate; several matches stay an honest ambiguity error.
+    mcp_tail_matches = sorted(
+        name for name in index
+        if _mcp_tail_name(name).lower() == attempted.lower())
+    if len(mcp_tail_matches) == 1:
+        resolved = mcp_tail_matches[0]
+        return resolved, None, {
+            'path': '$.name', 'kind': 'mcp_short_tool_name',
+            'before': attempted, 'after': resolved,
+        }
+    if len(mcp_tail_matches) > 1:
+        return None, {
+            'code': 'ambiguous_tool_name',
+            'message': f'Tool name {attempted!r} is ambiguous.',
+            'candidates': mcp_tail_matches[:8],
+            'retry_hint': 'Retry with one exact candidate name.',
+        }, None
 
     # A typo may be executed only when the winner is both absolutely strong
     # and clearly separated from the runner-up.  This applies to write tools
@@ -2569,6 +2664,17 @@ def normalize_gateway_call(
                          parse_exc)
             detail = {'code': 'invalid_arguments', 'message': str(exc)}
         return None, {**detail, 'index': index, 'name': name}
+
+    # Dynamic (MCP) schemas are absent from the static repair index; the
+    # request-owned contract document still knows their bounds, so clamp
+    # out-of-range numbers before contract validation rejects the call.
+    try:
+        args, _clamped = clamp_tool_arguments_from_documents(
+            contract_documents_by_name, name, args)
+        repairs.extend({'path': str(path), 'kind': str(kind)}
+                       for path, kind in _clamped)
+    except Exception as exc:
+        logger.debug('[ToolGateway] document bounds clamp failed: %s', exc)
 
     try:
         before_contract = args

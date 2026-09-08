@@ -7,6 +7,8 @@ facade). Isolates :func:`inject_prefetched_urls`, which mutates the
 
 from lib.log import get_logger
 
+from lib.tasks_pkg.context_composer.injections import append_injection
+
 logger = get_logger(__name__)
 
 
@@ -45,12 +47,8 @@ def inject_prefetched_urls(messages, prefetched, task):
     urls_text = '\n\n' + ('═' * 40 + '\n\n').join(url_blocks)
 
     _spliced = '\n\n[Auto-fetched URL content:]\n' + urls_text
-    messages.append({
-        'role': 'user',
-        'content': _spliced,
-        '_isMeta': True,
-        '_isUrlPrefetch': True,
-    })
+    append_injection(messages, 'url_prefetch', _spliced, task=task,
+                     flags={'_isUrlPrefetch': True})
 
     try:
         _cid = (task.get('convId') or '') if isinstance(task, dict) else ''

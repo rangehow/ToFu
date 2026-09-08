@@ -830,6 +830,14 @@ pub enum TransactionIrStep {
         request: crate::turn::SyncPruneRequest,
         slot: u8,
     },
+    TurnCleanup {
+        request: crate::turn::CleanupRequest,
+        slot: u8,
+    },
+    TurnSearchBackfillGlobal {
+        request: crate::semantic_executor::search_backfill_global::GlobalBackfillRequest,
+        slot: u8,
+    },
     EntityRead {
         key: EntityKey,
         slot: u8,
@@ -898,6 +906,10 @@ pub enum TransactionIrStep {
     },
     Queue {
         request: crate::queue::Request,
+        slot: u8,
+    },
+    ModelContinuation {
+        request: crate::model_continuation::Request,
         slot: u8,
     },
     Orchestration {
@@ -2036,6 +2048,21 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::Queue { request, slot } => {
+                    let initialized = initialized_slots
+                        .get_mut(*slot as usize)
+                        .ok_or_else(|| invalid_input("Transaction IR slot exceeds its bound"))?;
+                    if *initialized {
+                        return Err(invalid_input("Transaction IR initializes a slot twice"));
+                    }
+                    *initialized = true;
+                    literal_bytes = literal_bytes
+                        .checked_add(request.validate()?)
+                        .filter(|bytes| *bytes <= MAX_TRANSACTION_IR_LITERAL_BYTES)
+                        .ok_or_else(|| {
+                            invalid_input("Transaction IR literal bytes exceed 8 MiB")
+                        })?;
+                }
+                TransactionIrStep::ModelContinuation { request, slot } => {
                     let initialized = initialized_slots
                         .get_mut(*slot as usize)
                         .ok_or_else(|| invalid_input("Transaction IR slot exceeds its bound"))?;
@@ -4770,6 +4797,43 @@ impl TransactionIr {
                         return Err(invalid_input("invalid conversation sync prune"));
                     }
                 }
+                TransactionIrStep::TurnCleanup { request, slot } => {
+                    let initialized = initialized_slots
+                        .get_mut(*slot as usize)
+                        .ok_or_else(|| invalid_input("Transaction IR slot exceeds its bound"))?;
+                    if *initialized {
+                        return Err(invalid_input("Transaction IR initializes a slot twice"));
+                    }
+                    *initialized = true;
+                    if request.now_ms == 0
+                        || !(1..=crate::generated_tofudb_ir::MAX_CLEANUP_ATTEMPTS_PER_TRANSACTION)
+                            .contains(&request.limit)
+                    {
+                        return Err(invalid_input("invalid Turn cleanup"));
+                    }
+                }
+                TransactionIrStep::TurnSearchBackfillGlobal { request, slot } => {
+                    let initialized = initialized_slots
+                        .get_mut(*slot as usize)
+                        .ok_or_else(|| invalid_input("Transaction IR slot exceeds its bound"))?;
+                    if *initialized {
+                        return Err(invalid_input("Transaction IR initializes a slot twice"));
+                    }
+                    *initialized = true;
+                    use crate::semantic_executor::search_backfill_global as global_backfill;
+                    if !(1..=global_backfill::MAX_GLOBAL_BACKFILL_CLAIM_ROWS_PER_TRANSACTION)
+                        .contains(&request.max_rows)
+                        || !(1..=global_backfill::MAX_GLOBAL_BACKFILL_SOURCE_BYTES_PER_TRANSACTION)
+                            .contains(&request.max_bytes)
+                        || request.cursor.len() > global_backfill::MAX_GLOBAL_BACKFILL_CURSOR_BYTES
+                    {
+                        return Err(invalid_input("invalid global search backfill page"));
+                    }
+                    literal_bytes = literal_bytes
+                        .checked_add(request.cursor.len())
+                        .filter(|bytes| *bytes <= MAX_TRANSACTION_IR_LITERAL_BYTES)
+                        .ok_or_else(|| invalid_input("Transaction IR literal bytes exceed 8 MiB"))?
+                }
             }
             let identity_bytes = match step {
                 TransactionIrStep::ArtifactCreate { request, .. } => {
@@ -5087,7 +5151,9 @@ impl TransactionIr {
                             | TransactionIrStep::TurnEventRecord { .. }
                             | TransactionIrStep::TurnEventsPrune { .. }
                             | TransactionIrStep::TurnSyncPrune { .. }
+                            | TransactionIrStep::TurnCleanup { .. }
                             | TransactionIrStep::TurnDelete { .. }
+                            | TransactionIrStep::TurnSearchBackfillGlobal { .. }
                             | TransactionIrStep::TurnCompact { .. }
                             | TransactionIrStep::TurnBranchCreate { .. }
                             | TransactionIrStep::TurnBranchDelete { .. }
@@ -5256,6 +5322,8 @@ pub fn execute_transaction_ir(
                 | TransactionIrStep::TurnEventsPrune { .. }
                 | TransactionIrStep::TurnSyncSnapshot { .. }
                 | TransactionIrStep::TurnSyncPage { .. }
+                | TransactionIrStep::TurnSearchBackfillGlobal { .. }
+                | TransactionIrStep::TurnCleanup { .. }
                 | TransactionIrStep::TurnDelete { .. }
                 | TransactionIrStep::TurnCompact { .. }
                 | TransactionIrStep::TurnBranchDelete { .. }
@@ -5322,6 +5390,7 @@ pub fn execute_transaction_ir(
     } else {
         database.begin(ir.tenant_id, ir.owner_user_id)?
     };
+
     if let Some(response) = lookup_receipt(database, &mut transaction, ir)? {
         return Ok(response);
     }
@@ -5330,11 +5399,19 @@ pub fn execute_transaction_ir(
     }
     let mut slots: [Option<Option<Vec<u8>>>; MAX_TRANSACTION_IR_SLOTS] =
         std::array::from_fn(|_| None);
+    let _steps_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_IR_STEPS);
     for step in &ir.steps {
         match step {
             TransactionIrStep::Queue { request, slot } => {
                 slots[*slot as usize] =
                     Some(crate::queue::execute(database, &mut transaction, request)?);
+            }
+            TransactionIrStep::ModelContinuation { request, slot } => {
+                slots[*slot as usize] = Some(crate::model_continuation::execute(
+                    database,
+                    &mut transaction,
+                    request,
+                )?);
             }
             TransactionIrStep::Orchestration { request, slot } => {
                 slots[*slot as usize] = Some(crate::orchestration::execute(
@@ -6814,6 +6891,22 @@ pub fn execute_transaction_ir(
                     request,
                 )?));
             }
+            TransactionIrStep::TurnCleanup { request, slot } => {
+                slots[*slot as usize] = Some(Some(crate::turn::cleanup(
+                    database,
+                    &mut transaction,
+                    request,
+                )?));
+            }
+            TransactionIrStep::TurnSearchBackfillGlobal { request, slot } => {
+                slots[*slot as usize] = Some(Some(
+                    crate::semantic_executor::search_backfill_global::execute(
+                        database,
+                        &mut transaction,
+                        request,
+                    )?,
+                ));
+            }
             TransactionIrStep::EntityRead { key, slot } => {
                 slots[*slot as usize] = Some(database.entity_get(&mut transaction, key)?);
             }
@@ -7670,9 +7763,12 @@ pub fn execute_transaction_ir(
             }
         }
     }
+    drop(_steps_timer);
     let response = result_bytes(&ir.result, &slots)?;
     let Some(effects) = &ir.command_effects else {
         if transaction.has_business_mutation() {
+            let _commit_timer =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_IR_COMMIT);
             database.commit(transaction)?;
         }
         return Ok(response);
@@ -7712,6 +7808,7 @@ pub fn execute_transaction_ir(
             },
         )?;
     }
+    let _commit_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_IR_COMMIT);
     database.commit(transaction)?;
     Ok(response)
 }

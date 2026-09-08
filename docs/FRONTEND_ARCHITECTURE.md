@@ -72,8 +72,8 @@ stylesheet order are explicit contract data in their manifests.
   registration. `npm run check:runtime` rejects closed, unreachable chains of
   top-level retained callables in every generated runtime, as well as stale
   composition and missing lazy dependencies.
-- Every listener, timer, EventSource, observer, and subscription has a declared
-  scope and disposal path.
+- Every listener, timer, EventSource, observer, and subscription has a declared scope and disposal path.
+- Background activity owns at most one timer/request, no hidden-page polling timers, and composition teardown; unchanged popovers refresh elapsed text without rebuilding rows or rerendering chat.
 - Backend process liveness and Sidecar storage readiness are separate verdicts.
   `backend-availability-monitor.ts` treats push/browser state as suspicion and
   requires two failed health probes before alarming; the independent
@@ -105,6 +105,18 @@ stylesheet order are explicit contract data in their manifests.
   `tofu:app-ready`; the classic `feature-bridge.js` module-graph-timeout
   path mirrors the same storage keys for the case where the failed ESM graph
   is exactly what the typed owner cannot survive.
+ Two upstream changes make
+  that recovery rare instead of routine. The asset publication retains
+  multiple generations (`scripts/vite_asset_retention.mjs`): the current and
+  previous manifest graphs stay pinned, dropped generations survive
+  newest-first inside a bounded window (default 7 days / 48 MiB,
+  `TOFU_VITE_ASSET_RETENTION_MAX_AGE_MS` /
+  `TOFU_VITE_ASSET_RETENTION_MAX_BYTES`), every build re-stamps live mtimes
+  so a dropped file's grace window starts when it leaves the manifest, and
+  raw `vite build` never empties the output directory
+  (`emptyOutDir: false`). After boot, `main.ts` warms every routed feature
+  domain a few names per idle slice through the same `loadDomain` recovery
+  seam, so a healthy session's clicks never pay a chunk fetch at all.
 - The Memory panel owns one active catalog request per open epoch and at most
   one trailing request after close/reopen invalidates presentation ownership.
   Repeated opens and scope-tab clicks share the active all-scope snapshot and
@@ -176,6 +188,12 @@ stylesheet order are explicit contract data in their manifests.
   `frontend/src/conversation/application/swarm-presentation-overlay.ts`.
   Retained reducers are injected presentation ports; they neither subscribe
   independently nor copy session telemetry into durable Turn state.
+  A settled durable swarm snapshot outranks stale live agent rows. Header,
+  progress counts, result bodies, and timers must derive from the same resolved
+  execution state; a completion header must not coexist with unresolved rows
+  from an older overlay. Separate launches remain separate panels, while wait
+  and result retrieval are not new executions. Late telemetry must not cross
+  execution boundaries or reopen a terminal historical panel.
 - Swarm stuck-panel recovery timing lives in the DOM-free
   `frontend/src/conversation/application/swarm-reconciliation-scheduler.ts`.
   The retained panel injects backend reconciliation, browser clock/visibility,
@@ -213,6 +231,20 @@ stylesheet order are explicit contract data in their manifests.
   uncertain failure cancels automatic draining and leaves the restored draft
   for an explicit retry. Thus command IDs remain idempotent without turning a
   temporary send lock into a silent no-op.
+- Thinking-depth presentation lives in `frontend/src/features/thinking-depth-slider.ts`.
+  Desktop and mobile share six request levels: off/low/medium/high/xhigh/max,
+  default medium. One heading and a uniform, unhighlighted scale replace the
+  repeated current-value label and explanatory footer. A 28px rounded groove
+  encloses the 22px thumb even at either end, with a 44/48px interaction target.
+  Pointer drags temporarily use the native range's continuous step: fractional
+  position drives the thumb/fill without per-move label reconstruction or
+  persistence. Release snaps to the nearest real level and invokes the existing
+  `selectThinkingDepth` seam once only if that level changed; native keyboard
+  interaction uses integer steps. Restores, capability changes, localization
+  and cancellation repaint without writes; teardown removes every listener.
+  Legacy ultra displays as Max without rewriting saved state until a changed
+  selection. Labels/ARIA use i18n; model-specific effort mapping stays in the
+  backend. Executable specification: `tests/thinking_depth_slider.test.cjs`.
 - Pre-send translating/connecting presentation lives in
   `frontend/src/conversation/application/send-preparation-overlay.ts`. It owns
   one stable transient Turn and remembers the initiating conversation so a
@@ -345,7 +377,12 @@ stylesheet order are explicit contract data in their manifests.
   a new direction detaches browser polling/push through the runtime disposer but
   does not cancel the checkpointed server job; explicit **Stop run** is the only
   cancellation action. Recent directions come from the durable research list,
-  so refresh/reopen never depends on the in-memory task registry.
+  so refresh/reopen never depends on the in-memory task registry. While a
+  job is still in flight, entering Research mode re-attaches to it through
+  `GET /api/v1/tasks?kind=research` (owner-scoped list → snapshot → poll/push
+  re-attach) instead of stranding the researcher on the landing page; a job
+  that finished in the meantime projects its terminal state and hydrates the
+  durable archive.
   The retained Paper presentation islands are also demand-loaded: report and
   reader markup live only in the manifest-owned `paper-reader-presenters`
   runtime, while podcast and video markup live in `paper-media-presenters`.
@@ -368,6 +405,34 @@ stylesheet order are explicit contract data in their manifests.
   `readLiveRuntimeBinding` / `writeLiveRuntimeBinding` state port, because the
   owner override cache must not hide a later paper switch. A raw
   lexical-global dependency is not a compatibility seam.
+- The LaTeX live preview gives agent TeX edits the "Overleaf feel": a
+  right-side panel that recompiles the paper and scrolls the PDF to the
+  edit. It serves two edit sources — Overleaf MCP projects and LOCAL
+  workspace `.tex` files (the default when the user never mentioned
+  Overleaf). The retained manifest section `overleaf-preview-hook.js` scans
+  every painted tool round (the `renderToolRoundsHTML` seam); only a newly
+  settled `mcp__overleaf__edit_file`/`rewrite_file`/`update_section` round
+  or a local `.tex` write (`write_file`/`edit_file`/`apply_diff(s)`/
+  `insert_content(s)`, foreign-harness arg aliases tolerated) during a LIVE
+  stream becomes a candidate — history re-paints never compile, and
+  refused/rejected/unsettled rounds never do either. Dedupe is by
+  `toolCallId`, bounded at 256 ids. The candidate (source, project id or
+  local path, file, SyncTeX needle = inserted text / section title /
+  rewrite head) crosses to the typed owner
+  `frontend/src/features/overleaf/live-preview.ts` through the lazy feature
+  stub `_overleafPreviewRounds`, so the pdf.js pipeline loads only on a real
+  edit. The owner posts by source: `POST /api/v1/overleaf/preview` (Overleaf
+  MCP bridge compile + SyncTeX locate; PDF staged under the bounded local
+  cache in `lib/overleaf_preview.py`) or `POST /api/v1/latex/preview`
+  (host pdflatex/xelatex compile into a per-document cache dir with
+  `-synctex=1`; `lib/latex_preview.py` parses `.synctex.gz` itself — no
+  synctex CLI — and resolves the edited file+line to the same
+  page/rect-in-PostScript-points contract). It then renders fit-width with
+  the shared Paper pdf.js loader and smooth-scrolls the SyncTeX rect into
+  view with a pulsing highlight. Compiles serialize behind a trailing-latest
+  pump: an edit burst collapses to the newest candidate instead of queuing
+  stale PDFs, and per-document server-side locks prevent concurrent
+  compiles of the same tree.
 - Settings retained presenters are demand-loaded as the manifest-owned
   `settings-presenters` runtime. `frontend/src/features/settings.ts` evaluates
   the typed Settings owners before that retained island, so every declared
@@ -798,14 +863,15 @@ sufficient.
 | Server-projected chat-model capability taxonomy and ordered capability-toggle list | `frontend/src/core/model-capability-taxonomy.ts` |
 | Model vendor grouping and group labels | `frontend/src/core/model-group.ts` |
 | Model brand detection | `frontend/src/core/model-brand-detection.ts` |
-| Model brand SVG/color presentation (mono currentColor only — no url(#…) paint-server refs; every template/vendor key must resolve) | `frontend/src/core/model-brand-icons.ts` |
+| Model brand SVG/color presentation (mono currentColor only — no url(#…) paint-server refs; every template/vendor key must resolve, enforced by `tests/test_provider_template_brand_icons.py`) | `frontend/src/core/model-brand-icons.ts` |
 | Model/provider display names and natural ordering | `frontend/src/core/model-display-names.ts` |
 | Conversation role-avatar snippets | `frontend/src/core/role-avatar-icons.ts` |
 | Alias/family model display projection | `frontend/src/core/model-display-fold.ts` |
 | Bounded recent-model persistence | `frontend/src/core/recent-models.ts` |
-| Settings ProviderAccess summary with in-card Connection/Credential editor and per-provider 模型管理 dialog (Offering enable/alias/remove, no tabs); classic two-row key card (hint-only secret + today's per-key stats/override toggle) fed by `GET /api/v1/dispatch/key-stats` (`key_namespace` composes the owner-scoped provider id that override writes must target) | `runtime/sections/settings/provider_render.js::_renderModelRoutingProvidersTab` + `_renderV2KeyCardStats` |
+| Settings 服务商 (Providers) tab: provider-scoped supply only — ProviderAccess summary with in-card Connection/Credential editor and per-provider 模型管理 dialog (Offering enable/alias/remove, no tabs); classic two-row key card (hint-only secret + today's per-key stats/override toggle) fed by `GET /api/v1/dispatch/key-stats` (`key_namespace` composes the owner-scoped provider id that override writes must target). Never re-renders the 模型 tab. | `runtime/sections/settings/provider_render.js::_renderModelRoutingProvidersTab` + `_renderV2KeyCardStats` |
+| Settings 模型 (Models) tab: global, read-only Creator/Model registry grouped by model developer — kept up-to-date by world-catalogue sync + subscription sync; provider supply, credentials, offerings, deployments, aliases, routes never render here (the Creator/Model-only projection handed to the feature is the data boundary, not a view convention). Flows that reload the v2 authority or mutate creators/models repaint both tabs via `_renderModelRoutingTabs()`. | `runtime/sections/settings/model_catalog_tab.js::_renderModelCatalogTab` + `frontend/src/features/model-catalog/panel.ts` |
 | Owner-scoped model-routing v2 Settings load/CAS/secret replacement | `runtime/sections/settings/core_panel.js::_loadModelRoutingAuthority` + `runtime/sections/settings/save_export.js::_saveServerConfig`; concurrent Settings reads coalesce, and Save joins or retries authority readiness before feature persistence |
-| 本地部署 entry: engine preset chooser, batch endpoint probe-and-stage, managed model-path handoff into a fresh chat (local_serve flow) | `runtime/sections/settings/local_deploy.js::addLocalProvider` (staging via `provider_render.js::_stageModelRoutingProviderBundle`) |
+| 本地部署 page: live hardware strip, curated catalog ranked against it (purpose-filtered, fit-tiered, download-hint cards that hand off to the chat agent), DeepSeek V4 Flash cloud escape hatch deep-linking the template wizard, managed-instance ledger with failure diagnosis → agent repair handoff, then the engine preset chooser / batch endpoint probe-and-stage / managed model-path handoff | `runtime/sections/settings/local_deploy.js::addLocalProvider` (read-only `Api.localServe` → `routes/api_v1/local_serve.py`; staging via `provider_render.js::_stageModelRoutingProviderBundle`) |
 | Provider-first chat picker, automatic Provider choice, and provider-scoped pending identity | `runtime/sections/main/main_toolbar_ui.js::_modelRoutingDropdownModels` |
 | Model visibility/default projection from enabled v2 Offerings | `runtime/sections/settings/core_panel.js::_getAllModels` + `runtime/sections/settings/visibility_defaults.js` |
 | Speech ProviderAccess bundle creation/update/deletion and encrypted credential handoff | `frontend/src/features/settings/speech.ts` + `Api.modelRouting` |
@@ -911,9 +977,12 @@ same list: each child event log is folded independently (attempt/wire/tool
 joins stay scoped to that log's own `(turn, roundNum)` space), merged rows
 carry `sourceTaskId` plus the agent badge, and the drawer's per-round
 payload, previous-round diff base, and raw-archive reads all address
-`sourceTaskId` instead of the selected parent.
- The
-round detail exposes the wire projection: ordered final names,
+`sourceTaskId` instead of the selected parent. At most 32 child streams are
+merged into one fold; overflow reports `coverageReason:child-limit` so the
+bounded diagnostic never claims full coverage. Sub-agent snapshots reuse the
+finalized request body's canonical messages, model, tools, and wire parameters
+rather than reconstructing a second approximation.
+The round detail exposes the wire projection: ordered final names,
 schema-token estimate, an opaque exact-schema fingerprint, discovery backend,
 explicit budget, and budget omissions; it never presents the larger assembly
 snapshot as what the model received.
@@ -1123,3 +1192,54 @@ size budgets apply to authoring sections as well as shipped resources.
    the retained renderer.
 5. Regenerate artifacts and run the focused test plus `npm run check:frontend`.
 6. Remove the superseded runtime branch and its source-text regression tests.
+
+## Independent research workbench
+
+Research now enters through `features/research.ts`, independently lazy-routed
+from `toggleResearchMode` in `main.ts`. Paper panel composition no longer imports
+research owners. `research/api/reader.ts` is the explicit, lazy Paper navigation
+port; opening a corpus paper loads the reader, not another research session.
+
+- `research/api/ports.ts`: typed existing task/research API seams; no new transport.
+- `research/state/{stream,progress}.ts`: ephemeral projection and optional generated
+  `ResearchProgressV1` validation. Task snapshots remain lifecycle authority;
+  `research_progress` carries factual activity/counts, never an inferred percent.
+- `research/controllers/runtime.ts`: one push attachment and single-flight replay
+  polling per current task, submission gating, cancellation confirmation, hydration
+  and reattachment. Poll failure retains last confirmed execution state and exposes
+  reconnection. A failed cancellation never marks the task aborted.
+- `research/controllers/workspace.ts`: revision/CAS edits and research-action
+  polling; generation guards fence workspace loads and action callbacks, exit
+  clears the timer and retains the local editor draft. External write confirmation,
+  bindings/schema hashes, evidence receipts and source digests remain intact.
+- `research/components/{view,stable-dom}.ts`: stable telemetry patching preserves
+  controls, focus/selection, open disclosures and the separate workspace DOM island.
+  Overview, evidence, candidates, experiment and paper use native accessible
+  buttons; experiment/paper share one editor and revision owner, not cloned forms.
+- `research/pages/session.ts`: Research chrome and enter/exit lifecycle.
+- `research/testing/workbench.test.cjs`: focused executable DOM and task authority
+  regressions, run by `npm run check:research`.
+
+Source styles remain manifest-composed in `styles/application/03-paper-reader.css`.
+New status/navigation/count copy belongs to both source locales. The controller
+still uses the existing private feature registry compatibility ports; extracting
+all workspace HTML into smaller components and complete action reattachment after
+navigation are remaining follow-ups, not a second store or transport migration.
+
+### Conversation project restoration
+
+`conversation/application/conversation-project.ts` owns navigation restoration,
+including boot and cold snapshot continuations. The retained `project_state.js`
+adapter supplies draft, selection, transport and presentation ports until typed migration.
+
+An empty composer restores the target conversation's primary, extra roots and
+read-only subset via the pruning multi-path endpoint. Text, image/PDF/video
+attachments or pending cleaned-log input preserve the composer project instead.
+Generation, selection identity and live draft checks fence late hydration and
+restore responses (including A→B→A). Navigation and general settings capture
+never copy the global project into conversation metadata. Restore failure leaves
+the durable binding intact for retry and does not persist a mode demotion.
+Explicit project selection/clear and send are context commit boundaries; send
+copies the armed composer project's complete roots and read-only policy.
+
+`conversation/application/conversation-model.ts` applies the same draft rule to models/presets, provider references and thinking depth. Only explicit model/depth choices and send commit selection; navigation/settings capture never do. Cold hydration checks selection identity and navigation generation. Catalog refresh never substitutes unavailable models; legacy preset aliases resolve at paint.

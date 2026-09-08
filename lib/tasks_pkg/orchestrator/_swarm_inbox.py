@@ -40,6 +40,8 @@ from lib.agent_core.events import EventType, build_event
 from lib.log import get_logger
 from lib.tasks_pkg.manager import append_event
 
+from lib.tasks_pkg.context_composer import append_injection, can_append_injection
+
 logger = get_logger(__name__)
 
 
@@ -65,13 +67,7 @@ def drain_and_inject_inbox(
     before another role can speak).
     """
     try:
-        _last_msg = messages[-1] if messages else None
-        _has_unmatched_tool_call = (
-            bool(_last_msg)
-            and _last_msg.get('role') == 'assistant'
-            and _last_msg.get('tool_calls')
-        )
-        if not _has_unmatched_tool_call:
+        if can_append_injection(messages):
             from lib.agent_inbox import drain as _drain_inbox
             from lib.swarm.integration import swarm_key_for as _swarm_key_for
             # NOTE: drain with the conversation-scoped SWARM KEY — the
@@ -133,15 +129,10 @@ def drain_and_inject_inbox(
                 _payloads = [it.get('value', '') for it in _inbox_items
                              if it.get('value')]
                 if _payloads:
-                    messages.append({
-                        'role':    'user',
-                        'content': '\n\n'.join(_payloads),
-                        # Internal classification for compaction/query
-                        # extraction. Provider sanitization strips underscore
-                        # fields; the model still receives the same role/text.
-                        '_isInboxInject': True,
-                        '_containsHumanSteer': bool(_steer_items),
-                    })
+                    append_injection(
+                        messages, 'inbox_delivery', '\n\n'.join(_payloads),
+                        task=task, round_num=round_num,
+                        contains_human_steer=bool(_steer_items))
                     # Items already partitioned by the two drains above:
                     # ``_swarm_items`` (sub-agent results, carry agent_id)
                     # and ``_peer_items`` (Pillar #6, carry queueId). They

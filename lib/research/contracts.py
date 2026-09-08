@@ -18,9 +18,12 @@ from typing import Iterable
 DEFAULT_RESEARCH_IDEAS = 6
 MIN_RESEARCH_IDEAS = 3
 MAX_RESEARCH_IDEAS = 12
-DEFAULT_RESEARCH_HARVEST_PAPERS = 20
+DEFAULT_RESEARCH_HARVEST_PAPERS = 60
 MIN_RESEARCH_HARVEST_PAPERS = 3
-MAX_RESEARCH_SEED_PAPERS = 20
+MAX_RESEARCH_SEED_PAPERS = 200
+MAX_RESEARCH_DISCOVERY_QUERIES = 6
+MAX_RESEARCH_DISCOVERY_RESULTS_PER_QUERY = 40
+RESEARCH_DISCOVERY_STALE_ROUNDS = 2
 MAX_RESEARCH_DIRECTION_CHARS = 2_000
 MAX_RESEARCH_MODEL_CHARS = 256
 
@@ -62,7 +65,7 @@ def normalize_research_idea_count(value) -> int:
 
 
 def normalize_research_harvest_count(value) -> int:
-    """Clamp query-derived corpus fan-out to the same 3..20 paper envelope."""
+    """Bound corpus size independently from survey/model working-set budgets."""
     return _bounded_integer(
         value, default=DEFAULT_RESEARCH_HARVEST_PAPERS,
         minimum=MIN_RESEARCH_HARVEST_PAPERS,
@@ -162,6 +165,10 @@ __all__ = [
     'DEFAULT_RESEARCH_HARVEST_PAPERS', 'DEFAULT_RESEARCH_IDEAS',
     'MAX_RESEARCH_DIRECTION_CHARS', 'MAX_RESEARCH_IDEAS',
     'MAX_RESEARCH_MODEL_CHARS',
+
+    'MAX_RESEARCH_DISCOVERY_QUERIES',
+    'MAX_RESEARCH_DISCOVERY_RESULTS_PER_QUERY',
+    'RESEARCH_DISCOVERY_STALE_ROUNDS',
     'MAX_RESEARCH_SEED_PAPERS', 'MIN_RESEARCH_HARVEST_PAPERS',
     'MIN_RESEARCH_IDEAS', 'ResearchRequest',
     'normalize_discovered_arxiv_ids', 'normalize_research_harvest_count',

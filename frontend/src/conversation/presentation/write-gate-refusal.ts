@@ -19,7 +19,8 @@ type KnownWriteGateRefusalKind =
   | 'read_first'
   | 'partial_stale'
   | 'partial_read_first'
-  | 'content_ref';
+  | 'content_ref'
+  | 'outside_workspace';
 
 export type WriteGateRefusalInfo = Readonly<{
   kind: string;
@@ -139,6 +140,8 @@ export function createWriteGateRefusalPresentation(
         return translate('tool.gatePartialReadFirstBadge');
       case 'content_ref':
         return translate('tool.gateContentRefBadge');
+      case 'outside_workspace':
+        return translate('tool.gateOutsideWorkspaceBadge');
       default:
         return kind;
     }
@@ -160,6 +163,8 @@ export function createWriteGateRefusalPresentation(
         });
       case 'content_ref':
         return translate('tool.gateContentRefTitle');
+      case 'outside_workspace':
+        return translate('tool.gateOutsideWorkspaceTitle');
       default:
         return '';
     }
@@ -189,6 +194,10 @@ export function createWriteGateRefusalPresentation(
         });
       case 'content_ref':
         return translate('tool.gateContentRefText');
+      case 'outside_workspace':
+        return translate('tool.gateOutsideWorkspaceText', {
+          paths: PATHS_PLACEHOLDER,
+        });
       default:
         return '';
     }

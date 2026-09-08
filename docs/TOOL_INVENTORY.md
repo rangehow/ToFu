@@ -8,14 +8,14 @@ registry + the per-facet tables — nothing here is hand-maintained.
 Third-party plugin tools vary per deployment and are listed in the
 diagnostic section at the end, which `--check` ignores.
 
-Built-in tools: **96**
+Built-in tools: **97**
 
 ## Gaps
 
 | gap | count | meaning |
 |---|---|---|
 | write tool with no approval enricher | 0 | the approval dialog renders a bare tool name — the user approves blind, which the approval module itself calls "worse than not prompting at all" |
-| no UI label | 78 | the raw tool name is shown in the activity line |
+| no UI label | 79 | the raw tool name is shown in the activity line |
 | no reachable handler | 0 | schema advertised to the model but nothing executes it |
 | description cannot disambiguate | 6 | the model cannot tell this tool apart from its neighbours and picks the wrong one |
 | confusable tool pairs | 3 | two same-category tools open with near-identical sentences, so the model picks the wrong one |
@@ -79,6 +79,7 @@ Confusable same-category tool pairs (first-sentence overlap >= 0.5):
 | local_serve_deploy | local_serve | local_serve | SET | ✓ |  |  | ✓ |  |  |  |  |  | ? |
 | local_serve_list | local_serve | local_serve | SET |  |  |  |  |  |  |  |  |  | ? |
 | local_serve_prepare | local_serve | local_serve | SET |  |  |  |  |  |  |  |  |  | ? |
+| local_serve_recommend | local_serve | local_serve | SET |  |  |  |  |  |  |  |  |  | ? |
 | local_serve_remove | local_serve | local_serve | SET | ✓ |  |  | ✓ |  |  |  |  |  | ? |
 | local_serve_status | local_serve | local_serve | SET |  |  |  |  |  |  |  |  |  | ? |
 | local_serve_stop | local_serve | local_serve | SET | ✓ |  |  | ✓ |  |  |  |  |  | ? |
@@ -110,7 +111,7 @@ Confusable same-category tool pairs (first-sentence overlap >= 0.5):
 | fetch_url | search | fetch | EXACT |  | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ |
 | update_search_settings | search | search_settings | EXACT | ✓ |  |  | ✓ |  |  |  |  |  | ✓ |
 | web_search | search | search | EXACT |  | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |
-| load_skill | skills | skills | SET |  | ✓ | ✓ |  |  |  |  |  |  | ✓ |
+| load_skill | skills | skills | SET |  | ✓ | ✓ |  |  |  |  |  | ✓ | ✓ |
 | read_skill_resource | skills | skills | SET |  | ✓ | ✓ |  |  |  |  |  |  | ✓ |
 | request_skill_install | skills | skill_install | SET | ✓ |  | ✓ | ✓ |  |  |  |  |  | ? |
 | search_skills | skills | skills | SET |  | ✓ | ✓ |  |  |  |  |  |  | ✓ |

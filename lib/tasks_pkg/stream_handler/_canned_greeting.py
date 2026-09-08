@@ -62,6 +62,19 @@ _CANNED_GREETING_RE = re.compile(
 _SYSTEM_REMINDER_RE = re.compile(
     r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 
+# Context Composer managed blocks are wrapped in HTML-comment envelopes
+# AROUND the <system-reminder> body (``_envelope``, context_composer/
+# _render.py) and ride as SEPARATE trailing user messages
+# (``_append_tail``). Reminder-stripping alone leaves the markers behind,
+# so a bare "hi" turn read as >30 chars of prose and its legitimate
+# greeting reply was burned by both retries (2026-09-08 false positive).
+# Strip the whole envelope — markers plus body. ``project_context``
+# envelopes carry raw text with no reminder inside; same treatment.
+_TOFU_CONTEXT_ENVELOPE_RE = re.compile(
+    r'<!-- tofu-context:([^:\n]+):start -->.*?'
+    r'<!-- tofu-context:\1:end -->',
+    re.DOTALL)
+
 # The complement: a last-user-message that is PURE small-talk makes a
 # greeting reply legitimate. Kept tight — salutations and bare thanks only,
 # so "继续" / "?" / a brain kickoff never read as an invitation to greet.
@@ -94,20 +107,30 @@ def _message_text(content) -> str:
 
 
 def _user_own_text(content) -> str:
-    """The user's own words: flattened text minus system-injected reminders."""
-    return _SYSTEM_REMINDER_RE.sub('', _message_text(content)).strip()
+    """The user's own words: flattened text minus system-injected context."""
+    text = _TOFU_CONTEXT_ENVELOPE_RE.sub('', _message_text(content))
+    return _SYSTEM_REMINDER_RE.sub('', text).strip()
 
 
 def last_user_is_smalltalk(messages: list) -> bool:
-    """True iff the last user-role message is pure greeting/thanks small-talk."""
+    """True iff the last real user turn is pure greeting/thanks small-talk.
+
+    Injected-context carriers (Context Composer tails, attachment
+    reminders) are user-role messages with no user words of their own;
+    the scan skips them so the verdict keys off the last thing the user
+    actually said, not off the padding appended around it.
+    """
     for m in reversed(messages or []):
-        if isinstance(m, dict) and m.get('role') == 'user':
-            text = _user_own_text(m.get('content'))
-            if not text or len(text) > _SMALLTALK_MAX_CHARS:
-                return False
-            return bool(_SMALLTALK_RE.match(text))
-    # No user turn at all: nothing was asked, so a greeting cannot be a
-    # legitimate answer. Not small-talk.
+        if not (isinstance(m, dict) and m.get('role') == 'user'):
+            continue
+        text = _user_own_text(m.get('content'))
+        if not text:
+            continue  # injected-context carrier — not the user's own words
+        if len(text) > _SMALLTALK_MAX_CHARS:
+            return False
+        return bool(_SMALLTALK_RE.match(text))
+    # No substantive user turn at all: nothing was asked, so a greeting
+    # cannot be a legitimate answer. Not small-talk.
     return False
 
 

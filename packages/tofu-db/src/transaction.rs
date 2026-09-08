@@ -9,11 +9,25 @@ const MAGIC: &[u8; 8] = b"TDBTXN01";
 const FAMILY_MAGIC: &[u8; 8] = b"TDBFAM01";
 const FAMILY_VERSION: u32 = 1;
 const ENVELOPE_VERSION: u32 = 2;
+/// Version 3: identical header and block id list, followed by one
+/// `[u32 length | payload]` slot per block id plus one authority-state slot
+/// (`CARRIED_ABSENT` marks an identifier-only entry), then the inline
+/// payload. Carried copies let the WAL alone rebuild freshly written loose
+/// blocks after a crash that lost files not yet fsynced; blocks already
+/// durable keep identifier-only entries so record growth stays bounded to
+/// new writes.
+const ENVELOPE_VERSION_CARRIED: u32 = 3;
+const CARRIED_ABSENT: u32 = u32::MAX;
 const HEADER_BYTES: usize = 8 + 4 + 4 + 4 + 1 + 32;
 const FAMILY_HEADER_BYTES: usize = 8 + 4 + 2 + 2;
 const FAMILY_RECORD_HEADER_BYTES: usize = 1 + 3 + 4;
 pub const MAX_REFERENCED_BLOCKS: usize = 2_048;
 pub const MAX_INLINE_BYTES: usize = 256 * 1024;
+/// Total carried payload bytes embedded in one version 3 envelope. Above
+/// this bound the commit spills back to identifier-only references and
+/// fsyncs the loose blocks instead, preserving the 4 MiB history segment
+/// ceiling and bounded WAL replay memory.
+pub const MAX_CARRIED_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 // A maximum-size event.append_batch may touch 500 distinct streams. Reserve
 // bounded room for the entity root, receipt, outbox, and future singleton
 // families without relaxing the independent 256 KiB inline byte ceiling.
@@ -146,6 +160,11 @@ impl FamilyTransactionBuilder {
         })
     }
 }
+
+/// Result of [`TransactionEnvelope::decode_with_carried`]: the envelope,
+/// one carried payload slot per referenced block (`None` = identifier-only
+/// reference), and the optional carried authority-state payload.
+pub type DecodedCarriedEnvelope = (TransactionEnvelope, Vec<Option<Vec<u8>>>, Option<Vec<u8>>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TransactionEnvelope {
@@ -316,6 +335,92 @@ impl TransactionEnvelope {
         Ok(bytes)
     }
 
+    /// Version 3 encoding. `carried` aligns with `block_ids` element by
+    /// element; at least one payload (block or authority state) must be
+    /// present so the version marker is never ambiguous — identifier-only
+    /// transactions use `encode()`.
+    pub fn encode_with_carried(
+        &self,
+        carried: &[Option<&[u8]>],
+        authority_state_carried: Option<&[u8]>,
+    ) -> io::Result<Vec<u8>> {
+        if self.block_ids.len() > MAX_REFERENCED_BLOCKS {
+            return Err(invalid_input("transaction references too many blocks"));
+        }
+        if self.inline_payload.len() > MAX_INLINE_BYTES {
+            return Err(invalid_input("transaction inline payload exceeds 256 KiB"));
+        }
+        if carried.len() != self.block_ids.len() {
+            return Err(invalid_input("carried payload count mismatch"));
+        }
+        if authority_state_carried.is_some()
+            && !matches!(self.authority_state_update, Some(Some(_)))
+        {
+            return Err(invalid_input("authority state carried without root"));
+        }
+        let mut carried_bytes = authority_state_carried.map_or(0, <[u8]>::len);
+        for payload in carried.iter().flatten() {
+            carried_bytes = carried_bytes
+                .checked_add(payload.len())
+                .ok_or_else(|| invalid_input("transaction carried length overflow"))?;
+        }
+        if carried_bytes == 0 {
+            return Err(invalid_input("carried envelope embeds no payload"));
+        }
+        if carried_bytes > MAX_CARRIED_PAYLOAD_BYTES {
+            return Err(invalid_input("transaction carried payload exceeds 2 MiB"));
+        }
+        let slot_bytes = (self.block_ids.len() + 1)
+            .checked_mul(4)
+            .ok_or_else(|| invalid_input("transaction envelope length overflow"))?;
+        let mut bytes = Vec::with_capacity(
+            HEADER_BYTES
+                + self.block_ids.len() * 32
+                + slot_bytes
+                + carried_bytes
+                + self.inline_payload.len(),
+        );
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&ENVELOPE_VERSION_CARRIED.to_le_bytes());
+        bytes.extend_from_slice(&(self.block_ids.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(self.inline_payload.len() as u32).to_le_bytes());
+        match self.authority_state_update {
+            None => {
+                bytes.push(0);
+                bytes.extend_from_slice(&[0; 32]);
+            }
+            Some(None) => {
+                bytes.push(1);
+                bytes.extend_from_slice(&[0; 32]);
+            }
+            Some(Some(root)) => {
+                bytes.push(2);
+                bytes.extend_from_slice(&root.0);
+            }
+        }
+        for block_id in &self.block_ids {
+            bytes.extend_from_slice(&block_id.0);
+        }
+        for payload in carried {
+            match payload {
+                Some(payload) => {
+                    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+                    bytes.extend_from_slice(payload);
+                }
+                None => bytes.extend_from_slice(&CARRIED_ABSENT.to_le_bytes()),
+            }
+        }
+        match authority_state_carried {
+            Some(payload) => {
+                bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(payload);
+            }
+            None => bytes.extend_from_slice(&CARRIED_ABSENT.to_le_bytes()),
+        }
+        bytes.extend_from_slice(&self.inline_payload);
+        Ok(bytes)
+    }
+
     pub fn decode(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() < HEADER_BYTES || &bytes[..8] != MAGIC {
             return Err(invalid_data("transaction envelope magic mismatch"));
@@ -358,6 +463,146 @@ impl TransactionEnvelope {
             inline_payload: bytes[offset..].to_vec(),
             authority_state_update,
         })
+    }
+
+    /// Accepts version 2 and version 3 envelopes, returning the envelope
+    /// plus the carried payload slots (all `None` for version 2). Decode is
+    /// parse-only by design: content addressing makes a mismatched payload
+    /// land at its own hash-derived id — never the referenced one — and
+    /// block reads verify content hashes before returning bytes.
+    pub fn decode_with_carried(bytes: &[u8]) -> io::Result<DecodedCarriedEnvelope> {
+        Self::decode_carried_impl(bytes, true)
+    }
+
+    /// Parses version 2 and version 3 envelopes without copying carried
+    /// payload bytes; the exact logged bytes are retained separately by the
+    /// caller, so only the parsed header is needed.
+    pub fn decode_skipping_carried(bytes: &[u8]) -> io::Result<Self> {
+        let (envelope, _, _) = Self::decode_carried_impl(bytes, false)?;
+        Ok(envelope)
+    }
+
+    fn decode_carried_impl(bytes: &[u8], collect: bool) -> io::Result<DecodedCarriedEnvelope> {
+        if bytes.len() < HEADER_BYTES || &bytes[..8] != MAGIC {
+            return Err(invalid_data("transaction envelope magic mismatch"));
+        }
+        let version = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+        if version == ENVELOPE_VERSION {
+            let envelope = Self::decode(bytes)?;
+            let slots = vec![None; envelope.block_ids.len()];
+            return Ok((envelope, slots, None));
+        }
+        if version != ENVELOPE_VERSION_CARRIED {
+            return Err(invalid_data(
+                "unsupported or unbounded transaction envelope",
+            ));
+        }
+        let block_count = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let inline_len = u32::from_le_bytes(bytes[16..20].try_into().unwrap()) as usize;
+        if block_count > MAX_REFERENCED_BLOCKS || inline_len > MAX_INLINE_BYTES {
+            return Err(invalid_data(
+                "unsupported or unbounded transaction envelope",
+            ));
+        }
+        let authority_state_update = match bytes[20] {
+            0 if bytes[21..53] == [0; 32] => None,
+            1 if bytes[21..53] == [0; 32] => Some(None),
+            2 => Some(Some(BlockId(bytes[21..53].try_into().unwrap()))),
+            _ => return Err(invalid_data("invalid transaction authority state update")),
+        };
+        let ids_end = HEADER_BYTES
+            .checked_add(
+                block_count
+                    .checked_mul(32)
+                    .ok_or_else(|| invalid_data("transaction block length overflow"))?,
+            )
+            .ok_or_else(|| invalid_data("transaction block length overflow"))?;
+        if bytes.len() < ids_end + (block_count + 1) * 4 + inline_len {
+            return Err(invalid_data("transaction envelope length mismatch"));
+        }
+        let mut block_ids = Vec::with_capacity(block_count);
+        let mut offset = HEADER_BYTES;
+        for _ in 0..block_count {
+            block_ids.push(BlockId(bytes[offset..offset + 32].try_into().unwrap()));
+            offset += 32;
+        }
+        let mut carried_total = 0usize;
+        let mut carried_any = false;
+        let mut carried = Vec::with_capacity(block_count);
+        for _ in 0..block_count {
+            let length = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            offset += 4;
+            if length == CARRIED_ABSENT {
+                carried.push(None);
+                continue;
+            }
+            let length = length as usize;
+            carried_total = carried_total
+                .checked_add(length)
+                .ok_or_else(|| invalid_data("transaction carried length overflow"))?;
+            if carried_total > MAX_CARRIED_PAYLOAD_BYTES {
+                return Err(invalid_data("transaction carried payload exceeds 2 MiB"));
+            }
+            let end = offset
+                .checked_add(length)
+                .ok_or_else(|| invalid_data("transaction carried length overflow"))?;
+            if end > bytes.len() {
+                return Err(invalid_data("transaction envelope length mismatch"));
+            }
+            if collect {
+                carried.push(Some(bytes[offset..end].to_vec()));
+            } else {
+                carried.push(None);
+            }
+            offset = end;
+            carried_any = true;
+        }
+        let authority_state_carried = {
+            let length = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+            offset += 4;
+            if length == CARRIED_ABSENT {
+                None
+            } else {
+                if !matches!(authority_state_update, Some(Some(_))) {
+                    return Err(invalid_data("authority state carried without root"));
+                }
+                let length = length as usize;
+                carried_total = carried_total
+                    .checked_add(length)
+                    .ok_or_else(|| invalid_data("transaction carried length overflow"))?;
+                if carried_total > MAX_CARRIED_PAYLOAD_BYTES {
+                    return Err(invalid_data("transaction carried payload exceeds 2 MiB"));
+                }
+                let end = offset
+                    .checked_add(length)
+                    .ok_or_else(|| invalid_data("transaction carried length overflow"))?;
+                if end > bytes.len() {
+                    return Err(invalid_data("transaction envelope length mismatch"));
+                }
+                carried_any = true;
+                let payload = collect.then(|| bytes[offset..end].to_vec());
+                offset = end;
+                payload
+            }
+        };
+        if !carried_any {
+            return Err(invalid_data("carried envelope embeds no payload"));
+        }
+        let end = offset
+            .checked_add(inline_len)
+            .ok_or_else(|| invalid_data("transaction envelope length overflow"))?;
+        if end != bytes.len() {
+            return Err(invalid_data("transaction envelope length mismatch"));
+        }
+        Ok((
+            Self {
+                block_ids,
+                inline_payload: bytes[offset..end].to_vec(),
+                authority_state_update,
+            },
+            carried,
+            authority_state_carried,
+        ))
     }
 }
 

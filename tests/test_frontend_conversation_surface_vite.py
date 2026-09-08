@@ -1823,6 +1823,179 @@ dom.window.close();
     }
 
 
+def test_activity_tool_rejection_row_yields_to_the_inline_tool_rejection(
+        conversation_bundle: Path):
+    result = _run(conversation_bundle, r"""
+const { JSDOM } = require('jsdom');
+const dom = new JSDOM('<main id="chat"></main>');
+global.Element = dom.window.Element;
+const document = dom.window.document;
+const toolSegment = {type:'tool_use', blockId:'tool:call-b', id:'call-b',
+  name:'search_tool_artifact', input:{query:'consoleErrors'}, llmRound:0,
+  result:{status:'rejected', content:'ERROR: Tool call was NOT executed.'}};
+const textSegment = {type:'text', blockId:'text:terminal', text:'answer',
+  deliverable:true, terminal:true, llmRound:1};
+const rejectedRound = {roundNum:1, llmRound:0, toolCallId:'call-b',
+  toolName:'search_tool_artifact', toolArgs:{query:'consoleErrors'},
+  status:'rejected',
+  rejection:{kind:'tool_contract_invalid', tool:'search_tool_artifact',
+    reason:'ERROR: Tool call was NOT executed.'},
+  result:{status:'rejected', content:'ERROR: Tool call was NOT executed.'}};
+const entries = [
+  {id:'blocked-1', spanId:'tool:call-b', parentSpanId:'model:1', seq:1,
+    occurredAt:1005, startedAt:1000, endedAt:1005, durationMs:5,
+    kind:'tool', status:'skipped', severity:'warning', count:1,
+    summary:'search_tool_artifact blocked',
+    summaryKey:'activity.tool.blocked',
+    summaryArgs:{tool:'search_tool_artifact'},
+    detail:'ERROR: Tool call was NOT executed.',
+    reasonCode:'tool_contract_invalid',
+    toolName:'search_tool_artifact', toolCallId:'call-b', llmRound:0},
+  {id:'unavail-1', spanId:'tool:call-c', parentSpanId:'model:1', seq:2,
+    occurredAt:1010, kind:'tool', status:'skipped', severity:'warning', count:1,
+    summary:'legacy_tool unavailable', summaryKey:'activity.tool.unavailable',
+    summaryArgs:{tool:'legacy_tool'}, detail:'not in this turn toolset',
+    reasonCode:'tool_not_available', toolName:'legacy_tool',
+    toolCallId:'call-c', llmRound:1},
+];
+const turn = {
+  turnId:'turn-reject', conversationId:'conv-a', laneId:'main', ordinal:1,
+  actor:'assistant', kind:'reply', runId:'', status:'completed', currentAttemptId:null,
+  projection:{segments:[toolSegment, textSegment], toolRounds:[rejectedRound],
+    content:'answer',
+    activityTimeline:{blockId:'activity-timeline', version:1, entries}},
+  projectionRevision:1, settlement:{outcome:'completed'}, createdAt:1, updatedAt:2,
+};
+const state = {conversationId:'conv-a', conversationRevision:1, transport:'live',
+  turnsById:{'turn-reject':turn}, laneOrder:{main:['turn-reject']},
+  attemptsById:{}, queueItems:[], pendingEventsByTurn:{}, commandPending:{},
+  liveRoundUsageByTurn:{}};
+const scheduled = [];
+const controller = feature.createConversationSurfaceController({
+  isActive:() => true,
+  getContainer:() => document.getElementById('chat'),
+  schedule(render) { scheduled.push(render); return () => {}; },
+  nativeRenderers:feature.createClassicConversationRenderers({
+    renderSafeMarkdownHtml:value => value,
+    renderToolBlockHtml:block => '<details class="native-tool"><summary>'
+      + block.name + '</summary></details>',
+  }),
+});
+controller.render({id:'conv-a'}, state);
+scheduled.shift()();
+const vmTurn = feature.selectConversationViewModel(state).mainLane.turns[0];
+console.log(JSON.stringify({
+  blockIds:vmTurn.blocks.map(block => block.blockId),
+  blockedRowGone:!document.querySelector('[data-activity-id="blocked-1"]'),
+  orphanRowSummary:document.querySelector('[data-activity-id="unavail-1"]')
+    .querySelector('.activity-event__summary').textContent,
+}));
+controller.dispose();
+dom.window.close();
+""")
+    # The blocked row duplicates the rejected tool row's badge + full reason,
+    # so only the orphan unavailable row (no matching round) survives.
+    assert result == {
+        "blockIds": ["tool:call-b", "text:terminal", "activity:unavail-1"],
+        "blockedRowGone": True,
+        "orphanRowSummary": "legacy_tool unavailable",
+    }
+
+
+def test_activity_tool_failure_row_yields_to_the_inline_tool_error(
+        conversation_bundle: Path):
+    result = _run(conversation_bundle, r"""
+const { JSDOM } = require('jsdom');
+const dom = new JSDOM('<main id="chat"></main>');
+global.Element = dom.window.Element;
+const document = dom.window.document;
+const toolSegment = {type:'tool_use', blockId:'tool:call-e', id:'call-e',
+  name:'mcp__llm__experiment_stop', input:{mis:'359059'}, llmRound:0,
+  result:{status:'error', content:'MCP Error: confirm=true required'}};
+const textSegment = {type:'text', blockId:'text:terminal', text:'answer',
+  deliverable:true, terminal:true, llmRound:2};
+const errorRound = {roundNum:1, llmRound:0, toolCallId:'call-e',
+  toolName:'mcp__llm__experiment_stop', status:'error',
+  toolContent:'MCP Error: confirm=true required',
+  result:{status:'error', content:'MCP Error: confirm=true required'}};
+const gatewayContent = JSON.stringify({
+  contractVersion:'tofu.tool-result/v2', status:'ok', items:[{
+    status:'error', results:[], errors:[{
+      code:'missing_required_arguments', name:'read_tool_artifact',
+      message:'Missing required arguments: artifact_ref',
+      retry_hint:'Provide artifact_ref and retry.',
+    }],
+  }],
+});
+const gatewayRound = {roundNum:2, llmRound:1, toolCallId:'gw-1',
+  toolName:'execute_tools', status:'error', toolContent:gatewayContent};
+const entries = [
+  {id:'failed-1', spanId:'tool:call-e', parentSpanId:'model:1', seq:1,
+    occurredAt:1005, startedAt:1000, endedAt:1005, durationMs:5,
+    kind:'tool', status:'failed', severity:'error', count:1,
+    summary:'mcp__llm__experiment_stop failed',
+    summaryKey:'activity.tool.failed',
+    summaryArgs:{tool:'mcp__llm__experiment_stop'},
+    detail:'MCP Error: {"ok": false … <log policy omitted 628 chars> …',
+    reasonCode:'error',
+    toolName:'mcp__llm__experiment_stop', toolCallId:'call-e', llmRound:0},
+  {id:'failed-orphan', spanId:'tool:call-x', parentSpanId:'model:1', seq:2,
+    occurredAt:1010, kind:'tool', status:'failed', severity:'error', count:1,
+    summary:'orphan_probe failed', summaryKey:'activity.tool.failed',
+    summaryArgs:{tool:'orphan_probe'}, detail:'trimmed round lost',
+    reasonCode:'error', toolName:'orphan_probe',
+    toolCallId:'call-x', llmRound:1},
+  {id:'gw-1', spanId:'tool:gw-1', parentSpanId:'model:1', seq:3,
+    occurredAt:1016, kind:'tool', status:'failed', severity:'error', count:1,
+    summary:'execute_tools failed', summaryKey:'activity.tool.failed',
+    summaryArgs:{tool:'execute_tools'},
+    toolName:'execute_tools', toolCallId:'gw-1', llmRound:1},
+];
+const turn = {
+  turnId:'turn-fail', conversationId:'conv-a', laneId:'main', ordinal:1,
+  actor:'assistant', kind:'reply', runId:'', status:'completed', currentAttemptId:null,
+  projection:{segments:[toolSegment, textSegment],
+    toolRounds:[errorRound, gatewayRound],
+    content:'answer',
+    activityTimeline:{blockId:'activity-timeline', version:1, entries}},
+  projectionRevision:1, settlement:{outcome:'completed'}, createdAt:1, updatedAt:2,
+};
+const state = {conversationId:'conv-a', conversationRevision:1, transport:'live',
+  turnsById:{'turn-fail':turn}, laneOrder:{main:['turn-fail']},
+  attemptsById:{}, queueItems:[], pendingEventsByTurn:{}, commandPending:{},
+  liveRoundUsageByTurn:{}};
+const scheduled = [];
+const controller = feature.createConversationSurfaceController({
+  isActive:() => true,
+  getContainer:() => document.getElementById('chat'),
+  schedule(render) { scheduled.push(render); return () => {}; },
+  nativeRenderers:feature.createClassicConversationRenderers({
+    renderSafeMarkdownHtml:value => value,
+    renderToolBlockHtml:block => '<details class="native-tool"><summary>'
+      + block.name + '</summary></details>',
+  }),
+});
+controller.render({id:'conv-a'}, state);
+scheduled.shift()();
+const vmTurn = feature.selectConversationViewModel(state).mainLane.turns[0];
+console.log(JSON.stringify({
+  blockIds:vmTurn.blocks.map(block => block.blockId),
+  orphanRowSummary:document.querySelector('[data-activity-id="failed-orphan"]')
+    .querySelector('.activity-event__summary').textContent,
+}));
+controller.dispose();
+dom.window.close();
+""")
+    # The failed row duplicates the error tool row's badge + full content, so
+    # it drops; the orphan failed row (round trimmed away) and the execute_
+    # tools gateway row (replays as child validation) both survive.
+    block_ids = result["blockIds"]
+    assert "activity:failed-1" not in block_ids
+    assert "activity:failed-orphan" in block_ids
+    assert "activity:gw-1:validation-0" in block_ids
+    assert result["orphanRowSummary"] == "orphan_probe failed"
+
+
 def test_legacy_gateway_shell_replays_as_actionable_child_validation(
         conversation_bundle: Path):
     result = _run(conversation_bundle, r"""
@@ -2445,7 +2618,7 @@ console.log(JSON.stringify(payload));
         "visibleAfterOpen": True,
         "hiddenAfterCollapse": True,
         "sameParent": True,
-        "childActions": ["copy"],
+        "childActions": ["copy-block", "copy"],
         "forwarded": [
             ["toggle-branch", "parent", "lane-b", "open"],
             ["copy", "branch-assistant", "lane-b", None],
@@ -2782,14 +2955,17 @@ const renderText = state => {
 const preparing = renderText(makeState('pending', ''));
 const queued = renderText(makeState('pending', 'task-a'));
 const running = renderText(makeState('running', 'task-a'));
+const explicit = renderText({...makeState('running', 'task-a'), livePhase:{
+  phase:'working', detailKey:'stream.phase.workerStarting'}});
 controller.dispose();
 dom.window.close();
-console.log(JSON.stringify({preparing, queued, running}));
+console.log(JSON.stringify({preparing, queued, running, explicit}));
 """)
     assert result == {
         "preparing": "stream.phase.executorPreparing",
         "queued": "stream.phase.executorQueued",
-        "running": "stream.phase.workerStarting",
+        "running": "stream.phase.waitingWorkerStatus",
+        "explicit": "stream.phase.workerStarting",
     }
 
 
@@ -2863,7 +3039,7 @@ console.log(JSON.stringify({
     assert result == {
         "wedgedText": "WEDGE-LABEL",
         "wedgedClass": "stream-phase stream-phase-wedged",
-        "clearedText": "Server execution slot acquired; starting the task…",
+        "clearedText": "Waiting for an execution status update…",
         "clearedClass": "stream-phase",
         "stalePhase": "WEDGE-LABEL",
         "foldedTrue": True,
@@ -3914,7 +4090,7 @@ dom.window.close();
         "sameStatus": True,
         "initialBlocks": ["live-status"],
         "role": "Autopilot",
-        "status": "Reasoning…3 chars...",
+        "status": "Thinking…3 chars...",
         "visibleRunningBlocks": ["thinking:autopilot-live", "live-status"],
         "emptyRunningFooterHidden": True,
         "durableCount": 0,
@@ -4351,6 +4527,164 @@ console.log(JSON.stringify(output));
         },
         "durableStateUnchanged": True,
     }
+
+
+def test_surface_tail_window_keeps_retained_turns_in_place(
+        conversation_bundle: Path):
+    """Advancing a full window must not move its 79 retained text subtrees."""
+    result = _run(conversation_bundle, r"""
+const { JSDOM } = require('jsdom');
+const dom = new JSDOM('<main id="chat"></main>');
+global.Element = dom.window.Element;
+const document = dom.window.document;
+const turns = Array.from({length:81}, (_, index) => ({
+  turnId:`turn-${index}`, conversationId:'conv-tail', laneId:'main',
+  ordinal:index, actor:index % 2 ? 'virtual_user' : 'assistant',
+  kind:index % 2 ? 'autopilot_virtual_user' : 'flow_node', status:'completed',
+  currentAttemptId:null, projectionRevision:1,
+  projection:{content:`turn ${index}`, segments:[{
+    type:'text', blockId:'text:terminal', text:`turn ${index}`,
+    deliverable:true, terminal:true,
+  }]}, settlement:{outcome:'completed'}, createdAt:index, updatedAt:index,
+}));
+const store = feature.createTurnStore('conv-tail');
+let blockRenders = 0;
+const surface = feature.createConversationSurface(
+  document.getElementById('chat'),
+  {renderBlock(node, block) { blockRenders += 1; node.textContent = block.markdown; }},
+);
+store.dispatch({type:'snapshot', snapshot:{conversationRevision:80,
+  turns:turns.slice(0, 80), authoritativeFull:true}});
+surface.render(feature.selectConversationViewModel(store.getState()));
+const lane = surface.root.querySelector('[data-conversation-part="lane-turns"]');
+const retained = Array.from(lane.children).slice(1);
+const observer = new dom.window.MutationObserver(() => {});
+observer.observe(lane, {childList:true});
+store.dispatch({type:'snapshot', snapshot:{conversationRevision:81,
+  turns:turns.slice(80), authoritativeFull:false}});
+surface.render(feature.selectConversationViewModel(store.getState()));
+const records = observer.takeRecords();
+const result = {
+  removed:records.flatMap(record => Array.from(record.removedNodes))
+    .map(node => node.dataset.turnId),
+  added:records.flatMap(record => Array.from(record.addedNodes))
+    .map(node => node.dataset.turnId),
+  retainedInPlace:retained.every((node, index) => lane.children[index] === node),
+  mounted:lane.childElementCount, blockRenders,
+  durableTurns:Object.keys(store.getState().turnsById).length,
+};
+observer.disconnect(); surface.dispose(); dom.window.close();
+console.log(JSON.stringify(result));
+""")
+    assert result == {
+        "removed": ["turn-0"], "added": ["turn-80"],
+        "retainedInPlace": True, "mounted": 80, "blockRenders": 81,
+        "durableTurns": 81,
+    }
+
+
+def test_surface_windows_blocks_within_oversized_turn(
+        conversation_bundle: Path):
+    result = _run(conversation_bundle, r"""
+const { JSDOM } = require('jsdom');
+const dom = new JSDOM('<main id="chat"></main>');
+global.Element = dom.window.Element;
+const document = dom.window.document;
+const makeTurn = (conversationId, turnId, blockCount) => ({
+  turnId, conversationId, laneId:'main',
+  ordinal:0, actor:'assistant', kind:'reply', status:'completed',
+  currentAttemptId:null, projectionRevision:1,
+  projection:{content:`block ${blockCount - 1}`,
+    segments:Array.from({length:blockCount}, (_, i) => ({
+      type:'text', blockId:`${turnId}:block-${i}`, text:`block ${i}`,
+      deliverable:i === blockCount - 1, terminal:i === blockCount - 1,
+    }))},
+  settlement:{outcome:'completed'}, createdAt:0, updatedAt:0,
+});
+const makeVm = (conversationId, turns) => feature.selectConversationViewModel({
+  conversationId, conversationRevision:1, transport:'live',
+  turnsById:Object.fromEntries(turns.map(turn => [turn.turnId, turn])),
+  laneOrder:{main:turns.map(turn => turn.turnId)}, attemptsById:{},
+  queueItems:[], pendingEventsByTurn:{}, commandPending:{},
+  liveRoundUsageByTurn:{},
+});
+let blockRenders = 0;
+const surface = feature.createConversationSurface(
+  document.getElementById('chat'),
+  {renderBlock(node, block) { blockRenders += 1; node.textContent = block.markdown; },
+   windowing:{blockLabel:(n) => `earlier:${n}`}},
+);
+const MAX = feature.CONVERSATION_BLOCK_WINDOW_MAX_BLOCKS;
+const BATCH = feature.CONVERSATION_BLOCK_WINDOW_BATCH_BLOCKS;
+const blockCount = () => surface.root.querySelectorAll('[data-block-id]').length;
+const firstBlockId = () => surface.root.querySelector('[data-block-id]')?.dataset.blockId;
+const earlierButton = () => surface.root.querySelector(
+  '[data-conversation-block-window-action="earlier"]',
+);
+const earlierNav = () => surface.root.querySelector(
+  '[data-conversation-part="turn-blocks-earlier"]',
+);
+surface.render(makeVm('conv-blocks', [makeTurn('conv-blocks', 'turn-huge', 450)]));
+const contentParts = () => Array.from(
+  surface.root.querySelector('.conversation-turn-content').children,
+).map(node => node.dataset.conversationPart).filter(Boolean).slice(0, 3);
+const output = {
+  max:MAX, batch:BATCH,
+  initialBlocks:blockCount(), initialFirst:firstBlockId(),
+  initialRenders:blockRenders,
+  navVisible:!earlierNav().hidden,
+  buttonLabel:earlierButton().textContent,
+  contentOrder:contentParts(),
+  clicks:[],
+};
+for (let i = 0; i < 4; i += 1) {
+  const button = earlierButton();
+  if (!button || earlierNav().hidden) break;
+  button.click();
+  output.clicks.push({blocks:blockCount(), first:firstBlockId(),
+    hidden:earlierNav().hidden, label:earlierButton().textContent});
+}
+output.expandedBlocks = blockCount();
+surface.render(makeVm('conv-blocks', [makeTurn('conv-blocks', 'turn-huge', 450)]));
+output.expandedKeptAfterRerender = blockCount();
+surface.render(makeVm('conv-blocks-2', [
+  makeTurn('conv-blocks-2', 'turn-huge-2', 450),
+  makeTurn('conv-blocks-2', 'turn-small', 100),
+]));
+output.resetBlocksFirstTurn = blockCount();
+const smallTurn = surface.root.querySelector('[data-turn-id="turn-small"]');
+output.smallTurnBlocks = smallTurn.querySelectorAll('[data-block-id]').length;
+output.smallTurnNavHidden = smallTurn.querySelector(
+  '[data-conversation-part="turn-blocks-earlier"]',
+).hidden;
+surface.dispose();
+dom.window.close();
+console.log(JSON.stringify(output));
+""")
+
+    assert result["max"] == 200
+    assert result["batch"] == 100
+    assert result["initialBlocks"] == 200
+    assert result["initialFirst"] == "turn-huge:block-250"
+    assert result["initialRenders"] == 200
+    assert result["navVisible"] is True
+    assert result["buttonLabel"] == "earlier:100"
+    assert result["contentOrder"] == [
+        "turn-header", "turn-blocks-earlier", "turn-blocks",
+    ]
+    assert result["clicks"] == [
+        {"blocks": 300, "first": "turn-huge:block-150",
+         "hidden": False, "label": "earlier:100"},
+        {"blocks": 400, "first": "turn-huge:block-50",
+         "hidden": False, "label": "earlier:50"},
+        {"blocks": 450, "first": "turn-huge:block-0",
+         "hidden": True, "label": "earlier:0"},
+    ]
+    assert result["expandedBlocks"] == 450
+    assert result["expandedKeptAfterRerender"] == 450
+    assert result["resetBlocksFirstTurn"] == 300
+    assert result["smallTurnBlocks"] == 100
+    assert result["smallTurnNavHidden"] is True
 
 
 def test_surface_requests_remote_history_and_reveals_prepended_batch(
@@ -5226,3 +5560,172 @@ dom.window.close();
     assert result["afterFill"] == 2
     assert result["afterSame"] == 2
     assert result["stampedSignature"] is None
+
+
+def test_text_block_copy_button_addresses_exactly_that_block(
+        conversation_bundle: Path):
+    """Mid-turn prose (deliverable=False text segments) had no copy path: the
+    turn-level Copy only holds projection.content (the final answer). Every
+    text block now carries a hover-revealed copy button whose intent is
+    scoped by blockId, and the controller rewrites it with the live
+    translation display mode exactly like the turn-level copy."""
+    result = _run(conversation_bundle, r"""
+const { JSDOM } = require('jsdom');
+const dom = new JSDOM('<main id="chat"></main>');
+global.Element = dom.window.Element;
+const document = dom.window.document;
+const segments = [
+  {type:'thinking', blockId:'thinking:llm-1', text:'reason', llmRound:1},
+  {type:'text', blockId:'text:llm-1', text:'Middle prose',
+    translatedText:'中间段落', llmRound:1},
+  {type:'text', blockId:'text:terminal', text:'Original answer',
+    translatedText:'翻译答案', deliverable:true, terminal:true},
+];
+const turn = {
+  turnId:'copy-block-turn', conversationId:'conv-a', laneId:'main', ordinal:1,
+  actor:'assistant', kind:'reply', runId:'', status:'completed',
+  currentAttemptId:null,
+  projection:{segments, content:'Original answer',
+    translatedContent:'翻译答案', _translateDone:true, model:'model-a'},
+  projectionRevision:2, settlement:{outcome:'completed'},
+  createdAt:1, updatedAt:2,
+};
+const state = {conversationId:'conv-a', conversationRevision:2,
+  transport:'live',
+  turnsById:{'copy-block-turn':turn}, laneOrder:{main:['copy-block-turn']},
+  attemptsById:{}, queueItems:[], pendingEventsByTurn:{}, commandPending:{},
+  liveRoundUsageByTurn:{}};
+const scheduled = [];
+const forwarded = [];
+const controller = feature.createConversationSurfaceController({
+  isActive:() => true,
+  getContainer:() => document.getElementById('chat'),
+  schedule(render) { scheduled.push(render); return () => {}; },
+  nativeRenderers:feature.createClassicConversationRenderers({
+    renderSafeMarkdownHtml:value => value,
+    actionLabel:value => value,
+    localizedText:(_key, fallback) => fallback,
+  }),
+  onIntent:intent => forwarded.push(intent),
+});
+controller.render({id:'conv-a'}, state);
+scheduled.shift()();
+const node = document.querySelector('[data-turn-id="copy-block-turn"]');
+const textBlocks = () => Array.from(
+  node.querySelectorAll('.conversation-block--text'));
+const copyButtons = () => textBlocks().map(block =>
+  block.querySelectorAll('button[data-conversation-action="copy-block"]')
+    .length);
+const thinkingCopies = node.querySelectorAll(
+  '.conversation-block--thinking button[data-conversation-action="copy-block"]'
+).length;
+const middleCopy = () => textBlocks()[0]
+  .querySelector('button[data-conversation-action="copy-block"]');
+const aria = middleCopy().getAttribute('aria-label');
+middleCopy().click();
+node.querySelector('[data-conversation-action="translate"]').click();
+middleCopy().click();
+const afterTranslate = forwarded.map(intent =>
+  [intent.type, intent.blockId, intent.operation]);
+controller.render({id:'conv-a'}, state, {force:true});
+scheduled.shift()();
+const countsAfterRerender = copyButtons();
+const payload = {
+  textBlockCount:textBlocks().length,
+  copyButtons:copyButtons(),
+  thinkingCopies,
+  aria,
+  forwarded:afterTranslate,
+  countsAfterRerender,
+};
+controller.dispose();
+dom.window.close();
+console.log(JSON.stringify(payload));
+""")
+    assert result == {
+        "textBlockCount": 2,
+        "copyButtons": [1, 1],
+        "thinkingCopies": 0,
+        "aria": "Copy",
+        "forwarded": [
+            ["copy-block", "text:llm-1", "copy-translated"],
+            ["copy-block", "text:llm-1", "copy-original"],
+        ],
+        "countsAfterRerender": [1, 1],
+    }
+
+
+def test_human_text_block_has_no_per_block_copy_button(
+        conversation_bundle: Path) -> None:
+    """Human bubbles are exempt from the per-block copy affordance: their
+    single text block IS the turn content, so the action-bar Copy covers it
+    and the floating button only overlaps the message text. Assistant blocks
+    keep their own copy button (mid-turn prose has no turn-level path)."""
+    result = _run(conversation_bundle, r"""
+const { JSDOM } = require('jsdom');
+const dom = new JSDOM('<main id="chat"></main>');
+global.Element = dom.window.Element;
+const document = dom.window.document;
+const turn = (id, actor, ordinal) => ({
+  turnId:id, conversationId:'conv-a', laneId:'main', ordinal,
+  actor, kind: actor === 'human' ? 'input' : 'reply', runId:'',
+  status:'completed', currentAttemptId:null,
+  projection:{segments:[
+    {type:'text', blockId:`text:${id}`, text:'body',
+      deliverable:true, terminal:true},
+  ], content:'body'},
+  projectionRevision:1, settlement:{outcome:'completed'},
+  createdAt:1, updatedAt:2,
+});
+const human = turn('human-1', 'human', 1);
+const assistant = turn('assistant-1', 'assistant', 2);
+const state = {conversationId:'conv-a', conversationRevision:2,
+  transport:'live',
+  turnsById:{'human-1':human, 'assistant-1':assistant},
+  laneOrder:{main:['human-1','assistant-1']},
+  attemptsById:{}, queueItems:[], pendingEventsByTurn:{}, commandPending:{},
+  liveRoundUsageByTurn:{}};
+const scheduled = [];
+const controller = feature.createConversationSurfaceController({
+  isActive:() => true,
+  getContainer:() => document.getElementById('chat'),
+  schedule(render) { scheduled.push(render); return () => {}; },
+  nativeRenderers:feature.createClassicConversationRenderers({
+    renderSafeMarkdownHtml:value => value,
+    actionLabel:value => value,
+    localizedText:(_key, fallback) => fallback,
+  }),
+  onIntent:() => {},
+});
+controller.render({id:'conv-a'}, state);
+scheduled.shift()();
+const copies = id => document.querySelector(`[data-turn-id="${id}"]`)
+  .querySelectorAll('button[data-conversation-action="copy-block"]').length;
+const before = {human:copies('human-1'), assistant:copies('assistant-1')};
+controller.render({id:'conv-a'}, state, {force:true});
+scheduled.shift()();
+const after = {human:copies('human-1'), assistant:copies('assistant-1')};
+controller.dispose();
+dom.window.close();
+console.log(JSON.stringify({before, after}));
+""")
+    assert result == {
+        "before": {"human": 0, "assistant": 1},
+        "after": {"human": 0, "assistant": 1},
+    }
+
+
+def test_text_block_copy_button_is_hover_revealed() -> None:
+    """The per-block copy affordance must stay a hover/focus disclosure (the
+    same contract as the turn action shelf), not permanent chrome on every
+    paragraph block; touch layouts (max-width:720px) reveal it instead."""
+    source = (ROOT / "frontend/src/styles/application"
+              / "23-turn-reading-system.css").read_text(encoding="utf-8")
+    rule = source.split(
+        ".conversation-surface .conversation-block-copy {", 1)[1].split(
+        "\n}", 1)[0]
+    assert "position: absolute;" in rule
+    assert "opacity: 0;" in rule
+    assert (".conversation-surface .conversation-block--text:hover"
+            " .conversation-block-copy," in source)
+    assert ("focus-within .conversation-block-copy" in source)

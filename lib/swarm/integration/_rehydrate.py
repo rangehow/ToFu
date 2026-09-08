@@ -113,7 +113,7 @@ def _rehydrate_one(sess: dict) -> bool:
             try:
                 from lib.agent_core.push import push_event
                 push_event(
-                    'swarm', push_conv_id, ev,
+                    'swarm', push_conv_id, {**ev, 'swarmId': task_id},
                     user_id=owner_user_id,
                 )
             except Exception as e:

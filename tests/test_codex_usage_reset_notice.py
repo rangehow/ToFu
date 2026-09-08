@@ -361,6 +361,8 @@ const { window, document, check, report } = setup({
   },
 });
 global._i18nLang = window._i18nLang = 'en';
+const wait = () => new Promise((resolve) => setImmediate(resolve));
+(async () => {
 try {
   const el = document.getElementById('oauthCodexResetOffer');
 
@@ -399,12 +401,19 @@ try {
   check('available_card_copy', el.textContent.includes('One reset available'));
   check('available_card_says_no_auto_redeem', el.textContent.includes('Never auto-redeem'));
   check('available_card_state_class', el.classList.contains('is-available'));
+  const redeemBtn = el.querySelector('[data-tofu-action="_oauthConsumeReset()"]');
+  check('available_card_has_redeem_button', !!redeemBtn);
+  check('redeem_button_has_primary_small_style',
+    !!redeemBtn && redeemBtn.classList.contains('btn-small') &&
+    redeemBtn.classList.contains('btn-primary'));
 
   _renderOAuthResetOffer('codex', {
     state: 'available', available_count: 1, stale: true,
   }, true);
   check('stale_card_is_explicit',
     el.classList.contains('is-stale') && el.textContent.includes('Stale result'));
+  check('stale_card_hides_redeem_button',
+    !el.querySelector('[data-tofu-action="_oauthConsumeReset()"]'));
 
   _renderOAuthResetOffer('codex', {
     state: 'unknown', available_count: null, stale: false, refreshing: true,
@@ -421,11 +430,45 @@ try {
     state: 'available', available_count: 1, stale: false,
   }, false);
   check('logout_hides_card', el.style.display === 'none');
+
+  let confirmResult = true;
+  let confirmCalls = 0;
+  const alerts = [];
+  let consumeCalls = 0;
+  let consumeBody = { ok: true };
+  let statusReads = 0;
+  globalThis.showConfirm = () => {
+    confirmCalls += 1;
+    return Promise.resolve(confirmResult);
+  };
+  globalThis.showAlert = (message) => { alerts.push(message); };
+  Api.oauth.status = async () => { statusReads += 1; return null; };
+  Api.oauth.resetOfferConsume = async () => {
+    consumeCalls += 1;
+    return consumeBody;
+  };
+  confirmResult = false;
+  _oauthConsumeReset();
+  await wait(); await wait();
+  check('consume_confirm_decline_skips_api',
+    confirmCalls === 1 && consumeCalls === 0);
+  confirmResult = true;
+  _oauthConsumeReset();
+  await wait(); await wait(); await wait();
+  check('consume_success_confirms_calls_api_alerts_refreshes',
+    confirmCalls === 2 && consumeCalls === 1 &&
+    alerts.includes('settings.oauthResetRedeemSuccess') && statusReads >= 1);
+  consumeBody = { ok: false, error: 'none_available' };
+  _oauthConsumeReset();
+  await wait(); await wait(); await wait();
+  check('consume_gone_error_maps_to_gone_copy',
+    alerts.includes('settings.oauthResetRedeemGone'));
 } catch (error) {
   check('harness_threw:' + (error && error.stack || error), false);
 } finally {
   report();
 }
+})();
 """
 
 
@@ -479,6 +522,6 @@ def test_settings_offer_renderer_is_explicit_about_reset_state():
     run_harness(
         target_js=runtime_section_path("settings/oauth.js"),
         body_js=_SETTINGS_HARNESS,
-        expect_pass=13,
+        expect_pass=19,
         label="codex-reset-settings",
     )

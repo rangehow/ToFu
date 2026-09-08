@@ -34,6 +34,7 @@ def test_authoritative_contract_drives_models_slots_and_pricing():
     from lib.pricing import lookup_pricing
 
     expected = {
+        'gpt-6-astra',
         'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'}
     assert GPT56_MODEL_IDS == expected
     assert GPT56_ALIAS_TARGET == 'gpt-5.6-sol'
@@ -52,6 +53,14 @@ def test_authoritative_contract_drives_models_slots_and_pricing():
     assert large['cacheWriteMul'] == 1.25
     assert large['cacheReadMul'] == 0.10
     assert large['selectedTier']['id'] == 'ctx_gt_272000'
+
+    astra_small = lookup_pricing('gpt-6-astra', prompt_tokens=272_000)
+    astra_large = lookup_pricing('gpt-6-astra', prompt_tokens=272_001)
+    assert (astra_small['input'], astra_small['output']) == (10.0, 50.0)
+    assert (astra_large['input'], astra_large['output']) == (20.0, 75.0)
+    assert astra_large['cacheWriteMul'] == 1.25
+    assert astra_large['cacheReadMul'] == 0.10
+    assert astra_large['selectedTier']['id'] == 'ctx_gt_272000'
 
 
 def test_gpt56_effort_output_and_pro_mode_map_to_official_wire_values():

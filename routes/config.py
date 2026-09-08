@@ -46,6 +46,67 @@ def _read_server_config():
 
 
 # ══════════════════════════════════════════════════════
+#  Context-window policy helpers
+# ══════════════════════════════════════════════════════
+
+def _per_model_context_from_routing(document: dict) -> dict:
+    """Assemble ``per_model`` for the server-config context policy.
+
+    Rows are the enabled offerings of the model-routing v2 authority, keyed
+    ``provider::model`` — the frontend ``_resolveContextProfile`` FIRST
+    lookup. A BARE ``model_id`` alias rides along for every row: the
+    frontend's documented second-step fallback, which legacy conversations
+    depend on because they never persisted ``provider_id``. First
+    registration wins a cross-provider name collision (``setdefault``).
+
+    Values come from ``resolve_model_context_profile`` — the same resolver
+    the compaction gate uses, so the gauge's zones line up with the server's
+    trigger — with the offering's declared ``context_window`` as the floor
+    when neither static knowledge nor learned evidence knows the model.
+    """
+    from lib.tasks_pkg.compaction.api import resolve_model_context_profile
+    accesses = {
+        a.get('provider_access_id'): a.get('provider_id') or ''
+        for a in document.get('provider_accesses') or []
+    }
+    per_model = {}
+    for offering in document.get('offerings') or []:
+        if offering.get('enabled') is False:
+            continue
+        mid = (offering.get('model') or {}).get('model_id') or ''
+        if not mid:
+            continue
+        pid = accesses.get(offering.get('provider_access_id'), '')
+        profile = resolve_model_context_profile(mid, pid)
+        ceiling = offering.get('context_window')
+        if (profile.get('window') is None and isinstance(ceiling, int)
+                and not isinstance(ceiling, bool) and ceiling > 0):
+            profile = {
+                'window': ceiling,
+                'source': 'offering',
+                'exact': True,
+            }
+        per_model['%s::%s' % (pid, mid)] = profile
+        per_model.setdefault(mid, profile)
+    return per_model
+
+
+def _build_per_model_context_policy() -> dict:
+    """Owner-scoped read of the routing authority for the context policy."""
+    from routes.api_v1.auth import current_auth
+    try:
+        context = current_auth()
+    except Exception:
+        context = None
+    if context is None or context.owner_user_id is None:
+        return {}
+    from lib.model_routing import ModelRoutingRepository, OwnerBoundary
+    boundary = OwnerBoundary.create(context.owner_user_id, context.tenant_id)
+    document = ModelRoutingRepository().get(boundary).public_document()
+    return _per_model_context_from_routing(document)
+
+
+# ══════════════════════════════════════════════════════
 #  Feishu Helpers
 # ══════════════════════════════════════════════════════
 
@@ -242,18 +303,23 @@ def get_server_config():
         upload_policy = {}
 
     # Context-window policy — single source of truth for the Context Health
-    # Bar (static/js/context-bar.js). The bar used to hard-code a copy of the
-    # limit table + compaction thresholds, which silently drifted from the
+    # Bar (frontend context-bar section). The bar used to hard-code a copy of
+    # the limit table + compaction thresholds, which silently drifted from the
     # Python constants (e.g. 0.82 vs the real 0.90). Now it reads these.
-    # v2 Offering rows carry their own admission ceilings. This compatibility
-    # policy therefore has no provider/model projection of its own.
+    # per_model is the gauge's ONLY window source (lookup: scoped key, then
+    # bare alias) — the routing-v2 cutover emptied it and every conversation
+    # rendered "Context window: unknown" (2026-09-04).
     try:
         from lib.tasks_pkg.compaction.api import build_context_policy
         context_policy = build_context_policy()
-        context_policy['per_model'] = {}
     except Exception as e:
         logger.warning('[ServerConfig] context policy unavailable: %s', e)
         context_policy = {}
+    try:
+        context_policy['per_model'] = _build_per_model_context_policy()
+    except Exception as e:
+        logger.warning('[ServerConfig] per-model context policy unavailable: %s', e)
+        context_policy['per_model'] = {}
 
     # Translation policy — single source of truth for the frontend's
     # stale-partial-translation heuristic (was hard-coded 0.15 in

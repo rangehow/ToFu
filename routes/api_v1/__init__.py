@@ -41,6 +41,7 @@ from .orchestrations import api_v1_orchestrations_bp
 from .optimizer import api_v1_optimizer_bp
 from .scheduler import api_v1_scheduler_bp
 from .swarm import api_v1_swarm_bp
+from .activity import api_v1_activity_bp
 from .desktop import api_v1_desktop_bp
 from .browser import api_v1_browser_bp
 from .auth_sources import api_v1_auth_sources_bp
@@ -65,17 +66,21 @@ from .research import api_v1_research_bp
 from .paper_folders import api_v1_paper_folders_bp
 from .motion import api_v1_motion_bp
 from .slides import api_v1_slides_bp
+from .overleaf import api_v1_overleaf_bp
+from .latex import api_v1_latex_bp
 from .uploads import api_v1_uploads_bp
 from .videos import api_v1_videos_bp
 from .audio import api_v1_audio_bp
 from .common import api_v1_common_bp
 from .config import api_v1_config_bp
 from .providers import api_v1_providers_bp
+from .local_serve import api_v1_local_serve_bp
 from .model_intelligence import api_v1_model_intelligence_bp
 from .webhooks import api_v1_webhooks_bp
 from .usage import api_v1_usage_bp
 from .logs import api_v1_logs_bp
 from .update import api_v1_update_bp
+from .mobile import api_v1_mobile_bp
 
 
 ALL_V1_BLUEPRINTS = [
@@ -96,6 +101,7 @@ ALL_V1_BLUEPRINTS = [
     api_v1_optimizer_bp,
     api_v1_scheduler_bp,
     api_v1_swarm_bp,
+    api_v1_activity_bp,
     api_v1_desktop_bp,
     api_v1_browser_bp,
     api_v1_auth_sources_bp,
@@ -119,15 +125,19 @@ ALL_V1_BLUEPRINTS = [
     api_v1_paper_folders_bp,
     api_v1_motion_bp,
     api_v1_slides_bp,
+    api_v1_overleaf_bp,
     api_v1_uploads_bp,
+    api_v1_latex_bp,
     api_v1_videos_bp,
     api_v1_audio_bp,
     api_v1_common_bp,
     api_v1_config_bp,
     api_v1_providers_bp,
     api_v1_model_intelligence_bp,
+    api_v1_local_serve_bp,
     api_v1_webhooks_bp,
     api_v1_usage_bp,
     api_v1_logs_bp,
     api_v1_update_bp,
+    api_v1_mobile_bp,
 ]

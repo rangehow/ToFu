@@ -39,6 +39,7 @@ export type ModelRoutingModel = {
   "context_window": number;
   "quality_rank": number;
   "list_pricing"?: ModelRoutingPricing;
+  "official_pricing"?: ModelRoutingPricing;
   "release_date"?: string;
   "lifecycle"?: "stable" | "preview" | "dated_snapshot" | "retired";
 };

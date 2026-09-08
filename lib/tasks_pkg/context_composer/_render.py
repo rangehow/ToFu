@@ -42,6 +42,10 @@ _AUTHORITATIVE_RETRACTION_REASONS = frozenset({
     'memory_disabled',
     'multi_agent_disabled',
     'no_delta',
+    'no_disclosed_tools',
+    'no_deferred_tools',
+    'discovery_unavailable',
+    'capability_unavailable',
     'no_enabled_skills',
     'no_high_confidence_matches',
     'ordinary_agent_role',
@@ -356,6 +360,14 @@ def render_context(messages: list[dict[str, Any]], blocks: list[ContextBlock],
     """
     del replace_managed
     existing_hashes = _managed_block_hashes(messages)
+    from dataclasses import replace
+    from .registry import block_spec
+    # One optional-context switch by registry ID. Required policy, continuity
+    # and coordination cannot be turned off through an advisory ablation.
+    blocks = [replace(block, content='', suppressed_reason='disabled')
+              if (spec := block_spec(block.id)) is not None
+              and not spec.required and spec.id in request.disabled_blocks
+              else block for block in blocks]
     manifest: list[dict[str, Any]] = []
     winners: dict[str, ContextBlock] = {}
     ordered = sorted(
@@ -486,7 +498,23 @@ def render_context(messages: list[dict[str, Any]], blocks: list[ContextBlock],
                 row['reason'] = f'supersedes:{previous_hash}' + (
                     f';{transition_reason}' if transition_reason else '')
             tail_rows.append(row)
+    from .injections import can_append_injection
+    if tail_rows and not can_append_injection(messages):
+        # Snapshot acquisition has no destructive drain: leave it eligible for
+        # the next closed boundary and record the reason instead of splitting
+        # a protocol batch or pretending this context reached the model.
+        for row in tail_rows:
+            row.update(injected=False, appended=False, chars=0, tokens=0,
+                       reason='deferred:open_tool_batch')
+        tail_rows = []
     _append_tail(messages, tail_rows)
+    for row in manifest:
+        spec = block_spec(row['id'])
+        if spec is not None:
+            row.update(registryId=spec.id, necessity=spec.necessity,
+                       trigger=spec.trigger, required=spec.required,
+                       maxTokens=spec.max_tokens, lane=spec.lane)
+        row['appendedTokens'] = row['tokens'] if row.get('appended') else 0
     for order, row in enumerate(manifest):
         row['order'] = order
         row.pop('_rendered', None)

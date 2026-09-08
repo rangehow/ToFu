@@ -48,11 +48,12 @@ class TestDeprecatedOpenAISkuAbsence:
             )
 
     def test_bootstrap_openai_template_omits_retired_ids(self):
-        """The bootstrap installer's inline OpenAI template must not
-        offer a retired SKU as a first-run default."""
-        from bootstrap import _BUILTIN_PROVIDER_TEMPLATES
+        """The bootstrap installer's OpenAI template — hot-loaded from
+        lib/model_info/data/openai.json — must not offer a retired SKU as
+        a first-run default."""
+        from bootstrap import _load_provider_templates
         openai_tpl = next(
-            t for t in _BUILTIN_PROVIDER_TEMPLATES if t['key'] == 'openai'
+            t for t in _load_provider_templates() if t['key'] == 'openai'
         )
         offered = {m['model_id'] for m in openai_tpl['models']}
         for mid in _RETIRED_EXACT_IDS:
@@ -61,10 +62,16 @@ class TestDeprecatedOpenAISkuAbsence:
             )
 
     def test_current_provider_templates_omit_unsupported_ids(self):
+        # Templates are authored exclusively in lib/model_info/data/*.json
+        # (served to the frontend via the templates API). The generated
+        # app-runtime bundle is intentionally NOT scanned: its only
+        # retired-id literals are canonicalization maps such as
+        # 'gpt-5.6-pro' -> 'gpt-5.6' (mirroring lib/conv_config/_legacy.py
+        # and openai_provider.py), which repair legacy configs rather than
+        # offer the id.
         root = Path(__file__).resolve().parents[1]
         bodies = [
             (root / 'lib/model_info/data/openai.json').read_text(),
-            (root / 'frontend/src/runtime/app-runtime.js').read_text(),
         ]
         for mid in _RETIRED_EXACT_IDS:
             literal_hits = sum(

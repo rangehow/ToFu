@@ -150,7 +150,8 @@ def _merge_consecutive_same_role(messages: list) -> None:
         prev = messages[i - 1]
         # Do not collapse structured tool-call sequences
         if (curr.get('tool_calls') or prev.get('tool_calls')
-                or curr.get('tool_call_id') or prev.get('tool_call_id')):
+                or curr.get('tool_call_id') or prev.get('tool_call_id')
+                or curr.get('_retainedUserHistory') or prev.get('_retainedUserHistory')):
             i -= 1
             continue
         if (curr.get('role') == prev.get('role')

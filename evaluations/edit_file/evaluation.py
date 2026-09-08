@@ -2,9 +2,14 @@
 
 Input rows use ``model``, ``case_id``, ``tool_name`` and ``arguments`` (a
 JSON object or JSON string). An optional ``baseline_argument_chars`` records
-the legacy-tool argument size for the same answer and enables the 30% token
-reduction gate. The scorer is provider-neutral and performs no network calls,
-so the same captured outputs can be compared reproducibly.
+the legacy-tool argument size for the same answer and enables the 30% argument
+character reduction metric. It does not measure billed tokens, retries,
+latency or total task cost. Correct output and preferred operation are scored
+separately: a longer legal replacement is not an execution failure.
+
+This provider-neutral, offline corpus simulator covers exact matching and
+basic edit splicing, not runtime authorization, echo repair, the batch cap or
+partial failures. Production-boundary tests own those contracts.
 """
 
 from __future__ import annotations

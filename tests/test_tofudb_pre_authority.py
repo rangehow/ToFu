@@ -51,9 +51,9 @@ def test_storage_operation_catalog_matches_executable_registry():
     document = json.loads(CATALOG.read_text(encoding="utf-8"))
     names = [operation["name"] for operation in document["operations"]]
     assert names == sorted(build_registry())
-    assert len(names) == len(set(names)) == document["operationCount"] == 331
+    assert len(names) == len(set(names)) == document["operationCount"] == 335
     assert document["sourceSchemaVersion"] == SCHEMA_VERSION == 58
-    assert document["sourceRegistryVersion"] == REGISTRY_VERSION == 38
+    assert document["sourceRegistryVersion"] == REGISTRY_VERSION == 40
     canonical = json.dumps(
         document["operations"],
         ensure_ascii=False,
@@ -236,7 +236,7 @@ def test_tofudb_ir_contract_is_generated_bounded_and_default_deny():
         "maximumSteps": 128,
         "maximumSlots": 64,
         "maximumLiteralBytes": 8 * 1024 * 1024,
-        "maximumExecutableOperations": 331,
+        "maximumExecutableOperations": 335,
     }
     assert document["physicalBounds"] == {
         "maximumEntityKeyBytes": 3072,
@@ -297,7 +297,9 @@ def test_tofudb_ir_contract_is_generated_bounded_and_default_deny():
     }
     assert document["filesystemCertification"] == {
         "maximumRetainedEntries": 4096,
-        "payloadBlockBytes": 1024 * 1024,
+        # Must exceed the WAL carried ceiling (2 MiB) so the certification
+        # commit spills its block to a loose file for the reclaim stage.
+        "payloadBlockBytes": 2 * 1024 * 1024 + 1,
         "requiredMeasurements": [
             "write-process-micros",
             "first-reopen-micros",
@@ -468,6 +470,9 @@ def test_tofudb_ir_contract_is_generated_bounded_and_default_deny():
             "knowledge.settings.patch",
             "log_aggregate.flush",
             "log_aggregate.query",
+            "model_continuation.delete",
+            "model_continuation.get",
+            "model_continuation.put",
             "model_routing.commit",
             "model_routing.get",
             "model_routing.migration_receipt",
@@ -571,6 +576,7 @@ def test_tofudb_ir_contract_is_generated_bounded_and_default_deny():
             "queue.dequeue",
             "queue.enqueue",
             "queue.finalize",
+            "queue.injection.ack",
             "queue.kind.clear",
             "queue.lease.bind",
             "queue.lease.release",
@@ -651,6 +657,7 @@ def test_tofudb_ir_contract_is_generated_bounded_and_default_deny():
             "turn.attempt.start",
             "turn.branch.create",
             "turn.branch.delete",
+            "turn.cleanup",
             "turn.compact",
             "turn.create_pair",
             "turn.delete",
@@ -669,6 +676,7 @@ def test_tofudb_ir_contract_is_generated_bounded_and_default_deny():
             "turn.recover",
             "turn.related.announce",
             "turn.revision",
+            "turn.search.backfill",
             "turn.steer.commit",
             "turn.sync.changes",
             "turn.sync.page",
@@ -940,4 +948,13 @@ def test_tofudb_ir_contract_is_generated_bounded_and_default_deny():
     assert (
         tables["conversation_turns"]["tombstoneAgeIndexNamespace"]
         == "turn_tombstones_by_age"
+    )
+    assert (
+        tables["conversation_turns"]["supersededAttemptIndexNamespace"]
+        == "generation_attempts_by_superseded"
+    )
+    assert tables["conversation_turns"]["maximumCleanupAttemptsPerTransaction"] == 64
+    assert (
+        tables["conversation_turns"]["maximumCleanupIndexScanRowsPerTransaction"]
+        == 256
     )

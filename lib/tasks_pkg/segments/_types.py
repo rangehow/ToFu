@@ -37,7 +37,13 @@ SEG_SYSTEM_NOTE = 'system_note'
 # The closed ``noteKind`` vocabulary. Renderers key styling/labels off it.
 NOTE_INTENT_STALL = 'intent-stall'
 NOTE_TODO_CONTINUATION = 'todo-continuation'
-NOTE_KINDS = frozenset({NOTE_INTENT_STALL, NOTE_TODO_CONTINUATION})
+NOTE_SYSTEM_INTERVENTION = 'system-intervention'
+from lib.conversation_sync.generated_contract import OPENAPI_SCHEMAS
+_NOTE_PROPERTIES = OPENAPI_SCHEMAS['TurnSystemNoteSegment']['properties']
+NOTE_KINDS = frozenset(_NOTE_PROPERTIES['noteKind']['enum'])
+NOTE_ACTIONS = frozenset(_NOTE_PROPERTIES['action']['enum'])
+NOTE_REASON_LIMIT = _NOTE_PROPERTIES['reason']['maxLength']
+NOTE_TEXT_LIMIT = _NOTE_PROPERTIES['text']['maxLength']
 
 # ── Synthetic display-only tool rounds (agent_inbox lanes) ──
 # The frontend surfaces async <swarm-update> / peer / user-steer injections as
@@ -108,4 +114,20 @@ INJECTED_NOTES_FIELD = '_injected_notes'
 # downstream (resume_prefill_from_segments returns None on empty text).
 RESUMABLE_FINISH_REASONS = frozenset({
     'interrupted', 'server_offline', 'premature_close', 'length', 'aborted',
+})
+
+
+# ── Live tool-round statuses ──
+# A round whose execution (or approval) is still in flight. Defined ONCE here
+# and shared by the checkpoint inflight gate (``manager._sync``) and the live
+# pre-tool placement in ``_assemble.assemble_segments``: a TRAILING batch in
+# one of these statuses may still be awaiting its pre-tool prose stamp, so
+# accumulator prose must render ahead of its tool cards rather than at the
+# tail (the wire order).
+LIVE_ROUND_STATUSES = frozenset({
+    'searching',
+    'executing',
+    'pending_approval',
+    'awaiting_human',
+    'awaiting_stdin',
 })

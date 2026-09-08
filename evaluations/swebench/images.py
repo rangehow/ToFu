@@ -454,6 +454,28 @@ def _valid_asset(image: str, asset_dir: Path) -> dict[str, Any] | None:
     return metadata
 
 
+def _verify_oci_blobs(oci_path: Path) -> None:
+    """Read every downloaded blob before archiving; fail closed on corruption.
+
+    This validates content addressing independently of the archive tool; it
+    does not suppress tar's concurrent-modification check or claim to repair
+    remote-filesystem metadata races.
+    """
+    blobs = oci_path / "blobs" / "sha256"
+    if blobs.is_symlink() or not blobs.is_dir():
+        raise RuntimeError("OCI sha256 blob directory is missing or unsafe")
+    found = False
+    for blob in blobs.iterdir():
+        found = True
+        if (blob.is_symlink() or not blob.is_file() or len(blob.name) != 64
+                or any(char not in "0123456789abcdef" for char in blob.name)):
+            raise RuntimeError("OCI blob is not a regular SHA-256 addressed file")
+        if sha256_file(blob) != blob.name:
+            raise RuntimeError(f"OCI blob digest mismatch: {blob.name}")
+    if not found:
+        raise RuntimeError("OCI blob directory is empty")
+
+
 def _prepare_asset(
     image: str,
     *,
@@ -522,6 +544,7 @@ def _prepare_asset(
                 if attempt == 5:
                     raise
                 time.sleep(min(30.0, 2.0**attempt) + random.random())
+        _verify_oci_blobs(oci_path)
         index_path = oci_path / "index.json"
         index = json.loads(index_path.read_text(encoding="utf-8"))
         descriptors = index.get("manifests")

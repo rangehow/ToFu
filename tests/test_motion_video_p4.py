@@ -525,6 +525,47 @@ def test_produce_research_handler_clamps_and_threads_args(monkeypatch):
     assert json.loads(content2)['ok'] is False
 
 
+def test_produce_slides_badge_uses_work_unit_lifecycle(monkeypatch):
+    """Badge normalization (docs/API_CONTRACT.md §2.18): acceptance speaks
+    the WorkUnit lifecycle enum — 'queued' for a fresh job, 'running' when
+    deduped into an already-running one — and the meta carries the durable
+    workUnitRef handle the rich card re-attaches with."""
+    import lib.slides.engine as slides_engine
+    import lib.tasks_pkg.handlers.motion_video as hdl
+
+    metas = []
+    monkeypatch.setattr(hdl, '_build_simple_meta',
+                        lambda *a, **k: metas.append(k) or {})
+    monkeypatch.setattr(hdl, '_finalize_tool_round', lambda *a, **k: None)
+
+    def _run(deduped):
+        monkeypatch.setattr(
+            slides_engine, 'start_slides_job',
+            lambda *a, **k: {'task_id': 'slides_fake1', 'deduped': deduped})
+        task = {'events': [], 'conv_id': 'convX', '_userId': 1}
+        _, content, _ = hdl._handle_produce_slides(
+            task, {'id': 'tc1'}, 'produce_slides', 'tc1',
+            {'topic': 'ByteDance 大模型历程'}, 0, {'tool_calls': []},
+            cfg=None, project_path='', project_enabled=False)
+        assert json.loads(content)['ok'] is True
+        return metas[-1]
+
+    fresh = _run(deduped=False)
+    assert fresh['badge'] == 'queued'
+    assert fresh['extra'] == {'workUnitRef': {'taskId': 'slides_fake1',
+                                              'kind': 'slides-deck'}}
+    dedup = _run(deduped=True)
+    assert dedup['badge'] == 'running'
+
+    # Acceptance failure (no task) must NOT stamp a handle.
+    task = {'events': [], '_userId': 1}
+    hdl._handle_produce_slides(
+        task, {'id': 'tc2'}, 'produce_slides', 'tc2', {}, 0,
+        {'tool_calls': []}, cfg=None, project_path='', project_enabled=False)
+    assert metas[-1]['badge'] == 'failed'
+    assert metas[-1]['extra'] is None
+
+
 # ══════════════════════════════════════════════════════════
 #  engine job-manifest crash-resume helpers
 # ══════════════════════════════════════════════════════════

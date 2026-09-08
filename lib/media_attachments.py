@@ -65,12 +65,10 @@ class MediaProjectionBudget:
     attachments_remaining: int = 1
 
     def available(self, per_attachment_cap: int) -> int:
-        planned = max(1, int(self.attachments_remaining))
-        fair_share = (
-            max(0, int(self.text_chars_remaining)) + planned - 1
-        ) // planned
-        self.attachments_remaining = max(0, planned - 1)
-        return max(0, min(int(per_attachment_cap), fair_share))
+        # Allocate in transcript order. A future attachment must never shrink
+        # text that has already entered the provider's cached prefix.
+        self.skip_attachment()
+        return max(0, min(int(per_attachment_cap), self.text_chars_remaining))
 
     def skip_attachment(self) -> None:
         self.attachments_remaining = max(

@@ -36,7 +36,8 @@ def test_effective_tool_prompt_never_promises_absent_browser_js():
         'type': 'function',
         'function': {'name': 'browser_read_page', 'parameters': {}},
     }])
-    prompt = agent.messages[0]['content']
+    prompt = next(m['content'] for m in agent.messages
+                  if m.get('_contextInjectionId') == 'worker_policy')
 
     assert 'Available tools: browser_read_page.' in prompt
     assert 'browser_execute_js' not in prompt
@@ -62,13 +63,25 @@ def test_rehydration_refreshes_stale_system_authority():
         {'role': 'assistant', 'content': 'prior progress'},
     ]
 
+    master._resume_messages['visual'].append({
+        'role': 'user', '_isMeta': True,
+        '_contextInjectionId': 'worker_policy',
+        'content': 'Use browser_execute_js; stale worker tool authority',
+    })
+
     agent = master._make_agent(spec)
 
-    assert len(agent.messages) == 3
-    prompt = agent.messages[0]['content']
+
+    assert len(agent.messages) >= 4
+    prompt = next(m['content'] for m in agent.messages
+                  if m.get('_contextInjectionId') == 'worker_policy')
     assert 'browser_execute_js' not in prompt
     assert 'Never emulate a missing browser or privileged tool' in prompt
-    assert agent.messages[-1]['content'] == 'prior progress'
+    assert agent.messages[1:3] == [
+        {'role': 'user', 'content': 'inspect page'},
+        {'role': 'assistant', 'content': 'prior progress'},
+    ]
+    assert 'browser_execute_js' not in str(agent.messages)
     names = {t['function']['name'] for t in agent.tools}
     assert 'browser_preview_page' in names
     assert 'run_command' not in names

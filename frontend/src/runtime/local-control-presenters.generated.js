@@ -921,10 +921,10 @@ function _lcLocalBrowserClientId(clients) {
       // legacy extensions often report no ext_version at all.
       var upgradeLead = staleFrom
         ? _lcT('local.browserExtOutdated',
-          '扩展有新版本（{old} → {new}）——重新下载 ZIP 覆盖加载即可升级（已自动配对，零配置）：')
+          '扩展有新版本（{old} → {new}）——重新下载 ZIP，覆盖解压到当初加载的那个文件夹即可：扩展发现新文件会自动重载完成升级（已自动配对，零配置）：')
           .replace('{old}', staleFrom).replace('{new}', servedVer)
         : _lcT('local.browserExtCapabilityMismatch',
-          '当前扩展已连接，但缺少站点适配器所需能力。重新下载 ZIP 并在扩展管理页覆盖加载，即可完成升级：');
+          '当前扩展已连接，但缺少站点适配器所需能力。重新下载 ZIP，覆盖解压到当初加载的文件夹，扩展会自动重载完成升级：');
       setup.innerHTML = '<p class="lc-step">' + _lcEsc(upgradeLead) + '</p>' +
         _lcExtDownloadAction();
       _lcWireExtDownload();
@@ -941,7 +941,7 @@ function _lcLocalBrowserClientId(clients) {
     // broken install with the self-pairing one.
     setup.innerHTML =
       '<p class="lc-step">' + _lcEsc(_lcT('local.browserExtStranded',
-        '检测到旧版扩展因凭证失效连不上（它自己无法恢复）——重新下载扩展 ZIP（已自动配对、零配置），加载即恢复：')) + '</p>' +
+        '检测到旧版扩展因凭证失效连不上（它自己无法恢复）——重新下载扩展 ZIP（已自动配对、零配置），覆盖解压到当初加载的文件夹，扩展自动重载即恢复：')) + '</p>' +
       _lcExtDownloadAction();
     _lcWireExtDownload();
     return;
@@ -956,7 +956,7 @@ function _lcLocalBrowserClientId(clients) {
     var requiredProtocol = (d && d.protocolVersion) || '?';
     setup.innerHTML =
       '<p class="lc-step">' + _lcEsc(_lcT('local.browserExtProtocolMismatch',
-        '检测到浏览器扩展协议过旧（v{old} → v{new}），后端已安全拒绝命令。重新下载扩展 ZIP 并覆盖加载即可恢复：')
+        '检测到浏览器扩展协议过旧（v{old} → v{new}），后端已安全拒绝命令。重新下载扩展 ZIP，覆盖解压到当初加载的文件夹，扩展自动重载即可恢复：')
         .replace('{old}', reportedProtocol).replace('{new}', requiredProtocol)) + '</p>' +
       _lcExtDownloadAction();
     _lcWireExtDownload();

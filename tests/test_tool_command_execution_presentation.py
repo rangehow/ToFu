@@ -35,7 +35,6 @@ function occurrences(value, fragment) {
   return String(value).split(fragment).length - 1;
 }
 const messages = {
-  'toolCommandExecution.running': 'Running-local',
   'toolCommandExecution.timeout': 'timeout-local',
   'toolCommandExecution.notRun': 'not-run-local',
   'toolCommandExecution.exitCode': 'exit-local:{code}',
@@ -48,6 +47,8 @@ const messages = {
   'toolCmd.finished': 'finished-local',
   'toolCmd.grepSearchIntercepted': 'grep-local',
   'toolCmd.interruptedBadge': '⏸ interrupted-local',
+  'toolCmd.foldCommand': 'fold-cmd-local',
+  'toolCmd.foldOutput': 'fold-output-local',
   'project.qrScan': 'QR-local',
   'project.qrScanMulti': 'QRs-local',
 };
@@ -91,6 +92,15 @@ check('null_and_unrelated_rounds_fail_closed',
     { toolName: 'browser_execute_js' }, {}, header, closed,
   ) === '');
 
+for (const mode of ['running', 'settled']) {
+  const round = { toolName: 'run_command', query: 'pwd', toolArgs: {working_dir: '/tmp/<unsafe> directory'} };
+  const html = mode === 'running'
+    ? presentation.renderRunningCommandHtml(round, header, closed)
+    : presentation.renderSettledCommandHtml(round, {exitCode: '0'}, header, closed);
+  check(mode + '_cwd_is_visible_and_escaped', html.includes('working_dir: /tmp/&lt;unsafe&gt; directory') && !html.includes('<unsafe>'));
+}
+check('missing_cwd_is_not_invented', !presentation.renderRunningCommandHtml({toolName: 'run_command', query: 'pwd'}, header, closed).includes('working_dir:'));
+
 const runningRound = Object.freeze({
   toolName: 'run_command', query: 'npm test', toolCallId: 'call-1',
   toolArgs: '{"description":"run tests"}', _partialOutput: 'line 1',
@@ -106,8 +116,16 @@ check('running_card_uses_explicit_trusted_slots_and_localized_copy',
   && runningHtml.includes('data-slot="root"')
   && runningHtml.includes('data-slot="timer"')
   && runningHtml.includes('data-slot="interrupt"')
-  && runningHtml.includes('Running-local')
   && runningHtml.includes('grep-local'));
+check('plain_running_state_renders_no_status_label',
+  !runningHtml.includes('ptool-cmd-label'));
+const cancellingHtml = presentation.renderRunningCommandHtml({
+  toolName: 'run_command', query: 'npm test', toolCallId: 'call-cancel',
+  _partialOutputTerminalReason: 'cancelling',
+}, header, closed);
+check('non_running_progress_status_keeps_its_label',
+  cancellingHtml.includes('data-progress-status="cancelling"')
+  && cancellingHtml.includes('>Cancelling…</span>'));
 check('running_command_description_and_live_output_are_projected',
   runningHtml.includes('run tests')
   && runningHtml.includes('$ npm test')
@@ -142,7 +160,13 @@ check('command_and_description_have_visible_exact_bounds',
 check('body_interaction_snapshot_preserves_collapsible_state',
   longRunningHtml.includes('cmd-open')
   && longRunningHtml.includes('data-cmd-key="long-1"')
-  && longRunningHtml.includes('ptool-cmd-desc-toggle'));
+  && longRunningHtml.includes('ptool-cmd-fold-cmd')
+  && longRunningHtml.includes('_cmdBodyToggle(this,event)')
+  && longRunningHtml.includes('fold-cmd-local')
+  && longRunningHtml.includes('aria-expanded="true"'));
+check('running_card_without_collapsible_body_renders_no_fold_chip',
+  !runningHtml.includes('ptool-cmd-fold')
+  && !hostileHtml.includes('ptool-cmd-fold-output'));
 check('live_output_is_a_localized_bounded_tail_window',
   longRunningHtml.includes('live-elided:18')
   && !longRunningHtml.includes('LIVE_HEAD')
@@ -204,9 +228,14 @@ check('settled_success_preserves_status_output_and_disclosure_contract',
   && settledHtml.includes('finished-local')
   && settledHtml.includes('exit-local:0')
   && settledHtml.includes('ptool-cmd-hasoutput output-open')
-  && settledHtml.includes('_cmdHeaderToggle(this,event)')
-  && !settledHtml.includes('ptool-cmd-outchev')
+  && settledHtml.includes('ptool-cmd-fold-output')
+  && settledHtml.includes('_cmdOutputOpenToggle(this,event)')
+  && settledHtml.includes('fold-output-local')
   && settledHtml.includes('<code>ok</code>'));
+check('settled_header_is_inert_and_short_command_has_no_cmd_fold',
+  !settledHtml.includes('role="button"')
+  && !settledHtml.includes('ptool-cmd-fold-cmd')
+  && !settledHtml.includes('ptool-cmd-desc-toggle'));
 check('settled_metadata_precedes_args_and_query',
   settledHtml.includes('$ printf ok')
   && settledHtml.includes('>print</span>')
@@ -215,6 +244,15 @@ check('settled_owner_preserves_trusted_controls_and_inputs',
   settledHtml.includes('data-slot="controls"')
   && JSON.stringify([settledRound, settledMetadata]) === settledBefore);
 
+const backgroundHtml = presentation.renderSettledCommandHtml({
+  toolName: 'run_command', query: 'slow upload',
+}, { exitCode: 'background', backgrounded: true }, header, closed);
+check('background_acceptance_is_neither_failure_nor_command_completion',
+  backgroundHtml.includes('ptool-cmd-background')
+  && backgroundHtml.includes('bgCommand.moved')
+  && !backgroundHtml.includes('ptool-cmd-err')
+  && !backgroundHtml.includes('finished-local')
+  && !backgroundHtml.includes('exit-local:background'));
 const errorHtml = presentation.renderSettledCommandHtml({
   toolName: 'run_command', query: 'bad',
 }, { exitCode: 2, output: 'boom' }, header, closed);
@@ -289,6 +327,12 @@ const longKeyHtml = presentation.renderSettledCommandHtml({
 check('interaction_key_is_truncated_to_512_code_units',
   longKeyHtml.includes('data-cmd-key="' + truncatedInteractionKey + '"')
   && !longKeyHtml.includes('data-cmd-key="' + longInteractionKey + '"'));
+check('collapsible_settled_command_renders_both_fold_controls_closed',
+  longKeyHtml.includes('ptool-cmd-fold-cmd')
+  && longKeyHtml.includes('ptool-cmd-fold-output')
+  && longKeyHtml.includes('fold-cmd-local')
+  && longKeyHtml.includes('fold-output-local')
+  && !longKeyHtml.includes('aria-expanded="true"'));
 console.log(checks.join('\n'));
 """
 
@@ -296,7 +340,6 @@ console.log(checks.join('\n'));
 _WIRING_HARNESS = r"""
 const { setup } = require(process.env.JSDOM_HARNESS);
 const messages = {
-  'toolCommandExecution.running': '运行中',
   'toolCommandExecution.timeout': '超时',
   'toolCommandExecution.notRun': '未运行',
   'toolCommandExecution.exitCode': '退出码 {code}',
@@ -311,6 +354,8 @@ const messages = {
   'toolCmd.interruptedBadge': '⏸ 已中断',
   'toolCmd.interrupt': '中断',
   'toolCmd.interruptTip': '只中断命令',
+  'toolCmd.foldCommand': '命令',
+  'toolCmd.foldOutput': '输出',
   'project.qrScan': '二维码',
   'project.qrScanMulti': '个二维码',
 };
@@ -345,7 +390,7 @@ check('running_owner_reaches_retained_dispatch',
   runningHtml.includes('ptool-cmd-running')
   && runningHtml.includes('npm test')
   && runningHtml.includes('测试')
-  && runningHtml.includes('>运行中</span>')
+  && !runningHtml.includes('ptool-cmd-label')
   && runningHtml.includes('ptool-cmd-interrupt'));
 
 const settledRound = {
@@ -362,10 +407,10 @@ check('settled_owner_reaches_retained_dispatch',
 
 const host = document.createElement('div');
 host.innerHTML = settledHtml;
-const settledHeader = host.querySelector('.ptool-cmd-header');
-_cmdHeaderToggle(settledHeader, {
+const outputFold = host.querySelector('.ptool-cmd-fold-output');
+_cmdOutputOpenToggle(outputFold, {
   stopPropagation() {},
-  target: settledHeader,
+  target: outputFold,
 });
 const expandedOutputHtml = _renderUnifiedToolLine(settledRound, false);
 check('retained_output_state_is_supplied_as_a_boolean_snapshot',
@@ -430,7 +475,7 @@ def test_tool_command_execution_presentation_owner_contract() -> None:
         line for line in process.stdout.splitlines()
         if line.startswith('PASS ')
     ]
-    assert len(passes) == 23, process.stdout
+    assert len(passes) == 32, process.stdout
 
 
 def test_retained_dispatch_wires_command_execution_owner() -> None:

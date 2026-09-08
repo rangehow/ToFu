@@ -84,9 +84,6 @@ async function _saveSettingsBody() {
   if (typeof _collectResponsesExperimentControls === 'function') {
     _collectResponsesExperimentControls();
   }
-  config.temperature = parseFloat(document.getElementById("settingTemp").value);
-  config.maxTokens = parseInt(document.getElementById("settingMaxTokens").value);
-  config.imageMaxWidth = parseInt(document.getElementById("settingImageMaxWidth").value) || 0;
   config.systemPrompt = document.getElementById("settingSystem").value;
   var spModeSel = document.getElementById('settingSystemPromptMode');
   if (spModeSel) config.systemPromptMode = (spModeSel.value === 'replace') ? 'replace' : 'append';

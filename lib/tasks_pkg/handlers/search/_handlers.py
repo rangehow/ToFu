@@ -359,6 +359,26 @@ def _handle_fetch_url(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
     # hosts of the same dead origin — the exact loop this reason text kills.
     error_msg = item.get('error_msg')
     round_entry['_cacheableResult'] = bool(page_content)
+
+    extract_q = str(fn_args.get('extract') or '').strip()
+    if page_content and extract_q:
+        try:
+            from lib.search_extract import extract_answer
+            answer = extract_answer(extract_q, target_url, page_content)
+            round_entry['extractMode'] = True
+            tool_content = (
+                f"Extract from {target_url} — {extract_q}\n\n{answer}")
+            return tc_id, tool_content, True
+        except Exception as _exc:
+            # Fail-soft: the page was already paid for — never lose it.
+            logger.warning('[Fetch] extract mode failed, returning raw '
+                           'content: %s', _exc)
+            tool_content = (
+                f"(extract mode unavailable: {_exc} — raw content follows)\n\n"
+                f"Content from {target_url} ({filtered_chars:,} chars):\n\n"
+                f"{page_content}")
+            return tc_id, tool_content, True
+
     tool_content = (f"Content from {target_url} ({filtered_chars:,} chars):\n\n{page_content}"
                     if page_content
                     else f"Failed to fetch {target_url}."

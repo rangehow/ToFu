@@ -311,6 +311,49 @@ def test_tool_result_v2_artifactizes_structural_and_token_truncation(monkeypatch
     assert json.loads(visible)["artifactRef"]
 
 
+def test_tool_result_v2_plain_text_spill_cursor_resumes_after_preview(
+        monkeypatch):
+    import lib.tasks_pkg.compaction._budget as _budget
+
+    stored: list[str] = []
+
+    def store(content, **_kwargs):
+        stored.append(content)
+        return "tool-result:" + "c" * 64
+
+    monkeypatch.setattr(_budget, "_store_tool_result_artifact", store)
+    raw = "文档正文 line with 中文 and more content\n" * 2_000
+    visible = json.loads(_budget.budget_tool_result_v2(
+        "mcp__xuecheng__read_doc", raw, user_id=7, model=""))
+
+    assert visible["truncated"] is True
+    assert visible["artifactRef"] == "tool-result:" + "c" * 64
+    assert visible["summary"].endswith(_budget._ARTIFACT_RESUME_MARKER)
+    cursor = int(visible["cursor"])
+    assert cursor > 0
+    prefix = visible["summary"][: -len(_budget._ARTIFACT_RESUME_MARKER)]
+    # The cursor points exactly past the preview the model has already seen,
+    # so a continuation read never re-spends tokens on those bytes.
+    assert stored[0].encode("utf-8")[:cursor].decode("utf-8") == prefix
+
+
+def test_tool_result_v2_structured_spill_keeps_zero_cursor(monkeypatch):
+    import lib.tasks_pkg.compaction._budget as _budget
+
+    monkeypatch.setattr(
+        _budget, "_store_tool_result_artifact",
+        lambda *_args, **_kwargs: "tool-result:" + "d" * 64)
+    raw = json.dumps(
+        [{"index": index, "blob": "x" * 200} for index in range(500)])
+    visible = json.loads(_budget.budget_tool_result_v2(
+        "web_search", raw, user_id=7, model=""))
+
+    assert visible["truncated"] is True
+    # A synthesized summary is not a byte prefix of the stored raw JSON, so
+    # continuation must restart from the beginning of the artifact.
+    assert visible["cursor"] == "0"
+
+
 def test_tool_result_v2_delivery_keeps_harness_fields_out_of_messages():
     from lib.tools.result_envelope import (
         ToolResultEnvelopeV2,
@@ -1072,12 +1115,17 @@ def test_tool_artifact_cas_is_owner_scoped_expiring_and_utf8_safe():
         })
         chunks.append(row["content"])
         cursor = row["nextCursor"]
+        # Dead weight removed: the model only needs content/cursor identity.
+        assert "expiresAtMs" not in row
+        assert "mediaType" not in row
+        assert "visibleBytes" not in row
     assert "".join(chunks) == content
     found = _tool_result_artifact_search(session, {
         "user_id": 11, "artifact_ref": put["artifactRef"],
         "now_ms": 200, "query": "evidence", "limit": 2,
     })
     assert found["items"] and "evidence" in found["items"][0]["text"]
+    assert "expiresAtMs" not in found
     assert _tool_result_artifact_read(session, {
         "user_id": 11, "artifact_ref": put["artifactRef"], "now_ms": 1_001,
     }) is None

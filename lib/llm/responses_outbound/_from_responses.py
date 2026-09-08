@@ -18,6 +18,8 @@ Shape notes:
 
 from __future__ import annotations
 
+from lib.llm.responses_outbound._message_phase import capture_phase_messages
+
 from lib.llm.responses_outbound._sse import (
     _CAPTURE_ITEM_TYPES,
     _MAX_RESPONSE_ITEM_ID_CHARS,
@@ -61,7 +63,7 @@ def responses_response_to_openai(data: object,
     status = data.get('status', 'completed')
     if not isinstance(status, str):
         return _invalid_response('Responses status must be text')
-    if status == 'failed':
+    if status == 'failed' or data.get('error') is not None:
         err = data.get('error') or {}
         if not isinstance(err, dict):
             err = {}
@@ -73,7 +75,8 @@ def responses_response_to_openai(data: object,
                 else 'response_failed')
         logger.warning('[Responses] non-stream response failed: %s: %s',
                        code, message[:200])
-        return {'error': {'message': f'{code}: {message}', 'type': code}}
+        return {'error': {**err, 'message': f'{code}: {message}',
+                          'type': err.get('type') or code}}
     if status not in ('completed', 'incomplete'):
         return _invalid_response(
             f'Responses returned non-terminal status {status!r}')
@@ -210,6 +213,11 @@ def responses_response_to_openai(data: object,
         reason = details.get('reason', '')
         if reason == 'max_output_tokens':
             finish = 'length'
+        elif reason == 'content_filter':
+            return {'error': {
+                'message': 'Responses incomplete response: content_filter',
+                'type': 'content_filter',
+            }}
         elif reason:
             return _invalid_response(
                 f'Responses incomplete response: {str(reason)[:120]}')
@@ -219,6 +227,7 @@ def responses_response_to_openai(data: object,
 
     message: dict = {'role': 'assistant',
                      'content': '\n'.join(p for p in content_parts if p)}
+    response_items.extend(capture_phase_messages(output))
     if reasoning_parts:
         # Paragraph-join: each summary part is its own markdown headline —
         # a bare '\n' collapses under markdown/plain rendering and fuses

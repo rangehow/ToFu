@@ -22,6 +22,12 @@
     "responses_profile": {"type": "string"},
     "faces": {"type": "object"},
     "extra_headers": {"type": "object"},
+    "retired_model_ids": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true,
+      "description": "Authored kill-switch: logical model ids the dynamic template feed (lib/provider_template_feed.py) must never re-add to this template."
+    },
     "offering_recipes": {
       "type": "array",
       "maxItems": 1024,

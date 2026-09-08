@@ -19,6 +19,13 @@ This domain defines tool visibility, model schemas, validation/dispatch, and res
 | Tool event vocabulary | [`../EVENTS.md`](../EVENTS.md) and event registry |
 | Generated inventory | [`../TOOL_INVENTORY.md`](../TOOL_INVENTORY.md) |
 
+Local `run_command` validates its resolved working directory before project
+fast paths and subprocess environment setup. Missing/non-directory targets
+return an actionable not-run refusal without a child exit marker, spawning,
+creating directories, or silently falling back. Correct the supplied
+`working_dir` before retrying; repeating the invalid path cannot help.
+Existing sticky-directory containment and existence validation remains intact.
+
 ## Execution flow
 
 1. The task policy resolves an explicit visibility allow-list.
@@ -29,7 +36,10 @@ This domain defines tool visibility, model schemas, validation/dispatch, and res
 6. The gateway normalizes success/failure and timestamps.
 7. Settlement emits the canonical tool result and adds exactly one matching model-context result.
 
-Tool schemas describe capability; handlers implement it. Schemas stay free of task runtime/HTTP; search activates on first valid use. Once resident, its explicit-domain enum remains capability-derived, while prompt prose keeps only each domain's 96-character bounded purpose and any partial-availability warning; identifier rules and examples have one static owner, and the fully loaded `web_search` schema stays within 1,000 tokens. Runtime-built `fetch_url` retains remote/local routing, authenticated-browser server staging, final-destination verification, batch behavior, and optional whole-page relevance semantics within 400 tokens when the filter is on and 300 when off. The optional relevance gate skips pages below 6,000 characters, selects at most 6,000 query-focused characters, and emits a 32-token verdict. Its irrelevant sentinel is not a wire stop; one upstream 429 ends fail-open review, and rewrite remains opt-in. The server-wide `update_search_settings` schema stays within 550 tokens while retaining pure-read-first, profile, override, trade-off, clamp, global-write, and result-honesty semantics; approval metadata enumerates both profile/override and legacy knobs so a global mutation cannot masquerade as a read.
+Tool schemas describe capability; handlers implement it.
+ `ask_human` normalizes batch questions before presentation. If fewer than two valid questions remain, it consumes the batch selector and delegates once to single-question handling (or its missing-question error), without rewriting the original tool arguments.
+ The advertised project tool-name set is not an execution-owner set: background command check/kill remain owned by their command handlers and must not be reclaimed by the generic project dispatcher. Normal registry assembly is covered by executable dispatch tests.
+ Schemas stay free of task runtime/HTTP; search activates on first valid use. Once resident, its explicit-domain enum remains capability-derived, while prompt prose keeps only each domain's 96-character bounded purpose and any partial-availability warning; identifier rules and examples have one static owner, and the fully loaded `web_search` schema stays within 1,000 tokens. Runtime-built `fetch_url` retains remote/local routing, authenticated-browser server staging, final-destination verification, batch behavior, and optional whole-page relevance semantics within 400 tokens when the filter is on and 300 when off. The optional relevance gate skips pages below 6,000 characters, selects at most 6,000 query-focused characters, and emits a 32-token verdict. Its irrelevant sentinel is not a wire stop; one upstream 429 ends fail-open review, and rewrite remains opt-in. The server-wide `update_search_settings` schema stays within 550 tokens while retaining pure-read-first, profile, override, trade-off, clamp, global-write, and result-honesty semantics; approval metadata enumerates both profile/override and legacy knobs so a global mutation cannot masquerade as a read.
 
 `ToolContractV2` is the single definition for execution parameters, validation, model/search metadata, detailed help, permission, idempotency, typed errors, programmatic eligibility, and overflow recovery (`artifact`, `source`, or `none`).
 Its projections feed provider schemas, discovery, and execution validation; detailed help and parameters are paid only after discovery.

@@ -9,7 +9,10 @@
   "offering_recipes": [
     {
       "model_id": "glm-5.3",
-      "capabilities": ["text", "thinking"],
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
       "rpm": 60,
       "context_window": 1000000,
       "pricing": {
@@ -23,7 +26,12 @@
     },
     {
       "model_id": "glm-5.3-flash",
-      "capabilities": ["text", "vision", "thinking", "cheap"],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
       "rpm": 120,
       "context_window": 1000000,
       "pricing": {
@@ -37,7 +45,10 @@
     },
     {
       "model_id": "glm-5.2",
-      "capabilities": ["text", "thinking"],
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
       "rpm": 60,
       "context_window": 1000000,
       "pricing": {
@@ -51,9 +62,12 @@
     },
     {
       "model_id": "glm-5.1",
-      "capabilities": ["text", "thinking"],
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
       "rpm": 60,
-      "context_window": 1000000,
+      "context_window": 200000,
       "pricing": {
         "input": 3.45,
         "output": 13.81,
@@ -65,7 +79,10 @@
     },
     {
       "model_id": "glm-5",
-      "capabilities": ["text", "thinking"],
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
       "rpm": 60,
       "pricing": {
         "input": 3.45,
@@ -78,7 +95,11 @@
     },
     {
       "model_id": "glm-4.7",
-      "capabilities": ["text", "thinking", "cheap"],
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
       "rpm": 60,
       "pricing": {
         "input": 0.69,
@@ -91,7 +112,10 @@
     },
     {
       "model_id": "glm-4.7-flash",
-      "capabilities": ["text", "cheap"],
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
       "rpm": 200,
       "pricing": {
         "input": 0.0,
@@ -104,7 +128,10 @@
     },
     {
       "model_id": "glm-4.5-air",
-      "capabilities": ["text", "cheap"],
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
       "rpm": 120,
       "pricing": {
         "input": 0.28,
@@ -117,7 +144,10 @@
     },
     {
       "model_id": "glm-4.5-flash",
-      "capabilities": ["text", "cheap"],
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
       "rpm": 200,
       "pricing": {
         "input": 0.0,
@@ -126,6 +156,107 @@
         "cacheWriteMul": 0.0,
         "cacheReadMul": 0.0,
         "name": "GLM-4.5 Flash"
+      }
+    },
+    {
+      "model_id": "glm-4.5",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 131072,
+      "pricing": {
+        "input": 0.6,
+        "output": 2.2,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "glm-4.5v",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 65536,
+      "pricing": {
+        "input": 0.6,
+        "output": 1.8,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "glm-4.6",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 204800,
+      "pricing": {
+        "input": 0.5,
+        "output": 2.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "glm-4.6v",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap",
+        "video"
+      ],
+      "rpm": 30,
+      "context_window": 131072,
+      "pricing": {
+        "input": 0.3,
+        "output": 0.9,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "glm-5-turbo",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 202752,
+      "pricing": {
+        "input": 1.2,
+        "output": 4.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
+      }
+    },
+    {
+      "model_id": "glm-5v-turbo",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap",
+        "video"
+      ],
+      "rpm": 30,
+      "context_window": 200000,
+      "pricing": {
+        "input": 1.2,
+        "output": 4.0,
+        "currency": "USD",
+        "unit": "per_million_tokens"
       }
     }
   ]

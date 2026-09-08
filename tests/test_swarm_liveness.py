@@ -928,6 +928,7 @@ def test_spawn_specs_with_blank_ids_get_distinct_ids():
         def __init__(self, **kw):
             captured['specs'] = kw.get('specs') or []
             self.conv_id = kw.get('conv_id', '')
+            self.task_id = kw['task_id']
             self.specs = captured['specs']
             self.artifact_store = None
 
@@ -977,6 +978,7 @@ def test_explicit_spawn_ids_are_preserved():
         def __init__(self, **kw):
             captured['specs'] = kw.get('specs') or []
             self.conv_id = ''
+            self.task_id = kw['task_id']
             self.specs = captured['specs']
             self.artifact_store = None
 

@@ -99,6 +99,7 @@ class _QuietPollFilter(logging.Filter):
         '/api/v1/push/poll', '/api/v1/conversations/sync',
         '/api/v3/conversations/',
         '/api/v1/project/brain/summary', '/api/v1/tasks/events',
+        '/health/quiescence',
     )
     _REQUEST_STATUS_RE = re.compile(
         r'"(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+'

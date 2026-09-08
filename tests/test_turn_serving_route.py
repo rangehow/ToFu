@@ -311,7 +311,7 @@ def test_settings_runtime_has_one_v2_provider_editor():
         'settings/model_edit.js',
     ):
         assert legacy not in manifest
-    for term in ('服务商', '接入配置', '接入点', '凭证', '模型供给', '上游部署标识'):
+    for term in ('服务商', '接入配置', '接入点', '凭证', '模型供给'):
         assert term in renderer
     assert '<details class="stg-v2-advanced">' not in renderer
     assert '模型管理' in renderer
@@ -319,7 +319,7 @@ def test_settings_runtime_has_one_v2_provider_editor():
     assert '_stgProviderManagerTab' not in renderer
     assert '_stgProviderManagerLimit = 80' in renderer
     assert 'async function _showTemplateMenu' in renderer
-    assert 'async function _openTemplateWizard' in renderer
+    assert 'async function _addTemplateProvider' in renderer
     assert 'async function addProvider' in renderer
     assert "provider.brand === 'oauth'" in renderer
     assert 'codex|chatgpt|openai' in renderer

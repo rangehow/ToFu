@@ -200,7 +200,7 @@ def _cleanup_stale_sessions():
     for key in stale_ids:
         session = _active_sessions.pop(key, None)
         _session_timestamps.pop(key, None)
-        agent_inbox.clear(key)
+        agent_inbox.clear(key, modes=['swarm-update'])
         _purge_aliases(key)
         try:
             from lib.swarm import persistence
@@ -226,7 +226,7 @@ def _cleanup_stale_sessions():
         for key in sorted_ids[:excess]:
             session = _active_sessions.pop(key, None)
             _session_timestamps.pop(key, None)
-            agent_inbox.clear(key)
+            agent_inbox.clear(key, modes=['swarm-update'])
             _purge_aliases(key)
             try:
                 from lib.swarm import persistence
@@ -450,7 +450,12 @@ def _remove_session(task_id: str):
         for alias in [a for a, k in _key_aliases.items() if k == key]:
             _key_aliases.pop(alias, None)
         _reconcile_cleanup_timer_locked()
-    agent_inbox.clear(key)
+    # Only the swarm lane is being torn down here. The conversation-keyed
+    # inbox is shared with background-command / user-steer / peer-msg items
+    # whose delivery owners are still live — clearing them mid-turn would
+    # strand their durable rows until settlement (the stuck "result
+    # delivered-unconfirmed" banner).
+    agent_inbox.clear(key, modes=['swarm-update'])
     try:
         from lib.swarm import persistence
         persistence.delete_session(key)
@@ -588,6 +593,47 @@ def _status_from_persistence(task_id: str, *, user_id: int) -> dict | None:
         'agents':           agents,
         'agent_count':      len(agents),
     }
+
+
+def list_active_swarms(*, user_id: int) -> list[dict]:
+    """Bounded summaries of this owner's LIVE (non-terminated) swarm sessions.
+
+    Powers the background-activity surface: the spawning turn has usually
+    ended by the time anyone reads this, so nothing here depends on a task
+    id — the stable swarm key and the conversation id are what the client
+    needs to deep-link. Per-agent status is sampled OUTSIDE the registry
+    lock (``get_status`` takes the session's own lock) so a busy session
+    never stalls session registry readers.
+    """
+    owner_user_id = require_user_id(user_id, context='swarm activity list')
+    with _sessions_lock:
+        live = [
+            (key, session, _session_timestamps.get(key, 0))
+            for key, session in _active_sessions.items()
+            if int(session.user_id) == owner_user_id
+            and not getattr(session, 'is_terminated', False)
+        ]
+    out: list[dict] = []
+    for key, session, created_at in live:
+        try:
+            agents = [
+                {'id': sid, **info}
+                for sid, info in session.get_status().items()
+            ]
+            out.append({
+                'swarm_key':  key,
+                'conv_id':    session.conv_id,
+                'running':    session.running_count,
+                'pending':    session.pending_count,
+                'completed':  session.completed_count,
+                'agent_count': len(agents),
+                'agents':     agents,
+                'created_at': created_at,
+            })
+        except Exception as e:
+            logger.warning('[swarm] activity snapshot failed for %s: %s',
+                           key, e, exc_info=True)
+    return out
 
 
 def abort_swarm(task_id: str, *, user_id: int) -> dict:

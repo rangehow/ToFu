@@ -59,6 +59,40 @@ def _unwrap_result_payload(payload: Any) -> Any:
     return payload
 
 
+def _round_handle(round_entry: dict) -> dict:
+    """Decode a launch receipt without inferring identity from agent names."""
+    if not isinstance(round_entry, dict) or round_entry.get('toolName') != 'spawn_agents':
+        return {}
+    try:
+        handle = _unwrap_result_payload(json.loads(round_entry.get('toolContent') or ''))
+    except (ValueError, TypeError):
+        return {}
+    return handle if isinstance(handle, dict) else {}
+
+
+def _run_id(value: dict) -> str:
+    # Followups retain the original session task. Older receipts' swarm_id
+    # is usable on exact equality only; swarm_key is never execution identity.
+    value = value if isinstance(value, dict) else {}
+    identity = value.get('swarm_run_id') or value.get('swarm_id')
+    return identity if isinstance(identity, str) else ''
+
+
+def matching_snapshot_ids(round_entry: dict, snapshot: dict) -> set[str]:
+    """Match wave membership only when the receipt proves run ownership.
+
+    Identity-free legacy history remains readable but cannot be enriched by
+    current sessions: reused agent names cannot establish ownership.
+    """
+    identity = _run_id(snapshot)
+    if not identity or _run_id(_round_handle(round_entry)) != identity:
+        return set()
+    return _round_handle_ids(round_entry) & {
+        a.get('id') for a in snapshot.get('agents') or []
+        if isinstance(a, dict) and a.get('id')
+    }
+
+
 def _round_handle_ids(round_entry: dict) -> set[str]:
     """Return the set of agent ids referenced by a spawn round's handle.
 
@@ -129,6 +163,7 @@ def filter_snapshot(snapshot: dict, keep_ids: set) -> dict:
     settled = bool(snapshot.get('settled'))
     return {
         'agents':      agents,
+        **({'swarm_id': _run_id(snapshot)} if _run_id(snapshot) else {}),
         'settled':     settled,
         'totalTokens': total_tokens,
         'agentCount':  len(agents),
@@ -152,6 +187,12 @@ def stamp_round(round_entry: dict, snapshot: dict) -> bool:
         return False
     changed = False
     existing = round_entry.get('_swarmSnapshot')
+    incoming_run = _run_id(snapshot)
+    receipt_run = _run_id(_round_handle(round_entry))
+    existing_run = _run_id(existing)
+    if (not incoming_run or incoming_run != receipt_run
+            or (existing_run and existing_run != incoming_run)):
+        return False
     if existing != snapshot:
         if _snapshot_version(snapshot) < _snapshot_version(existing):
             # Older/partial trying to overwrite newer/settled — reject the
@@ -207,11 +248,7 @@ def reconcile_spawn_round_from_active_session(
         if session is None:
             return False
         snapshot = session._build_agent_snapshot()
-        scoped_ids = handle_ids & {
-            str(agent.get('id'))
-            for agent in (snapshot.get('agents') or [])
-            if isinstance(agent, dict) and agent.get('id')
-        }
+        scoped_ids = matching_snapshot_ids(round_entry, snapshot)
         if not scoped_ids:
             logger.warning(
                 '[SwarmSnapshot] active session has no agents matching the '
@@ -272,7 +309,7 @@ def _persist_snapshot_to_turns(conv_id: str, agent_ids, snapshot: dict, *,
         candidate = copy.deepcopy(projection)
         turn_changed = False
         for round_entry in (candidate.get('toolRounds') or []):
-            hids = _round_handle_ids(round_entry) & wanted
+            hids = matching_snapshot_ids(round_entry, snapshot) & wanted
             if not hids:
                 continue
             matched = True

@@ -19,6 +19,19 @@ plus two deliberate exclusions:
   * the original GPT-5 family (gpt-5/5.1/5.2/5-mini/5-nano) stays retired per
     the dated note in ``_slots.py`` even though the gateway still serves them.
 
+2026-09-04 cleanup (``_NEVER_TEMPLATE`` second block): recipes whose every wire
+id the probe proved unserved were removed — the whole deepseek-v3.2 mirror
+family 400s ``invalid model name`` on chat, ``claude-sonnet-4.6`` 400s
+"Access to Anthropic models is not allowed for this account", the image /
+embedding / transcription recipes 404 on their own surfaces, and
+``hy3-preview`` / ``gemini-3.8-flash`` were never probed on this gateway at
+all (hy3-preview remains served via the Tencent TokenHub template).
+
+2026-09-04 later that day: the ModelPlaza sync
+(``scripts/meituan_template_sync.py``) probed ``hy3-preview`` and
+``gemini-3.8-flash`` OK on this gateway — both left ``_NEVER_TEMPLATE`` and
+are regular recipes now.
+
 Run:
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/test_meituan_served_catalog_sync.py -v
 """
@@ -51,7 +64,11 @@ _EXPECTED_NEW = {
     'glm-5':                          {'text', 'thinking'},
     'glm-5-turbo':                    {'text', 'cheap'},
     'glm-4.7':                        {'text', 'thinking', 'cheap'},
-    'grok-4.6':                       {'text', 'vision', 'thinking'},
+    # 2026-09-06 plaza 新上 batch: probe rate_limited (served); the sync's
+    # mirror hint vs glm-5.3 was overridden — flash is a distinct model
+    # (multimodal, ¥0.4/¥1.4 on plaza), not a deployment spelling.
+    'glm-5.3-flash':                  {'text', 'vision', 'video', 'thinking', 'cheap'},
+    'grok-4.6':                       {'text', 'vision', 'thinking', 'cheap'},
     'kimi-k2.6':                      {'text', 'cheap'},
     'kimi-k2.7-code':                 {'text', 'thinking', 'cheap'},
     'kimi-k2.7-code-highspeed':       {'text', 'thinking', 'cheap'},
@@ -67,13 +84,23 @@ _EXPECTED_PRICED = [
     'deepseek-v4-flash-tencent', 'deepseek-v4-flash-meituan',
     'deepseek-v4-pro-tencent', 'deepseek-v4-flash-vision-exp',
     'doubao-seed-1-6-vision-250815', 'gemini-2.5-flash-lite',
+    'glm-5.3-flash',
     'gemini-3.1-flash-lite', 'glm-5-turbo', 'grok-4.6',
     'kimi-k2.7-code', 'kimi-k2.7-code-highspeed', 'o3-pro', 'qwen-mt-plus',
 ]
 
 # Models the gateway verifiably does NOT serve for chat — must stay absent.
 _NEVER_TEMPLATE = ['Ring-1T', 'Ling-1T', 'ring-1t', 'Ring-1T-Flash',
-                   'gemini-3.1-flash-lite-preview']
+                   'gemini-3.1-flash-lite-preview',
+                   # 2026-09-04 cleanup — probe-dead on every wire id:
+                   'deepseek-v3.2', 'deepseek-v3.2-tencent', 'deepseek-v3.2-baidu',
+                   'deepseek-v3.2-huawei', 'deepseek-v3.2-doubao',
+                   'claude-sonnet-4.6', 'aws.claude-sonnet-4.6',
+                   'Doubao-Seed-ASR-2.0',
+                   'gemini-2.5-flash-image', 'gemini-3-pro-image-preview',
+                   'gemini-3.1-flash-image-preview', 'gpt-image-1.5', 'gpt-image-2',
+                   'text-embedding-v4', 'text-embedding-3-small',
+                   'text-embedding-3-large']
 
 
 def _recipes() -> dict[str, dict]:

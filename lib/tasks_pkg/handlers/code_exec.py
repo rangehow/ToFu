@@ -9,7 +9,11 @@ import time
 
 from lib.log import get_logger
 from lib.project_mod.config import MAX_COMMAND_OUTPUT
-from lib.tasks_pkg.executor import _finalize_tool_round, tool_registry
+from lib.tasks_pkg.executor import (
+    _build_simple_meta,
+    _finalize_tool_round,
+    tool_registry,
+)
 from lib.tasks_pkg.manager import append_event
 
 logger = get_logger(__name__)
@@ -691,6 +695,38 @@ def _handle_code_exec(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
             task, rn, round_entry, [meta],
             status='done' if redirected.ok else 'error')
         return tc_id, redirected.tool_content, False
+    # Explicit mode uses the same durable completion lane as steer handoff.
+    if fn_args.get('background'):
+        from lib.tasks_pkg.background_commands import (
+            background_command_result, start_background_command,
+        )
+        bg_cmd_id = start_background_command(
+            task=task,
+            config=cfg,
+            command=cmd,
+            execute=lambda bg_task: execute_standalone_command(
+                fn_name, fn_args,
+                stdin_callback=None,
+                on_chunk=None,
+                on_spawn=None,
+                on_grep_intercept=None,
+                runtime_context=None,
+                task=bg_task,
+            ),
+        )
+        tool_content = background_command_result(
+            cmd, bg_cmd_id,
+            has_conversation=bool(task.get('convId') and task.get('_userId')),
+        )
+        meta = {
+            'toolName': 'code_exec', 'command': cmd,
+            'output': tool_content, 'exitCode': 'background',
+            'timedOut': False, 'backgrounded': True,
+            'backgroundCommandId': bg_cmd_id,
+            'badge': 'background',
+        }
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, tool_content, False
     # Background swarm/agent workers have no UI capable of answering a stdin
     # request. Giving them the interactive callback changes run_command to its
     # stdin-waiting implementation and can strand a worker indefinitely.
@@ -816,5 +852,97 @@ def _handle_code_exec(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, p
             meta['badge'] = 'interrupted'
     if round_entry.get('grepSearchIntercepted'):
         meta['grepSearchIntercepted'] = True
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
+
+
+@tool_registry.handler('check_background_command', category='code',
+                       description='Poll a background command status')
+def _handle_check_background(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
+    """Poll status and result of a background command."""
+    from lib.tasks_pkg.background_commands import check_background_command
+    command_id = fn_args.get('command_id', '')
+    if not command_id:
+        tool_content = 'Error: command_id is required.'
+        meta = _build_simple_meta(
+            fn_name, tool_content, source='BackgroundCommand',
+            title='Missing command_id', snippet='No command_id provided',
+            badge='error',
+        )
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, tool_content, False
+
+    info = check_background_command(command_id, user_id=task.get('_userId'))
+    if info is None:
+        tool_content = f'Unknown background command: {command_id}'
+        meta = _build_simple_meta(
+            fn_name, tool_content, source='BackgroundCommand',
+            title=command_id, snippet='Not found or expired',
+            badge='error',
+        )
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, tool_content, False
+
+    if info['status'] == 'completed':
+        result_text = info['result'] or '(no output)'
+        tool_content = (
+            f'Background command {command_id} completed '
+            f'(elapsed {info["elapsed_s"]}s):\n\n{result_text}'
+        )
+    else:
+        tool_content = (
+            f'Background command {command_id} is still running '
+            f'(elapsed {info["elapsed_s"]}s). Command: {info["command"][:200]}'
+        )
+
+    meta = _build_simple_meta(
+        fn_name, tool_content, source='BackgroundCommand',
+        title=f'{command_id}: {info["status"]}',
+        snippet=f'elapsed {info["elapsed_s"]}s',
+        badge='done' if info['status'] == 'completed' else 'running',
+        extra={
+            'commandId': command_id,
+            'command': info['command'],
+            'status': info['status'],
+            'elapsedS': info['elapsed_s'],
+            'result': info['result'],
+        },
+    )
+    _finalize_tool_round(task, rn, round_entry, [meta])
+    return tc_id, tool_content, False
+
+
+@tool_registry.handler('kill_background_command', category='code',
+                       description='Kill a running background command')
+def _handle_kill_background(task, tc, fn_name, tc_id, fn_args, rn, round_entry, cfg, project_path, project_enabled, all_tools=None):
+    """Kill a running background command."""
+    from lib.tasks_pkg.background_commands import kill_background_command
+    command_id = fn_args.get('command_id', '')
+    if not command_id:
+        tool_content = 'Error: command_id is required.'
+        meta = _build_simple_meta(
+            fn_name, tool_content, source='BackgroundCommand',
+            title='Missing command_id', snippet='No command_id provided',
+            badge='error',
+        )
+        _finalize_tool_round(task, rn, round_entry, [meta])
+        return tc_id, tool_content, False
+
+    killed = kill_background_command(command_id, user_id=task.get('_userId'))
+    if killed:
+        tool_content = f'Background command {command_id} kill signalled.'
+        badge = 'killed'
+    else:
+        tool_content = (
+            f'Background command {command_id} not found or already finished.'
+        )
+        badge = 'error'
+
+    meta = _build_simple_meta(
+        fn_name, tool_content, source='BackgroundCommand',
+        title=command_id,
+        snippet=tool_content[:200],
+        badge=badge,
+    )
     _finalize_tool_round(task, rn, round_entry, [meta])
     return tc_id, tool_content, False

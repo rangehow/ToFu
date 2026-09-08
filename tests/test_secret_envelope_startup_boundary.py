@@ -29,7 +29,7 @@ def test_secret_module_import_keeps_cipher_implementation_dormant():
         '"cryptography.fernet" in sys.modules)'
     )
     assert proc.returncode == 0, proc.stderr[-1200:]
-    assert 'SECRET-PACKAGE abcd…5678 False False' in proc.stdout
+    assert 'SECRET-PACKAGE abcd********5678 False False' in proc.stdout
 
 
 @pytest.mark.unit

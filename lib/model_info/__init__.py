@@ -51,6 +51,7 @@ from lib.model_info._family import (  # noqa: E402,F401
     is_kimi_k27_code,
     is_longcat,
     is_minimax,
+    is_muse_spark,
     is_qwen,
 )
 
@@ -61,10 +62,12 @@ from lib.model_info._capabilities import (  # noqa: E402,F401
     _GLM53_EFFORT_MAP,
     _GPT_EFFORT_MAP,
     _KIMI_K3_EFFORT_MAP,
+    _MUSE_SPARK_EFFORT_MAP,
     gemini_reasoning_effort,
     glm_reasoning_effort,
     gpt_reasoning_effort,
     kimi_k3_reasoning_effort,
+    muse_spark_reasoning_effort,
     model_requires_reasoning_content_replay,
     model_requires_thinking_signature_replay,
     model_requires_thought_signature_on_tool_calls,
@@ -130,12 +133,14 @@ __all__ = [
     'is_claude', 'is_claude_opus_47', 'is_deepseek', 'is_doubao', 'is_ernie',
     'is_gemini', 'is_glm', 'is_glm53', 'is_gpt', 'is_gpt5', 'is_gpt_56',
     'is_kimi', 'is_kimi_k3', 'is_kimi_k27_code', 'is_longcat', 'is_minimax',
-    'is_qwen',
+    'is_muse_spark', 'is_qwen',
     # capabilities
     'gemini_reasoning_effort', '_GEMINI_EFFORT_MAP',
     'glm_reasoning_effort', '_GLM52_EFFORT_MAP', '_GLM53_EFFORT_MAP',
     'gpt_reasoning_effort', '_GPT_EFFORT_MAP',
     'kimi_k3_reasoning_effort', '_KIMI_K3_EFFORT_MAP',
+
+    'muse_spark_reasoning_effort', '_MUSE_SPARK_EFFORT_MAP',
     'model_requires_reasoning_content_replay',
     'model_requires_thinking_signature_replay',
     'model_requires_thought_signature_on_tool_calls',

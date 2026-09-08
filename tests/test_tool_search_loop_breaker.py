@@ -332,3 +332,103 @@ def test_authentication_intent_ranks_login_ahead_of_document_search():
     for query in ('authorize access to xuecheng docs', '学城登录授权'):
         result = search_executable_catalog(_xuecheng_catalog(), query)
         assert result['items'][0]['name'] == 'mcp__xuecheng__login'
+
+
+def _llm_catalog():
+    run = _tool('mcp__llm__experiment_run',
+                description='[MCP:llm] Run experiments by id.')
+    run['function']['parameters'] = {
+        'type': 'object',
+        'properties': {'ids': {'type': 'array'}},
+        'required': ['ids'],
+    }
+    fork = _tool('mcp__llm__experiment_fork',
+                 description='[MCP:llm] Fork one experiment.')
+    fork['function']['parameters'] = {
+        'type': 'object',
+        'properties': {'base_id': {'type': 'string'},
+                       'name': {'type': 'string'}},
+        'required': ['base_id', 'name'],
+    }
+    return [run, fork,
+            _tool('mcp__llm__experiment_stop',
+                  description='[MCP:llm] Stop experiments.')]
+
+
+def test_mcp_short_name_uniquely_resolves_to_full_name():
+    result = search_executable_catalog(_llm_catalog(), 'experiment_fork')
+
+    assert result['resolved_name'] == 'mcp__llm__experiment_fork'
+    assert 'missing_name' not in result
+    assert [row['name'] for row in result['items']] == [
+        'mcp__llm__experiment_fork']
+    assert result['items'][0]['arguments_schema']['required'] == [
+        'base_id', 'name']
+    assert 'uniquely matches' in result['notice']
+
+
+def test_mcp_short_name_ambiguous_lists_full_names_without_a_miss_flag():
+    catalog = _llm_catalog() + [
+        _tool('mcp__other__experiment_run',
+              description='[MCP:other] Another runner.')]
+    result = search_executable_catalog(catalog, 'experiment_run')
+
+    assert result['ambiguous_names'] == [
+        'mcp__llm__experiment_run', 'mcp__other__experiment_run']
+    assert 'missing_name' not in result
+    assert 'resolved_name' not in result
+    assert 'matches 2 tools' in result['notice']
+    assert 'Do not search the short name again' in result['notice']
+
+
+def test_mcp_hyphenated_short_name_resolves():
+    catalog = [_tool('mcp__12306-train__get-current-date',
+                     description='[MCP:12306-train] Current date.'),
+               _tool('mcp__12306-train__get-tickets',
+                     description='[MCP:12306-train] Query tickets.')]
+    result = search_executable_catalog(catalog, 'get-current-date')
+
+    assert result['resolved_name'] == 'mcp__12306-train__get-current-date'
+    assert [row['name'] for row in result['items']] == [
+        'mcp__12306-train__get-current-date']
+
+
+def test_single_word_query_is_never_a_short_name_lookup():
+    result = search_executable_catalog(_xuecheng_catalog(), 'login')
+
+    assert 'resolved_name' not in result
+    assert 'missing_name' not in result
+    assert result['items'][0]['name'] == 'mcp__xuecheng__login'
+
+
+def test_repeated_exact_name_recovery_keeps_the_recovery_notice(monkeypatch):
+    from lib.tasks_pkg.handlers import tool_gateway as handler
+
+    monkeypatch.setattr(handler, '_finalize', lambda *args, **kwargs: None)
+    task = {
+        'id': 'task-exact-recovery', 'model': 'test',
+        '_executable_tool_catalog': _claim_catalog(),
+        '_executableToolNamespaceByName': {},
+    }
+
+    def run(query):
+        _tc_id, content, _aborted = handler.handle_search_tools(
+            task, {}, 'search_tools', 'call-1', {'query': query},
+            1, {}, {}, None, False)
+        return json.loads(content)
+
+    first = run('project board epic')
+    assert 'project_board_claim' in {row['name'] for row in first['items']}
+
+    # Compaction summarized the first disclosure away; re-reading the same
+    # exact name is a legitimate schema recovery, not a re-search loop.
+    second = run('project_board_claim')
+    assert second['already_disclosed'] == 'project_board_claim'
+    assert 'repeated_query' not in second
+
+    third = run('project_board_claim')
+    assert third['repeated_query'] == 2
+    assert third['already_disclosed'] == 'project_board_claim'
+    assert third['items'][0]['arguments_schema']['required'] == ['task_id']
+    assert 'Do not search for this name again' in third['notice']
+    assert 'the outcome cannot change' not in third['notice']

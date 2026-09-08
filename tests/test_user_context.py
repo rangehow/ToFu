@@ -239,7 +239,10 @@ def test_profile_review_uses_strict_zero_wait_admission(context_data_dir,
     assert pc.run_profile_consolidation([
         {'role': 'user', 'content': '我偏好简洁的中文回答。'},
     ]) == []
-    assert captured['max_429_attempts'] == 1
+    # Bounded above one: a single transient 429 on a saturated personal
+    # gateway used to kill every pass (19/19 lost over four days). Each 429
+    # rotates provider slots, so three attempts stay advisory-cheap.
+    assert captured['max_429_attempts'] == 3
     assert captured['defer_on_shared_contention'] is True
     assert key_stats.is_strict_billing_stop_admission() is False
 
@@ -365,3 +368,77 @@ def test_clear_memories_preserves_context_and_skill_packages(context_data_dir,
     assert result['failed_ids'] == []
     assert up.load_context()['items'][0]['text'] == 'Works at Meituan'
     assert skill_file.is_file()
+
+
+def test_deleted_item_is_not_relearned(context_data_dir, monkeypatch):
+    """A delete leaves a tombstone the consolidation learner must respect."""
+    import lib.memory.profile_consolidate as pc
+    import lib.memory.user_profile as up
+
+    created = up.create_context_item(
+        {'type': 'response_preference', 'text': '默认使用简洁的中文回答'},
+        source='assistant', record_change=True)
+    item_id = created['item']['id']
+    assert up.delete_context_item(item_id) is True
+    assert [item['id'] for item in up.deleted_context_items()] == [item_id]
+
+    user_text = '我偏好简洁的中文回答。'
+    response = {'actions': [{
+        'kind': 'new',
+        'type': 'response_preference',
+        'text': '默认使用简洁的中文回答',
+        'evidence': user_text,
+    }]}
+    monkeypatch.setattr(
+        'lib.llm_dispatch.dispatch_chat',
+        lambda *args, **kwargs: (json.dumps(response), {}))
+
+    # Same shape as test_short_explicit_preference_is_reviewed_and_grounded,
+    # which DOES learn — here the tombstone alone blocks the re-add.
+    assert pc.run_profile_consolidation([
+        {'role': 'user', 'content': user_text},
+    ]) == []
+    assert up.load_context()['items'] == []
+
+
+def test_replace_removal_records_tombstone_and_undo_restores(context_data_dir):
+    """Removal through the full-replace save path is tombstoned + undoable."""
+    import lib.memory.user_profile as up
+
+    saved = up.save_context_items([
+        {'type': 'identity', 'text': 'Works at Meituan'},
+        {'type': 'response_preference', 'text': 'Reply in Chinese'},
+    ])
+    keep, drop = saved['items']
+    up.save_context_items([keep])
+
+    assert [item['id'] for item in up.load_context()['items']] == [keep['id']]
+    assert [item['id'] for item in up.deleted_context_items()] == [drop['id']]
+
+    with open(up.context_changes_path(), encoding='utf-8') as handle:
+        changes = json.load(handle)['changes']
+    delete_change = changes[-1]
+    assert delete_change['operation'] == 'delete'
+    assert delete_change['item_id'] == drop['id']
+
+    result = up.undo_context_change(delete_change['id'])
+    assert result['undone'] is True
+    assert result['item']['id'] == drop['id']
+    assert [item['id'] for item in up.load_context()['items']] == [
+        keep['id'], drop['id']]
+    assert up.deleted_context_items() == []
+
+
+def test_manual_readd_after_delete_still_works(context_data_dir):
+    """Tombstones gate the assistant learner only, never the user."""
+    import lib.memory.user_profile as up
+
+    created = up.create_context_item(
+        {'type': 'response_preference', 'text': 'Reply in Chinese'})
+    up.delete_context_item(created['item']['id'])
+    assert len(up.deleted_context_items()) == 1
+
+    readded = up.create_context_item(
+        {'type': 'response_preference', 'text': 'Reply in Chinese'})
+    assert readded['item']['text'] == 'Reply in Chinese'
+    assert len(up.load_context()['items']) == 1

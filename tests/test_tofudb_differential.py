@@ -190,6 +190,10 @@ def _resolve_tofudb_binary() -> Path:
         try:
             subprocess.run(
                 [str(cargo), 'build', '--manifest-path', str(manifest)],
+                # cargo discovers .cargo/config.toml from the working
+                # directory, not the manifest path: the package config pins
+                # a devtoolset C toolchain that libmimalloc-sys requires.
+                cwd=str(manifest.parent),
                 check=True, capture_output=True, text=True, timeout=1800,
                 env=env,
             )
@@ -414,9 +418,25 @@ class _Ref:
     path: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _ContinuationWitnessRef:
+    """Settled-Turn witness recomputed from an earlier ``turn.get`` outcome.
+
+    The model-continuation CAS fences a checkpoint with the authority's
+    model-visible witness of the frontier Turn.  Resolving the witness from
+    the run actually in flight lets each driver present the witness its own
+    authority will recompute internally at ``put`` time.
+    """
+
+    step: int
+
+
 def _resolve_payload_refs(
     payload: Any, outcomes: list[tuple[Step, Outcome]],
 ) -> Any:
+    if isinstance(payload, _ContinuationWitnessRef):
+        from lib.storage.model_continuation import settled_witness
+        return settled_witness(outcomes[payload.step][1].value)
     if isinstance(payload, _Ref):
         value = outcomes[payload.step][1].value
         for key in payload.path:
@@ -2279,6 +2299,208 @@ def _turn_scripts() -> dict[str, list[Step]]:
             read('turn.sync.changes', f'{ns}_missing'),
             read('turn.sync.changes', f'{ns}_conv', limit=0),
         ]),
+        'model continuation checkpoint frontier CAS witness and deletion': build(lambda ns: [
+            Step('model_continuation.get', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+            }),
+            # A missing conversation never manufactures a record.
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_missing',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [{'role': 'assistant', 'content': 'a'}],
+                    'turns': [[f'{ns}_t1', '0' * 64]],
+                },
+            }, command=True),
+            Step('model_continuation.delete', {
+                'user_id': user, 'conversation_id': f'{ns}_missing',
+                'lane_id': 'main',
+            }, command=True),
+            append(f'{ns}_conv', f'{ns}_t1', 0),
+            read('turn.get', f'{ns}_conv', turn_id=f'{ns}_t1'),
+            # Malformed projections and forged witnesses never replace state.
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [],
+                    'turns': [_ContinuationWitnessRef(4)],
+                },
+            }, command=True),
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [{'role': 'assistant', 'content': 'forged'}],
+                    'turns': [[f'{ns}_t1', '0' * 64]],
+                },
+            }, command=True),
+            # First write lands at frontier ordinal+1 = 1.
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [
+                        {'role': 'user', 'content': 'q'},
+                        {'role': 'assistant', 'content': f'body of {ns}_t1'},
+                    ],
+                    'turns': [_ContinuationWitnessRef(4)],
+                },
+            }, command=True),
+            Step('model_continuation.get', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+            }),
+            # Equal-frontier retry with the identical payload is a read-only
+            # acknowledgement; a diverging payload at the same frontier is
+            # rejected.
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [
+                        {'role': 'user', 'content': 'q'},
+                        {'role': 'assistant', 'content': f'body of {ns}_t1'},
+                    ],
+                    'turns': [_ContinuationWitnessRef(4)],
+                },
+            }, command=True),
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [
+                        {'role': 'user', 'content': 'q'},
+                        {'role': 'assistant', 'content': 'edited'},
+                    ],
+                    'turns': [_ContinuationWitnessRef(4)],
+                },
+            }, command=True),
+            append(f'{ns}_conv', f'{ns}_t2', 1, actor='assistant'),
+            read('turn.get', f'{ns}_conv', turn_id=f'{ns}_t2'),
+            # Frontier 2 admits the extended checkpoint; the stale
+            # frontier-1 payload is then rejected.
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [
+                        {'role': 'user', 'content': 'q'},
+                        {'role': 'assistant', 'content': f'body of {ns}_t1'},
+                        {'role': 'assistant', 'content': f'body of {ns}_t2'},
+                    ],
+                    'turns': [
+                        _ContinuationWitnessRef(4),
+                        _ContinuationWitnessRef(12),
+                    ],
+                },
+            }, command=True),
+            Step('model_continuation.put', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+                'projection': {
+                    'messages': [
+                        {'role': 'user', 'content': 'q'},
+                        {'role': 'assistant', 'content': f'body of {ns}_t1'},
+                    ],
+                    'turns': [_ContinuationWitnessRef(4)],
+                },
+            }, command=True),
+            Step('model_continuation.delete', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+            }, command=True),
+            Step('model_continuation.delete', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+            }, command=True),
+            Step('model_continuation.get', {
+                'user_id': user, 'conversation_id': f'{ns}_conv',
+                'lane_id': 'main',
+            }),
+        ]),
+        'turn cleanup deletes superseded attempts behind retention and fences': build(lambda ns: [
+            # Validation parity: a zero limit is a protocol error on both.
+            Step('turn.cleanup', {
+                'user_id': user, 'limit': 0,
+            }, command=True),
+            Step('turn.create_pair', {
+                'conversation_id': f'{ns}_conv', 'user_id': user,
+                'command_id': f'{ns}_pair_command',
+                'input_projection': {'content': 'cleanup question'},
+                'config': {'model': 'cleanup-differential'},
+                # A real-clock past timestamp keeps the superseded attempt
+                # older than any retention-zero cutoff on both authorities.
+                'now': int(time.time() * 1000) - 120_000,
+                'conversation_defaults': defaults(),
+            }, command=True),
+            Step('turn.event.record', {
+                'attempt_id': _Ref(1, ('attempt', 'attemptId')),
+                'user_id': user,
+                'terminal': True, 'status': 'superseded',
+                'settlement': {
+                    'outcome': 'superseded', 'cause': 'regenerate',
+                    'resumeOptions': [],
+                },
+                'event_payload': {'status': 'superseded', 'phase': None},
+                'now': int(time.time() * 1000) - 119_000,
+            }, command=True, ignore_fields=recovery_clock),
+            Step('turn.attempt.create', {
+                'conversation_id': f'{ns}_conv', 'user_id': user,
+                'turn_id': _Ref(1, ('turn', 'turnId')),
+                'command_id': f'{ns}_regenerate',
+                'operation': 'regenerate',
+                'target_actor': 'assistant', 'target_kind': 'reply',
+                'expected_projection_revision': 2,
+                'config': {'model': 'cleanup-differential'},
+            }, command=True, ignore_fields=attempt_clock),
+            # Release the sync-replay fence so the superseded attempt becomes
+            # cleanup-eligible; sweep counts legitimately differ per fixture.
+            Step('turn.sync.prune', {
+                'user_id': user, 'created_before_ms': _FAR_FUTURE_MS,
+                'max_rows': 20_000,
+            }, command=True, compare=False),
+            Step('turn.cleanup', {
+                'user_id': user, 'retention_ms': 0, 'limit': 8,
+            }, command=True,
+                expect_divergence='turn.cleanup report shape and tenant scope'),
+            Step('turn.cleanup', {
+                'user_id': user, 'retention_ms': 0, 'limit': 8,
+            }, command=True,
+                expect_divergence='turn.cleanup report shape and tenant scope'),
+            # The compared parity surface: the regenerated attempt and the
+            # turn stay alive on both authorities; the superseded attempt is
+            # reaped only where the retention path is actually wired.
+            Step('turn.attempt.get', {
+                'attempt_id': _Ref(1, ('attempt', 'attemptId')),
+                'user_id': user,
+            }, ignore_fields=attempt_clock,
+                expect_divergence='turn.cleanup reaps what legacy retains'),
+            Step('turn.attempt.get', {
+                'attempt_id': _Ref(3, ('attempt', 'attemptId')),
+                'user_id': user,
+            }, ignore_fields=attempt_clock),
+            read('turn.get', f'{ns}_conv', ignore=attempt_clock,
+                 turn_id=_Ref(1, ('turn', 'turnId'))),
+        ]),
+        'turn search backfill global sweep contract': build(lambda ns: [
+            Step('turn.search.backfill', {
+                'cursor': '', 'max_rows': 8, 'max_bytes': 2_000_000,
+            }, command=True,
+                expect_divergence='turn.search.backfill global rebuild authority'),
+            # Any payload identity fails closed on the global sweep; the
+            # legacy shim ignores it entirely.
+            Step('turn.search.backfill', {
+                'cursor': '', 'max_rows': 8, 'max_bytes': 2_000_000,
+                'user_id': user,
+            }, command=True,
+                expect_divergence='turn.search.backfill global rebuild authority'),
+            Step('turn.search.backfill', {
+                'cursor': 'x' * 2000, 'max_rows': 8, 'max_bytes': 2_000_000,
+            }, command=True,
+                expect_divergence='turn.search.backfill global rebuild authority'),
+        ]),
     }
 
 
@@ -3870,6 +4092,93 @@ def _queue_scripts() -> dict[str, list[Step]]:
                 'conv_id': conv, 'user_id': user,
             }, command=True),
         ],
+        'queue injection ack drains only never-accepted inbox rows': (
+            lambda ack_conv, wf_bg, peer_msg, peer_human, wf_plain, real_msg: [
+                Step('conversation.create', {
+                    'conv_id': ack_conv, 'user_id': user,
+                    'created_at': _CONV_TS, 'updated_at': _CONV_TS,
+                }, command=True),
+                # Position-vs-priority ordering pin: the workflow row holds
+                # position 1 behind nothing, yet the lower-priority peer row
+                # sorts first in the priority-leading order index.  Removal
+                # reports must follow legacy (position, id) order.
+                Step('queue.enqueue', {
+                    'conv_id': ack_conv, 'user_id': user, 'queue_id': wf_bg,
+                    'message': {'text': 'bg done',
+                                '_backgroundCommand': f'bg_{suffix}'},
+                    'config': {}, 'kind': 'workflow_step', 'priority': 50,
+                    'created_at_ms': 2,
+                }, command=True),
+                Step('queue.enqueue', {
+                    'conv_id': ack_conv, 'user_id': user, 'queue_id': peer_msg,
+                    'message': {'_peerMessage': True, '_peerText': 'hello',
+                                '_fromConv': f'other-{suffix}'},
+                    'config': {}, 'kind': 'peer_msg', 'priority': 10,
+                    'created_at_ms': 3,
+                }, command=True),
+                Step('queue.enqueue', {
+                    'conv_id': ack_conv, 'user_id': user,
+                    'queue_id': peer_human,
+                    'message': {'_peerMessage': True, '_peerHuman': True,
+                                '_peerText': 'human peer'},
+                    'config': {}, 'kind': 'peer_msg', 'priority': 10,
+                    'created_at_ms': 4,
+                }, command=True),
+                Step('queue.enqueue', {
+                    'conv_id': ack_conv, 'user_id': user, 'queue_id': wf_plain,
+                    'message': {'text': 'plain workflow'},
+                    'config': {}, 'kind': 'workflow_step', 'priority': 40,
+                    'created_at_ms': 5,
+                }, command=True),
+                Step('queue.enqueue', {
+                    'conv_id': ack_conv, 'user_id': user, 'queue_id': real_msg,
+                    'message': {'text': 'human message'},
+                    'config': {}, 'kind': 'real', 'priority': 10,
+                    'created_at_ms': 6,
+                }, command=True),
+                # queue_ids must be a list of bounded text identities.
+                Step('queue.injection.ack', {
+                    'conv_id': ack_conv, 'user_id': user,
+                    'queue_ids': 'not-a-list',
+                }, command=True),
+                Step('queue.injection.ack', {
+                    'conv_id': ack_conv, 'user_id': user,
+                    'queue_ids': [''],
+                }, command=True),
+                # An empty drain is a stable no-op acknowledgement.
+                Step('queue.injection.ack', {
+                    'conv_id': ack_conv, 'user_id': user, 'queue_ids': [],
+                }, command=True),
+                # Duplicates and unknown identities are ignored; only the two
+                # removable inbox rows leave, in (position, id) order.
+                Step('queue.injection.ack', {
+                    'conv_id': ack_conv, 'user_id': user,
+                    'queue_ids': [peer_msg, wf_bg, peer_human, wf_plain,
+                                  real_msg, peer_msg, f'missing-{suffix}'],
+                }, command=True),
+                Step('queue.list', {'conv_id': ack_conv, 'user_id': user}),
+                # Re-ack is a no-op and publishes no further sync event.
+                Step('queue.injection.ack', {
+                    'conv_id': ack_conv, 'user_id': user,
+                    'queue_ids': [peer_msg, wf_bg],
+                }, command=True),
+                Step('turn.sync.changes', {
+                    'conversation_id': ack_conv, 'user_id': user,
+                    'after': 0, 'limit': 10,
+                }),
+                # Leave no residue in the module-scoped legacy authority's
+                # tenant-global queue feed (tofu-db starts fresh per script).
+                Step('queue.clear', {
+                    'conv_id': ack_conv, 'user_id': user,
+                }, command=True),
+            ])(
+                f'queue-ack-conversation-{suffix}',
+                f'queue-ack-workflow-{suffix}',
+                f'queue-ack-peer-{suffix}',
+                f'queue-ack-peer-human-{suffix}',
+                f'queue-ack-workflow-plain-{suffix}',
+                f'queue-ack-real-{suffix}',
+            ),
     }
 
 
@@ -6192,6 +6501,30 @@ KNOWN_DIVERGENCES: dict[str, str] = {
         'SQLite reports freelist pages and auto_vacuum while Tofu-DB reports '
         'content-addressed blocks, immutable segments, exact reclaimed bytes '
         'and whether another bounded round has candidates.'),
+    'turn.cleanup report shape and tenant scope': (
+        'the legacy sweep is tenant-global and returns a bare deleted-attempt '
+        'count, while Tofu-DB scopes the sweep to the authenticated owner and '
+        'returns a structured report (deletedAttempts, scannedIndexRows, '
+        'remaining). Retention, current-attempt and sync-replay fences are '
+        'ported identically, so the compared reads around the divergent '
+        'report steps assert the observable parity surface: the superseded '
+        'attempt disappears on both authorities.'),
+    'turn.cleanup reaps what legacy retains': (
+        'the legacy authority never writes '
+        'storage_generation_attempts.superseded_at (the column exists but no '
+        'settlement path populates it), so its cleanup predicate can never '
+        'match and superseded attempts are retained forever; Tofu-DB '
+        'maintains the superseded-at index inside the terminal settlement '
+        'transaction and reaps within the same retention/fence contract, so '
+        'a reaped attempt reads back as null there while legacy still '
+        'returns the retained attempt document.'),
+    'turn.search.backfill global rebuild authority': (
+        'legacy keeps a compatibility shim that ignores the payload and '
+        'returns a fixed scheduled receipt because the rebuild runs outside '
+        'the authority, while Tofu-DB executes the real bounded global sweep '
+        'inside the authority transaction and fails closed on any payload '
+        'identity (user_id/tenant_id) or an oversized cursor. The two '
+        'contracts answer differently by design.'),
 }
 
 

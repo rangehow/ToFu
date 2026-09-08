@@ -270,39 +270,194 @@ class TestWriteSafetyNet:
         assert 'matches 2 locations' in out
         assert target.read_text(encoding='utf-8') == '# app\n# app\n'
 
-    def test_edit_file_wrap_replace_rejected_pre_execution(self, proj):
-        """Parity with the server-side tool_edit_file wrap gate: a replace
-        whose content keeps the anchor verbatim at a boundary is a pure
-        insertion and must be refused BEFORE the write lands."""
-        pj.cmd_project_read_files({'root': 'app', 'path': 'README.md'})
-        out = pj.cmd_project_edit_file({
-            'root': 'app',
-            'edits': [
-                {'path': 'README.md', 'operation': 'replace',
-                 'anchor': 'hello world', 'content': 'hello world\nappended'},
-                {'path': 'README.md', 'operation': 'insert_after',
-                 'anchor': '# app', 'content': 'inserted'},
-            ],
-        })
-        assert out.startswith('Applied 1/2 edits (1 failed)')
-        assert 'pure insertion rejected' in out
-        assert "operation='insert_after'" in out
-        # the rejected edit never landed; the sibling insert did
-        assert (proj['root'] / 'README.md').read_text() == (
-            '# app\ninserted\nhello world\n')
+    @pytest.mark.parametrize(('before', 'anchor', 'replacement', 'expected'), [
+        ('A\nC\n', 'A', 'A\nB', 'A\nB\nC\n'),
+        ('A\n', 'A', 'B\nA', 'B\nA\n'),
+        ('}\n', '}', '}\nx\n}', '}\nx\n}\n'),
+        ('A\n', 'A', 'A\nA', 'A\nA\n'),
+        ('return x;\n', 'x', 'x + 1', 'return x + 1;\n'),
+        ('return x;\n', 'x', '1 + x', 'return 1 + x;\n'),
+        ('value = 1', '1', '10', 'value = 10'),
+        ('A', 'A', 'A\nB', 'A\nB'),
+        ('A\r\nC\r\n', 'A\r\n', 'A\r\nB\r\n', 'A\r\nB\r\nC\r\n'),
+        ('A\r\nC\r\n', 'A\nC', 'A\nB\nC', 'A\nB\nC\n'),
+        ('中文\n', '中文', '中文追加', '中文追加\n'),
+    ])
+    def test_edit_file_retained_anchor_replace_is_exact(
+            self, proj, before, anchor, replacement, expected):
+        target = proj['root'] / 'sample.txt'
+        target.write_bytes(before.encode('utf-8'))
+        pj.cmd_project_read_files({'root': 'app', 'path': 'sample.txt'})
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [{
+            'path': 'sample.txt', 'operation': 'replace',
+            'anchor': anchor, 'content': replacement,
+        }]})
+        assert out.startswith('Applied 1/1 edits'), out
+        assert '[replace]' in out and 'Re-issue' not in out
+        assert target.read_bytes() == expected.encode('utf-8')
 
-    def test_edit_file_wrap_gate_kill_switch(self, proj, monkeypatch):
-        monkeypatch.setenv('TOFU_EDIT_WRAP_GATE', '0')
-        pj.cmd_project_read_files({'root': 'app', 'path': 'README.md'})
-        out = pj.cmd_project_edit_file({
-            'root': 'app',
-            'edits': [
-                {'path': 'README.md', 'operation': 'replace',
-                 'anchor': 'hello world', 'content': 'hello world\nappended'},
-            ],
-        })
-        assert out.startswith('Applied 1/1 edits')
-        assert 'appended' in (proj['root'] / 'README.md').read_text()
+    def test_edit_file_retained_anchor_replace_all_then_dependent_insert(self, proj):
+        target = proj['root'] / 'sample.txt'
+        target.write_text('A\nA\nC\n', encoding='utf-8')
+        pj.cmd_project_read_files({'root': 'app', 'path': 'sample.txt'})
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [
+            {'path': 'sample.txt', 'operation': 'replace',
+             'anchor': 'A', 'content': 'A\nB', 'replace_all': True},
+            {'path': 'sample.txt', 'operation': 'insert_before',
+             'anchor': 'C', 'content': 'D'},
+        ]})
+        assert out.startswith('Applied 2/2 edits'), out
+        assert target.read_bytes() == b'A\nB\nA\nB\nD\nC\n'
+
+    @pytest.mark.parametrize(('initial', 'anchor', 'error'), [
+        ('A\n', 'missing', 'not found'),
+        ('A\nA\n', 'A', 'matches 2 locations'),
+    ])
+    def test_edit_file_retained_anchor_replace_keeps_cardinality_guard(
+            self, proj, initial, anchor, error):
+        target = proj['root'] / 'sample.txt'
+        target.write_text(initial, encoding='utf-8')
+        pj.cmd_project_read_files({'root': 'app', 'path': 'sample.txt'})
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [{
+            'path': 'sample.txt', 'operation': 'replace',
+            'anchor': anchor, 'content': anchor + '\nB',
+        }]})
+        assert out.startswith('Applied 0/1 edits (1 failed)'), out
+        assert error in out
+        assert target.read_text(encoding='utf-8') == initial
+
+    @pytest.mark.parametrize('stale', [False, True])
+    def test_edit_file_retained_anchor_replace_keeps_freshness_guard(self, proj, stale):
+        target = proj['root'] / 'README.md'
+        if stale:
+            pj.cmd_project_read_files({'root': 'app', 'path': 'README.md'})
+            target.write_text('# app\nexternal change\n', encoding='utf-8')
+        before = target.read_bytes()
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [{
+            'path': 'README.md', 'operation': 'replace',
+            'anchor': '# app', 'content': '# app\nB',
+        }]})
+        assert out.startswith('Applied 0/1 edits (1 failed)'), out
+        assert ('changed on disk' if stale else 'read-before-write') in out
+        assert target.read_bytes() == before
+
+    @pytest.mark.parametrize(('operation', 'anchor'), [
+        ('insert_after', 'A'), ('insert_before', 'C'),
+    ])
+    def test_edit_file_line_insert_retains_newline_behavior(self, proj, operation, anchor):
+        target = proj['root'] / 'sample.txt'
+        target.write_bytes(b'A\r\nC\r\n')
+        pj.cmd_project_read_files({'root': 'app', 'path': 'sample.txt'})
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [{
+            'path': 'sample.txt', 'operation': operation,
+            'anchor': anchor, 'content': 'B',
+        }]})
+        assert out.startswith('Applied 1/1 edits'), out
+        assert target.read_bytes() == b'A\nB\nC\n'
+
+    @pytest.mark.parametrize(('initial', 'first', 'last', 'warning_count'), [
+        ('x = 1\n', 'def f(:', 'def f():\n    pass', 0),
+        ('x = 1\n', 'def f(:', 'def g(:', 1),
+        ('def broken(:\n', 'x = 1', 'def g(:', 0),
+    ])
+    def test_edit_file_syntax_feedback_uses_final_batch_state(
+            self, proj, monkeypatch, initial, first, last, warning_count):
+        from lib.project_mod.write_tools import _ops
+        target = proj['root'] / 'src' / 'sample.py'
+        target.write_text(initial, encoding='utf-8')
+        pj.cmd_project_read_files({'root': 'app', 'path': 'src/sample.py'})
+        guard_calls = []
+        guard = _ops._py_syntax_guard
+
+        def record_guard(path, before, after):
+            guard_calls.append((before, after))
+            return guard(path, before, after)
+
+        monkeypatch.setattr(_ops, '_py_syntax_guard', record_guard)
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [
+            {'path': 'src/sample.py', 'operation': 'replace',
+             'anchor': initial.rstrip('\n'), 'content': first},
+            {'path': 'src/sample.py', 'operation': 'replace',
+             'anchor': first, 'content': last},
+        ]})
+        assert out.startswith('Applied 2/2 edits'), out
+        assert out.count('SYNTAX GUARD') == warning_count
+        assert target.read_text(encoding='utf-8') == last + '\n'
+        assert guard_calls == [(initial, last + '\n')]
+
+    @pytest.mark.parametrize('fail_at', [1, 2])
+    def test_edit_file_failed_write_warns_only_for_surviving_commits(
+            self, proj, monkeypatch, fail_at):
+        target = proj['root'] / 'src' / 'sample.py'
+        target.write_text('x = 1\n', encoding='utf-8')
+        pj.cmd_project_read_files({'root': 'app', 'path': 'src/sample.py'})
+        write = pj._atomic_write
+        writes = []
+
+        def fail_write(path, content):
+            writes.append(content)
+            if len(writes) == fail_at:
+                raise OSError('simulated write failure')
+            return write(path, content)
+
+        monkeypatch.setattr(pj, '_atomic_write', fail_write)
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [
+            {'path': 'src/sample.py', 'operation': 'replace',
+             'anchor': 'x = 1', 'content': 'x = 1\ndef f(:'},
+            {'path': 'src/sample.py', 'operation': 'replace',
+             'anchor': 'def f(:', 'content': 'def f():\n    pass'},
+        ]})
+        if fail_at == 1:
+            assert out.startswith('Applied 0/2 edits (2 failed)'), out
+            assert target.read_text(encoding='utf-8') == 'x = 1\n'
+            assert 'SYNTAX GUARD' not in out
+        else:
+            assert out.startswith('Applied 1/2 edits (1 failed)'), out
+            assert target.read_text(encoding='utf-8') == 'x = 1\ndef f(:\n'
+            assert out.count('SYNTAX GUARD') == 1
+        pj._check_write_allowed(str(target))  # token is only re-armed on a commit
+
+    def test_edit_file_syntax_feedback_ignores_fixed_insert_and_keeps_files_separate(self, proj):
+        for name in ('first.py', 'second.py'):
+            (proj['root'] / 'src' / name).write_text('x = 1\n', encoding='utf-8')
+            pj.cmd_project_read_files({'root': 'app', 'path': 'src/' + name})
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [
+            {'path': 'src/first.py', 'operation': 'insert_after',
+             'anchor': 'x = 1', 'content': 'def f():'},
+            {'path': 'src/second.py', 'operation': 'replace',
+             'anchor': 'x = 1', 'content': 'x = 1\ndef broken(:'},
+            {'path': 'src/first.py', 'operation': 'replace',
+             'anchor': 'def f():', 'content': 'def f():\n    pass'},
+        ]})
+        assert out.startswith('Applied 3/3 edits'), out
+        assert out.count('SYNTAX GUARD') == 1
+        warning_line = next(line for line in out.splitlines() if 'SYNTAX GUARD' in line)
+        assert '[2] OK src/second.py' in warning_line
+        assert (proj['root'] / 'src' / 'first.py').read_bytes() == b'x = 1\ndef f():\n    pass\n'
+
+    @pytest.mark.parametrize(('before', 'replacement'), [
+        ('x = 1\n# larger than test cap\n', 'def f(:\n'),
+        ('x = 1\n', 'def much_larger_than_test_cap(:\n'),
+    ])
+    def test_edit_file_syntax_state_obeys_both_size_bounds(
+            self, proj, monkeypatch, before, replacement):
+        from lib.project_mod.write_tools import _ops
+        monkeypatch.setattr(_ops, '_ECHO_REPAIR_MAX_CHARS', 16)
+
+        def unexpected_guard(*args):
+            pytest.fail('over-budget syntax state must not retain/compare both texts')
+
+        monkeypatch.setattr(_ops, '_py_syntax_guard', unexpected_guard)
+        target = proj['root'] / 'src' / 'sample.py'
+        target.write_text(before, encoding='utf-8')
+        pj.cmd_project_read_files({'root': 'app', 'path': 'src/sample.py'})
+        out = pj.cmd_project_edit_file({'root': 'app', 'edits': [{
+            'path': 'src/sample.py', 'operation': 'replace',
+            'anchor': before, 'content': replacement,
+        }]})
+        assert out.startswith('Applied 1/1 edits'), out
+        assert 'SYNTAX GUARD' not in out
+        assert target.read_text(encoding='utf-8') == replacement
 
     def test_edit_file_neighbour_echo_auto_repaired(self, proj):
         """Desktop parity for the mswlvsfgzwiywr incident: an insert_after
@@ -519,7 +674,9 @@ class TestShareRootsRegistration:
         stop = threading.Event()
         captured = {}
 
-        def fake_post(url, json=None, headers=None, timeout=None, proxies=None):
+        def fake_post(url, json=None, headers=None, timeout=None, proxies=None,
+                      allow_redirects=None, auth=None):
+            assert allow_redirects is False and callable(auth)
             captured['body'] = json
             stop.set()
             return _Resp()

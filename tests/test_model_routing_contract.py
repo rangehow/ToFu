@@ -34,6 +34,9 @@ from lib.model_routing import (
     plan_legacy_migration,
 )
 
+from lib.provider_headers import is_credential_header, split_header_secrecy
+from lib.secret_envelope import secret_hint
+
 
 pytestmark = pytest.mark.unit
 
@@ -198,6 +201,51 @@ def test_release_date_is_projected_at_read_boundary_never_persisted() -> None:
     _validator().validate(projected)
 
 
+def test_official_pricing_is_projected_at_read_boundary_never_persisted() -> None:
+    document = _full_document()
+    for row in document['models']:
+        if row['model_id'] == 'alpha':
+            row['model_id'] = 'claude-fable-5-1'
+            # A client echoing the projected field back must not persist it.
+            row['official_pricing'] = {
+                'input': 999, 'output': 999, 'currency': 'USD',
+                'unit': 'per_million_tokens',
+            }
+        if row['model_id'] == 'beta':
+            row['model_id'] = 'gemini-3.8-flash'
+            row['list_pricing'] = {
+                'input': 3, 'output': 9, 'currency': 'USD',
+                'unit': 'per_million_tokens',
+            }
+    for credential in document['credentials']:
+        for ref in credential['authorization']['models']:
+            if ref['model_id'] == 'alpha':
+                ref['model_id'] = 'claude-fable-5-1'
+            if ref['model_id'] == 'beta':
+                ref['model_id'] = 'gemini-3.8-flash'
+    for offering in document['offerings']:
+        if offering['model']['model_id'] == 'alpha':
+            offering['model']['model_id'] = 'claude-fable-5-1'
+        if offering['model']['model_id'] == 'beta':
+            offering['model']['model_id'] = 'gemini-3.8-flash'
+
+    normalized = normalize_document(document)
+    assert all('official_pricing' not in model for model in normalized['models'])
+    by_id_normalized = {model['model_id']: model for model in normalized['models']}
+    assert by_id_normalized['gemini-3.8-flash']['list_pricing']['input'] == 3
+    _validator().validate(normalized)
+
+    projected = public_projection(document)
+    by_id = {model['model_id']: model for model in projected['models']}
+    official = by_id['claude-fable-5-1']['official_pricing']
+    assert official['input'] == 10.0
+    assert official['output'] == 50.0
+    assert official['cache_read'] == 0.25
+    # A registered list_pricing stays authoritative — no projection stamped.
+    assert 'official_pricing' not in by_id['gemini-3.8-flash']
+    _validator().validate(projected)
+
+
 def test_trained_model_alias_rows_merge_and_repoint_references() -> None:
     """Provider respellings (relay SKU, quant, snapshot) of one trained model
     collapse into the survivor row; offerings, credential authorizations and
@@ -247,6 +295,27 @@ def test_trained_model_alias_rows_merge_and_repoint_references() -> None:
     assert selection.model == ModelRef(**survivor)
 
 
+def test_offering_pricing_tier_tags_are_not_identity_capabilities() -> None:
+    """The ``cheap`` tier derives from each provider's own price book, so a
+    reseller offering may carry it even when the official model row (priced
+    at the creator's list rates) does not.  Only true capability claims
+    (vision on a text model) stay rejectable identity expansion."""
+    document = _full_document()
+    # Model alpha is ['text', 'thinking']; provider B undercuts the price.
+    document['offerings'][1]['capabilities'] = ['text', 'cheap']
+    normalized = normalize_document(document)
+    offering = next(row for row in normalized['offerings']
+                    if row['offering_id'] == 'alpha-b')
+    assert offering['capabilities'] == ['cheap', 'text']
+
+    document = _full_document()
+    document['offerings'][1]['capabilities'] = ['text', 'vision']
+    with pytest.raises(ModelRoutingError) as error:
+        normalize_document(document)
+    assert error.value.kind == 'offering_capability_expansion'
+    assert 'vision' in str(error.value)
+
+
 def test_desktop_adapter_connection_is_bounded_to_matching_loopback_port() -> None:
     document = _full_document()
     document['connections'][0].update({
@@ -289,6 +358,80 @@ def test_legacy_adapter_marker_migrates_to_connection_transport() -> None:
     assert plan.document['connections'][0]['adapter'] == {
         'agent_id': 'agent-123', 'port': 8317}
     assert 'adapter-key' not in json.dumps(plan.public_dict())
+
+
+def test_legacy_extra_headers_split_between_connection_and_envelope() -> None:
+    plan = plan_legacy_migration({'providers': [{
+        'id': 'gw',
+        'name': 'Gateway',
+        'base_url': 'https://gw.example/v1',
+        'protocol': 'openai',
+        'api_keys': ['sk-gateway-key-1234'],
+        'extra_headers': {
+            'M-Transfer-Cell': 'gray',
+            'api-key': 'header-secret',
+            'Host': 'gw.example',
+        },
+        'models': [{'model_id': 'gw-model'}],
+    }]})
+
+    assert not plan.blocking_issues
+    connection = plan.document['connections'][0]
+    assert connection['extra_headers'] == {'M-Transfer-Cell': 'gray'}
+    envelope = json.loads(plan._secrets[0].plaintext)
+    assert envelope['extra_headers'] == {
+        'api-key': 'header-secret',
+        'Host': 'gw.example',
+    }
+    assert plan.document['credentials'][0]['key_hint'] == 'sk-g…1234'
+    # The plain routing header is inspectable document metadata (asserted on
+    # the connection above); credential/reserved headers never leak into the
+    # public projection or the persisted document.
+    public = json.dumps(plan.public_dict())
+    persisted = json.dumps(plan.document)
+    assert 'header-secret' not in public
+    assert 'header-secret' not in persisted
+
+
+def test_secret_hint_derives_from_usable_key_not_envelope() -> None:
+    repository = InMemoryModelRoutingRepository()
+    owner = OwnerBoundary.create(21)
+    envelope = json.dumps({
+        'format': 'tofu.credential-secret/v1',
+        'api_key': 'sk-usable-key-9876',
+        'oauth': '',
+        'extra_headers': {'api-key': 'header-secret'},
+    }, separators=(',', ':'), sort_keys=True)
+    stored = repository.put_secret(owner, envelope)
+    assert stored['key_hint'] == secret_hint('sk-usable-key-9876')
+    assert not stored['key_hint'].startswith('{')
+    assert 'header-secret' not in stored['key_hint']
+
+    raw = repository.put_secret(owner, 'sk-raw-key')
+    assert raw['key_hint'] == secret_hint('sk-raw-key')
+
+    headers_only = repository.put_secret(owner, json.dumps({
+        'format': 'tofu.credential-secret/v1',
+        'api_key': '',
+        'oauth': '',
+        'extra_headers': {'X-Tenant': 'blue'},
+    }, separators=(',', ':'), sort_keys=True))
+    assert headers_only['key_hint'] == 'headers'
+
+
+def test_header_secrecy_classifier_keeps_credential_material_encrypted() -> None:
+    assert is_credential_header('api-key')
+    assert is_credential_header('X-Auth-Token')
+    assert is_credential_header('Authorization')
+    assert not is_credential_header('X-Custom-Header')
+    envelope, connection = split_header_secrecy({
+        'M-Cell': 'gray',
+        'api-key': 's',
+        'Host': 'gw.example',
+        'X-Tenant': 'blue',
+    })
+    assert envelope == {'api-key': 's', 'Host': 'gw.example'}
+    assert connection == {'M-Cell': 'gray', 'X-Tenant': 'blue'}
 
 
 def test_owner_repository_isolation_revision_cas_and_secret_redaction() -> None:
@@ -507,6 +650,39 @@ def test_migration_maps_faces_keys_access_wire_ids_and_pending_identity() -> Non
     assert result.enabled is True
     assert repository.get(boundary).revision == 1
     assert repository.migration_receipt(boundary)['receipt']['status'] == 'committed'
+
+
+def test_migration_folds_dated_pin_list_pricing_to_rolling_alias() -> None:
+    legacy = {'providers': [{
+        'id': 'gateway', 'name': 'Gateway',
+        'base_url': 'https://gateway.example/v1',
+        'models': [
+            {'model_id': 'deepseek-v4-pro',
+             'pricing': {'input': 1.32, 'output': 3.96, 'cache_read': 0.044}},
+            # Scan materialized explicit zeros for the pin: the catalog had
+            # no price card for the dated id, but $0 is not an official tier.
+            {'model_id': 'deepseek-v4-pro-0813',
+             'pricing': {'input': 0.0, 'output': 0.0}},
+            {'model_id': 'kimi-k2-instruct-0905',
+             'pricing': {'input': 0.0, 'output': 0.0}},
+            {'model_id': 'glm-9.9',
+             'pricing': {'input': 0.0, 'output': 0.0}},
+        ],
+    }]}
+    plan = plan_legacy_migration(legacy)
+
+    assert not plan.blocking_issues
+    by_id = {row['model_id']: row for row in plan.document['models']}
+    folded = by_id['deepseek-v4-pro-0813']['list_pricing']
+    assert folded['input'] == 1.32
+    assert folded['output'] == 3.96
+    assert folded['cache_read'] == 0.044
+    assert by_id['deepseek-v4-pro']['list_pricing']['input'] == 1.32
+    # No priced rolling alias in-document: the placeholder zero is not an
+    # official price, so the pin stays unpriced (目录未挂牌), not $0.
+    assert 'list_pricing' not in by_id['kimi-k2-instruct-0905']
+    # Same for a non-pin model: all-zero list pricing never materializes.
+    assert 'list_pricing' not in by_id['glm-9.9']
 
 
 def test_failed_migration_keeps_authority_unchanged_and_receipt_durable() -> None:

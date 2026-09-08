@@ -3,7 +3,7 @@
 //! CONTROL owns publication of the content-addressed manifest block. This
 //! module only validates its canonical contents and bounds point-read fanout.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io;
 
 use uuid::Uuid;
@@ -57,8 +57,6 @@ impl PayloadSegmentReference {
             || self.file_bytes < self.payload_bytes
             || self.file_bytes > MAX_SEGMENT_FILE_BYTES
             || self.first_block_id > self.last_block_id
-            || self.first_block_id.0[0] != self.shard
-            || self.last_block_id.0[0] != self.shard
         {
             return Err(invalid_data("invalid payload segment reference"));
         }
@@ -66,9 +64,7 @@ impl PayloadSegmentReference {
     }
 
     pub fn may_contain(&self, block_id: BlockId) -> bool {
-        block_id.0[0] == self.shard
-            && self.first_block_id <= block_id
-            && block_id <= self.last_block_id
+        self.first_block_id <= block_id && block_id <= self.last_block_id
     }
 }
 
@@ -162,7 +158,6 @@ impl PayloadManifest {
             return Err(invalid_data("payload manifest exceeds segment bound"));
         }
         let mut identifiers = BTreeSet::new();
-        let mut shard_counts = BTreeMap::<u8, usize>::new();
         let mut previous_key = None;
         for reference in &self.segments {
             reference.validate()?;
@@ -173,11 +168,6 @@ impl PayloadManifest {
             previous_key = Some(key);
             if !identifiers.insert(reference.segment_id) {
                 return Err(invalid_data("payload manifest segment ID is duplicated"));
-            }
-            let count = shard_counts.entry(reference.shard).or_default();
-            *count += 1;
-            if *count > MAX_PAYLOAD_SEGMENTS_PER_SHARD {
-                return Err(invalid_data("payload manifest shard fanout exceeds 16"));
             }
         }
         Ok(())
@@ -240,8 +230,24 @@ mod tests {
     #[test]
     fn malformed_bounds_order_duplicates_and_reserved_bytes_fail_closed() {
         let mut too_many = Vec::new();
-        for value in 0..=MAX_PAYLOAD_SEGMENTS_PER_SHARD {
-            too_many.push(reference(1, value as u8, value as u8));
+        for value in 0..=MAX_PAYLOAD_SEGMENTS as u32 {
+            let mut uuid_bytes = [0_u8; 16];
+            uuid_bytes[..4].copy_from_slice(&value.to_le_bytes());
+            let mut first = [0_u8; 32];
+            let mut last = [0_u8; 32];
+            first[0] = 1;
+            last[0] = 1;
+            first[1..5].copy_from_slice(&value.to_le_bytes());
+            last[1..5].copy_from_slice(&value.to_le_bytes());
+            too_many.push(PayloadSegmentReference {
+                segment_id: Uuid::from_bytes(uuid_bytes),
+                shard: 1,
+                block_count: 2,
+                payload_bytes: 20,
+                file_bytes: 300,
+                first_block_id: BlockId(first),
+                last_block_id: BlockId(last),
+            });
         }
         assert!(PayloadManifest::new(too_many).is_err());
 

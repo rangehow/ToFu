@@ -839,6 +839,19 @@ def _format_run_output(command, stdout, stderr, exit_code, timed_out=False,
     return result_text
 
 
+def validate_command_cwd(base, command):
+    """Reject invalid local cwd without spawning or silently changing intent."""
+    if base and not os.path.isdir(base):
+        return (
+            f'$ {command}\n\n'
+            f'Error: Invalid working_dir {base!r}: directory does not exist '
+            'or is not a directory. Command was not started. '
+            'Correct working_dir to an existing directory before retrying; '
+            'do not repeat the same invalid path. No fallback directory was used.'
+        )
+    return None
+
+
 def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None,
                      on_chunk=None, cwd_sink=None, on_spawn=None,
                      credentials=None, on_grep_intercept=None,
@@ -897,6 +910,10 @@ def tool_run_command(base, command, timeout=None, stdin_callback=None, task=None
 
     if not base:
         base = os.path.expanduser('~')
+
+    cwd_error = validate_command_cwd(base, command)
+    if cwd_error:
+        return cwd_error
 
     try:
         from lib.credentials_vault import resolve_run_command_env

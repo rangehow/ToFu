@@ -687,6 +687,9 @@ class FlowExecutor:
         try:
             self._on_event(event)
         except Exception as e:
+            from lib.orchestration_graph import FlowEventDeliveryError
+            if isinstance(e, FlowEventDeliveryError):
+                raise
             logger.debug('[FlowEngine] on_event sink error: %s', e)
 
 class _AbortSignal(Exception):

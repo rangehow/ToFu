@@ -516,14 +516,25 @@ class MasterOrchestrator:
             # role policy, and security wording can change between processes;
             # retaining the old system prompt let a resumed browser worker
             # keep following a withdrawn browser_execute_js promise and route
-            # around it with run_command. Refresh only the system carrier and
-            # leave every user/assistant/tool turn byte-for-byte intact.
+            # around it with run_command. Refresh the legacy system carrier
+            # and registered worker runtime policies only; retain all dialogue
+            # and prerequisite evidence byte-for-byte.
             if fresh_system:
                 if (resumed and isinstance(resumed[0], dict)
                         and resumed[0].get('role') == 'system'):
                     resumed[0] = fresh_system
                 else:
                     resumed.insert(0, fresh_system)
+            policy_ids = {'worker_policy', 'worker_artifacts'}
+            fresh_policies = [dict(m) for m in initial if isinstance(m, dict)
+                              and m.get('_contextInjectionId') in policy_ids]
+            resumed = [m for m in resumed if not (isinstance(m, dict)
+                       and m.get('_contextInjectionId') in policy_ids)]
+            # Bootstrap contracts retain system authority before all dialogue;
+            # optional artifact hints remain chronological tail context.
+            bootstrap = [m for m in fresh_policies if m.get('role') == 'system']
+            tail = [m for m in fresh_policies if m.get('role') != 'system']
+            resumed = resumed[:1] + bootstrap + resumed[1:] + tail
             agent.messages = resumed
         resume_rounds = max(0, int(self._resume_rounds.get(spec.id, 0) or 0))
         if resume or resume_rounds:
@@ -638,6 +649,35 @@ class MasterOrchestrator:
                     live = 'pending'
                 else:
                     live = 'pending'
+                # A RUNNING agent's tool timeline is the same authority the
+                # terminal branch projects from — result.tool_log is appended
+                # per call under _tool_log_lock. Read it through the agent
+                # registry (never the scheduler's execution state) so the
+                # snapshot carries live progress: a reload previously blanked
+                # the timeline of every healthy in-flight agent and the
+                # user read that as "no tool calls are happening".
+                _live_tools: list = []
+                _live_tool_calls: list = []
+                _live_omitted = 0
+                _live_files = 0
+                _live_tokens = 0
+                _live_agent = self._agents.get(spec.id)
+                if live == 'running' and _live_agent is not None:
+                    _live_result = getattr(_live_agent, 'result', None)
+                    if _live_result is not None:
+                        _live_lock = getattr(
+                            _live_agent, '_tool_log_lock', None)
+                        if _live_lock is not None:
+                            with _live_lock:
+                                _live_log = list(
+                                    _live_result.tool_log or [])
+                        else:
+                            _live_log = list(_live_result.tool_log or [])
+                        (_live_tools, _live_tool_calls, _live_omitted
+                         ) = _snapshot_tool_timeline(_live_log)
+                        _live_files = _count_file_writes(_live_log)
+                        _live_tokens = int(
+                            getattr(_live_result, 'total_tokens', 0) or 0)
                 agents.append({
                     'id':            spec.id,
                     'role':          spec.role,
@@ -645,9 +685,9 @@ class MasterOrchestrator:
                     'objective':     spec.objective,
                     'status':        live,
                     'elapsed':       '',
-                    'tokens':        0,
+                    'tokens':        _live_tokens,
                     'preview':       '',
-                    'modifiedFiles': 0,
+                    'modifiedFiles': _live_files,
                     'error':         '',
                     # The live stopwatch's anchor. The frontend renders a
                     #   per-agent timer only while `status` is running AND it
@@ -670,6 +710,12 @@ class MasterOrchestrator:
                     'stallNote': (
                         self._stalled_agents[spec.id].get('note') or ''
                         if live == 'stalled' else ''),
+                    # Live timeline — identical row shape to the terminal
+                    # branch's `tools`/`toolCalls` keys so the panel renders
+                    # one code path for running and settled agents alike.
+                    'tools':         _live_tools,
+                    'toolCalls':     _live_tool_calls,
+                    'toolCallsOmitted': _live_omitted,
                 })
 
         # ── Monotonic version key (#2) ──
@@ -684,6 +730,7 @@ class MasterOrchestrator:
         return {
             'agents':       agents,
             'settled':      terminated,
+            'swarm_id':     self.task_id,
             'totalTokens':  total_tokens,
             'agentCount':   len(agents),
             'doneCount':    done_count,
@@ -733,7 +780,7 @@ class MasterOrchestrator:
                 def _stamp_task(task):
                     for round_record in task.get('toolRounds') or []:
                         handle_ids = (
-                            _snap._round_handle_ids(round_record) & agent_id_set
+                            _snap.matching_snapshot_ids(round_record, snapshot) & agent_id_set
                         )
                         if handle_ids:
                             _snap.stamp_round(
@@ -823,6 +870,30 @@ class MasterOrchestrator:
                     self.task_id, spec.role, spec.id,
                     terminal_status, result.elapsed_seconds,
                     result.total_tokens, result.rounds_used)
+        # Canonical completion precedes every fallible presentation adapter.
+        # Duplicate callbacks cannot grow history or resurrect consumed inbox rows.
+        with self._lock:
+            if spec.id in self._results_by_id:
+                return
+            self._results.append((spec, result))
+            self._results_by_id[spec.id] = (spec, result)
+            self._stalled_agents.pop(spec.id, None)
+
+        self._publish_completion_inbox(spec, result)
+        self._completion_event.set()
+        try:
+            self._persist_agent_snapshot()
+        except Exception:
+            logger.warning('[Master:%s] completion snapshot failed',
+                           self.task_id, exc_info=True)
+        try:
+            self._emit_agent_complete(spec, result, terminal_status)
+        except Exception:
+            logger.warning('[Master:%s] completion progress callback failed',
+                           self.task_id, exc_info=True)
+
+    def _emit_agent_complete(self, spec: SubTaskSpec,
+                            result: SubAgentResult, terminal_status: str) -> None:
         # 1) UI event (kept identical to legacy schema for the swarm panel)
         # ``objective`` is the agent-card body — full text, no truncation.
         # ``summary`` is the agent card's RESULT body. It carries the FULL
@@ -863,10 +934,9 @@ class MasterOrchestrator:
                 ),
             })
 
-        # 2) Record + signal waiters
+    def _publish_completion_inbox(self, spec: SubTaskSpec,
+                                  result: SubAgentResult) -> None:
         with self._lock:
-            self._results.append((spec, result))
-            self._results_by_id[spec.id] = (spec, result)
             # Scheduler publishes this callback before removing the current
             # id from ``_running`` so its driver cannot outrun master result
             # publication. Exclude the current completion from the remaining
@@ -882,7 +952,6 @@ class MasterOrchestrator:
                 logger.info('[Master:%s] agent %s recovered after a stall '
                             'verdict — snapshot self-heals to done',
                             self.task_id, spec.id)
-        self._completion_event.set()
 
         # 3) Push <swarm-update> to the model inbox so the main agent sees it
         #    on its next round. Errors here must NEVER kill the master thread.
@@ -902,19 +971,18 @@ class MasterOrchestrator:
                 remaining_pending=pending,
                 error=(result.error_message or '') if result.status != SubAgentStatus.COMPLETED.value else '',
             )
-            inbox_enqueue(self.inbox_key, payload,
-                          priority='later',
-                          mode='swarm-update',
-                          agent_id=spec.id)
+            # Only the bounded, callback-free inbox operation runs under the
+            # result lock. Await/get/inbox acknowledgements use this same lock:
+            # either enqueue wins and consumption removes it, or delivery wins
+            # and no late twin can be inserted. Never hold it over UI/storage.
+            with self._lock:
+                if spec.id not in self._delivered_result_ids:
+                    inbox_enqueue(self.inbox_key, payload,
+                                  priority='later', mode='swarm-update',
+                                  agent_id=spec.id, extra={'status': result.status})
         except Exception as e:
             logger.error('[Master:%s] Failed to enqueue swarm-update for agent=%s: %s',
                          self.task_id, spec.id, e, exc_info=True)
-
-        # 4) Durably snapshot the swarm onto the spawn round so a reload (even
-        #    one with no live _swarmAgents array and no await_agents sibling)
-        #    rebuilds a faithful, fully-expandable panel. Incremental: each
-        #    completion advances the persisted per-agent state.
-        self._persist_agent_snapshot()
 
     def _on_retry_callback(self, spec: SubTaskSpec, attempt: int, err: str) -> None:
         logger.warning('[Master:%s] AGENT_RETRY agent-%s-%s attempt=%d err=%.200s',
@@ -1089,10 +1157,38 @@ class MasterOrchestrator:
                     failed = sum(1 for _, r in self._results
                                  if r.status == SubAgentStatus.FAILED.value)
                     total_tokens = sum(r.total_tokens for _, r in self._results)
+                    outcomes = dict.fromkeys(
+                        ('completed', 'failed', 'cancelled', 'stalled', 'unknown'), 0)
+                    for spec in self.specs:
+                        pair = self._results_by_id.get(spec.id)
+                        status = (pair[1].status if pair else
+                                  'stalled' if spec.id in self._stalled_agents
+                                  else 'unknown')
+                        outcomes[status if status in outcomes else 'unknown'] += 1
+                reasons = []
+                if self._driver_error:
+                    reasons.append('driver_error')
+                if self._stop_stalled or outcomes['stalled']:
+                    reasons.append('liveness_stall')
+                if self._aborted:
+                    reasons.append('abort_requested')
+                for status in ('failed', 'cancelled', 'unknown'):
+                    if outcomes[status]:
+                        reasons.append('agent_' + status)
+                outcome = ('failed' if self._driver_error or outcomes['failed'] else
+                           'stalled' if self._stop_stalled or outcomes['stalled'] else
+                           'cancelled' if self._aborted or outcomes['cancelled'] else
+                           'incomplete' if outcomes['unknown'] else 'completed')
                 elapsed = time.time() - t0
-                logger.info(
-                    '%s Driver done — agents=%d failed=%d tokens=%d elapsed=%.1fs',
-                    log_prefix, n, failed, total_tokens, elapsed)
+                from lib.log import log_event
+                import logging
+                log_event(
+                    logger, logging.INFO, 'swarm.driver_done',
+                    '%s Driver done — outcome=%s outcomes=%s tokens=%d elapsed=%.1fs',
+                    log_prefix, outcome, outcomes, total_tokens, elapsed,
+                    outcome=outcome, outcome_counts=outcomes,
+                    reason_codes=reasons, task_id=self.task_id,
+                    total_tokens=total_tokens, elapsed_seconds=round(elapsed, 1))
 
                 if self.on_progress:
                     # Error transparency: a crashed driver used to surface ONLY
@@ -1110,9 +1206,17 @@ class MasterOrchestrator:
                             })
                         self.on_progress({
                             'type': 'swarm_phase', 'phase': 'complete',
-                            'content': (f'✅ Swarm complete — {n} agents '
-                                        f'({failed} failed), '
-                                        f'{total_tokens:,} tokens'),
+                            'content': (
+                                f'{"✅" if outcome == "completed" else "⚠️"} '
+                                f'Swarm {outcome} — {len(self.specs)} agents '
+                                f'({outcomes["completed"]} completed, {failed} failed, '
+                                f'{outcomes["cancelled"]} cancelled, '
+                                f'{outcomes["stalled"]} stalled, '
+                                f'{outcomes["unknown"]} unknown), '
+                                f'{total_tokens:,} tokens'),
+                            'outcome': outcome,
+                            'outcomeCounts': outcomes,
+                            'reasonCodes': reasons,
                             'agentCount': n,
                             'failedCount': failed,
                             'totalTokens': total_tokens,
@@ -1293,8 +1397,11 @@ class MasterOrchestrator:
                 preview=result.final_answer or '', output_file=output_file,
                 error=result.error_message if result.status != SubAgentStatus.COMPLETED.value else '',
             )
-            inbox_enqueue(self.inbox_key, payload, priority='later',
-                          mode='swarm-update', agent_id=spec.id)
+            with self._lock:
+                if spec.id not in self._delivered_result_ids:
+                    inbox_enqueue(self.inbox_key, payload, priority='later',
+                                  mode='swarm-update', agent_id=spec.id,
+                                  extra={'status': result.status})
         except Exception as e:
             logger.warning('[Master:%s] re-enqueue swarm-update for %s failed: %s',
                            self.task_id, spec.id, e)
@@ -1321,8 +1428,14 @@ class MasterOrchestrator:
     def await_agents(self, *,
                      ids: list[str] | None = None,
                      mode: str = 'any',
-                     timeout_seconds: float = 60.0) -> dict:
-        """Block until matching agents complete, or until *timeout_seconds*.
+                     timeout_seconds: float = 60.0,
+                     abort_check: Callable | None = None,
+                     pending_input_check: Callable[[], bool] | None = None) -> dict:
+        """Block until completion, timeout, cancellation, or pending input.
+
+        ``pending_input_check`` is an optional read-only boundary predicate.
+        A yield never delivers results or cancels workers; the normal tool
+        boundary owns input delivery. Headless callers may omit it.
 
         Returns a dict::
 
@@ -1400,6 +1513,48 @@ class MasterOrchestrator:
             sorted(to_wait), sorted(already_done), sorted(unknown),
             len(done_ids), len(delivered_ids), len(known_ids),
             int(timeout_seconds))
+
+        # Cancellation outranks cached timeout and already-done shortcuts.
+        if self._aborted or self.abort_check() or (abort_check and abort_check()):
+            self.abort()
+            response = self._build_await_response(
+                completed_ids=sorted(already_done),
+                still_running=sorted(to_wait), unknown=sorted(unknown),
+                mode=mode, timed_out=False,
+                note='Swarm cancellation requested; not waiting for worker drain.')
+            response['cancelled'] = True
+            return response
+
+        def yield_for_pending_input() -> dict | None:
+            if not to_wait or pending_input_check is None or not pending_input_check():
+                return None
+            # Stop may have arrived while the external predicate ran.
+            if self._aborted or self.abort_check() or (abort_check and abort_check()):
+                self.abort()
+                return None
+            with self._lock:
+                remaining_ids = to_wait - self._results_by_id.keys()
+            if not remaining_ids:
+                return None
+            return {
+                'completed': [], 'still_running': sorted(remaining_ids),
+                'unknown': sorted(unknown), 'mode': mode, 'timed_out': False,
+                'yield_reason': 'pending_input',
+                'note': ('Pending input is ready for the normal tool boundary. '
+                         'Agents continue running; no agent results were consumed. '
+                         'Process that input before waiting again.'),
+            }
+
+        yielded = yield_for_pending_input()
+        if yielded is not None:
+            return yielded
+        if self._aborted:
+            response = self._build_await_response(
+                completed_ids=[], still_running=sorted(to_wait),
+                unknown=sorted(unknown), mode=mode, timed_out=False,
+                note='Swarm cancellation requested; not waiting for worker drain.')
+            response['cancelled'] = True
+            return response
 
         # ── Special case: nothing to wait for ──────────────────────────
         # Either the caller asked for ids that are all already done, or
@@ -1483,6 +1638,10 @@ class MasterOrchestrator:
         # panel's swarm_phase:complete sweep.
         swarm_terminated = False
         while True:
+
+            if self._aborted or self.abort_check() or (abort_check and abort_check()):
+                self.abort()
+                break
             with self._lock:
                 done_now = set(self._results_by_id.keys())
                 if mode == 'any' and (already_done or (to_wait & done_now)):
@@ -1493,13 +1652,21 @@ class MasterOrchestrator:
                     swarm_terminated = True
                     break
 
+            yielded = yield_for_pending_input()
+            if yielded is not None:
+                return yielded
+            if self._aborted:
+                break
+
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 timed_out = True
                 break
 
+            # Level-check input every existing bounded wait slice: arrivals
+            # do not need an edge notification and cannot be lost on clear.
+            self._completion_event.wait(timeout=min(remaining, 0.1))
             self._completion_event.clear()
-            self._completion_event.wait(timeout=min(remaining, 2.0))
 
         # Build response — include both already_done (from before the wait)
         # and any of to_wait that finished during the wait.
@@ -1510,7 +1677,8 @@ class MasterOrchestrator:
         if not ids:
             completed_set -= delivered_now
         still_running = sorted(to_wait - done_now)
-        terminated_note = ''
+        terminated_note = ('Swarm cancellation requested; not waiting for worker drain.'
+                           if self._aborted else '')
         if swarm_terminated and still_running:
             logger.info(
                 '[Master:%s] await_agents BREAK-ON-TERMINATED mode=%s — swarm '
@@ -1537,7 +1705,7 @@ class MasterOrchestrator:
                 )
             else:
                 self._await_timeout_progress.pop(await_signature, None)
-        return self._build_await_response(
+        response = self._build_await_response(
             completed_ids=sorted(completed_set),
             still_running=still_running,
             unknown=sorted(unknown),
@@ -1545,6 +1713,10 @@ class MasterOrchestrator:
             timed_out=timed_out,
             note=terminated_note,
         )
+
+        if self._aborted:
+            response['cancelled'] = True
+        return response
 
     def _build_await_response(self, *, completed_ids: list[str],
                                still_running: list[str],
@@ -1812,9 +1984,11 @@ class MasterOrchestrator:
             return out
 
     def abort(self) -> None:
-        """Signal abort. Best-effort — already-running agents complete on their own thread."""
+        """Signal running workers and wake waiters without waiting for pool drain."""
         self._aborted = True
         self._completion_event.set()
+        if self._scheduler is not None:
+            self._scheduler.cancel_pending()
 
     # ── Diagnostics ───────────────────────────────────
 

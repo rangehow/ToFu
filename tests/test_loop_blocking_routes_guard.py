@@ -52,14 +52,21 @@ ROOT = os.path.normpath(os.path.join(HERE, '..'))
 _DAILY_REPORT = 'routes/api_v1/daily_report.py'
 
 # Helpers whose work scales with the whole messages table / a whole
-# conversation blob. Inside an async def of _DAILY_REPORT they may ONLY be
-# referenced as the fn argument of asyncio.to_thread(...).
+# conversation blob, plus the report-file helpers (locked JSON read /
+# read-modify-write on a network filesystem — the 2026-09-06 status-poll
+# stall caught by LoopWatch at 5.5s mid-request). Inside an async def of
+# _DAILY_REPORT they may ONLY be referenced as the fn argument of
+# asyncio.to_thread(...).
 _GUARDED_HELPERS = frozenset({
     '_count_convs_for_date',
     '_extract_convs_for_date',
     '_analyse_conversations',
     '_activity_counts_for_range',
     '_get_monthly_costs',
+    '_load_report',
+    '_get_today_inherited_todos',
+    '_update_report',
+    '_save_generated_report',
 })
 
 # File → (source token, min occurrences). Pins the offloads that live
@@ -72,9 +79,9 @@ _OFFLOAD_TOKENS = {
 }
 
 # Anti-empty-scan floor: daily_report.py must contain at least this many
-# to_thread-wrapped references to guarded helpers (today: 9). A broken
+# to_thread-wrapped references to guarded helpers (today: 25). A broken
 # AST scan or a wholesale revert trips this even if no bare call exists.
-_MIN_WRAPPED_REFS = 6
+_MIN_WRAPPED_REFS = 20
 
 
 def _read(rel):

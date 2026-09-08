@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from lib.log import get_logger
 
+from lib.tasks_pkg.context_composer.injections import append_injection
+
 from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
 
 logger = get_logger(__name__)
@@ -105,10 +107,8 @@ def build_branch_api_messages(
     if parent_selection:
         prefix += (f'\n[选中的上下文]\n'
                    f'{parent_selection[:2000]}\n[/选中的上下文]')
-    transformed.append({
-        'role': 'user', 'content': prefix,
-        '_isMeta': True, '_isBranchContext': True,
-    })
+    append_injection(transformed, 'branch_context', prefix,
+                     flags={'_isBranchContext': True})
     return transformed
 
 
@@ -214,13 +214,8 @@ def _append_note_as_tail_user(built: list[dict], note: str) -> bool:
     """Append an engine-authored recovery note without rewriting history."""
     if not isinstance(built, list) or not note:
         return False
-    built.append({
-        'role': 'user',
-        'content': note,
-        '_isMeta': True,
-        '_isLifecycleRecoveryNote': True,
-    })
-    return True
+    return append_injection(built, 'lifecycle_recovery', note,
+                            flags={'_isLifecycleCaution': True}) is not None
 
 
 def _load_messages_from_db(

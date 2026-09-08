@@ -54,7 +54,10 @@ def _zero_byte_usage(elapsed_ms: int = 4500, *, key='sankuai_key_0',
                      model='aws.claude-opus-4.7'):
     return {
         '_stream_anomaly': True,
-        '_empty_stop': True,
+        # A zero-byte EOF has no provider finish. _empty_stop instead proves
+        # a clean terminal response and intentionally selects its smaller cap.
+        '_missing_done': True,
+        '_missing_finish_reason': True,
         '_chunks_received': 0,
         'trace_id': 'M-BUDGET-TEST',
         'resp_trace_id': 'r-budget-1',
@@ -218,7 +221,8 @@ def test_classic_premature_close_retries_on_another_slot():
         _premature_retry_count=0,
         messages=[],
         usage={
-            '_stream_anomaly': False,
+            '_stream_anomaly': True,
+            '_missing_finish_reason': True,
             'trace_id': 'M-CLASSIC',
             'stream_elapsed_ms': 30000,
             '_dispatch': {'key': 'sankuai_key_0', 'model': 'aws.claude-opus-4.7'},
@@ -245,7 +249,8 @@ def test_classic_premature_close_retries_up_to_16():
             last_finish_reason='stop', task=task, tid='budget',
             model='aws.claude-opus-4.7', round_num=1,
             _premature_retry_count=count, messages=[],
-            usage={'_stream_anomaly': False, 'trace_id': 'M-CLASSIC',
+            usage={'_stream_anomaly': True, '_missing_finish_reason': True,
+                   'trace_id': 'M-CLASSIC',
                    'stream_elapsed_ms': 30000},
         )
 

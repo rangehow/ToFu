@@ -73,7 +73,7 @@ def recover_abnormal_terminal(assistant_msg, finish_reason, task, *,
         decision['premature_retry_count'] = attempts
         if '_premature_retry_count_phase' in task:
             task['_premature_retry_count_phase'] = attempts
-        if kind == 'unresolved_tool_marker' and messages is not None:
+        if messages is not None:
             text = (
                 '[SYSTEM: TOOL PROTOCOL RECOVERY]\n'
                 'Your last response contained an unexecuted tool-call packet. '
@@ -82,11 +82,20 @@ def recover_abnormal_terminal(assistant_msg, finish_reason, task, *,
                 'using the provided native tool schema, not XML tags. Do not '
                 'repeat operations that already have execution receipts.'
             )
-            messages.append({'role': 'user', '_isMeta': True, 'content': text})
-            from lib.tasks_pkg.segments import record_injected_note
-            record_injected_note(
-                task, llm_round=round_num, kind='intent-stall', text=text,
-            )
+            if kind != 'unresolved_tool_marker':
+                text = (
+                    '[SYSTEM: TERMINAL RESPONSE RECOVERY]\n'
+                    'Your last response ended without usable assistant text '
+                    'or a tool call. Continue the current authorized task from '
+                    'the preserved tool results. If more work is needed, use '
+                    'the native tool schema. Otherwise provide a final answer, '
+                    'or state the specific blocker or required user input. '
+                    'Do not repeat operations with execution receipts.'
+                )
+            from lib.tasks_pkg.context_composer import append_injection
+            append_injection(
+                messages, 'terminal_recovery', text, task=task,
+                round_num=round_num, action='continue', reason=kind)
         emit_phase(
             task, Phase.RETRYING, attempt=attempts,
             max=ABNORMAL_TERMINAL_RECOVERY_MAX, bucket=kind,
@@ -100,6 +109,9 @@ def recover_abnormal_terminal(assistant_msg, finish_reason, task, *,
     from lib.error_envelope import make_envelope
     task['error'] = make_envelope(
         'abnormal_stop',
+        message=(
+            'Model repeatedly returned no usable terminal response '
+            f'({kind}); bounded recovery exhausted.'),
         detail=('Model repeatedly ended without a usable terminal response; '
                 'the two per-task recovery attempts are exhausted. '
                 'Completed tool operations and their results were preserved.'),

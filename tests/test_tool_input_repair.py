@@ -18,6 +18,13 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lib.tool_input_repair import resolve_tool_name, validate_then_repair  # noqa: E402
+from lib.tool_input_repair._schema import _schemas  # noqa: E402
+from lib.tools.contracts import (  # noqa: E402
+    ToolContractError,
+    adapt_legacy_tool_contract,
+    clamp_arguments_to_schema,
+    clamp_tool_arguments_from_documents,
+)
 
 
 def test_valid_inputs_are_never_touched():
@@ -140,6 +147,50 @@ def test_zero_cursor_repair_precedes_authoritative_minimum_validation():
     assert zero.repair_log == [('before', 'zero_cursor_omission')]
     assert negative.parse_error is not None
     assert negative.contract_error is not None
+
+
+def test_ingest_clamps_mcp_numeric_bounds_before_contract_rejection():
+    """End-to-end pin for the user-reported failure shape: a server-dynamic
+    (MCP) tool whose max_chars sits below the declared minimum must be
+    clamped by Stage 4.5, not rejected by contract validation."""
+    import json
+
+    from lib.tool_input_repair import ingest_tool_call
+
+    contracts = {
+        'mcp__xuecheng__read_doc': _v2_contract_document({
+            'doc': {'type': 'string'},
+            'max_chars': {'type': 'integer', 'minimum': 1000,
+                          'maximum': 500000, 'default': 60000},
+        }),
+    }
+    below = ingest_tool_call(
+        {'id': 'call-below', 'function': {
+            'name': 'mcp__xuecheng__read_doc',
+            'arguments': json.dumps({'doc': '123', 'max_chars': 10}),
+        }},
+        known_tools={'mcp__xuecheng__read_doc'},
+        contract_documents_by_name=contracts,
+        emit_audit=False,
+    )
+    above = ingest_tool_call(
+        {'id': 'call-above', 'function': {
+            'name': 'mcp__xuecheng__read_doc',
+            'arguments': json.dumps({'doc': '123', 'max_chars': 999999}),
+        }},
+        known_tools={'mcp__xuecheng__read_doc'},
+        contract_documents_by_name=contracts,
+        emit_audit=False,
+    )
+
+    assert below.parse_error is None
+    assert below.contract_error is None
+    assert below.fn_args == {'doc': '123', 'max_chars': 1000}
+    assert ('$.max_chars', 'clamp_minimum') in below.repair_log
+    assert above.parse_error is None
+    assert above.contract_error is None
+    assert above.fn_args == {'doc': '123', 'max_chars': 500000}
+    assert ('$.max_chars', 'clamp_maximum') in above.repair_log
 
 
 def test_empty_placeholder_unwrap():
@@ -283,9 +334,11 @@ def test_param_alias_edit_keys_to_apply_diff():
     )
     assert out == {'path': 'tests/foo.py',
                    'search': 'window = sse_src[pos:pos + 600]',
-                   'replace': 'window = sse_src[pos:pos + 900]'}
+                   'replace': 'window = sse_src[pos:pos + 900]',
+                   'description': 'Edit tests/foo.py'}
     assert set(log) == {('path', 'param_alias'), ('search', 'param_alias'),
-                        ('replace', 'param_alias')}
+                        ('replace', 'param_alias'),
+                        ('apply_diff', 'structural_transform')}
 
 
 def test_param_alias_valid_keys_untouched():
@@ -308,13 +361,17 @@ def test_param_alias_does_not_overwrite_canonical():
 
 
 def test_param_alias_write_file_body_keys():
-    """write_file: file_path→path and file_text→content."""
+    """write_file: file_path→path and file_text→content. The foreign keys
+    also mark the payload as foreign-schema-shaped, so the presentational
+    caption Claude Code's Write never carries is derived from the path."""
     out, log = validate_then_repair(
         'write_file',
         {'file_path': 'a.py', 'file_text': 'print(1)\n'},
     )
-    assert out == {'path': 'a.py', 'content': 'print(1)\n'}
-    assert set(log) == {('path', 'param_alias'), ('content', 'param_alias')}
+    assert out == {'path': 'a.py', 'content': 'print(1)\n',
+                   'description': 'Write a.py'}
+    assert set(log) == {('path', 'param_alias'), ('content', 'param_alias'),
+                        ('write_file', 'structural_transform')}
 
 
 def test_param_alias_then_type_repair_combined():
@@ -354,9 +411,10 @@ def test_multiedit_reshaped_to_apply_diffs():
          ]},
     )
     assert out == {'edits': [
-        {'path': 'lib/server.py', 'search': 'a = 1', 'replace': 'a = 2'},
+        {'path': 'lib/server.py', 'search': 'a = 1', 'replace': 'a = 2',
+         'description': 'Edit lib/server.py'},
         {'path': 'lib/server.py', 'search': 'b = 3', 'replace': 'b = 4',
-         'replace_all': True},
+         'replace_all': True, 'description': 'Edit lib/server.py'},
     ]}
     assert ('apply_diffs', 'structural_transform') in log
     assert 'file_path' not in out
@@ -799,6 +857,817 @@ def test_structural_transform_runs_without_index_entry(monkeypatch):
         'never_indexed_tool_xyz', {'a': 1})
     assert repaired == {'a': 1, 'unwrapped': True}
     assert ('never_indexed_tool_xyz', 'structural_transform') in log
+
+
+# ═════════════════════════════════════════════════════
+#  Value-bounds repair (clamp out-of-range numbers / truncate display fields)
+# ═════════════════════════════════════════════════════
+
+def _v2_contract_document(properties):
+    return {
+        'contractVersion': 'tofu.tool-contract/v2',
+        'arguments_schema': {'type': 'object', 'properties': properties},
+    }
+
+
+def test_clamp_native_top_level_above_max():
+    repaired, log = validate_then_repair(
+        'read_tool_artifact', {'artifact_ref': 'a', 'limit': 999999})
+    assert repaired['limit'] == 65536
+    assert ('$.limit', 'clamp_maximum') in log
+
+
+def test_clamp_native_nested_below_min():
+    repaired, log = validate_then_repair(
+        'read_tool_artifact',
+        {'reads': [{'artifact_ref': 'a', 'limit': 0}]})
+    assert repaired['reads'][0]['limit'] == 1
+    assert ('$.reads[0].limit', 'clamp_minimum') in log
+
+
+def test_clamp_in_range_is_noop():
+    repaired, log = validate_then_repair(
+        'read_tool_artifact', {'artifact_ref': 'a', 'limit': 8192})
+    assert repaired['limit'] == 8192
+    assert log == []
+
+
+def test_truncate_display_caption_edit_file_description():
+    repaired, log = validate_then_repair(
+        'edit_file',
+        {'path': 'a.py', 'description': 'x' * 134, 'edits': []})
+    assert len(repaired['description']) == 120
+    assert ('$.description', 'truncate_max_length') in log
+
+
+def test_identity_strings_are_never_truncated():
+    """A todo id is addressable identity — truncating it would silently
+    break later sync/push references, so it must stay over-long and let
+    contract validation reject with a precise message."""
+    repaired, log = validate_then_repair(
+        'todo_write',
+        {'todos': [{'id': 'x' * 65, 'content': 'c', 'status': 'pending'}]})
+    assert len(repaired['todos'][0]['id']) == 65
+    assert not any(pattern == 'truncate_max_length' for _, pattern in log)
+
+
+def test_clamp_arguments_bool_passthrough():
+    out, log = clamp_arguments_to_schema(
+        {'n': True},
+        {'type': 'object',
+         'properties': {'n': {'type': 'integer', 'minimum': 1, 'maximum': 5}}})
+    assert out['n'] is True
+    assert log == []
+
+
+def test_identity_cursor_params_are_never_clamped():
+    """get_conversation.before is a navigation cursor: below-minimum is a
+    logic error that must stay rejected, not a size to silently move (its
+    before=0 sibling is repaired by the dedicated omission pass)."""
+    repaired, log = validate_then_repair(
+        'get_conversation', {'conversation_id': 'c', 'before': -1})
+    assert repaired['before'] == -1
+    assert not any(pattern.startswith('clamp') for _, pattern in log)
+
+
+def test_clamp_noop_preserves_object_identity():
+    args = {'reads': [{'path': 'lib/server.py'}]}
+    out, log = clamp_arguments_to_schema(args, _schemas()['read_files'])
+    assert log == []
+    assert out is args
+    assert out['reads'] is args['reads']
+
+
+def test_document_clamp_covers_mcp_style_tools():
+    """The measured failure class: mcp__xuecheng__read_doc max_chars below
+    the declared minimum — absent from the static repair index, clamped from
+    the request-owned contract document instead of rejected."""
+    docs = {'mcp__xuecheng__read_doc': _v2_contract_document({
+        'max_chars': {'type': 'integer', 'minimum': 1000, 'maximum': 500000}})}
+    out, log = clamp_tool_arguments_from_documents(
+        docs, 'mcp__xuecheng__read_doc', {'max_chars': 50})
+    assert out['max_chars'] == 1000
+    assert ('$.max_chars', 'clamp_minimum') in log
+    out, log = clamp_tool_arguments_from_documents(
+        docs, 'mcp__xuecheng__read_doc', {'max_chars': 600000})
+    assert out['max_chars'] == 500000
+    assert ('$.max_chars', 'clamp_maximum') in log
+
+
+def test_document_clamp_passthrough_without_authority():
+    docs = {'t': _v2_contract_document(
+        {'n': {'type': 'integer', 'minimum': 1}})}
+    assert clamp_tool_arguments_from_documents(
+        None, 't', {'n': 0}) == ({'n': 0}, [])
+    assert clamp_tool_arguments_from_documents(
+        {}, 't', {'n': 0}) == ({'n': 0}, [])
+    assert clamp_tool_arguments_from_documents(
+        {'t': {'contractVersion': 'other'}}, 't', {'n': 0}) == ({'n': 0}, [])
+    out, log = clamp_tool_arguments_from_documents(docs, 't', {'n': 5})
+    assert out == {'n': 5}
+    assert log == []
+
+
+def test_min_max_contract_errors_carry_bounds():
+    """A rejected bound must name the got/allowed values — the bare
+    'Value below minimum' left the model guessing on retry."""
+    contract = adapt_legacy_tool_contract({'function': {
+        'name': 't', 'description': 'd',
+        'parameters': {'type': 'object',
+                       'properties': {'n': {'type': 'integer',
+                                            'minimum': 1000,
+                                            'maximum': 500000}}}}})
+    with pytest.raises(ToolContractError) as below:
+        contract.validate_arguments({'n': 50})
+    assert below.value.code == 'invalid_argument_value'
+    assert 'got 50' in str(below.value)
+    assert '>= 1000' in str(below.value)
+    with pytest.raises(ToolContractError) as above:
+        contract.validate_arguments({'n': 600000})
+    assert 'got 600000' in str(above.value)
+    assert '<= 500000' in str(above.value)
+
+
+def test_high_traffic_descriptions_carry_bounds():
+    assert '120' in _schemas()[
+        'edit_file']['properties']['description']['description']
+    todo_props = _schemas()[
+        'todo_write']['properties']['todos']['items']['properties']
+    assert '64' in todo_props['id']['description']
+    assert '512' in todo_props['content']['description']
+
+
+# ═════════════════════════════════════════════════════
+#  Amazon Q todo_list → todo_write (name alias + command-shape transform)
+# ═════════════════════════════════════════════════════
+
+def test_todo_list_name_aliases_to_todo_write():
+    assert resolve_tool_name('todo_list', known={'todo_write'}) == (
+        'todo_write', 'alias')
+    # Case-insensitive like every other alias.
+    assert resolve_tool_name('TODO_LIST', known={'todo_write'}) == (
+        'todo_write', 'alias')
+    # An exact live name always wins over the alias table.
+    assert resolve_tool_name(
+        'todo_list', known={'todo_write', 'todo_list'}) == ('todo_list', None)
+
+
+def test_todo_list_command_shape_injects_todos_placeholder():
+    repaired, log = validate_then_repair('todo_write', {
+        'command': 'create', 'tasks': ['scan', 'patch'],
+        'todo_list_description': 'fix bug'})
+    assert repaired['todos'] == []
+    assert repaired['command'] == 'create'
+    assert repaired['tasks'] == ['scan', 'patch']
+    assert ('todo_write', 'structural_transform') in log
+
+
+def test_todo_list_transform_never_touches_native_or_unknown_payloads():
+    native = {'todos': [{'id': '1', 'content': 'x', 'status': 'pending'}]}
+    repaired, log = validate_then_repair('todo_write', dict(native))
+    assert repaired == native and log == []
+
+    unknown = {'command': 'restart'}
+    repaired, log = validate_then_repair('todo_write', dict(unknown))
+    assert 'todos' not in repaired and log == []
+
+    both = {'command': 'complete',
+            'todos': [{'id': '1', 'content': 'x', 'status': 'completed'}]}
+    repaired, log = validate_then_repair('todo_write', dict(both))
+    assert repaired == both and log == []
+
+
+def test_todo_write_transform_chain_still_unwraps_nested_envelope():
+    payload = {'todos': [{
+        'todos': [{'id': '1', 'content': 'real', 'status': 'pending'}],
+        'operation': 'sync', 'id': ''}]}
+    repaired, log = validate_then_repair('todo_write', payload)
+    assert repaired['todos'] == [
+        {'id': '1', 'content': 'real', 'status': 'pending'}]
+    assert ('todo_write', 'structural_transform') in log
+
+
+# ═════════════════════════════════════════════════════
+#  Kimi CLI SetTodoList → todo_write (name alias + item-vocabulary transform)
+# ═════════════════════════════════════════════════════
+
+def test_settodolist_name_aliases_to_todo_write():
+    # Kimi CLI's built-in checklist tool (MoonshotAI/kimi-cli
+    # src/kimi_cli/tools/todo/__init__.py): name SetTodoList, items
+    # {title, status: pending|in_progress|done}, no ids.
+    assert resolve_tool_name('SetTodoList', known={'todo_write'}) == (
+        'todo_write', 'alias')
+    assert resolve_tool_name('settodolist', known={'todo_write'}) == (
+        'todo_write', 'alias')
+    # An exact live name always wins over the alias table.
+    assert resolve_tool_name(
+        'SetTodoList', known={'todo_write', 'SetTodoList'}) == (
+            'SetTodoList', None)
+
+
+def test_kimi_item_vocabulary_mapped_to_native_shape():
+    repaired, log = validate_then_repair('todo_write', {'todos': [
+        {'title': 'scan the repo', 'status': 'done'},
+        {'title': 'patch the bug', 'status': 'in_progress'},
+        {'title': 'run tests', 'status': 'pending'},
+    ]})
+    assert repaired['todos'] == [
+        {'id': '1', 'content': 'scan the repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch the bug', 'status': 'in_progress'},
+        {'id': '3', 'content': 'run tests', 'status': 'pending'},
+    ]
+    assert ('todo_write', 'structural_transform') in log
+
+
+def test_kimi_item_vocabulary_survives_contract_validation():
+    """The adapted payload must pass the authoritative contract — unadapted
+    it died fail-closed: title dropped on the floor, missing item id."""
+    result = _ingest_todo({'todos': [
+        {'title': 'scan the repo', 'status': 'done'},
+        {'title': 'patch the bug', 'status': 'in_progress'},
+    ]})
+    assert result.parse_error is None
+    assert result.fn_args['todos'] == [
+        {'id': '1', 'content': 'scan the repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch the bug', 'status': 'in_progress'},
+    ]
+
+
+def test_kimi_transform_never_touches_native_or_ambiguous_payloads():
+    # Fully native list — strict no-op.
+    native = {'todos': [{'id': 'a', 'content': 'one', 'status': 'pending'}]}
+    repaired, log = validate_then_repair('todo_write', dict(native))
+    assert repaired == native and log == []
+
+    # Empty list is meaningful natively (and is Kimi's clear mode) — leave
+    # it to the state machine, never guess.
+    repaired, log = validate_then_repair('todo_write', {'todos': []})
+    assert repaired == {'todos': []} and log == []
+
+    # Query mode (no todos key) stays an honest contract error.
+    result = _ingest_todo({})
+    assert result.parse_error is not None
+
+    # A real content key is never clobbered by a stray title.
+    both = {'todos': [{'id': 'a', 'content': 'real', 'title': 'shadow',
+                       'status': 'pending'}]}
+    repaired, log = validate_then_repair('todo_write', dict(both))
+    assert repaired['todos'][0]['content'] == 'real'
+    assert ('todo_write', 'structural_transform') not in log
+
+
+def test_kimi_done_status_maps_even_in_blended_native_call():
+    """status 'done' is never valid natively; silent coercion to pending
+    downstream would erase the completion. Map it even when the item
+    otherwise looks native (right name, wrong status vocabulary)."""
+    repaired, log = validate_then_repair('todo_write', {'todos': [
+        {'id': 'a', 'content': 'one', 'status': 'done'},
+        {'id': 'b', 'content': 'two', 'status': 'pending'},
+    ]})
+    assert repaired['todos'][0]['status'] == 'completed'
+    assert repaired['todos'][1] == {'id': 'b', 'content': 'two',
+                                    'status': 'pending'}
+    assert ('todo_write', 'structural_transform') in log
+
+
+def test_kimi_settodolist_payload_runs_through_state_machine():
+    """Full chain: repair adapts the Kimi payload, then the canonical
+    state machine applies it as an ordinary sync — statuses survive."""
+    from lib.tools.todo import apply_todo_operation
+    repaired, _ = validate_then_repair('todo_write', {'todos': [
+        {'title': 'scan the repo', 'status': 'done'},
+        {'title': 'patch the bug', 'status': 'in_progress'},
+        {'title': 'run tests', 'status': 'pending'},
+    ]})
+    outcome = apply_todo_operation(None, repaired)
+    assert not outcome['rejected']
+    assert outcome['todos'] == [
+        {'id': '1', 'content': 'scan the repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch the bug', 'status': 'in_progress'},
+        {'id': '3', 'content': 'run tests', 'status': 'pending'},
+    ]
+
+    # A second Kimi-style full replace transitions positions stably: the
+    # positional ids line up, so sync combines instead of rejecting.
+    repaired2, _ = validate_then_repair('todo_write', {'todos': [
+        {'title': 'scan the repo', 'status': 'done'},
+        {'title': 'patch the bug', 'status': 'done'},
+        {'title': 'run tests', 'status': 'in_progress'},
+    ]})
+    outcome2 = apply_todo_operation(outcome['state'], repaired2)
+    assert not outcome2['rejected']
+    assert [t['status'] for t in outcome2['todos']] == [
+        'completed', 'completed', 'in_progress']
+
+
+# ══════════════════════════════════════════════
+#  Claude Code / OpenCode / Gemini / Codex checklist tools → todo_write
+# ══════════════════════════════════════════════
+
+def test_harness_checklist_names_alias_to_todo_write():
+    # Claude Code ``TodoWrite`` and OpenCode ``todowrite`` casefold to the
+    # same alias key; Gemini CLI ``write_todos``; Codex CLI ``update_plan``.
+    for emitted in ('TodoWrite', 'todowrite', 'TODOWRITE'):
+        assert resolve_tool_name(emitted, known={'todo_write'}) == (
+            'todo_write', 'alias')
+    assert resolve_tool_name('write_todos', known={'todo_write'}) == (
+        'todo_write', 'alias')
+    assert resolve_tool_name('update_plan', known={'todo_write'}) == (
+        'todo_write', 'alias')
+    # An exact live name always wins over the alias table.
+    assert resolve_tool_name(
+        'write_todos', known={'todo_write', 'write_todos'}) == (
+            'write_todos', None)
+
+
+def test_gemini_run_shell_command_and_friends_alias():
+    # Gemini CLI: run_shell_command {command, is_background?} → run_command;
+    # google_web_search {query} → web_search; read_many_files {paths}
+    # → read_files. Codex CLI: view_image {path} → inspect_image.
+    assert resolve_tool_name('run_shell_command', known={'run_command'}) == (
+        'run_command', 'alias')
+    assert resolve_tool_name('google_web_search', known={'web_search'}) == (
+        'web_search', 'alias')
+    assert resolve_tool_name('read_many_files', known={'read_files'}) == (
+        'read_files', 'alias')
+    assert resolve_tool_name('view_image', known={'inspect_image'}) == (
+        'inspect_image', 'alias')
+
+
+def test_codex_exec_command_and_amazon_q_execute_bash_alias():
+    # Codex CLI: exec_command {cmd, workdir?} → run_command. Amazon Q
+    # Developer CLI: execute_bash {command, summary?} → run_command.
+    assert resolve_tool_name('exec_command', known={'run_command'}) == (
+        'run_command', 'alias')
+    assert resolve_tool_name('execute_bash', known={'run_command'}) == (
+        'run_command', 'alias')
+
+
+def test_run_command_workdir_and_cwd_param_aliases():
+    # Codex's exec_command uses ``workdir``; ``cwd`` is the other common
+    # wrong-harness key for the same concept.
+    out, log = validate_then_repair(
+        'run_command', {'cmd': 'ls', 'workdir': '/tmp/x'})
+    assert out['command'] == 'ls' and out['working_dir'] == '/tmp/x'
+    assert ('command', 'param_alias') in log
+    assert ('working_dir', 'param_alias') in log
+    out, log = validate_then_repair(
+        'run_command', {'command': 'ls', 'cwd': '/tmp/y'})
+    assert out['working_dir'] == '/tmp/y'
+    # A real working_dir is never clobbered.
+    out, log = validate_then_repair(
+        'run_command', {'command': 'ls', 'workdir': '/a',
+                        'working_dir': '/b'})
+    assert out['working_dir'] == '/b' and out['workdir'] == '/a'
+    assert ('working_dir', 'param_alias') not in log
+
+
+def test_update_plan_envelope_reshaped_to_todos():
+    repaired, log = validate_then_repair('todo_write', {
+        'explanation': 'shipping the fix',
+        'plan': [{'step': 'scan the repo', 'status': 'completed'},
+                 {'step': 'patch the bug', 'status': 'in_progress'}]})
+    assert 'plan' not in repaired
+    assert repaired['todos'] == [
+        {'id': '1', 'content': 'scan the repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch the bug', 'status': 'in_progress'},
+    ]
+    # explanation is inert (tolerated unknown key), never dropped nor renamed.
+    assert repaired['explanation'] == 'shipping the fix'
+    assert ('todo_write', 'structural_transform') in log
+
+
+def test_update_plan_envelope_survives_contract_validation():
+    """The reshaped Codex payload must pass the authoritative contract —
+    unadapted it died fail-closed on the missing required ``todos`` key."""
+    result = _ingest_todo({'plan': [
+        {'step': 'scan the repo', 'status': 'pending'},
+        {'step': 'patch the bug', 'status': 'in_progress'},
+    ]})
+    assert result.parse_error is None
+    assert result.fn_args['todos'] == [
+        {'id': '1', 'content': 'scan the repo', 'status': 'pending'},
+        {'id': '2', 'content': 'patch the bug', 'status': 'in_progress'},
+    ]
+
+
+def test_gemini_write_todos_item_vocabulary():
+    # description→content + positional ids; blocked passes through natively.
+    repaired, log = validate_then_repair('todo_write', {'todos': [
+        {'description': 'scan the repo', 'status': 'completed'},
+        {'description': 'await review', 'status': 'blocked'},
+    ]})
+    assert repaired['todos'] == [
+        {'id': '1', 'content': 'scan the repo', 'status': 'completed'},
+        {'id': '2', 'content': 'await review', 'status': 'blocked'},
+    ]
+    assert ('todo_write', 'structural_transform') in log
+
+
+def test_cancelled_items_drop_from_foreign_list():
+    """OpenCode/Gemini ``cancelled`` = leaves the tracked list. Dropping
+    matches our full-list sync semantics; mapping to completed would lie."""
+    repaired, log = validate_then_repair('todo_write', {'todos': [
+        {'content': 'keep me', 'status': 'in_progress', 'priority': 'high'},
+        {'content': 'drop me', 'status': 'cancelled', 'priority': 'low'},
+    ]})
+    assert repaired['todos'] == [
+        {'id': '1', 'content': 'keep me', 'status': 'in_progress',
+         'priority': 'high'},
+    ]
+    assert ('todo_write', 'structural_transform') in log
+
+
+def test_claude_code_todowrite_items_get_positional_ids():
+    """Claude Code TodoWrite items are already ``{content, status,
+    activeForm}`` — every key native-tolerated, only the id is missing.
+    ``activeForm`` (absent from our declared schema) marks the list foreign
+    and licenses the backfill."""
+    repaired, log = validate_then_repair('todo_write', {'todos': [
+        {'content': 'scan the repo', 'status': 'completed',
+         'activeForm': 'Scanning the repo'},
+        {'content': 'patch the bug', 'status': 'in_progress',
+         'activeForm': 'Patching the bug'},
+    ]})
+    assert [t['id'] for t in repaired['todos']] == ['1', '2']
+    assert repaired['todos'][0]['content'] == 'scan the repo'
+    assert ('todo_write', 'structural_transform') in log
+
+
+def test_harness_item_vocabulary_never_touches_native_or_ambiguous():
+    # Fully native list — strict no-op.
+    native = {'todos': [{'id': 'a', 'content': 'one', 'status': 'pending'}]}
+    repaired, log = validate_then_repair('todo_write', dict(native))
+    assert repaired == native and log == []
+
+    # A real content key is never clobbered by a stray step/description.
+    both = {'todos': [{'id': 'a', 'content': 'real', 'step': 'shadow',
+                       'status': 'pending'}]}
+    repaired, _ = validate_then_repair('todo_write', dict(both))
+    assert repaired['todos'][0]['content'] == 'real'
+
+    # update_plan envelope never fires when a real todos list is present.
+    blend = {'todos': [{'id': 'a', 'content': 'one', 'status': 'pending'}],
+             'plan': [{'step': 'shadow', 'status': 'pending'}]}
+    repaired, log = validate_then_repair('todo_write', dict(blend))
+    assert repaired['todos'] == blend['todos'] and repaired['plan'] == blend['plan']
+    assert ('todo_write', 'structural_transform') not in log
+
+
+def test_update_plan_payload_runs_through_state_machine():
+    """Full chain: envelope + item repair, then the canonical state machine
+    applies the payload as an ordinary sync — statuses survive."""
+    from lib.tools.todo import apply_todo_operation
+    repaired, _ = validate_then_repair('todo_write', {'plan': [
+        {'step': 'scan the repo', 'status': 'completed'},
+        {'step': 'patch the bug', 'status': 'in_progress'},
+        {'step': 'run tests', 'status': 'pending'},
+    ]})
+    outcome = apply_todo_operation(None, repaired)
+    assert not outcome['rejected']
+    assert outcome['todos'] == [
+        {'id': '1', 'content': 'scan the repo', 'status': 'completed'},
+        {'id': '2', 'content': 'patch the bug', 'status': 'in_progress'},
+        {'id': '3', 'content': 'run tests', 'status': 'pending'},
+    ]
+
+
+# ═════════════════════════════════════════════════════
+#  Kimi CLI / OpenCode / Gemini base-tool vocabulary
+#  (edit / read / search / fetch / ask / skill)
+# ═════════════════════════════════════════════════════
+
+
+def test_kimi_str_replace_file_name_alias():
+    assert resolve_tool_name('StrReplaceFile', known={'apply_diff'}) == (
+        'apply_diff', 'alias')
+    # In edit_file sessions the convergence set routes it there instead.
+    assert resolve_tool_name(
+        'StrReplaceFile', known={'edit_file', 'apply_diff'}) == (
+        'edit_file', 'alias')
+
+
+def test_kimi_str_replace_file_envelope_to_apply_diff():
+    """Kimi StrReplaceFile {path, edit:{old,new,replace_all}} unwraps 1:1."""
+    out, _ = validate_then_repair(
+        'apply_diff',
+        {'path': 'a.py', 'edit': {'old': 'x = 1', 'new': 'x = 2',
+                                  'replace_all': True}},
+    )
+    assert out['search'] == 'x = 1' and out['replace'] == 'x = 2'
+    assert out['replace_all'] is True
+    assert 'edit' not in out
+
+
+def test_kimi_str_replace_file_list_form_passes_through():
+    """The list form can't be expressed by single-edit apply_diff — it must
+    pass through untouched and fail closed downstream, not be half-mapped."""
+    args = {'path': 'a.py', 'edit': [{'old': 'a', 'new': 'b'},
+                                     {'old': 'c', 'new': 'd'}]}
+    out, _ = validate_then_repair('apply_diff', args)
+    assert out['edit'] == args['edit']
+    assert 'search' not in out
+
+
+def test_apply_diff_native_call_with_stray_edit_key_untouched():
+    args = {'path': 'a.py', 'search': 'x', 'replace': 'y',
+            'edit': {'old': '1'}}
+    out, _ = validate_then_repair('apply_diff', args)
+    assert out == args
+
+
+def test_kimi_str_replace_file_envelope_to_edit_file():
+    """In edit_file sessions the same envelope normalizes to unified edits
+    (list form included)."""
+    out, _ = validate_then_repair(
+        'edit_file',
+        {'path': 'a.py', 'edit': [
+            {'old': 'a', 'new': 'b'},
+            {'old': 'c', 'new': 'd', 'replace_all': True}]},
+    )
+    assert out['edits'] == [
+        {'path': 'a.py', 'operation': 'replace', 'anchor': 'a',
+         'content': 'b'},
+        {'path': 'a.py', 'operation': 'replace', 'anchor': 'c',
+         'content': 'd', 'replace_all': True},
+    ]
+
+
+def test_opencode_edit_keys_to_edit_file():
+    """OpenCode edit {filePath, oldString, newString, replaceAll}."""
+    out, _ = validate_then_repair(
+        'edit_file',
+        {'filePath': 'a.py', 'oldString': 'foo', 'newString': 'bar',
+         'replaceAll': True},
+    )
+    assert out['edits'] == [
+        {'path': 'a.py', 'operation': 'replace', 'anchor': 'foo',
+         'content': 'bar', 'replace_all': True},
+    ]
+
+
+def test_opencode_edit_keys_to_apply_diff():
+    out, log = validate_then_repair(
+        'apply_diff',
+        {'filePath': 'a.py', 'oldString': 'foo', 'newString': 'bar',
+         'replaceAll': True},
+    )
+    assert out == {'path': 'a.py', 'search': 'foo', 'replace': 'bar',
+                   'replace_all': True, 'description': 'Edit a.py'}
+    assert set(log) == {('path', 'param_alias'), ('search', 'param_alias'),
+                        ('replace', 'param_alias'),
+                        ('replace_all', 'param_alias'),
+                        ('apply_diff', 'structural_transform')}
+
+
+def test_opencode_read_range_offset_limit():
+    out, _ = validate_then_repair(
+        'read_files', {'path': 'a.py', 'offset': 10, 'limit': 20})
+    assert out['start_line'] == 10 and out['end_line'] == 29
+
+
+def test_kimi_read_range_line_offset_n_lines():
+    out, _ = validate_then_repair(
+        'read_files', {'path': 'a.py', 'line_offset': 5, 'n_lines': 3})
+    assert out['start_line'] == 5 and out['end_line'] == 7
+
+
+def test_read_range_native_keys_win():
+    """Native start_line/end_line present → foreign keys never fire."""
+    out, _ = validate_then_repair(
+        'read_files', {'path': 'a.py', 'start_line': 2, 'end_line': 4,
+                       'offset': 100, 'limit': 100})
+    assert out['start_line'] == 2 and out['end_line'] == 4
+
+
+def test_kimi_opencode_gemini_base_tool_name_aliases():
+    assert resolve_tool_name('SearchWeb', known={'web_search'}) == (
+        'web_search', 'alias')
+    assert resolve_tool_name('FetchURL', known={'fetch_url'}) == (
+        'fetch_url', 'alias')
+    assert resolve_tool_name('web_fetch', known={'fetch_url'}) == (
+        'fetch_url', 'alias')
+    assert resolve_tool_name('question', known={'ask_human'}) == (
+        'ask_human', 'alias')
+    assert resolve_tool_name('skill', known={'load_skill'}) == (
+        'load_skill', 'alias')
+
+
+def test_opencode_question_envelope_to_ask_human():
+    """OpenCode question speaks the same questions[] envelope as Claude
+    Code's AskUserQuestion — the existing ask_human transform unwraps it."""
+    out, _ = validate_then_repair(
+        'ask_human',
+        {'questions': [{'question': 'which option?', 'header': 'Pick'}]},
+    )
+    assert out['question'] == 'which option?'
+
+
+def test_kimi_grep_glob_and_head_limit_param_aliases():
+    out, log = validate_then_repair(
+        'grep_search', {'pattern': 'foo', 'glob': '*.py', 'head_limit': 5})
+    assert out['include'] == '*.py' and out['max_results'] == 5
+    assert ('include', 'param_alias') in log
+    assert ('max_results', 'param_alias') in log
+
+
+def test_kimi_glob_directory_param_alias():
+    out, log = validate_then_repair(
+        'find_files', {'pattern': '*.py', 'directory': 'src'})
+    assert out['path'] == 'src'
+    assert ('path', 'param_alias') in log
+
+
+def test_opencode_skill_name_param_alias():
+    out, log = validate_then_repair('load_skill', {'name': 'flyai'})
+    assert out['skill_id'] == 'flyai'
+    assert ('skill_id', 'param_alias') in log
+
+
+# ═════════════════════════════════════════════════════
+#  Claude Code / Codex base tools (subagents, shell, grep, captions)
+# ═════════════════════════════════════════════════════
+
+
+def test_task_and_agent_names_alias_to_spawn_agents():
+    """Claude Code Task / OpenCode task / Kimi Agent — one shared envelope."""
+    for foreign in ('task', 'Task', 'agent', 'Agent'):
+        assert resolve_tool_name(foreign, known={'spawn_agents'}) == (
+            'spawn_agents', 'alias')
+
+
+def test_claude_code_task_envelope_to_spawn_agents():
+    out, log = validate_then_repair('spawn_agents', {
+        'description': 'Explore the auth flow',
+        'prompt': 'Trace how login works and report back.',
+        'subagent_type': 'Explore'})
+    assert out['agents'] == [
+        {'objective': 'Trace how login works and report back.'}]
+    assert ('spawn_agents', 'structural_transform') in log
+
+
+def test_spawn_agents_native_call_untouched():
+    args = {'agents': [{'objective': 'do x', 'role': 'coder'}]}
+    out, log = validate_then_repair('spawn_agents', dict(args))
+    assert out == args and log == []
+
+
+def test_spawn_agents_transform_requires_prompt():
+    """No agents list AND no prompt → nothing to build from, fail closed."""
+    out, log = validate_then_repair('spawn_agents', {'description': 'x'})
+    assert 'agents' not in out and log == []
+
+
+def test_claude_code_skill_param_alias():
+    """Claude Code Skill carries {skill, args?}; args stays inert."""
+    out, log = validate_then_repair(
+        'load_skill', {'skill': 'flyai', 'args': '--verbose'})
+    assert out['skill_id'] == 'flyai'
+    assert ('skill_id', 'param_alias') in log
+
+
+def test_codex_legacy_shell_command_array_joined():
+    out, log = validate_then_repair(
+        'run_command', {'command': ['ls', '-la', 'src']})
+    assert out['command'] == 'ls -la src'
+    assert ('run_command', 'structural_transform') in log
+
+
+def test_codex_exec_command_cmd_array_joined():
+    out, _ = validate_then_repair(
+        'run_command', {'cmd': ['git', 'status']})
+    assert out['command'] == 'git status'
+
+
+def test_claude_code_bash_timeout_milliseconds_converted():
+    """Claude Code's default 120000 ms must not become a 33-hour timeout."""
+    out, _ = validate_then_repair(
+        'run_command', {'command': 'pytest', 'timeout': 120000})
+    assert out['timeout_s'] == 120
+
+
+def test_run_command_legacy_timeout_aliased_to_timeout_s():
+    """The old `timeout` spelling is ambiguous-unit; it aliases to timeout_s."""
+    out, log = validate_then_repair(
+        'run_command', {'command': 'pytest', 'timeout': 300})
+    assert out['timeout_s'] == 300
+    assert 'timeout' not in out
+    assert ('timeout_s', 'param_alias') in log
+
+
+def test_run_command_native_timeout_s_untouched():
+    args = {'command': 'pytest', 'timeout_s': 300}
+    out, log = validate_then_repair('run_command', dict(args))
+    assert out == args and log == []
+
+
+def test_run_command_timeout_s_explicit_seconds_not_ms_converted():
+    """timeout_s declares its unit — a large value is explicit seconds."""
+    out, _ = validate_then_repair(
+        'run_command', {'command': 'pytest', 'timeout_s': 120000})
+    assert out['timeout_s'] == 120000
+
+
+def test_run_command_timeout_s_wins_over_legacy_timeout():
+    out, _ = validate_then_repair(
+        'run_command', {'command': 'pytest', 'timeout': 300, 'timeout_s': 60})
+    assert out['timeout_s'] == 60
+
+
+def test_grep_output_mode_count_maps_to_count_only():
+    for mode in ('count', 'count_matches'):
+        out, _ = validate_then_repair(
+            'grep_search', {'pattern': 'TODO', 'output_mode': mode})
+        assert out['count_only'] is True
+
+
+def test_grep_output_mode_content_stays_inert():
+    args = {'pattern': 'TODO', 'output_mode': 'files_with_matches'}
+    out, log = validate_then_repair('grep_search', dict(args))
+    assert 'count_only' not in out and log == []
+
+
+def test_claude_code_write_caption_backfilled():
+    out, log = validate_then_repair(
+        'write_file', {'file_path': 'lib/a.py', 'content': 'x'})
+    assert out['description'] == 'Write lib/a.py'
+    assert ('write_file', 'structural_transform') in log
+
+
+def test_claude_code_edit_caption_backfilled_edit_file():
+    out, _ = validate_then_repair(
+        'edit_file', {'file_path': 'a.py', 'old_string': 'x',
+                      'new_string': 'y'})
+    assert out['description'] == 'Edit a.py'
+
+
+def test_caption_backfill_multi_file_summary():
+    out, _ = validate_then_repair('edit_file', {'edits': [
+        {'file_path': 'a.py', 'old_string': 'x', 'new_string': 'y'},
+        {'file_path': 'b.py', 'old_string': 'u', 'new_string': 'v'}]})
+    assert out['description'] == 'Edit 2 files'
+
+
+def test_caption_backfill_never_fires_for_native_spelling():
+    """A native-schema payload missing description fails closed naming the
+    key — the backfill only fires on foreign key spellings, so the
+    native-payloads-untouched invariant holds even for broken native calls."""
+    out, log = validate_then_repair(
+        'write_file', {'path': 'a.py', 'content': 'x'})
+    assert 'description' not in out
+    assert ('write_file', 'structural_transform') not in log
+    out, log = validate_then_repair(
+        'edit_file', {'edits': [{'path': 'a.py', 'operation': 'replace',
+                                 'anchor': 'x', 'content': 'y'}]})
+    assert 'description' not in out
+    assert ('edit_file', 'structural_transform') not in log
+
+
+def test_edit_file_allow_outside_workspace_survives_native_call():
+    """conv mtq3ev44samfhr: the edit_file reshape rebuilt the envelope as
+    {edits, description?} on EVERY call — even a fully native one — and
+    silently dropped allow_outside_workspace. The write gate then refused
+    in a loop, its own error text telling the model to re-issue the exact
+    call whose flag the repair layer kept stripping."""
+    args = {'description': 'patch smali',
+            'allow_outside_workspace': True,
+            'edits': [{'path': '/abs/eh/c.smali', 'operation': 'insert_after',
+                       'anchor': '    return-void', 'content': '    nop'}]}
+    out, log = validate_then_repair('edit_file', args)
+    assert out['allow_outside_workspace'] is True
+    assert out['edits'] == args['edits']
+    assert out['description'] == 'patch smali'
+    assert ('edit_file', 'structural_transform') not in log
+
+
+def test_edit_file_allow_outside_workspace_survives_foreign_reshape():
+    """The flag is envelope-scoped, not edit-item data: a foreign-shaped
+    payload that legitimately gets reshaped must still carry it through."""
+    out, log = validate_then_repair(
+        'edit_file', {'file_path': '/abs/eh/c.smali', 'old_string': 'x',
+                      'new_string': 'y', 'allow_outside_workspace': True})
+    assert out['edits'] == [{'path': '/abs/eh/c.smali', 'operation': 'replace',
+                             'anchor': 'x', 'content': 'y'}]
+    assert out['allow_outside_workspace'] is True
+    assert ('edit_file', 'structural_transform') in log
+
+def test_apply_diffs_native_spelling_gets_no_caption_backfill():
+    """Top-level native ``path`` + native item keys: the multiedit reshape
+    fires (shared-path injection) but the caption backfill must not —
+    nothing marks this payload as foreign-schema-shaped."""
+    out, _ = validate_then_repair('apply_diffs', {
+        'path': 'a.py',
+        'edits': [{'search': 'x', 'replace': 'y'}]})
+    assert out['edits'][0]['path'] == 'a.py'
+    assert 'description' not in out['edits'][0]
+
+
+def test_existing_description_never_clobbered():
+    out, log = validate_then_repair(
+        'write_file', {'file_path': 'a.py', 'content': 'x',
+                       'description': 'seed the config'})
+    assert out['description'] == 'seed the config'
+    assert ('write_file', 'structural_transform') not in log
 
 
 if __name__ == '__main__':

@@ -28,8 +28,12 @@ def transport_owner_scope(owner_user_id: object | None) -> str:
     ``''`` means this model call has no owner and therefore may use only
     server-side network routes. Any supplied identity must be a positive
     repository owner; account subjects and booleans never become bridge scope.
+
+    Idempotent by contract: callers that normalize once and forward the
+    result (stream/chat/astream → ``prepare_request`` → OAuth branch) hand
+    this function its own output, so the ``''`` sentinel must round-trip.
     """
-    if owner_user_id is None:
+    if owner_user_id is None or owner_user_id == '':
         return ''
     from lib.identity import require_user_id
 

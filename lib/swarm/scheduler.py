@@ -15,7 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from lib.log import get_logger
 from lib.swarm.agent import SubAgent
-from lib.swarm.liveness import ProgressBeacon
+from lib.llm_errors import AbortedError
+from lib.swarm.liveness import ProgressBeacon, thread_progress_sink
 from lib.swarm.protocol import (
     SubAgentResult,
     SubAgentStatus,
@@ -506,7 +507,7 @@ class StreamingScheduler:
         return True
 
     def _inject_deps_locked(self, spec: SubTaskSpec):
-        """Inject results from completed dependencies into spec.context.
+        """Render completed prerequisite evidence without rewriting user context.
 
         Caller holds _lock.
         """
@@ -521,16 +522,15 @@ class StreamingScheduler:
                     f'{compress_result(dep_result.final_answer, max_chars=2000)}'
                 )
         if dep_results:
-            spec.context += (
-                '\n\nResults from prerequisite tasks:\n'
-                + '\n---\n'.join(dep_results)
-            )
+            return ('\n\nResults from prerequisite tasks:\n'
+                    + '\n---\n'.join(dep_results))
+        return ''
 
     def _launch_ready_locked(self):
         """Find pending specs with satisfied deps, submit to pool.
 
-        When a spec becomes ready, dependency context is injected
-        (from completed results) before submitting to the pool.
+        Completed dependency evidence is appended to the worker messages
+        after construction, leaving the delegated user context unchanged.
 
         Caller holds _lock.
         """
@@ -543,7 +543,6 @@ class StreamingScheduler:
         blocked = []
         for spec in self._pending:
             if self._deps_satisfied(spec):
-                self._inject_deps_locked(spec)
                 self._running[spec.id] = spec
                 self._started_at[spec.id] = time.time()
                 self._pool.submit(self._run_one, spec)
@@ -592,23 +591,42 @@ class StreamingScheduler:
         for attempt in range(1 + effective_retries):
             if self._abort_check():
                 logger.warning('[Scheduler] _run_one ABORT agent=%s (abort flag)', spec.id)
-                result = SubAgentResult(
-                    status=SubAgentStatus.CANCELLED.value,
-                    error_message='Aborted',
-                )
+                if result is None:
+                    result = SubAgentResult(error_message='Aborted')
+                result.status = SubAgentStatus.CANCELLED.value
                 break
 
             logger.debug('[Scheduler] agent=%s attempt %d/%d', spec.id, attempt + 1, 1 + effective_retries)
             try:
                 agent = self._factory(spec)
 
-                if self._rate_limiter:
-                    result = self._rate_limiter.run_agent(
-                        agent,
-                        abort_check=self._abort_check,
-                    )
-                else:
-                    result = agent.run()
+                with self._lock:
+                    dependency_evidence = self._inject_deps_locked(spec)
+                if dependency_evidence:
+                    from lib.tasks_pkg.context_composer.injections import append_injection
+                    messages = getattr(agent, 'messages', None)
+                    if messages is None:
+                        messages = agent.messages = []
+                    if not any(m.get('_contextInjectionId') == 'worker_dependencies'
+                               and m.get('content') == dependency_evidence
+                               for m in messages if isinstance(m, dict)):
+                        append_injection(messages, 'worker_dependencies', dependency_evidence,
+                                         task=getattr(agent, 'context_task', None))
+                # Admission backpressure (rate-limiter semaphore, then the
+                # process-wide execution gate) can legitimately park an agent
+                # longer than the stall window while other waves hold every
+                # permit. Bind the progress sink so those wait loops heartbeat
+                # the beacon — a QUEUED agent is alive and must never read as
+                # silent (production: whole waves were stall-aborted at 900s
+                # with zero LLM rounds while merely waiting for admission).
+                with thread_progress_sink(self._beacon, spec.id):
+                    if self._rate_limiter:
+                        result = self._rate_limiter.run_agent(
+                            agent,
+                            abort_check=self._abort_check,
+                        )
+                    else:
+                        result = agent.run()
 
                 if result.status == SubAgentStatus.COMPLETED.value:
                     result.retry_count = attempt
@@ -618,6 +636,11 @@ class StreamingScheduler:
                                  spec.id, attempt + 1, elapsed,
                                  len(result.final_answer or ''))
                     break  # success
+
+                if result.status == SubAgentStatus.CANCELLED.value or self._abort_check():
+                    result.status = SubAgentStatus.CANCELLED.value
+                    result.retry_count = attempt
+                    break  # Retain this attempt's partial answer, rounds and usage.
 
                 # Failed — prepare for retry
                 logger.warning('[Scheduler] agent=%s attempt %d FAILED status=%s err=%s',
@@ -639,6 +662,17 @@ class StreamingScheduler:
 
             except Exception as exc:
                 err_msg = f'{type(exc).__name__}: {exc}'
+                if isinstance(exc, AbortedError):
+                    # Cancellation is terminal and must NOT be retried: the
+                    # abort flag is sticky, so a retry dies at the same gate
+                    # and the AGENT_RETRY log mislabels an abort as a
+                    # transient failure (plus the outcome must be CANCELLED,
+                    # not FAILED).
+                    result = SubAgentResult(
+                        status=SubAgentStatus.CANCELLED.value,
+                        error_message=err_msg,
+                    )
+                    break
                 logger.error(
                     '[StreamingScheduler] Agent %s exception '
                     '(attempt %d): %s', spec.id, attempt + 1, err_msg, exc_info=True)

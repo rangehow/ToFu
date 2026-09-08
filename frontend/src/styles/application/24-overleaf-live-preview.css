@@ -1,0 +1,154 @@
+/* ===== 24-overleaf-live-preview =====
+ * Chat-side live PDF panel: fixed right drawer, fit-width pages, SyncTeX
+ * pulse highlight. Kept below modal z-indices; the drawer never covers the
+ * composer on narrow screens (it simply overlays the transcript). */
+
+.olp-panel {
+  position: fixed;
+  top: 56px;
+  right: 0;
+  bottom: 0;
+  width: min(44vw, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elevated, #fff);
+  border-left: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.12);
+  z-index: 900;
+  transform: translateX(102%);
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.olp-panel-open {
+  transform: translateX(0);
+}
+
+.olp-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  flex: 0 0 auto;
+}
+
+.olp-title {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.olp-file {
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary, rgba(0, 0, 0, 0.55));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.olp-status {
+  font-size: 11px;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.55));
+  white-space: nowrap;
+}
+
+.olp-status-busy::after {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-left: 6px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: -1px;
+  animation: olpSpin 0.8s linear infinite;
+}
+
+@keyframes olpSpin {
+  to { transform: rotate(360deg); }
+}
+
+.olp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.55));
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.olp-icon-btn:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+  color: var(--text-primary, inherit);
+}
+
+.olp-refresh {
+  margin-left: auto;
+}
+
+.olp-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  background: var(--bg-sunken, rgba(0, 0, 0, 0.03));
+}
+
+.olp-empty {
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary, rgba(0, 0, 0, 0.5));
+}
+
+.olp-page {
+  position: relative;
+  margin: 0 auto 12px;
+  width: fit-content;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+}
+
+.olp-canvas {
+  display: block;
+}
+
+/* SyncTeX pulse: a warm ring + wash that breathes twice, then fades. */
+.olp-highlight {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 3px;
+  opacity: 0;
+  background: rgba(255, 176, 32, 0.28);
+  box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.85);
+  transition: opacity 0.35s ease;
+}
+
+.olp-highlight-on {
+  opacity: 1;
+  animation: olpPulse 0.9s ease-in-out 2;
+}
+
+.olp-highlight-out {
+  opacity: 0;
+}
+
+@keyframes olpPulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(255, 152, 0, 0.85); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 152, 0, 0.25); }
+}
+
+@media (max-width: 900px) {
+  .olp-panel {
+    width: 100vw;
+    top: 48px;
+  }
+}

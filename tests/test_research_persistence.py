@@ -441,3 +441,20 @@ class TestRecipeIsWired:
 
 if __name__ == '__main__':
     sys.exit(pytest.main([__file__, '-x', '-q', '-m', 'unit']))
+
+
+def test_revision_cycle_and_all_review_costs_survive_repository_roundtrip(fresh_db):
+    from copy import deepcopy
+    from lib.research.persistence import persist_ideate, load_research_artifacts
+    artifact = deepcopy(_IDEATE_ARTIFACT)
+    artifact['research_cycle'] = {
+        'status': 'unresolved', 'revision_count': 1,
+        'history': [{'revision': 0, 'ideas': {'accepted': [{'idea_id': 'one'}]}}],
+        'issues': [{'issue_id': 'issue_1', 'status': 'unresolved'}],
+        'next_action': 'inspect_unresolved_issues',
+    }
+    artifact['evaluation_usage'] = {'calls': 6, 'prompt_tokens': 360}
+    assert persist_ideate(_DIRECTION, 'en', artifact, user_id=TEST_OWNER_USER_ID)
+    loaded = load_research_artifacts(_DIRECTION, 'en', user_id=TEST_OWNER_USER_ID)
+    assert loaded['research_cycle'] == artifact['research_cycle']
+    assert loaded['usage']['stages']['evaluate']['calls'] == 6

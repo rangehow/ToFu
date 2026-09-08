@@ -48,6 +48,9 @@ def _routing_model_entries(
         if row.get('enabled') is True and row.get('probe_status') == 'passed'
     }
     projected: list[tuple[str, dict]] = []
+    from lib.model_catalog.aa import cached_routing_scores
+
+    aa_scores = cached_routing_scores(list(models.values()))
     for offering in document['offerings']:
         access = accesses.get(offering.get('provider_access_id'))
         if (
@@ -75,6 +78,9 @@ def _routing_model_entries(
             'capabilities': list(offering.get('capabilities') or []),
             'context_window': offering.get('context_window'),
         }
+        if official:
+            score_key = f"{official['creator_id']}::{official['model_id']}"
+            entry['aa_scores'] = aa_scores.get(score_key, {})
         pricing = offering.get('actual_pricing')
         if isinstance(pricing, dict):
             entry['pricing'] = dict(pricing)
@@ -187,6 +193,7 @@ def configured_model_profiles(
             'capabilities': sorted(caps),
             'price': _price_snapshot(model_id, pid, entry),
             'enabled': True,
+            'aaScores': dict(entry.get('aa_scores') or {}),
         })
         out.append(profile)
     return out

@@ -120,6 +120,8 @@ def _rounds_view_from_segments(segments: list[dict[str, Any]]) -> list[dict[str,
             'status': result.get('status'),
             'llmRound': lr,
         }
+        if result.get('modelContent') is not None:
+            r['toolModelContent'] = result['modelContent']
         attempt_id, task_id = execution_identity(s)
         if attempt_id:
             r['attemptId'] = attempt_id

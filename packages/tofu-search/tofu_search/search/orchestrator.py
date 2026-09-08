@@ -16,6 +16,7 @@ Pipeline order (cheap → expensive):
 """
 # HOT_PATH
 
+import re
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -82,7 +83,8 @@ def perform_web_search(query, max_results=None, user_question='', freshness='',
         fetch_pages: When False, skip page fetch and return engine snippets.
         filter_pages: When False, skip the LLM relevance filter.
         rerank: When False, skip BM25 rerank.
-        engines: Optional iterable of engine tags (subset). None ⇒ all.
+        engines: Optional iterable of engine tags. None selects Web engines only;
+                an explicit empty/unknown/unavailable selection fails closed.
         max_chars_per_page: Override fetch_max_chars_search for this call.
         deepen: When True, follow top query-relevant links one hop deeper.
                 None ⇒ SEARCH_DEEPEN_HOPS env default (off).
@@ -118,7 +120,8 @@ def _perform_web_search_impl(query, max_results=None, user_question='', freshnes
         fetch_pages: When False, skip page fetch and return engine snippets.
         filter_pages: When False, skip the LLM relevance filter.
         rerank: When False, skip BM25 rerank.
-        engines: Optional iterable of engine tags (subset). None ⇒ all.
+        engines: Optional iterable of engine tags. None selects Web engines only;
+                an explicit empty/unknown/unavailable selection fails closed.
         max_chars_per_page: Override fetch_max_chars_search for this call.
         deepen: When True, follow top query-relevant links one hop deeper.
                 None ⇒ SEARCH_DEEPEN_HOPS env default (off).
@@ -171,10 +174,35 @@ def _perform_web_search_impl(query, max_results=None, user_question='', freshnes
     engine_errors = {}
     engine_empty = []
 
+    requested = None if engines is None else set(engines)
+
+    def selection_error(reason, detail):
+        result = SearchResultList()
+        result._engine_breakdown = {}
+        result._search_diag = {
+            'reason': reason, 'reason_detail': detail,
+            'engine_errors': {}, 'engine_empty': [], 'engine_ok': [],
+            'deadline_hit': False,
+        }
+        return result
+
+    native_requested = requested is not None and any(
+        tag == 'Xiaohongshu' or str(tag).startswith('Site:') for tag in requested)
+    # Native keyword APIs cannot enforce Web operator semantics, even for a
+    # matching site domain. Never strip constraints or navigate first.
+    if native_requested and (freshness or re.search(
+            r'(?i)(?<!\w)(?:site|filetype|ext|inurl|allinurl|intitle|allintitle|'
+            r'intext|allintext|before|after|cache|related|source):', query)):
+        return selection_error(
+            'unsupported_site_query',
+            'Native site search cannot enforce Web operators or freshness. '
+            'Use plain native keywords, or select a Web engine to preserve these constraints.')
+
     ALL_ENGINE_NAMES = ['DDG-HTML', 'Brave', 'Bing', 'DDG-API', 'SearXNG', 'Marginalia']
     site_engine_specs = []
     site_provider = get_site_search_provider()
-    if site_provider is not None:
+    if site_provider is not None and requested and any(
+            str(tag).startswith('Site:') for tag in requested):
         try:
             site_sources = site_provider.list_sources() or []
         except Exception as exc:
@@ -200,23 +228,27 @@ def _perform_web_search_impl(query, max_results=None, user_question='', freshnes
                 raw = site_provider.search(_sid, q, max_results=n,
                                            freshness=fresh)
                 if raw is None:
-                    return []
+                    raise RuntimeError('Native site source unavailable: ' + _sid)
                 return normalize_site_search_results(
                     raw, source_id=_sid, source_name=_name, max_results=n)
 
             site_engine_specs.append((tag, _site_search, 10))
             ALL_ENGINE_NAMES.append(tag)
-    _xhs_on = xhs_search_available()
+    _xhs_on = bool(requested and 'Xiaohongshu' in requested and xhs_search_available())
     if _xhs_on:
         ALL_ENGINE_NAMES.append('Xiaohongshu')
-    if engines:
-        engine_allow = {e for e in engines if e in ALL_ENGINE_NAMES}
-        if not engine_allow:
-            logger.warning('[Search] all requested engines unknown (%s) — falling back to default set',
-                           list(engines))
-            engine_allow = set(ALL_ENGINE_NAMES)
+    if requested is not None:
+        invalid = requested - set(ALL_ENGINE_NAMES)
+        if not requested or invalid:
+            return selection_error(
+                'invalid_engines',
+                'Explicit engine selection is empty or contains unknown/unavailable engines: '
+                + ', '.join(sorted(map(str, invalid or requested))))
+        engine_allow = requested
     else:
         engine_allow = set(ALL_ENGINE_NAMES)
+    # An explicit selection is an authority boundary, not a fallback hint.
+    allow_generic_fallback = requested is None
 
     max_chars = max_chars_per_page if max_chars_per_page else config.fetch_max_chars_search
     pdf_max_chars = config.fetch_max_chars_pdf
@@ -397,7 +429,7 @@ def _perform_web_search_impl(query, max_results=None, user_question='', freshnes
     # normal network timeout instead of starting it with only milliseconds left
     # and quietly violating the advertised whole-search deadline.
     _left = _budget_left()
-    if not all_results and not _deadline_hit and (_left is None or _left > 11):
+    if allow_generic_fallback and not all_results and not _deadline_hit and (_left is None or _left > 11):
         logger.info('[Search] 0 results on first attempt, retrying DDG+Brave after 0.8s for query=%r', query[:80])
         time.sleep(0.8)
         try:
@@ -426,7 +458,7 @@ def _perform_web_search_impl(query, max_results=None, user_question='', freshnes
     # The provider contract permits a 25s browser fetch, so do not start one
     # unless that much search budget remains.
     _left = _budget_left()
-    if not all_results and not _deadline_hit and (_left is None or _left > 25):
+    if allow_generic_fallback and not all_results and not _deadline_hit and (_left is None or _left > 25):
         browser_results = search_via_browser(query, max_results)
         if browser_results:
             logger.info('[Search] Browser fallback produced %d results for query=%r',
@@ -692,7 +724,7 @@ def _perform_web_search_impl(query, max_results=None, user_question='', freshnes
                        len(final_results), _deadline_secs, pipeline_total, query[:60])
 
     if not final_results:
-        total_engines = len(ALL_ENGINE_NAMES)
+        total_engines = len(engine_allow)
         errored = len(engine_errors)
         empty = len(engine_empty)
         if errored == total_engines:

@@ -1,0 +1,14 @@
+{
+  "brand": "perplexity",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "perplexity",
+  "category": "official",
+  "name": "Perplexity",
+  "base_url": "https://api.perplexity.ai",
+  "offering_recipes": [
+    {"model_id": "sonar",               "capabilities": ["text", "cheap"]},
+    {"model_id": "sonar-pro",           "capabilities": ["text"]},
+    {"model_id": "sonar-reasoning",     "capabilities": ["text", "thinking", "cheap"]},
+    {"model_id": "sonar-reasoning-pro", "capabilities": ["text", "thinking", "cheap"]}
+  ]
+}

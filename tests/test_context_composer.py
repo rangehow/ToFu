@@ -294,27 +294,35 @@ def test_project_rules_reuses_inflight_prefetch_without_duplicate_read(
 
 def test_provider_deadline_does_not_allow_late_live_task_mutation(monkeypatch):
     monkeypatch.setattr(providers, '_CONTEXT_PROVIDER_DEADLINE_SECONDS', 0.03)
+    release = threading.Event()
+    finished = threading.Event()
 
     def slow_profile(request):
-        time.sleep(0.10)
+        release.wait(2.0)
         request.task['_appliedPreferences'] = {'late': True}
+        request.task['config']['nested']['value'] = 'late'
+        finished.set()
         return 'late profile'
 
     monkeypatch.setattr(providers, '_profile_block', slow_profile)
-    task = {'config': {}}
-    started = time.monotonic()
-    blocks = providers.collect_context_blocks(
-        [{'role': 'user', 'content': 'request'}], ComposeRequest(task=task),
-    )
-    elapsed = time.monotonic() - started
-
-    assert elapsed < 0.09
+    task = {'config': {'nested': {'value': 'original'}}}
+    try:
+        blocks = providers.collect_context_blocks(
+            [{'role': 'user', 'content': 'request'}], ComposeRequest(task=task),
+        )
+        # Deadline applies to provider reads, independently of cold imports
+        # and pure rendering overhead. A synchronous wait would finish the
+        # provider before collect returned and fail this check.
+        assert not finished.is_set()
+    finally:
+        release.set()
     assert next(block for block in blocks if block.id == 'user_context').content == ''
     timing = {row['provider']: row for row in task['_contextProviderTimings']}
     assert timing['profile']['status'] == 'timeout'
     assert '_appliedPreferences' not in task
-    time.sleep(0.11)
+    assert finished.wait(1.0)
     assert '_appliedPreferences' not in task
+    assert task['config']['nested']['value'] == 'original'
 
 
 def test_successful_project_provider_returns_cursor_receipt_to_live_task(
@@ -524,8 +532,8 @@ def test_workspace_routing_guidance_is_in_environment_tail(monkeypatch):
 
 def test_mcp_tools_delta_surfaces_late_connected_tools(monkeypatch):
     """Tools that (re)connect after the wire froze are rendered as a
-    per-turn tail block with name/description/input_schema, callable via
-    execute_tools; on-wire and absent tools never appear."""
+    per-turn name/description hint with on-demand schema discovery;
+    on-wire and absent tools never appear."""
     from lib.mcp.tool_search import (
         freeze_wire_definitions,
         mcp_selection_scope_id,
@@ -559,7 +567,9 @@ def test_mcp_tools_delta_surfaces_late_connected_tools(monkeypatch):
         task = {'id': task_id}
         blocks = providers.collect_context_blocks(
             [{'role': 'user', 'content': 'request'}],
-            ComposeRequest(conv_id=conv_id, user_id=7, task=task),
+            ComposeRequest(conv_id=conv_id, user_id=7, task=task,
+                           has_real_tools=True,
+                           tool_names=frozenset({'search_tools', 'execute_tools'})),
         )
         block = next(block for block in blocks
                      if block.id == 'mcp_tools_delta')
@@ -569,7 +579,8 @@ def test_mcp_tools_delta_surfaces_late_connected_tools(monkeypatch):
     assert delta.placement == 'tail'
     assert '<available_mcp_tools>' in delta.content
     assert 'mcp__docs__write' in delta.content
-    assert 'input_schema' in delta.content
+    assert 'input_schema' not in delta.content
+    assert 'search_tools with an exact name' in delta.content
     assert 'execute_tools' in delta.content
     assert 'mcp__docs__read' not in delta.content
     assert delta.provenance['delta'] == 1
@@ -600,3 +611,88 @@ def test_mcp_tools_delta_surfaces_late_connected_tools(monkeypatch):
                                task_id='delta-task-new')
     assert unfrozen.content == ''
     assert unfrozen.suppressed_reason == 'wire_not_frozen'
+
+
+def _disclosed_catalog():
+    return [
+        {'type': 'function', 'function': {
+            'name': 'mcp__llm__experiment_run',
+            'description': 'Run experiments by id.',
+            'parameters': {
+                'type': 'object',
+                'properties': {'ids': {'type': 'array'},
+                               'dry_run': {'type': 'boolean'}},
+                'required': ['ids']}}},
+        {'type': 'function', 'function': {
+            'name': 'read_files',
+            'description': 'Read files.',
+            'parameters': {'type': 'object', 'properties': {}}}},
+    ]
+
+
+def test_disclosed_tools_block_reminds_deferred_names_and_signatures():
+    """Already-disclosed deferred tools resurface as a per-turn tail
+    reminder (name + argument signature only) so the model calls them
+    through execute_tools instead of re-running broad searches after
+    compaction summarized the original search result away."""
+    from lib.tools.disclosure_state import record_search_items
+
+    catalog = _disclosed_catalog()
+    task = {'id': 'task-disclosed-block',
+            '_executable_tool_catalog': catalog}
+    record_search_items(task, [
+        {'name': 'mcp__llm__experiment_run',
+         'arguments_schema': catalog[0]['function']['parameters']},
+        {'name': 'read_files',
+         'arguments_schema': catalog[1]['function']['parameters']},
+    ], catalog=catalog)
+
+    blocks = providers.collect_context_blocks(
+        [{'role': 'user', 'content': 'request'}],
+        ComposeRequest(
+            conv_id='conv-disclosed', user_id=7, task=task,
+            has_real_tools=True,
+            tool_names=frozenset({'read_files', 'search_tools', 'execute_tools'})),
+    )
+    block = next(row for row in blocks if row.id == 'disclosed_tools')
+    assert block.placement == 'tail'
+    assert '<disclosed_tools>' in block.content
+    assert 'mcp__llm__experiment_run' in block.content
+    assert 'required: ids' in block.content
+    assert 'optional: dry_run' in block.content
+    assert 'execute_tools' in block.content
+    # A wire-visible tool is never reminded as deferred.
+    assert 'read_files' not in block.content
+    assert block.provenance['deferred'] == 1
+
+
+def test_disclosed_tools_block_reports_empty_reasons():
+    from lib.tools.disclosure_state import record_search_items
+
+    def _block_for(task, **kwargs):
+        blocks = providers.collect_context_blocks(
+            [{'role': 'user', 'content': 'request'}],
+            ComposeRequest(conv_id='conv-x', user_id=7, task=task, **kwargs),
+        )
+        return next(row for row in blocks if row.id == 'disclosed_tools')
+
+    empty = _block_for({'id': 'task-disclosed-empty'})
+    assert empty.content == ''
+    assert empty.suppressed_reason == 'no_disclosed_tools'
+
+    visible_only = {'id': 'task-disclosed-visible',
+                    '_executable_tool_catalog': _disclosed_catalog()}
+    record_search_items(visible_only, [{
+        'name': 'read_files',
+        'arguments_schema': {'type': 'object', 'properties': {}},
+    }], catalog=visible_only['_executable_tool_catalog'])
+    suppressed = _block_for(
+        visible_only, tool_names=frozenset({'read_files'}))
+    assert suppressed.content == ''
+    assert suppressed.suppressed_reason == 'no_deferred_tools'
+
+    disabled = _block_for(
+        {'id': 'task-disclosed-disabled'},
+        disabled_blocks=frozenset({'disclosed_tools'}))
+    assert disabled.content == ''
+    assert disabled.suppressed_reason == 'disabled'

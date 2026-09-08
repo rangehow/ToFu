@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from evaluations.codex_kimi_proxy.codex_contract import CODEX_VERSION
+from evaluations.opencode_contract import OPENCODE_VERSION
 
 from .artifacts import prepare_output_root
 from .audit import audit_run
@@ -36,6 +37,11 @@ from .tofu_kimi_runtime import (
     TOFU_KIMI_AGENT,
     TOFU_KIMI_PROFILE_ID,
     TofuKimiCandidateSettings,
+)
+from .opencode_runtime import (
+    OPENCODE_AGENT,
+    OPENCODE_PROFILE_ID,
+    OpenCodeBaselineSettings,
 )
 
 
@@ -154,6 +160,7 @@ def _tofu_kimi_settings(
         agent_version=agent_version,
         experiment_arm=args.tofu_experiment_arm,
         runtime_config=runtime_config,
+        model=str(args.models[0]),
         agent_timeout_seconds=args.tofu_agent_timeout_seconds,
         command_timeout_seconds=args.tofu_command_timeout_seconds,
         upstream_base_url_env=args.kimi_base_url_env,
@@ -162,6 +169,36 @@ def _tofu_kimi_settings(
     )
     settings.validate()
     return TOFU_KIMI_AGENT, agent_version, settings
+
+
+def _opencode_settings(
+    args: argparse.Namespace,
+    *,
+    agent: str,
+    agent_version: str | None,
+) -> tuple[str, str | None, OpenCodeBaselineSettings | None]:
+    if agent not in {OPENCODE_PROFILE_ID, OPENCODE_AGENT}:
+        return agent, agent_version, None
+    if args.opencode_binary is None or not args.opencode_sha256 \
+            or args.opencode_cache_seed is None \
+            or not args.glm_provider_face or not args.glm_slot_id:
+        raise ValueError(
+            "opencode requires binary/hash/cache-seed plus --glm-provider-face "
+            "and --glm-slot-id (or their TOFU_* environment variables)"
+        )
+    settings = OpenCodeBaselineSettings(
+        opencode_binary=args.opencode_binary,
+        opencode_sha256=args.opencode_sha256,
+        opencode_cache_seed=args.opencode_cache_seed,
+        model=str(args.models[0]),
+        provider_face=args.glm_provider_face,
+        provider_slot_id=args.glm_slot_id,
+        agent_timeout_seconds=args.opencode_agent_timeout_seconds,
+        upstream_base_url_env=args.glm_base_url_env,
+        upstream_api_key_env=args.glm_api_key_env,
+    )
+    settings.validate(verify_binary=False)
+    return OPENCODE_AGENT, args.agent_version or OPENCODE_VERSION, settings
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -279,6 +316,48 @@ def build_parser() -> argparse.ArgumentParser:
         "--kimi-slot-id",
         default=os.environ.get("TOFU_KIMI_SLOT_ID"),
         help="Non-secret Kimi slot identifier shared by both paired arms",
+    )
+    run.add_argument(
+        "--opencode-binary",
+        type=Path,
+        default=_env_path("TOFU_OPENCODE_BINARY"),
+        help="Pinned OpenCode binary for --agent opencode",
+    )
+    run.add_argument(
+        "--opencode-sha256",
+        default=os.environ.get("TOFU_OPENCODE_SHA256"),
+        help="Expected SHA-256 for the pinned OpenCode binary",
+    )
+    run.add_argument(
+        "--opencode-cache-seed",
+        type=Path,
+        default=_env_path("TOFU_OPENCODE_CACHE_SEED"),
+        help="Pinned offline provider-package cache seed for --agent opencode",
+    )
+    run.add_argument(
+        "--opencode-agent-timeout-seconds",
+        type=int,
+        default=3600,
+    )
+    run.add_argument(
+        "--glm-base-url-env",
+        default="GLM_CHAT_BASE_URL",
+        help="Host-only environment variable containing the GLM Chat base URL",
+    )
+    run.add_argument(
+        "--glm-api-key-env",
+        default="GLM_API_KEY",
+        help="Host-only environment variable containing the GLM API key",
+    )
+    run.add_argument(
+        "--glm-provider-face",
+        default=os.environ.get("TOFU_GLM_PROVIDER_FACE"),
+        help="Non-secret provider face frozen into paired benchmark manifests",
+    )
+    run.add_argument(
+        "--glm-slot-id",
+        default=os.environ.get("TOFU_GLM_SLOT_ID"),
+        help="Non-secret GLM slot identifier shared by both paired arms",
     )
     run.add_argument("--harbor-bin", default="harbor")
     run.add_argument("--run-id")
@@ -445,6 +524,8 @@ def main(argv: list[str] | None = None) -> int:
             agent, agent_version, codex_kimi = _codex_kimi_settings(args)
             agent, agent_version, tofu_kimi = _tofu_kimi_settings(
                 args, agent=agent, agent_version=agent_version)
+            agent, agent_version, opencode = _opencode_settings(
+                args, agent=agent, agent_version=agent_version)
             if not args.dry_run:
                 checks = harbor_checks(
                     backend=args.backend,
@@ -486,6 +567,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.max_retries is not None
                     else (0 if (
                         codex_kimi is not None or tofu_kimi is not None
+                        or opencode is not None
                     ) else 2)
                 ),
                 timeout_multiplier=args.timeout_multiplier,
@@ -497,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
                 rootless_qemu=rootless_qemu,
                 codex_kimi=codex_kimi,
                 tofu_kimi=tofu_kimi,
+                opencode=opencode,
                 release_run_root=args.release_run_root,
             )
             code, run_dir = start_harbor_run(spec, dry_run=args.dry_run)

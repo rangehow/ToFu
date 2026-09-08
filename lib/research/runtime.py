@@ -65,7 +65,28 @@ def _claim_research_task(key: tuple, task_id: str, *, direction: str,
 
 
 def _append_research_event(task, event):
-    return _production.append_event(task, event)
+    from lib.research.progress import project_progress
+    # Presentation never revives a settled task or turns Stop into completion.
+    if (task.get('status') not in ('pending', 'running')
+            or task.get('_executionTerminalizing')
+            or (task.get('abort_event') and task['abort_event'].is_set())):
+        return None
+    import time
+    progress = project_progress(task.get('research_progress'), event,
+                                run_id=task['task_id'], now_ms=int(time.time() * 1000))
+    if task.get('_research_record_enabled'):
+        from lib.research.records import persist_record
+        # Persist semantic receipts, not token deltas or heartbeat traffic.
+        if event.get('type') in ('paper_done', 'corpus_admitted', 'search_round',
+                                  'stage_started', 'stage_done', 'stage_skipped',
+                                  'stage_failed', 'stage_checkpoint_invalidated', 'final'):
+            task['research_progress'] = progress
+            persist_record(task, event=event)
+    seq = _production.append_event(task, {**event, 'research_progress': progress})
+    if seq is not None:
+        _research_runtime.update_fields(task['task_id'], fields={'research_progress': progress},
+                                        only_if_status=('pending', 'running'))
+    return seq
 
 
 def _cleanup_stale_research_tasks():

@@ -11,8 +11,8 @@ import pytest
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE = ROOT / 'frontend/src/features/paper/research-workspace.ts'
-VIEW = ROOT / 'frontend/src/features/paper/research-view.ts'
+WORKSPACE = ROOT / 'frontend/src/features/research/controllers/workspace.ts'
+VIEW = ROOT / 'frontend/src/features/research/components/view.ts'
 API = ROOT / 'frontend/src/runtime/sections/api.js'
 PANEL = ROOT / 'frontend/src/features/paper/panel-owners.ts'
 CSS = ROOT / 'frontend/src/styles/application/03-paper-reader.css'
@@ -23,7 +23,8 @@ def test_completed_research_mounts_the_production_workspace():
     panel = PANEL.read_text(encoding='utf-8')
     assert "researchWorkspaceHtml(stream)" in view
     assert "loadResearchWorkspace(stream.direction, stream.lang)" in view
-    assert "import './research-workspace'" in panel
+    assert "import './research-workspace'" not in panel
+    assert "../controllers/workspace" in view
 
 
 def test_workspace_has_real_experiment_evidence_and_manuscript_controls():
@@ -77,6 +78,24 @@ def test_workspace_styles_are_scoped_and_responsive():
     assert '.rsw-workspace' in css and '.rsw-output-grid' in css
     assert '@media(max-width:640px)' in css
     assert '.rsw-grid.cols-2,.rsw-grid.cols-3{grid-template-columns:1fr}' in css
+
+
+def test_protocol_starts_from_a_grounded_draft_not_a_blank_form():
+    """The last Auto Research step used to open with ~10 empty fields even
+    though the pipeline had already paid for survey + gaps + ideas. The
+    contract now: one click drafts the whole protocol from that evidence,
+    and rarely-changed fields stay collapsed until asked for."""
+    src = WORKSPACE.read_text(encoding='utf-8')
+    api = API.read_text(encoding='utf-8')
+    assert '_draftResearchProtocol(this)' in src
+    assert "api.draftProtocol({ direction: state.direction, lang: state.lang, idea_id: ideaId })" in src
+    assert "post('/api/v1/research/workspace/draft-protocol'" in api
+    # Rarely-touched protocol fields live behind an opt-in disclosure.
+    assert '<details class="rsw-advanced">' in src
+    assert 'paper.research.advancedProtocol' in src
+    # Suggested capability bindings are adoptable in one click.
+    assert '_autobindResearchCapabilities()' in src
+    assert "notes: 'suggested'" in src
 
 
 def test_every_workspace_translation_is_present_in_both_locales():

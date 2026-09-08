@@ -7,9 +7,9 @@ project structure at runtime.
 This module provides ``get_context_for_prompt()`` which assembles the
 SYSTEM-LEVEL context block: the project header, multi-root workspace topology,
 any project intelligence file (CLAUDE.md / .cursorrules / AGENTS.md /
-COPILOT.md) that lives in the workspace, and the project evolution journal
-(``JOURNAL.md`` — auto-seeded on a writable primary root that lacks one, then
-injected so the model reads and maintains it).
+COPILOT.md) that lives in the workspace, and a short project evolution journal
+locator. Context acquisition is read-only: it does not seed, rotate, or inject
+journal history, or update .gitignore.
 
 It does NOT enumerate per-tool descriptions — each tool's own usage prose now
 lives in its API-level ``description`` field (see ``lib/tools/*.py``), which
@@ -228,9 +228,7 @@ def get_context_for_prompt(base_path=None, conv_id=None):
     if not path:
         return None
 
-    # Is the PRIMARY root writable?  Used below to decide whether to nudge
-    # the model to create the iteration journal (never nudge inside a
-    # read-only root — writes there are refused anyway).
+    # Scope the journal maintenance reminder to writable primary roots.
     primary_is_ro = any(rs.get('access') == 'ro'
                         for rs in _roots_snapshot.values()
                         if rs.get('path') == path)
@@ -327,7 +325,7 @@ def get_context_for_prompt(base_path=None, conv_id=None):
         if os.path.isfile(intel_path):
             try:
                 with open(intel_path, encoding='utf-8', errors='replace') as f:
-                    intel_content = f.read(32_000)
+                    intel_content = f.read()
                 if intel_content.strip():
                     ctx += (f"\n{'='*50}\n"
                             f"Project Intelligence — {intel_name}\n"
@@ -341,105 +339,14 @@ def get_context_for_prompt(base_path=None, conv_id=None):
                 logger.warning('[Context] Failed to read project intelligence file %s: %s',
                                intel_path, e)
 
-    # ═══════════════════════════════════════════════════════
-    #  JOURNAL.md — the project evolution journal (auto-created)
-    # ═══════════════════════════════════════════════════════
-    # Unlike CLAUDE.md (immutable rules the agent OBEYS), JOURNAL.md is a
-    # living dev log the agent READS and WRITES: methods/tech tried and why
-    # they changed, experiment results, refactoring decisions and current
-    # status. Option A: when the primary root is WRITABLE and has no journal,
-    # we lazily SEED one here (at context-build time, not at path-selection
-    # time) with the evolution-tracking rules + the update/reference
-    # instruction, so the model both knows the file exists and is told to keep
-    # it current. We NEVER clobber an existing journal, and read-only primaries
-    # are skipped entirely (a write there would be refused).
+    # Context reads advertise the journal location, never its history or a
+    # maintenance lifecycle. Historical evidence is retrieved only as needed.
     journal_path = os.path.join(path, _JOURNAL_FILE)
-    journal_content = ''
-    journal_exists = os.path.isfile(journal_path)
-    if not journal_exists and not primary_is_ro:
-        # Double-check the resolver agrees this path is writable before
-        # touching disk — a root may be flagged read-only via the conv-scoped
-        # registry even when the snapshot's primary entry isn't.
-        try:
-            from lib.project_mod.config import is_readonly_path
-            blocked = is_readonly_path(journal_path, conv_id)
-        except Exception as e:
-            logger.debug('[Context] is_readonly_path check failed for %s: %s',
-                         journal_path, e)
-            blocked = False
-        if not blocked:
-            try:
-                from lib.json_store import write_text_atomic
-                write_text_atomic(journal_path, _journal_seed())
-                journal_exists = True
-                logger.info('[Context] Auto-created project journal: %s', journal_path)
-                _ensure_journal_gitignored(path)
-                try:
-                    from lib.log import audit_log
-                    audit_log('journal_autocreate', path=journal_path)
-                except Exception as _e:
-                    logger.debug('[Context] journal audit_log failed: %s', _e)
-            except OSError as e:
-                logger.warning('[Context] Failed to auto-create journal %s: %s',
-                               journal_path, e)
-
-    if journal_exists:
-        # Rotate the oldest entries into .tofu/journal-archive/ when the live
-        # file grows large, so it stays bounded on disk. Only when the primary
-        # is writable (never write into a read-only root). Best-effort — a
-        # failure is logged inside and never raised into prompt assembly.
-        if not primary_is_ro:
-            try:
-                from lib.project_mod.journal import maybe_rotate
-                maybe_rotate(journal_path, path)
-            except Exception as e:
-                logger.debug('[Context] journal rotation skipped for %s: %s',
-                             journal_path, e)
-        try:
-            from lib.project_mod.journal import read_for_injection
-            journal_content = read_for_injection(journal_path)
-        except Exception as e:
-            logger.warning('[Context] Failed to build journal injection for %s: %s',
-                           journal_path, e)
-            journal_content = ''
-
-    if journal_content.strip():
-        ctx += (f"\n{'='*50}\n"
-                f"Project Journal — {_JOURNAL_FILE}\n"
-                f"{'='*50}\n"
-                f"(Auto-detected from {journal_path})\n"
-                f"This is the project's evolution journal — a record of exploration "
-                f"and decisions, NOT a rules file. Read it to understand how the "
-                f"project reached its current state (method/technology changes and "
-                f"why, experiment results, refactoring history, current status). As "
-                f"you make meaningful changes, APPEND dated entries on your own "
-                f"initiative so the next session can pick up where you left off — "
-                f"updating this journal is a standing, pre-authorized action that "
-                f"needs NO user confirmation; never pause to ask before adding an "
-                f"entry.\n\n"
-                f"{journal_content.strip()}\n")
-        logger.info('[Context] Injected project journal: %s (%d chars)',
-                    journal_path, len(journal_content))
-
-    # ═══════════════════════════════════════════════════════
-    #  Keep the assistant's hidden runtime artifacts out of git
-    # ═══════════════════════════════════════════════════════
-    # The assistant writes .tofu/ (file-history + memories), .tofu_trash/
-    # (recoverable deletes) and .tofu_sandbox/ (restricted-run shims) INTO the
-    # selected project.  Ensure they're gitignored so they never pollute
-    # ``git status`` or get committed.  Same writability gate as the journal:
-    # never write into a read-only root.
-    if not primary_is_ro:
-        try:
-            from lib.project_mod.config import is_readonly_path
-            artifacts_blocked = is_readonly_path(path, conv_id)
-        except Exception as e:
-            logger.debug('[Context] is_readonly_path check failed for %s: %s',
-                         path, e)
-            artifacts_blocked = False
-        if not artifacts_blocked:
-            _ensure_gitignored(
-                path, _TOFU_ARTIFACT_IGNORES,
-                'AI assistant runtime artifacts (file-history, trash, sandbox)')
+    ctx += (f"\nProject Journal — {_JOURNAL_FILE}\n"
+            f"Location: {journal_path}\n"
+            "Historical evidence, NOT current project rules. Read relevant entries "
+            "only when needed for this task; verify claims against current code/tests.\n")
+    if primary_is_ro:
+        ctx += "READ-ONLY primary root: do not create or update its journal.\n"
 
     return ctx

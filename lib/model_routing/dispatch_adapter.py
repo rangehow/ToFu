@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import secrets
-from typing import Any, Mapping
+from typing import Mapping
 
 from lib.llm_dispatch.ephemeral import (
     EphemeralSlotHandle,
@@ -14,6 +13,7 @@ from lib.llm_dispatch.ephemeral import (
 )
 from lib.provider_headers import sanitise_extra_headers
 
+from .credential_envelope import decode_credential_envelope
 from .domain import ModelRoutingError, NativeModelSelection
 from .health import RouteHealthRegistry
 from .repository import OwnerBoundary, RepositoryPort
@@ -36,11 +36,8 @@ def decode_credential_secret(
 ) -> tuple[str, str, dict[str, str]]:
     """Decode an encrypted secret envelope, accepting raw API-key drafts."""
     value = str(plaintext or "")
-    try:
-        decoded: Any = json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        decoded = None
-    if isinstance(decoded, Mapping) and decoded.get("format") == "tofu.credential-secret/v1":
+    decoded = decode_credential_envelope(value)
+    if decoded is not None:
         raw_headers = decoded.get("extra_headers") or {}
         if not isinstance(raw_headers, Mapping):
             raise ModelRoutingError(

@@ -431,13 +431,47 @@ def _content_text(value) -> str:
     return ''.join(out).strip()
 
 
+def _reasoning_text(value) -> str:
+    """Extract reasoning payload from a content-part list.
+
+    Thinking-native models under the tiny probe budget can spend EVERY token
+    on one thinking block (stop_reason 'max_tokens', no text part) — that
+    block is still generated output, so the cell provably routes,
+    authenticates and generates. 2026-09-08: 25/339 sankuai Anthropic-dialect
+    cells (glm / MiniMax / LongCat families) were falsely invalid_response
+    because only text parts counted.
+    """
+    if not isinstance(value, list):
+        return ''
+    for part in value:
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get('type')
+        if ptype == 'redacted_thinking':
+            data = part.get('data')
+            if isinstance(data, str) and data.strip():
+                return data.strip()
+            continue
+        if ptype not in ('thinking', 'reasoning'):
+            continue
+        for key in ('thinking', 'reasoning', 'text'):
+            text = part.get(key)
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+    return ''
+
+
 def _chat_json_text(parsed, protocol: str) -> str:
     """Extract generated text from OpenAI, Anthropic, or Responses JSON."""
     if not isinstance(parsed, dict):
         return ''
 
     if protocol == 'anthropic':
-        text = _content_text(parsed.get('content'))
+        content = parsed.get('content')
+        text = _content_text(content)
+        if text:
+            return text
+        text = _reasoning_text(content)
         if text:
             return text
 
@@ -453,6 +487,24 @@ def _chat_json_text(parsed, protocol: str) -> str:
                 text = _content_text(item.get('content'))
                 if text:
                     return text
+            # Responses reasoning models (gpt-5/o-series) under the tiny
+            # probe budget emit ONLY a reasoning item; its id/encrypted
+            # payload is generated output even with an empty summary.
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                if item.get('type') != 'reasoning':
+                    continue
+                for _proof in (item.get('id'), item.get('encrypted_content')):
+                    if isinstance(_proof, str) and _proof.strip():
+                        return _proof.strip()
+                summary = item.get('summary')
+                if isinstance(summary, list):
+                    for spart in summary:
+                        if isinstance(spart, dict):
+                            text = spart.get('text')
+                            if isinstance(text, str) and text.strip():
+                                return text.strip()
 
     choices = parsed.get('choices')
     if isinstance(choices, list):
@@ -474,6 +526,11 @@ def _chat_json_text(parsed, protocol: str) -> str:
                     text = _content_text(msg.get(_rkey))
                     if text:
                         return text
+                # Gateways that map thinking blocks into message content
+                # parts (type 'thinking'/'reasoning') — same proof.
+                text = _reasoning_text(msg.get('content'))
+                if text:
+                    return text
             text = _content_text(choice.get('text'))
             if text:
                 return text
@@ -501,6 +558,12 @@ def _sse_generated_text(raw: str) -> str:
             text = delta.get('text')
             if isinstance(text, str) and text.strip():
                 return text.strip()
+            # Anthropic content_block_delta carries reasoning as
+            # thinking_delta / signature_delta payloads.
+            for _dkey in ('thinking', 'signature'):
+                text = delta.get(_dkey)
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
         text = _chat_json_text(event, 'responses')
         if text:
             return text
@@ -857,24 +920,11 @@ _PROBE_DISABLE_STATUSES = {
 }
 
 
-# A 429 whose message names a short rolling window (per minute / per hour)
-# means the (key, id) pair is HEALTHY but momentarily over its rate window —
-# the condition clears on its own. Recommending disable would convert a
-# one-minute cap into a permanent config removal (Meituan AIGC answers
-# "每分钟请求次数超过限制" even for the first probe of a busy key).
-_RATE_LIMIT_WINDOW_MARKERS = (
-    '每分钟', '每小时', 'per minute', 'per hour', 'per-minute', 'per-hour',
-)
-
-
 def _recommend_disable(status, detail) -> bool:
-    if status not in _PROBE_DISABLE_STATUSES:
-        return False
-    if status == 'rate_limited':
-        text = str(detail or '').lower()
-        if any(marker in text for marker in _RATE_LIMIT_WINDOW_MARKERS):
-            return False
-    return True
+    # Recommendation policy is separate from dispatch's transient health.
+    # A successful retry wins in probe_cell_multi; a final 429 is disabled
+    # regardless of whether its message describes a rolling rate window.
+    return status in _PROBE_DISABLE_STATUSES
 
 
 def provider_probe_runtime_snapshot() -> dict[str, int | float | bool]:
@@ -1008,6 +1058,12 @@ def normalize_probe_snapshot(snapshot: dict) -> dict:
                 proof = _PROOF_BY_SURFACE.get(surface)
                 if proof:
                     cell['proof'] = proof
+        if cell.get('status') == 'rate_limited':
+            # Read-time policy upgrade also covers previously saved 429s.
+            cell['recommend_disable'] = True
+        if cell.get('deployment_enabled') is False:
+            # Discovery probes of disabled request names stay non-actionable.
+            cell['recommend_disable'] = False
         cells_out[key] = cell
 
     out['cells'] = cells_out
@@ -1227,6 +1283,10 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
     owner_user_id = task.get('_owner_user_id')
     adapter = task.get('_adapter') or {}
     attempts = task.get('attempts', 3)
+    # "<root>::<wire id>" keys of not-yet-enabled deployments: probed for
+    # discovery (that verdict is how a manually added request name earns its
+    # enable), but never actionable as a disable recommendation.
+    disabled_cells = task.get('_disabled_cells') or frozenset()
     if task['cells']:
         _recount_summary(task)
     logger.info('[CellProbe] Started background probe for %s — %d cell(s) this run, '
@@ -1234,6 +1294,8 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                 len(work), len(task['cells']), attempts, protocol)
 
     def _run(item):
+        if task.get('_abort'):
+            raise RuntimeError('provider probe cancelled before dispatch')
         key_idx, api_key, root, mid = item[0], item[1], item[2], item[3]
         caps = item[4] if len(item) > 4 else None
         # Per-cell wire face (account/face separation). A work tuple may carry
@@ -1320,6 +1382,10 @@ def run_cell_probe_task(task: dict, work: list, timeout: int):
                 except Exception as e:
                     logger.error('[CellProbe] cell task raised: %s', e, exc_info=True)
                     continue
+                if ('%s::%s' % (cell.get('root_model_id'), cell.get('model_id'))
+                        in disabled_cells):
+                    cell['recommend_disable'] = False
+                    cell['deployment_enabled'] = False
                 with CELL_PROBE_LOCK:
                     task['cells'][probe_cell_key(cell['key_idx'], cell['model_id'])] = cell
                     # Progress counts only THIS RUN's completions — cells

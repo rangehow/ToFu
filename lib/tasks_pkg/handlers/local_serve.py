@@ -65,6 +65,50 @@ def _fmt_prepare(result: dict) -> str:
     lines.append('用户确认后调用 local_serve_deploy 开始部署（会安装引擎并启动服务）。')
     return '\n'.join(lines)
 
+_TIER_LABEL = {'comfortable': '轻松运行', 'tight': '刚好能跑',
+               'extreme': '极限运行', 'cpu': 'CPU 慢速'}
+
+
+def _fmt_candidate(rank: int, cand: dict) -> str:
+    best = cand.get('best') or {}
+    download = best.get('download') or {}
+    lines = [
+        '%d. %s（约 %sB 参数）— %s' % (
+            rank, cand.get('display'), cand.get('params_b'),
+            _TIER_LABEL.get(cand.get('tier'), cand.get('tier'))),
+        '   变体 %s · 引擎 %s · 权重约 %s GiB' % (
+            best.get('variant'), best.get('engine'),
+            _gib(best.get('weight_bytes'))),
+        '   下载：%s' % download.get('hf_cmd', '?'),
+    ]
+    if download.get('modelscope_cmd'):
+        lines.append('   国内镜像：%s' % download['modelscope_cmd'])
+    if cand.get('note'):
+        lines.append('   %s' % cand['note'])
+    return '\n'.join(lines)
+
+
+def _fmt_recommend(result: dict) -> str:
+    lines = ['硬件：%s' % _fmt_hardware(result.get('hardware') or {})]
+    candidates = result.get('candidates') or []
+    if candidates:
+        lines.append('推荐（按适配度排序）：')
+        lines.extend(_fmt_candidate(i + 1, c)
+                     for i, c in enumerate(candidates))
+    else:
+        lines.append('目录中没有模型能在本机硬件上运行。')
+    alt = result.get('cloud_alternative')
+    if alt:
+        pricing = alt.get('pricing') or {}
+        lines.append(
+            '云端替代：%s — %s。API 价格约 $%s/$%s 每百万 token'
+            '（输入/输出），在 设置→服务商→从模板添加→DeepSeek 接入即可。'
+            % (alt.get('display'), alt.get('reason'),
+               pricing.get('input'), pricing.get('output')))
+    lines.append('用户选定模型后：先给出下载命令，下载完成后用 '
+                 'local_serve_prepare 检查路径并生成部署计划。')
+    return '\n'.join(lines)
+
 
 _STATUS_LABEL = {
     'planned': '已规划', 'installing': '安装引擎中', 'starting': '启动中',
@@ -97,6 +141,14 @@ def _fmt_status(result: dict) -> str:
         lines.append('  进程存活：%s；/models 应答：%s'
                      % ('是' if result.get('pid_alive') else '否',
                         '正常' if result.get('serving') else '异常'))
+    diagnosis = result.get('diagnosis')
+    if diagnosis:
+        lines.append('诊断（%s）：%s' % (diagnosis.get('kind'),
+                                      diagnosis.get('summary')))
+        for suggestion in diagnosis.get('suggestions') or []:
+            lines.append('  · %s' % suggestion)
+        lines.append('  重试部署是否有意义：%s'
+                     % ('是' if diagnosis.get('retryable') else '否'))
     tail = result.get('log_tail') or ''
     if tail and result.get('status') in ('failed', 'installing', 'starting'):
         lines.append('日志尾部：\n%s' % tail[-1200:])
@@ -124,7 +176,11 @@ def _handle_local_serve_tool(task, tc, fn_name, tc_id, fn_args, rn,
     title = str(fn_args.get('model_path') or fn_args.get('instance_id') or '')
     owner_user_id = task_user_id(task)
     try:
-        if fn_name == 'local_serve_prepare':
+        if fn_name == 'local_serve_recommend':
+            content = _fmt_recommend(serve_api.recommend(
+                fn_args.get('purpose') or None))
+
+        elif fn_name == 'local_serve_prepare':
             engine = fn_args.get('engine') or None
             content = _fmt_prepare(serve_api.prepare(
                 str(fn_args.get('model_path') or ''), engine=engine))

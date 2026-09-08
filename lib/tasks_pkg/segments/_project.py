@@ -50,10 +50,9 @@ def tool_history_from_segments(segments: list[dict[str, Any]]) -> list[dict[str,
     Lets a Continue rebuild be driven from persisted segments byte-identically
     to the frontend-supplied toolHistory (the step-4 parity gate).
     """
-    from lib.tools.todo import compact_todo_rounds_for_replay
     replay_prefix = scan_replayable_tool_round_prefix(
         _rounds_view_from_segments(segments))
-    rounds = compact_todo_rounds_for_replay(list(replay_prefix.rounds))
+    rounds = list(replay_prefix.rounds)
     # ``llmRound`` is local to one execution attempt.  Delegating both batch
     # identity and shape to their shared owners prevents this compatibility
     # path from recreating the old global-dict merge after Continue.

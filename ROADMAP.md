@@ -38,5 +38,5 @@ transport, repository, or error taxonomy.
   behavior.
 
 Start from `docs/README.md`. Enterprise gaps and their evidence are maintained
-in `docs/ENTERPRISE_READINESS_AUDIT.md`; frontend ownership is maintained in
+in `docs/ENTERPRISE_EVOLUTION.md`; frontend ownership is maintained in
 `docs/FRONTEND_ARCHITECTURE.md`.

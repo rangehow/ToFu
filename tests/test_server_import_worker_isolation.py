@@ -127,6 +127,7 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     from types import SimpleNamespace
 
     import lib.oauth.codex_catalog as codex_catalog
+    import lib.oauth.outbound as oauth_outbound
     import lib.scheduler.manager as scheduler_manager
     import routes
     import routes.plugin_registry as plugin_registry
@@ -144,6 +145,8 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
 
     monkeypatch.setattr(
         scheduler_manager, 'start_scheduler_worker', start_scheduler_worker)
+    monkeypatch.setattr(oauth_outbound, 'reconcile_oauth_providers',
+                        lambda: calls.append('oauth-reconcile'))
     monkeypatch.setattr(codex_catalog, 'start_codex_catalog_refresher',
                         lambda: calls.append('codex-catalog') or True)
     monkeypatch.setattr(plugin_registry, 'run_startup_hooks',
@@ -156,7 +159,7 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     assert routes.start_registered_background_services(app) == 3
     assert routes.start_registered_background_services(app) == 0
     assert calls == [
-        'scheduler', 'codex-catalog', 'plugin',
+        'scheduler', 'oauth-reconcile', 'codex-catalog', 'plugin',
     ]
 
 

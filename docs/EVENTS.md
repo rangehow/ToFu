@@ -45,7 +45,29 @@ unrelated `TaskRuntime` channels that define their own small private vocabulary
 for a non-chat feature (e.g. the paper/translate runtimes emitting
 `{'type': 'chunk'}` on their own channel — see CLAUDE.md §14). Those are
 self-contained producer↔consumer pairs, not part of the shared task-event
-contract, so they are not registered here. The conversation UI consumes the
+contract, so they are not registered here.
+
+
+**Carve-out — the production stage grammar IS registered.** The five event
+types emitted by the single seam `lib.production.stages.run_stages` —
+`stage_started`, `stage_done`, `stage_retry`, `stage_skipped`, `stage_failed`
+— are capability-agnostic by construction (slides, longform-report, research
+and motion-video all ride that one runner), so they form ONE shared
+production vocabulary:
+
+| type | fields | meaning |
+|---|---|---|
+| `stage_started` | `stage`, `index`, `total`, `attempt` | attempt begins |
+| `stage_retry` | `stage`, `attempt`, `errors[≤4]` | gate rejected; next attempt follows |
+| `stage_done` | `stage`, `index`, `total`, `elapsed_s` | stage artifact committed |
+| `stage_skipped` | `stage`, `index`, `total`, `resumed:true` | checkpoint reuse |
+| `stage_failed` | `stage`, `index`, `total`, `detail`, `errors[≤4]` | attempts exhausted |
+
+`stage_checkpoint_invalidated` and per-capability extras (`page_authored`,
+`final`, …) stay private. The client-facing lifecycle derived from this
+grammar is the WorkUnit projection (docs/API_CONTRACT.md §2.18); the
+terminal truth stays the task snapshot, never an event.
+ The conversation UI consumes the
 v3 turn projection/event protocol described below; do not add a second task-SSE
 consumer to make a new chat field visible.
 
@@ -57,6 +79,14 @@ Turn-native conversation synchronization is a separate declared protocol. Its
 Those events are appended transactionally by the Storage Sidecar and consumed
 by the one conversation coordinator; do not emit them with `build_event` or
 add a second frontend stream.
+
+Swarm push adapters add `swarmId` to the conversation-channel envelope: it is
+ the original session task ID, preserved by restart recovery and follow-up
+waves. The envelope's `taskId` remains the conversation subscription key.
+`swarmId` is transport routing metadata, not a new task event field; adapters
+must not mutate the event delivered to the task sink. Consumers fence live
+telemetry by this identity and the launch roster, never by conversation key
+alone. Persisted launch receipts carry the same identity as `swarm_run_id`.
 
 An `attempt.event` has one exact durable body, not two. New Conversation Sync
 rows store a private `(attemptId, seq)` reference to the already-committed
@@ -280,7 +310,8 @@ provider fallback; `model_fallback` remains a separate event and timeline fact.
   machine-discoverable via `/api/v1/capabilities` (`phases` block, grouped
   by domain: `chat` = the shared status row; production channels are
   catalogued for perceivability, their private event *types* stay
-  unregistered per the §1 scope ruling). Then emit it via `emit_phase`.
+  unregistered per the §1 scope ruling — except the registered stage
+  grammar in the §1 carve-out). Then emit it via `emit_phase`.
 * Frontend-local phase states the client derives itself (e.g.
   `thinking_active`) are NOT pushes — they are deliberately unregistered.
 
@@ -388,6 +419,10 @@ must update the cumulative `programRuns`/parent `toolRounds` projection before
 delivery. Real child calls keep their ordinary tool lifecycle, so clients show
 one program parent plus inspectable children and never invent native adoption
 from an `execute_tools` gateway call.
+
+The aggregate `result` preserves its JSON type: object, array, string, number,
+boolean, or null. Scalar/array reductions must settle through the same terminal
+event as object results; clients must not treat a falsy result as absent.
 
 ---
 

@@ -1,10 +1,8 @@
 # Browser automation
 
-This domain lets an authenticated owner use a specific connected Chromium
-extension for page reads and approved mutations. It owns device registration,
-protocol negotiation, command routing, leases, consent, site adapters, and
-redacted audit. Server-side fetching and rendering are adjacent transports,
-not alternate browser authorities.
+This domain lets an authenticated owner use a specific connected Chromium extension for page reads and approved mutations.
+It owns device registration, protocol negotiation, command routing, leases, consent, site adapters, and redacted audit.
+Server-side fetching and rendering are adjacent transports, not alternate browser authorities.
 
 ## Ownership
 
@@ -32,14 +30,10 @@ owner plus device; “most recently seen globally” is never an authority seam.
 
 ## Integration decision
 
-OpenCLI's useful browser mechanisms are internalized here, not invoked through
-an OpenCLI subprocess or a second long-running Node browser daemon. In
-particular, Tofu adopts capture-before-navigation, CDP response-body reads,
-bounded network-idle settling and generic response ranking. Device selection,
-logged-in tabs, domain policy, leases, cleanup and audit remain owned by the
-existing Tofu bridge. This avoids a second browser/session authority and a
-second unbounded cache/process budget while keeping `tofu-search` behind its
-existing host-provider interface.
+OpenCLI's useful browser mechanisms are internalized here, not invoked through an OpenCLI subprocess or a second long-running Node browser daemon.
+Tofu adopts capture-before-navigation, CDP response-body reads, bounded network-idle settling and generic response ranking.
+Device selection, logged-in tabs, domain policy, leases, cleanup and audit remain owned by the existing Tofu bridge.
+This avoids a second browser/session authority and a second unbounded cache/process budget while keeping `tofu-search` behind its existing host-provider interface.
 
 ## Runtime flow
 
@@ -47,14 +41,19 @@ existing host-provider interface.
 2. Poll validates device, protocol and capabilities, registers bounded live metadata, and settles only results claimed by that owner/device.
 3. A task selects one device in its owner fleet and leases it with explicit profile, task and tab policy.
 4. Capability negotiation rejects unsupported commands before enqueue.
-5. Load-waiting navigation starts bounded CDP Network capture before leaving `about:blank`, then waits for DOM and network stability. The Tofu client tab (`isClient`, URL under the server origin) is never a navigation target or working-tab seed; targeting it opens a new foreground tab whose id the server re-binds as the working tab.
+5. Load-waiting navigation starts bounded CDP Network capture before leaving `about:blank`, then waits for DOM and network stability.
+ Capture startup is best-effort: when it cannot start (capacity, policy) the navigation still proceeds with a plain load wait, and a navigation that itself fails closes the inert tab rather than stranding an `about:blank`.
+ The Tofu client tab (`isClient`, URL under the server origin) is never a navigation target or working-tab seed; targeting it opens a new foreground tab whose id the server re-binds as the working tab.
 6. Poll atomically claims only commands addressed to that owner/device.
 7. Server and extension re-check current tab/domain and grant before every page action.
 8. API/WebSocket evidence is type-filtered, ranked, authorized per URL, redacted, and merged under one context budget. A `research_hints` client may reserve 256 KiB of the unchanged 1 MiB body ceiling for up to five high-confidence passive endpoint templates; it never issues a hinted request, and unmatched current evidence retains the remaining budget.
 9. A URL-addressed file that needs browser cookies is streamed from the response body to bounded server staging; it never enters Chrome's download manager.
 10. Deep research may accumulate virtual-list/hydration data and recognized same-origin pagination in an owned background tab; cross-origin traversal stops. After authorization it may retain only the owner-scoped, query-free, non-executable structural projection defined by `contracts/browser_site_observation_v1.schema.json`; raw content and session material remain transient.
 11. DevTools, network, screenshot and trusted input share one serialized per-tab CDP lease; the last holder detaches.
-12. Settlement verifies claim ownership; timeout/cancel/release closes captures, transfers and ephemeral tabs. All leases share one launch-probed process capacity (`TOFU_BROWSER_SESSION_LEASE_CAPACITY`: lean personal 64, distributed 2,048, adaptive personal aligned with the device registry). One lifecycle sweeper orders timed leases instead of one sleeping thread per lease; persistent leases hold capacity until owner release, and failed admission never displaces an existing owner/device lease.
+12. Settlement verifies claim ownership; timeout/cancel/release closes captures, transfers and ephemeral tabs.
+ Search `fetch_url` and `research_url` commands own at most four temporary tabs per extension, including pending tab creation; excess work fails explicitly before opening another tab. Command settlement closes the exact owned tab independently of a suspended handler or CDP cleanup, and a late create is closed without navigation. A serialized, four-ID `chrome.storage.session` ledger reclaims these disposable tabs before new admission after a worker restart; unrelated blank/user tabs are never inferred to be owned. Cleanup/storage waits are bounded to five seconds, and an unconfirmed cleanup retains its ownership record and capacity. No page content or URL is persisted in this ledger.
+ Captures are additionally bounded to 32 active and reclaimed by an idle reaper (5 min without activity or 15 min alive, swept by the keep-alive alarm and before every capacity admission), so a command wedged mid-flight cannot hold a slot forever; CDP attach/detach handoffs give up waiting after 5 s and let Chrome's onDetach reconcile state.
+ All leases share one launch-probed process capacity (`TOFU_BROWSER_SESSION_LEASE_CAPACITY`: lean personal 64, distributed 2,048, adaptive personal aligned with the device registry). One lifecycle sweeper orders timed leases instead of one sleeping thread per lease; persistent leases hold capacity until owner release, and failed admission never displaces an existing owner/device lease.
 
 ## Access policy
 
@@ -111,7 +110,7 @@ Limits: every non-final chunk has a 16 KiB floor and every chunk has a 256 KiB c
 
 `browser_research_page` captures before navigation, accumulates open-shadow/virtual-list text, recognizes hydration globals and JSON-LD, scrolls, follows only recognized same-origin next/load-more controls, and returns content plus source strategy. Pagination calls collapse by method/host/path; inferred shapes contain types, not values.
 
-Capture is reconstructible, never durable: at most 4 active captures; each has 80 responses, 160 in-flight methods, 40 text WebSocket frames, 384 KiB per response/frame and 1 MiB total; only 12 completed tab snapshots remain in MV3 memory. Static/binary assets are excluded, telemetry is de-ranked, duplicates removed, secrets redacted, and every response URL re-authorized before at most 80,000 model characters.
+Capture is reconstructible, never durable: at most 32 active captures; each has 80 responses, 160 in-flight methods, 40 text WebSocket frames, 384 KiB per response/frame and 1 MiB total; only 12 completed tab snapshots remain in MV3 memory. Static/binary assets are excluded, telemetry is de-ranked, duplicates removed, secrets redacted, and every response URL re-authorized before at most 80,000 model characters.
 
 Research runs in the serial browser lane for at most 65 seconds, 5 same-origin pages and 8 scrolls/page, with 80,000 DOM and 160,000 transient hydration characters; it always destroys its tab. Arguments only lower ceilings. Cookie replay, Playwright and direct HTTP are explicit separate transports; private-host SSRF exceptions apply only to server fetches.
 
@@ -203,6 +202,7 @@ Negotiated DevTools shows “ready”; invocations retain their timeline badge, 
 | Browser-to-server file export | `file_transfer.py`, bridge routes, extension | owner/device/token isolation, same-response reuse, chunk/total/disk bounds, atomic commit, cleanup, typed location |
 | Protocol capability | `protocol.py` + extension | parity, rejection, upgrade UI |
 | SPA/network evidence | extension + `network_evidence.py` | pre-navigation capture, bounds, redaction, per-URL policy |
+| Temporary search tabs | extension command settlement and session ledger | `test_browser_temporary_tabs.py`: stalled capture/extraction, timeout, late create, concurrency bound, restart cleanup |
 | Generic deep research and observations | extension + `research.py`, `site_observations.py`, Sidecar browser domain | traversal/storage bounds, owner isolation, redaction, decay, redirect stops, cleanup |
 | DevTools Bridge | extension + `_devtools.py` | CDP reuse, capability gate, object/console bounds, pause failsafe, redaction |
 | Consent or redirect policy | `access.py`, Sidecar domain | exact scope, revocation, redirect race |

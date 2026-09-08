@@ -20,6 +20,8 @@ import uuid
 import requests
 
 from lib.desktop_agent._dispatch import COMMANDS, dispatch_command
+
+from lib.desktop_agent._runtime import RuntimeState, retry_delay, validate_poll_response
 from lib.desktop_agent.config import load_config, update_config
 from lib.log import get_logger
 
@@ -233,9 +235,37 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
     """
 
     endpoint = f'{server_url.rstrip("/")}/api/desktop/poll'
-    result_queue = []
-    stream_outbox = []  # RWA P2: streamed-command frames for the next poll(s)
-    io_lock = threading.Lock()  # guards both outboxes (runner threads append)
+    stop_event = stop_event if stop_event is not None else threading.Event()
+    runtime = RuntimeState(stop_event)
+    result_queue, stream_outbox, io_lock = runtime.results, runtime.streams, runtime.lock
+
+    class CompletionQueue:
+        def append(self, result):
+            result_queue.append(result)
+            runtime.finish(result['id'])
+
+    def execute(cmd):
+        cmd_id, cmd_type = cmd['id'], cmd['type']
+        params = cmd.get('params', {})
+        completion = CompletionQueue()
+        try:
+            if cmd_type == 'project_run_command':
+                _start_project_run_streamed(cmd_id, params, permissions,
+                                            completion, stream_outbox, io_lock)
+                return
+            if cmd_type == 'egress_http_stream':
+                _start_egress_stream_streamed(cmd_id, params, permissions,
+                                             completion, stream_outbox, io_lock)
+                return
+            result = dispatch_command(cmd_type, params, permissions)
+            encoded = json.dumps(result, ensure_ascii=False, default=str)
+            if len(encoded.encode('utf-8')) > 500_000:
+                result = {'error': 'Result too large for transport', 'partial': encoded[:100_000]}
+            completion.append({'id': cmd_id, 'result': result,
+                               'error': result.get('error') if isinstance(result, dict) else None})
+        except Exception as exc:
+            completion.append({'id': cmd_id, 'result': None,
+                               'error': f'{type(exc).__name__}: {str(exc)[:1000]}'})
     headers = {}
     if bridge_secret:
         headers['X-Bridge-Secret'] = bridge_secret
@@ -355,10 +385,11 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                     json=poll_payload,
                     headers=headers,
                     timeout=15,
-                    proxies={'no_proxy': '*'}
+                    allow_redirects=False,
+                    auth=lambda request: request
                 )
 
-            if resp.status_code == 401:
+            if resp.status_code in (401, 403):
                 # Two utterly different refusals share this status. Tofu's
                 # own 401 (api_error envelope) means the bridge secret is
                 # wrong — a fresh connect line fixes it. A GATEWAY's 401
@@ -386,12 +417,25 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
                         'address is intercepted (SSO proxy?). Re-check the '
                         'connect line\'s URL half (ssh tunnel: '
                         'http://127.0.0.1:<port>).')
-                time.sleep(poll_interval * 10)
+                consecutive_errors += 1
+                stop_event.wait(retry_delay(poll_interval, consecutive_errors))
                 continue
             if resp.status_code != 200:
                 _emit('http', code=resp.status_code)
                 logger.info('Server returned %s', resp.status_code)
-                time.sleep(poll_interval * 3)
+                if resp.status_code in (301, 302, 303, 307, 308, 408, 502, 503, 504):
+                    _route_dead_hit()
+                consecutive_errors += 1
+                stop_event.wait(retry_delay(poll_interval, consecutive_errors))
+                continue
+
+            try:
+                commands = validate_poll_response(resp.json())
+            except (ValueError, TypeError):
+                _emit('proxy')
+                _route_dead_hit()
+                consecutive_errors += 1
+                stop_event.wait(retry_delay(poll_interval, consecutive_errors))
                 continue
 
             # A request rejected by an SSO edge / server must NOT consume
@@ -405,67 +449,32 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
             consecutive_errors = 0
             _emit('ok', transport='browser' if via_browser else 'direct')
             _route_alive()
-            data = resp.json()
-            commands = data.get('commands', [])
+
 
             if commands:
                 logger.info('Received %d command(s)', len(commands))
 
             for cmd in commands:
-                cmd_id = cmd.get('id', '')
-                cmd_type = cmd.get('type', '')
-                cmd_params = cmd.get('params', {})
-
-                logger.info('  → Executing: %s (id=%s...)', cmd_type, cmd_id[:8])
-
-                if cmd_type == 'project_run_command':
-                    # RWA P2: streamed, off the poll loop (blocking here would
-                    # stall heartbeats past the 15s connected window).
-                    _start_project_run_streamed(cmd_id, cmd_params, permissions,
-                                                result_queue, stream_outbox,
-                                                io_lock)
-                    continue
-
-                if cmd_type == 'egress_http_stream':
-                    # S3: streamed, off the poll loop — a 30-min LLM stream
-                    # must not stall heartbeats past the 15s window.
-                    _start_egress_stream_streamed(cmd_id, cmd_params, permissions,
-                                                  result_queue, stream_outbox,
-                                                  io_lock)
-                    continue
-
-                if cmd_type == 'egress_cancel':
-                    # S3: fire-and-forget abort of an in-flight stream.
+                # Cancellation is a nonblocking control-plane signal, not work.
+                if cmd['type'] == 'egress_cancel':
                     from lib.desktop_agent._egress import cancel_inflight
-                    cancel_inflight(str(cmd_params.get('cmd_id') or ''))
+                    cancel_inflight(str(cmd.get('params', {}).get('cmd_id') or ''))
                     continue
+                if not stop_event.is_set() and runtime.admit(cmd['id']):
+                    try:
+                        threading.Thread(target=execute, args=(cmd,), daemon=True,
+                                         name='desktop-command').start()
+                    except RuntimeError as exc:
+                        CompletionQueue().append({'id': cmd['id'], 'result': None,
+                                                  'error': str(exc)})
 
-                result = dispatch_command(cmd_type, cmd_params, permissions)
-
-                # Truncate large results for transport
-                result_str = json.dumps(result, ensure_ascii=False, default=str)
-                if len(result_str) > 500_000:
-                    result = {'error': f'Result too large ({len(result_str):,} bytes), truncated',
-                              'partial': result_str[:100_000]}
-
-                with io_lock:
-                    result_queue.append({
-                        'id': cmd_id,
-                        'result': result,
-                        'error': result.get('error') if isinstance(result, dict) else None,
-                    })
-
-                status = '✅' if not (isinstance(result, dict) and result.get('error')) else '❌'
-                logger.info('     %s %s done', status, cmd_type)
-
-        except requests.ConnectionError:
+        except requests.RequestException:
             consecutive_errors += 1
             _emit('unreachable')
             _route_dead_hit()
             if consecutive_errors == 1:
                 logger.info('Cannot reach server at %s, retrying...', server_url, exc_info=True)
-            wait = min(poll_interval * (2 ** min(consecutive_errors, 5)), 60)
-            time.sleep(wait)
+            stop_event.wait(retry_delay(poll_interval, consecutive_errors))
             continue
 
         except KeyboardInterrupt:
@@ -475,9 +484,13 @@ def run_agent(server_url, permissions, poll_interval=1.0, bridge_secret='',
         except Exception as e:
             _emit('error', detail=str(e)[:120])
             logger.error('Error: %s', e, exc_info=True)
-            time.sleep(poll_interval * 2)
+            consecutive_errors += 1
+            stop_event.wait(retry_delay(poll_interval, consecutive_errors))
+            continue
 
-        time.sleep(poll_interval)
+        stop_event.wait(max(0.01, poll_interval))
+
+    stop_event.set()
 
 
 # ══════════════════════════════════════════════════════════

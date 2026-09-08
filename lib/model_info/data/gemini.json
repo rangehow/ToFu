@@ -1,0 +1,16 @@
+{
+  "brand": "gemini",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "gemini",
+  "category": "official",
+  "name": "Google Gemini",
+  "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+  "offering_recipes": [
+    {"model_id": "gemini-3.1-pro-preview", "capabilities": ["text", "vision", "thinking", "cheap"]},
+    {"model_id": "gemini-3.8-flash",       "capabilities": ["text", "vision", "thinking", "cheap"]},
+    {"model_id": "gemini-2.5-pro",         "capabilities": ["text", "vision", "thinking", "cheap"]},
+    {"model_id": "gemini-3.7-flash",       "capabilities": ["text", "vision", "thinking", "cheap"]},
+    {"model_id": "gemini-2.5-flash",       "capabilities": ["text", "vision", "cheap"]},
+    {"model_id": "gemini-3.1-flash-lite",  "capabilities": ["text", "cheap"]}
+  ]
+}

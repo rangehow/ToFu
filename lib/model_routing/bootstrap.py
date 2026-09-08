@@ -7,6 +7,7 @@ at their authentication/storage boundary instead of assuming a global user.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import copy
 import json
 import os
@@ -14,7 +15,13 @@ import os
 from lib.config_dir import config_path
 from lib.identity import PERSONAL_USER_ID
 from lib.log import get_logger
+from lib.provider_headers import split_header_secrecy
 
+from .credential_envelope import (
+    ENVELOPE_FORMAT,
+    credential_secret_display_hint,
+    decode_credential_envelope,
+)
 from .discovered_provider import (
     build_discovered_provider_bundle,
     discovered_provider_id,
@@ -270,6 +277,127 @@ def _recover_missing_legacy_providers(
     }
 
 
+def _repair_credential_secrets(
+    repository: ModelRoutingRepository,
+    boundary: OwnerBoundary,
+) -> int:
+    """Relocate inspectable headers out of credential envelopes, fix hints.
+
+    Early v2 writers folded every legacy provider header into the encrypted
+    credential-secret envelope and stored a ``secret_hint`` of that whole
+    envelope as the credential ``key_hint``.  Masked key cards then rendered
+    the JSON chrome (``{"ap****…``) instead of the key's own digits, the
+    reveal eye showed raw envelope JSON, and routing headers vanished from
+    the 自定义请求头 editor.  This pass moves plain routing headers back onto
+    their authorized connections, re-seals each envelope with only credential
+    material, and re-derives hints from the usable key.  It is idempotent
+    and never weakens secrecy: credential-named and transport-reserved
+    headers stay encrypted, and a header only moves when no authorized
+    connection already carries a conflicting value (dispatch merges
+    connection headers under envelope headers, so partial moves would change
+    wire behavior).
+    """
+    authority = repository.get(boundary)
+    connections_by_id = {
+        str(row.get('connection_id') or ''): row
+        for row in authority.document['connections']
+    }
+    planned_headers: dict[str, dict[str, str]] = {
+        connection_id: dict(row.get('extra_headers') or {})
+        for connection_id, row in connections_by_id.items()
+    }
+    hint_updates: dict[str, str] = {}
+    reseal: list[tuple[str, str]] = []
+    moved_headers = 0
+    for credential in authority.document['credentials']:
+        reference = str(credential.get('secret_reference') or '')
+        if not reference:
+            continue
+        try:
+            plaintext = repository.resolve_secret(boundary, reference)
+        except Exception:
+            continue
+        new_plaintext = plaintext
+        envelope = decode_credential_envelope(plaintext)
+        if envelope is not None:
+            raw_headers = envelope.get('extra_headers')
+            headers = (
+                {str(name): str(value) for name, value in raw_headers.items()}
+                if isinstance(raw_headers, Mapping) else {}
+            )
+            envelope_named, plain = split_header_secrecy(headers)
+            authorized = [
+                connection_id for connection_id in (
+                    (credential.get('authorization') or {}).get('connection_ids')
+                    or [])
+                if str(connection_id) in planned_headers
+            ]
+            movable = (
+                {
+                    name: value for name, value in plain.items()
+                    if all(
+                        planned_headers[cid].get(name) in (None, value)
+                        for cid in authorized)
+                }
+                if authorized else {}
+            )
+            if movable:
+                kept = dict(envelope_named)
+                for name, value in plain.items():
+                    if name not in movable:
+                        # Conflicted plain header stays encrypted to preserve
+                        # the envelope-over-connection dispatch precedence.
+                        kept[name] = value
+                for cid in authorized:
+                    planned_headers[cid].update(movable)
+                moved_headers += len(movable)
+                new_plaintext = json.dumps({
+                    'format': ENVELOPE_FORMAT,
+                    'api_key': str(envelope.get('api_key') or ''),
+                    'oauth': str(envelope.get('oauth') or ''),
+                    'extra_headers': kept,
+                }, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+                reseal.append((reference, new_plaintext))
+        hint = credential_secret_display_hint(new_plaintext)
+        if hint != str(credential.get('key_hint') or ''):
+            hint_updates[str(credential['credential_id'])] = hint
+    header_delta = {
+        connection_id: headers
+        for connection_id, headers in planned_headers.items()
+        if headers != dict(
+            connections_by_id[connection_id].get('extra_headers') or {})
+    }
+    if not hint_updates and not header_delta:
+        return 0
+
+    def apply(document: dict) -> None:
+        for connection in document['connections']:
+            delta = header_delta.get(str(connection.get('connection_id') or ''))
+            if delta is not None:
+                connection['extra_headers'] = dict(delta)
+        for credential in document['credentials']:
+            hint = hint_updates.get(str(credential.get('credential_id') or ''))
+            if hint is not None:
+                credential['key_hint'] = hint
+
+    repository.mutate(boundary, apply)
+    # Document first, secrets second: a crash between the two leaves headers
+    # duplicated on both surfaces, which dispatch merges to identical values;
+    # the next boot converges.
+    for reference, secret_plaintext in reseal:
+        repository.put_secret(
+            boundary, secret_plaintext, secret_reference=reference)
+    logger.info(
+        'Repaired credential secrets owner=%s revision=%s '
+        '(headers relocated=%d, hints=%d)',
+        boundary.owner_user_id,
+        repository.get(boundary).revision,
+        moved_headers,
+        len(hint_updates),
+    )
+    return moved_headers + len(hint_updates)
+
+
 def bootstrap_owner_model_routing(
     boundary: OwnerBoundary,
     *,
@@ -279,6 +407,15 @@ def bootstrap_owner_model_routing(
     authority_repository = repository or ModelRoutingRepository()
     current = authority_repository.get(boundary)
     if current.revision:
+        try:
+            _repair_credential_secrets(authority_repository, boundary)
+            current = authority_repository.get(boundary)
+        except Exception as exc:
+            logger.warning(
+                'Credential secret repair deferred owner=%s: %s',
+                boundary.owner_user_id,
+                str(exc)[:300],
+            )
         result = _recover_missing_legacy_providers(
             authority_repository, boundary, current)
         if result is None:

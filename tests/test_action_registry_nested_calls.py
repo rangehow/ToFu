@@ -19,6 +19,11 @@ Pinned behaviours (real jsdom click through the REAL registry source):
   6. Controls: plain literal args and quoted strings unchanged.
   7. Data attributes resolve as arguments, so approval ids never need to be
      interpolated into executable action text.
+  8. Nested call inside a METHOD-call argument list:
+     ``this.setAttribute('aria-expanded', this.parentElement.classList.contains('expanded'))``
+     parses as the outer setAttribute (ptool-header expander, 2026-09-06).
+  9. Call-shaped receivers keep working: ``this.closest('.drop').remove()``
+     must not be re-parsed as `.closest(...)` on `this`.
 
 Skips when node+jsdom dev-deps are absent (convention of
 test_frontend_cmd_collapse.py).
@@ -66,6 +71,8 @@ const dom = new JSDOM(`<!DOCTYPE html><html><body>
   <div id="m4" class="item"><button id="b4" data-tofu-action="captureValue(_nope(this))">Unknown</button></div>
   <div id="m5" class="item"><button id="b5" data-tofu-action="captureValue(7,'x')">Control</button></div>
   <div id="m6" class="item"><button id="b6" data-approval-id="ap');unsafe()//" data-tofu-action="captureValue(this.dataset.approvalId)">Dataset</button></div>
+  <div id="pth" class="ptool"><button id="b7" aria-expanded="false" data-tofu-action="if(event.target.closest('.ri-tool-anchor'))return;event.stopPropagation();this.parentElement.classList.toggle('expanded');this.setAttribute('aria-expanded',this.parentElement.classList.contains('expanded'))"><span id="a7" class="ri-tool-anchor">anchor</span><span id="h7">hdr</span></button></div>
+  <div class="drop" id="d8"><button id="b8" data-tofu-action="this.closest('.drop').remove()">Rm</button></div>
 </body></html>`, { url: 'http://localhost/' });
 globalThis.window = dom.window;
 globalThis.document = dom.window.document;
@@ -146,6 +153,26 @@ document.getElementById('b6').click();
 check('dataset_argument_resolved_without_code_interpolation',
   JSON.stringify(received.copy.at(-1)) === '["ap\');unsafe()//"]');
 
+// ── 8. nested call inside a method-call argument list (ptool-header ──
+// ── expander, 2026-09-06: greedy receiver threw "Unknown action method") ──
+const b7 = document.getElementById('b7');
+const pth = document.getElementById('pth');
+document.getElementById('a7').dispatchEvent(
+  new dom.window.MouseEvent('click', { bubbles: true }));
+check('anchor_guard_skips_toggle', b7.getAttribute('aria-expanded') === 'false');
+document.getElementById('h7').dispatchEvent(
+  new dom.window.MouseEvent('click', { bubbles: true }));
+check('nested_arg_aria_expanded_true', b7.getAttribute('aria-expanded') === 'true');
+check('nested_arg_parent_toggled', pth.classList.contains('expanded'));
+document.getElementById('h7').dispatchEvent(
+  new dom.window.MouseEvent('click', { bubbles: true }));
+check('nested_arg_aria_collapses_back', b7.getAttribute('aria-expanded') === 'false');
+
+// ── 9. call-shaped receiver keeps working (a non-greedy receiver would ──
+// ── parse this.closest('.drop') as the method and silently no-op) ──
+document.getElementById('b8').click();
+check('call_receiver_remove_still_works', document.getElementById('d8') === null);
+
 console.log(out.join('\n'));
 process.exit(0);
 """
@@ -174,7 +201,7 @@ def test_nested_call_grammar_contract():
     assert proc.returncode == 0, f'node failed: {proc.stderr}\n{output}'
     fails = [ln for ln in output.splitlines() if ln.startswith('FAIL')]
     assert not fails, 'action-registry nested-call failures:\n' + output
-    assert output.count('PASS') >= 12, f'expected >=12 PASS lines, got:\n{output}'
+    assert output.count('PASS') >= 17, f'expected >=17 PASS lines, got:\n{output}'
 
 
 @pytest.mark.unit
@@ -185,6 +212,11 @@ def test_registry_grammar_pins_no_eval_and_recursion():
     assert 'new Function' not in source
     assert 'eval(' not in source
     assert 'invokeCall(value, event, element, resolve)' in source
+    # Paren-balance-aware method split: neither the old greedy receiver
+    # (swallowed nested-call argument lists) nor a non-greedy one (breaks
+    # call-shaped receivers) may come back.
+    assert 'splitMethodCall(source)' in source
+    assert 'balancedParens(args)' in source
     # the call-shape branch must precede the event./this./window. fast paths
     call_branch = source.index('.test(value)) {')
     property_paths = source.index("value.startsWith('event.')")

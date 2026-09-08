@@ -12,6 +12,7 @@ from lib.swarm.execution_gate import (
     OwnerFairExecutionGate,
     process_swarm_execution_gate,
 )
+from lib.swarm.liveness import notify_tool_progress
 from lib.swarm.protocol import SubAgentResult
 
 logger = get_logger(__name__)
@@ -58,6 +59,10 @@ class RateLimiter:
             self._semaphore.acquire()
         else:
             while not self._semaphore.acquire(timeout=0.25):
+                # Waiting for a slot is live backpressure, not silence — keep
+                # the swarm liveness beacon fresh when a sink is bound (no-op
+                # otherwise).
+                notify_tool_progress('admission_wait')
                 self._raise_if_aborted(abort_check)
             try:
                 self._raise_if_aborted(abort_check)

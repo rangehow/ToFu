@@ -632,3 +632,305 @@ def test_logout_authority_clears_both_quota_and_reset_cache():
     assert result["ok"] is True
     clear_quota.assert_called_once_with("codex", cache_key="oauth_codex")
     clear_reset.assert_called_once_with(account_id="account-to-clear")
+
+
+# ── Explicit consume command (the "Reset now" spend) ────────────────
+
+
+def _details_payload(*credit_ids: str) -> dict:
+    return {
+        "available_count": len(credit_ids),
+        "credits": [
+            {
+                "id": credit_id,
+                "reset_type": "codex_rate_limits",
+                "status": "available",
+                "granted_at": "2030-01-01T00:00:00Z",
+                "expires_at": f"2030-02-{index + 1:02d}T00:00:00Z",
+            }
+            for index, credit_id in enumerate(credit_ids)
+        ],
+    }
+
+
+def _consume_mocks(details, post_response=None, post_side_effect=None,
+                   projection=None):
+    """Patch every network/settle seam of the consume command."""
+    projection = (
+        {"state": "none", "available_count": 0, "captured_at": 2000,
+         "stale": False, "refreshing": False}
+        if projection is None else projection)
+    if post_side_effect is not None:
+        post = mock.patch.object(
+            codex_usage, "_authenticated_post", side_effect=post_side_effect)
+    else:
+        post = mock.patch.object(
+            codex_usage, "_authenticated_post", return_value=post_response)
+    return (
+        mock.patch("lib.oauth.token_store.load_token", return_value=_token()),
+        mock.patch.object(
+            codex_usage, "_authenticated_get", return_value=details),
+        post,
+        mock.patch.object(
+            codex_usage, "refresh_codex_usage_reset", return_value=projection),
+        mock.patch.object(codex_usage, "_publish_codex_usage_reset_update"),
+    )
+
+
+def test_consume_spends_soonest_expiring_credit_and_settles_projection():
+    projection = {"state": "none", "available_count": 0, "captured_at": 2000,
+                  "stale": False, "refreshing": False}
+    published = []
+    patches = _consume_mocks(
+        _details_payload("credit-1", "credit-2"),
+        post_response=_Response({
+            "code": "reset", "windows_reset": 2,
+            "credit": {"redeemed_at": "2030-01-02T00:00:00Z"},
+        }),
+        projection=projection)
+    with patches[0], patches[1] as get, patches[2] as post, \
+         patches[3] as refresh, patches[4] as publish:
+        publish.side_effect = lambda **kwargs: published.append(kwargs)
+        result = codex_usage.consume_codex_usage_reset(
+            user_id="owner-7", now=1_800_000_000)
+
+    assert result["ok"] is True
+    assert result["windows_reset"] == 2
+    assert result["redeemed_at"] == "2030-01-02T00:00:00Z"
+    assert result["reset_offer"] == projection
+    assert get.call_args.args[0] == (
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits")
+    assert post.call_args.args[0] == (
+        "https://chatgpt.com/backend-api/wham/"
+        "rate-limit-reset-credits/consume")
+    body = post.call_args.args[1]
+    assert body["credit_id"] == "credit-1"
+    assert isinstance(body["redeem_request_id"], str)
+    assert len(body["redeem_request_id"]) == 36
+    assert post.call_args.kwargs["user_id"] == "owner-7"
+    refresh.assert_called_once_with(user_id="owner-7", force=True)
+    assert published == [
+        {"user_id": "owner-7", "reset_offer": projection}]
+    identity = codex_usage._identity(_token(), "owner-7")
+    assert identity is not None
+    entry = codex_usage._read_entries()[identity["cache_key"]]
+    assert "pending_redeem" not in entry
+
+
+def test_consume_retry_after_ambiguous_outcome_reuses_persisted_request_id():
+    request_ids = []
+
+    def flaky_post(_url, payload, **_kwargs):
+        request_ids.append(payload["redeem_request_id"])
+        if len(request_ids) == 1:
+            raise RuntimeError("injected transport outage")
+        return _Response({"code": "reset", "windows_reset": 1})
+
+    patches = _consume_mocks(
+        _details_payload("credit-1"), post_side_effect=flaky_post)
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        first = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+        second = codex_usage.consume_codex_usage_reset(user_id="o", now=1010)
+
+    assert first["ok"] is False
+    assert first["error"] == "unresolved"
+    assert second["ok"] is True
+    assert len(request_ids) == 2
+    assert request_ids[0] == request_ids[1]
+
+
+def test_consume_ambiguous_retry_against_another_credit_mints_a_fresh_key():
+    request_ids = []
+    responses = [RuntimeError("injected transport outage"),
+                 _Response({"code": "reset"})]
+    details_sequence = [_details_payload("credit-1"),
+                        _details_payload("credit-2")]
+
+    def post(_url, payload, **_kwargs):
+        request_ids.append(payload["redeem_request_id"])
+        outcome = responses.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    patches = _consume_mocks(None)
+    with patches[0], \
+         mock.patch.object(codex_usage, "_authenticated_get",
+                           side_effect=details_sequence), \
+         mock.patch.object(codex_usage, "_authenticated_post",
+                           side_effect=post), \
+         patches[3], patches[4]:
+        first = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+        second = codex_usage.consume_codex_usage_reset(user_id="o", now=1010)
+
+    assert first["error"] == "unresolved"
+    assert second["ok"] is True
+    assert len(request_ids) == 2
+    assert request_ids[0] != request_ids[1]
+
+
+@pytest.mark.parametrize("code", ["nothing_to_reset", "already_redeemed"])
+def test_consume_definitive_no_spend_codes_clear_pending(code):
+    patches = _consume_mocks(
+        _details_payload("credit-1"),
+        post_response=_Response({"code": code}))
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        result = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+
+    assert result["ok"] is False
+    assert result["error"] == code
+    identity = codex_usage._identity(_token(), "o")
+    assert identity is not None
+    entry = codex_usage._read_entries()[identity["cache_key"]]
+    assert "pending_redeem" not in entry
+
+
+def test_consume_definitive_4xx_rejection_clears_pending():
+    rejected = _Response({"error": "forbidden"})
+    rejected.status_code = 403
+    patches = _consume_mocks(
+        _details_payload("credit-1"), post_response=rejected)
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        result = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+
+    assert result["ok"] is False
+    assert result["error"] == "upstream_rejected"
+    assert result["status"] == 403
+    identity = codex_usage._identity(_token(), "o")
+    assert identity is not None
+    entry = codex_usage._read_entries()[identity["cache_key"]]
+    assert "pending_redeem" not in entry
+
+
+def test_consume_5xx_keeps_pending_record_for_idempotent_retry():
+    failed = _Response({"error": "boom"})
+    failed.status_code = 500
+    patches = _consume_mocks(
+        _details_payload("credit-1"), post_response=failed)
+    with patches[0], patches[1], patches[2], patches[3], patches[4]:
+        result = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+
+    assert result["ok"] is False
+    assert result["error"] == "unresolved"
+    identity = codex_usage._identity(_token(), "o")
+    assert identity is not None
+    pending = codex_usage._read_entries()[
+        identity["cache_key"]]["pending_redeem"]
+    assert pending["credit_id"] == "credit-1"
+    assert pending["redeem_request_id"]
+    assert pending["created_at"] == 1000
+
+
+def test_consume_without_available_credit_never_posts():
+    patches = _consume_mocks(
+        {"available_count": 0,
+         "credits": [{"id": "credit-1", "status": "redeemed"}]})
+    with patches[0], patches[1], patches[2] as post, patches[3], patches[4]:
+        result = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+
+    assert result["ok"] is False
+    assert result["error"] == "none_available"
+    post.assert_not_called()
+
+
+def test_consume_details_outage_is_upstream_unavailable_and_never_posts():
+    patches = _consume_mocks(None)
+    with patches[0], \
+         mock.patch.object(codex_usage, "_authenticated_get",
+                           side_effect=RuntimeError("details down")), \
+         patches[2] as post, patches[3], patches[4]:
+        result = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+
+    assert result["ok"] is False
+    assert result["error"] == "upstream_unavailable"
+    post.assert_not_called()
+
+
+def test_consume_requires_authentication_and_skips_settle():
+    with mock.patch("lib.oauth.token_store.load_token", return_value={}), \
+         mock.patch.object(
+             codex_usage, "refresh_codex_usage_reset") as refresh, \
+         mock.patch.object(
+             codex_usage, "_publish_codex_usage_reset_update") as publish:
+        result = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+
+    assert result == {"ok": False, "error": "not_authenticated"}
+    refresh.assert_not_called()
+    publish.assert_not_called()
+
+
+def test_consume_aborts_before_any_network_when_account_changes():
+    with mock.patch(
+            "lib.oauth.token_store.load_token",
+            side_effect=[_token("account-a"), _token("account-b")]), \
+         mock.patch.object(codex_usage, "_authenticated_get") as get, \
+         mock.patch.object(codex_usage, "_authenticated_post") as post, \
+         mock.patch.object(codex_usage, "refresh_codex_usage_reset",
+                           return_value={"state": "unknown"}), \
+         mock.patch.object(codex_usage, "_publish_codex_usage_reset_update"):
+        result = codex_usage.consume_codex_usage_reset(user_id="o", now=1000)
+
+    assert result["ok"] is False
+    assert result["error"] == "account_changed"
+    get.assert_not_called()
+    post.assert_not_called()
+
+
+def test_consume_route_envelope_and_error_status_mapping():
+    import asyncio
+    import sys
+
+    import quart as _quart
+    sys.modules.setdefault("flask", _quart)
+    from quart import Quart
+    if "PROVIDE_AUTOMATIC_OPTIONS" not in Quart.default_config:
+        Quart.default_config = {**Quart.default_config,
+                                "PROVIDE_AUTOMATIC_OPTIONS": True}
+    app = Quart(__name__)
+    from routes.api_v1.oauth import api_v1_oauth_bp
+    app.register_blueprint(api_v1_oauth_bp)
+
+    @app.before_request
+    def _fake_auth():
+        from quart import g
+        from lib.api_keys import local_admin_context
+        g.auth_ctx = local_admin_context()
+
+    async def _run():
+        client = app.test_client()
+        with mock.patch(
+                "lib.oauth.codex_usage.consume_codex_usage_reset",
+                return_value={"ok": True, "code": "reset", "windows_reset": 2,
+                              "reset_offer": {"state": "none"}}) as consume, \
+             mock.patch("lib.log.audit_log") as audit:
+            resp = await client.post(
+                "/api/v1/oauth/reset-offer/consume", json={})
+            assert resp.status_code == 200
+            body = json.loads(await resp.get_data(as_text=True))
+            assert body["ok"] is True
+            assert body["windows_reset"] == 2
+            assert body["reset_offer"] == {"state": "none"}
+            consume.assert_called_once_with(user_id="1")
+            audit.assert_called_once()
+            assert audit.call_args.args[0] == "oauth_codex_reset_consumed"
+
+        for error, expected in (
+                ("not_authenticated", 401),
+                ("none_available", 409),
+                ("already_redeemed", 409),
+                ("unresolved", 502),
+                ("upstream_unavailable", 502),
+        ):
+            with mock.patch(
+                    "lib.oauth.codex_usage.consume_codex_usage_reset",
+                    return_value={"ok": False, "error": error}), \
+                 mock.patch("lib.log.audit_log") as audit:
+                resp = await client.post(
+                    "/api/v1/oauth/reset-offer/consume", json={})
+                assert resp.status_code == expected, error
+                body = json.loads(await resp.get_data(as_text=True))
+                assert body["ok"] is False
+                assert body["error"] == error
+                audit.assert_not_called()
+
+    asyncio.run(_run())

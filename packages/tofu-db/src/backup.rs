@@ -1484,7 +1484,24 @@ mod tests {
             .unwrap();
         database.commit(retire).unwrap();
 
+        // A fresh BlockStore has no visibility into the engine's pending
+        // (staged, not yet materialized) blocks; checkpoint first so every
+        // committed chunk is durable inside a payload segment, then install
+        // the published catalog from CONTROL exactly as Engine::open does.
+        database.checkpoint_for_test().unwrap();
         let source_blocks = BlockStore::open(source.path()).unwrap();
+        let mut source_control = crate::control::ControlFile::open(source.path()).unwrap();
+        if let Some(manifest_id) = source_control
+            .read_current()
+            .unwrap()
+            .payload_manifest_block_id
+        {
+            let manifest = crate::payload_manifest::PayloadManifest::decode(
+                &source_blocks.get(manifest_id).unwrap(),
+            )
+            .unwrap();
+            source_blocks.install_payload_manifest(manifest).unwrap();
+        }
         let destination_blocks = BlockStore::initialize(destination.path()).unwrap();
         let root = database.authority_state_root();
         copy_entity_reachable_blocks(&source_blocks, &destination_blocks, root).unwrap();

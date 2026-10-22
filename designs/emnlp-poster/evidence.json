@@ -1,0 +1,232 @@
+{
+  "snapshot_date": "2026-10-20",
+  "repository_head_at_capture": "a50bee171839b200bae460d69dd80b28ff9ae4fa",
+  "authority_note": "Exact source hashes identify the inspected shared-checkout contracts. The manuscript is background. No runtime changes or benchmark reruns were performed for poster production.",
+  "user_scope": "Replace basic cache discussion with synchronous/asynchronous tool management and persistent sub-agents. Preserve current TofuDB mechanisms and scoped measurements, community-inspired academic layout, and all three official institutional logos.",
+  "claims": [
+    {
+      "id": "sync_async_lifecycle",
+      "claim": "Ordinary tools are model-synchronous. Background commands and Swarm children return pending handles; poll unifies inspection/wait and kill scopes command/child cancellation. A handle is not a success result.",
+      "source_files": [
+        {
+          "path": "lib/tools/poll.py",
+          "sha256": "8e19fee5ef06ff7d8dd48aff79803b37d42edc6f3d6995e1758012c4602a82b7"
+        },
+        {
+          "path": "docs/modules/task_engine.md",
+          "sha256": "830ea44fdef56a9106a26682ed67e9766d214bfc17f8412f074a58f3f8229391"
+        },
+        {
+          "path": "docs/modules/tools_execution.md",
+          "sha256": "efa7e3b1ac2523be5fcdaeaeffd0697217d878781cac1b5093a8e45aacfbd04c"
+        }
+      ]
+    },
+    {
+      "id": "command_handoff",
+      "claim": "Eligible local foreground commands hand off after 60 seconds of actual subprocess time without being killed. Foreground handoff is process-local; explicit local background launch is required for restart records and reattachment.",
+      "source_files": [
+        {
+          "path": "lib/tasks_pkg/handlers/_background_command.py",
+          "sha256": "f9a760ab6d6342b96ada822b39ed543f5f3cce3e124d6173e4b4270c21e28e73"
+        },
+        {
+          "path": "docs/modules/task_engine.md",
+          "sha256": "830ea44fdef56a9106a26682ed67e9766d214bfc17f8412f074a58f3f8229391"
+        }
+      ]
+    },
+    {
+      "id": "completion_delivery",
+      "claim": "Completions use owned queue/inbox publication and receipt identity. Active turns consume them at complete round boundaries. Required running/unread child outcomes remain delivery dependencies after provider completion; callbacks wake eligible continuation, without polling-only model turns.",
+      "source_files": [
+        {
+          "path": "lib/tasks_pkg/handlers/_background_command.py",
+          "sha256": "f9a760ab6d6342b96ada822b39ed543f5f3cce3e124d6173e4b4270c21e28e73"
+        },
+        {
+          "path": "docs/RETAINED_AGENTS.md",
+          "sha256": "8119d10af276b44f86e50702d11cc1e79a3418a2480e6f63bde534ce5da4bf15"
+        },
+        {
+          "path": "docs/AGENT_LIFECYCLE.md",
+          "sha256": "e5be13bfd82b17e6d094db2963cb3b9a6f8958e3d893f220690a61e2a0ce56dc"
+        }
+      ]
+    },
+    {
+      "id": "retained_identity",
+      "claim": "Explicit create/promote yields a scoped durable identity. A later ordinary child restores its saved working dialogue under fresh caller authority. Final working messages and result commit before returning idle, with no idle resident worker. Temporary spawn remains default.",
+      "source_files": [
+        {
+          "path": "docs/RETAINED_AGENTS.md",
+          "sha256": "8119d10af276b44f86e50702d11cc1e79a3418a2480e6f63bde534ce5da4bf15"
+        },
+        {
+          "path": "lib/swarm/retained.py",
+          "sha256": "4b1c122c4db8825f6411ff29d93110fbbcddc5eff7342cc98884c67737be6027"
+        },
+        {
+          "path": "lib/swarm/retained_repository.py",
+          "sha256": "6fc2c6b95b5a7461ee7de94b0472968a4331426954ee68edd7102300bbf772c0"
+        }
+      ]
+    },
+    {
+      "id": "retained_messages",
+      "claim": "Stable messaging activates an idle persistent identity or steers its busy assignment. One active assignment per identity; separate identities can execute in parallel. Exact-run messaging is passive and does not start a new assignment.",
+      "source_files": [
+        {
+          "path": "docs/RETAINED_AGENTS.md",
+          "sha256": "8119d10af276b44f86e50702d11cc1e79a3418a2480e6f63bde534ce5da4bf15"
+        },
+        {
+          "path": "docs/AGENT_LIFECYCLE.md",
+          "sha256": "e5be13bfd82b17e6d094db2963cb3b9a6f8958e3d893f220690a61e2a0ce56dc"
+        }
+      ]
+    },
+    {
+      "id": "retained_recovery_scope",
+      "claim": "Unknown launch acknowledgements retain the claim until reconciliation; reset/abandon fences late memory writes. Restart continuation requires explicit lineage, scope, cancellation and resolved effect evidence. Persistence is not an exactly-once external effect guarantee.",
+      "source_files": [
+        {
+          "path": "docs/RETAINED_AGENTS.md",
+          "sha256": "8119d10af276b44f86e50702d11cc1e79a3418a2480e6f63bde534ce5da4bf15"
+        },
+        {
+          "path": "docs/AGENT_LIFECYCLE.md",
+          "sha256": "e5be13bfd82b17e6d094db2963cb3b9a6f8958e3d893f220690a61e2a0ce56dc"
+        },
+        {
+          "path": "lib/swarm/retained_launch.py",
+          "sha256": "b6576d40497d03c781daba979dfa33ea8731ec6b0cbd8b2d08c011dc8be9de8a"
+        }
+      ]
+    },
+    {
+      "id": "native_materialization",
+      "claim": "Native semantic context reads remove redundant JSON conversion while preserving evidence. This does not isolate the necessity of the physical engine.",
+      "source_files": [
+        {
+          "path": "docs/TOFUDB_CONTEXT_READ.md",
+          "sha256": "1e315a76b18fa398d37078423234de8198a251fd134a37f10abe45ecc8821a1f"
+        }
+      ]
+    },
+    {
+      "id": "native_continuation",
+      "claim": "Initial certification checks N headers. Same-epoch two-turn continuation checks three headers, at N=8,128,2048, for reads and advancing checkpoint saves. Earlier edits invalidate certificates; reopen requires revalidation. Full output remains proportional.",
+      "source_files": [
+        {
+          "path": "docs/TOFUDB_CONTEXT_READ.md",
+          "sha256": "1e315a76b18fa398d37078423234de8198a251fd134a37f10abe45ecc8821a1f"
+        }
+      ]
+    },
+    {
+      "id": "durable_adoption",
+      "claim": "Accepted context, archive and receipt commit before model-view adoption. Persistence failure preserves original context and stops provider dispatch.",
+      "source_files": [
+        {
+          "path": "docs/CONTEXT_COMPACTION.md",
+          "sha256": "37fccd5e5ac8cc7af0cc22ff27318cdbfa6bc491ded67201efcc726942e4954b"
+        }
+      ]
+    },
+    {
+      "id": "four_arm_control",
+      "claim": "Six XFS rows of the later 2026-10-19 four-arm semantic-read control, P50 milliseconds, 400 samples/cell. Full matrix exactly validates 12800 responses. Native loses on escaped full reads to SQL objects. Rust/Python and engine effects are uncontrolled.",
+      "source_files": [
+        {
+          "path": "docs/TOFUDB_SQLITE_CONTROLS.md",
+          "sha256": "e56d062e592bd669a7ec143af813f892a341d962b36c5cb447a344049f288c32"
+        }
+      ]
+    }
+  ],
+  "manuscript": {
+    "path": ".tmp/tofu-paper/_EMNLP_Demo__ToFu.zip",
+    "sha256": "80b2d152ef457b28ddcbf2cbb0d9052e578e92a3e66e73db5c1731a2d10e652b",
+    "used_for": [
+      "title",
+      "author roster",
+      "affiliations",
+      "mascot",
+      "historical background only"
+    ],
+    "historical_scores_displayed": false
+  },
+  "external_references": [
+    {
+      "url": "https://2026.emnlp.org/poster-printing/",
+      "purpose": "A0 portrait PDF dimensions, verified in the earlier production pass."
+    },
+    {
+      "url": "https://john-b-yang.github.io/static/pictures/posters/2024-SWEagent.png",
+      "purpose": "Downloaded and visually inspected finished poster: method, concrete examples, evidence. No figures reused.",
+      "sha256": "3b6ab6b5683d44f721a8ad19115b037d80ac53fd72df8fec7d83294e55593730"
+    },
+    {
+      "url": "https://john-b-yang.github.io/static/pictures/posters/2025-SWEsmith.png",
+      "purpose": "Downloaded and visually inspected finished poster: central pipeline and supporting measured figures. No figures reused.",
+      "sha256": "3d094833b848e95b177e54284ed514d23256bcb895fbcb813960a44e473cb060"
+    },
+    {
+      "url": "https://aclanthology.org/attachments/2024.emnlp-industry.31.poster.pdf",
+      "purpose": "Downloaded and visually inspected SEED: portrait section bars, mechanism diagram, tables. No figures reused.",
+      "sha256": "80a2137520bd458e4af23f5cfcfb1112d33b410c86f2d92f98d0ba6f5aff8644"
+    },
+    {
+      "url": "https://aclanthology.org/attachments/2024.emnlp-industry.6.poster.pdf",
+      "purpose": "Inspected dense text-heavy composition; not adopted.",
+      "sha256": "0b10a80f29a3cac9dcabbab3d80e9cc0c29c4db03a5a743097803aa2800da0df"
+    },
+    {
+      "url": "https://github.com/NiuTrans/ToFu",
+      "purpose": "QR destination and source-code link."
+    }
+  ],
+  "deliberately_excluded": [
+    "Historical SWE-bench performance numbers as a causal explanation",
+    "Universal TofuDB speedup versus SQLite",
+    "Whole-agent latency or success improvements inferred from storage microbenchmarks",
+    "Exactly-once arbitrary external effects",
+    "Native runtime ports presented as universally enabled production defaults"
+  ],
+  "font_assets": [
+    {
+      "file": "assets/Inter-400.ttf",
+      "sha256": "8fe523f52564985a24663269785ea95c62b4d7f5cdcdb24be897d9fafd4715de"
+    },
+    {
+      "file": "assets/Inter-600.ttf",
+      "sha256": "d71afa489ba84bf36426317dc1e9b1b0c637ef4fd8bd19af56100d8acd41842c"
+    },
+    {
+      "file": "assets/Inter-700.ttf",
+      "sha256": "98795d77c8988e10b624370a455c323f8b9c980ebe738f6a26aef22276411b49"
+    },
+    {
+      "file": "assets/Newsreader-400.ttf",
+      "sha256": "30f84a761d412603192e5cfcefe043bd67c1a503226f1e1d68003487e488ccdf"
+    },
+    {
+      "file": "assets/Newsreader-500.ttf",
+      "sha256": "8ab4e2f1bbf983f46eb5f356235d0bd76c1c1579d7d2ca21f38bcc464d7980dd"
+    },
+    {
+      "file": "assets/JetBrainsMono-Regular.ttf",
+      "sha256": "44ce4a84f20d60f24539bd0cef11f79c29e38609e0f8adf18551c9794a5d9dc3"
+    }
+  ],
+  "verification": {
+    "pdf": "One A0 page; embedded fonts; bounds, overlaps and glyph coverage; inspect actual PDF raster.",
+    "svg": "Independent Chromium rendering and geometry checks; inspect image.",
+    "qr": "Decode QR from the final PDF at 300 dpi and match the exact GitHub URL.",
+    "data": "All 24 displayed latency cells retained from the documented later four-arm control; no new measurements, timeline durations, or lifecycle speedups claimed.",
+    "visual": "Inspect the PDF and independent SVG, including tool swimlanes, cross-assignment context reuse and the unchanged TofuDB measurement table."
+  },
+  "revision": "Substantial redesign after author feedback: official affiliations, real workspace image, current Inspector component, explicit mechanisms and tradeoffs.",
+  "displayed_data_sha256": "26530c562559f4cf68f39d71a1444fed576d57d4b778997d8ca7cb89c512859b"
+}

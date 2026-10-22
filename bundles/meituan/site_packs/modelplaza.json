@@ -1,0 +1,125 @@
+{
+  "pack": "tofu.site-pack/v1",
+  "id": "modelplaza",
+  "name": "ModelPlaza",
+  "version": 1,
+  "routing_hint": "model names/attributes only",
+  "domains": ["aigc.sankuai.com"],
+  "aliases": ["model-plaza", "模型广场"],
+  "auth": {
+    "login_url": "https://aigc.sankuai.com/ml/modelPlaza/modelInfo",
+    "domain": "sankuai.com",
+    "label": "Meituan internal (SSO)",
+    "access_strategy": "browser_first",
+    "risk_notice": "使用浏览器中的美团 SSO 活会话；无需服务器私网放行。",
+    "fields": [
+      {"name": "ssoid", "importance": "recommended"},
+      {"name": "ssoid_sankuai", "importance": "optional"},
+      {"name": "ssousername", "importance": "optional"},
+      {"name": "ssosession", "importance": "optional"}
+    ]
+  },
+  "operations": [
+    {
+      "name": "search",
+      "description": "按模型名称或别名查找目录条目；不支持文档、协议问题或全文搜索",
+      "access": "read",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {"type": "string", "minLength": 1, "maxLength": 128,
+                    "pattern": "^[^?？\\r\\n]+$",
+                    "description": "A model name or alias only, such as Claude or kimi-0902-preview."},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 40},
+          "pages": {"type": "integer", "minimum": 1, "maximum": 1}
+        },
+        "required": ["query"]
+      },
+      "output_schema": {"type": "array", "items": {"type": "object"}},
+      "timeout": 35,
+      "steps": [
+        {"do": "navigate",
+         "url": "https://aigc.sankuai.com/ml/modelPlaza/modelInfo"},
+        {"do": "ensure_auth"},
+        {"do": "try",
+         "steps": [
+           {"do": "fill", "value": "{query}",
+            "selector": "input[type=\"search\"],input[placeholder*=\"搜索\"],input[placeholder*=\"模型\"]"},
+           {"do": "ensure_auth"},
+           {"do": "press", "keys": "Enter",
+            "selector": "input[type=\"search\"],input[placeholder*=\"搜索\"],input[placeholder*=\"模型\"]"},
+           {"do": "ensure_auth"},
+           {"do": "wait", "selector": "a[href]", "timeout": 8}
+         ]},
+        {"do": "ensure_auth"},
+        {"do": "extract",
+         "js": "(() => Array.from(document.querySelectorAll('a[href]')).map(a => {\n  const card = a.closest('[class*=\"model\"],article,li,tr,div') || a;\n  const text = (card.innerText || a.innerText || '').trim();\n  return {title: (a.innerText || text.split('\\n')[0] || '').trim().slice(0, 200),\n          snippet: text.slice(0, 400), url: a.href || ''};\n}).filter(x => x.title && /model|模型/i.test(x.snippet + ' ' + x.url)).slice(0, 40))()",
+         "args_from_params": ["query"],
+         "into": "candidates"},
+        {"do": "normalize", "kind": "search_records",
+         "query_from_param": "query", "limit_from_param": "limit",
+         "limit_max": 40, "source_name": "ModelPlaza"}
+      ]
+    },
+    {
+      "name": "detail",
+      "description": "读取模型详情",
+      "access": "read",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {"type": "string", "maxLength": 8192, "pattern": "^https?://"},
+          "max_chars": {"type": "integer", "minimum": 1000, "maximum": 80000}
+        },
+        "required": ["url"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "content": {"type": "string"}
+        }
+      },
+      "timeout": 35,
+      "steps": [
+        {"do": "navigate", "url": "{url|raw}"},
+        {"do": "ensure_auth"},
+        {"do": "normalize", "kind": "detail",
+         "max_chars_from_param": "max_chars"}
+      ]
+    },
+    {
+      "name": "model-info",
+      "description": "批量查询模型的定价/上下文/请求 ID/能力标签（compareModels API）",
+      "access": "read",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "names": {"type": "array", "minItems": 1, "maxItems": 64,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 128,
+                              "pattern": ".*\\S.*"}}
+        },
+        "required": ["names"]
+      },
+      "output_schema": {"type": "object"},
+      "timeout": 35,
+      "steps": [
+        {"do": "navigate",
+         "url": "https://aigc.sankuai.com/ml/modelPlaza/modelInfo"},
+        {"do": "ensure_auth"},
+        {"do": "extract",
+         "js": "(async () => {\n  const names = (Array.isArray(args.names) ? args.names : [])\n    .map(n => String(n || '').trim()).filter(Boolean).slice(0, 64);\n  const qs = names.map(n => 'names=' + encodeURIComponent(n)).join('&');\n  const resp = await fetch(\n    '/api/friday/ml/v1/model/type/information/compareModels?' + qs,\n    {credentials: 'same-origin', headers: {accept: 'application/json'}});\n  const reader = resp.body?.getReader();\n  if (!reader) return {ok: false, status: resp.status};\n  const decoder = new TextDecoder();\n  let text = '', bytes = 0;\n  try {\n    while (true) {\n      const chunk = await reader.read();\n      if (chunk.done) break;\n      bytes += chunk.value.byteLength;\n      if (bytes > 262144) return {ok: false, status: resp.status, reason: 'response_budget'};\n      text += decoder.decode(chunk.value, {stream: true});\n    }\n  } finally { await reader.cancel().catch(() => {}); }\n  let body;\n  try { body = JSON.parse(text + decoder.decode()); } catch (_) { return {ok: false, status: resp.status}; }\n  if (!resp.ok || !body || ![undefined, 0, 200, '0', '200'].includes(body.code) || !Array.isArray(body.data)) {\n    return {ok: false, status: resp.status, reason: 'application_error'};\n  }\n  return {ok: true, code: body.code, data: body.data.slice(0, 64),\n          truncated: body.data.length > 64};\n})()",
+         "args_from_params": ["names"],
+         "into": "payload"},
+        {"do": "normalize", "kind": "json_payload",
+         "data_field": "data",
+         "coverage_scope": "requested_model_attributes",
+         "max_output_bytes": 60000}
+      ]
+    }
+  ]
+}

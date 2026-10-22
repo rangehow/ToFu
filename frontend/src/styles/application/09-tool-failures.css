@@ -1,0 +1,107 @@
+
+/* ── Interrupted tool round — task aborted (Stop) while this round was
+      in-flight; the backend dangling-round sweep marks status='aborted'. ── */
+.ptool-interrupted {
+  background: color-mix(in srgb, var(--text-secondary) 8%, transparent);
+  border-color: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  opacity: 0.75;
+}
+.ptool-badge-interrupted {
+  background: var(--chip-warn-bg);
+  color: var(--chip-warn-color);
+  border: 1px solid var(--chip-warn-border);
+}
+
+/* ── Failed tool round — the tool RAN but never produced a result (raised,
+      or cancelled by the parallel-pool timeout ceiling); backend stamps
+      status='error'. Warm red tint (vs. the amber 'interrupted') so a failure
+      reads differently from a user Stop at a glance. ── */
+.ptool-error {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+}
+/* The reason can be a long unbroken string (URL, JSON payload). As a nowrap
+ * flex sibling it out-shrinks .ptool-text (whose flex-basis is 0), squeezing
+ * the command text to a ~1-char column that wraps one letter per line. Give
+ * the reason its own full-width line under the row and wrap it there. */
+.ptool-line.ptool-error,
+.ptool-line.ptool-rejected {
+  flex-wrap: wrap;
+  row-gap: calc(var(--space-1) / 2);
+}
+.ptool-error-reason {
+  flex: 1 1 100%;
+  /* Align with .ptool-text: 16px icon + 8px gap. */
+  margin-left: var(--space-6);
+  color: var(--error-text);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  opacity: 0.85;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* A rejected call never ran, so its reason is the ONLY diagnostic there is,
+ * and a failed call's clipped tail is exactly the part that explains the
+ * failure — show both whole. Other tool output keeps the 4-line clamp. */
+.ptool-line.ptool-rejected .ptool-error-reason,
+.ptool-line.ptool-error .ptool-error-reason {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+/* ── Rejected-call request parameters ──
+ * A rejected call never ran, so the arguments the model actually sent are
+ * the only evidence of what went wrong; the reason names the rule it broke,
+ * not the payload that broke it. Short payloads open in place, large ones
+ * (whole file bodies) stay collapsed with their size on the summary line. */
+.ptool-line.ptool-rejected .ptool-rejected-params {
+  flex: 1 1 100%;
+  /* Align with .ptool-text: 16px icon + 8px gap. */
+  margin-left: var(--space-6);
+  border: var(--control-edge-inset) solid var(--error-border);
+  border-radius: 6px;
+  background: var(--error-bg);
+  font-size: var(--font-size-xs);
+}
+.ptool-line.ptool-rejected .ptool-rejected-params > summary {
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+  list-style: none;
+  user-select: none;
+}
+.ptool-line.ptool-rejected .ptool-rejected-params > summary::-webkit-details-marker,
+.ptool-line.ptool-rejected .ptool-rejected-params > summary::marker {
+  display: none;
+  content: "";
+}
+.ptool-rejected-params-size {
+  margin-left: var(--space-1);
+  opacity: 0.6;
+}
+.ptool-reject-args {
+  margin: 0;
+  padding: var(--space-2);
+  border-top: var(--control-edge-inset) solid
+    color-mix(in srgb, var(--error-border) 65%, transparent);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+.ptool-reject-args-more {
+  display: block;
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  opacity: 0.65;
+}

@@ -1,0 +1,106 @@
+--- a/packages/tofu-runtime/src/token_merge_linear.rs
++++ b/packages/tofu-runtime/src/token_merge_linear.rs
+@@ -7,45 +7,17 @@
+ const STACK_PARTS: usize = 32;
+ type Part = (usize, u32);
+
+-use std::ops::{Deref, DerefMut};
+-
+-trait Boundaries: DerefMut<Target = [Part]> {
+-    fn push_boundary(&mut self, value: Part);
+-    fn remove_boundary(&mut self, index: usize);
+-}
+-impl Boundaries for Vec<Part> {
+-    fn push_boundary(&mut self, value: Part) { self.push(value); }
+-    fn remove_boundary(&mut self, index: usize) { self.remove(index); }
+-}
+-struct InlineBoundaries { values: [Part; STACK_PARTS], length: usize }
+-impl Deref for InlineBoundaries {
+-    type Target = [Part];
+-    fn deref(&self) -> &[Part] { &self.values[..self.length] }
+-}
+-impl DerefMut for InlineBoundaries {
+-    fn deref_mut(&mut self) -> &mut [Part] { &mut self.values[..self.length] }
+-}
+-impl Boundaries for InlineBoundaries {
+-    fn push_boundary(&mut self, value: Part) {
+-        self.values[self.length] = value;
+-        self.length += 1;
+-    }
+-    fn remove_boundary(&mut self, index: usize) {
+-        self.values.copy_within(index + 1..self.length, index);
+-        self.length -= 1;
+-    }
+-}
+-
+ fn merge(piece: &[u8], ranks: &FxHashMap<Vec<u8>, u32>, pairs: &PairRanks,
+-         mut parts: impl Boundaries) -> usize {
++         parts: &mut [Part]) -> usize {
+     let mut best = (u32::MAX, usize::MAX);
+     for index in 0..piece.len() - 1 {
+         let rank = pairs.get(piece[index], piece[index + 1]);
+         if rank < best.0 { best = (rank, index); }
+-        parts.push_boundary((index, rank));
++        parts[index] = (index, rank);
+     }
+-    parts.push_boundary((piece.len() - 1, u32::MAX));
+-    parts.push_boundary((piece.len(), u32::MAX));
++    parts[piece.len() - 1] = (piece.len() - 1, u32::MAX);
++    parts[piece.len()] = (piece.len(), u32::MAX);
++    let mut length = piece.len() + 1;
+     let merged_rank = |parts: &[Part], index: usize| {
+         if index + 3 < parts.len() {
+             *ranks.get(&piece[parts[index].0..parts[index + 3].0]).unwrap_or(&u32::MAX)
+@@ -53,24 +25,27 @@
+     };
+     while best.0 != u32::MAX {
+         let index = best.1;
+-        if index > 0 { parts[index - 1].1 = merged_rank(&parts, index - 1); }
+-        parts[index].1 = merged_rank(&parts, index);
+-        parts.remove_boundary(index + 1);
++        if index > 0 { parts[index - 1].1 = merged_rank(&parts[..length], index - 1); }
++        parts[index].1 = merged_rank(&parts[..length], index);
++        parts.copy_within(index + 2..length, index + 1);
++        length -= 1;
+         best = (u32::MAX, usize::MAX);
+-        for (index, &(_, rank)) in parts[..parts.len() - 1].iter().enumerate() {
++        for (index, &(_, rank)) in parts[..length - 1].iter().enumerate() {
+             if rank < best.0 { best = (rank, index); }
+         }
+     }
+-    parts.len() - 1
++    length - 1
+ }
+
+ // Keep small-piece storage out of the regex/whole-token caller's stack frame.
+ #[inline(never)]
+ pub(crate) fn count(piece: &[u8], ranks: &FxHashMap<Vec<u8>, u32>, pairs: &PairRanks) -> usize {
+     if piece.len() < STACK_PARTS {
+-        merge(piece, ranks, pairs, InlineBoundaries { values: [(0, u32::MAX); STACK_PARTS], length: 0 })
++        let mut parts = [(0, u32::MAX); STACK_PARTS];
++        merge(piece, ranks, pairs, &mut parts[..piece.len() + 1])
+     } else {
+-        merge(piece, ranks, pairs, Vec::with_capacity(piece.len() + 1))
++        let mut parts = vec![(0, u32::MAX); piece.len() + 1];
++        merge(piece, ranks, pairs, &mut parts)
+     }
+ }
+
+--- a/packages/tofu-runtime/src/token_pair_ranks.rs
++++ b/packages/tofu-runtime/src/token_pair_ranks.rs
+@@ -3,13 +3,11 @@
+ //! hashing, mutable request state or global cache. Byte order is explicit.
+ pub(crate) const BYTE_PAIR_COUNT: usize = 256 * 256;
+
+-pub(crate) struct PairRanks(Box<[u32; BYTE_PAIR_COUNT]>);
++pub(crate) struct PairRanks(Box<[u32]>);
+
+ impl PairRanks {
+     pub(crate) fn new() -> Self {
+-        let values = vec![u32::MAX; BYTE_PAIR_COUNT].into_boxed_slice().try_into()
+-            .unwrap_or_else(|_| unreachable!("fixed byte-pair index size"));
+-        Self(values)
++        Self(vec![u32::MAX; BYTE_PAIR_COUNT].into_boxed_slice())
+     }
+
+     pub(crate) fn insert(&mut self, left: u8, right: u8, rank: u32) {

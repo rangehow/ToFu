@@ -1,0 +1,41 @@
+# Tofu UI Kit gallery
+
+Living preview of the design system (authority: `docs/DESIGN_SYSTEM.md`).
+Every shared control must be registered on this page.
+
+- `index.html` — kitchen-sink page. `?theme=dark|light|tofu` selects the
+  theme, `&dialog=open` renders the modal state. It consumes the real
+  composed stylesheet (`static/styles.css`), never a copy.
+- `capture.py` — regenerates `previews/*.png` (3 themes × desktop/mobile +
+  dialog states) and `previews/contrast-report.json` (feedback-text
+  WCAG 4.5:1 gate; legacy on-accent cases warn).
+- `verify.py` — 18 structural checks in a real Chromium: control height
+  ramp, theme-invariant geometry, 320px overflow, dialog focus-trap /
+  Escape / backdrop / action resolution, field error wiring, focus ring,
+  per-theme token resolution.
+- `previews/timeline-*.png` — mixed conversation chronology from the production
+  Surface and tool presenters: continuous activity surfaces, answer typography,
+  desktop, phone, warm Tofu branding and the nonmodal process reader. `timeline-shell-*.png` places the same
+  mounted renderer in the real `index.html` shell markup, with application
+  scripts absent (layout review, not a backend/boot test).
+  Regenerate with `tests/visual/test_visual_timeline_reading.py`; its JSON
+  measurements check label alignment and contrast against the actual activity
+  surface across all themes. The rationale and visual references are in
+  `docs/DESIGN_SYSTEM.md#conversation-reading-grammar`.
+- `previews/context-rail-*.png` — collapsed/expanded context sections from
+  `tests/visual/test_visual_context_rail_reading.py`: production renderer,
+  fixed heading controls, localized counts and real pointer hit testing.
+  `context-rail-live-tofu.png` also boots the actual application shell and checks
+  its adaptive rail grant against the reading column and composer.
+
+Workflow for a new/changed control:
+
+```bash
+node scripts/compose_frontend_styles.mjs   # refresh static/styles.css
+python3 designs/ui-gallery/verify.py       # structural proof
+python3 designs/ui-gallery/capture.py      # previews + contrast gate
+```
+
+Then inspect the PNGs in `previews/` (they are the review artifact posted
+in the change). Both scripts self-serve the repository root on a local
+port and reuse `chromium_env` for the rootless-container library path.

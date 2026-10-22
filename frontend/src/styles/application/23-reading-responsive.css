@@ -1,0 +1,164 @@
+/* User notes, narrow screens and reduced motion.
+ * Owner: ConversationSurface; tokens: 00-design-tokens.css.
+ * Delivery: ordered application manifest; neighboring content owners are independent.
+ */
+
+/* User turns are compact notes; they deliberately do not grow an execution spine. */
+
+.conversation-surface .message.user-msg .message-content {
+  justify-self: end;
+  box-sizing: border-box;
+  width: fit-content;
+  /* Cap to a chat-bubble measure, not the assistant reading column: a one-liner
+     must read as a tight note, not a slab that nearly spans the transcript. */
+  max-width: min(72%, 46rem);
+  padding: var(--space-3) var(--space-4);
+  border: var(--control-edge-inset) solid var(--turn-rule);
+  /* Chat geometry: a slightly flattened top-right corner signals the sender's
+     side; the rest stay rounded so it reads as one calm bubble, not a card. */
+  border-radius: var(--radius) var(--radius) var(--radius-xs) var(--radius);
+  background: color-mix(in srgb, var(--user-bubble) 70%, var(--bg-primary));
+  box-shadow: none;
+}
+
+.conversation-surface .message.user-msg .message-avatar {
+  visibility: hidden;
+}
+
+.conversation-surface .message.user-msg .message-header {
+  margin-block: 0 var(--space-2);
+  padding-inline-start: 0;
+}
+
+.conversation-surface .message.user-msg .conversation-turn-blocks > .conversation-block {
+  margin-bottom: var(--space-1);
+}
+
+.conversation-surface .message.user-msg .conversation-block--text > .md-content {
+  font-size: var(--conversation-font-size-body);
+  line-height: var(--leading-body);
+}
+
+/* When the bubble carries attachments, the fixed-size media tiles (80px thumbs,
+   300px video cards) are far narrower than a full-length text line. fit-content
+   then sizes the bubble to the TEXT, leaving dead space beside the thumbnails.
+   Cap the text to a comfortable reading measure so the bubble hugs its real
+   content and the attachment row and text row stay visually balanced. */
+.conversation-surface .message.user-msg .conversation-turn-blocks:has(.conversation-block--attachments) .conversation-block--text > .md-content {
+  max-width: 34rem;
+}
+
+.conversation-surface .message.user-msg .conversation-turn-actions {
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+}
+
+@media (max-width: 720px) {
+  .conversation-surface {
+    --conversation-process-row-height: var(--control-h-lg);
+  }
+  .conversation-surface .conversation-turn.message {
+    grid-template-columns: minmax(0, 1fr);
+    margin-bottom: var(--space-6);
+  }
+
+  .conversation-surface .conversation-turn.message > .conversation-turn-content {
+    grid-column: 1;
+  }
+
+  .conversation-surface .conversation-turn-header.message-header {
+    min-height: 22px;
+    margin-bottom: var(--space-2);
+  }
+
+  .conversation-surface .conversation-block--text[data-deliverable="true"] > .md-content > :is(h1, h2, h3):first-child {
+    font-size: var(--conversation-font-size-heading-2);
+  }
+  .conversation-surface .conversation-history-process__body {
+    padding: var(--space-2);
+  }
+
+  .conversation-surface .message-time {
+    font-size: var(--conversation-font-size-caption);
+  }
+
+  .conversation-surface .conversation-round-header__toggle {
+    flex-wrap: wrap;
+  }
+
+  .conversation-surface .bilingual-header {
+    min-height: 44px;
+  }
+
+  .conversation-surface .conversation-turn-actions.message-actions {
+    flex-wrap: nowrap;
+    margin-right: calc(-1 * var(--space-1));
+    overflow-x: auto;
+    scrollbar-width: none;
+    opacity: 1;
+  }
+  .conversation-surface .conversation-block-copy {
+    opacity: .6;
+  }
+  /* Touch keeps copy discoverable without painting over the last words. */
+  .conversation-surface .conversation-block--text:has(> .conversation-block-copy) > .md-content {
+    box-sizing: border-box;
+    padding-inline-end: var(--space-6);
+  }
+
+  .conversation-surface .sw-inbox-row > .sw-inbox-row-header,
+  .conversation-surface .ptool-result-header:has(.ptool-artifact-header) {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
+  .conversation-surface .sw-inbox-row-header > .ptool-text,
+  .conversation-surface .ptool-result-header:has(.ptool-artifact-header) > .ptool-text {
+    flex-basis: calc(100% - var(--conversation-process-marker) - var(--conversation-process-gap) - var(--space-8));
+  }
+  .conversation-surface .sw-inbox-row-header > :not(.ptool-icon, .ptool-text),
+  .conversation-surface .ptool-result-header:has(.ptool-artifact-header) > :not(.ptool-icon, .ptool-text) {
+    order: 2;
+  }
+  .conversation-surface .sw-inbox-row-header > .ptool-text + :not(.ptool-row-ctl),
+  .conversation-surface .ptool-result-header:has(.ptool-artifact-header) > .ptool-text + :not(.ptool-row-ctl) {
+    margin-inline-start: calc(var(--conversation-process-marker) + var(--conversation-process-gap));
+  }
+
+  .conversation-surface .conversation-turn-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .conversation-surface .msg-action-btn,
+  [data-theme="tofu"] .conversation-surface .msg-action-btn {
+    min-height: 44px;
+    padding: var(--space-2) var(--space-2);
+    flex: 0 0 auto;
+    font-size: var(--conversation-font-size-caption);
+  }
+
+  .conversation-surface .conversation-action--delete {
+    margin-left: 0;
+  }
+
+  .conversation-surface .message.user-msg .message-content {
+    max-width: 88%;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius) var(--radius) var(--radius-xs) var(--radius);
+  }
+}
+
+@media (pointer: coarse) {
+  .conversation-surface { --conversation-process-row-height: var(--control-h-lg); }
+  .conversation-surface .ptool-cmd-fold { min-height: var(--control-h-lg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-surface .thinking-state-dot,
+  .conversation-surface .conversation-disclosure-chevron,
+  .conversation-surface .conversation-turn-actions,
+  .conversation-surface .thinking-header,
+  .conversation-surface .conversation-block--tool * {
+    animation: none !important;
+    transition-duration: .01ms !important;
+  }
+}

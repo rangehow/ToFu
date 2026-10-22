@@ -1,0 +1,610 @@
+/* Thinking disclosures and generic tool evidence.
+ * Owner: ConversationSurface; tokens: 00-design-tokens.css.
+ * Delivery: ordered application manifest; neighboring content owners are independent.
+ */
+
+/* A shared disclosure grammar for reasoning, tool results, context notes,
+ * checklists, programs and the fallback renderer. Existing native disclosures
+ * retain their lifecycle; only the label/marker/evidence columns are shared. */
+.conversation-surface :is(
+  .thinking-header, .ptool-line, .ptc-head, .conversation-tool-card__summary
+) {
+  box-sizing: border-box;
+  min-height: var(--conversation-process-row-height);
+  padding: var(--space-2) var(--conversation-process-inset);
+  gap: var(--conversation-process-gap);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-process-font-size);
+  line-height: var(--leading-title);
+}
+
+.conversation-surface :is(
+  .thinking-header, .ptool-line, .ptc-head, .conversation-tool-card__summary
+):hover {
+  background: var(--turn-process-hover);
+}
+
+.conversation-surface :is(
+  .thinking-label, .ptool-text, .ptc-title, .conversation-tool-card__title
+) {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-process-font-size);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-title);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  letter-spacing: normal;
+}
+
+/* Tool identity stays in the leading slot; a single trailing caret is the
+ * consistent disclosure affordance. Native summaries still own interaction.
+ * The caret is a pseudo-element of the FLEX ROW, so it is an atomic flex item
+ * that can never wrap onto a line of its own — the failure the edit card had
+ * while its caret was inline text inside the wrapping label. */
+.conversation-surface :is(.ptool-result-header, .ptool-results-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .conversation-tool-card__summary)::after {
+  content: '';
+  box-sizing: border-box;
+  flex: 0 0 var(--space-2);
+  width: var(--space-2);
+  height: var(--space-2);
+  margin-inline: var(--space-1);
+  border-inline-end: var(--control-edge-inset) solid currentColor;
+  border-block-end: var(--control-edge-inset) solid currentColor;
+  transform: rotate(-45deg);
+  color: var(--text-secondary);
+}
+.conversation-surface details[open] > :is(.ptool-result-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header, .conversation-tool-card__summary)::after,
+.conversation-surface .ptool-results-header[aria-expanded="true"]::after {
+  transform: rotate(45deg);
+}
+.conversation-surface :is(.ptool-result-header, .ptool-results-header, .sw-inbox-row-header, .ptool-todo-header) > .ptool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--conversation-process-marker);
+  width: var(--conversation-process-marker);
+  height: var(--conversation-process-marker);
+  color: var(--text-secondary);
+}
+.conversation-surface .ptool-results-header > .ptool-results-toggle,
+.conversation-surface :is(.ptool-result-header, .sw-inbox-row-header, .ptool-todo-header, .ptool-batch-done-header) .ptool-text::after {
+  display: none;
+}
+.conversation-surface .ptc-head::before,
+.conversation-surface .conversation-tool-card__summary::before {
+  content: '{}';
+  order: -1;
+  width: var(--conversation-process-marker);
+  flex: 0 0 var(--conversation-process-marker);
+  text-align: center;
+  color: var(--text-secondary);
+  font: var(--weight-medium) var(--conversation-font-size-meta) var(--font-mono);
+}
+.conversation-surface .ptc-chevron { order: 2; }
+.conversation-surface .conversation-block[data-process-edge] :is(.ptool-icon, .ptool-cmd-icon, .thinking-state-dot),
+.conversation-surface .conversation-block[data-process-edge] .ptc-head::before {
+  position: relative;
+  z-index: 1;
+}
+/* SVG tool slots stay transparent; only non-SVG process markers keep paint. */
+.conversation-surface .conversation-block[data-process-edge] .thinking-state-dot,
+.conversation-surface .conversation-block[data-process-edge] .ptc-head::before {
+  background-color: var(--turn-process-panel);
+  box-shadow: 0 0 0 var(--space-1) var(--turn-process-panel);
+}
+
+.conversation-surface :is(.ptc-chevron, .conversation-disclosure-chevron) {
+  flex: 0 0 var(--conversation-process-marker);
+  width: var(--conversation-process-marker);
+  height: var(--conversation-process-marker);
+}
+
+.conversation-surface .ptc-meta {
+  order: 3;
+  padding-inline-start: calc(var(--conversation-process-marker) + var(--conversation-process-gap));
+  font-size: var(--conversation-font-size-meta);
+}
+
+.conversation-surface :is(.ptool-result-header, .ptool-results-header, .sw-inbox-row-header, .ptool-todo-header) > .ptool-text {
+  flex: 1 1 auto;
+}
+.conversation-surface :is(.ptool-result-header, .ptool-results-header, .sw-inbox-row-header, .ptool-todo-header)::after {
+  margin-inline-start: auto;
+}
+.conversation-surface .ptc-preview {
+  margin-block: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--conversation-font-size-content);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+
+.conversation-surface :is(.ptool-result-body, .ptc-body, .ptool-todo-body, .sw-inbox-row-body, .conversation-tool-card__body),
+.conversation-surface .ptool-results-block.expanded > .ptool-results-content {
+  margin: var(--space-1) var(--conversation-process-inset) var(--space-3) var(--space-4);
+  padding: var(--space-1) 0 var(--space-1) calc(var(--space-4) - var(--control-edge-inset));
+  border: 0;
+  border-inline-start: var(--control-edge-inset) solid var(--turn-spine);
+  border-radius: 0;
+  background: transparent;
+}
+
+.conversation-surface .ptool-results-block,
+.conversation-surface .ptool-results-block.expanded {
+  margin: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+}
+
+.conversation-surface .ptool-results-content .search-result-item {
+  padding: var(--space-2) 0;
+  border-color: var(--turn-rule);
+}
+
+.conversation-surface :is(.ptool-result-pre, .conversation-tool-card__pre, .ptc-detail pre) {
+  border-color: var(--turn-rule);
+  border-radius: var(--radius-sm);
+  background: var(--turn-process-surface);
+  box-shadow: none;
+}
+
+.conversation-surface :is(.ptool-result-pre > code, .conversation-tool-card__pre > code) {
+  padding: var(--space-3);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--conversation-font-size-content);
+  line-height: var(--leading-body);
+}
+
+.conversation-surface :is(.thinking-header, .ptool-result-header, .ptool-todo-header, .sw-inbox-row-header, .ptc-head, .conversation-tool-card__summary):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: var(--control-edge-inset);
+}
+
+.conversation-surface .thinking-block {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.conversation-surface .thinking-header {
+  opacity: 1;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.conversation-surface .thinking-header:hover {
+  background: var(--turn-process-hover);
+  opacity: 1;
+}
+
+.conversation-surface .thinking-block[data-state="active"] .thinking-header {
+  opacity: 1;
+}
+
+.conversation-surface .thinking-block[data-state="active"] .thinking-label {
+  color: var(--text-primary);
+}
+
+.conversation-surface .thinking-header:focus-visible,
+.conversation-surface .bilingual-header:focus-visible,
+.conversation-surface .conversation-tool-card__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.conversation-surface .thinking-state-dot {
+  box-sizing: border-box;
+  width: var(--conversation-process-marker);
+  height: var(--conversation-process-marker);
+  flex: 0 0 var(--conversation-process-marker);
+  border: var(--control-edge-inset) dashed var(--text-secondary);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.conversation-surface .thinking-block[data-state="complete"] .thinking-state-dot {
+  display: block;
+}
+
+.conversation-surface .thinking-block[data-state="active"] .thinking-state-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  animation: turn-thinking-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes turn-thinking-pulse {
+  0%, 100% { opacity: .62; transform: scale(.9); }
+  50% { opacity: 1; transform: scale(1.18); }
+}
+
+.conversation-surface .thinking-label {
+  flex: 1;
+}
+
+.conversation-surface .thinking-state-dot { order: -1; }
+.conversation-surface .thinking-toggle.conversation-disclosure-chevron {
+  order: 2;
+  margin: 0;
+  opacity: 1;
+  color: var(--text-secondary);
+  transform: rotate(-90deg);
+}
+.conversation-surface .thinking-block[open] > summary .thinking-toggle.conversation-disclosure-chevron {
+  transform: none;
+}
+
+.conversation-surface .conversation-disclosure-chevron {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  opacity: .72;
+  transform: none;
+  transition: transform var(--motion-fast) ease, opacity var(--motion-fast) ease;
+}
+
+.conversation-surface :is(.thinking-block, .bilingual-block)[open] > summary .conversation-disclosure-chevron {
+  transform: rotate(180deg);
+}
+
+.conversation-surface .thinking-content,
+.conversation-surface .thinking-block[open] .thinking-content {
+  max-height: none;
+  overflow: visible;
+  transition: none;
+}
+
+.conversation-surface .thinking-block:not([open]) .thinking-content {
+  display: none;
+}
+
+.conversation-surface .thinking-text {
+  padding: var(--space-1) 0 var(--space-2) calc(var(--space-4) - var(--control-edge-inset));
+  margin: var(--space-1) var(--conversation-process-inset) var(--space-3) var(--space-4);
+  border-top: 0;
+  border-left: 1px solid var(--turn-spine);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-process-font-size);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-body);
+}
+
+.conversation-surface .thinking-text > :first-child {
+  margin-top: var(--space-1);
+}
+
+/* Tool rounds share one restrained surface and never replay entrance effects. */
+
+.conversation-surface .conversation-block--tool .ptool-panel {
+  margin: 0;
+  animation: none;
+}
+
+.conversation-surface .conversation-block--tool .ptool-panel-header {
+  min-height: 24px;
+  padding: 0 var(--space-1) var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--conversation-font-size-caption);
+  font-weight: var(--weight-semibold);
+  letter-spacing: .012em;
+}
+
+.conversation-surface button.ptool-panel-header {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.conversation-surface button.ptool-panel-header:hover {
+  color: var(--text-secondary);
+}
+
+.conversation-surface button.ptool-panel-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 5px;
+}
+
+.conversation-surface .ptool-panel-routine {
+  padding: var(--space-1) var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--turn-rule) 82%, transparent);
+  border-radius: 999px;
+  color: var(--text-tertiary);
+  font-size: var(--conversation-font-size-caption);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+}
+
+.conversation-surface .ptool-panel-chevron {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform var(--motion-fast) ease;
+}
+
+.conversation-surface .ptool-panel.collapsed > .ptool-panel-body {
+  display: none;
+}
+
+.conversation-surface .ptool-panel.collapsed .ptool-panel-chevron {
+  transform: rotate(-90deg);
+}
+
+.conversation-surface .ptool-parent-child {
+  margin-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--turn-rule) 74%, transparent);
+}
+
+.conversation-surface .conversation-block--tool .ptool-turn {
+  margin: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+}
+
+[data-theme="tofu"] .conversation-surface .conversation-block--tool .ptool-turn {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.conversation-surface .conversation-block--tool .ptool-turn[data-batch-size="1"] > .ptool-turn-rno-solo {
+  display: none;
+}
+
+.conversation-surface .conversation-block--tool .ptool-line {
+  min-height: var(--conversation-process-row-height);
+  padding: var(--space-2) var(--conversation-process-inset);
+  gap: var(--conversation-process-gap);
+  border: 0;
+  font-size: var(--conversation-process-font-size);
+}
+
+.conversation-surface .conversation-block--tool .ptool-line:hover {
+  background: var(--turn-process-hover);
+}
+
+.conversation-surface .conversation-block--tool :is(
+  .ptool-badge-info,
+  .ptool-badge-ok,
+  .ptool-badge-err,
+  .ptool-badge-warn,
+  .ptool-badge-skip
+) {
+  border-width: 0;
+  border-radius: 5px;
+  box-shadow: none;
+  animation: none;
+}
+
+.conversation-surface .conversation-block--tool :is(.ptool-text, .ptool-cmd-label) {
+  font-size: var(--conversation-process-font-size);
+  line-height: var(--leading-title);
+}
+
+.conversation-surface .conversation-tool-card {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+}
+
+/* Keep exceptional outcomes colored, make routine metadata readable and quiet. */
+.conversation-surface :is(.ptc-status, .conversation-tool-card__chip--ok, .ptool-line-status--ok, .ptool-badge-info, .ptool-badge-ok) {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--conversation-font-size-meta);
+  box-shadow: none;
+  animation: none;
+}
+.conversation-surface .ptc-status.ptc-status-error {
+  color: var(--error-text);
+  background: var(--error-bg);
+}
+.conversation-surface .ptc-running .ptc-status { color: var(--accent); }
+
+.conversation-surface button.ptool-results-header,
+.conversation-surface button.eb-toggle,
+.conversation-surface button.ptool-cmd-toggle {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  touch-action: manipulation;
+}
+
+.conversation-surface .ptool-results-header[role="button"] {
+  border-bottom: 1px solid transparent;
+}
+
+.conversation-surface .ptool-results-header[role="button"]:focus-visible,
+.conversation-surface button.eb-toggle:focus-visible,
+.conversation-surface button.ptool-cmd-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.conversation-surface button.ptool-cmd-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.conversation-surface :is(.ptool-results-toggle, .eb-arrow) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform var(--motion-fast) ease;
+}
+
+.conversation-surface :is(.ptool-results-toggle, .eb-arrow) svg,
+.conversation-surface .ig-action-btn svg {
+  display: block;
+}
+
+.conversation-surface .ptool-results-block.expanded .ptool-results-toggle {
+  transform: rotate(180deg);
+}
+
+.conversation-surface .eb-section.eb-expanded .eb-arrow {
+  transform: rotate(90deg);
+}
+
+/* Historical process is a quiet turn-leading disclosure. Closing unmounts
+ * evidence; inner paging and scroll remain owned by HistoricalProcess. */
+.conversation-history-process {
+  margin-block: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-font-size-content);
+}
+
+.conversation-history-process > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  min-height: var(--control-h-lg);
+  padding: var(--space-2) var(--space-3);
+  border: var(--control-edge-inset) solid var(--turn-process-line);
+  border-radius: var(--conversation-process-radius);
+  background: var(--turn-process-panel);
+  list-style: none;
+  cursor: pointer;
+  line-height: var(--leading-title);
+  overflow-wrap: anywhere;
+  transition: color var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+
+.conversation-history-process > summary::-webkit-details-marker { display: none; }
+.conversation-history-process > summary::after {
+  content: '';
+  flex: 0 0 auto;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-inline-end: 1px solid currentColor;
+  border-block-end: 1px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--motion-fast) ease;
+}
+.conversation-history-process[open] > summary::after { transform: rotate(45deg); }
+.conversation-history-process > summary:hover {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+.conversation-history-process > summary:focus-visible {
+  outline: 0;
+  box-shadow: var(--focus-ring);
+}
+
+.conversation-history-process__body {
+  max-height: min(65vh, var(--conversation-reading-measure));
+  margin-block-start: var(--space-3);
+  margin-inline-start: 0;
+  padding: var(--space-3);
+  border: var(--control-edge-inset) solid var(--turn-process-line);
+  border-radius: var(--conversation-process-radius);
+  background: var(--bg-primary);
+  scrollbar-width: thin;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+}
+.conversation-history-process__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-block: var(--space-1) var(--space-2);
+  background: var(--bg-primary);
+  font-size: var(--conversation-font-size-meta);
+}
+.conversation-history-process__controls > span {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.conversation-history-process__controls[hidden] { display: none; }
+.conversation-history-notice {
+  font-size: var(--conversation-font-size-content);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+
+/* A non-modal reading inspector uses the native top layer. It keeps the
+ * original keyed evidence beneath its Turn for delegation and teardown. */
+.conversation-surface .conversation-answer-label > [data-conversation-part="turn-history-process"] {
+  flex: 0 0 auto;
+}
+.conversation-surface .conversation-answer-label .conversation-history-process > summary {
+  border-color: transparent;
+  background: var(--bg-secondary);
+  font-size: var(--conversation-font-size-meta);
+}
+.conversation-surface .conversation-history-process__body[popover] {
+  position: fixed;
+  inset: var(--space-16) var(--space-6) var(--space-6) auto;
+  box-sizing: border-box;
+  width: min(var(--conversation-inspector-width), calc(100vw - var(--space-12)));
+  height: auto;
+  max-height: calc(100dvh - var(--space-16) - var(--space-6));
+  margin: 0;
+  padding: var(--space-4);
+  border: var(--control-edge-inset) solid var(--border);
+  border-radius: var(--space-5);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow);
+}
+.conversation-surface .conversation-history-process__heading {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: var(--control-h-lg);
+  margin-block-end: var(--space-3);
+  padding-block-end: var(--space-3);
+  border-block-end: var(--control-edge-inset) solid var(--border-light);
+}
+.conversation-surface .conversation-history-process__heading > strong {
+  color: var(--text-primary);
+  font-size: var(--conversation-process-font-size);
+  font-weight: var(--weight-semibold);
+}
+@media (max-width: 720px) {
+  .conversation-surface .conversation-history-process__body[popover] {
+    inset: auto var(--space-2) var(--space-2);
+    width: calc(100vw - var(--space-4));
+    max-height: 78dvh;
+    border-radius: var(--space-5);
+  }
+}

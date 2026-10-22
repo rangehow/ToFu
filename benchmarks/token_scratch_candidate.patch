@@ -1,0 +1,84 @@
+diff --git a/packages/tofu-runtime/src/token_ingress.rs b/packages/tofu-runtime/src/token_ingress.rs
+index d22acf458..6c75c7191 100644
+--- a/packages/tofu-runtime/src/token_ingress.rs
++++ b/packages/tofu-runtime/src/token_ingress.rs
+@@ -41,7 +41,7 @@ impl Encoder {
+     pub fn loaded(&self) -> bool {
+         self.core.get().is_some()
+     }
+-    fn count(&self, text: &str, scratch: &mut Option<fancy_regex::Regex>) -> Result<u64, Error> {
++    fn count(&self, text: &str, scratch: &mut crate::token_rank_counter::Scratch) -> Result<u64, Error> {
+         if text.is_empty() {
+             return Ok(0);
+         }
+@@ -113,7 +113,7 @@ impl Counter {
+             .and_then(|v| v.checked_add(TOKEN_REQUEST_OVERHEAD))
+             .ok_or(Error::Overflow)?;
+         let mut bytes = 0usize;
+-        let mut scratch = None;
++        let mut scratch = crate::token_rank_counter::Scratch::default();
+         let mut add = |text: &str| -> Result<(), Error> {
+             if text.len() > self.bounds.text_bytes {
+                 return Err(Error::InputBytes);
+diff --git a/packages/tofu-runtime/src/token_rank_counter.rs b/packages/tofu-runtime/src/token_rank_counter.rs
+index d6e9adc35..ea4b5a859 100644
+--- a/packages/tofu-runtime/src/token_rank_counter.rs
++++ b/packages/tofu-runtime/src/token_rank_counter.rs
+@@ -17,6 +17,12 @@ pub(crate) struct RankCounter {
+     ranks: FxHashMap<Vec<u8>, tiktoken_rs::Rank>,
+     pattern: Regex,
+ }
++#[derive(Default)]
++pub(crate) struct Scratch {
++    regex: Option<Regex>,
++    // Byte offsets/ranks only; no text references or cross-request retention.
++    parts: Vec<(usize, u32)>,
++}
+ impl RankCounter {
+     pub(crate) fn new(encoding: Encoding) -> Result<Self, Error> {
+         let (source, expected, fingerprint, pattern) = match encoding {
+@@ -45,11 +51,14 @@ impl RankCounter {
+     // Count the canonical leftmost lowest-rank merges without materializing
+     // the final token slices/IDs. Adapted from MIT tiktoken byte-pair merging;
+     // notices are retained in licenses/tiktoken-rs-0.11.0/.
+-    fn piece_count(&self, piece: &[u8]) -> usize {
++    fn piece_count(&self, piece: &[u8], parts: &mut Vec<(usize, u32)>) -> usize {
+         if piece.len() >= crate::token_merge_heap::MIN_PIECE_BYTES {
+             return crate::token_merge_heap::count(piece, &self.ranks);
+         }
+-        let mut parts = Vec::with_capacity(piece.len() + 1);
++        parts.clear();
++        // Exact growth keeps reusable short-piece storage below the heap
++        // crossover instead of doubling capacity across differently sized pieces.
++        parts.reserve_exact(piece.len() + 1);
+         let mut best = (u32::MAX, usize::MAX);
+         for index in 0..piece.len() - 1 {
+             let rank = *self.ranks.get(&piece[index..index + 2]).unwrap_or(&u32::MAX);
+@@ -65,8 +74,8 @@ impl RankCounter {
+         };
+         while best.0 != u32::MAX {
+             let index = best.1;
+-            if index > 0 { parts[index-1].1 = merged_rank(&parts,index-1); }
+-            parts[index].1 = merged_rank(&parts,index);
++            if index > 0 { parts[index-1].1 = merged_rank(parts,index-1); }
++            parts[index].1 = merged_rank(parts,index);
+             parts.remove(index+1);
+             best = (u32::MAX,usize::MAX);
+             for (index, &(_,rank)) in parts[..parts.len()-1].iter().enumerate() {
+@@ -75,13 +84,13 @@ impl RankCounter {
+         }
+         parts.len()-1
+     }
+-    pub(crate) fn count(&self, text: &str, scratch: &mut Option<Regex>) -> Result<u64, Error> {
+-        let regex = scratch.get_or_insert_with(|| self.pattern.clone());
++    pub(crate) fn count(&self, text: &str, scratch: &mut Scratch) -> Result<u64, Error> {
++        let regex = scratch.regex.get_or_insert_with(|| self.pattern.clone());
+         let mut count = 0u64;
+         for matched in regex.find_iter(text) {
+             let piece = matched.map_err(|_| Error::Encoder)?.as_str().as_bytes();
+             let tokens = if self.ranks.contains_key(piece) { 1 }
+-                else { self.piece_count(piece) };
++                else { self.piece_count(piece, &mut scratch.parts) };
+             count = count.checked_add(tokens as u64).ok_or(Error::Overflow)?;
+         }
+         Ok(count)

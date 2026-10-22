@@ -1,0 +1,72 @@
+{
+  "pack": "tofu.site-pack/v1",
+  "id": "friday",
+  "name": "Friday Skills Market",
+  "version": 1,
+  "domains": ["friday.sankuai.com"],
+  "aliases": ["friday-skills", "skills-market", "技能市场"],
+  "auth": {
+    "login_url": "https://friday.sankuai.com/skills/skills-market",
+    "project": false,
+    "risk_notice": "使用浏览器中的美团 SSO 活会话；采集正文仅在内存中短暂保留并按域复核。"
+  },
+  "operations": [
+    {
+      "name": "search",
+      "description": "检索技能市场并跨虚拟滚动/分页读取结构化技能记录",
+      "access": "read",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {"type": "string", "minLength": 1, "maxLength": 512,
+                    "description": "Native keywords, not web operators or a general question."},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 40},
+          "pages": {"type": "integer", "minimum": 1, "maximum": 5}
+        },
+        "required": ["query"]
+      },
+      "output_schema": {"type": "array", "items": {"type": "object"}},
+      "timeout": 90,
+      "steps": [
+        {"do": "research",
+         "url": "https://friday.sankuai.com/skills/skills-market?deepSearch=false&keyword={query}&mainView=skill&orderByDownloadCount=all&orderByTotalCallCount=all&orderByTotalCallerCount=all&page=1&pageSize={limit|floor:30}&securityScanStatus=all&spaceKeyword=&spaceSortOrder=default&spaceTypeFilter=org%2Cproject&spaceVerifiedFilter=all&supportEnv=all&tag=&verifiedType=all&viewMode=card&visibility=all",
+         "max_chars": 80000, "max_scrolls": 4,
+         "max_pages_from_param": "pages", "pagination": "auto"},
+        {"do": "normalize", "kind": "search_records",
+         "query_from_param": "query", "limit_from_param": "limit",
+         "limit_max": 40, "source_name": "Friday Skills Market"}
+      ]
+    },
+    {
+      "name": "detail",
+      "description": "深层读取技能市场页面或技能详情",
+      "access": "read",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {"type": "string", "maxLength": 8192, "pattern": "^https?://"},
+          "max_chars": {"type": "integer", "minimum": 1000, "maximum": 80000}
+        },
+        "required": ["url"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "url": {"type": "string"},
+          "content": {"type": "string"}
+        }
+      },
+      "timeout": 90,
+      "steps": [
+        {"do": "research", "url": "{url|raw}",
+         "max_chars_from_param": "max_chars", "max_chars": 80000,
+         "max_scrolls": 3, "max_pages": 1, "pagination": "none"},
+        {"do": "normalize", "kind": "detail",
+         "max_chars_from_param": "max_chars", "max_chars_default": 80000}
+      ]
+    }
+  ]
+}

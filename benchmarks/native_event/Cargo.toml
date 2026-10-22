@@ -1,0 +1,15 @@
+[package]
+name = "tofu-event-prototype"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "tofu_event_prototype"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "=0.29.2", features = ["extension-module"] }
+
+[features]
+stable-abi = ["pyo3/abi3-py312"]

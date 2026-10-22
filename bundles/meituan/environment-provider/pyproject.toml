@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "tofu-meituan-environments"
+version = "0.1.0"
+readme = "README.md"
+requires-python = ">=3.10"
+description = "Optional internal MLP image and CodeLab environment provider"
+dependencies = ["tofu-environments>=0.1,<0.2", "websocket-client>=1.7,<2"]
+[project.optional-dependencies]
+official-auth = ["tofu-mtsso-auth>=0.1,<0.2"]
+[project.entry-points."tofu.environment_providers"]
+mlp = "tofu_meituan_environments:provider_factory"
+[tool.setuptools.packages.find]
+include = ["tofu_meituan_environments*"]
+
+[project.entry-points."tofu.compute_providers"]
+hope = "tofu_meituan_environments.hope:hope_provider_factory"
+
+[tool.setuptools.package-data]
+tofu_meituan_environments = ["*.json", "java/*.java"]

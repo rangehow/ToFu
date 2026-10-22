@@ -1,0 +1,1565 @@
+{
+  "brand": "meituan",
+  "recipe_version": "tofu.provider-offering-recipe/v1",
+  "key": "meituan",
+  "category": "relay",
+  "name": "Meituan (AIGC Gateway)",
+  "base_url": "https://aigc.sankuai.com/v1/openai/native",
+  "faces": {
+    "anthropic": {
+      "base_url": "https://aigc.sankuai.com/v1/anthropic",
+      "protocol": "anthropic"
+    },
+    "kunlun": {
+      "base_url": "https://aigc.sankuai.com/v1",
+      "protocol": "responses",
+      "responses_profile": "compatible",
+      "extra_headers": {
+        "x-context-provider": "kunlun"
+      },
+      "inference_profile": {
+        "sampling": {
+          "temperature": "omit"
+        },
+        "features": {
+          "responses_reasoning_replay": "supported"
+        }
+      }
+    }
+  },
+  "_kunlun_face_note": "THIRD face, added 2026-10-20 on live evidence. aigc.sankuai.com exposes an OpenAI-shaped Responses endpoint at /v1/responses beside the native chat face. Two facts measured on App **0733: (1) the public wire id gpt-6.1-sol is served but RPM-walled — repeated probes 0/20/40/60s apart all returned status=failed rate_limit_exceeded 'App:**0733在模型:gpt-6.1-sol每分钟请求次数超过限制'; (2) the Kunlun serving alias kunlunbedrock.gpt-6.1-sol-m17 returns 200 and streams, but ONLY with 'x-context-provider: kunlun' (without it: 200 + invalid_prompt '配置不存在'; on the chat face: 400 '配置不存在'; on gpt-6.1-sol with the same header: 400 '该模型在 provider 下无可用账号'). So the selector is per-DEPLOYMENT, not per-account: it lives on this face and reaches only the wire ids that pin face='kunlun' via the recipe's request_faces map. Do NOT lift these headers to the provider level — they 400 every other model on both other faces. The alias is not pinnable forever: '-m17' is a Kunlun revision, so it is a SEED entry in the pool rather than a replacement for the public id. This endpoint also REJECTS sampling: a request with temperature returns 400 \"Unsupported parameter: 'temperature' is not supported with this model\", so the face declares sampling.temperature='omit' (scoped to the face because that is where it was measured). Verified end to end through lib/llm/chat.py: model kunlunbedrock.gpt-6.1-sol-m17 + x-context-provider:kunlun + responses -> 'TOFU-OK' (22 tokens). REPLAY (added 2026-10-21): this face streams opaque 'reasoning' items carrying only encrypted_content — no summary text. A stateless Responses route that does NOT declare features.responses_reasoning_replay cannot re-send that item, so checked conversion refuses the whole next request as protocol_conversion:mandatory_continuity_unrepresentable and the Turn dies in request-prepare (observed in two live conversations at tool round 4-5). The endpoint both emits the item and serves the wire id that produces it, so replay is declared here rather than dropping the item: undeclared replay is exactly the closed-world default and is not a data problem.",
+  "_extra_headers_note": "Do NOT re-add M-TransferContext-INF-CELL here. It pins every request to a named gray cell; when gray-release-ai-gpt-test was decommissioned on 2026-09-21 the whole provider 502'd (all models, both faces) while header-less clients stayed up. Gray cells are temporary by nature — the default must be the stable cell.",
+  "_face_note": "ONE account, TWO wire faces. aigc.sankuai.com serves the same models over an OpenAI-compatible face (base_url, default) and an Anthropic-native face (faces.anthropic), sharing one set of API keys. Claude-family entries are routed to the anthropic face AUTOMATICALLY by lib/llm_dispatch/provider_face.resolve_face — they carry no per-model 'face' key, so a future opus-6/fable-6 is correct the day it is added. That face is the only one that emits thinking-block signature_delta (measured 2026-07-28: the OpenAI face streamed 111 chunks / 33 reasoning_content / 0 signature), and a thinking block replayed without its signature is rejected upstream. Do NOT delete faces.anthropic: a Claude entry with no anthropic face on this gateway is REFUSED at slot-build time rather than silently downgraded. kimi-k3 is ALSO pinned to the anthropic face (per-model 'face' key, 2026-09-10): its upstream is Anthropic-native, and the OpenAI face's translation layer started leaking Anthropic-protocol SSE frames (message_start/ping/content_block_*) into chat.completions streams at ~11:21 that day, poisoning Tofu's one-malformed-frame = untrustworthy-tool-stream guard. Probed live: POST /v1/anthropic/v1/messages model=kimi-k3 returns clean thinking+text, stream and non-stream.",
+  "offering_recipes": [
+    {
+      "model_id": "LongCat-Flash-Thinking-2601",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "family_estimate",
+      "cost": 0.0
+    },
+    {
+      "model_id": "LongCat-2.0",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "context_window": 1000000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.0
+    },
+    {
+      "model_id": "gemini-2.5-pro",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 100,
+      "cost": 0.005
+    },
+    {
+      "model_id": "gemini-2.5-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 200,
+      "cost": 0.001
+    },
+    {
+      "model_id": "gemini-2.5-flash-lite",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 200,
+      "cost": 0.001
+    },
+    {
+      "model_id": "gemini-3.1-flash-lite",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.001
+    },
+    {
+      "model_id": "gemini-3.1-pro-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 5,
+      "cost": 0.006
+    },
+    {
+      "model_id": "gemini-3-flash-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "audio_chat"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "LongCat-Flash-Omni-2603",
+      "capabilities": [
+        "text",
+        "vision",
+        "audio_chat"
+      ],
+      "rpm": 60,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "family_estimate",
+      "cost": 0.0
+    },
+    {
+      "model_id": "gemini-3.5-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "context_window": 1000000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.005
+    },
+    {
+      "model_id": "gemini-3.6-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 20,
+      "context_window": 1000000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.005
+    },
+    {
+      "model_id": "gemini-3.7-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 20,
+      "context_window": 1000000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.005
+    },
+    {
+      "model_id": "gemini-4-argon",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 5,
+      "context_window": 1048576,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.006
+    },
+    {
+      "model_id": "gemini-3.5-flash-lite",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 20,
+      "context_window": 1000000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.001
+    },
+    {
+      "model_id": "qwen3.5-plus",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "qwen3-vl-plus",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.001
+    },
+    {
+      "model_id": "qwen-mt-plus",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "MiniMax-M3.1-Flash-Preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.002
+    },
+    {
+      "model_id": "MiniMax-M3",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.002
+    },
+    {
+      "model_id": "MiniMax-M2.7",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 90,
+      "cost": 0.001
+    },
+    {
+      "model_id": "MiniMax-M2.5",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "MiniMax-M2.1",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "kimi-k3",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.008,
+      "face": "anthropic"
+    },
+    {
+      "model_id": "kimi-k2.7-code",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.003
+    },
+    {
+      "model_id": "kimi-k2.7-code-highspeed",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.005
+    },
+    {
+      "model_id": "kimi-k2.6",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.003
+    },
+    {
+      "model_id": "gpt-4.1-mini",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "gpt-5.3-codex",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 10,
+      "cost": 0.006
+    },
+    {
+      "model_id": "gpt-5.2-codex",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 10,
+      "cost": 0.006
+    },
+    {
+      "model_id": "o3-pro",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 10,
+      "cost": 0.06
+    },
+    {
+      "model_id": "grok-4.6",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.01
+    },
+    {
+      "model_id": "grok-4.7",
+      "request_ids": [
+        "aws.grok-4.7"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.01
+    },
+    {
+      "model_id": "qwen3.8-omni-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "context_window": 1000000,
+      "rpm": 100,
+      "cost": 0.0004
+    },
+    {
+      "model_id": "mimo-v2.6-pro",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking", "cheap"],
+      "context_window": 1000000,
+      "rpm": 100,
+      "cost": 0.0008
+    },
+    {
+      "model_id": "mimo-v2.6-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "context_window": 1000000,
+      "rpm": 100,
+      "cost": 0.0003
+    },
+    {
+      "model_id": "gpt-6.1-sol",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.01,
+      "request_ids": [
+        "gpt-6.1-sol",
+        "kunlunbedrock.gpt-6.1-sol-m17"
+      ],
+      "request_faces": {
+        "kunlunbedrock.gpt-6.1-sol-m17": "kunlun"
+      }
+    },
+    {
+      "model_id": "gpt-6-sol",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.01
+    },
+    {
+      "model_id": "gpt-6-luna",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.0005
+    },
+    {
+      "model_id": "gpt-5.6-sol",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.02
+    },
+    {
+      "model_id": "gpt-5.6-terra",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.009
+    },
+    {
+      "model_id": "gpt-5.6-luna",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.003
+    },
+    {
+      "model_id": "glm-5",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.004
+    },
+    {
+      "model_id": "glm-5-turbo",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.002
+    },
+    {
+      "model_id": "glm-4.7",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "doubao-seed-1-6-vision-250815",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001
+    },
+    {
+      "model_id": "glm-5.3",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "context_window": 1000000,
+      "pricing": {
+        "input": 3.45,
+        "output": 13.81,
+        "currency": "USD",
+        "cacheWriteMul": 1.0,
+        "cacheReadMul": 0.1,
+        "name": "GLM-5.3"
+      }
+    },
+    {
+      "model_id": "glm-5.2",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "context_window": 1000000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.004
+    },
+    {
+      "model_id": "glm-5.1",
+      "request_ids": [
+        "glm-5.1",
+        "glm-5.1-huawei"
+      ],
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 60,
+      "context_window": 200000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.004
+    },
+    {
+      "model_id": "glm-5v-turbo",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 60,
+      "context_window": 200000,
+      "context_window_exact": true,
+      "context_window_source": "vendor_official",
+      "cost": 0.002
+    },
+    {
+      "model_id": "Doubao-Seed-2.0-pro",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.002
+    },
+    {
+      "model_id": "deepseek-v4-pro",
+      "display_name": "DeepSeek V4 Pro",
+      "request_ids": [
+        "deepseek-v4-pro",
+        "deepseek-v4-pro-tencent"
+      ],
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.003
+    },
+    {
+      "model_id": "deepseek-v4.1-flash",
+      "display_name": "DeepSeek V4.1 Flash",
+      "request_ids": [
+        "deepseek-v4-flash",
+        "deepseek-flash",
+        "deepseek-v4-flash-huawei",
+        "deepseek-v4-flash-tencent",
+        "deepseek-v4-flash-meituan"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.0002
+    },
+    {
+      "model_id": "deepseek-v4-flash-vision-exp",
+      "display_name": "DeepSeek V4 Flash Vision Exp",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.0002
+    },
+    {
+      "model_id": "claude-opus-5.5",
+      "request_ids": [
+        "kunlunbedrock.claude-opus-5.5-m17",
+        "aws.claude-opus-5.5"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.04
+    },
+    {
+      "model_id": "claude-opus-5",
+      "request_ids": [
+        "yuju-claude-opus-5-evaDaily"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-opus-4.8",
+      "request_ids": [
+        "aws.claude-opus-4.8",
+        "yuju-claude-opus-4.8-evaDaily"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-opus-4.7",
+      "request_ids": [
+        "aws.claude-opus-4.7",
+        "aws.claude-opus-4.7-nova04",
+        "yuju-claude-opus-4.7-evaDaily"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-opus-4.6",
+      "request_ids": [
+        "aws.claude-opus-4.6",
+        "aws.claude-opus-4.6-b",
+        "vertex.claude-opus-4.6"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "claude-sonnet-5",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 50,
+      "cost": 0.009
+    },
+    {
+      "model_id": "claude-fable-5",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.045
+    },
+    {
+      "model_id": "Doubao-1.5-lite-32k",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 30,
+      "cost": 6.3e-05,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-1.5-pro-32k",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 30,
+      "cost": 0.000194,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-1.5-pro-32k-character-0715",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 30,
+      "cost": 0.000194,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-1.5-vision-pro-32k",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 30,
+      "cost": 0.000833,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-Seed-1.6",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 30,
+      "cost": 0.000611,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-Seed-1.6-flash",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 30,
+      "cost": 8.3e-05,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-Seed-1.8",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.000611,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-Seed-2.0-lite",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 120,
+      "cost": 0.000292,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-pro-128k",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 30,
+      "cost": 0.000972,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-pro-4k",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 30,
+      "cost": 0.000194,
+      "context_window": 8000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Doubao-seed-2.1-pro",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.0025,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Ernie-5.0-thinking-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking"
+      ],
+      "rpm": 10,
+      "cost": 0.002083,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "GLM-4V",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 60,
+      "cost": 0.006944,
+      "context_window": 2000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Llama-4-Maverick-17B-128E-Instruct-FP8-Meituan",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 60,
+      "cost": 0.001,
+      "context_window": 64000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Llama-4-Scout-17B-16E-Meituan",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 60,
+      "cost": 0.001,
+      "context_window": 64000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "LongCat-Tel-18B-Chat",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 60,
+      "cost": 0.000104,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "MiniMax-M1",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 50,
+      "cost": 0.001833,
+      "context_window": 1024000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "MiniMax-M2",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 50,
+      "cost": 0.00075,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "Qwen3_8-27B-Meituan",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.000167,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "abab5.5-chat",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 8,
+      "cost": 0.002083,
+      "context_window": 8000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "abab5.5s-chat",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 8,
+      "cost": 0.000111,
+      "context_window": 8000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "abab6.5g-chat",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 10,
+      "cost": 0.000111,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "abab6.5s-chat",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 10,
+      "cost": 0.000139,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "abab6.5t-chat",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 10,
+      "cost": 0.000111,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "claude-haiku-4.5",
+      "request_ids": [
+        "aws.claude-haiku-4.5"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 120,
+      "cost": 0.003,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "claude-opus-4.5",
+      "request_ids": [
+        "aws.claude-opus-4.5"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.015,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "claude-sonnet-4",
+      "request_ids": [
+        "aws.claude-sonnet-4"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.009,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "claude-sonnet-4.5",
+      "request_ids": [
+        "aws.claude-sonnet-4.5"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.009,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "claude-fable-5.1",
+      "request_ids": [
+        "azure.claude-fable-5.1"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.03,
+      "context_window": 1000000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+
+    {
+      "model_id": "deepseek-v3-friday",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 3,
+      "cost": 0.000694,
+      "context_window": 64000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "deepseek-v31-meituan",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 10,
+      "cost": 0.001111,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gemini-3.8-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 120,
+      "cost": 0.00225,
+      "context_window": 1000000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4-0520",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 60,
+      "cost": 0.013889,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4-air",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 60,
+      "cost": 5.2e-05,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4-airx",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 60,
+      "cost": 0.001389,
+      "context_window": 8000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4-flash",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 60,
+      "cost": 0.001,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4.5v",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.001111,
+      "context_window": 64000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4.6",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.000694,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4.6v",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.000278,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-4v-plus",
+      "capabilities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "rpm": 60,
+      "cost": 0.000556,
+      "context_window": 8000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-5.3-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 100,
+      "cost": 0.000125,
+      "context_window": 1000000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-z1-air",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 6.9e-05,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-z1-airx",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.000694,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "glm-z1-flash",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 30,
+      "cost": 0.001,
+      "context_window": 32000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-4.1",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.005494,
+      "context_window": 1024000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-4.1-nano",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 30,
+      "cost": 0.00025,
+      "context_window": 1024000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-4o-2024-05-13",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 100,
+      "cost": 0.00625,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-4o-2024-08-06",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 200,
+      "cost": 0.006364,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-4o-2024-11-20",
+      "capabilities": [
+        "text",
+        "vision"
+      ],
+      "rpm": 100,
+      "cost": 0.006868,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-4o-mini",
+      "capabilities": [
+        "text",
+        "vision",
+        "cheap"
+      ],
+      "rpm": 200,
+      "cost": 0.000413,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-5.4",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.008741,
+      "context_window": 1000000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-5.4-mini",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 120,
+      "cost": 0.002623,
+      "context_window": 400000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "gpt-5.5",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.015147,
+      "context_window": 1050000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "grok-3",
+      "capabilities": [
+        "text"
+      ],
+      "rpm": 60,
+      "cost": 0.009,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "grok-3-mini",
+      "capabilities": [
+        "text",
+        "cheap"
+      ],
+      "rpm": 120,
+      "cost": 0.000764,
+      "context_window": 128000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "hy3-preview",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 5,
+      "cost": 0.000361,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "hy4-preview",
+      "capabilities": [
+        "text",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 60,
+      "cost": 0.001667,
+      "context_window": 1000000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "kimi-0902-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.002326,
+      "context_window": 1000000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "o3-2025-04-16",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 60,
+      "cost": 0.004327,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "o3-mini-2025-01-31",
+      "capabilities": [
+        "text",
+        "thinking"
+      ],
+      "rpm": 120,
+      "cost": 0.00275,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "o4-mini-2025-04-16",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking"
+      ],
+      "rpm": 120,
+      "cost": 0.00275,
+      "context_window": 200000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "qwen3-max-preview",
+      "capabilities": [
+        "text",
+        "vision",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 20,
+      "cost": 0.005208,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "qwen3-vl-flash",
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 20,
+      "cost": 0.000458,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    },
+    {
+      "model_id": "qwen3.5",
+      "request_ids": [
+        "qwen3.5-baidu"
+      ],
+      "capabilities": [
+        "text",
+        "vision",
+        "video",
+        "thinking",
+        "cheap"
+      ],
+      "rpm": 5,
+      "cost": 0.000583,
+      "context_window": 256000,
+      "context_window_exact": false,
+      "context_window_source": "meituan_plaza"
+    }
+  ]
+}

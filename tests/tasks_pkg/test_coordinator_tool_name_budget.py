@@ -1,7 +1,7 @@
 """Every Coordinator-family surface fits the Sankuai Claude tool-name budget.
 
 docs/LLM_COST_OPTIMIZATION.md section 6 ("Coordinator-role surfaces"): Claude on
-your-llm-gateway.example.com's Anthropic face reuses its prompt cache only while the joined
+a declared gateway's Anthropic face (the budget test gateway) reuses its prompt cache only while the joined
 tool names stay within the route budget. A Project Coordinator's human Turn
 carried all 23 role tools (456 bytes), every one required-direct, so once the
 artifact readers joined its ceiling each such Claude round would re-write its
@@ -44,10 +44,13 @@ from tests.router.test_router_tool_name_budget import router as router
 from tests.tasks_pkg.test_coordinator_policy import coordinator as coordinator
 from tests.tasks_pkg.test_coordinator_tool_surface import assemble
 
-pytestmark = pytest.mark.unit
+from tests.support.gateway_profiles import (  # noqa: F401 (fixture)
+    CLAUDE_TOOL_NAME_BUDGET_BYTES, claude_tool_name_budget_gateway)
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('claude_tool_name_budget_gateway')]
 
 OWNER = 7
-BUDGET = tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+BUDGET = CLAUDE_TOOL_NAME_BUDGET_BYTES
 DISCOVERY = frozenset({'search_tools', 'execute_tools'})
 READERS = ('read_tool_artifact', 'search_tool_artifact')
 
@@ -150,7 +153,7 @@ def test_project_coordinator_human_turn_fits_the_budget_with_leads_and_memory_di
 @pytest.mark.parametrize('protocol,base_url,model', [
     ('anthropic', SANKUAI_ANTHROPIC, 'kimi-k3.1-pro'),
     ('anthropic', 'https://api.anthropic.com/v1', 'claude-opus-5.5'),
-    ('openai', 'https://api.openai.com/v1', 'claude-opus-5.5'),
+    ('openai', 'https://claude-gateway.example.test/v1/openai/native', 'claude-opus-5.5'),
 ])
 def test_project_coordinator_routes_without_a_name_budget_keep_the_whole_surface_direct(
         coordinator, protocol, base_url, model):

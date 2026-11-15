@@ -27,7 +27,9 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
 use crate::entity::EntityKey;
 use crate::generated_paper_build as limits;
-use crate::generated_tofudb_ir::{MAX_ENTITY_KEY_BYTES, MAX_LEGACY_DOCUMENT_BYTES, MAX_ENTITY_RANGE_ROWS};
+use crate::generated_tofudb_ir::{
+    MAX_ENTITY_KEY_BYTES, MAX_ENTITY_RANGE_ROWS, MAX_LEGACY_DOCUMENT_BYTES,
+};
 use crate::paper_build_artifact;
 use crate::paper_build_receipt::lower_hex;
 use crate::paper_document;
@@ -49,8 +51,7 @@ const CAPACITY_KEY: &str = "capacity";
 const MIGRATION_KEY: &str = "migration";
 /// A migration packet has its ordinary literal byte bound, independent of
 /// retained record counts.
-const MAX_BUILD_LEDGER_JSON_BYTES: usize =
-    MAX_LEGACY_DOCUMENT_BYTES;
+const MAX_BUILD_LEDGER_JSON_BYTES: usize = MAX_LEGACY_DOCUMENT_BYTES;
 const MAX_DOCUMENT_LEDGER_JSON_BYTES: usize = 256;
 
 #[derive(Deserialize)]
@@ -250,9 +251,16 @@ fn read_build_reservations(
     let mut cursor = start;
     loop {
         let page = database.entity_scan(transaction, &cursor, &end, MAX_ENTITY_RANGE_ROWS)?;
-        if page.is_empty() { break; }
+        if page.is_empty() {
+            break;
+        }
         let full_page = page.len() == MAX_ENTITY_RANGE_ROWS;
-        let mut successor = page.last().expect("nonempty reservation page").0.key_bytes().to_vec();
+        let mut successor = page
+            .last()
+            .expect("nonempty reservation page")
+            .0
+            .key_bytes()
+            .to_vec();
         successor.push(0);
         for (key, raw) in &page {
             let name = std::str::from_utf8(key.key_bytes())
@@ -267,9 +275,15 @@ fn read_build_reservations(
                 u64::from_be_bytes(raw.as_slice().try_into().unwrap()),
             );
         }
-        if !full_page { break; }
-        cursor = EntityKey::new(transaction.tenant_id(), TENANT_GLOBAL_OWNER_ID,
-                                limits::BUDGET_NAMESPACE, &successor)?;
+        if !full_page {
+            break;
+        }
+        cursor = EntityKey::new(
+            transaction.tenant_id(),
+            TENANT_GLOBAL_OWNER_ID,
+            limits::BUDGET_NAMESPACE,
+            &successor,
+        )?;
     }
     Ok(reservations)
 }

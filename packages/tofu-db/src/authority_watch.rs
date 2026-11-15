@@ -39,10 +39,26 @@ use crate::authority::AuthorityDatabase;
 // they are not a per-authority correlation or a health/admission decision.
 #[derive(Clone, Copy)]
 #[repr(u8)]
-enum BackgroundHold { RotationPrepare, RotationInstall, PackPrepare, PackInstall,
-    OverlayCapture, OverlayPublish, MaintenanceRound, HistoryInstall,
-    SearchPrepare, SearchAcknowledge, SearchActivation, SearchBackfill, SearchDirtyList,
-    ArchiveCapture, ArchivePublish, RotationPartial, RotationHandover, SearchActivationCapture }
+enum BackgroundHold {
+    RotationPrepare,
+    RotationInstall,
+    PackPrepare,
+    PackInstall,
+    OverlayCapture,
+    OverlayPublish,
+    MaintenanceRound,
+    HistoryInstall,
+    SearchPrepare,
+    SearchAcknowledge,
+    SearchActivation,
+    SearchBackfill,
+    SearchDirtyList,
+    ArchiveCapture,
+    ArchivePublish,
+    RotationPartial,
+    RotationHandover,
+    SearchActivationCapture,
+}
 const BACKGROUND_HOLDS: [(BackgroundHold, &str); 18] = [
     (BackgroundHold::RotationPrepare, "rotation.prepare"),
     (BackgroundHold::RotationInstall, "rotation.install"),
@@ -61,10 +77,15 @@ const BACKGROUND_HOLDS: [(BackgroundHold, &str); 18] = [
     (BackgroundHold::ArchivePublish, "archive.publish"),
     (BackgroundHold::RotationPartial, "rotation.partial"),
     (BackgroundHold::RotationHandover, "rotation.handover"),
-    (BackgroundHold::SearchActivationCapture, "search.activation-capture"),
+    (
+        BackgroundHold::SearchActivationCapture,
+        "search.activation-capture",
+    ),
 ];
 fn background_hold(operation: &str) -> Option<BackgroundHold> {
-    BACKGROUND_HOLDS.iter().find_map(|(hold, name)| (*name == operation).then_some(*hold))
+    BACKGROUND_HOLDS
+        .iter()
+        .find_map(|(hold, name)| (*name == operation).then_some(*hold))
 }
 
 /// Fixed phase vocabulary of an attributed hold, in `HOLD_PHASE_NAMES` order.
@@ -72,10 +93,36 @@ fn background_hold(operation: &str) -> Option<BackgroundHold> {
 /// time to one phase; time outside every instrumented stage is `Other`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
-pub(crate) enum HoldPhase { Decode, Execute, Read, Stage, Validate, Journal, Sync, Apply,
-    Merge, Retention, Publish, Wait, Other }
-pub(crate) const HOLD_PHASE_NAMES: [&str; 13] = ["decode", "execute", "read", "stage",
-    "validate", "journal", "sync", "apply", "merge", "retention", "publish", "wait", "other"];
+pub(crate) enum HoldPhase {
+    Decode,
+    Execute,
+    Read,
+    Stage,
+    Validate,
+    Journal,
+    Sync,
+    Apply,
+    Merge,
+    Retention,
+    Publish,
+    Wait,
+    Other,
+}
+pub(crate) const HOLD_PHASE_NAMES: [&str; 13] = [
+    "decode",
+    "execute",
+    "read",
+    "stage",
+    "validate",
+    "journal",
+    "sync",
+    "apply",
+    "merge",
+    "retention",
+    "publish",
+    "wait",
+    "other",
+];
 
 /// The phase a stage charges, or None when it inherits its enclosing span's
 /// phase (generic writes, wrappers, counters). Physical reads, fsyncs and
@@ -84,101 +131,221 @@ pub(crate) fn hold_phase_of_stage(stage: usize) -> Option<HoldPhase> {
     use crate::fsync_stats::*;
     use crate::request_profile as profile;
     Some(match stage {
-        STAGE_SEMANTIC_TRANSACTION_COMPILE | STAGE_SEMANTIC_PAYLOAD_DECODE
-        | STAGE_PROTOCOL_FRAME_AFTER_PREFIX | STAGE_PROTOCOL_FRAME_DECODE
-        | STAGE_EMBEDDED_ENVELOPE_DECODE | STAGE_EMBEDDED_PAYLOAD_VALIDATE
-        | STAGE_EMBEDDED_NUMERIC_COMPATIBILITY | STAGE_EMBEDDED_VALUE_FALLBACK
-        | STAGE_EMBEDDED_PAYLOAD_PROOF | profile::PARALLEL_COMPILE => HoldPhase::Decode,
-        STAGE_SEMANTIC | STAGE_IR_STEPS | STAGE_COMMAND_EXECUTE | STAGE_PARALLEL_PREPARE
-        | STAGE_TURN_EVENT_LOAD | STAGE_TURN_EVENT_PROJECTION | STAGE_TURN_EVENT_STORE
-        | STAGE_TA_CLAIMS | STAGE_TA_HEADER | STAGE_TA_LANE_READS | STAGE_TA_PROJECTION
-        | STAGE_TA_DOCUMENT | STAGE_TA_INDEXES | STAGE_TA_DIRTY | STAGE_TA_SYNC
-        | STAGE_PROJECTION_HEAD_MATERIALIZE | STAGE_PROJECTION_HEAD_CHECKPOINT
-        | STAGE_PROJECTION_HEAD_PATCH_APPLY | STAGE_DOCUMENT_VALUE_MATERIALIZE
-        | STAGE_DOCUMENT_JSON_CANONICAL | STAGE_DOCUMENT_PROJECT_ENCODE
-        | STAGE_DOCUMENT_JSON_FALLBACK | profile::QUERY_EXECUTE | profile::TURN_PUBLIC
-        | profile::TURN_SNAPSHOT_ENCODE | profile::TURN_SNAPSHOT_WINDOW
+        STAGE_SEMANTIC_TRANSACTION_COMPILE
+        | STAGE_SEMANTIC_PAYLOAD_DECODE
+        | STAGE_PROTOCOL_FRAME_AFTER_PREFIX
+        | STAGE_PROTOCOL_FRAME_DECODE
+        | STAGE_EMBEDDED_ENVELOPE_DECODE
+        | STAGE_EMBEDDED_PAYLOAD_VALIDATE
+        | STAGE_EMBEDDED_NUMERIC_COMPATIBILITY
+        | STAGE_EMBEDDED_VALUE_FALLBACK
+        | STAGE_EMBEDDED_PAYLOAD_PROOF
+        | profile::PARALLEL_COMPILE => HoldPhase::Decode,
+        STAGE_SEMANTIC
+        | STAGE_IR_STEPS
+        | STAGE_COMMAND_EXECUTE
+        | STAGE_PARALLEL_PREPARE
+        | STAGE_TURN_EVENT_LOAD
+        | STAGE_TURN_EVENT_PROJECTION
+        | STAGE_TURN_EVENT_STORE
+        | STAGE_TA_CLAIMS
+        | STAGE_TA_HEADER
+        | STAGE_TA_LANE_READS
+        | STAGE_TA_PROJECTION
+        | STAGE_TA_DOCUMENT
+        | STAGE_TA_INDEXES
+        | STAGE_TA_DIRTY
+        | STAGE_TA_SYNC
+        | STAGE_PROJECTION_HEAD_MATERIALIZE
+        | STAGE_PROJECTION_HEAD_CHECKPOINT
+        | STAGE_PROJECTION_HEAD_PATCH_APPLY
+        | STAGE_DOCUMENT_VALUE_MATERIALIZE
+        | STAGE_DOCUMENT_JSON_CANONICAL
+        | STAGE_DOCUMENT_PROJECT_ENCODE
+        | STAGE_DOCUMENT_JSON_FALLBACK
+        | profile::QUERY_EXECUTE
+        | profile::TURN_PUBLIC
+        | profile::TURN_SNAPSHOT_ENCODE
+        | profile::TURN_SNAPSHOT_WINDOW
         | profile::TURN_SNAPSHOT_ATTEMPTS => HoldPhase::Execute,
-        STAGE_LOAD_NODE | STAGE_BLOCK_GET | STAGE_GET_PENDING | STAGE_GET_CACHE
-        | STAGE_GET_UNCACHED_OK | STAGE_GET_UNCACHED_MISS | STAGE_OVERLAY_POINT
-        | STAGE_OVERLAY_VIEW | STAGE_HISTORY_DECODE | STAGE_HISTORY_LOOKUP | STAGE_HISTORY_RANGE
-        | STAGE_PROJECTION_HEAD_PATCH_LOAD | STAGE_ENTITY_PAGE_SOURCE_READ
-        | STAGE_ENTITY_PAGE_DECODE | STAGE_BLOCK_SHARED_READ | STAGE_BLOCK_CACHE_ACCESS
-        | STAGE_BLOCK_HISTORY_RESOLVE | STAGE_BLOCK_HISTORY_SOURCE_OPEN
-        | STAGE_BLOCK_HISTORY_SOURCE_READ | STAGE_BLOCK_CONTENT_VERIFY
-        | STAGE_BLOCK_MATERIALIZED_RESOLVE | STAGE_BLOCK_LOOSE_READ | STAGE_BLOB_MANIFEST_OPEN
-        | STAGE_BLOB_CHUNK_SOURCE | STAGE_BLOB_CHUNK_DECODE | STAGE_BLOB_CHUNK_HASH
-        | STAGE_BLOB_CONTENT_HASH | STAGE_BLOB_BUFFER_COLLECT | STAGE_BLOB_CHUNK_CACHE_ACCESS
-        | STAGE_BLOB_WHOLE_PROOF_LOOKUP | STAGE_BLOB_WHOLE_PROOF_DEPENDENCIES
-        | STAGE_BLOB_WHOLE_PROOF_STORE | STAGE_PUBLISHED_READ_LOOKUP | STAGE_PUBLISHED_READ_PIN
-        | STAGE_PUBLISHED_READ_CLONE | STAGE_ENTITY_POINT_PREPARE | STAGE_ENTITY_POINT_RESOLVE
-        | STAGE_ENTITY_POINT_RETAIN | STAGE_PACK_FILTER | STAGE_PACK_FILTER_INCOMPLETE
-        | STAGE_CATALOG_LOCATION_HIT | STAGE_CATALOG_LOCATION_ABSENT
-        | STAGE_CATALOG_LOCATION_UNKNOWN | profile::VFS_OPEN | profile::VFS_READ | profile::VFS_METADATA | profile::VFS_DIRECTORY
+        STAGE_LOAD_NODE
+        | STAGE_BLOCK_GET
+        | STAGE_GET_PENDING
+        | STAGE_GET_CACHE
+        | STAGE_GET_UNCACHED_OK
+        | STAGE_GET_UNCACHED_MISS
+        | STAGE_OVERLAY_POINT
+        | STAGE_OVERLAY_VIEW
+        | STAGE_HISTORY_DECODE
+        | STAGE_HISTORY_LOOKUP
+        | STAGE_HISTORY_RANGE
+        | STAGE_PROJECTION_HEAD_PATCH_LOAD
+        | STAGE_ENTITY_PAGE_SOURCE_READ
+        | STAGE_ENTITY_PAGE_DECODE
+        | STAGE_BLOCK_SHARED_READ
+        | STAGE_BLOCK_CACHE_ACCESS
+        | STAGE_BLOCK_HISTORY_RESOLVE
+        | STAGE_BLOCK_HISTORY_SOURCE_OPEN
+        | STAGE_BLOCK_HISTORY_SOURCE_READ
+        | STAGE_BLOCK_CONTENT_VERIFY
+        | STAGE_BLOCK_MATERIALIZED_RESOLVE
+        | STAGE_BLOCK_LOOSE_READ
+        | STAGE_BLOB_MANIFEST_OPEN
+        | STAGE_BLOB_CHUNK_SOURCE
+        | STAGE_BLOB_CHUNK_DECODE
+        | STAGE_BLOB_CHUNK_HASH
+        | STAGE_BLOB_CONTENT_HASH
+        | STAGE_BLOB_BUFFER_COLLECT
+        | STAGE_BLOB_CHUNK_CACHE_ACCESS
+        | STAGE_BLOB_WHOLE_PROOF_LOOKUP
+        | STAGE_BLOB_WHOLE_PROOF_DEPENDENCIES
+        | STAGE_BLOB_WHOLE_PROOF_STORE
+        | STAGE_PUBLISHED_READ_LOOKUP
+        | STAGE_PUBLISHED_READ_PIN
+        | STAGE_PUBLISHED_READ_CLONE
+        | STAGE_ENTITY_POINT_PREPARE
+        | STAGE_ENTITY_POINT_RESOLVE
+        | STAGE_ENTITY_POINT_RETAIN
+        | STAGE_PACK_FILTER
+        | STAGE_PACK_FILTER_INCOMPLETE
+        | STAGE_CATALOG_LOCATION_HIT
+        | STAGE_CATALOG_LOCATION_ABSENT
+        | STAGE_CATALOG_LOCATION_UNKNOWN
+        | profile::VFS_OPEN
+        | profile::VFS_READ
+        | profile::VFS_METADATA
+        | profile::VFS_DIRECTORY
         | profile::DOCUMENT_MATERIALIZE => HoldPhase::Read,
-        STAGE_STORE_PAGE | STAGE_PUT_DEFERRED | STAGE_PUT_STAGE | STAGE_BLOB_ENCODE
-        | STAGE_BLOB_STAGE | STAGE_PREPARED_BLOB_PUBLISH
-        | STAGE_AUTHORITY_COMMIT_PRIVATE_BLOB_PUBLISH | STAGE_AUTHORITY_COMMIT_STREAM_PREPARE
-        | profile::BLOB_CODEC_COMPRESS | profile::STREAM_SEGMENT_ENCODE
+        STAGE_STORE_PAGE
+        | STAGE_PUT_DEFERRED
+        | STAGE_PUT_STAGE
+        | STAGE_BLOB_ENCODE
+        | STAGE_BLOB_STAGE
+        | STAGE_PREPARED_BLOB_PUBLISH
+        | STAGE_AUTHORITY_COMMIT_PRIVATE_BLOB_PUBLISH
+        | STAGE_AUTHORITY_COMMIT_STREAM_PREPARE
+        | profile::BLOB_CODEC_COMPRESS
+        | profile::STREAM_SEGMENT_ENCODE
         | profile::STREAM_SEGMENT_FRESH_PUBLISH => HoldPhase::Stage,
-        STAGE_AUTHORITY_COMMIT_VALIDATE_REBASE | STAGE_OVERLAY_VALIDATE_HEAD_VERSIONS
+        STAGE_AUTHORITY_COMMIT_VALIDATE_REBASE
+        | STAGE_OVERLAY_VALIDATE_HEAD_VERSIONS
         | STAGE_OVERLAY_VALIDATE_ORIGINAL_BLIND_VERSIONS
         | STAGE_OVERLAY_VALIDATE_RANGE_WITNESSES
         | STAGE_OVERLAY_VALIDATE_PENDING_ONLY => HoldPhase::Validate,
         STAGE_ENGINE_COMMIT | STAGE_BUILDER | STAGE_ENCODE | STAGE_CARRIED | STAGE_WAL
         | STAGE_COMMIT_TAIL => HoldPhase::Journal,
-        STAGE_WAL_BARRIER_WAIT | STAGE_WAL_BARRIER_SYNC | STAGE_CK_WAIT
-        | profile::VFS_SYNC => HoldPhase::Sync,
+        STAGE_WAL_BARRIER_WAIT | STAGE_WAL_BARRIER_SYNC | STAGE_CK_WAIT | profile::VFS_SYNC => {
+            HoldPhase::Sync
+        }
         STAGE_PREPARE | STAGE_APPLY | STAGE_TA_PREPARE_FAST => HoldPhase::Apply,
-        STAGE_APPLY_BATCH | STAGE_CHECKPOINT_IF | STAGE_DRAIN_STEP | STAGE_STEP_CHUNK
-        | STAGE_STEP_MANIFEST | STAGE_CK_MATERIALIZE | STAGE_CK_SEGMENTS | STAGE_CK_MANIFEST
-        | STAGE_CK_WAL | STAGE_CK_CONTROL | STAGE_FLUSH_DIRTY | STAGE_CK_DRAIN | STAGE_CK_CLEAR
-        | STAGE_CK_SWAP | STAGE_PACK_ADOPT | STAGE_HISTORY_STAGE | STAGE_CATALOG_PUBLISH
-        | STAGE_CATALOG_WRITE | STAGE_CATALOG_INSTALL | STAGE_CATALOG_CONTROL
-        | STAGE_TA_PREPARE_MERGE | STAGE_OVERLAY_REPLAY | STAGE_OVERLAY_SELECT
-        | STAGE_OVERLAY_CARRY_BUDGET | STAGE_OVERLAY_PUBLISH | STAGE_CHECKPOINT_TOTAL
-        | STAGE_OVERLAY_PREPARE_CAPTURE | STAGE_OVERLAY_PREPARE_ENCODE
-        | STAGE_OVERLAY_PREPARE_PUBLISH | STAGE_ROTATION_PREFIX_ENCODE
-        | STAGE_ROTATION_WINDOW_CAPTURE | STAGE_ROTATION_WINDOW_ENCODE
-        | STAGE_ROTATION_INSTALL_DIRTY_CONTROL | STAGE_ROTATION_INSTALL_WINDOW
-        | STAGE_ROTATION_INSTALL_MANIFEST | STAGE_ROTATION_INSTALL_WAL
-        | STAGE_ROTATION_INSTALL_CONTROL | STAGE_ROTATION_INSTALL_RELEASE
+        STAGE_APPLY_BATCH
+        | STAGE_CHECKPOINT_IF
+        | STAGE_DRAIN_STEP
+        | STAGE_STEP_CHUNK
+        | STAGE_STEP_MANIFEST
+        | STAGE_CK_MATERIALIZE
+        | STAGE_CK_SEGMENTS
+        | STAGE_CK_MANIFEST
+        | STAGE_CK_WAL
+        | STAGE_CK_CONTROL
+        | STAGE_FLUSH_DIRTY
+        | STAGE_CK_DRAIN
+        | STAGE_CK_CLEAR
+        | STAGE_CK_SWAP
+        | STAGE_PACK_ADOPT
+        | STAGE_HISTORY_STAGE
+        | STAGE_CATALOG_PUBLISH
+        | STAGE_CATALOG_WRITE
+        | STAGE_CATALOG_INSTALL
+        | STAGE_CATALOG_CONTROL
+        | STAGE_TA_PREPARE_MERGE
+        | STAGE_OVERLAY_REPLAY
+        | STAGE_OVERLAY_SELECT
+        | STAGE_OVERLAY_CARRY_BUDGET
+        | STAGE_OVERLAY_PUBLISH
+        | STAGE_CHECKPOINT_TOTAL
+        | STAGE_OVERLAY_PREPARE_CAPTURE
+        | STAGE_OVERLAY_PREPARE_ENCODE
+        | STAGE_OVERLAY_PREPARE_PUBLISH
+        | STAGE_ROTATION_PREFIX_ENCODE
+        | STAGE_ROTATION_WINDOW_CAPTURE
+        | STAGE_ROTATION_WINDOW_ENCODE
+        | STAGE_ROTATION_INSTALL_DIRTY_CONTROL
+        | STAGE_ROTATION_INSTALL_WINDOW
+        | STAGE_ROTATION_INSTALL_MANIFEST
+        | STAGE_ROTATION_INSTALL_WAL
+        | STAGE_ROTATION_INSTALL_CONTROL
+        | STAGE_ROTATION_INSTALL_RELEASE
         | STAGE_ROTATION_GENERATION_HANDOVER
         | STAGE_ROTATION_PREDECESSOR_INSTALL => HoldPhase::Merge,
         STAGE_CK_REMOVE | STAGE_PACK_RETIRE | STAGE_RETENTION_PRUNE => HoldPhase::Retention,
-        STAGE_TURN_EVENT_PUBLISH | STAGE_TA_RECEIPT | STAGE_TA_OUTBOX | STAGE_RECEIPT_ENCODE
-        | STAGE_RECEIPT_COMPRESS | STAGE_AUTHORITY_COMMIT_INDEXES
-        | STAGE_AUTHORITY_COMMIT_OUTBOX_CAPTURE | STAGE_IR_RESULT_EXTRACT
-        | STAGE_IR_RECEIPT_RESPONSE_POLICY | STAGE_SEMANTIC_RESPONSE_VALIDATE
-        | STAGE_EMBEDDED_RESPONSE_ENCODE | STAGE_EMBEDDED_ENVELOPE_BUILD
+        STAGE_TURN_EVENT_PUBLISH
+        | STAGE_TA_RECEIPT
+        | STAGE_TA_OUTBOX
+        | STAGE_RECEIPT_ENCODE
+        | STAGE_RECEIPT_COMPRESS
+        | STAGE_AUTHORITY_COMMIT_INDEXES
+        | STAGE_AUTHORITY_COMMIT_OUTBOX_CAPTURE
+        | STAGE_IR_RESULT_EXTRACT
+        | STAGE_IR_RECEIPT_RESPONSE_POLICY
+        | STAGE_SEMANTIC_RESPONSE_VALIDATE
+        | STAGE_EMBEDDED_RESPONSE_ENCODE
+        | STAGE_EMBEDDED_ENVELOPE_BUILD
         | STAGE_PUBLISHED_READ_PUBLISH => HoldPhase::Publish,
-        STAGE_AUTHORITY_WAIT | STAGE_ENTITY_PAGE_CACHE_READ_WAIT
-        | STAGE_ENTITY_PAGE_CACHE_WRITE_WAIT | STAGE_BLOCK_PENDING_WAIT | STAGE_BLOCK_CACHE_WAIT
-        | STAGE_BLOCK_HISTORY_SOURCE_WAIT | STAGE_PIN_REGISTRY_WAIT | STAGE_PARALLEL_SNAPSHOT_WAIT
-        | STAGE_OVERLAY_PREPARE_BUDGET_WAIT | STAGE_ROTATION_PARK | STAGE_ROTATION_PREPARE_WAIT
-        | STAGE_ROTATION_INSTALL_WAIT | STAGE_EMBEDDED_WAIT_RESPONSE | STAGE_EMBEDDED_QUEUE_WAIT
-        | profile::FIFO_WAIT | profile::MUTEX_WAIT | profile::BLOB_CODEC_WAIT => HoldPhase::Wait,
+        STAGE_AUTHORITY_WAIT
+        | STAGE_ENTITY_PAGE_CACHE_READ_WAIT
+        | STAGE_ENTITY_PAGE_CACHE_WRITE_WAIT
+        | STAGE_BLOCK_PENDING_WAIT
+        | STAGE_BLOCK_CACHE_WAIT
+        | STAGE_BLOCK_HISTORY_SOURCE_WAIT
+        | STAGE_PIN_REGISTRY_WAIT
+        | STAGE_PARALLEL_SNAPSHOT_WAIT
+        | STAGE_OVERLAY_PREPARE_BUDGET_WAIT
+        | STAGE_ROTATION_PARK
+        | STAGE_ROTATION_PREPARE_WAIT
+        | STAGE_ROTATION_INSTALL_WAIT
+        | STAGE_EMBEDDED_WAIT_RESPONSE
+        | STAGE_EMBEDDED_QUEUE_WAIT
+        | profile::FIFO_WAIT
+        | profile::MUTEX_WAIT
+        | profile::BLOB_CODEC_WAIT => HoldPhase::Wait,
         _ => return None,
     })
 }
-struct HoldCounters { calls: AtomicU64, nanos: AtomicU64, maximum: AtomicU64 }
+struct HoldCounters {
+    calls: AtomicU64,
+    nanos: AtomicU64,
+    maximum: AtomicU64,
+}
 impl HoldCounters {
-    const fn new() -> Self { Self { calls: AtomicU64::new(0), nanos: AtomicU64::new(0), maximum: AtomicU64::new(0) } }
+    const fn new() -> Self {
+        Self {
+            calls: AtomicU64::new(0),
+            nanos: AtomicU64::new(0),
+            maximum: AtomicU64::new(0),
+        }
+    }
     fn record(&self, nanos: u64) {
         self.nanos.fetch_add(nanos, Ordering::Relaxed);
         self.maximum.fetch_max(nanos, Ordering::Relaxed);
         self.calls.fetch_add(1, Ordering::Relaxed);
     }
 }
-static HOLD_COUNTERS: [HoldCounters; BACKGROUND_HOLDS.len()] = [const { HoldCounters::new() }; BACKGROUND_HOLDS.len()];
+static HOLD_COUNTERS: [HoldCounters; BACKGROUND_HOLDS.len()] =
+    [const { HoldCounters::new() }; BACKGROUND_HOLDS.len()];
 pub(crate) fn hold_profile() -> serde_json::Value {
-    if !crate::request_profile::enabled() { return serde_json::json!({"enabled": false}); }
-    let phases: Vec<_> = BACKGROUND_HOLDS.iter().map(|(hold, name)| {
-        let counters = &HOLD_COUNTERS[*hold as usize];
-        serde_json::json!({"phase": name, "calls": counters.calls.load(Ordering::Relaxed),
+    if !crate::request_profile::enabled() {
+        return serde_json::json!({"enabled": false});
+    }
+    let phases: Vec<_> = BACKGROUND_HOLDS
+        .iter()
+        .map(|(hold, name)| {
+            let counters = &HOLD_COUNTERS[*hold as usize];
+            serde_json::json!({"phase": name, "calls": counters.calls.load(Ordering::Relaxed),
             "totalNanos": counters.nanos.load(Ordering::Relaxed),
             "maximumNanos": counters.maximum.load(Ordering::Relaxed)})
-    }).collect();
+        })
+        .collect();
     serde_json::json!({"enabled": true, "contract": "tofudb.authority-holds/v1",
         "scope": "process lifetime; completed instrumented background holds; wall time, not CPU; counters may advance during snapshot; phases are not additive",
         "fixedCounterBytes": std::mem::size_of_val(&HOLD_COUNTERS),
@@ -201,55 +368,95 @@ pub(crate) struct AuthorityHoldTimer<'a> {
 impl<'a> AuthorityHoldTimer<'a> {
     pub(crate) fn start(operation: &'a str) -> Self {
         let attribution = crate::request_profile::begin_hold();
-        Self { operation, started: Some(Instant::now()), warn: true,
-            hold: if crate::request_profile::enabled() { background_hold(operation) } else { None },
-            attribution }
+        Self {
+            operation,
+            started: Some(Instant::now()),
+            warn: true,
+            hold: if crate::request_profile::enabled() {
+                background_hold(operation)
+            } else {
+                None
+            },
+            attribution,
+        }
     }
 }
 
 impl<'a> AuthorityHoldTimer<'a> {
     /// Counter-only observer: no clock read or extra warning when disabled.
     pub(crate) fn probe(operation: &'a str) -> Self {
-        let hold = if crate::request_profile::enabled() { background_hold(operation) } else { None };
-        Self { operation, started: hold.map(|_| Instant::now()), warn: false, hold, attribution: None }
+        let hold = if crate::request_profile::enabled() {
+            background_hold(operation)
+        } else {
+            None
+        };
+        Self {
+            operation,
+            started: hold.map(|_| Instant::now()),
+            warn: false,
+            hold,
+            attribution: None,
+        }
     }
 }
 
 impl Drop for AuthorityHoldTimer<'_> {
     fn drop(&mut self) {
-        let Some(started) = self.started else { return; };
+        let Some(started) = self.started else {
+            return;
+        };
         let elapsed = started.elapsed();
         let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
         let reported = self.warn && elapsed >= Duration::from_secs(1);
-        let attribution = self.attribution.take()
+        let attribution = self
+            .attribution
+            .take()
             .map(|token| crate::request_profile::finish_hold(token, nanos, reported));
         if let Some(hold) = self.hold {
             HOLD_COUNTERS[hold as usize].record(nanos);
         }
         if reported {
-            crate::engine_log::warn("authority_hold",
-                &hold_message(self.operation, elapsed, attribution.as_ref()));
+            crate::engine_log::warn(
+                "authority_hold",
+                &hold_message(self.operation, elapsed, attribution.as_ref()),
+            );
         }
     }
 }
 
-fn milliseconds(nanos: u64) -> String { format!("{:.1}", nanos as f64 / 1e6) }
+fn milliseconds(nanos: u64) -> String {
+    format!("{:.1}", nanos as f64 / 1e6)
+}
 
 /// `operation=<op> elapsed_ms=<n> phases=<phase>:<ms>,... stages=<stage>:<ms>,...`
 /// Both lists are exclusive milliseconds in descending order; `phases` sums to
 /// the elapsed time. A hold nested in another attributed hold on the same
 /// thread prints no lists: the outer hold's line carries its spans.
-fn hold_message(operation: &str, elapsed: Duration,
-    attribution: Option<&crate::request_profile::HoldReport>) -> String {
+fn hold_message(
+    operation: &str,
+    elapsed: Duration,
+    attribution: Option<&crate::request_profile::HoldReport>,
+) -> String {
     let mut message = format!("operation={operation} elapsed_ms={}", elapsed.as_millis());
-    let Some(report) = attribution else { return message; };
-    let mut phases: Vec<_> = HOLD_PHASE_NAMES.iter().zip(report.phases)
-        .filter(|(_, nanos)| *nanos != 0).collect();
-    phases.sort_by(|a, b| b.1.cmp(&a.1));
-    let list = |entries: &mut dyn Iterator<Item = (&str, u64)>| entries
-        .map(|(name, nanos)| format!("{name}:{}", milliseconds(nanos))).collect::<Vec<_>>().join(",");
+    let Some(report) = attribution else {
+        return message;
+    };
+    let mut phases: Vec<_> = HOLD_PHASE_NAMES
+        .iter()
+        .zip(report.phases)
+        .filter(|(_, nanos)| *nanos != 0)
+        .collect();
+    phases.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+    let list = |entries: &mut dyn Iterator<Item = (&str, u64)>| {
+        entries
+            .map(|(name, nanos)| format!("{name}:{}", milliseconds(nanos)))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
     message.push_str(" phases=");
-    message.push_str(&list(&mut phases.into_iter().map(|(name, nanos)| (*name, nanos))));
+    message.push_str(&list(
+        &mut phases.into_iter().map(|(name, nanos)| (*name, nanos)),
+    ));
     if !report.stages.is_empty() {
         message.push_str(" stages=");
         message.push_str(&list(&mut report.stages.iter().copied()));
@@ -282,7 +489,11 @@ struct SharedState {
 }
 
 #[derive(Clone, Copy)]
-enum Probe { Free, Busy, Poisoned }
+enum Probe {
+    Free,
+    Busy,
+    Poisoned,
+}
 
 impl SharedState {
     fn record_probe(&self, now: u64, probe: Probe, progressed: bool) {
@@ -290,7 +501,11 @@ impl SharedState {
             self.contention_started_millis.store(0, Ordering::Release);
         } else {
             let _ = self.contention_started_millis.compare_exchange(
-                0, now.max(1), Ordering::AcqRel, Ordering::Acquire);
+                0,
+                now.max(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
         }
     }
 
@@ -351,9 +566,7 @@ impl AuthorityContentionObserver {
                 .unwrap_or_else(Instant::now),
         });
         if contended_milliseconds > 0 {
-            shared
-                .contention_started_millis
-                .store(1, Ordering::Release);
+            shared.contention_started_millis.store(1, Ordering::Release);
         }
         Self {
             shared,
@@ -371,7 +584,10 @@ pub struct AuthorityContentionWatch {
 }
 
 impl AuthorityContentionWatch {
-    pub fn start(database: &Arc<Mutex<AuthorityDatabase>>, foreground_admissions: Arc<AtomicU64>) -> io::Result<Self> {
+    pub fn start(
+        database: &Arc<Mutex<AuthorityDatabase>>,
+        foreground_admissions: Arc<AtomicU64>,
+    ) -> io::Result<Self> {
         let shared = Arc::new(SharedState {
             contention_started_millis: AtomicU64::new(0),
             base: Instant::now(),
@@ -393,12 +609,19 @@ impl AuthorityContentionWatch {
                             break;
                         }
                         let probe = match database.try_lock() {
-                            Ok(guard) => { drop(guard); Probe::Free },
+                            Ok(guard) => {
+                                drop(guard);
+                                Probe::Free
+                            }
                             Err(TryLockError::WouldBlock) => Probe::Busy,
                             Err(TryLockError::Poisoned(_)) => Probe::Poisoned,
                         };
                         let progress = foreground_admissions.load(Ordering::Relaxed);
-                        shared.record_probe(shared.elapsed_millis(), probe, progress != previous_progress);
+                        shared.record_probe(
+                            shared.elapsed_millis(),
+                            probe,
+                            progress != previous_progress,
+                        );
                         previous_progress = progress;
                         std::thread::park_timeout(WATCH_POLL_INTERVAL);
                     }
@@ -451,19 +674,32 @@ mod tests {
     #[test]
     fn completed_hold_counters_keep_total_and_largest_concurrent_duration() {
         let counters = Arc::new(HoldCounters::new());
-        let threads: Vec<_> = (1..=4).map(|nanos| {
-            let counters = Arc::clone(&counters);
-            std::thread::spawn(move || { for _ in 0..1000 { counters.record(nanos); } })
-        }).collect();
-        for thread in threads { thread.join().unwrap(); }
+        let threads: Vec<_> = (1..=4)
+            .map(|nanos| {
+                let counters = Arc::clone(&counters);
+                std::thread::spawn(move || {
+                    for _ in 0..1000 {
+                        counters.record(nanos);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
         assert_eq!(counters.calls.load(Ordering::Relaxed), 4000);
         assert_eq!(counters.nanos.load(Ordering::Relaxed), 10000);
         assert_eq!(counters.maximum.load(Ordering::Relaxed), 4);
         assert!(background_hold("turn.append_settled").is_none());
         assert!(background_hold("private owner/key/payload").is_none());
-        for (hold, name) in BACKGROUND_HOLDS { assert_eq!(background_hold(name).unwrap() as u8, hold as u8); }
-        eprintln!("authority_hold_resources: counters={} timer={}",
-            std::mem::size_of_val(&HOLD_COUNTERS), std::mem::size_of::<AuthorityHoldTimer<'_>>());
+        for (hold, name) in BACKGROUND_HOLDS {
+            assert_eq!(background_hold(name).unwrap() as u8, hold as u8);
+        }
+        eprintln!(
+            "authority_hold_resources: counters={} timer={}",
+            std::mem::size_of_val(&HOLD_COUNTERS),
+            std::mem::size_of::<AuthorityHoldTimer<'_>>()
+        );
     }
 
     #[test]
@@ -473,16 +709,25 @@ mod tests {
         phases[HoldPhase::Journal as usize] = 99_800_000;
         phases[HoldPhase::Other as usize] = 400_000_000;
         phases[HoldPhase::Sync as usize] = 400_000_000;
-        let report = crate::request_profile::HoldReport { phases,
-            stages: vec![("get_unc_ok", 1_400_000_000), ("wal", 99_800_000)], invalid_spans: 0 };
+        let report = crate::request_profile::HoldReport {
+            phases,
+            stages: vec![("get_unc_ok", 1_400_000_000), ("wal", 99_800_000)],
+            invalid_spans: 0,
+        };
         assert_eq!(hold_message("turn.event.record", Duration::from_millis(2_400), Some(&report)),
             "operation=turn.event.record elapsed_ms=2400 phases=read:1500.2,sync:400.0,other:400.0,\
              journal:99.8 stages=get_unc_ok:1400.0,wal:99.8");
-        assert_eq!(hold_message("rotation.install", Duration::from_millis(1_250), None),
-            "operation=rotation.install elapsed_ms=1250");
-        let crossing = crate::request_profile::HoldReport { phases: [0; HOLD_PHASE_NAMES.len()],
-            stages: Vec::new(), invalid_spans: 2 };
-        assert!(hold_message("x", Duration::from_secs(1), Some(&crossing)).ends_with(" invalid_spans=2"));
+        assert_eq!(
+            hold_message("rotation.install", Duration::from_millis(1_250), None),
+            "operation=rotation.install elapsed_ms=1250"
+        );
+        let crossing = crate::request_profile::HoldReport {
+            phases: [0; HOLD_PHASE_NAMES.len()],
+            stages: Vec::new(),
+            invalid_spans: 2,
+        };
+        assert!(hold_message("x", Duration::from_secs(1), Some(&crossing))
+            .ends_with(" invalid_spans=2"));
     }
 
     #[test]
@@ -501,11 +746,15 @@ mod tests {
             let nested = AuthorityHoldTimer::start("overlay.publish");
             assert!(nested.attribution.is_none());
             drop(nested);
-            assert!(crate::request_profile::enter(stage).is_some(), "the outer hold still attributes");
+            assert!(
+                crate::request_profile::enter(stage).is_some(),
+                "the outer hold still attributes"
+            );
         }
         assert!(crate::request_profile::enter(stage).is_none());
         std::thread::spawn(move || assert!(crate::request_profile::enter(stage).is_none()))
-            .join().unwrap();
+            .join()
+            .unwrap();
     }
 
     #[test]
@@ -516,21 +765,40 @@ mod tests {
         for stage in 0..names + 32 {
             if let Some(phase) = hold_phase_of_stage(stage) {
                 assert!((phase as usize) < HOLD_PHASE_NAMES.len());
-                assert_ne!(phase, HoldPhase::Other, "Other is only the uncovered remainder");
+                assert_ne!(
+                    phase,
+                    HoldPhase::Other,
+                    "Other is only the uncovered remainder"
+                );
             }
         }
-        for stage in [crate::request_profile::VFS_SYNC, crate::fsync_stats::STAGE_WAL_BARRIER_WAIT] {
+        for stage in [
+            crate::request_profile::VFS_SYNC,
+            crate::fsync_stats::STAGE_WAL_BARRIER_WAIT,
+        ] {
             assert_eq!(hold_phase_of_stage(stage), Some(HoldPhase::Sync));
         }
-        assert_eq!(hold_phase_of_stage(crate::request_profile::VFS_READ), Some(HoldPhase::Read));
-        assert_eq!(hold_phase_of_stage(crate::fsync_stats::STAGE_RETENTION_PRUNE), Some(HoldPhase::Retention));
+        assert_eq!(
+            hold_phase_of_stage(crate::request_profile::VFS_READ),
+            Some(HoldPhase::Read)
+        );
+        assert_eq!(
+            hold_phase_of_stage(crate::fsync_stats::STAGE_RETENTION_PRUNE),
+            Some(HoldPhase::Retention)
+        );
         assert_eq!(hold_phase_of_stage(crate::request_profile::VFS_WRITE), None);
-        assert_eq!(hold_phase_of_stage(crate::fsync_stats::STAGE_IR_COMMIT), None);
+        assert_eq!(
+            hold_phase_of_stage(crate::fsync_stats::STAGE_IR_COMMIT),
+            None
+        );
     }
 
     #[test]
     fn busy_sampling_with_handoffs_never_becomes_a_false_wedge() {
-        let shared = SharedState { contention_started_millis: AtomicU64::new(0), base: Instant::now() };
+        let shared = SharedState {
+            contention_started_millis: AtomicU64::new(0),
+            base: Instant::now(),
+        };
         // Forty busy probes span the actual production wedge threshold.
         // Progress comes from successful foreground acquisitions, not arrivals.
         for now in (250..=30_000).step_by(250) {
@@ -539,12 +807,18 @@ mod tests {
         }
         shared.record_probe(30_250, Probe::Busy, false);
         shared.record_probe(41_000, Probe::Busy, false);
-        assert_eq!(shared.contention_started_millis.load(Ordering::Acquire), 30_250);
+        assert_eq!(
+            shared.contention_started_millis.load(Ordering::Acquire),
+            30_250
+        );
         shared.record_probe(41_250, Probe::Busy, true);
         assert_eq!(shared.contention_started_millis.load(Ordering::Acquire), 0);
         shared.record_probe(42_000, Probe::Poisoned, true);
         shared.record_probe(53_000, Probe::Poisoned, true);
-        assert_eq!(shared.contention_started_millis.load(Ordering::Acquire), 42_000);
+        assert_eq!(
+            shared.contention_started_millis.load(Ordering::Acquire),
+            42_000
+        );
     }
 
     #[test]

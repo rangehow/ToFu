@@ -10,12 +10,26 @@ pub(crate) mod decode_cache;
 #[path = "blob_whole_cache.rs"]
 mod whole_cache;
 
-pub(crate) enum ChunkBytes { Owned(Vec<u8>), Shared(std::sync::Arc<Vec<u8>>) }
-impl ChunkBytes {
-    fn as_slice(&self) -> &[u8] { match self { Self::Owned(bytes) => bytes, Self::Shared(bytes) => bytes } }
-    fn into_vec(self) -> Vec<u8> { match self { Self::Owned(bytes) => bytes, Self::Shared(bytes) => std::sync::Arc::try_unwrap(bytes).unwrap_or_else(|bytes| bytes.as_ref().clone()) } }
+pub(crate) enum ChunkBytes {
+    Owned(Vec<u8>),
+    Shared(std::sync::Arc<Vec<u8>>),
 }
-
+impl ChunkBytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Shared(bytes) => bytes,
+        }
+    }
+    fn into_vec(self) -> Vec<u8> {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Shared(bytes) => {
+                std::sync::Arc::try_unwrap(bytes).unwrap_or_else(|bytes| bytes.as_ref().clone())
+            }
+        }
+    }
+}
 
 const CHUNK_MAGIC: &[u8; 8] = b"TDBCHN01";
 const MANIFEST_MAGIC: &[u8; 8] = b"TDBBLB01";
@@ -175,7 +189,8 @@ fn decode_chunk(encoded: &[u8], expected_logical_bytes: u32) -> io::Result<Vec<u
         return Err(invalid_data("blob chunk header or length mismatch"));
     }
     let payload = &encoded[CHUNK_HEADER_BYTES..];
-    let decode_timer = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CHUNK_DECODE);
+    let decode_timer =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CHUNK_DECODE);
     let raw = match codec {
         CODEC_RAW if payload.len() == logical_bytes as usize => payload.to_vec(),
         CODEC_ZSTD => zstd::bulk::decompress(payload, logical_bytes as usize)
@@ -183,8 +198,12 @@ fn decode_chunk(encoded: &[u8], expected_logical_bytes: u32) -> io::Result<Vec<u
         _ => return Err(invalid_data("unsupported blob chunk codec")),
     };
     drop(decode_timer);
-    crate::request_profile::work(crate::request_profile::Work::BlobDecodedBytes, raw.len() as u64);
-    let _hash = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CHUNK_HASH);
+    crate::request_profile::work(
+        crate::request_profile::Work::BlobDecodedBytes,
+        raw.len() as u64,
+    );
+    let _hash =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CHUNK_HASH);
     if raw.len() != logical_bytes as usize || blake3::hash(&raw).as_bytes() != &expected_hash {
         return Err(invalid_data("blob chunk logical hash mismatch"));
     }
@@ -288,7 +307,8 @@ where
     VisitBlock: FnMut(BlockId, &[u8]) -> io::Result<()>,
 {
     let manifest_bytes = read_block(reference.manifest_block_id)?;
-    let manifest = decode_reachable_manifest(tenant_id, owner_user_id, &reference, &manifest_bytes)?;
+    let manifest =
+        decode_reachable_manifest(tenant_id, owner_user_id, &reference, &manifest_bytes)?;
     visit_block(reference.manifest_block_id, &manifest_bytes)?;
     let mut metrics = BlobReachabilityMetrics {
         block_count: 1,
@@ -324,7 +344,8 @@ where
     VisitReference: FnMut(BlockId) -> io::Result<()>,
 {
     let manifest_bytes = read_block(reference.manifest_block_id)?;
-    let manifest = decode_reachable_manifest(tenant_id, owner_user_id, &reference, &manifest_bytes)?;
+    let manifest =
+        decode_reachable_manifest(tenant_id, owner_user_id, &reference, &manifest_bytes)?;
     visit_reference(reference.manifest_block_id)?;
     for chunk in &manifest.chunks {
         visit_reference(chunk.block_id)?;
@@ -376,8 +397,12 @@ pub(crate) trait BlobStagingIo {
 }
 
 impl BlobStagingIo for Engine {
-    fn encode_chunk(&self, raw: &[u8]) -> io::Result<Vec<u8>> { self.blob_chunk_encoder().encode(raw) }
-    fn stage_block(&self, encoded: &[u8]) -> io::Result<BlockId> { self.write_blob_block(encoded) }
+    fn encode_chunk(&self, raw: &[u8]) -> io::Result<Vec<u8>> {
+        self.blob_chunk_encoder().encode(raw)
+    }
+    fn stage_block(&self, encoded: &[u8]) -> io::Result<BlockId> {
+        self.write_blob_block(encoded)
+    }
 }
 
 pub(crate) fn stage_blob_with_backend<R: Read>(
@@ -403,7 +428,8 @@ pub(crate) fn stage_blob_with_backend<R: Read>(
     loop {
         // A small document needs its remaining admitted bytes plus one byte
         // to detect overflow, not a zero-filled 1 MiB allocation per read.
-        let capacity = (maximum_bytes - logical_bytes).saturating_add(1)
+        let capacity = (maximum_bytes - logical_bytes)
+            .saturating_add(1)
             .min(BLOB_CHUNK_BYTES as u64) as usize;
         let mut raw = vec![0; capacity];
         let mut used = 0;
@@ -436,7 +462,9 @@ pub(crate) fn stage_blob_with_backend<R: Read>(
         if chunks.len() > MAX_BLOB_CHUNKS {
             return Err(invalid_input("blob exceeds its chunk count bound"));
         }
-        if reached_eof { break; }
+        if reached_eof {
+            break;
+        }
     }
     let blob_id = BlobId(*hasher.finalize().as_bytes());
     let manifest = Manifest {
@@ -467,13 +495,22 @@ impl<'a> BlobReader<'a> {
 
     fn read_current_chunk(&self, chunk: &ChunkReference) -> io::Result<std::sync::Arc<Vec<u8>>> {
         let encoded = {
-            let _source = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CHUNK_SOURCE);
+            let _source = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_BLOB_CHUNK_SOURCE,
+            );
             self.backend.read_verified(chunk.block_id)?
         };
-        crate::request_profile::work(crate::request_profile::Work::BlobCurrentEncodedBytes, encoded.len() as u64);
+        crate::request_profile::work(
+            crate::request_profile::Work::BlobCurrentEncodedBytes,
+            encoded.len() as u64,
+        );
         Ok(encoded)
     }
-    fn decode_current_source(&self, chunk: &ChunkReference, encoded: &std::sync::Arc<Vec<u8>>) -> io::Result<ChunkBytes> {
+    fn decode_current_source(
+        &self,
+        chunk: &ChunkReference,
+        encoded: &std::sync::Arc<Vec<u8>>,
+    ) -> io::Result<ChunkBytes> {
         match self.decode_cache {
             Some(cache) => cache.decode(chunk.block_id, encoded, chunk.logical_bytes),
             None => decode_chunk(encoded, chunk.logical_bytes).map(ChunkBytes::Owned),
@@ -484,53 +521,111 @@ impl<'a> BlobReader<'a> {
     }
     fn identity(&self) -> VerifiedBlobIdentity {
         VerifiedBlobIdentity {
-            tenant_id: self.manifest.tenant_id, owner_user_id: self.manifest.owner_user_id,
-            content_hash: self.manifest.blob_id.0, logical_bytes: self.manifest.logical_bytes,
+            tenant_id: self.manifest.tenant_id,
+            owner_user_id: self.manifest.owner_user_id,
+            content_hash: self.manifest.blob_id.0,
+            logical_bytes: self.manifest.logical_bytes,
         }
     }
     // Only a fresh, complete materialization may reuse this proof. Streaming and
     // range APIs retain their original independent cursor/hash semantics.
-    fn materialize_with_whole_cache(&self, cache: &whole_cache::WholeBlobCache, maximum_bytes: usize, bound_error: &impl Fn() -> io::Error) -> io::Result<VerifiedBlobBytes> {
-        let certificate = cache.lookup(self.manifest_block_id, &self.encoded_manifest, self.identity());
-        let mut matched = certificate.as_ref().is_some_and(|c| c.matches_count(self.manifest.chunks.len()));
+    fn materialize_with_whole_cache(
+        &self,
+        cache: &whole_cache::WholeBlobCache,
+        maximum_bytes: usize,
+        bound_error: &impl Fn() -> io::Error,
+    ) -> io::Result<VerifiedBlobBytes> {
+        let certificate = cache.lookup(
+            self.manifest_block_id,
+            &self.encoded_manifest,
+            self.identity(),
+        );
+        let mut matched = certificate
+            .as_ref()
+            .is_some_and(|c| c.matches_count(self.manifest.chunks.len()));
         // Never pin an oversized body while attempting optional admission.
         // Format bounds cap vector metadata; encoded pins also fit the current
         // cache allowance. A concurrent resize may release entries while this
         // reader still owns its already bounded in-flight certificate.
         let allowance = cache.dependency_capacity();
-        let mut charge = 4096usize.checked_add(512)
+        let mut charge = 4096usize
+            .checked_add(512)
             .and_then(|n| n.checked_add(self.encoded_manifest.capacity()))
-            .and_then(|n| n.checked_add(self.manifest.chunks.len().checked_mul(std::mem::size_of::<std::sync::Arc<Vec<u8>>>() + std::mem::size_of::<Vec<u8>>() + 2 * std::mem::size_of::<usize>())?));
-        let mut sources = charge.filter(|&n| n <= allowance).map(|_| Vec::with_capacity(self.manifest.chunks.len()));
+            .and_then(|n| {
+                n.checked_add(self.manifest.chunks.len().checked_mul(
+                    std::mem::size_of::<std::sync::Arc<Vec<u8>>>()
+                        + std::mem::size_of::<Vec<u8>>()
+                        + 2 * std::mem::size_of::<usize>(),
+                )?)
+            });
+        let mut sources = charge
+            .filter(|&n| n <= allowance)
+            .map(|_| Vec::with_capacity(self.manifest.chunks.len()));
         let mut bytes = Vec::with_capacity(self.manifest.logical_bytes as usize);
         for (index, chunk) in self.manifest.chunks.iter().enumerate() {
             let encoded = self.read_current_chunk(chunk)?;
             let raw = self.decode_current_source(chunk, &encoded)?;
-            if bytes.len().saturating_add(raw.as_slice().len()) > maximum_bytes { return Err(bound_error()); }
+            if bytes.len().saturating_add(raw.as_slice().len()) > maximum_bytes {
+                return Err(bound_error());
+            }
             {
-                let _dependencies = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_WHOLE_PROOF_DEPENDENCIES);
-                matched &= certificate.as_ref().is_some_and(|c| c.matches_chunk(index, &encoded));
+                let _dependencies = crate::fsync_stats::StageTimer::diagnostic(
+                    crate::fsync_stats::STAGE_BLOB_WHOLE_PROOF_DEPENDENCIES,
+                );
+                matched &= certificate
+                    .as_ref()
+                    .is_some_and(|c| c.matches_chunk(index, &encoded));
                 charge = charge.and_then(|n| n.checked_add(encoded.capacity()));
                 if charge.is_some_and(|n| n <= allowance) {
-                    if let Some(sources) = &mut sources { sources.push(encoded); }
-                } else { sources = None; }
+                    if let Some(sources) = &mut sources {
+                        sources.push(encoded);
+                    }
+                } else {
+                    sources = None;
+                }
             }
-            let _collect = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_BUFFER_COLLECT);
+            let _collect = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_BLOB_BUFFER_COLLECT,
+            );
             bytes.extend_from_slice(raw.as_slice());
-            crate::request_profile::work(crate::request_profile::Work::BlobCollectedBytes, raw.as_slice().len() as u64);
+            crate::request_profile::work(
+                crate::request_profile::Work::BlobCollectedBytes,
+                raw.as_slice().len() as u64,
+            );
         }
-        if bytes.len() as u64 != self.manifest.logical_bytes { return Err(invalid_data("blob logical content witness mismatch")); }
+        if bytes.len() as u64 != self.manifest.logical_bytes {
+            return Err(invalid_data("blob logical content witness mismatch"));
+        }
         if !matched {
             crate::request_profile::work(crate::request_profile::Work::BlobWholeProofMiss, 1);
-            let _hash = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CONTENT_HASH);
+            let _hash = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_BLOB_CONTENT_HASH,
+            );
             let mut hasher = content_hasher(self.manifest.tenant_id, self.manifest.owner_user_id);
             hasher.update(&bytes);
-            crate::request_profile::work(crate::request_profile::Work::BlobContentHashBytes, bytes.len() as u64);
-            if BlobId(*hasher.finalize().as_bytes()) != self.manifest.blob_id { return Err(invalid_data("blob logical content witness mismatch")); }
-        } else { cache.record_reuse(self.manifest.logical_bytes); }
-        let verified = VerifiedBlobBytes { bytes, identity: self.identity() };
+            crate::request_profile::work(
+                crate::request_profile::Work::BlobContentHashBytes,
+                bytes.len() as u64,
+            );
+            if BlobId(*hasher.finalize().as_bytes()) != self.manifest.blob_id {
+                return Err(invalid_data("blob logical content witness mismatch"));
+            }
+        } else {
+            cache.record_reuse(self.manifest.logical_bytes);
+        }
+        let verified = VerifiedBlobBytes {
+            bytes,
+            identity: self.identity(),
+        };
         if !matched {
-            if let Some(sources) = sources { cache.remember(self.manifest_block_id, &self.encoded_manifest, sources, &verified); }
+            if let Some(sources) = sources {
+                cache.remember(
+                    self.manifest_block_id,
+                    &self.encoded_manifest,
+                    sources,
+                    &verified,
+                );
+            }
         }
         Ok(verified)
     }
@@ -546,7 +641,11 @@ impl<'a> BlobReader<'a> {
             return Err(bound_error());
         }
         if self.next_chunk == 0 && self.logical_bytes_read == 0 {
-            if let Some(cache) = self.decode_cache.map(|cache| &cache.whole).filter(|cache| cache.enabled_for(self.manifest.logical_bytes)) {
+            if let Some(cache) = self
+                .decode_cache
+                .map(|cache| &cache.whole)
+                .filter(|cache| cache.enabled_for(self.manifest.logical_bytes))
+            {
                 return self.materialize_with_whole_cache(cache, maximum_bytes, &bound_error);
             }
         }
@@ -555,14 +654,21 @@ impl<'a> BlobReader<'a> {
             if bytes.len().saturating_add(chunk.as_slice().len()) > maximum_bytes {
                 return Err(bound_error());
             }
-            let _collect = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_BUFFER_COLLECT);
+            let _collect = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_BLOB_BUFFER_COLLECT,
+            );
             bytes.extend_from_slice(chunk.as_slice());
-            crate::request_profile::work(crate::request_profile::Work::BlobCollectedBytes, chunk.as_slice().len() as u64);
+            crate::request_profile::work(
+                crate::request_profile::Work::BlobCollectedBytes,
+                chunk.as_slice().len() as u64,
+            );
         }
         // next_chunk(None) establishes the full scoped content witness. A
         // partially consumed reader cannot certify only its remaining suffix.
         if !self.verified || bytes.len() as u64 != self.manifest.logical_bytes {
-            return Err(invalid_data("blob materialization is not a complete verified body"));
+            return Err(invalid_data(
+                "blob materialization is not a complete verified body",
+            ));
         }
         Ok(VerifiedBlobBytes {
             bytes,
@@ -604,9 +710,14 @@ impl<'a> BlobReader<'a> {
         owner_user_id: u64,
         reference: BlobReference,
     ) -> io::Result<Self> {
-        let _manifest = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_MANIFEST_OPEN);
+        let _manifest = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_BLOB_MANIFEST_OPEN,
+        );
         let encoded_manifest = backend.read_verified(reference.manifest_block_id)?;
-        crate::request_profile::work(crate::request_profile::Work::BlobCurrentEncodedBytes, encoded_manifest.len() as u64);
+        crate::request_profile::work(
+            crate::request_profile::Work::BlobCurrentEncodedBytes,
+            encoded_manifest.len() as u64,
+        );
         let manifest = Manifest::decode(&encoded_manifest)?;
         if manifest.tenant_id != tenant_id || manifest.owner_user_id != owner_user_id {
             return Err(io::Error::new(
@@ -687,13 +798,16 @@ impl<'a> BlobReader<'a> {
     }
 
     pub fn next_chunk(&mut self) -> io::Result<Option<Vec<u8>>> {
-        self.next_chunk_bytes().map(|chunk| chunk.map(ChunkBytes::into_vec))
+        self.next_chunk_bytes()
+            .map(|chunk| chunk.map(ChunkBytes::into_vec))
     }
 
     fn next_chunk_bytes(&mut self) -> io::Result<Option<ChunkBytes>> {
         if self.next_chunk == self.manifest.chunks.len() {
             if !self.verified {
-                let _hash = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CONTENT_HASH);
+                let _hash = crate::fsync_stats::StageTimer::diagnostic(
+                    crate::fsync_stats::STAGE_BLOB_CONTENT_HASH,
+                );
                 let actual = BlobId(*self.content_hasher.finalize().as_bytes());
                 if self.logical_bytes_read != self.manifest.logical_bytes
                     || actual != self.manifest.blob_id
@@ -711,9 +825,14 @@ impl<'a> BlobReader<'a> {
             .checked_add(raw.as_slice().len() as u64)
             .ok_or_else(|| invalid_data("blob reader byte count overflow"))?;
         {
-            let _hash = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOB_CONTENT_HASH);
+            let _hash = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_BLOB_CONTENT_HASH,
+            );
             self.content_hasher.update(raw.as_slice());
-            crate::request_profile::work(crate::request_profile::Work::BlobContentHashBytes, raw.as_slice().len() as u64);
+            crate::request_profile::work(
+                crate::request_profile::Work::BlobContentHashBytes,
+                raw.as_slice().len() as u64,
+            );
         }
         self.next_chunk += 1;
         Ok(Some(raw))
@@ -733,51 +852,135 @@ mod tests {
     fn cached_blob_reader_keeps_source_errors_bounds_scope_and_complete_hash_checks() {
         use crate::entity::EntityBlockIo;
         use crate::vfs::{DeterministicVfs, Vfs};
-        use std::{cell::{Cell, RefCell}, path::Path, sync::Arc};
+        use std::{
+            cell::{Cell, RefCell},
+            path::Path,
+            sync::Arc,
+        };
         struct Source<'a> {
-            engine: &'a Engine, chunk: BlockId, reads: Cell<usize>, fail: Cell<bool>,
+            engine: &'a Engine,
+            chunk: BlockId,
+            reads: Cell<usize>,
+            fail: Cell<bool>,
             replacement: RefCell<Option<Arc<Vec<u8>>>>,
         }
         impl EntityBlockIo for Source<'_> {
             fn read_verified(&self, id: BlockId) -> io::Result<Arc<Vec<u8>>> {
                 if id == self.chunk {
-                    self.reads.set(self.reads.get()+1);
-                    if self.fail.get() { return Err(io::Error::other("injected source failure")); }
-                    if let Some(bytes) = self.replacement.borrow().as_ref() { return Ok(Arc::clone(bytes)); }
+                    self.reads.set(self.reads.get() + 1);
+                    if self.fail.get() {
+                        return Err(io::Error::other("injected source failure"));
+                    }
+                    if let Some(bytes) = self.replacement.borrow().as_ref() {
+                        return Ok(Arc::clone(bytes));
+                    }
                 }
                 self.engine.read_block_shared(id)
             }
-            fn write_fresh(&self, _: &[u8]) -> io::Result<BlockId> { panic!("read-only fixture") }
-            fn write_fresh_owned(&self, _: Vec<u8>) -> io::Result<BlockId> { panic!("read-only fixture") }
+            fn write_fresh(&self, _: &[u8]) -> io::Result<BlockId> {
+                panic!("read-only fixture")
+            }
+            fn write_fresh_owned(&self, _: Vec<u8>) -> io::Result<BlockId> {
+                panic!("read-only fixture")
+            }
         }
-        let vfs=Arc::new(DeterministicVfs::new(None)); vfs.create_dir(Path::new("/data")).unwrap();
-        let mut engine=Engine::initialize_with_vfs(Path::new("/data"),vfs).unwrap();
-        let bytes=vec![b'a';32768];
-        let reference=stage_blob(&engine,7,11,&mut Cursor::new(&bytes),bytes.len() as u64).unwrap().commit(&mut engine,b"cache-reader").unwrap();
-        let manifest=Manifest::decode(&engine.read_block(reference.manifest_block_id).unwrap()).unwrap();
-        let source=Source {engine:&engine,chunk:manifest.chunks[0].block_id,reads:Cell::new(0),fail:Cell::new(false),replacement:RefCell::new(None)};
-        let cache=Arc::new(decode_cache::DecodedChunkCache::default());cache.configure_capacity(1024*1024);
-        let metrics=cache.observer();
-        let open=||BlobReader::open_reachable(&source,7,11,reference).unwrap().with_decode_cache(&cache);
-        for _ in 0..2 { assert_eq!(open().materialize_verified(bytes.len(),||invalid_data("fixture bound")).unwrap().bytes(),bytes); }
-        assert_eq!((source.reads.get(),metrics.metrics().hits),(2,1));
-        let before=source.reads.get();
-        assert_eq!(open().materialize_verified(bytes.len()-1,||invalid_data("fixture bound")).err().unwrap().to_string(),"fixture bound");
-        assert_eq!(source.reads.get(),before);
-        assert_eq!(BlobReader::open_reachable(&source,7,12,reference).err().unwrap().kind(),io::ErrorKind::PermissionDenied);
+        let vfs = Arc::new(DeterministicVfs::new(None));
+        vfs.create_dir(Path::new("/data")).unwrap();
+        let mut engine = Engine::initialize_with_vfs(Path::new("/data"), vfs).unwrap();
+        let bytes = vec![b'a'; 32768];
+        let reference = stage_blob(&engine, 7, 11, &mut Cursor::new(&bytes), bytes.len() as u64)
+            .unwrap()
+            .commit(&mut engine, b"cache-reader")
+            .unwrap();
+        let manifest =
+            Manifest::decode(&engine.read_block(reference.manifest_block_id).unwrap()).unwrap();
+        let source = Source {
+            engine: &engine,
+            chunk: manifest.chunks[0].block_id,
+            reads: Cell::new(0),
+            fail: Cell::new(false),
+            replacement: RefCell::new(None),
+        };
+        let cache = Arc::new(decode_cache::DecodedChunkCache::default());
+        cache.configure_capacity(1024 * 1024);
+        let metrics = cache.observer();
+        let open = || {
+            BlobReader::open_reachable(&source, 7, 11, reference)
+                .unwrap()
+                .with_decode_cache(&cache)
+        };
+        for _ in 0..2 {
+            assert_eq!(
+                open()
+                    .materialize_verified(bytes.len(), || invalid_data("fixture bound"))
+                    .unwrap()
+                    .bytes(),
+                bytes
+            );
+        }
+        assert_eq!((source.reads.get(), metrics.metrics().hits), (2, 1));
+        let before = source.reads.get();
+        assert_eq!(
+            open()
+                .materialize_verified(bytes.len() - 1, || invalid_data("fixture bound"))
+                .err()
+                .unwrap()
+                .to_string(),
+            "fixture bound"
+        );
+        assert_eq!(source.reads.get(), before);
+        assert_eq!(
+            BlobReader::open_reachable(&source, 7, 12, reference)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
         source.fail.set(true);
-        assert_eq!(open().materialize_verified(bytes.len(),||invalid_data("fixture bound")).err().unwrap().to_string(),"injected source failure");
-        assert_eq!(metrics.metrics().hits,1);source.fail.set(false);
-        let mut corrupted=source.engine.read_block(source.chunk).unwrap();corrupted[24]^=1;
-        *source.replacement.borrow_mut()=Some(Arc::new(corrupted));
-        assert_eq!(open().materialize_verified(bytes.len(),||invalid_data("fixture bound")).err().unwrap().to_string(),"blob chunk logical hash mismatch");
-        assert_eq!(metrics.metrics().hits,1);*source.replacement.borrow_mut()=None;
-        let mut reader=open();reader.manifest.blob_id=BlobId([0;32]);
-        assert_eq!(reader.materialize_verified(bytes.len(),||invalid_data("fixture bound")).err().unwrap().to_string(),"blob logical content witness mismatch");
-        assert_eq!(metrics.metrics().hits,2);
-        let mut mutable=open().next_chunk().unwrap().unwrap();mutable[0]=b'z';
-        assert_eq!(open().read_range(0,4).unwrap(),b"aaaa");
-        assert_eq!(open().materialize_verified(bytes.len(),||invalid_data("fixture bound")).unwrap().bytes(),bytes);
+        assert_eq!(
+            open()
+                .materialize_verified(bytes.len(), || invalid_data("fixture bound"))
+                .err()
+                .unwrap()
+                .to_string(),
+            "injected source failure"
+        );
+        assert_eq!(metrics.metrics().hits, 1);
+        source.fail.set(false);
+        let mut corrupted = source.engine.read_block(source.chunk).unwrap();
+        corrupted[24] ^= 1;
+        *source.replacement.borrow_mut() = Some(Arc::new(corrupted));
+        assert_eq!(
+            open()
+                .materialize_verified(bytes.len(), || invalid_data("fixture bound"))
+                .err()
+                .unwrap()
+                .to_string(),
+            "blob chunk logical hash mismatch"
+        );
+        assert_eq!(metrics.metrics().hits, 1);
+        *source.replacement.borrow_mut() = None;
+        let mut reader = open();
+        reader.manifest.blob_id = BlobId([0; 32]);
+        assert_eq!(
+            reader
+                .materialize_verified(bytes.len(), || invalid_data("fixture bound"))
+                .err()
+                .unwrap()
+                .to_string(),
+            "blob logical content witness mismatch"
+        );
+        assert_eq!(metrics.metrics().hits, 2);
+        let mut mutable = open().next_chunk().unwrap().unwrap();
+        mutable[0] = b'z';
+        assert_eq!(open().read_range(0, 4).unwrap(), b"aaaa");
+        assert_eq!(
+            open()
+                .materialize_verified(bytes.len(), || invalid_data("fixture bound"))
+                .unwrap()
+                .bytes(),
+            bytes
+        );
     }
 
     #[test]
@@ -871,27 +1074,35 @@ mod tests {
             vfs.sync_directory(Path::new("/")).unwrap();
             let mut engine = Engine::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
             let first = stage_blob(&engine, 7, 11, &mut Cursor::new(vec![17; 9000]), 9000)
-                .unwrap().commit(&mut engine, b"first").unwrap();
+                .unwrap()
+                .commit(&mut engine, b"first")
+                .unwrap();
             (vfs, engine, first)
         }
         let (baseline_vfs, mut baseline, _) = prepared();
-        let staged = stage_blob(&baseline, 7, 11, &mut Cursor::new(vec![23; 17000]), 17000).unwrap();
+        let staged =
+            stage_blob(&baseline, 7, 11, &mut Cursor::new(vec![23; 17000]), 17000).unwrap();
         baseline_vfs.arm_fault(None).unwrap();
         staged.commit(&mut baseline, b"second").unwrap();
         let trace = baseline_vfs.trace().unwrap();
         let mut faults = Vec::new();
         for (index, operation) in trace.iter().enumerate() {
-            faults.push(FaultRule { operation_number: index as u64 + 1,
-                action: FaultAction::ErrorBefore(io::ErrorKind::Other) });
+            faults.push(FaultRule {
+                operation_number: index as u64 + 1,
+                action: FaultAction::ErrorBefore(io::ErrorKind::Other),
+            });
             if *operation == Operation::Write {
-                faults.push(FaultRule { operation_number: index as u64 + 1,
-                    action: FaultAction::ShortWrite(7) });
+                faults.push(FaultRule {
+                    operation_number: index as u64 + 1,
+                    action: FaultAction::ShortWrite(7),
+                });
             }
         }
         assert!(!faults.is_empty());
         for fault in faults {
             let (vfs, mut engine, first) = prepared();
-            let staged = stage_blob(&engine, 7, 11, &mut Cursor::new(vec![23; 17000]), 17000).unwrap();
+            let staged =
+                stage_blob(&engine, 7, 11, &mut Cursor::new(vec![23; 17000]), 17000).unwrap();
             vfs.arm_fault(Some(fault)).unwrap();
             let acknowledged = staged.commit(&mut engine, b"second").ok();
             // Snapshot BEFORE Drop: destructor catch-up must not rescue a
@@ -899,11 +1110,20 @@ mod tests {
             let crash = Arc::new(vfs.fork_durable().unwrap());
             let recovered = Engine::open_with_vfs(Path::new("/data"), crash).unwrap();
             for (reference, payload) in std::iter::once((first, vec![17; 9000]))
-                .chain(acknowledged.map(|reference| (reference, vec![23; 17000]))) {
-                let mut reader = BlobReader::open(&recovered,
-                    Some(recovered.transaction_snapshot().unwrap()), 7, 11, reference).unwrap();
+                .chain(acknowledged.map(|reference| (reference, vec![23; 17000])))
+            {
+                let mut reader = BlobReader::open(
+                    &recovered,
+                    Some(recovered.transaction_snapshot().unwrap()),
+                    7,
+                    11,
+                    reference,
+                )
+                .unwrap();
                 let mut actual = Vec::new();
-                while let Some(chunk) = reader.next_chunk().unwrap() { actual.extend(chunk); }
+                while let Some(chunk) = reader.next_chunk().unwrap() {
+                    actual.extend(chunk);
+                }
                 assert_eq!(actual, payload);
             }
         }
@@ -1070,8 +1290,10 @@ mod tests {
         let encoder = ChunkEncoder::default();
         for size in [8192, BLOB_CHUNK_BYTES, 1, 32768, 8192] {
             let mut raw = vec![0; size];
-            blake3::Hasher::new().update(&(size as u64).to_le_bytes())
-                .finalize_xof().fill(&mut raw);
+            blake3::Hasher::new()
+                .update(&(size as u64).to_le_bytes())
+                .finalize_xof()
+                .fill(&mut raw);
             for value in [raw, vec![b'x'; size]] {
                 let encoded = encoder.encode(&value).unwrap();
                 assert_eq!(encoded, encode_chunk(&value).unwrap());
@@ -1084,11 +1306,16 @@ mod tests {
 
     #[test]
     fn blob_read_buffers_follow_remaining_admission_and_reject_overflow() {
-        struct BoundedReader { input: Cursor<Vec<u8>>, maximum: usize }
+        struct BoundedReader {
+            input: Cursor<Vec<u8>>,
+            maximum: usize,
+        }
         impl Read for BoundedReader {
             fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-                assert!(buffer.len() <= self.maximum,
-                    "small blob exceeded its admitted read-buffer bound");
+                assert!(
+                    buffer.len() <= self.maximum,
+                    "small blob exceeded its admitted read-buffer bound"
+                );
                 self.input.read(buffer)
             }
         }
@@ -1096,19 +1323,38 @@ mod tests {
         let mut engine = Engine::initialize(directory.path()).unwrap();
         for size in [0, 8192, BLOB_CHUNK_BYTES, BLOB_CHUNK_BYTES + 1] {
             let payload = vec![b'b'; size];
-            let mut input = BoundedReader { input: Cursor::new(payload.clone()),
-                maximum: (size + 1).min(BLOB_CHUNK_BYTES) };
+            let mut input = BoundedReader {
+                input: Cursor::new(payload.clone()),
+                maximum: (size + 1).min(BLOB_CHUNK_BYTES),
+            };
             let staged = stage_blob(&engine, 7, 11, &mut input, size as u64).unwrap();
             let reference = staged.commit(&mut engine, b"bounded-read").unwrap();
-            let mut reader = BlobReader::open(&engine,
-                Some(engine.transaction_snapshot().unwrap()), 7, 11, reference).unwrap();
+            let mut reader = BlobReader::open(
+                &engine,
+                Some(engine.transaction_snapshot().unwrap()),
+                7,
+                11,
+                reference,
+            )
+            .unwrap();
             let mut restored = Vec::new();
-            while let Some(chunk) = reader.next_chunk().unwrap() { restored.extend(chunk); }
+            while let Some(chunk) = reader.next_chunk().unwrap() {
+                restored.extend(chunk);
+            }
             assert_eq!(restored, payload);
         }
         let before = engine.block_write_metrics().blocks_staged;
-        let error = stage_blob(&engine, 7, 11, &mut BoundedReader {
-            input: Cursor::new(vec![1; 8193]), maximum: 8193 }, 8192).unwrap_err();
+        let error = stage_blob(
+            &engine,
+            7,
+            11,
+            &mut BoundedReader {
+                input: Cursor::new(vec![1; 8193]),
+                maximum: 8193,
+            },
+            8192,
+        )
+        .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(engine.block_write_metrics().blocks_staged, before);
     }

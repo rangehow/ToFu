@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 pub(crate) const HOT_CACHE_BUDGET_DIVISOR: usize = 16;
-pub(crate) fn whole_cache_budget_divisor() -> usize { super::whole_cache::HOT_CACHE_BUDGET_DIVISOR }
+pub(crate) fn whole_cache_budget_divisor() -> usize {
+    super::whole_cache::HOT_CACHE_BUDGET_DIVISOR
+}
 const BASE_BYTES: usize = 4096;
 const ENTRY_BYTES: usize = 512;
 struct Entry {
@@ -139,7 +141,9 @@ impl DecodedChunkCache {
         DecodedChunkCacheObserver(Arc::clone(self))
     }
     pub(crate) fn configure_capacity(&self, capacity: usize) {
-        self.whole.configure_capacity(capacity / (super::whole_cache::HOT_CACHE_BUDGET_DIVISOR / HOT_CACHE_BUDGET_DIVISOR));
+        self.whole.configure_capacity(
+            capacity / (super::whole_cache::HOT_CACHE_BUDGET_DIVISOR / HOT_CACHE_BUDGET_DIVISOR),
+        );
         if let Ok(mut state) = self.state.lock() {
             state.capacity = capacity;
             state.trim();

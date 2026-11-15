@@ -20,7 +20,8 @@ pub(super) fn key() -> EntityKey {
 
 /// CONTROL states recovery can select from `vfs` as it stands, newest first.
 pub(super) fn durable_slots(vfs: &DeterministicVfs) -> Vec<ControlState> {
-    let mut control = ControlFile::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
+    let mut control =
+        ControlFile::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
     control.read_current().unwrap();
     control.selectable_states_for_test()
 }
@@ -29,15 +30,25 @@ pub(super) fn durable_slots(vfs: &DeterministicVfs) -> Vec<ControlState> {
 pub(super) fn destroy_newest_slot(vfs: &DeterministicVfs) {
     let newest = durable_slots(vfs)[0].generation;
     let mut control = vfs
-        .open(Path::new("/data/CONTROL"), OpenRequest { write: true, ..OpenRequest::default() })
+        .open(
+            Path::new("/data/CONTROL"),
+            OpenRequest {
+                write: true,
+                ..OpenRequest::default()
+            },
+        )
         .unwrap();
-    control.write_all_at(((newest - 1) % 2) * 4096, &[0xa5; 64]).unwrap();
+    control
+        .write_all_at(((newest - 1) % 2) * 4096, &[0xa5; 64])
+        .unwrap();
     sync_all_barrier(control.as_mut()).unwrap();
 }
 
 /// Opens a crash image of `vfs` after destroying its newest slot, and reads
 /// the value and every history segment the recovered manifest names.
-pub(super) fn recover_from_fallback(vfs: &DeterministicVfs) -> io::Result<(Option<BlockId>, Vec<u8>)> {
+pub(super) fn recover_from_fallback(
+    vfs: &DeterministicVfs,
+) -> io::Result<(Option<BlockId>, Vec<u8>)> {
     let image = Arc::new(vfs.fork_durable()?);
     destroy_newest_slot(&image);
     let mut database = AuthorityDatabase::open_with_vfs(Path::new("/data"), image)?;
@@ -65,7 +76,9 @@ pub(super) fn pruned_history_authority(vfs: Arc<dyn Vfs>) -> AuthorityDatabase {
     // packed segment holds no dead content to rewrite.
     database.set_write_overlay_for_test(false);
     let mut transaction = database.begin(7, 11).unwrap();
-    database.entity_put(&mut transaction, key(), b"value-v3".to_vec()).unwrap();
+    database
+        .entity_put(&mut transaction, key(), b"value-v3".to_vec())
+        .unwrap();
     database.commit(transaction).unwrap();
     database.checkpoint_for_test().unwrap();
     for round in 0..3 {
@@ -83,14 +96,25 @@ pub(super) fn pruned_history_authority(vfs: Arc<dyn Vfs>) -> AuthorityDatabase {
 fn loose_deletion_keeps_every_block_the_fallback_control_slot_recovers_from() {
     let vfs = UnfinishableMarkVfs::new();
     let database = Arc::new(Mutex::new(pruned_history_authority(vfs.clone())));
-    let current_manifest = database.lock().unwrap().writer_engine().unwrap().state().history_manifest_block_id;
+    let current_manifest = database
+        .lock()
+        .unwrap()
+        .writer_engine()
+        .unwrap()
+        .state()
+        .history_manifest_block_id;
     let slots = durable_slots(&vfs.inner);
     assert_eq!(slots.len(), 2);
     assert_eq!(slots[0].history_manifest_block_id, current_manifest);
     let fallback_manifest = slots[1].history_manifest_block_id;
-    assert_ne!(fallback_manifest, current_manifest, "fixture: the fallback names the pruned manifest");
-    assert_eq!(slots[1].active_log_generation, slots[0].active_log_generation,
-        "fixture: both slots replay the same retained WAL");
+    assert_ne!(
+        fallback_manifest, current_manifest,
+        "fixture: the fallback names the pruned manifest"
+    );
+    assert_eq!(
+        slots[1].active_log_generation, slots[0].active_log_generation,
+        "fixture: both slots replay the same retained WAL"
+    );
     // Before any collection the fallback slot is a complete recovery path.
     assert_eq!(
         recover_from_fallback(&vfs.inner).unwrap(),
@@ -99,10 +123,17 @@ fn loose_deletion_keeps_every_block_the_fallback_control_slot_recovers_from() {
 
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
-    assert_eq!(metrics(&collector).total_reclaimed_blocks, 0, "the first mark confirms nothing");
+    assert_eq!(
+        metrics(&collector).total_reclaimed_blocks,
+        0,
+        "the first mark confirms nothing"
+    );
     vfs.control_writes.store(0, Ordering::SeqCst);
     run_epoch(&mut collector, &database);
-    assert!(metrics(&collector).total_reclaimed_blocks > 0, "pruned history is garbage");
+    assert!(
+        metrics(&collector).total_reclaimed_blocks > 0,
+        "pruned history is garbage"
+    );
 
     // Losing the newest slot after the deletion must still recover.
     let (recovered_manifest, value) = recover_from_fallback(&vfs.inner)
@@ -116,17 +147,31 @@ fn loose_deletion_keeps_every_block_the_fallback_control_slot_recovers_from() {
         .iter()
         .all(|state| state.history_manifest_block_id == current_manifest));
     assert_eq!(
-        database.lock().unwrap().read_block_for_test(fallback_manifest.unwrap()).unwrap_err().kind(),
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(fallback_manifest.unwrap())
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::NotFound
     );
 
     // Slots that already recover the current roots cost no CONTROL I/O.
-    let orphan = database.lock().unwrap().write_orphan_block_for_test(b"later orphan").unwrap();
+    let orphan = database
+        .lock()
+        .unwrap()
+        .write_orphan_block_for_test(b"later orphan")
+        .unwrap();
     run_epoch(&mut collector, &database);
     vfs.control_writes.store(0, Ordering::SeqCst);
     run_epoch(&mut collector, &database);
     assert_eq!(
-        database.lock().unwrap().read_block_for_test(orphan).unwrap_err().kind(),
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(orphan)
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::NotFound
     );
     assert_eq!(vfs.control_writes.load(Ordering::SeqCst), 0);
@@ -146,7 +191,9 @@ fn crash_before_the_epochs_catalog_publication_keeps_the_fallback_slot_recoverab
             AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
         for value in [b"value-v1", b"value-v2", b"value-v3"] {
             let mut transaction = database.begin(7, 11).unwrap();
-            database.entity_put(&mut transaction, key(), value.to_vec()).unwrap();
+            database
+                .entity_put(&mut transaction, key(), value.to_vec())
+                .unwrap();
             database.commit(transaction).unwrap();
             database.checkpoint_for_test().unwrap();
         }
@@ -160,8 +207,13 @@ fn crash_before_the_epochs_catalog_publication_keeps_the_fallback_slot_recoverab
     run_epoch(&mut collector, &database);
     vfs.control_writes.store(0, Ordering::SeqCst);
     vfs.fail_control_writes_from.store(1, Ordering::SeqCst);
-    let error = collector.run_epoch(&database, &AtomicBool::new(false)).unwrap_err();
-    assert!(error.to_string().contains("injected CONTROL write failure"), "{error}");
+    let error = collector
+        .run_epoch(&database, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("injected CONTROL write failure"),
+        "{error}"
+    );
     assert_eq!(
         recover_from_fallback(&vfs.inner)
             .expect("no loose victim may be unlinked while the fallback slot names it"),
@@ -190,8 +242,9 @@ fn compaction_failing_between_a_middle_segments_control_publications_keeps_its_l
     let (seed, backlog) = seed;
     let open = || {
         let vfs = UnfinishableMarkVfs::over(Arc::new(seed.fork_durable().unwrap()));
-        let database =
-            Arc::new(Mutex::new(AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap()));
+        let database = Arc::new(Mutex::new(
+            AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap(),
+        ));
         (vfs, database)
     };
     // Dry run on an identical fork: three segments, two CONTROL writes each,
@@ -208,9 +261,15 @@ fn compaction_failing_between_a_middle_segments_control_publications_keeps_its_l
     let (vfs, database) = open();
     let mut collector = OnlineGarbageCollector::new(backlog_budget());
     vfs.control_writes.store(0, Ordering::SeqCst);
-    vfs.fail_control_writes_from.store(control_writes - 2, Ordering::SeqCst);
-    let error = collector.run_epoch(&database, &AtomicBool::new(false)).unwrap_err();
-    assert!(error.to_string().contains("injected CONTROL write failure"), "{error}");
+    vfs.fail_control_writes_from
+        .store(control_writes - 2, Ordering::SeqCst);
+    let error = collector
+        .run_epoch(&database, &AtomicBool::new(false))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("injected CONTROL write failure"),
+        "{error}"
+    );
     assert_eq!(
         loose_backlog_remaining(&database, &backlog),
         2 * backlog.len() / 3,

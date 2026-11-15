@@ -180,7 +180,9 @@ fn relink_fence_skips_candidates_rereferenced_since_the_snapshot() {
     // Arm the fence exactly like an epoch snapshot hold would.
     let capture = {
         let database_guard = database.lock().unwrap();
-        database_guard.online_gc_capture(test_budget().maximum_temporary_bytes).unwrap()
+        database_guard
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap()
     };
     // A commit path re-references the orphan after the snapshot: the write
     // path observes existing durable content and records the relink.
@@ -193,7 +195,9 @@ fn relink_fence_skips_candidates_rereferenced_since_the_snapshot() {
     }
     let removal = {
         let mut database_guard = database.lock().unwrap();
-        database_guard.online_gc_delete_loose(&[orphan], &mut Vec::new()).unwrap()
+        database_guard
+            .online_gc_delete_loose(&[orphan], &mut Vec::new())
+            .unwrap()
     };
     assert_eq!(removal.blocks_removed, 0);
     drop(capture);
@@ -205,11 +209,15 @@ fn relink_fence_skips_candidates_rereferenced_since_the_snapshot() {
     // deletes normally.
     {
         let database_guard = database.lock().unwrap();
-        database_guard.online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
+        database_guard
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap();
     }
     let removal = {
         let mut database_guard = database.lock().unwrap();
-        database_guard.online_gc_delete_loose(&[orphan], &mut Vec::new()).unwrap()
+        database_guard
+            .online_gc_delete_loose(&[orphan], &mut Vec::new())
+            .unwrap()
     };
     assert_eq!(removal.blocks_removed, 1);
 }
@@ -228,23 +236,41 @@ fn relink_fence_keeps_every_dedupe_hit_of_an_epoch_window_and_still_filters() {
     let (garbage, relinked) = {
         let mut database_guard = database.lock().unwrap();
         for chunk in payloads.chunks(4_096) {
-            database_guard.commit_block_payloads_for_test(chunk).unwrap();
+            database_guard
+                .commit_block_payloads_for_test(chunk)
+                .unwrap();
         }
         database_guard.checkpoint_for_test().unwrap();
         (
-            database_guard.write_orphan_block_for_test(b"fence-garbage").unwrap(),
-            database_guard.write_orphan_block_for_test(b"fence-relinked").unwrap(),
+            database_guard
+                .write_orphan_block_for_test(b"fence-garbage")
+                .unwrap(),
+            database_guard
+                .write_orphan_block_for_test(b"fence-relinked")
+                .unwrap(),
         )
     };
     let blocks = database.lock().unwrap().block_store_shared();
-    assert_eq!(blocks.relink_fence_len_for_test(), None, "nothing records outside an epoch window");
-    database.lock().unwrap().online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
+    assert_eq!(
+        blocks.relink_fence_len_for_test(),
+        None,
+        "nothing records outside an epoch window"
+    );
+    database
+        .lock()
+        .unwrap()
+        .online_gc_capture(test_budget().maximum_temporary_bytes)
+        .unwrap();
     {
         let mut database_guard = database.lock().unwrap();
         for chunk in payloads.chunks(4_096) {
-            database_guard.commit_block_payloads_for_test(chunk).unwrap();
+            database_guard
+                .commit_block_payloads_for_test(chunk)
+                .unwrap();
         }
-        database_guard.commit_block_payload_for_test(b"fence-relinked").unwrap();
+        database_guard
+            .commit_block_payload_for_test(b"fence-relinked")
+            .unwrap();
     }
     assert_eq!(blocks.relink_fence_len_for_test(), Some(DEDUPE_HITS + 1));
     let mut unlinked = Vec::new();
@@ -254,13 +280,21 @@ fn relink_fence_keeps_every_dedupe_hit_of_an_epoch_window_and_still_filters() {
         .online_gc_delete_loose(&[garbage, relinked], &mut unlinked)
         .unwrap();
     assert_eq!((removal.blocks_removed, unlinked), (1, vec![garbage]));
-    assert!(database.lock().unwrap().read_block_for_test(relinked).is_ok());
+    assert!(database
+        .lock()
+        .unwrap()
+        .read_block_for_test(relinked)
+        .is_ok());
 
     // A whole epoch closes its window and releases the fence.
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
     assert_eq!(blocks.relink_fence_len_for_test(), None);
-    database.lock().unwrap().commit_block_payload_for_test(&payloads[0]).unwrap();
+    database
+        .lock()
+        .unwrap()
+        .commit_block_payload_for_test(&payloads[0])
+        .unwrap();
     assert_eq!(blocks.relink_fence_len_for_test(), None);
 }
 
@@ -352,7 +386,10 @@ fn scan_probe_payloads(tag: &[u8], count: usize, accept: impl Fn(u8) -> bool) ->
 }
 
 fn scan_probe_ids(payloads: &[Vec<u8>]) -> Vec<BlockId> {
-    payloads.iter().map(|payload| BlockId::for_payload(payload)).collect()
+    payloads
+        .iter()
+        .map(|payload| BlockId::for_payload(payload))
+        .collect()
 }
 
 fn loose_block_path(block_id: BlockId) -> PathBuf {
@@ -374,14 +411,24 @@ struct ScanProbeLog {
 
 impl ScanProbeLog {
     fn opens(&self, block_id: BlockId) -> u64 {
-        self.block_opens.lock().unwrap().get(&loose_block_path(block_id)).copied().unwrap_or(0)
+        self.block_opens
+            .lock()
+            .unwrap()
+            .get(&loose_block_path(block_id))
+            .copied()
+            .unwrap_or(0)
     }
 
     fn segment_reads_after(&self, block_ids: &[BlockId]) -> u64 {
         let reads = self.segment_reads_after.lock().unwrap();
         block_ids
             .iter()
-            .map(|block_id| reads.get(&loose_block_path(*block_id)).copied().unwrap_or(0))
+            .map(|block_id| {
+                reads
+                    .get(&loose_block_path(*block_id))
+                    .copied()
+                    .unwrap_or(0)
+            })
             .sum()
     }
 }
@@ -397,11 +444,23 @@ impl Vfs for ScanProbeVfs {
         let loose_block = path.parent().and_then(Path::parent) == Some(Path::new("/data/blocks"))
             && path.extension().is_some_and(|extension| extension == "blk");
         if request.read && loose_block && self.log.counting.load(Ordering::Acquire) {
-            *self.log.block_opens.lock().unwrap().entry(path.to_path_buf()).or_default() += 1;
+            *self
+                .log
+                .block_opens
+                .lock()
+                .unwrap()
+                .entry(path.to_path_buf())
+                .or_default() += 1;
             *self.log.last_block.lock().unwrap() = Some(path.to_path_buf());
         }
-        if path.extension().is_some_and(|extension| extension == "pseg") {
-            return Ok(Box::new(ScanProbeSegmentFile { inner: file, log: self.log.clone() }));
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "pseg")
+        {
+            return Ok(Box::new(ScanProbeSegmentFile {
+                inner: file,
+                log: self.log.clone(),
+            }));
         }
         Ok(file)
     }
@@ -453,7 +512,13 @@ impl ScanProbeSegmentFile {
             return;
         }
         if let Some(block) = self.log.last_block.lock().unwrap().clone() {
-            *self.log.segment_reads_after.lock().unwrap().entry(block).or_default() += 1;
+            *self
+                .log
+                .segment_reads_after
+                .lock()
+                .unwrap()
+                .entry(block)
+                .or_default() += 1;
         }
     }
 }
@@ -512,16 +577,25 @@ fn scan_probe_fixture(catalog: bool) -> ScanProbeFixture {
     inner.create_dir(Path::new("/data")).unwrap();
     inner.sync_directory(Path::new("/")).unwrap();
     let log = Arc::new(ScanProbeLog::default());
-    let vfs = Arc::new(ScanProbeVfs { inner: inner.clone(), log: log.clone() });
+    let vfs = Arc::new(ScanProbeVfs {
+        inner: inner.clone(),
+        log: log.clone(),
+    });
     let mut authority = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs).unwrap();
     inner.arm_fault(None).unwrap();
-    authority.block_store_shared().set_segment_index_cache_bytes(0).unwrap();
-    let earlier_payloads =
-        scan_probe_payloads(b"scan-probe-earlier-", 140, |shard| shard < SCAN_PROBE_PLANNED_SHARD);
-    let planned_payloads =
-        scan_probe_payloads(b"scan-probe-planned-", 8, |shard| shard == SCAN_PROBE_PLANNED_SHARD);
-    let tail_payloads =
-        scan_probe_payloads(b"scan-probe-tail-", 1, |shard| shard > SCAN_PROBE_PLANNED_SHARD);
+    authority
+        .block_store_shared()
+        .set_segment_index_cache_bytes(0)
+        .unwrap();
+    let earlier_payloads = scan_probe_payloads(b"scan-probe-earlier-", 140, |shard| {
+        shard < SCAN_PROBE_PLANNED_SHARD
+    });
+    let planned_payloads = scan_probe_payloads(b"scan-probe-planned-", 8, |shard| {
+        shard == SCAN_PROBE_PLANNED_SHARD
+    });
+    let tail_payloads = scan_probe_payloads(b"scan-probe-tail-", 1, |shard| {
+        shard > SCAN_PROBE_PLANNED_SHARD
+    });
     let mut segment_payloads = Vec::new();
     if catalog {
         for tag in [&b"scan-probe-segment-a-"[..], &b"scan-probe-segment-b-"[..]] {
@@ -570,7 +644,12 @@ fn run_scan_probe_epoch(
     run_epoch(&mut collector, &fixture.database);
     fixture.log.counting.store(false, Ordering::Release);
     let database = fixture.database.lock().unwrap();
-    for block_id in fixture.earlier.iter().chain(&fixture.planned_shard).chain([&fixture.tail]) {
+    for block_id in fixture
+        .earlier
+        .iter()
+        .chain(&fixture.planned_shard)
+        .chain([&fixture.tail])
+    {
         assert!(database.read_block_for_test(*block_id).is_ok());
     }
     metrics(&collector)
@@ -586,7 +665,10 @@ fn scan_packs_the_segment_it_closes_and_sizes_each_later_block_once() {
     {
         let database = fixture.database.lock().unwrap();
         let blocks = database.block_store_shared();
-        assert_eq!(blocks.list_block_ids(expected.len() + 64).unwrap(), expected);
+        assert_eq!(
+            blocks.list_block_ids(expected.len() + 64).unwrap(),
+            expected
+        );
     }
     // The budget closes a segment after exactly the first 128 earlier blocks.
     // The scan packs it there and keeps admitting: the 21 blocks after it
@@ -600,7 +682,11 @@ fn scan_packs_the_segment_it_closes_and_sizes_each_later_block_once() {
         .chain(&fixture.planned_shard)
         .chain([&fixture.tail])
     {
-        assert_eq!(fixture.log.opens(*block_id), 1, "one size probe per live block after the closed segment");
+        assert_eq!(
+            fixture.log.opens(*block_id),
+            1,
+            "one size probe per live block after the closed segment"
+        );
     }
 }
 
@@ -618,7 +704,11 @@ fn scan_probes_catalog_membership_for_every_block_a_segment_can_hold() {
     );
     assert!(fixture.log.segment_reads_after(&fixture.planned_shard) > 0);
     for block_id in &fixture.planned_shard {
-        assert_eq!(fixture.log.opens(*block_id), 1, "one size probe per live block");
+        assert_eq!(
+            fixture.log.opens(*block_id),
+            1,
+            "one size probe per live block"
+        );
     }
 }
 
@@ -644,7 +734,11 @@ fn scan_skips_compaction_probes_while_no_catalog_slot_stays_below_the_pressure_f
         .copied()
         .collect();
     for block_id in &live {
-        assert_eq!(fixture.log.opens(*block_id), 0, "closed compaction sized a live block");
+        assert_eq!(
+            fixture.log.opens(*block_id),
+            0,
+            "closed compaction sized a live block"
+        );
     }
     assert_eq!(metrics(&collector).total_redundant_copies_removed, 0);
     let database = fixture.database.lock().unwrap();
@@ -656,7 +750,8 @@ fn scan_skips_compaction_probes_while_no_catalog_slot_stays_below_the_pressure_f
 
 /// Blocks per segment in the backlog fixtures: their temporary-byte budget
 /// admits exactly this many 16 KiB probe blocks per segment.
-const BACKLOG_SEGMENT_BLOCKS: usize = crate::authority_gc::MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS;
+const BACKLOG_SEGMENT_BLOCKS: usize =
+    crate::authority_gc::MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS;
 
 pub(super) fn backlog_budget() -> AuthorityGarbageCollectionBudget {
     AuthorityGarbageCollectionBudget {
@@ -673,12 +768,17 @@ pub(super) fn loose_backlog(
     database: &Arc<Mutex<AuthorityDatabase>>,
     segments: usize,
 ) -> Vec<(BlockId, Vec<u8>)> {
-    let payloads = scan_probe_payloads(b"loose-backlog-", segments * BACKLOG_SEGMENT_BLOCKS, |_| true);
+    let payloads =
+        scan_probe_payloads(b"loose-backlog-", segments * BACKLOG_SEGMENT_BLOCKS, |_| {
+            true
+        });
     let mut database_guard = database.lock().unwrap();
     let mut backlog = Vec::with_capacity(payloads.len());
     let commits = (payloads.len() / 160).max(1);
     for chunk in payloads.chunks(payloads.len().div_ceil(commits)) {
-        let block_ids = database_guard.commit_block_payloads_for_test(chunk).unwrap();
+        let block_ids = database_guard
+            .commit_block_payloads_for_test(chunk)
+            .unwrap();
         backlog.extend(block_ids.into_iter().zip(chunk.iter().cloned()));
     }
     backlog
@@ -696,7 +796,10 @@ pub(super) fn loose_backlog_remaining(
         .unwrap()
         .into_iter()
         .collect();
-    backlog.iter().filter(|(block_id, _)| loose.contains(block_id)).count()
+    backlog
+        .iter()
+        .filter(|(block_id, _)| loose.contains(block_id))
+        .count()
 }
 
 /// The 2026-10-31 inode exhaustion: the search projection held ~12.4M live
@@ -733,7 +836,10 @@ fn one_epoch_packs_a_loose_backlog_into_every_segment_the_limits_require() {
         vec![(5, 0)],
         "per epoch: (segments published, backlog blocks still loose)"
     );
-    assert_eq!(metrics(&collector).total_compacted_blocks, backlog.len() as u64);
+    assert_eq!(
+        metrics(&collector).total_compacted_blocks,
+        backlog.len() as u64
+    );
     assert_eq!(metrics(&collector).total_compaction_segments, 5);
     for lose_newest_slot in [false, true] {
         let image = Arc::new(vfs.fork_durable().unwrap());
@@ -755,10 +861,8 @@ fn doorbell_and_pressure_never_break_the_pacing_floor() {
     // back-to-back epochs indefinitely; the pacing floor must hold under
     // doorbells AND volume pressure alike.
     let (_vfs, database) = authority();
-    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
-        test_budget(),
-        Duration::from_millis(60),
-    );
+    let mut collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(60));
     // First epoch is due immediately (no boot grace in this constructor).
     assert!(collector.should_run_now(false));
     run_epoch(&mut collector, &database);
@@ -786,10 +890,8 @@ fn doorbell_and_pressure_never_break_the_pacing_floor() {
 
 #[test]
 fn duty_cycle_floor_waits_out_the_previous_epochs_duration() {
-    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
-        test_budget(),
-        Duration::from_millis(10),
-    );
+    let mut collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(10));
     // Simulate a just-finished long epoch: due by the idle timer, past the
     // min-interval floor, but inside its own duty-cycle window.
     let now = Instant::now();
@@ -817,17 +919,25 @@ fn an_epoch_ending_at_ninety_percent_of_the_catalog_ceiling_keeps_the_minimum_in
     let expedited = (crate::payload_manifest::MAX_PAYLOAD_SEGMENTS * 90).div_ceil(100);
     let production = OnlineGarbageCollector::new(test_budget());
     assert_eq!(
-        (production.catalog_pressure_expedited(expedited), production.catalog_pressure_expedited(expedited - 1)),
+        (
+            production.catalog_pressure_expedited(expedited),
+            production.catalog_pressure_expedited(expedited - 1)
+        ),
         (true, false),
         "the threshold is 90% of the catalog ceiling: {expedited} segments"
     );
     let (_vfs, database) = authority();
     let payload = b"catalog-pressure-cadence-shared-live";
-    database.lock().unwrap().commit_block_payload_for_test(payload).unwrap();
+    database
+        .lock()
+        .unwrap()
+        .commit_block_payload_for_test(payload)
+        .unwrap();
     let references = publish_one_block_segments(&database, payload, 2);
     let minimum = Duration::from_millis(1);
     let mut collector = OnlineGarbageCollector::with_min_epoch_interval(test_budget(), minimum);
-    collector.set_catalog_pressure_floor_for_test(crate::payload_manifest::MAX_PAYLOAD_SEGMENTS + 1);
+    collector
+        .set_catalog_pressure_floor_for_test(crate::payload_manifest::MAX_PAYLOAD_SEGMENTS + 1);
     collector.set_catalog_expedite_floor_for_test(references.len());
     let idle_intervals = |collector: &mut OnlineGarbageCollector, epochs: usize| -> Vec<Duration> {
         (0..epochs)
@@ -837,7 +947,11 @@ fn an_epoch_ending_at_ninety_percent_of_the_catalog_ceiling_keeps_the_minimum_in
             })
             .collect()
     };
-    assert_eq!(idle_intervals(&mut collector, 2), vec![minimum; 2], "epochs ending at the threshold keep the minimum");
+    assert_eq!(
+        idle_intervals(&mut collector, 2),
+        vec![minimum; 2],
+        "epochs ending at the threshold keep the minimum"
+    );
     database
         .lock()
         .unwrap()
@@ -872,31 +986,50 @@ fn driver_publishes_the_first_catalog_location_table_while_epochs_defer() {
             .map(|payload| (BlockId::for_payload(&payload), payload))
             .collect();
         let created = store
-            .create(uuid::Uuid::from_u128(41), payloads.keys().copied().collect(), |id| Ok(payloads[&id].clone()))
+            .create(
+                uuid::Uuid::from_u128(41),
+                payloads.keys().copied().collect(),
+                |id| Ok(payloads[&id].clone()),
+            )
             .unwrap();
-        let reference =
-            PayloadSegmentReference::new(created.metadata(), created.first_block_id(), created.last_block_id()).unwrap();
-        guard.engine_mut_for_test()
+        let reference = PayloadSegmentReference::new(
+            created.metadata(),
+            created.first_block_id(),
+            created.last_block_id(),
+        )
+        .unwrap();
+        guard
+            .engine_mut_for_test()
             .publish_payload_manifest_for_test(PayloadManifest::new(vec![reference]).unwrap())
             .unwrap();
         blocks
     };
     assert!(blocks.published_catalog_locations_for_test().is_none());
-    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(25));
+    let mut collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(25));
     collector.defer_first_epoch(Duration::from_millis(500));
     let driver =
         OnlineGarbageCollectionDriver::start_with_collector(&database, collector, false).unwrap();
     let observer = driver.observer();
     let foreground = database.lock().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while blocks.published_catalog_locations_for_test().is_none() || observer.metrics().deferred_epochs == 0 {
-        assert!(std::time::Instant::now() < deadline, "no first table while the capture defers");
+    while blocks.published_catalog_locations_for_test().is_none()
+        || observer.metrics().deferred_epochs == 0
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no first table while the capture defers"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     let (publication, table) = blocks.published_catalog_locations_for_test().unwrap();
     assert_eq!(publication, blocks.installed_catalog_publication_for_test());
     assert_eq!(table.located_blocks(), 8);
-    assert_eq!(observer.metrics().marks_built, 0, "no epoch got past its capture");
+    assert_eq!(
+        observer.metrics().marks_built,
+        0,
+        "no epoch got past its capture"
+    );
     drop(foreground);
     driver.stop_and_join().unwrap();
 }
@@ -921,34 +1054,65 @@ fn driver_builds_the_packed_filter_off_the_mutex_while_epochs_defer() {
         let blocks = guard.block_store_shared();
         let store = blocks.payload_segment_store().unwrap();
         let created = store
-            .create(uuid::Uuid::from_u128(43), payloads.keys().copied().collect(), |id| Ok(payloads[&id].clone()))
+            .create(
+                uuid::Uuid::from_u128(43),
+                payloads.keys().copied().collect(),
+                |id| Ok(payloads[&id].clone()),
+            )
             .unwrap();
-        let reference =
-            PayloadSegmentReference::new(created.metadata(), created.first_block_id(), created.last_block_id()).unwrap();
-        guard.engine_mut_for_test()
+        let reference = PayloadSegmentReference::new(
+            created.metadata(),
+            created.first_block_id(),
+            created.last_block_id(),
+        )
+        .unwrap();
+        guard
+            .engine_mut_for_test()
             .publish_payload_manifest_for_test(PayloadManifest::new(vec![reference]).unwrap())
             .unwrap();
     }
     drop(database);
-    let database = Arc::new(Mutex::new(AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap()));
+    let database = Arc::new(Mutex::new(
+        AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap(),
+    ));
     let blocks = database.lock().unwrap().block_store_shared();
-    assert_eq!(blocks.packed_filter_state_for_test(), (false, false), "fixture: the open built no filter");
-    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(25));
+    assert_eq!(
+        blocks.packed_filter_state_for_test(),
+        (false, false),
+        "fixture: the open built no filter"
+    );
+    let mut collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(25));
     collector.defer_first_epoch(Duration::from_millis(100));
     let driver =
         OnlineGarbageCollectionDriver::start_with_collector(&database, collector, false).unwrap();
     let observer = driver.observer();
     let foreground = database.lock().unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while blocks.packed_filter_state_for_test() != (true, true) || observer.metrics().deferred_epochs == 0 {
-        assert!(std::time::Instant::now() < deadline, "no packed filter while the capture defers");
+    while blocks.packed_filter_state_for_test() != (true, true)
+        || observer.metrics().deferred_epochs == 0
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no packed filter while the capture defers"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(observer.metrics().marks_built, 0, "no epoch got past its capture");
+    assert_eq!(
+        observer.metrics().marks_built,
+        0,
+        "no epoch got past its capture"
+    );
     for (id, payload) in &payloads {
         assert_eq!(&blocks.get(*id).unwrap(), payload);
     }
-    assert_eq!(blocks.get(BlockId::for_payload(b"never written")).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        blocks
+            .get(BlockId::for_payload(b"never written"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
     drop(foreground);
     driver.stop_and_join().unwrap();
 }
@@ -962,16 +1126,17 @@ fn driver_runs_epochs_and_reports_health() {
             .write_orphan_block_for_test(b"driver-orphan")
             .unwrap();
     }
-    let collector = OnlineGarbageCollector::with_min_epoch_interval(
-        test_budget(),
-        Duration::from_millis(25),
-    );
+    let collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(25));
     let driver =
         OnlineGarbageCollectionDriver::start_with_collector(&database, collector, false).unwrap();
     let observer = driver.observer();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while observer.metrics().epochs_completed < 2 {
-        assert!(std::time::Instant::now() < deadline, "driver made no epochs");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "driver made no epochs"
+        );
         assert!(observer.require_healthy().is_ok());
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -986,24 +1151,39 @@ fn driver_attributes_mark_reads_to_the_online_gc_component() {
         let mut database_guard = database.lock().unwrap();
         let mut transaction = database_guard.begin(7, 11).unwrap();
         database_guard
-            .entity_put(&mut transaction, EntityKey::new(7, 11, "record", b"attributed").unwrap(), b"value".to_vec())
+            .entity_put(
+                &mut transaction,
+                EntityKey::new(7, 11, "record", b"attributed").unwrap(),
+                b"value".to_vec(),
+            )
             .unwrap();
         database_guard.commit(transaction).unwrap();
     }
-    let reads = || crate::fsync_stats::component_stage_calls(
-        crate::fsync_stats::COMPONENT_ONLINE_GC, crate::fsync_stats::STAGE_BLOCK_GET);
+    let reads = || {
+        crate::fsync_stats::component_stage_calls(
+            crate::fsync_stats::COMPONENT_ONLINE_GC,
+            crate::fsync_stats::STAGE_BLOCK_GET,
+        )
+    };
     let before = reads();
-    let collector = OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(25));
+    let collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(25));
     let driver =
         OnlineGarbageCollectionDriver::start_with_collector(&database, collector, false).unwrap();
     let observer = driver.observer();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while observer.metrics().epochs_completed < 1 {
-        assert!(std::time::Instant::now() < deadline, "driver made no epochs");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "driver made no epochs"
+        );
         std::thread::sleep(Duration::from_millis(25));
     }
     driver.stop_and_join().unwrap();
-    assert!(reads() > before, "the collector's traversal must not be billed to foreground");
+    assert!(
+        reads() > before,
+        "the collector's traversal must not be billed to foreground"
+    );
 }
 
 /// Same-shard fixtures sized so one commit carrying `count` of them exceeds
@@ -1068,10 +1248,8 @@ fn catalog_pressure_consolidates_small_segments_into_one() {
         live_ids.push((live, b"consolidate-live-final".to_vec()));
         assert_eq!(database_guard.payload_segment_count_for_test(), 4);
     }
-    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
-        test_budget(),
-        Duration::from_millis(1),
-    );
+    let mut collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(1));
     collector.set_catalog_pressure_floor_for_test(1);
     run_epoch(&mut collector, &database);
     run_epoch(&mut collector, &database);
@@ -1111,26 +1289,35 @@ fn pressured_consolidation_plans_only_unions_one_segment_can_hold() {
                 .collect();
             let mut ids = Vec::with_capacity(per_segment + 1);
             for chunk in payloads.chunks(1_000) {
-                ids.extend(database_guard.commit_block_payloads_for_test(chunk).unwrap());
+                ids.extend(
+                    database_guard
+                        .commit_block_payloads_for_test(chunk)
+                        .unwrap(),
+                );
             }
-            ids.push(database_guard
-                .write_orphan_block_for_test(format!("union-bound-dead-{segment}").as_bytes())
-                .unwrap());
-            database_guard.compact_payload_blocks_for_test(&ids).unwrap();
+            ids.push(
+                database_guard
+                    .write_orphan_block_for_test(format!("union-bound-dead-{segment}").as_bytes())
+                    .unwrap(),
+            );
+            database_guard
+                .compact_payload_blocks_for_test(&ids)
+                .unwrap();
             live.extend(ids[..per_segment].iter().copied().zip(payloads));
         }
         assert_eq!(database_guard.payload_segment_count_for_test(), 2);
     }
-    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
-        test_budget(),
-        Duration::from_millis(1),
-    );
+    let mut collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(1));
     collector.set_catalog_pressure_floor_for_test(1);
     for _ in 0..3 {
         run_epoch(&mut collector, &database);
     }
     let final_metrics = metrics(&collector);
-    assert_eq!((final_metrics.failed_epochs, final_metrics.epoch_error), (0, None));
+    assert_eq!(
+        (final_metrics.failed_epochs, final_metrics.epoch_error),
+        (0, None)
+    );
     let database_guard = database.lock().unwrap();
     for (id, payload) in live.iter().step_by(997) {
         assert_eq!(&database_guard.read_block_for_test(*id).unwrap(), payload);
@@ -1153,7 +1340,11 @@ fn publish_one_block_segments(
             .block_store()
             .payload_segment_store()
             .unwrap()
-            .create(uuid::Uuid::from_u128(index as u128 + 1), vec![block_id], |_| Ok(payload.to_vec()))
+            .create(
+                uuid::Uuid::from_u128(index as u128 + 1),
+                vec![block_id],
+                |_| Ok(payload.to_vec()),
+            )
             .unwrap();
         references.push(
             crate::payload_manifest::PayloadSegmentReference::new(
@@ -1221,35 +1412,26 @@ fn full_catalog_recovers_capacity_through_pressured_consolidation() {
             io::ErrorKind::InvalidInput,
             "catalog-full must reject new-segment publication"
         );
-        let _ = store
-            .payload_segment_store()
-            .unwrap()
-            .remove_orphan_file(&crate::payload_segment::PayloadSegmentOrphanCandidate {
+        let _ = store.payload_segment_store().unwrap().remove_orphan_file(
+            &crate::payload_segment::PayloadSegmentOrphanCandidate {
                 file_name: format!("{}.pseg", reference.segment_id.simple()),
                 segment_id: Some(reference.segment_id),
                 file_bytes: reference.file_bytes,
-            });
+            },
+        );
     }
     // Pressured epochs consolidate the one-block segments and free slots.
-    let mut collector = OnlineGarbageCollector::with_min_epoch_interval(
-        test_budget(),
-        Duration::from_millis(1),
-    );
+    let mut collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_millis(1));
     let stop = AtomicBool::new(false);
     for _ in 0..64 {
         collector.run_epoch(&database, &stop).unwrap();
-        let count = database
-            .lock()
-            .unwrap()
-            .payload_segment_count_for_test();
+        let count = database.lock().unwrap().payload_segment_count_for_test();
         if count < crate::payload_manifest::MAX_PAYLOAD_SEGMENTS {
             break;
         }
     }
-    let remaining = database
-        .lock()
-        .unwrap()
-        .payload_segment_count_for_test();
+    let remaining = database.lock().unwrap().payload_segment_count_for_test();
     assert!(
         remaining < crate::payload_manifest::MAX_PAYLOAD_SEGMENTS,
         "pressured consolidation never freed a slot: {remaining}"
@@ -1266,21 +1448,25 @@ fn full_catalog_recovers_capacity_through_pressured_consolidation() {
 #[test]
 fn doorbell_expedites_an_epoch_past_the_idle_backoff() {
     let (_vfs, database) = authority();
-    let collector = OnlineGarbageCollector::with_min_epoch_interval(
-        test_budget(),
-        Duration::from_secs(3600),
-    );
+    let collector =
+        OnlineGarbageCollector::with_min_epoch_interval(test_budget(), Duration::from_secs(3600));
     let driver =
         OnlineGarbageCollectionDriver::start_with_collector(&database, collector, false).unwrap();
     let observer = driver.observer();
     // No natural epoch for an hour; the doorbell must still start one.
     {
         let database_guard = database.lock().unwrap();
-        database_guard.online_garbage_collection().unwrap().request_expedited_epoch();
+        database_guard
+            .online_garbage_collection()
+            .unwrap()
+            .request_expedited_epoch();
     }
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while observer.metrics().epochs_completed < 1 {
-        assert!(std::time::Instant::now() < deadline, "doorbell never started an epoch");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "doorbell never started an epoch"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
     driver.stop_and_join().unwrap();
@@ -1447,22 +1633,50 @@ fn idle_epochs_eventually_verify_every_payload_catalog_window() {
         let mut guard = database.lock().unwrap();
         for index in 0..(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED + 1) {
             let payload = format!("idle-window-live-{index}");
-            let id = guard.commit_block_payload_for_test(payload.as_bytes()).unwrap();
+            let id = guard
+                .commit_block_payload_for_test(payload.as_bytes())
+                .unwrap();
             guard.compact_payload_blocks_for_test(&[id]).unwrap();
         }
-        let capture = guard.online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
-        let manifest = capture.blocks.installed_payload_manifest().unwrap().unwrap();
-        let count = manifest.segments.len().div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
+        let capture = guard
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap();
+        let manifest = capture
+            .blocks
+            .installed_payload_manifest()
+            .unwrap()
+            .unwrap();
+        let count = manifest
+            .segments
+            .len()
+            .div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
         assert!(count > 1);
-        let start = (capture.snapshot.generation as usize % count) * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
-        manifest.segments.iter().enumerate()
-            .find(|(index, _)| *index < start || *index >= start + MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED)
-            .unwrap().1.segment_id
+        let start = (capture.snapshot.generation as usize % count)
+            * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
+        manifest
+            .segments
+            .iter()
+            .enumerate()
+            .find(|(index, _)| {
+                *index < start || *index >= start + MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED
+            })
+            .unwrap()
+            .1
+            .segment_id
     };
     // Corruption outside the first selected window is a reachability oracle:
     // repeated idle epochs must eventually inspect that real catalog file.
-    let path = Path::new("/data/payload-segments").join(format!("{}.pseg", excluded_segment.simple()));
-    let mut file = vfs.open(&path, OpenRequest { write: true, ..OpenRequest::default() }).unwrap();
+    let path =
+        Path::new("/data/payload-segments").join(format!("{}.pseg", excluded_segment.simple()));
+    let mut file = vfs
+        .open(
+            &path,
+            OpenRequest {
+                write: true,
+                ..OpenRequest::default()
+            },
+        )
+        .unwrap();
     file.write_all_at(0, b"BROKEN!!").unwrap();
     sync_all_barrier(file.as_mut()).unwrap();
     drop(file);
@@ -1476,7 +1690,10 @@ fn idle_epochs_eventually_verify_every_payload_catalog_window() {
             break;
         }
     }
-    assert!(detected, "unchanged generation must not starve another catalog window");
+    assert!(
+        detected,
+        "unchanged generation must not starve another catalog window"
+    );
 }
 
 #[test]
@@ -1491,15 +1708,38 @@ fn idle_epochs_reclaim_dead_segment_beyond_first_window_and_preserve_live_data()
             guard.compact_payload_blocks_for_test(&[id]).unwrap();
             payloads.push((id, payload));
         }
-        let capture = guard.online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
-        let manifest = capture.blocks.installed_payload_manifest().unwrap().unwrap();
-        let windows = manifest.segments.len().div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
-        let start = (capture.snapshot.generation as usize % windows) * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
-        let target = manifest.segments.iter().enumerate()
-            .find(|(index, _)| *index < start || *index >= start + MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED)
-            .unwrap().1;
-        let dead_id = capture.blocks.payload_segment_store().unwrap()
-            .open_segment(target.segment_id).unwrap().block_ids().next().unwrap();
+        let capture = guard
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap();
+        let manifest = capture
+            .blocks
+            .installed_payload_manifest()
+            .unwrap()
+            .unwrap();
+        let windows = manifest
+            .segments
+            .len()
+            .div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
+        let start = (capture.snapshot.generation as usize % windows)
+            * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
+        let target = manifest
+            .segments
+            .iter()
+            .enumerate()
+            .find(|(index, _)| {
+                *index < start || *index >= start + MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED
+            })
+            .unwrap()
+            .1;
+        let dead_id = capture
+            .blocks
+            .payload_segment_store()
+            .unwrap()
+            .open_segment(target.segment_id)
+            .unwrap()
+            .block_ids()
+            .next()
+            .unwrap();
         let mut live_ids = Vec::new();
         for (id, payload) in payloads {
             if id != dead_id {
@@ -1507,19 +1747,34 @@ fn idle_epochs_reclaim_dead_segment_beyond_first_window_and_preserve_live_data()
                 live_ids.push((id, payload));
             }
         }
-        let after = guard.online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
+        let after = guard
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap();
         assert_eq!(after.snapshot.generation, capture.snapshot.generation);
         (dead_id, live_ids)
     };
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
     run_epoch(&mut collector, &database);
-    assert!(database.lock().unwrap().read_block_for_test(dead_id).is_ok(),
-        "first window must not retire another window's segment");
-    for _ in 0..6 { run_epoch(&mut collector, &database); }
+    assert!(
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(dead_id)
+            .is_ok(),
+        "first window must not retire another window's segment"
+    );
+    for _ in 0..6 {
+        run_epoch(&mut collector, &database);
+    }
     let guard = database.lock().unwrap();
-    assert_eq!(guard.read_block_for_test(dead_id).unwrap_err().kind(), io::ErrorKind::NotFound);
-    for (id, payload) in live_ids { assert_eq!(guard.read_block_for_test(id).unwrap(), payload); }
+    assert_eq!(
+        guard.read_block_for_test(dead_id).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    for (id, payload) in live_ids {
+        assert_eq!(guard.read_block_for_test(id).unwrap(), payload);
+    }
     assert!(metrics(&collector).total_segments_retired > 0);
 }
 
@@ -1528,12 +1783,18 @@ fn cancelled_and_contended_epochs_do_not_advance_catalog_confirmation() {
     let (_vfs, database) = authority();
     let mut collector = OnlineGarbageCollector::new(test_budget());
     let stop = AtomicBool::new(true);
-    assert_eq!(collector.run_epoch(&database, &stop).unwrap(), OnlineGarbageCollectionOutcome::Deferred);
+    assert_eq!(
+        collector.run_epoch(&database, &stop).unwrap(),
+        OnlineGarbageCollectionOutcome::Deferred
+    );
     assert!(collector.payload_window_cursor.is_none());
     assert!(!collector.payload_window_second_epoch);
     stop.store(false, Ordering::Release);
     let guard = database.lock().unwrap();
-    assert_eq!(collector.run_epoch(&database, &stop).unwrap(), OnlineGarbageCollectionOutcome::Deferred);
+    assert_eq!(
+        collector.run_epoch(&database, &stop).unwrap(),
+        OnlineGarbageCollectionOutcome::Deferred
+    );
     assert!(collector.payload_window_cursor.is_none());
     drop(guard);
     run_epoch(&mut collector, &database);
@@ -1545,7 +1806,10 @@ fn cancelled_and_contended_epochs_do_not_advance_catalog_confirmation() {
     assert!(collector.payload_window_second_epoch);
     stop.store(false, Ordering::Release);
     run_epoch(&mut collector, &database);
-    assert_eq!(collector.payload_window_cursor, Some(cursor.wrapping_add(1)));
+    assert_eq!(
+        collector.payload_window_cursor,
+        Some(cursor.wrapping_add(1))
+    );
     assert!(!collector.payload_window_second_epoch);
 }
 
@@ -1554,30 +1818,68 @@ fn idle_epoch_sweeps_expired_retirement_without_another_catalog_publication() {
     let (vfs, database) = authority();
     let (live_id, victim) = {
         let mut guard = database.lock().unwrap();
-        let live_id = guard.commit_block_payload_for_test(b"idle-expiry-live").unwrap();
-        let dead_id = guard.write_orphan_block_for_test(b"idle-expiry-dead").unwrap();
-        guard.compact_payload_blocks_for_test(&[live_id, dead_id]).unwrap();
+        let live_id = guard
+            .commit_block_payload_for_test(b"idle-expiry-live")
+            .unwrap();
+        let dead_id = guard
+            .write_orphan_block_for_test(b"idle-expiry-dead")
+            .unwrap();
+        guard
+            .compact_payload_blocks_for_test(&[live_id, dead_id])
+            .unwrap();
         let victim = guard.engine_mut_for_test().payload_segment_references()[0].segment_id;
         (live_id, victim)
     };
     let mut collector = OnlineGarbageCollector::new(test_budget());
-    run_epoch(&mut collector, &database);run_epoch(&mut collector, &database);
+    run_epoch(&mut collector, &database);
+    run_epoch(&mut collector, &database);
     assert_eq!(metrics(&collector).total_segments_rewritten, 1);
     let path = Path::new("/data/payload-segments").join(format!("{}.pseg", victim.simple()));
-    assert!(vfs.metadata(&path).is_ok(), "retirement must first preserve reader grace");
+    assert!(
+        vfs.metadata(&path).is_ok(),
+        "retirement must first preserve reader grace"
+    );
     let catalog = {
         let mut guard = database.lock().unwrap();
         let store = guard.block_store_shared();
-        let age = crate::payload_segment::segment_retirement_delay().saturating_add(Duration::from_secs(1));
-        assert_eq!(store.payload_segment_store().unwrap().age_deferred_retirements_for_test(age).unwrap(), 1);
-        guard.engine_mut_for_test().payload_segment_references().to_vec()
+        let age = crate::payload_segment::segment_retirement_delay()
+            .saturating_add(Duration::from_secs(1));
+        assert_eq!(
+            store
+                .payload_segment_store()
+                .unwrap()
+                .age_deferred_retirements_for_test(age)
+                .unwrap(),
+            1
+        );
+        guard
+            .engine_mut_for_test()
+            .payload_segment_references()
+            .to_vec()
     };
     run_epoch(&mut collector, &database);
-    assert_eq!(database.lock().unwrap().engine_mut_for_test().payload_segment_references(), catalog.as_slice(),
-        "expiry reclamation must not require another catalog publication");
-    assert_eq!(database.lock().unwrap().read_block_for_test(live_id).unwrap(), b"idle-expiry-live");
-    assert_eq!(vfs.metadata(&path).unwrap_err().kind(), io::ErrorKind::NotFound,
-        "an expired predecessor must not remain parked indefinitely on an idle authority");
+    assert_eq!(
+        database
+            .lock()
+            .unwrap()
+            .engine_mut_for_test()
+            .payload_segment_references(),
+        catalog.as_slice(),
+        "expiry reclamation must not require another catalog publication"
+    );
+    assert_eq!(
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(live_id)
+            .unwrap(),
+        b"idle-expiry-live"
+    );
+    assert_eq!(
+        vfs.metadata(&path).unwrap_err().kind(),
+        io::ErrorKind::NotFound,
+        "an expired predecessor must not remain parked indefinitely on an idle authority"
+    );
 }
 
 /// Shards past a per-directory entry cap overflow into `blocks-overflow`
@@ -1588,7 +1890,8 @@ fn epochs_reclaim_overflowed_garbage_and_keep_overflowed_live_blocks() {
     let (vfs, database) = authority();
     // Every shard refuses new names from here on; earlier blocks stay primary.
     for shard in 0..=u8::MAX {
-        vfs.cap_directory_entries(&Path::new("/data/blocks").join(format!("{shard:02x}")), 0).unwrap();
+        vfs.cap_directory_entries(&Path::new("/data/blocks").join(format!("{shard:02x}")), 0)
+            .unwrap();
     }
     let overflow_path = |id: BlockId| {
         let hexadecimal = id.to_hex();
@@ -1601,29 +1904,51 @@ fn epochs_reclaim_overflowed_garbage_and_keep_overflowed_live_blocks() {
     let live = {
         let mut guard = database.lock().unwrap();
         let mut transaction = guard.begin(7, 11).unwrap();
-        guard.entity_put(&mut transaction, key.clone(), b"live-value".to_vec()).unwrap();
+        guard
+            .entity_put(&mut transaction, key.clone(), b"live-value".to_vec())
+            .unwrap();
         guard.commit(transaction).unwrap();
         // Larger than a WAL carries, so the commit writes it loose at once.
         let mut payload = b"overflowed live payload ".to_vec();
         payload.resize(crate::transaction::MAX_CARRIED_PAYLOAD_BYTES + 1, 0x6c);
         guard.commit_block_payloads_for_test(&[payload]).unwrap()
     };
-    let orphan = database.lock().unwrap().write_orphan_block_for_test(b"overflowed unreferenced block").unwrap();
+    let orphan = database
+        .lock()
+        .unwrap()
+        .write_orphan_block_for_test(b"overflowed unreferenced block")
+        .unwrap();
     for id in live.iter().chain([&orphan]) {
-        assert_eq!(vfs.metadata(&overflow_path(*id)).ok(), Some(crate::vfs::FileKind::File), "{}", id.to_hex());
+        assert_eq!(
+            vfs.metadata(&overflow_path(*id)).ok(),
+            Some(crate::vfs::FileKind::File),
+            "{}",
+            id.to_hex()
+        );
     }
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
     assert!(database.lock().unwrap().read_block_for_test(orphan).is_ok());
     run_epoch(&mut collector, &database);
     assert_eq!(
-        database.lock().unwrap().read_block_for_test(orphan).unwrap_err().kind(),
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(orphan)
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::NotFound
     );
-    assert_eq!(vfs.metadata(&overflow_path(orphan)).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        vfs.metadata(&overflow_path(orphan)).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
     assert!(metrics(&collector).total_reclaimed_blocks >= 1);
     for id in &live {
-        assert_eq!(vfs.metadata(&overflow_path(*id)).unwrap(), crate::vfs::FileKind::File);
+        assert_eq!(
+            vfs.metadata(&overflow_path(*id)).unwrap(),
+            crate::vfs::FileKind::File
+        );
         assert!(database.lock().unwrap().read_block_for_test(*id).is_ok());
     }
     assert_live_value(&database, &key, b"live-value");

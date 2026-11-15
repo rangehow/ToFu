@@ -10,7 +10,7 @@ use std::io;
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::MIGRATION_SESSION_MAX_PAGE_ROWS;
-use crate::receipt::{ReceiptSnapshot};
+use crate::receipt::ReceiptSnapshot;
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
@@ -31,7 +31,9 @@ pub(crate) fn unhex(value: &str, maximum: usize) -> io::Result<Vec<u8>> {
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
                 .map_err(|_| invalid("invalid receipt snapshot hex"))

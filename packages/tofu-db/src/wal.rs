@@ -81,16 +81,23 @@ pub(crate) fn scan_selected_generation_chain(
     let mut predecessor_records = Vec::new();
     let (base_sequence, base_hash) = match &state.sealed_log {
         Some(sealed) => {
-            let mut predecessor = ActiveLog::open_generation_with_vfs(
-                data_dir, sealed.generation, vfs,
+            let mut predecessor =
+                ActiveLog::open_generation_with_vfs(data_dir, sealed.generation, vfs)?;
+            let prefix = predecessor.scan(
+                state.checkpoint_sequence,
+                state.checkpoint_hash,
+                sealed.terminal_sequence,
             )?;
-            let prefix = predecessor.scan(state.checkpoint_sequence,
-                state.checkpoint_hash, sealed.terminal_sequence)?;
-            if prefix.truncated_bytes != 0 || prefix.records.last().is_none_or(|record| {
-                record.sequence != sealed.terminal_sequence || record.record_hash != sealed.terminal_hash
-            }) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData,
-                    "sealed WAL does not match its exact CONTROL terminal witness"));
+            if prefix.truncated_bytes != 0
+                || prefix.records.last().is_none_or(|record| {
+                    record.sequence != sealed.terminal_sequence
+                        || record.record_hash != sealed.terminal_hash
+                })
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "sealed WAL does not match its exact CONTROL terminal witness",
+                ));
             }
             predecessor_records = prefix.records;
             (sealed.terminal_sequence, sealed.terminal_hash)
@@ -98,14 +105,30 @@ pub(crate) fn scan_selected_generation_chain(
         None => (state.checkpoint_sequence, state.checkpoint_hash),
     };
     let predecessor_record_count = predecessor_records.len();
-    let predecessor_bytes = predecessor_records.last().map_or(0, |record| record.end_offset);
+    let predecessor_bytes = predecessor_records
+        .last()
+        .map_or(0, |record| record.end_offset);
     let mut recovery = active.scan(base_sequence, base_hash, state.durable_sequence)?;
-    let valid_bytes = predecessor_bytes.checked_add(
-        recovery.records.last().map_or(0, |record| record.end_offset),
-    ).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "selected WAL byte count overflow"))?;
+    let valid_bytes = predecessor_bytes
+        .checked_add(
+            recovery
+                .records
+                .last()
+                .map_or(0, |record| record.end_offset),
+        )
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "selected WAL byte count overflow",
+            )
+        })?;
     predecessor_records.append(&mut recovery.records);
     recovery.records = predecessor_records;
-    Ok(SelectedWalRecovery { recovery, predecessor_record_count, valid_bytes })
+    Ok(SelectedWalRecovery {
+        recovery,
+        predecessor_record_count,
+        valid_bytes,
+    })
 }
 
 pub struct ActiveLog {
@@ -196,12 +219,31 @@ impl WalBarrierShared {
         barrier
     }
 
-    fn queue_write(&self, path: &Path, offset: u64, next_len: u64, parts: &[&[u8]]) -> io::Result<bool> {
-        let mut state = self.state.lock().map_err(|_| io::Error::other("WAL barrier state poisoned"))?;
-        if state.path != path { return Err(io::Error::other("WAL write buffer belongs to another generation")); }
-        if state.stop || state.closing { return Err(io::Error::other("WAL barrier is closed")); }
-        if let Some(error) = &state.error { return Err(io::Error::new(error.kind, error.message.clone())); }
-        if !state.writes.queue(offset, parts)? { return Ok(false); }
+    fn queue_write(
+        &self,
+        path: &Path,
+        offset: u64,
+        next_len: u64,
+        parts: &[&[u8]],
+    ) -> io::Result<bool> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("WAL barrier state poisoned"))?;
+        if state.path != path {
+            return Err(io::Error::other(
+                "WAL write buffer belongs to another generation",
+            ));
+        }
+        if state.stop || state.closing {
+            return Err(io::Error::other("WAL barrier is closed"));
+        }
+        if let Some(error) = &state.error {
+            return Err(io::Error::new(error.kind, error.message.clone()));
+        }
+        if !state.writes.queue(offset, parts)? {
+            return Ok(false);
+        }
         state.requested_len = state.requested_len.max(next_len);
         drop(state);
         self.wake.notify_all();
@@ -209,7 +251,9 @@ impl WalBarrierShared {
     }
 
     pub fn write_buffer_metrics(&self) -> serde_json::Value {
-        let Ok(state) = self.state.lock() else { return serde_json::json!({"available":false}); };
+        let Ok(state) = self.state.lock() else {
+            return serde_json::json!({"available":false});
+        };
         let writes = &state.writes;
         serde_json::json!({"available":true,"contract":crate::generated_storage_v2::WAL_WRITE_BUFFER_CONTRACT,
             "enabled":writes.capacity != 0,"failed":state.error.is_some(),"closing":state.closing,"capacityBytes":writes.capacity,
@@ -280,17 +324,34 @@ impl WalBarrierShared {
         let mut wrote = false;
         let mut batches = 0;
         let result = (|| {
-            let mut file = vfs.open(&path, OpenRequest { write: true, ..Default::default() })?;
+            let mut file = vfs.open(
+                &path,
+                OpenRequest {
+                    write: true,
+                    ..Default::default()
+                },
+            )?;
             batches = write_buffer::write_frames(file.as_mut(), &frames)?;
             wrote = true;
             self.note_written(&path, len);
             file.sync_data()
         })();
         drop(frames);
-        self.state.lock().unwrap().writes.release_counts(bytes, count, wrote, batches, 0);
+        self.state
+            .lock()
+            .unwrap()
+            .writes
+            .release_counts(bytes, count, wrote, batches, 0);
         match result {
-            Ok(()) => { self.note_synced(&path, len); Ok(()) }
-            Err(error) => { let returned = io::Error::new(error.kind(), error.to_string()); self.note_flush_error(&path, error); Err(returned) }
+            Ok(()) => {
+                self.note_synced(&path, len);
+                Ok(())
+            }
+            Err(error) => {
+                let returned = io::Error::new(error.kind(), error.to_string());
+                self.note_flush_error(&path, error);
+                Err(returned)
+            }
         }
     }
 
@@ -306,15 +367,32 @@ impl WalBarrierShared {
         let bytes = frames.iter().map(|f| f.bytes.len()).sum::<usize>();
         let mut batches = 0;
         let result = (|| -> io::Result<()> {
-            let mut file = vfs.open(&path, OpenRequest { write: true, ..Default::default() })?;
+            let mut file = vfs.open(
+                &path,
+                OpenRequest {
+                    write: true,
+                    ..Default::default()
+                },
+            )?;
             batches = write_buffer::write_frames(file.as_mut(), &frames)?;
             Ok(())
         })();
         drop(frames);
-        self.state.lock().unwrap().writes.release_counts(bytes, count, result.is_ok(), batches, 0);
+        self.state
+            .lock()
+            .unwrap()
+            .writes
+            .release_counts(bytes, count, result.is_ok(), batches, 0);
         match result {
-            Ok(()) => { self.note_written(&path, len); Ok(()) }
-            Err(error) => { let returned = io::Error::new(error.kind(), error.to_string()); self.note_flush_error(&path, error); Err(returned) }
+            Ok(()) => {
+                self.note_written(&path, len);
+                Ok(())
+            }
+            Err(error) => {
+                let returned = io::Error::new(error.kind(), error.to_string());
+                self.note_flush_error(&path, error);
+                Err(returned)
+            }
         }
     }
 
@@ -356,8 +434,10 @@ impl WalBarrierShared {
         if let Ok(mut state) = self.state.lock() {
             if state.path != path {
                 if state.writes.retained_bytes != 0 {
-                    state.error = Some(FlushError { kind: io::ErrorKind::InvalidData,
-                        message: "WAL source changed before queued writes completed".into() });
+                    state.error = Some(FlushError {
+                        kind: io::ErrorKind::InvalidData,
+                        message: "WAL source changed before queued writes completed".into(),
+                    });
                     drop(state);
                     self.synced.notify_all();
                     return;
@@ -386,7 +466,9 @@ impl WalBarrierShared {
     /// A cached owned reply performs no I/O and must never wait for a driver.
     /// Contention/poison/error means no health proof; ordinary dispatch remains.
     pub(crate) fn try_healthy(&self) -> bool {
-        self.state.try_lock().is_ok_and(|state| state.error.is_none())
+        self.state
+            .try_lock()
+            .is_ok_and(|state| state.error.is_none())
     }
 
     pub fn barrier_error(&self) -> Option<io::Error> {
@@ -473,7 +555,9 @@ impl std::error::Error for BarrierDeadline {}
 
 /// Whether `error` is a barrier wait's deadline ([`BarrierDeadline`]).
 pub(crate) fn is_barrier_deadline(error: &io::Error) -> bool {
-    error.get_ref().is_some_and(|inner| inner.is::<BarrierDeadline>())
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<BarrierDeadline>())
 }
 
 /// Owns the barrier worker thread. The driver flushes the current log path
@@ -498,12 +582,23 @@ impl WalBarrierDriver {
 
     /// Reuses the same launch-time resource observation as transport/cache sizing.
     pub fn capacity_for_headroom(headroom_bytes: Option<u64>) -> usize {
-        use crate::generated_storage_v2::{WAL_WRITE_BUFFER_HEADROOM_DIVISOR, WAL_WRITE_BUFFER_FALLBACK_BYTES};
-        usize::try_from(headroom_bytes.map(|bytes| bytes / WAL_WRITE_BUFFER_HEADROOM_DIVISOR)
-            .unwrap_or(WAL_WRITE_BUFFER_FALLBACK_BYTES)).unwrap_or(usize::MAX)
+        use crate::generated_storage_v2::{
+            WAL_WRITE_BUFFER_FALLBACK_BYTES, WAL_WRITE_BUFFER_HEADROOM_DIVISOR,
+        };
+        usize::try_from(
+            headroom_bytes
+                .map(|bytes| bytes / WAL_WRITE_BUFFER_HEADROOM_DIVISOR)
+                .unwrap_or(WAL_WRITE_BUFFER_FALLBACK_BYTES),
+        )
+        .unwrap_or(usize::MAX)
     }
 
-    pub fn start_with_write_buffer(vfs: Arc<dyn Vfs>, path: PathBuf, interval: Duration, capacity_bytes: usize) -> io::Result<(WalBarrier, Self)> {
+    pub fn start_with_write_buffer(
+        vfs: Arc<dyn Vfs>,
+        path: PathBuf,
+        interval: Duration,
+        capacity_bytes: usize,
+    ) -> io::Result<(WalBarrier, Self)> {
         Self::start_buffered(vfs, path, WalDurability::Strict, interval, capacity_bytes)
     }
 
@@ -511,8 +606,13 @@ impl WalBarrierDriver {
     /// each captured prefix, because a response needs the sync. Normal: a
     /// writer thread performs the physical writes a response needs and the
     /// worker syncs the written prefix as the interval-bounded backstop.
-    pub fn start_buffered(vfs: Arc<dyn Vfs>, path: PathBuf, durability: WalDurability,
-        interval: Duration, capacity_bytes: usize) -> io::Result<(WalBarrier, Self)> {
+    pub fn start_buffered(
+        vfs: Arc<dyn Vfs>,
+        path: PathBuf,
+        durability: WalDurability,
+        interval: Duration,
+        capacity_bytes: usize,
+    ) -> io::Result<(WalBarrier, Self)> {
         if !(MIN_WAL_FLUSH_INTERVAL..=MAX_WAL_FLUSH_INTERVAL).contains(&interval) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -522,16 +622,28 @@ impl WalBarrierDriver {
         let barrier = WalBarrier::default();
         barrier.note_rotated(path);
         if vfs.supports_buffered_wal_writes() {
-            barrier.state.lock().map_err(|_| io::Error::other("WAL barrier state poisoned"))?.writes.capacity = capacity_bytes;
+            barrier
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("WAL barrier state poisoned"))?
+                .writes
+                .capacity = capacity_bytes;
         }
-        let driver = Self { barrier: barrier.clone(), worker: Mutex::new(None), writer: Mutex::new(None) };
+        let driver = Self {
+            barrier: barrier.clone(),
+            worker: Mutex::new(None),
+            writer: Mutex::new(None),
+        };
         if durability == WalDurability::Normal {
             let writer_barrier = barrier.clone();
             let writer_vfs = Arc::clone(&vfs);
             let writer = thread::Builder::new()
                 .name("tofu-db-wal-writer".to_owned())
                 .spawn(move || run_wal_writer(writer_vfs, writer_barrier))?;
-            *driver.writer.lock().map_err(|_| io::Error::other("WAL barrier state poisoned"))? = Some(writer);
+            *driver
+                .writer
+                .lock()
+                .map_err(|_| io::Error::other("WAL barrier state poisoned"))? = Some(writer);
         }
         let worker_barrier = barrier.clone();
         // A failed spawn drops `driver`, which stops and joins any writer.
@@ -541,7 +653,10 @@ impl WalBarrierDriver {
                 WalDurability::Strict => run_wal_barrier(vfs, worker_barrier, interval),
                 WalDurability::Normal => run_wal_syncer(vfs, worker_barrier, interval),
             })?;
-        *driver.worker.lock().map_err(|_| io::Error::other("WAL barrier state poisoned"))? = Some(worker);
+        *driver
+            .worker
+            .lock()
+            .map_err(|_| io::Error::other("WAL barrier state poisoned"))? = Some(worker);
         Ok((barrier, driver))
     }
 
@@ -549,14 +664,22 @@ impl WalBarrierDriver {
         let drain = match self.barrier.state.lock() {
             Ok(mut state) => {
                 state.closing = true;
-                Ok((state.writes.capacity != 0 && state.requested_len > state.synced_len)
-                    .then_some(state.requested_len))
+                Ok(
+                    (state.writes.capacity != 0 && state.requested_len > state.synced_len)
+                        .then_some(state.requested_len),
+                )
             }
             Err(_) => Err(io::Error::other("WAL barrier state poisoned during close")),
         };
         // Join even on poison; unknown ownership cannot report a drained close.
-        let drained = drain.and_then(|target| target.map(|len| self.barrier.wait_synced(len,
-            std::time::Instant::now() + MAX_BARRIER_WAIT)).transpose());
+        let drained = drain.and_then(|target| {
+            target
+                .map(|len| {
+                    self.barrier
+                        .wait_synced(len, std::time::Instant::now() + MAX_BARRIER_WAIT)
+                })
+                .transpose()
+        });
         if let Ok(mut state) = self.barrier.state.lock() {
             state.stop = true;
         }
@@ -593,7 +716,9 @@ fn run_wal_barrier(vfs: Arc<dyn Vfs>, barrier: WalBarrier, interval: Duration) {
 // The hook makes the notification window after a real sync deterministic in
 // tests. The production closure is empty and is eliminated during compilation.
 fn run_wal_barrier_with_sync_hook(
-    vfs: Arc<dyn Vfs>, barrier: WalBarrier, interval: Duration,
+    vfs: Arc<dyn Vfs>,
+    barrier: WalBarrier,
+    interval: Duration,
     mut after_sync: impl FnMut(),
 ) {
     crate::fsync_stats::set_current_component(crate::fsync_stats::COMPONENT_WAL_BARRIER);
@@ -602,12 +727,25 @@ fn run_wal_barrier_with_sync_hook(
         let (path, requested_len, synced_len, stop, failed, frames) = match barrier.state.lock() {
             Ok(mut state) => {
                 let failed = state.error.is_some();
-                let frames = if failed { Default::default() } else { state.writes.take() };
-                (state.path.clone(), state.requested_len, state.synced_len, state.stop, failed, frames)
-            },
+                let frames = if failed {
+                    Default::default()
+                } else {
+                    state.writes.take()
+                };
+                (
+                    state.path.clone(),
+                    state.requested_len,
+                    state.synced_len,
+                    state.stop,
+                    failed,
+                    frames,
+                )
+            }
             Err(_) => return,
         };
-        if stop { return; }
+        if stop {
+            return;
+        }
         if !failed && requested_len > synced_len {
             let frame_count = frames.len();
             let frame_bytes = frames.iter().map(|f| f.bytes.len()).sum::<usize>();
@@ -615,8 +753,20 @@ fn run_wal_barrier_with_sync_hook(
             let mut write_nanos = 0;
             let mut wrote = false;
             let result = (|| -> io::Result<()> {
-                if handle.as_ref().is_none_or(|(handle_path, _)| *handle_path != path) {
-                    handle = Some((path.clone(), vfs.open(&path, OpenRequest { write: true, ..Default::default() })?));
+                if handle
+                    .as_ref()
+                    .is_none_or(|(handle_path, _)| *handle_path != path)
+                {
+                    handle = Some((
+                        path.clone(),
+                        vfs.open(
+                            &path,
+                            OpenRequest {
+                                write: true,
+                                ..Default::default()
+                            },
+                        )?,
+                    ));
                 }
                 let file = &mut handle.as_mut().expect("opened WAL worker handle").1;
                 let started = std::time::Instant::now();
@@ -628,14 +778,21 @@ fn run_wal_barrier_with_sync_hook(
                 // frames, inline appends that preceded it and earlier batches.
                 // Normal acknowledgements need nothing more; Strict waits on.
                 barrier.note_written(&path, requested_len);
-                let _sync = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_SYNC);
+                let _sync =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_SYNC);
                 file.sync_data()
             })();
             // Budget credit follows actual frame deallocation, including the
             // complete write+sync interval; inflight frames cannot hide RAM.
             drop(frames);
             if let Ok(mut state) = barrier.state.lock() {
-                state.writes.release_counts(frame_bytes, frame_count, wrote, batches_written, write_nanos);
+                state.writes.release_counts(
+                    frame_bytes,
+                    frame_count,
+                    wrote,
+                    batches_written,
+                    write_nanos,
+                );
             }
             match result {
                 Ok(()) => barrier.note_synced(&path, requested_len),
@@ -654,7 +811,9 @@ fn run_wal_barrier_with_sync_hook(
         // Check its predicate under the same mutex used by note_appended before
         // atomically releasing it to sleep. A latched I/O failure must not spin.
         if guard.error.is_none() && guard.requested_len > guard.synced_len {
-            let _reschedule = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_RESCHEDULE);
+            let _reschedule = crate::fsync_stats::StageTimer::new(
+                crate::fsync_stats::STAGE_WAL_BARRIER_RESCHEDULE,
+            );
             continue;
         }
         let (guard, _) = barrier
@@ -675,9 +834,13 @@ fn run_wal_writer(vfs: Arc<dyn Vfs>, barrier: WalBarrier) {
     let mut handle: Option<(PathBuf, Box<dyn VfsFile>)> = None;
     loop {
         let (path, requested_len, frames) = {
-            let Ok(mut state) = barrier.state.lock() else { return };
+            let Ok(mut state) = barrier.state.lock() else {
+                return;
+            };
             loop {
-                if state.stop { return; }
+                if state.stop {
+                    return;
+                }
                 if state.error.is_none() {
                     if !state.writes.pending.is_empty() {
                         break (state.path.clone(), state.requested_len, state.writes.take());
@@ -693,15 +856,30 @@ fn run_wal_writer(vfs: Arc<dyn Vfs>, barrier: WalBarrier) {
                 }
                 // Every enqueue, inline append, rotation and stop notifies
                 // `wake` after changing this predicate under the same mutex.
-                state = match barrier.wake.wait(state) { Ok(state) => state, Err(_) => return };
+                state = match barrier.wake.wait(state) {
+                    Ok(state) => state,
+                    Err(_) => return,
+                };
             }
         };
         let frame_count = frames.len();
         let frame_bytes = frames.iter().map(|f| f.bytes.len()).sum::<usize>();
         let started = std::time::Instant::now();
         let result = (|| -> io::Result<usize> {
-            if handle.as_ref().is_none_or(|(handle_path, _)| *handle_path != path) {
-                handle = Some((path.clone(), vfs.open(&path, OpenRequest { write: true, ..Default::default() })?));
+            if handle
+                .as_ref()
+                .is_none_or(|(handle_path, _)| *handle_path != path)
+            {
+                handle = Some((
+                    path.clone(),
+                    vfs.open(
+                        &path,
+                        OpenRequest {
+                            write: true,
+                            ..Default::default()
+                        },
+                    )?,
+                ));
             }
             let file = &mut handle.as_mut().expect("opened WAL writer handle").1;
             write_buffer::write_frames(file.as_mut(), &frames)
@@ -710,7 +888,13 @@ fn run_wal_writer(vfs: Arc<dyn Vfs>, barrier: WalBarrier) {
         drop(frames);
         if let Ok(mut state) = barrier.state.lock() {
             let batches = *result.as_ref().unwrap_or(&0);
-            state.writes.release_counts(frame_bytes, frame_count, result.is_ok(), batches, write_nanos);
+            state.writes.release_counts(
+                frame_bytes,
+                frame_count,
+                result.is_ok(),
+                batches,
+                write_nanos,
+            );
         }
         match result {
             Ok(_) => barrier.note_written(&path, requested_len),
@@ -728,9 +912,13 @@ fn run_wal_syncer(vfs: Arc<dyn Vfs>, barrier: WalBarrier, interval: Duration) {
     let mut handle: Option<(PathBuf, Box<dyn VfsFile>)> = None;
     loop {
         let (path, written_len) = {
-            let Ok(mut state) = barrier.state.lock() else { return };
+            let Ok(mut state) = barrier.state.lock() else {
+                return;
+            };
             loop {
-                if state.stop { return; }
+                if state.stop {
+                    return;
+                }
                 if state.error.is_none() && state.written_len > state.synced_len {
                     break (state.path.clone(), state.written_len);
                 }
@@ -741,11 +929,24 @@ fn run_wal_syncer(vfs: Arc<dyn Vfs>, barrier: WalBarrier, interval: Duration) {
             }
         };
         let result = (|| -> io::Result<()> {
-            if handle.as_ref().is_none_or(|(handle_path, _)| *handle_path != path) {
-                handle = Some((path.clone(), vfs.open(&path, OpenRequest { write: true, ..Default::default() })?));
+            if handle
+                .as_ref()
+                .is_none_or(|(handle_path, _)| *handle_path != path)
+            {
+                handle = Some((
+                    path.clone(),
+                    vfs.open(
+                        &path,
+                        OpenRequest {
+                            write: true,
+                            ..Default::default()
+                        },
+                    )?,
+                ));
             }
             let file = &mut handle.as_mut().expect("opened WAL barrier handle").1;
-            let _sync = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_SYNC);
+            let _sync =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_SYNC);
             file.sync_data()
         })();
         match result {
@@ -782,11 +983,19 @@ fn record_hash_header(
 
 /// Original frame split into fixed framing and the borrowed immutable payload.
 /// CRC and chain hash cover exactly the original bytes; only their copy is gone.
-fn encode_frame_parts(sequence: u64, parent_hash: [u8; 32], payload: &[u8])
-    -> io::Result<([u8; FRAME_PREFIX_BYTES], [u8; FRAME_TRAILER_BYTES], [u8; 32])> {
+fn encode_frame_parts(
+    sequence: u64,
+    parent_hash: [u8; 32],
+    payload: &[u8],
+) -> io::Result<(
+    [u8; FRAME_PREFIX_BYTES],
+    [u8; FRAME_TRAILER_BYTES],
+    [u8; 32],
+)> {
     let header = record_hash_header(sequence, parent_hash, payload.len())?;
-    let body_len = FIXED_BODY_BYTES.checked_add(payload.len())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "transaction length overflow"))?;
+    let body_len = FIXED_BODY_BYTES.checked_add(payload.len()).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "transaction length overflow")
+    })?;
     let (crc, hash) = calculate_frame_checksums(&header, payload);
     let mut leading = [0; FRAME_PREFIX_BYTES];
     leading[..4].copy_from_slice(&(body_len as u32).to_le_bytes());
@@ -965,8 +1174,12 @@ impl ActiveLog {
     /// independent fdatasync covers the same inode, so its progress counts.
     /// Reuse an orphan only after witnessing both its empty inode and name.
     /// A previous create may have failed before its directory barrier.
-    pub(crate) fn resync_empty_generation(&mut self, data_dir: &Path, vfs: &dyn Vfs) -> io::Result<()> {
-        if !self.is_empty()? {
+    pub(crate) fn resync_empty_generation(
+        &mut self,
+        data_dir: &Path,
+        vfs: &dyn Vfs,
+    ) -> io::Result<()> {
+        if !self.is_empty() {
             return Err(invalid_data("orphan successor WAL is not empty"));
         }
         sync_all_barrier(self.file.as_mut())?;
@@ -995,12 +1208,16 @@ impl ActiveLog {
     pub(crate) fn buffered_writes_enabled(&self) -> bool {
         // Unknown state may own unwritten frames. Preserve the failed barrier
         // rather than detaching it and trusting an inline fsync on empty bytes.
-        self.barrier.as_ref().is_some_and(|b| b.state.lock().map_or(true, |s| s.writes.capacity != 0))
+        self.barrier
+            .as_ref()
+            .is_some_and(|b| b.state.lock().map_or(true, |s| s.writes.capacity != 0))
     }
 
     pub fn detach_barrier(&mut self) {
         let must_drain = self.buffered_writes_enabled();
-        if must_drain && self.sync_pending().is_err() { return; }
+        if must_drain && self.sync_pending().is_err() {
+            return;
+        }
         if let Some(barrier) = self.barrier.take() {
             // Preserve the worker's observed barrier progress so the engine
             // side counter stays honest after detachment.
@@ -1019,7 +1236,8 @@ impl ActiveLog {
             return Ok(0);
         }
         if let Some(barrier) = &self.barrier {
-            let _wait = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_WAIT);
+            let _wait =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_WAL_BARRIER_WAIT);
             barrier.wait_synced(self.len, std::time::Instant::now() + MAX_BARRIER_WAIT)?;
             return Ok(pending);
         }
@@ -1044,7 +1262,12 @@ impl ActiveLog {
         // caller holds the authority mutex across file I/O; the tiers differ
         // only in the frontier that acknowledges (`wait_acknowledged`).
         if let Some(barrier) = &self.barrier {
-            if barrier.queue_write(&self.path, current_len, next_len, &[&leading, payload, &trailing])? {
+            if barrier.queue_write(
+                &self.path,
+                current_len,
+                next_len,
+                &[&leading, payload, &trailing],
+            )? {
                 crate::fsync_stats::note_wal_encoded_bytes(next_len - current_len);
                 self.len = next_len;
                 return Ok(hash);
@@ -1052,9 +1275,14 @@ impl ActiveLog {
         }
         // A failure proven to have written nothing leaves the log as it was
         // (`vfs::NothingWritten`); the engine decides whether that needs reopen.
-        self.file.write_all_vectored_at_proving_nothing_written(current_len, &mut [
-            io::IoSlice::new(&leading), io::IoSlice::new(payload), io::IoSlice::new(&trailing),
-        ])?;
+        self.file.write_all_vectored_at_proving_nothing_written(
+            current_len,
+            &mut [
+                io::IoSlice::new(&leading),
+                io::IoSlice::new(payload),
+                io::IoSlice::new(&trailing),
+            ],
+        )?;
         self.note_appended(next_len - current_len, next_len)?;
         self.len = next_len;
         Ok(hash)
@@ -1129,7 +1357,10 @@ impl ActiveLog {
         let next_len = current_len
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| invalid_data("active WAL length overflow"))?;
-        self.file.write_all_vectored_at_proving_nothing_written(current_len, &mut [io::IoSlice::new(&bytes)])?;
+        self.file.write_all_vectored_at_proving_nothing_written(
+            current_len,
+            &mut [io::IoSlice::new(&bytes)],
+        )?;
         self.note_appended(next_len - current_len, next_len)?;
         self.len = next_len;
         Ok(hashes)
@@ -1176,7 +1407,9 @@ impl ActiveLog {
                 "WAL checkpoint sequence exceeds durable sequence",
             ));
         }
-        if self.buffered_writes_enabled() { self.sync_pending()?; }
+        if self.buffered_writes_enabled() {
+            self.sync_pending()?;
+        }
         let file_len = self.file.len()?;
         let mut reader = reader::buffered_reader(self.file.as_mut(), file_len);
         let mut frame = Vec::new();
@@ -1200,8 +1433,7 @@ impl ActiveLog {
                     break;
                 }
             };
-            if body_len < FIXED_BODY_BYTES
-                || body_len > FIXED_BODY_BYTES + MAX_TRANSACTION_BYTES
+            if !(FIXED_BODY_BYTES..=FIXED_BODY_BYTES + MAX_TRANSACTION_BYTES).contains(&body_len)
                 || file_len - offset < total_len as u64
             {
                 invalid_tail = true;
@@ -1267,8 +1499,8 @@ impl ActiveLog {
         &self.path
     }
 
-    pub fn is_empty(&self) -> io::Result<bool> {
-        Ok(self.len == 0)
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub fn would_exceed(&self, payload: &[u8], limit: u64) -> io::Result<bool> {
@@ -1340,7 +1572,9 @@ impl ActiveLog {
                 "WAL truncation offset exceeds file length",
             ));
         }
-        if self.buffered_writes_enabled() { self.sync_pending()?; }
+        if self.buffered_writes_enabled() {
+            self.sync_pending()?;
+        }
         self.file.set_len(end_offset)?;
         sync_all_barrier(self.file.as_mut())?;
         self.len = end_offset;
@@ -1383,7 +1617,9 @@ mod tests {
             lengths: Arc<Mutex<Vec<usize>>>,
         }
         impl VfsFile for ReadProbe {
-            fn len(&self) -> io::Result<u64> { self.file.len() }
+            fn len(&self) -> io::Result<u64> {
+                self.file.len()
+            }
             fn read_all(&mut self, _: usize) -> io::Result<Vec<u8>> {
                 panic!("recovery must not allocate the entire durable backlog")
             }
@@ -1394,25 +1630,41 @@ mod tests {
             fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
                 self.file.write_all_at(offset, bytes)
             }
-            fn set_len(&mut self, length: u64) -> io::Result<()> { self.file.set_len(length) }
-            fn sync_data(&mut self) -> io::Result<()> { self.file.sync_data() }
-            fn sync_all(&mut self) -> io::Result<()> { self.file.sync_all() }
-            fn try_lock_exclusive(&mut self) -> io::Result<()> { self.file.try_lock_exclusive() }
+            fn set_len(&mut self, length: u64) -> io::Result<()> {
+                self.file.set_len(length)
+            }
+            fn sync_data(&mut self) -> io::Result<()> {
+                self.file.sync_data()
+            }
+            fn sync_all(&mut self) -> io::Result<()> {
+                self.file.sync_all()
+            }
+            fn try_lock_exclusive(&mut self) -> io::Result<()> {
+                self.file.try_lock_exclusive()
+            }
         }
         let directory = tempfile::tempdir().unwrap();
         let mut log = ActiveLog::initialize(directory.path()).unwrap();
         log.append(1, [0; 32], b"acknowledged prefix").unwrap();
         let valid_bytes = log.len();
-        log.file.write_all_at(valid_bytes, &u32::MAX.to_le_bytes()).unwrap();
+        log.file
+            .write_all_at(valid_bytes, &u32::MAX.to_le_bytes())
+            .unwrap();
         let sparse_length = 8 * 1024 * 1024 * 1024_u64;
         log.file.set_len(sparse_length).unwrap();
         log.file.sync_all().unwrap();
         drop(log);
         let mut log = ActiveLog::open(directory.path()).unwrap();
         let lengths = Arc::new(Mutex::new(Vec::new()));
-        log.file = Box::new(ReadProbe { file: log.file, lengths: Arc::clone(&lengths) });
+        log.file = Box::new(ReadProbe {
+            file: log.file,
+            lengths: Arc::clone(&lengths),
+        });
         // A durable witness beyond the valid prefix must preserve evidence.
-        assert_eq!(log.recover(2).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            log.recover(2).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
         assert_eq!(log.file.len().unwrap(), sparse_length);
         let scanned = log.scan(0, [0; 32], 1).unwrap();
         assert_eq!(scanned.records.len(), 1);
@@ -1423,7 +1675,9 @@ mod tests {
         assert_eq!(log.file.len().unwrap(), valid_bytes);
         let lengths = lengths.lock().unwrap();
         assert_eq!(lengths.len(), 3);
-        assert!(lengths.iter().all(|length| *length <= crate::generated_tofudb_ir::WAL_RECOVERY_READ_BUFFER_BYTES));
+        assert!(lengths
+            .iter()
+            .all(|length| *length <= crate::generated_tofudb_ir::WAL_RECOVERY_READ_BUFFER_BYTES));
     }
 
     #[test]
@@ -1438,24 +1692,37 @@ mod tests {
         let worker_vfs = vfs.clone();
         let worker = thread::spawn(move || {
             let mut pause = Some(wait_resume);
-            run_wal_barrier_with_sync_hook(worker_vfs, worker_barrier,
-                Duration::from_secs(1), move || {
+            run_wal_barrier_with_sync_hook(
+                worker_vfs,
+                worker_barrier,
+                Duration::from_secs(1),
+                move || {
                     if let Some(resume) = pause.take() {
                         reached.send(()).unwrap();
                         resume.recv_timeout(Duration::from_secs(5)).unwrap();
                     }
-                });
+                },
+            );
         });
-        let driver = WalBarrierDriver { barrier: barrier.clone(), worker: Mutex::new(Some(worker)),
-            writer: Mutex::new(None) };
+        let driver = WalBarrierDriver {
+            barrier: barrier.clone(),
+            worker: Mutex::new(Some(worker)),
+            writer: Mutex::new(None),
+        };
         wait_reached.recv_timeout(Duration::from_secs(5)).unwrap();
-        log.append(2, first, b"arrival while worker cannot receive wakeup").unwrap();
+        log.append(2, first, b"arrival while worker cannot receive wakeup")
+            .unwrap();
         let witness = barrier.witness(log.len()).unwrap();
         resume.send(()).unwrap();
-        let result = barrier.wait_witness(&witness,
-            std::time::Instant::now() + Duration::from_millis(250));
+        let result = barrier.wait_witness(
+            &witness,
+            std::time::Instant::now() + Duration::from_millis(250),
+        );
         driver.stop_and_join().unwrap();
-        assert!(result.is_ok(), "queued write must not wait for the idle interval: {result:?}");
+        assert!(
+            result.is_ok(),
+            "queued write must not wait for the idle interval: {result:?}"
+        );
         vfs.crash().unwrap();
         let mut recovered = ActiveLog::open_with_vfs(Path::new("/data"), vfs).unwrap();
         assert_eq!(recovered.recover(0).unwrap().records.len(), 2);
@@ -1552,10 +1819,18 @@ mod tests {
             let hash = calculate_record_hash(sequence, parent, &payload).unwrap();
             let (original_frame, original_hash) = encode(sequence, parent, &payload).unwrap();
             assert_eq!(hash, original_hash, "payload={length}");
-            let (leading, trailing, vectored_hash) = encode_frame_parts(sequence, parent, &payload).unwrap();
-            let reconstructed: Vec<u8> = leading.into_iter().chain(payload.iter().copied()).chain(trailing).collect();
+            let (leading, trailing, vectored_hash) =
+                encode_frame_parts(sequence, parent, &payload).unwrap();
+            let reconstructed: Vec<u8> = leading
+                .into_iter()
+                .chain(payload.iter().copied())
+                .chain(trailing)
+                .collect();
             assert_eq!(reconstructed, original_frame, "frame payload={length}");
-            assert_eq!(vectored_hash, original_hash, "vectored hash payload={length}");
+            assert_eq!(
+                vectored_hash, original_hash,
+                "vectored hash payload={length}"
+            );
             assert_eq!(hash, log.append(sequence, parent, &payload).unwrap());
             expected.push((sequence, hash, length));
             parent = hash;
@@ -1616,8 +1891,14 @@ mod tests {
     fn recovery_refuses_clean_eof_below_control_without_mutating_evidence() {
         for retained_records in [0, 1] {
             let (vfs, mut log) = durable_simulated_log();
-            let hash = log.append(1, [0; 32], b"first acknowledged record").unwrap();
-            let prefix = if retained_records == 0 { 0 } else { log.file.len().unwrap() };
+            let hash = log
+                .append(1, [0; 32], b"first acknowledged record")
+                .unwrap();
+            let prefix = if retained_records == 0 {
+                0
+            } else {
+                log.file.len().unwrap()
+            };
             log.append(2, hash, b"missing acknowledged record").unwrap();
             log.file.set_len(prefix).unwrap();
             log.file.sync_all().unwrap();
@@ -1638,16 +1919,35 @@ mod tests {
         let payload = b"unacknowledged payload";
         let payload_end = FRAME_PREFIX_BYTES + payload.len();
         let frame_len = payload_end + FRAME_TRAILER_BYTES;
-        for cut in [1, 4, FRAME_PREFIX_BYTES - 1, FRAME_PREFIX_BYTES,
-            FRAME_PREFIX_BYTES + 1, payload_end - 1, payload_end,
-            payload_end + 1, frame_len - 1] {
+        for cut in [
+            1,
+            4,
+            FRAME_PREFIX_BYTES - 1,
+            FRAME_PREFIX_BYTES,
+            FRAME_PREFIX_BYTES + 1,
+            payload_end - 1,
+            payload_end,
+            payload_end + 1,
+            frame_len - 1,
+        ] {
             let (vfs, mut log) = durable_simulated_log();
             let first_hash = log.append(1, [0; 32], b"acknowledged prefix").unwrap();
             let acknowledged_len = log.len();
-            vfs.arm_operation_fault(Operation::Write, 1, FaultAction::ShortWrite(cut)).unwrap();
-            assert_eq!(log.append(2, first_hash, payload).unwrap_err().kind(), io::ErrorKind::WriteZero);
-            assert!(vfs.operation_fault_fired().unwrap(), "short write must fire: cut={cut}");
-            assert_eq!(log.len(), acknowledged_len, "failed append cannot advance logical length");
+            vfs.arm_operation_fault(Operation::Write, 1, FaultAction::ShortWrite(cut))
+                .unwrap();
+            assert_eq!(
+                log.append(2, first_hash, payload).unwrap_err().kind(),
+                io::ErrorKind::WriteZero
+            );
+            assert!(
+                vfs.operation_fault_fired().unwrap(),
+                "short write must fire: cut={cut}"
+            );
+            assert_eq!(
+                log.len(),
+                acknowledged_len,
+                "failed append cannot advance logical length"
+            );
             vfs.arm_fault(None).unwrap();
             // An ambient kernel flush may persist bytes even after write fails.
             // Force that outcome; recovery must reject every partial frame.
@@ -1661,7 +1961,9 @@ mod tests {
             assert_eq!(recovery.records[0].payload, b"acknowledged prefix");
             assert_eq!(recovery.records[0].record_hash, first_hash);
             assert_eq!(reopened.len(), acknowledged_len);
-            reopened.append(2, first_hash, b"retry after recovery").unwrap();
+            reopened
+                .append(2, first_hash, b"retry after recovery")
+                .unwrap();
             drop(reopened);
             vfs.crash().unwrap();
             let mut reopened = ActiveLog::open_with_vfs(Path::new("/data"), vfs).unwrap();

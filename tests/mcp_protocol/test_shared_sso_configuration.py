@@ -1,11 +1,14 @@
 """One internal SSO configuration contract, principal-bound MCP environment."""
 import pytest
+
+from tests.support.overlay import requires_yourprovider_overlay
 from lib.mcp import registry
 from lib.mcp.stdio_environment import build_stdio_environment
 
 pytestmark = pytest.mark.unit
 
 
+@requires_yourprovider_overlay
 @pytest.mark.skipif(registry.is_opensource_build(), reason='internal providers are not exported')
 def test_internal_mcps_share_same_sso_mode_and_paths():
     for server in ('hope', 'llm', 'xuecheng'):

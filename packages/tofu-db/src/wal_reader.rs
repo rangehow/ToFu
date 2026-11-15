@@ -27,6 +27,10 @@ impl Read for WalReadCursor<'_> {
 pub(super) fn buffered_reader(file: &mut dyn VfsFile, length: u64) -> impl Read + '_ {
     BufReader::with_capacity(
         WAL_RECOVERY_READ_BUFFER_BYTES,
-        WalReadCursor { file, length, offset: 0 },
+        WalReadCursor {
+            file,
+            length,
+            offset: 0,
+        },
     )
 }

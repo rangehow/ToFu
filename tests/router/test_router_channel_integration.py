@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.dx_overlay import requires_dx
+
 from tests.support.semantic_authorities import semantic_authority as semantic_authority
 
 pytest_plugins = ('tests.support.postgres_cluster',)
@@ -137,13 +139,14 @@ def test_channel_media_reach_the_real_router_turn_as_durable_attachments(world, 
         '[transcript unavailable: no transcription model is configured]')
 
 
+@requires_dx
 def test_a_quote_reply_reaches_the_real_router_turn_with_the_quoted_message(world):
     """The 2026-11-09 shape over the real Turn authority (docs/CHANNELS.md C13): the owner quote-replies
     (大象 type 20) to Tofu's own sent message. The persisted human Turn keeps his words verbatim as its
     content and carries the quoted message, labelled as Tofu's, in replyQuotes; the model reads it
     above his words, and his authored text is his message alone."""
     from lib.channels import outbox, quotes
-    from lib.channels.dx.adapter import event_from_live
+    from tofu_yourprovider.dx.adapter import event_from_live
     from lib.channels.ingress import ingest
     from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
     from lib.turn_initiation import require_human_turn, steer_author

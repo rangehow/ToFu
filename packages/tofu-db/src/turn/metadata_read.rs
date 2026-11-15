@@ -49,9 +49,8 @@ pub(super) fn get(
     let execution_epoch =
         crate::conversation_header::execution_epoch(database, transaction, conversation_id)?;
     let logical_key = turn_logical_key(conversation_id, turn_id);
-    let summarized =
-        metadata_summary::bound(database, transaction, &key, &stored, &logical_key)?
-            .and_then(|summary| serde_json::from_slice::<Metadata>(&summary).ok());
+    let summarized = metadata_summary::bound(database, transaction, &key, &stored, &logical_key)?
+        .and_then(|summary| serde_json::from_slice::<Metadata>(&summary).ok());
     let Metadata(document) = match summarized {
         Some(metadata) => metadata,
         None => whole_document(database, transaction, &stored, &logical_key)?,

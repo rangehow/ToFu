@@ -4,6 +4,7 @@
 #
 #  Usage:
 #    make lint          — Run ruff linter + format check
+#    make static-check  — Lint gates for changes since BASE (ruff; Tofu-DB rustfmt + clippy)
 #    make test          — Verify current changes; TESTS="tests/owner/..." selects a scope
 #    make test-plan     — Explain the same verification selection without execution
 #    make test-full     — Run all existing release gates unconditionally
@@ -26,7 +27,7 @@
 #
 # ═══════════════════════════════════════════════════════════════
 
-.PHONY: lint architecture-check contracts-check monorepo-check test test-plan test-deps test-affected test-full test-unit test-api test-api-core test-slow test-visual test-e2e test-frontend test-all test-coverage healthcheck ci smoke help desktop desktop-icons stop vendor-mcp audit-tests suite-health
+.PHONY: lint static-check architecture-check contracts-check monorepo-check test test-plan test-deps test-affected test-full test-unit test-api test-api-core test-slow test-visual test-e2e test-frontend test-all test-coverage healthcheck ci smoke help desktop desktop-icons stop vendor-mcp audit-tests suite-health
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -39,6 +40,10 @@ lint: ## Run ruff linter (errors only — blocks CI)
 	# scripts/, evaluations/ or any other shipped dir fails the PUBLIC lint
 	# gate even though a lib/-routes/-tests-only scan cannot see it.
 	python -m ruff check .
+
+static-check: ## Lint gates for changes since BASE=<ref>: ruff, Tofu-DB rustfmt + clippy
+	$(if $(BASE),,$(error BASE=<ref> is required, e.g. make static-check BASE=main))
+	python3 scripts/check_static_gates.py --base $(BASE)
 
 architecture-check: ## Reject retired surfaces and incident-only source notation
 	python3 scripts/check_architecture.py

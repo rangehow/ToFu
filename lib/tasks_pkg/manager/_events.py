@@ -433,6 +433,20 @@ def _persist_task_event_batch(task, entries):
 
 
 def append_event(task, event):
+    try:
+        return _append_event_admitted(task, event)
+    finally:
+        if (event.get('type') in TASK_REPLAY_TERMINAL_EVENT_TYPES
+                or task.get('status') in TASK_REPLAY_TERMINAL_STATUSES):
+            # A settled task's subscribers fire even when its terminal frame
+            # was refused (revoked lane, lost lease, closed publication):
+            # otherwise the global registry keeps each callback, and the task
+            # its closure captures, for the life of the process.
+            from lib.agent_core.admission import fire_terminal_callbacks
+            fire_terminal_callbacks(str(task.get('id') or ''))
+
+
+def _append_event_admitted(task, event):
     # Raw frames bypass build_event; this seam writes the log that durable
     # reconstruction folds, so it admits only the registered vocabulary.
     require_registered_event(event)

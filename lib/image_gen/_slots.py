@@ -71,13 +71,6 @@ def _size_for_openai(model: str, aspect_ratio: str, resolution: str) -> str:
     return _OPENAI_SIZE_MAP.get(aspect_ratio, '1024x1024')
 
 
-# ── Domains that use the proprietary FRIDAY async image API ──
-# All other providers use the standard OpenAI-compatible chat completions API.
-_FRIDAY_DOMAINS = frozenset({
-    'your-llm-gateway.example.com',
-})
-
-
 def _is_friday_provider(slot) -> bool:
     """Check if a slot's provider uses the proprietary FRIDAY image API.
 
@@ -89,8 +82,8 @@ def _is_friday_provider(slot) -> bool:
     OpenAI-compatible ``/v1/chat/completions`` endpoint.
     """
     if slot and slot.base_url:
-        p = urlparse(slot.base_url)
-        return p.netloc in _FRIDAY_DOMAINS
+        from lib.provider.gateway_profiles import gateway_trait
+        return gateway_trait('image_generation_api', base_url=slot.base_url) == 'friday_async'
     return False
 
 

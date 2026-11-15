@@ -24,7 +24,10 @@ use crate::vfs::{
 };
 
 fn not_found(path: &Path) -> io::Error {
-    io::Error::new(io::ErrorKind::NotFound, format!("{} does not exist", path.display()))
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("{} does not exist", path.display()),
+    )
 }
 
 fn poisoned() -> io::Error {
@@ -46,12 +49,19 @@ struct Upper {
 }
 
 impl Upper {
-    fn children<'a>(&'a self, directory: &'a Path) -> impl Iterator<Item = (&'a PathBuf, FileKind)> + 'a {
-        let files = self.files.range(directory.to_path_buf()..)
+    fn children<'a>(
+        &'a self,
+        directory: &'a Path,
+    ) -> impl Iterator<Item = (&'a PathBuf, FileKind)> + 'a {
+        let files = self
+            .files
+            .range(directory.to_path_buf()..)
             .take_while(move |(path, _)| path.starts_with(directory))
             .filter(move |(path, _)| path.parent() == Some(directory))
             .map(|(path, _)| (path, FileKind::File));
-        let directories = self.directories.range(directory.to_path_buf()..)
+        let directories = self
+            .directories
+            .range(directory.to_path_buf()..)
             .take_while(move |path| path.starts_with(directory))
             .filter(move |path| path.parent() == Some(directory))
             .map(|path| (path, FileKind::Directory));
@@ -66,7 +76,10 @@ pub(crate) struct ReadOnlyAuthorityVfs {
 
 impl ReadOnlyAuthorityVfs {
     pub(crate) fn new() -> Self {
-        Self { source: RealVfs, upper: Mutex::new(Upper::default()) }
+        Self {
+            source: RealVfs,
+            upper: Mutex::new(Upper::default()),
+        }
     }
 
     fn upper(&self) -> io::Result<MutexGuard<'_, Upper>> {
@@ -96,9 +109,18 @@ impl ReadOnlyAuthorityVfs {
 
     /// The source listing of `path` without hidden files; `None` when the
     /// source has no such directory.
-    fn source_listing(&self, upper: &Upper, path: &Path) -> io::Result<Option<Vec<DirectoryEntry>>> {
+    fn source_listing(
+        &self,
+        upper: &Upper,
+        path: &Path,
+    ) -> io::Result<Option<Vec<DirectoryEntry>>> {
         match self.source.read_directory_entries(path) {
-            Ok(entries) => Ok(Some(entries.into_iter().filter(|entry| !upper.hidden.contains(&entry.path)).collect())),
+            Ok(entries) => Ok(Some(
+                entries
+                    .into_iter()
+                    .filter(|entry| !upper.hidden.contains(&entry.path))
+                    .collect(),
+            )),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
@@ -110,8 +132,11 @@ impl ReadOnlyAuthorityVfs {
         if source.is_none() && !upper.directories.contains(path) {
             return Err(not_found(path));
         }
-        let mut entries: BTreeMap<PathBuf, Option<FileKind>> =
-            source.into_iter().flatten().map(|entry| (entry.path, entry.kind)).collect();
+        let mut entries: BTreeMap<PathBuf, Option<FileKind>> = source
+            .into_iter()
+            .flatten()
+            .map(|entry| (entry.path, entry.kind))
+            .collect();
         for (child, kind) in upper.children(path) {
             entries.insert(child.clone(), Some(kind));
         }
@@ -129,7 +154,10 @@ impl Vfs for ReadOnlyAuthorityVfs {
         let mut upper = self.upper()?;
         if let Some(file) = upper.files.get(path) {
             if request.create_new {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} exists", path.display())));
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{} exists", path.display()),
+                ));
             }
             if request.truncate {
                 file.data.lock().map_err(|_| poisoned())?.clear();
@@ -137,7 +165,10 @@ impl Vfs for ReadOnlyAuthorityVfs {
             return Ok(Box::new(ShadowFile::new(file, path, request)));
         }
         if upper.directories.contains(path) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is a directory", path.display())));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is a directory", path.display()),
+            ));
         }
         let in_source = !upper.hidden.contains(path) && self.source_file_exists(path)?;
         if !mutates {
@@ -148,7 +179,10 @@ impl Vfs for ReadOnlyAuthorityVfs {
             return self.source.open(path, request);
         }
         if in_source && request.create_new {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} exists", path.display())));
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} exists", path.display()),
+            ));
         }
         if !in_source && !(request.create || request.create_new) {
             return Err(not_found(path));
@@ -156,20 +190,33 @@ impl Vfs for ReadOnlyAuthorityVfs {
         if !in_source {
             let parent = path.parent().ok_or_else(|| not_found(path))?;
             if self.kind(&upper, parent)? != FileKind::Directory {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a directory", parent.display())));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is not a directory", parent.display()),
+                ));
             }
         }
         // Copy-up: the source bytes become this view's private file.
-        let bytes = if in_source && !request.truncate { std::fs::read(path)? } else { Vec::new() };
+        let bytes = if in_source && !request.truncate {
+            std::fs::read(path)?
+        } else {
+            Vec::new()
+        };
         let shadows_source = self.source_file_exists(path)?;
         upper.hidden.remove(path);
-        let file = UpperFile { data: Arc::new(Mutex::new(bytes)), shadows_source };
+        let file = UpperFile {
+            data: Arc::new(Mutex::new(bytes)),
+            shadows_source,
+        };
         let handle = ShadowFile::new(&file, path, request);
         upper.files.insert(path.to_path_buf(), file);
         Ok(Box::new(handle))
     }
 
-    fn open_positioned_reader(&self, path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+    fn open_positioned_reader(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
         {
             let upper = self.upper()?;
             if upper.files.contains_key(path) || upper.hidden.contains(path) {
@@ -183,13 +230,21 @@ impl Vfs for ReadOnlyAuthorityVfs {
     fn create_dir(&self, path: &Path) -> io::Result<()> {
         let mut upper = self.upper()?;
         match self.kind(&upper, path) {
-            Ok(_) => return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{} exists", path.display()))),
+            Ok(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("{} exists", path.display()),
+                ))
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
         let parent = path.parent().ok_or_else(|| not_found(path))?;
         if self.kind(&upper, parent)? != FileKind::Directory {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a directory", parent.display())));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a directory", parent.display()),
+            ));
         }
         upper.directories.insert(path.to_path_buf());
         Ok(())
@@ -198,11 +253,17 @@ impl Vfs for ReadOnlyAuthorityVfs {
     fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> {
         let mut upper = self.upper()?;
         if self.kind(&upper, source)? != FileKind::File {
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "the read-only authority view renames files only"));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the read-only authority view renames files only",
+            ));
         }
         match self.kind(&upper, destination) {
             Ok(FileKind::Directory) => {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is a directory", destination.display())));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("{} is a directory", destination.display()),
+                ));
             }
             Ok(FileKind::File) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -222,7 +283,13 @@ impl Vfs for ReadOnlyAuthorityVfs {
         }
         let shadows_source = self.source_file_exists(destination)?;
         upper.hidden.remove(destination);
-        upper.files.insert(destination.to_path_buf(), UpperFile { data, shadows_source });
+        upper.files.insert(
+            destination.to_path_buf(),
+            UpperFile {
+                data,
+                shadows_source,
+            },
+        );
         Ok(())
     }
 
@@ -256,9 +323,16 @@ impl Vfs for ReadOnlyAuthorityVfs {
             .collect())
     }
 
-    fn read_directory_bounded(&self, path: &Path, maximum_entries: usize) -> io::Result<BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum_entries: usize,
+    ) -> io::Result<BoundedDirectoryEntries> {
         if maximum_entries == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "directory entry bound must be nonzero"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "directory entry bound must be nonzero",
+            ));
         }
         let upper = self.upper()?;
         let source = match self.source.read_directory_bounded(path, maximum_entries) {
@@ -293,19 +367,30 @@ impl Vfs for ReadOnlyAuthorityVfs {
     ) -> io::Result<BoundedDirectoryMatches> {
         let upper = self.upper()?;
         let mut result = match self.source.match_directory_prefix_bounded(
-            path, name_prefix, maximum_entries_scanned, maximum_matches,
+            path,
+            name_prefix,
+            maximum_entries_scanned,
+            maximum_matches,
         ) {
             Ok(result) => result,
-            Err(error) if error.kind() == io::ErrorKind::NotFound && upper.directories.contains(path) => {
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound && upper.directories.contains(path) =>
+            {
                 BoundedDirectoryMatches::default()
             }
             Err(error) => return Err(error),
         };
-        let mut matches: BTreeSet<PathBuf> =
-            result.matches.drain(..).filter(|entry| !upper.hidden.contains(entry)).collect();
+        let mut matches: BTreeSet<PathBuf> = result
+            .matches
+            .drain(..)
+            .filter(|entry| !upper.hidden.contains(entry))
+            .collect();
         for (child, kind) in upper.children(path) {
             if kind == FileKind::File
-                && child.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with(name_prefix))
+                && child
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(name_prefix))
             {
                 result.scanned_entries += 1;
                 matches.insert(child.clone());
@@ -323,7 +408,10 @@ impl Vfs for ReadOnlyAuthorityVfs {
         let upper = self.upper()?;
         match self.kind(&upper, path)? {
             FileKind::Directory => Ok(()),
-            FileKind::File => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a directory", path.display()))),
+            FileKind::File => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a directory", path.display()),
+            )),
         }
     }
 }
@@ -357,7 +445,10 @@ impl ShadowFile {
         if allowed {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("handle was not opened for {what}")))
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("handle was not opened for {what}"),
+            ))
         }
     }
 }
@@ -379,7 +470,10 @@ impl VfsFile for ShadowFile {
         self.require(self.readable, "reading")?;
         let data = self.data()?;
         if data.len() > maximum_bytes {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "file exceeds its read admission bound"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "file exceeds its read admission bound",
+            ));
         }
         Ok(data.clone())
     }
@@ -387,8 +481,11 @@ impl VfsFile for ShadowFile {
     fn read_exact_at(&mut self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
         self.require(self.readable, "reading")?;
         let data = self.data()?;
-        let start = usize::try_from(offset).map_err(|_| io::Error::from(io::ErrorKind::UnexpectedEof))?;
-        let end = start.checked_add(bytes.len()).filter(|end| *end <= data.len())
+        let start =
+            usize::try_from(offset).map_err(|_| io::Error::from(io::ErrorKind::UnexpectedEof))?;
+        let end = start
+            .checked_add(bytes.len())
+            .filter(|end| *end <= data.len())
             .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))?;
         bytes.copy_from_slice(&data[start..end]);
         Ok(())
@@ -397,8 +494,11 @@ impl VfsFile for ShadowFile {
     fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
         self.require(self.writable, "writing")?;
         let mut data = self.data()?;
-        let start = usize::try_from(offset).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-        let end = start.checked_add(bytes.len()).ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let start =
+            usize::try_from(offset).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let end = start
+            .checked_add(bytes.len())
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
         if data.len() < end {
             data.resize(end, 0);
         }
@@ -408,7 +508,8 @@ impl VfsFile for ShadowFile {
 
     fn set_len(&mut self, length: u64) -> io::Result<()> {
         self.require(self.writable, "writing")?;
-        let length = usize::try_from(length).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        let length =
+            usize::try_from(length).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         self.data()?.resize(length, 0);
         Ok(())
     }
@@ -436,7 +537,16 @@ mod tests {
     use super::*;
 
     fn read(vfs: &ReadOnlyAuthorityVfs, path: &Path) -> Vec<u8> {
-        vfs.open(path, OpenRequest { read: true, ..OpenRequest::default() }).unwrap().read_all(1 << 20).unwrap()
+        vfs.open(
+            path,
+            OpenRequest {
+                read: true,
+                ..OpenRequest::default()
+            },
+        )
+        .unwrap()
+        .read_all(1 << 20)
+        .unwrap()
     }
 
     #[test]
@@ -447,33 +557,62 @@ mod tests {
         std::fs::write(root.path().join("removed"), b"gone").unwrap();
         std::fs::create_dir(root.path().join("shard")).unwrap();
         let vfs = ReadOnlyAuthorityVfs::new();
-        let read_write = OpenRequest { read: true, write: true, ..OpenRequest::default() };
+        let read_write = OpenRequest {
+            read: true,
+            write: true,
+            ..OpenRequest::default()
+        };
         let mut kept = vfs.open(&root.path().join("kept"), read_write).unwrap();
         kept.write_all_at(6, b"+appended").unwrap();
-        vfs.rename(&root.path().join("moved"), &root.path().join("shard/landed")).unwrap();
+        vfs.rename(
+            &root.path().join("moved"),
+            &root.path().join("shard/landed"),
+        )
+        .unwrap();
         vfs.remove_file(&root.path().join("removed")).unwrap();
         vfs.create_dir(&root.path().join("fresh")).unwrap();
-        let mut created = vfs.open(&root.path().join("fresh/new"), OpenRequest { create_new: true, ..read_write }).unwrap();
+        let mut created = vfs
+            .open(
+                &root.path().join("fresh/new"),
+                OpenRequest {
+                    create_new: true,
+                    ..read_write
+                },
+            )
+            .unwrap();
         created.write_all_at(0, b"new").unwrap();
 
         assert_eq!(read(&vfs, &root.path().join("kept")), b"source+appended");
         assert_eq!(read(&vfs, &root.path().join("shard/landed")), b"moved");
         assert_eq!(read(&vfs, &root.path().join("fresh/new")), b"new");
         for gone in ["moved", "removed"] {
-            assert_eq!(vfs.metadata(&root.path().join(gone)).unwrap_err().kind(), io::ErrorKind::NotFound);
+            assert_eq!(
+                vfs.metadata(&root.path().join(gone)).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
         }
         assert_eq!(
             vfs.read_directory(root.path()).unwrap(),
-            ["fresh", "kept", "shard"].map(|name| root.path().join(name)).to_vec()
+            ["fresh", "kept", "shard"]
+                .map(|name| root.path().join(name))
+                .to_vec()
         );
-        assert_eq!(vfs.read_directory(&root.path().join("shard")).unwrap(), vec![root.path().join("shard/landed")]);
+        assert_eq!(
+            vfs.read_directory(&root.path().join("shard")).unwrap(),
+            vec![root.path().join("shard/landed")]
+        );
 
         // The source directory is exactly as it was.
         assert_eq!(std::fs::read(root.path().join("kept")).unwrap(), b"source");
         assert_eq!(std::fs::read(root.path().join("moved")).unwrap(), b"moved");
         assert_eq!(std::fs::read(root.path().join("removed")).unwrap(), b"gone");
         assert!(!root.path().join("fresh").exists());
-        assert_eq!(std::fs::read_dir(root.path().join("shard")).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("shard"))
+                .unwrap()
+                .count(),
+            0
+        );
     }
 
     #[test]
@@ -481,18 +620,29 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let lock = root.path().join("LOCK");
         std::fs::write(&lock, b"").unwrap();
-        let lease = OpenRequest { read: true, write: true, create: true, ..OpenRequest::default() };
+        let lease = OpenRequest {
+            read: true,
+            write: true,
+            create: true,
+            ..OpenRequest::default()
+        };
         let real = RealVfs;
         let mut writer = real.open(&lock, lease).unwrap();
         writer.try_lock_exclusive().unwrap();
         let view = ReadOnlyAuthorityVfs::new();
         let mut refused = view.open(&lock, lease).unwrap();
-        assert_eq!(refused.try_lock_exclusive().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            refused.try_lock_exclusive().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         drop(writer);
         let mut held = view.open(&lock, lease).unwrap();
         held.try_lock_exclusive().unwrap();
         let mut second_writer = real.open(&lock, lease).unwrap();
-        assert_eq!(second_writer.try_lock_exclusive().unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            second_writer.try_lock_exclusive().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         drop(held);
         second_writer.try_lock_exclusive().unwrap();
     }

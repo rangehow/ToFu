@@ -924,7 +924,9 @@ and `tests/startup_integrity.rs` in both default and diagnostic feature builds.
 and replays must use the same segment IDs, compare full traces, and assert every
 armed fault fires. Production still generates UUIDs; never skip unexercised cells.
 
-Run `cargo test --manifest-path packages/tofu-db/Cargo.toml`.  Filesystem or
+Run `cargo test --manifest-path packages/tofu-db/Cargo.toml`; `make
+static-check BASE=<ref>` applies the rustfmt and clippy `-D warnings` gates the
+integration gate enforces. Filesystem or
 commit changes must add a deterministic crash/torn-write test before broader
 application integration tests.
 

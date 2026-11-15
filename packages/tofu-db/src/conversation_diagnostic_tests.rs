@@ -76,7 +76,8 @@ fn seed(db: &mut AuthorityDatabase, projection: Value, patched: bool) -> Value {
                 base_revision: 1,
                 patch_count: 1,
                 patch_bytes: serde_json::to_vec(&patch).unwrap().len(),
-                text_tail: None, frame_witness: None,
+                text_tail: None,
+                frame_witness: None,
             };
             let checkpoint_key = projection_checkpoint_key(&tx, "conv", id, &head.head_id).unwrap();
             restore(
@@ -468,14 +469,19 @@ fn diagnostic_live_text_tail_serves_its_structural_state() {
     // A streaming Turn: one structural patch plus two folded text revisions.
     stream_text(&mut db, 2, 6);
     let (live, state) = reconstruct(&mut db);
-    assert_eq!(live["liveText"],
-        json!({"structuralRevision":2,"projectionRevision":4,"textBytes":6}));
+    assert_eq!(
+        live["liveText"],
+        json!({"structuralRevision":2,"projectionRevision":4,"textBytes":6})
+    );
     assert_eq!(live["turn"]["projectionRevision"], 4);
     assert_eq!(live["patches"].as_array().unwrap().len(), 1);
     assert_eq!(state, structural);
     // Without the tail the same revision drift remains a corruption fence.
     replace_large(&mut db, |turn| {
-        turn["_projectionHead"].as_object_mut().unwrap().remove("textTail");
+        turn["_projectionHead"]
+            .as_object_mut()
+            .unwrap()
+            .remove("textTail");
     });
     assert_eq!(
         query(&mut db, 11, payload("turn")).unwrap_err().code(),
@@ -487,7 +493,11 @@ fn diagnostic_live_text_tail_serves_its_structural_state() {
 fn diagnostic_live_text_token_survives_appends_without_rescanning_its_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let mut db = AuthorityDatabase::initialize(dir.path()).unwrap();
-    seed(&mut db, json!({"content":"x".repeat(3 * MAX_CHUNK_BYTES)}), true);
+    seed(
+        &mut db,
+        json!({"content":"x".repeat(3 * MAX_CHUNK_BYTES)}),
+        true,
+    );
     stream_text(&mut db, 1, 3);
     let descriptor = query(&mut db, 11, payload("turn")).unwrap();
     let expected = source_bytes(&mut db, &descriptor);
@@ -500,8 +510,15 @@ fn diagnostic_live_text_token_survives_appends_without_rescanning_its_checkpoint
         request["offset"] = json!(MAX_CHUNK_BYTES);
         let chunk = query(&mut db, 11, request).unwrap();
         assert_eq!(chunk["sourceToken"], descriptor["source"]["token"]);
-        assert_eq!(chunk_bytes(&chunk).as_slice(), &expected[MAX_CHUNK_BYTES..2 * MAX_CHUNK_BYTES]);
-        assert_eq!(source_plan::hits(), served + 1, "an append must not re-scan the checkpoint");
+        assert_eq!(
+            chunk_bytes(&chunk).as_slice(),
+            &expected[MAX_CHUNK_BYTES..2 * MAX_CHUNK_BYTES]
+        );
+        assert_eq!(
+            source_plan::hits(),
+            served + 1,
+            "an append must not re-scan the checkpoint"
+        );
     }
     // A cold reader derives the same structural token.
     source_plan::clear();
@@ -516,7 +533,9 @@ fn diagnostic_live_text_token_survives_appends_without_rescanning_its_checkpoint
             source_plan::clear();
         }
         assert_eq!(
-            query(&mut db, 11, chunk_payload(&descriptor)).unwrap_err().code(),
+            query(&mut db, 11, chunk_payload(&descriptor))
+                .unwrap_err()
+                .code(),
             "database_conflict"
         );
     }
@@ -534,7 +553,9 @@ fn diagnostic_live_text_token_survives_appends_without_rescanning_its_checkpoint
             source_plan::clear();
         }
         assert_eq!(
-            query(&mut db, 11, chunk_payload(&descriptor)).unwrap_err().code(),
+            query(&mut db, 11, chunk_payload(&descriptor))
+                .unwrap_err()
+                .code(),
             "database_conflict"
         );
     }
@@ -546,7 +567,9 @@ fn diagnostic_live_text_token_survives_appends_without_rescanning_its_checkpoint
         turn["projectionRevision"] = json!(7);
     });
     assert_eq!(
-        query(&mut db, 11, chunk_payload(&descriptor)).unwrap_err().code(),
+        query(&mut db, 11, chunk_payload(&descriptor))
+            .unwrap_err()
+            .code(),
         "database_conflict"
     );
 }
@@ -1141,7 +1164,9 @@ fn diagnostic_source_token_survives_unrelated_conversation_writes() {
     assert!(!first["nextOffset"].is_null());
     set_conversation_revision(&mut db, 13);
     assert_eq!(
-        query(&mut db, 11, chunk_payload(&before)).unwrap_err().code(),
+        query(&mut db, 11, chunk_payload(&before))
+            .unwrap_err()
+            .code(),
         "database_conflict"
     );
     let mut descriptor = payload("turn");

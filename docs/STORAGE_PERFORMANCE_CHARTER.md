@@ -1854,6 +1854,158 @@ failed for both the old and the new Sidecar alike, so 5x differences in this
 session are host noise, not engine evidence. Raw reports:
 `/dev/shm/rj-sc/{lt-before,rec-sidecar-a,rec-tofudb,rec-sidecar-b}` (volatile).
 
+## TofuDB hot paths on the production DolphinFS client (2026-11-15)
+
+**Problem:** decide where TofuDB loses time on the production-shaped load
+now that the harness keeps the userspace DolphinFS client (H1 above).
+
+**Profile.** `scripts/tofudb_load_test.py --scales 1,5 --duration 150
+--request-profile`, WAL `normal`, real DolphinFS, engine source = shared
+head `4776702ffc` (binary `047be923`). Engine dispatch time by exclusive
+stage, the one leg whose host load stayed below the CPU count (A2, max
+load 71.7 on 77 CPUs):
+
+| stage | 1x (88.3 s total) | 5x (208.0 s total) |
+|---|---|---|
+| `wal_barrier_wait` | 69.3 s (78.5%) | 162.4 s (78.1%) |
+| `fifo_wait` | 11.0 s (12.4%) | 12.6 s (6.1%) |
+| `ir_steps` | 1.0 s (1.1%) | 4.9 s (2.4%) |
+| `vfs_read` + `vfs_open` | 1.5 s (1.7%) | 2.9 s (1.4%) |
+
+`turn.event.record` and `worker_job.heartbeat` own nearly all of the
+barrier wait. A2 is not typical of the volume, though: it is the leg with
+multi-second WAL write stalls. All three base legs, valid or not:
+
+| base leg | commits per physical write | WAL wait share of engine time | `turn.event.record` p50/p99 ms | `worker_job.heartbeat` p50/p99 ms | completed ops/s |
+|---|---|---|---|---|---|
+| A1 1x / 5x | 1.02 / 1.04 | 33.5% / 26.4% | 1.71/112 · 1.69/94 | 0.72/2.3 · 0.80/6.9 | 341 / 1,689 |
+| A2 1x / 5x (valid) | 1.08 / 1.15 | 78.5% / 78.1% | 1.75/1,981 · 1.87/563 | 0.78/40 · 1.02/399 | 333 / 1,579 |
+| A3 1x / 5x | 1.01 / 1.04 | 29.8% / 25.5% | 1.68/49 · 1.66/97 | 0.69/2.2 · 0.78/3.4 | 342 / 1,690 |
+
+The WAL writer is busy 3-16% of wall time (26-82 physical writes/s at
+0.85-5.0 ms each, 50-60 KB per frame). Point reads stay at 0.03-0.11 ms
+engine mean.
+
+The earlier profile of this session ran on kernel FUSE (the H1 defect):
+there `event.list` (Request Inspector history pages) cost 98-115 ms per call,
+about 110-130 serial cold reads at ~0.6 ms each. On the userspace client the
+same call costs 9-19 ms (88-117 reads at ~0.06-0.11 ms). Kernel-FUSE read
+costs are not production evidence.
+
+**Rejected: overlapping a batch's cold block reads.** Candidate
+`BlockStore::get_shared_many` read the uncached segments of
+`stream::read_persisted_positions` on one scoped thread per block (verified,
+ordered, first-error semantics), plus single-flight file opens for history
+sources and payload segments. Unit specifications passed and the full lib
+suite matched base. Alternating base/candidate legs (A1 B1 A2 B2 A3 B3, each
+1x+5x, fresh seed) on the production client:
+
+| `event.list` engine mean | base | candidate |
+|---|---|---|
+| valid pair A2/B2, 1x | 9.1 ms | 26.5 ms |
+| valid pair A2/B2, 5x | 16.1 ms | 222.1 ms |
+| median of all six legs, 5x | 18.7 ms | 194.5 ms |
+
+The candidate's time was spent waiting for its read threads (215 ms of 222
+ms exclusive in `block_shared_read` at 5x): on a loaded host, spawning and
+scheduling about 80-100 threads per call costs far more than the
+~0.06 ms reads it overlaps. Single-flight opens showed no measurable gain
+(history-source opens are not among the base's top stages on this client).
+Both were reverted. A pooled reader would add a pool-size knob (principle 5);
+it is not pursued while reads are under 2% of engine time. Legs A1, B1, A3
+(max load 84-94) and B3 (589) exceeded the CPU count and are not evidence;
+with them the other operations' medians differ only within noise.
+
+**Group commit is already the WAL design; no rewrite.** Problem: about 1.1
+commits per physical write suggested missing group commit. It is not
+missing. Commits capture their WAL witness under the authority mutex and
+wait outside it (`server.rs`, dispatch and parallel-commit paths), so later
+commits queue frames while a write is in flight. The Strict barrier worker
+(`run_wal_barrier`) takes every queued frame as one vectored write and one
+`fdatasync`, then acknowledges them all. The Normal writer
+(`run_wal_writer`) takes the whole queue as one write and acknowledges at
+the written frontier, the tier's documented loss window. Neither has a
+batch size, linger timer or cap.
+`wal::buffer_tests::strict_commits_queued_behind_a_write_share_one_write_and_one_sync_and_wait_for_it`,
+`normal_commits_queued_behind_a_write_share_it_and_are_acknowledged_after_it`
+and `a_torn_group_write_acknowledges_none_of_its_commits_and_recovers_the_acknowledged_prefix`
+pin it with the real driver threads and concurrent committers. Commits held
+behind one write go out as one write; none is acknowledged before its tier's
+point. Recovery after a crash returns every acknowledged commit in commit
+order, and a torn group write acknowledges none of its commits and recovers
+to the acknowledged prefix.
+
+The low ratio follows from utilization: with the writer busy 3-16% of the
+time, few commits arrive during a write. The ratio rises exactly when writes
+stall (A2: 1.15). Raising it further would need a delay window that holds
+commits back (rejected, principle 5). Requiring an `fdatasync` before
+Normal acknowledgements would change that tier's contract, not optimize
+it. The WAL wait share tracks the medium's write-latency tail (A2 p99 0.4-2
+s, the other legs 49-112 ms), which no batching shortens.
+
+**Maintenance bytes in the foreground WAL: measured, not moved.** Problem:
+foreground commits share one WAL writer with maintenance, so a commit queued
+behind a large maintenance frame waits for that whole write (head-of-line
+blocking). The authority's own WAL (`walWriteBuffer.writtenBytes`; the
+process-wide `walEncodedBytes` also counts the search projection index's
+separate WAL, which shares no writer) held, per 150 s phase:
+
+| base leg | authority WAL | request-attributed | background | overlay-merge pages (merges) |
+|---|---|---|---|---|
+| A1 1x / 5x | 243 / 752 MB | 13% / 21% | 212 / 595 MB | 205 / 580 MB (510 / 328) |
+| A2 1x / 5x | 221 / 716 MB | 13% / 21% | 191 / 568 MB | 185 / 548 MB (425 / 312) |
+| A3 1x / 5x | 242 / 744 MB | 13% / 21% | 210 / 587 MB | 203 / 572 MB (512 / 325) |
+
+About 97% of background bytes are overlay-drain merge pages, which a merge
+publishes with its root in one WAL transaction (see
+[write overlay](TOFUDB_WRITE_PATH_OVERLAY.md)). Search acknowledgements,
+retention and archive commits are frequent (8-19 k per phase) but small. On
+this volume a merge-sized write costs 2.1 ms at 0.4 MB (1x) and 7.2-7.5 ms
+at 1.75 MB (5x), p99 at most 9.3 ms, against 0.6 ms for a 58 KB foreground
+frame (a `pwrite` probe on this pool through the userspace client, 120
+shuffled writes per size, two rounds). Merge writes therefore occupy 0.6-1.6% of wall time.
+Suppose every commit that arrives during a merge write, or queues just
+behind one, waited for the whole write. The head-of-line cost would still be
+at most 0.03 ms per commit at 1x (0.1-2.6% of the foreground WAL wait) and
+0.22-0.24 ms at 5x (20-23% of the 1.0-1.2 ms mean in A1/A3, 1.5% of the
+15 ms mean in A2). It reaches at most about 3% of commits, by at most one
+merge write (9.3 ms p99), so it cannot produce the 49-112 ms or 0.4-2 s
+p99s above.
+
+Decision: keep merge pages in the WAL. Each way of removing them changes the
+durability format for a gain capped at about 0.23 ms per commit and 9 ms of
+p99 at 5x:
+
+- (a) Merge pages in their own fsynced segment, published by a small WAL
+  record. Recovery, online GC, backup, verify and history promotion would
+  have to treat WAL-referenced segments as live. That needs a new store
+  feature marker and a downgrade converter, and each merge adds a file
+  create, fsync, rename and directory barrier on DolphinFS.
+- (b) A separate maintenance WAL lane. A merge root must follow every delta
+  it covers in WAL order (the dominance proofs above), so recovery would
+  need cross-lane sequencing, and rotation, retirement and history
+  promotion would double.
+- (c) Re-derive merges and log nothing. The tree must still be durable
+  before its WAL window retires, so rotation would write the pages in bulk,
+  the cost the WAL-carried design replaced on network mounts.
+- Priority writes or splitting large frames: frames are hash-chained and
+  acknowledged as a contiguous prefix, so order cannot change, and a split
+  needs a size constant (principle 5).
+
+Next: the foreground WAL wait is the commit's own write plus the medium's
+write-latency tail. Measure that tail on the target host before attributing
+it to the engine; this pool showed pwrite p99 50-70 ms at 16-256 KiB and
+multi-second stalls in leg A2. Reproduce the attribution with the request
+profile run below, then read `walWriteBuffer`, `durability.overlayMergeCommits`
+and the `wal_barrier_wait` stage per phase.
+
+Reproduce (from a checkout whose engine source matches the binary):
+
+```sh
+python3 scripts/tofudb_load_test.py --root /mnt/your-fs \
+  --engine "$TOFUDB_BIN" --scales 1,5 --duration 150 --request-profile --run-id A2
+```
+
 ## Agent-loop load test
 
 **Problem:** production users wait on the Agent process, not on the engine.

@@ -201,9 +201,7 @@ fn online_gc_metrics(client: &mut WireClient) -> OnlineGcMetrics {
     OnlineGcMetrics {
         epochs_completed: collector["epochs_completed"].as_u64().unwrap(),
         total_reclaimed_bytes: collector["total_reclaimed_bytes"].as_u64().unwrap(),
-        total_temporary_files_removed: collector["total_temporary_files_removed"]
-            .as_u64()
-            .unwrap(),
+        total_temporary_files_removed: collector["total_temporary_files_removed"].as_u64().unwrap(),
     }
 }
 
@@ -309,8 +307,7 @@ fn upsert_large_document(client: &mut WireClient, index: u32) {
         }),
     );
     assert_eq!(
-        response.status,
-        0,
+        response.status, 0,
         "garbage-generating write {index} failed: {:?}",
         response.error_message
     );
@@ -328,15 +325,13 @@ fn assert_foreground_continuity(client: &mut WireClient, round: u32) {
         }),
     );
     assert_eq!(
-        write.status,
-        0,
+        write.status, 0,
         "foreground write failed while an online epoch was running: {:?}",
         write.error_message
     );
     let read = client.call("daily_cost.latest", json!({"user_id": 11}), None);
     assert_eq!(
-        read.status,
-        0,
+        read.status, 0,
         "foreground read failed while an online epoch was running: {:?}",
         read.error_message
     );
@@ -476,8 +471,7 @@ fn system_reclaim_validates_budget_bounds_before_expediting() {
     ] {
         let response = client.command("system.reclaim", payload.clone());
         assert_eq!(
-            response.status,
-            STATUS_BAD_REQUEST,
+            response.status, STATUS_BAD_REQUEST,
             "out-of-bounds reclaim payload was accepted: {payload}"
         );
     }
@@ -489,8 +483,7 @@ fn system_reclaim_validates_budget_bounds_before_expediting() {
     ] {
         let response = client.command("system.reclaim", payload.clone());
         assert_eq!(
-            response.status,
-            0,
+            response.status, 0,
             "in-bounds reclaim payload was rejected: {payload}"
         );
         let document: Value = serde_json::from_slice(&response.payload).unwrap();

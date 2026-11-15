@@ -70,7 +70,11 @@ fn invalid_data(message: &str) -> io::Error {
 fn encode(state: &ControlState) -> [u8; SLOT_BYTES] {
     let mut slot = [0_u8; SLOT_BYTES];
     slot[0..8].copy_from_slice(MAGIC);
-    let version = if state.sealed_log.is_some() { SEALED_LOG_CONTROL_VERSION } else { CONTROL_VERSION };
+    let version = if state.sealed_log.is_some() {
+        SEALED_LOG_CONTROL_VERSION
+    } else {
+        CONTROL_VERSION
+    };
     slot[8..12].copy_from_slice(&version.to_le_bytes());
     slot[12..20].copy_from_slice(&state.generation.to_le_bytes());
     slot[20..28].copy_from_slice(&state.durable_sequence.to_le_bytes());
@@ -118,7 +122,10 @@ fn decode(slot: &[u8; SLOT_BYTES]) -> io::Result<Option<ControlState>> {
         return Ok(None);
     }
     let version = u32::from_le_bytes(slot[8..12].try_into().unwrap());
-    if version != LEGACY_CONTROL_VERSION && version != CONTROL_VERSION && version != SEALED_LOG_CONTROL_VERSION {
+    if version != LEGACY_CONTROL_VERSION
+        && version != CONTROL_VERSION
+        && version != SEALED_LOG_CONTROL_VERSION
+    {
         return Err(invalid_data("unsupported CONTROL format version"));
     }
     let generation = u64::from_le_bytes(slot[12..20].try_into().unwrap());
@@ -147,7 +154,11 @@ fn decode(slot: &[u8; SLOT_BYTES]) -> io::Result<Option<ControlState>> {
     let encoded_payload_manifest = BlockId(slot[191..223].try_into().unwrap());
     let payload_manifest_block_id = match (version, slot[190]) {
         (LEGACY_CONTROL_VERSION, 0) if encoded_payload_manifest == BlockId([0; 32]) => None,
-        (CONTROL_VERSION | SEALED_LOG_CONTROL_VERSION, 0) if encoded_payload_manifest == BlockId([0; 32]) => None,
+        (CONTROL_VERSION | SEALED_LOG_CONTROL_VERSION, 0)
+            if encoded_payload_manifest == BlockId([0; 32]) =>
+        {
+            None
+        }
         (CONTROL_VERSION | SEALED_LOG_CONTROL_VERSION, 1) => Some(encoded_payload_manifest),
         _ => return Err(invalid_data("invalid CONTROL payload manifest presence")),
     };
@@ -197,7 +208,8 @@ fn validate_state(state: &ControlState) -> io::Result<()> {
             || sealed.generation.checked_add(1) != Some(state.active_log_generation)
             || sealed.terminal_sequence <= state.checkpoint_sequence
             || sealed.terminal_sequence > state.durable_sequence
-            || (sealed.terminal_sequence == state.durable_sequence && sealed.terminal_hash != state.root_hash)
+            || (sealed.terminal_sequence == state.durable_sequence
+                && sealed.terminal_hash != state.root_hash)
         {
             return Err(invalid_data("invalid CONTROL sealed WAL ownership"));
         }
@@ -421,7 +433,8 @@ impl ControlFile {
                 .active_log_generation
                 .checked_add(1)
                 .ok_or_else(|| invalid_data("active WAL generation overflow"))?;
-            if current.sealed_log.is_some() || next.sealed_log.is_some()
+            if current.sealed_log.is_some()
+                || next.sealed_log.is_some()
                 || next.active_log_generation != expected_generation
                 || next.durable_sequence != current.durable_sequence
                 || next.root_hash != current.root_hash
@@ -456,7 +469,11 @@ impl ControlFile {
     /// Every valid state recovery can select, newest first.
     #[cfg(test)]
     pub(crate) fn selectable_states_for_test(&self) -> Vec<ControlState> {
-        self.current.iter().cloned().chain(self.fallback.clone().flatten()).collect()
+        self.current
+            .iter()
+            .cloned()
+            .chain(self.fallback.clone().flatten())
+            .collect()
     }
 
     /// Whether no slot recovery can select names a payload catalog other
@@ -464,7 +481,8 @@ impl ControlFile {
     /// Unknown slot contents after a failed write answer `false`.
     pub(crate) fn slots_name_only_payload_manifest(&self, installed: Option<BlockId>) -> bool {
         let names_only_installed = |state: &ControlState| {
-            state.payload_manifest_block_id.is_none() || state.payload_manifest_block_id == installed
+            state.payload_manifest_block_id.is_none()
+                || state.payload_manifest_block_id == installed
         };
         match (&self.current, &self.fallback) {
             (Some(current), Some(fallback)) => {
@@ -740,19 +758,53 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut control = ControlFile::initialize(directory.path(), Uuid::from_u128(42)).unwrap();
         let initial = control.read_current().unwrap();
-        let tip = ControlState { generation: 2, durable_sequence: 2, root_hash: [2; 32], ..initial };
+        let tip = ControlState {
+            generation: 2,
+            durable_sequence: 2,
+            root_hash: [2; 32],
+            ..initial
+        };
         control.publish(&tip).unwrap();
-        let sealed = SealedLog { generation: 1, terminal_sequence: 2, terminal_hash: [2; 32] };
-        let handover = ControlState { generation: 3, active_log_generation: 2, sealed_log: Some(sealed.clone()), ..tip };
-        assert_eq!(u32::from_le_bytes(encode(&handover)[8..12].try_into().unwrap()), SEALED_LOG_CONTROL_VERSION);
+        let sealed = SealedLog {
+            generation: 1,
+            terminal_sequence: 2,
+            terminal_hash: [2; 32],
+        };
+        let handover = ControlState {
+            generation: 3,
+            active_log_generation: 2,
+            sealed_log: Some(sealed.clone()),
+            ..tip
+        };
+        assert_eq!(
+            u32::from_le_bytes(encode(&handover)[8..12].try_into().unwrap()),
+            SEALED_LOG_CONTROL_VERSION
+        );
         assert_eq!(decode(&encode(&handover)).unwrap(), Some(handover.clone()));
         control.publish(&handover).unwrap();
-        let successor = ControlState { generation: 4, durable_sequence: 3, root_hash: [3; 32], ..handover };
+        let successor = ControlState {
+            generation: 4,
+            durable_sequence: 3,
+            root_hash: [3; 32],
+            ..handover
+        };
         control.publish(&successor).unwrap();
-        let completed = ControlState { generation: 5, checkpoint_sequence: 2, checkpoint_hash: [2; 32],
-            history_manifest_block_id: Some(BlockId([9; 32])), sealed_log: None, ..successor };
+        let completed = ControlState {
+            generation: 5,
+            checkpoint_sequence: 2,
+            checkpoint_hash: [2; 32],
+            history_manifest_block_id: Some(BlockId([9; 32])),
+            sealed_log: None,
+            ..successor
+        };
         control.publish(&completed).unwrap();
-        assert_eq!(ControlFile::open(directory.path()).unwrap().read_current().unwrap(), completed);
+        assert_eq!(
+            ControlFile::open(directory.path())
+                .unwrap()
+                .read_current()
+                .unwrap(),
+            completed
+        );
         assert_eq!(completed.durable_sequence, 3);
     }
 
@@ -761,29 +813,71 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut control = ControlFile::initialize(directory.path(), Uuid::from_u128(43)).unwrap();
         let initial = control.read_current().unwrap();
-        let tip = ControlState { generation: 2, durable_sequence: 2, root_hash: [2; 32], ..initial };
+        let tip = ControlState {
+            generation: 2,
+            durable_sequence: 2,
+            root_hash: [2; 32],
+            ..initial
+        };
         control.publish(&tip).unwrap();
-        let handover = ControlState { generation: 3, active_log_generation: 2,
-            sealed_log: Some(SealedLog { generation: 1, terminal_sequence: 2, terminal_hash: [2; 32] }), ..tip };
+        let handover = ControlState {
+            generation: 3,
+            active_log_generation: 2,
+            sealed_log: Some(SealedLog {
+                generation: 1,
+                terminal_sequence: 2,
+                terminal_hash: [2; 32],
+            }),
+            ..tip
+        };
         control.publish(&handover).unwrap();
         for invalid in [
-            ControlState { generation: 4, sealed_log: None, ..handover.clone() },
-            ControlState { generation: 4, active_log_generation: 3,
-                sealed_log: Some(SealedLog { generation: 2, terminal_sequence: 2, terminal_hash: [2; 32] }), ..handover.clone() },
-            ControlState { generation: 4, checkpoint_sequence: 2, checkpoint_hash: [7; 32],
-                history_manifest_block_id: Some(BlockId([9; 32])), sealed_log: None, ..handover.clone() },
-            ControlState { generation: 4, checkpoint_sequence: 2, checkpoint_hash: [2; 32],
-                history_manifest_block_id: Some(BlockId([9; 32])), sealed_log: None,
-                root_hash: [8; 32], ..handover.clone() },
+            ControlState {
+                generation: 4,
+                sealed_log: None,
+                ..handover.clone()
+            },
+            ControlState {
+                generation: 4,
+                active_log_generation: 3,
+                sealed_log: Some(SealedLog {
+                    generation: 2,
+                    terminal_sequence: 2,
+                    terminal_hash: [2; 32],
+                }),
+                ..handover.clone()
+            },
+            ControlState {
+                generation: 4,
+                checkpoint_sequence: 2,
+                checkpoint_hash: [7; 32],
+                history_manifest_block_id: Some(BlockId([9; 32])),
+                sealed_log: None,
+                ..handover.clone()
+            },
+            ControlState {
+                generation: 4,
+                checkpoint_sequence: 2,
+                checkpoint_hash: [2; 32],
+                history_manifest_block_id: Some(BlockId([9; 32])),
+                sealed_log: None,
+                root_hash: [8; 32],
+                ..handover.clone()
+            },
         ] {
-            assert_eq!(control.publish(&invalid).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            assert_eq!(
+                control.publish(&invalid).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
             assert_eq!(control.read_current().unwrap(), handover);
         }
         let mut disguised = encode(&handover);
         disguised[8..12].copy_from_slice(&CONTROL_VERSION.to_le_bytes());
         let checksum = blake3::hash(&disguised[..CHECKSUM_OFFSET]);
         disguised[CHECKSUM_OFFSET..].copy_from_slice(checksum.as_bytes());
-        assert!(decode(&disguised).is_err(), "a predecessor must not hide in legacy reserved bytes");
+        assert!(
+            decode(&disguised).is_err(),
+            "a predecessor must not hide in legacy reserved bytes"
+        );
     }
-
 }

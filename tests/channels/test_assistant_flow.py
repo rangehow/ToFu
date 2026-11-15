@@ -8,11 +8,13 @@ import asyncio
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 from lib.channels import outbox, service, tools
 from lib.channels.delivery import EVENT_COMMAND_PREFIX
 from lib.channels.ingress import ingest
 from lib.channels.model import ChannelError, ThreadKey
-from tests.channels.conftest import OWNER, ROUTER, make_event
+from tests.channels.conftest import DX_INSTALLED, OWNER, ROUTER, make_event
 from tests.channels.test_assistant_authority import COMMAND, HOME, PRIVATE, owner_turn, review
 
 pytestmark = pytest.mark.unit
@@ -176,6 +178,7 @@ def test_subscriptions_are_owner_decisions(channel, turns):
                     ) == 'human_turn_required'
 
 
+@requires_yourprovider_overlay
 def test_owner_notes_reach_only_the_routers_review(channel, dispatch, turns):
     service.update_account(OWNER, {'assistantNote': '我是阮俊豪，回复简短 <口语>'}, store=channel)
     service.configure_thread(OWNER, PRIVATE, note='这是我的经理，语气正式', store=channel)
@@ -228,6 +231,7 @@ def test_a_review_refusal_says_what_the_review_may_do(channel, dispatch, turns):
     assert coordinator_call_rejection(owner, 'delegate_project_work', {}) is None
 
 
+@requires_yourprovider_overlay
 def test_settings_set_notes_and_read_the_audit_over_http(channel, monkeypatch):
     from tests.channels.test_routes import _validate
     from quart import Quart, g, request
@@ -236,7 +240,8 @@ def test_settings_set_notes_and_read_the_audit_over_http(channel, monkeypatch):
     from lib.http_transport.error_handlers import register_http_error_handlers
     from lib.identity import PrincipalContext
     from routes.api_v1.channels import api_v1_channels_bp
-    monkeypatch.setattr('lib.channels.dx.supervisor.notify_account_changed', lambda owner: None)
+    if DX_INSTALLED:
+        monkeypatch.setattr('tofu_yourprovider.dx.supervisor.notify_account_changed', lambda owner: None)
     application = Quart(__name__)
     register_http_error_handlers(application)
     application.register_blueprint(attach_v4_envelope(copy_blueprint_to_v4(api_v1_channels_bp, name='channels_v4')))

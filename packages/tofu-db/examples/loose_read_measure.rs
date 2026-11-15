@@ -14,9 +14,18 @@ fn median(values: &mut [f64]) -> f64 {
 }
 
 fn main() -> io::Result<()> {
-    let base = std::env::args_os().nth(1).map(PathBuf::from)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "pass an existing base directory"))?;
-    let directory = tempfile::Builder::new().prefix(".tofu-loose-read-measure-").tempdir_in(&base)?;
+    let base = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pass an existing base directory",
+            )
+        })?;
+    let directory = tempfile::Builder::new()
+        .prefix(".tofu-loose-read-measure-")
+        .tempdir_in(&base)?;
     let path = directory.path().join("probe");
     let payload = vec![b'x'; 64 * 1024];
     std::fs::write(&path, &payload)?;
@@ -24,8 +33,18 @@ fn main() -> io::Result<()> {
     let expected = blake3::hash(&payload);
     let mut pairs = Vec::new();
     for sample in 0..3 {
-        for observed in if sample % 2 == 0 { [false, true] } else { [true, false] } {
-            let mut file = RealVfs.open(&path, OpenRequest { read: true, ..OpenRequest::default() })?;
+        for observed in if sample % 2 == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        } {
+            let mut file = RealVfs.open(
+                &path,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )?;
             let mut elapsed = Vec::new();
             for index in 0..144 {
                 let started = Instant::now();
@@ -38,7 +57,9 @@ fn main() -> io::Result<()> {
                 let milliseconds = started.elapsed().as_secs_f64() * 1000.0;
                 assert_eq!(bytes.len(), payload.len());
                 assert_eq!(blake3::hash(&bytes), expected);
-                if index >= 16 { elapsed.push(milliseconds); }
+                if index >= 16 {
+                    elapsed.push(milliseconds);
+                }
             }
             let med = median(&mut elapsed);
             pairs.push(serde_json::json!({
@@ -47,11 +68,14 @@ fn main() -> io::Result<()> {
             }));
         }
     }
-    println!("{}", serde_json::json!({
-        "contract": "tofu.loose-read-measure/v1", "payloadBytes": payload.len(),
-        "outputDigest": expected.to_hex().to_string(), "pairs": pairs,
-        "scope": "warm real VFS read with identical handle-length validation",
-        "excludes": ["block verification", "cold cache", "application RPC", "whole task latency"],
-    }));
+    println!(
+        "{}",
+        serde_json::json!({
+            "contract": "tofu.loose-read-measure/v1", "payloadBytes": payload.len(),
+            "outputDigest": expected.to_hex().to_string(), "pairs": pairs,
+            "scope": "warm real VFS read with identical handle-length validation",
+            "excludes": ["block verification", "cold cache", "application RPC", "whole task latency"],
+        })
+    );
     Ok(())
 }

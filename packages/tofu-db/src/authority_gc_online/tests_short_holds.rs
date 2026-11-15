@@ -11,7 +11,8 @@ use super::tests_fallback_slot::{durable_slots, key, recover_from_fallback};
 use super::*;
 use crate::entity::EntityKey;
 use crate::vfs::{
-    BoundedDirectoryEntries, BoundedDirectoryMatches, DeterministicVfs, DirectoryEntry, OpenRequest, VfsFile,
+    BoundedDirectoryEntries, BoundedDirectoryMatches, DeterministicVfs, DirectoryEntry,
+    OpenRequest, VfsFile,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -43,7 +44,9 @@ impl Drop for ResetHoldAttemptHook {
     }
 }
 
-pub(super) fn before_every_hold_attempt(hook: impl FnMut(Duration, Duration) + 'static) -> ResetHoldAttemptHook {
+pub(super) fn before_every_hold_attempt(
+    hook: impl FnMut(Duration, Duration) + 'static,
+) -> ResetHoldAttemptHook {
     BEFORE_SINGLE_FILE_HOLD.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     ResetHoldAttemptHook
 }
@@ -73,12 +76,19 @@ impl OnlineGcDatabase for CountedHolds {
 pub(super) enum Observed {
     /// A loose block file unlink. `hold` names the collector hold it ran in,
     /// `None` when the authority mutex was free.
-    Unlink { path: PathBuf, hold: Option<u64> },
-    ControlWrite { hold: Option<u64> },
+    Unlink {
+        path: PathBuf,
+        hold: Option<u64>,
+    },
+    ControlWrite {
+        hold: Option<u64>,
+    },
     HookStarted,
     HookFinished,
     /// The contention watch's probe (`try_lock`) through the hold seam.
-    Probe { busy: bool },
+    Probe {
+        busy: bool,
+    },
 }
 
 pub(super) type Hook = Box<dyn FnOnce() + Send>;
@@ -126,7 +136,10 @@ impl ObservedVfs {
 
     /// Observes an existing image, such as a crash image to reopen.
     pub(super) fn over(inner: Arc<DeterministicVfs>) -> Arc<Self> {
-        Arc::new(Self { inner, observer: Arc::default() })
+        Arc::new(Self {
+            inner,
+            observer: Arc::default(),
+        })
     }
 
     pub(super) fn arm_directory_sync(&self, path: PathBuf, hook: Hook) {
@@ -148,7 +161,10 @@ impl Vfs for ObservedVfs {
     fn open(&self, path: &Path, request: OpenRequest) -> io::Result<Box<dyn VfsFile>> {
         let file = self.inner.open(path, request)?;
         if path.ends_with("CONTROL") {
-            return Ok(Box::new(ObservedControlFile { inner: file, observer: Arc::clone(&self.observer) }));
+            return Ok(Box::new(ObservedControlFile {
+                inner: file,
+                observer: Arc::clone(&self.observer),
+            }));
         }
         Ok(file)
     }
@@ -160,7 +176,10 @@ impl Vfs for ObservedVfs {
     }
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         if is_loose_block(path) {
-            self.observer.note(Observed::Unlink { path: path.to_path_buf(), hold: self.observer.hold() });
+            self.observer.note(Observed::Unlink {
+                path: path.to_path_buf(),
+                hold: self.observer.hold(),
+            });
             let mut armed = self.observer.stop_after_unlinks.lock().unwrap();
             if let Some((remaining, stop)) = armed.as_mut() {
                 *remaining -= 1;
@@ -181,7 +200,11 @@ impl Vfs for ObservedVfs {
     fn read_directory_entries(&self, path: &Path) -> io::Result<Vec<DirectoryEntry>> {
         self.inner.read_directory_entries(path)
     }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
     fn match_directory_prefix_bounded(
@@ -191,12 +214,16 @@ impl Vfs for ObservedVfs {
         maximum: usize,
         matches: usize,
     ) -> io::Result<BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         let hook = {
             let mut armed = self.observer.on_directory_sync.lock().unwrap();
-            if armed.as_ref().is_some_and(|(armed_path, _)| armed_path == path) {
+            if armed
+                .as_ref()
+                .is_some_and(|(armed_path, _)| armed_path == path)
+            {
                 armed.take().map(|(_, hook)| hook)
             } else {
                 None
@@ -227,7 +254,9 @@ impl VfsFile for ObservedControlFile {
         self.inner.read_exact_at(offset, bytes)
     }
     fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
-        self.observer.note(Observed::ControlWrite { hold: self.observer.hold() });
+        self.observer.note(Observed::ControlWrite {
+            hold: self.observer.hold(),
+        });
         self.inner.write_all_at(offset, bytes)
     }
     fn set_len(&mut self, length: u64) -> io::Result<()> {
@@ -251,19 +280,27 @@ pub(super) fn observed_authority() -> (Arc<ObservedVfs>, Arc<Mutex<AuthorityData
 }
 
 /// Moves the populated fixture behind the hold-counting port.
-pub(super) fn count_holds(vfs: &ObservedVfs, database: Arc<Mutex<AuthorityDatabase>>) -> Arc<Mutex<CountedHolds>> {
+pub(super) fn count_holds(
+    vfs: &ObservedVfs,
+    database: Arc<Mutex<AuthorityDatabase>>,
+) -> Arc<Mutex<CountedHolds>> {
     let authority = Arc::try_unwrap(database)
         .ok()
         .expect("the fixture released every handle")
         .into_inner()
         .unwrap();
-    let counted = Arc::new(Mutex::new(CountedHolds { authority, holds: Arc::clone(&vfs.observer.holds) }));
+    let counted = Arc::new(Mutex::new(CountedHolds {
+        authority,
+        holds: Arc::clone(&vfs.observer.holds),
+    }));
     assert!(vfs.observer.authority.set(Arc::downgrade(&counted)).is_ok());
     counted
 }
 
 pub(super) fn epoch(collector: &mut OnlineGarbageCollector, database: &Arc<Mutex<CountedHolds>>) {
-    let outcome = collector.run_epoch(database, &AtomicBool::new(false)).unwrap();
+    let outcome = collector
+        .run_epoch(database, &AtomicBool::new(false))
+        .unwrap();
     assert_eq!(outcome, OnlineGarbageCollectionOutcome::EpochComplete);
 }
 
@@ -279,13 +316,18 @@ pub(super) fn shard_directory(block_id: BlockId) -> PathBuf {
 /// Garbage loose blocks, each in its own shard, sorted by shard: the scan
 /// confirms them in this order, so one shard's directory barrier separates
 /// every victim's hold from the next one's.
-fn garbage_in_distinct_shards(database: &Arc<Mutex<AuthorityDatabase>>, count: usize) -> Vec<BlockId> {
+fn garbage_in_distinct_shards(
+    database: &Arc<Mutex<AuthorityDatabase>>,
+    count: usize,
+) -> Vec<BlockId> {
     let database = database.lock().unwrap();
     let mut by_shard = BTreeMap::new();
     let mut index = 0_u32;
     while by_shard.len() < count {
         let payload = format!("short-hold-garbage-{index}").into_bytes();
-        by_shard.entry(BlockId::for_payload(&payload).0[0]).or_insert(payload);
+        by_shard
+            .entry(BlockId::for_payload(&payload).0[0])
+            .or_insert(payload);
         index += 1;
     }
     by_shard
@@ -300,7 +342,9 @@ pub(super) fn unlinks_per_hold(events: &[Observed]) -> (BTreeMap<u64, usize>, us
     let mut off_mutex = 0;
     for event in events {
         match event {
-            Observed::Unlink { hold: Some(hold), .. } => *per_hold.entry(*hold).or_insert(0) += 1,
+            Observed::Unlink {
+                hold: Some(hold), ..
+            } => *per_hold.entry(*hold).or_insert(0) += 1,
             Observed::Unlink { hold: None, .. } => off_mutex += 1,
             _ => {}
         }
@@ -337,9 +381,18 @@ fn every_compaction_copy_and_garbage_victim_is_unlinked_in_its_own_hold() {
     epoch(&mut collector, &database);
     let deleting = vfs.observer.take();
 
-    let copies: BTreeSet<PathBuf> = backlog.iter().map(|(block_id, _)| loose_path(*block_id)).collect();
-    assert_eq!(unlinked_paths(&packing), copies, "the packing epoch unlinks exactly the packed copies");
-    assert!(unlinked_paths(&deleting).is_superset(&garbage.iter().map(|id| loose_path(*id)).collect()));
+    let copies: BTreeSet<PathBuf> = backlog
+        .iter()
+        .map(|(block_id, _)| loose_path(*block_id))
+        .collect();
+    assert_eq!(
+        unlinked_paths(&packing),
+        copies,
+        "the packing epoch unlinks exactly the packed copies"
+    );
+    assert!(
+        unlinked_paths(&deleting).is_superset(&garbage.iter().map(|id| loose_path(*id)).collect())
+    );
     let (packing_holds, packing_off_mutex) = unlinks_per_hold(&packing);
     let (deleting_holds, deleting_off_mutex) = unlinks_per_hold(&deleting);
     let most = |holds: &BTreeMap<u64, usize>| holds.values().copied().max().unwrap_or(0);
@@ -360,10 +413,20 @@ fn every_compaction_copy_and_garbage_victim_is_unlinked_in_its_own_hold() {
     );
     let guard = database.lock().unwrap();
     for (block_id, payload) in &backlog {
-        assert_eq!(&guard.authority.read_block_for_test(*block_id).unwrap(), payload);
+        assert_eq!(
+            &guard.authority.read_block_for_test(*block_id).unwrap(),
+            payload
+        );
     }
     for block_id in &garbage {
-        assert_eq!(guard.authority.read_block_for_test(*block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            guard
+                .authority
+                .read_block_for_test(*block_id)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }
 
@@ -396,11 +459,19 @@ fn a_foreground_commit_completes_between_two_deletion_holds() {
                         .try_lock()
                         .map_err(|_| "the authority mutex is held".to_owned())?;
                     let authority = &mut guard.authority;
-                    let mut transaction = authority.begin(7, 11).map_err(|error| error.to_string())?;
+                    let mut transaction =
+                        authority.begin(7, 11).map_err(|error| error.to_string())?;
                     authority
-                        .entity_put(&mut transaction, foreground_key(), b"committed-between-holds".to_vec())
+                        .entity_put(
+                            &mut transaction,
+                            foreground_key(),
+                            b"committed-between-holds".to_vec(),
+                        )
                         .map_err(|error| error.to_string())?;
-                    authority.commit(transaction).map(|_| ()).map_err(|error| error.to_string())
+                    authority
+                        .commit(transaction)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
                 })
                 .join()
                 .unwrap();
@@ -410,26 +481,49 @@ fn a_foreground_commit_completes_between_two_deletion_holds() {
     }
     vfs.observer.take();
     epoch(&mut collector, &database);
-    let outcome = foreground.lock().unwrap().take().expect("the deletion reached the first victim's shard barrier");
-    assert_eq!(outcome, Ok(()), "the foreground commit acquires the authority between two deletion holds");
+    let outcome = foreground
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the deletion reached the first victim's shard barrier");
+    assert_eq!(
+        outcome,
+        Ok(()),
+        "the foreground commit acquires the authority between two deletion holds"
+    );
 
     let events = vfs.observer.take();
-    let hook = events.iter().position(|event| *event == Observed::HookStarted).unwrap();
+    let hook = events
+        .iter()
+        .position(|event| *event == Observed::HookStarted)
+        .unwrap();
     let victims_after: BTreeSet<PathBuf> = garbage[1..].iter().map(|id| loose_path(*id)).collect();
     assert!(unlinked_paths(&events[..hook]).contains(&loose_path(garbage[0])));
     assert_eq!(
-        unlinked_paths(&events[hook..]).intersection(&victims_after).count(),
+        unlinked_paths(&events[hook..])
+            .intersection(&victims_after)
+            .count(),
         victims_after.len(),
         "the deletion was in progress: every later victim goes after the commit"
     );
     let guard = database.lock().unwrap();
     let mut transaction = guard.authority.begin(7, 11).unwrap();
     assert_eq!(
-        guard.authority.entity_get(&mut transaction, &foreground_key()).unwrap(),
+        guard
+            .authority
+            .entity_get(&mut transaction, &foreground_key())
+            .unwrap(),
         Some(b"committed-between-holds".to_vec())
     );
     for block_id in &garbage {
-        assert_eq!(guard.authority.read_block_for_test(*block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            guard
+                .authority
+                .read_block_for_test(*block_id)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }
 
@@ -440,7 +534,9 @@ fn unpruned_history_authority(vfs: Arc<dyn Vfs>) -> AuthorityDatabase {
     let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs).unwrap();
     database.set_write_overlay_for_test(false);
     let mut transaction = database.begin(7, 11).unwrap();
-    database.entity_put(&mut transaction, key(), b"value-v3".to_vec()).unwrap();
+    database
+        .entity_put(&mut transaction, key(), b"value-v3".to_vec())
+        .unwrap();
     database.commit(transaction).unwrap();
     database.checkpoint_for_test().unwrap();
     for round in 0..3 {
@@ -479,7 +575,11 @@ fn a_control_publication_between_two_victims_is_revalidated_by_the_next_hold() {
                     .try_lock()
                     .map_err(|_| "the authority mutex is held".to_owned())
                     .and_then(|mut guard| {
-                        guard.authority.compact_history(1).map(|_| ()).map_err(|error| error.to_string())
+                        guard
+                            .authority
+                            .compact_history(1)
+                            .map(|_| ())
+                            .map_err(|error| error.to_string())
                     });
                 *published.lock().unwrap() = Some(outcome);
             }),
@@ -487,28 +587,49 @@ fn a_control_publication_between_two_victims_is_revalidated_by_the_next_hold() {
     }
     vfs.observer.take();
     epoch(&mut collector, &database);
-    let outcome = published.lock().unwrap().take().expect("the deletion reached the first victim's shard barrier");
-    assert_eq!(outcome, Ok(()), "history pruning publishes between two deletion holds");
+    let outcome = published
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the deletion reached the first victim's shard barrier");
+    assert_eq!(
+        outcome,
+        Ok(()),
+        "history pruning publishes between two deletion holds"
+    );
 
     let events = vfs.observer.take();
-    let started = events.iter().position(|event| *event == Observed::HookStarted).unwrap();
-    let finished = events.iter().position(|event| *event == Observed::HookFinished).unwrap();
+    let started = events
+        .iter()
+        .position(|event| *event == Observed::HookStarted)
+        .unwrap();
+    let finished = events
+        .iter()
+        .position(|event| *event == Observed::HookFinished)
+        .unwrap();
     assert!(
-        events[started..finished].iter().any(|event| matches!(event, Observed::ControlWrite { .. })),
+        events[started..finished]
+            .iter()
+            .any(|event| matches!(event, Observed::ControlWrite { .. })),
         "fixture: pruning publishes CONTROL"
     );
     let (next_unlink, next_hold) = events[finished..]
         .iter()
         .enumerate()
         .find_map(|(offset, event)| match event {
-            Observed::Unlink { hold: Some(hold), .. } => Some((finished + offset, *hold)),
+            Observed::Unlink {
+                hold: Some(hold), ..
+            } => Some((finished + offset, *hold)),
             _ => None,
         })
         .expect("victims remain after the publication");
     assert_eq!(
         events[finished..next_unlink]
             .iter()
-            .filter(|event| **event == Observed::ControlWrite { hold: Some(next_hold) })
+            .filter(|event| **event
+                == Observed::ControlWrite {
+                    hold: Some(next_hold)
+                })
             .count(),
         1,
         "the next victim's hold republishes CONTROL once, before its unlink: {:?}",
@@ -522,15 +643,30 @@ fn a_control_publication_between_two_victims_is_revalidated_by_the_next_hold() {
         .unwrap()
         .state()
         .history_manifest_block_id;
-    assert!(durable_slots(&vfs.inner).iter().all(|state| state.history_manifest_block_id == current));
-    assert_eq!(recover_from_fallback(&vfs.inner).unwrap(), (current, b"value-v3".to_vec()));
+    assert!(durable_slots(&vfs.inner)
+        .iter()
+        .all(|state| state.history_manifest_block_id == current));
+    assert_eq!(
+        recover_from_fallback(&vfs.inner).unwrap(),
+        (current, b"value-v3".to_vec())
+    );
     let guard = database.lock().unwrap();
     for block_id in &garbage {
-        assert_eq!(guard.authority.read_block_for_test(*block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            guard
+                .authority
+                .read_block_for_test(*block_id)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }
 
-pub(super) fn backlog_still_loose(database: &Arc<Mutex<CountedHolds>>, backlog: &[(BlockId, Vec<u8>)]) -> usize {
+pub(super) fn backlog_still_loose(
+    database: &Arc<Mutex<CountedHolds>>,
+    backlog: &[(BlockId, Vec<u8>)],
+) -> usize {
     let loose: BTreeSet<BlockId> = database
         .lock()
         .unwrap()
@@ -540,11 +676,20 @@ pub(super) fn backlog_still_loose(database: &Arc<Mutex<CountedHolds>>, backlog: 
         .unwrap()
         .into_iter()
         .collect();
-    backlog.iter().filter(|(block_id, _)| loose.contains(block_id)).count()
+    backlog
+        .iter()
+        .filter(|(block_id, _)| loose.contains(block_id))
+        .count()
 }
 
 fn foreground_value_key(index: u32) -> EntityKey {
-    EntityKey::new(7, 11, "record", format!("short-hold-foreground-{index}").as_bytes()).unwrap()
+    EntityKey::new(
+        7,
+        11,
+        "record",
+        format!("short-hold-foreground-{index}").as_bytes(),
+    )
+    .unwrap()
 }
 
 /// A contended authority makes a deletion hold wait instead of ending the
@@ -560,7 +705,8 @@ fn contended_deletion_holds_wait_for_each_foreground_commit_and_every_file_goes(
     let database = count_holds(&vfs, database);
     let mut collector = OnlineGarbageCollector::new(backlog_budget());
     let commits = Rc::new(Cell::new(0_u32));
-    let committers: Rc<RefCell<Vec<std::thread::JoinHandle<Result<(), String>>>>> = Rc::default();
+    type Committer = std::thread::JoinHandle<Result<(), String>>;
+    let committers: Rc<RefCell<Vec<Committer>>> = Rc::default();
     let reset = {
         let database = Arc::downgrade(&database);
         let commits = Rc::clone(&commits);
@@ -570,16 +716,28 @@ fn contended_deletion_holds_wait_for_each_foreground_commit_and_every_file_goes(
             let index = commits.get();
             commits.set(index + 1);
             let (locked, entered) = mpsc::channel();
-            committers.borrow_mut().push(std::thread::spawn(move || -> Result<(), String> {
-                let mut guard = database.lock().map_err(|_| "the authority mutex is poisoned".to_owned())?;
-                locked.send(()).unwrap();
-                let authority = &mut guard.authority;
-                let mut transaction = authority.begin(7, 11).map_err(|error| error.to_string())?;
-                authority
-                    .entity_put(&mut transaction, foreground_value_key(index), index.to_le_bytes().to_vec())
-                    .map_err(|error| error.to_string())?;
-                authority.commit(transaction).map(|_| ()).map_err(|error| error.to_string())
-            }));
+            committers
+                .borrow_mut()
+                .push(std::thread::spawn(move || -> Result<(), String> {
+                    let mut guard = database
+                        .lock()
+                        .map_err(|_| "the authority mutex is poisoned".to_owned())?;
+                    locked.send(()).unwrap();
+                    let authority = &mut guard.authority;
+                    let mut transaction =
+                        authority.begin(7, 11).map_err(|error| error.to_string())?;
+                    authority
+                        .entity_put(
+                            &mut transaction,
+                            foreground_value_key(index),
+                            index.to_le_bytes().to_vec(),
+                        )
+                        .map_err(|error| error.to_string())?;
+                    authority
+                        .commit(transaction)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                }));
             entered.recv().unwrap();
         })
     };
@@ -593,9 +751,20 @@ fn contended_deletion_holds_wait_for_each_foreground_commit_and_every_file_goes(
         committer.join().unwrap().unwrap();
     }
 
-    let most = |events: &[Observed]| unlinks_per_hold(events).0.values().copied().max().unwrap_or(0);
+    let most = |events: &[Observed]| {
+        unlinks_per_hold(events)
+            .0
+            .values()
+            .copied()
+            .max()
+            .unwrap_or(0)
+    };
     assert_eq!((most(&packing), most(&deleting)), (1, 1));
-    assert_eq!(backlog_still_loose(&database, &backlog), 0, "every compaction copy goes in its epoch");
+    assert_eq!(
+        backlog_still_loose(&database, &backlog),
+        0,
+        "every compaction copy goes in its epoch"
+    );
     assert!(
         commits.get() as usize >= backlog.len() + garbage.len(),
         "one foreground commit took the authority before every hold: {}",
@@ -603,12 +772,22 @@ fn contended_deletion_holds_wait_for_each_foreground_commit_and_every_file_goes(
     );
     let guard = database.lock().unwrap();
     for block_id in &garbage {
-        assert_eq!(guard.authority.read_block_for_test(*block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            guard
+                .authority
+                .read_block_for_test(*block_id)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
     let mut transaction = guard.authority.begin(7, 11).unwrap();
     for index in 0..commits.get() {
         assert_eq!(
-            guard.authority.entity_get(&mut transaction, &foreground_value_key(index)).unwrap(),
+            guard
+                .authority
+                .entity_get(&mut transaction, &foreground_value_key(index))
+                .unwrap(),
             Some(index.to_le_bytes().to_vec())
         );
     }
@@ -660,12 +839,27 @@ fn deletion_holds_wait_for_an_authority_held_at_every_attempt_instead_of_backing
         holder.join().unwrap();
     }
 
-    assert_eq!(attempts.get(), VICTIMS, "one attempt per victim: each waited for its holder, none was retried");
+    assert_eq!(
+        attempts.get(),
+        VICTIMS,
+        "one attempt per victim: each waited for its holder, none was retried"
+    );
     let (per_hold, off_mutex) = unlinks_per_hold(&vfs.observer.take());
-    assert_eq!((per_hold.len(), off_mutex), (VICTIMS, 0), "(holds that unlinked a victim, unlinks off the mutex)");
+    assert_eq!(
+        (per_hold.len(), off_mutex),
+        (VICTIMS, 0),
+        "(holds that unlinked a victim, unlinks off the mutex)"
+    );
     let guard = database.lock().unwrap();
     for block_id in &garbage {
-        assert_eq!(guard.authority.read_block_for_test(*block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            guard
+                .authority
+                .read_block_for_test(*block_id)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }
 
@@ -686,12 +880,26 @@ fn stop_between_deletion_holds_records_exactly_the_unlinked_victims() {
     vfs.observer.take();
     let error = collector.run_epoch(&database, &stop).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.to_string().contains("online GC epoch stopped"), "{error}");
+    assert!(
+        error.to_string().contains("online GC epoch stopped"),
+        "{error}"
+    );
     let unlinked = unlinked_paths(&vfs.observer.take());
-    assert_eq!(unlinked.len(), 3, "the run stops before the fourth victim's hold");
-    let recorded: BTreeSet<PathBuf> =
-        collector.previous.unlinked_loose.iter().map(|block_id| loose_path(*block_id)).collect();
-    assert_eq!(recorded, unlinked, "rule S10 records exactly the unlinked victims");
+    assert_eq!(
+        unlinked.len(),
+        3,
+        "the run stops before the fourth victim's hold"
+    );
+    let recorded: BTreeSet<PathBuf> = collector
+        .previous
+        .unlinked_loose
+        .iter()
+        .map(|block_id| loose_path(*block_id))
+        .collect();
+    assert_eq!(
+        recorded, unlinked,
+        "rule S10 records exactly the unlinked victims"
+    );
     {
         let guard = database.lock().unwrap();
         for block_id in &garbage {
@@ -705,7 +913,14 @@ fn stop_between_deletion_holds_records_exactly_the_unlinked_victims() {
     epoch(&mut collector, &database);
     let guard = database.lock().unwrap();
     for block_id in &garbage {
-        assert_eq!(guard.authority.read_block_for_test(*block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            guard
+                .authority
+                .read_block_for_test(*block_id)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
     }
 }
 
@@ -721,7 +936,10 @@ fn assert_retries_back_off(attempts: &[(Instant, Duration)], retried: usize) {
     for index in 2..=retried {
         let off_mutex = attempts[index].1;
         let retrying = attempts[index - 1].0.saturating_duration_since(first_retry);
-        assert!(off_mutex >= retrying, "retry {index} waited {off_mutex:?} after {retrying:?} of retries");
+        assert!(
+            off_mutex >= retrying,
+            "retry {index} waited {off_mutex:?} after {retrying:?} of retries"
+        );
     }
 }
 
@@ -740,7 +958,9 @@ fn refused_deletion_holds_back_off_geometrically() {
     let attempts: Rc<RefCell<Vec<(Instant, Duration)>>> = Rc::default();
     let reset = {
         let attempts = Rc::clone(&attempts);
-        before_every_hold_attempt(move |_, off_mutex| attempts.borrow_mut().push((Instant::now(), off_mutex)))
+        before_every_hold_attempt(move |_, off_mutex| {
+            attempts.borrow_mut().push((Instant::now(), off_mutex))
+        })
     };
     let stop = AtomicBool::new(false);
     let mut holds = SingleFileHolds::new(&blocks, Duration::ZERO, &stop);
@@ -804,9 +1024,19 @@ fn a_stop_raised_while_a_hold_waits_for_the_mutex_ends_the_run_before_it_acts() 
     holder.take().unwrap().join().unwrap();
 
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.to_string().contains("online GC epoch stopped"), "{error}");
-    assert_eq!(unlinked_paths(&vfs.observer.take()), BTreeSet::new(), "no file goes after the stop");
-    assert!(collector.previous.unlinked_loose.is_empty(), "rule S10 records no unlink");
+    assert!(
+        error.to_string().contains("online GC epoch stopped"),
+        "{error}"
+    );
+    assert_eq!(
+        unlinked_paths(&vfs.observer.take()),
+        BTreeSet::new(),
+        "no file goes after the stop"
+    );
+    assert!(
+        collector.previous.unlinked_loose.is_empty(),
+        "rule S10 records no unlink"
+    );
     let guard = database.lock().unwrap();
     for block_id in &garbage {
         assert!(guard.authority.read_block_for_test(*block_id).is_ok());
@@ -833,7 +1063,10 @@ fn a_stop_wakes_a_run_paused_by_its_backoff() {
             pausing.send(()).unwrap();
             let started = Instant::now();
             let outcome = holds.attempt(&database, |_| Ok(()));
-            (outcome.map_err(|error| error.to_string()), started.elapsed())
+            (
+                outcome.map_err(|error| error.to_string()),
+                started.elapsed(),
+            )
         })
     };
     paused.recv().unwrap();
@@ -842,7 +1075,10 @@ fn a_stop_wakes_a_run_paused_by_its_backoff() {
     let (outcome, waited) = run.join().unwrap();
 
     assert!(outcome.unwrap_err().contains("online GC epoch stopped"));
-    assert!(waited < Duration::from_secs(60), "the stop woke the run only after {waited:?}");
+    assert!(
+        waited < Duration::from_secs(60),
+        "the stop woke the run only after {waited:?}"
+    );
 }
 
 /// The contention watch reports a wedge only after 10 s of probes that find
@@ -877,8 +1113,14 @@ fn an_idle_authority_is_free_between_every_two_deletion_holds() {
     drop(reset);
     let events = vfs.observer.take();
 
-    let unlinks = events.iter().filter(|event| matches!(event, Observed::Unlink { .. })).count();
-    assert!(unlinks >= backlog.len() + garbage.len(), "{unlinks} unlinks");
+    let unlinks = events
+        .iter()
+        .filter(|event| matches!(event, Observed::Unlink { .. }))
+        .count();
+    assert!(
+        unlinks >= backlog.len() + garbage.len(),
+        "{unlinks} unlinks"
+    );
     let (mut window, mut longest) = (0, 0);
     for event in &events {
         match event {
@@ -890,11 +1132,16 @@ fn an_idle_authority_is_free_between_every_two_deletion_holds() {
             _ => {}
         }
     }
-    assert_eq!(longest, 1, "most consecutive observations that found the authority held");
+    assert_eq!(
+        longest, 1,
+        "most consecutive observations that found the authority held"
+    );
     let waits = waits.borrow();
     assert!(waits.len() >= unlinks);
     assert!(
-        waits.iter().all(|(previous_hold, off_mutex)| off_mutex >= previous_hold),
+        waits
+            .iter()
+            .all(|(previous_hold, off_mutex)| off_mutex >= previous_hold),
         "every attempt waits off the mutex at least as long as the previous hold"
     );
 }

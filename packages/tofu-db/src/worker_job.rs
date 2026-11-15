@@ -685,21 +685,28 @@ fn lease_candidates(
     ] {
         let mut cursor = start;
         while let Some((key, entry)) = first_lease_range(db, tx, kind, cursor, finish.clone())? {
-            if epoch_matches(db, &entry.lease_authority_epoch) && entry.lease_deadline_ms <= now_ms {
+            if epoch_matches(db, &entry.lease_authority_epoch) && entry.lease_deadline_ms <= now_ms
+            {
                 let job = read_job(db, tx, &entry.task_id)?
                     .ok_or_else(|| invalid_data("worker lease target is missing"))?;
                 if job.status != "running" || lease_key(tx, &job)? != key {
                     return Err(invalid_data("worker lease target differs"));
                 }
                 if process_claim_protected(&job.claim_owner) {
-                    let delay = job.lease_deadline_ms.checked_sub(job.heartbeat_at_ms)
+                    let delay = job
+                        .lease_deadline_ms
+                        .checked_sub(job.heartbeat_at_ms)
                         .filter(|delay| *delay > 0)
                         .ok_or_else(|| invalid_data("invalid process liveness interval"))?;
                     recheck = Some(recheck.map_or(delay, |old| old.min(delay)));
                     let mut next = key.key_bytes().to_vec();
                     next.push(0);
-                    cursor = EntityKey::new(tx.tenant_id(), TENANT_GLOBAL_OWNER_ID,
-                        WORKER_JOB_LEASE_INDEX_NAMESPACE, &next)?;
+                    cursor = EntityKey::new(
+                        tx.tenant_id(),
+                        TENANT_GLOBAL_OWNER_ID,
+                        WORKER_JOB_LEASE_INDEX_NAMESPACE,
+                        &next,
+                    )?;
                     continue;
                 }
             }
@@ -714,30 +721,51 @@ fn lease_candidates(
 /// or unavailable evidence never permits timeout takeover; epoch/token still
 /// fence every mutation. The shared journal owner supplies kernel death proof.
 fn process_claim_protected(owner: &str) -> bool {
-    let Some(raw) = owner.strip_prefix(crate::generated_tofudb_ir::WORKER_PROCESS_OWNER_PREFIX) else {
+    let Some(raw) = owner.strip_prefix(crate::generated_tofudb_ir::WORKER_PROCESS_OWNER_PREFIX)
+    else {
         return false;
     };
     let fields: Vec<_> = raw.split(':').collect();
     if fields.len() != 5 || owner.len() > 256 {
         return false;
     }
-    let Ok(boot) = uuid::Uuid::parse_str(fields[0]) else { return false; };
-    if boot.hyphenated().to_string() != fields[0]
-        || fields[4].len() != 32 || !fields[4].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
-        return false;
-    }
-    let number = |field: &str| field.parse::<u64>().ok()
-        .filter(|n| *n > 0 && n.to_string() == field);
-    let (Some(namespace), Some(pid), Some(start)) = (number(fields[1]), number(fields[2]), number(fields[3])) else {
+    let Ok(boot) = uuid::Uuid::parse_str(fields[0]) else {
         return false;
     };
-    if pid > i32::MAX as u64 { return false; }
+    if boot.hyphenated().to_string() != fields[0]
+        || fields[4].len() != 32
+        || !fields[4]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return false;
+    }
+    let number = |field: &str| {
+        field
+            .parse::<u64>()
+            .ok()
+            .filter(|n| *n > 0 && n.to_string() == field)
+    };
+    let (Some(namespace), Some(pid), Some(start)) =
+        (number(fields[1]), number(fields[2]), number(fields[3]))
+    else {
+        return false;
+    };
+    if pid > i32::MAX as u64 {
+        return false;
+    }
     #[cfg(feature = "native-runtime-checkpoints")]
-    { !tofu_runtime::checkpoint_writer::quiescent(&json!({
-        "boot_id": fields[0], "pid_namespace": namespace, "pid": pid, "start_ticks": start,
-    })).unwrap_or(false) }
+    {
+        !tofu_runtime::checkpoint_writer::quiescent(&json!({
+            "boot_id": fields[0], "pid_namespace": namespace, "pid": pid, "start_ticks": start,
+        }))
+        .unwrap_or(false)
+    }
     #[cfg(not(feature = "native-runtime-checkpoints"))]
-    { let _ = (namespace, start); true }
+    {
+        let _ = (namespace, start);
+        true
+    }
 }
 fn epoch_matches(db: &AuthorityDatabase, epoch: &str) -> bool {
     uuid::Uuid::parse_str(epoch).is_ok_and(|value| value == db.event_read_epoch())
@@ -773,8 +801,17 @@ fn lease_claimable_first(
         u64::MAX
     };
     let waited_for = utc_now_ms.saturating_sub(waiting.available_at_ms);
-    (Reverse(leased_for), lease.priority, lease.created_at_ms, lease.task_id.as_str())
-        <= (Reverse(waited_for), waiting.priority, waiting.created_at_ms, waiting.task_id.as_str())
+    (
+        Reverse(leased_for),
+        lease.priority,
+        lease.created_at_ms,
+        lease.task_id.as_str(),
+    ) <= (
+        Reverse(waited_for),
+        waiting.priority,
+        waiting.created_at_ms,
+        waiting.task_id.as_str(),
+    )
 }
 /// Claim the job that became claimable first: the earliest reclaimable lease
 /// (`lease_candidates` skips live protected holders) or the queued head
@@ -823,8 +860,7 @@ pub(crate) fn claim_next(
         else {
             return Err(invalid_data("worker job queue summary target is missing"));
         };
-        if entry.available_at_ms != summary[priority] || entry.available_at_ms > clock.utc_now_ms
-        {
+        if entry.available_at_ms != summary[priority] || entry.available_at_ms > clock.utc_now_ms {
             return Err(invalid_data(
                 "worker job queue summary differs from its index",
             ));
@@ -854,7 +890,11 @@ pub(crate) fn claim_next(
         }
         (lease, _) => lease.is_some(),
     };
-    let Some(selected) = (if takeover { expired.as_ref() } else { queued.as_ref() }) else {
+    let Some(selected) = (if takeover {
+        expired.as_ref()
+    } else {
+        queued.as_ref()
+    }) else {
         return Ok(None);
     };
     let mut job = read_job(database, transaction, &selected.task_id)?
@@ -917,8 +957,11 @@ pub(crate) fn claim_horizon(
     let mut observe =
         |delay: u64| horizon = Some(horizon.map_or(delay, |current| current.min(delay)));
     for task_kind in task_kinds {
-        let (entries, recheck) = lease_candidates(database, transaction, task_kind, clock.lease_now_ms)?;
-        if let Some(delay) = recheck { observe(delay); }
+        let (entries, recheck) =
+            lease_candidates(database, transaction, task_kind, clock.lease_now_ms)?;
+        if let Some(delay) = recheck {
+            observe(delay);
+        }
         for entry in entries {
             observe(if epoch_matches(database, &entry.lease_authority_epoch) {
                 entry.lease_deadline_ms.saturating_sub(clock.lease_now_ms)
@@ -948,30 +991,53 @@ pub(crate) fn active_list(
     let mut jobs = Vec::new();
     for kind in task_kinds {
         let prefix = task_kind_prefix(kind)?;
-        for namespace in [WORKER_JOB_QUEUED_INDEX_NAMESPACE, WORKER_JOB_LEASE_INDEX_NAMESPACE] {
+        for namespace in [
+            WORKER_JOB_QUEUED_INDEX_NAMESPACE,
+            WORKER_JOB_LEASE_INDEX_NAMESPACE,
+        ] {
             let (mut cursor, end) = namespace_range(transaction, namespace, &prefix)?;
             loop {
-                let page = database.entity_scan(transaction, &cursor, &end,
-                    crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS)?;
-                let Some((last, _)) = page.last() else { break; };
+                let page = database.entity_scan(
+                    transaction,
+                    &cursor,
+                    &end,
+                    crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS,
+                )?;
+                let Some((last, _)) = page.last() else {
+                    break;
+                };
                 let mut next = last.key_bytes().to_vec();
                 next.push(0);
-                cursor = EntityKey::new(transaction.tenant_id(), TENANT_GLOBAL_OWNER_ID,
-                    namespace, &next)?;
+                cursor = EntityKey::new(
+                    transaction.tenant_id(),
+                    TENANT_GLOBAL_OWNER_ID,
+                    namespace,
+                    &next,
+                )?;
                 for (key, raw) in page {
                     let entry: IndexEntry = serde_json::from_slice(&raw)
                         .map_err(|_| invalid_data("worker activity index is malformed"))?;
                     let job = read_job(database, transaction, &entry.task_id)?
                         .ok_or_else(|| invalid_data("worker activity target is missing"))?;
                     let expected = match job.status.as_str() {
-                        "queued" | "suspended" if namespace == WORKER_JOB_QUEUED_INDEX_NAMESPACE =>
-                            queued_key(transaction, &job)?,
-                        "running" if namespace == WORKER_JOB_LEASE_INDEX_NAMESPACE =>
-                            lease_key(transaction, &job)?,
-                        _ => return Err(invalid_data("worker activity state differs from its index")),
+                        "queued" | "suspended"
+                            if namespace == WORKER_JOB_QUEUED_INDEX_NAMESPACE =>
+                        {
+                            queued_key(transaction, &job)?
+                        }
+                        "running" if namespace == WORKER_JOB_LEASE_INDEX_NAMESPACE => {
+                            lease_key(transaction, &job)?
+                        }
+                        _ => {
+                            return Err(invalid_data(
+                                "worker activity state differs from its index",
+                            ))
+                        }
                     };
                     if job.task_kind != *kind || entry.task_kind != *kind || expected != key {
-                        return Err(invalid_data("worker activity identity differs from its index"));
+                        return Err(invalid_data(
+                            "worker activity identity differs from its index",
+                        ));
                     }
                     if owner.is_none_or(|owner| owner == job.user_id) {
                         jobs.push(job);
@@ -980,8 +1046,9 @@ pub(crate) fn active_list(
             }
         }
     }
-    jobs.sort_by(|left, right| (left.created_at_ms, &left.task_id).cmp(
-        &(right.created_at_ms, &right.task_id)));
+    jobs.sort_by(|left, right| {
+        (left.created_at_ms, &left.task_id).cmp(&(right.created_at_ms, &right.task_id))
+    });
     encoded_json_bytes(&Value::Array(jobs.into_iter().map(|job| json!({
         "taskId": job.task_id, "userId": job.user_id, "taskKind": job.task_kind,
         "conversationId": job.payload.get("conversationId").and_then(Value::as_str).unwrap_or(""),
@@ -1014,7 +1081,9 @@ pub struct PublicationClaim {
 impl PublicationClaim {
     pub(crate) fn validate(&self) -> io::Result<()> {
         if !text_within(&self.worker_id, 256, false)
-            || self.fencing_token == 0 || self.fencing_token > i64::MAX as u64 {
+            || self.fencing_token == 0
+            || self.fencing_token > i64::MAX as u64
+        {
             return Err(invalid_input("invalid worker publication claim"));
         }
         Ok(())
@@ -1034,19 +1103,34 @@ impl PublicationClaim {
 }
 
 /// Private immutable process identity carried only by the actual worker entry.
-pub(crate) fn execution_witness(process: &Value, claim: Option<&PublicationClaim>) -> io::Result<Value> {
-    use crate::generated_tofudb_ir::{WORKER_EXECUTION_PROCESS_FIELDS, WORKER_EXECUTION_WITNESS_FORMAT};
+pub(crate) fn execution_witness(
+    process: &Value,
+    claim: Option<&PublicationClaim>,
+) -> io::Result<Value> {
+    use crate::generated_tofudb_ir::{
+        WORKER_EXECUTION_PROCESS_FIELDS, WORKER_EXECUTION_WITNESS_FORMAT,
+    };
     let claim = claim.ok_or_else(|| invalid_input("worker entry requires its exact claim"))?;
     claim.validate()?;
     if !process.is_null() {
-        let fields = process.as_object().ok_or_else(|| invalid_input("invalid worker process identity"))?;
+        let fields = process
+            .as_object()
+            .ok_or_else(|| invalid_input("invalid worker process identity"))?;
         if fields.len() != WORKER_EXECUTION_PROCESS_FIELDS.len()
-            || WORKER_EXECUTION_PROCESS_FIELDS.iter().any(|key| !fields.contains_key(*key))
+            || WORKER_EXECUTION_PROCESS_FIELDS
+                .iter()
+                .any(|key| !fields.contains_key(*key))
             || !fields["pid"].as_u64().is_some_and(|pid| pid > 0)
-            || WORKER_EXECUTION_PROCESS_FIELDS.iter().filter(|key| **key != "pid")
+            || WORKER_EXECUTION_PROCESS_FIELDS
+                .iter()
+                .filter(|key| **key != "pid")
                 .any(|key| !fields[*key].as_str().is_some_and(|text| !text.is_empty()))
-            || ["started", "pid_namespace"].iter().any(|key|
-                !fields[*key].as_str().is_some_and(|text| text.bytes().all(|byte| byte.is_ascii_digit()))) {
+            || ["started", "pid_namespace"].iter().any(|key| {
+                !fields[*key]
+                    .as_str()
+                    .is_some_and(|text| text.bytes().all(|byte| byte.is_ascii_digit()))
+            })
+        {
             return Err(invalid_input("invalid worker process identity"));
         }
     }
@@ -1057,26 +1141,37 @@ pub(crate) fn execution_witness(process: &Value, claim: Option<&PublicationClaim
 
 /// Initial tool entry is admission; subsequent evidence may drain cancellation.
 pub(crate) fn starts_tool_effect(event_type: &str, payload: &[u8]) -> io::Result<bool> {
-    if event_type != "tool_effect" { return Ok(false); }
+    if event_type != "tool_effect" {
+        return Ok(false);
+    }
     let event: Value = serde_json::from_slice(payload)
         .map_err(|_| invalid_input("tool effect event is not JSON"))?;
     let effect = &event["executionEffect"];
-    Ok(effect.get("state").and_then(Value::as_str) == Some("entered")
-        && effect.get("reconciliation").is_none_or(Value::is_null))
+    Ok(
+        effect.get("state").and_then(Value::as_str) == Some("entered")
+            && effect.get("reconciliation").is_none_or(Value::is_null),
+    )
 }
 
 /// Read the bound job inside the publishing transaction so its version joins
 /// OCC validation. A heartbeat/claim read in another transaction is not a fence.
 pub(crate) fn require_conversation_publication_claim(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-    attempt_id: &str, task_id: &str, proof: Option<&PublicationClaim>, terminal: bool,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    attempt_id: &str,
+    task_id: &str,
+    proof: Option<&PublicationClaim>,
+    terminal: bool,
     drain_entered: bool,
 ) -> io::Result<()> {
     // The SQL authority sends the same literal reasons (_worker_jobs.py).
     use crate::semantic_executor::conflict_fence;
     if task_id != format!("conversation-attempt:{attempt_id}") {
-        return if proof.is_none() { Ok(()) }
-            else { Err(conflict_fence("Attempt has no durable worker binding")) };
+        return if proof.is_none() {
+            Ok(())
+        } else {
+            Err(conflict_fence("Attempt has no durable worker binding"))
+        };
     }
     let proof = proof.ok_or_else(|| conflict_fence("Durable attempt requires a worker claim"))?;
     proof.validate()?;
@@ -1085,10 +1180,18 @@ pub(crate) fn require_conversation_publication_claim(
     if job.user_id != transaction.owner_user_id()
         || job.task_kind != "conversation-attempt"
         || job.payload.get("attemptId").and_then(Value::as_str) != Some(attempt_id)
-        || !live_claim_matches(database, &job, &proof.worker_id, proof.fencing_token,
-                               database.worker_lease_now_ms()?)
-        || (!terminal && job.cancel_requested_at_ms > 0
-            && !(drain_entered && crate::turn::attempt_has_entered(database, transaction, attempt_id)?)) {
+        || !live_claim_matches(
+            database,
+            &job,
+            &proof.worker_id,
+            proof.fencing_token,
+            database.worker_lease_now_ms()?,
+        )
+        || (!terminal
+            && job.cancel_requested_at_ms > 0
+            && !(drain_entered
+                && crate::turn::attempt_has_entered(database, transaction, attempt_id)?))
+    {
         return Err(conflict_fence("Worker claim cannot publish this attempt"));
     }
     Ok(())
@@ -1202,7 +1305,7 @@ pub(crate) fn claim_state(
     task_id: &str,
     worker_id: &str,
     fence: u64,
-    now_ms: u64,
+    _now_ms: u64,
 ) -> io::Result<Vec<u8>> {
     let Some(job) = read_job(database, transaction, task_id)? else {
         return Ok(br#"{"ok":false,"error":"stale_fence"}"#.to_vec());
@@ -1339,23 +1442,39 @@ pub(crate) fn request_cancel(
 /// Domain-owned wakeup. Availability and its observation advance together;
 /// a still-running worker cannot overwrite this wake with an older deferral.
 pub(crate) fn wake_owned(
-    db: &AuthorityDatabase, tx: &mut AuthorityTransaction, task_id: &str,
-    owner: u64, tenant: &str, now_ms: u64,
+    db: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    task_id: &str,
+    owner: u64,
+    tenant: &str,
+    now_ms: u64,
 ) -> io::Result<Option<Vec<u8>>> {
-    let Some(mut job) = read_job(db, tx, task_id)? else { return Ok(None); };
-    if job.user_id != owner || job.tenant_id != tenant
-        || matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled") {
+    let Some(mut job) = read_job(db, tx, task_id)? else {
+        return Ok(None);
+    };
+    if job.user_id != owner
+        || job.tenant_id != tenant
+        || matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled")
+    {
         return Ok(None);
     }
     let indexed = matches!(job.status.as_str(), "queued" | "suspended");
-    if indexed { remove_queued_index(db, tx, &job)?; }
-    job.wake_sequence = job.wake_sequence.checked_add(1)
+    if indexed {
+        remove_queued_index(db, tx, &job)?;
+    }
+    job.wake_sequence = job
+        .wake_sequence
+        .checked_add(1)
         .filter(|v| *v <= MAX_WORKER_JOB_CLOCK_MILLISECONDS)
         .ok_or_else(|| invalid_data("worker wake sequence overflows"))?;
-    job.available_at_ms = job.available_at_ms.min(db.worker_clock_snapshot()?.utc_now_ms);
+    job.available_at_ms = job
+        .available_at_ms
+        .min(db.worker_clock_snapshot()?.utc_now_ms);
     job.updated_at_ms = now_ms;
     put_job(db, tx, &job)?;
-    if indexed { put_queued_index(db, tx, &job)?; }
+    if indexed {
+        put_queued_index(db, tx, &job)?;
+    }
     encoded_json_bytes(&job.response()).map(Some)
 }
 
@@ -1398,6 +1517,56 @@ pub(crate) fn complete(
     job.terminal_at_ms = request.now_ms;
     put_job(database, transaction, &job)?;
     encoded_json_bytes(&json!({"ok": true, "job": job.response()}))
+}
+
+/// Only event settlement may update its cursor or retire this pure transport.
+/// The domain proves the live fence, immutable source and bounded transition.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn settle_automation_event(
+    db: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    task_id: &str,
+    user_id: u64,
+    tenant: &str,
+    expected: &Value,
+    next: Option<&Value>,
+    now_ms: u64,
+) -> io::Result<()> {
+    let mut job =
+        read_job(db, tx, task_id)?.ok_or_else(|| invalid_data("event transport is missing"))?;
+    if job.user_id != user_id
+        || job.tenant_id != tenant
+        || job.task_kind != "automation-event"
+        || job.idempotency_key != task_id
+        || job.status != "running"
+        || &job.payload != expected
+    {
+        return Err(invalid_data("event transport changed"));
+    }
+    if let Some(payload) = next {
+        job.payload = payload.clone();
+        job.updated_at_ms = now_ms;
+        return put_job(db, tx, &job);
+    }
+    let idem = idempotency_key(tx, user_id, task_id)?;
+    let raw = db
+        .entity_get(tx, &idem)?
+        .ok_or_else(|| invalid_data("event idempotency claim is missing"))?;
+    let claim: IdempotencyEntry =
+        serde_json::from_slice(&raw).map_err(|_| invalid_data("malformed event idempotency"))?;
+    if claim.task_id != task_id || claim.user_id != user_id || claim.idempotency_key != task_id {
+        return Err(invalid_data("event idempotency escaped its owner"));
+    }
+    db.entity_delete(tx, lease_key(tx, &job)?)?;
+    versioned_document::delete(
+        db,
+        tx,
+        job_key(tx, task_id)?,
+        LOGICAL_NAMESPACE,
+        task_id,
+        None,
+    )?;
+    db.entity_delete(tx, idem)
 }
 
 #[cfg(test)]
@@ -1469,8 +1638,10 @@ mod tests {
         }
         let read = |db: &AuthorityDatabase, owner| {
             let mut tx = db.begin_with_identity_claim_scopes(7, 41).unwrap();
-            serde_json::from_slice::<Value>(&active_list(
-                db, &mut tx, &["lease-kind".into()], owner).unwrap()).unwrap()
+            serde_json::from_slice::<Value>(
+                &active_list(db, &mut tx, &["lease-kind".into()], owner).unwrap(),
+            )
+            .unwrap()
         };
         let queued = read(&db, Some(41));
         assert_eq!(queued.as_array().unwrap().len(), count);
@@ -1478,8 +1649,15 @@ mod tests {
         take(&mut db, "active-holder", 100_000).unwrap();
         let active = read(&db, None);
         assert_eq!(active.as_array().unwrap().len(), count);
-        assert_eq!(active.as_array().unwrap().iter()
-            .filter(|row| row["status"] == "running").count(), 1);
+        assert_eq!(
+            active
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|row| row["status"] == "running")
+                .count(),
+            1
+        );
         assert_eq!(read(&db, Some(42)), json!([]));
     }
 
@@ -1488,40 +1666,92 @@ mod tests {
         let (_, mut db) = prepared();
         let task_id = "conversation-attempt:publishing";
         let mut tx = db.begin_with_identity_claim_scopes(7, 41).unwrap();
-        enqueue(&db, &mut tx, EnqueueRequest {
-            task_id: task_id.into(), user_id: 41, tenant_id: "tenant-a".into(),
-            task_kind: "conversation-attempt".into(), payload: json!({"attemptId":"publishing"}),
-            idempotency_key: task_id.into(), request_digest: "a".repeat(64),
-            priority: 100, available_at_ms: 1_000, now_ms: 1_000,
-        }).unwrap();
+        enqueue(
+            &db,
+            &mut tx,
+            EnqueueRequest {
+                task_id: task_id.into(),
+                user_id: 41,
+                tenant_id: "tenant-a".into(),
+                task_kind: "conversation-attempt".into(),
+                payload: json!({"attemptId":"publishing"}),
+                idempotency_key: task_id.into(),
+                request_digest: "a".repeat(64),
+                priority: 100,
+                available_at_ms: 1_000,
+                now_ms: 1_000,
+            },
+        )
+        .unwrap();
         db.commit(tx).unwrap();
         let mut claim_tx = db.begin_with_identity_claim_scopes(7, 41).unwrap();
-        claim_next(&db, &mut claim_tx, "old", 1, 10_000, &["conversation-attempt".into()])
-            .unwrap().unwrap();
+        claim_next(
+            &db,
+            &mut claim_tx,
+            "old",
+            1,
+            10_000,
+            &["conversation-attempt".into()],
+        )
+        .unwrap()
+        .unwrap();
         db.commit(claim_tx).unwrap();
 
         let mut publication = db.begin_with_identity_claim_scopes(7, 41).unwrap();
-        require_conversation_publication_claim(&db, &mut publication,
-            "publishing", task_id, Some(&PublicationClaim {
-                worker_id: "old".into(), fencing_token: 1 }), false, false).unwrap();
+        require_conversation_publication_claim(
+            &db,
+            &mut publication,
+            "publishing",
+            task_id,
+            Some(&PublicationClaim {
+                worker_id: "old".into(),
+                fencing_token: 1,
+            }),
+            false,
+            false,
+        )
+        .unwrap();
         // A domain write disjoint from the job: only the fence's read dependency
         // can prevent this otherwise valid transaction from committing late.
         let visible = EntityKey::new(7, 41, "publication_test", b"visible").unwrap();
-        db.entity_put(&mut publication, visible.clone(), b"old".to_vec()).unwrap();
+        db.entity_put(&mut publication, visible.clone(), b"old".to_vec())
+            .unwrap();
         db.set_worker_lease_test_time(110_000);
         let mut replacement = db.begin_with_identity_claim_scopes(7, 41).unwrap();
-        let claimed = claim_next(&db, &mut replacement, "new", 1, 10_000,
-            &["conversation-attempt".into()]).unwrap().unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&claimed).unwrap()["fencingToken"], 2);
+        let claimed = claim_next(
+            &db,
+            &mut replacement,
+            "new",
+            1,
+            10_000,
+            &["conversation-attempt".into()],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&claimed).unwrap()["fencingToken"],
+            2
+        );
         db.commit(replacement).unwrap();
         assert!(db.commit(publication).is_err());
 
         let mut current = db.begin_with_identity_claim_scopes(7, 41).unwrap();
         assert!(db.entity_get(&mut current, &visible).unwrap().is_none());
-        require_conversation_publication_claim(&db, &mut current,
-            "publishing", task_id, Some(&PublicationClaim {
-                worker_id: "new".into(), fencing_token: 2 }), false, false).unwrap();
-        db.entity_put(&mut current, visible, b"new".to_vec()).unwrap();
+        require_conversation_publication_claim(
+            &db,
+            &mut current,
+            "publishing",
+            task_id,
+            Some(&PublicationClaim {
+                worker_id: "new".into(),
+                fencing_token: 2,
+            }),
+            false,
+            false,
+        )
+        .unwrap();
+        db.entity_put(&mut current, visible, b"new".to_vec())
+            .unwrap();
         db.commit(current).unwrap();
     }
 
@@ -1553,7 +1783,10 @@ mod tests {
         for ordinal in 0..4_u64 {
             db.set_worker_lease_test_time(100_000 + 2_500 * ordinal);
             seed(&mut db, &format!("storm-{ordinal}"));
-            assert_eq!(take(&mut db, "storm", 1).unwrap()["taskId"], format!("storm-{ordinal}"));
+            assert_eq!(
+                take(&mut db, "storm", 1).unwrap()["taskId"],
+                format!("storm-{ordinal}")
+            );
         }
         // Claimable after storm-0's lease expired (110_000), before the others.
         seed_at(&mut db, "waiting", 111_000);
@@ -1561,12 +1794,23 @@ mod tests {
         for step in 0..8_u64 {
             db.set_worker_lease_test_time(120_000 + 2_500 * step);
             let job = take(&mut db, "storm", 1).expect("a claim is due at every step");
-            claimed.push((job["taskId"].as_str().unwrap().to_owned(), job["fencingToken"].as_u64().unwrap()));
+            claimed.push((
+                job["taskId"].as_str().unwrap().to_owned(),
+                job["fencingToken"].as_u64().unwrap(),
+            ));
         }
         // It waits only for the one lease that expired before it was claimable;
         // the storm keeps its deadline order and every takeover advances the fence.
-        let expected: [(&str, u64); 8] = [("storm-0", 2), ("waiting", 1), ("storm-1", 2),
-            ("storm-2", 2), ("storm-3", 2), ("storm-0", 3), ("waiting", 2), ("storm-1", 3)];
+        let expected: [(&str, u64); 8] = [
+            ("storm-0", 2),
+            ("waiting", 1),
+            ("storm-1", 2),
+            ("storm-2", 2),
+            ("storm-3", 2),
+            ("storm-0", 3),
+            ("waiting", 2),
+            ("storm-1", 3),
+        ];
         assert_eq!(claimed, expected.map(|(id, fence)| (id.to_owned(), fence)));
     }
 
@@ -1574,14 +1818,20 @@ mod tests {
     fn claim_order_measures_each_wait_on_its_own_clock_after_a_utc_rollback() {
         let (_, mut db) = prepared();
         seed(&mut db, "held");
-        assert_eq!(take(&mut db, "holder", 1).unwrap()["leaseDeadlineMs"], 110_000);
+        assert_eq!(
+            take(&mut db, "holder", 1).unwrap()["leaseDeadlineMs"],
+            110_000
+        );
         seed_at(&mut db, "queued", 95_000);
         // UTC fell 20 s behind the advancing lease clock: the lease has been
         // claimable for 10 s, the queued job for 5 s though its raw time is earlier.
         db.set_worker_lease_test_time(120_000);
         db.set_worker_queue_test_time(100_000);
         let first = take(&mut db, "successor", 1).unwrap();
-        assert_eq!((&first["taskId"], &first["fencingToken"]), (&json!("held"), &json!(2)));
+        assert_eq!(
+            (&first["taskId"], &first["fencingToken"]),
+            (&json!("held"), &json!(2))
+        );
         assert_eq!(take(&mut db, "successor", 1).unwrap()["taskId"], "queued");
     }
 
@@ -1670,7 +1920,10 @@ mod tests {
     fn horizon(database: &AuthorityDatabase) -> Value {
         let mut tx = database.begin_with_identity_claim_scopes(7, 41).unwrap();
         let bytes = claim_horizon(database, &mut tx, &["lease-kind".into()]).unwrap();
-        assert!(!tx.has_business_mutation(), "a horizon probe must not write");
+        assert!(
+            !tx.has_business_mutation(),
+            "a horizon probe must not write"
+        );
         serde_json::from_slice::<Value>(&bytes).unwrap()["claimableInMs"].clone()
     }
 
@@ -1687,12 +1940,23 @@ mod tests {
         assert!(take(&mut db, "rival", 1).is_none());
 
         let mut tx = db.begin_with_identity_claim_scopes(7, 41).unwrap();
-        enqueue(&db, &mut tx, EnqueueRequest {
-            task_id: "delayed".to_owned(), user_id: 41, tenant_id: "tenant-a".to_owned(),
-            task_kind: "lease-kind".to_owned(), payload: json!({}),
-            idempotency_key: "delayed".to_owned(), request_digest: "b".repeat(64),
-            priority: 900, available_at_ms: 4_000, now_ms: 1_000,
-        }).unwrap();
+        enqueue(
+            &db,
+            &mut tx,
+            EnqueueRequest {
+                task_id: "delayed".to_owned(),
+                user_id: 41,
+                tenant_id: "tenant-a".to_owned(),
+                task_kind: "lease-kind".to_owned(),
+                payload: json!({}),
+                idempotency_key: "delayed".to_owned(),
+                request_digest: "b".repeat(64),
+                priority: 900,
+                available_at_ms: 4_000,
+                now_ms: 1_000,
+            },
+        )
+        .unwrap();
         db.commit(tx).unwrap();
         assert_eq!(horizon(&db), json!(3_000));
         assert!(take(&mut db, "rival", 1).is_none());
@@ -1801,53 +2065,4 @@ mod tests {
         assert!(reads <= 32, "claim performed {reads} physical reads");
         database.commit(claim).unwrap();
     }
-}
-
-/// Only event settlement may update its cursor or retire this pure transport.
-/// The domain proves the live fence, immutable source and bounded transition.
-pub(crate) fn settle_automation_event(
-    db: &AuthorityDatabase,
-    tx: &mut AuthorityTransaction,
-    task_id: &str,
-    user_id: u64,
-    tenant: &str,
-    expected: &Value,
-    next: Option<&Value>,
-    now_ms: u64,
-) -> io::Result<()> {
-    let mut job =
-        read_job(db, tx, task_id)?.ok_or_else(|| invalid_data("event transport is missing"))?;
-    if job.user_id != user_id
-        || job.tenant_id != tenant
-        || job.task_kind != "automation-event"
-        || job.idempotency_key != task_id
-        || job.status != "running"
-        || &job.payload != expected
-    {
-        return Err(invalid_data("event transport changed"));
-    }
-    if let Some(payload) = next {
-        job.payload = payload.clone();
-        job.updated_at_ms = now_ms;
-        return put_job(db, tx, &job);
-    }
-    let idem = idempotency_key(tx, user_id, task_id)?;
-    let raw = db
-        .entity_get(tx, &idem)?
-        .ok_or_else(|| invalid_data("event idempotency claim is missing"))?;
-    let claim: IdempotencyEntry =
-        serde_json::from_slice(&raw).map_err(|_| invalid_data("malformed event idempotency"))?;
-    if claim.task_id != task_id || claim.user_id != user_id || claim.idempotency_key != task_id {
-        return Err(invalid_data("event idempotency escaped its owner"));
-    }
-    db.entity_delete(tx, lease_key(tx, &job)?)?;
-    versioned_document::delete(
-        db,
-        tx,
-        job_key(tx, task_id)?,
-        LOGICAL_NAMESPACE,
-        task_id,
-        None,
-    )?;
-    db.entity_delete(tx, idem)
 }

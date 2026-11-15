@@ -1,7 +1,7 @@
 """Conformance drivers: each adapter against its platform fake, through the protocol.
 
 ``reference`` and ``reference-stdio`` run the protocol-native reference adapter
-in-process and in a child process over the stdio binding; ``dx``, ``github``,
+in-process and in a child process over the stdio binding; ``github``,
 ``wecom``, ``qq`` and ``wechat`` run today's adapters unchanged behind the
 compatibility shim (``harness.Shim``) against the platform fakes the channel
 suite already uses (``tests/channels/bot_fakes.py``, ``conftest.FakeGitHub``),
@@ -226,9 +226,10 @@ class ReferenceStdioDriver(ReferenceDriver):
 
 def _drivers() -> dict[str, type[Driver]]:
     from tests.channels.conformance.driver_bots import QQDriver, WeChatDriver, WeComDriver
-    from tests.channels.conformance.driver_dx import DxDriver
     from tests.channels.conformance.driver_github import GitHubDriver
-    return {'reference': ReferenceDriver, 'reference-stdio': ReferenceStdioDriver, 'dx': DxDriver,
+    # The 大象 driver and baseline moved with the adapter to the YourProvider overlay
+    # (bundles/yourprovider/tests/channels/test_dx_conformance.py).
+    return {'reference': ReferenceDriver, 'reference-stdio': ReferenceStdioDriver,
             'github': GitHubDriver, 'wecom': WeComDriver, 'qq': QQDriver, 'wechat': WeChatDriver}
 
 

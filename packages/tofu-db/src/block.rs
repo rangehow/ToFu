@@ -14,12 +14,12 @@ use uuid::Uuid;
 use crate::generated_tofudb_ir::BLOCK_PAYLOAD_CACHE_ENTRY_OVERHEAD_BYTES;
 use crate::payload_manifest::{PayloadManifest, PayloadSegmentReference};
 use crate::payload_segment::{CatalogLocationTable, PayloadSegment, PayloadSegmentStore};
-use crate::vfs::{
-    hyphenated_temporary_name, is_hyphenated_temporary_name, sync_all_barrier, sync_directory_barrier, FileKind,
-    OpenRequest, RealVfs, Vfs, VfsFile,
-};
 #[cfg(test)]
 use crate::vfs::VfsPositionedReader;
+use crate::vfs::{
+    hyphenated_temporary_name, is_hyphenated_temporary_name, sync_all_barrier,
+    sync_directory_barrier, FileKind, OpenRequest, RealVfs, Vfs, VfsFile,
+};
 use crate::FORMAT_VERSION;
 
 const MAGIC: &[u8; 8] = b"TDBBLK01";
@@ -153,7 +153,11 @@ impl PackedBlockFilter {
     }
 
     fn covers_catalog(&self, catalog: &PayloadManifest) -> bool {
-        self.built && catalog.segments.iter().all(|reference| self.covers_segment(reference))
+        self.built
+            && catalog
+                .segments
+                .iter()
+                .all(|reference| self.covers_segment(reference))
     }
 
     /// Inserts every block ID of one verified segment index. Records of
@@ -161,14 +165,19 @@ impl PackedBlockFilter {
     /// (`MAX_PAYLOAD_SEGMENTS`, the most one publication can add); forgetting
     /// the oldest record keeps its bits and only costs an index read if that
     /// segment is ever installed.
-    fn cover_segment(&mut self, reference: &PayloadSegmentReference, ids: impl Iterator<Item = BlockId>) {
+    fn cover_segment(
+        &mut self,
+        reference: &PayloadSegmentReference,
+        ids: impl Iterator<Item = BlockId>,
+    ) {
         if !self.built || self.covers_segment(reference) {
             return;
         }
         for id in ids {
             self.insert(id);
         }
-        self.covered_segments.insert(reference.segment_id, *reference);
+        self.covered_segments
+            .insert(reference.segment_id, *reference);
         self.uncatalogued_segments.push_back(reference.segment_id);
         if self.uncatalogued_segments.len() > crate::payload_manifest::MAX_PAYLOAD_SEGMENTS {
             if let Some(oldest) = self.uncatalogued_segments.pop_front() {
@@ -181,7 +190,8 @@ impl PackedBlockFilter {
     /// still awaiting publication. Dropped segments keep their bits: harmless
     /// positives until the next rebuild.
     fn retain_catalog(&mut self, catalog: &HashSet<Uuid>) {
-        self.uncatalogued_segments.retain(|segment_id| !catalog.contains(segment_id));
+        self.uncatalogued_segments
+            .retain(|segment_id| !catalog.contains(segment_id));
         let pending: HashSet<Uuid> = self.uncatalogued_segments.iter().copied().collect();
         self.covered_segments
             .retain(|segment_id, _| catalog.contains(segment_id) || pending.contains(segment_id));
@@ -227,7 +237,10 @@ pub(crate) mod packed_filter_counters {
 pub(crate) struct CarriedRecoveryLookup {
     locations: BTreeMap<BlockId, (Option<PayloadSegmentReference>, bool)>,
     complete: bool,
-    history: Option<(Arc<crate::history_payload::Catalog>, crate::history_payload::RecoveryLookup)>,
+    history: Option<(
+        Arc<crate::history_payload::Catalog>,
+        crate::history_payload::RecoveryLookup,
+    )>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,11 +428,21 @@ impl BlockPayloadCache {
             }
             let slot = match self.free_slots.pop() {
                 Some(slot) => {
-                    self.slots[slot as usize] = CacheSlot { id, payload: Some(payload), newer: NO_SLOT, older: NO_SLOT };
+                    self.slots[slot as usize] = CacheSlot {
+                        id,
+                        payload: Some(payload),
+                        newer: NO_SLOT,
+                        older: NO_SLOT,
+                    };
                     slot
                 }
                 None => {
-                    self.slots.push(CacheSlot { id, payload: Some(payload), newer: NO_SLOT, older: NO_SLOT });
+                    self.slots.push(CacheSlot {
+                        id,
+                        payload: Some(payload),
+                        newer: NO_SLOT,
+                        older: NO_SLOT,
+                    });
                     (self.slots.len() - 1) as u32
                 }
             };
@@ -432,7 +455,10 @@ impl BlockPayloadCache {
 
     fn insert(&mut self, id: BlockId, payload: &[u8]) {
         if self.capacity_bytes == 0
-            || payload.len().saturating_add(BLOCK_PAYLOAD_CACHE_ENTRY_OVERHEAD_BYTES) > self.capacity_bytes
+            || payload
+                .len()
+                .saturating_add(BLOCK_PAYLOAD_CACHE_ENTRY_OVERHEAD_BYTES)
+                > self.capacity_bytes
         {
             return;
         }
@@ -553,17 +579,31 @@ impl BlockPayloadCache {
 
 /// Immutable source whose identity was computed before private capture.
 /// The borrow forbids mutation until capture; fields have no public setters.
-pub(crate) struct PreparedBlockSource<'a> { id: BlockId, encoded: &'a [u8] }
+pub(crate) struct PreparedBlockSource<'a> {
+    id: BlockId,
+    encoded: &'a [u8],
+}
 impl<'a> PreparedBlockSource<'a> {
     pub(crate) fn new(encoded: &'a [u8]) -> io::Result<Self> {
         if encoded.len() > MAX_BLOCK_BYTES {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "prepared block exceeds maximum size"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "prepared block exceeds maximum size",
+            ));
         }
-        Ok(Self { id: BlockId::for_payload(encoded), encoded })
+        Ok(Self {
+            id: BlockId::for_payload(encoded),
+            encoded,
+        })
     }
-    pub(crate) fn id(&self) -> BlockId { self.id }
+    pub(crate) fn id(&self) -> BlockId {
+        self.id
+    }
     pub(crate) fn capture(self) -> PreparedBlockPayload {
-        PreparedBlockPayload { id: self.id, bytes: Arc::new(self.encoded.to_vec()) }
+        PreparedBlockPayload {
+            id: self.id,
+            bytes: Arc::new(self.encoded.to_vec()),
+        }
     }
 
     /// Hash the exact owned immutable allocation before entering publication.
@@ -577,21 +617,50 @@ impl<'a> PreparedBlockSource<'a> {
 /// Content identity is bound to this immutable allocation. Shared readers
 /// can clone the Arc; mutation of a clone creates a different allocation.
 /// Only PreparedBlockSource capture methods mint a payload for publication.
-pub(crate) struct PreparedBlockPayload { id: BlockId, bytes: Arc<Vec<u8>> }
+pub(crate) struct PreparedBlockPayload {
+    id: BlockId,
+    bytes: Arc<Vec<u8>>,
+}
 impl PreparedBlockPayload {
-    pub(crate) fn id(&self) -> BlockId { self.id }
-    pub(crate) fn shared(&self) -> Arc<Vec<u8>> { Arc::clone(&self.bytes) }
-    pub(crate) fn byte_len(&self) -> usize { self.bytes.len() }
+    pub(crate) fn id(&self) -> BlockId {
+        self.id
+    }
+    pub(crate) fn shared(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.bytes)
+    }
+    pub(crate) fn byte_len(&self) -> usize {
+        self.bytes.len()
+    }
 }
 
-enum DeferredBlockInput<'a> { Bytes(Cow<'a, [u8]>), Prepared(&'a PreparedBlockPayload) }
+enum DeferredBlockInput<'a> {
+    Bytes(Cow<'a, [u8]>),
+    Prepared(&'a PreparedBlockPayload),
+}
 impl AsRef<[u8]> for DeferredBlockInput<'_> {
-    fn as_ref(&self) -> &[u8] { match self { Self::Bytes(bytes) => bytes.as_ref(), Self::Prepared(payload) => payload.bytes.as_slice() } }
+    fn as_ref(&self) -> &[u8] {
+        match self {
+            Self::Bytes(bytes) => bytes.as_ref(),
+            Self::Prepared(payload) => payload.bytes.as_slice(),
+        }
+    }
 }
 impl DeferredBlockInput<'_> {
-    fn len(&self) -> usize { self.as_ref().len() }
-    fn id(&self) -> BlockId { match self { Self::Bytes(bytes) => BlockId::for_payload(bytes), Self::Prepared(payload) => payload.id } }
-    fn into_shared(self) -> Arc<Vec<u8>> { match self { Self::Bytes(bytes) => Arc::new(bytes.into_owned()), Self::Prepared(payload) => payload.shared() } }
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+    fn id(&self) -> BlockId {
+        match self {
+            Self::Bytes(bytes) => BlockId::for_payload(bytes),
+            Self::Prepared(payload) => payload.id,
+        }
+    }
+    fn into_shared(self) -> Arc<Vec<u8>> {
+        match self {
+            Self::Bytes(bytes) => Arc::new(bytes.into_owned()),
+            Self::Prepared(payload) => payload.shared(),
+        }
+    }
 }
 
 /// One hash shard's share of a loose batch: staged payloads to materialize
@@ -769,9 +838,17 @@ impl HistorySourceHandle {
         read_history_source_at(&self.file, offset, bytes)
     }
 }
-fn read_history_source_at(file: &crate::vfs::SharedReadFile, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
-    file.read_exact_at_staged(offset, bytes, crate::fsync_stats::STAGE_BLOCK_HISTORY_SOURCE_WAIT,
-        crate::fsync_stats::STAGE_BLOCK_HISTORY_SOURCE_READ)
+fn read_history_source_at(
+    file: &crate::vfs::SharedReadFile,
+    offset: u64,
+    bytes: &mut [u8],
+) -> io::Result<()> {
+    file.read_exact_at_staged(
+        offset,
+        bytes,
+        crate::fsync_stats::STAGE_BLOCK_HISTORY_SOURCE_WAIT,
+        crate::fsync_stats::STAGE_BLOCK_HISTORY_SOURCE_READ,
+    )
 }
 #[derive(Default)]
 struct HistorySourceHandles {
@@ -781,15 +858,26 @@ struct HistorySourceHandles {
 impl HistorySourceHandles {
     fn trim(&mut self, maximum: usize) {
         while self.entries.len() > maximum {
-            let id = self.entries.iter().min_by_key(|(_, (_, age))| age).map(|(id, _)| *id).unwrap();
+            let id = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, age))| age)
+                .map(|(id, _)| *id)
+                .unwrap();
             self.entries.remove(&id);
         }
     }
     fn get(&mut self, id: BlockId) -> Option<Arc<HistorySourceHandle>> {
         self.clock = self.clock.saturating_add(1);
-        self.entries.get_mut(&id).map(|(handle, age)| { *age = self.clock; Arc::clone(handle) })
+        self.entries.get_mut(&id).map(|(handle, age)| {
+            *age = self.clock;
+            Arc::clone(handle)
+        })
     }
 }
+
+#[cfg(test)]
+type InstallSwapHook = Box<dyn FnOnce(&BlockStore) + Send>;
 
 pub struct BlockStore {
     root: PathBuf,
@@ -805,7 +893,7 @@ pub struct BlockStore {
     packed_filter: RwLock<PackedBlockFilter>,
     /// Runs once inside the next install, right before its catalog swap.
     #[cfg(test)]
-    install_swap_hook: Mutex<Option<Box<dyn FnOnce(&BlockStore) + Send>>>,
+    install_swap_hook: Mutex<Option<InstallSwapHook>>,
     next_payload_catalog_publication: AtomicU64,
     installed_payload_catalog_publication: AtomicU64,
     /// Exact block locations of one catalog publication, shared by foreground
@@ -861,7 +949,10 @@ struct UnbarrieredLeaves {
 
 impl UnbarrieredLeaves {
     const fn new() -> Self {
-        Self { next: 0, leaves: BTreeMap::new() }
+        Self {
+            next: 0,
+            leaves: BTreeMap::new(),
+        }
     }
 }
 
@@ -913,7 +1004,9 @@ fn overflowed_shards(vfs: &dyn Vfs, overflow_root: &Path) -> io::Result<[AtomicB
     for path in bounded.entries {
         let shard = shard_name_byte(&path)?;
         if vfs.metadata(&path)? != FileKind::Directory {
-            return Err(invalid_data("block overflow root contains a non-directory entry"));
+            return Err(invalid_data(
+                "block overflow root contains a non-directory entry",
+            ));
         }
         shards[usize::from(shard)].store(true, Ordering::Relaxed);
     }
@@ -1002,14 +1095,20 @@ impl TraversalReader<'_> {
     /// resident table bytes); all zero without a catalog.
     pub(crate) fn location_table_shape(&self) -> (usize, usize, usize) {
         self.locations.as_ref().map_or((0, 0, 0), |(_, locations)| {
-            (locations.located_blocks(), locations.unindexed_segments(), locations.resident_bytes())
+            (
+                locations.located_blocks(),
+                locations.unindexed_segments(),
+                locations.resident_bytes(),
+            )
         })
     }
 
     #[cfg(test)]
     pub(crate) fn location_table_mut_for_test(&mut self) -> Option<&mut CatalogLocationTable> {
         // A private copy: the published table stays intact.
-        self.locations.as_mut().map(|(_, locations)| Arc::make_mut(locations))
+        self.locations
+            .as_mut()
+            .map(|(_, locations)| Arc::make_mut(locations))
     }
 }
 
@@ -1130,8 +1229,7 @@ enum DedupeProbe {
     /// payload (idempotent by content ID), so a write can never reference
     /// a block that durable storage does not actually hold.
     Missing,
-    }
-
+}
 
 impl BlockStore {
     pub(crate) fn register_background_packer(
@@ -1153,7 +1251,8 @@ impl BlockStore {
     }
 
     pub(crate) fn request_background_drain(&self) {
-        self.background_drain_requested.store(true, Ordering::Release);
+        self.background_drain_requested
+            .store(true, Ordering::Release);
         let _ = self.wake_background_packer();
     }
 
@@ -1163,8 +1262,10 @@ impl BlockStore {
 
     /// The rotation install has fenced writers until payload publication.
     /// Unlike early background draining, this work is on the foreground path.
+    #[cfg(test)]
     pub(crate) fn request_foreground_drain(&self) {
-        self.foreground_drain_requested.store(true, Ordering::Release);
+        self.foreground_drain_requested
+            .store(true, Ordering::Release);
         self.request_background_drain();
     }
 
@@ -1173,8 +1274,10 @@ impl BlockStore {
     }
 
     pub(crate) fn finish_background_drain(&self) {
-        self.foreground_drain_requested.store(false, Ordering::Release);
-        self.background_drain_requested.store(false, Ordering::Release);
+        self.foreground_drain_requested
+            .store(false, Ordering::Release);
+        self.background_drain_requested
+            .store(false, Ordering::Release);
     }
 
     pub fn initialize(data_dir: &Path) -> io::Result<Self> {
@@ -1187,7 +1290,8 @@ impl BlockStore {
         sync_directory_barrier(vfs.as_ref(), data_dir)?;
         let payload_segments =
             PayloadSegmentStore::initialize_with_vfs(data_dir, Arc::clone(&vfs))?;
-        let read_hints = crate::payload_hints::PayloadHints::new(payload_segments.routing_budget_bytes());
+        let read_hints =
+            crate::payload_hints::PayloadHints::new(payload_segments.routing_budget_bytes());
         let overflowed_shards = [const { AtomicBool::new(false) }; 256];
         Ok(Self {
             root,
@@ -1198,7 +1302,9 @@ impl BlockStore {
             payload_manifest: RwLock::new(None),
             history_payloads: RwLock::new(None),
             history_source_handles: Mutex::new(HistorySourceHandles::default()),
-            history_source_handle_limit: AtomicUsize::new(DEFAULT_BLOCK_CACHE_BYTES / MAX_BLOCK_BYTES),
+            history_source_handle_limit: AtomicUsize::new(
+                DEFAULT_BLOCK_CACHE_BYTES / MAX_BLOCK_BYTES,
+            ),
             payload_routing: RwLock::new(Default::default()),
             packed_filter: RwLock::new(PackedBlockFilter::empty()),
             #[cfg(test)]
@@ -1246,9 +1352,15 @@ impl BlockStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => return Err(error),
         };
-        let read_hints = crate::payload_hints::PayloadHints::load(data_dir, vfs.as_ref(),
-            payload_segments.as_ref().map_or(0, |store| store.routing_budget_bytes()));
-        let overflowed_shards = overflowed_shards(vfs.as_ref(), &data_dir.join(OVERFLOW_DIRECTORY))?;
+        let read_hints = crate::payload_hints::PayloadHints::load(
+            data_dir,
+            vfs.as_ref(),
+            payload_segments
+                .as_ref()
+                .map_or(0, |store| store.routing_budget_bytes()),
+        );
+        let overflowed_shards =
+            overflowed_shards(vfs.as_ref(), &data_dir.join(OVERFLOW_DIRECTORY))?;
         Ok(Self {
             root,
             vfs,
@@ -1258,7 +1370,9 @@ impl BlockStore {
             payload_manifest: RwLock::new(None),
             history_payloads: RwLock::new(None),
             history_source_handles: Mutex::new(HistorySourceHandles::default()),
-            history_source_handle_limit: AtomicUsize::new(DEFAULT_BLOCK_CACHE_BYTES / MAX_BLOCK_BYTES),
+            history_source_handle_limit: AtomicUsize::new(
+                DEFAULT_BLOCK_CACHE_BYTES / MAX_BLOCK_BYTES,
+            ),
             payload_routing: RwLock::new(Default::default()),
             packed_filter: RwLock::new(PackedBlockFilter::empty()),
             #[cfg(test)]
@@ -1301,7 +1415,9 @@ impl BlockStore {
 
     fn overflow_leaf(&self, id: BlockId) -> PathBuf {
         let hexadecimal = id.to_hex();
-        self.overflow_root.join(&hexadecimal[..2]).join(&hexadecimal[2..4])
+        self.overflow_root
+            .join(&hexadecimal[..2])
+            .join(&hexadecimal[2..4])
     }
 
     fn overflow_path(&self, id: BlockId) -> PathBuf {
@@ -1335,9 +1451,14 @@ impl BlockStore {
     /// Opens `id`'s loose file for reading: the shard directory's copy, else
     /// the overflow leaf's when the shard overflowed.
     fn open_loose_file(&self, id: BlockId) -> io::Result<Box<dyn VfsFile>> {
-        let read = OpenRequest { read: true, ..OpenRequest::default() };
+        let read = OpenRequest {
+            read: true,
+            ..OpenRequest::default()
+        };
         match self.vfs.open(&self.path(id), read) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound && self.shard_overflowed(id.0[0]) => {
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound && self.shard_overflowed(id.0[0]) =>
+            {
                 self.vfs.open(&self.overflow_path(id), read)
             }
             opened => opened,
@@ -1354,7 +1475,9 @@ impl BlockStore {
             match self.write_loose_synced(id, payload, &directory, &self.path(id)) {
                 Ok(encoded_len) => return Ok((encoded_len, directory)),
                 Err(LooseWriteFailure::Failed(error)) => return Err(error),
-                Err(LooseWriteFailure::NameRefused(error)) => self.overflow_shard(id.0[0], &error)?,
+                Err(LooseWriteFailure::NameRefused(error)) => {
+                    self.overflow_shard(id.0[0], &error)?
+                }
             }
         }
         let leaf = self.ensure_overflow_leaf(id)?;
@@ -1369,7 +1492,10 @@ impl BlockStore {
     /// so a reopen that lists it keeps this shard's reads, listings and writes
     /// on both locations.
     fn overflow_shard(&self, shard: u8, cause: &io::Error) -> io::Result<()> {
-        let data_dir = self.overflow_root.parent().expect("the overflow root has a parent");
+        let data_dir = self
+            .overflow_root
+            .parent()
+            .expect("the overflow root has a parent");
         self.publish_overflow_directory(&self.overflow_root, data_dir)?;
         let shard_overflow = self.overflow_root.join(format!("{shard:02x}"));
         self.publish_overflow_directory(&shard_overflow, &self.overflow_root)?;
@@ -1406,7 +1532,10 @@ impl BlockStore {
         let leaf = self.overflow_leaf(id);
         let key = u16::from_be_bytes([id.0[0], id.0[1]]);
         let published = |leaves: &Mutex<HashSet<u16>>| {
-            leaves.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&key)
+            leaves
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains(&key)
         };
         if !published(&self.published_overflow_leaves) {
             self.publish_overflow_directory(&leaf, leaf.parent().expect("a leaf has its shard"))?;
@@ -1431,12 +1560,21 @@ impl BlockStore {
     /// barrier covers yet. A failed barrier releases nothing.
     fn sync_overflow_leaves(&self, shard: u8) -> io::Result<()> {
         let pending = &self.unbarriered_overflow_leaves[usize::from(shard)];
-        let snapshot = pending.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).leaves.clone();
+        let snapshot = pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .leaves
+            .clone();
         for leaf in snapshot.keys() {
-            let directory = self.overflow_root.join(format!("{shard:02x}")).join(format!("{leaf:02x}"));
+            let directory = self
+                .overflow_root
+                .join(format!("{shard:02x}"))
+                .join(format!("{leaf:02x}"));
             sync_directory_barrier(self.vfs.as_ref(), &directory)?;
         }
-        let mut pending = pending.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut pending = pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for (leaf, sequence) in snapshot {
             if pending.leaves.get(&leaf) == Some(&sequence) {
                 pending.leaves.remove(&leaf);
@@ -1553,7 +1691,10 @@ impl BlockStore {
 
     /// Whether any of `block_ids` was re-referenced since the open window's
     /// capture. `WouldBlock` when no window is open.
-    pub(crate) fn any_relinked(&self, block_ids: impl IntoIterator<Item = BlockId>) -> io::Result<bool> {
+    pub(crate) fn any_relinked(
+        &self,
+        block_ids: impl IntoIterator<Item = BlockId>,
+    ) -> io::Result<bool> {
         let fence = self
             .relink_fence
             .lock()
@@ -1597,7 +1738,9 @@ impl BlockStore {
     pub(crate) fn retain_held_block(&self, id: BlockId) -> io::Result<bool> {
         let held = match self.loose_metadata(id)? {
             Some((_, FileKind::File)) => true,
-            Some((_, FileKind::Directory)) => return Err(invalid_data("block path is a directory")),
+            Some((_, FileKind::Directory)) => {
+                return Err(invalid_data("block path is a directory"))
+            }
             None => self.has_catalogued_payload_block(id)?,
         };
         if held {
@@ -1617,7 +1760,11 @@ impl BlockStore {
     /// Whether this call wrote the block: another copy of the same block may
     /// have published it first (a VFS whose rename never replaces a name);
     /// the bytes are the same.
-    pub(crate) fn publish_copied_block_unbarriered(&self, id: BlockId, payload: &[u8]) -> io::Result<bool> {
+    pub(crate) fn publish_copied_block_unbarriered(
+        &self,
+        id: BlockId,
+        payload: &[u8],
+    ) -> io::Result<bool> {
         let written = self.write_loose_placed(id, payload);
         if self.shard_overflowed(id.0[0]) {
             // This rename, or the racing copy's that won it, waits for the
@@ -1626,7 +1773,10 @@ impl BlockStore {
         }
         let encoded_len = match written {
             Ok((encoded_len, _)) => encoded_len,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && self.retain_held_block(id)? => {
+            Err(error)
+                if error.kind() == io::ErrorKind::AlreadyExists
+                    && self.retain_held_block(id)? =>
+            {
                 return Ok(false);
             }
             Err(error) => return Err(error),
@@ -1673,7 +1823,9 @@ impl BlockStore {
                     return Ok(id);
                 }
             },
-            Some((_, FileKind::Directory)) => return Err(invalid_data("block path is a directory")),
+            Some((_, FileKind::Directory)) => {
+                return Err(invalid_data("block path is a directory"))
+            }
             None => {}
         }
         if !self.shard_overflowed(id.0[0]) {
@@ -1715,15 +1867,26 @@ impl BlockStore {
         self.put_deferred_content(Cow::Borrowed(payload), false)
     }
 
-    pub(crate) fn put_deferred_prepared(&self, payload: &PreparedBlockPayload) -> io::Result<(BlockId, bool)> {
+    pub(crate) fn put_deferred_prepared(
+        &self,
+        payload: &PreparedBlockPayload,
+    ) -> io::Result<(BlockId, bool)> {
         self.put_deferred_input(DeferredBlockInput::Prepared(payload), false)
     }
 
-    fn put_deferred_content(&self, payload: Cow<'_, [u8]>, probe_loose: bool) -> io::Result<(BlockId, bool)> {
+    fn put_deferred_content(
+        &self,
+        payload: Cow<'_, [u8]>,
+        probe_loose: bool,
+    ) -> io::Result<(BlockId, bool)> {
         self.put_deferred_input(DeferredBlockInput::Bytes(payload), probe_loose)
     }
 
-    fn put_deferred_input(&self, payload: DeferredBlockInput<'_>, probe_loose: bool) -> io::Result<(BlockId, bool)> {
+    fn put_deferred_input(
+        &self,
+        payload: DeferredBlockInput<'_>,
+        probe_loose: bool,
+    ) -> io::Result<(BlockId, bool)> {
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_PUT_DEFERRED);
         let id = payload.id();
         {
@@ -1731,9 +1894,7 @@ impl BlockStore {
                 .pending
                 .lock()
                 .map_err(|_| io::Error::other("pending block set poisoned"))?;
-            if pending.payloads.contains_key(&id)
-                || pending.rotation_draining.contains_key(&id)
-            {
+            if pending.payloads.contains_key(&id) || pending.rotation_draining.contains_key(&id) {
                 return Ok((id, true));
             }
         }
@@ -1755,11 +1916,12 @@ impl BlockStore {
             self.note_relink(id);
             return Ok((id, false));
         }
-        let existing = if probe_loose { self.probe_dedupe(id)? }
-            else {
-                crate::request_profile::work(crate::request_profile::Work::ColdHistoryDedupeBypass, 1);
-                self.probe_packed_dedupe(id)?
-            };
+        let existing = if probe_loose {
+            self.probe_dedupe(id)?
+        } else {
+            crate::request_profile::work(crate::request_profile::Work::ColdHistoryDedupeBypass, 1);
+            self.probe_packed_dedupe(id)?
+        };
         match existing {
             DedupeProbe::Present(existing) => {
                 if existing.as_slice() != payload.as_ref() {
@@ -1793,7 +1955,10 @@ impl BlockStore {
     /// API, and a duplicate carry costs WAL bandwidth, never correctness.
     /// Fresh-page semantics with identity/allocation captured off authority.
     /// Preserve pending/rotation staging; never add a durable dedup probe.
-    pub(crate) fn put_deferred_fresh_prepared(&self, payload: &PreparedBlockPayload) -> io::Result<(BlockId, bool)> {
+    pub(crate) fn put_deferred_fresh_prepared(
+        &self,
+        payload: &PreparedBlockPayload,
+    ) -> io::Result<(BlockId, bool)> {
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_PUT_DEFERRED);
         self.stage_pending_input(payload.id, DeferredBlockInput::Prepared(payload))?;
         Ok((payload.id, true))
@@ -1870,7 +2035,11 @@ impl BlockStore {
             Ok(Some(existing)) if existing == payload => return Ok(id),
             Ok(Some(_)) => return Err(invalid_data("carried and history block differ")),
             Ok(None) => {}
-            Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::InvalidData) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+                ) => {}
             Err(error) => return Err(error),
         }
         if self.packed_filter_may_contain(id)? {
@@ -1882,8 +2051,11 @@ impl BlockStore {
                     return Ok(id);
                 }
                 Ok(None) => {}
-                Err(error) if matches!(error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::InvalidData) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+                    ) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -1891,20 +2063,29 @@ impl BlockStore {
     }
 
     fn payload_catalog_snapshot(&self) -> io::Result<(Option<PayloadManifest>, u64)> {
-        let manifest = self.payload_manifest.read()
+        let manifest = self
+            .payload_manifest
+            .read()
             .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
-        Ok((manifest.clone(), self.installed_payload_catalog_publication.load(Ordering::Acquire)))
+        Ok((
+            manifest.clone(),
+            self.installed_payload_catalog_publication
+                .load(Ordering::Acquire),
+        ))
     }
 
     #[cfg(test)]
     pub(crate) fn prepare_carried_recovery(
-        &self, ids: BTreeSet<BlockId>,
+        &self,
+        ids: BTreeSet<BlockId>,
     ) -> io::Result<CarriedRecoveryLookup> {
         self.prepare_carried_recovery_until(ids, &|| false)
     }
 
     pub(crate) fn prepare_carried_recovery_until(
-        &self, ids: BTreeSet<BlockId>, should_stop: &dyn Fn() -> bool,
+        &self,
+        ids: BTreeSet<BlockId>,
+        should_stop: &dyn Fn() -> bool,
     ) -> io::Result<CarriedRecoveryLookup> {
         let mut lookup = CarriedRecoveryLookup {
             locations: ids.into_iter().map(|id| (id, (None, false))).collect(),
@@ -1914,20 +2095,48 @@ impl BlockStore {
         let (manifest, publication) = self.payload_catalog_snapshot()?;
         if let Some(manifest) = manifest {
             let mut verified_routes = crate::payload_routing::PayloadRouting::default();
-            let mut filter = self.scan_packed_filter_until(&manifest, Some(&mut lookup), Some(&mut verified_routes), should_stop);
-            if should_stop() { return Err(io::Error::new(io::ErrorKind::Interrupted, "recovery catalog scan cancelled")); }
+            let mut filter = self.scan_packed_filter_until(
+                &manifest,
+                Some(&mut lookup),
+                Some(&mut verified_routes),
+                should_stop,
+            );
+            if should_stop() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "recovery catalog scan cancelled",
+                ));
+            }
             filter.covered_catalog_publication = publication;
             let store = self.payload_segments.as_ref();
-            let routing = crate::payload_routing::PayloadRouting::build(&manifest, store, &verified_routes,
-                &Default::default(), store.map_or(0, |store| store.routing_budget_bytes()), false);
-            let current = self.payload_manifest.read().map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
+            let routing = crate::payload_routing::PayloadRouting::build(
+                &manifest,
+                store,
+                &verified_routes,
+                &Default::default(),
+                store.map_or(0, |store| store.routing_budget_bytes()),
+                false,
+            );
+            let current = self
+                .payload_manifest
+                .read()
+                .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
             if current.as_ref() == Some(&manifest)
-                && self.installed_payload_catalog_publication.load(Ordering::Acquire) == publication {
-                *self.payload_routing.write().map_err(|_| io::Error::other("payload routing lock was poisoned"))? = routing;
+                && self
+                    .installed_payload_catalog_publication
+                    .load(Ordering::Acquire)
+                    == publication
+            {
+                *self
+                    .payload_routing
+                    .write()
+                    .map_err(|_| io::Error::other("payload routing lock was poisoned"))? = routing;
             }
             drop(current);
             lookup.complete = filter.built;
-            *self.packed_filter.write()
+            *self
+                .packed_filter
+                .write()
                 .map_err(|_| io::Error::other("packed block filter lock was poisoned"))? = filter;
         }
         self.prepare_history_recovery_until(&mut lookup, should_stop)?;
@@ -1937,14 +2146,22 @@ impl BlockStore {
     /// The history root is installed after packed-reference preparation.
     /// Bind this volatile lookup to that exact catalog for this exclusive open.
     pub(crate) fn prepare_history_recovery_until(
-        &self, lookup: &mut CarriedRecoveryLookup, should_stop: &dyn Fn() -> bool,
+        &self,
+        lookup: &mut CarriedRecoveryLookup,
+        should_stop: &dyn Fn() -> bool,
     ) -> io::Result<()> {
-        let catalog = self.history_payloads.read()
-            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?.clone();
+        let catalog = self
+            .history_payloads
+            .read()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?
+            .clone();
         lookup.history = match catalog {
             Some(catalog) => {
                 let prepared = catalog.prepare_recovery_lookup(
-                    self, lookup.locations.keys().copied(), should_stop)?;
+                    self,
+                    lookup.locations.keys().copied(),
+                    should_stop,
+                )?;
                 Some((catalog, prepared))
             }
             None => None,
@@ -1953,23 +2170,35 @@ impl BlockStore {
     }
 
     pub(crate) fn restore_carried_with_lookup(
-        &self, payload: &[u8], lookup: &mut CarriedRecoveryLookup,
+        &self,
+        payload: &[u8],
+        lookup: &mut CarriedRecoveryLookup,
     ) -> io::Result<BlockId> {
         let id = BlockId::for_payload(payload);
         // This proof is scoped to the exclusive open and to content bytes,
         // including verified historical copies. Check it before consulting
         // history: that lookup can read cold routing pages and source files.
-        if lookup.locations.get(&id).is_some_and(|(_, verified)| *verified) {
+        if lookup
+            .locations
+            .get(&id)
+            .is_some_and(|(_, verified)| *verified)
+        {
             return Ok(id);
         }
         match self.get_from_history_with_lookup(id, Some(lookup)) {
             Ok(Some(existing)) if existing == payload => {
-                if let Some((_, verified)) = lookup.locations.get_mut(&id) { *verified = true; }
+                if let Some((_, verified)) = lookup.locations.get_mut(&id) {
+                    *verified = true;
+                }
                 return Ok(id);
             }
             Ok(Some(_)) => return Err(invalid_data("carried and history block differ")),
             Ok(None) => {}
-            Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::InvalidData) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+                ) => {}
             Err(error) => return Err(error),
         }
         let Some((reference, verified)) = lookup.locations.get_mut(&id) else {
@@ -1985,7 +2214,11 @@ impl BlockStore {
                     return Ok(id);
                 }
                 Ok(None) => {}
-                Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::InvalidData) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+                    ) => {}
                 Err(error) => return Err(error),
             }
         } else if !lookup.complete {
@@ -2002,26 +2235,38 @@ impl BlockStore {
     /// verified segment indexes. Reuse that exact location even when the
     /// bounded process-wide routing cache cannot retain the entire catalog.
     pub(crate) fn get_for_recovery(
-        &self, id: BlockId, lookup: &CarriedRecoveryLookup,
+        &self,
+        id: BlockId,
+        lookup: &CarriedRecoveryLookup,
     ) -> io::Result<Vec<u8>> {
         if let Some(payload) = self.pending_payload(id)? {
             return Ok((*payload).clone());
         }
         if let Some((Some(reference), _)) = lookup.locations.get(&id) {
-            if let Some(payload) = self.get_from_payload_segment_references(id, std::slice::from_ref(reference))? {
-                self.cache.write().map_err(|_| io::Error::other("block cache lock was poisoned"))?
+            if let Some(payload) =
+                self.get_from_payload_segment_references(id, std::slice::from_ref(reference))?
+            {
+                self.cache
+                    .write()
+                    .map_err(|_| io::Error::other("block cache lock was poisoned"))?
                     .insert(id, &payload);
                 return Ok(payload);
             }
         }
         // An unselected reference or incomplete index scan retains the verified
         // fallback. A lookup never fabricates existence or skips byte checks.
-        if let Some(payload) = self.cache.read()
-            .map_err(|_| io::Error::other("block cache lock was poisoned"))?.peek_shared(id) {
+        if let Some(payload) = self
+            .cache
+            .read()
+            .map_err(|_| io::Error::other("block cache lock was poisoned"))?
+            .peek_shared(id)
+        {
             return Ok((*payload).clone());
         }
         let payload = self.get_uncached_with_history_lookup(id, Some(lookup))?;
-        self.cache.write().map_err(|_| io::Error::other("block cache lock was poisoned"))?
+        self.cache
+            .write()
+            .map_err(|_| io::Error::other("block cache lock was poisoned"))?
             .insert(id, &payload);
         Ok(payload)
     }
@@ -2058,24 +2303,42 @@ impl BlockStore {
     /// Recovery marks every replayed block this way because the file may
     /// predate the last power event.
     pub(crate) fn stage_pending_sync(&self, id: BlockId) -> io::Result<()> {
-        let catalog = self.history_payloads.read().map_err(|_| io::Error::other("history payload catalog lock poisoned"))?.clone();
+        let catalog = self
+            .history_payloads
+            .read()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?
+            .clone();
         if let Some(catalog) = catalog {
-            if catalog.lookup(self, id)?.is_some() { return Ok(()); }
+            if catalog.lookup(self, id)?.is_some() {
+                return Ok(());
+            }
         }
         self.stage_pending_loose_sync(id)
     }
 
     pub(crate) fn stage_pending_sync_for_recovery(
-        &self, id: BlockId, lookup: &CarriedRecoveryLookup,
+        &self,
+        id: BlockId,
+        lookup: &CarriedRecoveryLookup,
     ) -> io::Result<()> {
-        let current = self.history_payloads.read()
-            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?.clone();
+        let current = self
+            .history_payloads
+            .read()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?
+            .clone();
         if let (Some(current), Some((catalog, prepared))) = (current, &lookup.history) {
             if Arc::ptr_eq(&current, catalog) {
                 let mut held = false;
-                if let Some(result) = prepared.visit_locations(id, &mut |_| { held = true; Ok(true) }) {
+                if let Some(result) = prepared.visit_locations(id, &mut |_| {
+                    held = true;
+                    Ok(true)
+                }) {
                     result?;
-                    return if held { Ok(()) } else { self.stage_pending_loose_sync(id) };
+                    return if held {
+                        Ok(())
+                    } else {
+                        self.stage_pending_loose_sync(id)
+                    };
                 }
             }
         }
@@ -2110,8 +2373,13 @@ impl BlockStore {
     }
 
     #[inline(always)]
-    fn pending_payload_measured<const MEASURE: bool>(&self, id: BlockId) -> io::Result<Option<Arc<Vec<u8>>>> {
-        let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_PENDING_WAIT);
+    fn pending_payload_measured<const MEASURE: bool>(
+        &self,
+        id: BlockId,
+    ) -> io::Result<Option<Arc<Vec<u8>>>> {
+        let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+            crate::fsync_stats::STAGE_BLOCK_PENDING_WAIT,
+        );
         let pending = self
             .pending
             .lock()
@@ -2148,6 +2416,7 @@ impl BlockStore {
     /// instead and only routes the catalog-overflow minority through the
     /// loose batch. On error nothing is cleared, so the next attempt
     /// retries the full set idempotently.
+    #[cfg(test)]
     pub(crate) fn flush_pending(&self) -> io::Result<()> {
         let materialize: BTreeSet<BlockId> = {
             let pending = self
@@ -2186,6 +2455,7 @@ impl BlockStore {
     /// True while the covered prefix still owns staged blocks: the rotation
     /// write fence and the install defer both key off this set and nothing
     /// else, so window-commit staging never extends either.
+    #[cfg(test)]
     pub(crate) fn has_rotation_drain_pending(&self) -> io::Result<bool> {
         Ok(!self
             .pending
@@ -2287,13 +2557,19 @@ impl BlockStore {
     /// Production still allocates a fresh UUID only after the batch qualifies.
     #[cfg(test)]
     pub(crate) fn begin_background_pack_with_test_id(
-        &self, minimum_bytes: u64, maximum_bytes: u64, segment_id: Uuid,
+        &self,
+        minimum_bytes: u64,
+        maximum_bytes: u64,
+        segment_id: Uuid,
     ) -> io::Result<Option<(Uuid, Vec<BlockId>)>> {
         self.begin_background_pack_with_id_source(minimum_bytes, maximum_bytes, || segment_id)
     }
 
     fn begin_background_pack_with_id_source(
-        &self, minimum_bytes: u64, maximum_bytes: u64, next_id: impl FnOnce() -> Uuid,
+        &self,
+        minimum_bytes: u64,
+        maximum_bytes: u64,
+        next_id: impl FnOnce() -> Uuid,
     ) -> io::Result<Option<(Uuid, Vec<BlockId>)>> {
         if minimum_bytes == 0 || minimum_bytes > maximum_bytes {
             return Err(io::Error::new(
@@ -2373,8 +2649,7 @@ impl BlockStore {
                 ids,
             }) if *active == segment_id => {
                 let packed = ids.clone();
-                background.active =
-                    Some(BackgroundPack::Completed { reference, packed });
+                background.active = Some(BackgroundPack::Completed { reference, packed });
                 BackgroundPackCompletion::Published
             }
             _ if background.abandoned == Some(segment_id) => {
@@ -2425,9 +2700,7 @@ impl BlockStore {
             .background_pack
             .lock()
             .map_err(|_| io::Error::other("background pack state poisoned"))?;
-        if let Some(BackgroundPack::Creating { segment_id, .. }) =
-            background.active.take()
-        {
+        if let Some(BackgroundPack::Creating { segment_id, .. }) = background.active.take() {
             background.abandoned = Some(segment_id);
         }
         self.background_pack_revision
@@ -2448,7 +2721,10 @@ impl BlockStore {
         match background.active.take() {
             Some(BackgroundPack::Completed { reference, packed }) => {
                 let segment_id = reference.segment_id;
-                background.active = Some(BackgroundPack::Publishing { segment_id, merge_id: None });
+                background.active = Some(BackgroundPack::Publishing {
+                    segment_id,
+                    merge_id: None,
+                });
                 Ok(Some((
                     reference,
                     packed,
@@ -2551,12 +2827,17 @@ impl BlockStore {
     /// Segment IDs whose files must survive orphan planning although no
     /// manifest references them yet.
     pub(crate) fn unpublished_background_segment_ids(&self) -> io::Result<Vec<Uuid>> {
-        let background = self.background_pack.lock()
+        let background = self
+            .background_pack
+            .lock()
             .map_err(|_| io::Error::other("background pack state poisoned"))?;
         let mut ids = Vec::with_capacity(2);
         if let Some(pack) = &background.active {
             ids.push(pack.segment_id());
-            if let BackgroundPack::Publishing { merge_id: Some(id), .. } = pack {
+            if let BackgroundPack::Publishing {
+                merge_id: Some(id), ..
+            } = pack
+            {
                 ids.push(*id);
             }
         }
@@ -2564,16 +2845,22 @@ impl BlockStore {
     }
 
     pub(crate) fn reserve_background_merge(&self, segment_id: Uuid) -> io::Result<Uuid> {
-        let mut background = self.background_pack.lock()
+        let mut background = self
+            .background_pack
+            .lock()
             .map_err(|_| io::Error::other("background pack state poisoned"))?;
         match &mut background.active {
-            Some(BackgroundPack::Publishing { segment_id: active, merge_id })
-                if *active == segment_id && merge_id.is_none() => {
-                    let id = Uuid::new_v4();
-                    *merge_id = Some(id);
-                    Ok(id)
-                }
-            _ => Err(io::Error::other("merge publication reservation is unavailable")),
+            Some(BackgroundPack::Publishing {
+                segment_id: active,
+                merge_id,
+            }) if *active == segment_id && merge_id.is_none() => {
+                let id = Uuid::new_v4();
+                *merge_id = Some(id);
+                Ok(id)
+            }
+            _ => Err(io::Error::other(
+                "merge publication reservation is unavailable",
+            )),
         }
     }
 
@@ -2607,19 +2894,27 @@ impl BlockStore {
     /// block with `WouldBlock`; nothing is cleared, so the payloads stay
     /// staged and WAL-carried.
     pub(crate) fn flush_pending_subset_until(
-        &self, materialize: &BTreeSet<BlockId>, stop: &AtomicBool,
+        &self,
+        materialize: &BTreeSet<BlockId>,
+        stop: &AtomicBool,
     ) -> io::Result<()> {
         self.flush_pending_selection(materialize, true, Some(stop))
     }
 
     /// A reference-only commit needs durability for its own references, not
     /// the unrelated WAL-carried backlog or its recovery sync marks.
-    pub(crate) fn flush_pending_references(&self, references: &BTreeSet<BlockId>) -> io::Result<()> {
+    pub(crate) fn flush_pending_references(
+        &self,
+        references: &BTreeSet<BlockId>,
+    ) -> io::Result<()> {
         self.flush_pending_selection(references, false, None)
     }
 
     fn flush_pending_selection(
-        &self, materialize: &BTreeSet<BlockId>, include_all_sync_marks: bool, stop: Option<&AtomicBool>,
+        &self,
+        materialize: &BTreeSet<BlockId>,
+        include_all_sync_marks: bool,
+        stop: Option<&AtomicBool>,
     ) -> io::Result<()> {
         let (payloads, sync_only) = {
             let pending = self
@@ -2634,7 +2929,10 @@ impl BlockStore {
                     .filter(|(id, _)| materialize.contains(*id))
                     .map(|(id, payload)| (*id, Arc::clone(payload)))
                     .collect::<Vec<_>>(),
-                pending.sync_only.iter().copied()
+                pending
+                    .sync_only
+                    .iter()
+                    .copied()
                     .filter(|id| include_all_sync_marks || materialize.contains(id))
                     .collect::<Vec<_>>(),
             )
@@ -2646,13 +2944,21 @@ impl BlockStore {
         let mut materialized = BTreeSet::new();
         for (id, payload) in payloads {
             if materialized.insert(id) {
-                shards.entry(self.shard_directory(id)).or_default().payloads.push((id, payload));
+                shards
+                    .entry(self.shard_directory(id))
+                    .or_default()
+                    .payloads
+                    .push((id, payload));
             }
         }
         let mut flushed = materialized.clone();
         for id in sync_only {
             if flushed.insert(id) {
-                shards.entry(self.shard_directory(id)).or_default().sync_only.push(id);
+                shards
+                    .entry(self.shard_directory(id))
+                    .or_default()
+                    .sync_only
+                    .push(id);
             }
         }
         self.publish_loose_shards(&shards, stop)?;
@@ -2676,12 +2982,14 @@ impl BlockStore {
     /// its shard on the caller instead. Every shard finishes before the first
     /// error in shard order is returned, and a worker panic resumes here.
     fn publish_loose_shards(
-        &self, shards: &BTreeMap<PathBuf, LooseShardBatch>, stop: Option<&AtomicBool>,
+        &self,
+        shards: &BTreeMap<PathBuf, LooseShardBatch>,
+        stop: Option<&AtomicBool>,
     ) -> io::Result<()> {
         if shards.len() < 2 || !self.vfs.supports_concurrent_file_publication() {
-            return shards
-                .iter()
-                .try_for_each(|(directory, batch)| self.publish_loose_shard(directory, batch, stop));
+            return shards.iter().try_for_each(|(directory, batch)| {
+                self.publish_loose_shard(directory, batch, stop)
+            });
         }
         let component = crate::fsync_stats::current_component();
         let mut shards = shards.iter();
@@ -2721,7 +3029,10 @@ impl BlockStore {
     /// it unlinks is skipped, since GC collects only blocks whose content
     /// lives on elsewhere and re-checkpointing must stay idempotent.
     fn publish_loose_shard(
-        &self, directory: &Path, batch: &LooseShardBatch, stop: Option<&AtomicBool>,
+        &self,
+        directory: &Path,
+        batch: &LooseShardBatch,
+        stop: Option<&AtomicBool>,
     ) -> io::Result<()> {
         let mut shard_ready = false;
         let mut publish_directory = false;
@@ -2736,7 +3047,10 @@ impl BlockStore {
         };
         for (id, payload) in &batch.payloads {
             if stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, "loose batch stopped before its next block"));
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "loose batch stopped before its next block",
+                ));
             }
             // A filename is not a complete-copy witness. Optional
             // dedupe/recovery may have staged valid WAL bytes over a
@@ -2806,7 +3120,11 @@ impl BlockStore {
     /// published name never has unsynced content. The caller owns the
     /// directory barrier.
     fn write_loose_synced(
-        &self, id: BlockId, payload: &[u8], directory: &Path, destination: &Path,
+        &self,
+        id: BlockId,
+        payload: &[u8],
+        directory: &Path,
+        destination: &Path,
     ) -> Result<u64, LooseWriteFailure> {
         let temporary = new_temporary_block_path(directory);
         let encoded = encoded_block(id, payload).map_err(LooseWriteFailure::Failed)?;
@@ -2822,9 +3140,12 @@ impl BlockStore {
                     },
                 )
                 .map_err(LooseWriteFailure::naming)?;
-            file.write_all_at(0, &encoded).map_err(LooseWriteFailure::Failed)?;
+            file.write_all_at(0, &encoded)
+                .map_err(LooseWriteFailure::Failed)?;
             sync_all_barrier(file.as_mut()).map_err(LooseWriteFailure::Failed)?;
-            self.vfs.rename(&temporary, destination).map_err(LooseWriteFailure::naming)
+            self.vfs
+                .rename(&temporary, destination)
+                .map_err(LooseWriteFailure::naming)
         })();
         if write_result.is_err() {
             let _ = self.vfs.remove_file(&temporary);
@@ -2873,34 +3194,47 @@ impl BlockStore {
 
     #[inline(always)]
     fn get_shared_measured<const MEASURE: bool>(&self, id: BlockId) -> io::Result<Arc<Vec<u8>>> {
-        let _read = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_SHARED_READ);
+        let _read = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+            crate::fsync_stats::STAGE_BLOCK_SHARED_READ,
+        );
         let pending = {
-            let _pending = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_GET_PENDING);
+            let _pending = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+                crate::fsync_stats::STAGE_GET_PENDING,
+            );
             self.pending_payload_measured::<MEASURE>(id)?
         };
         if let Some(payload) = pending {
             return Ok(payload);
         }
         {
-            let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT);
+            let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+                crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT,
+            );
             let mut cache = self
                 .cache
                 .write()
                 .map_err(|_| io::Error::other("block cache lock was poisoned"))?;
             drop(waiting);
-            let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS);
+            let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+                crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS,
+            );
             if let Some(payload) = cache.get(id) {
                 return Ok(payload);
             }
         }
         let payload = self.get_uncached(id)?;
         let shared = Arc::new(payload);
-        let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT);
-        let mut cache = self.cache
+        let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+            crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT,
+        );
+        let mut cache = self
+            .cache
             .write()
             .map_err(|_| io::Error::other("block cache lock was poisoned"))?;
         drop(waiting);
-        let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS);
+        let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+            crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS,
+        );
         cache.insert_shared(id, Arc::clone(&shared));
         Ok(shared)
     }
@@ -2924,26 +3258,50 @@ impl BlockStore {
     }
 
     #[inline(always)]
-    fn get_materialized_shared_measured<const MEASURE: bool>(&self, id: BlockId) -> io::Result<Arc<Vec<u8>>> {
-        let _read = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_SHARED_READ);
+    fn get_materialized_shared_measured<const MEASURE: bool>(
+        &self,
+        id: BlockId,
+    ) -> io::Result<Arc<Vec<u8>>> {
+        let _read = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+            crate::fsync_stats::STAGE_BLOCK_SHARED_READ,
+        );
         let pending = {
-            let _pending = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_GET_PENDING);
+            let _pending = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+                crate::fsync_stats::STAGE_GET_PENDING,
+            );
             self.pending_payload_measured::<MEASURE>(id)?
         };
-        if let Some(payload) = pending { return Ok(payload); }
+        if let Some(payload) = pending {
+            return Ok(payload);
+        }
         {
-            let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT);
-            let mut cache = self.cache.write()
+            let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+                crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT,
+            );
+            let mut cache = self
+                .cache
+                .write()
                 .map_err(|_| io::Error::other("block cache lock was poisoned"))?;
             drop(waiting);
-            let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS);
-            if let Some(payload) = cache.get(id) { return Ok(payload); }
+            let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+                crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS,
+            );
+            if let Some(payload) = cache.get(id) {
+                return Ok(payload);
+            }
         }
         let payload = Arc::new(self.get_uncached_materialized(id)?);
-        let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT);
-        let mut cache = self.cache.write().map_err(|_| io::Error::other("block cache lock was poisoned"))?;
+        let waiting = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+            crate::fsync_stats::STAGE_BLOCK_CACHE_WAIT,
+        );
+        let mut cache = self
+            .cache
+            .write()
+            .map_err(|_| io::Error::other("block cache lock was poisoned"))?;
         drop(waiting);
-        let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS);
+        let _access = crate::fsync_stats::StageTimer::conditional::<MEASURE>(
+            crate::fsync_stats::STAGE_BLOCK_CACHE_ACCESS,
+        );
         cache.insert_shared(id, Arc::clone(&payload));
         Ok(payload)
     }
@@ -2951,43 +3309,69 @@ impl BlockStore {
     /// Maintenance streaming must not evict foreground nodes with complete
     /// history sources. Each caller owns this bounded temporary allocation.
     pub(crate) fn get_materialized_uncached(&self, id: BlockId) -> io::Result<Arc<Vec<u8>>> {
-        if let Some(payload) = self.pending_payload(id)? { return Ok(payload); }
+        if let Some(payload) = self.pending_payload(id)? {
+            return Ok(payload);
+        }
         self.get_uncached_materialized(id).map(Arc::new)
     }
 
     pub(crate) fn install_history_payload_catalog(
-        &self, manifest: &crate::history::HistoryManifest,
+        &self,
+        manifest: &crate::history::HistoryManifest,
         root: Option<crate::history_payload::RoutingRoot>,
     ) -> io::Result<()> {
         if manifest.payload_index_root_id.is_some() != root.is_some() {
             return Err(invalid_data("history routing root presence mismatch"));
         }
-        *self.history_payloads.write().map_err(|_| io::Error::other("history payload catalog lock poisoned"))? =
+        *self
+            .history_payloads
+            .write()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))? =
             root.map(|root| Arc::new(crate::history_payload::Catalog::new(manifest, root)));
-        let sources: BTreeSet<_> = manifest.segments.iter().map(|reference| reference.block_id).collect();
-        self.history_source_handles.lock().map_err(|_| io::Error::other("history source cache lock poisoned"))?
-            .entries.retain(|id, _| sources.contains(id));
+        let sources: BTreeSet<_> = manifest
+            .segments
+            .iter()
+            .map(|reference| reference.block_id)
+            .collect();
+        self.history_source_handles
+            .lock()
+            .map_err(|_| io::Error::other("history source cache lock poisoned"))?
+            .entries
+            .retain(|id, _| sources.contains(id));
         Ok(())
     }
 
-    pub(crate) fn history_payload_metadata_ids(&self, manifest: &crate::history::HistoryManifest) -> io::Result<Vec<BlockId>> {
+    pub(crate) fn history_payload_metadata_ids(
+        &self,
+        manifest: &crate::history::HistoryManifest,
+    ) -> io::Result<Vec<BlockId>> {
         let selection = HistoryPayloadMetadataSelection::capture(manifest, u64::MAX)?;
         let mut ids = Vec::new();
-        self.visit_history_payload_metadata_selection(selection, |id| { ids.push(id); Ok(()) })?;
+        self.visit_history_payload_metadata_selection(selection, |id| {
+            ids.push(id);
+            Ok(())
+        })?;
         Ok(ids)
     }
 
     /// Eager readers and off-authority GC share one current-source decode and
     /// page enumeration. GC streams IDs into its existing bounded mark set.
     pub(crate) fn visit_history_payload_metadata_selection(
-        &self, selection: HistoryPayloadMetadataSelection,
+        &self,
+        selection: HistoryPayloadMetadataSelection,
         mut visitor: impl FnMut(BlockId) -> io::Result<()>,
     ) -> io::Result<()> {
-        for id in selection.index_ids { visitor(id)?; }
+        for id in selection.index_ids {
+            visitor(id)?;
+        }
         if let Some(root_id) = selection.payload_root_id {
             visitor(root_id)?;
-            let root = crate::history_payload::RoutingRoot::decode(&self.get_materialized_shared(root_id)?)?;
-            for id in root.page_ids() { visitor(id)?; }
+            let root = crate::history_payload::RoutingRoot::decode(
+                &self.get_materialized_shared(root_id)?,
+            )?;
+            for id in root.page_ids() {
+                visitor(id)?;
+            }
         }
         Ok(())
     }
@@ -2995,8 +3379,14 @@ impl BlockStore {
     /// Called only after CONTROL owns the indexed history copies. In-flight
     /// pack plans keep their Arc buffers; their optional publication may still
     /// complete, but no data is lost when these RAM copies disappear.
-    pub(crate) fn release_history_carried_payloads(&self, ids: &BTreeSet<BlockId>) -> io::Result<()> {
-        let mut pending = self.pending.lock().map_err(|_| io::Error::other("pending block set poisoned"))?;
+    pub(crate) fn release_history_carried_payloads(
+        &self,
+        ids: &BTreeSet<BlockId>,
+    ) -> io::Result<()> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| io::Error::other("pending block set poisoned"))?;
         for id in ids {
             pending.remove(*id);
         }
@@ -3008,101 +3398,180 @@ impl BlockStore {
     }
 
     fn get_from_history_with_lookup(
-        &self, id: BlockId, lookup: Option<&CarriedRecoveryLookup>,
+        &self,
+        id: BlockId,
+        lookup: Option<&CarriedRecoveryLookup>,
     ) -> io::Result<Option<Vec<u8>>> {
-        let _resolve = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_HISTORY_RESOLVE);
-        let catalog = self.history_payloads.read().map_err(|_| io::Error::other("history payload catalog lock poisoned"))?.clone();
-        let Some(catalog) = catalog else { return Ok(None); };
+        let _resolve = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_BLOCK_HISTORY_RESOLVE,
+        );
+        let catalog = self
+            .history_payloads
+            .read()
+            .map_err(|_| io::Error::other("history payload catalog lock poisoned"))?
+            .clone();
+        let Some(catalog) = catalog else {
+            return Ok(None);
+        };
         let mut found = None;
         let mut copy_error = None;
-        let mut visit = |location: crate::history_payload::PayloadLocation| {
-            match self.read_history_location(id, location) {
-                Ok(payload) => { found = Some(payload); Ok(true) }
-                Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::InvalidData) => {
-                    copy_error = Some(error); Ok(false)
-                }
-                Err(error) => Err(error),
+        let mut visit = |location: crate::history_payload::PayloadLocation| match self
+            .read_history_location(id, location)
+        {
+            Ok(payload) => {
+                found = Some(payload);
+                Ok(true)
             }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+                ) =>
+            {
+                copy_error = Some(error);
+                Ok(false)
+            }
+            Err(error) => Err(error),
         };
-        let prepared = lookup.and_then(|lookup| lookup.history.as_ref())
+        let prepared = lookup
+            .and_then(|lookup| lookup.history.as_ref())
             .filter(|(captured, _)| Arc::ptr_eq(captured, &catalog));
         match prepared.and_then(|(_, prepared)| prepared.visit_locations(id, &mut visit)) {
             Some(result) => result?,
             None => catalog.visit_locations(self, id, &mut visit)?,
         }
-        if found.is_some() { return Ok(found); }
-        if let Some(error) = copy_error { return Err(error); }
+        if found.is_some() {
+            return Ok(found);
+        }
+        if let Some(error) = copy_error {
+            return Err(error);
+        }
         Ok(None)
     }
 
-    fn open_history_source(&self, source: BlockId, source_bytes: u32) -> io::Result<Arc<HistorySourceHandle>> {
+    fn open_history_source(
+        &self,
+        source: BlockId,
+        source_bytes: u32,
+    ) -> io::Result<Arc<HistorySourceHandle>> {
         {
-            let mut cache = self.history_source_handles.lock().map_err(|_| io::Error::other("history source cache lock poisoned"))?;
+            let mut cache = self
+                .history_source_handles
+                .lock()
+                .map_err(|_| io::Error::other("history source cache lock poisoned"))?;
             cache.trim(self.history_source_handle_limit.load(Ordering::Relaxed));
             if let Some(handle) = cache.get(source) {
-                if handle.source_bytes != source_bytes { return Err(invalid_data("history payload source size witness mismatch")); }
+                if handle.source_bytes != source_bytes {
+                    return Err(invalid_data("history payload source size witness mismatch"));
+                }
                 return Ok(handle);
             }
         }
         // Opening and framing I/O never hold the cache mutex. Racing opens may
         // share the winner's verified handle; unused descriptors drop here.
         let file = match crate::vfs::SharedReadFile::open(self.vfs.as_ref(), &self.path(source)) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound && self.shard_overflowed(source.0[0]) => {
+            Err(error)
+                if error.kind() == io::ErrorKind::NotFound
+                    && self.shard_overflowed(source.0[0]) =>
+            {
                 crate::vfs::SharedReadFile::open(self.vfs.as_ref(), &self.overflow_path(source))?
             }
             opened => opened?,
         };
         let expected = HEADER_BYTES as u64 + u64::from(source_bytes) + FOOTER_BYTES as u64;
-        if file.len()? != expected { return Err(invalid_data("history payload source size mismatch")); }
-        let mut header = [0_u8; HEADER_BYTES]; read_history_source_at(&file, 0, &mut header)?;
-        let mut source_id = [0_u8; 32]; read_history_source_at(&file, expected - 32, &mut source_id)?;
-        if &header[..8] != MAGIC || u32::from_le_bytes(header[8..12].try_into().unwrap()) != FORMAT_VERSION
-            || u32::from_le_bytes(header[12..16].try_into().unwrap()) != source_bytes || source_id != source.0 {
+        if file.len()? != expected {
+            return Err(invalid_data("history payload source size mismatch"));
+        }
+        let mut header = [0_u8; HEADER_BYTES];
+        read_history_source_at(&file, 0, &mut header)?;
+        let mut source_id = [0_u8; 32];
+        read_history_source_at(&file, expected - 32, &mut source_id)?;
+        if &header[..8] != MAGIC
+            || u32::from_le_bytes(header[8..12].try_into().unwrap()) != FORMAT_VERSION
+            || u32::from_le_bytes(header[12..16].try_into().unwrap()) != source_bytes
+            || source_id != source.0
+        {
             return Err(invalid_data("history payload source witness mismatch"));
         }
         let handle = Arc::new(HistorySourceHandle { file, source_bytes });
-        let mut cache = self.history_source_handles.lock().map_err(|_| io::Error::other("history source cache lock poisoned"))?;
+        let mut cache = self
+            .history_source_handles
+            .lock()
+            .map_err(|_| io::Error::other("history source cache lock poisoned"))?;
         let maximum = self.history_source_handle_limit.load(Ordering::Relaxed);
         if maximum != 0 {
             if let Some(existing) = cache.get(source) {
-                if existing.source_bytes != source_bytes { return Err(invalid_data("history payload source size witness mismatch")); }
+                if existing.source_bytes != source_bytes {
+                    return Err(invalid_data("history payload source size witness mismatch"));
+                }
                 return Ok(existing);
             }
             cache.clock = cache.clock.saturating_add(1);
-            let age = cache.clock; cache.entries.insert(source, (Arc::clone(&handle), age)); cache.trim(maximum);
+            let age = cache.clock;
+            cache.entries.insert(source, (Arc::clone(&handle), age));
+            cache.trim(maximum);
         }
         Ok(handle)
     }
 
-    fn read_history_location(&self, id: BlockId, location: crate::history_payload::PayloadLocation) -> io::Result<Vec<u8>> {
-        if location.offset.checked_add(location.length).is_none_or(|end| end > location.source_bytes) {
+    fn read_history_location(
+        &self,
+        id: BlockId,
+        location: crate::history_payload::PayloadLocation,
+    ) -> io::Result<Vec<u8>> {
+        if location
+            .offset
+            .checked_add(location.length)
+            .is_none_or(|end| end > location.source_bytes)
+        {
             return Err(invalid_data("history payload location exceeds its source"));
         }
         let mut payload = vec![0; location.length as usize];
         let opened = {
-            let _open = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_HISTORY_SOURCE_OPEN);
+            let _open = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_BLOCK_HISTORY_SOURCE_OPEN,
+            );
             self.open_history_source(location.source, location.source_bytes)
         };
         match opened {
             Ok(handle) => {
-                let result = handle.read_exact_at(HEADER_BYTES as u64 + u64::from(location.offset), &mut payload);
+                let result = handle.read_exact_at(
+                    HEADER_BYTES as u64 + u64::from(location.offset),
+                    &mut payload,
+                );
                 if let Err(error) = result {
-                    self.history_source_handles.lock().map_err(|_| io::Error::other("history source cache lock poisoned"))?
-                        .entries.remove(&location.source);
-                    return Err(if error.kind() == io::ErrorKind::UnexpectedEof { invalid_data("history payload source was truncated") } else { error });
+                    self.history_source_handles
+                        .lock()
+                        .map_err(|_| io::Error::other("history source cache lock poisoned"))?
+                        .entries
+                        .remove(&location.source);
+                    return Err(if error.kind() == io::ErrorKind::UnexpectedEof {
+                        invalid_data("history payload source was truncated")
+                    } else {
+                        error
+                    });
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let source = self.get_materialized_shared(location.source)?;
-                if source.len() != location.source_bytes as usize { return Err(invalid_data("packed history source size mismatch")); }
-                payload.copy_from_slice(&source[location.offset as usize..(location.offset + location.length) as usize]);
+                if source.len() != location.source_bytes as usize {
+                    return Err(invalid_data("packed history source size mismatch"));
+                }
+                payload.copy_from_slice(
+                    &source[location.offset as usize..(location.offset + location.length) as usize],
+                );
             }
             Err(error) => return Err(error),
         }
-        let _verify = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_CONTENT_VERIFY);
+        let _verify = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_BLOCK_CONTENT_VERIFY,
+        );
         if BlockId::for_payload(&payload) != id {
-            self.history_source_handles.lock().map_err(|_| io::Error::other("history source cache lock poisoned"))?
-                .entries.remove(&location.source);
+            self.history_source_handles
+                .lock()
+                .map_err(|_| io::Error::other("history source cache lock poisoned"))?
+                .entries
+                .remove(&location.source);
             return Err(invalid_data("history payload content hash mismatch"));
         }
         Ok(payload)
@@ -3184,17 +3653,28 @@ impl BlockStore {
     ) -> io::Result<TraversalReader<'_>> {
         let store = match self.payload_segments.as_ref() {
             Some(store) if !catalog_locations_disabled() => store,
-            _ => return Ok(TraversalReader { blocks: self, locations: None }),
+            _ => {
+                return Ok(TraversalReader {
+                    blocks: self,
+                    locations: None,
+                })
+            }
         };
         // A failed derivation leaves the build below to answer.
         let _ = self.advance_catalog_locations();
         if let Some(table) = self.current_catalog_locations() {
             if table.unindexed_segments() == 0 {
-                return Ok(TraversalReader { blocks: self, locations: Some((store, table)) });
+                return Ok(TraversalReader {
+                    blocks: self,
+                    locations: Some((store, table)),
+                });
             }
         }
         let table = self.build_and_publish_catalog_locations(store, check, "traversal")?;
-        Ok(TraversalReader { blocks: self, locations: table.map(|table| (store, table)) })
+        Ok(TraversalReader {
+            blocks: self,
+            locations: table.map(|table| (store, table)),
+        })
     }
 
     /// Builds and publishes the store's first catalog location table, unless
@@ -3211,13 +3691,17 @@ impl BlockStore {
             return Ok(false);
         };
         if catalog_locations_disabled()
-            || self.catalog_locations.read()
+            || self
+                .catalog_locations
+                .read()
                 .map_err(|_| io::Error::other("catalog location lock was poisoned"))?
                 .is_some()
         {
             return Ok(false);
         }
-        Ok(self.build_and_publish_catalog_locations(store, check, "first")?.is_some())
+        Ok(self
+            .build_and_publish_catalog_locations(store, check, "first")?
+            .is_some())
     }
 
     /// Builds the location table of the installed catalog from every segment
@@ -3239,30 +3723,45 @@ impl BlockStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn published_catalog_locations_for_test(&self) -> Option<(u64, Arc<CatalogLocationTable>)> {
-        self.catalog_locations.read().unwrap().as_ref()
+    pub(crate) fn published_catalog_locations_for_test(
+        &self,
+    ) -> Option<(u64, Arc<CatalogLocationTable>)> {
+        self.catalog_locations
+            .read()
+            .unwrap()
+            .as_ref()
             .map(|published| (published.publication, Arc::clone(&published.table)))
     }
 
     #[cfg(test)]
     pub(crate) fn installed_catalog_publication_for_test(&self) -> u64 {
-        self.installed_payload_catalog_publication.load(Ordering::Acquire)
+        self.installed_payload_catalog_publication
+            .load(Ordering::Acquire)
     }
 
     /// (built, negative answers cover the installed catalog).
     #[cfg(test)]
     pub(crate) fn packed_filter_state_for_test(&self) -> (bool, bool) {
         let filter = self.packed_filter.read().unwrap();
-        (filter.built, filter.built && self.filter_covers_installed_catalog(&filter))
+        (
+            filter.built,
+            filter.built && self.filter_covers_installed_catalog(&filter),
+        )
     }
 
     #[cfg(test)]
-    pub(crate) fn packed_filter_covers_segment_for_test(&self, reference: &PayloadSegmentReference) -> bool {
+    pub(crate) fn packed_filter_covers_segment_for_test(
+        &self,
+        reference: &PayloadSegmentReference,
+    ) -> bool {
         self.packed_filter.read().unwrap().covers_segment(reference)
     }
 
     #[cfg(test)]
-    pub(crate) fn before_next_install_swap_for_test(&self, hook: impl FnOnce(&BlockStore) + Send + 'static) {
+    pub(crate) fn before_next_install_swap_for_test(
+        &self,
+        hook: impl FnOnce(&BlockStore) + Send + 'static,
+    ) {
         *self.install_swap_hook.lock().unwrap() = Some(Box::new(hook));
     }
 
@@ -3279,7 +3778,9 @@ impl BlockStore {
     /// The table is an optimization: a poisoned lock only means no table.
     fn current_catalog_locations(&self) -> Option<Arc<CatalogLocationTable>> {
         let published = self.catalog_locations.read().ok()?.clone()?;
-        let installed = self.installed_payload_catalog_publication.load(Ordering::Acquire);
+        let installed = self
+            .installed_payload_catalog_publication
+            .load(Ordering::Acquire);
         (published.publication == installed).then_some(published.table)
     }
 
@@ -3300,9 +3801,13 @@ impl BlockStore {
         let Ok(mut published) = self.catalog_locations.write() else {
             return;
         };
-        let installed = self.installed_payload_catalog_publication.load(Ordering::Acquire);
+        let installed = self
+            .installed_payload_catalog_publication
+            .load(Ordering::Acquire);
         if publication != installed
-            && published.as_ref().is_some_and(|current| current.publication == installed)
+            && published
+                .as_ref()
+                .is_some_and(|current| current.publication == installed)
         {
             return;
         }
@@ -3314,27 +3819,39 @@ impl BlockStore {
         });
         drop(published);
         if let Some(replaced) = replaced {
-            let previous_spare = self.retired_catalog_locations.lock().ok()
+            let previous_spare = self
+                .retired_catalog_locations
+                .lock()
+                .ok()
                 .and_then(|mut retired| retired.replace(replaced.table));
             // Released outside the lock: it may be the last handle.
             drop(previous_spare);
         }
-        crate::engine_log::info("catalog_locations", &format!(
-            "step=published source={source} publication={publication} installed={installed} \
+        crate::engine_log::info(
+            "catalog_locations",
+            &format!(
+                "step=published source={source} publication={publication} installed={installed} \
              located_blocks={} unindexed_segments={} resident_bytes={} elapsed_ms={}",
-            table.located_blocks(), table.unindexed_segments(), table.resident_bytes(),
-            started.elapsed().as_millis(),
-        ));
+                table.located_blocks(),
+                table.unindexed_segments(),
+                table.resident_bytes(),
+                started.elapsed().as_millis(),
+            ),
+        );
     }
 
     /// Whether the published table is a catalog behind, so that
     /// `advance_catalog_locations` has a derivation to do.
     pub(crate) fn catalog_location_derivation_due(&self) -> bool {
-        let installed = self.installed_payload_catalog_publication.load(Ordering::Acquire);
+        let installed = self
+            .installed_payload_catalog_publication
+            .load(Ordering::Acquire);
         self.payload_segments.is_some()
             && installed != 0
             && self.catalog_locations.read().ok().is_some_and(|published| {
-                published.as_ref().is_some_and(|published| published.publication != installed)
+                published
+                    .as_ref()
+                    .is_some_and(|published| published.publication != installed)
             })
     }
 
@@ -3348,13 +3865,22 @@ impl BlockStore {
         let Some(store) = self.payload_segments.as_ref() else {
             return Ok(false);
         };
-        let published = self.catalog_locations.read()
+        let published = self
+            .catalog_locations
+            .read()
             .map_err(|_| io::Error::other("catalog location lock was poisoned"))?
             .clone();
-        let Some(PublishedCatalogLocations { publication, table: previous, .. }) = published else {
+        let Some(PublishedCatalogLocations {
+            publication,
+            table: previous,
+            ..
+        }) = published
+        else {
             return Ok(false);
         };
-        let installed = self.installed_payload_catalog_publication.load(Ordering::Acquire);
+        let installed = self
+            .installed_payload_catalog_publication
+            .load(Ordering::Acquire);
         if installed == 0 || installed == publication {
             return Ok(false);
         }
@@ -3363,11 +3889,17 @@ impl BlockStore {
             return Ok(false);
         }
         let started = std::time::Instant::now();
-        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CATALOG_LOCATION_DERIVE);
-        let catalog = manifest.as_ref().map_or(&[][..], |manifest| manifest.segments.as_slice());
+        let _timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CATALOG_LOCATION_DERIVE);
+        let catalog = manifest
+            .as_ref()
+            .map_or(&[][..], |manifest| manifest.segments.as_slice());
         // A spare a reader still holds is left to that reader, which frees
         // it; this derivation then allocates.
-        let spare = self.retired_catalog_locations.lock().ok()
+        let spare = self
+            .retired_catalog_locations
+            .lock()
+            .ok()
             .and_then(|mut retired| retired.take())
             .and_then(|table| Arc::try_unwrap(table).ok());
         let derived = Arc::new(store.derive_location_table(&previous, catalog, spare)?);
@@ -3395,7 +3927,11 @@ impl BlockStore {
     fn resolve_in_published_catalog<T>(
         &self,
         id: BlockId,
-        mut probe: impl FnMut(&PayloadSegmentStore, &PayloadSegmentReference, u32) -> io::Result<Option<T>>,
+        mut probe: impl FnMut(
+            &PayloadSegmentStore,
+            &PayloadSegmentReference,
+            u32,
+        ) -> io::Result<Option<T>>,
     ) -> PublishedCatalogAnswer<T> {
         use crate::fsync_stats::{
             note_stage_elapsed, STAGE_CATALOG_LOCATION_ABSENT, STAGE_CATALOG_LOCATION_HIT,
@@ -3409,11 +3945,22 @@ impl BlockStore {
         }
         let started = std::time::Instant::now();
         let unknown = || {
-            note_stage_elapsed(STAGE_CATALOG_LOCATION_UNKNOWN, started.elapsed().as_nanos() as u64);
+            note_stage_elapsed(
+                STAGE_CATALOG_LOCATION_UNKNOWN,
+                started.elapsed().as_nanos() as u64,
+            );
             PublishedCatalogAnswer::Unknown
         };
-        let installed = || self.installed_payload_catalog_publication.load(Ordering::Acquire);
-        let Some(published) = self.catalog_locations.read().ok().and_then(|published| published.clone()) else {
+        let installed = || {
+            self.installed_payload_catalog_publication
+                .load(Ordering::Acquire)
+        };
+        let Some(published) = self
+            .catalog_locations
+            .read()
+            .ok()
+            .and_then(|published| published.clone())
+        else {
             return unknown();
         };
         let current = published.publication == installed();
@@ -3427,7 +3974,10 @@ impl BlockStore {
             }
             match probe(store, reference, position) {
                 Ok(Some(held)) => {
-                    note_stage_elapsed(STAGE_CATALOG_LOCATION_HIT, started.elapsed().as_nanos() as u64);
+                    note_stage_elapsed(
+                        STAGE_CATALOG_LOCATION_HIT,
+                        started.elapsed().as_nanos() as u64,
+                    );
                     return PublishedCatalogAnswer::Held(held);
                 }
                 Ok(None) => {}
@@ -3437,7 +3987,10 @@ impl BlockStore {
         if undecided || published.publication != installed() {
             return unknown();
         }
-        note_stage_elapsed(STAGE_CATALOG_LOCATION_ABSENT, started.elapsed().as_nanos() as u64);
+        note_stage_elapsed(
+            STAGE_CATALOG_LOCATION_ABSENT,
+            started.elapsed().as_nanos() as u64,
+        );
         PublishedCatalogAnswer::Absent(published.publication)
     }
 
@@ -3475,12 +4028,19 @@ impl BlockStore {
     }
 
     fn get_uncached_with_history_lookup(
-        &self, id: BlockId, lookup: Option<&CarriedRecoveryLookup>,
+        &self,
+        id: BlockId,
+        lookup: Option<&CarriedRecoveryLookup>,
     ) -> io::Result<Vec<u8>> {
         match self.get_from_history_with_lookup(id, lookup) {
             Ok(Some(payload)) => return Ok(payload),
             Ok(None) => {}
-            Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::InvalidData) => {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+                ) =>
+            {
                 return self.get_uncached_materialized(id).or(Err(error));
             }
             Err(error) => return Err(error),
@@ -3489,7 +4049,9 @@ impl BlockStore {
     }
 
     fn get_uncached_materialized(&self, id: BlockId) -> io::Result<Vec<u8>> {
-        let _resolve = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_MATERIALIZED_RESOLVE);
+        let _resolve = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_BLOCK_MATERIALIZED_RESOLVE,
+        );
         match self.locate_in_published_catalog(id) {
             PublishedCatalogAnswer::Held(payload) => return Ok(payload),
             PublishedCatalogAnswer::Absent(publication) => {
@@ -3504,17 +4066,24 @@ impl BlockStore {
         // checkpoint manifests are usually loose; resolve them directly before
         // considering a segment scan. A corrupt loose duplicate still falls
         // through to the existing verified packed-copy path.
-        let filter_built = self.packed_filter.read()
-            .map_err(|_| io::Error::other("packed block filter lock was poisoned"))?.built;
+        let filter_built = self
+            .packed_filter
+            .read()
+            .map_err(|_| io::Error::other("packed block filter lock was poisoned"))?
+            .built;
         if !filter_built {
             match self.loose_metadata(id)? {
                 Some((path, FileKind::File)) => match self.read_loose_block(id, &path) {
                     Ok(payload) => return Ok(payload),
-                    Err(error) if matches!(error.kind(), io::ErrorKind::InvalidData | io::ErrorKind::NotFound) => {},
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::InvalidData | io::ErrorKind::NotFound
+                        ) => {}
                     Err(error) => return Err(error),
                 },
-                Some((_, FileKind::Directory)) => {}, // The packed copy may still be valid.
-                None => {},
+                Some((_, FileKind::Directory)) => {} // The packed copy may still be valid.
+                None => {}
             }
         }
         let excluded_at = self.packed_filter_excludes(id)?;
@@ -3544,19 +4113,33 @@ impl BlockStore {
     /// unless the filter excluded the block under the publication that is
     /// still installed: then no catalogued segment holds it, so the miss is
     /// final. That proof keeps cold misses off the catalog.
-    fn get_loose_after_catalog(&self, id: BlockId, excluded_at: Option<u64>) -> io::Result<Vec<u8>> {
-        let missing = || io::Error::new(io::ErrorKind::NotFound, format!("content block {} is missing", id.to_hex()));
+    fn get_loose_after_catalog(
+        &self,
+        id: BlockId,
+        excluded_at: Option<u64>,
+    ) -> io::Result<Vec<u8>> {
+        let missing = || {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("content block {} is missing", id.to_hex()),
+            )
+        };
         match self.loose_metadata(id)? {
             Some((path, FileKind::File)) => match self.read_loose_block(id, &path) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 read => return read,
             },
-            Some((_, FileKind::Directory)) => return Err(invalid_data("block is not a regular file")),
+            Some((_, FileKind::Directory)) => {
+                return Err(invalid_data("block is not a regular file"))
+            }
             None => {}
         }
         let catalogued = match excluded_at {
             Some(publication) => {
-                publication != self.installed_payload_catalog_publication.load(Ordering::Acquire)
+                publication
+                    != self
+                        .installed_payload_catalog_publication
+                        .load(Ordering::Acquire)
                     && self.packed_filter_may_contain(id)?
             }
             None => true,
@@ -3580,7 +4163,8 @@ impl BlockStore {
             .packed_filter
             .read()
             .map_err(|_| io::Error::other("packed block filter lock was poisoned"))?;
-        Ok(filter.built && (filter.may_contain(id) || !self.filter_covers_installed_catalog(&filter)))
+        Ok(filter.built
+            && (filter.may_contain(id) || !self.filter_covers_installed_catalog(&filter)))
     }
 
     /// Dedupe membership probe behind the write path. The union filter is
@@ -3632,7 +4216,9 @@ impl BlockStore {
             return Ok(present);
         }
         match self.loose_metadata(id)? {
-            Some((path, FileKind::File)) => self.read_loose_block(id, &path).map(DedupeProbe::Present),
+            Some((path, FileKind::File)) => {
+                self.read_loose_block(id, &path).map(DedupeProbe::Present)
+            }
             Some((_, FileKind::Directory)) => Err(invalid_data("block is not a regular file")),
             None => Ok(DedupeProbe::Missing),
         }
@@ -3647,8 +4233,12 @@ impl BlockStore {
             .map_err(|_| io::Error::other("block cache lock was poisoned"))?
             .set_capacity_bytes(capacity_bytes);
         let maximum = capacity_bytes / MAX_BLOCK_BYTES;
-        self.history_source_handle_limit.store(maximum, Ordering::Relaxed);
-        self.history_source_handles.lock().map_err(|_| io::Error::other("history source cache lock poisoned"))?.trim(maximum);
+        self.history_source_handle_limit
+            .store(maximum, Ordering::Relaxed);
+        self.history_source_handles
+            .lock()
+            .map_err(|_| io::Error::other("history source cache lock poisoned"))?
+            .trim(maximum);
         Ok(())
     }
 
@@ -3660,21 +4250,37 @@ impl BlockStore {
         if let Some(store) = self.payload_segments.as_ref() {
             store.set_open_segment_cache_budget_bytes(budget_bytes)?;
             if let Ok(mut hints) = self.read_hints.write() {
-                hints.resize_with_saved(self.root.parent().expect("blocks have an authority parent"),
-                    self.vfs.as_ref(), store.routing_budget_bytes());
+                hints.resize_with_saved(
+                    self.root.parent().expect("blocks have an authority parent"),
+                    self.vfs.as_ref(),
+                    store.routing_budget_bytes(),
+                );
             }
-            let manifest = self.payload_manifest.read().map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
+            let manifest = self
+                .payload_manifest
+                .read()
+                .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
             if let Some(manifest) = manifest.as_ref() {
-                let mut routing = self.payload_routing.write().map_err(|_| io::Error::other("payload routing lock was poisoned"))?;
-                *routing = crate::payload_routing::PayloadRouting::build(manifest, Some(store), &routing,
-                    &Default::default(), store.routing_budget_bytes(), false);
+                let mut routing = self
+                    .payload_routing
+                    .write()
+                    .map_err(|_| io::Error::other("payload routing lock was poisoned"))?;
+                *routing = crate::payload_routing::PayloadRouting::build(
+                    manifest,
+                    Some(store),
+                    &routing,
+                    &Default::default(),
+                    store.routing_budget_bytes(),
+                    false,
+                );
             }
         }
         Ok(())
     }
 
     fn read_loose_block(&self, id: BlockId, path: &Path) -> io::Result<Vec<u8>> {
-        let _read = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_LOOSE_READ);
+        let _read =
+            crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_LOOSE_READ);
         let maximum = HEADER_BYTES + MAX_BLOCK_BYTES + FOOTER_BYTES;
         let mut file = self.vfs.open(
             path,
@@ -3703,7 +4309,9 @@ impl BlockStore {
         }
         let crc_offset = HEADER_BYTES + payload_len;
         let stored_crc = u32::from_le_bytes(bytes[crc_offset..crc_offset + 4].try_into().unwrap());
-        let _verify = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_BLOCK_CONTENT_VERIFY);
+        let _verify = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_BLOCK_CONTENT_VERIFY,
+        );
         if crc32c::crc32c(&bytes[..crc_offset]) != stored_crc {
             return Err(invalid_data("block CRC32C mismatch"));
         }
@@ -3729,17 +4337,23 @@ impl BlockStore {
             .packed_filter
             .read()
             .map_err(|_| io::Error::other("packed block filter lock was poisoned"))?;
-        if !filter.built || filter.may_contain(id) || !self.filter_covers_installed_catalog(&filter) {
+        if !filter.built || filter.may_contain(id) || !self.filter_covers_installed_catalog(&filter)
+        {
             return Ok(None);
         }
         Ok(Some(filter.covered_catalog_publication))
     }
 
     fn filter_covers_installed_catalog(&self, filter: &PackedBlockFilter) -> bool {
-        let publication = self.installed_payload_catalog_publication.load(Ordering::Acquire);
+        let publication = self
+            .installed_payload_catalog_publication
+            .load(Ordering::Acquire);
         let complete = publication != 0 && filter.covered_catalog_publication == publication;
         if !complete {
-            crate::fsync_stats::note_stage_elapsed(crate::fsync_stats::STAGE_PACK_FILTER_INCOMPLETE, 0);
+            crate::fsync_stats::note_stage_elapsed(
+                crate::fsync_stats::STAGE_PACK_FILTER_INCOMPLETE,
+                0,
+            );
         }
         complete
     }
@@ -3788,7 +4402,10 @@ impl BlockStore {
     /// coverage of unpublished segments, which their install reads again.
     /// Nothing persists, so a crash or stop anywhere leaves a reopened store
     /// as a clean open leaves it.
-    pub(crate) fn build_packed_filter(&self, mut check: impl FnMut() -> io::Result<()>) -> io::Result<bool> {
+    pub(crate) fn build_packed_filter(
+        &self,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<bool> {
         let poisoned = || io::Error::other("packed block filter lock was poisoned");
         let Some(store) = self.payload_segments.as_ref() else {
             return Ok(false);
@@ -3802,7 +4419,11 @@ impl BlockStore {
         };
         let started = std::time::Instant::now();
         let mut built = PackedBlockFilter::with_capacity(
-            catalog.segments.iter().map(|reference| reference.block_count as usize).sum(),
+            catalog
+                .segments
+                .iter()
+                .map(|reference| reference.block_count as usize)
+                .sum(),
         );
         let mut routes = crate::payload_routing::PayloadRouting::default();
         let mut remaining_route_bytes = store.routing_budget_bytes();
@@ -3811,7 +4432,13 @@ impl BlockStore {
         loop {
             for reference in &unread {
                 check()?;
-                if !self.cover_from_verified_index(store, reference, &mut built, &mut routes, &mut remaining_route_bytes) {
+                if !self.cover_from_verified_index(
+                    store,
+                    reference,
+                    &mut built,
+                    &mut routes,
+                    &mut remaining_route_bytes,
+                ) {
                     unreadable.insert(reference.segment_id);
                 }
             }
@@ -3820,8 +4447,12 @@ impl BlockStore {
             let Some(current) = current else {
                 return Ok(false);
             };
-            unread = current.segments.iter()
-                .filter(|reference| !built.covers_segment(reference) && !unreadable.contains(&reference.segment_id))
+            unread = current
+                .segments
+                .iter()
+                .filter(|reference| {
+                    !built.covers_segment(reference) && !unreadable.contains(&reference.segment_id)
+                })
                 .copied()
                 .collect();
             if !unread.is_empty() {
@@ -3829,10 +4460,18 @@ impl BlockStore {
             }
             // Built outside every lock, from the indexes this build verified.
             let routing = {
-                let previous = self.payload_routing.read()
+                let previous = self
+                    .payload_routing
+                    .read()
                     .map_err(|_| io::Error::other("payload routing lock was poisoned"))?;
                 crate::payload_routing::PayloadRouting::build(
-                    &current, Some(store), &previous, &routes, store.routing_budget_bytes(), false)
+                    &current,
+                    Some(store),
+                    &previous,
+                    &routes,
+                    store.routing_budget_bytes(),
+                    false,
+                )
             };
             let mut filter = self.packed_filter.write().map_err(|_| poisoned())?;
             if !due(&filter) {
@@ -3841,21 +4480,37 @@ impl BlockStore {
             }
             // The manifest read lock fences installs: a catalog swap cannot
             // land between this comparison and the replacement below.
-            let installed = self.payload_manifest.read()
+            let installed = self
+                .payload_manifest
+                .read()
                 .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
             if installed.as_ref() != Some(&current)
-                || self.installed_payload_catalog_publication.load(Ordering::Acquire) != publication
+                || self
+                    .installed_payload_catalog_publication
+                    .load(Ordering::Acquire)
+                    != publication
             {
                 continue;
             }
-            built.retain_catalog(&current.segments.iter().map(|reference| reference.segment_id).collect());
+            built.retain_catalog(
+                &current
+                    .segments
+                    .iter()
+                    .map(|reference| reference.segment_id)
+                    .collect(),
+            );
             if publication != 0 && built.covers_catalog(&current) {
                 built.covered_catalog_publication = publication;
             }
-            *self.payload_routing.write()
+            *self
+                .payload_routing
+                .write()
                 .map_err(|_| io::Error::other("payload routing lock was poisoned"))? = routing;
             let replaced = std::mem::replace(&mut *filter, built);
-            let (blocks, covered) = (filter.insertions, filter.covered_catalog_publication == publication);
+            let (blocks, covered) = (
+                filter.insertions,
+                filter.covered_catalog_publication == publication,
+            );
             drop(installed);
             drop(filter);
             // A replaced filter can be a gigabyte; free it outside the locks.
@@ -3892,7 +4547,9 @@ impl BlockStore {
         for id in segment.block_ids() {
             filter.insert(id);
         }
-        filter.covered_segments.insert(reference.segment_id, *reference);
+        filter
+            .covered_segments
+            .insert(reference.segment_id, *reference);
         true
     }
 
@@ -3901,7 +4558,8 @@ impl BlockStore {
     /// pre-filter scan path, which surfaces that corruption exactly
     /// where it always did.
     fn scan_packed_filter(
-        &self, manifest: &PayloadManifest,
+        &self,
+        manifest: &PayloadManifest,
         recovery: Option<&mut CarriedRecoveryLookup>,
         routes: Option<&mut crate::payload_routing::PayloadRouting>,
     ) -> PackedBlockFilter {
@@ -3909,7 +4567,8 @@ impl BlockStore {
     }
 
     fn scan_packed_filter_until(
-        &self, manifest: &PayloadManifest,
+        &self,
+        manifest: &PayloadManifest,
         mut recovery: Option<&mut CarriedRecoveryLookup>,
         mut routes: Option<&mut crate::payload_routing::PayloadRouting>,
         should_stop: &dyn Fn() -> bool,
@@ -3923,7 +4582,9 @@ impl BlockStore {
         if let Some(store) = self.payload_segments.as_ref() {
             let mut remaining_route_bytes = store.routing_budget_bytes();
             for reference in &manifest.segments {
-                if should_stop() { return PackedBlockFilter::empty(); }
+                if should_stop() {
+                    return PackedBlockFilter::empty();
+                }
                 match store.open_segment(reference.segment_id) {
                     Ok(segment) => {
                         if validate_open_segment(&segment, reference).is_err()
@@ -3932,7 +4593,11 @@ impl BlockStore {
                             return PackedBlockFilter::empty();
                         }
                         if let Some(routes) = routes.as_deref_mut() {
-                            routes.remember_verified(*reference, &segment, &mut remaining_route_bytes);
+                            routes.remember_verified(
+                                *reference,
+                                &segment,
+                                &mut remaining_route_bytes,
+                            );
                         }
                         for id in segment.block_ids() {
                             filter.insert(id);
@@ -3942,7 +4607,9 @@ impl BlockStore {
                                 }
                             }
                         }
-                        filter.covered_segments.insert(reference.segment_id, *reference);
+                        filter
+                            .covered_segments
+                            .insert(reference.segment_id, *reference);
                     }
                     Err(_) => return PackedBlockFilter::empty(),
                 }
@@ -3972,10 +4639,12 @@ impl BlockStore {
     ) -> io::Result<bool> {
         let poisoned = || io::Error::other("packed block filter lock was poisoned");
         if !self.packed_filter.read().map_err(|_| poisoned())?.built {
-            let nothing_catalogued = self.payload_manifest.read()
+            let nothing_catalogued = self
+                .payload_manifest
+                .read()
                 .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?
                 .as_ref()
-                .map_or(true, |installed| installed.segments.is_empty());
+                .is_none_or(|installed| installed.segments.is_empty());
             if !nothing_catalogued {
                 return Ok(false);
             }
@@ -3990,19 +4659,29 @@ impl BlockStore {
         }
         let uncovered: Vec<PayloadSegmentReference> = {
             let filter = self.packed_filter.read().map_err(|_| poisoned())?;
-            manifest.segments.iter().filter(|reference| !filter.covers_segment(reference)).copied().collect()
+            manifest
+                .segments
+                .iter()
+                .filter(|reference| !filter.covers_segment(reference))
+                .copied()
+                .collect()
         };
         if let Some(store) = self.payload_segments.as_ref() {
             let mut remaining_route_bytes = store.routing_budget_bytes();
             for reference in &uncovered {
-                let Ok(segment) = store.open_segment(reference.segment_id) else { return Ok(true); };
+                let Ok(segment) = store.open_segment(reference.segment_id) else {
+                    return Ok(true);
+                };
                 if validate_open_segment(&segment, reference).is_err() {
                     return Ok(true);
                 }
                 // Optional witness, as after every verified index read.
                 let _ = store.remember_segment_membership(&segment);
                 routes.remember_verified(*reference, &segment, &mut remaining_route_bytes);
-                self.packed_filter.write().map_err(|_| poisoned())?.cover_segment(reference, segment.block_ids());
+                self.packed_filter
+                    .write()
+                    .map_err(|_| poisoned())?
+                    .cover_segment(reference, segment.block_ids());
             }
         }
         let mut filter = self.packed_filter.write().map_err(|_| poisoned())?;
@@ -4016,8 +4695,14 @@ impl BlockStore {
             .payload_manifest
             .read()
             .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
-        if manifest.is_none() { return Ok(Vec::new()); }
-        Ok(self.payload_routing.read().map_err(|_| io::Error::other("payload routing lock was poisoned"))?.candidates(id))
+        if manifest.is_none() {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .payload_routing
+            .read()
+            .map_err(|_| io::Error::other("payload routing lock was poisoned"))?
+            .candidates(id))
     }
 
     fn get_from_payload_segments(&self, id: BlockId) -> io::Result<Option<Vec<u8>>> {
@@ -4037,7 +4722,9 @@ impl BlockStore {
         candidates: &[PayloadSegmentReference],
     ) -> io::Result<Option<Vec<u8>>> {
         let result = self.get_from_payload_segment_references(id, candidates);
-        if matches!(result, Ok(Some(_))) { return result; }
+        if matches!(result, Ok(Some(_))) {
+            return result;
+        }
         let latest = self.payload_segment_candidates(id)?;
         if latest != candidates {
             self.get_from_payload_segment_references(id, &latest)
@@ -4082,7 +4769,9 @@ impl BlockStore {
             return Ok(None);
         }
         match self.resolve_in_published_catalog(id, |store, reference, position| {
-            Ok(store.located_entry_names(reference, position, id)?.then_some(reference.segment_id))
+            Ok(store
+                .located_entry_names(reference, position, id)?
+                .then_some(reference.segment_id))
         }) {
             PublishedCatalogAnswer::Held(segment_id) => return Ok(Some(segment_id)),
             PublishedCatalogAnswer::Absent(_) => return Ok(None),
@@ -4095,7 +4784,11 @@ impl BlockStore {
         let store = self.payload_segments.as_ref().ok_or_else(|| {
             invalid_data("CONTROL payload manifest has no payload segment directory")
         })?;
-        for reference in store.segments_that_may_contain(&candidates, id)?.iter().rev() {
+        for reference in store
+            .segments_that_may_contain(&candidates, id)?
+            .iter()
+            .rev()
+        {
             if self
                 .open_catalogued_payload_segment(reference)?
                 .contains(id)
@@ -4117,7 +4810,11 @@ impl BlockStore {
         let store = self.payload_segments.as_ref().ok_or_else(|| {
             invalid_data("CONTROL payload manifest has no payload segment directory")
         })?;
-        for reference in store.segments_that_may_contain(references, id)?.iter().rev() {
+        for reference in store
+            .segments_that_may_contain(references, id)?
+            .iter()
+            .rev()
+        {
             let segment = self.open_catalogued_payload_segment(reference)?;
             if let Some(payload) = store.get_with_handle(&segment, id)? {
                 if let Ok(mut hints) = self.read_hints.write() {
@@ -4132,16 +4829,24 @@ impl BlockStore {
     fn get_from_read_hint(&self, id: BlockId) -> Option<Vec<u8>> {
         let reference = {
             let manifest = self.payload_manifest.read().ok()?;
-            self.read_hints.read().ok()?.candidate(id, manifest.as_ref()?)?
+            self.read_hints
+                .read()
+                .ok()?
+                .candidate(id, manifest.as_ref()?)?
         };
         // A stale/corrupt hint only loses its fast path. The ordinary read
         // below remains responsible for the final integrity/error verdict.
-        self.get_from_payload_segment_references(id, &[reference]).ok().flatten()
+        self.get_from_payload_segment_references(id, &[reference])
+            .ok()
+            .flatten()
     }
 
     pub(crate) fn save_read_hints(&self) -> io::Result<()> {
         if let Ok(mut hints) = self.read_hints.write() {
-            hints.save(self.root.parent().expect("blocks have an authority parent"), self.vfs.as_ref())?;
+            hints.save(
+                self.root.parent().expect("blocks have an authority parent"),
+                self.vfs.as_ref(),
+            )?;
         }
         Ok(())
     }
@@ -4161,37 +4866,59 @@ impl BlockStore {
             .clone())
     }
 
-    pub(crate) fn install_recovery_payload_manifest(&self, manifest: PayloadManifest) -> io::Result<()> {
+    pub(crate) fn install_recovery_payload_manifest(
+        &self,
+        manifest: PayloadManifest,
+    ) -> io::Result<()> {
         self.install_payload_manifest_inner(manifest, true)
     }
 
-    fn install_payload_manifest_inner(&self, manifest: PayloadManifest, defer_filter: bool) -> io::Result<()> {
+    fn install_payload_manifest_inner(
+        &self,
+        manifest: PayloadManifest,
+        defer_filter: bool,
+    ) -> io::Result<()> {
         if !manifest.segments.is_empty() && self.payload_segments.is_none() {
             return Err(invalid_data(
                 "payload manifest requires a payload segment directory",
             ));
         }
-        let publication = self.next_payload_catalog_publication.fetch_update(
-            Ordering::AcqRel, Ordering::Relaxed, |value| value.checked_add(1),
-        ).map_err(|_| invalid_data("payload catalog cache publication counter exhausted"))? + 1;
+        let publication = self
+            .next_payload_catalog_publication
+            .try_update(Ordering::AcqRel, Ordering::Relaxed, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| invalid_data("payload catalog cache publication counter exhausted"))?
+            + 1;
         let mut verified_routes = crate::payload_routing::PayloadRouting::default();
         // Before the filter's builder has read the catalog, unknown routes
         // stay fallback: reading them here would read the indexes it reads.
-        let read_indexes = !defer_filter && self.cover_packed_filter(&manifest, publication, &mut verified_routes)?;
+        let read_indexes = !defer_filter
+            && self.cover_packed_filter(&manifest, publication, &mut verified_routes)?;
         // Whether this coverage step bound the publication to the filter, which
         // only a replacement by `build_packed_filter` can undo before the swap.
-        let bound = read_indexes && self.packed_filter.read()
-            .is_ok_and(|filter| filter.covered_catalog_publication == publication);
-        let budget = self.payload_segments.as_ref().map_or(0, |store| store.routing_budget_bytes());
+        let bound = read_indexes
+            && self
+                .packed_filter
+                .read()
+                .is_ok_and(|filter| filter.covered_catalog_publication == publication);
+        let budget = self
+            .payload_segments
+            .as_ref()
+            .map_or(0, |store| store.routing_budget_bytes());
         if let Some(store) = self.payload_segments.as_ref().filter(|_| read_indexes) {
             // Segments this publication adds whose route nothing verified yet;
             // their indexes are read here, outside every lock.
-            let unrouted = self.payload_routing.read()
+            let unrouted = self
+                .payload_routing
+                .read()
                 .map_err(|_| io::Error::other("payload routing lock was poisoned"))?
                 .unrouted(&manifest, &verified_routes, budget);
             let mut remaining = budget;
             for reference in &unrouted {
-                let Ok(segment) = store.open_segment(reference.segment_id) else { continue; };
+                let Ok(segment) = store.open_segment(reference.segment_id) else {
+                    continue;
+                };
                 if validate_open_segment(&segment, reference).is_ok() {
                     verified_routes.remember_verified(*reference, &segment, &mut remaining);
                 }
@@ -4214,9 +4941,17 @@ impl BlockStore {
         // The manifest read lock also fences its routes. Readers cannot see
         // routes from another publication generation, even during retirement.
         {
-            let mut current = self.payload_manifest.write().map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
-            let mut routes = self.payload_routing.write().map_err(|_| io::Error::other("payload routing lock was poisoned"))?;
-            let previous_segments = current.as_ref().map_or(&[][..], |previous| previous.segments.as_slice());
+            let mut current = self
+                .payload_manifest
+                .write()
+                .map_err(|_| io::Error::other("payload manifest lock was poisoned"))?;
+            let mut routes = self
+                .payload_routing
+                .write()
+                .map_err(|_| io::Error::other("payload routing lock was poisoned"))?;
+            let previous_segments = current
+                .as_ref()
+                .map_or(&[][..], |previous| previous.segments.as_slice());
             dropped_segments = previous_segments
                 .iter()
                 .filter(|reference| !referenced_segments.contains(&reference.segment_id))
@@ -4235,16 +4970,21 @@ impl BlockStore {
             // Zero is an invalidation fence: a concurrent negative probe is
             // conservative throughout the catalog/routes replacement. The
             // reserved ID is unique even if independent publishers overlap.
-            self.installed_payload_catalog_publication.store(0, Ordering::Release);
+            self.installed_payload_catalog_publication
+                .store(0, Ordering::Release);
             routes.advance(&manifest, &verified_routes, budget);
             *current = Some(manifest);
-            self.installed_payload_catalog_publication.store(publication, Ordering::Release);
+            self.installed_payload_catalog_publication
+                .store(publication, Ordering::Release);
             // Ordered with the swap, so liveness always describes the
             // catalog it names. A poisoned lock leaves the previous liveness,
             // which no longer matches this publication and so answers nothing.
             if let Ok(mut published) = self.catalog_locations.write() {
                 if let Some(published) = published.as_mut() {
-                    published.live_segments = published.table.segments().iter()
+                    published.live_segments = published
+                        .table
+                        .segments()
+                        .iter()
                         .map(|reference| referenced_segments.contains(&reference.segment_id))
                         .collect();
                     published.live_publication = publication;
@@ -4255,7 +4995,9 @@ impl BlockStore {
         let replaced_meanwhile = match self.packed_filter.write() {
             Ok(mut filter) => {
                 filter.retain_catalog(&referenced_segments);
-                !defer_filter && filter.built && filter.covered_catalog_publication != publication
+                !defer_filter
+                    && filter.built
+                    && filter.covered_catalog_publication != publication
                     && (bound || !read_indexes)
             }
             Err(_) => false,
@@ -4283,7 +5025,9 @@ impl BlockStore {
         // full-catalog adoption merge re-homes every block of the segment it
         // replaces. Any uncertainty keeps the original whole-cache clear.
         if !dropped_segments.is_empty()
-            && self.evict_payloads_of_dropped_segments(&dropped_segments, &added_segments).is_err()
+            && self
+                .evict_payloads_of_dropped_segments(&dropped_segments, &added_segments)
+                .is_err()
         {
             self.cache
                 .write()
@@ -4318,9 +5062,11 @@ impl BlockStore {
         for reference in dropped {
             let segment = store.open_segment(reference.segment_id)?;
             validate_open_segment(&segment, reference)?;
-            evicted.extend(segment.block_ids().filter(|id| {
-                !survivors.iter().any(|survivor| survivor.contains(*id))
-            }));
+            evicted.extend(
+                segment
+                    .block_ids()
+                    .filter(|id| !survivors.iter().any(|survivor| survivor.contains(*id))),
+            );
         }
         let mut cache = self
             .cache
@@ -4502,7 +5248,9 @@ impl BlockStore {
             let mut first_error = None;
             for handle in handles {
                 let result = match handle {
-                    Ok(handle) => handle.join().unwrap_or_else(|_| Err(io::Error::other("shard sweep panicked"))),
+                    Ok(handle) => handle
+                        .join()
+                        .unwrap_or_else(|_| Err(io::Error::other("shard sweep panicked"))),
                     // A refused spawn sweeps its shard on this thread.
                     Err((shard_byte, shard, _)) => self
                         .block_shard_ids(shard_byte, &shard)
@@ -4533,13 +5281,18 @@ impl BlockStore {
     /// The leaf directories of an overflowed shard.
     fn overflow_leaves(&self, shard_byte: u8) -> io::Result<Vec<PathBuf>> {
         let mut leaves = Vec::new();
-        for entry in self.vfs.read_directory_entries(&self.overflow_root.join(format!("{shard_byte:02x}")))? {
+        for entry in self
+            .vfs
+            .read_directory_entries(&self.overflow_root.join(format!("{shard_byte:02x}")))?
+        {
             let kind = match entry.kind {
                 Some(kind) => kind,
                 None => self.vfs.metadata(&entry.path)?,
             };
             if kind != FileKind::Directory {
-                return Err(invalid_data("block overflow shard contains a non-directory entry"));
+                return Err(invalid_data(
+                    "block overflow shard contains a non-directory entry",
+                ));
             }
             leaves.push(entry.path);
         }
@@ -4548,7 +5301,12 @@ impl BlockStore {
 
     /// The blocks one loose directory names, temporary names skipped: a shard
     /// directory, or the overflow leaf `leaf_byte` of that shard.
-    fn directory_block_ids(&self, directory: &Path, shard_byte: u8, leaf_byte: Option<u8>) -> io::Result<Vec<BlockId>> {
+    fn directory_block_ids(
+        &self,
+        directory: &Path,
+        shard_byte: u8,
+        leaf_byte: Option<u8>,
+    ) -> io::Result<Vec<BlockId>> {
         let mut shard_ids = Vec::new();
         for entry in self.vfs.read_directory_entries(directory)? {
             let name = entry
@@ -4583,7 +5341,11 @@ impl BlockStore {
     }
 
     pub(crate) fn plan_temporary_file(&self) -> io::Result<BlockTemporaryFilePlan> {
-        let mut shards: Vec<PathBuf> = self.block_shard_paths()?.into_iter().map(|(_, path)| path).collect();
+        let mut shards: Vec<PathBuf> = self
+            .block_shard_paths()?
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect();
         for shard in 0..=u8::MAX {
             if self.shard_overflowed(shard) {
                 shards.extend(self.overflow_leaves(shard)?);
@@ -4595,9 +5357,9 @@ impl BlockStore {
         for (index, shard_path) in shards.iter().enumerate() {
             // Streams every entry: the scan retains at most one match, so the
             // number of entries it passes needs no bound.
-            let matches = self
-                .vfs
-                .match_directory_prefix_bounded(shard_path, ".new-", usize::MAX, 1)?;
+            let matches =
+                self.vfs
+                    .match_directory_prefix_bounded(shard_path, ".new-", usize::MAX, 1)?;
             scanned_entries += matches.scanned_entries;
             for path in matches.matches {
                 validate_temporary_block_path(&self.root, &self.overflow_root, &path)?;
@@ -4718,7 +5480,9 @@ impl BlockStore {
             // it would fail closed on a directory that does not exist.
             let mut removed_file = false;
             for &id in &ids {
-                if let LooseRemoval::Unlinked { bytes } = self.unlink_loose_noting_absent(id, &mut Vec::new())? {
+                if let LooseRemoval::Unlinked { bytes } =
+                    self.unlink_loose_noting_absent(id, &mut Vec::new())?
+                {
                     metrics.bytes_removed = metrics
                         .bytes_removed
                         .checked_add(bytes)
@@ -4765,16 +5529,30 @@ impl BlockStore {
         self.sync_overflow_leaves(id.0[0])
     }
 
-    fn unlink_loose_noting_absent(&self, id: BlockId, absent: &mut Vec<BlockId>) -> io::Result<LooseRemoval> {
+    fn unlink_loose_noting_absent(
+        &self,
+        id: BlockId,
+        absent: &mut Vec<BlockId>,
+    ) -> io::Result<LooseRemoval> {
         // A block that was only ever staged (pending) has no loose file; the
         // caller's removal of its in-memory copy already retired it, so a
         // missing file is not an error. An overflowed shard can hold a copy in
         // both locations, and every copy goes: once this call unlinked one, a
         // fresh write may recreate that name, so `absent` holds the block.
         let mut unlinked_bytes = None;
-        let locations = [Some(self.path(id)), self.shard_overflowed(id.0[0]).then(|| self.overflow_path(id))];
+        let locations = [
+            Some(self.path(id)),
+            self.shard_overflowed(id.0[0])
+                .then(|| self.overflow_path(id)),
+        ];
         for path in locations.iter().flatten() {
-            let file = match self.vfs.open(path, OpenRequest { read: true, ..OpenRequest::default() }) {
+            let file = match self.vfs.open(
+                path,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            ) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => {
@@ -4840,7 +5618,8 @@ fn validate_temporary_block_path(root: &Path, overflow_root: &Path, path: &Path)
     let shard = if directory.parent() == Some(root) {
         directory
     } else if directory.parent().and_then(Path::parent) == Some(overflow_root) {
-        shard_name_byte(directory).map_err(|_| invalid_data("temporary block shard is malformed"))?;
+        shard_name_byte(directory)
+            .map_err(|_| invalid_data("temporary block shard is malformed"))?;
         directory.parent().expect("a leaf has its shard")
     } else {
         return Err(invalid_data("temporary block path escaped its shard"));
@@ -4935,15 +5714,24 @@ mod tests {
         release: Arc<(Mutex<bool>, Condvar)>,
     }
     impl VfsPositionedReader for PausingHistoryReader {
-        fn len(&self) -> io::Result<u64> { self.inner.len() }
+        fn len(&self) -> io::Result<u64> {
+            self.inner.len()
+        }
         fn read_exact_at(&self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
-            self.entered.send(()).map_err(|_| io::Error::other("read probe receiver closed"))?;
+            self.entered
+                .send(())
+                .map_err(|_| io::Error::other("read probe receiver closed"))?;
             let (lock, wake) = &*self.release;
             let mut released = lock.lock().unwrap();
             while !*released {
                 let (next, result) = wake.wait_timeout(released, Duration::from_secs(5)).unwrap();
                 released = next;
-                if result.timed_out() { return Err(io::Error::new(io::ErrorKind::TimedOut, "read probe release elapsed")); }
+                if result.timed_out() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "read probe release elapsed",
+                    ));
+                }
             }
             self.inner.read_exact_at(offset, bytes)
         }
@@ -4954,63 +5742,135 @@ mod tests {
     fn same_history_source_allows_two_actual_reads_before_either_completes() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(BlockStore::initialize(directory.path()).unwrap());
-        let mut source = vec![17; 4096]; source.extend_from_slice(&vec![29; 4096]);
+        let mut source = vec![17; 4096];
+        source.extend_from_slice(&vec![29; 4096]);
         let source_id = store.put(&source).unwrap();
-        let original = store.open_history_source(source_id, source.len() as u32).unwrap();
-        let crate::vfs::SharedReadFile::Positioned(reader) = &original.file else { panic!("plain Unix source must use positioned reads") };
+        let original = store
+            .open_history_source(source_id, source.len() as u32)
+            .unwrap();
+        let crate::vfs::SharedReadFile::Positioned(reader) = &original.file else {
+            panic!("plain Unix source must use positioned reads")
+        };
         let (entered, receive) = std::sync::mpsc::channel();
         let release = Arc::new((Mutex::new(false), Condvar::new()));
         // Ordinary open checked framing. Pause only the real read operation;
         // cache/source witnesses and per-payload content checks still run.
-        let handle = Arc::new(HistorySourceHandle { source_bytes: source.len() as u32,
+        let handle = Arc::new(HistorySourceHandle {
+            source_bytes: source.len() as u32,
             file: crate::vfs::SharedReadFile::Positioned(Arc::new(PausingHistoryReader {
-                inner: Arc::clone(reader), entered, release: Arc::clone(&release),
+                inner: Arc::clone(reader),
+                entered,
+                release: Arc::clone(&release),
             })),
         });
-        store.history_source_handles.lock().unwrap().entries.insert(source_id, (handle, 0));
-        let workers = [17, 29].into_iter().enumerate().map(|(index, value)| {
-            let store = Arc::clone(&store);
-            std::thread::spawn(move || {
-                let expected = vec![value; 4096];
-                let location = crate::history_payload::PayloadLocation { source: source_id,
-                    source_bytes: 8192, offset: (index * 4096) as u32, length: 4096 };
-                let read = store.read_history_location(BlockId::for_payload(&expected), location)?;
-                assert_eq!(read, expected);
-                Ok::<_, io::Error>(())
+        store
+            .history_source_handles
+            .lock()
+            .unwrap()
+            .entries
+            .insert(source_id, (handle, 0));
+        let workers = [17, 29]
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let store = Arc::clone(&store);
+                std::thread::spawn(move || {
+                    let expected = vec![value; 4096];
+                    let location = crate::history_payload::PayloadLocation {
+                        source: source_id,
+                        source_bytes: 8192,
+                        offset: (index * 4096) as u32,
+                        length: 4096,
+                    };
+                    let read =
+                        store.read_history_location(BlockId::for_payload(&expected), location)?;
+                    assert_eq!(read, expected);
+                    Ok::<_, io::Error>(())
+                })
             })
-        }).collect::<Vec<_>>();
+            .collect::<Vec<_>>();
         let first = receive.recv_timeout(Duration::from_secs(2));
         let second = receive.recv_timeout(Duration::from_secs(2));
-        *release.0.lock().unwrap() = true; release.1.notify_all();
-        for worker in workers { worker.join().unwrap().unwrap(); }
-        assert!(first.is_ok() && second.is_ok(), "both reads must enter I/O without serial source ownership");
+        *release.0.lock().unwrap() = true;
+        release.1.notify_all();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        assert!(
+            first.is_ok() && second.is_ok(),
+            "both reads must enter I/O without serial source ownership"
+        );
     }
 
     #[test]
     fn positioned_source_read_fault_corruption_and_truncation_fail_closed() {
         let vfs = Arc::new(DeterministicVfs::new(None));
-        vfs.create_dir(Path::new("/data")).unwrap(); vfs.sync_directory(Path::new("/")).unwrap();
+        vfs.create_dir(Path::new("/data")).unwrap();
+        vfs.sync_directory(Path::new("/")).unwrap();
         let store = BlockStore::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
-        let payload = vec![19; 4096]; let source_id = store.put(&payload).unwrap();
+        let payload = vec![19; 4096];
+        let source_id = store.put(&payload).unwrap();
         let location = crate::history_payload::PayloadLocation {
-            source: source_id, source_bytes: 4096, offset: 0, length: 4096,
+            source: source_id,
+            source_bytes: 4096,
+            offset: 0,
+            length: 4096,
         };
         let id = BlockId::for_payload(&payload);
         assert_eq!(store.read_history_location(id, location).unwrap(), payload);
-        vfs.arm_fault(Some(FaultRule { operation_number: 1,
-            action: FaultAction::ErrorBefore(io::ErrorKind::Other) })).unwrap();
-        assert_eq!(store.read_history_location(id, location).unwrap_err().kind(), io::ErrorKind::Other);
-        assert!(store.history_source_handles.lock().unwrap().entries.is_empty());
+        vfs.arm_fault(Some(FaultRule {
+            operation_number: 1,
+            action: FaultAction::ErrorBefore(io::ErrorKind::Other),
+        }))
+        .unwrap();
+        assert_eq!(
+            store
+                .read_history_location(id, location)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Other
+        );
+        assert!(store
+            .history_source_handles
+            .lock()
+            .unwrap()
+            .entries
+            .is_empty());
         vfs.arm_fault(None).unwrap();
         assert_eq!(store.read_history_location(id, location).unwrap(), payload);
-        let mut file = vfs.open(&store.path(source_id), OpenRequest { write: true, ..OpenRequest::default() }).unwrap();
+        let mut file = vfs
+            .open(
+                &store.path(source_id),
+                OpenRequest {
+                    write: true,
+                    ..OpenRequest::default()
+                },
+            )
+            .unwrap();
         file.write_all_at(HEADER_BYTES as u64, &[27]).unwrap();
-        assert_eq!(store.read_history_location(id, location).unwrap_err().kind(), io::ErrorKind::InvalidData);
-        assert!(store.history_source_handles.lock().unwrap().entries.is_empty());
+        assert_eq!(
+            store
+                .read_history_location(id, location)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(store
+            .history_source_handles
+            .lock()
+            .unwrap()
+            .entries
+            .is_empty());
         file.write_all_at(HEADER_BYTES as u64, &[19]).unwrap();
         assert_eq!(store.read_history_location(id, location).unwrap(), payload);
         file.set_len(HEADER_BYTES as u64 + 1024).unwrap();
-        assert_eq!(store.read_history_location(id, location).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            store
+                .read_history_location(id, location)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
@@ -5039,7 +5899,6 @@ mod tests {
         store.retire_staged_payloads(&retire).unwrap();
         assert_eq!(store.pending_staged_bytes().unwrap(), 0);
     }
-
 
     use super::*;
     use crate::vfs::{DeterministicVfs, FaultAction, FaultRule, Operation};
@@ -5089,7 +5948,11 @@ mod tests {
         }
         assert_eq!(cache.len(), 100);
         assert_eq!(cache.resident_bytes, 100 * ENTRY);
-        assert_eq!(cache.slots.len(), 100, "evicted slots are reused, not appended");
+        assert_eq!(
+            cache.slots.len(),
+            100,
+            "evicted slots are reused, not appended"
+        );
         assert!(cache.get(numbered_id(899)).is_none());
         assert!(cache.get(numbered_id(900)).is_some());
         cache.set_capacity_bytes(0);
@@ -5110,7 +5973,10 @@ mod tests {
         let payload = Arc::new(payload);
         let mut cache = BlockPayloadCache::new(1024);
         cache.insert_shared(id, Arc::clone(&payload));
-        assert!(cache.get(id).is_none(), "allocated capacity plus overhead exceeds the budget");
+        assert!(
+            cache.get(id).is_none(),
+            "allocated capacity plus overhead exceeds the budget"
+        );
         assert_eq!(Arc::strong_count(&payload), 1);
         cache.set_capacity_bytes(payload.capacity() + ENTRY);
         cache.insert_shared(id, Arc::clone(&payload));
@@ -5132,9 +5998,15 @@ mod tests {
             cache.insert_shared(numbered_id(value), Arc::new(vec![0_u8; 64]));
         }
         assert_eq!(cache.len(), blocks as usize);
-        assert!(cache.get(numbered_id(0)).is_some(), "the oldest small block is still resident");
+        assert!(
+            cache.get(numbered_id(0)).is_some(),
+            "the oldest small block is still resident"
+        );
         cache.insert_shared(numbered_id(blocks), Arc::new(vec![0_u8; 64]));
-        assert!(cache.get(numbered_id(1)).is_none(), "the byte budget evicts the least recent block");
+        assert!(
+            cache.get(numbered_id(1)).is_none(),
+            "the byte budget evicts the least recent block"
+        );
         assert_eq!(cache.resident_bytes, blocks as usize * (64 + ENTRY));
     }
 
@@ -5161,7 +6033,9 @@ mod tests {
                     if charge(length) <= capacity {
                         model.retain(|(existing, _)| *existing != id);
                         model.push((id, length));
-                        while model.iter().map(|(_, bytes)| charge(*bytes)).sum::<usize>() > capacity {
+                        while model.iter().map(|(_, bytes)| charge(*bytes)).sum::<usize>()
+                            > capacity
+                        {
                             model.remove(0);
                         }
                     }
@@ -5177,15 +6051,27 @@ mod tests {
                 }
                 3 => {
                     let peeked = cache.peek_shared(id).map(|payload| payload.len());
-                    assert_eq!(peeked, model.iter().find(|(existing, _)| *existing == id).map(|(_, bytes)| *bytes));
+                    assert_eq!(
+                        peeked,
+                        model
+                            .iter()
+                            .find(|(existing, _)| *existing == id)
+                            .map(|(_, bytes)| *bytes)
+                    );
                 }
                 _ => {
                     cache.remove(id);
                     model.retain(|(existing, _)| *existing != id);
                 }
             }
-            assert_eq!(cache.oldest_first(), model.iter().map(|(id, _)| *id).collect::<Vec<_>>());
-            assert_eq!(cache.resident_bytes, model.iter().map(|(_, bytes)| charge(*bytes)).sum::<usize>());
+            assert_eq!(
+                cache.oldest_first(),
+                model.iter().map(|(id, _)| *id).collect::<Vec<_>>()
+            );
+            assert_eq!(
+                cache.resident_bytes,
+                model.iter().map(|(_, bytes)| charge(*bytes)).sum::<usize>()
+            );
         }
     }
 
@@ -5200,11 +6086,17 @@ mod tests {
             let payload = format!("catalog-cache-{index}").into_bytes();
             let id = BlockId::for_payload(&payload);
             let segment = segments
-                .create(Uuid::from_bytes([index + 60; 16]), vec![id], |_| Ok(payload.clone()))
+                .create(Uuid::from_bytes([index + 60; 16]), vec![id], |_| {
+                    Ok(payload.clone())
+                })
                 .unwrap();
             references.push(
-                PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                    .unwrap(),
+                PayloadSegmentReference::new(
+                    segment.metadata(),
+                    segment.first_block_id(),
+                    segment.last_block_id(),
+                )
+                .unwrap(),
             );
             ids.push(id);
         }
@@ -5215,9 +6107,14 @@ mod tests {
         let cached = |store: &BlockStore| store.cache.read().unwrap().peek_shared(ids[0]).is_some();
         assert!(cached(&store));
         store
-            .install_payload_manifest(PayloadManifest::new(vec![references[0], references[1]]).unwrap())
+            .install_payload_manifest(
+                PayloadManifest::new(vec![references[0], references[1]]).unwrap(),
+            )
             .unwrap();
-        assert!(cached(&store), "a pure catalog addition keeps verified payloads warm");
+        assert!(
+            cached(&store),
+            "a pure catalog addition keeps verified payloads warm"
+        );
         store
             .install_payload_manifest(PayloadManifest::new(vec![references[1]]).unwrap())
             .unwrap();
@@ -5245,39 +6142,74 @@ mod tests {
                 .map(|name| (BlockId::for_payload(name.as_bytes()), payload(name)))
                 .collect();
             let segment = segments
-                .create(Uuid::from_bytes([seed; 16]), payloads.keys().copied().collect(), |id| {
-                    Ok(payloads[&id].clone())
-                })
+                .create(
+                    Uuid::from_bytes([seed; 16]),
+                    payloads.keys().copied().collect(),
+                    |id| Ok(payloads[&id].clone()),
+                )
                 .unwrap();
-            PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                .unwrap()
+            PayloadSegmentReference::new(
+                segment.metadata(),
+                segment.first_block_id(),
+                segment.last_block_id(),
+            )
+            .unwrap()
         };
         let merged_away = make(81, &["re-homed", "retired"]);
         let untouched = make(82, &["untouched"]);
         let merged = make(83, &["re-homed", "incoming"]);
-        store.install_payload_manifest(PayloadManifest::new(vec![merged_away, untouched]).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(vec![merged_away, untouched]).unwrap())
+            .unwrap();
         for name in ["re-homed", "retired", "untouched"] {
-            assert_eq!(store.get(BlockId::for_payload(name.as_bytes())).unwrap(), payload(name));
+            assert_eq!(
+                store.get(BlockId::for_payload(name.as_bytes())).unwrap(),
+                payload(name)
+            );
         }
-        store.install_payload_manifest(PayloadManifest::new(vec![merged, untouched]).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(vec![merged, untouched]).unwrap())
+            .unwrap();
         let cached = |name: &str| {
-            store.cache.read().unwrap().peek_shared(BlockId::for_payload(name.as_bytes())).is_some()
+            store
+                .cache
+                .read()
+                .unwrap()
+                .peek_shared(BlockId::for_payload(name.as_bytes()))
+                .is_some()
         };
-        assert!(cached("re-homed"), "a block the added segment holds stays warm across the drop");
-        assert!(cached("untouched"), "blocks of unchanged segments stay warm");
-        assert!(!cached("retired"), "a block whose last catalogued copy was dropped leaves the cache");
-        assert_eq!(store.put_deferred(b"retired").unwrap(), (BlockId::for_payload(b"retired"), true),
-            "dedup must restage content whose only copy was dropped");
-        assert_eq!(store.put_deferred(b"re-homed").unwrap(), (BlockId::for_payload(b"re-homed"), false));
+        assert!(
+            cached("re-homed"),
+            "a block the added segment holds stays warm across the drop"
+        );
+        assert!(
+            cached("untouched"),
+            "blocks of unchanged segments stay warm"
+        );
+        assert!(
+            !cached("retired"),
+            "a block whose last catalogued copy was dropped leaves the cache"
+        );
+        assert_eq!(
+            store.put_deferred(b"retired").unwrap(),
+            (BlockId::for_payload(b"retired"), true),
+            "dedup must restage content whose only copy was dropped"
+        );
+        assert_eq!(
+            store.put_deferred(b"re-homed").unwrap(),
+            (BlockId::for_payload(b"re-homed"), false)
+        );
     }
 
     /// Builds `segments` catalogued segments whose content IDs, like every
     /// production pack/merge output, span the whole ID space, so neither the
     /// first/last range nor 16-bit prefix routing can exclude any of them.
     /// Returns one probe ID per segment, ordered by segment.
-    fn full_range_catalog(store: &BlockStore, segments: usize, blocks: usize)
-        -> (Vec<PayloadSegmentReference>, Vec<BlockId>)
-    {
+    fn full_range_catalog(
+        store: &BlockStore,
+        segments: usize,
+        blocks: usize,
+    ) -> (Vec<PayloadSegmentReference>, Vec<BlockId>) {
         let segment_store = store.payload_segment_store().unwrap();
         let mut references = Vec::with_capacity(segments);
         let mut probes = Vec::with_capacity(segments);
@@ -5291,13 +6223,19 @@ mod tests {
             let mut segment_id = [0xc5_u8; 16];
             segment_id[..8].copy_from_slice(&(segment_number as u64).to_be_bytes());
             let segment = segment_store
-                .create(Uuid::from_bytes(segment_id), payloads.keys().copied().collect(), |id| {
-                    Ok(payloads[&id].clone())
-                })
+                .create(
+                    Uuid::from_bytes(segment_id),
+                    payloads.keys().copied().collect(),
+                    |id| Ok(payloads[&id].clone()),
+                )
                 .unwrap();
             references.push(
-                PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                    .unwrap(),
+                PayloadSegmentReference::new(
+                    segment.metadata(),
+                    segment.first_block_id(),
+                    segment.last_block_id(),
+                )
+                .unwrap(),
             );
             probes.push(*payloads.keys().nth(blocks / 2).unwrap());
         }
@@ -5321,9 +6259,15 @@ mod tests {
         // budget keeps the filters of 32 of the 128 segments under the
         // previous one-quarter membership share.
         store.set_segment_index_cache_bytes(128 * 1024).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         let reads = |vfs: &DeterministicVfs| {
-            vfs.trace().unwrap().iter().filter(|operation| **operation == Operation::Read).count()
+            vfs.trace()
+                .unwrap()
+                .iter()
+                .filter(|operation| **operation == Operation::Read)
+                .count()
         };
         let before = reads(&vfs);
         for id in &probes {
@@ -5352,19 +6296,39 @@ mod tests {
         // About 510 distinct prefixes per segment cost ~128 KiB of route budget:
         // a 2 MiB index budget routes two segments and leaves the 256-byte
         // minimum for every other one, which therefore stays fallback.
-        store.set_segment_index_cache_bytes(2 * 1024 * 1024).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .set_segment_index_cache_bytes(2 * 1024 * 1024)
+            .unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         let reads = |vfs: &DeterministicVfs| {
-            vfs.trace().unwrap().iter().filter(|operation| **operation == Operation::Read).count()
+            vfs.trace()
+                .unwrap()
+                .iter()
+                .filter(|operation| **operation == Operation::Read)
+                .count()
         };
         let before = reads(&vfs);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
-        assert_eq!(reads(&vfs) - before, 0, "an unchanged catalog re-read segment indexes");
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
+        assert_eq!(
+            reads(&vfs) - before,
+            0,
+            "an unchanged catalog re-read segment indexes"
+        );
         references.push(added);
         let before = reads(&vfs);
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         // Header, trailer and index of the one added segment.
-        assert_eq!(reads(&vfs) - before, 3, "a one-segment publication re-read other segment indexes");
+        assert_eq!(
+            reads(&vfs) - before,
+            3,
+            "a one-segment publication re-read other segment indexes"
+        );
         assert!(
             store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap()),
             "the same index read covers the packed filter"
@@ -5383,36 +6347,51 @@ mod tests {
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
         let (mut catalog, _) = full_range_catalog(&store, 4, 16);
-        store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+            .unwrap();
         let payload = b"loose until compaction packs it".to_vec();
         let id = store.put(&payload).unwrap();
         let excluded_at = store.packed_filter_excludes(id).unwrap();
-        assert!(excluded_at.is_some(), "a covering filter excludes a loose block");
+        assert!(
+            excluded_at.is_some(),
+            "a covering filter excludes a loose block"
+        );
         let segment = store
             .payload_segment_store()
             .unwrap()
             .create(catalog_segment_id(9), vec![id], |_| Ok(payload.clone()))
             .unwrap();
-        let reference =
-            PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                .unwrap();
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )
+        .unwrap();
         store.verify_payload_segment(&reference).unwrap();
         catalog.push(reference);
-        store.install_payload_manifest(PayloadManifest::new(catalog).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog).unwrap())
+            .unwrap();
         store.remove_blocks(&[id]).unwrap();
-        assert_eq!(store.get_loose_after_catalog(id, excluded_at).unwrap(), payload);
+        assert_eq!(
+            store.get_loose_after_catalog(id, excluded_at).unwrap(),
+            payload
+        );
         // Under an unchanged catalog the answer stays exact and touches no segment.
         let missing = BlockId::for_payload(b"never written");
         let current = store.packed_filter_excludes(missing).unwrap();
         assert!(current.is_some());
         crate::payload_segment::read_path_counters::take();
         assert_eq!(
-            store.get_loose_after_catalog(missing, current).unwrap_err().kind(),
+            store
+                .get_loose_after_catalog(missing, current)
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::NotFound
         );
         assert_eq!(crate::payload_segment::read_path_counters::take().0, 0);
     }
-
 
     type RaceHook = Box<dyn FnOnce() + Send>;
 
@@ -5430,7 +6409,11 @@ mod tests {
             let inner = DeterministicVfs::new(None);
             inner.create_dir(Path::new("/data")).unwrap();
             inner.sync_directory(Path::new("/")).unwrap();
-            Arc::new(Self { inner, before_metadata: Mutex::new(None), before_open: Mutex::new(None) })
+            Arc::new(Self {
+                inner,
+                before_metadata: Mutex::new(None),
+                before_open: Mutex::new(None),
+            })
         }
 
         fn arm_before_metadata(&self, path: PathBuf, hook: impl FnOnce() + Send + 'static) {
@@ -5475,7 +6458,10 @@ mod tests {
             Self::fire(&self.before_open, path);
             self.inner.open(path, request)
         }
-        fn open_positioned_reader(&self, path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+        fn open_positioned_reader(
+            &self,
+            path: &Path,
+        ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
             self.inner.open_positioned_reader(path)
         }
         fn create_dir(&self, path: &Path) -> io::Result<()> {
@@ -5494,7 +6480,10 @@ mod tests {
         fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
             self.inner.read_directory(path)
         }
-        fn read_directory_entries(&self, path: &Path) -> io::Result<Vec<crate::vfs::DirectoryEntry>> {
+        fn read_directory_entries(
+            &self,
+            path: &Path,
+        ) -> io::Result<Vec<crate::vfs::DirectoryEntry>> {
             self.inner.read_directory_entries(path)
         }
         fn read_directory_bounded(
@@ -5511,7 +6500,8 @@ mod tests {
             maximum: usize,
             matches: usize,
         ) -> io::Result<crate::vfs::BoundedDirectoryMatches> {
-            self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+            self.inner
+                .match_directory_prefix_bounded(path, prefix, maximum, matches)
         }
         fn sync_directory(&self, path: &Path) -> io::Result<()> {
             self.inner.sync_directory(path)
@@ -5521,22 +6511,32 @@ mod tests {
     /// A store whose every read reaches the disk paths under test.
     fn race_store() -> (Arc<LooseRaceVfs>, Arc<BlockStore>) {
         let vfs = LooseRaceVfs::new();
-        let store = Arc::new(BlockStore::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap());
+        let store =
+            Arc::new(BlockStore::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap());
         store.set_cache_capacity_bytes(0).unwrap();
         (vfs, store)
     }
 
     /// A verified, unpublished segment holding exactly `payload`.
-    fn segment_holding(store: &BlockStore, segment_number: usize, payload: &[u8]) -> PayloadSegmentReference {
+    fn segment_holding(
+        store: &BlockStore,
+        segment_number: usize,
+        payload: &[u8],
+    ) -> PayloadSegmentReference {
         let id = BlockId::for_payload(payload);
         let segment = store
             .payload_segment_store()
             .unwrap()
-            .create(catalog_segment_id(segment_number), vec![id], |_| Ok(payload.to_vec()))
+            .create(catalog_segment_id(segment_number), vec![id], |_| {
+                Ok(payload.to_vec())
+            })
             .unwrap();
-        let reference =
-            PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                .unwrap();
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )
+        .unwrap();
         store.verify_payload_segment(&reference).unwrap();
         reference
     }
@@ -5573,7 +6573,10 @@ mod tests {
         assert_eq!(store.get_traversal(id).unwrap(), payload);
         assert_eq!(*store.get_shared(id).unwrap(), payload);
         assert_eq!(*store.get_materialized_shared(id).unwrap(), payload);
-        assert_eq!(store.traversal_reader(|| Ok(())).unwrap().get(id).unwrap(), payload);
+        assert_eq!(
+            store.traversal_reader(|| Ok(())).unwrap().get(id).unwrap(),
+            payload
+        );
         assert!(
             !loose_opened.load(Ordering::SeqCst),
             "a covering filter never sends a catalogued block to its loose copy"
@@ -5581,14 +6584,32 @@ mod tests {
 
         let reopened = BlockStore::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
         reopened.set_cache_capacity_bytes(0).unwrap();
-        reopened.install_recovery_payload_manifest(manifest).unwrap();
-        assert!(!reopened.packed_filter.read().unwrap().built, "fixture: a clean open builds no filter");
+        reopened
+            .install_recovery_payload_manifest(manifest)
+            .unwrap();
+        assert!(
+            !reopened.packed_filter.read().unwrap().built,
+            "fixture: a clean open builds no filter"
+        );
         assert_eq!(reopened.get(id).unwrap(), payload);
-        assert!(loose_opened.load(Ordering::SeqCst), "an unbuilt filter tries the loose copy first");
-        assert_eq!(vfs.inner.metadata(&path).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(
+            loose_opened.load(Ordering::SeqCst),
+            "an unbuilt filter tries the loose copy first"
+        );
+        assert_eq!(
+            vfs.inner.metadata(&path).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(reopened.get(id).unwrap(), payload);
         assert_eq!(reopened.get_traversal(id).unwrap(), payload);
-        assert_eq!(reopened.traversal_reader(|| Ok(())).unwrap().get(id).unwrap(), payload);
+        assert_eq!(
+            reopened
+                .traversal_reader(|| Ok(()))
+                .unwrap()
+                .get(id)
+                .unwrap(),
+            payload
+        );
     }
 
     /// A reader whose catalog view predates the publication that packed a
@@ -5601,10 +6622,15 @@ mod tests {
     fn a_loose_copy_unlinked_between_a_readers_stat_and_open_resolves_through_the_new_catalog() {
         let (vfs, store) = race_store();
         let (mut catalog, _) = full_range_catalog(&store, 4, 16);
-        store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+            .unwrap();
         let payload = b"loose until a publication packs it".to_vec();
         let id = store.put_loose(&payload).unwrap();
-        assert!(store.packed_filter_excludes(id).unwrap().is_some(), "fixture: a covering filter excludes it");
+        assert!(
+            store.packed_filter_excludes(id).unwrap().is_some(),
+            "fixture: a covering filter excludes it"
+        );
         let path = store.path(id);
         {
             let store = Arc::clone(&store);
@@ -5613,12 +6639,18 @@ mod tests {
             let unlinked = path.clone();
             vfs.arm_before_open(path.clone(), move || {
                 catalog.push(segment_holding(&store, 9, &payload));
-                store.install_payload_manifest(PayloadManifest::new(catalog).unwrap()).unwrap();
+                store
+                    .install_payload_manifest(PayloadManifest::new(catalog).unwrap())
+                    .unwrap();
                 inner.remove_file(&unlinked).unwrap();
             });
         }
         assert_eq!(store.get(id).unwrap(), payload);
-        assert_eq!(vfs.inner.metadata(&path).unwrap_err().kind(), io::ErrorKind::NotFound, "the copy went after the stat");
+        assert_eq!(
+            vfs.inner.metadata(&path).unwrap_err().kind(),
+            io::ErrorKind::NotFound,
+            "the copy went after the stat"
+        );
     }
 
     /// The same race when the filter cannot exclude the block (stale bits of
@@ -5630,12 +6662,21 @@ mod tests {
     fn a_loose_miss_with_no_catalog_candidate_rechecks_a_later_publication() {
         let (vfs, store) = race_store();
         let (mut catalog, _) = full_range_catalog(&store, 4, 16);
-        store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+            .unwrap();
         let payload = b"loose behind a filter false positive".to_vec();
         let id = store.put_loose(&payload).unwrap();
         store.note_packed(&[id]).unwrap();
-        assert_eq!(store.packed_filter_excludes(id).unwrap(), None, "fixture: the filter cannot exclude it");
-        assert!(store.payload_segment_candidates(id).unwrap().is_empty(), "fixture: no segment is a candidate");
+        assert_eq!(
+            store.packed_filter_excludes(id).unwrap(),
+            None,
+            "fixture: the filter cannot exclude it"
+        );
+        assert!(
+            store.payload_segment_candidates(id).unwrap().is_empty(),
+            "fixture: no segment is a candidate"
+        );
         let path = store.path(id);
         {
             let store = Arc::clone(&store);
@@ -5644,7 +6685,9 @@ mod tests {
             let unlinked = path.clone();
             vfs.arm_before_metadata(path.clone(), move || {
                 catalog.push(segment_holding(&store, 9, &payload));
-                store.install_payload_manifest(PayloadManifest::new(catalog).unwrap()).unwrap();
+                store
+                    .install_payload_manifest(PayloadManifest::new(catalog).unwrap())
+                    .unwrap();
                 inner.remove_file(&unlinked).unwrap();
             });
         }
@@ -5665,7 +6708,8 @@ mod tests {
         assert_eq!(store.put_loose(&payload).unwrap(), id);
         drop(store);
         vfs.inner.crash().unwrap();
-        let reopened = BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.inner.clone())).unwrap();
+        let reopened =
+            BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.inner.clone())).unwrap();
         assert_eq!(reopened.get(id).unwrap(), payload);
     }
 
@@ -5682,7 +6726,8 @@ mod tests {
         assert!(store.pending_payload(id).unwrap().is_none());
         drop(store);
         vfs.inner.crash().unwrap();
-        let reopened = BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.inner.clone())).unwrap();
+        let reopened =
+            BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.inner.clone())).unwrap();
         assert_eq!(reopened.get(id).unwrap(), payload);
     }
 
@@ -5691,7 +6736,9 @@ mod tests {
     #[test]
     fn flushing_a_sync_mark_skips_a_copy_unlinked_after_its_stat() {
         let (vfs, store) = race_store();
-        let id = store.put_loose(b"synced while an online-GC hold unlinks it").unwrap();
+        let id = store
+            .put_loose(b"synced while an online-GC hold unlinks it")
+            .unwrap();
         store.stage_pending_sync(id).unwrap();
         assert!(store.pending.lock().unwrap().sync_only.contains(&id));
         vfs.unlink_before_open(store.path(id));
@@ -5706,7 +6753,9 @@ mod tests {
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
         let (mut catalog, _) = full_range_catalog(&store, 4, 16);
-        store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+            .unwrap();
         // A segment this store never verified, like one whose coverage record
         // a saturation rebuild dropped.
         let payload = b"published while its index was unreadable".to_vec();
@@ -5717,23 +6766,43 @@ mod tests {
             .create(catalog_segment_id(9), vec![id], |_| Ok(payload.clone()))
             .unwrap();
         catalog.push(
-            PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                .unwrap(),
+            PayloadSegmentReference::new(
+                segment.metadata(),
+                segment.first_block_id(),
+                segment.last_block_id(),
+            )
+            .unwrap(),
         );
-        let covered = |store: &BlockStore| store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap());
+        let covered = |store: &BlockStore| {
+            store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap())
+        };
         vfs.arm_fault(Some(FaultRule {
             operation_number: 1,
             action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
         }))
         .unwrap();
-        store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
-        assert_eq!(vfs.trace().unwrap().first(), Some(&Operation::Metadata), "the fault must hit the cover read");
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+            .unwrap();
+        assert_eq!(
+            vfs.trace().unwrap().first(),
+            Some(&Operation::Metadata),
+            "the fault must hit the cover read"
+        );
         assert!(!covered(&store));
         let missing = BlockId::for_payload(b"never written");
-        assert!(store.packed_filter_may_contain(missing).unwrap(), "an uncovered publication excludes nothing");
-        assert_eq!(store.get(missing).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(
+            store.packed_filter_may_contain(missing).unwrap(),
+            "an uncovered publication excludes nothing"
+        );
+        assert_eq!(
+            store.get(missing).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(store.get(id).unwrap(), payload);
-        store.install_payload_manifest(PayloadManifest::new(catalog).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog).unwrap())
+            .unwrap();
         assert!(covered(&store));
         assert!(!store.packed_filter_may_contain(missing).unwrap());
         assert!(store.packed_filter_may_contain(id).unwrap());
@@ -5762,12 +6831,18 @@ mod tests {
         let segment_store = store.payload_segment_store().unwrap();
         let create = |seed: usize, payloads: &BTreeMap<BlockId, Vec<u8>>| {
             let segment = segment_store
-                .create(catalog_segment_id(seed), payloads.keys().copied().collect(), |id| {
-                    Ok(payloads[&id].clone())
-                })
+                .create(
+                    catalog_segment_id(seed),
+                    payloads.keys().copied().collect(),
+                    |id| Ok(payloads[&id].clone()),
+                )
                 .unwrap();
-            PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                .unwrap()
+            PayloadSegmentReference::new(
+                segment.metadata(),
+                segment.first_block_id(),
+                segment.last_block_id(),
+            )
+            .unwrap()
         };
         let fresh = |label: &str, count: usize| -> BTreeMap<BlockId, Vec<u8>> {
             (0..count)
@@ -5779,24 +6854,37 @@ mod tests {
         };
         let contents = |reference: &PayloadSegmentReference| -> BTreeMap<BlockId, Vec<u8>> {
             let segment = segment_store.open_segment(reference.segment_id).unwrap();
-            segment.block_ids().map(|id| (id, segment.get(id).unwrap().unwrap())).collect()
+            segment
+                .block_ids()
+                .map(|id| (id, segment.get(id).unwrap().unwrap()))
+                .collect()
         };
         let publish = |catalog: &[PayloadSegmentReference]| {
-            store.install_payload_manifest(PayloadManifest::new(catalog.to_vec()).unwrap()).unwrap();
+            store
+                .install_payload_manifest(PayloadManifest::new(catalog.to_vec()).unwrap())
+                .unwrap();
             store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap())
         };
         let mut coverage = vec![("initial", publish(&catalog))];
         // Checkpoint pack: a fresh segment verified and noted before publication.
         let checkpoint = fresh("checkpoint-pack", BLOCKS);
         catalog.push(create(SEGMENTS, &checkpoint));
-        store.verify_payload_segment(catalog.last().unwrap()).unwrap();
-        store.note_packed(&checkpoint.keys().copied().collect::<Vec<_>>()).unwrap();
+        store
+            .verify_payload_segment(catalog.last().unwrap())
+            .unwrap();
+        store
+            .note_packed(&checkpoint.keys().copied().collect::<Vec<_>>())
+            .unwrap();
         coverage.push(("checkpoint pack", publish(&catalog)));
         // Full-catalog adoption: the packer verified and noted its pack; the
         // merged copy that replaces the smallest segment is only verified.
         let incoming = fresh("adopted-pack", 8);
-        store.verify_payload_segment(&create(SEGMENTS + 1, &incoming)).unwrap();
-        store.note_packed(&incoming.keys().copied().collect::<Vec<_>>()).unwrap();
+        store
+            .verify_payload_segment(&create(SEGMENTS + 1, &incoming))
+            .unwrap();
+        store
+            .note_packed(&incoming.keys().copied().collect::<Vec<_>>())
+            .unwrap();
         let mut merged = contents(&catalog[0]);
         merged.extend(incoming);
         catalog[0] = create(SEGMENTS + 2, &merged);
@@ -5818,8 +6906,12 @@ mod tests {
         for (seed, label) in [(SEGMENTS + 4, "history-a"), (SEGMENTS + 5, "history-b")] {
             let batch = fresh(label, BLOCKS);
             catalog.push(create(seed, &batch));
-            store.verify_payload_segment(catalog.last().unwrap()).unwrap();
-            store.note_packed(&batch.keys().copied().collect::<Vec<_>>()).unwrap();
+            store
+                .verify_payload_segment(catalog.last().unwrap())
+                .unwrap();
+            store
+                .note_packed(&batch.keys().copied().collect::<Vec<_>>())
+                .unwrap();
         }
         coverage.push(("history promotion", publish(&catalog)));
 
@@ -5849,8 +6941,17 @@ mod tests {
             let (index_reads, index_bytes, admissions) =
                 crate::payload_segment::read_path_counters::take_index_work();
             let trace = vfs.trace().unwrap();
-            let count = |kind: Operation| trace.iter().filter(|operation| **operation == kind).count() as u64;
-            [witness_checks, index_reads, index_bytes, admissions, count(Operation::Open), count(Operation::Read)]
+            let count = |kind: Operation| {
+                trace.iter().filter(|operation| **operation == kind).count() as u64
+            };
+            [
+                witness_checks,
+                index_reads,
+                index_bytes,
+                admissions,
+                count(Operation::Open),
+                count(Operation::Read),
+            ]
         };
         let loose_work = work(&mut || {
             for (id, payload) in &loose {
@@ -5865,7 +6966,12 @@ mod tests {
         });
         let dedupe_work = work(&mut || {
             for number in 0..LOOKUPS {
-                assert!(store.put_deferred(format!("fresh-dedupe-{number}").as_bytes()).unwrap().1);
+                assert!(
+                    store
+                        .put_deferred(format!("fresh-dedupe-{number}").as_bytes())
+                        .unwrap()
+                        .1
+                );
             }
         });
         let packed_work = work(&mut || {
@@ -5887,18 +6993,39 @@ mod tests {
             per_lookup(packed_work),
         );
         for reference in &catalog {
-            for id in segment_store.open_segment(reference.segment_id).unwrap().block_ids() {
-                assert!(store.packed_filter_may_contain(id).unwrap(), "a catalogued block failed the packed filter");
+            for id in segment_store
+                .open_segment(reference.segment_id)
+                .unwrap()
+                .block_ids()
+            {
+                assert!(
+                    store.packed_filter_may_contain(id).unwrap(),
+                    "a catalogued block failed the packed filter"
+                );
             }
         }
-        assert!(coverage.iter().all(|(_, covered)| *covered), "a publication left the filter stale: {coverage:?}");
-        for (label, work) in [("loose", loose_work), ("missing", missing_work), ("dedupe", dedupe_work)] {
+        assert!(
+            coverage.iter().all(|(_, covered)| *covered),
+            "a publication left the filter stale: {coverage:?}"
+        );
+        for (label, work) in [
+            ("loose", loose_work),
+            ("missing", missing_work),
+            ("dedupe", dedupe_work),
+        ] {
             assert_eq!(work[0], 0, "{label} lookups checked segment witnesses");
-            assert_eq!((work[1], work[3]), (0, 0), "{label} lookups read or admitted segment indexes");
+            assert_eq!(
+                (work[1], work[3]),
+                (0, 0),
+                "{label} lookups read or admitted segment indexes"
+            );
         }
         // A loose read opens and reads only its own file; misses and dedupe
         // probes of new content open nothing.
-        assert_eq!((loose_work[4], loose_work[5]), (LOOKUPS as u64, LOOKUPS as u64));
+        assert_eq!(
+            (loose_work[4], loose_work[5]),
+            (LOOKUPS as u64, LOOKUPS as u64)
+        );
         assert_eq!((missing_work[4], missing_work[5]), (0, 0));
         assert_eq!((dedupe_work[4], dedupe_work[5]), (0, 0));
     }
@@ -5930,9 +7057,17 @@ mod tests {
     }
 
     fn flip_segment_byte(vfs: &DeterministicVfs, segment_id: Uuid, offset: u64) {
-        let path = Path::new("/data/payload-segments").join(format!("{}.pseg", segment_id.simple()));
+        let path =
+            Path::new("/data/payload-segments").join(format!("{}.pseg", segment_id.simple()));
         let mut file = vfs
-            .open(&path, OpenRequest { read: true, write: true, ..OpenRequest::default() })
+            .open(
+                &path,
+                OpenRequest {
+                    read: true,
+                    write: true,
+                    ..OpenRequest::default()
+                },
+            )
             .unwrap();
         let mut byte = [0_u8; 1];
         file.read_exact_at(offset, &mut byte).unwrap();
@@ -5955,13 +7090,23 @@ mod tests {
         let store = simulated_store(&vfs);
         let (references, probes) = full_range_catalog(&store, SEGMENTS, BLOCKS);
         store.set_segment_index_cache_bytes(128 * 1024).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         let reads = |vfs: &DeterministicVfs| {
-            vfs.trace().unwrap().iter().filter(|operation| **operation == Operation::Read).count()
+            vfs.trace()
+                .unwrap()
+                .iter()
+                .filter(|operation| **operation == Operation::Read)
+                .count()
         };
         let before = reads(&vfs);
         let reader = store.traversal_reader(|| Ok(())).unwrap();
-        assert_eq!(reads(&vfs) - before, 3 * SEGMENTS, "header, trailer and index of each segment, once");
+        assert_eq!(
+            reads(&vfs) - before,
+            3 * SEGMENTS,
+            "header, trailer and index of each segment, once"
+        );
         let (located, unindexed, resident_bytes) = reader.location_table_shape();
         assert_eq!((located, unindexed), (SEGMENTS * BLOCKS, 0));
         assert!(resident_bytes >= 8 * SEGMENTS * BLOCKS);
@@ -5971,9 +7116,20 @@ mod tests {
             assert!(reader.get(*id).unwrap().starts_with(b"catalog-"));
         }
         let located_reads = reads(&vfs) - before;
-        assert_eq!(located_reads, 2 * probes.len(), "one index entry and one payload read per block");
-        assert_eq!(crate::payload_segment::read_path_counters::take(), (0, probes.len() as u64));
-        assert!(store.payload_segment_store().unwrap().resident_index_ids_for_test().is_empty());
+        assert_eq!(
+            located_reads,
+            2 * probes.len(),
+            "one index entry and one payload read per block"
+        );
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take(),
+            (0, probes.len() as u64)
+        );
+        assert!(store
+            .payload_segment_store()
+            .unwrap()
+            .resident_index_ids_for_test()
+            .is_empty());
         assert!(probes.iter().all(|id| !store.cache_contains_for_test(*id)));
         drop(reader);
         set_catalog_locations_disabled_for_test(true);
@@ -5985,9 +7141,15 @@ mod tests {
         set_catalog_locations_disabled_for_test(false);
         let (witness_checks, _) = crate::payload_segment::read_path_counters::take();
         assert!(witness_checks >= (SEGMENTS * probes.len()) as u64);
-        assert!(exact_reads >= 4 * probes.len(), "a whole verified index per cold block");
-        println!("traversal_reader located_reads={located_reads} exact_reads={exact_reads} \
-            exact_witness_checks={witness_checks} table_bytes={resident_bytes} blocks={}", probes.len());
+        assert!(
+            exact_reads >= 4 * probes.len(),
+            "a whole verified index per cold block"
+        );
+        println!(
+            "traversal_reader located_reads={located_reads} exact_reads={exact_reads} \
+            exact_witness_checks={witness_checks} table_bytes={resident_bytes} blocks={}",
+            probes.len()
+        );
     }
 
     /// Damage after a reader learned a position never yields other bytes and
@@ -6002,7 +7164,9 @@ mod tests {
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
         let (references, probes) = full_range_catalog(&store, SEGMENTS, BLOCKS);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         let index_offset = |segment_number: usize| {
             let reference = references
                 .iter()
@@ -6012,32 +7176,65 @@ mod tests {
         };
         // Byte 33 of an entry is inside its payload offset: the ID still matches.
         let (position, _, _) = catalog_layout(0, BLOCKS, probes[0]);
-        flip_segment_byte(&vfs, catalog_segment_id(0), index_offset(0) + position * 48 + 33);
+        flip_segment_byte(
+            &vfs,
+            catalog_segment_id(0),
+            index_offset(0) + position * 48 + 33,
+        );
         let mut reader = store.traversal_reader(|| Ok(())).unwrap();
         // The reader's fallbacks below must be the exact path, not the table
         // this reader just published.
         set_catalog_locations_disabled_for_test(true);
-        assert_eq!(reader.location_table_shape().1, 1, "the unverifiable index stays out of the table");
-        assert_eq!(reader.get(probes[0]).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            reader.location_table_shape().1,
+            1,
+            "the unverifiable index stays out of the table"
+        );
+        assert_eq!(
+            reader.get(probes[0]).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
 
         let (_, payload_offset, _) = catalog_layout(1, BLOCKS, probes[1]);
         flip_segment_byte(&vfs, catalog_segment_id(1), payload_offset);
-        assert_eq!(reader.get(probes[1]).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            reader.get(probes[1]).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
 
         let (position, _, _) = catalog_layout(2, BLOCKS, probes[2]);
-        flip_segment_byte(&vfs, catalog_segment_id(2), index_offset(2) + position * 48 + 33);
-        assert_eq!(reader.get(probes[2]).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        flip_segment_byte(
+            &vfs,
+            catalog_segment_id(2),
+            index_offset(2) + position * 48 + 33,
+        );
+        assert_eq!(
+            reader.get(probes[2]).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
 
         let (_, _, expected) = catalog_layout(3, BLOCKS, probes[3]);
-        assert_eq!(reader.location_table_mut_for_test().unwrap().misplace_for_test(probes[3]), 1);
+        assert_eq!(
+            reader
+                .location_table_mut_for_test()
+                .unwrap()
+                .misplace_for_test(probes[3]),
+            1
+        );
         crate::payload_segment::read_path_counters::take();
         assert_eq!(reader.get(probes[3]).unwrap(), expected);
         let (witness_checks, candidates) = crate::payload_segment::read_path_counters::take();
         assert_eq!(candidates, 1);
-        assert!(witness_checks > 0, "the exact path resolved the misplaced block");
+        assert!(
+            witness_checks > 0,
+            "the exact path resolved the misplaced block"
+        );
 
         for (segment_number, id) in probes.iter().enumerate().skip(4) {
-            assert_eq!(reader.get(*id).unwrap(), catalog_layout(segment_number, BLOCKS, *id).2);
+            assert_eq!(
+                reader.get(*id).unwrap(),
+                catalog_layout(segment_number, BLOCKS, *id).2
+            );
         }
         set_catalog_locations_disabled_for_test(false);
     }
@@ -6051,7 +7248,9 @@ mod tests {
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
         let (references, probes) = full_range_catalog(&store, 2, BLOCKS);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         let reader = store.traversal_reader(|| Ok(())).unwrap();
         let segment_store = store.payload_segment_store().unwrap();
 
@@ -6061,10 +7260,16 @@ mod tests {
         let packed_payload = b"packed-after-the-table".to_vec();
         let packed = BlockId::for_payload(&packed_payload);
         let added = segment_store
-            .create(catalog_segment_id(7), vec![packed], |_| Ok(packed_payload.clone()))
+            .create(catalog_segment_id(7), vec![packed], |_| {
+                Ok(packed_payload.clone())
+            })
             .unwrap();
-        let added = PayloadSegmentReference::new(added.metadata(), added.first_block_id(), added.last_block_id())
-            .unwrap();
+        let added = PayloadSegmentReference::new(
+            added.metadata(),
+            added.first_block_id(),
+            added.last_block_id(),
+        )
+        .unwrap();
         let moved_payloads: BTreeMap<BlockId, Vec<u8>> = (0..BLOCKS)
             .map(|block_number| {
                 let bytes = format!("catalog-0-{block_number}").into_bytes();
@@ -6072,25 +7277,43 @@ mod tests {
             })
             .collect();
         let moved = segment_store
-            .create(catalog_segment_id(8), moved_payloads.keys().copied().collect(), |id| {
-                Ok(moved_payloads[&id].clone())
-            })
+            .create(
+                catalog_segment_id(8),
+                moved_payloads.keys().copied().collect(),
+                |id| Ok(moved_payloads[&id].clone()),
+            )
             .unwrap();
-        let moved = PayloadSegmentReference::new(moved.metadata(), moved.first_block_id(), moved.last_block_id())
+        let moved = PayloadSegmentReference::new(
+            moved.metadata(),
+            moved.first_block_id(),
+            moved.last_block_id(),
+        )
+        .unwrap();
+        let retained = *references
+            .iter()
+            .find(|reference| reference.segment_id == catalog_segment_id(1))
             .unwrap();
-        let retained = *references.iter().find(|reference| reference.segment_id == catalog_segment_id(1)).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(vec![retained, added, moved]).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(vec![retained, added, moved]).unwrap())
+            .unwrap();
         segment_store.remove_segment(catalog_segment_id(0)).unwrap();
 
         assert_eq!(reader.get(packed).unwrap(), packed_payload);
         assert_eq!(reader.get(probes[0]).unwrap(), moved_payloads[&probes[0]]);
         assert!(reader.get(probes[1]).unwrap().starts_with(b"catalog-1-"));
         let missing = BlockId::for_payload(b"never written");
-        assert_eq!(reader.get(missing).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            reader.get(missing).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     fn segment_reads(vfs: &DeterministicVfs) -> usize {
-        vfs.trace().unwrap().iter().filter(|operation| **operation == Operation::Read).count()
+        vfs.trace()
+            .unwrap()
+            .iter()
+            .filter(|operation| **operation == Operation::Read)
+            .count()
     }
 
     /// Live shape on 2026-11-06 (docs/TOFUDB_BLOCK_READ_PATH.md, "Published
@@ -6109,7 +7332,9 @@ mod tests {
         let (references, probes) = full_range_catalog(&store, SEGMENTS, BLOCKS);
         store.set_segment_index_cache_bytes(128 * 1024).unwrap();
         store.set_cache_capacity_bytes(0).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         drop(store.traversal_reader(|| Ok(())).unwrap());
         let (published, table) = store.published_catalog_locations_for_test().unwrap();
         assert_eq!(published, store.installed_catalog_publication_for_test());
@@ -6122,10 +7347,24 @@ mod tests {
             assert!(store.get(*id).unwrap().starts_with(b"catalog-"));
         }
         let located_reads = segment_reads(&vfs) - before;
-        assert_eq!(located_reads, 2 * probes.len(), "one index entry and one payload read per block");
-        assert_eq!(crate::payload_segment::read_path_counters::take(), (0, probes.len() as u64));
-        assert_eq!(crate::payload_segment::read_path_counters::take_index_work(), (0, 0, 0));
-        assert!(store.payload_segment_store().unwrap().resident_index_ids_for_test().is_empty());
+        assert_eq!(
+            located_reads,
+            2 * probes.len(),
+            "one index entry and one payload read per block"
+        );
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take(),
+            (0, probes.len() as u64)
+        );
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take_index_work(),
+            (0, 0, 0)
+        );
+        assert!(store
+            .payload_segment_store()
+            .unwrap()
+            .resident_index_ids_for_test()
+            .is_empty());
 
         set_catalog_locations_disabled_for_test(true);
         let before = segment_reads(&vfs);
@@ -6135,12 +7374,19 @@ mod tests {
         let exact_reads = segment_reads(&vfs) - before;
         set_catalog_locations_disabled_for_test(false);
         let (witness_checks, _) = crate::payload_segment::read_path_counters::take();
-        let (index_reads, index_bytes, _) = crate::payload_segment::read_path_counters::take_index_work();
+        let (index_reads, index_bytes, _) =
+            crate::payload_segment::read_path_counters::take_index_work();
         assert!(witness_checks >= (SEGMENTS * probes.len()) as u64);
-        assert!(index_reads >= probes.len() as u64, "a whole verified index per cold block");
-        println!("foreground located_reads={located_reads} exact_reads={exact_reads} \
+        assert!(
+            index_reads >= probes.len() as u64,
+            "a whole verified index per cold block"
+        );
+        println!(
+            "foreground located_reads={located_reads} exact_reads={exact_reads} \
             exact_witness_checks={witness_checks} exact_index_reads={index_reads} \
-            exact_index_bytes={index_bytes} blocks={}", probes.len());
+            exact_index_bytes={index_bytes} blocks={}",
+            probes.len()
+        );
     }
 
     /// A current table proves a block absent from the installed catalog: the
@@ -6155,21 +7401,39 @@ mod tests {
         let manifest = PayloadManifest::new(references).unwrap();
         let loose = store.put_loose(b"loose beside the catalog").unwrap();
         drop(store);
-        let reopened = BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
+        let reopened =
+            BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
         reopened.set_cache_capacity_bytes(0).unwrap();
-        reopened.install_recovery_payload_manifest(manifest).unwrap();
-        assert!(!reopened.packed_filter.read().unwrap().built, "fixture: a clean open builds no filter");
+        reopened
+            .install_recovery_payload_manifest(manifest)
+            .unwrap();
+        assert!(
+            !reopened.packed_filter.read().unwrap().built,
+            "fixture: a clean open builds no filter"
+        );
         let missing = BlockId::for_payload(b"never written");
         crate::payload_segment::read_path_counters::take();
-        assert_eq!(reopened.get(missing).unwrap_err().kind(), io::ErrorKind::NotFound);
-        assert!(crate::payload_segment::read_path_counters::take().0 >= 8, "without a table a miss walks every witness");
+        assert_eq!(
+            reopened.get(missing).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(
+            crate::payload_segment::read_path_counters::take().0 >= 8,
+            "without a table a miss walks every witness"
+        );
 
         drop(reopened.traversal_reader(|| Ok(())).unwrap());
         crate::payload_segment::read_path_counters::take_index_work();
         assert_eq!(reopened.get(loose).unwrap(), b"loose beside the catalog");
-        assert_eq!(reopened.get(missing).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            reopened.get(missing).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(crate::payload_segment::read_path_counters::take(), (0, 0));
-        assert_eq!(crate::payload_segment::read_path_counters::take_index_work().0, 0);
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take_index_work().0,
+            0
+        );
     }
 
     /// docs/TOFUDB_BLOCK_READ_PATH.md, "Published catalog location table": a
@@ -6189,32 +7453,61 @@ mod tests {
         store.set_cache_capacity_bytes(0).unwrap();
         let (references, _) = full_range_catalog(&store, 6, BLOCKS);
         let derive = |segments: usize| {
-            store.install_payload_manifest(PayloadManifest::new(references[..segments].to_vec()).unwrap()).unwrap();
+            store
+                .install_payload_manifest(
+                    PayloadManifest::new(references[..segments].to_vec()).unwrap(),
+                )
+                .unwrap();
             assert!(store.advance_catalog_locations().unwrap());
             let (_, table) = store.published_catalog_locations_for_test().unwrap();
-            let fresh = store.payload_segment_store().unwrap()
-                .build_location_table(&references[..segments], || Ok(())).unwrap();
-            assert_eq!(table.located_entries_for_test(), fresh.located_entries_for_test());
+            let fresh = store
+                .payload_segment_store()
+                .unwrap()
+                .build_location_table(&references[..segments], || Ok(()))
+                .unwrap();
+            assert_eq!(
+                table.located_entries_for_test(),
+                fresh.located_entries_for_test()
+            );
             table
         };
-        store.install_payload_manifest(PayloadManifest::new(references[..4].to_vec()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references[..4].to_vec()).unwrap())
+            .unwrap();
         drop(store.traversal_reader(|| Ok(())).unwrap());
         let first = derive(5);
-        let (first_allocation, first_capacity) = (first.entries_allocation_for_test(), first.entries_capacity_for_test());
-        assert_eq!(first_capacity, 5 * BLOCKS, "no spare yet: the first derivation allocates its entries");
+        let (first_allocation, first_capacity) = (
+            first.entries_allocation_for_test(),
+            first.entries_capacity_for_test(),
+        );
+        assert_eq!(
+            first_capacity,
+            5 * BLOCKS,
+            "no spare yet: the first derivation allocates its entries"
+        );
         drop(first);
         drop(derive(6));
         let third = derive(3);
         assert_eq!(
-            (third.entries_allocation_for_test(), third.entries_capacity_for_test()),
+            (
+                third.entries_allocation_for_test(),
+                third.entries_capacity_for_test()
+            ),
             (first_allocation, first_capacity),
             "the third derivation writes into the first one's allocation"
         );
         let held_entries = third.located_entries_for_test();
         drop(derive(4));
         let fifth = derive(2);
-        assert_ne!(fifth.entries_allocation_for_test(), third.entries_allocation_for_test());
-        assert_eq!(third.located_entries_for_test(), held_entries, "a table a reader holds is never written");
+        assert_ne!(
+            fifth.entries_allocation_for_test(),
+            third.entries_allocation_for_test()
+        );
+        assert_eq!(
+            third.located_entries_for_test(),
+            held_entries,
+            "a table a reader holds is never written"
+        );
     }
 
     /// Each publication's table is derived from the previous one: kept
@@ -6230,10 +7523,18 @@ mod tests {
         let store = simulated_store(&vfs);
         store.set_cache_capacity_bytes(0).unwrap();
         let (references, probes) = full_range_catalog(&store, 4, BLOCKS);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
-        assert!(!store.advance_catalog_locations().unwrap(), "nothing to derive from before a pass publishes");
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
+        assert!(
+            !store.advance_catalog_locations().unwrap(),
+            "nothing to derive from before a pass publishes"
+        );
         drop(store.traversal_reader(|| Ok(())).unwrap());
-        assert!(!store.advance_catalog_locations().unwrap(), "a current table needs no derivation");
+        assert!(
+            !store.advance_catalog_locations().unwrap(),
+            "a current table needs no derivation"
+        );
 
         // An adoption-style merge re-homes segment 0 into segment 8, and
         // segment 7 adds new content.
@@ -6247,40 +7548,70 @@ mod tests {
             })
             .collect();
         let moved = segment_store
-            .create(catalog_segment_id(8), moved_payloads.keys().copied().collect(), |id| {
-                Ok(moved_payloads[&id].clone())
-            })
+            .create(
+                catalog_segment_id(8),
+                moved_payloads.keys().copied().collect(),
+                |id| Ok(moved_payloads[&id].clone()),
+            )
             .unwrap();
-        let moved = PayloadSegmentReference::new(moved.metadata(), moved.first_block_id(), moved.last_block_id())
-            .unwrap();
+        let moved = PayloadSegmentReference::new(
+            moved.metadata(),
+            moved.first_block_id(),
+            moved.last_block_id(),
+        )
+        .unwrap();
         let mut catalog = references[1..].to_vec();
         catalog.extend([added, moved]);
-        store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+            .unwrap();
         segment_store.remove_segment(catalog_segment_id(0)).unwrap();
 
         crate::payload_segment::read_path_counters::take();
         assert_eq!(store.get(probes[0]).unwrap(), moved_payloads[&probes[0]]);
         let (witness_checks, candidates) = crate::payload_segment::read_path_counters::take();
-        assert!(witness_checks > 0 && candidates == 0, "a segment the installed catalog dropped never answers");
+        assert!(
+            witness_checks > 0 && candidates == 0,
+            "a segment the installed catalog dropped never answers"
+        );
 
         crate::payload_segment::read_path_counters::take_index_work();
         assert!(store.advance_catalog_locations().unwrap());
         let (index_reads, _, _) = crate::payload_segment::read_path_counters::take_index_work();
-        assert!(index_reads <= 2, "only the two added segments' indexes may be read, not {index_reads}");
+        assert!(
+            index_reads <= 2,
+            "only the two added segments' indexes may be read, not {index_reads}"
+        );
         let (derived_publication, derived) = store.published_catalog_locations_for_test().unwrap();
-        assert_eq!(derived_publication, store.installed_catalog_publication_for_test());
-        let fresh = segment_store.build_location_table(&catalog, || Ok(())).unwrap();
-        assert_eq!(derived.located_entries_for_test(), fresh.located_entries_for_test());
-        assert_eq!((derived.located_blocks(), derived.unindexed_segments()), (4 * BLOCKS + 1, 0));
+        assert_eq!(
+            derived_publication,
+            store.installed_catalog_publication_for_test()
+        );
+        let fresh = segment_store
+            .build_location_table(&catalog, || Ok(()))
+            .unwrap();
+        assert_eq!(
+            derived.located_entries_for_test(),
+            fresh.located_entries_for_test()
+        );
+        assert_eq!(
+            (derived.located_blocks(), derived.unindexed_segments()),
+            (4 * BLOCKS + 1, 0)
+        );
 
         crate::payload_segment::read_path_counters::take();
         assert_eq!(store.get(probes[0]).unwrap(), moved_payloads[&probes[0]]);
-        assert_eq!(store.get(BlockId::for_payload(&added_payload)).unwrap(), added_payload);
+        assert_eq!(
+            store.get(BlockId::for_payload(&added_payload)).unwrap(),
+            added_payload
+        );
         assert!(store.get(probes[1]).unwrap().starts_with(b"catalog-1-"));
         assert_eq!(crate::payload_segment::read_path_counters::take(), (0, 3));
 
         // Dropping the rest derives an empty table that still proves absence.
-        store.install_payload_manifest(PayloadManifest::new(Vec::new()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(Vec::new()).unwrap())
+            .unwrap();
         assert!(store.advance_catalog_locations().unwrap());
         let (_, empty) = store.published_catalog_locations_for_test().unwrap();
         assert_eq!((empty.located_blocks(), empty.unindexed_segments()), (0, 0));
@@ -6297,29 +7628,52 @@ mod tests {
         let store = simulated_store(&vfs);
         store.set_cache_capacity_bytes(0).unwrap();
         let (references, probes) = full_range_catalog(&store, 3, BLOCKS);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         drop(store.traversal_reader(|| Ok(())).unwrap());
         let (built_for, _) = store.published_catalog_locations_for_test().unwrap();
         let added_payload = b"added-after-the-table".to_vec();
         let added_id = BlockId::for_payload(&added_payload);
         let added = segment_holding(&store, 7, &added_payload);
-        store.install_payload_manifest(PayloadManifest::new(vec![references[1], references[2], added]).unwrap()).unwrap();
-        assert_ne!(built_for, store.installed_catalog_publication_for_test(), "fixture: the table is stale");
+        store
+            .install_payload_manifest(
+                PayloadManifest::new(vec![references[1], references[2], added]).unwrap(),
+            )
+            .unwrap();
+        assert_ne!(
+            built_for,
+            store.installed_catalog_publication_for_test(),
+            "fixture: the table is stale"
+        );
 
         assert_eq!(store.published_catalog_answer_for_test(probes[1]), "held");
         crate::payload_segment::read_path_counters::take();
         assert!(store.get(probes[1]).unwrap().starts_with(b"catalog-1-"));
-        assert_eq!(store.catalogued_payload_segment(probes[2]).unwrap(), Some(catalog_segment_id(2)));
-        assert_eq!(crate::payload_segment::read_path_counters::take(), (0, 2), "no catalog walk");
+        assert_eq!(
+            store.catalogued_payload_segment(probes[2]).unwrap(),
+            Some(catalog_segment_id(2))
+        );
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take(),
+            (0, 2),
+            "no catalog walk"
+        );
         let missing = BlockId::for_payload(b"never written");
         for id in [probes[0], added_id, missing] {
             assert_eq!(store.published_catalog_answer_for_test(id), "unknown");
         }
         assert_eq!(store.get(added_id).unwrap(), added_payload);
-        assert_eq!(store.get(probes[0]).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            store.get(probes[0]).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
         let (_, _, dropped_only_copy) = catalog_layout(0, BLOCKS, probes[0]);
-        assert_eq!(store.put_deferred(&dropped_only_copy).unwrap(), (probes[0], true),
-            "dedupe restages content whose only segment the installed catalog dropped");
+        assert_eq!(
+            store.put_deferred(&dropped_only_copy).unwrap(),
+            (probes[0], true),
+            "dedupe restages content whose only segment the installed catalog dropped"
+        );
 
         assert!(store.advance_catalog_locations().unwrap());
         assert_eq!(store.published_catalog_answer_for_test(added_id), "held");
@@ -6342,32 +7696,58 @@ mod tests {
         store.set_cache_capacity_bytes(0).unwrap();
         let (references, probes) = full_range_catalog(&store, SEGMENTS, BLOCKS);
         store.set_segment_index_cache_bytes(16 * 1024).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         drop(store.traversal_reader(|| Ok(())).unwrap());
         let probe_all = |store: &BlockStore| {
             for (segment_number, id) in probes.iter().enumerate() {
-                assert_eq!(store.catalogued_payload_segment(*id).unwrap(), Some(catalog_segment_id(segment_number)));
+                assert_eq!(
+                    store.catalogued_payload_segment(*id).unwrap(),
+                    Some(catalog_segment_id(segment_number))
+                );
                 let (_, _, bytes) = catalog_layout(segment_number, BLOCKS, *id);
-                assert_eq!(store.put_deferred(&bytes).unwrap(), (*id, false), "a packed copy dedupes");
+                assert_eq!(
+                    store.put_deferred(&bytes).unwrap(),
+                    (*id, false),
+                    "a packed copy dedupes"
+                );
             }
         };
         crate::payload_segment::read_path_counters::take();
         crate::payload_segment::read_path_counters::take_index_work();
         probe_all(&store);
-        assert_eq!(crate::payload_segment::read_path_counters::take(), (0, 2 * SEGMENTS as u64));
-        assert_eq!(crate::payload_segment::read_path_counters::take_index_work(), (0, 0, 0));
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take(),
+            (0, 2 * SEGMENTS as u64)
+        );
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take_index_work(),
+            (0, 0, 0)
+        );
         let fresh = b"content no segment holds".to_vec();
-        assert_eq!(store.put_deferred(&fresh).unwrap(), (BlockId::for_payload(&fresh), true));
+        assert_eq!(
+            store.put_deferred(&fresh).unwrap(),
+            (BlockId::for_payload(&fresh), true)
+        );
 
         set_catalog_locations_disabled_for_test(true);
         probe_all(&store);
         set_catalog_locations_disabled_for_test(false);
         let (witness_checks, _) = crate::payload_segment::read_path_counters::take();
-        let (index_reads, index_bytes, _) = crate::payload_segment::read_path_counters::take_index_work();
-        assert!(witness_checks >= 2 * (SEGMENTS * SEGMENTS) as u64, "{witness_checks}");
+        let (index_reads, index_bytes, _) =
+            crate::payload_segment::read_path_counters::take_index_work();
+        assert!(
+            witness_checks >= 2 * (SEGMENTS * SEGMENTS) as u64,
+            "{witness_checks}"
+        );
         assert!(index_reads > 0);
-        println!("probes={} located_candidates={} exact_witness_checks={witness_checks} \
-            exact_index_reads={index_reads} exact_index_bytes={index_bytes}", 2 * SEGMENTS, 2 * SEGMENTS);
+        println!(
+            "probes={} located_candidates={} exact_witness_checks={witness_checks} \
+            exact_index_reads={index_reads} exact_index_bytes={index_bytes}",
+            2 * SEGMENTS,
+            2 * SEGMENTS
+        );
     }
 
     /// The first table is built once, from every index of the installed
@@ -6379,17 +7759,28 @@ mod tests {
         const BLOCKS: usize = 16;
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
-        assert!(!store.publish_first_catalog_locations(|| Ok(())).unwrap(), "no catalog, no table");
+        assert!(
+            !store.publish_first_catalog_locations(|| Ok(())).unwrap(),
+            "no catalog, no table"
+        );
         let (references, _) = full_range_catalog(&store, SEGMENTS, BLOCKS);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         assert!(store.publish_first_catalog_locations(|| Ok(())).unwrap());
         let (publication, table) = store.published_catalog_locations_for_test().unwrap();
         assert_eq!(publication, store.installed_catalog_publication_for_test());
         assert_eq!(table.located_blocks(), SEGMENTS * BLOCKS);
-        store.install_payload_manifest(PayloadManifest::new(references[1..].to_vec()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references[1..].to_vec()).unwrap())
+            .unwrap();
         let before = segment_reads(&vfs);
         assert!(!store.publish_first_catalog_locations(|| Ok(())).unwrap());
-        assert_eq!(segment_reads(&vfs) - before, 0, "a stale table is never rebuilt");
+        assert_eq!(
+            segment_reads(&vfs) - before,
+            0,
+            "a stale table is never rebuilt"
+        );
     }
 
     /// A whole-store pass reuses the published table while it describes the
@@ -6402,20 +7793,32 @@ mod tests {
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
         let (references, _) = full_range_catalog(&store, SEGMENTS, BLOCKS);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         let before = segment_reads(&vfs);
         drop(store.traversal_reader(|| Ok(())).unwrap());
         assert_eq!(segment_reads(&vfs) - before, 3 * SEGMENTS);
         let before = segment_reads(&vfs);
         let reader = store.traversal_reader(|| Ok(())).unwrap();
-        assert_eq!(segment_reads(&vfs) - before, 0, "the current published table is reused");
+        assert_eq!(
+            segment_reads(&vfs) - before,
+            0,
+            "the current published table is reused"
+        );
         assert_eq!(reader.location_table_shape().0, SEGMENTS * BLOCKS);
         drop(reader);
 
-        store.install_payload_manifest(PayloadManifest::new(references[1..].to_vec()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references[1..].to_vec()).unwrap())
+            .unwrap();
         let before = segment_reads(&vfs);
         drop(store.traversal_reader(|| Ok(())).unwrap());
-        assert_eq!(segment_reads(&vfs) - before, 0, "a stale table is derived: a drop reads no index");
+        assert_eq!(
+            segment_reads(&vfs) - before,
+            0,
+            "a stale table is derived: a drop reads no index"
+        );
         let (published, table) = store.published_catalog_locations_for_test().unwrap();
         assert_eq!(published, store.installed_catalog_publication_for_test());
         assert_eq!(table.located_blocks(), (SEGMENTS - 1) * BLOCKS);
@@ -6434,16 +7837,25 @@ mod tests {
     #[test]
     #[ignore]
     fn cold_packed_read_measurement() {
-        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else { return; };
+        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else {
+            return;
+        };
         let env = |name: &str, default: usize| {
-            std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
         };
         let segments = env("TOFU_DB_COLD_READ_BENCH_SEGMENTS", 512);
         let blocks = env("TOFU_DB_COLD_READ_BENCH_BLOCKS", 8_192);
         let reads = env("TOFU_DB_COLD_READ_BENCH_READS", 200);
         let filter_bytes = (blocks * 16).next_power_of_two() / 8;
-        let budget = env("TOFU_DB_COLD_READ_BENCH_BUDGET", 4 * filter_bytes * segments * 29 / 100);
-        let directory = std::path::PathBuf::from(root).join(format!("cold-read-{}", Uuid::new_v4().simple()));
+        let budget = env(
+            "TOFU_DB_COLD_READ_BENCH_BUDGET",
+            4 * filter_bytes * segments * 29 / 100,
+        );
+        let directory =
+            std::path::PathBuf::from(root).join(format!("cold-read-{}", Uuid::new_v4().simple()));
         std::fs::create_dir_all(&directory).unwrap();
         let (references, probes) = {
             let store = BlockStore::initialize(&directory).unwrap();
@@ -6451,14 +7863,20 @@ mod tests {
         };
         let io = || {
             let text = std::fs::read_to_string("/proc/self/io").unwrap();
-            let field = |name: &str| text.lines().find_map(|line| line.strip_prefix(name))
-                .and_then(|value| value.trim().parse::<u64>().ok()).unwrap();
+            let field = |name: &str| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .unwrap()
+            };
             (field("rchar:"), field("syscr:"))
         };
         let store = BlockStore::open(&directory).unwrap();
         store.set_cache_capacity_bytes(1 << 30).unwrap();
         store.set_segment_index_cache_bytes(budget).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         // Distinct segments in a fixed pseudo-random order: no cold read can
         // reuse a payload or index another cold read already brought in.
         let mut state = 0x2545_f491_4f6c_dd1d_u64;
@@ -6503,15 +7921,24 @@ mod tests {
         merged_ids.sort_unstable();
         let merged = segment_store
             .create(Uuid::new_v4(), merged_ids, |id| {
-                if id == BlockId::for_payload(&incoming) { Ok(incoming.clone()) }
-                else { Ok(segment_store.get_with_handle(&source, id).unwrap().unwrap()) }
+                if id == BlockId::for_payload(&incoming) {
+                    Ok(incoming.clone())
+                } else {
+                    Ok(segment_store.get_with_handle(&source, id).unwrap().unwrap())
+                }
             })
             .unwrap();
         let mut replacement = references.clone();
-        replacement[0] = PayloadSegmentReference::new(merged.metadata(), merged.first_block_id(), merged.last_block_id())
-            .unwrap();
+        replacement[0] = PayloadSegmentReference::new(
+            merged.metadata(),
+            merged.first_block_id(),
+            merged.last_block_id(),
+        )
+        .unwrap();
         store.verify_payload_segment(&replacement[0]).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(replacement).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(replacement).unwrap())
+            .unwrap();
         pass("after_merge_drop");
         drop(store);
         std::fs::remove_dir_all(&directory).unwrap();
@@ -6530,14 +7957,20 @@ mod tests {
     #[test]
     #[ignore]
     fn published_location_table_cold_read_measurement() {
-        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else { return; };
+        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else {
+            return;
+        };
         let env = |name: &str, default: usize| {
-            std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
         };
         let segments = env("TOFU_DB_COLD_READ_BENCH_SEGMENTS", 1_024);
         let blocks = env("TOFU_DB_COLD_READ_BENCH_BLOCKS", 8_192);
         let reads = env("TOFU_DB_COLD_READ_BENCH_READS", 200).min(segments);
-        let directory = std::path::PathBuf::from(root).join(format!("located-read-{}", Uuid::new_v4().simple()));
+        let directory = std::path::PathBuf::from(root)
+            .join(format!("located-read-{}", Uuid::new_v4().simple()));
         std::fs::create_dir_all(&directory).unwrap();
         let built = std::time::Instant::now();
         let references = {
@@ -6545,11 +7978,18 @@ mod tests {
             full_range_catalog(&store, segments, blocks).0
         };
         let catalog_seconds = built.elapsed().as_secs_f64();
-        let index_bytes: usize = references.iter().map(|reference| reference.block_count as usize * 48).sum();
+        let index_bytes: usize = references
+            .iter()
+            .map(|reference| reference.block_count as usize * 48)
+            .sum();
         let store = BlockStore::open(&directory).unwrap();
         store.set_cache_capacity_bytes(0).unwrap();
-        store.set_segment_index_cache_bytes(index_bytes * 29 / 100).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .set_segment_index_cache_bytes(index_bytes * 29 / 100)
+            .unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         let started = std::time::Instant::now();
         drop(store.traversal_reader(|| Ok(())).unwrap());
         let table_build = started.elapsed();
@@ -6565,8 +8005,12 @@ mod tests {
         order.truncate(reads);
         let io = || {
             let text = std::fs::read_to_string("/proc/self/io").unwrap();
-            let field = |name: &str| text.lines().find_map(|line| line.strip_prefix(name))
-                .and_then(|value| value.trim().parse::<u64>().ok()).unwrap();
+            let field = |name: &str| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .unwrap()
+            };
             (field("rchar:"), field("syscr:"))
         };
         let pass = |label: &str, block_number: usize, exact: bool| {
@@ -6615,33 +8059,50 @@ mod tests {
     #[test]
     #[ignore]
     fn concurrent_packed_read_measurement() {
-        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else { return; };
+        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else {
+            return;
+        };
         let env = |name: &str, default: usize| {
-            std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
         };
         let segments = env("TOFU_DB_COLD_READ_BENCH_SEGMENTS", 256);
         let blocks = env("TOFU_DB_COLD_READ_BENCH_BLOCKS", 4_096);
         let hot = env("TOFU_DB_CONCURRENT_READ_BENCH_HOT_SEGMENTS", 16).clamp(1, segments);
         let threads = env("TOFU_DB_CONCURRENT_READ_BENCH_THREADS", 64);
         let reads = env("TOFU_DB_CONCURRENT_READ_BENCH_READS", 2_000);
-        let directory = std::path::PathBuf::from(root).join(format!("concurrent-read-{}", Uuid::new_v4().simple()));
+        let directory = std::path::PathBuf::from(root)
+            .join(format!("concurrent-read-{}", Uuid::new_v4().simple()));
         std::fs::create_dir_all(&directory).unwrap();
         let references = {
             let store = BlockStore::initialize(&directory).unwrap();
             full_range_catalog(&store, segments, blocks).0
         };
-        let index_bytes: usize = references.iter().map(|reference| reference.block_count as usize * 48).sum();
+        let index_bytes: usize = references
+            .iter()
+            .map(|reference| reference.block_count as usize * 48)
+            .sum();
         let store = BlockStore::open(&directory).unwrap();
         store.set_cache_capacity_bytes(0).unwrap();
-        store.set_segment_index_cache_bytes(index_bytes * 29 / 100).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .set_segment_index_cache_bytes(index_bytes * 29 / 100)
+            .unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         drop(store.traversal_reader(|| Ok(())).unwrap());
         let usage = || {
             // SAFETY: getrusage fills the caller-owned structure.
             let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
             assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) }, 0);
-            let micros = |time: libc::timeval| time.tv_sec as i64 * 1_000_000 + time.tv_usec as i64;
-            (micros(usage.ru_utime) + micros(usage.ru_stime), usage.ru_nvcsw as i64, usage.ru_nivcsw as i64)
+            let micros = |time: libc::timeval| time.tv_sec * 1_000_000 + time.tv_usec;
+            (
+                micros(usage.ru_utime) + micros(usage.ru_stime),
+                usage.ru_nvcsw as i64,
+                usage.ru_nivcsw as i64,
+            )
         };
         let pass = |label: &str| {
             let (cpu, voluntary, involuntary) = usage();
@@ -6650,14 +8111,16 @@ mod tests {
                 for thread in 0..threads {
                     let store = &store;
                     scope.spawn(move || {
-                        let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ (thread as u64 + 1).wrapping_mul(0x2545_f491_4f6c_dd1d);
+                        let mut state = 0x9e37_79b9_7f4a_7c15_u64
+                            ^ (thread as u64 + 1).wrapping_mul(0x2545_f491_4f6c_dd1d);
                         for _ in 0..reads {
                             state ^= state << 13;
                             state ^= state >> 7;
                             state ^= state << 17;
                             let segment_number = (state % hot as u64) as usize;
                             let block_number = ((state >> 32) % blocks as u64) as usize;
-                            let bytes = format!("catalog-{segment_number}-{block_number}").into_bytes();
+                            let bytes =
+                                format!("catalog-{segment_number}-{block_number}").into_bytes();
                             assert_eq!(store.get(BlockId::for_payload(&bytes)).unwrap(), bytes);
                         }
                     });
@@ -6695,17 +8158,26 @@ mod tests {
     #[test]
     #[ignore]
     fn cold_loose_lookup_after_publication_measurement() {
-        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else { return; };
+        let Some(root) = std::env::var_os("TOFU_DB_COLD_READ_BENCH_DIR") else {
+            return;
+        };
         let env = |name: &str, default: usize| {
-            std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
         };
         // The live catalog on 2026-10-31; one more segment still fits the bound.
         let segments = env("TOFU_DB_COLD_READ_BENCH_SEGMENTS", 4_091);
         let blocks = env("TOFU_DB_COLD_READ_BENCH_BLOCKS", 1_024);
         let lookups = env("TOFU_DB_COLD_READ_BENCH_READS", 200);
         let filter_bytes = (blocks * 16).next_power_of_two() / 8;
-        let budget = env("TOFU_DB_COLD_READ_BENCH_BUDGET", 4 * filter_bytes * segments * 29 / 100);
-        let directory = std::path::PathBuf::from(root).join(format!("cold-loose-{}", Uuid::new_v4().simple()));
+        let budget = env(
+            "TOFU_DB_COLD_READ_BENCH_BUDGET",
+            4 * filter_bytes * segments * 29 / 100,
+        );
+        let directory =
+            std::path::PathBuf::from(root).join(format!("cold-loose-{}", Uuid::new_v4().simple()));
         std::fs::create_dir_all(&directory).unwrap();
         let (mut references, _) = {
             let store = BlockStore::initialize(&directory).unwrap();
@@ -6713,14 +8185,20 @@ mod tests {
         };
         let io = || {
             let text = std::fs::read_to_string("/proc/self/io").unwrap();
-            let field = |name: &str| text.lines().find_map(|line| line.strip_prefix(name))
-                .and_then(|value| value.trim().parse::<u64>().ok()).unwrap();
+            let field = |name: &str| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .unwrap()
+            };
             (field("rchar:"), field("syscr:"))
         };
         let store = BlockStore::open(&directory).unwrap();
         store.set_cache_capacity_bytes(1 << 30).unwrap();
         store.set_segment_index_cache_bytes(budget).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         let segment_store = store.payload_segment_store().unwrap();
         let packed: BTreeMap<BlockId, Vec<u8>> = (0..blocks)
             .map(|number| {
@@ -6729,17 +8207,30 @@ mod tests {
             })
             .collect();
         let segment = segment_store
-            .create(Uuid::new_v4(), packed.keys().copied().collect(), |id| Ok(packed[&id].clone()))
+            .create(Uuid::new_v4(), packed.keys().copied().collect(), |id| {
+                Ok(packed[&id].clone())
+            })
             .unwrap();
-        let reference =
-            PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                .unwrap();
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )
+        .unwrap();
         store.verify_payload_segment(&reference).unwrap();
-        store.note_packed(&packed.keys().copied().collect::<Vec<_>>()).unwrap();
+        store
+            .note_packed(&packed.keys().copied().collect::<Vec<_>>())
+            .unwrap();
         references.push(reference);
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         let loose: Vec<BlockId> = (0..lookups)
-            .map(|number| store.put(format!("bench-loose-{number}").as_bytes()).unwrap())
+            .map(|number| {
+                store
+                    .put(format!("bench-loose-{number}").as_bytes())
+                    .unwrap()
+            })
             .collect();
         store.cache.write().unwrap().clear();
         let pass = |label: &str, run: &mut dyn FnMut()| {
@@ -6773,7 +8264,12 @@ mod tests {
         });
         pass("dedupe_new", &mut || {
             for number in 0..lookups {
-                assert!(store.put_deferred(format!("bench-dedupe-{number}").as_bytes()).unwrap().1);
+                assert!(
+                    store
+                        .put_deferred(format!("bench-dedupe-{number}").as_bytes())
+                        .unwrap()
+                        .1
+                );
             }
         });
         drop(store);
@@ -6791,15 +8287,21 @@ mod tests {
     #[test]
     #[ignore]
     fn traversal_reader_measurement() {
-        let Some(root) = std::env::var_os("TOFU_DB_TRAVERSAL_BENCH_DIR") else { return; };
+        let Some(root) = std::env::var_os("TOFU_DB_TRAVERSAL_BENCH_DIR") else {
+            return;
+        };
         let env = |name: &str, default: usize| {
-            std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
         };
         let segments = env("TOFU_DB_TRAVERSAL_BENCH_SEGMENTS", 256);
         let blocks = env("TOFU_DB_TRAVERSAL_BENCH_BLOCKS", 8_192);
         let filter_bytes = (blocks * 16).next_power_of_two() / 8;
         let budget = 4 * filter_bytes * segments * 29 / 100;
-        let directory = std::path::PathBuf::from(root).join(format!("traversal-{}", Uuid::new_v4().simple()));
+        let directory =
+            std::path::PathBuf::from(root).join(format!("traversal-{}", Uuid::new_v4().simple()));
         std::fs::create_dir_all(&directory).unwrap();
         let (references, _) = {
             let store = BlockStore::initialize(&directory).unwrap();
@@ -6807,17 +8309,27 @@ mod tests {
         };
         let io = || {
             let text = std::fs::read_to_string("/proc/self/io").unwrap();
-            let field = |name: &str| text.lines().find_map(|line| line.strip_prefix(name))
-                .and_then(|value| value.trim().parse::<u64>().ok()).unwrap();
+            let field = |name: &str| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix(name))
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .unwrap()
+            };
             (field("rchar:"), field("syscr:"))
         };
         let store = BlockStore::open(&directory).unwrap();
         store.set_cache_capacity_bytes(0).unwrap();
         store.set_segment_index_cache_bytes(budget).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(references).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references).unwrap())
+            .unwrap();
         let probes = |block_number: usize| -> Vec<BlockId> {
             (0..segments)
-                .map(|segment_number| BlockId::for_payload(format!("catalog-{segment_number}-{block_number}").as_bytes()))
+                .map(|segment_number| {
+                    BlockId::for_payload(
+                        format!("catalog-{segment_number}-{block_number}").as_bytes(),
+                    )
+                })
                 .collect()
         };
         let report = |label: &str, count: usize, run: &mut dyn FnMut()| {
@@ -6856,7 +8368,10 @@ mod tests {
                 assert!(reader.get(*id).unwrap().starts_with(b"catalog-"));
             }
         });
-        eprintln!("traversal_reader table_bytes={}", reader.location_table_shape().2);
+        eprintln!(
+            "traversal_reader table_bytes={}",
+            reader.location_table_shape().2
+        );
         drop(reader);
         drop(store);
         std::fs::remove_dir_all(&directory).unwrap();
@@ -6899,23 +8414,35 @@ mod tests {
             segment_id[0] = 0xb0;
             segment_id[15] = segment_number;
             let segment = segment_store
-                .create(Uuid::from_bytes(segment_id), payloads.keys().copied().collect(), |id| {
-                    Ok(payloads[&id].clone())
-                })
+                .create(
+                    Uuid::from_bytes(segment_id),
+                    payloads.keys().copied().collect(),
+                    |id| Ok(payloads[&id].clone()),
+                )
                 .unwrap();
             references.push(
-                PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())
-                    .unwrap(),
+                PayloadSegmentReference::new(
+                    segment.metadata(),
+                    segment.first_block_id(),
+                    segment.last_block_id(),
+                )
+                .unwrap(),
             );
             if segment_number + 1 < segments_total {
                 catalog_ids.extend(payloads.keys().copied());
             }
         }
         let initial = references[..references.len() - 1].to_vec();
-        store.install_payload_manifest(PayloadManifest::new(initial).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(initial).unwrap())
+            .unwrap();
         store.set_cache_capacity_bytes(1 << 30).unwrap();
         let payload_reads = |vfs: &DeterministicVfs| {
-            vfs.trace().unwrap().iter().filter(|operation| **operation == Operation::Read).count()
+            vfs.trace()
+                .unwrap()
+                .iter()
+                .filter(|operation| **operation == Operation::Read)
+                .count()
         };
         let mut pass = |store: &BlockStore, reads: usize| -> (usize, std::time::Duration) {
             vfs.arm_fault(None).unwrap();
@@ -6928,7 +8455,9 @@ mod tests {
         };
         let (warm_misses, _) = pass(&store, catalog_ids.len());
         let (steady_misses, steady_elapsed) = pass(&store, 200_000);
-        store.install_payload_manifest(PayloadManifest::new(references.clone()).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(references.clone()).unwrap())
+            .unwrap();
         let (after_addition_misses, after_elapsed) = pass(&store, 200_000);
         eprintln!(
             "block_cache_working_set blocks={} warm_reads={} warm_misses={} steady_reads=200000 steady_misses={} \
@@ -6949,13 +8478,23 @@ mod tests {
         let store = simulated_store(&vfs);
         let make = |payload: &[u8]| {
             let id = BlockId::for_payload(payload);
-            let segment = store.payload_segment_store().unwrap()
-                .create(Uuid::new_v4(), vec![id], |_| Ok(payload.to_vec())).unwrap();
-            let reference = PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id()).unwrap();
+            let segment = store
+                .payload_segment_store()
+                .unwrap()
+                .create(Uuid::new_v4(), vec![id], |_| Ok(payload.to_vec()))
+                .unwrap();
+            let reference = PayloadSegmentReference::new(
+                segment.metadata(),
+                segment.first_block_id(),
+                segment.last_block_id(),
+            )
+            .unwrap();
             (id, reference)
         };
         let (base_id, base) = make(b"published base");
-        store.install_payload_manifest(PayloadManifest::new(vec![base]).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(vec![base]).unwrap())
+            .unwrap();
         let (future_id, future) = make(b"durable batch awaiting catalog publication");
         // History promotion builds several segments before its atomic publish.
         // A saturation rebuild sees only the old catalog, losing early hints.
@@ -6964,19 +8503,42 @@ mod tests {
         let mut filler = 0_u64;
         while !store.packed_filter.read().unwrap().saturated() {
             filler += 1;
-            store.note_packed(&[BlockId::for_payload(&filler.to_le_bytes())]).unwrap();
+            store
+                .note_packed(&[BlockId::for_payload(&filler.to_le_bytes())])
+                .unwrap();
         }
         // Callers note packed IDs inside their authority hold: a saturated
         // filter is rebuilt by `build_packed_filter`, off the mutex, never here.
         crate::payload_segment::read_path_counters::take_index_work();
         store.note_packed(&[base_id]).unwrap();
-        assert_eq!(crate::payload_segment::read_path_counters::take_index_work().0, 0, "note_packed rescanned the catalog");
-        assert!(store.build_packed_filter(|| Ok(())).unwrap(), "a saturated filter is rebuilt");
-        assert!(!store.packed_filter.read().unwrap().may_contain(future_id), "the regression needs a dropped unpublished hint");
-        assert!(!store.packed_filter.read().unwrap().covers_segment(&future), "the rebuild must forget what it dropped");
-        store.install_payload_manifest(PayloadManifest::new(vec![base, future]).unwrap()).unwrap();
-        assert!(store.has_catalogued_payload_block(future_id).unwrap(), "a stale filter must never disprove membership in a new catalog");
-        assert_eq!(store.get(future_id).unwrap(), b"durable batch awaiting catalog publication");
+        assert_eq!(
+            crate::payload_segment::read_path_counters::take_index_work().0,
+            0,
+            "note_packed rescanned the catalog"
+        );
+        assert!(
+            store.build_packed_filter(|| Ok(())).unwrap(),
+            "a saturated filter is rebuilt"
+        );
+        assert!(
+            !store.packed_filter.read().unwrap().may_contain(future_id),
+            "the regression needs a dropped unpublished hint"
+        );
+        assert!(
+            !store.packed_filter.read().unwrap().covers_segment(&future),
+            "the rebuild must forget what it dropped"
+        );
+        store
+            .install_payload_manifest(PayloadManifest::new(vec![base, future]).unwrap())
+            .unwrap();
+        assert!(
+            store.has_catalogued_payload_block(future_id).unwrap(),
+            "a stale filter must never disprove membership in a new catalog"
+        );
+        assert_eq!(
+            store.get(future_id).unwrap(),
+            b"durable batch awaiting catalog publication"
+        );
         // The install re-read the one segment the rebuild dropped, so negative
         // answers cover the new catalog again.
         assert!(store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap()));
@@ -7032,7 +8594,11 @@ mod tests {
         }
         // Only distinct blocks whose bits were all set already (filter false
         // positives, rare at this load) leave the count unchanged.
-        assert!(next - capacity < capacity / 1000, "{} distinct inserts did not count", next - capacity);
+        assert!(
+            next - capacity < capacity / 1000,
+            "{} distinct inserts did not count",
+            next - capacity
+        );
     }
 
     #[test]
@@ -7042,15 +8608,18 @@ mod tests {
             let mut segment_id = [0x7e_u8; 16];
             segment_id[..8].copy_from_slice(&(number as u64).to_be_bytes());
             let id = BlockId::for_payload(format!("coverage-{number}").as_bytes());
-            (PayloadSegmentReference {
-                segment_id: Uuid::from_bytes(segment_id),
-                shard: 0,
-                block_count: 1,
-                payload_bytes: 1,
-                file_bytes: 1,
-                first_block_id: id,
-                last_block_id: id,
-            }, id)
+            (
+                PayloadSegmentReference {
+                    segment_id: Uuid::from_bytes(segment_id),
+                    shard: 0,
+                    block_count: 1,
+                    payload_bytes: 1,
+                    file_bytes: 1,
+                    first_block_id: id,
+                    last_block_id: id,
+                },
+                id,
+            )
         };
         let bound = crate::payload_manifest::MAX_PAYLOAD_SEGMENTS;
         for number in 0..bound + 3 {
@@ -7060,18 +8629,44 @@ mod tests {
         assert_eq!(filter.uncatalogued_segments.len(), bound);
         assert_eq!(filter.covered_segments.len(), bound);
         let (forgotten, forgotten_id) = reference(0);
-        assert!(!filter.covers_segment(&forgotten), "the oldest unpublished record is forgotten");
-        assert!(filter.may_contain(forgotten_id), "forgetting a record never removes its bits");
+        assert!(
+            !filter.covers_segment(&forgotten),
+            "the oldest unpublished record is forgotten"
+        );
+        assert!(
+            filter.may_contain(forgotten_id),
+            "forgetting a record never removes its bits"
+        );
         // Installing a catalog keeps its records, drops the records of
         // segments it no longer references and keeps pending ones.
-        let installed: HashSet<Uuid> = (3..=4).map(|number| reference(number).0.segment_id).collect();
+        let installed: HashSet<Uuid> = (3..=4)
+            .map(|number| reference(number).0.segment_id)
+            .collect();
         filter.retain_catalog(&installed);
         assert!(filter.covers_segment(&reference(3).0) && filter.covers_segment(&reference(4).0));
-        assert_eq!((filter.uncatalogued_segments.len(), filter.covered_segments.len()), (bound - 2, bound));
+        assert_eq!(
+            (
+                filter.uncatalogued_segments.len(),
+                filter.covered_segments.len()
+            ),
+            (bound - 2, bound)
+        );
         filter.retain_catalog(&HashSet::from([reference(5).0.segment_id]));
-        assert!(!filter.covers_segment(&reference(3).0), "a dropped segment keeps no coverage record");
-        assert!(filter.covers_segment(&reference(bound + 2).0), "a pending segment keeps its record");
-        assert_eq!((filter.uncatalogued_segments.len(), filter.covered_segments.len()), (bound - 3, bound - 2));
+        assert!(
+            !filter.covers_segment(&reference(3).0),
+            "a dropped segment keeps no coverage record"
+        );
+        assert!(
+            filter.covers_segment(&reference(bound + 2).0),
+            "a pending segment keeps its record"
+        );
+        assert_eq!(
+            (
+                filter.uncatalogued_segments.len(),
+                filter.covered_segments.len()
+            ),
+            (bound - 3, bound - 2)
+        );
         // An unbuilt filter records nothing: it holds no bits yet.
         let mut unbuilt = PackedBlockFilter::empty();
         let (reference, id) = reference(7);
@@ -7139,11 +8734,20 @@ mod tests {
         assert_eq!(store.put_deferred_blob(payload).unwrap(), (id, true));
         assert!(vfs.trace().unwrap().is_empty());
         store.flush_pending().unwrap();
-        let segment = store.payload_segment_store().unwrap()
-            .create(Uuid::new_v4(), vec![id], |id| store.get(id)).unwrap();
-        let reference = PayloadSegmentReference::new(segment.metadata(),
-            segment.first_block_id(), segment.last_block_id()).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(vec![reference]).unwrap()).unwrap();
+        let segment = store
+            .payload_segment_store()
+            .unwrap()
+            .create(Uuid::new_v4(), vec![id], |id| store.get(id))
+            .unwrap();
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )
+        .unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(vec![reference]).unwrap())
+            .unwrap();
         store.remove_blocks(&[id]).unwrap();
         assert_eq!(store.put_deferred_blob(payload).unwrap(), (id, false));
         assert!(store.pending_payload(id).unwrap().is_none());
@@ -7314,7 +8918,9 @@ mod tests {
             .unwrap()
             .remove_segment(reference.segment_id)
             .unwrap();
-        let error = store.get_from_snapshot_candidates(id, &snapshot).unwrap_err();
+        let error = store
+            .get_from_snapshot_candidates(id, &snapshot)
+            .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert!(error.to_string().contains("missing segment"));
         assert_eq!(
@@ -7434,7 +9040,10 @@ mod tests {
         // The bound holds: the oldest park was physically reclaimed, the
         // remaining entries stay parked.
         let parked = segment_store.deferred_retirement_ids().unwrap();
-        assert_eq!(parked.len(), crate::payload_segment::MAX_DEFERRED_RETIREMENTS);
+        assert_eq!(
+            parked.len(),
+            crate::payload_segment::MAX_DEFERRED_RETIREMENTS
+        );
         assert!(!parked.contains(&ids[0].0));
         assert_eq!(
             segment_store.remove_segment(ids[0].0).unwrap_err().kind(),
@@ -7455,11 +9064,20 @@ mod tests {
         let store = simulated_store(&vfs);
         let payload = b"durable-packed-recovery";
         let id = store.put(payload).unwrap();
-        let segment = store.payload_segment_store().unwrap()
-            .create(Uuid::new_v4(), vec![id], |id| store.get(id)).unwrap();
-        let reference = PayloadSegmentReference::new(segment.metadata(),
-            segment.first_block_id(), segment.last_block_id()).unwrap();
-        store.install_payload_manifest(PayloadManifest::new(vec![reference]).unwrap()).unwrap();
+        let segment = store
+            .payload_segment_store()
+            .unwrap()
+            .create(Uuid::new_v4(), vec![id], |id| store.get(id))
+            .unwrap();
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )
+        .unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(vec![reference]).unwrap())
+            .unwrap();
         store.remove_blocks(&[id]).unwrap();
         assert_eq!(store.restore_carried(payload).unwrap(), id);
         assert!(store.pending_payload(id).unwrap().is_none());
@@ -7467,35 +9085,66 @@ mod tests {
         let missing_id = BlockId::for_payload(missing);
         store.note_packed(&[missing_id]).unwrap();
         assert_eq!(store.restore_carried(missing).unwrap(), missing_id);
-        assert_eq!(store.pending_payload(missing_id).unwrap().unwrap().as_slice(), missing);
+        assert_eq!(
+            store
+                .pending_payload(missing_id)
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            missing
+        );
     }
 
     #[test]
     fn carried_recovery_lookup_repairs_invalid_files_but_propagates_io_errors() {
-        for kind in [io::ErrorKind::InvalidData, io::ErrorKind::NotFound, io::ErrorKind::Interrupted] {
+        for kind in [
+            io::ErrorKind::InvalidData,
+            io::ErrorKind::NotFound,
+            io::ErrorKind::Interrupted,
+        ] {
             let vfs = DeterministicVfs::new(None);
             let store = simulated_store(&vfs);
             let payload = b"WAL remains the repair authority";
             let id = BlockId::for_payload(payload);
-            let segment = store.payload_segment_store().unwrap()
-                .create(Uuid::new_v4(), vec![id], |_| Ok(payload.to_vec())).unwrap();
-            let reference = PayloadSegmentReference::new(segment.metadata(),
-                segment.first_block_id(), segment.last_block_id()).unwrap();
-            store.install_recovery_payload_manifest(PayloadManifest::new(vec![reference]).unwrap()).unwrap();
-            let mut lookup = store.prepare_carried_recovery(BTreeSet::from([id])).unwrap();
+            let segment = store
+                .payload_segment_store()
+                .unwrap()
+                .create(Uuid::new_v4(), vec![id], |_| Ok(payload.to_vec()))
+                .unwrap();
+            let reference = PayloadSegmentReference::new(
+                segment.metadata(),
+                segment.first_block_id(),
+                segment.last_block_id(),
+            )
+            .unwrap();
+            store
+                .install_recovery_payload_manifest(PayloadManifest::new(vec![reference]).unwrap())
+                .unwrap();
+            let mut lookup = store
+                .prepare_carried_recovery(BTreeSet::from([id]))
+                .unwrap();
             assert!(lookup.complete);
             assert_eq!(lookup.locations[&id].0, Some(reference));
-            vfs.arm_fault(Some(FaultRule { operation_number: 1,
-                action: FaultAction::ErrorBefore(kind) })).unwrap();
+            vfs.arm_fault(Some(FaultRule {
+                operation_number: 1,
+                action: FaultAction::ErrorBefore(kind),
+            }))
+            .unwrap();
             let result = store.restore_carried_with_lookup(payload, &mut lookup);
-            assert!(!vfs.trace().unwrap().is_empty(), "fault must actually be reached");
+            assert!(
+                !vfs.trace().unwrap().is_empty(),
+                "fault must actually be reached"
+            );
             if kind == io::ErrorKind::Interrupted {
                 assert_eq!(result.unwrap_err().kind(), kind);
                 assert!(!lookup.locations[&id].1);
                 assert!(store.pending_payload(id).unwrap().is_none());
             } else {
                 assert_eq!(result.unwrap(), id);
-                assert_eq!(store.pending_payload(id).unwrap().unwrap().as_slice(), payload);
+                assert_eq!(
+                    store.pending_payload(id).unwrap().unwrap().as_slice(),
+                    payload
+                );
             }
         }
     }
@@ -7505,9 +9154,13 @@ mod tests {
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
         let ids: BTreeSet<_> = (0_usize..=65_536)
-            .map(|i| BlockId::for_payload(&i.to_le_bytes())).collect();
+            .map(|i| BlockId::for_payload(&i.to_le_bytes()))
+            .collect();
         let lookup = store.prepare_carried_recovery(ids.clone()).unwrap();
-        assert_eq!(lookup.locations.keys().copied().collect::<BTreeSet<_>>(), ids);
+        assert_eq!(
+            lookup.locations.keys().copied().collect::<BTreeSet<_>>(),
+            ids
+        );
     }
 
     #[test]
@@ -7521,84 +9174,182 @@ mod tests {
                 .map(|block_number| {
                     let bytes = format!("catalog-{segment_number}-{block_number}").into_bytes();
                     (BlockId::for_payload(&bytes), bytes)
-                }).collect();
+                })
+                .collect();
             if segment_number == 0 {
                 let (id, bytes) = payloads.iter().nth(16).unwrap();
                 target = Some((*id, bytes.clone()));
             }
-            let segment = store.payload_segment_store().unwrap()
-                .create(Uuid::new_v4(), payloads.keys().copied().collect(),
-                    |id| Ok(payloads[&id].clone())).unwrap();
-            references.push(PayloadSegmentReference::new(segment.metadata(),
-                segment.first_block_id(), segment.last_block_id()).unwrap());
+            let segment = store
+                .payload_segment_store()
+                .unwrap()
+                .create(Uuid::new_v4(), payloads.keys().copied().collect(), |id| {
+                    Ok(payloads[&id].clone())
+                })
+                .unwrap();
+            references.push(
+                PayloadSegmentReference::new(
+                    segment.metadata(),
+                    segment.first_block_id(),
+                    segment.last_block_id(),
+                )
+                .unwrap(),
+            );
         }
         let manifest = PayloadManifest::new(references).unwrap();
         store.install_payload_manifest(manifest.clone()).unwrap();
         let (id, bytes) = target.unwrap();
         // A freshly published segment has never served a payload read. Its
         // already-required verification must seed the next launch's hints.
-        let reference = manifest.segments.iter().find(|reference| {
-            store.payload_segment_store().unwrap().open_segment(reference.segment_id)
-                .unwrap().contains(id)
-        }).unwrap();
+        let reference = manifest
+            .segments
+            .iter()
+            .find(|reference| {
+                store
+                    .payload_segment_store()
+                    .unwrap()
+                    .open_segment(reference.segment_id)
+                    .unwrap()
+                    .contains(id)
+            })
+            .unwrap();
         store.verify_payload_segment(reference).unwrap();
         store.save_read_hints().unwrap();
-        let first_open = BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
-        first_open.install_recovery_payload_manifest(manifest.clone()).unwrap();
+        let first_open =
+            BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
+        first_open
+            .install_recovery_payload_manifest(manifest.clone())
+            .unwrap();
         vfs.arm_fault(None).unwrap();
         assert_eq!(first_open.get(id).unwrap(), bytes);
-        let publication_opens = vfs.trace().unwrap().iter()
-            .filter(|op| **op == Operation::Open).count();
-        assert!(publication_opens <= 2, "new pack required {publication_opens} opens before its first read");
+        let publication_opens = vfs
+            .trace()
+            .unwrap()
+            .iter()
+            .filter(|op| **op == Operation::Open)
+            .count();
+        assert!(
+            publication_opens <= 2,
+            "new pack required {publication_opens} opens before its first read"
+        );
         assert!(store.payload_segment_candidates(id).unwrap().len() <= 2);
         vfs.arm_fault(None).unwrap();
-        assert_eq!(store.get_from_payload_segments(id).unwrap(), Some(bytes.clone()));
-        let opens = vfs.trace().unwrap().iter()
-            .filter(|operation| **operation == Operation::Open).count();
+        assert_eq!(
+            store.get_from_payload_segments(id).unwrap(),
+            Some(bytes.clone())
+        );
+        let opens = vfs
+            .trace()
+            .unwrap()
+            .iter()
+            .filter(|operation| **operation == Operation::Open)
+            .count();
         assert!(opens < 12, "negative segment probes reopened {opens} files");
         store.save_read_hints().unwrap();
-        let reopened = BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
-        reopened.install_recovery_payload_manifest(manifest.clone()).unwrap();
+        let reopened =
+            BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs.clone())).unwrap();
+        reopened
+            .install_recovery_payload_manifest(manifest.clone())
+            .unwrap();
         vfs.arm_fault(None).unwrap();
         assert_eq!(reopened.get(id).unwrap(), bytes);
-        let opens = vfs.trace().unwrap().iter()
-            .filter(|operation| **operation == Operation::Open).count();
-        assert!(opens <= 2, "persisted point-read hint reopened {opens} segments");
+        let opens = vfs
+            .trace()
+            .unwrap()
+            .iter()
+            .filter(|operation| **operation == Operation::Open)
+            .count();
+        assert!(
+            opens <= 2,
+            "persisted point-read hint reopened {opens} segments"
+        );
         // A validly encoded hint that names a wrong but current segment must
         // fall back to the actual payload, not claim absence or return bytes.
-        let wrong = manifest.segments.iter().find(|reference| {
-            reference.may_contain(id) && reopened.payload_segment_store().unwrap()
-                .open_segment(reference.segment_id).unwrap().get(id).unwrap().is_none()
-        }).unwrap();
-        reopened.read_hints.write().unwrap().remember(id, wrong.segment_id);
+        let wrong = manifest
+            .segments
+            .iter()
+            .find(|reference| {
+                reference.may_contain(id)
+                    && reopened
+                        .payload_segment_store()
+                        .unwrap()
+                        .open_segment(reference.segment_id)
+                        .unwrap()
+                        .get(id)
+                        .unwrap()
+                        .is_none()
+            })
+            .unwrap();
+        reopened
+            .read_hints
+            .write()
+            .unwrap()
+            .remember(id, wrong.segment_id);
         reopened.cache.write().unwrap().clear();
         assert_eq!(reopened.get(id).unwrap(), bytes);
         store.set_segment_index_cache_bytes(0).unwrap();
         assert!(store.payload_segment_candidates(id).unwrap().len() > 50);
-        assert_eq!(store.get_from_payload_segments(id).unwrap(), Some(bytes.clone()));
+        assert_eq!(
+            store.get_from_payload_segments(id).unwrap(),
+            Some(bytes.clone())
+        );
         let missing_payload = b"WAL-only block";
         let missing_id = BlockId::for_payload(missing_payload);
         vfs.arm_fault(None).unwrap();
-        let mut lookup = store.prepare_carried_recovery(BTreeSet::from([id, missing_id])).unwrap();
-        let catalog_opens = vfs.trace().unwrap().iter()
-            .filter(|operation| **operation == Operation::Open).count();
+        let mut lookup = store
+            .prepare_carried_recovery(BTreeSet::from([id, missing_id]))
+            .unwrap();
+        let catalog_opens = vfs
+            .trace()
+            .unwrap()
+            .iter()
+            .filter(|operation| **operation == Operation::Open)
+            .count();
         // Segments read earlier keep idle handles, so recovery may open fewer.
-        assert!(catalog_opens <= 64, "recovery must read each verified segment index only once");
+        assert!(
+            catalog_opens <= 64,
+            "recovery must read each verified segment index only once"
+        );
         assert!(lookup.complete);
         assert!(lookup.locations[&id].0.is_some());
         vfs.arm_fault(None).unwrap();
         assert_eq!(store.get_for_recovery(id, &lookup).unwrap(), bytes);
-        let recovery_opens = vfs.trace().unwrap().iter()
-            .filter(|operation| **operation == Operation::Open).count();
-        assert!(recovery_opens <= 2, "known recovery location reopened {recovery_opens} segments");
+        let recovery_opens = vfs
+            .trace()
+            .unwrap()
+            .iter()
+            .filter(|operation| **operation == Operation::Open)
+            .count();
+        assert!(
+            recovery_opens <= 2,
+            "known recovery location reopened {recovery_opens} segments"
+        );
         assert!(lookup.locations[&missing_id].0.is_none());
         vfs.arm_fault(None).unwrap();
-        assert_eq!(store.restore_carried_with_lookup(&bytes, &mut lookup).unwrap(), id);
+        assert_eq!(
+            store
+                .restore_carried_with_lookup(&bytes, &mut lookup)
+                .unwrap(),
+            id
+        );
         assert!(store.pending_payload(id).unwrap().is_none());
         vfs.arm_fault(None).unwrap();
-        assert_eq!(store.restore_carried_with_lookup(&bytes, &mut lookup).unwrap(), id);
-        assert_eq!(store.restore_carried_with_lookup(missing_payload, &mut lookup).unwrap(), missing_id);
-        assert!(vfs.trace().unwrap().is_empty(), "verified and WAL-only blocks must not rescan the catalog");
+        assert_eq!(
+            store
+                .restore_carried_with_lookup(&bytes, &mut lookup)
+                .unwrap(),
+            id
+        );
+        assert_eq!(
+            store
+                .restore_carried_with_lookup(missing_payload, &mut lookup)
+                .unwrap(),
+            missing_id
+        );
+        assert!(
+            vfs.trace().unwrap().is_empty(),
+            "verified and WAL-only blocks must not rescan the catalog"
+        );
     }
 
     #[test]
@@ -7716,26 +9467,49 @@ mod tests {
         let mut changed_reader = prepared.shared();
         Arc::make_mut(&mut changed_reader)[1] = 98;
         assert_ne!(changed_reader.as_ptr(), allocation.as_ptr());
-        assert_eq!(store.put_deferred_prepared(&prepared).unwrap(), (identity, true));
-        assert!(Arc::ptr_eq(&store.pending_payload(identity).unwrap().unwrap(), &allocation));
+        assert_eq!(
+            store.put_deferred_prepared(&prepared).unwrap(),
+            (identity, true)
+        );
+        assert!(Arc::ptr_eq(
+            &store.pending_payload(identity).unwrap().unwrap(),
+            &allocation
+        ));
         assert_eq!(store.get(identity).unwrap(), vec![37; 128 * 1024]);
         store.rotate_pending_for_rotation().unwrap();
-        assert_eq!(store.put_deferred_prepared(&prepared).unwrap(), (identity, true));
-        assert!(Arc::ptr_eq(&store.pending_payload(identity).unwrap().unwrap(), &allocation));
+        assert_eq!(
+            store.put_deferred_prepared(&prepared).unwrap(),
+            (identity, true)
+        );
+        assert!(Arc::ptr_eq(
+            &store.pending_payload(identity).unwrap().unwrap(),
+            &allocation
+        ));
         assert_eq!(store.blocks_staged.load(Ordering::Relaxed), 1);
         store.restore_rotation_pending().unwrap();
         store.flush_pending().unwrap();
         // Blob publication deliberately carries an optional loose duplicate
         // again; only a verified cached/packed copy suppresses WAL carrying.
-        assert_eq!(store.put_deferred_prepared(&prepared).unwrap(), (identity, true));
-        assert!(Arc::ptr_eq(&store.pending_payload(identity).unwrap().unwrap(), &allocation));
+        assert_eq!(
+            store.put_deferred_prepared(&prepared).unwrap(),
+            (identity, true)
+        );
+        assert!(Arc::ptr_eq(
+            &store.pending_payload(identity).unwrap().unwrap(),
+            &allocation
+        ));
         store.flush_pending().unwrap();
         store.set_cache_capacity_bytes(256 * 1024).unwrap();
         assert_eq!(store.get(identity).unwrap(), vec![37; 128 * 1024]);
-        assert_eq!(store.put_deferred_prepared(&prepared).unwrap(), (identity, false));
+        assert_eq!(
+            store.put_deferred_prepared(&prepared).unwrap(),
+            (identity, false)
+        );
         assert!(store.pending_payload(identity).unwrap().is_none());
         assert_eq!(store.get(identity).unwrap(), vec![37; 128 * 1024]);
-        assert!(matches!(PreparedBlockSource::new(&vec![0; MAX_BLOCK_BYTES + 1]), Err(error) if error.kind() == io::ErrorKind::InvalidInput));
+        assert!(
+            matches!(PreparedBlockSource::new(&vec![0; MAX_BLOCK_BYTES + 1]), Err(error) if error.kind() == io::ErrorKind::InvalidInput)
+        );
     }
 
     #[test]
@@ -7749,8 +9523,14 @@ mod tests {
         let mut changed = Arc::clone(&original);
         Arc::make_mut(&mut changed)[0] = 99;
         assert_ne!(BlockId::for_payload(&changed), expected);
-        assert_eq!(store.put_deferred_fresh_prepared(&captured).unwrap(), (expected, true));
-        assert!(Arc::ptr_eq(&store.pending_payload(expected).unwrap().unwrap(), &original));
+        assert_eq!(
+            store.put_deferred_fresh_prepared(&captured).unwrap(),
+            (expected, true)
+        );
+        assert!(Arc::ptr_eq(
+            &store.pending_payload(expected).unwrap().unwrap(),
+            &original
+        ));
         store.rotate_pending_for_rotation().unwrap();
         store.put_deferred_fresh_prepared(&captured).unwrap();
         assert_eq!(store.blocks_staged.load(Ordering::Relaxed), 1);
@@ -7759,10 +9539,18 @@ mod tests {
         store.set_cache_capacity_bytes(65536).unwrap();
         assert_eq!(store.get(expected).unwrap(), *original);
         // Fresh pages deliberately stage even if a verified durable copy exists.
-        assert_eq!(store.put_deferred_fresh_prepared(&captured).unwrap(), (expected, true));
-        assert!(Arc::ptr_eq(&store.pending_payload(expected).unwrap().unwrap(), &original));
-        assert!(matches!(PreparedBlockSource::capture_shared(Arc::new(vec![0; MAX_BLOCK_BYTES + 1])),
-            Err(error) if error.kind() == io::ErrorKind::InvalidInput));
+        assert_eq!(
+            store.put_deferred_fresh_prepared(&captured).unwrap(),
+            (expected, true)
+        );
+        assert!(Arc::ptr_eq(
+            &store.pending_payload(expected).unwrap().unwrap(),
+            &original
+        ));
+        assert!(
+            matches!(PreparedBlockSource::capture_shared(Arc::new(vec![0; MAX_BLOCK_BYTES + 1])),
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput)
+        );
     }
 
     #[test]
@@ -8131,7 +9919,10 @@ mod tests {
             let error = store.plan_temporary_file().unwrap_err();
             assert_eq!(
                 (error.kind(), error.to_string()),
-                (io::ErrorKind::InvalidData, "temporary block filename is malformed".to_owned()),
+                (
+                    io::ErrorKind::InvalidData,
+                    "temporary block filename is malformed".to_owned()
+                ),
                 "{name}"
             );
         }
@@ -8150,26 +9941,42 @@ mod tests {
             vfs.arm_fault(None).unwrap();
             write(&store).unwrap();
             let trace = vfs.trace().unwrap();
-            trace.iter().position(|operation| *operation == Operation::Rename).unwrap() + 1
+            trace
+                .iter()
+                .position(|operation| *operation == Operation::Rename)
+                .unwrap()
+                + 1
         };
         let vfs = DeterministicVfs::new(None);
         let store = open(&vfs);
         let failure = FaultAction::ErrorBefore(io::ErrorKind::Other);
         vfs.arm_faults(&[
-            FaultRule { operation_number: rename as u64, action: failure },
-            FaultRule { operation_number: rename as u64 + 1, action: failure },
+            FaultRule {
+                operation_number: rename as u64,
+                action: failure,
+            },
+            FaultRule {
+                operation_number: rename as u64 + 1,
+                action: failure,
+            },
         ])
         .unwrap();
         write(&store).unwrap_err();
         let trace = vfs.trace().unwrap();
         assert_eq!(trace.get(rename - 1), Some(&Operation::Rename));
-        assert_eq!(trace.get(rename), Some(&Operation::RemoveFile), "the cleanup unlink must fail too");
+        assert_eq!(
+            trace.get(rename),
+            Some(&Operation::RemoveFile),
+            "the cleanup unlink must fail too"
+        );
         vfs.arm_fault(None).unwrap();
         (vfs, store)
     }
 
     fn assert_staging_file_is_collected(store: &BlockStore, payload: &[u8], name_prefix: &str) {
-        let shard = store.root.join(&BlockId::for_payload(payload).to_hex()[..2]);
+        let shard = store
+            .root
+            .join(&BlockId::for_payload(payload).to_hex()[..2]);
         let candidate = store
             .plan_temporary_file()
             .unwrap()
@@ -8178,7 +9985,10 @@ mod tests {
         assert_eq!(candidate.path.parent(), Some(shard.as_path()));
         let name = candidate.path.file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with(name_prefix), "{name}");
-        assert_eq!(store.remove_temporary_file(&candidate).unwrap(), candidate.file_bytes);
+        assert_eq!(
+            store.remove_temporary_file(&candidate).unwrap(),
+            candidate.file_bytes
+        );
         assert!(store.plan_temporary_file().unwrap().candidate.is_none());
     }
 
@@ -8187,9 +9997,8 @@ mod tests {
     #[test]
     fn staging_files_left_by_the_loose_writers_are_collected() {
         let payload = b"interrupted between staging and rename".to_vec();
-        let (_vfs, store) = leave_writer_staging_file(simulated_store, |store| {
-            store.put_loose(&payload).map(drop)
-        });
+        let (_vfs, store) =
+            leave_writer_staging_file(simulated_store, |store| store.put_loose(&payload).map(drop));
         assert_staging_file_is_collected(&store, &payload, ".new-");
 
         let (_vfs, store) = leave_writer_staging_file(simulated_store, |store| {
@@ -8215,9 +10024,8 @@ mod tests {
             BlockStore::initialize_with_vfs(Path::new("/data"), Arc::new(encrypting)).unwrap()
         };
         let payload = b"interrupted inside the at-rest rename".to_vec();
-        let (_vfs, store) = leave_writer_staging_file(encrypted_store, |store| {
-            store.put_loose(&payload).map(drop)
-        });
+        let (_vfs, store) =
+            leave_writer_staging_file(encrypted_store, |store| store.put_loose(&payload).map(drop));
         assert_staging_file_is_collected(&store, &payload, ".new-ren-");
     }
 
@@ -8271,7 +10079,9 @@ mod tests {
             .unwrap();
         // Each callback held its own shard's 10 IDs, never the store's 40.
         assert_eq!(visited, expected);
-        assert!(visited.values().map(Vec::len).sum::<usize>() > RETIRED_LISTING_TOTAL_AT_TEST_SCALE);
+        assert!(
+            visited.values().map(Vec::len).sum::<usize>() > RETIRED_LISTING_TOTAL_AT_TEST_SCALE
+        );
     }
 
     #[test]
@@ -8339,7 +10149,8 @@ mod tests {
         );
         assert_eq!(
             listing(&|vfs, shard_path| {
-                vfs.create_dir(&shard_path.join(format!("{named}.blk"))).unwrap()
+                vfs.create_dir(&shard_path.join(format!("{named}.blk")))
+                    .unwrap()
             }),
             refused("block path does not match its identifier")
         );
@@ -8378,9 +10189,15 @@ mod tests {
             .join(temporary_block_file_name(Uuid::from_bytes([0x3c; 16])));
         create_simulated_file(&vfs, &temporary);
         let plan = store.plan_temporary_file().unwrap();
-        assert_eq!(plan.candidate.map(|candidate| candidate.path), Some(temporary));
+        assert_eq!(
+            plan.candidate.map(|candidate| candidate.path),
+            Some(temporary)
+        );
         // Shard 00's 32 entries, then the temporary, which sorts first in ff.
-        assert_eq!(plan.scanned_entries, 2 * RETIRED_LISTING_TOTAL_AT_TEST_SCALE as u64 + 1);
+        assert_eq!(
+            plan.scanned_entries,
+            2 * RETIRED_LISTING_TOTAL_AT_TEST_SCALE as u64 + 1
+        );
     }
 
     #[test]
@@ -8390,18 +10207,44 @@ mod tests {
         let payload = b"complete carried source";
         let id = store.put_loose(payload).unwrap();
         store.set_cache_capacity_bytes(0).unwrap();
-        let mut file = vfs.open(&store.path(id), OpenRequest { write: true, ..OpenRequest::default() }).unwrap();
+        let mut file = vfs
+            .open(
+                &store.path(id),
+                OpenRequest {
+                    write: true,
+                    ..OpenRequest::default()
+                },
+            )
+            .unwrap();
         file.write_all_at(HEADER_BYTES as u64, b"X").unwrap();
         file.sync_all().unwrap();
         assert_eq!(store.put_deferred_blob(payload).unwrap(), (id, true));
-        assert_eq!(store.flush_pending_references(&BTreeSet::from([id])).unwrap_err().kind(), io::ErrorKind::InvalidData);
-        assert_eq!(store.pending_payload(id).unwrap().unwrap().as_slice(), payload);
-        assert_eq!(store.read_loose_block(id, &store.path(id)).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            store
+                .flush_pending_references(&BTreeSet::from([id]))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            store.pending_payload(id).unwrap().unwrap().as_slice(),
+            payload
+        );
+        assert_eq!(
+            store
+                .read_loose_block(id, &store.path(id))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
         // The caller must repair explicitly; failure did not silently rewrite.
-        file.write_all_at(HEADER_BYTES as u64, &payload[..1]).unwrap();
+        file.write_all_at(HEADER_BYTES as u64, &payload[..1])
+            .unwrap();
         file.sync_all().unwrap();
         store.begin_relink_observation();
-        store.flush_pending_references(&BTreeSet::from([id])).unwrap();
+        store
+            .flush_pending_references(&BTreeSet::from([id]))
+            .unwrap();
         assert!(store.pending_payload(id).unwrap().is_none());
         assert!(store.any_relinked([id]).unwrap());
         drop(store);
@@ -8414,29 +10257,60 @@ mod tests {
     fn staged_reference_flush_directory_and_sync_failures_keep_all_payloads() {
         let vfs = DeterministicVfs::new(None);
         let store = simulated_store(&vfs);
-        let candidates: [&[u8]; 2] = [b"duplicate source survives sync failure", b"directory collision has no complete-copy witness"];
-        let (payload, directory_payload) = if BlockId::for_payload(candidates[0]) < BlockId::for_payload(candidates[1]) {
-            (candidates[0], candidates[1])
-        } else { (candidates[1], candidates[0]) };
+        let candidates: [&[u8]; 2] = [
+            b"duplicate source survives sync failure",
+            b"directory collision has no complete-copy witness",
+        ];
+        let (payload, directory_payload) =
+            if BlockId::for_payload(candidates[0]) < BlockId::for_payload(candidates[1]) {
+                (candidates[0], candidates[1])
+            } else {
+                (candidates[1], candidates[0])
+            };
         let id = store.put_loose(payload).unwrap();
         store.set_cache_capacity_bytes(0).unwrap();
         assert_eq!(store.put_deferred_blob(payload).unwrap(), (id, true));
-        vfs.arm_operation_fault(Operation::SyncAll, 1, FaultAction::ErrorBefore(io::ErrorKind::Other)).unwrap();
-        assert!(store.flush_pending_references(&BTreeSet::from([id])).is_err());
+        vfs.arm_operation_fault(
+            Operation::SyncAll,
+            1,
+            FaultAction::ErrorBefore(io::ErrorKind::Other),
+        )
+        .unwrap();
+        assert!(store
+            .flush_pending_references(&BTreeSet::from([id]))
+            .is_err());
         assert!(vfs.operation_fault_fired().unwrap());
-        assert_eq!(store.pending_payload(id).unwrap().unwrap().as_slice(), payload);
+        assert_eq!(
+            store.pending_payload(id).unwrap().unwrap().as_slice(),
+            payload
+        );
         vfs.arm_fault(None).unwrap();
         let directory_id = BlockId::for_payload(directory_payload);
-        assert!(id < directory_id, "valid duplicate must be processed before the failing directory");
+        assert!(
+            id < directory_id,
+            "valid duplicate must be processed before the failing directory"
+        );
         let shard = store.ensure_shard(directory_id).unwrap();
         vfs.create_dir(&store.path(directory_id)).unwrap();
         vfs.sync_directory(&shard).unwrap();
-        assert_eq!(store.put_deferred_blob(directory_payload).unwrap(), (directory_id, true));
+        assert_eq!(
+            store.put_deferred_blob(directory_payload).unwrap(),
+            (directory_id, true)
+        );
         store.begin_relink_observation();
-        assert_eq!(store.flush_pending_references(&BTreeSet::from([id, directory_id])).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            store
+                .flush_pending_references(&BTreeSet::from([id, directory_id]))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
         assert!(store.pending_payload(id).unwrap().is_some());
         assert!(store.pending_payload(directory_id).unwrap().is_some());
-        assert!(store.any_relinked([id]).unwrap(), "first duplicate completed fresh verification before the batch failed");
+        assert!(
+            store.any_relinked([id]).unwrap(),
+            "first duplicate completed fresh verification before the batch failed"
+        );
     }
 
     #[test]
@@ -8446,7 +10320,9 @@ mod tests {
         let payload = b"reference-only commit during rotation";
         let id = store.put_deferred(payload).unwrap().0;
         store.rotate_pending_for_rotation().unwrap();
-        store.flush_pending_references(&BTreeSet::from([id])).unwrap();
+        store
+            .flush_pending_references(&BTreeSet::from([id]))
+            .unwrap();
         drop(store);
         vfs.crash().unwrap();
         let reopened = BlockStore::open_with_vfs(Path::new("/data"), Arc::new(vfs)).unwrap();
@@ -8524,7 +10400,11 @@ mod tests {
         let ids = [b"0123456789", b"abcdefghij", b"klmnopqrst", b"uvwxyz0123"]
             .map(|payload| store.put(payload).unwrap());
         let disk_reads = || {
-            vfs.trace().unwrap().iter().filter(|operation| **operation == Operation::Read).count()
+            vfs.trace()
+                .unwrap()
+                .iter()
+                .filter(|operation| **operation == Operation::Read)
+                .count()
         };
         let cached = |id| store.cache.read().unwrap().peek_shared(id).is_some();
         assert_eq!(store.get(ids[0]).unwrap(), b"0123456789");
@@ -8666,16 +10546,12 @@ mod tests {
         let original_segment = store
             .payload_segment_store()
             .unwrap()
-            .create(
-                Uuid::new_v4(),
-                vec![floor_id, shared_id],
-                |key| {
-                    offline
-                        .get(&key)
-                        .cloned()
-                        .ok_or_else(|| invalid_data("offline payload missing"))
-                },
-            )
+            .create(Uuid::new_v4(), vec![floor_id, shared_id], |key| {
+                offline
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| invalid_data("offline payload missing"))
+            })
             .unwrap();
         references.push(
             PayloadSegmentReference::new(
@@ -8739,30 +10615,57 @@ pub(crate) struct HistoryPayloadMetadataSelection {
 }
 impl HistoryPayloadMetadataSelection {
     pub(crate) fn capture(
-        manifest: &crate::history::HistoryManifest, maximum_snapshot_bytes: u64,
+        manifest: &crate::history::HistoryManifest,
+        maximum_snapshot_bytes: u64,
     ) -> io::Result<Self> {
-        let count = manifest.segments.iter().filter(|entry| entry.payload_index_block_id.is_some()).count()
+        let count = manifest
+            .segments
+            .iter()
+            .filter(|entry| entry.payload_index_block_id.is_some())
+            .count()
             .checked_add(manifest.manifest_page_ids.len())
             .ok_or_else(|| invalid_data("history metadata count overflow"))?;
         let resident_bytes = |capacity: usize| -> Option<u64> {
-            capacity.checked_mul(std::mem::size_of::<BlockId>())?
-                .checked_add(std::mem::size_of::<Self>())?.try_into().ok()
+            capacity
+                .checked_mul(std::mem::size_of::<BlockId>())?
+                .checked_add(std::mem::size_of::<Self>())?
+                .try_into()
+                .ok()
         };
         if resident_bytes(count).is_none_or(|bytes| bytes > maximum_snapshot_bytes) {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "GC metadata selection exceeds workspace budget"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "GC metadata selection exceeds workspace budget",
+            ));
         }
         let mut index_ids = Vec::new();
-        index_ids.try_reserve_exact(count).map_err(|_|
-            io::Error::new(io::ErrorKind::WouldBlock, "GC metadata selection allocation unavailable"))?;
+        index_ids.try_reserve_exact(count).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "GC metadata selection allocation unavailable",
+            )
+        })?;
         if resident_bytes(index_ids.capacity()).is_none_or(|bytes| bytes > maximum_snapshot_bytes) {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "GC metadata selection exceeds workspace budget"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "GC metadata selection exceeds workspace budget",
+            ));
         }
         index_ids.extend(manifest.manifest_page_ids.iter().copied());
-        index_ids.extend(manifest.segments.iter().filter_map(|entry| entry.payload_index_block_id));
-        Ok(Self { payload_root_id: manifest.payload_index_root_id, index_ids })
+        index_ids.extend(
+            manifest
+                .segments
+                .iter()
+                .filter_map(|entry| entry.payload_index_block_id),
+        );
+        Ok(Self {
+            payload_root_id: manifest.payload_index_root_id,
+            index_ids,
+        })
     }
     #[cfg(test)]
     pub(crate) fn resident_bytes(&self) -> u64 {
-        (std::mem::size_of::<Self>() + self.index_ids.capacity() * std::mem::size_of::<BlockId>()) as u64
+        (std::mem::size_of::<Self>() + self.index_ids.capacity() * std::mem::size_of::<BlockId>())
+            as u64
     }
 }

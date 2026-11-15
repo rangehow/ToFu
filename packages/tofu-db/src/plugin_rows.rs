@@ -19,10 +19,8 @@ use sha2::{Digest, Sha256};
 
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
-use crate::generated_tofudb_ir::{
-    MAX_PLUGIN_NAMESPACE_CHARACTERS, PLUGIN_ROW_DOCUMENT_NAMESPACE,
-};
-use crate::plugin_migration::{row_composite, row_document_key, unique_claim_key, unique_composite};
+use crate::generated_tofudb_ir::{MAX_PLUGIN_NAMESPACE_CHARACTERS, PLUGIN_ROW_DOCUMENT_NAMESPACE};
+use crate::plugin_migration::{row_composite, row_document_key, unique_claim_key};
 use crate::versioned_document::{self, PutRequest};
 
 const MAX_OPERATION_NAME_CHARACTERS: usize = 63;
@@ -43,7 +41,7 @@ fn conflict(message: &str) -> io::Error {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DynRequest {
+pub struct DynRequest {
     pub namespace: String,
     pub operation: String,
     pub command: bool,
@@ -102,9 +100,7 @@ fn expected_version(payload: &Map<String, Value>) -> io::Result<Option<u64>> {
 fn key_string(value: Option<&Value>) -> io::Result<String> {
     match value {
         Some(Value::String(value)) => Ok(value.clone()),
-        Some(Value::Number(number)) if number.is_i64() || number.is_u64() => {
-            Ok(number.to_string())
-        }
+        Some(Value::Number(number)) if number.is_i64() || number.is_u64() => Ok(number.to_string()),
         _ => Err(crate::plugin::incompatible()),
     }
 }
@@ -112,9 +108,7 @@ fn key_string(value: Option<&Value>) -> io::Result<String> {
 /// Port of `manifest.validate_document`: exact declared-column projection,
 /// required fields, and per-column Python type semantics.
 fn validate_document(table: &Map<String, Value>, value: &Value) -> io::Result<Map<String, Value>> {
-    let document = value
-        .as_object()
-        .ok_or_else(crate::plugin::incompatible)?;
+    let document = value.as_object().ok_or_else(crate::plugin::incompatible)?;
     let columns = table
         .get("columns")
         .and_then(Value::as_array)
@@ -196,9 +190,7 @@ fn unique_indexes_of<'a>(table: &'a Map<String, Value>) -> Vec<(String, Vec<&'a 
             indexes
                 .iter()
                 .filter_map(Value::as_object)
-                .filter(|index| {
-                    index.get("unique").and_then(Value::as_bool) == Some(true)
-                })
+                .filter(|index| index.get("unique").and_then(Value::as_bool) == Some(true))
                 .filter_map(|index| {
                     let name = index.get("name").and_then(Value::as_str)?.to_owned();
                     let columns = index
@@ -263,13 +255,11 @@ fn read_row(
 }
 
 fn row_response(stored: &StoredRow) -> io::Result<Vec<u8>> {
-    serde_json::to_vec(&Value::Object(
-        json_map(&[
-            ("document", Value::Object(stored.document.clone())),
-            ("version", Value::from(stored.version)),
-            ("updated_at_ms", Value::from(stored.updated_at_ms)),
-        ]),
-    ))
+    serde_json::to_vec(&Value::Object(json_map(&[
+        ("document", Value::Object(stored.document.clone())),
+        ("version", Value::from(stored.version)),
+        ("updated_at_ms", Value::from(stored.updated_at_ms)),
+    ])))
     .map_err(|_| invalid_data("plugin row response cannot be encoded"))
 }
 
@@ -283,6 +273,7 @@ fn json_map(fields: &[(&str, Value)]) -> Map<String, Value> {
 /// Delete the row's current unique claims (computed from its stored
 /// document, so claims always track the document that made them), then
 /// insert the claims of the replacement document when supplied.
+#[allow(clippy::too_many_arguments)]
 fn replace_unique_claims(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -318,11 +309,7 @@ fn replace_unique_claims(
                     return Err(conflict("Plugin unique constraint conflict"));
                 }
             }
-            database.entity_put(
-                transaction,
-                claim_key,
-                row_key.as_bytes().to_vec(),
-            )?;
+            database.entity_put(transaction, claim_key, row_key.as_bytes().to_vec())?;
         }
     }
     Ok(())
@@ -338,10 +325,7 @@ fn put_document(
     updated_at_ms: u64,
 ) -> io::Result<Vec<u8>> {
     let primary_key = text_field(table_spec, "primary_key_name")?;
-    let document = validate_document(
-        table_spec,
-        payload.get("document").unwrap_or(&Value::Null),
-    )?;
+    let document = validate_document(table_spec, payload.get("document").unwrap_or(&Value::Null))?;
     let key = key_string(document.get(primary_key))?;
     if key.is_empty() {
         return Err(crate::plugin::incompatible());
@@ -479,7 +463,10 @@ fn list_rows(
         .filter_map(Value::as_object)
         .filter_map(|column| column.get("name").and_then(Value::as_str))
         .collect();
-    if filters.keys().any(|field| !declared.contains(field.as_str())) {
+    if filters
+        .keys()
+        .any(|field| !declared.contains(field.as_str()))
+    {
         return Err(invalid_input("plugin filter is undeclared"));
     }
     let primary_key = text_field(table_spec, "primary_key_name")?;
@@ -526,16 +513,14 @@ fn list_rows(
     let rows = database.entity_scan(transaction, &start, &end, read_limit)?;
     let mut result = Vec::with_capacity(limit);
     for (_, raw) in rows {
-        let (value_json, version, updated_at_ms) =
-            versioned_document::project_stored_document(
-                database,
-                transaction.tenant_id(),
-                transaction.owner_user_id(),
-                &raw,
-                PLUGIN_ROW_DOCUMENT_NAMESPACE,
-                crate::generated_tofudb_ir::MAX_PLUGIN_ROW_DOCUMENT_BYTES
-                    + ENVELOPE_OVERHEAD_BYTES,
-            )?;
+        let (value_json, version, updated_at_ms) = versioned_document::project_stored_document(
+            database,
+            transaction.tenant_id(),
+            transaction.owner_user_id(),
+            &raw,
+            PLUGIN_ROW_DOCUMENT_NAMESPACE,
+            crate::generated_tofudb_ir::MAX_PLUGIN_ROW_DOCUMENT_BYTES + ENVELOPE_OVERHEAD_BYTES,
+        )?;
         let document = serde_json::from_slice::<Value>(&value_json)
             .ok()
             .and_then(|value| value.as_object().cloned())
@@ -546,15 +531,9 @@ fn list_rows(
                 break;
             }
         }
-        if filters
-            .iter()
-            .all(|(field, value)| {
-                crate::plugin::python_value_eq(
-                    document.get(field).unwrap_or(&Value::Null),
-                    value,
-                )
-            })
-        {
+        if filters.iter().all(|(field, value)| {
+            crate::plugin::python_value_eq(document.get(field).unwrap_or(&Value::Null), value)
+        }) {
             result.push(Value::Object(json_map(&[
                 ("document", Value::Object(document)),
                 ("version", Value::from(version)),
@@ -598,7 +577,9 @@ pub(crate) fn execute(
     };
     let manifest: Value = serde_json::from_slice(&manifest_raw)
         .map_err(|_| invalid_data("stored plugin manifest is malformed"))?;
-    let manifest = manifest.as_object().ok_or_else(|| invalid_data("stored plugin manifest is malformed"))?;
+    let manifest = manifest
+        .as_object()
+        .ok_or_else(|| invalid_data("stored plugin manifest is malformed"))?;
     let operations = manifest
         .get("operations")
         .and_then(Value::as_array)
@@ -606,9 +587,7 @@ pub(crate) fn execute(
     let spec = operations
         .iter()
         .filter_map(Value::as_object)
-        .find(|item| {
-            item.get("name").and_then(Value::as_str) == Some(request.operation.as_str())
-        })
+        .find(|item| item.get("name").and_then(Value::as_str) == Some(request.operation.as_str()))
         .ok_or_else(|| invalid_input("Unknown plugin storage operation"))?;
     let declared_command = text_field(spec, "kind")? == "command";
     if declared_command != request.command {
@@ -622,9 +601,7 @@ pub(crate) fn execute(
     let table = tables
         .iter()
         .filter_map(Value::as_object)
-        .find(|item| {
-            item.get("name").and_then(Value::as_str) == Some(table_name)
-        })
+        .find(|item| item.get("name").and_then(Value::as_str) == Some(table_name))
         .ok_or_else(|| invalid_data("stored plugin manifest table is missing"))?;
     let table = &normalize_table_spec(table)?;
     let namespace = request.namespace.as_str();
@@ -677,8 +654,16 @@ pub(crate) fn execute(
             )
             .map(Some)
         }
-        "batch" => execute_batch(database, transaction, namespace, table_name, table, spec, request)
-            .map(Some),
+        "batch" => execute_batch(
+            database,
+            transaction,
+            namespace,
+            table_name,
+            table,
+            spec,
+            request,
+        )
+        .map(Some),
         "legacy_scan" => {
             // Payload validation matches the legacy startup-only scan before
             // the (always absent) native legacy-table answer.
@@ -697,9 +682,7 @@ pub(crate) fn execute(
             match request.payload.get("offset") {
                 None => {}
                 Some(Value::Number(number))
-                    if number
-                        .as_u64()
-                        .is_some_and(|value| value <= 10_000_000) => {}
+                    if number.as_u64().is_some_and(|value| value <= 10_000_000) => {}
                 _ => return Err(invalid_input("plugin legacy scan offset is invalid")),
             }
             // No pre-authority SQL table can exist inside a native
@@ -735,7 +718,11 @@ fn execute_batch(
         {
             mutations
         }
-        _ => return Err(invalid_input("Plugin batch must contain a bounded mutation list")),
+        _ => {
+            return Err(invalid_input(
+                "Plugin batch must contain a bounded mutation list",
+            ))
+        }
     };
     let primary_key = text_field(table_spec, "primary_key_name")?;
     let mut seen = std::collections::BTreeSet::new();
@@ -745,7 +732,9 @@ fn execute_batch(
             .ok_or_else(|| invalid_input("Plugin mutation must be an object"))?;
         let key_value = match mutation.get("action").and_then(Value::as_str) {
             Some("put") => mutation.get("document").and_then(|document| {
-                document.as_object().and_then(|object| object.get(primary_key))
+                document
+                    .as_object()
+                    .and_then(|object| object.get(primary_key))
             }),
             Some("delete") => mutation.get(primary_key),
             _ => return Err(invalid_input("Unsupported plugin batch mutation")),
@@ -791,6 +780,9 @@ fn execute_batch(
                 .map_err(|_| invalid_data("plugin batch result cannot be encoded"))?,
         );
     }
-    serde_json::to_vec(&Value::Object(json_map(&[("results", Value::Array(results))])))
-        .map_err(|_| invalid_data("plugin batch response cannot be encoded"))
+    serde_json::to_vec(&Value::Object(json_map(&[(
+        "results",
+        Value::Array(results),
+    )])))
+    .map_err(|_| invalid_data("plugin batch response cannot be encoded"))
 }

@@ -22,9 +22,8 @@ use std::io;
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MAX_PROJECT_BRAIN_PROJECT_KEY_CHARACTERS,
-    MIGRATION_SESSION_MAX_PAGE_ROWS, PROJECT_BRAIN_DOCUMENT_NAMESPACE,
-    PROJECT_BRAIN_UPDATED_INDEX_NAMESPACE,
+    MAX_PROJECT_BRAIN_PROJECT_KEY_CHARACTERS, MIGRATION_SESSION_MAX_PAGE_ROWS,
+    PROJECT_BRAIN_DOCUMENT_NAMESPACE, PROJECT_BRAIN_UPDATED_INDEX_NAMESPACE,
 };
 use crate::versioned_document::{self, PutRequest};
 

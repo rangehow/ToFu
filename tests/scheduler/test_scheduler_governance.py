@@ -24,7 +24,7 @@ from lib.scheduler.executor import execute_scheduler_tool
 from lib.scheduler.executor._roles import execute_role_scheduler_tool
 from lib.scheduler.manager import ScheduledTaskManager
 from lib.tools.result_value import tool_result_failure_verdict
-from tests.router.test_owner_delegation import OWNER, approvals, d, standing  # noqa: F401 (fixtures)
+from tests.router.test_owner_delegation import OWNER, approvals, d as d, standing  # noqa: F401 (fixtures)
 
 pytestmark = pytest.mark.unit
 

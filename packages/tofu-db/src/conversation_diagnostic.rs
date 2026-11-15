@@ -45,7 +45,7 @@ impl Request {
             || (self.kind == Kind::Header && (self.index.is_some() || self.revision.is_some()))
             || (self.kind != Kind::Chunk && (self.offset != 0 || self.limit != MAX_CHUNK_BYTES))
             || (self.kind == Kind::Chunk
-                && self.source_token.as_ref().map_or(true, |token| {
+                && self.source_token.as_ref().is_none_or(|token| {
                     token.len() != 64
                         || !token
                             .bytes()
@@ -316,8 +316,12 @@ fn live_structure(
     // Sorted explicitly: field order is not part of a Turn's identity.
     let mut fields: Vec<_> = metadata
         .iter()
-        .filter(|(key, _)| !matches!(key.as_str(),
-            "projection" | "projectionRevision" | "updatedAt" | "_projectionHead"))
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                "projection" | "projectionRevision" | "updatedAt" | "_projectionHead"
+            )
+        })
         .collect();
     fields.sort_unstable_by(|left, right| left.0.cmp(right.0));
     let mut hasher =
@@ -471,7 +475,14 @@ pub(crate) fn read(
     let epoch = crate::conversation_header::execution_epoch(database, tx, id)?;
     if request.kind == Kind::Chunk {
         if let Some(bytes) = source_plan::chunk(
-            database, tx, &lane_key, &stored, epoch, request, revision, deadline_elapsed,
+            database,
+            tx,
+            &lane_key,
+            &stored,
+            epoch,
+            request,
+            revision,
+            deadline_elapsed,
         )? {
             return Ok(Some(bytes));
         }
@@ -531,7 +542,9 @@ pub(crate) fn read(
     if head.as_ref().is_some_and(|head| {
         head.base_revision
             .checked_add(head.patch_count as u64)
-            .and_then(|value| value.checked_add(head.text_tail.as_ref().map_or(0, |tail| tail.revisions)))
+            .and_then(|value| {
+                value.checked_add(head.text_tail.as_ref().map_or(0, |tail| tail.revisions))
+            })
             != Some(projection_revision)
     }) {
         return Err(invalid_data(

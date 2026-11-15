@@ -302,7 +302,13 @@ fn build_ledger_counts_are_unlimited_and_numeric_overflow_is_invalid() {
     let mut over_records = build_snapshot(&[], 1, 1000);
     over_records["value_json"] = json!(build_ledger_json(&entries));
     let request = parse_restore(over_records, MAX_BUILD_LEDGER_JSON_BYTES).unwrap();
-    assert_eq!(parse_build_ledger(&request, OWNER).unwrap().reservations.len(), 129);
+    assert_eq!(
+        parse_build_ledger(&request, OWNER)
+            .unwrap()
+            .reservations
+            .len(),
+        129
+    );
     let over_bytes = BTreeMap::from([
         (reservation_name(OWNER, 'b'), u64::MAX),
         (reservation_name(OWNER, 'c'), 1_u64),
@@ -371,7 +377,6 @@ fn document_budget_restores_exact_counts_and_provenance() {
     let larger = document_snapshot(129, 513, 1, 1000);
     restore_document_op(&mut fresh, larger.clone()).unwrap();
     assert_eq!(get_document_op(&mut fresh, OWNER), larger);
-
 }
 
 #[test]

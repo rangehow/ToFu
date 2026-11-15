@@ -16,31 +16,131 @@ impl CheckpointRuntime for EmbeddedRuntime {
         }
         Ok(guard)
     }
-    fn checkpoint_database(&self) -> &Arc<Mutex<AuthorityDatabase>> { &self.database }
-    fn checkpoint_scope(&self) -> crate::semantic::AuthenticatedScope { self.scope }
+    fn checkpoint_database(&self) -> &Arc<Mutex<AuthorityDatabase>> {
+        &self.database
+    }
+    fn checkpoint_scope(&self) -> crate::semantic::AuthenticatedScope {
+        self.scope
+    }
 }
 
 impl EmbeddedRuntime {
-    pub fn checkpoint_goal_claim(&self, owner:u64, header_bytes:usize, snapshot_bytes:usize, request:&serde_json::Value, evidence_bytes:usize) -> Result<serde_json::Value, Error> {
-        CheckpointRuntime::checkpoint_goal_claim(self, owner, header_bytes, snapshot_bytes, request, evidence_bytes)
+    pub fn checkpoint_goal_claim(
+        &self,
+        owner: u64,
+        header_bytes: usize,
+        snapshot_bytes: usize,
+        request: &serde_json::Value,
+        evidence_bytes: usize,
+    ) -> Result<serde_json::Value, Error> {
+        CheckpointRuntime::checkpoint_goal_claim(
+            self,
+            owner,
+            header_bytes,
+            snapshot_bytes,
+            request,
+            evidence_bytes,
+        )
     }
-    pub fn checkpoint_goal_handoff(self:&Arc<Self>, owner:u64, header_bytes:usize, snapshot_bytes:usize, identity_bytes:usize, specs:Vec<ActorHandoffSpec>, authorization:&serde_json::Value, evidence_bytes:usize) -> Result<Vec<OwnedLease>, Error> {
-        CheckpointRuntime::checkpoint_goal_handoff(self, owner, header_bytes, snapshot_bytes, identity_bytes, specs, authorization, evidence_bytes)
+    #[allow(clippy::too_many_arguments)]
+    pub fn checkpoint_goal_handoff(
+        self: &Arc<Self>,
+        owner: u64,
+        header_bytes: usize,
+        snapshot_bytes: usize,
+        identity_bytes: usize,
+        specs: Vec<ActorHandoffSpec>,
+        authorization: &serde_json::Value,
+        evidence_bytes: usize,
+    ) -> Result<Vec<OwnedLease>, Error> {
+        CheckpointRuntime::checkpoint_goal_handoff(
+            self,
+            owner,
+            header_bytes,
+            snapshot_bytes,
+            identity_bytes,
+            specs,
+            authorization,
+            evidence_bytes,
+        )
     }
-    pub fn checkpoint_frontier(&self, owner:u64, task:&str, header_bytes:usize, snapshot_bytes:usize, identity_bytes:usize) -> Result<Option<serde_json::Value>, Error> {
-        CheckpointRuntime::checkpoint_frontier(self, owner, task, header_bytes, snapshot_bytes, identity_bytes)
+    pub fn checkpoint_frontier(
+        &self,
+        owner: u64,
+        task: &str,
+        header_bytes: usize,
+        snapshot_bytes: usize,
+        identity_bytes: usize,
+    ) -> Result<Option<serde_json::Value>, Error> {
+        CheckpointRuntime::checkpoint_frontier(
+            self,
+            owner,
+            task,
+            header_bytes,
+            snapshot_bytes,
+            identity_bytes,
+        )
     }
-    pub fn checkpoint_invoice(&self, owner:u64, task:&str, header_bytes:usize) -> Result<Option<serde_json::Value>, Error> {
+    pub fn checkpoint_invoice(
+        &self,
+        owner: u64,
+        task: &str,
+        header_bytes: usize,
+    ) -> Result<Option<serde_json::Value>, Error> {
         CheckpointRuntime::checkpoint_invoice(self, owner, task, header_bytes)
     }
-    pub fn checkpoint_lease(self:&Arc<Self>, scope:Scope, header_bytes:usize, snapshot_bytes:usize, identity_bytes:usize, token:&str) -> Result<OwnedLease, Error> {
-        CheckpointRuntime::checkpoint_lease(self, scope, header_bytes, snapshot_bytes, identity_bytes, token)
+    pub fn checkpoint_lease(
+        self: &Arc<Self>,
+        scope: Scope,
+        header_bytes: usize,
+        snapshot_bytes: usize,
+        identity_bytes: usize,
+        token: &str,
+    ) -> Result<OwnedLease, Error> {
+        CheckpointRuntime::checkpoint_lease(
+            self,
+            scope,
+            header_bytes,
+            snapshot_bytes,
+            identity_bytes,
+            token,
+        )
     }
-    pub fn checkpoint_recover(self:&Arc<Self>, scope:Scope, header_bytes:usize, snapshot_bytes:usize, identity_bytes:usize, token:&str) -> Result<OwnedLease, Error> {
-        CheckpointRuntime::checkpoint_recover(self, scope, header_bytes, snapshot_bytes, identity_bytes, token)
+    pub fn checkpoint_recover(
+        self: &Arc<Self>,
+        scope: Scope,
+        header_bytes: usize,
+        snapshot_bytes: usize,
+        identity_bytes: usize,
+        token: &str,
+    ) -> Result<OwnedLease, Error> {
+        CheckpointRuntime::checkpoint_recover(
+            self,
+            scope,
+            header_bytes,
+            snapshot_bytes,
+            identity_bytes,
+            token,
+        )
     }
-    pub fn checkpoint_handoff(self:&Arc<Self>, scope:Scope, header_bytes:usize, snapshot_bytes:usize, identity_bytes:usize, token:&str, lineage:&ResumeLineage) -> Result<OwnedLease, Error> {
-        CheckpointRuntime::checkpoint_handoff(self, scope, header_bytes, snapshot_bytes, identity_bytes, token, lineage)
+    pub fn checkpoint_handoff(
+        self: &Arc<Self>,
+        scope: Scope,
+        header_bytes: usize,
+        snapshot_bytes: usize,
+        identity_bytes: usize,
+        token: &str,
+        lineage: &ResumeLineage,
+    ) -> Result<OwnedLease, Error> {
+        CheckpointRuntime::checkpoint_handoff(
+            self,
+            scope,
+            header_bytes,
+            snapshot_bytes,
+            identity_bytes,
+            token,
+            lineage,
+        )
     }
 }
 

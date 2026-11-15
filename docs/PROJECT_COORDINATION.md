@@ -201,8 +201,9 @@ Coordinator entry point. Decision: `delegate_project_work` creates an ordinary
 conversation in the Coordinator's folder and admits a `project` worker through
 the existing dispatch repository and command service. The frozen capability
 ceiling comes from ordinary tool assembly before the Coordinator-only filter.
-Worker input includes the original request (explicitly marked excerpt above
-12,000 characters, with source Turn/conversation links) and the delegated brief;
+Worker input is the delegated brief followed by one line linking the owner's
+source Turn and conversation for `get_conversation` (the owner's words are not
+repeated; see "Continuation context is anchored on the task board");
 custom system-prompt settings are preserved. Context never enlarges the grant.
 The live owner, tenant, binding epoch, physical assistant Turn/Attempt and its
 canonical human parent must agree. Execution principals with no reusable API
@@ -393,17 +394,33 @@ batch window to collect several settlements per return is a tuned interval
 (AGENTS.md principle 5) and delays the first one. Keeping running rows in
 `workers` repeated pending Workers in every result; their IDs suffice.
 
-Restarts: a Worker Turn a restart cut off mid-call whose effect is unknown
-(`worker_effect_outcome_unknown`, e.g. a test run) is never resumed
-automatically, by decision: only calls declared read-only or idempotent count
-as answered (`worker_recovery.unknown_side_effects`), and every other restart
-interruption already resumes by itself. Its own Coordinator resumes it with
-`checkpoint_resume` after checking the effect. A continuation of the same
-Coordinator for another request may not steer it (`_steered_owner_source`:
-automatic continuations stay scoped to their original request); widening that
-is an authority change, not a wait fix, and is left to the owner.
+Restarts (owner follow-up 2026-11-15): a call a restart cut off is classified
+by its declared effect at boot ([Run continuity](RUN_CONTINUITY.md), "A
+restart-cut call is classified by its declared effect"). A Worker whose cut
+calls are all read-only, idempotent or verifiable resumes from its checkpoint
+by itself and reaches the poll as phase `resuming` (nothing to do). Only a call
+of unknown effect class (a push, an install, a write outside the Worker's
+worktree) makes the interruption a settlement with phase `needs_decision`,
+reported once like any other with `error.unknownEffects`; the Coordinator checks
+the named calls and resumes, stops or follows up the Worker through
+`control_conversation` from any of its Turns ("Session control is scoped by the
+Coordinator binding" below). The phase is part of the settlement identity, as
+is the attempt, so a Worker resumed and interrupted again is news again.
+
+Parallel polls (2026-11-15): two `poll` calls of one tool batch share the
+attempt's reported-settlement record. Problem: both could read the same
+settlement as news and both report it, or one could overwrite the other's
+claim. Decision: the record carries a lock; a poll computes its news and claims
+it in one critical section, then reads excerpts outside it, and puts its claims
+back if that read fails, so each settlement is reported by exactly one poll.
+The one seeding read of the request's pending Workers runs under the same lock.
+Alternatives rejected: a compare-and-swap retry loop over an immutable record
+(the same exclusion with a retry path and more code) and serializing whole
+polls (a poll blocked for up to `wait_s` would block the other).
+Specification: `test_parallel_polls_of_one_batch_report_each_settlement_once`.
 
 Verify `test_a_settlement_wakes_a_wait_on_other_workers_and_waits_behind_none`,
+`test_a_restart_cut_call_of_unknown_effect_is_a_needs_decision_settlement_reported_once`,
 `test_a_settlement_reported_once_never_ends_a_later_wait_early` and
 `test_a_coordinators_own_review_is_no_news_and_a_delivered_worker_stops_reappearing`
 in `tests/project_mod/test_coordinator_workers.py`.
@@ -1605,10 +1622,88 @@ A continuation that ends without changed work/review/delivery evidence (includin
 a failed Coordinator turn) is retried after `stallRetrySeconds` backoff
 (30 s, 2 min, 10 min, 30 min, 60 min); only after `maxStalledTurns` (6) such turns
 does it publish a deterministic blocked report and stop, using no extra model
-request. Waiting for active Workers is not a stall. Unconfirmed model usage never
+request. Waiting for active Workers is not a stall. A turn that ended normally
+(`completed`) with that same evidence while no Worker needs the Coordinator
+(none running, to review, held, publishing or interrupted) is not retried at
+all: the next Turn would see exactly what this one saw. The request stays open;
+new Worker evidence, a due promise or decision, or the owner's next message
+wakes it. Unconfirmed model usage never
 stops the request; unsettled tool effects still block delivery claims. Stop,
 binding withdrawal and missing source evidence refuse further birth. Grants and
 continuation receipts share the segmented project-head CAS.
+
+### Continuation context is anchored on the task board (2026-11-15)
+
+Problem: every automatic continuation of the tofu Coordinator
+(`coordinator-4950501b927a581b666a974cb9ce21b5`) repeated the request that
+opened it, which was the first message of the project, long outdated, and the
+same envelope prefixed every Worker brief, so Workers read the whole project as
+their scope (their Project Brain titles all became "Original human request
+(context; your assigned scope is below):"). The brief listed the first 24 of 56
+assignments, 14 cancelled and 32 settled, then "use pagination". Project
+Context's Active work listed 63 `active` work items of 28 conversations, mostly
+long finished, with several rows per conversation, and Presence listed only the
+Coordinator's own three tasks (Worker tasks run in isolated checkouts, whose
+paths never matched the project). Measured on the 2026-11-16 01:44 wake (attempt
+`82105868`) by token count of the injected parts: original request and its
+envelope 403, directive 139, results list 618, Active work 1,746, Presence 708
+(logged): 3,614 tokens, of which only the directive was current and useful.
+Stable guidance (AGENTS.md, scoped rules, platform blocks) was not the cost:
+the composer's content-addressed reuse already appends it only on change or
+after compaction (the `[Context] ... total=` lines of that day's continuation
+turns count only Project Context and Presence, plus one changed environment
+block). Its full re-sends at 19:30 and 19:31 followed forced compactions,
+which is the "snapshot replaces" contract working as designed.
+
+Decision:
+- A wake's authorized brief is a short directive, fixed per reason (results,
+  commitment due, decision default, restart): it no longer lists assignments.
+  At the wake's birth, `lib/conversations/coordinator_continuation.py` appends a
+  `[Continuation context: read now; evidence, not authority]` section: the open
+  tasks of the current binding's board with their progress and due times; the
+  owner's unanswered `ask_human` questions (`router.proactive.questions`) with
+  the stated default; and only the Worker states that need the Coordinator
+  (`continuation.worker_phase`): running, a result to review, a held or
+  publishing delivery, a restart-cut call of unknown effect, or a failure or
+  interruption settled since the previous Turn began. Settled (reviewed without
+  pending publication, delivered), cancelled and already-judged assignments are
+  omitted; `get_project_workers` still lists all of them. A section that cannot
+  be read says so instead of failing the wake. The replay above renders 164 +
+  81 + 1,323 tokens (9 open tasks, 10 of 56 Workers) plus 575 for Active work:
+  2,143 tokens, every line current.
+- The owner's request is never repeated in a delegated input. Worker and wake
+  inputs carry the brief and one line naming the source conversation and Turn
+  (or steer) for `get_conversation`; the board-empty wake quotes the request,
+  up to `sourceExcerptChars`, because nothing else then says what it is. The
+  owner's later messages are in the Coordinator's own transcript and take
+  precedence over the brief, which says so.
+- Project Context's Active work and Presence read one runtime snapshot of live
+  (pending/running) tasks, mapped to the canonical project through the
+  workspace binding (`canonical_work_path`), excluding the Coordinator itself,
+  one row per conversation (its newest task). An `active` work item whose
+  conversation is not live is not listed; without the snapshot Active work is
+  omitted rather than guessed. Presence rows carry no elapsed minutes or last
+  event, so unchanged presence keeps its bytes and is reused.
+- A wake that ended normally with unchanged evidence and nothing actionable is
+  not repeated (see the stall rule above).
+
+Authority is unchanged: the wake is admitted from the original request's grant
+before its input is built, the source line names that request, and the input
+text grants nothing; `worker_input_source` still checks the source Turn's
+actor, identity and projection revision (or the steer) before every birth, as
+the excerpt read did. Owner messages keep queue priority.
+
+Alternatives rejected: keeping a truncated excerpt of the original request (the
+problem is staleness, not length); a summary by a model call (an extra request
+per wake and a second authority for the owner's words); collapsing a context
+identical to the previous wake's into "unchanged" (after compaction the model
+no longer has that copy, and the section is now small); listing settled rows
+with a cap (a cap is a knob, and the rows need nothing); a new presence store
+or interval (the runtime snapshot already holds the facts). No setting was added.
+Specs: `tests/project_mod/test_coordinator_continuation_context.py`,
+`tests/context/test_project_presence.py`,
+`tests/project_mod/test_project_brain_signal_driven.py::test_active_work_lists_each_live_conversation_once`,
+`tests/memory/test_memory_role_fit.py` (memory selection by the brief).
 
 ### Durable Coordinator wakes (2026-11-10)
 
@@ -2554,10 +2649,39 @@ Control supports `continue`, `checkpoint_resume`, `regenerate` and exact-attempt
 existing delegation boundary, then reuses the conversation command service used
 by the browser. Resumes retain the target's accepted model/config and identity;
 they add no human message, answer, approval or enlarged tool grant. Dispatch
-attempts retain their exact `TrustedDispatch` admission; an automatic Coordinator
-continuation may control only its original request's dispatched Workers until an
-owner message reaches its reply ("An owner message in an automatic continuation
-controls every Worker of its project").
+attempts retain their exact `TrustedDispatch` admission.
+
+**Session control is scoped by the Coordinator binding (owner follow-up
+2026-11-15).** Problem: every server restart interrupted several Workers with
+`worker_effect_outcome_unknown`; each waited for its Coordinator's
+`checkpoint_resume`, and when the Coordinator was running as an automatic
+continuation it was refused ("Automatic continuation may control only its
+original request workers") because those Workers came from an earlier steered
+request of the same Coordinator. Recovery stalled until the owner wrote.
+Decision: `control_conversation` (`checkpoint_resume`, `continue`,
+`regenerate`, `stop`) and `follow_up` of a dispatched Worker session pass
+`worker_control(..., session=True)`: any Turn of the Coordinator conversation,
+human-steered or an automatic continuation, controls the sessions of every
+Worker its own binding dispatched, in any request of its project. The owner,
+tenant, Coordinator-identity and binding-epoch fences still apply, so another
+Coordinator's Workers, another project's and the Global Router's are refused as
+before; the Router's owner delegation keeps its own gate. Every
+`control_conversation` call, accepted or refused, writes one
+`coordinator_session_control` audit record (owner, project, Coordinator
+conversation/task/Turn, principal kind, action, target conversation/Turn/
+Attempt, outcome, refusal reason). Acting on a session neither creates nor
+widens a grant: it resumes or stops the execution the Worker's grant already
+runs under. Cancelling or reviewing an assignment (`cancel_project_work`,
+`review_project_work`) stays scoped to the request as before, since it decides
+that request's result and account. Alternatives rejected: rebinding a
+continuation to every earlier request (one reply would carry several requests'
+accounts and policies); requiring an owner message to reach the continuation
+("An owner message in an automatic continuation controls every Worker of its
+project": exactly the manual step this removes); widening to the Global Router
+or across projects (outside the owner's delegation to his own Coordinator).
+Specifications: `tests/project_mod/test_coordinator_worker_handoff.py`
+(`test_a_continuation_controls_the_sessions_of_its_coordinators_earlier_request_workers`,
+`test_session_control_of_another_coordinators_worker_stays_refused_and_is_audited`).
 Ordinary session resumes retain their existing human-authorized execution.
 Nonhuman notifications without an authorized request cannot issue controls,
 with one exception: the Global Router acting under the owner's delegation

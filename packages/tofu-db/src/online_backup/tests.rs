@@ -66,7 +66,10 @@ fn run(driver: &Arc<Mutex<AuthorityDatabase>>, context: &EpochContext) -> Online
     run_epoch(driver, context, &stop, &EpochStatus::default()).unwrap()
 }
 
-pub(super) fn restore_store(vfs: &Arc<DeterministicVfs>, target: &str) -> crate::backup::BackupManifest {
+pub(super) fn restore_store(
+    vfs: &Arc<DeterministicVfs>,
+    target: &str,
+) -> crate::backup::BackupManifest {
     vfs.create_dir(Path::new(target)).unwrap();
     crate::backup::restore_latest_backup_with_vfs(Path::new(STORE), Path::new(target), vfs.clone())
         .unwrap()
@@ -75,7 +78,10 @@ pub(super) fn restore_store(vfs: &Arc<DeterministicVfs>, target: &str) -> crate:
 pub(super) fn read_value(database: &AuthorityDatabase, key: &[u8]) -> Option<Vec<u8>> {
     let mut transaction = database.begin(7, 11).unwrap();
     database
-        .entity_get(&mut transaction, &EntityKey::new(7, 11, "record", key).unwrap())
+        .entity_get(
+            &mut transaction,
+            &EntityKey::new(7, 11, "record", key).unwrap(),
+        )
         .unwrap()
 }
 
@@ -128,9 +134,20 @@ fn the_anchor_hold_writes_nothing_and_leaves_overlay_and_wal_tail_in_place() {
         )),
         "the anchor hold performed file I/O: {trace:?}"
     );
-    assert_eq!(guard.writer_engine().unwrap().state().generation, generation, "no CONTROL publication");
-    assert_eq!(guard.entity_overlay_entries_for_test(), entries, "no overlay merge");
-    assert!(guard.writer_engine().unwrap().has_active_transactions(), "no checkpoint");
+    assert_eq!(
+        guard.writer_engine().unwrap().state().generation,
+        generation,
+        "no CONTROL publication"
+    );
+    assert_eq!(
+        guard.entity_overlay_entries_for_test(),
+        entries,
+        "no overlay merge"
+    );
+    assert!(
+        guard.writer_engine().unwrap().has_active_transactions(),
+        "no checkpoint"
+    );
     guard.deregister_backup_anchor(anchor.anchor_token);
 }
 
@@ -145,15 +162,30 @@ fn an_epoch_over_an_unmerged_overlay_and_wal_tail_restores_every_commit() {
     database.lock().unwrap().checkpoint_for_test().unwrap();
     seed_overlay_commit(&database, "deferred", 600);
     commit_value(&database, b"tail", b"value-tail");
-    let source_sequence = database.lock().unwrap().writer_engine().unwrap().state().durable_sequence;
+    let source_sequence = database
+        .lock()
+        .unwrap()
+        .writer_engine()
+        .unwrap()
+        .state()
+        .durable_sequence;
     let report = run(&database, &context(&vfs));
-    assert_eq!(report.durable_sequence, source_sequence, "the generation includes the uncheckpointed tail");
+    assert_eq!(
+        report.durable_sequence, source_sequence,
+        "the generation includes the uncheckpointed tail"
+    );
     assert!(report.tail_transactions >= 2);
     let manifest = restore_store(&vfs, "/restore");
     assert_eq!(manifest.durable_sequence, source_sequence);
     let restored = AuthorityDatabase::open_with_vfs(Path::new("/restore"), vfs.clone()).unwrap();
-    assert_eq!(read_value(&restored, b"checkpointed").as_deref(), Some(&b"value-checkpointed"[..]));
-    assert_eq!(read_value(&restored, b"tail").as_deref(), Some(&b"value-tail"[..]));
+    assert_eq!(
+        read_value(&restored, b"checkpointed").as_deref(),
+        Some(&b"value-checkpointed"[..])
+    );
+    assert_eq!(
+        read_value(&restored, b"tail").as_deref(),
+        Some(&b"value-tail"[..])
+    );
     for index in [0, 299, 599] {
         assert_eq!(
             read_value(&restored, format!("deferred-{index}").as_bytes()),
@@ -185,9 +217,13 @@ fn an_epoch_reads_and_copies_only_what_the_closed_store_lacks() {
     assert!(second.durable_sequence > first.durable_sequence);
     assert!(second.present_subgraphs > 0);
     assert!(
-        second.source_reads * 10 < first.source_reads && second.copied_blocks * 10 < first.copied_blocks,
+        second.source_reads * 10 < first.source_reads
+            && second.copied_blocks * 10 < first.copied_blocks,
         "first read {} and copied {}; second read {} and copied {}",
-        first.source_reads, first.copied_blocks, second.source_reads, second.copied_blocks
+        first.source_reads,
+        first.copied_blocks,
+        second.source_reads,
+        second.copied_blocks
     );
     let manifest = restore_store(&vfs, "/restore");
     assert_eq!(manifest.durable_sequence, second.durable_sequence);
@@ -292,13 +328,20 @@ fn registered_anchor_protects_anchor_history_from_online_gc() {
     let (destination, _) =
         crate::backup::initialize_or_open_backup(&context.backup_dir, _vfs.clone()).unwrap();
     let (manifest, built) = crate::backup::plan_anchored_generation(
-        &anchor.state, anchor.history.as_ref(), &anchor.tail).unwrap();
+        &anchor.state,
+        anchor.history.as_ref(),
+        &anchor.tail,
+    )
+    .unwrap();
     crate::backup::copy_generation(
         &anchor.source,
         &destination,
         None,
         &DestinationPolicy::unverified(),
-        &crate::backup::GenerationCopyPlan { manifest: &manifest, built },
+        &crate::backup::GenerationCopyPlan {
+            manifest: &manifest,
+            built,
+        },
         &stop,
         None,
         None,
@@ -353,8 +396,14 @@ impl Vfs for FirstBlockWriteGate {
         path: &Path,
         request: crate::vfs::OpenRequest,
     ) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
-        if request.write && path.starts_with(&self.blocks) && self.armed.swap(false, Ordering::AcqRel) {
-            assert!(!self.panics, "injected panic at the copy's first block write");
+        if request.write
+            && path.starts_with(&self.blocks)
+            && self.armed.swap(false, Ordering::AcqRel)
+        {
+            assert!(
+                !self.panics,
+                "injected panic at the copy's first block write"
+            );
             self.entered
                 .send(())
                 .map_err(|_| io::Error::other("gate receiver closed"))?;
@@ -404,7 +453,11 @@ impl Vfs for FirstBlockWriteGate {
         maximum_matches: usize,
     ) -> io::Result<crate::vfs::BoundedDirectoryMatches> {
         self.inner.match_directory_prefix_bounded(
-            path, name_prefix, maximum_entries_scanned, maximum_matches)
+            path,
+            name_prefix,
+            maximum_entries_scanned,
+            maximum_matches,
+        )
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         self.inner.sync_directory(path)
@@ -422,25 +475,42 @@ pub(super) fn anchored_record(index: u32) -> Vec<u8> {
 pub(super) fn seed_anchored_generation(database: &Arc<Mutex<AuthorityDatabase>>) -> BlockId {
     database.lock().unwrap().set_write_overlay_for_test(false);
     for index in 0..ANCHORED_RECORDS {
-        commit_value(database, &anchored_record(index), format!("anchored-value-{index:0>80}").as_bytes());
+        commit_value(
+            database,
+            &anchored_record(index),
+            format!("anchored-value-{index:0>80}").as_bytes(),
+        );
     }
     let mut guard = database.lock().unwrap();
     guard.checkpoint_for_test().unwrap();
-    guard.writer_engine().unwrap().state().authority_state_root.flatten().unwrap()
+    guard
+        .writer_engine()
+        .unwrap()
+        .state()
+        .authority_state_root
+        .flatten()
+        .unwrap()
 }
 
 /// Rewrites every record and retires the history of the old values: from
 /// here on only a backup anchor can still reference the old generation.
 fn supersede_anchored_generation(database: &Arc<Mutex<AuthorityDatabase>>) {
     for index in 0..ANCHORED_RECORDS {
-        commit_value(database, &anchored_record(index), format!("current-value-{index:0>80}").as_bytes());
+        commit_value(
+            database,
+            &anchored_record(index),
+            format!("current-value-{index:0>80}").as_bytes(),
+        );
     }
     let mut guard = database.lock().unwrap();
     guard.checkpoint_for_test().unwrap();
     guard.compact_history(1).unwrap();
 }
 
-fn complete_gc_epochs(collector: &mut OnlineGarbageCollector, database: &Arc<Mutex<AuthorityDatabase>>) {
+fn complete_gc_epochs(
+    collector: &mut OnlineGarbageCollector,
+    database: &Arc<Mutex<AuthorityDatabase>>,
+) {
     let stop = AtomicBool::new(false);
     for _ in 0..2 {
         assert_eq!(
@@ -474,25 +544,44 @@ fn gc_epochs_during_a_copy_never_reclaim_what_its_anchor_references() {
         let mut context = context(&vfs);
         context.destination_vfs = gate.clone();
         std::thread::spawn(move || {
-            run_epoch(&database, &context, &AtomicBool::new(false), &EpochStatus::default())
+            run_epoch(
+                &database,
+                &context,
+                &AtomicBool::new(false),
+                &EpochStatus::default(),
+            )
         })
     };
     if reached.recv_timeout(Duration::from_secs(60)).is_err() {
         gate.release();
-        panic!("the epoch never reached its first block write: {:?}", epoch.join());
+        panic!(
+            "the epoch never reached its first block write: {:?}",
+            epoch.join()
+        );
     }
     supersede_anchored_generation(&database);
-    let garbage = database.lock().unwrap().write_orphan_block_for_test(b"unanchored-garbage").unwrap();
-    let mut collector = OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
+    let garbage = database
+        .lock()
+        .unwrap()
+        .write_orphan_block_for_test(b"unanchored-garbage")
+        .unwrap();
+    let mut collector =
+        OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
     complete_gc_epochs(&mut collector, &database);
     let reclaimed_mid_copy = collector.handle().metrics().total_reclaimed_blocks;
-    assert!(block_is_reclaimed(&database, garbage), "the collector deletes garbage mid-copy");
+    assert!(
+        block_is_reclaimed(&database, garbage),
+        "the collector deletes garbage mid-copy"
+    );
     assert!(
         !block_is_reclaimed(&database, anchored_root),
         "the collector deleted the anchored root while the copy still needed it"
     );
     gate.release();
-    let report = epoch.join().unwrap().expect("the copy completes with every anchored block");
+    let report = epoch
+        .join()
+        .unwrap()
+        .expect("the copy completes with every anchored block");
     assert!(report.copied_blocks > 1, "{report:?}");
     let manifest = restore_store(&vfs, "/restore");
     assert_eq!(manifest.durable_sequence, report.durable_sequence);
@@ -521,7 +610,11 @@ fn gc_epochs_during_a_copy_never_reclaim_the_anchors_committed_tail() {
     let (vfs, database) = authority();
     seed_anchored_generation(&database);
     for index in 0..40_u32 {
-        commit_value(&database, format!("tail-{index}").as_bytes(), format!("tail-value-{index:0>80}").as_bytes());
+        commit_value(
+            &database,
+            format!("tail-{index}").as_bytes(),
+            format!("tail-value-{index:0>80}").as_bytes(),
+        );
     }
     let tail_blocks: Vec<BlockId> = database
         .lock()
@@ -532,22 +625,37 @@ fn gc_epochs_during_a_copy_never_reclaim_the_anchors_committed_tail() {
         .iter()
         .flat_map(|transaction| transaction.envelope.block_ids.iter().copied())
         .collect();
-    assert!(!tail_blocks.is_empty(), "the uncheckpointed commits must name blocks");
+    assert!(
+        !tail_blocks.is_empty(),
+        "the uncheckpointed commits must name blocks"
+    );
     let (gate, reached) = FirstBlockWriteGate::new(&vfs, false);
     let epoch = {
         let database = database.clone();
         let mut context = context(&vfs);
         context.destination_vfs = gate.clone();
         std::thread::spawn(move || {
-            run_epoch(&database, &context, &AtomicBool::new(false), &EpochStatus::default())
+            run_epoch(
+                &database,
+                &context,
+                &AtomicBool::new(false),
+                &EpochStatus::default(),
+            )
         })
     };
     if reached.recv_timeout(Duration::from_secs(60)).is_err() {
         gate.release();
-        panic!("the epoch never reached its first block write: {:?}", epoch.join());
+        panic!(
+            "the epoch never reached its first block write: {:?}",
+            epoch.join()
+        );
     }
     for index in 0..40_u32 {
-        commit_value(&database, format!("tail-{index}").as_bytes(), b"superseded-tail");
+        commit_value(
+            &database,
+            format!("tail-{index}").as_bytes(),
+            b"superseded-tail",
+        );
     }
     supersede_anchored_generation(&database);
     {
@@ -558,13 +666,24 @@ fn gc_epochs_during_a_copy_never_reclaim_the_anchors_committed_tail() {
         guard.checkpoint_for_test().unwrap();
         guard.compact_history(1).unwrap();
     }
-    let mut collector = OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
+    let mut collector =
+        OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
     complete_gc_epochs(&mut collector, &database);
-    let reclaimed: Vec<BlockId> =
-        tail_blocks.iter().copied().filter(|id| block_is_reclaimed(&database, *id)).collect();
-    assert!(reclaimed.is_empty(), "the collector deleted {} anchored tail blocks mid-copy", reclaimed.len());
+    let reclaimed: Vec<BlockId> = tail_blocks
+        .iter()
+        .copied()
+        .filter(|id| block_is_reclaimed(&database, *id))
+        .collect();
+    assert!(
+        reclaimed.is_empty(),
+        "the collector deleted {} anchored tail blocks mid-copy",
+        reclaimed.len()
+    );
     gate.release();
-    let report = epoch.join().unwrap().expect("the copy completes with the anchored tail");
+    let report = epoch
+        .join()
+        .unwrap()
+        .expect("the copy completes with the anchored tail");
     assert!(report.tail_transactions > 0, "{report:?}");
     restore_store(&vfs, "/restore");
     let restored = AuthorityDatabase::open_with_vfs(Path::new("/restore"), vfs.clone()).unwrap();
@@ -576,7 +695,9 @@ fn gc_epochs_during_a_copy_never_reclaim_the_anchors_committed_tail() {
     }
     complete_gc_epochs(&mut collector, &database);
     assert!(
-        tail_blocks.iter().any(|id| block_is_reclaimed(&database, *id)),
+        tail_blocks
+            .iter()
+            .any(|id| block_is_reclaimed(&database, *id)),
         "the anchored tail stays referenced after the epoch ended"
     );
 }
@@ -591,11 +712,17 @@ fn an_epoch_that_panics_mid_copy_still_releases_its_anchor() {
     let mut context = context(&vfs);
     context.destination_vfs = gate;
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_epoch(&database, &context, &AtomicBool::new(false), &EpochStatus::default())
+        run_epoch(
+            &database,
+            &context,
+            &AtomicBool::new(false),
+            &EpochStatus::default(),
+        )
     }));
     assert!(outcome.is_err(), "the injected copy panic propagates");
     supersede_anchored_generation(&database);
-    let mut collector = OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
+    let mut collector =
+        OnlineGarbageCollector::new(AuthorityGarbageCollectionBudget::conservative());
     complete_gc_epochs(&mut collector, &database);
     assert!(
         block_is_reclaimed(&database, anchored_root),
@@ -612,7 +739,8 @@ fn epochs_prune_to_the_retained_generation_count() {
         run(&database, &context);
     }
     let manifests =
-        crate::backup::existing_manifests(&Path::new(STORE).join("snapshots"), _vfs.as_ref()).unwrap();
+        crate::backup::existing_manifests(&Path::new(STORE).join("snapshots"), _vfs.as_ref())
+            .unwrap();
     assert_eq!(
         manifests.len(),
         ONLINE_BACKUP_RETAINED_GENERATIONS,
@@ -661,23 +789,49 @@ struct FailFirstShardBarrierVfs {
     armed: AtomicBool,
 }
 impl crate::vfs::Vfs for FailFirstShardBarrierVfs {
-    fn open(&self, path: &Path, request: crate::vfs::OpenRequest) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
+    fn open(
+        &self,
+        path: &Path,
+        request: crate::vfs::OpenRequest,
+    ) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
         self.inner.open(path, request)
     }
-    fn create_dir(&self, path: &Path) -> io::Result<()> { self.inner.create_dir(path) }
-    fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> { self.inner.rename(source, destination) }
-    fn remove_file(&self, path: &Path) -> io::Result<()> { self.inner.remove_file(path) }
-    fn metadata(&self, path: &Path) -> io::Result<crate::vfs::FileKind> { self.inner.metadata(path) }
-    fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> { self.inner.read_directory(path) }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.inner.create_dir(path)
+    }
+    fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        self.inner.rename(source, destination)
+    }
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        self.inner.remove_file(path)
+    }
+    fn metadata(&self, path: &Path) -> io::Result<crate::vfs::FileKind> {
+        self.inner.metadata(path)
+    }
+    fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.inner.read_directory(path)
+    }
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
-    fn match_directory_prefix_bounded(&self, path: &Path, prefix: &str, maximum: usize, matches: usize)
-        -> io::Result<crate::vfs::BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+    fn match_directory_prefix_bounded(
+        &self,
+        path: &Path,
+        prefix: &str,
+        maximum: usize,
+        matches: usize,
+    ) -> io::Result<crate::vfs::BoundedDirectoryMatches> {
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
-        let shard = path.parent().is_some_and(|parent| parent.ends_with("closed/blocks"));
+        let shard = path
+            .parent()
+            .is_some_and(|parent| parent.ends_with("closed/blocks"));
         if shard && self.armed.swap(false, Ordering::AcqRel) {
             return Err(io::Error::other("injected shard barrier failure"));
         }
@@ -694,13 +848,26 @@ fn names_a_failed_shard_barrier_left_are_durable_before_a_later_epoch_trusts_the
     let (vfs, database) = authority();
     database.lock().unwrap().set_write_overlay_for_test(false);
     for index in 0..300_u32 {
-        commit_value(&database, format!("barrier-{index}").as_bytes(), &[5_u8; 64]);
+        commit_value(
+            &database,
+            format!("barrier-{index}").as_bytes(),
+            &[5_u8; 64],
+        );
     }
-    let failing = Arc::new(FailFirstShardBarrierVfs { inner: vfs.clone(), armed: AtomicBool::new(true) });
-    let context = EpochContext { destination_vfs: failing.clone(), ..context(&vfs) };
+    let failing = Arc::new(FailFirstShardBarrierVfs {
+        inner: vfs.clone(),
+        armed: AtomicBool::new(true),
+    });
+    let context = EpochContext {
+        destination_vfs: failing.clone(),
+        ..context(&vfs)
+    };
     let stop = AtomicBool::new(false);
     let error = run_epoch(&database, &context, &stop, &EpochStatus::default()).unwrap_err();
-    assert!(error.to_string().contains("injected shard barrier failure"), "{error}");
+    assert!(
+        error.to_string().contains("injected shard barrier failure"),
+        "{error}"
+    );
     assert!(!failing.armed.load(Ordering::Acquire));
     let report = run(&database, &context);
     assert!(report.ok);
@@ -709,7 +876,10 @@ fn names_a_failed_shard_barrier_left_are_durable_before_a_later_epoch_trusts_the
     assert_eq!(manifest.durable_sequence, report.durable_sequence);
     let restored = AuthorityDatabase::open_with_vfs(Path::new("/restore"), vfs.clone()).unwrap();
     for index in [0_u32, 150, 299] {
-        assert_eq!(read_value(&restored, format!("barrier-{index}").as_bytes()), Some(vec![5_u8; 64]));
+        assert_eq!(
+            read_value(&restored, format!("barrier-{index}").as_bytes()),
+            Some(vec![5_u8; 64])
+        );
     }
 }
 
@@ -719,28 +889,54 @@ struct FailFirstManifestRemovalVfs {
     armed: AtomicBool,
 }
 impl crate::vfs::Vfs for FailFirstManifestRemovalVfs {
-    fn open(&self, path: &Path, request: crate::vfs::OpenRequest) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
+    fn open(
+        &self,
+        path: &Path,
+        request: crate::vfs::OpenRequest,
+    ) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
         self.inner.open(path, request)
     }
-    fn create_dir(&self, path: &Path) -> io::Result<()> { self.inner.create_dir(path) }
-    fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> { self.inner.rename(source, destination) }
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.inner.create_dir(path)
+    }
+    fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        self.inner.rename(source, destination)
+    }
     fn remove_file(&self, path: &Path) -> io::Result<()> {
-        let manifest = path.parent().is_some_and(|parent| parent.ends_with("snapshots"));
+        let manifest = path
+            .parent()
+            .is_some_and(|parent| parent.ends_with("snapshots"));
         if manifest && self.armed.swap(false, Ordering::AcqRel) {
             return Err(io::Error::other("injected manifest removal failure"));
         }
         self.inner.remove_file(path)
     }
-    fn metadata(&self, path: &Path) -> io::Result<crate::vfs::FileKind> { self.inner.metadata(path) }
-    fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> { self.inner.read_directory(path) }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
+    fn metadata(&self, path: &Path) -> io::Result<crate::vfs::FileKind> {
+        self.inner.metadata(path)
+    }
+    fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.inner.read_directory(path)
+    }
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
-    fn match_directory_prefix_bounded(&self, path: &Path, prefix: &str, maximum: usize, matches: usize)
-        -> io::Result<crate::vfs::BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+    fn match_directory_prefix_bounded(
+        &self,
+        path: &Path,
+        prefix: &str,
+        maximum: usize,
+        matches: usize,
+    ) -> io::Result<crate::vfs::BoundedDirectoryMatches> {
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
-    fn sync_directory(&self, path: &Path) -> io::Result<()> { self.inner.sync_directory(path) }
+    fn sync_directory(&self, path: &Path) -> io::Result<()> {
+        self.inner.sync_directory(path)
+    }
 }
 
 /// Retention runs after publication: a failed prune reports the published
@@ -749,8 +945,14 @@ impl crate::vfs::Vfs for FailFirstManifestRemovalVfs {
 #[test]
 fn a_failed_prune_keeps_the_published_generation_and_the_next_epoch_resumes_it() {
     let (vfs, database) = authority();
-    let failing = Arc::new(FailFirstManifestRemovalVfs { inner: vfs.clone(), armed: AtomicBool::new(true) });
-    let mut context = EpochContext { destination_vfs: failing.clone(), ..context(&vfs) };
+    let failing = Arc::new(FailFirstManifestRemovalVfs {
+        inner: vfs.clone(),
+        armed: AtomicBool::new(true),
+    });
+    let mut context = EpochContext {
+        destination_vfs: failing.clone(),
+        ..context(&vfs)
+    };
     context.retention = 1;
     commit_value(&database, b"rolling", b"one");
     let first = run(&database, &context);
@@ -758,18 +960,31 @@ fn a_failed_prune_keeps_the_published_generation_and_the_next_epoch_resumes_it()
     commit_value(&database, b"rolling", b"two");
     let second = run(&database, &context);
     assert!(second.ok);
-    assert!(second.prune_error.as_deref().is_some_and(|error| error.contains("injected")), "{second:?}");
+    assert!(
+        second
+            .prune_error
+            .as_deref()
+            .is_some_and(|error| error.contains("injected")),
+        "{second:?}"
+    );
     commit_value(&database, b"rolling", b"three");
     let third = run(&database, &context);
     assert_eq!(third.prune_error, None);
     assert_eq!(third.retained_generations, 1);
     assert!(third.pruned_generations >= 2, "{third:?}");
     let manifests =
-        crate::backup::existing_manifests(&Path::new(STORE).join("snapshots"), vfs.as_ref()).unwrap();
+        crate::backup::existing_manifests(&Path::new(STORE).join("snapshots"), vfs.as_ref())
+            .unwrap();
     assert_eq!(manifests.len(), 1);
-    assert_eq!(restore_store(&vfs, "/restore").durable_sequence, third.durable_sequence);
+    assert_eq!(
+        restore_store(&vfs, "/restore").durable_sequence,
+        third.durable_sequence
+    );
     let restored = AuthorityDatabase::open_with_vfs(Path::new("/restore"), vfs.clone()).unwrap();
-    assert_eq!(read_value(&restored, b"rolling").as_deref(), Some(&b"three"[..]));
+    assert_eq!(
+        read_value(&restored, b"rolling").as_deref(),
+        Some(&b"three"[..])
+    );
 }
 
 /// Records the bytes every read returns, per path.
@@ -778,23 +993,53 @@ struct ReadRecordingVfs {
     reads: Arc<Mutex<Vec<(PathBuf, usize)>>>,
 }
 impl crate::vfs::Vfs for ReadRecordingVfs {
-    fn open(&self, path: &Path, request: crate::vfs::OpenRequest) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
+    fn open(
+        &self,
+        path: &Path,
+        request: crate::vfs::OpenRequest,
+    ) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
         let file = self.inner.open(path, request)?;
-        Ok(Box::new(ReadRecordingFile { inner: file, path: path.to_path_buf(), reads: self.reads.clone() }))
+        Ok(Box::new(ReadRecordingFile {
+            inner: file,
+            path: path.to_path_buf(),
+            reads: self.reads.clone(),
+        }))
     }
-    fn create_dir(&self, path: &Path) -> io::Result<()> { self.inner.create_dir(path) }
-    fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> { self.inner.rename(source, destination) }
-    fn remove_file(&self, path: &Path) -> io::Result<()> { self.inner.remove_file(path) }
-    fn metadata(&self, path: &Path) -> io::Result<crate::vfs::FileKind> { self.inner.metadata(path) }
-    fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> { self.inner.read_directory(path) }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.inner.create_dir(path)
+    }
+    fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> {
+        self.inner.rename(source, destination)
+    }
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        self.inner.remove_file(path)
+    }
+    fn metadata(&self, path: &Path) -> io::Result<crate::vfs::FileKind> {
+        self.inner.metadata(path)
+    }
+    fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.inner.read_directory(path)
+    }
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
-    fn match_directory_prefix_bounded(&self, path: &Path, prefix: &str, maximum: usize, matches: usize)
-        -> io::Result<crate::vfs::BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+    fn match_directory_prefix_bounded(
+        &self,
+        path: &Path,
+        prefix: &str,
+        maximum: usize,
+        matches: usize,
+    ) -> io::Result<crate::vfs::BoundedDirectoryMatches> {
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
-    fn sync_directory(&self, path: &Path) -> io::Result<()> { self.inner.sync_directory(path) }
+    fn sync_directory(&self, path: &Path) -> io::Result<()> {
+        self.inner.sync_directory(path)
+    }
 }
 struct ReadRecordingFile {
     inner: Box<dyn crate::vfs::VfsFile>,
@@ -802,22 +1047,40 @@ struct ReadRecordingFile {
     reads: Arc<Mutex<Vec<(PathBuf, usize)>>>,
 }
 impl crate::vfs::VfsFile for ReadRecordingFile {
-    fn len(&self) -> io::Result<u64> { self.inner.len() }
+    fn len(&self) -> io::Result<u64> {
+        self.inner.len()
+    }
     fn read_all(&mut self, maximum: usize) -> io::Result<Vec<u8>> {
         let bytes = self.inner.read_all(maximum)?;
-        self.reads.lock().unwrap().push((self.path.clone(), bytes.len()));
+        self.reads
+            .lock()
+            .unwrap()
+            .push((self.path.clone(), bytes.len()));
         Ok(bytes)
     }
     fn read_exact_at(&mut self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
         self.inner.read_exact_at(offset, bytes)?;
-        self.reads.lock().unwrap().push((self.path.clone(), bytes.len()));
+        self.reads
+            .lock()
+            .unwrap()
+            .push((self.path.clone(), bytes.len()));
         Ok(())
     }
-    fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> { self.inner.write_all_at(offset, bytes) }
-    fn set_len(&mut self, length: u64) -> io::Result<()> { self.inner.set_len(length) }
-    fn sync_data(&mut self) -> io::Result<()> { self.inner.sync_data() }
-    fn sync_all(&mut self) -> io::Result<()> { self.inner.sync_all() }
-    fn try_lock_exclusive(&mut self) -> io::Result<()> { self.inner.try_lock_exclusive() }
+    fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
+        self.inner.write_all_at(offset, bytes)
+    }
+    fn set_len(&mut self, length: u64) -> io::Result<()> {
+        self.inner.set_len(length)
+    }
+    fn sync_data(&mut self) -> io::Result<()> {
+        self.inner.sync_data()
+    }
+    fn sync_all(&mut self) -> io::Result<()> {
+        self.inner.sync_all()
+    }
+    fn try_lock_exclusive(&mut self) -> io::Result<()> {
+        self.inner.try_lock_exclusive()
+    }
 }
 
 #[test]
@@ -828,32 +1091,66 @@ fn unchanged_generation_reads_no_held_blob_chunk_from_either_store() {
         inner.sync_directory(Path::new("/")).unwrap();
     }
     let reads = Arc::new(Mutex::new(Vec::new()));
-    let vfs = Arc::new(ReadRecordingVfs { inner: inner.clone(), reads: reads.clone() });
-    let mut authority = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let vfs = Arc::new(ReadRecordingVfs {
+        inner: inner.clone(),
+        reads: reads.clone(),
+    });
+    let mut authority =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     let document = EntityKey::new(7, 11, "record", b"chunked").unwrap();
     let mut state = 0x2545_f491_4f6c_dd1d_u64;
-    let text: String = (0..3 * crate::blob::BLOB_CHUNK_BYTES + 1024).map(|_| {
-        state ^= state << 13; state ^= state >> 7; state ^= state << 17;
-        char::from(b"0123456789abcdef"[(state & 15) as usize])
-    }).collect();
+    let text: String = (0..3 * crate::blob::BLOB_CHUNK_BYTES + 1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            char::from(b"0123456789abcdef"[(state & 15) as usize])
+        })
+        .collect();
     let mut transaction = authority.begin(7, 11).unwrap();
-    crate::versioned_document::put(&authority, &mut transaction, crate::versioned_document::PutRequest {
-        key: document.clone(), namespace: "record".into(), logical_key: "chunked".into(),
-        value_json: serde_json::to_vec(&text).unwrap(), expected_version: None, updated_at_ms: 1,
-    }).unwrap();
-    let stored = authority.entity_get(&mut transaction, &document).unwrap().unwrap();
+    crate::versioned_document::put(
+        &authority,
+        &mut transaction,
+        crate::versioned_document::PutRequest {
+            key: document.clone(),
+            namespace: "record".into(),
+            logical_key: "chunked".into(),
+            value_json: serde_json::to_vec(&text).unwrap(),
+            expected_version: None,
+            updated_at_ms: 1,
+        },
+    )
+    .unwrap();
+    let stored = authority
+        .entity_get(&mut transaction, &document)
+        .unwrap()
+        .unwrap();
     authority.commit(transaction).unwrap();
-    let reference = crate::versioned_document::stored_blob_reference(&stored).unwrap().unwrap();
+    let reference = crate::versioned_document::stored_blob_reference(&stored)
+        .unwrap()
+        .unwrap();
     let manifest = reference.manifest_block_id;
     let mut chunks = Vec::new();
-    crate::blob::visit_blob_references(7, 11, reference, |id| authority.block_store_shared().get(id),
-        |id| { chunks.push(id); Ok(()) }).unwrap();
+    crate::blob::visit_blob_references(
+        7,
+        11,
+        reference,
+        |id| authority.block_store_shared().get(id),
+        |id| {
+            chunks.push(id);
+            Ok(())
+        },
+    )
+    .unwrap();
     chunks.retain(|id| *id != manifest);
     assert_eq!(chunks.len(), 4);
     authority.configure_hot_data_caches(0, 0).unwrap();
     let database = Arc::new(Mutex::new(authority));
     let context = context(&inner);
-    let context = EpochContext { destination_vfs: vfs.clone(), ..context };
+    let context = EpochContext {
+        destination_vfs: vfs.clone(),
+        ..context
+    };
     let first = run(&database, &context);
     assert!(first.copied_blocks >= 5);
     reads.lock().unwrap().clear();
@@ -866,17 +1163,33 @@ fn unchanged_generation_reads_no_held_blob_chunk_from_either_store() {
     // still decoded to enumerate their transactions.
     let loose = |root: &str, id: &BlockId| {
         let name = id.to_hex();
-        Path::new(root).join("blocks").join(&name[..2]).join(format!("{name}.blk"))
+        Path::new(root)
+            .join("blocks")
+            .join(&name[..2])
+            .join(format!("{name}.blk"))
     };
-    let held = chunks.iter().flat_map(|id| [loose(STORE, id), loose("/data", id)]).collect::<Vec<_>>();
-    assert!(reads.iter().all(|(path, _)| !held.contains(path)), "{reads:?}");
-    let segment_bytes: usize = reads.iter()
+    let held = chunks
+        .iter()
+        .flat_map(|id| [loose(STORE, id), loose("/data", id)])
+        .collect::<Vec<_>>();
+    assert!(
+        reads.iter().all(|(path, _)| !held.contains(path)),
+        "{reads:?}"
+    );
+    let segment_bytes: usize = reads
+        .iter()
         .filter(|(path, _)| path.starts_with("/data/payload-segments"))
-        .map(|(_, bytes)| bytes).sum();
-    assert!(segment_bytes < 256 * 1024, "unchanged generation read {segment_bytes} source segment bytes");
-    let destination_bytes: usize = reads.iter()
+        .map(|(_, bytes)| bytes)
+        .sum();
+    assert!(
+        segment_bytes < 256 * 1024,
+        "unchanged generation read {segment_bytes} source segment bytes"
+    );
+    let destination_bytes: usize = reads
+        .iter()
         .filter(|(path, _)| path.starts_with("/backup/closed/blocks"))
-        .map(|(_, bytes)| bytes).sum();
+        .map(|(_, bytes)| bytes)
+        .sum();
     println!("unchanged_generation source_segment_bytes={segment_bytes} destination_block_bytes={destination_bytes} reads={}",
         reads.len());
 }
@@ -885,8 +1198,12 @@ fn unchanged_generation_reads_no_held_blob_chunk_from_either_store() {
 fn driver_attributes_copy_reads_to_the_online_backup_component() {
     let (vfs, database) = authority();
     commit_value(&database, b"attributed", b"value-attributed");
-    let reads = || crate::fsync_stats::component_stage_calls(
-        crate::fsync_stats::COMPONENT_ONLINE_BACKUP, crate::fsync_stats::STAGE_BLOCK_GET);
+    let reads = || {
+        crate::fsync_stats::component_stage_calls(
+            crate::fsync_stats::COMPONENT_ONLINE_BACKUP,
+            crate::fsync_stats::STAGE_BLOCK_GET,
+        )
+    };
     let before = reads();
     let driver = OnlineBackupDriver::start_with_destination_vfs(
         &database,
@@ -895,9 +1212,18 @@ fn driver_attributes_copy_reads_to_the_online_backup_component() {
         None,
     )
     .unwrap();
-    assert!(driver.observer().run_and_wait(now_unix_ms() + 30_000).unwrap().ok);
+    assert!(
+        driver
+            .observer()
+            .run_and_wait(now_unix_ms() + 30_000)
+            .unwrap()
+            .ok
+    );
     driver.stop_and_join().unwrap();
-    assert!(reads() > before, "backup copies must not be billed to foreground");
+    assert!(
+        reads() > before,
+        "backup copies must not be billed to foreground"
+    );
 }
 
 #[test]
@@ -917,8 +1243,9 @@ fn concurrent_doorbells_each_receive_the_finished_epoch_receipt() {
         released: Mutex::new(false),
         signal: Condvar::new(),
     });
-    let driver = OnlineBackupDriver::start_with_destination_vfs(&database, backup_dir, gate.clone(), None)
-        .unwrap();
+    let driver =
+        OnlineBackupDriver::start_with_destination_vfs(&database, backup_dir, gate.clone(), None)
+            .unwrap();
     let observer = driver.observer();
     let first = std::thread::spawn({
         let observer = observer.clone();
@@ -1113,7 +1440,7 @@ fn native_shadow_slow_io_allows_foreground_commits_and_retains_the_source_lease(
     assert!(crate::engine::acquire_lease(&config.durable_authority, &crate::vfs::RealVfs).is_ok());
     let restored = _root.path().join("restored");
     backup::restore_latest_backup(&config.shadow_directory, &restored).unwrap();
-    let mut restored = AuthorityDatabase::open(&restored).unwrap();
+    let restored = AuthorityDatabase::open(&restored).unwrap();
     let mut read = restored.begin(7, 11).unwrap();
     let key = EntityKey::new(7, 11, "record", b"during-copy").unwrap();
     assert_eq!(
@@ -1171,7 +1498,7 @@ fn native_shadow_failures_back_off_without_losing_foreground_data() {
         "failed replication must not spin: {metrics:?}"
     );
     assert!(metrics.last_error.is_some());
-    let mut guard = database.lock().unwrap();
+    let guard = database.lock().unwrap();
     let mut read = guard.begin(7, 11).unwrap();
     let key = EntityKey::new(7, 11, "record", b"after-failure").unwrap();
     assert_eq!(
@@ -1183,21 +1510,30 @@ fn native_shadow_failures_back_off_without_losing_foreground_data() {
 #[test]
 fn native_shadow_doorbell_reuses_an_unchanged_restored_generation() {
     let (_root, config, lease, database) = native_fastpath();
-    let driver = OnlineBackupDriver::start_fastpath(&database,config.shadow_directory,None,lease).unwrap();
-    let report = driver.observer().run_and_wait(now_unix_ms()+30_000).unwrap();
+    let driver =
+        OnlineBackupDriver::start_fastpath(&database, config.shadow_directory, None, lease)
+            .unwrap();
+    let report = driver
+        .observer()
+        .run_and_wait(now_unix_ms() + 30_000)
+        .unwrap();
     driver.stop_and_join().unwrap();
-    assert_eq!(report.copied_blocks,0);
-    assert_eq!(report.manifest_bytes,0);
+    assert_eq!(report.copied_blocks, 0);
+    assert_eq!(report.manifest_bytes, 0);
     assert!(report.ok);
 }
-
 
 #[test]
 fn epoch_resumes_interrupted_prune_before_copying_latest_state() {
     use crate::vfs::{FaultAction, FaultRule};
-    fn seed() -> (Arc<DeterministicVfs>, Arc<Mutex<AuthorityDatabase>>, EpochContext) {
+    fn seed() -> (
+        Arc<DeterministicVfs>,
+        Arc<Mutex<AuthorityDatabase>>,
+        EpochContext,
+    ) {
         let (vfs, database) = authority();
-        let mut context = context(&vfs); context.retention = 4;
+        let mut context = context(&vfs);
+        context.retention = 4;
         for value in [b"one", b"two", b"new"] {
             commit_value(&database, b"rolling", value);
             run(&database, &context);
@@ -1211,12 +1547,17 @@ fn epoch_resumes_interrupted_prune_before_copying_latest_state() {
     let mut exercised = false;
     for operation_number in 1..=operations as u64 {
         let (vfs, database, mut context) = seed();
-        vfs.arm_fault(Some(FaultRule { operation_number,
-            action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted) })).unwrap();
+        vfs.arm_fault(Some(FaultRule {
+            operation_number,
+            action: FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+        }))
+        .unwrap();
         let failed = crate::backup::prune_backup_with_vfs(Path::new(STORE), 1, vfs.clone());
         vfs.arm_fault(None).unwrap();
-        if failed.is_err() && crate::backup::ensure_no_prune(Path::new(STORE), vfs.as_ref())
-            .is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock) {
+        if failed.is_err()
+            && crate::backup::ensure_no_prune(Path::new(STORE), vfs.as_ref())
+                .is_err_and(|error| error.kind() == io::ErrorKind::WouldBlock)
+        {
             commit_value(&database, b"rolling", b"latest");
             context.retention = 2; // the pending plan still owns its old retention set
             let report = run(&database, &context);
@@ -1225,13 +1566,24 @@ fn epoch_resumes_interrupted_prune_before_copying_latest_state() {
             restore_store(&vfs, "/restore");
             let restored = AuthorityDatabase::open_with_vfs(Path::new("/restore"), vfs).unwrap();
             let mut tx = restored.begin(7, 11).unwrap();
-            assert_eq!(restored.entity_get(&mut tx, &EntityKey::new(7, 11,
-                "record", b"rolling").unwrap()).unwrap().unwrap(), b"latest");
+            assert_eq!(
+                restored
+                    .entity_get(
+                        &mut tx,
+                        &EntityKey::new(7, 11, "record", b"rolling").unwrap()
+                    )
+                    .unwrap()
+                    .unwrap(),
+                b"latest"
+            );
             exercised = true;
             break;
         }
     }
-    assert!(exercised, "fault injection must leave a committed pending prune plan");
+    assert!(
+        exercised,
+        "fault injection must leave a committed pending prune plan"
+    );
 }
 
 /// A closed store whose shards refuse new names, as DolphinFS directories past
@@ -1242,22 +1594,41 @@ fn epoch_resumes_interrupted_prune_before_copying_latest_state() {
 fn an_epoch_into_a_capped_closed_store_publishes_and_restores_through_overflow() {
     let (vfs, database) = authority();
     for index in 0..24 {
-        commit_value(&database, format!("capped-{index}").as_bytes(), format!("value-{index}").as_bytes());
+        commit_value(
+            &database,
+            format!("capped-{index}").as_bytes(),
+            format!("value-{index}").as_bytes(),
+        );
     }
     database.lock().unwrap().checkpoint_for_test().unwrap();
     commit_value(&database, b"tail", b"value-tail");
     for shard in 0..=u8::MAX {
         let name = format!("{shard:02x}");
-        vfs.cap_directory_entries(&Path::new(STORE).join("blocks").join(&name), 0).unwrap();
-        vfs.cap_directory_entries(&Path::new("/restored/blocks").join(&name), 0).unwrap();
+        vfs.cap_directory_entries(&Path::new(STORE).join("blocks").join(&name), 0)
+            .unwrap();
+        vfs.cap_directory_entries(&Path::new("/restored/blocks").join(&name), 0)
+            .unwrap();
     }
     let report = run(&database, &context(&vfs));
     assert!(report.ok && report.copied_blocks > 0);
-    assert_eq!(vfs.metadata(&Path::new(STORE).join("blocks-overflow")).unwrap(), crate::vfs::FileKind::Directory);
+    assert_eq!(
+        vfs.metadata(&Path::new(STORE).join("blocks-overflow"))
+            .unwrap(),
+        crate::vfs::FileKind::Directory
+    );
     vfs.create_dir(Path::new("/restored")).unwrap();
     vfs.sync_directory(Path::new("/")).unwrap();
-    crate::backup::restore_latest_backup_with_vfs(Path::new(STORE), Path::new("/restored"), vfs.clone()).unwrap();
-    assert_eq!(vfs.metadata(Path::new("/restored/blocks-overflow")).unwrap(), crate::vfs::FileKind::Directory);
+    crate::backup::restore_latest_backup_with_vfs(
+        Path::new(STORE),
+        Path::new("/restored"),
+        vfs.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        vfs.metadata(Path::new("/restored/blocks-overflow"))
+            .unwrap(),
+        crate::vfs::FileKind::Directory
+    );
     // What the restore returned is durable, overflowed blocks included.
     vfs.crash().unwrap();
     let restored = AuthorityDatabase::open_with_vfs(Path::new("/restored"), vfs.clone()).unwrap();
@@ -1267,9 +1638,11 @@ fn an_epoch_into_a_capped_closed_store_publishes_and_restores_through_overflow()
             Some(format!("value-{index}").into_bytes())
         );
     }
-    assert_eq!(read_value(&restored, b"tail").as_deref(), Some(&b"value-tail"[..]));
+    assert_eq!(
+        read_value(&restored, b"tail").as_deref(),
+        Some(&b"value-tail"[..])
+    );
 }
-
 
 /// A run interrupted between an overflow leaf's renames and its barrier leaves
 /// names that are visible but not durable. The next run's destination policy
@@ -1280,14 +1653,20 @@ fn destination_policy_makes_overflow_leaf_names_durable_before_trusting_presence
     let (vfs, database) = authority();
     commit_value(&database, b"seed", b"value-seed");
     for shard in 0..=u8::MAX {
-        vfs.cap_directory_entries(&Path::new(STORE).join("blocks").join(format!("{shard:02x}")), 0).unwrap();
+        vfs.cap_directory_entries(
+            &Path::new(STORE).join("blocks").join(format!("{shard:02x}")),
+            0,
+        )
+        .unwrap();
     }
     assert!(run(&database, &context(&vfs)).ok);
     let store = crate::block::BlockStore::open_with_vfs(Path::new(STORE), vfs.clone()).unwrap();
     let payload = b"visible but not yet durable".to_vec();
     let id = crate::block::BlockId::for_payload(&payload);
     store.ensure_copy_shard(id).unwrap();
-    assert!(store.publish_copied_block_unbarriered(id, &payload).unwrap());
+    assert!(store
+        .publish_copied_block_unbarriered(id, &payload)
+        .unwrap());
     drop(store);
     crate::backup::destination_policy(Path::new(STORE), vfs.as_ref()).unwrap();
     vfs.crash().unwrap();

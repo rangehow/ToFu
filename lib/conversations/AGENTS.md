@@ -106,6 +106,12 @@ the transcript seed of a pre-history head are "Task history" in
 store, and the board stays the only checklist. Verify
 `test_coordinator_task_history.py` and the history HTTP journey.
 
+`coordinator_continuation.py` builds the state a Coordinator wake acts on, read at
+its birth and appended to the wake's fixed brief: open board tasks, unanswered
+owner questions and only actionable Worker states ("Continuation context is
+anchored on the task board" in `docs/PROJECT_COORDINATION.md`). Evidence, never
+authority; verify `test_coordinator_continuation_context.py`.
+
 `coordinator_budget.py` owns the passive request usage projection from dispatch
 receipts. Requests have no spending ceiling, so there are no defaults to save.
 Verify the usage HTTP owner journey and native restart.

@@ -223,7 +223,9 @@ fn page_bytes(
 }
 fn parse_page(raw: &[u8]) -> io::Result<Vec<Value>> {
     if raw.len() > MAX_FROZEN_TRANSCRIPT_PAGE_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("frozen transcript page exceeds byte budget"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "frozen transcript page exceeds byte budget",
+        ));
     }
     let messages: Vec<Value> = serde_json::from_slice(raw)
         .map_err(|_| invalid("frozen transcript page is not a message array"))?;
@@ -272,14 +274,12 @@ fn restore_page(
     {
         return Err(conflict("frozen transcript page order differs"));
     }
-    m.messages = m
-        .messages
-        .checked_add(count)
-        .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("frozen transcript count overflow"))?;
-    m.decoded_bytes = m
-        .decoded_bytes
-        .checked_add(raw.len())
-        .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("frozen transcript byte count overflow"))?;
+    m.messages = m.messages.checked_add(count).ok_or_else(|| {
+        crate::resource_exhaustion::accounting_overflow("frozen transcript count overflow")
+    })?;
+    m.decoded_bytes = m.decoded_bytes.checked_add(raw.len()).ok_or_else(|| {
+        crate::resource_exhaustion::accounting_overflow("frozen transcript byte count overflow")
+    })?;
     m.pages.push(descriptor);
     validate_manifest(&m)?;
     versioned_document::put_with_blob_owner_bounded(
@@ -382,9 +382,15 @@ pub(crate) fn messages(
             if (start..end).contains(&(p.start + offset)) {
                 bytes = bytes
                     .checked_add(serde_json::to_vec(&message)?.len() + 1)
-                    .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("frozen transcript response byte overflow"))?;
+                    .ok_or_else(|| {
+                        crate::resource_exhaustion::accounting_overflow(
+                            "frozen transcript response byte overflow",
+                        )
+                    })?;
                 if bytes > MAX_FROZEN_TRANSCRIPT_PAGE_BYTES {
-                    return Err(crate::resource_exhaustion::domain_bound("frozen transcript response exceeds page budget"));
+                    return Err(crate::resource_exhaustion::domain_bound(
+                        "frozen transcript response exceeds page budget",
+                    ));
                 }
                 result.push(message);
             }
@@ -458,7 +464,7 @@ fn verify_physical_pages(
         return Err(corrupt("frozen transcript physical page catalog differs"));
     }
     for index in 0..m.pages.len() {
-        if parse_page(&page_bytes(database, tx, &m, index)?)?.len() != m.pages[index].count {
+        if parse_page(&page_bytes(database, tx, m, index)?)?.len() != m.pages[index].count {
             return Err(corrupt("frozen transcript page count differs"));
         }
     }
@@ -733,36 +739,57 @@ mod tests {
     #[test]
     fn turn_usage_reads_frozen_rows_page_by_page_without_bodies() {
         let (_, mut db) = prepared();
-        put(&mut db, 0, 0, json!([
-            {"role":"user","content":"imported question","timestamp":0},
-            {"role":"assistant","content":"x".repeat(4096),"usage":{"p":1}},
-            {"role":"assistant","timestamp":9000,"usage":{"p":3}},
-        ])).unwrap();
-        put(&mut db, 1, 3, json!([
-            {"role":"assistant","timestamp":150,"usage":{"p":4},"model":"m"},
-            {"role":"assistant","timestamp":"160","usage":{"p":5}},
-            {"role":"assistant","timestamp":170,"usage":{}},
-        ])).unwrap();
+        put(
+            &mut db,
+            0,
+            0,
+            json!([
+                {"role":"user","content":"imported question","timestamp":0},
+                {"role":"assistant","content":"x".repeat(4096),"usage":{"p":1}},
+                {"role":"assistant","timestamp":9000,"usage":{"p":3}},
+            ]),
+        )
+        .unwrap();
+        put(
+            &mut db,
+            1,
+            3,
+            json!([
+                {"role":"assistant","timestamp":150,"usage":{"p":4},"model":"m"},
+                {"role":"assistant","timestamp":"160","usage":{"p":5}},
+                {"role":"assistant","timestamp":170,"usage":{}},
+            ]),
+        )
+        .unwrap();
         finish(&mut db).unwrap();
         let usage = |db: &AuthorityDatabase, id: &str| {
             let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
-            header::turn_usage(db, &mut tx, &header::TurnUsageRequest {
-                conversation_id: id.into(),
-                timestamp_gte: 100,
-                timestamp_lt: 1_000,
-                title_fallback_characters: 8,
-            }, &mut || false).unwrap()
+            header::turn_usage(
+                db,
+                &mut tx,
+                &header::TurnUsageRequest {
+                    conversation_id: id.into(),
+                    timestamp_gte: 100,
+                    timestamp_lt: 1_000,
+                    title_fallback_characters: 8,
+                },
+                &mut || false,
+            )
+            .unwrap()
         };
         let value: Value = serde_json::from_slice(&usage(&db, "conv").unwrap()).unwrap();
         assert_eq!(value["message_count"], 6);
         assert_eq!(value["metadata"]["title"], "historic");
         // A titled conversation needs no fallback read.
         assert_eq!(value["title_fallback"], "");
-        assert_eq!(value["turns"], json!([
-            {"index":1,"usage":{"p":1}},
-            {"index":3,"timestamp":150,"usage":{"p":4},"model":"m"},
-            {"index":4,"timestamp":"160","usage":{"p":5}},
-        ]));
+        assert_eq!(
+            value["turns"],
+            json!([
+                {"index":1,"usage":{"p":1}},
+                {"index":3,"timestamp":150,"usage":{"p":4},"model":"m"},
+                {"index":4,"timestamp":"160","usage":{"p":5}},
+            ])
+        );
         assert!(usage(&db, "missing").is_none());
     }
     #[test]

@@ -10,6 +10,8 @@ import json
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 from lib.llm.body import build_body
 from lib.model_routing.inference import resolve_inference_profile
 
@@ -52,22 +54,23 @@ def test_explicit_none_and_ladderless_dialects_are_not_rebound():
 
 @pytest.mark.parametrize('depth,effort', [('xhigh', 'xhigh'), ('max', 'max'),
                                           ('default', 'medium'), ('off', 'low')])
+@requires_yourprovider_overlay
 def test_shipped_tokrouter_claude_route_prepares_a_responses_request(monkeypatch, depth, effort):
     from lib.llm._sse_core import prepare_request
     from lib.model_routing import compile_candidates
     from lib.model_routing.domain import NativeModelSelection, ProviderOfferingRef
     from lib.model_routing.inference import candidate_inference_metadata
-    from bundles.meituan.tests.test_meituan_tokrouter_request_names import _meituan_document
+    from bundles.yourprovider.tests.test_yourprovider_tokrouter_request_names import _yourprovider_document
 
     monkeypatch.setattr('lib.token_counter.count_tokens', lambda *a, **kw: {'tokens': 20})
     monkeypatch.setattr('lib.tasks_pkg.compaction._tokens.resolve_model_context_limit',
                         lambda *a, **kw: 200000)
     monkeypatch.setattr('lib.desktop.egress.route_request', lambda *a, **kw: 'direct')
-    document = _meituan_document('claude-opus-5.5')
+    document = _yourprovider_document('claude-opus-5.5')
     offering = document['offerings'][0]
     candidate = next(
         row for row in compile_candidates(document, NativeModelSelection(
-            None, ProviderOfferingRef('meituan', offering['offering_id']), ''))
+            None, ProviderOfferingRef('yourprovider', offering['offering_id']), ''))
         if row.deployment['wire_model_id'] == 'tokrouter.claude-opus-5.5')
     assert candidate.connection['protocol'] == 'openai_responses'
     profile = candidate_inference_metadata(candidate)['inference_profile']

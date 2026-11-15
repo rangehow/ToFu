@@ -7,7 +7,6 @@ The actual submission check is in hope-mcp and in the pinned CLI guard.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Optional
 
 from lib.tools.hope_queue_policy import CAPABILITY, PROJECT_META

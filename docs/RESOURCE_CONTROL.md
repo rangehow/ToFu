@@ -274,6 +274,100 @@ finished.
 - A process-wide spawn hook in the hosts: implicit, and it would also raise
   server infrastructure and Tofu's own Git.
 
+## Settled task retention
+
+**Measured 2026-11-15** (production container, 35 GiB memory cgroup at its
+limit with OOM kills). The measurements were read-only: `/proc/*/smaps_rollup`,
+`/proc/<pid>/pagemap` with `/proc/<pid>/mem`, and a CPython 3.12 heap census
+that counts `ob_type` words, tests liveness against pymalloc pool headers and
+walks referrers to owners. The live server was not restarted.
+
+| Holder | PSS |
+|---|---|
+| `/dev/shm` load-test roots (31 directories, last written 6 h earlier) | 15 GiB shmem |
+| Execution host (`serverctl_pkg.execution_host`, 17.5 h uptime) | 2.73 GiB, grew 0.3 → 2.5 GiB from 16:00 to 01:00 (`logs/cgroup_pressure.log` `self_rss_gib`) |
+| TofuDB engine | 2.52 GiB (evict-only caches: block headroom/16, pages /32, segment indexes /64, overlay /128) |
+| API host (`server.py`) | 0.85 GiB; 1.8 GiB high-water, about 150 MiB of live Python objects, the rest freed arena pages |
+| Playwright driver and headless shells | 0.31 GiB, separate processes |
+| Storage host | 0.05 GiB |
+| Worker commands (descendants of the execution host: pytest, builds, a `gc-census`) | 3.3 GiB, transient |
+| Cloud IDE and Jupyter (not Tofu) | 3.4 GiB |
+
+The execution host held 3.85 M live dicts, 3.1 M strs and 0.6 M `SettledDict`
+rows. Sampled to their owners, they were mostly per-round Request Inspector
+snapshots (history plus tool schemas), each task's replay window, and API-round
+records, all reachable from **210 task dicts**. **191 of those tasks had settled**,
+up to 10 h earlier, against a 1800 s TTL, and still carried 1,070 MiB of charged
+replay bytes. Every one satisfied `_terminal_reclaimable`; the registry had
+already swept most of them. Each task was pinned from outside the registry:
+
+1. **Event delivery lanes with a definitive failure (121 tasks).**
+   *Problem:* a head the authority rejects as a settled or superseded attempt
+   (`EventAttemptStaleError`, "never retried") or under a replaced worker claim
+   (`WorkerLeaseLost`) stayed in the coordinator's process-global lane set as a
+   retained failed head, with `lane.task` and the exception's traceback. The
+   logs show 208 such retentions in one day. *Decision:* both verdicts end the
+   lane exactly like `EventDeliveryRevoked`: its items are released and it
+   leaves the coordinator. The pump also drops its locals after any failure.
+   Transient failures keep the retained head. *Alternatives rejected:* a TTL or
+   count on failed lanes, which is a knob and would also drop transient heads
+   that can still commit; catching each producer seam separately, which misses
+   seams such as the post-settlement observer append and the batch path.
+2. **Terminal subscribers (49 more tasks; 63 registry entries).** *Problem:*
+   `admission.on_terminal` callbacks fired only at the tail of a successful
+   `append_event`. A settled task whose terminal frame was refused (revoked
+   lane, lost lease, closed publication) left its callbacks, and the task each
+   closure captures, in the global registry. *Decision:* `append_event` fires
+   them in a `finally` once the event or the task is terminal. Firing is a pop,
+   so it is idempotent. *Alternatives rejected:* weak references in the
+   registry, which would let disposal callbacks (BYO slots, program results)
+   vanish before they run; a periodic registry sweep, which needs an interval.
+3. **Runtimes without a sweep (translate tasks up to 9 h; search,
+   orchestration and paper runtimes).** *Problem:* every `TaskRuntime` declares
+   a TTL, but only the chat runtime had a periodic `cleanup_stale`. *Decision:*
+   the existing 60 s reaper also sweeps every registered runtime
+   (`task_abort_signal.registered_runtimes`) by that runtime's own TTL. Wrapper
+   indexes already prune orphaned ids. *Alternative rejected:* expiring only on
+   `create`, which leaves idle runtimes holding results indefinitely.
+4. **Load-test roots on tmpfs (15 GiB).** *Problem:* `scripts/tofudb_load_test.py`
+   keeps its root (seed, authority, checkout copy) for `--reuse-seed`; roots on
+   `/dev/shm` are unreclaimable cgroup memory. *Decision:* it refuses a root that
+   `local_placement.describe_volume` classifies as a memory filesystem, before
+   creating it. This is a placement rule, independent of memory size. The
+   leftover roots were removed and their results kept. *Alternative rejected:*
+   deleting the root after each run, which breaks `--reuse-seed`.
+
+None of these caps, queues, refuses or recycles work, and no setting was added.
+The released state is durable elsewhere (storage replay, settled Turns) or is
+dead: a stale attempt's frame can never commit.
+
+**Replay** (`benchmarks/settled_turn_retention.py --turns 100 --waves 5`, the
+measured mix through the real owners, pre-change tree vs this tree, alternating
+fresh processes):
+
+| | before | after |
+|---|---|---|
+| Settled graphs still reachable | 500 / 500 | 0 / 500 |
+| Lanes left in the coordinator | 500 | 0 |
+| Retained Python heap | 267.7 MiB | 1.5 MiB |
+| RSS growth after waves 1–5 (MiB) | 124, 249, 389, 498, 606 | 101–102, 120, 122–123, 122–123, 124 |
+| Settle p50 / p90 | 0.31–0.32 / 0.38 ms | 0.32–0.37 / 0.36–0.47 ms (host noise) |
+
+Specifications: `tests/tasks_pkg/test_task_event_delivery.py`
+(`test_definitive_authority_loss_releases_the_lane_and_its_task`),
+`tests/tasks_pkg/test_terminal_subscriber_release.py`,
+`tests/agent_core/test_task_runtime_ttl_sweep.py` and
+`tests/tofudb/test_tofudb_load_test.py`
+(`test_root_on_a_memory_filesystem_is_refused`). Each one asserts on retained
+objects (weak-reference probes, registry membership), never on an RSS
+threshold.
+
+**Idle footprint of optional capabilities.** After 17 h, neither host maps
+torch, transformers, onnxruntime, faiss, numpy, pandas or Playwright. Native
+libraries total under 20 MiB per host. The browser runs in Playwright's own
+processes, and stdio MCP servers start on demand and were not running at
+measurement time.
+
 ## Optional local search ranking
 
 **Problem:** an optional CPU relevance model can retain large allocator/primitive

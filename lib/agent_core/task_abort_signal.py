@@ -62,6 +62,12 @@ def register_runtime(runtime) -> None:
         _runtimes.add(runtime)
 
 
+def registered_runtimes() -> list:
+    """Every live TaskRuntime of this process (snapshot)."""
+    with _runtimes_lock:
+        return list(_runtimes)
+
+
 def plant_durable_abort(task_id: str, *, user_id: int, source: str) -> bool:
     """Record an abort request for a task this process does not own.
 

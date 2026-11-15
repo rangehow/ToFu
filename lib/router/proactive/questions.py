@@ -410,7 +410,8 @@ def open_questions(owner, *, coordinator_id=None, client=None, turn_get=None, la
             continue
         answered, turn = _card(owner, value, turn_get)
         if answered:
-            _recorded(client, row, lambda current, by=turn.get('ordinal'): None if current.get('answeredAt')
+            by = turn.get('ordinal')
+            _recorded(client, row, lambda current, by=by: None if current.get('answeredAt')
                       else _answered(current, by))
             continue
         if turn is None:

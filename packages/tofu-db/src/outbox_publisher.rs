@@ -9,9 +9,7 @@
 use std::collections::BTreeSet;
 use std::io;
 
-use crate::authority::{
-    PendingLogicalOutboxRecord, MAX_LOGICAL_OUTBOX_FETCH_BYTES, MAX_LOGICAL_OUTBOX_FETCH_RECORDS,
-};
+use crate::authority::{PendingLogicalOutboxRecord, MAX_LOGICAL_OUTBOX_FETCH_BYTES};
 use crate::logical_outbox::SealedLogicalOutboxRecord;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -40,9 +38,7 @@ pub struct LogicalOutboxPublishBudget {
 
 impl LogicalOutboxPublishBudget {
     pub fn new(max_records: usize, max_bytes: usize) -> io::Result<Self> {
-        if max_records == 0
-            || max_bytes == 0
-        {
+        if max_records == 0 || max_bytes == 0 {
             return Err(invalid_input("invalid logical outbox publish budget"));
         }
         Ok(Self {

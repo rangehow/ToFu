@@ -468,17 +468,17 @@
       "status": "documented"
     },
     "MTSSO_LOGIN_REQUESTED_AT_MS": {
-      "description": "Hand-off, not a setting: the owner's last explicit login request (ms since the epoch) for one `python -m tofu_mtsso_auth exec` launch. After an unapproved 大象 approval request, the launch may send one new request only for an owner request newer than it; malformed or absent means no request, and the value never reaches the launched command. The 大象 supervisor sets it from the account's loginRequestedAtMs (lib/channels/dx/login.py with_login_request).",
+      "description": "Hand-off, not a setting: the owner's last explicit login request (ms since the epoch) for one `python -m tofu_mtsso_auth exec` launch. After an unapproved 大象 approval request, the launch may send one new request only for an owner request newer than it; malformed or absent means no request, and the value never reaches the launched command. The 大象 supervisor sets it from the account's loginRequestedAtMs (bundles/yourprovider/tofu_yourprovider/dx/login.py with_login_request).",
       "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__main__.py",
       "status": "documented"
     },
     "MTSSO_NODE_EXECUTABLE": {
-      "description": "Authoritative Node executable override for the official MTSSO agent bridge; automatic selection is used only without this override. An MCP server's field sets it for that server only; the 大象 launcher always receives TOFU_NODE's verified Node here (lib/channels/dx/runtime.py).",
+      "description": "Authoritative Node executable override for the official MTSSO agent bridge; automatic selection is used only without this override. An MCP server's field sets it for that server only; the 大象 launcher always receives TOFU_NODE's verified Node here (bundles/yourprovider/tofu_yourprovider/dx/runtime.py).",
       "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__init__.py",
       "status": "documented"
     },
     "MTSSO_NODE_VERIFIED": {
-      "description": "Hand-off, not a setting: a parent's node_runtime() record (realpath, file identity, version) for MTSSO_NODE_EXECUTABLE. While that file's identity is unchanged the child runs it without probing it again; the 大象 launcher receives it from lib/channels/dx/runtime.py.",
+      "description": "Hand-off, not a setting: a parent's node_runtime() record (realpath, file identity, version) for MTSSO_NODE_EXECUTABLE. While that file's identity is unchanged the child runs it without probing it again; the 大象 launcher receives it from bundles/yourprovider/tofu_yourprovider/dx/runtime.py.",
       "owner": "packages/tofu-mtsso-auth/src/tofu_mtsso_auth/__init__.py",
       "status": "documented"
     },
@@ -2878,7 +2878,7 @@
       "status": "legacy"
     },
     "TOFU_NODE": {
-      "description": "Explicit Node executable override used by frontend lifecycle preparation; read from environment or project environment values before automatic runnable Node selection. It is also the one durable setting of the 大象 launcher's Node (lib/channels/dx/runtime.py): verified at boot against contract x-dx.bridgeNode and handed to the bridge (DX_NODE) and its SSO step (MTSSO_NODE_EXECUTABLE, MTSSO_NODE_VERIFIED).",
+      "description": "Explicit Node executable override used by frontend lifecycle preparation; read from environment or project environment values before automatic runnable Node selection. It is also the one durable setting of the 大象 launcher's Node (bundles/yourprovider/tofu_yourprovider/dx/runtime.py): verified at boot against contract x-dx.bridgeNode and handed to the bridge (DX_NODE) and its SSO step (MTSSO_NODE_EXECUTABLE, MTSSO_NODE_VERIFIED).",
       "owner": "serverctl.py",
       "status": "documented"
     },
@@ -3240,11 +3240,6 @@
     "TOFU_REPO_GRAMMAR_MANIFEST_SHA256": {
       "description": "Build-only SHA-256 pin for the manifest in TOFU_REPO_GRAMMAR_BUNDLE. Both settings are required together before the optional installed grammar libraries can enter a wheel.",
       "owner": "packages/tofu-repo-kernel/setup.py",
-      "status": "documented"
-    },
-    "TOFU_REQUIRED_HOST_VOLUME": {
-      "description": "Deployment declaration, not a tuning knob: the absolute mount root of a shared checkout volume. A checkout on it keeps rootless-VM and evaluation host storage on that volume (rootless_vm.host_paths.required_host_volume). No default; unset means no volume restriction.",
-      "owner": "rootless_vm/host_paths.py",
       "status": "documented"
     },
     "TOFU_REQUIRE_FRONTEND": {
@@ -3994,7 +3989,7 @@
     },
     "TOFU_TB_INGRESS_BRANCH": {
       "description": "Deployment declaration, not a tuning knob: the sandbox ingress branch carrying the native exec channel for the Terminal-Bench runner. No default; unset makes `run --branch` required.",
-      "owner": "evaluations/terminal_bench/gateway.py",
+      "owner": "evaluations/terminal_bench/__main__.py",
       "status": "documented"
     },
     "TOFU_TEMPLATE_FEED": {

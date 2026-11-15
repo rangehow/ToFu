@@ -173,6 +173,18 @@ class _Delivery:
         return len(self.progress_frames) if self.progress_frames is not None else 1
 
 
+def _ends_publication_authority(error):
+    """A definitive verdict that no write of this lane can ever commit.
+
+    A settled or superseded attempt (``EventAttemptStaleError``, documented as
+    never retried) and a replaced worker claim (``WorkerLeaseLost``: storage
+    refuses every write under it) end publication exactly as a revocation does.
+    """
+    from lib.durable_worker import WorkerLeaseLost
+    from lib.tasks_pkg.event_log import EventAttemptStaleError
+    return isinstance(error, (EventAttemptStaleError, WorkerLeaseLost))
+
+
 class EventDeliveryCoordinator:
     """One FIFO per task with independent lanes on the shared demand executor.
 
@@ -767,20 +779,24 @@ class EventDeliveryCoordinator:
                         lane.running = False
                         self.active -= 1
                         self.metrics['failures'] += 1
-                        revoked = lane.revoke_requested
+                        revoked = lane.revoke_requested or _ends_publication_authority(exc)
                         if revoked:
-                            # Its owner revoked publication during this run:
-                            # release the lane instead of retaining a dead head.
+                            # Its owner revoked publication during this run, or
+                            # the authority proved no write of this lane can
+                            # ever commit: release the lane (and the task it
+                            # pins) instead of retaining a dead head.
                             self._revoke_locked(lane)
                         else:
                             lane.error = exc
                             lane.task['_eventDeliveryError'] = type(exc).__name__
                             self._notify_lane(lane)
                             self.condition.notify_all()
-                    if not revoked:
-                        logger.warning('[TaskEvents] retained failed delivery task=%s seq=%s run=%d error=%s',
-                                       str(lane.task.get('id') or '?'), run[0].sequence, len(run),
-                                       type(exc).__name__)
+                    logger.warning('[TaskEvents] %s failed delivery task=%s seq=%s run=%d error=%s',
+                                   'released' if revoked else 'retained',
+                                   str(lane.task.get('id') or '?'), run[0].sequence, len(run),
+                                   type(exc).__name__)
+                    # A parked pump must not keep the failed lane's task alive.
+                    del item, run, lane
                     continue
                 # Publish/replay share one exclusive cursor. The memory
                 # buffer may contain accepted future frames, but consumers

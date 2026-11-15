@@ -528,7 +528,12 @@ fn namespace_directory_publication_survives_each_lost_sync_and_preserves_ancesto
     }
 }
 
-fn probe(durable_fsync_us: u64, local_fsync_us: u64, durable_lookup_us: u64, local_lookup_us: u64) -> CandidateProbe {
+fn probe(
+    durable_fsync_us: u64,
+    local_fsync_us: u64,
+    durable_lookup_us: u64,
+    local_lookup_us: u64,
+) -> CandidateProbe {
     CandidateProbe {
         durable_fsync: Duration::from_micros(durable_fsync_us),
         local_fsync: Duration::from_micros(local_fsync_us),
@@ -555,17 +560,33 @@ fn pre_relocation_refusals_are_typed_and_leave_no_fastpath_state() {
     let (_root, config) = setup();
     fs::create_dir_all(&config.local_authority).unwrap();
     let error = config.prepare_with_probe(None, false).err().unwrap();
-    assert_eq!(admission_refusal(&error).map(|refusal| refusal.reason), Some("unclaimed-artifacts"));
+    assert_eq!(
+        admission_refusal(&error).map(|refusal| refusal.reason),
+        Some("unclaimed-artifacts")
+    );
     fs::remove_dir(&config.local_authority).unwrap();
 
-    let error = require_capacity(config.local_authority.parent().unwrap(), u64::MAX / 4).unwrap_err();
+    let error =
+        require_capacity(config.local_authority.parent().unwrap(), u64::MAX / 4).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::StorageFull);
-    assert_eq!(admission_refusal(&error).map(|refusal| refusal.reason), Some("capacity"));
+    assert_eq!(
+        admission_refusal(&error).map(|refusal| refusal.reason),
+        Some("capacity")
+    );
 
-    let walk = corpus_walk_refusal(io::Error::new(io::ErrorKind::InvalidInput, "capacity preflight directory bound exceeded"));
-    assert_eq!(admission_refusal(&walk).map(|refusal| refusal.reason), Some("authority-too-large"));
+    let walk = corpus_walk_refusal(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "capacity preflight directory bound exceeded",
+    ));
+    assert_eq!(
+        admission_refusal(&walk).map(|refusal| refusal.reason),
+        Some("authority-too-large")
+    );
     let fatal = corpus_walk_refusal(io::Error::new(io::ErrorKind::PermissionDenied, "denied"));
-    assert!(admission_refusal(&fatal).is_none(), "an unreadable corpus is not an admission refusal");
+    assert!(
+        admission_refusal(&fatal).is_none(),
+        "an unreadable corpus is not an admission refusal"
+    );
 
     assert!(!relocation_is_fenced(&config.durable_authority));
     assert!(!config.durable_authority.join(PENDING_MARKER).exists());
@@ -586,10 +607,15 @@ fn stale_preparation_is_a_typed_refusal_but_an_active_fence_never_declines() {
         interval_ms: 1000,
     };
     publish_marker(&config.durable_authority.join(PENDING_MARKER), &pending).unwrap();
-    source.commit(b"served-classically-after-an-interrupted-seed").unwrap();
+    source
+        .commit(b"served-classically-after-an-interrupted-seed")
+        .unwrap();
     drop(source);
     let error = config.prepare_for_test(None).err().unwrap();
-    assert_eq!(admission_refusal(&error).map(|refusal| refusal.reason), Some("stale-preparation"));
+    assert_eq!(
+        admission_refusal(&error).map(|refusal| refusal.reason),
+        Some("stale-preparation")
+    );
     assert!(!relocation_is_fenced(&config.durable_authority));
 
     let (_active_root, active) = setup();

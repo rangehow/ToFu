@@ -457,9 +457,8 @@ impl OpenTurnSearchProjection {
             {
                 let phase = usize::from(state.phase);
                 if !bloom_might_contain(&header.bloom, &conversation_blooms[phase]) {
-                    chunks_read = chunks_read.saturating_add(
-                        usize::try_from(header.chunk_count).unwrap_or(usize::MAX),
-                    );
+                    chunks_read = chunks_read
+                        .saturating_add(usize::try_from(header.chunk_count).unwrap_or(usize::MAX));
                     state.pending = None;
                     state.after = Some((header.updated_at_ms, header.conversation_id.clone()));
                     barren += 1;

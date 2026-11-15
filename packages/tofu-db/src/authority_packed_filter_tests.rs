@@ -30,7 +30,11 @@ fn spill_value(label: &str, row: u32) -> Vec<u8> {
 fn spill(database: &mut AuthorityDatabase, label: &str) -> io::Result<()> {
     let mut transaction = database.begin(7, 11)?;
     for row in 0..SPILL_ROWS {
-        database.entity_put(&mut transaction, key(&format!("{label}-{row:05}")), spill_value(label, row))?;
+        database.entity_put(
+            &mut transaction,
+            key(&format!("{label}-{row:05}")),
+            spill_value(label, row),
+        )?;
     }
     database.commit(transaction).map(|_| ())
 }
@@ -39,7 +43,9 @@ fn assert_spilled(database: &AuthorityDatabase, label: &str) {
     let mut inspect = database.begin(7, 11).unwrap();
     for row in 0..SPILL_ROWS {
         assert_eq!(
-            database.entity_get(&mut inspect, &key(&format!("{label}-{row:05}"))).unwrap(),
+            database
+                .entity_get(&mut inspect, &key(&format!("{label}-{row:05}")))
+                .unwrap(),
             Some(spill_value(label, row)),
             "{label} row {row}"
         );
@@ -51,24 +57,37 @@ fn assert_catalogued(blocks: &BlockStore, catalogued: &BTreeMap<BlockId, Vec<u8>
         assert_eq!(&blocks.get(*id).unwrap(), payload);
     }
     let missing = BlockId::for_payload(b"never written by anyone");
-    assert_eq!(blocks.get(missing).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        blocks.get(missing).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
 }
 
 /// A settled authority with `CATALOGUED_SEGMENTS` published segments, reopened
 /// as a graceful restart reopens it: the WAL is empty, so the open installs
 /// the catalog without scanning it.
-fn reopened_catalogued_authority() -> (Arc<DeterministicVfs>, AuthorityDatabase, BTreeMap<BlockId, Vec<u8>>) {
+fn reopened_catalogued_authority() -> (
+    Arc<DeterministicVfs>,
+    AuthorityDatabase,
+    BTreeMap<BlockId, Vec<u8>>,
+) {
     let vfs = Arc::new(DeterministicVfs::new(None));
     vfs.create_dir(Path::new("/data")).unwrap();
     vfs.sync_directory(Path::new("/")).unwrap();
-    let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let mut database =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     database.set_write_overlay_for_test(false);
     let mut seed = database.begin(7, 11).unwrap();
-    database.entity_put(&mut seed, key("seed"), b"seed".to_vec()).unwrap();
+    database
+        .entity_put(&mut seed, key("seed"), b"seed".to_vec())
+        .unwrap();
     database.commit(seed).unwrap();
     let blocks = database.block_store_shared();
     let store = blocks.payload_segment_store().unwrap();
-    let mut references = blocks.installed_payload_manifest().unwrap().map_or_else(Vec::new, |manifest| manifest.segments);
+    let mut references = blocks
+        .installed_payload_manifest()
+        .unwrap()
+        .map_or_else(Vec::new, |manifest| manifest.segments);
     let mut catalogued = BTreeMap::new();
     for number in 0..CATALOGUED_SEGMENTS {
         let payloads: BTreeMap<BlockId, Vec<u8>> = (0..32)
@@ -76,16 +95,26 @@ fn reopened_catalogued_authority() -> (Arc<DeterministicVfs>, AuthorityDatabase,
             .map(|payload| (BlockId::for_payload(&payload), payload))
             .collect();
         let created = store
-            .create(Uuid::from_u128(0xf117_0000 + number as u128), payloads.keys().copied().collect(), |id| {
-                Ok(payloads[&id].clone())
-            })
+            .create(
+                Uuid::from_u128(0xf117_0000 + number as u128),
+                payloads.keys().copied().collect(),
+                |id| Ok(payloads[&id].clone()),
+            )
             .unwrap();
         references.push(
-            PayloadSegmentReference::new(created.metadata(), created.first_block_id(), created.last_block_id()).unwrap(),
+            PayloadSegmentReference::new(
+                created.metadata(),
+                created.first_block_id(),
+                created.last_block_id(),
+            )
+            .unwrap(),
         );
         catalogued.extend(payloads);
     }
-    database.engine_mut_for_test().publish_payload_manifest_for_test(PayloadManifest::new(references).unwrap()).unwrap();
+    database
+        .engine_mut_for_test()
+        .publish_payload_manifest_for_test(PayloadManifest::new(references).unwrap())
+        .unwrap();
     database.merge_entity_overlay_fully().unwrap();
     database.checkpoint_wal_window().unwrap();
     drop(database);
@@ -101,11 +130,17 @@ fn reopened_catalogued_authority() -> (Arc<DeterministicVfs>, AuthorityDatabase,
 fn the_first_spill_after_a_clean_open_reads_only_the_segment_it_adds() {
     let (_vfs, mut database, catalogued) = reopened_catalogued_authority();
     let segments = database.writer_engine().unwrap().payload_segment_count();
-    assert!(segments > CATALOGUED_SEGMENTS, "fixture: {segments} catalogued segments");
+    assert!(
+        segments > CATALOGUED_SEGMENTS,
+        "fixture: {segments} catalogued segments"
+    );
     read_path_counters::take_index_work();
     spill(&mut database, "first-publication").unwrap();
     let (index_reads, _, _) = read_path_counters::take_index_work();
-    assert!(database.writer_engine().unwrap().payload_segment_count() > segments, "the spill must publish a segment");
+    assert!(
+        database.writer_engine().unwrap().payload_segment_count() > segments,
+        "the spill must publish a segment"
+    );
     assert!(
         index_reads <= 2,
         "the first publication read {index_reads} segment indexes of a {segments}-segment catalog"
@@ -117,7 +152,13 @@ fn the_first_spill_after_a_clean_open_reads_only_the_segment_it_adds() {
 /// The online GC driver builds the filter on its own thread; a commit that
 /// spills while that build is suspended between two index reads finishes on
 /// its own reads, and the build then covers the catalog the commit published.
-fn suspended_build(blocks: Arc<BlockStore>) -> (mpsc::Receiver<()>, mpsc::Sender<bool>, std::thread::JoinHandle<io::Result<bool>>) {
+fn suspended_build(
+    blocks: Arc<BlockStore>,
+) -> (
+    mpsc::Receiver<()>,
+    mpsc::Sender<bool>,
+    std::thread::JoinHandle<io::Result<bool>>,
+) {
     let (entered, suspended) = mpsc::channel();
     let (release, released) = mpsc::channel::<bool>();
     let builder = std::thread::spawn(move || {
@@ -139,23 +180,48 @@ fn suspended_build(blocks: Arc<BlockStore>) -> (mpsc::Receiver<()>, mpsc::Sender
 fn a_spill_during_the_off_mutex_filter_build_neither_waits_for_it_nor_scans_the_catalog() {
     let (_vfs, mut database, catalogued) = reopened_catalogued_authority();
     let blocks = database.block_store_shared();
-    assert_eq!(blocks.packed_filter_state_for_test(), (false, false), "fixture: a clean open builds no filter");
+    assert_eq!(
+        blocks.packed_filter_state_for_test(),
+        (false, false),
+        "fixture: a clean open builds no filter"
+    );
     let (suspended, release, builder) = suspended_build(Arc::clone(&blocks));
     suspended.recv().unwrap();
     read_path_counters::take_index_work();
     spill(&mut database, "during-the-build").unwrap();
-    assert!(read_path_counters::take_index_work().0 <= 2, "the commit read catalogued indexes");
-    assert!(!builder.is_finished(), "the commit finished while the build was suspended");
-    assert_eq!(blocks.packed_filter_state_for_test(), (false, false), "an uncovered publication excludes nothing");
+    assert!(
+        read_path_counters::take_index_work().0 <= 2,
+        "the commit read catalogued indexes"
+    );
+    assert!(
+        !builder.is_finished(),
+        "the commit finished while the build was suspended"
+    );
+    assert_eq!(
+        blocks.packed_filter_state_for_test(),
+        (false, false),
+        "an uncovered publication excludes nothing"
+    );
     assert_spilled(&database, "during-the-build");
     assert_catalogued(&blocks, &catalogued);
     release.send(true).unwrap();
-    assert!(builder.join().unwrap().unwrap(), "the build installs its filter");
-    assert_eq!(blocks.packed_filter_state_for_test(), (true, true), "the build covers the catalog the spill published");
+    assert!(
+        builder.join().unwrap().unwrap(),
+        "the build installs its filter"
+    );
+    assert_eq!(
+        blocks.packed_filter_state_for_test(),
+        (true, true),
+        "the build covers the catalog the spill published"
+    );
     assert_spilled(&database, "during-the-build");
     assert_catalogued(&blocks, &catalogued);
     spill(&mut database, "after-the-build").unwrap();
-    assert_eq!(blocks.packed_filter_state_for_test(), (true, true), "later publications stay covered");
+    assert_eq!(
+        blocks.packed_filter_state_for_test(),
+        (true, true),
+        "later publications stay covered"
+    );
     assert_spilled(&database, "after-the-build");
 }
 
@@ -171,8 +237,15 @@ fn a_crash_during_the_off_mutex_filter_build_loses_no_acknowledged_commit() {
     spill(&mut database, "before-the-crash").unwrap();
     vfs.crash().unwrap();
     release.send(false).unwrap();
-    assert_eq!(builder.join().unwrap().unwrap_err().kind(), io::ErrorKind::WouldBlock);
-    assert_eq!(blocks.packed_filter_state_for_test(), (false, false), "a stopped build installed nothing");
+    assert_eq!(
+        builder.join().unwrap().unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    assert_eq!(
+        blocks.packed_filter_state_for_test(),
+        (false, false),
+        "a stopped build installed nothing"
+    );
     drop(blocks);
     drop(database);
     let mut reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();

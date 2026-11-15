@@ -19,19 +19,15 @@ use serde_json::{json, Value};
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_storage_operations::StorageOperationKind;
-pub use crate::generated_tofudb_ir::{
-    MAX_ENTITY_RANGE_ROWS,
-};
+pub use crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS;
 use crate::generated_tofudb_ir::{
-    MAX_MODEL_ROUTING_CIPHERTEXT_CHARACTERS,
-    MAX_MODEL_ROUTING_KEY_HINT_CHARACTERS,
+    MAX_MODEL_ROUTING_CIPHERTEXT_CHARACTERS, MAX_MODEL_ROUTING_KEY_HINT_CHARACTERS,
     MAX_MODEL_ROUTING_SECRET_REFERENCE_CHARACTERS, MAX_MODEL_ROUTING_TIMESTAMP_SECONDS,
     MAX_PROVIDER_TENANT_LABEL_CHARACTERS, MAX_RECENT_PROJECT_PATH_CHARACTERS,
-    MAX_TASK_RESULT_CACHE_FACT,
-    MAX_TASK_RESULT_COST_EXPERIMENT_ROWS, MAX_TASK_RESULT_COST_EXPERIMENT_SCAN_ROWS,
-    MAX_TASK_RESULT_DOCUMENT_BYTES, MAX_TASK_RESULT_RECOVERY_ROWS,
-    MAX_TASK_RESULT_RECOVERY_SCAN_ROWS, MAX_TASK_RESULT_SUMMARY_ROWS,
-    MAX_TASK_RESULT_SUMMARY_SCAN_ROWS, MAX_WORKER_JOB_CLAIM_KINDS,
+    MAX_TASK_RESULT_CACHE_FACT, MAX_TASK_RESULT_COST_EXPERIMENT_ROWS,
+    MAX_TASK_RESULT_COST_EXPERIMENT_SCAN_ROWS, MAX_TASK_RESULT_DOCUMENT_BYTES,
+    MAX_TASK_RESULT_RECOVERY_ROWS, MAX_TASK_RESULT_RECOVERY_SCAN_ROWS,
+    MAX_TASK_RESULT_SUMMARY_ROWS, MAX_TASK_RESULT_SUMMARY_SCAN_ROWS, MAX_WORKER_JOB_CLAIM_KINDS,
     MAX_WORKER_JOB_CLOCK_MILLISECONDS, MAX_WORKER_JOB_ERROR_BYTES, MAX_WORKER_JOB_PAYLOAD_BYTES,
     MAX_WORKER_JOB_PRIORITY,
 };
@@ -94,20 +90,29 @@ fn execute_fenced_indexed_append(
     require_attempts_live: &[String],
     worker_claim: Option<&crate::worker_job::PublicationClaim>,
 ) -> io::Result<Vec<u8>> {
-    let worker_root = crate::task_result::worker_root_for_event_stream(database, transaction, &request.task_id)?;
+    let worker_root =
+        crate::task_result::worker_root_for_event_stream(database, transaction, &request.task_id)?;
     if worker_root.is_some() || worker_claim.is_some() {
         let root = worker_root.as_deref().unwrap_or(&request.task_id);
         let attempt_id = root.strip_prefix("conversation-attempt:").unwrap_or("");
-        let starts_effect = crate::worker_job::starts_tool_effect(
-            &request.event_type, &request.payload_json)?;
+        let starts_effect =
+            crate::worker_job::starts_tool_effect(&request.event_type, &request.payload_json)?;
         if let Err(error) = crate::worker_job::require_conversation_publication_claim(
-            database, transaction, attempt_id, root, worker_claim,
-            matches!(request.event_type.as_str(), "done" | "error" | "aborted"), !starts_effect) {
-            if error.kind() != io::ErrorKind::AlreadyExists { return Err(error); }
+            database,
+            transaction,
+            attempt_id,
+            root,
+            worker_claim,
+            matches!(request.event_type.as_str(), "done" | "error" | "aborted"),
+            !starts_effect,
+        ) {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
             return serde_json::to_vec(&json!({"inserted": false,
                 "rejected": "worker_claim_stale", "task_id": request.task_id,
                 "sequence": request.application_sequence}))
-                .map_err(|_| invalid_input("worker event rejection cannot be encoded"));
+            .map_err(|_| invalid_input("worker event rejection cannot be encoded"));
         }
     }
     if !require_attempts_live.is_empty()
@@ -125,6 +130,7 @@ fn execute_fenced_indexed_append(
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum TransactionIrStep {
     BillingLedgerAppend {
         entry: crate::billing::LedgerEntry,
@@ -995,8 +1001,13 @@ pub enum TransactionIrStep {
         slot: usize,
     },
     TurnSyncRoundDirectory {
-        conversation_id: String, lane_id: String, offset: u64, limit: usize,
-        sync_sequence: u64, anchor_turn_id: String, slot: usize,
+        conversation_id: String,
+        lane_id: String,
+        offset: u64,
+        limit: usize,
+        sync_sequence: u64,
+        anchor_turn_id: String,
+        slot: usize,
     },
     TurnSyncPage {
         conversation_id: String,
@@ -1045,7 +1056,6 @@ pub enum TransactionIrStep {
         slot: usize,
     },
     VersionedDocumentList {
-
         include_value: bool,
         start: EntityKey,
         end: EntityKey,
@@ -1311,10 +1321,15 @@ pub enum TransactionIrStep {
 #[derive(Clone, Debug)]
 pub enum TransactionIrResult {
     Literal(Vec<u8>),
-    SlotOrLiteral { slot: usize, missing: Vec<u8> },
+    SlotOrLiteral {
+        slot: usize,
+        missing: Vec<u8>,
+    },
     /// A JSON array of distinct initialized slots in this order (a missing
     /// value encodes as `null`), e.g. one ordinary result per batched step.
-    SlotArray { slots: Vec<usize> },
+    SlotArray {
+        slots: Vec<usize>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1360,8 +1375,7 @@ fn validate_provider_step_slot(
     tenant_label: &str,
     provider_id: Option<&str>,
 ) -> io::Result<()> {
-    let initialized = initialized_slots
-        .get_or_insert(slot as usize);
+    let initialized = initialized_slots.get_or_insert(slot);
     if *initialized {
         return Err(invalid_input("Transaction IR initializes a slot twice"));
     }
@@ -1379,8 +1393,7 @@ fn validate_model_routing_slot(
     slot: usize,
     tenant_label: &str,
 ) -> io::Result<()> {
-    let initialized = initialized_slots
-        .get_or_insert(slot as usize);
+    let initialized = initialized_slots.get_or_insert(slot);
     if *initialized {
         return Err(invalid_input("Transaction IR initializes a slot twice"));
     }
@@ -1393,16 +1406,15 @@ fn validate_model_routing_slot(
 
 fn valid_model_routing_json_object(bytes: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(bytes)
-            .ok()
-            .is_some_and(|value| value.is_object())
+        .ok()
+        .is_some_and(|value| value.is_object())
 }
 
 fn validate_worker_job_slot(
     initialized_slots: &mut SparseSlotValues<bool>,
     slot: usize,
 ) -> io::Result<()> {
-    let initialized = initialized_slots
-        .get_or_insert(slot as usize);
+    let initialized = initialized_slots.get_or_insert(slot);
     if *initialized {
         return Err(invalid_input("Transaction IR initializes a slot twice"));
     }
@@ -1462,10 +1474,7 @@ fn referenced_slot(condition: EntityWriteCondition) -> Option<usize> {
 
 impl TransactionIr {
     pub fn validate(&self) -> io::Result<()> {
-        if self.tenant_id == 0
-            || self.owner_user_id == 0
-            || self.operation.is_empty()
-        {
+        if self.tenant_id == 0 || self.owner_user_id == 0 || self.operation.is_empty() {
             return Err(invalid_input("invalid Transaction IR envelope"));
         }
         let mut initialized_slots = SparseSlotValues::<bool>::new();
@@ -1919,8 +1928,7 @@ impl TransactionIr {
                 | TransactionIrStep::CredentialTouch { slot, .. }
                 | TransactionIrStep::CredentialUpdate { slot, .. }
                 | TransactionIrStep::CredentialRevoke { slot, .. } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -1943,13 +1951,18 @@ impl TransactionIr {
                         if intent.is_empty() || !*guarded || !*require_parent {
                             return Err(invalid_input("invalid child tool effect admission"));
                         }
-                        literal_bytes = literal_bytes.checked_add(intent.len())
-                            .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        literal_bytes =
+                            literal_bytes.checked_add(intent.len()).ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
                     if let Some(claim) = worker_claim {
                         claim.validate()?;
-                        literal_bytes = literal_bytes.checked_add(claim.worker_id.len())
-                            .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        literal_bytes = literal_bytes
+                            .checked_add(claim.worker_id.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
                     validate_worker_job_slot(&mut initialized_slots, *slot)?;
                     task_result_bytes = task_result_bytes
@@ -2118,8 +2131,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2157,8 +2169,13 @@ impl TransactionIr {
                     }
                     archive_document_bytes = archive_document_bytes
                         .checked_add(messages_json.len())
-                        .filter(|bytes| *bytes <= crate::generated_tofudb_ir::MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES)
-                        .ok_or_else(|| invalid_input("compaction archive transaction exceeds its body bound"))?;
+                        .filter(|bytes| {
+                            *bytes
+                                <= crate::generated_tofudb_ir::MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES
+                        })
+                        .ok_or_else(|| {
+                            invalid_input("compaction archive transaction exceeds its body bound")
+                        })?;
                     literal_bytes = [
                         archive_id.len(),
                         conversation_id.len(),
@@ -2184,8 +2201,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2220,8 +2236,13 @@ impl TransactionIr {
                     }
                     archive_document_bytes = archive_document_bytes
                         .checked_add(post_messages_json.as_ref().map_or(0, Vec::len))
-                        .filter(|bytes| *bytes <= crate::generated_tofudb_ir::MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES)
-                        .ok_or_else(|| invalid_input("compaction archive transaction exceeds its body bound"))?;
+                        .filter(|bytes| {
+                            *bytes
+                                <= crate::generated_tofudb_ir::MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES
+                        })
+                        .ok_or_else(|| {
+                            invalid_input("compaction archive transaction exceeds its body bound")
+                        })?;
                     literal_bytes = literal_bytes
                         .checked_add(archive_id.len())
                         .and_then(|bytes| bytes.checked_add(summary.len()))
@@ -2240,8 +2261,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2263,8 +2283,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2275,11 +2294,9 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid recent-project touch step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(path.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes = literal_bytes.checked_add(path.len()).ok_or_else(|| {
+                        invalid_input("Transaction IR literal byte count overflow")
+                    })?;
                 }
                 TransactionIrStep::ProjectRelink {
                     old_path,
@@ -2287,8 +2304,7 @@ impl TransactionIr {
                     updated_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2310,73 +2326,72 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::Queue { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::ModelContinuation { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::Invocation { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::Orchestration { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::IntegrationWorkspace { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::Swarm { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2385,14 +2400,17 @@ impl TransactionIr {
                     // like task results; do not charge their bodies to inline IR.
                     swarm_document_bytes = swarm_document_bytes
                         .checked_add(request.validate()?)
-                        .filter(|bytes| *bytes <= crate::generated_tofudb_ir::MAX_SWARM_RESPONSE_BYTES)
+                        .filter(|bytes| {
+                            *bytes <= crate::generated_tofudb_ir::MAX_SWARM_RESPONSE_BYTES
+                        })
                         .ok_or_else(|| {
-                            invalid_input("swarm documents exceed their aggregate transaction bound")
+                            invalid_input(
+                                "swarm documents exceed their aggregate transaction bound",
+                            )
                         })?;
                 }
                 TransactionIrStep::Scheduler { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2404,8 +2422,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::Timer { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2424,8 +2441,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2447,8 +2463,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::DailyCostMonth { year, month, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2458,15 +2473,14 @@ impl TransactionIr {
                     }
                 }
                 TransactionIrStep::DailyCostPersistedDates { dates, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
                     if dates
-                            .iter()
-                            .any(|date| !crate::daily_cost::valid_date(date))
+                        .iter()
+                        .any(|date| !crate::daily_cost::valid_date(date))
                         || dates
                             .iter()
                             .collect::<std::collections::BTreeSet<_>>()
@@ -2483,8 +2497,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::DailyCostDelete { date, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2507,8 +2520,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2523,9 +2535,8 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid log-aggregate flush step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(rows_json.len())
-                        .ok_or_else(|| {
+                    literal_bytes =
+                        literal_bytes.checked_add(rows_json.len()).ok_or_else(|| {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
@@ -2536,8 +2547,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2563,8 +2573,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2572,15 +2581,15 @@ impl TransactionIr {
                     if serde_json::from_slice::<Value>(manifest_json).is_err() {
                         return Err(invalid_input("invalid plugin manifest step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(manifest_json.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(manifest_json.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::PluginManifestGet { namespace, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2590,136 +2599,134 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid plugin manifest step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(namespace.len())
-                        .ok_or_else(|| {
+                    literal_bytes =
+                        literal_bytes.checked_add(namespace.len()).ok_or_else(|| {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
                 TransactionIrStep::PluginRowOperation { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::Paper { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::PaperLibrary { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::PaperArtifact { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::PaperBuildArtifact { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::PaperDocument { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::PaperPodcast { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::RawArchive { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
                     // Compressed bodies are bounded blob inputs. Count only
                     // routing metadata against the inline IR literal budget.
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::Research { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
                     // Report/workspace bodies are separately bounded blob
                     // inputs rather than inline Transaction IR literals.
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::Optimizer { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2731,19 +2738,19 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::Knowledge { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
                     *initialized = true;
                     // Document/chunk bodies are separately bounded blob
                     // inputs rather than inline Transaction IR literals.
-                    literal_bytes = literal_bytes
-                        .checked_add(request.validate()?)
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.validate()?)
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::ProjectBrainCommand {
                     project_key,
@@ -2752,8 +2759,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2787,8 +2793,7 @@ impl TransactionIr {
                                 invalid_input("Transaction IR literal byte count overflow")
                             })?;
                     }
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2799,8 +2804,7 @@ impl TransactionIr {
                     timestamp,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2811,15 +2815,15 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid Project Brain rebuild step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(project_key.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(project_key.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::ProjectBrainGet { project_key, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2829,11 +2833,12 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid Project Brain get step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(project_key.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(project_key.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::RecentProjectTouchMany {
                     paths,
@@ -2841,8 +2846,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2878,8 +2882,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2929,8 +2932,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -2979,8 +2981,7 @@ impl TransactionIr {
                     deleted_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3002,8 +3003,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3025,8 +3025,7 @@ impl TransactionIr {
                     purged_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3048,8 +3047,7 @@ impl TransactionIr {
                     maximum_conversations,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3078,8 +3076,7 @@ impl TransactionIr {
                     anchor_turn_id,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3117,8 +3114,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3155,8 +3151,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3178,17 +3173,11 @@ impl TransactionIr {
                 TransactionIrStep::EntityPut {
                     value, condition, ..
                 } => {
-                    literal_bytes = literal_bytes
-                        .checked_add(value.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes = literal_bytes.checked_add(value.len()).ok_or_else(|| {
+                        invalid_input("Transaction IR literal byte count overflow")
+                    })?;
                     if let Some(slot) = referenced_slot(*condition) {
-                        if !initialized_slots
-                            .get(slot as usize)
-                            .copied()
-                            .unwrap_or(false)
-                        {
+                        if !initialized_slots.get(slot).copied().unwrap_or(false) {
                             return Err(invalid_input(
                                 "Transaction IR condition references an unread slot",
                             ));
@@ -3197,11 +3186,7 @@ impl TransactionIr {
                 }
                 TransactionIrStep::EntityDelete { condition, .. } => {
                     if let Some(slot) = referenced_slot(*condition) {
-                        if !initialized_slots
-                            .get(slot as usize)
-                            .copied()
-                            .unwrap_or(false)
-                        {
+                        if !initialized_slots.get(slot).copied().unwrap_or(false) {
                             return Err(invalid_input(
                                 "Transaction IR condition references an unread slot",
                             ));
@@ -3217,11 +3202,9 @@ impl TransactionIr {
                         return Err(invalid_input("Transaction IR stream append is empty"));
                     }
                     literal_bytes = events.iter().try_fold(literal_bytes, |bytes, event| {
-                        bytes
-                            .checked_add(event.encoded_len())
-                            .ok_or_else(|| {
-                                invalid_input("Transaction IR literal byte count overflow")
-                            })
+                        bytes.checked_add(event.encoded_len()).ok_or_else(|| {
+                            invalid_input("Transaction IR literal byte count overflow")
+                        })
                     })?;
                 }
                 TransactionIrStep::ConversationClone {
@@ -3232,8 +3215,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3267,8 +3249,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3279,8 +3260,11 @@ impl TransactionIr {
                     validate_attempt_fence(require_attempts_live)?;
                     if let Some(claim) = worker_claim {
                         claim.validate()?;
-                        literal_bytes = literal_bytes.checked_add(claim.worker_id.len())
-                            .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        literal_bytes = literal_bytes
+                            .checked_add(claim.worker_id.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
                     literal_bytes = literal_bytes
                         .checked_add(task_id.len())
@@ -3295,8 +3279,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::IndexedStreamAppendBatch { items, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3311,8 +3294,11 @@ impl TransactionIr {
                         validate_attempt_fence(&item.require_attempts_live)?;
                         if let Some(claim) = &item.worker_claim {
                             claim.validate()?;
-                            literal_bytes = literal_bytes.checked_add(claim.worker_id.len())
-                                .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                            literal_bytes = literal_bytes
+                                .checked_add(claim.worker_id.len())
+                                .ok_or_else(|| {
+                                    invalid_input("Transaction IR literal byte count overflow")
+                                })?;
                         }
                         literal_bytes = literal_bytes
                             .checked_add(item.task_id.len())
@@ -3335,8 +3321,7 @@ impl TransactionIr {
                     settings_keys,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3377,8 +3362,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3427,8 +3411,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3452,8 +3435,7 @@ impl TransactionIr {
                     title_fallback_characters,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -3475,11 +3457,12 @@ impl TransactionIr {
                 | TransactionIrStep::ModelRoutingMigrationReceiptGet { tenant_label, slot }
                 | TransactionIrStep::ModelRoutingSecretList { tenant_label, slot } => {
                     validate_model_routing_slot(&mut initialized_slots, *slot, tenant_label)?;
-                    literal_bytes = literal_bytes
-                        .checked_add(tenant_label.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(tenant_label.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::ModelRoutingCommit {
                     tenant_label,
@@ -3501,9 +3484,12 @@ impl TransactionIr {
                     }
                     // The owner-bound blob codec owns durable document bodies.
                     // The shared literal budget still applies to IR metadata.
-                    literal_bytes = literal_bytes
-                        .checked_add(tenant_label.len())
-                        .ok_or_else(|| invalid_input("Transaction IR metadata exceeds its bound"))?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(tenant_label.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR metadata exceeds its bound")
+                            })?;
                 }
                 TransactionIrStep::ModelRoutingMigrationReceiptPut {
                     tenant_label,
@@ -3524,9 +3510,12 @@ impl TransactionIr {
                     }
                     // The owner-bound blob codec owns durable document bodies.
                     // The shared literal budget still applies to IR metadata.
-                    literal_bytes = literal_bytes
-                        .checked_add(tenant_label.len())
-                        .ok_or_else(|| invalid_input("Transaction IR metadata exceeds its bound"))?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(tenant_label.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR metadata exceeds its bound")
+                            })?;
                 }
                 TransactionIrStep::ModelRoutingSecretGet {
                     tenant_label,
@@ -3589,11 +3578,10 @@ impl TransactionIr {
                 } => {
                     validate_model_routing_slot(&mut initialized_slots, *slot, tenant_label)?;
                     if active_secret_references.iter().any(|reference| {
-                            reference.is_empty()
-                                || reference.chars().count()
-                                    > MAX_MODEL_ROUTING_SECRET_REFERENCE_CHARACTERS
-                        })
-                        || !updated_before.is_finite()
+                        reference.is_empty()
+                            || reference.chars().count()
+                                > MAX_MODEL_ROUTING_SECRET_REFERENCE_CHARACTERS
+                    }) || !updated_before.is_finite()
                         || !(0.0..=MAX_MODEL_ROUTING_TIMESTAMP_SECONDS).contains(updated_before)
                     {
                         return Err(invalid_input("invalid model-routing secret prune step"));
@@ -3656,11 +3644,12 @@ impl TransactionIr {
                 }
                 TransactionIrStep::ProviderList { tenant_label, slot } => {
                     validate_provider_step_slot(&mut initialized_slots, *slot, tenant_label, None)?;
-                    literal_bytes = literal_bytes
-                        .checked_add(tenant_label.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(tenant_label.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                 }
                 TransactionIrStep::ProviderUpdate {
                     tenant_label,
@@ -3714,51 +3703,73 @@ impl TransactionIr {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
-                TransactionIrStep::AutomationSkillSourceUpdate {request,slot} => {
-                    validate_worker_job_slot(&mut initialized_slots,*slot)?;
-                    request.validate(self.owner_user_id,u64::MAX)?;
-                    literal_bytes=literal_bytes.checked_add(request.literal_bytes()?)
-                        .ok_or_else(||invalid_input("skill source literal bytes exceed bound"))?;
+                TransactionIrStep::AutomationSkillSourceUpdate { request, slot } => {
+                    validate_worker_job_slot(&mut initialized_slots, *slot)?;
+                    request.validate(self.owner_user_id, u64::MAX)?;
+                    literal_bytes = literal_bytes
+                        .checked_add(request.literal_bytes()?)
+                        .ok_or_else(|| invalid_input("skill source literal bytes exceed bound"))?;
                 }
-                TransactionIrStep::AutomationProjectUpdate {request,slot} => {
-                    validate_worker_job_slot(&mut initialized_slots,*slot)?;
-                    request.validate(self.owner_user_id,u64::MAX)?;
-                    literal_bytes=literal_bytes.checked_add(request.literal_bytes()?)
-                        .ok_or_else(||invalid_input("project registration literal bytes exceed bound"))?;
+                TransactionIrStep::AutomationProjectUpdate { request, slot } => {
+                    validate_worker_job_slot(&mut initialized_slots, *slot)?;
+                    request.validate(self.owner_user_id, u64::MAX)?;
+                    literal_bytes = literal_bytes
+                        .checked_add(request.literal_bytes()?)
+                        .ok_or_else(|| {
+                            invalid_input("project registration literal bytes exceed bound")
+                        })?;
                 }
-                TransactionIrStep::AutomationDefinitionUpdate {request,slot} => {
-                    validate_worker_job_slot(&mut initialized_slots,*slot)?;
-                    request.validate(self.owner_user_id,u64::MAX)?;
-                    literal_bytes=literal_bytes.checked_add(request.literal_bytes()?)
-                        .ok_or_else(||invalid_input("publication literal bytes exceed bound"))?;
+                TransactionIrStep::AutomationDefinitionUpdate { request, slot } => {
+                    validate_worker_job_slot(&mut initialized_slots, *slot)?;
+                    request.validate(self.owner_user_id, u64::MAX)?;
+                    literal_bytes = literal_bytes
+                        .checked_add(request.literal_bytes()?)
+                        .ok_or_else(|| invalid_input("publication literal bytes exceed bound"))?;
                 }
                 TransactionIrStep::AutomationEventSettle { request, slot } => {
                     validate_worker_job_slot(&mut initialized_slots, *slot)?;
                     request.validate(self.owner_user_id, u64::MAX)?;
-                    literal_bytes = literal_bytes.checked_add(request.literal_bytes()?)
-                        .ok_or_else(|| invalid_input("event settlement literal bytes exceed bound"))?;
+                    literal_bytes = literal_bytes
+                        .checked_add(request.literal_bytes()?)
+                        .ok_or_else(|| {
+                            invalid_input("event settlement literal bytes exceed bound")
+                        })?;
                 }
-                TransactionIrStep::AutomationDefinitionDraftGuard {key} => {
-                    if key.is_empty() || key.chars().count()>512 { return Err(invalid_input("invalid draft key")); }
-                    literal_bytes=literal_bytes.checked_add(key.len())
-                        .ok_or_else(||invalid_input("draft guard literal bytes exceed bound"))?;
+                TransactionIrStep::AutomationDefinitionDraftGuard { key } => {
+                    if key.is_empty() || key.chars().count() > 512 {
+                        return Err(invalid_input("invalid draft key"));
+                    }
+                    literal_bytes = literal_bytes
+                        .checked_add(key.len())
+                        .ok_or_else(|| invalid_input("draft guard literal bytes exceed bound"))?;
                 }
                 TransactionIrStep::AutomationRunCancel { request, slot } => {
                     validate_worker_job_slot(&mut initialized_slots, *slot)?;
                     request.validate(self.owner_user_id, u64::MAX)?;
-                    literal_bytes = literal_bytes.checked_add(request.literal_bytes()?)
-                        .ok_or_else(|| invalid_input("automation cancellation literal bytes exceed bound"))?;
+                    literal_bytes = literal_bytes
+                        .checked_add(request.literal_bytes()?)
+                        .ok_or_else(|| {
+                            invalid_input("automation cancellation literal bytes exceed bound")
+                        })?;
                 }
                 TransactionIrStep::AutomationRunApprove { request, slot } => {
                     validate_worker_job_slot(&mut initialized_slots, *slot)?;
                     request.validate(self.owner_user_id, u64::MAX)?;
-                    literal_bytes = literal_bytes.checked_add(request.literal_bytes()?)
-                        .ok_or_else(|| invalid_input("automation approval literal bytes exceed bound"))?;
+                    literal_bytes = literal_bytes
+                        .checked_add(request.literal_bytes()?)
+                        .ok_or_else(|| {
+                            invalid_input("automation approval literal bytes exceed bound")
+                        })?;
                 }
-            TransactionIrStep::AutomationRunMutation { request, advance, slot } => {
+                TransactionIrStep::AutomationRunMutation {
+                    request,
+                    advance,
+                    slot,
+                } => {
                     validate_worker_job_slot(&mut initialized_slots, *slot)?;
                     request.validate(*advance, self.owner_user_id, u64::MAX)?;
-                    literal_bytes = literal_bytes.checked_add(request.literal_bytes()?)
+                    literal_bytes = literal_bytes
+                        .checked_add(request.literal_bytes()?)
                         .ok_or_else(|| invalid_input("automation literal bytes exceed bound"))?;
                 }
                 TransactionIrStep::WorkerJobEnqueue {
@@ -3775,7 +3786,10 @@ impl TransactionIr {
                     slot,
                 } => {
                     validate_worker_job_slot(&mut initialized_slots, *slot)?;
-                    if self.operation=="worker_job.enqueue" && crate::generated_tofudb_ir::AUTOMATION_RESERVED_WORKER_TASK_KINDS.contains(&task_kind.as_str()) {
+                    if self.operation == "worker_job.enqueue"
+                        && crate::generated_tofudb_ir::AUTOMATION_RESERVED_WORKER_TASK_KINDS
+                            .contains(&task_kind.as_str())
+                    {
                         return Err(invalid_input("automation jobs require their atomic owner"));
                     }
                     if !valid_worker_job_text(task_id, 256, false)
@@ -3816,11 +3830,9 @@ impl TransactionIr {
                     if !valid_worker_job_text(task_id, 256, false) || *user_id == 0 {
                         return Err(invalid_input("invalid worker job get step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(task_id.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes = literal_bytes.checked_add(task_id.len()).ok_or_else(|| {
+                        invalid_input("Transaction IR literal byte count overflow")
+                    })?;
                 }
                 TransactionIrStep::WorkerJobClaimNext {
                     worker_id,
@@ -3852,11 +3864,15 @@ impl TransactionIr {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
-                TransactionIrStep::WorkerJobActiveList { user_id: Some(0), .. } => {
+                TransactionIrStep::WorkerJobActiveList {
+                    user_id: Some(0), ..
+                } => {
                     return Err(invalid_input("invalid worker activity owner"));
                 }
                 TransactionIrStep::WorkerJobClaimHorizon { task_kinds, slot }
-                | TransactionIrStep::WorkerJobActiveList { task_kinds, slot, .. } => {
+                | TransactionIrStep::WorkerJobActiveList {
+                    task_kinds, slot, ..
+                } => {
                     validate_worker_job_slot(&mut initialized_slots, *slot)?;
                     let unique: std::collections::BTreeSet<_> = task_kinds.iter().collect();
                     if task_kinds.is_empty()
@@ -4007,8 +4023,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::TurnCreatePair { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4033,16 +4048,13 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid Turn pair step"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(encoded.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes = literal_bytes.checked_add(encoded.len()).ok_or_else(|| {
+                        invalid_input("Transaction IR literal byte count overflow")
+                    })?;
                 }
                 TransactionIrStep::TurnQueueActivate { request, slot }
                 | TransactionIrStep::TurnQueueCancel { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4063,8 +4075,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::TurnSteerCommit { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4096,8 +4107,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::TurnRelatedAnnounce { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4130,11 +4140,13 @@ impl TransactionIr {
                 TransactionIrStep::TurnVisibleSync { request, slot } => {
                     if let Some(claim) = &request.worker_claim {
                         claim.validate()?;
-                        literal_bytes = literal_bytes.checked_add(claim.worker_id.len())
-                            .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        literal_bytes = literal_bytes
+                            .checked_add(claim.worker_id.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4197,8 +4209,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4251,8 +4262,7 @@ impl TransactionIr {
                     conversation_id,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4290,8 +4300,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4337,8 +4346,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::TurnTimingTraceGet { task_id, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4346,11 +4354,9 @@ impl TransactionIr {
                     if task_id.is_empty() || task_id.chars().count() > 256 {
                         return Err(invalid_input("invalid timing trace task identity"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(task_id.len())
-                        .ok_or_else(|| {
-                            invalid_input("Transaction IR literal byte count overflow")
-                        })?;
+                    literal_bytes = literal_bytes.checked_add(task_id.len()).ok_or_else(|| {
+                        invalid_input("Transaction IR literal byte count overflow")
+                    })?;
                 }
                 TransactionIrStep::TurnTimingTraceList {
                     conversation_id,
@@ -4358,8 +4364,7 @@ impl TransactionIr {
                     limit,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4379,8 +4384,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::TurnPerceptionRecord { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4412,8 +4416,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::TurnRecover { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4442,18 +4445,27 @@ impl TransactionIr {
                 TransactionIrStep::TurnEventRecord { request, slot } => {
                     if let Some(claim) = &request.worker_claim {
                         claim.validate()?;
-                        literal_bytes = literal_bytes.checked_add(claim.worker_id.len())
-                            .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        literal_bytes = literal_bytes
+                            .checked_add(claim.worker_id.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
-                    for item in request.task_event.iter().chain(request.preceding_task_events.iter()) {
+                    for item in request
+                        .task_event
+                        .iter()
+                        .chain(request.preceding_task_events.iter())
+                    {
                         if let Some(claim) = &item.worker_claim {
                             claim.validate()?;
-                            literal_bytes = literal_bytes.checked_add(claim.worker_id.len())
-                                .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                            literal_bytes = literal_bytes
+                                .checked_add(claim.worker_id.len())
+                                .ok_or_else(|| {
+                                    invalid_input("Transaction IR literal byte count overflow")
+                                })?;
                         }
                     }
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4480,27 +4492,55 @@ impl TransactionIr {
                         }
                     }
                     if !request.preceding_task_events.is_empty() {
-                        let last = request.task_event.as_ref()
-                            .ok_or_else(|| invalid_input("progress event batch needs a final carrier"))?;
-                        if request.terminal || request.preceding_task_events.len() >= crate::generated_task_event_delivery::PROGRESS_BATCH_MAX_FRAMES
-                            || last.task_id != request.task_id {
+                        let last = request.task_event.as_ref().ok_or_else(|| {
+                            invalid_input("progress event batch needs a final carrier")
+                        })?;
+                        if request.terminal
+                            || request.preceding_task_events.len()
+                                >= crate::generated_task_event_delivery::PROGRESS_BATCH_MAX_FRAMES
+                            || last.task_id != request.task_id
+                        {
                             return Err(invalid_input("invalid progress event batch scope"));
                         }
-                        let wire_bytes = request.preceding_task_events.iter().chain(std::iter::once(last))
-                            .try_fold(0usize, |total, item| total.checked_add(item.payload_json.len())
-                                .ok_or_else(|| invalid_input("progress event batch wire byte overflow")))?;
-                        if wire_bytes > crate::generated_task_event_delivery::PROGRESS_BATCH_MAX_WIRE_BYTES {
+                        let wire_bytes = request
+                            .preceding_task_events
+                            .iter()
+                            .chain(std::iter::once(last))
+                            .try_fold(0usize, |total, item| {
+                                total.checked_add(item.payload_json.len()).ok_or_else(|| {
+                                    invalid_input("progress event batch wire byte overflow")
+                                })
+                            })?;
+                        if wire_bytes
+                            > crate::generated_task_event_delivery::PROGRESS_BATCH_MAX_WIRE_BYTES
+                        {
                             return Err(invalid_input("progress event batch exceeds wire budget"));
                         }
-                        let mut expected = last.application_sequence.checked_sub(request.preceding_task_events.len() as u64)
-                            .ok_or_else(|| invalid_input("invalid progress event batch sequence"))?;
-                        for item in request.preceding_task_events.iter().chain(std::iter::once(last)) {
-                            if item.task_id != last.task_id || item.application_sequence != expected
-                                || !matches!(item.event_type.as_str(), "delta" | "program_output" | "tool_progress") {
-                                return Err(invalid_input("invalid progress event batch scope/order"));
+                        let mut expected = last
+                            .application_sequence
+                            .checked_sub(request.preceding_task_events.len() as u64)
+                            .ok_or_else(|| {
+                                invalid_input("invalid progress event batch sequence")
+                            })?;
+                        for item in request
+                            .preceding_task_events
+                            .iter()
+                            .chain(std::iter::once(last))
+                        {
+                            if item.task_id != last.task_id
+                                || item.application_sequence != expected
+                                || !matches!(
+                                    item.event_type.as_str(),
+                                    "delta" | "program_output" | "tool_progress"
+                                )
+                            {
+                                return Err(invalid_input(
+                                    "invalid progress event batch scope/order",
+                                ));
                             }
-                            expected = expected.checked_add(1)
-                                .ok_or_else(|| invalid_input("progress event batch sequence overflow"))?;
+                            expected = expected.checked_add(1).ok_or_else(|| {
+                                invalid_input("progress event batch sequence overflow")
+                            })?;
                         }
                     }
                     let request_bytes = serde_json::to_vec(&serde_json::json!({
@@ -4514,12 +4554,19 @@ impl TransactionIr {
                     }))
                     .map_err(|_| invalid_input("invalid Turn event record payload"))?
                     .len();
-                    let preceding_bytes = request.preceding_task_events.iter().try_fold(0usize, |total, item| {
-                        total.checked_add(item.payload_json.len())
-                            .and_then(|bytes| bytes.checked_add(item.task_id.len()))
-                            .and_then(|bytes| bytes.checked_add(item.event_type.len()))
-                            .ok_or_else(|| invalid_input("progress event batch byte count overflow"))
-                    })?;
+                    let preceding_bytes =
+                        request
+                            .preceding_task_events
+                            .iter()
+                            .try_fold(0usize, |total, item| {
+                                total
+                                    .checked_add(item.payload_json.len())
+                                    .and_then(|bytes| bytes.checked_add(item.task_id.len()))
+                                    .and_then(|bytes| bytes.checked_add(item.event_type.len()))
+                                    .ok_or_else(|| {
+                                        invalid_input("progress event batch byte count overflow")
+                                    })
+                            })?;
                     literal_bytes = literal_bytes
                         .checked_add(preceding_bytes)
                         .and_then(|bytes| bytes.checked_add(request.attempt_id.len()))
@@ -4544,8 +4591,7 @@ impl TransactionIr {
                     lane_id,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4574,8 +4620,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4604,8 +4649,7 @@ impl TransactionIr {
                     )?;
                 }
                 TransactionIrStep::TurnAttemptCreate { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4659,7 +4703,8 @@ impl TransactionIr {
                         || !valid_target
                         || !valid_answer
                         || request.discard_later_turn_ids.as_ref().is_some_and(|ids| {
-                            ids.iter().any(|id| id.is_empty() || id.chars().count() > 128)
+                            ids.iter()
+                                .any(|id| id.is_empty() || id.chars().count() > 128)
                         })
                         || (request.operation == "regenerate"
                             && request.input_update.is_some()
@@ -4744,9 +4789,10 @@ impl TransactionIr {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
-                TransactionIrStep::TurnAttemptGet { attempt_id, slot, .. } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                TransactionIrStep::TurnAttemptGet {
+                    attempt_id, slot, ..
+                } => {
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4754,9 +4800,8 @@ impl TransactionIr {
                     if attempt_id.is_empty() || attempt_id.chars().count() > 128 {
                         return Err(invalid_input("invalid Turn attempt identity"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(attempt_id.len())
-                        .ok_or_else(|| {
+                    literal_bytes =
+                        literal_bytes.checked_add(attempt_id.len()).ok_or_else(|| {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
@@ -4766,8 +4811,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4793,8 +4837,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4825,20 +4868,33 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    if let Some(context) = automation_context { context.validate()?; }
+                    if let Some(context) = automation_context {
+                        context.validate()?;
+                    }
                     if let Some(process) = worker_process {
-                        let witness = crate::worker_job::execution_witness(process, worker_claim.as_ref())?;
-                        literal_bytes = literal_bytes.checked_add(serde_json::to_vec(&witness)
-                            .map_err(|_| invalid_input("worker execution witness cannot be encoded"))?.len())
-                            .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        let witness =
+                            crate::worker_job::execution_witness(process, worker_claim.as_ref())?;
+                        literal_bytes = literal_bytes
+                            .checked_add(
+                                serde_json::to_vec(&witness)
+                                    .map_err(|_| {
+                                        invalid_input("worker execution witness cannot be encoded")
+                                    })?
+                                    .len(),
+                            )
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
                     if let Some(claim) = worker_claim {
                         claim.validate()?;
-                        literal_bytes = literal_bytes.checked_add(claim.worker_id.len())
-                            .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        literal_bytes = literal_bytes
+                            .checked_add(claim.worker_id.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?;
                     }
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4864,8 +4920,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4876,15 +4931,13 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid Turn event list"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(attempt_id.len())
-                        .ok_or_else(|| {
+                    literal_bytes =
+                        literal_bytes.checked_add(attempt_id.len()).ok_or_else(|| {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
                 TransactionIrStep::TurnEventsPrune { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4903,8 +4956,7 @@ impl TransactionIr {
                     deleted_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -4934,8 +4986,7 @@ impl TransactionIr {
                     )?;
                 }
                 TransactionIrStep::TurnCompact { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5009,8 +5060,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5050,8 +5100,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5086,8 +5135,7 @@ impl TransactionIr {
                     committed_at_ms,
                     slot,
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5099,8 +5147,11 @@ impl TransactionIr {
                         || *updated_at_ms == 0
                         || *committed_at_ms == 0
                         || human_guidance_answer_json.as_ref().is_some_and(|bytes| {
-                            bytes.len() > crate::generated_tofudb_ir::MAX_HUMAN_GUIDANCE_PAYLOAD_BYTES || serde_json::from_slice::<serde_json::Value>(bytes)
-                                .ok().is_none_or(|value| !value.is_object())
+                            bytes.len()
+                                > crate::generated_tofudb_ir::MAX_HUMAN_GUIDANCE_PAYLOAD_BYTES
+                                || serde_json::from_slice::<serde_json::Value>(bytes)
+                                    .ok()
+                                    .is_none_or(|value| !value.is_object())
                         })
                         || serde_json::from_slice::<serde_json::Value>(projection_json)
                             .ok()
@@ -5113,7 +5164,11 @@ impl TransactionIr {
                         .checked_add(conversation_id.len())
                         .and_then(|bytes| bytes.checked_add(turn_id.len()))
                         .and_then(|bytes| bytes.checked_add(projection_json.len()))
-                        .and_then(|bytes| bytes.checked_add(human_guidance_answer_json.as_ref().map_or(0, Vec::len)))
+                        .and_then(|bytes| {
+                            bytes.checked_add(
+                                human_guidance_answer_json.as_ref().map_or(0, Vec::len),
+                            )
+                        })
                         .ok_or_else(|| {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
@@ -5125,8 +5180,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5134,7 +5188,8 @@ impl TransactionIr {
                     if conversation_id.is_empty()
                         || conversation_id.chars().count() > 256
                         || *turn_limit > 256
-                        || (*max_projection_bytes != 0 && !(65536..=16777216).contains(max_projection_bytes))
+                        || (*max_projection_bytes != 0
+                            && !(65536..=16777216).contains(max_projection_bytes))
                     {
                         return Err(invalid_input("invalid Turn sync snapshot"));
                     }
@@ -5144,19 +5199,35 @@ impl TransactionIr {
                             invalid_input("Transaction IR literal byte count overflow")
                         })?;
                 }
-                TransactionIrStep::TurnSyncRoundDirectory { conversation_id, lane_id, anchor_turn_id, limit, slot, .. } => {
-                    let initialized = initialized_slots.get_or_insert(*slot as usize);
-                    if *initialized { return Err(invalid_input("Transaction IR initializes a slot twice")); }
+                TransactionIrStep::TurnSyncRoundDirectory {
+                    conversation_id,
+                    lane_id,
+                    anchor_turn_id,
+                    limit,
+                    slot,
+                    ..
+                } => {
+                    let initialized = initialized_slots.get_or_insert(*slot);
+                    if *initialized {
+                        return Err(invalid_input("Transaction IR initializes a slot twice"));
+                    }
                     *initialized = true;
-                    if conversation_id.is_empty() || conversation_id.chars().count() > 256
-                        || lane_id.is_empty() || lane_id.chars().count() > 128
-                        || anchor_turn_id.chars().count() > 128 || !(1..=100).contains(limit) {
+                    if conversation_id.is_empty()
+                        || conversation_id.chars().count() > 256
+                        || lane_id.is_empty()
+                        || lane_id.chars().count() > 128
+                        || anchor_turn_id.chars().count() > 128
+                        || !(1..=100).contains(limit)
+                    {
                         return Err(invalid_input("invalid Turn round directory"));
                     }
-                    literal_bytes = literal_bytes.checked_add(conversation_id.len())
+                    literal_bytes = literal_bytes
+                        .checked_add(conversation_id.len())
                         .and_then(|n| n.checked_add(lane_id.len()))
                         .and_then(|n| n.checked_add(anchor_turn_id.len()))
-                        .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?;
+                        .ok_or_else(|| {
+                            invalid_input("Transaction IR literal byte count overflow")
+                        })?;
                 }
                 TransactionIrStep::TurnSyncPage {
                     conversation_id,
@@ -5166,8 +5237,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5177,7 +5247,8 @@ impl TransactionIr {
                         || lane_id.is_empty()
                         || lane_id.chars().count() > 128
                         || !(1..=256).contains(limit)
-                        || (*max_projection_bytes != 0 && !(65536..=16777216).contains(max_projection_bytes))
+                        || (*max_projection_bytes != 0
+                            && !(65536..=16777216).contains(max_projection_bytes))
                     {
                         return Err(invalid_input("invalid Turn sync page"));
                     }
@@ -5194,8 +5265,7 @@ impl TransactionIr {
                     slot,
                     ..
                 } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5213,8 +5283,7 @@ impl TransactionIr {
                         })?;
                 }
                 TransactionIrStep::TurnSyncPrune { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5224,8 +5293,7 @@ impl TransactionIr {
                     }
                 }
                 TransactionIrStep::TurnCleanup { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5238,8 +5306,7 @@ impl TransactionIr {
                     }
                 }
                 TransactionIrStep::TurnSearchBackfillGlobal { request, slot } => {
-                    let initialized = initialized_slots
-                        .get_or_insert(*slot as usize);
+                    let initialized = initialized_slots.get_or_insert(*slot);
                     if *initialized {
                         return Err(invalid_input("Transaction IR initializes a slot twice"));
                     }
@@ -5253,9 +5320,12 @@ impl TransactionIr {
                     {
                         return Err(invalid_input("invalid global search backfill page"));
                     }
-                    literal_bytes = literal_bytes
-                        .checked_add(request.cursor.len())
-                        .ok_or_else(|| invalid_input("Transaction IR literal byte count overflow"))?
+                    literal_bytes =
+                        literal_bytes
+                            .checked_add(request.cursor.len())
+                            .ok_or_else(|| {
+                                invalid_input("Transaction IR literal byte count overflow")
+                            })?
                 }
             }
             let identity_bytes = match step {
@@ -5469,11 +5539,14 @@ impl TransactionIr {
                     ..
                 } => {
                     if payload_types.as_ref().is_some_and(|values| {
-                        values.len() > 64 || values.iter().any(|value| {
-                            value.is_empty() || value.chars().count() > 128
-                        })
+                        values.len() > 64
+                            || values
+                                .iter()
+                                .any(|value| value.is_empty() || value.chars().count() > 128)
                     }) {
-                        return Err(invalid_input("Transaction IR event payload selection is unbounded"));
+                        return Err(invalid_input(
+                            "Transaction IR event payload selection is unbounded",
+                        ));
                     }
                     if *limit == 0
                         || *limit > MAX_ENTITY_RANGE_ROWS
@@ -5533,18 +5606,20 @@ impl TransactionIr {
             TransactionIrResult::SlotOrLiteral { slot, .. } => std::slice::from_ref(slot),
             TransactionIrResult::SlotArray { slots } => slots,
         };
-        if result_slots.iter().any(|slot| {
-            !initialized_slots
-                .get(*slot)
-                .copied()
-                .unwrap_or(false)
-        }) {
+        if result_slots
+            .iter()
+            .any(|slot| !initialized_slots.get(*slot).copied().unwrap_or(false))
+        {
             return Err(invalid_input(
                 "Transaction IR result references an unread slot",
             ));
         }
         if result_slots.len() > 1
-            && result_slots.iter().collect::<std::collections::BTreeSet<_>>().len() != result_slots.len()
+            && result_slots
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != result_slots.len()
         {
             return Err(invalid_input("Transaction IR result array repeats a slot"));
         }
@@ -5687,12 +5762,12 @@ fn condition_matches(
     match condition {
         EntityWriteCondition::Always => Ok(true),
         EntityWriteCondition::SlotMissing(slot) => slots
-            .get(slot as usize)
+            .get(slot)
             .and_then(Option::as_ref)
             .map(|value| value.is_none())
             .ok_or_else(|| invalid_input("Transaction IR condition slot is unavailable")),
         EntityWriteCondition::SlotPresent(slot) => slots
-            .get(slot as usize)
+            .get(slot)
             .and_then(Option::as_ref)
             .map(Option::is_some)
             .ok_or_else(|| invalid_input("Transaction IR condition slot is unavailable")),
@@ -5722,8 +5797,12 @@ impl IrResponse {
     pub(crate) fn json_proven(&self) -> bool {
         self.json_proven
     }
-    pub(crate) fn snapshot_stable(&self) -> bool { self.snapshot_stable.is_some() }
-    pub(crate) fn cache_admission(&self) -> Option<crate::query_result_cache::Admission> { self.snapshot_stable }
+    pub(crate) fn snapshot_stable(&self) -> bool {
+        self.snapshot_stable.is_some()
+    }
+    pub(crate) fn cache_admission(&self) -> Option<crate::query_result_cache::Admission> {
+        self.snapshot_stable
+    }
     pub(crate) fn certify_snapshot_stable(&mut self, ir: &TransactionIr) {
         // compile_records binds this operation's key only from request scope,
         // namespace and key. A pure storage step alone cannot certify a future
@@ -5743,23 +5822,43 @@ impl IrResponse {
                  TransactionIrResult::SlotOrLiteral { slot: result, missing })
                     if slot == result && missing == b"null");
         self.snapshot_stable = ((deterministic_record || complete_snapshot)
-            && ir.operation_kind == crate::generated_storage_operations::StorageOperationKind::Query
-            && ir.command_effects.is_none()).then_some(if complete_snapshot {
-                crate::query_result_cache::Admission::RepeatedSnapshot
-            } else { crate::query_result_cache::Admission::RepeatedKey });
+            && ir.operation_kind
+                == crate::generated_storage_operations::StorageOperationKind::Query
+            && ir.command_effects.is_none())
+        .then_some(if complete_snapshot {
+            crate::query_result_cache::Admission::RepeatedSnapshot
+        } else {
+            crate::query_result_cache::Admission::RepeatedKey
+        });
         // The selected absence literal is a complete canonical scalar. This
         // proves only these exact bytes, never a general unverified response.
-        if self.snapshot_stable.is_some() && self.bytes == b"null" { self.json_proven = true; }
+        if self.snapshot_stable.is_some() && self.bytes == b"null" {
+            self.json_proven = true;
+        }
     }
     // Only the private dispatch certificate reconstructs this immutable proof.
-    pub(crate) fn from_snapshot_cache(bytes: Vec<u8>, admission: crate::query_result_cache::Admission) -> Self {
-        Self { bytes, json_proven: true, receipt_cacheable_proven: false, snapshot_stable: Some(admission), snapshot_read_complete: false }
+    pub(crate) fn from_snapshot_cache(
+        bytes: Vec<u8>,
+        admission: crate::query_result_cache::Admission,
+    ) -> Self {
+        Self {
+            bytes,
+            json_proven: true,
+            receipt_cacheable_proven: false,
+            snapshot_stable: Some(admission),
+            snapshot_read_complete: false,
+        }
     }
-
 
     fn from_encoded(response: crate::response_json::EncodedResponse) -> Self {
         let json_proven = response.json_proven();
-        Self { bytes: response.into_bytes(), json_proven, receipt_cacheable_proven: false, snapshot_stable: None, snapshot_read_complete: false }
+        Self {
+            bytes: response.into_bytes(),
+            json_proven,
+            receipt_cacheable_proven: false,
+            snapshot_stable: None,
+            snapshot_read_complete: false,
+        }
     }
     pub(crate) fn into_bytes(self) -> Vec<u8> {
         self.bytes
@@ -5792,10 +5891,19 @@ impl IrSlots {
         slot: usize,
         projection: Option<crate::versioned_document::DocumentProjection>,
     ) {
-        self.set_response(slot, projection.map(|value| {
-            let json_proven = value.json_proven();
-            IrResponse { bytes: value.into_bytes(), json_proven, receipt_cacheable_proven: false, snapshot_stable: None, snapshot_read_complete: false }
-        }));
+        self.set_response(
+            slot,
+            projection.map(|value| {
+                let json_proven = value.json_proven();
+                IrResponse {
+                    bytes: value.into_bytes(),
+                    json_proven,
+                    receipt_cacheable_proven: false,
+                    snapshot_stable: None,
+                    snapshot_read_complete: false,
+                }
+            }),
+        );
     }
 
     fn set_response(&mut self, slot: usize, response: Option<IrResponse>) {
@@ -5805,7 +5913,11 @@ impl IrSlots {
     }
 }
 impl IrSlots {
-    fn set_settled_append_response(&mut self, slot: usize, response: crate::turn::SettledAppendResponse) {
+    fn set_settled_append_response(
+        &mut self,
+        slot: usize,
+        response: crate::turn::SettledAppendResponse,
+    ) {
         self.bytes[slot] = Some(Some(response.into_bytes()));
         self.json_proven[slot] = false;
         self.receipt_cacheable_proven[slot] = true;
@@ -5835,28 +5947,50 @@ impl std::ops::IndexMut<usize> for IrSlots {
 /// step has finished. The certificate follows those exact bytes, and the slot
 /// is invalidated before its allocation leaves the execution frame.
 fn result_bytes(result: &TransactionIrResult, slots: &mut IrSlots) -> io::Result<IrResponse> {
-    let _extract = crate::fsync_stats::StageTimer::diagnostic(
-        crate::fsync_stats::STAGE_IR_RESULT_EXTRACT);
+    let _extract =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_IR_RESULT_EXTRACT);
     match result {
         TransactionIrResult::Literal(value) => {
-            crate::request_profile::work(crate::request_profile::Work::IrResultCopiedBytes, value.len() as u64);
+            crate::request_profile::work(
+                crate::request_profile::Work::IrResultCopiedBytes,
+                value.len() as u64,
+            );
             Ok(IrResponse::unverified(value.clone()))
         }
         TransactionIrResult::SlotOrLiteral { slot, missing } => {
-            let index = *slot as usize;
+            let index = *slot;
             let proven = slots.json_proven.get(index).copied().unwrap_or(false);
-            let receipt_cacheable_proven = slots.receipt_cacheable_proven.get(index).copied().unwrap_or(false);
-            let value = slots.bytes.get_mut(index).and_then(Option::take)
+            let receipt_cacheable_proven = slots
+                .receipt_cacheable_proven
+                .get(index)
+                .copied()
+                .unwrap_or(false);
+            let value = slots
+                .bytes
+                .get_mut(index)
+                .and_then(Option::take)
                 .ok_or_else(|| invalid_input("Transaction IR result slot is unavailable"))?;
             slots.json_proven[index] = false;
             slots.receipt_cacheable_proven[index] = false;
             Ok(match value {
                 Some(bytes) => {
-                    crate::request_profile::work(crate::request_profile::Work::IrResultMovedBytes, bytes.len() as u64);
-                    IrResponse { bytes, json_proven: proven, receipt_cacheable_proven, snapshot_stable: None, snapshot_read_complete: false }
+                    crate::request_profile::work(
+                        crate::request_profile::Work::IrResultMovedBytes,
+                        bytes.len() as u64,
+                    );
+                    IrResponse {
+                        bytes,
+                        json_proven: proven,
+                        receipt_cacheable_proven,
+                        snapshot_stable: None,
+                        snapshot_read_complete: false,
+                    }
                 }
                 None => {
-                    crate::request_profile::work(crate::request_profile::Work::IrResultCopiedBytes, missing.len() as u64);
+                    crate::request_profile::work(
+                        crate::request_profile::Work::IrResultCopiedBytes,
+                        missing.len() as u64,
+                    );
                     IrResponse::unverified(missing.clone())
                 }
             })
@@ -5864,13 +5998,20 @@ fn result_bytes(result: &TransactionIrResult, slots: &mut IrSlots) -> io::Result
         TransactionIrResult::SlotArray { slots: selected } => {
             let mut values = Vec::with_capacity(selected.len());
             for slot in selected {
-                let value = slots.bytes.get_mut(*slot).and_then(Option::take)
+                let value = slots
+                    .bytes
+                    .get_mut(*slot)
+                    .and_then(Option::take)
                     .ok_or_else(|| invalid_input("Transaction IR result slot is unavailable"))?;
                 slots.json_proven[*slot] = false;
                 slots.receipt_cacheable_proven[*slot] = false;
                 values.push(value);
             }
-            let length = values.iter().map(|value| value.as_ref().map_or(4, Vec::len) + 1).sum::<usize>() + 1;
+            let length = values
+                .iter()
+                .map(|value| value.as_ref().map_or(4, Vec::len) + 1)
+                .sum::<usize>()
+                + 1;
             let mut bytes = Vec::with_capacity(length);
             bytes.push(b'[');
             for (index, value) in values.into_iter().enumerate() {
@@ -5880,7 +6021,10 @@ fn result_bytes(result: &TransactionIrResult, slots: &mut IrSlots) -> io::Result
                 bytes.extend_from_slice(value.as_deref().unwrap_or(b"null"));
             }
             bytes.push(b']');
-            crate::request_profile::work(crate::request_profile::Work::IrResultCopiedBytes, bytes.len() as u64);
+            crate::request_profile::work(
+                crate::request_profile::Work::IrResultCopiedBytes,
+                bytes.len() as u64,
+            );
             Ok(IrResponse::unverified(bytes))
         }
     }
@@ -5940,7 +6084,8 @@ pub(crate) fn execute_transaction_ir_with_deadline(
     notices: &mut Vec<crate::authority::ConversationCommitNotice>,
     deadline_budget: Duration,
 ) -> io::Result<Vec<u8>> {
-    execute_transaction_ir_with_json_proof(database, ir, notices, deadline_budget).map(IrResponse::into_bytes)
+    execute_transaction_ir_with_json_proof(database, ir, notices, deadline_budget)
+        .map(IrResponse::into_bytes)
 }
 
 pub(crate) fn execute_transaction_ir_with_json_proof(
@@ -5983,9 +6128,16 @@ pub(crate) fn prepare_execution_frame_ir_with_deadline(
     deadline_budget: Duration,
 ) -> io::Result<PreparedTransactionIr> {
     if !ir.operation_kind.mutates_state() {
-        return Err(invalid_input("execution frame requires a command transaction"));
+        return Err(invalid_input(
+            "execution frame requires a command transaction",
+        ));
     }
-    prepare_transaction_ir_mode(database, ir, deadline_budget, IrStepExecution::ExperimentalTurnFrame)
+    prepare_transaction_ir_mode(
+        database,
+        ir,
+        deadline_budget,
+        IrStepExecution::ExperimentalTurnFrame,
+    )
 }
 
 enum IrStepExecution {
@@ -6133,8 +6285,10 @@ fn prepare_transaction_ir_mode(
     }) || ir.steps.iter().any(|step| match step {
         // Scoped live answers resolve the owned attempt and update its existing
         // recovery sizing; ordinary settled projection edits retain their scope.
-        TransactionIrStep::TurnProjectionUpdate { human_guidance_answer_json, .. } =>
-            human_guidance_answer_json.is_some(),
+        TransactionIrStep::TurnProjectionUpdate {
+            human_guidance_answer_json,
+            ..
+        } => human_guidance_answer_json.is_some(),
         // Every stream resolves immutable task ancestry before deciding whether
         // it is fenced. Omitting a caller claim cannot select a weaker scope.
         TransactionIrStep::IndexedStreamAppend { .. }
@@ -6156,7 +6310,10 @@ fn prepare_transaction_ir_mode(
     };
 
     if let Some(response) = lookup_receipt(database, &mut transaction, ir)? {
-        return Ok(PreparedTransactionIr { response: IrResponse::unverified(response), transaction: None });
+        return Ok(PreparedTransactionIr {
+            response: IrResponse::unverified(response),
+            transaction: None,
+        });
     }
     // A finite rotation install can fence writes for many request arrivals.
     // Do not repeatedly materialize projections and stage blobs only to fail
@@ -6171,9 +6328,12 @@ fn prepare_transaction_ir_mode(
     let mut slots = IrSlots::new();
     // Several Turn event records share one all-or-nothing outcome: a stale
     // attempt rejects every entry, so a mixed result may never commit.
-    let batched_turn_events = ir.steps.iter()
+    let batched_turn_events = ir
+        .steps
+        .iter()
         .filter(|step| matches!(step, TransactionIrStep::TurnEventRecord { .. }))
-        .nth(1).is_some();
+        .nth(1)
+        .is_some();
     let mut turn_event_applied = None;
     let mut adjacent_turn_projection = None;
     // Carried payload after the previous step when it was an applied batched
@@ -6186,7 +6346,10 @@ fn prepare_transaction_ir_mode(
         #[cfg(test)]
         IrStepExecution::ExperimentalTurnFrame => {
             for (slot, response) in crate::turn::execution_frame::record(
-                database, &mut transaction, &ir.steps, &mut deadline_elapsed,
+                database,
+                &mut transaction,
+                &ir.steps,
+                &mut deadline_elapsed,
             )? {
                 slots[slot] = Some(Some(response));
             }
@@ -6202,54 +6365,51 @@ fn prepare_transaction_ir_mode(
         let carried_after_previous_step = carried_after_turn_event.take();
         match step {
             TransactionIrStep::Queue { request, slot } => {
-                slots[*slot as usize] =
-                    Some(crate::queue::execute(database, &mut transaction, request)?);
+                slots[*slot] = Some(crate::queue::execute(database, &mut transaction, request)?);
             }
             TransactionIrStep::ModelContinuation { request, slot } => {
-                slots[*slot as usize] = Some(crate::model_continuation::execute(
+                slots[*slot] = Some(crate::model_continuation::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Invocation { request, slot } => {
-                slots[*slot as usize] = Some(crate::invocation::execute(
+                slots[*slot] = Some(crate::invocation::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Orchestration { request, slot } => {
-                slots[*slot as usize] = Some(crate::orchestration::execute(
+                slots[*slot] = Some(crate::orchestration::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::IntegrationWorkspace { request, slot } => {
-                slots[*slot as usize] = Some(crate::integration_workspace::execute(
+                slots[*slot] = Some(crate::integration_workspace::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Swarm { request, slot } => {
-                slots[*slot as usize] =
-                    Some(crate::swarm::execute(database, &mut transaction, request)?);
+                slots[*slot] = Some(crate::swarm::execute(database, &mut transaction, request)?);
             }
             TransactionIrStep::Scheduler { request, slot } => {
-                slots[*slot as usize] = Some(crate::scheduler::execute(
+                slots[*slot] = Some(crate::scheduler::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Timer { request, slot } => {
-                slots[*slot as usize] =
-                    Some(crate::timer::execute(database, &mut transaction, request)?);
+                slots[*slot] = Some(crate::timer::execute(database, &mut transaction, request)?);
             }
             TransactionIrStep::BillingLedgerAppend { entry, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::ledger_append(
+                slots[*slot] = Some(Some(crate::billing::ledger_append(
                     database,
                     &mut transaction,
                     entry,
@@ -6262,7 +6422,7 @@ fn prepare_transaction_ir_mode(
                 ref_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::billing::ledger_find(
+                slots[*slot] = Some(crate::billing::ledger_find(
                     database,
                     &mut transaction,
                     user_id,
@@ -6272,14 +6432,14 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::BillingLedgerList { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::ledger_list(
+                slots[*slot] = Some(Some(crate::billing::ledger_list(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::BillingLedgerRecompute { user_id, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::ledger_recompute(
+                slots[*slot] = Some(Some(crate::billing::ledger_recompute(
                     database,
                     &mut transaction,
                     user_id,
@@ -6290,7 +6450,7 @@ fn prepare_transaction_ir_mode(
                 provider_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::billing::payment_find(
+                slots[*slot] = Some(crate::billing::payment_find(
                     database,
                     &mut transaction,
                     provider,
@@ -6298,7 +6458,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::BillingPaymentList { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::payment_list(
+                slots[*slot] = Some(Some(crate::billing::payment_list(
                     database,
                     &mut transaction,
                     request,
@@ -6312,7 +6472,7 @@ fn prepare_transaction_ir_mode(
                 physical_updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::billing::payment_record(
+                slots[*slot] = Some(Some(crate::billing::payment_record(
                     database,
                     &mut transaction,
                     provider,
@@ -6328,7 +6488,7 @@ fn prepare_transaction_ir_mode(
                 physical_updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::billing::payment_bind(
+                slots[*slot] = Some(Some(crate::billing::payment_bind(
                     database,
                     &mut transaction,
                     payment_id,
@@ -6343,7 +6503,7 @@ fn prepare_transaction_ir_mode(
                 physical_updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::billing::payment_settle(
+                slots[*slot] = Some(Some(crate::billing::payment_settle(
                     database,
                     &mut transaction,
                     payment_id,
@@ -6353,21 +6513,21 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::BillingRedeemCodeApply { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::redeem_code_apply(
+                slots[*slot] = Some(Some(crate::billing::redeem_code_apply(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::BillingRedeemCodesList { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::redeem_codes_list(
+                slots[*slot] = Some(Some(crate::billing::redeem_codes_list(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::BillingRedeemCodesMint { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::redeem_codes_mint(
+                slots[*slot] = Some(Some(crate::billing::redeem_codes_mint(
                     database,
                     &mut transaction,
                     request,
@@ -6378,7 +6538,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::billing::reserve_stale(
+                slots[*slot] = Some(Some(crate::billing::reserve_stale(
                     database,
                     &mut transaction,
                     *cutoff_ts,
@@ -6386,28 +6546,28 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::BillingWalletApply { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::wallet_apply(
+                slots[*slot] = Some(Some(crate::billing::wallet_apply(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::BillingWalletGet { user_id, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::wallet_get(
+                slots[*slot] = Some(Some(crate::billing::wallet_get(
                     database,
                     &mut transaction,
                     user_id,
                 )?));
             }
             TransactionIrStep::BillingWalletSettle { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::billing::wallet_settle(
+                slots[*slot] = Some(Some(crate::billing::wallet_settle(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::ArtifactCreate { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::artifact::create(
+                slots[*slot] = Some(Some(crate::artifact::create(
                     database,
                     &mut transaction,
                     request.clone(),
@@ -6418,7 +6578,7 @@ fn prepare_transaction_ir_mode(
                 include_content,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::artifact::get(
+                slots[*slot] = Some(crate::artifact::get(
                     database,
                     &mut transaction,
                     artifact_id,
@@ -6430,7 +6590,7 @@ fn prepare_transaction_ir_mode(
                 include_deleted,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::artifact::list(
+                slots[*slot] = Some(Some(crate::artifact::list(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -6442,7 +6602,7 @@ fn prepare_transaction_ir_mode(
                 deleted_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::artifact::delete(
+                slots[*slot] = Some(Some(crate::artifact::delete(
                     database,
                     &mut transaction,
                     artifact_id,
@@ -6450,14 +6610,14 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::ArtifactVersions { artifact_id, slot } => {
-                slots[*slot as usize] = Some(Some(crate::artifact::versions(
+                slots[*slot] = Some(Some(crate::artifact::versions(
                     database,
                     &mut transaction,
                     artifact_id,
                 )?));
             }
             TransactionIrStep::ArtifactLibrary { limit, slot } => {
-                slots[*slot as usize] = Some(Some(crate::artifact::library(
+                slots[*slot] = Some(Some(crate::artifact::library(
                     database,
                     &mut transaction,
                     *limit,
@@ -6468,7 +6628,7 @@ fn prepare_transaction_ir_mode(
                 pinned,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::artifact::pin(
+                slots[*slot] = Some(Some(crate::artifact::pin(
                     database,
                     &mut transaction,
                     artifact_id,
@@ -6482,7 +6642,7 @@ fn prepare_transaction_ir_mode(
                 expires_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::artifact::tool_put(
+                slots[*slot] = Some(Some(crate::artifact::tool_put(
                     database,
                     &mut transaction,
                     content,
@@ -6499,7 +6659,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::artifact::tool_read(
+                slots[*slot] = Some(crate::artifact::tool_read(
                     database,
                     &mut transaction,
                     artifact_ref,
@@ -6518,7 +6678,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::artifact::tool_search(
+                slots[*slot] = Some(crate::artifact::tool_search(
                     database,
                     &mut transaction,
                     artifact_ref,
@@ -6536,7 +6696,7 @@ fn prepare_transaction_ir_mode(
             } => {
                 let progress =
                     crate::artifact::tool_prune(database, &mut transaction, *now_ms, *limit)?;
-                slots[*slot as usize] = Some(Some(
+                slots[*slot] = Some(Some(
                     serde_json::to_vec(&serde_json::json!({
                         "deleted": progress.deleted,
                         "hasMore": progress.has_more,
@@ -6550,7 +6710,7 @@ fn prepare_transaction_ir_mode(
                 ));
             }
             TransactionIrStep::SystemSchemaVersion { slot } => {
-                slots[*slot as usize] = Some(Some(
+                slots[*slot] = Some(Some(
                     serde_json::to_vec(&serde_json::json!({
                         "version": crate::generated_storage_operations::STORAGE_SCHEMA_VERSION
                     }))
@@ -6563,7 +6723,7 @@ fn prepare_transaction_ir_mode(
                 ));
             }
             TransactionIrStep::RateLimitRecordAndCheck { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::rate_limit::record_and_check(
+                slots[*slot] = Some(Some(crate::rate_limit::record_and_check(
                     database,
                     &mut transaction,
                     request,
@@ -6589,7 +6749,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::compaction_archive::create(
+                slots[*slot] = Some(Some(crate::compaction_archive::create(
                     database,
                     &mut transaction,
                     &crate::compaction_archive::CreateRequest {
@@ -6619,7 +6779,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::compaction_archive::list(
+                slots[*slot] = Some(Some(crate::compaction_archive::list(
                     database,
                     &mut transaction,
                     &crate::compaction_archive::ListRequest {
@@ -6637,7 +6797,7 @@ fn prepare_transaction_ir_mode(
                 include_post_messages,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::compaction_archive::get(
+                slots[*slot] = Some(crate::compaction_archive::get(
                     database,
                     &mut transaction,
                     &crate::compaction_archive::GetRequest {
@@ -6660,7 +6820,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::compaction_archive::update_summary(
+                slots[*slot] = Some(Some(crate::compaction_archive::update_summary(
                     database,
                     &mut transaction,
                     &crate::compaction_archive::UpdateSummaryRequest {
@@ -6680,7 +6840,7 @@ fn prepare_transaction_ir_mode(
                 archive_scope,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::compaction_archive::delete_conversation(
+                slots[*slot] = Some(Some(crate::compaction_archive::delete_conversation(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -6693,7 +6853,7 @@ fn prepare_transaction_ir_mode(
                 keep,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::compaction_archive::prune(
+                slots[*slot] = Some(Some(crate::compaction_archive::prune(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -6730,7 +6890,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::clone_conversation(
+                slots[*slot] = Some(Some(crate::conversation_header::clone_conversation(
                     database,
                     &mut transaction,
                     &crate::conversation_header::CloneRequest {
@@ -6747,7 +6907,7 @@ fn prepare_transaction_ir_mode(
                 deleted_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::delete(
+                slots[*slot] = Some(Some(crate::conversation_header::delete(
                     database,
                     &mut transaction,
                     &crate::conversation_header::DeleteRequest {
@@ -6761,7 +6921,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::restore(
+                slots[*slot] = Some(Some(crate::conversation_header::restore(
                     database,
                     &mut transaction,
                     &crate::conversation_header::RestoreRequest {
@@ -6775,7 +6935,7 @@ fn prepare_transaction_ir_mode(
                 purged_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::purge(
+                slots[*slot] = Some(Some(crate::conversation_header::purge(
                     database,
                     &mut transaction,
                     &crate::conversation_header::PurgeRequest {
@@ -6789,7 +6949,7 @@ fn prepare_transaction_ir_mode(
                 maximum_conversations,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::trash_prune(
+                slots[*slot] = Some(Some(crate::conversation_header::trash_prune(
                     database,
                     &mut transaction,
                     &crate::conversation_header::TrashPruneRequest {
@@ -6799,7 +6959,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::ConversationCount { slot } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::count(
+                slots[*slot] = Some(Some(crate::conversation_header::count(
                     database,
                     &mut transaction,
                 )?));
@@ -6811,7 +6971,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::activity_dates(
+                slots[*slot] = Some(Some(crate::conversation_header::activity_dates(
                     database,
                     &mut transaction,
                     &crate::conversation_header::ActivityDatesRequest {
@@ -6829,7 +6989,7 @@ fn prepare_transaction_ir_mode(
                 title_fallback_characters,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::conversation_header::turn_usage(
+                slots[*slot] = Some(crate::conversation_header::turn_usage(
                     database,
                     &mut transaction,
                     &crate::conversation_header::TurnUsageRequest {
@@ -6842,7 +7002,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::ConversationDiagnostic { request, slot } => {
-                slots[*slot as usize] = Some(crate::turn::diagnostic::read(
+                slots[*slot] = Some(crate::turn::diagnostic::read(
                     database,
                     &mut transaction,
                     request,
@@ -6857,7 +7017,7 @@ fn prepare_transaction_ir_mode(
                 anchor_turn_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::conversation_header::get_anchored(
+                slots[*slot] = Some(crate::conversation_header::get_anchored(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -6876,7 +7036,7 @@ fn prepare_transaction_ir_mode(
                 settings_keys,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::catalog_page(
+                slots[*slot] = Some(Some(crate::conversation_header::catalog_page(
                     database,
                     &mut transaction,
                     &crate::conversation_header::CatalogPageRequest {
@@ -6902,7 +7062,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::list(
+                slots[*slot] = Some(Some(crate::conversation_header::list(
                     database,
                     &mut transaction,
                     &crate::conversation_header::ListRequest {
@@ -6925,7 +7085,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::ModelRoutingGet { tenant_label, slot } => {
-                slots[*slot as usize] = Some(crate::model_routing::get(
+                slots[*slot] = Some(crate::model_routing::get(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -6939,7 +7099,7 @@ fn prepare_transaction_ir_mode(
                 updated_at,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::model_routing::commit(
+                slots[*slot] = Some(Some(crate::model_routing::commit(
                     database,
                     &mut transaction,
                     crate::model_routing::CommitRequest {
@@ -6960,7 +7120,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::ModelRoutingMigrationReceiptGet { tenant_label, slot } => {
-                slots[*slot as usize] = Some(crate::model_routing::migration_receipt(
+                slots[*slot] = Some(crate::model_routing::migration_receipt(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -6973,7 +7133,7 @@ fn prepare_transaction_ir_mode(
                 updated_at,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::model_routing::put_migration_receipt(
+                slots[*slot] = Some(Some(crate::model_routing::put_migration_receipt(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -6995,7 +7155,7 @@ fn prepare_transaction_ir_mode(
                 updated_at,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::model_routing::secret_put(
+                slots[*slot] = Some(Some(crate::model_routing::secret_put(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7010,7 +7170,7 @@ fn prepare_transaction_ir_mode(
                 secret_reference,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::model_routing::secret_get(
+                slots[*slot] = Some(crate::model_routing::secret_get(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7018,7 +7178,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::ModelRoutingSecretList { tenant_label, slot } => {
-                slots[*slot as usize] = Some(Some(crate::model_routing::secret_list(
+                slots[*slot] = Some(Some(crate::model_routing::secret_list(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7029,7 +7189,7 @@ fn prepare_transaction_ir_mode(
                 secret_reference,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::model_routing::secret_delete(
+                slots[*slot] = Some(Some(crate::model_routing::secret_delete(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7042,7 +7202,7 @@ fn prepare_transaction_ir_mode(
                 updated_before,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::model_routing::secret_prune(
+                slots[*slot] = Some(Some(crate::model_routing::secret_prune(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7057,7 +7217,7 @@ fn prepare_transaction_ir_mode(
                 physical_updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::provider::create(
+                slots[*slot] = Some(Some(crate::provider::create(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7071,7 +7231,7 @@ fn prepare_transaction_ir_mode(
                 provider_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::provider::get(
+                slots[*slot] = Some(crate::provider::get(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7079,7 +7239,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::ProviderList { tenant_label, slot } => {
-                slots[*slot as usize] = Some(Some(crate::provider::list(
+                slots[*slot] = Some(Some(crate::provider::list(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7093,7 +7253,7 @@ fn prepare_transaction_ir_mode(
                 physical_updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::provider::update(
+                slots[*slot] = Some(crate::provider::update(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7108,7 +7268,7 @@ fn prepare_transaction_ir_mode(
                 provider_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::provider::delete(
+                slots[*slot] = Some(Some(crate::provider::delete(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7122,7 +7282,7 @@ fn prepare_transaction_ir_mode(
                 physical_updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::provider::touch(
+                slots[*slot] = Some(Some(crate::provider::touch(
                     database,
                     &mut transaction,
                     tenant_label,
@@ -7131,33 +7291,62 @@ fn prepare_transaction_ir_mode(
                     *physical_updated_at_ms,
                 )?));
             }
-                TransactionIrStep::AutomationSkillSourceUpdate {request,slot} => {
-                slots[*slot as usize]=Some(Some(crate::automation_skill_source::execute(database,&mut transaction,request)?));
-            }
-                TransactionIrStep::AutomationProjectUpdate {request,slot} => {
-                slots[*slot as usize]=Some(Some(crate::automation_project::execute(database,&mut transaction,request)?));
-            }
-                TransactionIrStep::AutomationDefinitionUpdate {request,slot} => {
-                slots[*slot as usize]=Some(Some(crate::automation_definition::execute(database,&mut transaction,request)?));
-            }
-            TransactionIrStep::AutomationEventSettle { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::automation_events::execute(
-                    database, &mut transaction, request,
+            TransactionIrStep::AutomationSkillSourceUpdate { request, slot } => {
+                slots[*slot] = Some(Some(crate::automation_skill_source::execute(
+                    database,
+                    &mut transaction,
+                    request,
                 )?));
             }
-            TransactionIrStep::AutomationDefinitionDraftGuard {key} => {
-                crate::automation_definition::guard_draft(database,&mut transaction,key)?;
+            TransactionIrStep::AutomationProjectUpdate { request, slot } => {
+                slots[*slot] = Some(Some(crate::automation_project::execute(
+                    database,
+                    &mut transaction,
+                    request,
+                )?));
             }
-            TransactionIrStep::AutomationRunMutation { request, advance, slot } => {
-                slots[*slot as usize] = Some(Some(crate::automation_run::execute(
-                    database, &mut transaction, request, *advance,
+            TransactionIrStep::AutomationDefinitionUpdate { request, slot } => {
+                slots[*slot] = Some(Some(crate::automation_definition::execute(
+                    database,
+                    &mut transaction,
+                    request,
+                )?));
+            }
+            TransactionIrStep::AutomationEventSettle { request, slot } => {
+                slots[*slot] = Some(Some(crate::automation_events::execute(
+                    database,
+                    &mut transaction,
+                    request,
+                )?));
+            }
+            TransactionIrStep::AutomationDefinitionDraftGuard { key } => {
+                crate::automation_definition::guard_draft(database, &mut transaction, key)?;
+            }
+            TransactionIrStep::AutomationRunMutation {
+                request,
+                advance,
+                slot,
+            } => {
+                slots[*slot] = Some(Some(crate::automation_run::execute(
+                    database,
+                    &mut transaction,
+                    request,
+                    *advance,
                 )?));
             }
             TransactionIrStep::AutomationRunCancel { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::automation_run::cancel(database, &mut transaction, request)?));
+                slots[*slot] = Some(Some(crate::automation_run::cancel(
+                    database,
+                    &mut transaction,
+                    request,
+                )?));
             }
             TransactionIrStep::AutomationRunApprove { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::automation_approval::approve(database, &mut transaction, request)?));
+                slots[*slot] = Some(Some(crate::automation_approval::approve(
+                    database,
+                    &mut transaction,
+                    request,
+                )?));
             }
             TransactionIrStep::WorkerJobEnqueue {
                 task_id,
@@ -7172,7 +7361,7 @@ fn prepare_transaction_ir_mode(
                 now_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::worker_job::enqueue(
+                slots[*slot] = Some(Some(crate::worker_job::enqueue(
                     database,
                     &mut transaction,
                     crate::worker_job::EnqueueRequest {
@@ -7195,7 +7384,7 @@ fn prepare_transaction_ir_mode(
                 user_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::worker_job::get(
+                slots[*slot] = Some(crate::worker_job::get(
                     database,
                     &mut transaction,
                     task_id,
@@ -7209,7 +7398,7 @@ fn prepare_transaction_ir_mode(
                 task_kinds,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::worker_job::claim_next(
+                slots[*slot] = Some(crate::worker_job::claim_next(
                     database,
                     &mut transaction,
                     worker_id,
@@ -7219,15 +7408,22 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::WorkerJobClaimHorizon { task_kinds, slot } => {
-                slots[*slot as usize] = Some(Some(crate::worker_job::claim_horizon(
+                slots[*slot] = Some(Some(crate::worker_job::claim_horizon(
                     database,
                     &mut transaction,
                     task_kinds,
                 )?));
             }
-            TransactionIrStep::WorkerJobActiveList { task_kinds, user_id, slot } => {
-                slots[*slot as usize] = Some(Some(crate::worker_job::active_list(
-                    database, &mut transaction, task_kinds, *user_id,
+            TransactionIrStep::WorkerJobActiveList {
+                task_kinds,
+                user_id,
+                slot,
+            } => {
+                slots[*slot] = Some(Some(crate::worker_job::active_list(
+                    database,
+                    &mut transaction,
+                    task_kinds,
+                    *user_id,
                 )?));
             }
             TransactionIrStep::WorkerJobDefer {
@@ -7241,7 +7437,7 @@ fn prepare_transaction_ir_mode(
                 observed_wake_sequence,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::worker_job::defer(
+                slots[*slot] = Some(Some(crate::worker_job::defer(
                     database,
                     &mut transaction,
                     crate::worker_job::DeferRequest {
@@ -7265,7 +7461,7 @@ fn prepare_transaction_ir_mode(
                 replay_cursor,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::worker_job::heartbeat(
+                slots[*slot] = Some(Some(crate::worker_job::heartbeat(
                     database,
                     &mut transaction,
                     crate::worker_job::HeartbeatRequest {
@@ -7285,7 +7481,7 @@ fn prepare_transaction_ir_mode(
                 now_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::worker_job::claim_state(
+                slots[*slot] = Some(Some(crate::worker_job::claim_state(
                     database,
                     &mut transaction,
                     task_id,
@@ -7301,7 +7497,7 @@ fn prepare_transaction_ir_mode(
                 reason,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::worker_job::request_cancel(
+                slots[*slot] = Some(crate::worker_job::request_cancel(
                     database,
                     &mut transaction,
                     task_id,
@@ -7321,7 +7517,7 @@ fn prepare_transaction_ir_mode(
                 error_json,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::worker_job::complete(
+                slots[*slot] = Some(Some(crate::worker_job::complete(
                     database,
                     &mut transaction,
                     crate::worker_job::CompleteRequest {
@@ -7346,7 +7542,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::update_settings(
+                slots[*slot] = Some(Some(crate::conversation_header::update_settings(
                     database,
                     &mut transaction,
                     &crate::conversation_header::SettingsUpdateRequest {
@@ -7366,7 +7562,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::conversation_header::update_metadata(
+                slots[*slot] = Some(Some(crate::conversation_header::update_metadata(
                     database,
                     &mut transaction,
                     &crate::conversation_header::MetadataUpdateRequest {
@@ -7398,70 +7594,73 @@ fn prepare_transaction_ir_mode(
                 default_created_at_ms,
                 slot,
             } => {
-                slots.set_settled_append_response(*slot as usize, crate::turn::append_settled_with_receipt_proof(
-                    database,
-                    &mut transaction,
-                    &crate::turn::AppendSettledRequest {
-                        conversation_id: conversation_id.clone(),
-                        actor: actor.clone(),
-                        status: status.clone(),
-                        projection_json: projection_json.clone(),
-                        projection_timestamp: projection_timestamp.clone(),
-                        settlement_json: settlement_json.clone(),
-                        lane_id: lane_id.clone(),
-                        command_id: command_id.clone(),
-                        kind: kind.clone(),
-                        run_id: run_id.clone(),
-                        turn_id: turn_id.clone(),
-                        attempt_id: attempt_id.clone(),
-                        created_at_ms: *created_at_ms,
-                        committed_at_ms: *committed_at_ms,
-                        defaults: crate::conversation_header::TurnDefaults {
-                            allow_create: *allow_create,
-                            title: default_title.clone(),
-                            settings_json: default_settings_json.clone(),
-                            created_at_ms: *default_created_at_ms,
+                slots.set_settled_append_response(
+                    *slot,
+                    crate::turn::append_settled_with_receipt_proof(
+                        database,
+                        &mut transaction,
+                        &crate::turn::AppendSettledRequest {
+                            conversation_id: conversation_id.clone(),
+                            actor: actor.clone(),
+                            status: status.clone(),
+                            projection_json: projection_json.clone(),
+                            projection_timestamp: projection_timestamp.clone(),
+                            settlement_json: settlement_json.clone(),
+                            lane_id: lane_id.clone(),
+                            command_id: command_id.clone(),
+                            kind: kind.clone(),
+                            run_id: run_id.clone(),
+                            turn_id: turn_id.clone(),
+                            attempt_id: attempt_id.clone(),
+                            created_at_ms: *created_at_ms,
+                            committed_at_ms: *committed_at_ms,
+                            defaults: crate::conversation_header::TurnDefaults {
+                                allow_create: *allow_create,
+                                title: default_title.clone(),
+                                settings_json: default_settings_json.clone(),
+                                created_at_ms: *default_created_at_ms,
+                            },
                         },
-                    },
-                )?);
+                    )?,
+                );
             }
             TransactionIrStep::TurnCreatePair { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::create_pair(
+                slots[*slot] = Some(Some(crate::turn::create_pair(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnQueueActivate { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::queue_activate(
+                slots[*slot] = Some(Some(crate::turn::queue_activate(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnQueueCancel { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::queue_cancel(
+                slots[*slot] = Some(Some(crate::turn::queue_cancel(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnSteerCommit { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::steer_commit(
+                slots[*slot] = Some(Some(crate::turn::steer_commit(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnRelatedAnnounce { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::related_announce(
+                slots[*slot] = Some(Some(crate::turn::related_announce(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnVisibleSync { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::visible_sync(
+                slots[*slot] = Some(Some(crate::turn::visible_sync(
                     database,
                     &mut transaction,
                     request,
@@ -7471,7 +7670,7 @@ fn prepare_transaction_ir_mode(
                 conversation_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::exists(
+                slots[*slot] = Some(Some(crate::turn::exists(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7483,7 +7682,7 @@ fn prepare_transaction_ir_mode(
                 include_projection,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::turn::get_with_projection(
+                slots[*slot] = Some(crate::turn::get_with_projection(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7498,7 +7697,7 @@ fn prepare_transaction_ir_mode(
                 image_index,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::turn::image_get(
+                slots[*slot] = Some(crate::turn::image_get(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7514,7 +7713,7 @@ fn prepare_transaction_ir_mode(
                 page,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::turn::projection_page::read(
+                slots[*slot] = Some(crate::turn::projection_page::read(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7523,17 +7722,32 @@ fn prepare_transaction_ir_mode(
                     *page,
                 )?);
             }
-            TransactionIrStep::TurnContextRead { conversation_id, turn_id, replay, after_turn_id, slot } => {
-                slots.set_response(*slot as usize, crate::turn::model_context::read(
-                    database, &mut transaction, conversation_id, turn_id, *replay,
-                    after_turn_id.as_deref())?.map(IrResponse::from_encoded));
+            TransactionIrStep::TurnContextRead {
+                conversation_id,
+                turn_id,
+                replay,
+                after_turn_id,
+                slot,
+            } => {
+                slots.set_response(
+                    *slot,
+                    crate::turn::model_context::read(
+                        database,
+                        &mut transaction,
+                        conversation_id,
+                        turn_id,
+                        *replay,
+                        after_turn_id.as_deref(),
+                    )?
+                    .map(IrResponse::from_encoded),
+                );
             }
             TransactionIrStep::TurnList {
                 conversation_id,
                 lane_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::list(
+                slots[*slot] = Some(Some(crate::turn::list(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7548,7 +7762,7 @@ fn prepare_transaction_ir_mode(
                 server_now_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::list_delta(
+                slots[*slot] = Some(Some(crate::turn::list_delta(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7561,14 +7775,14 @@ fn prepare_transaction_ir_mode(
                 conversation_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::revision(
+                slots[*slot] = Some(Some(crate::turn::revision(
                     database,
                     &mut transaction,
                     conversation_id,
                 )?));
             }
             TransactionIrStep::TurnAttemptCreate { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::attempt_create(
+                slots[*slot] = Some(Some(crate::turn::attempt_create(
                     database,
                     &mut transaction,
                     request,
@@ -7579,7 +7793,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::attempt_dispatchable_list(
+                slots[*slot] = Some(Some(crate::turn::attempt_dispatchable_list(
                     database,
                     &mut transaction,
                     *created_before_ms,
@@ -7587,14 +7801,18 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::TurnAttemptDispatchWorker { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::attempt_dispatch_worker(
+                slots[*slot] = Some(Some(crate::turn::attempt_dispatch_worker(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
-            TransactionIrStep::TurnAttemptGet { attempt_id, slot, include_execution_config } => {
-                slots[*slot as usize] = Some(crate::turn::attempt_get_with_config(
+            TransactionIrStep::TurnAttemptGet {
+                attempt_id,
+                slot,
+                include_execution_config,
+            } => {
+                slots[*slot] = Some(crate::turn::attempt_get_with_config(
                     database,
                     &mut transaction,
                     attempt_id,
@@ -7602,7 +7820,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::TurnTimingTraceGet { task_id, slot } => {
-                slots[*slot as usize] = Some(crate::turn::timing_trace_get(
+                slots[*slot] = Some(crate::turn::timing_trace_get(
                     database,
                     &mut transaction,
                     task_id,
@@ -7614,7 +7832,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::timing_trace_list(
+                slots[*slot] = Some(Some(crate::turn::timing_trace_list(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7623,14 +7841,14 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::TurnPerceptionRecord { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::perception_record(
+                slots[*slot] = Some(Some(crate::turn::perception_record(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnRecover { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::recover(
+                slots[*slot] = Some(Some(crate::turn::recover(
                     database,
                     &mut transaction,
                     request,
@@ -7643,19 +7861,30 @@ fn prepare_transaction_ir_mode(
                     None => 0,
                 };
                 let response = if batched_turn_events {
-                    crate::turn::event_record_adjacent(database, &mut transaction, request,
-                        &mut adjacent_turn_projection)?
+                    crate::turn::event_record_adjacent(
+                        database,
+                        &mut transaction,
+                        request,
+                        &mut adjacent_turn_projection,
+                    )?
                 } else {
                     crate::turn::event_record(database, &mut transaction, request)?
                 };
                 if batched_turn_events {
                     let applied = serde_json::from_slice::<serde_json::Value>(&response)
-                        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData,
-                            "Turn event record response is malformed"))?
-                        .get("applied") == Some(&serde_json::Value::Bool(true));
+                        .map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "Turn event record response is malformed",
+                            )
+                        })?
+                        .get("applied")
+                        == Some(&serde_json::Value::Bool(true));
                     if *turn_event_applied.get_or_insert(applied) != applied {
-                        return Err(io::Error::new(io::ErrorKind::WouldBlock,
-                            "Turn event batch entries diverged inside one transaction"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::WouldBlock,
+                            "Turn event batch entries diverged inside one transaction",
+                        ));
                     }
                     // Composed records must not turn into a commit that drains
                     // every conversation's overlay or synchronizes each loose
@@ -7665,10 +7894,12 @@ fn prepare_transaction_ir_mode(
                     // it off would only repeat its work while the rest fits.
                     if applied {
                         let carried = database.carried_payload_bytes(&transaction)?;
-                        largest_turn_event_carried = largest_turn_event_carried
-                            .max(carried.saturating_sub(carried_before));
+                        largest_turn_event_carried =
+                            largest_turn_event_carried.max(carried.saturating_sub(carried_before));
                         if !database.commits_as_one_ordinary_delta(
-                            &transaction, carried.saturating_sub(largest_turn_event_carried)) {
+                            &transaction,
+                            carried.saturating_sub(largest_turn_event_carried),
+                        ) {
                             return Err(crate::resource_exhaustion::domain_bound(
                                 "Turn event batch exceeds one ordinary commit; record fewer entries per batch",
                             ));
@@ -7676,7 +7907,7 @@ fn prepare_transaction_ir_mode(
                         carried_after_turn_event = Some(carried);
                     }
                 }
-                slots[*slot as usize] = Some(Some(response));
+                slots[*slot] = Some(Some(response));
             }
             TransactionIrStep::TurnAttemptClaim {
                 attempt_id,
@@ -7684,7 +7915,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::attempt_claim(
+                slots[*slot] = Some(Some(crate::turn::attempt_claim(
                     database,
                     &mut transaction,
                     attempt_id,
@@ -7699,7 +7930,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::attempt_bind(
+                slots[*slot] = Some(Some(crate::turn::attempt_bind(
                     database,
                     &mut transaction,
                     attempt_id,
@@ -7717,7 +7948,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::attempt_start_with_automation(
+                slots[*slot] = Some(Some(crate::turn::attempt_start_with_automation(
                     database,
                     &mut transaction,
                     attempt_id,
@@ -7735,7 +7966,7 @@ fn prepare_transaction_ir_mode(
                 patch_mode,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::turn::events_list(
+                slots[*slot] = Some(crate::turn::events_list(
                     database,
                     &mut transaction,
                     attempt_id,
@@ -7746,8 +7977,9 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::TurnEventsPrune { request, slot } => {
-                let _retention = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_RETENTION_PRUNE);
-                slots[*slot as usize] = Some(Some(crate::turn::events_prune(
+                let _retention =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_RETENTION_PRUNE);
+                slots[*slot] = Some(Some(crate::turn::events_prune(
                     database,
                     &mut transaction,
                     request,
@@ -7759,7 +7991,7 @@ fn prepare_transaction_ir_mode(
                 deleted_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::delete(
+                slots[*slot] = Some(Some(crate::turn::delete(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7768,7 +8000,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::TurnCompact { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::compact(
+                slots[*slot] = Some(Some(crate::turn::compact(
                     database,
                     &mut transaction,
                     request,
@@ -7787,7 +8019,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::branch_create(
+                slots[*slot] = Some(Some(crate::turn::branch_create(
                     database,
                     &mut transaction,
                     &crate::turn::BranchCreateRequest {
@@ -7812,7 +8044,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::turn::branch_delete(
+                slots[*slot] = Some(Some(crate::turn::branch_delete(
                     database,
                     &mut transaction,
                     &crate::turn::BranchDeleteRequest {
@@ -7836,12 +8068,17 @@ fn prepare_transaction_ir_mode(
                 slot,
             } => {
                 if let Some(answer_json) = human_guidance_answer_json {
-                    slots[*slot as usize] = Some(Some(crate::turn::answer_guidance(
-                        database, &mut transaction, conversation_id, turn_id, answer_json, *committed_at_ms,
+                    slots[*slot] = Some(Some(crate::turn::answer_guidance(
+                        database,
+                        &mut transaction,
+                        conversation_id,
+                        turn_id,
+                        answer_json,
+                        *committed_at_ms,
                     )?));
                     continue;
                 }
-                slots[*slot as usize] = Some(Some(crate::turn::update_projection(
+                slots[*slot] = Some(Some(crate::turn::update_projection(
                     database,
                     &mut transaction,
                     &crate::turn::ProjectionUpdateRequest {
@@ -7863,27 +8100,45 @@ fn prepare_transaction_ir_mode(
                 slot,
             } => {
                 let mut deadline_seen = false;
-                slots.set_response(*slot as usize, crate::turn::sync_snapshot_with_proof(
-                    database,
-                    &mut transaction,
-                    conversation_id,
-                    *turn_limit,
-                    *max_projection_bytes,
-                    *include_artifact_hint,
-                    &mut || {
-                        let elapsed = deadline_elapsed();
-                        deadline_seen |= elapsed;
-                        elapsed
-                    },
-                )?.map(IrResponse::from_encoded));
+                slots.set_response(
+                    *slot,
+                    crate::turn::sync_snapshot_with_proof(
+                        database,
+                        &mut transaction,
+                        conversation_id,
+                        *turn_limit,
+                        *max_projection_bytes,
+                        *include_artifact_hint,
+                        &mut || {
+                            let elapsed = deadline_elapsed();
+                            deadline_seen |= elapsed;
+                            elapsed
+                        },
+                    )?
+                    .map(IrResponse::from_encoded),
+                );
                 snapshot_read_complete = !deadline_seen;
             }
             TransactionIrStep::TurnSyncRoundDirectory {
-                conversation_id, lane_id, offset, limit, sync_sequence, anchor_turn_id, slot,
+                conversation_id,
+                lane_id,
+                offset,
+                limit,
+                sync_sequence,
+                anchor_turn_id,
+                slot,
             } => {
-                slots[*slot as usize] = Some(crate::turn::sync_round_directory(database,
-                    &mut transaction, conversation_id, lane_id, *offset, *limit,
-                    *sync_sequence, anchor_turn_id, &mut deadline_elapsed)?);
+                slots[*slot] = Some(crate::turn::sync_round_directory(
+                    database,
+                    &mut transaction,
+                    conversation_id,
+                    lane_id,
+                    *offset,
+                    *limit,
+                    *sync_sequence,
+                    anchor_turn_id,
+                    &mut deadline_elapsed,
+                )?);
             }
             TransactionIrStep::TurnSyncPage {
                 conversation_id,
@@ -7894,7 +8149,7 @@ fn prepare_transaction_ir_mode(
                 max_projection_bytes,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::turn::sync_page(
+                slots[*slot] = Some(crate::turn::sync_page(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7912,7 +8167,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::turn::sync_changes(
+                slots[*slot] = Some(crate::turn::sync_changes(
                     database,
                     &mut transaction,
                     conversation_id,
@@ -7922,22 +8177,23 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::TurnSyncPrune { request, slot } => {
-                let _retention = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_RETENTION_PRUNE);
-                slots[*slot as usize] = Some(Some(crate::turn::sync_prune(
+                let _retention =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_RETENTION_PRUNE);
+                slots[*slot] = Some(Some(crate::turn::sync_prune(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnCleanup { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::turn::cleanup(
+                slots[*slot] = Some(Some(crate::turn::cleanup(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TurnSearchBackfillGlobal { request, slot } => {
-                slots[*slot as usize] = Some(Some(
+                slots[*slot] = Some(Some(
                     crate::semantic_executor::search_backfill_global::execute(
                         database,
                         &mut transaction,
@@ -7946,7 +8202,7 @@ fn prepare_transaction_ir_mode(
                 ));
             }
             TransactionIrStep::EntityRead { key, slot } => {
-                slots[*slot as usize] = Some(database.entity_get(&mut transaction, key)?);
+                slots[*slot] = Some(database.entity_get(&mut transaction, key)?);
             }
             TransactionIrStep::EntityPut {
                 key,
@@ -7968,9 +8224,16 @@ fn prepare_transaction_ir_mode(
                 logical_key,
                 slot,
             } => {
-                slots.set_projection(*slot as usize, crate::versioned_document::get_with_response_proof(
-                    database, &mut transaction, key, namespace, logical_key,
-                )?);
+                slots.set_projection(
+                    *slot,
+                    crate::versioned_document::get_with_response_proof(
+                        database,
+                        &mut transaction,
+                        key,
+                        namespace,
+                        logical_key,
+                    )?,
+                );
             }
             TransactionIrStep::TaskResultCheckpoint {
                 worker_claim,
@@ -7991,7 +8254,7 @@ fn prepare_transaction_ir_mode(
                     cache_prefix_hwm: *cache_prefix_hwm,
                     last_turn_cache_read: *last_turn_cache_read,
                 });
-                slots[*slot as usize] = Some(Some(crate::task_result::checkpoint(
+                slots[*slot] = Some(Some(crate::task_result::checkpoint(
                     database,
                     &mut transaction,
                     task_id,
@@ -8007,7 +8270,7 @@ fn prepare_transaction_ir_mode(
                 requested_user_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::task_result::record_get(
+                slots[*slot] = Some(crate::task_result::record_get(
                     database,
                     &mut transaction,
                     task_id,
@@ -8021,7 +8284,7 @@ fn prepare_transaction_ir_mode(
                 include_metadata,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::task_result::replay_get(
+                slots[*slot] = Some(crate::task_result::replay_get(
                     database,
                     &mut transaction,
                     task_id,
@@ -8041,7 +8304,7 @@ fn prepare_transaction_ir_mode(
                 after_key,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::task_result::summary_list(
+                slots[*slot] = Some(Some(crate::task_result::summary_list(
                     database,
                     &mut transaction,
                     &crate::task_result::SummaryListRequest {
@@ -8063,7 +8326,7 @@ fn prepare_transaction_ir_mode(
                 requested_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::task_result::abort(
+                slots[*slot] = Some(Some(crate::task_result::abort(
                     database,
                     &mut transaction,
                     task_id,
@@ -8077,7 +8340,7 @@ fn prepare_transaction_ir_mode(
                 requested_user_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::task_result::abort_requested(
+                slots[*slot] = Some(Some(crate::task_result::abort_requested(
                     database,
                     &mut transaction,
                     task_id,
@@ -8091,7 +8354,7 @@ fn prepare_transaction_ir_mode(
                 updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::task_result::recover_running(
+                slots[*slot] = Some(Some(crate::task_result::recover_running(
                     database,
                     &mut transaction,
                     &crate::task_result::RecoverRunningRequest {
@@ -8103,7 +8366,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::TaskResultRecoveryPending { slot } => {
-                slots[*slot as usize] = Some(Some(crate::task_result::recovery_pending(
+                slots[*slot] = Some(Some(crate::task_result::recovery_pending(
                     database,
                     &mut transaction,
                 )?));
@@ -8117,7 +8380,7 @@ fn prepare_transaction_ir_mode(
                 after_key,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::task_result::cost_experiment_scan(
+                slots[*slot] = Some(Some(crate::task_result::cost_experiment_scan(
                     database,
                     &mut transaction,
                     &crate::task_result::CostExperimentScanRequest {
@@ -8131,21 +8394,21 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::TenantUserCreate { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::tenant_user::create(
+                slots[*slot] = Some(Some(crate::tenant_user::create(
                     database,
                     &mut transaction,
                     request,
                 )?));
             }
             TransactionIrStep::TenantUserGet { selector, slot } => {
-                slots[*slot as usize] = Some(crate::tenant_user::get(
+                slots[*slot] = Some(crate::tenant_user::get(
                     database,
                     &mut transaction,
                     selector,
                 )?);
             }
             TransactionIrStep::TenantUserList { request, slot } => {
-                slots[*slot as usize] = Some(Some(crate::tenant_user::list(
+                slots[*slot] = Some(Some(crate::tenant_user::list(
                     database,
                     &mut transaction,
                     request,
@@ -8156,7 +8419,7 @@ fn prepare_transaction_ir_mode(
                 status,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::tenant_user::set_status(
+                slots[*slot] = Some(crate::tenant_user::set_status(
                     database,
                     &mut transaction,
                     user_id,
@@ -8168,7 +8431,7 @@ fn prepare_transaction_ir_mode(
                 role,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::tenant_user::set_role(
+                slots[*slot] = Some(crate::tenant_user::set_role(
                     database,
                     &mut transaction,
                     user_id,
@@ -8176,7 +8439,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::TenantUserAuthentication { email, slot } => {
-                slots[*slot as usize] = Some(crate::tenant_user::authentication(
+                slots[*slot] = Some(crate::tenant_user::authentication(
                     database,
                     &mut transaction,
                     email,
@@ -8187,7 +8450,7 @@ fn prepare_transaction_ir_mode(
                 last_login_at,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::tenant_user::record_login(
+                slots[*slot] = Some(Some(crate::tenant_user::record_login(
                     database,
                     &mut transaction,
                     user_id,
@@ -8195,7 +8458,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::CredentialCreate { request, slot } => {
-                slots[*slot as usize] = Some(crate::credential::create(
+                slots[*slot] = Some(crate::credential::create(
                     database,
                     &mut transaction,
                     request,
@@ -8203,7 +8466,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::CredentialCreateIfOwnerEmpty { request, slot } => {
-                slots[*slot as usize] = Some(crate::credential::create(
+                slots[*slot] = Some(crate::credential::create(
                     database,
                     &mut transaction,
                     request,
@@ -8215,7 +8478,7 @@ fn prepare_transaction_ir_mode(
                 credential_id,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::credential::get(
+                slots[*slot] = Some(crate::credential::get(
                     database,
                     &mut transaction,
                     boundary,
@@ -8223,14 +8486,14 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::CredentialList { boundary, slot } => {
-                slots[*slot as usize] = Some(Some(crate::credential::list(
+                slots[*slot] = Some(Some(crate::credential::list(
                     database,
                     &mut transaction,
                     boundary,
                 )?));
             }
             TransactionIrStep::CredentialExists { boundary, slot } => {
-                slots[*slot as usize] = Some(Some(crate::credential::exists(
+                slots[*slot] = Some(Some(crate::credential::exists(
                     database,
                     &mut transaction,
                     boundary,
@@ -8241,7 +8504,7 @@ fn prepare_transaction_ir_mode(
                 now,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::credential::authenticate(
+                slots[*slot] = Some(crate::credential::authenticate(
                     database,
                     &mut transaction,
                     secret_hash,
@@ -8253,7 +8516,7 @@ fn prepare_transaction_ir_mode(
                 now,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::credential::validate(
+                slots[*slot] = Some(crate::credential::validate(
                     database,
                     &mut transaction,
                     secret_hash,
@@ -8261,7 +8524,7 @@ fn prepare_transaction_ir_mode(
                 )?);
             }
             TransactionIrStep::CredentialIdentify { secret_hash, slot } => {
-                slots[*slot as usize] = Some(crate::credential::identify(
+                slots[*slot] = Some(crate::credential::identify(
                     database,
                     &mut transaction,
                     secret_hash,
@@ -8274,7 +8537,7 @@ fn prepare_transaction_ir_mode(
                 touch_if_before,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::credential::touch(
+                slots[*slot] = Some(Some(crate::credential::touch(
                     database,
                     &mut transaction,
                     boundary,
@@ -8289,7 +8552,7 @@ fn prepare_transaction_ir_mode(
                 request,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::credential::update(
+                slots[*slot] = Some(crate::credential::update(
                     database,
                     &mut transaction,
                     boundary,
@@ -8303,7 +8566,7 @@ fn prepare_transaction_ir_mode(
                 revoked_at,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::credential::revoke(
+                slots[*slot] = Some(Some(crate::credential::revoke(
                     database,
                     &mut transaction,
                     boundary,
@@ -8323,14 +8586,26 @@ fn prepare_transaction_ir_mode(
             } => {
                 let projection = if *include_value {
                     crate::versioned_document::list_direction_with_response_proof(
-                        database, &mut transaction, start, end, namespace, *limit, *reverse,
+                        database,
+                        &mut transaction,
+                        start,
+                        end,
+                        namespace,
+                        *limit,
+                        *reverse,
                     )?
                 } else {
                     crate::versioned_document::list_headers_direction_with_response_proof(
-                        database, &mut transaction, start, end, namespace, *limit, *reverse,
+                        database,
+                        &mut transaction,
+                        start,
+                        end,
+                        namespace,
+                        *limit,
+                        *reverse,
                     )?
                 };
-                slots.set_projection(*slot as usize, Some(projection));
+                slots.set_projection(*slot, Some(projection));
             }
             TransactionIrStep::VersionedDocumentPut {
                 key,
@@ -8341,7 +8616,7 @@ fn prepare_transaction_ir_mode(
                 updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::versioned_document::put(
+                slots[*slot] = Some(Some(crate::versioned_document::put(
                     database,
                     &mut transaction,
                     crate::versioned_document::PutRequest {
@@ -8361,7 +8636,7 @@ fn prepare_transaction_ir_mode(
                 expected_version,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::versioned_document::delete(
+                slots[*slot] = Some(Some(crate::versioned_document::delete(
                     database,
                     &mut transaction,
                     key.clone(),
@@ -8371,7 +8646,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::RecentProjectList { slot } => {
-                slots[*slot as usize] = Some(Some(crate::recent_project::list(
+                slots[*slot] = Some(Some(crate::recent_project::list(
                     database,
                     &mut transaction,
                 )?));
@@ -8382,7 +8657,7 @@ fn prepare_transaction_ir_mode(
                 updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::recent_project::touch(
+                slots[*slot] = Some(Some(crate::recent_project::touch(
                     database,
                     &mut transaction,
                     path,
@@ -8396,7 +8671,7 @@ fn prepare_transaction_ir_mode(
                 updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::recent_project::touch_many(
+                slots[*slot] = Some(Some(crate::recent_project::touch_many(
                     database,
                     &mut transaction,
                     paths,
@@ -8405,7 +8680,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::RecentProjectClear { slot } => {
-                slots[*slot as usize] = Some(Some(crate::recent_project::clear(
+                slots[*slot] = Some(Some(crate::recent_project::clear(
                     database,
                     &mut transaction,
                 )?));
@@ -8438,7 +8713,7 @@ fn prepare_transaction_ir_mode(
                         new_path,
                         *updated_at_ms,
                     )?;
-                slots[*slot as usize] = Some(Some(
+                slots[*slot] = Some(Some(
                     serde_json::to_vec(&json!({
                         "project": project,
                         "projectBrainMoved": brain_moved,
@@ -8454,7 +8729,7 @@ fn prepare_transaction_ir_mode(
                 ));
             }
             TransactionIrStep::DailyCostMonth { year, month, slot } => {
-                slots[*slot as usize] = Some(Some(crate::daily_cost::month(
+                slots[*slot] = Some(Some(crate::daily_cost::month(
                     database,
                     &mut transaction,
                     *year,
@@ -8462,11 +8737,10 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::DailyCostLatest { slot } => {
-                slots[*slot as usize] =
-                    Some(crate::daily_cost::latest(database, &mut transaction)?);
+                slots[*slot] = Some(crate::daily_cost::latest(database, &mut transaction)?);
             }
             TransactionIrStep::DailyCostPersistedDates { dates, slot } => {
-                slots[*slot as usize] = Some(Some(crate::daily_cost::persisted_dates(
+                slots[*slot] = Some(Some(crate::daily_cost::persisted_dates(
                     database,
                     &mut transaction,
                     dates,
@@ -8484,7 +8758,7 @@ fn prepare_transaction_ir_mode(
                     .ok()
                     .and_then(|value: serde_json::Value| value.as_object().cloned())
                     .ok_or_else(|| invalid_input("daily-cost conversations are malformed"))?;
-                slots[*slot as usize] = Some(Some(crate::daily_cost::upsert(
+                slots[*slot] = Some(Some(crate::daily_cost::upsert(
                     database,
                     &mut transaction,
                     &crate::daily_cost::UpsertRequest {
@@ -8497,7 +8771,7 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::DailyCostDelete { date, slot } => {
-                slots[*slot as usize] = Some(Some(crate::daily_cost::delete(
+                slots[*slot] = Some(Some(crate::daily_cost::delete(
                     database,
                     &mut transaction,
                     date.as_deref(),
@@ -8512,7 +8786,7 @@ fn prepare_transaction_ir_mode(
                 let rows: Vec<crate::log_aggregate::FlushRow> =
                     serde_json::from_slice(rows_json)
                         .map_err(|_| invalid_input("log-aggregate flush rows are malformed"))?;
-                slots[*slot as usize] = Some(Some(crate::log_aggregate::flush(
+                slots[*slot] = Some(Some(crate::log_aggregate::flush(
                     database,
                     &mut transaction,
                     &rows,
@@ -8527,7 +8801,7 @@ fn prepare_transaction_ir_mode(
                 limit,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::log_aggregate::query(
+                slots[*slot] = Some(Some(crate::log_aggregate::query(
                     database,
                     &mut transaction,
                     level,
@@ -8541,7 +8815,7 @@ fn prepare_transaction_ir_mode(
                 updated_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::plugin::register(
+                slots[*slot] = Some(Some(crate::plugin::register(
                     database,
                     &mut transaction,
                     manifest_json,
@@ -8549,101 +8823,100 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::PluginManifestGet { namespace, slot } => {
-                slots[*slot as usize] = Some(Some(crate::plugin::manifest_get(
+                slots[*slot] = Some(Some(crate::plugin::manifest_get(
                     database,
                     &mut transaction,
                     namespace,
                 )?));
             }
             TransactionIrStep::PluginRowOperation { request, slot } => {
-                slots[*slot as usize] = Some(crate::plugin_rows::execute(
+                slots[*slot] = Some(crate::plugin_rows::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Paper { request, slot } => {
-                slots[*slot as usize] =
-                    Some(crate::paper::execute(database, &mut transaction, request)?);
+                slots[*slot] = Some(crate::paper::execute(database, &mut transaction, request)?);
             }
             TransactionIrStep::PaperLibrary { request, slot } => {
-                slots[*slot as usize] = Some(crate::paper_library::execute(
+                slots[*slot] = Some(crate::paper_library::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::PaperArtifact { request, slot } => {
-                slots[*slot as usize] = Some(crate::paper_artifact::execute(
+                slots[*slot] = Some(crate::paper_artifact::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::PaperBuildArtifact { request, slot } => {
-                slots[*slot as usize] = Some(crate::paper_build_artifact::execute(
+                slots[*slot] = Some(crate::paper_build_artifact::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::PaperDocument { request, slot } => {
-                slots[*slot as usize] = Some(crate::paper_document::execute(
+                slots[*slot] = Some(crate::paper_document::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::PaperPodcast { request, slot } => {
-                slots[*slot as usize] = Some(crate::paper_podcast::execute(
+                slots[*slot] = Some(crate::paper_podcast::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::RawArchive { request, slot } => {
-                slots[*slot as usize] = Some(crate::raw_archive::execute(
+                slots[*slot] = Some(crate::raw_archive::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Research { request, slot } => {
-                slots[*slot as usize] = Some(crate::research::execute(
+                slots[*slot] = Some(crate::research::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Optimizer { request, slot } => {
-                slots[*slot as usize] = Some(crate::optimizer::execute(
+                slots[*slot] = Some(crate::optimizer::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::Knowledge { request, slot } => {
-                slots[*slot as usize] = Some(crate::knowledge::execute(
+                slots[*slot] = Some(crate::knowledge::execute(
                     database,
                     &mut transaction,
                     request,
                 )?);
             }
             TransactionIrStep::ProjectBrainGet { project_key, slot } => {
-                slots[*slot as usize] = Some(Some(crate::project_brain::get(
+                slots[*slot] = Some(Some(crate::project_brain::get(
                     database,
                     &mut transaction,
                     project_key,
                 )?));
             }
             TransactionIrStep::ProjectBrainActiveList { slot } => {
-                slots[*slot as usize] = Some(Some(crate::project_brain::list_active(
+                slots[*slot] = Some(Some(crate::project_brain::list_active(
                     database,
                     &mut transaction,
                 )?));
             }
             TransactionIrStep::ProjectBrainRecoverySnapshot { slot, cursor } => {
-                slots[*slot as usize] = Some(Some(crate::project_brain::recovery_snapshot(
+                slots[*slot] = Some(Some(crate::project_brain::recovery_snapshot(
                     database,
                     &mut transaction,
                     cursor.as_ref(),
@@ -8654,7 +8927,7 @@ fn prepare_transaction_ir_mode(
                 timestamp,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::project_brain::rebuild(
+                slots[*slot] = Some(Some(crate::project_brain::rebuild(
                     database,
                     &mut transaction,
                     project_key,
@@ -8672,7 +8945,7 @@ fn prepare_transaction_ir_mode(
                     .ok()
                     .and_then(|value: serde_json::Value| value.as_object().cloned())
                     .ok_or_else(|| invalid_input("Project Brain payload is malformed"))?;
-                slots[*slot as usize] = Some(Some(crate::project_brain::command(
+                slots[*slot] = Some(Some(crate::project_brain::command(
                     database,
                     &mut transaction,
                     &crate::project_brain::CommandRequest {
@@ -8690,7 +8963,7 @@ fn prepare_transaction_ir_mode(
                 now_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::browser_site_observation::get(
+                slots[*slot] = Some(crate::browser_site_observation::get(
                     database,
                     &mut transaction,
                     &crate::browser_site_observation::Identity {
@@ -8711,7 +8984,7 @@ fn prepare_transaction_ir_mode(
                 committed_at_ms,
                 slot,
             } => {
-                slots[*slot as usize] = Some(crate::browser_site_observation::record(
+                slots[*slot] = Some(crate::browser_site_observation::record(
                     database,
                     &mut transaction,
                     &crate::browser_site_observation::RecordRequest {
@@ -8749,7 +9022,7 @@ fn prepare_transaction_ir_mode(
                 worker_claim,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(execute_fenced_indexed_append(
+                slots[*slot] = Some(Some(execute_fenced_indexed_append(
                     database,
                     &mut transaction,
                     &crate::indexed_stream::AppendRequest {
@@ -8764,13 +9037,20 @@ fn prepare_transaction_ir_mode(
                 )?));
             }
             TransactionIrStep::IndexedStreamAppendBatch { items, slot } => {
-                let mut fenced = items
-                    .iter()
-                    .any(|item| !item.require_attempts_live.is_empty() || item.task_id.starts_with("conversation-attempt:") || item.worker_claim.is_some());
+                let mut fenced = items.iter().any(|item| {
+                    !item.require_attempts_live.is_empty()
+                        || item.task_id.starts_with("conversation-attempt:")
+                        || item.worker_claim.is_some()
+                });
                 if !fenced {
                     for item in items {
-                        if crate::task_result::worker_root_for_task(database, &mut transaction,
-                                &item.task_id)?.is_some() {
+                        if crate::task_result::worker_root_for_task(
+                            database,
+                            &mut transaction,
+                            &item.task_id,
+                        )?
+                        .is_some()
+                        {
                             fenced = true;
                             break;
                         }
@@ -8803,7 +9083,7 @@ fn prepare_transaction_ir_mode(
                         rejected += usize::from(result.get("rejected").is_some());
                         results.push(result);
                     }
-                    slots[*slot as usize] = Some(Some(
+                    slots[*slot] = Some(Some(
                         serde_json::to_vec(&json!({
                             "results": results,
                             "inserted": inserted,
@@ -8823,7 +9103,7 @@ fn prepare_transaction_ir_mode(
                             created_at_ms: item.created_at_ms,
                         })
                         .collect::<Vec<_>>();
-                    slots[*slot as usize] = Some(Some(crate::indexed_stream::append_batch(
+                    slots[*slot] = Some(Some(crate::indexed_stream::append_batch(
                         database,
                         &mut transaction,
                         &requests,
@@ -8840,7 +9120,7 @@ fn prepare_transaction_ir_mode(
                 inspector_projection,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::indexed_stream::list(
+                slots[*slot] = Some(Some(crate::indexed_stream::list(
                     database,
                     &mut transaction,
                     &crate::indexed_stream::ListRequest {
@@ -8854,8 +9134,13 @@ fn prepare_transaction_ir_mode(
                     },
                 )?));
             }
-            TransactionIrStep::IndexedStreamBounds { task_id, include_read_guard, types, slot } => {
-                slots[*slot as usize] = Some(Some(crate::indexed_stream::bounds(
+            TransactionIrStep::IndexedStreamBounds {
+                task_id,
+                include_read_guard,
+                types,
+                slot,
+            } => {
+                slots[*slot] = Some(Some(crate::indexed_stream::bounds(
                     database,
                     &mut transaction,
                     task_id,
@@ -8867,7 +9152,7 @@ fn prepare_transaction_ir_mode(
                 root_task_ids,
                 slot,
             } => {
-                slots[*slot as usize] = Some(Some(crate::indexed_stream::inspector_summary(
+                slots[*slot] = Some(Some(crate::indexed_stream::inspector_summary(
                     database,
                     &mut transaction,
                     root_task_ids,
@@ -8887,8 +9172,9 @@ fn prepare_transaction_ir_mode(
                         crate::indexed_stream::RetentionClass::Structural
                     }
                 };
-                let _retention = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_RETENTION_PRUNE);
-                slots[*slot as usize] = Some(Some(crate::indexed_stream::prune(
+                let _retention =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_RETENTION_PRUNE);
+                slots[*slot] = Some(Some(crate::indexed_stream::prune(
                     database,
                     &mut transaction,
                     &crate::indexed_stream::PruneRequest {
@@ -8911,8 +9197,12 @@ fn prepare_transaction_ir_mode(
                     &deadline_elapsed,
                 )?));
             }
-            TransactionIrStep::IndexedStreamLatest { task_id, metadata_only, slot } => {
-                slots[*slot as usize] = Some(crate::indexed_stream::latest(
+            TransactionIrStep::IndexedStreamLatest {
+                task_id,
+                metadata_only,
+                slot,
+            } => {
+                slots[*slot] = Some(crate::indexed_stream::latest(
                     database,
                     &mut transaction,
                     task_id,
@@ -8937,21 +9227,29 @@ fn prepare_transaction_ir_mode(
     };
     let receipt_cacheable = {
         let _policy = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_IR_RECEIPT_RESPONSE_POLICY);
-        effects.store_receipt && if response.receipt_cacheable_proven {
-            crate::request_profile::work(crate::request_profile::Work::ReceiptPolicyProofReuse, 1);
-            true
-        } else {
-            serde_json::from_slice::<serde_json::Value>(&response).map_or(true, |value| {
-                !value.is_null()
-                    && !value
-                        .as_object()
-                        .is_some_and(|object| object.get("ok") == Some(&serde_json::Value::Bool(false)))
-            })
-        }
+            crate::fsync_stats::STAGE_IR_RECEIPT_RESPONSE_POLICY,
+        );
+        effects.store_receipt
+            && if response.receipt_cacheable_proven {
+                crate::request_profile::work(
+                    crate::request_profile::Work::ReceiptPolicyProofReuse,
+                    1,
+                );
+                true
+            } else {
+                serde_json::from_slice::<serde_json::Value>(&response).map_or(true, |value| {
+                    !value.is_null()
+                        && !value.as_object().is_some_and(|object| {
+                            object.get("ok") == Some(&serde_json::Value::Bool(false))
+                        })
+                })
+            }
     };
     if !receipt_cacheable && !transaction.has_business_mutation() {
-        return Ok(PreparedTransactionIr { response, transaction: None });
+        return Ok(PreparedTransactionIr {
+            response,
+            transaction: None,
+        });
     }
     if receipt_cacheable {
         let _ta_receipt = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_TA_RECEIPT);
@@ -8980,7 +9278,10 @@ fn prepare_transaction_ir_mode(
             },
         )?;
     }
-    Ok(PreparedTransactionIr { response, transaction: Some(transaction) })
+    Ok(PreparedTransactionIr {
+        response,
+        transaction: Some(transaction),
+    })
 }
 
 #[cfg(test)]
@@ -9044,14 +9345,26 @@ mod tests {
         assert!(proven.clone().json_proven());
         // The operation remains record.get, but a literal can never inherit
         // the previously selected slot's certificate.
-        let literal =
-            result_bytes(&TransactionIrResult::Literal(b"not JSON".to_vec()), &mut slots).unwrap();
+        let literal = result_bytes(
+            &TransactionIrResult::Literal(b"not JSON".to_vec()),
+            &mut slots,
+        )
+        .unwrap();
         assert!(!literal.json_proven());
         assert!(crate::response_json::validate(&literal).is_err());
         assert!(slots.bytes[0].is_none());
         assert!(!slots.json_proven[0]);
-        slots.set_projection(0, crate::versioned_document::get_with_response_proof(
-            &database, &mut transaction, &record, "proof", "row").unwrap());
+        slots.set_projection(
+            0,
+            crate::versioned_document::get_with_response_proof(
+                &database,
+                &mut transaction,
+                &record,
+                "proof",
+                "row",
+            )
+            .unwrap(),
+        );
         slots[0].as_mut().unwrap().as_mut().unwrap()[0] = b'!';
         let mutated = result_bytes(&selected, &mut slots).unwrap();
         assert!(!mutated.json_proven());
@@ -9071,7 +9384,10 @@ mod tests {
         let pointer = bytes.as_ptr();
         let capacity = bytes.capacity();
         slots[0] = Some(Some(bytes));
-        let selected = TransactionIrResult::SlotOrLiteral { slot: 0, missing: b"null".to_vec() };
+        let selected = TransactionIrResult::SlotOrLiteral {
+            slot: 0,
+            missing: b"null".to_vec(),
+        };
         let response = result_bytes(&selected, &mut slots).unwrap();
         assert_eq!(response.bytes.as_ptr(), pointer);
         assert_eq!(response.bytes.capacity(), capacity);
@@ -9079,8 +9395,14 @@ mod tests {
         assert!(!response.json_proven());
         assert!(result_bytes(&selected, &mut slots).is_err());
         slots[0] = Some(None);
-        assert_eq!(result_bytes(&selected, &mut slots).unwrap().into_bytes(), b"null");
-        let invalid = TransactionIrResult::SlotOrLiteral { slot: usize::MAX, missing: Vec::new() };
+        assert_eq!(
+            result_bytes(&selected, &mut slots).unwrap().into_bytes(),
+            b"null"
+        );
+        let invalid = TransactionIrResult::SlotOrLiteral {
+            slot: usize::MAX,
+            missing: Vec::new(),
+        };
         assert!(result_bytes(&invalid, &mut slots).is_err());
     }
 
@@ -9088,28 +9410,49 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        crate::turn::append_settled_with_receipt_proof(&database, &mut transaction,
+        crate::turn::append_settled_with_receipt_proof(
+            &database,
+            &mut transaction,
             &crate::turn::AppendSettledRequest {
-                conversation_id: "receipt-producer".into(), actor: "human".into(),
-                status: "completed".into(), projection_json: br#"{"content":"escaped \n text","ok":false}"#.to_vec(),
-                projection_timestamp: None, settlement_json: br#"{"outcome":"completed"}"#.to_vec(),
-                lane_id: "main".into(), command_id: "producer-command".into(),
-                kind: "message".into(), run_id: String::new(), turn_id: "producer-turn".into(),
-                attempt_id: None, created_at_ms: 1000, committed_at_ms: 1000,
+                conversation_id: "receipt-producer".into(),
+                actor: "human".into(),
+                status: "completed".into(),
+                projection_json: br#"{"content":"escaped \n text","ok":false}"#.to_vec(),
+                projection_timestamp: None,
+                settlement_json: br#"{"outcome":"completed"}"#.to_vec(),
+                lane_id: "main".into(),
+                command_id: "producer-command".into(),
+                kind: "message".into(),
+                run_id: String::new(),
+                turn_id: "producer-turn".into(),
+                attempt_id: None,
+                created_at_ms: 1000,
+                committed_at_ms: 1000,
                 defaults: crate::conversation_header::TurnDefaults {
-                    allow_create: true, title: "Producer".into(), settings_json: b"{}".to_vec(), created_at_ms: 1000,
+                    allow_create: true,
+                    title: "Producer".into(),
+                    settings_json: b"{}".to_vec(),
+                    created_at_ms: 1000,
                 },
-            }).unwrap()
+            },
+        )
+        .unwrap()
     }
 
     #[test]
     fn receipt_proof_follows_only_selected_immutable_producer_bytes() {
-        let selected = TransactionIrResult::SlotOrLiteral { slot: 0, missing: b"null".to_vec() };
+        let selected = TransactionIrResult::SlotOrLiteral {
+            slot: 0,
+            missing: b"null".to_vec(),
+        };
         let mut slots = IrSlots::new();
         slots.set_settled_append_response(0, settled_receipt_response_fixture());
         let response = result_bytes(&selected, &mut slots).unwrap();
         assert!(response.receipt_cacheable_proven);
-        assert!(!response.json_proven(), "receipt policy is not an integrity proof");
+        assert!(
+            !response.json_proven(),
+            "receipt policy is not an integrity proof"
+        );
         crate::response_json::validate(&response).unwrap();
         let parsed: Value = serde_json::from_slice(&response).unwrap();
         assert!(parsed.get("ok").is_none());
@@ -9121,20 +9464,41 @@ mod tests {
 
         slots.set_settled_append_response(0, settled_receipt_response_fixture());
         let replacement = slots[0].as_mut().unwrap().as_mut().unwrap();
-        replacement.clear(); replacement.extend_from_slice(br#"{"ok":false}"#);
-        assert!(!result_bytes(&selected, &mut slots).unwrap().receipt_cacheable_proven);
+        replacement.clear();
+        replacement.extend_from_slice(br#"{"ok":false}"#);
+        assert!(
+            !result_bytes(&selected, &mut slots)
+                .unwrap()
+                .receipt_cacheable_proven
+        );
 
         slots.set_settled_append_response(0, settled_receipt_response_fixture());
-        let literal = result_bytes(&TransactionIrResult::Literal(b"null".to_vec()), &mut slots).unwrap();
+        let literal =
+            result_bytes(&TransactionIrResult::Literal(b"null".to_vec()), &mut slots).unwrap();
         assert!(!literal.receipt_cacheable_proven);
         slots[1] = Some(Some(br#"{"ok":false}"#.to_vec()));
-        let alternate = TransactionIrResult::SlotOrLiteral { slot: 1, missing: b"null".to_vec() };
-        assert!(!result_bytes(&alternate, &mut slots).unwrap().receipt_cacheable_proven);
+        let alternate = TransactionIrResult::SlotOrLiteral {
+            slot: 1,
+            missing: b"null".to_vec(),
+        };
+        assert!(
+            !result_bytes(&alternate, &mut slots)
+                .unwrap()
+                .receipt_cacheable_proven
+        );
         slots.set_projection(0, None);
-        assert!(!result_bytes(&selected, &mut slots).unwrap().receipt_cacheable_proven);
-        eprintln!("receipt_resource_layout: slots={} response={} slot_payloads={} slot_count={}",
-            std::mem::size_of::<IrSlots>(), std::mem::size_of::<IrResponse>(),
-            std::mem::size_of::<SparseSlotValues<Option<Option<Vec<u8>>>>>(), slots.bytes.len());
+        assert!(
+            !result_bytes(&selected, &mut slots)
+                .unwrap()
+                .receipt_cacheable_proven
+        );
+        eprintln!(
+            "receipt_resource_layout: slots={} response={} slot_payloads={} slot_count={}",
+            std::mem::size_of::<IrSlots>(),
+            std::mem::size_of::<IrResponse>(),
+            std::mem::size_of::<SparseSlotValues<Option<Option<Vec<u8>>>>>(),
+            slots.bytes.len()
+        );
     }
 
     #[test]
@@ -9210,9 +9574,13 @@ mod tests {
                 missing: b"null".to_vec(),
             },
         );
-        let result =
-            execute_transaction_ir_with_json_proof(&mut database, &ir, &mut Vec::new(), Duration::MAX)
-                .unwrap();
+        let result = execute_transaction_ir_with_json_proof(
+            &mut database,
+            &ir,
+            &mut Vec::new(),
+            Duration::MAX,
+        )
+        .unwrap();
         assert!(!result.json_proven());
         assert_eq!(result.into_bytes(), b"not JSON");
     }
@@ -9335,111 +9703,231 @@ mod tests {
         // Capture a legacy single-WAL snapshot before attaching the driver:
         // its install still retires window writes and requires this fence.
         engine.attach_rotation_driver();
-        engine.commit_transaction(b"window", &[b"pending payload"]).unwrap();
+        engine
+            .commit_transaction(b"window", &[b"pending payload"])
+            .unwrap();
         let mut adoption = engine.prepare_pack_publication_for_test();
-        assert_eq!(engine.finish_rotation_checkpoint(prepared, Ok(outcome)).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(
+            engine
+                .finish_rotation_checkpoint(prepared, Ok(outcome))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
         assert!(engine.online_rotation_blocks_writes());
         let wal_before = database.wal_len().unwrap();
         let staged_before = store.pending_staged_bytes().unwrap();
 
-        assert_eq!(execute_transaction_ir(&mut database, &command).unwrap(), committed);
+        assert_eq!(
+            execute_transaction_ir(&mut database, &command).unwrap(),
+            committed
+        );
         let mut conflicting_replay = command.clone();
-        conflicting_replay.command_effects.as_mut().unwrap().request_digest = [99; 32];
-        assert_eq!(execute_transaction_ir(&mut database, &conflicting_replay).unwrap_err().kind(), io::ErrorKind::WouldBlock);
-        assert_eq!(execute_transaction_ir(&mut database, &query(Vec::new(),
-            TransactionIrResult::Literal(b"readable".to_vec()))).unwrap(), b"readable");
+        conflicting_replay
+            .command_effects
+            .as_mut()
+            .unwrap()
+            .request_digest = [99; 32];
+        assert_eq!(
+            execute_transaction_ir(&mut database, &conflicting_replay)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            execute_transaction_ir(
+                &mut database,
+                &query(
+                    Vec::new(),
+                    TransactionIrResult::Literal(b"readable".to_vec())
+                )
+            )
+            .unwrap(),
+            b"readable"
+        );
 
         let mut fresh = command.clone();
         fresh.command_effects.as_mut().unwrap().command_id = "new-command".to_owned();
         // The old stream position is deliberately stale. While fenced, the
         // write must be parked before even evaluating this semantic conflict.
-        assert_eq!(execute_transaction_ir(&mut database, &fresh).unwrap_err().kind(), io::ErrorKind::ResourceBusy);
+        assert_eq!(
+            execute_transaction_ir(&mut database, &fresh)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::ResourceBusy
+        );
         assert_eq!(database.wal_len().unwrap(), wal_before);
         assert_eq!(store.pending_staged_bytes().unwrap(), staged_before);
 
         let published = crate::engine::publish_prepared_pack_adoption(&mut adoption);
-        database.engine_mut_for_test().finish_pack_adoption(adoption, published).unwrap();
+        database
+            .engine_mut_for_test()
+            .finish_pack_adoption(adoption, published)
+            .unwrap();
         drop(registration);
         let crate::engine::RotationWork::Deferred(prepared, outcome) =
-            database.take_prepared_rotation().unwrap().unwrap() else { panic!() };
-        database.finish_rotation_checkpoint(prepared, Ok(outcome)).unwrap();
-        assert_eq!(execute_transaction_ir(&mut database, &fresh).unwrap_err().kind(), io::ErrorKind::WouldBlock);
-        assert_eq!(execute_transaction_ir(&mut database, &command).unwrap(), committed);
+            database.take_prepared_rotation().unwrap().unwrap()
+        else {
+            panic!()
+        };
+        database
+            .finish_rotation_checkpoint(prepared, Ok(outcome))
+            .unwrap();
+        assert_eq!(
+            execute_transaction_ir(&mut database, &fresh)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            execute_transaction_ir(&mut database, &command).unwrap(),
+            committed
+        );
     }
 
     #[test]
     fn ordered_step_demand_exceeds_former_quota_with_late_conflict_rollback_and_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let stream = StreamKey::new(7, 11, "task_event", b"step-demand").unwrap();
-        let make_key = |ordinal: u64| EntityKey::new(7, 11, "ir-test", &ordinal.to_be_bytes()).unwrap();
+        let make_key =
+            |ordinal: u64| EntityKey::new(7, 11, "ir-test", &ordinal.to_be_bytes()).unwrap();
         {
             let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
             let mut command = stream_command(stream.clone());
             let mut tail = command.steps.pop().unwrap();
-            if let TransactionIrStep::StreamAppend { expected_next_sequence, .. } = &mut tail {
+            if let TransactionIrStep::StreamAppend {
+                expected_next_sequence,
+                ..
+            } = &mut tail
+            {
                 *expected_next_sequence = 2;
             }
-            command.steps = (0..1001_u64).map(|ordinal| TransactionIrStep::EntityPut {
-                key: make_key(ordinal), value: ordinal.to_be_bytes().to_vec(),
-                condition: EntityWriteCondition::Always,
-            }).collect();
+            command.steps = (0..1001_u64)
+                .map(|ordinal| TransactionIrStep::EntityPut {
+                    key: make_key(ordinal),
+                    value: ordinal.to_be_bytes().to_vec(),
+                    condition: EntityWriteCondition::Always,
+                })
+                .collect();
             command.steps.push(tail);
             command.validate().unwrap();
             let before = database.wal_len().unwrap();
-            assert_eq!(execute_transaction_ir(&mut database, &command).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(
+                execute_transaction_ir(&mut database, &command)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::WouldBlock
+            );
             assert_eq!(database.wal_len().unwrap(), before);
             let mut read = database.begin(7, 11).unwrap();
-            for ordinal in 0..1001 { assert_eq!(database.entity_get(&mut read, &make_key(ordinal)).unwrap(), None); }
+            for ordinal in 0..1001 {
+                assert_eq!(
+                    database.entity_get(&mut read, &make_key(ordinal)).unwrap(),
+                    None
+                );
+            }
             drop(read);
-            if let TransactionIrStep::StreamAppend { expected_next_sequence, .. } = command.steps.last_mut().unwrap() {
+            if let TransactionIrStep::StreamAppend {
+                expected_next_sequence,
+                ..
+            } = command.steps.last_mut().unwrap()
+            {
                 *expected_next_sequence = 1;
             }
-            assert_eq!(execute_transaction_ir(&mut database, &command).unwrap(), br#"{"inserted":true}"#);
+            assert_eq!(
+                execute_transaction_ir(&mut database, &command).unwrap(),
+                br#"{"inserted":true}"#
+            );
         }
         let database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut read = database.begin(7, 11).unwrap();
         for ordinal in 0..1001_u64 {
-            assert_eq!(database.entity_get(&mut read, &make_key(ordinal)).unwrap(), Some(ordinal.to_be_bytes().to_vec()));
+            assert_eq!(
+                database.entity_get(&mut read, &make_key(ordinal)).unwrap(),
+                Some(ordinal.to_be_bytes().to_vec())
+            );
         }
-        assert_eq!(database.stream_read(7, 11, &stream, 1, 2).unwrap().events.len(), 1);
+        assert_eq!(
+            database
+                .stream_read(7, 11, &stream, 1, 2)
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn sparse_slot_demand_exceeds_former_capacity_and_large_identifier_reopens_exactly() {
         let directory = tempfile::tempdir().unwrap();
-        let source_key = |ordinal: u64| EntityKey::new(7, 11, "ir-test", &ordinal.to_be_bytes()).unwrap();
-        let target_key = |ordinal: u64| EntityKey::new(7, 11, "ir-test", format!("target-{ordinal}").as_bytes()).unwrap();
+        let source_key =
+            |ordinal: u64| EntityKey::new(7, 11, "ir-test", &ordinal.to_be_bytes()).unwrap();
+        let target_key = |ordinal: u64| {
+            EntityKey::new(7, 11, "ir-test", format!("target-{ordinal}").as_bytes()).unwrap()
+        };
         {
             let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
             let mut seed = database.begin(7, 11).unwrap();
             for ordinal in 0..513_u64 {
-                database.entity_put(&mut seed, source_key(ordinal), ordinal.to_be_bytes().to_vec()).unwrap();
+                database
+                    .entity_put(
+                        &mut seed,
+                        source_key(ordinal),
+                        ordinal.to_be_bytes().to_vec(),
+                    )
+                    .unwrap();
             }
             database.commit(seed).unwrap();
             let stream = StreamKey::new(7, 11, "task_event", b"slot-demand").unwrap();
             let mut command = stream_command(stream);
             command.steps.clear();
             for ordinal in 0..513_u64 {
-                command.steps.push(TransactionIrStep::EntityRead { key: source_key(ordinal), slot: ordinal as usize });
-                command.steps.push(TransactionIrStep::EntityPut { key: target_key(ordinal),
-                    value: ordinal.to_be_bytes().to_vec(), condition: EntityWriteCondition::SlotPresent(ordinal as usize) });
+                command.steps.push(TransactionIrStep::EntityRead {
+                    key: source_key(ordinal),
+                    slot: ordinal as usize,
+                });
+                command.steps.push(TransactionIrStep::EntityPut {
+                    key: target_key(ordinal),
+                    value: ordinal.to_be_bytes().to_vec(),
+                    condition: EntityWriteCondition::SlotPresent(ordinal as usize),
+                });
             }
-            command.steps.push(TransactionIrStep::EntityRead { key: source_key(512), slot: usize::MAX });
-            command.result = TransactionIrResult::SlotOrLiteral { slot: usize::MAX, missing: Vec::new() };
+            command.steps.push(TransactionIrStep::EntityRead {
+                key: source_key(512),
+                slot: usize::MAX,
+            });
+            command.result = TransactionIrResult::SlotOrLiteral {
+                slot: usize::MAX,
+                missing: Vec::new(),
+            };
             command.validate().unwrap();
             let mut duplicate = command.clone();
-            duplicate.steps.push(TransactionIrStep::EntityRead { key: source_key(0), slot: 0 });
+            duplicate.steps.push(TransactionIrStep::EntityRead {
+                key: source_key(0),
+                slot: 0,
+            });
             assert!(duplicate.validate().is_err());
             let mut unread = command.clone();
-            unread.steps.push(TransactionIrStep::EntityPut { key: target_key(999), value: Vec::new(),
-                condition: EntityWriteCondition::SlotPresent(999) });
+            unread.steps.push(TransactionIrStep::EntityPut {
+                key: target_key(999),
+                value: Vec::new(),
+                condition: EntityWriteCondition::SlotPresent(999),
+            });
             assert!(unread.validate().is_err());
-            assert_eq!(execute_transaction_ir(&mut database, &command).unwrap(), 512_u64.to_be_bytes());
+            assert_eq!(
+                execute_transaction_ir(&mut database, &command).unwrap(),
+                512_u64.to_be_bytes()
+            );
         }
         let database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut read = database.begin(7, 11).unwrap();
         for ordinal in 0..513_u64 {
-            assert_eq!(database.entity_get(&mut read, &target_key(ordinal)).unwrap(), Some(ordinal.to_be_bytes().to_vec()));
+            assert_eq!(
+                database
+                    .entity_get(&mut read, &target_key(ordinal))
+                    .unwrap(),
+                Some(ordinal.to_be_bytes().to_vec())
+            );
         }
     }
 
@@ -9450,58 +9938,102 @@ mod tests {
         assert_eq!(slots.bytes.len(), 0);
         slots.set_settled_append_response(usize::MAX, settled_receipt_response_fixture());
         assert_eq!(slots.bytes.len(), 1);
-        let selected = TransactionIrResult::SlotOrLiteral { slot: usize::MAX, missing: Vec::new() };
+        let selected = TransactionIrResult::SlotOrLiteral {
+            slot: usize::MAX,
+            missing: Vec::new(),
+        };
         assert!(slots.receipt_cacheable_proven[usize::MAX]);
         slots[usize::MAX].as_mut().unwrap().as_mut().unwrap()[0] = b'!';
         assert!(!slots.receipt_cacheable_proven[usize::MAX]);
-        assert!(!result_bytes(&selected, &mut slots).unwrap().receipt_cacheable_proven);
+        assert!(
+            !result_bytes(&selected, &mut slots)
+                .unwrap()
+                .receipt_cacheable_proven
+        );
         assert_eq!(slots.bytes.len(), 1);
-        eprintln!("sparse_ir_slots: resident_header_bytes={} touched_slots={}",
-            std::mem::size_of::<IrSlots>(), slots.bytes.len());
+        eprintln!(
+            "sparse_ir_slots: resident_header_bytes={} touched_slots={}",
+            std::mem::size_of::<IrSlots>(),
+            slots.bytes.len()
+        );
     }
 
     #[test]
     fn literal_demand_exceeds_former_aggregate_quota_with_atomic_rollback_and_reopen() {
         let directory = tempfile::tempdir().unwrap();
-        let make_key = |ordinal: u64| EntityKey::new(7, 11, "ir-test", &ordinal.to_be_bytes()).unwrap();
+        let make_key =
+            |ordinal: u64| EntityKey::new(7, 11, "ir-test", &ordinal.to_be_bytes()).unwrap();
         let stream = StreamKey::new(7, 11, "task_event", b"literal-demand").unwrap();
         {
             let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
             let mut command = stream_command(stream.clone());
             let mut tail = command.steps.pop().unwrap();
-            if let TransactionIrStep::StreamAppend { expected_next_sequence, .. } = &mut tail {
+            if let TransactionIrStep::StreamAppend {
+                expected_next_sequence,
+                ..
+            } = &mut tail
+            {
                 *expected_next_sequence = 2;
             }
-            command.steps = (0..1501_u64).map(|ordinal| TransactionIrStep::EntityPut {
-                key: make_key(ordinal), value: vec![(ordinal % 251) as u8; 7000],
-                condition: EntityWriteCondition::Always,
-            }).collect();
+            command.steps = (0..1501_u64)
+                .map(|ordinal| TransactionIrStep::EntityPut {
+                    key: make_key(ordinal),
+                    value: vec![(ordinal % 251) as u8; 7000],
+                    condition: EntityWriteCondition::Always,
+                })
+                .collect();
             command.steps.push(tail);
             command.result = TransactionIrResult::Literal(vec![b'x'; 9 * 1024 * 1024]);
             command.validate().unwrap();
             let before = database.wal_len().unwrap();
-            assert_eq!(execute_transaction_ir(&mut database, &command).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(
+                execute_transaction_ir(&mut database, &command)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::WouldBlock
+            );
             assert_eq!(database.wal_len().unwrap(), before);
             let mut read = database.begin(7, 11).unwrap();
-            for ordinal in 0..1501 { assert!(database.entity_get(&mut read, &make_key(ordinal)).unwrap().is_none()); }
+            for ordinal in 0..1501 {
+                assert!(database
+                    .entity_get(&mut read, &make_key(ordinal))
+                    .unwrap()
+                    .is_none());
+            }
             drop(read);
-            if let TransactionIrStep::StreamAppend { expected_next_sequence, .. } = command.steps.last_mut().unwrap() {
+            if let TransactionIrStep::StreamAppend {
+                expected_next_sequence,
+                ..
+            } = command.steps.last_mut().unwrap()
+            {
                 *expected_next_sequence = 1;
             }
             let response = execute_transaction_ir(&mut database, &command).unwrap();
             if let TransactionIrResult::Literal(expected) = &command.result {
                 assert_eq!(response.len(), expected.len());
                 assert_eq!(blake3::hash(&response), blake3::hash(expected));
-            } else { panic!("literal fixture changed"); }
+            } else {
+                panic!("literal fixture changed");
+            }
         }
         let database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut read = database.begin(7, 11).unwrap();
         for ordinal in 0..1501_u64 {
-            let value = database.entity_get(&mut read, &make_key(ordinal)).unwrap().unwrap();
+            let value = database
+                .entity_get(&mut read, &make_key(ordinal))
+                .unwrap()
+                .unwrap();
             assert_eq!(value.len(), 7000);
             assert!(value.iter().all(|byte| *byte == (ordinal % 251) as u8));
         }
-        assert_eq!(database.stream_read(7, 11, &stream, 1, 2).unwrap().events.len(), 1);
+        assert_eq!(
+            database
+                .stream_read(7, 11, &stream, 1, 2)
+                .unwrap()
+                .events
+                .len(),
+            1
+        );
     }
 
     #[test]

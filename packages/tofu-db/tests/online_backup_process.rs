@@ -218,7 +218,10 @@ impl WireClient {
                 response.error_message
             );
             assert_eq!(response.error_code.as_deref(), Some("database_unavailable"));
-            assert!(response.retryable, "system.backup failure must be retryable");
+            assert!(
+                response.retryable,
+                "system.backup failure must be retryable"
+            );
             assert!(
                 attempt < BACKUP_ATTEMPTS,
                 "system.backup kept failing: {:?}",
@@ -244,8 +247,7 @@ fn upsert_document(client: &mut WireClient, date: &str, blob: &str) {
         }),
     );
     assert_eq!(
-        response.status,
-        0,
+        response.status, 0,
         "write for {date} failed: {:?}",
         response.error_message
     );
@@ -260,7 +262,7 @@ fn unique_blob(batch: u32, index: u32) -> String {
 
 fn sha256_file(path: &Path) -> String {
     use sha2::Digest;
-    let digest = sha2::Sha256::digest(&std::fs::read(path).unwrap());
+    let digest = sha2::Sha256::digest(std::fs::read(path).unwrap());
     let mut encoded = String::with_capacity(digest.len() * 2);
     for byte in digest {
         use std::fmt::Write as _;
@@ -338,7 +340,11 @@ fn assert_backup_receipt(payload: &Value, backup_dir: &Path) {
             "pruned_block_bytes",
         ])
     );
-    assert_eq!(payload["prune_error"], Value::Null, "retention failed after publication");
+    assert_eq!(
+        payload["prune_error"],
+        Value::Null,
+        "retention failed after publication"
+    );
 
     // Scheduler receipt shape (lib/scheduler/manager.py).
     assert!(payload.is_object());
@@ -396,7 +402,11 @@ fn assert_backup_receipt(payload: &Value, backup_dir: &Path) {
 
     // `sha256` is the lowercase hex digest of the published manifest file.
     let sha256 = payload["sha256"].as_str().unwrap();
-    assert_eq!(sha256.len(), 64, "manifest sha256 must be 64 hex characters");
+    assert_eq!(
+        sha256.len(),
+        64,
+        "manifest sha256 must be 64 hex characters"
+    );
     assert!(
         sha256
             .bytes()
@@ -410,7 +420,10 @@ fn assert_backup_receipt(payload: &Value, backup_dir: &Path) {
     // writes the entire file. Either case must authenticate the actual file.
     let manifest = PathBuf::from(payload["manifest"].as_str().unwrap());
     assert!(manifest.is_file(), "receipt manifest must exist on disk");
-    assert_eq!(manifest.parent().unwrap(), store(backup_dir).join("snapshots"));
+    assert_eq!(
+        manifest.parent().unwrap(),
+        store(backup_dir).join("snapshots")
+    );
     let name = manifest.file_name().unwrap().to_str().unwrap();
     assert!(name.starts_with("snapshot-") && name.ends_with(".manifest"));
     assert_eq!(sha256, sha256_file(&manifest));
@@ -460,7 +473,11 @@ fn wait_for_overlay_merge_commit(client: &mut WireClient) {
     let deadline = std::time::Instant::now() + BACKUP_DEADLINE;
     loop {
         let metrics = client.control_json("system.metrics");
-        if metrics["durability"]["overlayMergeCommits"].as_u64().unwrap_or(0) > 0 {
+        if metrics["durability"]["overlayMergeCommits"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+        {
             return;
         }
         assert!(
@@ -493,11 +510,24 @@ fn repeated_epoch_reuses_manifest_without_reporting_new_manifest_bytes() {
     assert_eq!(repeated["manifest"], first["manifest"]);
     assert_eq!(repeated["sha256"], first["sha256"]);
     assert_eq!(repeated["durable_sequence"], first["durable_sequence"]);
-    for field in ["bytes", "copied_blocks", "copied_block_bytes", "manifest_bytes"] {
-        assert_eq!(repeated[field], json!(0), "unchanged epoch must not copy {field}");
+    for field in [
+        "bytes",
+        "copied_blocks",
+        "copied_block_bytes",
+        "manifest_bytes",
+    ] {
+        assert_eq!(
+            repeated[field],
+            json!(0),
+            "unchanged epoch must not copy {field}"
+        );
     }
     assert_backup_receipt(&repeated, &backup_dir);
-    assert_eq!(repeated["source_reads"], json!(0), "an unchanged epoch reads nothing");
+    assert_eq!(
+        repeated["source_reads"],
+        json!(0),
+        "an unchanged epoch reads nothing"
+    );
     assert_eq!(snapshot_manifests(&backup_dir).len(), generations);
     daemon.stop_gracefully();
 }
@@ -615,16 +645,16 @@ fn system_backup_publishes_a_complete_restorable_snapshot() {
         .collect();
     assert_eq!(persisted.len(), 20);
     for date in &days {
-        assert!(persisted.contains(date), "restored authority is missing {date}");
+        assert!(
+            persisted.contains(date),
+            "restored authority is missing {date}"
+        );
     }
     let latest = client.call("daily_cost.latest", json!({"user_id": 11}), None);
     assert_eq!(latest.status, 0);
     let latest: Value = serde_json::from_slice(&latest.payload).unwrap();
     assert_eq!(latest["date"], json!("2026-03-20"));
-    assert_eq!(
-        latest["conversations"]["blob"],
-        json!(unique_blob(0, 19))
-    );
+    assert_eq!(latest["conversations"]["blob"], json!(unique_blob(0, 19)));
     restored.stop_gracefully();
 }
 

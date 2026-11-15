@@ -19,12 +19,16 @@ fn key(index: u8) -> EntityKey {
 fn put_values(database: &mut AuthorityDatabase) {
     for index in 0..4_u8 {
         let mut transaction = database.begin(7, 11).unwrap();
-        database.entity_put(&mut transaction, key(index), vec![index; 64]).unwrap();
+        database
+            .entity_put(&mut transaction, key(index), vec![index; 64])
+            .unwrap();
         database.commit(transaction).unwrap();
     }
 }
 
-fn prepare_rotation(database: &mut AuthorityDatabase) -> Box<crate::engine::PreparedRotationCheckpoint> {
+fn prepare_rotation(
+    database: &mut AuthorityDatabase,
+) -> Box<crate::engine::PreparedRotationCheckpoint> {
     let engine = database.engine_mut_for_test();
     engine.attach_rotation_driver();
     match engine.try_prepare_rotation_checkpoint().unwrap() {
@@ -34,24 +38,43 @@ fn prepare_rotation(database: &mut AuthorityDatabase) -> Box<crate::engine::Prep
 }
 
 fn window_ids(database: &Arc<Mutex<AuthorityDatabase>>) -> Vec<BlockId> {
-    database.lock().unwrap().block_store_shared().publication_window_block_ids()
+    database
+        .lock()
+        .unwrap()
+        .block_store_shared()
+        .publication_window_block_ids()
 }
 
 /// Every history segment the installed manifest names reads back, every
 /// value reads back, and a crash image of the volume reopens.
-fn assert_installed_history_complete(database: &Arc<Mutex<AuthorityDatabase>>, vfs: &DeterministicVfs) {
+fn assert_installed_history_complete(
+    database: &Arc<Mutex<AuthorityDatabase>>,
+    vfs: &DeterministicVfs,
+) {
     let mut guard = database.lock().unwrap();
-    let manifest = guard.engine_mut_for_test().state().history_manifest_block_id.unwrap();
-    guard.read_block_for_test(manifest).expect("the installed history manifest survives");
+    let manifest = guard
+        .engine_mut_for_test()
+        .state()
+        .history_manifest_block_id
+        .unwrap();
+    guard
+        .read_block_for_test(manifest)
+        .expect("the installed history manifest survives");
     for segment in guard.engine_mut_for_test().history_segment_block_ids() {
-        guard.read_block_for_test(segment).expect("an installed history segment survives");
+        guard
+            .read_block_for_test(segment)
+            .expect("an installed history segment survives");
     }
     drop(guard);
-    let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), Arc::new(vfs.fork_durable().unwrap()))
-        .expect("the installed history reopens");
+    let reopened =
+        AuthorityDatabase::open_with_vfs(Path::new("/data"), Arc::new(vfs.fork_durable().unwrap()))
+            .expect("the installed history reopens");
     let mut transaction = reopened.begin(7, 11).unwrap();
     for index in 0..4_u8 {
-        assert_eq!(reopened.entity_get(&mut transaction, &key(index)).unwrap(), Some(vec![index; 64]));
+        assert_eq!(
+            reopened.entity_get(&mut transaction, &key(index)).unwrap(),
+            Some(vec![index; 64])
+        );
     }
 }
 
@@ -63,13 +86,19 @@ fn epochs_inside_a_rotation_window_keep_its_outputs_and_still_reclaim() {
     let vfs = Arc::new(DeterministicVfs::new(None));
     vfs.create_dir(Path::new("/data")).unwrap();
     vfs.sync_directory(Path::new("/")).unwrap();
-    let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let mut database =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     put_values(&mut database);
-    let orphan = database.write_orphan_block_for_test(b"garbage from before the window").unwrap();
+    let orphan = database
+        .write_orphan_block_for_test(b"garbage from before the window")
+        .unwrap();
     let prepared = prepare_rotation(&mut database);
     let database = Arc::new(Mutex::new(database));
     let outcome = crate::engine::encode_rotation_segments(&prepared).unwrap();
-    assert!(!window_ids(&database).is_empty(), "the encoded outputs belong to the open window");
+    assert!(
+        !window_ids(&database).is_empty(),
+        "the encoded outputs belong to the open window"
+    );
 
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
@@ -77,7 +106,12 @@ fn epochs_inside_a_rotation_window_keep_its_outputs_and_still_reclaim() {
     let inside = metrics(&collector);
     assert_eq!((inside.epochs_completed, inside.deferred_epochs), (2, 0));
     assert_eq!(
-        database.lock().unwrap().read_block_for_test(orphan).unwrap_err().kind(),
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(orphan)
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::NotFound,
         "an open window does not stop reclamation"
     );
@@ -88,7 +122,10 @@ fn epochs_inside_a_rotation_window_keep_its_outputs_and_still_reclaim() {
         .engine_mut_for_test()
         .finish_rotation_checkpoint(prepared, Ok(outcome))
         .unwrap();
-    assert!(window_ids(&database).is_empty(), "installation closes the window");
+    assert!(
+        window_ids(&database).is_empty(),
+        "installation closes the window"
+    );
     run_epoch(&mut collector, &database);
     run_epoch(&mut collector, &database);
     assert_installed_history_complete(&database, &vfs);
@@ -101,14 +138,21 @@ fn epochs_inside_a_rotation_window_keep_its_outputs_and_still_reclaim() {
 #[test]
 fn epoch_spanning_a_history_compaction_install_keeps_the_installed_history() {
     let vfs = UnfinishableMarkVfs::new();
-    let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let mut database =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     database.set_write_overlay_for_test(false);
     put_values(&mut database);
     for _ in 0..3 {
         let prepared = prepare_rotation(&mut database);
         let outcome = crate::engine::encode_rotation_segments(&prepared).unwrap();
-        database.engine_mut_for_test().finish_rotation_checkpoint(prepared, Ok(outcome)).unwrap();
-        database.engine_mut_for_test().commit(b"next history segment").unwrap();
+        database
+            .engine_mut_for_test()
+            .finish_rotation_checkpoint(prepared, Ok(outcome))
+            .unwrap();
+        database
+            .engine_mut_for_test()
+            .commit(b"next history segment")
+            .unwrap();
     }
     let database = Arc::new(Mutex::new(database));
     let prepared = database
@@ -119,7 +163,10 @@ fn epoch_spanning_a_history_compaction_install_keeps_the_installed_history() {
         .unwrap()
         .unwrap();
     let outcome = crate::engine::encode_history_compaction(&prepared);
-    assert!(!window_ids(&database).is_empty(), "the encoded manifest belongs to the open window");
+    assert!(
+        !window_ids(&database).is_empty(),
+        "the encoded manifest belongs to the open window"
+    );
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
     // Install between the second epoch's capture and its deletion hold.
@@ -129,13 +176,24 @@ fn epoch_spanning_a_history_compaction_install_keeps_the_installed_history() {
         let pending = Arc::clone(&pending);
         *vfs.before_segment_listing.lock().unwrap() = Some(Box::new(move || {
             let (prepared, outcome) = pending.lock().unwrap().take().unwrap();
-            database.lock().unwrap().engine_mut_for_test().finish_history_compaction(prepared, outcome).unwrap();
+            database
+                .lock()
+                .unwrap()
+                .engine_mut_for_test()
+                .finish_history_compaction(prepared, outcome)
+                .unwrap();
         }));
     }
     run_epoch(&mut collector, &database);
-    assert!(pending.lock().unwrap().is_none(), "the install ran inside the epoch");
+    assert!(
+        pending.lock().unwrap().is_none(),
+        "the install ran inside the epoch"
+    );
     assert!(window_ids(&database).is_empty());
-    assert!(metrics(&collector).total_reclaimed_blocks > 0, "the pruned history is reclaimed");
+    assert!(
+        metrics(&collector).total_reclaimed_blocks > 0,
+        "the pruned history is reclaimed"
+    );
     assert_installed_history_complete(&database, &vfs.inner);
 }
 
@@ -146,14 +204,29 @@ fn pack_adoption_window_marks_its_catalog_root_until_it_installs() {
     let vfs = Arc::new(DeterministicVfs::new(None));
     vfs.create_dir(Path::new("/data")).unwrap();
     vfs.sync_directory(Path::new("/")).unwrap();
-    let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
-    let mut prepared = database.engine_mut_for_test().prepare_pack_publication_for_test();
+    let mut database =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let mut prepared = database
+        .engine_mut_for_test()
+        .prepare_pack_publication_for_test();
     let outcome = crate::engine::publish_prepared_pack_adoption(&mut prepared);
-    let capture = database.online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
-    database.engine_mut_for_test().finish_pack_adoption(prepared, outcome).unwrap();
-    let installed = database.engine_mut_for_test().state().payload_manifest_block_id.unwrap();
+    let capture = database
+        .online_gc_capture(test_budget().maximum_temporary_bytes)
+        .unwrap();
+    database
+        .engine_mut_for_test()
+        .finish_pack_adoption(prepared, outcome)
+        .unwrap();
+    let installed = database
+        .engine_mut_for_test()
+        .state()
+        .payload_manifest_block_id
+        .unwrap();
     assert!(capture.snapshot.committed_block_ids.contains(&installed));
-    assert!(database.block_store_shared().publication_window_block_ids().is_empty());
+    assert!(database
+        .block_store_shared()
+        .publication_window_block_ids()
+        .is_empty());
 }
 
 /// A failed encode restores the covered prefix to the engine and closes the
@@ -163,16 +236,23 @@ fn aborted_rotation_closes_its_window() {
     let vfs = Arc::new(DeterministicVfs::new(None));
     vfs.create_dir(Path::new("/data")).unwrap();
     vfs.sync_directory(Path::new("/")).unwrap();
-    let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let mut database =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     put_values(&mut database);
     let prepared = prepare_rotation(&mut database);
     let outcome = crate::engine::encode_rotation_segments(&prepared).unwrap();
     drop(outcome);
-    assert!(!database.block_store_shared().publication_window_block_ids().is_empty());
+    assert!(!database
+        .block_store_shared()
+        .publication_window_block_ids()
+        .is_empty());
     let error = database
         .engine_mut_for_test()
         .finish_rotation_checkpoint(prepared, Err(io::Error::other("injected encode failure")))
         .unwrap_err();
     assert_eq!(error.to_string(), "injected encode failure");
-    assert!(database.block_store_shared().publication_window_block_ids().is_empty());
+    assert!(database
+        .block_store_shared()
+        .publication_window_block_ids()
+        .is_empty());
 }

@@ -129,7 +129,7 @@
             backend: database.writer_engine().unwrap(),
             page_cache: Some(&database.page_cache),
         })
-        .scan(database.root, &tkey(0).encoded(), &tkey(33).encoded(), 64, &mut 0)
+        .scan(database.root, tkey(0).encoded(), tkey(33).encoded(), 64, &mut 0)
         .unwrap();
         assert_eq!(rows.len(), 17, "live rows 16..32 survive");
         for (offset, (key, _)) in rows.iter().enumerate() {
@@ -344,7 +344,7 @@
         database.merge_overlay_fully().unwrap();
         drop(pin_a);
         let progress = database
-            .reclaim_tombstones_in_range(&tkey(0).encoded(), &tkey(1000).encoded(), 64)
+            .reclaim_tombstones_in_range(tkey(0).encoded(), tkey(1000).encoded(), 64)
             .unwrap();
         assert!(progress.entries_reclaimed >= 40, "progress: {progress:?}");
         assert!(progress.resume.is_none(), "one slice covers 64 leaves: {progress:?}");
@@ -355,18 +355,18 @@
         }
         assert_eq!(
             tree_get(&database, &tkey(5000)).unwrap().value,
-            Some(vec![(5000_u16 % 256) as u8; 32].to_vec())
+            Some([(5000_u16 % 256) as u8; 32].to_vec())
         );
         let (rows, _) = (Tree {
             backend: database.writer_engine().unwrap(),
             page_cache: Some(&database.page_cache),
         })
-        .scan(database.root, &tkey(0).encoded(), &tkey(6000).encoded(), 100, &mut 0)
+        .scan(database.root, tkey(0).encoded(), tkey(6000).encoded(), 100, &mut 0)
         .unwrap();
         assert_eq!(rows.len(), 1);
         // Re-running the sweep is a cheap no-op.
         let again = database
-            .reclaim_tombstones_in_range(&tkey(0).encoded(), &tkey(1000).encoded(), 64)
+            .reclaim_tombstones_in_range(tkey(0).encoded(), tkey(1000).encoded(), 64)
             .unwrap();
         assert_eq!(again.entries_reclaimed, 0);
         assert!(again.resume.is_none());
@@ -379,7 +379,7 @@
         database.set_tombstone_reclaim_override_for_test(Some(true));
         dense_tombstone_region(&mut database, 40);
         let first = database
-            .reclaim_tombstones_in_range(&tkey(0).encoded(), &tkey(1000).encoded(), 4)
+            .reclaim_tombstones_in_range(tkey(0).encoded(), tkey(1000).encoded(), 4)
             .unwrap();
         assert_eq!(first.pages_rewritten, 4);
         let (resume_start, resume_end) = first
@@ -422,7 +422,7 @@
         // snapshot from BEFORE the deletes instead — reopen the region.
         drop(old_pin);
         let progress = database
-            .reclaim_tombstones_in_range(&tkey(0).encoded(), &tkey(1000).encoded(), 64)
+            .reclaim_tombstones_in_range(tkey(0).encoded(), tkey(1000).encoded(), 64)
             .unwrap();
         assert!(progress.entries_reclaimed >= 20);
     }

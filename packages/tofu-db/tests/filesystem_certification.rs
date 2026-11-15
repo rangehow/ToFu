@@ -473,22 +473,50 @@ fn restore_cli_requires_target_lease_before_publishing_a_pin() {
     let backup = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
     let mut engine = Engine::initialize(source.path()).unwrap();
-    engine.commit_transaction(b"lease-test", &[b"durable payload"]).unwrap();
+    engine
+        .commit_transaction(b"lease-test", &[b"durable payload"])
+        .unwrap();
     tofu_db::backup::create_incremental_backup(&mut engine, backup.path()).unwrap();
-    let lease = std::fs::OpenOptions::new().read(true).write(true).create_new(true)
-        .open(target.path().join("LOCK")).unwrap();
+    let lease = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(target.path().join("LOCK"))
+        .unwrap();
     lease.try_lock_exclusive().unwrap();
-    let restore = || Command::new(common::native_binary())
-        .arg("restore").arg("--backup-dir").arg(backup.path())
-        .arg("--data-dir").arg(target.path()).output().unwrap();
+    let restore = || {
+        Command::new(common::native_binary())
+            .arg("restore")
+            .arg("--backup-dir")
+            .arg(backup.path())
+            .arg("--data-dir")
+            .arg(target.path())
+            .output()
+            .unwrap()
+    };
     let refused = restore();
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr)
         .contains("another tofu-db process owns the data directory"));
-    assert_eq!(std::fs::read_dir(backup.path().join("pins")).unwrap().count(), 0);
+    assert_eq!(
+        std::fs::read_dir(backup.path().join("pins"))
+            .unwrap()
+            .count(),
+        0
+    );
     assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 1);
     drop(lease);
     let completed = restore();
-    assert!(completed.status.success(), "{}", String::from_utf8_lossy(&completed.stderr));
-    assert_eq!(Engine::open(target.path()).unwrap().state().durable_sequence, 1);
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stderr)
+    );
+    assert_eq!(
+        Engine::open(target.path())
+            .unwrap()
+            .state()
+            .durable_sequence,
+        1
+    );
 }

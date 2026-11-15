@@ -7,8 +7,10 @@ use super::super::*;
 use serde::{Deserialize, Serialize};
 
 // Version 2 was published with both user_abort and system_recovery restart
-// envelopes. Version 3 binds its size proof to the current recovery owner.
-const CURRENT_WITNESS_VERSION: u64 = 3;
+// envelopes. Version 3 binds its size proof to the recovery owner before a
+// restart interruption that produced nothing offered `continue`; version 4
+// measures the current settlement.
+const CURRENT_WITNESS_VERSION: u64 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -74,7 +76,10 @@ pub(in crate::turn) fn normalization_for_patch(
     actor: &str,
     status: &str,
     verified: Option<&VerifiedStableSegments>,
-) -> io::Result<(Option<crate::turn_projection_segments::StableFields>, Option<VerifiedStableSegments>)> {
+) -> io::Result<(
+    Option<crate::turn_projection_segments::StableFields>,
+    Option<VerifiedStableSegments>,
+)> {
     if let Some(proof) = verified.filter(|proof| proof.matches(revision, actor, status)) {
         return Ok((None, Some(proof.clone())));
     }
@@ -82,11 +87,14 @@ pub(in crate::turn) fn normalization_for_patch(
     if !fields.unchanged_in(projection) {
         return Ok((Some(fields), None));
     }
-    Ok((None, Some(VerifiedStableSegments {
-        revision,
-        actor: actor.to_owned(),
-        status: status.to_owned(),
-    })))
+    Ok((
+        None,
+        Some(VerifiedStableSegments {
+            revision,
+            actor: actor.to_owned(),
+            status: status.to_owned(),
+        }),
+    ))
 }
 
 fn normalization_dependency(key: &str) -> bool {
@@ -221,8 +229,9 @@ impl ProjectionWitness {
     fn bounded(&self) -> io::Result<bool> {
         Ok(
             self.bytes <= crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES
-                && self.recovery_bytes.is_none_or(|bytes|
-                    bytes > 0 && bytes <= crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES)
+                && self.recovery_bytes.is_none_or(|bytes| {
+                    bytes > 0 && bytes <= crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES
+                })
                 && size(self)? <= MAX_TURN_PROJECTION_PATCH_BYTES
                 && self.fields.keys().next().is_none_or(|key| {
                     !matches!(
@@ -235,7 +244,10 @@ impl ProjectionWitness {
 
     pub(in crate::turn) fn decode(raw: &Value, revision: u64) -> io::Result<Option<Self>> {
         // Unknown evidence versions remain a reconstructible optimization miss.
-        if !matches!(raw.get("version").and_then(Value::as_u64), Some(1 | 2 | CURRENT_WITNESS_VERSION)) {
+        if !matches!(
+            raw.get("version").and_then(Value::as_u64),
+            Some(1 | 2 | 3 | CURRENT_WITNESS_VERSION)
+        ) {
             return Ok(None);
         }
         let witness: Self = serde_json::from_value(raw.clone())
@@ -266,12 +278,17 @@ impl ProjectionWitness {
             return Err(invalid_data("Turn frame fields differ"));
         }
         if let Some(expected) = self.recovery_bytes {
-            let mut recovery = restart_settlement(projection);
+            // Verify the exact historical envelope, not an arbitrary size
+            // tolerance. All options still come from the shared owner; v2 and
+            // v3 measured the settlement before unproduced restart resume and
+            // v2 also published a user_abort label. This adapter never
+            // changes the actual settlement or supplies fast admission.
+            let mut recovery = if self.version == CURRENT_WITNESS_VERSION {
+                restart_settlement(projection)
+            } else {
+                restart_settlement_before_unproduced_resume(projection)
+            };
             if size(&recovery)? != expected {
-                // Verify the exact historical envelope, not an arbitrary size
-                // tolerance. All options still come from the shared owner;
-                // only this published v2 label differed. This adapter never
-                // changes the actual settlement or supplies fast admission.
                 if self.version != 2 {
                     return Err(invalid_data("Turn frame recovery bytes differ"));
                 }
@@ -357,10 +374,11 @@ pub(in crate::turn) fn append_from_witness(
     let Some(mut witness) = head.frame_witness.clone() else {
         return Ok(None);
     };
-    // A v2 count may describe either published recovery envelope. Verify the
-    // materialized projection and mint current evidence before reusing a size
-    // proof; the historical count must never under-reserve a new settlement.
-    if witness.version == 2 && witness.recovery_bytes.is_some() {
+    // A v2/v3 count describes a historical recovery envelope, which may be
+    // smaller than the current one. Verify the materialized projection and
+    // mint current evidence before reusing a size proof; the historical count
+    // must never under-reserve a new settlement.
+    if witness.version < CURRENT_WITNESS_VERSION && witness.recovery_bytes.is_some() {
         return Ok(None);
     }
     if head.text_tail.is_some()
@@ -455,11 +473,17 @@ pub(in crate::turn) fn append_from_witness(
     envelope.insert("settlement".into(), json!(request.settlement));
     envelope.insert("updatedAt".into(), json!(request.now_ms));
     let reserve = MAX_LEGACY_DOCUMENT_BYTES + MAX_TIMING_TRACE_PERSISTED_BYTES + 1024;
-    let materialized = witness.bytes.saturating_add(size(&envelope)?)
+    let materialized = witness
+        .bytes
+        .saturating_add(size(&envelope)?)
         .saturating_add(b",\"projection\":".len());
     let limit = crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES;
-    if materialized.saturating_add(witness.bytes).saturating_add(reserve) > limit
-        && witness.recovery_bytes.is_none() {
+    if materialized
+        .saturating_add(witness.bytes)
+        .saturating_add(reserve)
+        > limit
+        && witness.recovery_bytes.is_none()
+    {
         return Ok(None);
     }
     let reserve = reserve.max(witness.recovery_bytes.unwrap_or(0).saturating_add(1024));

@@ -305,12 +305,24 @@ pub(super) fn sweep(
         // Later writes share the overlay delta: this head, the job (bounded by
         // its decode limit), the scheduler cursor and the IR's receipt.
         let reserved = crate::entity::overlay_write_bytes(head_key.encoded().len(), None)
-            + crate::entity::overlay_write_bytes(key.encoded().len(),
-                Some(crate::generated_tofudb_ir::MAX_ATTEMPT_TURN_DIRECTORY_BYTES))
-            + crate::entity::overlay_write_bytes(cursor_key.encoded().len(), Some(key.key_bytes().len()))
+            + crate::entity::overlay_write_bytes(
+                key.encoded().len(),
+                Some(crate::generated_tofudb_ir::MAX_ATTEMPT_TURN_DIRECTORY_BYTES),
+            )
+            + crate::entity::overlay_write_bytes(
+                cursor_key.encoded().len(),
+                Some(key.key_bytes().len()),
+            )
             + max_receipt_write_bytes(tx)?;
-        let deletion = delete_attempt_event_rows(database, tx, attempt_id, job.next_sequence,
-            head, request.max_rows - deleted_rows, reserved)?;
+        let deletion = delete_attempt_event_rows(
+            database,
+            tx,
+            attempt_id,
+            job.next_sequence,
+            head,
+            request.max_rows - deleted_rows,
+            reserved,
+        )?;
         deleted_rows += deletion.deleted;
         attempts += 1;
         if deletion.exhausted {

@@ -24,17 +24,9 @@ use crate::outbox_publisher::{
 
 const DROP_DRAIN_WAIT: Duration = Duration::from_millis(100);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub struct LogicalOutboxWorkerConfig {
     pub publish_budget: LogicalOutboxPublishBudget,
-}
-
-impl Default for LogicalOutboxWorkerConfig {
-    fn default() -> Self {
-        Self {
-            publish_budget: LogicalOutboxPublishBudget::default(),
-        }
-    }
 }
 
 impl LogicalOutboxWorkerConfig {

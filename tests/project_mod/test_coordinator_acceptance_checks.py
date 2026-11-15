@@ -103,7 +103,7 @@ def test_checks_are_stored_with_the_brief_and_numbered_in_the_worker_input(run, 
     row = delegate(r, 'checked', acceptance=given)
     assert row['request']['acceptance'] == CHECKS
     content = inputs[0]
-    assert content.index('Assigned objective:\n' + r.args['brief']) < content.index('Acceptance checks')
+    assert content.startswith(r.args['brief']) and content.index('Delegated for') < content.index('Acceptance checks')
     assert content.endswith(numbered(CHECKS)) and 'evidence' in content[content.index('Acceptance checks'):]
     replay = r.call('delegate_project_work', **{**r.args, 'idempotency_key': 'checked', 'acceptance': given})
     assert replay['assignment_id'] == row['id'] and len(r.calls) == 1

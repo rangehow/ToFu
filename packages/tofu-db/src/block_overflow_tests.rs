@@ -44,7 +44,10 @@ fn primary_file(id: BlockId) -> PathBuf {
 
 fn overflow_leaf(id: BlockId) -> PathBuf {
     let hexadecimal = id.to_hex();
-    Path::new(DATA).join(OVERFLOW).join(&hexadecimal[..2]).join(&hexadecimal[2..4])
+    Path::new(DATA)
+        .join(OVERFLOW)
+        .join(&hexadecimal[..2])
+        .join(&hexadecimal[2..4])
 }
 
 fn overflow_file(id: BlockId) -> PathBuf {
@@ -82,7 +85,11 @@ fn assert_no_temporary_names(vfs: &DeterministicVfs) {
     }
     for directory in directories {
         for name in names(vfs, &directory) {
-            assert!(!name.starts_with(".new-"), "temporary {name} in {}", directory.display());
+            assert!(
+                !name.starts_with(".new-"),
+                "temporary {name} in {}",
+                directory.display()
+            );
         }
     }
 }
@@ -96,10 +103,18 @@ fn a_refused_name_overflows_its_shard_durably_and_the_block_reads_back_after_reo
     assert_eq!(vfs.metadata(&primary_file(first)).unwrap(), FileKind::File);
     vfs.cap_directory_entries(&primary_shard(SHARD), 1).unwrap();
     let second = store.put(&payloads[1]).unwrap();
-    assert_eq!(vfs.metadata(&overflow_file(second)).unwrap(), FileKind::File);
-    assert_eq!(names(&vfs, &primary_shard(SHARD)).len(), 1, "nothing new in the capped shard");
+    assert_eq!(
+        vfs.metadata(&overflow_file(second)).unwrap(),
+        FileKind::File
+    );
+    assert_eq!(
+        names(&vfs, &primary_shard(SHARD)).len(),
+        1,
+        "nothing new in the capped shard"
+    );
     // The shard stays overflowed once room is back: no retry of the primary.
-    vfs.cap_directory_entries(&primary_shard(SHARD), usize::MAX).unwrap();
+    vfs.cap_directory_entries(&primary_shard(SHARD), usize::MAX)
+        .unwrap();
     let third = store.put(&payloads[2]).unwrap();
     assert_eq!(vfs.metadata(&overflow_file(third)).unwrap(), FileKind::File);
     drop(store);
@@ -109,14 +124,20 @@ fn a_refused_name_overflows_its_shard_durably_and_the_block_reads_back_after_reo
     for (payload, id) in payloads.iter().zip(written) {
         assert_eq!(&reopened.get(id).unwrap(), payload);
         assert!(reopened.retain_held_block(id).unwrap());
-        assert_eq!(reopened.block_file_bytes(id).unwrap(), (HEADER_BYTES + payload.len() + FOOTER_BYTES) as u64);
+        assert_eq!(
+            reopened.block_file_bytes(id).unwrap(),
+            (HEADER_BYTES + payload.len() + FOOTER_BYTES) as u64
+        );
     }
     let mut expected = written.to_vec();
     expected.sort_unstable();
     assert_eq!(listed(&reopened, SHARD), expected);
     // The mark is durable: after the reopen the shard still writes overflow.
     let fourth = reopened.put(&payloads[3]).unwrap();
-    assert_eq!(vfs.metadata(&overflow_file(fourth)).unwrap(), FileKind::File);
+    assert_eq!(
+        vfs.metadata(&overflow_file(fourth)).unwrap(),
+        FileKind::File
+    );
     assert_eq!(names(&vfs, &primary_shard(SHARD)).len(), 1);
 }
 
@@ -129,8 +150,14 @@ fn a_refused_publishing_rename_overflows_and_leaves_no_temporary_name() {
     // Room for the temporary file, none for the name it is renamed to.
     vfs.cap_directory_entries(&primary_shard(SHARD), 2).unwrap();
     let second = store.put(&payloads[1]).unwrap();
-    assert_eq!(vfs.metadata(&overflow_file(second)).unwrap(), FileKind::File);
-    assert_eq!(names(&vfs, &primary_shard(SHARD)), vec![format!("{}.blk", first.to_hex())]);
+    assert_eq!(
+        vfs.metadata(&overflow_file(second)).unwrap(),
+        FileKind::File
+    );
+    assert_eq!(
+        names(&vfs, &primary_shard(SHARD)),
+        vec![format!("{}.blk", first.to_hex())]
+    );
     drop(store);
     vfs.crash().unwrap();
     assert_eq!(reopen(&vfs).get(second).unwrap(), payloads[1]);
@@ -159,13 +186,19 @@ fn a_batch_overflows_only_the_shards_that_refuse() {
             (primary_file(id), overflow_file(id))
         };
         assert_eq!(vfs.metadata(&expected).unwrap(), FileKind::File);
-        assert_eq!(vfs.metadata(&unexpected).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            vfs.metadata(&unexpected).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
     drop(store);
     vfs.crash().unwrap();
     let reopened = reopen(&vfs);
     for payload in &payloads {
-        assert_eq!(&reopened.get(BlockId::for_payload(payload)).unwrap(), payload);
+        assert_eq!(
+            &reopened.get(BlockId::for_payload(payload)).unwrap(),
+            payload
+        );
     }
     assert_no_temporary_names(&vfs);
 }
@@ -181,7 +214,9 @@ fn a_copied_block_overflows_and_its_shard_barrier_covers_the_overflow_leaf() {
         let payload = payloads_in_shard(SHARD, 1, "copy").remove(0);
         let id = BlockId::for_payload(&payload);
         store.ensure_copy_shard(id).unwrap();
-        assert!(store.publish_copied_block_unbarriered(id, &payload).unwrap());
+        assert!(store
+            .publish_copied_block_unbarriered(id, &payload)
+            .unwrap());
         assert!(store.retain_held_block(id).unwrap());
         if barrier {
             store.sync_copy_shard(BlockId([SHARD; 32])).unwrap();
@@ -204,7 +239,13 @@ fn deletion_removes_every_copy_in_both_locations_durably() {
     let third = store.put(&payloads[2]).unwrap();
     // A racing writer can leave one block in both locations.
     let bytes = vfs
-        .open(&primary_file(first), OpenRequest { read: true, ..OpenRequest::default() })
+        .open(
+            &primary_file(first),
+            OpenRequest {
+                read: true,
+                ..OpenRequest::default()
+            },
+        )
         .unwrap()
         .read_all(MAX_BLOCK_FILE_BYTES as usize)
         .unwrap();
@@ -212,23 +253,44 @@ fn deletion_removes_every_copy_in_both_locations_durably() {
         vfs.create_dir(&overflow_leaf(first)).unwrap();
     }
     let mut duplicate = vfs
-        .open(&overflow_file(first), OpenRequest { write: true, create_new: true, ..OpenRequest::default() })
+        .open(
+            &overflow_file(first),
+            OpenRequest {
+                write: true,
+                create_new: true,
+                ..OpenRequest::default()
+            },
+        )
         .unwrap();
     duplicate.write_all_at(0, &bytes).unwrap();
     duplicate.sync_all().unwrap();
     drop(duplicate);
     vfs.sync_directory(&overflow_leaf(first)).unwrap();
-    assert_eq!(listed(&store, SHARD).iter().filter(|id| **id == first).count(), 1);
+    assert_eq!(
+        listed(&store, SHARD)
+            .iter()
+            .filter(|id| **id == first)
+            .count(),
+        1
+    );
 
     let metrics = store.remove_blocks(&[first, second]).unwrap();
     assert_eq!(metrics.blocks_removed, 2);
     for id in [first, second] {
-        assert_eq!(vfs.metadata(&primary_file(id)).unwrap_err().kind(), io::ErrorKind::NotFound);
-        assert_eq!(vfs.metadata(&overflow_file(id)).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            vfs.metadata(&primary_file(id)).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            vfs.metadata(&overflow_file(id)).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
     let mut absent = Vec::new();
     assert!(matches!(
-        store.remove_block_noting_absent(third, &mut absent).unwrap(),
+        store
+            .remove_block_noting_absent(third, &mut absent)
+            .unwrap(),
         LooseRemoval::Unlinked { .. }
     ));
     assert_eq!(absent, vec![third]);
@@ -237,7 +299,10 @@ fn deletion_removes_every_copy_in_both_locations_durably() {
     vfs.crash().unwrap();
     let reopened = reopen(&vfs);
     for id in [first, second, third] {
-        assert_eq!(reopened.get(id).unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert_eq!(
+            reopened.get(id).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
     assert!(listed(&reopened, SHARD).is_empty());
 }
@@ -247,28 +312,51 @@ fn temporary_names_in_overflow_leaves_are_planned_and_removed() {
     let vfs = DeterministicVfs::new(None);
     let store = store(&vfs);
     vfs.cap_directory_entries(&primary_shard(SHARD), 0).unwrap();
-    let id = store.put(&payloads_in_shard(SHARD, 1, "temporary").remove(0)).unwrap();
+    let id = store
+        .put(&payloads_in_shard(SHARD, 1, "temporary").remove(0))
+        .unwrap();
     let stray = overflow_leaf(id).join(temporary_block_file_name(Uuid::from_bytes([0x5a; 16])));
     let mut file = vfs
-        .open(&stray, OpenRequest { write: true, create_new: true, ..OpenRequest::default() })
+        .open(
+            &stray,
+            OpenRequest {
+                write: true,
+                create_new: true,
+                ..OpenRequest::default()
+            },
+        )
         .unwrap();
     file.write_all_at(0, b"torn").unwrap();
     drop(file);
-    let candidate = store.plan_temporary_file().unwrap().candidate.expect("the stray file is planned");
+    let candidate = store
+        .plan_temporary_file()
+        .unwrap()
+        .candidate
+        .expect("the stray file is planned");
     assert_eq!(candidate.path, stray);
     assert_eq!(store.remove_temporary_file(&candidate).unwrap(), 4);
-    assert_eq!(vfs.metadata(&stray).unwrap_err().kind(), io::ErrorKind::NotFound);
-    assert_eq!(store.get(id).unwrap().len(), payloads_in_shard(SHARD, 1, "temporary")[0].len());
+    assert_eq!(
+        vfs.metadata(&stray).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        store.get(id).unwrap().len(),
+        payloads_in_shard(SHARD, 1, "temporary")[0].len()
+    );
 }
 
 #[test]
 fn only_name_refusals_overflow_a_shard() {
-    for (kind, overflows) in [(io::ErrorKind::StorageFull, true), (io::ErrorKind::PermissionDenied, false)] {
+    for (kind, overflows) in [
+        (io::ErrorKind::StorageFull, true),
+        (io::ErrorKind::PermissionDenied, false),
+    ] {
         let vfs = DeterministicVfs::new(None);
         let store = store(&vfs);
         let payload = payloads_in_shard(SHARD, 1, "refusal").remove(0);
         // The first open of a missing block's put is its temporary file.
-        vfs.arm_operation_fault(Operation::Open, 1, FaultAction::ErrorBefore(kind)).unwrap();
+        vfs.arm_operation_fault(Operation::Open, 1, FaultAction::ErrorBefore(kind))
+            .unwrap();
         let outcome = store.put(&payload);
         assert!(vfs.operation_fault_fired().unwrap());
         let overflow_root = Path::new(DATA).join(OVERFLOW);
@@ -277,7 +365,10 @@ fn only_name_refusals_overflow_a_shard() {
             assert_eq!(vfs.metadata(&overflow_file(id)).unwrap(), FileKind::File);
         } else {
             assert_eq!(outcome.unwrap_err().kind(), kind);
-            assert_eq!(vfs.metadata(&overflow_root).unwrap_err().kind(), io::ErrorKind::NotFound);
+            assert_eq!(
+                vfs.metadata(&overflow_root).unwrap_err().kind(),
+                io::ErrorKind::NotFound
+            );
         }
     }
 }
@@ -298,7 +389,13 @@ fn a_store_that_never_meets_a_refusal_keeps_the_original_layout() {
     store.flush_pending_subset(&staged).unwrap();
     drop(store);
     reopen(&vfs);
-    assert_eq!(names(&vfs, Path::new(DATA)).iter().filter(|name| name.as_str() == OVERFLOW).count(), 0);
+    assert_eq!(
+        names(&vfs, Path::new(DATA))
+            .iter()
+            .filter(|name| name.as_str() == OVERFLOW)
+            .count(),
+        0
+    );
 }
 
 /// Every operation of the first overflow can fail or lose its sync: the store
@@ -319,7 +416,12 @@ fn every_failure_during_the_first_overflow_leaves_a_consistent_store() {
             let first = store.put(&payloads[0]).unwrap();
             vfs.cap_directory_entries(&primary_shard(SHARD), 1).unwrap();
             match operation {
-                None => vfs.arm_fault(Some(FaultRule { operation_number: step as u64, action })).unwrap(),
+                None => vfs
+                    .arm_fault(Some(FaultRule {
+                        operation_number: step as u64,
+                        action,
+                    }))
+                    .unwrap(),
                 Some(operation) => vfs.arm_operation_fault(operation, step, action).unwrap(),
             }
             let outcome = store.put(&payloads[1]);
@@ -335,10 +437,18 @@ fn every_failure_during_the_first_overflow_leaves_a_consistent_store() {
             drop(store);
             vfs.crash().unwrap();
             let reopened = reopen(&vfs);
-            assert_eq!(reopened.get(first).unwrap(), payloads[0], "{operation:?} step {step}");
+            assert_eq!(
+                reopened.get(first).unwrap(),
+                payloads[0],
+                "{operation:?} step {step}"
+            );
             let second = BlockId::for_payload(&payloads[1]);
             if outcome.is_ok() {
-                assert_eq!(reopened.get(second).unwrap(), payloads[1], "{operation:?} step {step}");
+                assert_eq!(
+                    reopened.get(second).unwrap(),
+                    payloads[1],
+                    "{operation:?} step {step}"
+                );
             }
             listed(&reopened, SHARD);
             assert_eq!(reopened.put(&payloads[1]).unwrap(), second);
@@ -348,10 +458,17 @@ fn every_failure_during_the_first_overflow_leaves_a_consistent_store() {
             drop(reopened);
             vfs.crash().unwrap();
             let retried = reopen(&vfs);
-            assert_eq!(retried.get(second).unwrap(), payloads[1], "{operation:?} step {step}");
+            assert_eq!(
+                retried.get(second).unwrap(),
+                payloads[1],
+                "{operation:?} step {step}"
+            );
             assert_eq!(retried.get(first).unwrap(), payloads[0]);
             assert_no_temporary_names(&vfs);
         }
     }
-    assert!(exercised > 10, "the campaign must reach the overflow operations ({exercised})");
+    assert!(
+        exercised > 10,
+        "the campaign must reach the overflow operations ({exercised})"
+    );
 }

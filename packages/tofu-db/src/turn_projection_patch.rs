@@ -59,11 +59,12 @@ fn parse_path(value: &Value) -> Result<Vec<PathPart>, ProjectionPatchError> {
 }
 
 fn descend<'a>(root: &'a Value, path: &[PathPart]) -> Option<&'a Value> {
-    path.iter().try_fold(root, |current, part| match (current, part) {
-        (Value::Object(object), PathPart::Object(key)) => object.get(key),
-        (Value::Array(array), PathPart::Array(index)) => array.get(*index),
-        _ => None,
-    })
+    path.iter()
+        .try_fold(root, |current, part| match (current, part) {
+            (Value::Object(object), PathPart::Object(key)) => object.get(key),
+            (Value::Array(array), PathPart::Array(index)) => array.get(*index),
+            _ => None,
+        })
 }
 
 fn descend_mut<'a>(
@@ -132,13 +133,18 @@ fn remove_at_path(root: &mut Value, path: &[PathPart]) -> Result<(), ProjectionP
     }
 }
 
+#[cfg(test)]
 pub(crate) fn apply_projection_patch(
     projection: Option<&Map<String, Value>>,
     raw_patch: &Map<String, Value>,
 ) -> Result<Map<String, Value>, ProjectionPatchError> {
     let operations = checked_projection_patch_operations(raw_patch)?;
-    apply_projection_patch_operations_owned(projection.cloned().unwrap_or_default(), operations, None)
-        .map(|(next, _)| next)
+    apply_projection_patch_operations_owned(
+        projection.cloned().unwrap_or_default(),
+        operations,
+        None,
+    )
+    .map(|(next, _)| next)
 }
 
 /// Exact `serde_json::to_vec(value)?.len()`, counted without buffering.
@@ -149,7 +155,9 @@ pub(crate) fn encoded_len<T: serde::Serialize + ?Sized>(value: &T) -> serde_json
             self.0 += bytes.len();
             Ok(bytes.len())
         }
-        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
     let mut counter = Counter(0);
     serde_json::to_writer(&mut counter, value)?;
@@ -207,7 +215,9 @@ fn encoded<T: serde::Serialize + ?Sized>(value: &T) -> Result<i128, ProjectionPa
 }
 
 fn encoded_sum(values: &[Value]) -> Result<i128, ProjectionPatchError> {
-    values.iter().try_fold(0, |sum, value| Ok(sum + encoded(value)?))
+    values
+        .iter()
+        .try_fold(0, |sum, value| Ok(sum + encoded(value)?))
 }
 
 fn members_commas(members: usize) -> i128 {
@@ -218,7 +228,9 @@ fn members_commas(members: usize) -> i128 {
 /// members are compared, and a string extending the old one adds its suffix's
 /// escaped bytes (serde_json escapes each character independently).
 fn encoded_delta(old: &Value, new: &Value) -> Result<i128, ProjectionPatchError> {
-    let member = |key: &str, value: &Value| Ok::<_, ProjectionPatchError>(encoded(key)? + 1 + encoded(value)?);
+    let member = |key: &str, value: &Value| {
+        Ok::<_, ProjectionPatchError>(encoded(key)? + 1 + encoded(value)?)
+    };
     Ok(match (old, new) {
         (Value::String(old), Value::String(new)) => match new.strip_prefix(old.as_str()) {
             Some(suffix) => encoded(suffix)? - 2,
@@ -252,7 +264,11 @@ fn encoded_delta(old: &Value, new: &Value) -> Result<i128, ProjectionPatchError>
     })
 }
 
-fn object_set_delta(object: &Map<String, Value>, key: &str, value: &Value) -> Result<i128, ProjectionPatchError> {
+fn object_set_delta(
+    object: &Map<String, Value>,
+    key: &str,
+    value: &Value,
+) -> Result<i128, ProjectionPatchError> {
     Ok(match object.get(key) {
         Some(old) => encoded_delta(old, value)?,
         None => encoded(key)? + 1 + encoded(value)? + i128::from(!object.is_empty()),
@@ -287,11 +303,15 @@ fn operation_encoded_delta(
     let comma = |members: usize| i128::from(members > 0);
     let Some((leaf, parent_path)) = path.split_last() else {
         return Ok(match kind {
-            Some("set") => Some(encoded(operation.get("value").unwrap_or(&Value::Null))? - encoded(root)?),
+            Some("set") => {
+                Some(encoded(operation.get("value").unwrap_or(&Value::Null))? - encoded(root)?)
+            }
             _ => None,
         });
     };
-    let Some(parent) = descend(root, parent_path) else { return Ok(None) };
+    let Some(parent) = descend(root, parent_path) else {
+        return Ok(None);
+    };
     let replacement = || operation.get("value").unwrap_or(&Value::Null);
     Ok(match (kind, parent, leaf) {
         (Some("set"), Value::Object(object), PathPart::Object(key)) => {
@@ -301,10 +321,12 @@ fn operation_encoded_delta(
             Some(old) => Some(encoded_delta(old, replacement())?),
             None => None,
         },
-        (Some("remove"), Value::Object(object), PathPart::Object(key)) => Some(match object.get(key) {
-            Some(old) => -(encoded(key)? + 1 + encoded(old)? + comma(object.len() - 1)),
-            None => 0,
-        }),
+        (Some("remove"), Value::Object(object), PathPart::Object(key)) => {
+            Some(match object.get(key) {
+                Some(old) => -(encoded(key)? + 1 + encoded(old)? + comma(object.len() - 1)),
+                None => 0,
+            })
+        }
         (Some("remove"), Value::Array(array), PathPart::Array(index)) => match array.get(*index) {
             Some(old) => Some(-(encoded(old)? + comma(array.len() - 1))),
             None => None,
@@ -320,18 +342,24 @@ fn operation_encoded_delta(
                 },
                 (Some("append"), Some(Value::Array(target))) => match operation.get("value") {
                     Some(Value::Array(items)) if items.is_empty() => Some(0),
-                    Some(Value::Array(items)) => Some(encoded_sum(items)?
-                        + items.len() as i128 - 1 + comma(target.len())),
+                    Some(Value::Array(items)) => {
+                        Some(encoded_sum(items)? + items.len() as i128 - 1 + comma(target.len()))
+                    }
                     _ => None,
                 },
                 (Some("truncate"), Some(Value::Array(target))) => {
-                    match operation.get("length").and_then(Value::as_u64)
+                    match operation
+                        .get("length")
+                        .and_then(Value::as_u64)
                         .and_then(|length| usize::try_from(length).ok())
                     {
                         Some(length) if length == target.len() => Some(0),
                         Some(length) if length < target.len() => {
                             let removed = &target[length..];
-                            Some(-(encoded_sum(removed)? + removed.len() as i128 - 1 + comma(length)))
+                            Some(
+                                -(encoded_sum(removed)? + removed.len() as i128 - 1
+                                    + comma(length)),
+                            )
                         }
                         _ => None,
                     }
@@ -360,7 +388,11 @@ fn apply_projection_patch_operations_owned(
         )?;
         if let Some(bytes) = encoded_bytes {
             let delta = operation_encoded_delta(
-                &next, operation.get("op").and_then(Value::as_str), &path, operation)?;
+                &next,
+                operation.get("op").and_then(Value::as_str),
+                &path,
+                operation,
+            )?;
             encoded_bytes = delta.map(|delta| bytes + delta).filter(|bytes| *bytes >= 0);
         }
         match operation.get("op").and_then(Value::as_str) {
@@ -460,7 +492,9 @@ fn diff_value(
                 )?;
             }
         }
-        (Value::Object(before), Value::Object(after)) => diff_objects(before, after, path, operations)?,
+        (Value::Object(before), Value::Object(after)) => {
+            diff_objects(before, after, path, operations)?
+        }
         (Value::Array(before), Value::Array(after)) => {
             let (start, evicted) = evicted_run(before, after);
             for _ in 0..evicted {
@@ -574,7 +608,9 @@ pub(crate) fn build_projection_patch(
         "baseRevision": base_revision,
         "targetRevision": target_revision,
         "operations": operations,
-    }) else { unreachable!("projection patch construction is an object"); };
+    }) else {
+        unreachable!("projection patch construction is an object");
+    };
     Ok(patch)
 }
 
@@ -594,17 +630,30 @@ mod tests {
         projection.insert("evidence".to_owned(), Value::String(evidence));
         for revision in 1..=64 {
             let patch = json!({"version": 1, "baseRevision": revision - 1,
-                "targetRevision": revision, "operations": [
-                    {"op": "append_text", "path": ["content"], "value": "追加🧈".repeat(64)}
-                ]});
-            projection = apply_projection_patch_owned(projection, patch.as_object().unwrap()).unwrap();
-            assert_eq!(projection["evidence"].as_str().unwrap().as_ptr() as usize, evidence_pointer,
-                "a small patch must not clone unrelated large evidence");
-            assert_eq!(projection["content"].as_str().unwrap().as_ptr() as usize, content_pointer,
-                "text replay must reuse available capacity");
+            "targetRevision": revision, "operations": [
+                {"op": "append_text", "path": ["content"], "value": "追加🧈".repeat(64)}
+            ]});
+            projection =
+                apply_projection_patch_owned(projection, patch.as_object().unwrap()).unwrap();
+            assert_eq!(
+                projection["evidence"].as_str().unwrap().as_ptr() as usize,
+                evidence_pointer,
+                "a small patch must not clone unrelated large evidence"
+            );
+            assert_eq!(
+                projection["content"].as_str().unwrap().as_ptr() as usize,
+                content_pointer,
+                "text replay must reuse available capacity"
+            );
         }
-        assert_eq!(projection["content"], Value::String(format!("seed{}", "追加🧈".repeat(64 * 64))));
-        assert_eq!(projection["evidence"], Value::String("stable".repeat(32 * 1024)));
+        assert_eq!(
+            projection["content"],
+            Value::String(format!("seed{}", "追加🧈".repeat(64 * 64)))
+        );
+        assert_eq!(
+            projection["evidence"],
+            Value::String("stable".repeat(32 * 1024))
+        );
     }
 
     #[test]
@@ -653,7 +702,8 @@ mod tests {
 
     #[test]
     fn full_window_eviction_removes_the_head_instead_of_rewriting_rows() {
-        let row = |index: u64| json!({"id": format!("status:{index}"), "count": 1, "tEnd": 1000 + index});
+        let row =
+            |index: u64| json!({"id": format!("status:{index}"), "count": 1, "tEnd": 1000 + index});
         let rows = (0..128).map(row).collect::<Vec<_>>();
         let mut updated_tail = rows[127].clone();
         updated_tail["count"] = json!(2);
@@ -768,7 +818,6 @@ mod tests {
                 .collect::<Vec<_>>(),
         });
         assert!(apply_projection_patch(None, too_many.as_object().unwrap()).is_err());
-
     }
     fn assert_measured(before: &Value, patch: &Value) -> Map<String, Value> {
         let before = before.as_object().unwrap().clone();
@@ -776,9 +825,14 @@ mod tests {
         assert_eq!(encoded_len(&before).unwrap(), bytes);
         let expected = apply_projection_patch(Some(&before), patch.as_object().unwrap()).unwrap();
         let (next, next_bytes) =
-            apply_projection_patch_owned_measured(before, bytes, patch.as_object().unwrap()).unwrap();
+            apply_projection_patch_owned_measured(before, bytes, patch.as_object().unwrap())
+                .unwrap();
         assert_eq!(next, expected);
-        assert_eq!(next_bytes, Some(serde_json::to_vec(&next).unwrap().len()), "{patch}");
+        assert_eq!(
+            next_bytes,
+            Some(serde_json::to_vec(&next).unwrap().len()),
+            "{patch}"
+        );
         next
     }
 
@@ -828,9 +882,17 @@ mod tests {
             assert_measured(&base, &ops(operations));
         }
         // Removing every key, first and last included, down to `{}`.
-        let mut keys = base.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        let mut keys = base
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
         keys.rotate_left(1);
-        let removals = keys.iter().map(|key| json!({"op": "remove", "path": [key]})).collect::<Vec<_>>();
+        let removals = keys
+            .iter()
+            .map(|key| json!({"op": "remove", "path": [key]}))
+            .collect::<Vec<_>>();
         assert!(assert_measured(&base, &ops(Value::Array(removals))).is_empty());
     }
 
@@ -838,18 +900,28 @@ mod tests {
     fn measured_insertion_matches_the_encoded_length() {
         let mut object = Map::new();
         let mut bytes = Some(2);
-        for (key, value) in [("segments", json!([{"t": "汉\n"}])), ("fileChanges", json!({})),
-            ("segments", json!([])), ("\"k\\", json!(0.5))]
-        {
+        for (key, value) in [
+            ("segments", json!([{"t": "汉\n"}])),
+            ("fileChanges", json!({})),
+            ("segments", json!([])),
+            ("\"k\\", json!(0.5)),
+        ] {
             bytes = insert_measured(&mut object, bytes, key, value);
-            assert_eq!(bytes, Some(serde_json::to_vec(&object).unwrap().len()), "{key}");
+            assert_eq!(
+                bytes,
+                Some(serde_json::to_vec(&object).unwrap().len()),
+                "{key}"
+            );
         }
         assert_eq!(insert_measured(&mut object, None, "x", json!(1)), None);
     }
 
     #[test]
     fn measured_application_reports_no_length_for_an_impossible_input_length() {
-        let before = json!({"content": "x".repeat(64)}).as_object().unwrap().clone();
+        let before = json!({"content": "x".repeat(64)})
+            .as_object()
+            .unwrap()
+            .clone();
         let patch = ops(json!([{"op": "remove", "path": ["content"]}]));
         let (next, bytes) =
             apply_projection_patch_owned_measured(before, 3, patch.as_object().unwrap()).unwrap();
@@ -868,8 +940,12 @@ mod tests {
         }
 
         fn text(&mut self) -> String {
-            const PIECES: [&str; 10] = ["a", "\"", "\\", "\n", "\u{1}", "汉", "😀", "\u{2028}", "key", " "];
-            (0..self.next(6)).map(|_| PIECES[self.next(10) as usize]).collect()
+            const PIECES: [&str; 10] = [
+                "a", "\"", "\\", "\n", "\u{1}", "汉", "😀", "\u{2028}", "key", " ",
+            ];
+            (0..self.next(6))
+                .map(|_| PIECES[self.next(10) as usize])
+                .collect()
         }
 
         fn value(&mut self, depth: u32) -> Value {
@@ -877,10 +953,16 @@ mod tests {
                 0 => Value::Null,
                 1 => Value::Bool(self.next(2) == 0),
                 2 => json!(self.next(1 << 40) as i64 - (1 << 39)),
-                3 => json!((self.next(1 << 30) as f64) / 7.0 * if self.next(2) == 0 { 1e-9 } else { 1e12 }),
+                3 => json!(
+                    (self.next(1 << 30) as f64) / 7.0 * if self.next(2) == 0 { 1e-9 } else { 1e12 }
+                ),
                 4 | 5 => Value::String(self.text()),
                 6 => Value::Array((0..self.next(4)).map(|_| self.value(depth - 1)).collect()),
-                _ => Value::Object((0..self.next(4)).map(|_| (self.text(), self.value(depth - 1))).collect()),
+                _ => Value::Object(
+                    (0..self.next(4))
+                        .map(|_| (self.text(), self.value(depth - 1)))
+                        .collect(),
+                ),
             }
         }
 
@@ -890,17 +972,33 @@ mod tests {
             let descend = self.next(3) != 0;
             match value {
                 Value::Object(object) if descend && !object.is_empty() => {
-                    let key = object.keys().nth(self.next(object.len() as u64) as usize).unwrap().clone();
+                    let key = object
+                        .keys()
+                        .nth(self.next(object.len() as u64) as usize)
+                        .unwrap()
+                        .clone();
                     match self.next(4) {
-                        0 => { object.remove(&key); }
-                        1 => { object.insert(self.text(), self.value(depth)); }
+                        0 => {
+                            object.remove(&key);
+                        }
+                        1 => {
+                            object.insert(self.text(), self.value(depth));
+                        }
                         _ => self.mutate(object.get_mut(&key).unwrap(), depth),
                     }
                 }
                 Value::Array(array) if descend && !array.is_empty() => match self.next(5) {
-                    0 => { array.remove(self.next(array.len() as u64) as usize); }
-                    1 => { array.truncate(self.next(array.len() as u64) as usize); }
-                    2 => { for _ in 0..=self.next(3) { array.push(self.value(depth)); } }
+                    0 => {
+                        array.remove(self.next(array.len() as u64) as usize);
+                    }
+                    1 => {
+                        array.truncate(self.next(array.len() as u64) as usize);
+                    }
+                    2 => {
+                        for _ in 0..=self.next(3) {
+                            array.push(self.value(depth));
+                        }
+                    }
                     _ => {
                         let index = self.next(array.len() as u64) as usize;
                         self.mutate(&mut array[index], depth);
@@ -916,19 +1014,34 @@ mod tests {
     fn measured_application_matches_the_encoded_length_for_random_documents_and_patches() {
         let mut random = Random(0x9E37_79B9_7F4A_7C15);
         for _ in 0..2000 {
-            let mut before = Value::Object((0..random.next(6))
-                .map(|_| (random.text(), random.value(3))).collect());
+            let mut before = Value::Object(
+                (0..random.next(6))
+                    .map(|_| (random.text(), random.value(3)))
+                    .collect(),
+            );
             for _ in 0..3 {
                 let mut after = before.clone();
                 for _ in 0..=random.next(4) {
                     random.mutate(&mut after, 2);
                 }
-                if !after.is_object() { continue; }
-                assert_eq!(encoded_delta(&before, &after).unwrap(),
-                    encoded(&after).unwrap() - encoded(&before).unwrap());
+                if !after.is_object() {
+                    continue;
+                }
+                assert_eq!(
+                    encoded_delta(&before, &after).unwrap(),
+                    encoded(&after).unwrap() - encoded(&before).unwrap()
+                );
                 let patch = build_projection_patch(
-                    before.as_object().unwrap(), after.as_object().unwrap(), 1, 2).unwrap();
-                assert_eq!(Value::Object(assert_measured(&before, &Value::Object(patch))), after);
+                    before.as_object().unwrap(),
+                    after.as_object().unwrap(),
+                    1,
+                    2,
+                )
+                .unwrap();
+                assert_eq!(
+                    Value::Object(assert_measured(&before, &Value::Object(patch))),
+                    after
+                );
                 before = after;
             }
         }

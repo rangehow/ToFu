@@ -4,8 +4,12 @@ use std::time::Instant;
 use tofu_db::engine::Engine;
 use tofu_db::transaction::MAX_CARRIED_PAYLOAD_BYTES;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let parent = std::env::args().nth(1).ok_or("filesystem parent required")?;
-    let directory = tempfile::Builder::new().prefix("tofu-spill-bench-").tempdir_in(parent)?;
+    let parent = std::env::args()
+        .nth(1)
+        .ok_or("filesystem parent required")?;
+    let directory = tempfile::Builder::new()
+        .prefix("tofu-spill-bench-")
+        .tempdir_in(parent)?;
     let mut engine = Engine::initialize(directory.path())?;
     let started = Instant::now();
     for index in 0_u32..256 {

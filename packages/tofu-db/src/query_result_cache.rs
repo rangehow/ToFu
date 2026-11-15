@@ -231,11 +231,10 @@ impl QueryResultCache {
             return;
         }
         let hash = key.hash_key();
-        let known_hot = state
-            .entries
-            .get(&hash)
-            .is_some_and(|entry| entry.matches(key)
-                && (admission == Admission::RepeatedKey || entry.snapshot == snapshot));
+        let known_hot = state.entries.get(&hash).is_some_and(|entry| {
+            entry.matches(key)
+                && (admission == Admission::RepeatedKey || entry.snapshot == snapshot)
+        });
         let admission_hash = match admission {
             Admission::RepeatedKey => hash,
             Admission::RepeatedSnapshot => {

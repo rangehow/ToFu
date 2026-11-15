@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::versioned_document::{
-    self, materialize_stored_document_bounded, put_with_blob_owner_bounded, PutRequest,
+    materialize_stored_document_bounded, put_with_blob_owner_bounded, PutRequest,
 };
 
 pub(crate) mod migration;
@@ -45,8 +45,8 @@ pub(crate) const MAX_TURN_WITNESSES: usize = 4_096;
 pub(crate) const MAX_JSON_SAFE_INTEGER: u64 = (1 << 53) - 1;
 
 use crate::generated_model_context_projection::{
-    DISPLAY_ONLY_FIELDS, ROUND_DISPLAY_ONLY_FIELDS,
-    SEGMENT_DISPLAY_ONLY_FIELDS, TRANSLATED_SEGMENT_TYPES,
+    DISPLAY_ONLY_FIELDS, ROUND_DISPLAY_ONLY_FIELDS, SEGMENT_DISPLAY_ONLY_FIELDS,
+    TRANSLATED_SEGMENT_TYPES,
 };
 
 fn invalid_input(message: &str) -> io::Error {
@@ -88,7 +88,10 @@ fn continuation_key(
     )
 }
 
-pub(crate) fn lane_index_key(transaction: &AuthorityTransaction, raw_key: &str) -> io::Result<EntityKey> {
+pub(crate) fn lane_index_key(
+    transaction: &AuthorityTransaction,
+    raw_key: &str,
+) -> io::Result<EntityKey> {
     EntityKey::new(
         transaction.tenant_id(),
         transaction.owner_user_id(),
@@ -175,14 +178,16 @@ pub(crate) fn encode_projection(projection: &Value) -> Option<Vec<u8>> {
         });
     let proof = object.get("historyProof");
     // A proof binds the whole prefix and carries only its terminal witness.
-    let witnesses_allowed = if proof.is_some() { 1 } else { MAX_TURN_WITNESSES };
+    let witnesses_allowed = if proof.is_some() {
+        1
+    } else {
+        MAX_TURN_WITNESSES
+    };
     let turns_valid = object
         .get("turns")
         .and_then(Value::as_array)
         .is_some_and(|turns| {
-            !turns.is_empty()
-                && turns.len() <= witnesses_allowed
-                && turns.iter().all(valid_witness)
+            !turns.is_empty() && turns.len() <= witnesses_allowed && turns.iter().all(valid_witness)
         });
     if let Some(proof) = proof {
         let valid = proof.as_object().is_some_and(|proof| {
@@ -192,12 +197,19 @@ pub(crate) fn encode_projection(projection: &Value) -> Option<Vec<u8>> {
                     .get("count")
                     .and_then(Value::as_u64)
                     .is_some_and(|count| count <= MAX_JSON_SAFE_INTEGER)
-                && proof.get("digest").and_then(Value::as_str).is_some_and(|digest| {
-                    digest.len() == 64 && digest.bytes().all(|byte|
-                        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                })
+                && proof
+                    .get("digest")
+                    .and_then(Value::as_str)
+                    .is_some_and(|digest| {
+                        digest.len() == 64
+                            && digest
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    })
         });
-        if !valid { return None; }
+        if !valid {
+            return None;
+        }
     }
     if !messages_valid || !turns_valid {
         return None;
@@ -213,97 +225,170 @@ pub(crate) fn encode_projection(projection: &Value) -> Option<Vec<u8>> {
 
 fn normalized_round(value: &Value) -> Value {
     match value.as_object() {
-        Some(round) => Value::Object(round.iter()
-            .filter(|(key, _)| !ROUND_DISPLAY_ONLY_FIELDS.contains(&key.as_str()))
-            .map(|(key, value)| (key.clone(), value.clone())).collect()),
+        Some(round) => Value::Object(
+            round
+                .iter()
+                .filter(|(key, _)| !ROUND_DISPLAY_ONLY_FIELDS.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        ),
         None => value.clone(),
     }
 }
 
 fn normalized_projection(projection: &Map<String, Value>) -> Map<String, Value> {
-    projection.iter().filter(|(key, _)| !DISPLAY_ONLY_FIELDS.contains(&key.as_str()))
+    projection
+        .iter()
+        .filter(|(key, _)| !DISPLAY_ONLY_FIELDS.contains(&key.as_str()))
         .map(|(key, value)| {
             let value = match (key.as_str(), value) {
-                ("toolRounds", Value::Array(rounds)) =>
-                    Value::Array(rounds.iter().map(normalized_round).collect()),
-                ("segments", Value::Array(segments)) => Value::Array(segments.iter().map(|segment| {
-                    let mut segment = segment.clone();
-                    let translated = segment.get("type").and_then(Value::as_str)
-                        .is_some_and(|kind| TRANSLATED_SEGMENT_TYPES.contains(&kind));
-                    if translated {
-                        if let Some(object) = segment.as_object_mut() {
-                            for field in SEGMENT_DISPLAY_ONLY_FIELDS { object.remove(*field); }
-                        }
-                    }
-                    if let Some(round) = segment.get_mut("_round") {
-                        *round = normalized_round(round);
-                    }
-                    segment
-                }).collect()),
+                ("toolRounds", Value::Array(rounds)) => {
+                    Value::Array(rounds.iter().map(normalized_round).collect())
+                }
+                ("segments", Value::Array(segments)) => Value::Array(
+                    segments
+                        .iter()
+                        .map(|segment| {
+                            let mut segment = segment.clone();
+                            let translated = segment
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|kind| TRANSLATED_SEGMENT_TYPES.contains(&kind));
+                            if translated {
+                                if let Some(object) = segment.as_object_mut() {
+                                    for field in SEGMENT_DISPLAY_ONLY_FIELDS {
+                                        object.remove(*field);
+                                    }
+                                }
+                            }
+                            if let Some(round) = segment.get_mut("_round") {
+                                *round = normalized_round(round);
+                            }
+                            segment
+                        })
+                        .collect(),
+                ),
                 _ => value.clone(),
             };
             (key.clone(), value)
-        }).collect()
+        })
+        .collect()
 }
 
-fn same_entries<F>(left: &Map<String, Value>, right: &Map<String, Value>,
-                   excluded: &[&str], compare: F) -> bool
-where F: Fn(&str, &Value, &Value) -> bool {
+fn same_entries<F>(
+    left: &Map<String, Value>,
+    right: &Map<String, Value>,
+    excluded: &[&str],
+    compare: F,
+) -> bool
+where
+    F: Fn(&str, &Value, &Value) -> bool,
+{
     let visible = |key: &str| !excluded.contains(&key);
-    left.keys().filter(|key| visible(key)).count() == right.keys().filter(|key| visible(key)).count()
-        && left.iter().filter(|(key, _)| visible(key)).all(|(key, value)|
-            right.get(key).is_some_and(|other| compare(key, value, other)))
+    left.keys().filter(|key| visible(key)).count()
+        == right.keys().filter(|key| visible(key)).count()
+        && left
+            .iter()
+            .filter(|(key, _)| visible(key))
+            .all(|(key, value)| {
+                right
+                    .get(key)
+                    .is_some_and(|other| compare(key, value, other))
+            })
 }
 
 fn same_round(left: &Value, right: &Value) -> bool {
     match (left.as_object(), right.as_object()) {
-        (Some(left), Some(right)) => same_entries(left, right, ROUND_DISPLAY_ONLY_FIELDS,
-                                                 |_, left, right| left == right),
+        (Some(left), Some(right)) => {
+            same_entries(left, right, ROUND_DISPLAY_ONLY_FIELDS, |_, left, right| {
+                left == right
+            })
+        }
         _ => left == right,
     }
 }
 
 fn same_array<F>(left: &Value, right: &Value, compare: F) -> bool
-where F: Fn(&Value, &Value) -> bool {
+where
+    F: Fn(&Value, &Value) -> bool,
+{
     match (left.as_array(), right.as_array()) {
-        (Some(left), Some(right)) => left.len() == right.len()
-            && left.iter().zip(right).all(|(left, right)| compare(left, right)),
+        (Some(left), Some(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| compare(left, right))
+        }
         _ => left == right,
     }
 }
 
 /// Borrow evidence text while comparing: never clone/serialize large results
 /// merely to decide whether an edit is display-only.
-pub(crate) fn model_projections_equal(left: &Map<String, Value>, right: &Map<String, Value>) -> bool {
-    same_entries(left, right, DISPLAY_ONLY_FIELDS, |key, left, right| match key {
-        "toolRounds" => same_array(left, right, same_round),
-        "segments" => same_array(left, right, |left, right| match (left.as_object(), right.as_object()) {
-            (Some(left), Some(right)) => {
-                let translated = left.get("type").and_then(Value::as_str)
-                    .is_some_and(|kind| TRANSLATED_SEGMENT_TYPES.contains(&kind));
-                let excluded = if translated { SEGMENT_DISPLAY_ONLY_FIELDS } else { &[] };
-                same_entries(left, right, excluded, |key, left, right|
-                    if key == "_round" { same_round(left, right) } else { left == right })
-            },
+pub(crate) fn model_projections_equal(
+    left: &Map<String, Value>,
+    right: &Map<String, Value>,
+) -> bool {
+    same_entries(
+        left,
+        right,
+        DISPLAY_ONLY_FIELDS,
+        |key, left, right| match key {
+            "toolRounds" => same_array(left, right, same_round),
+            "segments" => same_array(left, right, |left, right| {
+                match (left.as_object(), right.as_object()) {
+                    (Some(left), Some(right)) => {
+                        let translated = left
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .is_some_and(|kind| TRANSLATED_SEGMENT_TYPES.contains(&kind));
+                        let excluded = if translated {
+                            SEGMENT_DISPLAY_ONLY_FIELDS
+                        } else {
+                            &[]
+                        };
+                        same_entries(left, right, excluded, |key, left, right| {
+                            if key == "_round" {
+                                same_round(left, right)
+                            } else {
+                                left == right
+                            }
+                        })
+                    }
+                    _ => left == right,
+                }
+            }),
             _ => left == right,
-        }),
-        _ => left == right,
-    })
+        },
+    )
 }
 
 /// Model-visible Turn witness; declared display-only locations are excluded.
 pub(crate) fn settled_witness(turn: &Map<String, Value>) -> Value {
     let mut source = Map::new();
-    for field in ["actor", "laneId", "parentTurnId", "status", "currentAttemptId"] {
+    for field in [
+        "actor",
+        "laneId",
+        "parentTurnId",
+        "status",
+        "currentAttemptId",
+    ] {
         source.insert(
             field.to_owned(),
             turn.get(field).cloned().unwrap_or(Value::Null),
         );
     }
     if turn.contains_key("modelContextRevision") || turn.contains_key("projectionRevision") {
-        let revision = turn.get("modelContextRevision").cloned().or_else(||
-            crate::turn::model_context_revision(turn).ok().map(Value::from));
-        source.insert("modelContextRevision".to_owned(), revision.unwrap_or(Value::Null));
+        let revision = turn.get("modelContextRevision").cloned().or_else(|| {
+            crate::turn::model_context_revision(turn)
+                .ok()
+                .map(Value::from)
+        });
+        source.insert(
+            "modelContextRevision".to_owned(),
+            revision.unwrap_or(Value::Null),
+        );
     }
     let projection = turn
         .get("projection")
@@ -363,7 +448,8 @@ fn read_record_bytes(
     transaction: &mut AuthorityTransaction,
     key: &EntityKey,
 ) -> io::Result<Option<Vec<u8>>> {
-    database.entity_get(transaction, key)?
+    database
+        .entity_get(transaction, key)?
         .map(|stored| materialize_record(database, transaction, key, &stored))
         .transpose()
 }
@@ -446,6 +532,7 @@ fn json_record(frontier: u64, projection: &Map<String, Value>, updated_at_ms: u6
 /// Monotonic ordinal-frontier CAS. The frontier comes only from authority
 /// ordinals, never an untrusted client counter. An equal-frontier retry is
 /// read-only and acknowledges only an identical stored payload.
+#[allow(clippy::too_many_arguments)]
 fn put_frontier(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -474,7 +561,13 @@ fn put_frontier(
                 updated_at_ms,
             )?;
             let certificate = crate::turn::model_context::certify_frontier(
-                database, transaction, conversation_id, lane_id, frontier - 1, projection)?;
+                database,
+                transaction,
+                conversation_id,
+                lane_id,
+                frontier - 1,
+                projection,
+            )?;
             database.entity_put(
                 transaction,
                 lane_index_key(transaction, raw_key)?,
@@ -492,7 +585,13 @@ fn put_frontier(
                 updated_at_ms,
             )?;
             let certificate = crate::turn::model_context::certify_frontier(
-                database, transaction, conversation_id, lane_id, frontier - 1, projection)?;
+                database,
+                transaction,
+                conversation_id,
+                lane_id,
+                frontier - 1,
+                projection,
+            )?;
             database.entity_put(
                 transaction,
                 lane_index_key(transaction, raw_key)?,
@@ -615,198 +714,6 @@ impl Request {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn display_round_locations_ignore_ui_but_keep_nested_user_evidence() {
-        let before = serde_json::json!({
-            "content": "answer", "translation": "display",
-            "toolRounds": [{"toolContent": "receipt", "toolArgs": {"_swarmSnapshot": "data"},
-                            "_swarmSnapshot": {"status": "running"}}],
-            "segments": [{"_round": {"toolCallId": "c1", "usage": 1, "toolContent": "receipt"}}]
-        });
-        let mut display = before.clone();
-        display["translation"] = serde_json::json!("translated");
-        display["toolRounds"][0]["_swarmSnapshot"]["status"] = serde_json::json!("completed");
-        display["segments"][0]["_round"]["usage"] = serde_json::json!(100);
-        let same = |left: &Value, right: &Value| model_projections_equal(
-            left.as_object().unwrap(), right.as_object().unwrap());
-        assert!(same(&before, &display));
-        assert_eq!(normalized_projection(before.as_object().unwrap()),
-                   normalized_projection(display.as_object().unwrap()));
-        let mut genuine = display.clone();
-        genuine["toolRounds"][0]["toolArgs"]["_swarmSnapshot"] = serde_json::json!("changed data");
-        assert!(!same(&before, &genuine));
-        genuine = display;
-
-        let numeric = serde_json::json!({"toolRounds": [{"toolArgs": {"value": 1}}]});
-        let boolean = serde_json::json!({"toolRounds": [{"toolArgs": {"value": true}}]});
-        let floating = serde_json::json!({"toolRounds": [{"toolArgs": {"value": 1.0}}]});
-        assert!(!same(&numeric, &boolean));
-        assert!(!same(&numeric, &floating));
-        genuine["segments"][0]["_round"]["toolContent"] = serde_json::json!("changed receipt");
-        assert!(!same(&before, &genuine));
-    }
-
-    #[test]
-    fn real_translation_locations_preserve_context_but_keep_source_and_nested_evidence() {
-        let before = serde_json::json!({"content": "answer", "segments": [
-            {"type": "text", "text": "narration"},
-            {"type": "thinking", "text": "reasoning"}],
-            "toolRounds": [{"toolArgs": {"translatedText": "evidence"}}]});
-        let mut after = before.clone();
-        after["translatedContent"] = serde_json::json!("display answer");
-        after["_translateDone"] = serde_json::json!(true);
-        after["_showingTranslation"] = serde_json::json!(true);
-        after["segments"][0]["translatedText"] = serde_json::json!("display narration");
-        after["segments"][1]["translatedText"] = serde_json::json!("display reasoning");
-        let same = |left: &Value, right: &Value| model_projections_equal(
-            left.as_object().unwrap(), right.as_object().unwrap());
-        assert!(same(&before, &after));
-        assert_eq!(normalized_projection(before.as_object().unwrap()),
-                   normalized_projection(after.as_object().unwrap()));
-        let mut changed = after.clone();
-        changed["segments"][0]["text"] = serde_json::json!("edited narration");
-        assert!(!same(&before, &changed));
-        changed = after.clone();
-        changed["toolRounds"][0]["toolArgs"]["translatedText"] = serde_json::json!("edited evidence");
-        assert!(!same(&before, &changed));
-        after["content"] = serde_json::json!("translated model input");
-        assert!(!same(&before, &after));
-    }
-
-    #[test]
-    fn terminal_revision_binds_public_and_private_documents_identically() {
-        let stored = serde_json::json!({"turnId": "a", "actor": "assistant", "laneId": "main",
-            "parentTurnId": "u", "status": "completed", "projectionRevision": 9,
-            "_modelContextDisplayOffset": 3, "projection": {"content": "answer"}});
-        let mut public = stored.clone();
-        public.as_object_mut().unwrap().remove("_modelContextDisplayOffset");
-        public["modelContextRevision"] = serde_json::json!(6);
-        assert_eq!(settled_witness(stored.as_object().unwrap()),
-                   settled_witness(public.as_object().unwrap()));
-        public["projectionRevision"] = serde_json::json!(10);
-        assert_eq!(settled_witness(stored.as_object().unwrap()),
-                   settled_witness(public.as_object().unwrap()));
-        public["modelContextRevision"] = serde_json::json!(7);
-        assert_ne!(settled_witness(stored.as_object().unwrap()),
-                   settled_witness(public.as_object().unwrap()));
-
-        public["modelContextRevision"] = serde_json::json!(6);
-        public["currentAttemptId"] = serde_json::json!("new-attempt");
-        assert_ne!(settled_witness(stored.as_object().unwrap()),
-                   settled_witness(public.as_object().unwrap()));
-    }
-
-    #[test]
-    fn history_proof_count_is_a_plain_json_safe_counter_and_needs_no_witness_list() {
-        let witness = || serde_json::json!(["turn", "0".repeat(64)]);
-        let projection = |count: Value, turns: Vec<Value>| serde_json::json!({
-            "messages": [{"role": "assistant", "content": "retained"}],
-            "turns": turns,
-            "historyProof": {"version": 2, "count": count, "digest": "a".repeat(64)}});
-        for count in [0, 9_999, 10_000, 20_000, 1 << 40, MAX_JSON_SAFE_INTEGER] {
-            assert!(encode_projection(&projection(count.into(), vec![witness()])).is_some());
-        }
-        for count in [
-            serde_json::json!(MAX_JSON_SAFE_INTEGER + 1),
-            serde_json::json!(u64::MAX),
-            serde_json::json!(-1),
-            serde_json::json!(1.0),
-            serde_json::json!(true),
-            serde_json::json!("1"),
-        ] {
-            assert!(encode_projection(&projection(count, vec![witness()])).is_none());
-        }
-        assert!(encode_projection(&projection(1.into(), vec![witness(), witness()])).is_none());
-        let legacy = |len| serde_json::json!({
-            "messages": [{"role": "assistant", "content": "retained"}],
-            "turns": vec![witness(); len]});
-        assert!(encode_projection(&legacy(MAX_TURN_WITNESSES)).is_some());
-        assert!(encode_projection(&legacy(MAX_TURN_WITNESSES + 1)).is_none());
-    }
-
-    #[test]
-    fn legacy_inline_continuation_upgrades_to_durable_bounded_blob() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        let small = Map::from_iter([("messages".to_owned(), serde_json::json!([
-            {"role": "assistant", "content": "old"}
-        ]))]);
-        let large = Map::from_iter([("messages".to_owned(), serde_json::json!([
-            {"role": "system", "content": "context".repeat(4096)},
-            {"role": "assistant", "content": "new"}
-        ]))]);
-        let mut transaction = database.begin(7, 11).unwrap();
-        let key = continuation_key(&transaction, "legacy", "main").unwrap();
-        database.entity_put(&mut transaction, key.clone(),
-            serde_json::to_vec(&json_record(1, &small, 100)).unwrap()).unwrap();
-        database.commit(transaction).unwrap();
-        let mut transaction = database.begin(7, 11).unwrap();
-        assert_eq!(read_record(&database, &mut transaction, &key).unwrap(), Some((1, small)));
-        write_record(&database, &mut transaction, key.clone(), 2, &large, 200).unwrap();
-        let physical = database.entity_get(&mut transaction, &key).unwrap().unwrap();
-        assert!(physical.len() < 8192, "large continuation must not occupy an inline entity");
-        assert!(crate::versioned_document::stored_blob_reference(&physical).unwrap().is_some());
-        database.commit(transaction).unwrap();
-        drop(database);
-        let database = AuthorityDatabase::open(directory.path()).unwrap();
-        let mut transaction = database.begin(7, 11).unwrap();
-        assert_eq!(read_record(&database, &mut transaction, &key).unwrap(), Some((2, large)));
-    }
-
-    #[test]
-    fn delete_conversation_removes_only_its_own_lane_directory() {
-        let directory = tempfile::tempdir().unwrap();
-        let database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        let mut transaction = database.begin(7, 11).unwrap();
-        let keys_for = |transaction: &AuthorityTransaction, conv: &str, lane: &str| {
-            let continuation = continuation_key(transaction, conv, lane).unwrap();
-            let index = lane_index_key(transaction, &continuation_raw_key(conv, lane)).unwrap();
-            (continuation, index)
-        };
-        for lane in ["main", "branch"] {
-            let (continuation, index) = keys_for(&transaction, "conv-a", lane);
-            database
-                .entity_put(&mut transaction, continuation, b"record".to_vec())
-                .unwrap();
-            database
-                .entity_put(&mut transaction, index, Vec::new())
-                .unwrap();
-        }
-        let (other_continuation, other_index) = keys_for(&transaction, "conv-b", "main");
-        database
-            .entity_put(&mut transaction, other_continuation, b"record".to_vec())
-            .unwrap();
-        database
-            .entity_put(&mut transaction, other_index, Vec::new())
-            .unwrap();
-
-        delete_conversation(&database, &mut transaction, "conv-a").unwrap();
-        for lane in ["main", "branch"] {
-            let (continuation, index) = keys_for(&transaction, "conv-a", lane);
-            assert!(database
-                .entity_get(&mut transaction, &continuation)
-                .unwrap()
-                .is_none());
-            assert!(database
-                .entity_get(&mut transaction, &index)
-                .unwrap()
-                .is_none());
-        }
-        let (other_continuation, _) = keys_for(&transaction, "conv-b", "main");
-        assert!(database
-            .entity_get(&mut transaction, &other_continuation)
-            .unwrap()
-            .is_some());
-        // Idempotent: an empty directory is a no-op.
-        delete_conversation(&database, &mut transaction, "conv-a").unwrap();
-        delete_conversation(&database, &mut transaction, "conv-missing").unwrap();
-    }
-}
-
 pub(crate) fn execute(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -906,10 +813,7 @@ pub(crate) fn execute(
                 database.entity_delete(transaction, key)?;
                 database.entity_delete(
                     transaction,
-                    lane_index_key(
-                        transaction,
-                        &continuation_raw_key(conversation_id, lane_id),
-                    )?,
+                    lane_index_key(transaction, &continuation_raw_key(conversation_id, lane_id))?,
                 )?;
             }
             Ok(Some(if existed {
@@ -918,5 +822,244 @@ pub(crate) fn execute(
                 b"false".to_vec()
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_round_locations_ignore_ui_but_keep_nested_user_evidence() {
+        let before = serde_json::json!({
+            "content": "answer", "translation": "display",
+            "toolRounds": [{"toolContent": "receipt", "toolArgs": {"_swarmSnapshot": "data"},
+                            "_swarmSnapshot": {"status": "running"}}],
+            "segments": [{"_round": {"toolCallId": "c1", "usage": 1, "toolContent": "receipt"}}]
+        });
+        let mut display = before.clone();
+        display["translation"] = serde_json::json!("translated");
+        display["toolRounds"][0]["_swarmSnapshot"]["status"] = serde_json::json!("completed");
+        display["segments"][0]["_round"]["usage"] = serde_json::json!(100);
+        let same = |left: &Value, right: &Value| {
+            model_projections_equal(left.as_object().unwrap(), right.as_object().unwrap())
+        };
+        assert!(same(&before, &display));
+        assert_eq!(
+            normalized_projection(before.as_object().unwrap()),
+            normalized_projection(display.as_object().unwrap())
+        );
+        let mut genuine = display.clone();
+        genuine["toolRounds"][0]["toolArgs"]["_swarmSnapshot"] = serde_json::json!("changed data");
+        assert!(!same(&before, &genuine));
+        genuine = display;
+
+        let numeric = serde_json::json!({"toolRounds": [{"toolArgs": {"value": 1}}]});
+        let boolean = serde_json::json!({"toolRounds": [{"toolArgs": {"value": true}}]});
+        let floating = serde_json::json!({"toolRounds": [{"toolArgs": {"value": 1.0}}]});
+        assert!(!same(&numeric, &boolean));
+        assert!(!same(&numeric, &floating));
+        genuine["segments"][0]["_round"]["toolContent"] = serde_json::json!("changed receipt");
+        assert!(!same(&before, &genuine));
+    }
+
+    #[test]
+    fn real_translation_locations_preserve_context_but_keep_source_and_nested_evidence() {
+        let before = serde_json::json!({"content": "answer", "segments": [
+            {"type": "text", "text": "narration"},
+            {"type": "thinking", "text": "reasoning"}],
+            "toolRounds": [{"toolArgs": {"translatedText": "evidence"}}]});
+        let mut after = before.clone();
+        after["translatedContent"] = serde_json::json!("display answer");
+        after["_translateDone"] = serde_json::json!(true);
+        after["_showingTranslation"] = serde_json::json!(true);
+        after["segments"][0]["translatedText"] = serde_json::json!("display narration");
+        after["segments"][1]["translatedText"] = serde_json::json!("display reasoning");
+        let same = |left: &Value, right: &Value| {
+            model_projections_equal(left.as_object().unwrap(), right.as_object().unwrap())
+        };
+        assert!(same(&before, &after));
+        assert_eq!(
+            normalized_projection(before.as_object().unwrap()),
+            normalized_projection(after.as_object().unwrap())
+        );
+        let mut changed = after.clone();
+        changed["segments"][0]["text"] = serde_json::json!("edited narration");
+        assert!(!same(&before, &changed));
+        changed = after.clone();
+        changed["toolRounds"][0]["toolArgs"]["translatedText"] =
+            serde_json::json!("edited evidence");
+        assert!(!same(&before, &changed));
+        after["content"] = serde_json::json!("translated model input");
+        assert!(!same(&before, &after));
+    }
+
+    #[test]
+    fn terminal_revision_binds_public_and_private_documents_identically() {
+        let stored = serde_json::json!({"turnId": "a", "actor": "assistant", "laneId": "main",
+            "parentTurnId": "u", "status": "completed", "projectionRevision": 9,
+            "_modelContextDisplayOffset": 3, "projection": {"content": "answer"}});
+        let mut public = stored.clone();
+        public
+            .as_object_mut()
+            .unwrap()
+            .remove("_modelContextDisplayOffset");
+        public["modelContextRevision"] = serde_json::json!(6);
+        assert_eq!(
+            settled_witness(stored.as_object().unwrap()),
+            settled_witness(public.as_object().unwrap())
+        );
+        public["projectionRevision"] = serde_json::json!(10);
+        assert_eq!(
+            settled_witness(stored.as_object().unwrap()),
+            settled_witness(public.as_object().unwrap())
+        );
+        public["modelContextRevision"] = serde_json::json!(7);
+        assert_ne!(
+            settled_witness(stored.as_object().unwrap()),
+            settled_witness(public.as_object().unwrap())
+        );
+
+        public["modelContextRevision"] = serde_json::json!(6);
+        public["currentAttemptId"] = serde_json::json!("new-attempt");
+        assert_ne!(
+            settled_witness(stored.as_object().unwrap()),
+            settled_witness(public.as_object().unwrap())
+        );
+    }
+
+    #[test]
+    fn history_proof_count_is_a_plain_json_safe_counter_and_needs_no_witness_list() {
+        let witness = || serde_json::json!(["turn", "0".repeat(64)]);
+        let projection = |count: Value, turns: Vec<Value>| {
+            serde_json::json!({
+            "messages": [{"role": "assistant", "content": "retained"}],
+            "turns": turns,
+            "historyProof": {"version": 2, "count": count, "digest": "a".repeat(64)}})
+        };
+        for count in [0, 9_999, 10_000, 20_000, 1 << 40, MAX_JSON_SAFE_INTEGER] {
+            assert!(encode_projection(&projection(count.into(), vec![witness()])).is_some());
+        }
+        for count in [
+            serde_json::json!(MAX_JSON_SAFE_INTEGER + 1),
+            serde_json::json!(u64::MAX),
+            serde_json::json!(-1),
+            serde_json::json!(1.0),
+            serde_json::json!(true),
+            serde_json::json!("1"),
+        ] {
+            assert!(encode_projection(&projection(count, vec![witness()])).is_none());
+        }
+        assert!(encode_projection(&projection(1.into(), vec![witness(), witness()])).is_none());
+        let legacy = |len| {
+            serde_json::json!({
+            "messages": [{"role": "assistant", "content": "retained"}],
+            "turns": vec![witness(); len]})
+        };
+        assert!(encode_projection(&legacy(MAX_TURN_WITNESSES)).is_some());
+        assert!(encode_projection(&legacy(MAX_TURN_WITNESSES + 1)).is_none());
+    }
+
+    #[test]
+    fn legacy_inline_continuation_upgrades_to_durable_bounded_blob() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let small = Map::from_iter([(
+            "messages".to_owned(),
+            serde_json::json!([
+                {"role": "assistant", "content": "old"}
+            ]),
+        )]);
+        let large = Map::from_iter([(
+            "messages".to_owned(),
+            serde_json::json!([
+                {"role": "system", "content": "context".repeat(4096)},
+                {"role": "assistant", "content": "new"}
+            ]),
+        )]);
+        let mut transaction = database.begin(7, 11).unwrap();
+        let key = continuation_key(&transaction, "legacy", "main").unwrap();
+        database
+            .entity_put(
+                &mut transaction,
+                key.clone(),
+                serde_json::to_vec(&json_record(1, &small, 100)).unwrap(),
+            )
+            .unwrap();
+        database.commit(transaction).unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        assert_eq!(
+            read_record(&database, &mut transaction, &key).unwrap(),
+            Some((1, small))
+        );
+        write_record(&database, &mut transaction, key.clone(), 2, &large, 200).unwrap();
+        let physical = database
+            .entity_get(&mut transaction, &key)
+            .unwrap()
+            .unwrap();
+        assert!(
+            physical.len() < 8192,
+            "large continuation must not occupy an inline entity"
+        );
+        assert!(crate::versioned_document::stored_blob_reference(&physical)
+            .unwrap()
+            .is_some());
+        database.commit(transaction).unwrap();
+        drop(database);
+        let database = AuthorityDatabase::open(directory.path()).unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        assert_eq!(
+            read_record(&database, &mut transaction, &key).unwrap(),
+            Some((2, large))
+        );
+    }
+
+    #[test]
+    fn delete_conversation_removes_only_its_own_lane_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        let keys_for = |transaction: &AuthorityTransaction, conv: &str, lane: &str| {
+            let continuation = continuation_key(transaction, conv, lane).unwrap();
+            let index = lane_index_key(transaction, &continuation_raw_key(conv, lane)).unwrap();
+            (continuation, index)
+        };
+        for lane in ["main", "branch"] {
+            let (continuation, index) = keys_for(&transaction, "conv-a", lane);
+            database
+                .entity_put(&mut transaction, continuation, b"record".to_vec())
+                .unwrap();
+            database
+                .entity_put(&mut transaction, index, Vec::new())
+                .unwrap();
+        }
+        let (other_continuation, other_index) = keys_for(&transaction, "conv-b", "main");
+        database
+            .entity_put(&mut transaction, other_continuation, b"record".to_vec())
+            .unwrap();
+        database
+            .entity_put(&mut transaction, other_index, Vec::new())
+            .unwrap();
+
+        delete_conversation(&database, &mut transaction, "conv-a").unwrap();
+        for lane in ["main", "branch"] {
+            let (continuation, index) = keys_for(&transaction, "conv-a", lane);
+            assert!(database
+                .entity_get(&mut transaction, &continuation)
+                .unwrap()
+                .is_none());
+            assert!(database
+                .entity_get(&mut transaction, &index)
+                .unwrap()
+                .is_none());
+        }
+        let (other_continuation, _) = keys_for(&transaction, "conv-b", "main");
+        assert!(database
+            .entity_get(&mut transaction, &other_continuation)
+            .unwrap()
+            .is_some());
+        // Idempotent: an empty directory is a no-op.
+        delete_conversation(&database, &mut transaction, "conv-a").unwrap();
+        delete_conversation(&database, &mut transaction, "conv-missing").unwrap();
     }
 }

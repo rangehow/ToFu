@@ -1163,8 +1163,8 @@ def host_tmp_path(monkeypatch):
     """Per-test scratch the host-scratch policy accepts for this checkout.
 
     The host-scratch policy (rootless_vm/host_paths.py) fails closed on any
-    path below shared /tmp and requires scratch under the checkout's declared
-    shared volume (TOFU_REQUIRED_HOST_VOLUME), so APIs guarded by it cannot take pytest's tmpfs tmp_path. Use
+    path below shared /tmp and requires scratch under the checkout's shared
+    /mnt/<volume> network volume, so APIs guarded by it cannot take pytest's tmpfs tmp_path. Use
     this fixture ONLY for those guarded APIs; everything else keeps tmp_path
     (full POSIX semantics — no FUSE readdir/hard-link degradation).
 

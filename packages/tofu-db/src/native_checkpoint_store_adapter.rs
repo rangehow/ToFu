@@ -11,12 +11,12 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tofu_runtime::checkpoint_journal::{Error, Header, Handoff, SnapshotWrite, Store};
+use tofu_runtime::checkpoint_journal::{Error, Handoff, Header, SnapshotWrite, Store};
 
-#[path = "native_checkpoint_handoff.rs"]
-mod handoff;
 #[path = "native_goal_actor_claim.rs"]
 mod goal_claim;
+#[path = "native_checkpoint_handoff.rs"]
+mod handoff;
 
 use super::{HEADERS, REPLAY, SNAPSHOTS};
 use crate::logical_outbox::{
@@ -79,7 +79,9 @@ impl NativeCheckpointStore {
     /// Explicit launch-derived aggregate evidence budget for a passive replica.
     /// This enables validation of composite claim records, never active leases.
     pub fn with_goal_claim_replay_budget(mut self, evidence_bytes: usize) -> Result<Self, Error> {
-        if evidence_bytes == 0 { return Err(Error::Invalid); }
+        if evidence_bytes == 0 {
+            return Err(Error::Invalid);
+        }
         self.goal_claim_replay_bytes = Some(evidence_bytes);
         Ok(self)
     }
@@ -152,9 +154,13 @@ fn encode<T: Serialize + ?Sized>(value: &T, maximum: usize) -> Result<Vec<u8>, E
     Ok(output.value)
 }
 impl Store for NativeCheckpointStore {
-    fn handoff_retired_actors(&self, actors: &[tofu_runtime::checkpoint_journal::ActorHandoff],
-        authorization: &Value, evidence_bytes: usize) -> Result<(),Error> {
-        self.consume_goal_actors(actors,authorization,evidence_bytes)
+    fn handoff_retired_actors(
+        &self,
+        actors: &[tofu_runtime::checkpoint_journal::ActorHandoff],
+        authorization: &Value,
+        evidence_bytes: usize,
+    ) -> Result<(), Error> {
+        self.consume_goal_actors(actors, authorization, evidence_bytes)
     }
     fn handoff(&self, request: Handoff<'_>) -> Result<u64, Error> {
         self.handoff_atomic(request)
@@ -458,7 +464,10 @@ impl NativeCheckpointStore {
     ) -> Result<u64, Error> {
         if record.identity.tenant_id != self.tenant
             || record.identity.owner_user_id != self.owner
-            || !matches!(record.identity.operation.as_str(), OPERATION | goal_claim::GOAL_CLAIM_OPERATION | goal_claim::GOAL_HANDOFF_OPERATION)
+            || !matches!(
+                record.identity.operation.as_str(),
+                OPERATION | goal_claim::GOAL_CLAIM_OPERATION | goal_claim::GOAL_HANDOFF_OPERATION
+            )
             || record.identity.schema_version
                 != crate::generated_storage_operations::STORAGE_SCHEMA_VERSION
             || record.identity.registry_version
@@ -471,12 +480,24 @@ impl NativeCheckpointStore {
             return Err(Error::Invalid);
         }
         if record.identity.operation == goal_claim::GOAL_CLAIM_OPERATION {
-            return self.replay_goal_claim_clear(&clear, source_uuid, record, archive_uuid, verified_old,
-                self.goal_claim_replay_bytes.ok_or(Error::Ineligible)?);
+            return self.replay_goal_claim_clear(
+                &clear,
+                source_uuid,
+                record,
+                archive_uuid,
+                verified_old,
+                self.goal_claim_replay_bytes.ok_or(Error::Ineligible)?,
+            );
         }
         if record.identity.operation == goal_claim::GOAL_HANDOFF_OPERATION {
-            return self.replay_goal_handoff_clear(&clear,source_uuid,record,archive_uuid,verified_old,
-                self.goal_claim_replay_bytes.ok_or(Error::Ineligible)?);
+            return self.replay_goal_handoff_clear(
+                &clear,
+                source_uuid,
+                record,
+                archive_uuid,
+                verified_old,
+                self.goal_claim_replay_bytes.ok_or(Error::Ineligible)?,
+            );
         }
         let mutation: ReceivedMutation =
             serde_json::from_slice(&clear).map_err(|_| Error::Invalid)?;
@@ -579,37 +600,75 @@ impl NativeCheckpointStore {
             return Err(Error::Conflict);
         }
         if let Some(source) = &mutation.handoff_source {
-            if mutation.expected_version != 0 || mutation.snapshot.is_null()
+            if mutation.expected_version != 0
+                || mutation.snapshot.is_null()
                 || source.task_id == mutation.task_id
-                || !matches!(mutation.header["phase"].as_str(), Some("completed" | "tools_pending"))
+                || !matches!(
+                    mutation.header["phase"].as_str(),
+                    Some("completed" | "tools_pending")
+                )
                 || (mutation.header["phase"] == "tools_pending")
                     != (mutation.snapshot.get("tools_pending") == Some(&Value::Bool(true)))
                 || mutation.header["epoch"] != source.header["epoch"]
                 || mutation.header["binding"] != source.header["binding"]
                 || mutation.header["next_round"] != source.header["next_round"]
-            { return Err(Error::Invalid); }
-            let source_receipt_key = versioned_document::record_key(self.tenant, self.owner, REPLAY,
-                &source.task_id).map_err(map_io)?;
-            let source_receipt = versioned_document::get_value_with_version_bounded(&database,
-                &mut transaction, &source_receipt_key, REPLAY, &source.task_id, self.header_bytes)
-                .map_err(map_io)?.ok_or(Error::Conflict)?;
-            let source_receipt: Value = serde_json::from_slice(&source_receipt.0).map_err(|_| Error::Invalid)?;
+            {
+                return Err(Error::Invalid);
+            }
+            let source_receipt_key =
+                versioned_document::record_key(self.tenant, self.owner, REPLAY, &source.task_id)
+                    .map_err(map_io)?;
+            let source_receipt = versioned_document::get_value_with_version_bounded(
+                &database,
+                &mut transaction,
+                &source_receipt_key,
+                REPLAY,
+                &source.task_id,
+                self.header_bytes,
+            )
+            .map_err(map_io)?
+            .ok_or(Error::Conflict)?;
+            let source_receipt: Value =
+                serde_json::from_slice(&source_receipt.0).map_err(|_| Error::Invalid)?;
             if source_receipt["source_uuid"] != source_uuid
                 || source_receipt["version"].as_u64() != Some(source.expected_version)
                 || match archive_uuid {
-                    Some(id) => source_receipt["archive_uuid"].as_str() != Some(id.to_string().as_str()),
+                    Some(id) => {
+                        source_receipt["archive_uuid"].as_str() != Some(id.to_string().as_str())
+                    }
                     None => source_receipt.get("archive_uuid").is_some(),
                 }
-            { return Err(Error::Conflict); }
-            self.retire_handoff_source(&database, &mut transaction, source,
-                mutation.header["phase"].as_str().ok_or(Error::Invalid)?, false, mutation.updated_at_ms)?;
+            {
+                return Err(Error::Conflict);
+            }
+            self.retire_handoff_source(
+                &database,
+                &mut transaction,
+                source,
+                mutation.header["phase"].as_str().ok_or(Error::Invalid)?,
+                false,
+                mutation.updated_at_ms,
+            )?;
             let mut retired_receipt = expected_receipt.clone();
-            retired_receipt["version"] = Value::from(source.expected_version.checked_add(1).ok_or(Error::Invalid)?);
-            versioned_document::put(&database, &mut transaction, PutRequest {
-                key: source_receipt_key, namespace: REPLAY.into(), logical_key: source.task_id.clone(),
-                value_json: encode(&retired_receipt, self.header_bytes)?, expected_version: None,
-                updated_at_ms: mutation.updated_at_ms,
-            }).map_err(map_io)?;
+            retired_receipt["version"] = Value::from(
+                source
+                    .expected_version
+                    .checked_add(1)
+                    .ok_or(Error::Invalid)?,
+            );
+            versioned_document::put(
+                &database,
+                &mut transaction,
+                PutRequest {
+                    key: source_receipt_key,
+                    namespace: REPLAY.into(),
+                    logical_key: source.task_id.clone(),
+                    value_json: encode(&retired_receipt, self.header_bytes)?,
+                    expected_version: None,
+                    updated_at_ms: mutation.updated_at_ms,
+                },
+            )
+            .map_err(map_io)?;
         }
         versioned_document::put_known_version_returning_envelope(
             &database,

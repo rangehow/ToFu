@@ -83,8 +83,7 @@ fn document_from_snapshot(snapshot: &Value) -> io::Result<Map<String, Value>> {
     if attempt_is_live(&document) {
         return Err(invalid_input("live attempts must settle before migration"));
     }
-    if serde_json::to_vec(&document)?.len()
-        > crate::generated_tofudb_ir::MAX_LEGACY_DOCUMENT_BYTES
+    if serde_json::to_vec(&document)?.len() > crate::generated_tofudb_ir::MAX_LEGACY_DOCUMENT_BYTES
     {
         return Err(invalid_input("attempt snapshot exceeds document bound"));
     }

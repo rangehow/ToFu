@@ -15,6 +15,7 @@ file.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import threading
 from typing import TypedDict
@@ -107,6 +108,14 @@ class CatalogEntry(TypedDict, total=False):
                                 # into the owner's skills when this server is
                                 # installed from the catalog
                                 # (lib/skills/companion.py).
+    document_reader: dict       # optional: documents of ``hosts`` whose path
+                                # matches ``path_pattern`` are read through this
+                                # connector's ``tool`` (argument ``url_argument``)
+                                # under the user's identity instead of an
+                                # anonymous fetch (lib/search/search_bridge.py
+                                # McpDocumentReader). ``base_url`` builds links
+                                # for bare document ids; ``label`` names the
+                                # document kind in reader messages.
     read_only_tools: tuple[str, ...]  # raw MCP tool names a reviewer
                                 # confirmed are pure reads although the server
                                 # does not annotate readOnlyHint=true. Applied
@@ -165,26 +174,6 @@ def is_opensource_build() -> bool:
 # ══════════════════════════════════════════════════════════
 #  Curated Catalog
 # ══════════════════════════════════════════════════════════
-
-# Shared SSO setup is one contract for all internal MCPs; secrets are never
-# persisted into these specs. The installed adapter owns provider discovery.
-_INTERNAL_SSO_ENV_SPECS = [
-    {'key': 'MTSSO_AUTH_MODE', 'label': 'SSO provider mode', 'required': False,
-     'secret': False, 'type': 'select', 'hint': 'auto selects registered official SSO first; otherwise reuse the same-user shared session',
-     'options': [{'label': value, 'value': value} for value in ('auto', 'official', 'shared', 'legacy')]},
-    {'key': 'MTSSO_MIS', 'label': 'Shared SSO MIS', 'hint': 'Same user across Hope, LLM and Xuecheng; login target, not identity proof',
-     'required': False, 'secret': False},
-    {'key': 'MTSSO_SESSION_SDK', 'label': 'Installed shared SSO SDK',
-     'hint': 'Optional absolute path to installed @datafe/llm-cli/dist/lib/auth.js; discovered locally by default',
-     'required': False, 'secret': False},
-    {'key': 'MTSSO_SESSION_TOKEN_FILE', 'label': 'Existing shared SSO session file',
-     'hint': 'Optional private same-user session file; defaults to existing MLP/LLM session, never copies credentials',
-     'required': False, 'secret': False},
-    {'key': 'MTSSO_NODE_EXECUTABLE', 'label': 'SSO Node executable',
-     'hint': ('Optional compatible Node 20+ path for this MCP server only; no automatic download. '
-              'The 大象 channel runs TOFU_NODE instead'),
-     'required': False, 'secret': False},
-]
 
 # Kingsoft Docs annotates EVERY one of its 630 tools readOnlyHint=false and
 # destructiveHint=true, so without a review each read needs write approval, is
@@ -1219,6 +1208,45 @@ CATALOG: list[CatalogEntry] = [
         'tags': ['discovery', 'mcp', 'meta'],
     },
 ]
+
+
+MCP_CATALOG_CONTRACT = 'tofu.mcp-catalog/v1'
+
+
+def _bundle_catalog_entries(core_ids: set[str]) -> list[CatalogEntry]:
+    """Entries installed bundles declare in ``mcp_catalog/*.json``.
+
+    Company-internal connectors ship with their overlay (docs/PUBLIC_CORE.md),
+    never in ``CATALOG``. A core id always wins; a malformed file or entry is
+    skipped so one bad drop-in never empties the Settings grid.
+    """
+    from tofu_extensions import bundle_directories
+    entries: list[CatalogEntry] = []
+    seen = set(core_ids)
+    for directory in bundle_directories('mcp_catalog'):
+        for path in sorted(directory.glob('*.json')):
+            try:
+                document = json.loads(path.read_text(encoding='utf-8'))
+                if document.get('contract') != MCP_CATALOG_CONTRACT:
+                    raise ValueError(f'not a {MCP_CATALOG_CONTRACT} document')
+                raw_entries = document['entries']
+            except (OSError, ValueError, KeyError, AttributeError) as exc:
+                logger.warning('[MCP:Registry] skipping catalog file %s: %s', path, exc)
+                continue
+            for entry in raw_entries:
+                if (not isinstance(entry, dict) or not isinstance(entry.get('id'), str)
+                        or not isinstance(entry.get('name'), str)
+                        or entry.get('category') not in CATEGORIES
+                        or entry['id'] in seen):
+                    logger.warning('[MCP:Registry] skipping catalog entry %r in %s',
+                                   entry.get('id') if isinstance(entry, dict) else entry, path)
+                    continue
+                seen.add(entry['id'])
+                entries.append(entry)
+    return entries
+
+
+CATALOG.extend(_bundle_catalog_entries({entry['id'] for entry in CATALOG}))
 
 
 # ── Lookup helpers ────────────────────────────────────────

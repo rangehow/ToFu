@@ -465,27 +465,6 @@ MODEL_PRICING = {
 # revision that settled-round cost memos validate against.
 MODEL_PRICING = RevisionedTable(MODEL_PRICING)
 
-# ── FRIDAY (YourProvider AIGC gateway, your-llm-gateway.example.com) Claude cache billing ──
-# FRIDAY bills Claude prompt-cache tokens as fixed multiples of the model's
-# base input price, for every Claude model it serves. 学城 2762588777
-# 《Friday 大模型平台 Claude 模型接入推荐实践》 §1.3 (modified 2026-05-15,
-# read 2026-11-08), verbatim:
-#   | 5m（默认） | × 1.25 base | $3.75 |
-#   | 1h | × 2.0 base | $6.00 |
-#   | 命中读取（任意 TTL） | × 0.1 base | $0.30 |
-# FRIDAY publishes no base price (none for Opus 5.5, which shipped after that
-# page), so its rows keep each Claude row's base input/output above and that
-# row's evidence; only these multipliers are FRIDAY's. lib.pricing._provider
-# installs them for FRIDAY_PROVIDER_IDS; every other provider, such as a
-# direct Anthropic key, keeps the creator's official row.
-FRIDAY_CLAUDE_CACHE_MULTIPLIERS = MappingProxyType({
-    'cacheWriteMul': 1.25, 'cacheWrite1hMul': 2.0, 'cacheReadMul': 0.10})
-# Providers whose Claude traffic FRIDAY bills: 'yourprovider' is the provider a
-# fresh install of bundles/yourprovider/provider_templates/yourprovider.json creates
-# (its template key); 'example-corp' is the deployment's provider that the v1→v2
-# cutover imported, all of whose Connections terminate at your-llm-gateway.example.com.
-FRIDAY_PROVIDER_IDS = ('yourprovider', 'example-corp')
-
 # Dated-checkpoint pins (deepseek-v4-pro-0813, claude-opus-4-5-20251001) serve
 # the same model as their rolling alias, and vendors do not reprice a pin. An
 # exact miss therefore folds ONE trailing -MMDD / -YYYYMMDD stamp and retries

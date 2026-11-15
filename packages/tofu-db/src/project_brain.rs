@@ -719,27 +719,37 @@ fn decode_event_chunks(
     let chunk_count = u32::from_be_bytes(header[20..24].try_into().unwrap()) as usize;
     let total_bytes = u32::from_be_bytes(header[24..28].try_into().unwrap()) as usize;
     let digest: [u8; 32] = header[28..60].try_into().unwrap();
-    if first_chunk_index != 0 || chunk_count == 0 || total_bytes == 0
+    if first_chunk_index != 0
+        || chunk_count == 0
+        || total_bytes == 0
         || chunk_count != total_bytes.div_ceil(EVENT_CHUNK_BYTES)
     {
-        return Err(invalid_data("Project Brain event chunk bounds are malformed"));
+        return Err(invalid_data(
+            "Project Brain event chunk bounds are malformed",
+        ));
     }
-    let next = first_physical_sequence.checked_add(chunk_count as u64)
+    let next = first_physical_sequence
+        .checked_add(chunk_count as u64)
         .ok_or_else(|| invalid_data("Project Brain physical sequence overflow"))?;
     // Physical pages may stop before the logical event's end. Grow only from
     // verified chunks, never an untrusted header's declared allocation size.
     let mut encoded = Vec::new();
     let mut index = 0_usize;
     while index < chunk_count {
-        let page = database.stream_read_in_transaction(transaction,key,first_physical_sequence+index as u64,
-            (chunk_count-index).min(crate::generated_tofudb_ir::MAX_STREAM_READ_EVENTS))?;
+        let page = database.stream_read_in_transaction(
+            transaction,
+            key,
+            first_physical_sequence + index as u64,
+            (chunk_count - index).min(crate::generated_tofudb_ir::MAX_STREAM_READ_EVENTS),
+        )?;
         if page.events.is_empty() {
             return Err(invalid_data("Project Brain event chunks are incomplete"));
         }
         for chunk in &page.events {
             let payload = chunk.event.payload.as_slice();
-            let expected_bytes = (total_bytes-encoded.len()).min(EVENT_CHUNK_BYTES);
-            if index >= chunk_count || chunk.sequence != first_physical_sequence + index as u64
+            let expected_bytes = (total_bytes - encoded.len()).min(EVENT_CHUNK_BYTES);
+            if index >= chunk_count
+                || chunk.sequence != first_physical_sequence + index as u64
                 || chunk.event.event_type != "semantic_event_chunk"
                 || payload.len() != EVENT_CHUNK_HEADER_BYTES + expected_bytes
                 || &payload[..8] != EVENT_CHUNK_MAGIC
@@ -749,10 +759,15 @@ fn decode_event_chunks(
                 || u32::from_be_bytes(payload[24..28].try_into().unwrap()) as usize != total_bytes
                 || payload[28..60] != digest
             {
-                return Err(invalid_data("Project Brain event chunk sequence is malformed"));
+                return Err(invalid_data(
+                    "Project Brain event chunk sequence is malformed",
+                ));
             }
-            encoded.try_reserve(expected_bytes)
-                .map_err(|_| crate::resource_exhaustion::reservation_failure("Project Brain event allocation failed"))?;
+            encoded.try_reserve(expected_bytes).map_err(|_| {
+                crate::resource_exhaustion::reservation_failure(
+                    "Project Brain event allocation failed",
+                )
+            })?;
             encoded.extend_from_slice(&payload[EVENT_CHUNK_HEADER_BYTES..]);
             index += 1;
         }
@@ -911,19 +926,35 @@ pub(crate) fn list_active(
     let mut projects = Vec::new();
     let mut seen_projects = HashSet::new();
     loop {
-        let rows = database.entity_scan(transaction, &cursor, &end, crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS)?;
-        if rows.is_empty() { break; }
+        let rows = database.entity_scan(
+            transaction,
+            &cursor,
+            &end,
+            crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS,
+        )?;
+        if rows.is_empty() {
+            break;
+        }
         let mut successor = rows.last().expect("nonempty page").0.key_bytes().to_vec();
         successor.push(0);
-        cursor = EntityKey::new(transaction.tenant_id(),transaction.owner_user_id(),PROJECT_BRAIN_UPDATED_INDEX_NAMESPACE,&successor)?;
+        cursor = EntityKey::new(
+            transaction.tenant_id(),
+            transaction.owner_user_id(),
+            PROJECT_BRAIN_UPDATED_INDEX_NAMESPACE,
+            &successor,
+        )?;
         for (_, raw_project_key) in rows {
             let project_key = std::str::from_utf8(&raw_project_key)
                 .map_err(|_| invalid_data("Project Brain updated index is malformed"))?;
             // Legacy update indexes may repeat projects across page boundaries.
-            if !seen_projects.insert(project_key.to_owned()) { continue; }
-            if recovery::can_skip(database, transaction, project_key)? { continue; }
-            let projection = load_projection(database,transaction,project_key)?;
-            let work_items = public_work_items(&projection,true)?;
+            if !seen_projects.insert(project_key.to_owned()) {
+                continue;
+            }
+            if recovery::can_skip(database, transaction, project_key)? {
+                continue;
+            }
+            let projection = load_projection(database, transaction, project_key)?;
+            let work_items = public_work_items(&projection, true)?;
             if !work_items.is_empty() {
                 projects.push(json!({"projectKey":project_key,"workItems":work_items}));
             }
@@ -982,7 +1013,9 @@ fn recovery_snapshot_with_yield(
     if let Some(cursor) = cursor {
         cursor.validate(transaction.owner_user_id())?;
         // Advance past the exact key even if that project was since retired.
-        start = document_key(transaction, &cursor.project_key)?.exact_range()?.1;
+        start = document_key(transaction, &cursor.project_key)?
+            .exact_range()?
+            .1;
     }
     let rows = database.entity_scan(transaction, &start, &end, 1000)?;
     let mut projects = Vec::new();
@@ -990,7 +1023,9 @@ fn recovery_snapshot_with_yield(
     for (physical, document) in &rows {
         // Always consume one document, including an inactive one.
         // A short/empty active page must still advance its cursor.
-        if consumed > 0 && should_yield() { break; }
+        if consumed > 0 && should_yield() {
+            break;
+        }
         consumed += 1;
         let project_key = stored_project_key(transaction, physical, document)?;
         // The scanned envelope is the exact header its summary must match.
@@ -1010,8 +1045,16 @@ fn recovery_snapshot_with_yield(
     let capped = if consumed < rows.len() {
         true
     } else if rows.len() == 1000 {
-        let after = rows.last().expect("full page is nonempty").0.clone().exact_range()?.1;
-        !database.entity_scan(transaction, &after, &end, 1)?.is_empty()
+        let after = rows
+            .last()
+            .expect("full page is nonempty")
+            .0
+            .clone()
+            .exact_range()?
+            .1;
+        !database
+            .entity_scan(transaction, &after, &end, 1)?
+            .is_empty()
     } else {
         false
     };
@@ -1240,10 +1283,7 @@ fn merge_relinked_projections(
                     }
                 }
             }
-            combined.insert(
-                "changedPaths".to_owned(),
-                Value::Array(changed_paths),
-            );
+            combined.insert("changedPaths".to_owned(), Value::Array(changed_paths));
             let mut artifact_order: Vec<String> = Vec::new();
             let mut artifacts_by_key: HashMap<String, Map<String, Value>> = HashMap::new();
             for list in [previous.get("artifacts"), item.get("artifacts")]
@@ -1275,10 +1315,7 @@ fn merge_relinked_projections(
                 .iter()
                 .map(|key| Value::Object(artifacts_by_key[key].clone()))
                 .collect();
-            combined.insert(
-                "artifacts".to_owned(),
-                Value::Array(artifact_values),
-            );
+            combined.insert("artifacts".to_owned(), Value::Array(artifact_values));
             work_by_id.insert(work_id, combined);
         }
     }
@@ -2695,13 +2732,20 @@ mod tests {
     fn recovery_snapshot_yields_after_inactive_rows_without_skipping_active_work() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        for (project, timestamp, active) in [("/inactive", 30, false), ("/second", 20, true), ("/last", 10, true)] {
+        for (project, timestamp, active) in [
+            ("/inactive", 30, false),
+            ("/second", 20, true),
+            ("/last", 10, true),
+        ] {
             let mut seed = database.begin(7, 11).unwrap();
             let mut projection = empty_projection(11, project);
             if active {
-                projection.insert("workItems".into(), json!([
-                    {"id": project, "taskId": project, "status": "active"}
-                ]));
+                projection.insert(
+                    "workItems".into(),
+                    json!([
+                        {"id": project, "taskId": project, "status": "active"}
+                    ]),
+                );
             }
             save_projection(&database, &mut seed, project, &projection, timestamp).unwrap();
             database.commit(seed).unwrap();
@@ -2710,14 +2754,26 @@ mod tests {
         let mut seen = Vec::new();
         for page_number in 0..3 {
             let mut tx = database.begin(7, 11).unwrap();
-            let page: Value = serde_json::from_slice(&recovery_snapshot_with_yield(
-                &database, &mut tx, cursor.as_ref(), || true,
-            ).unwrap()).unwrap();
+            let page: Value = serde_json::from_slice(
+                &recovery_snapshot_with_yield(&database, &mut tx, cursor.as_ref(), || true)
+                    .unwrap(),
+            )
+            .unwrap();
             let projects = page["projects"].as_array().unwrap();
-            assert!(projects.len() <= 1, "each yielded page consumes one project");
-            seen.extend(projects.iter().map(|p| p["projectKey"].as_str().unwrap().to_owned()));
+            assert!(
+                projects.len() <= 1,
+                "each yielded page consumes one project"
+            );
+            seen.extend(
+                projects
+                    .iter()
+                    .map(|p| p["projectKey"].as_str().unwrap().to_owned()),
+            );
             assert_eq!(page["capped"], page_number < 2);
-            cursor = page.get("nextCursor").cloned().map(|c| serde_json::from_value(c).unwrap());
+            cursor = page
+                .get("nextCursor")
+                .cloned()
+                .map(|c| serde_json::from_value(c).unwrap());
             if let Some(ref cursor) = cursor {
                 // A retired cursor project must not strand continuation or skip its successor.
                 let mut delete = database.begin(7, 11).unwrap();
@@ -2725,7 +2781,13 @@ mod tests {
                 database.entity_delete(&mut delete, key).unwrap();
                 database.commit(delete).unwrap();
                 let mut foreign = database.begin(7, 12).unwrap();
-                assert!(recovery_snapshot_with_yield(&database, &mut foreign, Some(cursor), || true).is_err());
+                assert!(recovery_snapshot_with_yield(
+                    &database,
+                    &mut foreign,
+                    Some(cursor),
+                    || true
+                )
+                .is_err());
             }
         }
         seen.sort();
@@ -2739,39 +2801,56 @@ mod tests {
         let project_key = "/legacy-duplicates";
         let mut seed = database.begin(7, 11).unwrap();
         let mut projection = empty_projection(11, project_key);
-        projection.insert("workItems".to_owned(), json!([
-            {"id": "work", "taskId": "task", "status": "active"}
-        ]));
-        projection.insert("narratives".to_owned(), json!([
-            {"text": "retained-history ".repeat(4096)}
-        ]));
+        projection.insert(
+            "workItems".to_owned(),
+            json!([
+                {"id": "work", "taskId": "task", "status": "active"}
+            ]),
+        );
+        projection.insert(
+            "narratives".to_owned(),
+            json!([
+                {"text": "retained-history ".repeat(4096)}
+            ]),
+        );
         save_projection(&database, &mut seed, project_key, &projection, 2000).unwrap();
         // Simulate retained legacy index entries without rewriting authority.
         for timestamp in 0..1000 {
             let key = updated_index_key(&seed, project_key, timestamp).unwrap();
-            database.entity_put(&mut seed, key, project_key.as_bytes().to_vec()).unwrap();
+            database
+                .entity_put(&mut seed, key, project_key.as_bytes().to_vec())
+                .unwrap();
         }
         database.commit(seed).unwrap();
         let hydrations = projection_hydrations();
         let mut inspect = database.begin(7, 11).unwrap();
-        let first: Value = serde_json::from_slice(
-            &recovery_snapshot(&database, &mut inspect, None).unwrap()).unwrap();
+        let first: Value =
+            serde_json::from_slice(&recovery_snapshot(&database, &mut inspect, None).unwrap())
+                .unwrap();
         assert_eq!(projection_hydrations() - hydrations, 1);
         assert_eq!(first["projects"].as_array().unwrap().len(), 1);
         assert_eq!(first["projects"][0]["workItems"][0]["taskId"], "task");
         assert_eq!(first["capped"], false);
         let mut settle = database.begin(7, 11).unwrap();
-        projection.insert("workItems".to_owned(), json!([
-            {"id": "work", "taskId": "task", "status": "completed"}
-        ]));
+        projection.insert(
+            "workItems".to_owned(),
+            json!([
+                {"id": "work", "taskId": "task", "status": "completed"}
+            ]),
+        );
         save_projection(&database, &mut settle, project_key, &projection, 3000).unwrap();
         database.commit(settle).unwrap();
         let hydrations = projection_hydrations();
         let mut inspect = database.begin(7, 11).unwrap();
-        let last: Value = serde_json::from_slice(
-            &recovery_snapshot(&database, &mut inspect, None).unwrap()).unwrap();
+        let last: Value =
+            serde_json::from_slice(&recovery_snapshot(&database, &mut inspect, None).unwrap())
+                .unwrap();
         assert_eq!(last, json!({"projects": [], "capped": false}));
-        assert_eq!(projection_hydrations(), hydrations, "settlement published a negative summary");
+        assert_eq!(
+            projection_hydrations(),
+            hydrations,
+            "settlement published a negative summary"
+        );
     }
 
     #[test]
@@ -2781,37 +2860,62 @@ mod tests {
         let mut seed = database.begin(7, 11).unwrap();
         for index in 0..1001 {
             let project_key = format!("/project-{index}");
-            save_projection(&database, &mut seed, &project_key,
-                &empty_projection(11, &project_key), 50).unwrap();
+            save_projection(
+                &database,
+                &mut seed,
+                &project_key,
+                &empty_projection(11, &project_key),
+                50,
+            )
+            .unwrap();
         }
         database.commit(seed).unwrap();
         let mut inspect = database.begin(7, 11).unwrap();
         let first: Value = serde_json::from_slice(
-            &recovery_snapshot_with_yield(&database, &mut inspect, None, || false).unwrap()).unwrap();
+            &recovery_snapshot_with_yield(&database, &mut inspect, None, || false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(first["projects"], json!([]));
         assert_eq!(first["capped"], true);
         let cursor: RecoveryCursor = serde_json::from_value(first["nextCursor"].clone()).unwrap();
         // Update-order continuations of older engines are refused, never reinterpreted.
         assert!(serde_json::from_value::<RecoveryCursor>(json!({
             "updatedAt": 50, "ownerUserId": 11, "projectKey": cursor.project_key,
-        })).is_err());
+        }))
+        .is_err());
         let mut settlement = database.begin(7, 11).unwrap();
         let projection = load_projection(&database, &mut settlement, &cursor.project_key).unwrap();
-        save_projection(&database, &mut settlement, &cursor.project_key, &projection, 100).unwrap();
+        save_projection(
+            &database,
+            &mut settlement,
+            &cursor.project_key,
+            &projection,
+            100,
+        )
+        .unwrap();
         database.commit(settlement).unwrap();
         let mut inspect = database.begin(7, 11).unwrap();
         let last: Value = serde_json::from_slice(
-            &recovery_snapshot_with_yield(&database, &mut inspect, Some(&cursor), || false).unwrap()).unwrap();
+            &recovery_snapshot_with_yield(&database, &mut inspect, Some(&cursor), || false)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(last, json!({"projects": [], "capped": false}));
         let mut foreign = database.begin(7, 12).unwrap();
         assert!(recovery_snapshot(&database, &mut foreign, Some(&cursor)).is_err());
         let mut delete = database.begin(7, 11).unwrap();
-        database.entity_delete(&mut delete,
-            document_key(&inspect, &cursor.project_key).unwrap()).unwrap();
+        database
+            .entity_delete(
+                &mut delete,
+                document_key(&inspect, &cursor.project_key).unwrap(),
+            )
+            .unwrap();
         database.commit(delete).unwrap();
         let mut inspect = database.begin(7, 11).unwrap();
         let exact: Value = serde_json::from_slice(
-            &recovery_snapshot_with_yield(&database, &mut inspect, None, || false).unwrap()).unwrap();
+            &recovery_snapshot_with_yield(&database, &mut inspect, None, || false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(exact, json!({"projects": [], "capped": false}));
     }
 
@@ -2834,7 +2938,9 @@ mod tests {
         loop {
             let mut inspect = database.begin(7, 11).unwrap();
             let page: Value = serde_json::from_slice(
-                &recovery_snapshot(&database, &mut inspect, cursor.as_ref()).unwrap()).unwrap();
+                &recovery_snapshot(&database, &mut inspect, cursor.as_ref()).unwrap(),
+            )
+            .unwrap();
             let mut settle = database.begin(7, 11).unwrap();
             for project in page["projects"].as_array().unwrap() {
                 let key = project["projectKey"].as_str().unwrap();
@@ -2918,7 +3024,8 @@ mod tests {
 
         let mut inspect = database.begin(7, 11).unwrap();
         let snapshot: Value =
-            serde_json::from_slice(&recovery_snapshot(&database, &mut inspect, None).unwrap()).unwrap();
+            serde_json::from_slice(&recovery_snapshot(&database, &mut inspect, None).unwrap())
+                .unwrap();
         assert_eq!(snapshot["capped"], false);
         assert_eq!(snapshot["projects"].as_array().unwrap().len(), 1);
         assert_eq!(snapshot["projects"][0]["ownerUserId"], 11);
@@ -3027,11 +3134,18 @@ mod tests {
 mod demand_retention_tests {
     use super::*;
     fn apply(database: &mut AuthorityDatabase, action: CommandAction, payload: Value) -> Value {
-        let mut transaction = database.begin(7,11).unwrap();
-        let bytes = command(database,&mut transaction,&CommandRequest {
-            project_key:"/demand-project".to_owned(),action,
-            payload:payload.as_object().unwrap().clone(),timestamp:1000,
-        }).unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        let bytes = command(
+            database,
+            &mut transaction,
+            &CommandRequest {
+                project_key: "/demand-project".to_owned(),
+                action,
+                payload: payload.as_object().unwrap().clone(),
+                timestamp: 1000,
+            },
+        )
+        .unwrap();
         database.commit(transaction).unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
@@ -3039,22 +3153,30 @@ mod demand_retention_tests {
     fn active_project_list_includes_every_project_beyond_the_former_page_quota() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        let mut transaction = database.begin(7,11).unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
         for ordinal in 0..1001 {
             let key = format!("/active-demand-{ordinal:04}");
-            let mut projection = empty_projection(11,&key);
-            projection.insert("workItems".to_owned(),json!([{"id":"work","taskId":"task","status":"active"}]));
-            save_projection(&database,&mut transaction,&key,&projection,ordinal+1).unwrap();
+            let mut projection = empty_projection(11, &key);
+            projection.insert(
+                "workItems".to_owned(),
+                json!([{"id":"work","taskId":"task","status":"active"}]),
+            );
+            save_projection(&database, &mut transaction, &key, &projection, ordinal + 1).unwrap();
         }
         database.commit(transaction).unwrap();
         drop(database);
         let database = AuthorityDatabase::open(directory.path()).unwrap();
-        let mut transaction = database.begin(7,11).unwrap();
-        let value:Value = serde_json::from_slice(&list_active(&database,&mut transaction).unwrap()).unwrap();
-        assert_eq!(value["projects"].as_array().unwrap().len(),1001);
-        assert_eq!(value["projects"][1000]["projectKey"],"/active-demand-0000");
-        let mut foreign = database.begin(7,12).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&list_active(&database,&mut foreign).unwrap()).unwrap(),json!({"projects":[]}));
+        let mut transaction = database.begin(7, 11).unwrap();
+        let value: Value =
+            serde_json::from_slice(&list_active(&database, &mut transaction).unwrap()).unwrap();
+        assert_eq!(value["projects"].as_array().unwrap().len(), 1001);
+        assert_eq!(value["projects"][1000]["projectKey"], "/active-demand-0000");
+        let mut foreign = database.begin(7, 12).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&list_active(&database, &mut foreign).unwrap())
+                .unwrap(),
+            json!({"projects":[]})
+        );
     }
 
     #[test]
@@ -3063,82 +3185,174 @@ mod demand_retention_tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         for ordinal in 0..121 {
             let task_id = format!("task-{ordinal}");
-            let digest = format!("{:x}",Sha256::digest(task_id.as_bytes()));
-            apply(&mut database,CommandAction::WorkStart,json!({"work_item":{
+            let digest = format!("{:x}", Sha256::digest(task_id.as_bytes()));
+            apply(
+                &mut database,
+                CommandAction::WorkStart,
+                json!({"work_item":{
                 "id":format!("pw_{}",&digest[..24]),"taskId":task_id,"conversationId":"conversation",
                 "title":"Demand work","trigger":"file_write","status":"active",
                 "changedPaths":[],"artifacts":[],"resultSummary":"","startedAt":ordinal,
-                "finishedAt":null,"_titlePriority":100,"_titleRefined":false}}));
+                "finishedAt":null,"_titlePriority":100,"_titleRefined":false}}),
+            );
         }
-        let mut transaction = database.begin(7,11).unwrap();
-        let mut projection = load_projection(&database,&mut transaction,"/demand-project").unwrap();
-        assert_eq!(projection["workItems"].as_array().unwrap().len(),121);
-        let work_id = projection["workItems"][0]["id"].as_str().unwrap().to_owned();
+        let mut transaction = database.begin(7, 11).unwrap();
+        let mut projection =
+            load_projection(&database, &mut transaction, "/demand-project").unwrap();
+        assert_eq!(projection["workItems"].as_array().unwrap().len(), 121);
+        let work_id = projection["workItems"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         for ordinal in 0..121 {
             projection["workItems"].as_array_mut().unwrap().push(json!({"id":format!("terminal-{ordinal}"),"status":"completed","finishedAt":ordinal}));
         }
         for ordinal in 0..601 {
-            let sequence = projection["headSequence"].as_u64().unwrap()+1;
+            let sequence = projection["headSequence"].as_u64().unwrap() + 1;
             let event = json!({"projectSequence":sequence,"timestamp":2000+ordinal,"kind":"narrative_added",
                 "payload":{"narrativeKind":"note","text":format!("history-{ordinal}")}});
-            append_event(&database,&mut transaction,"/demand-project",&event,sequence,2000+ordinal).unwrap();
-            fold_event(&mut projection,&event).unwrap();
+            append_event(
+                &database,
+                &mut transaction,
+                "/demand-project",
+                &event,
+                sequence,
+                2000 + ordinal,
+            )
+            .unwrap();
+            fold_event(&mut projection, &event).unwrap();
         }
         for ordinal in 0..1101 {
-            let sequence = projection["headSequence"].as_u64().unwrap()+1;
+            let sequence = projection["headSequence"].as_u64().unwrap() + 1;
             let event = json!({"projectSequence":sequence,"timestamp":3000+ordinal,
                 "kind":"cursor_confirmed","payload":{"conversationId":format!("cursor-{ordinal}"),"deliveredSequence":1}});
-            append_event(&database,&mut transaction,"/demand-project",&event,sequence,3000+ordinal).unwrap();
-            fold_event(&mut projection,&event).unwrap();
+            append_event(
+                &database,
+                &mut transaction,
+                "/demand-project",
+                &event,
+                sequence,
+                3000 + ordinal,
+            )
+            .unwrap();
+            fold_event(&mut projection, &event).unwrap();
         }
         for ordinal in 0..151 {
-            projection["watch"].as_array_mut().unwrap().push(json!({"id":format!("watch-{ordinal}"),"text":"retained","updatedAt":ordinal}));
-            projection["checkers"].as_array_mut().unwrap().push(json!({"checkerId":format!("checker-{ordinal}"),"version":1}));
+            projection["watch"].as_array_mut().unwrap().push(
+                json!({"id":format!("watch-{ordinal}"),"text":"retained","updatedAt":ordinal}),
+            );
+            projection["checkers"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"checkerId":format!("checker-{ordinal}"),"version":1}));
         }
         for ordinal in 0..301 {
-            projection["charter"]["decisions"].as_array_mut().unwrap().push(json!({"decisionId":format!("decision-{ordinal}")}));
+            projection["charter"]["decisions"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"decisionId":format!("decision-{ordinal}")}));
         }
-        save_projection(&database,&mut transaction,"/demand-project",&projection,1000).unwrap();
+        save_projection(
+            &database,
+            &mut transaction,
+            "/demand-project",
+            &projection,
+            1000,
+        )
+        .unwrap();
         database.commit(transaction).unwrap();
-        let changed = apply(&mut database,CommandAction::WorkChange,json!({"work_id":work_id,
+        let changed = apply(
+            &mut database,
+            CommandAction::WorkChange,
+            json!({"work_id":work_id,
             "changed_paths":(0..401).map(|n|format!("src/path-{n}")).collect::<Vec<_>>(),
-            "artifacts":(0..151).map(|n|json!({"id":format!("artifact-{n}")})).collect::<Vec<_>>()}));
-        let item = changed["projection"]["workItems"].as_array().unwrap().iter().find(|v|v["id"]==work_id).unwrap();
-        assert_eq!(item["changedPaths"].as_array().unwrap().len(),401);
-        assert_eq!(item["artifacts"].as_array().unwrap().len(),151);
-        apply(&mut database,CommandAction::WorkFinish,json!({"work_id":work_id,"status":"completed","result_summary":"complete"}));
-        apply(&mut database,CommandAction::CheckerRegister,json!({"definition":{"checkerId":"checker-new","version":1,
-            "label":"new","argv":["true"],"cwd":"/demand-project","pathGlobs":["**"],"timeoutMs":100,"enabled":true}}));
-        apply(&mut database,CommandAction::WatchAdd,json!({"item":{"id":"watch-new","kind":"concern","text":"new","status":"active",
-            "sourceConversationId":"conversation","createdAt":1000,"updatedAt":1000,"latestResult":null}}));
-        apply(&mut database,CommandAction::DecisionPromote,json!({"decision":{"decisionId":"decision-new","text":"new",
-            "checkerRef":{"id":"checker-new","version":1},"sourceConversationId":"conversation","sourceTurnId":"turn", "latestVerification":null}}));
+            "artifacts":(0..151).map(|n|json!({"id":format!("artifact-{n}")})).collect::<Vec<_>>()}),
+        );
+        let item = changed["projection"]["workItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == work_id)
+            .unwrap();
+        assert_eq!(item["changedPaths"].as_array().unwrap().len(), 401);
+        assert_eq!(item["artifacts"].as_array().unwrap().len(), 151);
+        apply(
+            &mut database,
+            CommandAction::WorkFinish,
+            json!({"work_id":work_id,"status":"completed","result_summary":"complete"}),
+        );
+        apply(
+            &mut database,
+            CommandAction::CheckerRegister,
+            json!({"definition":{"checkerId":"checker-new","version":1,
+            "label":"new","argv":["true"],"cwd":"/demand-project","pathGlobs":["**"],"timeoutMs":100,"enabled":true}}),
+        );
+        apply(
+            &mut database,
+            CommandAction::WatchAdd,
+            json!({"item":{"id":"watch-new","kind":"concern","text":"new","status":"active",
+            "sourceConversationId":"conversation","createdAt":1000,"updatedAt":1000,"latestResult":null}}),
+        );
+        apply(
+            &mut database,
+            CommandAction::DecisionPromote,
+            json!({"decision":{"decisionId":"decision-new","text":"new",
+            "checkerRef":{"id":"checker-new","version":1},"sourceConversationId":"conversation","sourceTurnId":"turn", "latestVerification":null}}),
+        );
         drop(database);
         let database = AuthorityDatabase::open(directory.path()).unwrap();
-        let mut transaction = database.begin(7,11).unwrap();
-        let retained = load_projection(&database,&mut transaction,"/demand-project").unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        let retained = load_projection(&database, &mut transaction, "/demand-project").unwrap();
         eprintln!("project_history_demand: retained projection {} JSON bytes; 242 work items, 1101 cursors, 152 checkers/watch, 302 decisions",serde_json::to_vec(&retained).unwrap().len());
-        assert_eq!(retained["workItems"].as_array().unwrap().len(),242);
-        assert_eq!(retained["cursors"].as_object().unwrap().len(),1101);
-        assert_eq!(retained["narratives"][0]["text"],"history-0");
-        assert!(retained["narratives"].as_array().unwrap().len()>601);
-        assert_eq!(retained["checkers"].as_array().unwrap().len(),152);
-        assert_eq!(retained["watch"].as_array().unwrap().len(),152);
-        assert_eq!(retained["charter"]["decisions"].as_array().unwrap().len(),302);
-        let merged = merge_relinked_projections(11,"/renamed",&empty_projection(11,"/renamed"),&retained).unwrap();
-        for field in ["workItems","checkers","watch"] {
-            assert_eq!(merged[field],retained[field],"{field}");
+        assert_eq!(retained["workItems"].as_array().unwrap().len(), 242);
+        assert_eq!(retained["cursors"].as_object().unwrap().len(), 1101);
+        assert_eq!(retained["narratives"][0]["text"], "history-0");
+        assert!(retained["narratives"].as_array().unwrap().len() > 601);
+        assert_eq!(retained["checkers"].as_array().unwrap().len(), 152);
+        assert_eq!(retained["watch"].as_array().unwrap().len(), 152);
+        assert_eq!(
+            retained["charter"]["decisions"].as_array().unwrap().len(),
+            302
+        );
+        let merged = merge_relinked_projections(
+            11,
+            "/renamed",
+            &empty_projection(11, "/renamed"),
+            &retained,
+        )
+        .unwrap();
+        for field in ["workItems", "checkers", "watch"] {
+            assert_eq!(merged[field], retained[field], "{field}");
         }
-        let mut merged_texts = merged["narratives"].as_array().unwrap().iter().map(|v|v["text"].as_str().unwrap()).collect::<Vec<_>>();
-        let mut retained_texts = retained["narratives"].as_array().unwrap().iter().map(|v|v["text"].as_str().unwrap()).collect::<Vec<_>>();
-        merged_texts.sort(); retained_texts.sort();
-        assert_eq!(merged_texts,retained_texts);
-        assert_eq!(merged["charter"]["decisions"],retained["charter"]["decisions"]);
+        let mut merged_texts = merged["narratives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["text"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        let mut retained_texts = retained["narratives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["text"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        merged_texts.sort();
+        retained_texts.sort();
+        assert_eq!(merged_texts, retained_texts);
+        assert_eq!(
+            merged["charter"]["decisions"],
+            retained["charter"]["decisions"]
+        );
         let mut divergent = retained.clone();
         divergent["checkers"][0]["label"] = json!("conflicting identity");
-        assert!(merge_relinked_projections(11,"/renamed",&retained,&divergent).is_err());
-        let mut foreign = database.begin(7,12).unwrap();
-        assert!(load_projection(&database,&mut foreign,"/demand-project").unwrap()["workItems"].as_array().unwrap().is_empty());
+        assert!(merge_relinked_projections(11, "/renamed", &retained, &divergent).is_err());
+        let mut foreign = database.begin(7, 12).unwrap();
+        assert!(
+            load_projection(&database, &mut foreign, "/demand-project").unwrap()["workItems"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
@@ -3146,28 +3360,46 @@ mod demand_retention_tests {
 mod demand_chunk_tests {
     use super::*;
     #[test]
-    fn claimed_large_chunk_headers_do_not_allocate_the_declared_event_and_missing_data_fails_closed() {
+    fn claimed_large_chunk_headers_do_not_allocate_the_declared_event_and_missing_data_fails_closed(
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        for (label,count,total,body) in [
-            ("shape",2_u32,1_u32,vec![b'x']),
-            ("missing",(u32::MAX as usize).div_ceil(EVENT_CHUNK_BYTES) as u32,u32::MAX,vec![b'x';EVENT_CHUNK_BYTES]),
-            ("digest",1_u32,1_u32,vec![b'x']),
+        for (label, count, total, body) in [
+            ("shape", 2_u32, 1_u32, vec![b'x']),
+            (
+                "missing",
+                (u32::MAX as usize).div_ceil(EVENT_CHUNK_BYTES) as u32,
+                u32::MAX,
+                vec![b'x'; EVENT_CHUNK_BYTES],
+            ),
+            ("digest", 1_u32, 1_u32, vec![b'x']),
         ] {
-            let mut transaction = database.begin(7,11).unwrap();
-            let key = stream_key(&transaction,label).unwrap();
+            let mut transaction = database.begin(7, 11).unwrap();
+            let key = stream_key(&transaction, label).unwrap();
             let mut payload = Vec::new();
             payload.extend_from_slice(EVENT_CHUNK_MAGIC);
             payload.extend_from_slice(&1_u64.to_be_bytes());
             payload.extend_from_slice(&0_u32.to_be_bytes());
             payload.extend_from_slice(&count.to_be_bytes());
             payload.extend_from_slice(&total.to_be_bytes());
-            payload.extend_from_slice(&[0;32]);
+            payload.extend_from_slice(&[0; 32]);
             payload.extend_from_slice(&body);
-            database.stream_append(&mut transaction,key.clone(),1,vec![StreamEvent::new(1,"semantic_event_chunk",payload).unwrap()]).unwrap();
+            database
+                .stream_append(
+                    &mut transaction,
+                    key.clone(),
+                    1,
+                    vec![StreamEvent::new(1, "semantic_event_chunk", payload).unwrap()],
+                )
+                .unwrap();
             database.commit(transaction).unwrap();
-            let mut read = database.begin(7,11).unwrap();
-            assert_eq!(decode_event_chunks(&database,&mut read,&key,1).unwrap_err().kind(),io::ErrorKind::InvalidData);
+            let mut read = database.begin(7, 11).unwrap();
+            assert_eq!(
+                decode_event_chunks(&database, &mut read, &key, 1)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
         }
     }
 }

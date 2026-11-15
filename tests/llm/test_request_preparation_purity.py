@@ -39,7 +39,14 @@ pytestmark = pytest.mark.unit
 _AUDIT_SYNTHETIC_REPO_PATHS = ('lib/0.py',)
 
 URL = 'https://example.invalid/v1'
-CATPAW_URL = 'https://mcli.internal.example.com/v1'
+IDENTITY_GATEWAY_URL = 'https://identity-gateway.example.test/v1'
+# A gateway whose profile requires the Claude Code client identity (lib.llm.gateway_shape).
+IDENTITY_GATEWAY_PROFILE = {
+    'id': 'test-identity-gateway', 'hosts': ['identity-gateway.example.test'],
+    'traits': {'anthropic_system_identity': {
+        'text': "You are Claude Code, Anthropic's official CLI for Claude.",
+        'accepted_prefix': 'you are claude code'},
+        'working_directory_header': 'X-Working-Dir'}}
 _PNG = ('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGPkqjjBwMDAxMDAwMDAAAA'
         'O5AFORZ0V2QAAAABJRU5ErkJggg==')
 SMALL_PNG = 'data:image/png;base64,' + _PNG
@@ -150,7 +157,8 @@ SLOT_CASES = {
     'messages-claude': ('claude-sonnet-4-6', slot('claude-sonnet-4-6', 'anthropic'), {}),
     'messages-claude-cloak': ('claude-sonnet-4-6', slot('claude-sonnet-4-6', 'anthropic'),
                               {'oauth': 'claude'}),
-    'messages-catpaw': ('kimi-k3', slot('kimi-k3', 'anthropic'), {'base_url': CATPAW_URL}),
+    'messages-gateway-identity': ('kimi-k3', slot('kimi-k3', 'anthropic'),
+                                  {'base_url': IDENTITY_GATEWAY_URL}),
     'responses-gpt': ('gpt-5.6', slot('gpt-5.6', 'responses', responses_profile='openai'), {}),
     'responses-codex': ('gpt-5.6', slot('gpt-5.6', 'responses'), {'oauth': 'codex'}),
     # A prebuilt body swapped onto Claude re-validates and re-scales images.
@@ -188,6 +196,8 @@ def offline(monkeypatch):
                         + '_account_00000000-0000-0000-0000-000000000000'
                         + '_session_00000000-0000-0000-0000-000000000000')
     monkeypatch.setattr('lib.desktop.egress.route_request', lambda *a, **k: 'direct')
+    from tests.support.gateway_profiles import install_gateway_profiles
+    install_gateway_profiles(monkeypatch, IDENTITY_GATEWAY_PROFILE)
 
 
 def _digest(value):
@@ -344,11 +354,11 @@ PINNED = {
         'tokens': 508,
         'diagnostics': '163c0aa4de37b7ab0e79bb0e47e2d3a8c91510095bf8ce2391fbe1f604932a87',
     },
-    'messages-catpaw': {
+    'messages-gateway-identity': {
         'adapted': '76b576e5b353f53ec8e5a91ecd4498d335815b28b3fd879306b7c1dd49bd3ab9',
         'payload': '640ff68ca5d1993a7a925103532e314bb48be44144ec45d3d9a186c673b4e599',
         'semantic': '54e003f457b7ca6270d1b057c8bd9e2decd86a16aef4ae4cdd91d2c13c78bca8',
-        'prefix': '3e62e11240c7372d777eac5129f15e32467823c0f71d52262cfe289a26b309f3',
+        'prefix': '73376358316da786e96954e3e6948c570b5a58f862407ed29e9de25cece4e8bd',
         'tokens': 820,
         'diagnostics': 'bc84be495ab65a9b6db46789c3fa5120dd8d0c280671ceec81fd9e6290ebfee4',
     },
@@ -427,7 +437,7 @@ def frozen(value):
 
 def _converters():
     from lib.llm.anthropic_outbound import openai_body_to_anthropic
-    from lib.llm.catpaw_gateway import apply_catpaw_shape
+    from lib.llm.gateway_shape import apply_gateway_anthropic_shape
     from lib.llm.openai_outbound import openai_body_to_chat
     from lib.llm.responses_outbound import openai_body_to_responses
     from lib.oauth.outbound import apply_claude_cloak
@@ -435,14 +445,15 @@ def _converters():
         'chat': openai_body_to_chat,
         'messages': openai_body_to_anthropic,
         'messages-cloak': lambda body: apply_claude_cloak(openai_body_to_anthropic(body)),
-        'messages-catpaw': lambda body: apply_catpaw_shape(openai_body_to_anthropic(body)),
+        'messages-gateway-identity': lambda body: apply_gateway_anthropic_shape(
+            openai_body_to_anthropic(body), IDENTITY_GATEWAY_URL),
         'responses': lambda body: openai_body_to_responses(body, stream=True),
         'responses-codex': lambda body: openai_body_to_responses(
             body, profile='codex', stream=True),
     }
 
 
-@pytest.mark.parametrize('name', ['chat', 'messages', 'messages-cloak', 'messages-catpaw',
+@pytest.mark.parametrize('name', ['chat', 'messages', 'messages-cloak', 'messages-gateway-identity',
                                   'responses', 'responses-codex'])
 @pytest.mark.parametrize('build', [anthropic_replay_body, responses_replay_body],
                          ids=['anthropic-replay', 'responses-replay'])

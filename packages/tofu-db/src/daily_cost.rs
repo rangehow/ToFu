@@ -161,7 +161,9 @@ pub(crate) fn upsert(
     if is_new {
         let next = read_count(database, transaction)?
             .checked_add(1)
-            .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("daily-cost count overflow"))?;
+            .ok_or_else(|| {
+                crate::resource_exhaustion::accounting_overflow("daily-cost count overflow")
+            })?;
         write_count(database, transaction, next)?;
     }
     versioned_document::put_with_blob_owner_bounded(
@@ -195,11 +197,17 @@ pub(crate) fn month(
     let mut values = Vec::new();
     loop {
         let rows = database.entity_scan(transaction, &cursor, &end, MAX_ENTITY_RANGE_ROWS)?;
-        if rows.is_empty() { break; }
+        if rows.is_empty() {
+            break;
+        }
         let mut successor = rows.last().expect("nonempty page").0.key_bytes().to_vec();
         successor.push(0);
-        cursor = EntityKey::new(transaction.tenant_id(), transaction.owner_user_id(),
-            DAILY_COST_DOCUMENT_NAMESPACE, &successor)?;
+        cursor = EntityKey::new(
+            transaction.tenant_id(),
+            transaction.owner_user_id(),
+            DAILY_COST_DOCUMENT_NAMESPACE,
+            &successor,
+        )?;
         for (key, _) in rows {
             let date = std::str::from_utf8(key.key_bytes())
                 .map_err(|_| invalid_data("daily-cost date key is malformed"))?;

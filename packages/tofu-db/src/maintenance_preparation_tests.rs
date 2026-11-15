@@ -184,7 +184,7 @@ mod preparation {
             for action in actions {
                 let vfs = Arc::new(seed.fork_durable().unwrap());
                 let authority = open(&vfs);
-                vfs.arm_operation_fault(operation.clone(), occurrence, action)
+                vfs.arm_operation_fault(*operation, occurrence, action)
                     .unwrap();
                 let result = prepared::run_transaction(&authority, prepare_tool_prune);
                 assert!(

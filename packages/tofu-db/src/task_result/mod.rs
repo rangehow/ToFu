@@ -289,9 +289,7 @@ impl Header {
                     && object
                         .get("parent_task_id")
                         .and_then(Value::as_str)
-                        .is_some_and(|value| {
-                            text_within(value, MAX_TASK_ID_CHARACTERS, false)
-                        })
+                        .is_some_and(|value| text_within(value, MAX_TASK_ID_CHARACTERS, false))
                     && object.get("child_task_id").and_then(Value::as_str)
                         == Some(self.task_id.as_str())
                     && object
@@ -397,14 +395,17 @@ pub(crate) fn worker_root_for_task(
         if header.owner_user_id != transaction.owner_user_id() {
             return Err(io::Error::new(io::ErrorKind::NotFound, "task not found"));
         }
-        let conv = identity["conversation_id"].as_str()
+        let conv = identity["conversation_id"]
+            .as_str()
             .ok_or_else(|| invalid_data("child invocation conversation is malformed"))?;
         if conv != header.conv_id || conversation.as_ref().is_some_and(|value| value != conv) {
             return Err(invalid_data("child invocation ancestry is malformed"));
         }
         conversation = Some(conv.to_owned());
-        current = identity["parent_task_id"].as_str()
-            .ok_or_else(|| invalid_data("child invocation parent is malformed"))?.to_owned();
+        current = identity["parent_task_id"]
+            .as_str()
+            .ok_or_else(|| invalid_data("child invocation parent is malformed"))?
+            .to_owned();
     }
 }
 
@@ -421,12 +422,14 @@ pub(crate) fn worker_root_for_event_stream(
     if parent_root.is_none() && child_root.is_none() {
         return Ok(None);
     }
-    let birth = read_header(database, transaction, child)?
-        .and_then(|header| header.child_invocation);
-    if parent_root.is_none() || parent_root != child_root
-        || birth.as_ref().is_none_or(|identity|
+    let birth =
+        read_header(database, transaction, child)?.and_then(|header| header.child_invocation);
+    if parent_root.is_none()
+        || parent_root != child_root
+        || birth.as_ref().is_none_or(|identity| {
             identity["parent_task_id"].as_str() != Some(parent)
-            || identity["child_task_id"].as_str() != Some(child))
+                || identity["child_task_id"].as_str() != Some(child)
+        })
     {
         return Err(invalid_input("Inspector stream differs from child birth"));
     }
@@ -438,19 +441,29 @@ fn tool_rows(value: &Value) -> io::Result<std::borrow::Cow<'_, [Value]>> {
     match value.get("tool_rounds") {
         None | Some(Value::Null) => Ok(Cow::Owned(Vec::new())),
         Some(Value::String(text)) if text.is_empty() => Ok(Cow::Owned(Vec::new())),
-        Some(Value::String(text)) => Ok(Cow::Owned(serde_json::from_str::<Vec<Value>>(text)
-            .map_err(|_| invalid_input("invalid child tool receipts"))?)),
+        Some(Value::String(text)) => Ok(Cow::Owned(
+            serde_json::from_str::<Vec<Value>>(text)
+                .map_err(|_| invalid_input("invalid child tool receipts"))?,
+        )),
         Some(Value::Array(rows)) => Ok(Cow::Borrowed(rows)),
         _ => Err(invalid_input("invalid child tool receipts")),
     }
 }
 
-fn tool_operation_ids(value: &Value, entered_only: bool) -> io::Result<std::collections::HashSet<String>> {
+fn tool_operation_ids(
+    value: &Value,
+    entered_only: bool,
+) -> io::Result<std::collections::HashSet<String>> {
     let mut operations = std::collections::HashSet::new();
     for row in tool_rows(value)?.iter() {
-        let Some(effect) = row.get("executionEffect").filter(|value| value.is_object()) else { continue; };
-        let operation = effect.get("operationId").and_then(Value::as_str)
-            .filter(|value| !value.is_empty()).ok_or_else(|| invalid_input("invalid child effect identity"))?;
+        let Some(effect) = row.get("executionEffect").filter(|value| value.is_object()) else {
+            continue;
+        };
+        let operation = effect
+            .get("operationId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid_input("invalid child effect identity"))?;
         if !entered_only || effect.get("state").and_then(Value::as_str) == Some("entered") {
             operations.insert(operation.to_owned());
         }
@@ -458,35 +471,67 @@ fn tool_operation_ids(value: &Value, entered_only: bool) -> io::Result<std::coll
     Ok(operations)
 }
 
-fn starts_new_tool_effect(database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-                         task_id: &str, incoming: &Value, intent: Option<&str>) -> io::Result<bool> {
+fn starts_new_tool_effect(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    task_id: &str,
+    incoming: &Value,
+    intent: Option<&str>,
+) -> io::Result<bool> {
     if incoming.get("tool_rounds").is_none() {
-        return if intent.is_some() { Err(invalid_input("tool entry requires its exact invocation receipt")) }
-            else { Ok(false) };
+        return if intent.is_some() {
+            Err(invalid_input(
+                "tool entry requires its exact invocation receipt",
+            ))
+        } else {
+            Ok(false)
+        };
     }
     let previous = read_document_value(database, transaction, task_id)?
-        .map(Value::Object).unwrap_or(json!({}));
+        .map(Value::Object)
+        .unwrap_or(json!({}));
     if let Some(intent) = intent {
         let incoming_rows = tool_rows(incoming)?;
         let previous_rows = tool_rows(&previous)?;
-        let matches = |row: &&Value| row.get("executionEffect")
-            .and_then(|effect| effect.get("operationId")).and_then(Value::as_str) == Some(intent);
+        let matches = |row: &&Value| {
+            row.get("executionEffect")
+                .and_then(|effect| effect.get("operationId"))
+                .and_then(Value::as_str)
+                == Some(intent)
+        };
         let selected: Vec<_> = incoming_rows.iter().filter(matches).collect();
-        if selected.len() != 1 || selected[0].get("taskId").and_then(Value::as_str) != Some(task_id)
-            || selected[0]["executionEffect"].get("scope").and_then(Value::as_str) != Some("invocation")
-            || selected[0]["executionEffect"].get("state").and_then(Value::as_str) != Some("entered")
-            || selected[0]["executionEffect"].get("reconciliation").is_some_and(|value| !value.is_null()) {
-            return Err(invalid_input("tool entry requires its exact invocation receipt"));
+        if selected.len() != 1
+            || selected[0].get("taskId").and_then(Value::as_str) != Some(task_id)
+            || selected[0]["executionEffect"]
+                .get("scope")
+                .and_then(Value::as_str)
+                != Some("invocation")
+            || selected[0]["executionEffect"]
+                .get("state")
+                .and_then(Value::as_str)
+                != Some("entered")
+            || selected[0]["executionEffect"]
+                .get("reconciliation")
+                .is_some_and(|value| !value.is_null())
+        {
+            return Err(invalid_input(
+                "tool entry requires its exact invocation receipt",
+            ));
         }
         let prior: Vec<_> = previous_rows.iter().filter(matches).collect();
         if !prior.is_empty() && prior != selected {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,
-                                     "tool effect admission changed its occurrence"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "tool effect admission changed its occurrence",
+            ));
         }
         return Ok(true);
     }
     let admitted = tool_operation_ids(&previous, false)?;
-    Ok(tool_operation_ids(incoming, true)?.difference(&admitted).next().is_some())
+    Ok(tool_operation_ids(incoming, true)?
+        .difference(&admitted)
+        .next()
+        .is_some())
 }
 
 fn read_replay_projection(
@@ -622,7 +667,8 @@ pub(crate) fn write_indexes(
         }
     }
     if matches!(header.status.as_str(), "pending" | "running")
-        && !crate::worker_job::owns_conversation_task(&header.task_id) {
+        && !crate::worker_job::owns_conversation_task(&header.task_id)
+    {
         database.entity_put(
             transaction,
             live_key(transaction, &header.task_id)?,
@@ -714,6 +760,7 @@ fn guarded_checkpoint_response(
     encode(&response, "guarded task result checkpoint response failed")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn checkpoint(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -727,7 +774,9 @@ pub(crate) fn checkpoint(
     let worker_root = worker_root_for_task(database, transaction, task_id)?;
     let intent = guard.and_then(|guard| guard.tool_effect_intent.as_deref());
     if intent.is_some() && (worker_root.is_none() || worker_root.as_deref() == Some(task_id)) {
-        return Err(invalid_input("tool admission requires a durable worker descendant"));
+        return Err(invalid_input(
+            "tool admission requires a durable worker descendant",
+        ));
     }
     if worker_root.is_some() || worker_claim.is_some() {
         let value: Value = serde_json::from_slice(&value_json)
@@ -735,12 +784,21 @@ pub(crate) fn checkpoint(
         let root = worker_root.as_deref().unwrap_or(task_id);
         // Root tool entry belongs to Turn/replay publication. Descendants
         // persist their write-ahead receipts in this existing checkpoint.
-        let starts_effect = root != task_id && starts_new_tool_effect(database, transaction, task_id, &value, intent)?;
+        let starts_effect = root != task_id
+            && starts_new_tool_effect(database, transaction, task_id, &value, intent)?;
         crate::worker_job::require_conversation_publication_claim(
-            database, transaction, root.strip_prefix("conversation-attempt:").unwrap_or(""),
-            root, worker_claim,
-            !starts_effect && matches!(value.get("status").and_then(Value::as_str),
-                     Some("done" | "error" | "aborted" | "interrupted")), !starts_effect)?;
+            database,
+            transaction,
+            root.strip_prefix("conversation-attempt:").unwrap_or(""),
+            root,
+            worker_claim,
+            !starts_effect
+                && matches!(
+                    value.get("status").and_then(Value::as_str),
+                    Some("done" | "error" | "aborted" | "interrupted")
+                ),
+            !starts_effect,
+        )?;
     }
     checkpoint_inner(
         database,
@@ -876,11 +934,7 @@ fn checkpoint_inner(
             }
         }
         None => {
-            if !allow_child_birth
-                && incoming
-                    .get("child_invocation")
-                    .is_some_and(python_truthy)
-            {
+            if !allow_child_birth && incoming.get("child_invocation").is_some_and(python_truthy) {
                 return Err(invalid_input(
                     "Child birth requires invocation registration",
                 ));
@@ -913,11 +967,16 @@ fn checkpoint_inner(
             // Attempt's record, or taking over a recovery-interrupted one,
             // needs the Turn's current Attempt bound to this id; the
             // predecessor stays fenced.
-            taking_over = !writer.is_empty() && writer != holder
-                && (!holder.is_empty() || recovered);
-            if taking_over && !crate::turn::current_attempt_bound_to_task(
-                database, transaction, &writer, task_id,
-            )? {
+            taking_over =
+                !writer.is_empty() && writer != holder && (!holder.is_empty() || recovered);
+            if taking_over
+                && !crate::turn::current_attempt_bound_to_task(
+                    database,
+                    transaction,
+                    &writer,
+                    task_id,
+                )?
+            {
                 return guarded_checkpoint_response(task_id, 0, 0, false, guard, false, None);
             }
             if (recovered && !taking_over)
@@ -1102,10 +1161,14 @@ fn checkpoint_inner(
 /// authenticated owner lives in the validated header.
 /// A prepared cross-domain operation rechecks the compact semantic CAS authority
 /// without materializing the unchanged cumulative child transcript again.
-pub(crate) fn owned_record_version(database: &AuthorityDatabase,
-    transaction: &mut AuthorityTransaction, task_id: &str) -> io::Result<Option<u64>> {
+pub(crate) fn owned_record_version(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    task_id: &str,
+) -> io::Result<Option<u64>> {
     Ok(read_header(database, transaction, task_id)?
-        .filter(|header| header.owner_user_id == transaction.owner_user_id()).map(|header| header.version))
+        .filter(|header| header.owner_user_id == transaction.owner_user_id())
+        .map(|header| header.version))
 }
 
 pub(crate) fn record_get(
@@ -1124,19 +1187,33 @@ pub(crate) fn record_get(
         return Ok(None);
     }
     let result = versioned_document::get_with_blob_owner_bounded(
-        database, transaction, &document_key(transaction, task_id)?,
-        FULL_LOGICAL_NAMESPACE, task_id, TENANT_GLOBAL_OWNER_ID,
+        database,
+        transaction,
+        &document_key(transaction, task_id)?,
+        FULL_LOGICAL_NAMESPACE,
+        task_id,
+        TENANT_GLOBAL_OWNER_ID,
         MAX_TASK_RESULT_DOCUMENT_BYTES + DOCUMENT_ENVELOPE_OVERHEAD_BYTES,
-    )?.ok_or_else(|| invalid_data("task result payload is missing"))?;
+    )?
+    .ok_or_else(|| invalid_data("task result payload is missing"))?;
     let mut envelope: Value = serde_json::from_slice(&result)
         .map_err(|_| invalid_data("task result payload envelope is malformed"))?;
-    if envelope["version"].as_u64().is_none_or(|version| version > header.version) {
-        return Err(invalid_data("task result payload version exceeds its header"));
+    if envelope["version"]
+        .as_u64()
+        .is_none_or(|version| version > header.version)
+    {
+        return Err(invalid_data(
+            "task result payload version exceeds its header",
+        ));
     }
-    let value = envelope.get_mut("value").and_then(Value::as_object_mut)
+    let value = envelope
+        .get_mut("value")
+        .and_then(Value::as_object_mut)
         .ok_or_else(|| invalid_data("task result payload is not an object"))?;
     if value.get("user_id").and_then(Value::as_u64) != Some(header.owner_user_id) {
-        return Err(invalid_data("task result payload owner differs from its header"));
+        return Err(invalid_data(
+            "task result payload owner differs from its header",
+        ));
     }
     // Abort/recovery advance the compact header without rewriting MiB of
     // content. The header is the version and lifecycle authority, not the
@@ -1148,11 +1225,17 @@ pub(crate) fn record_get(
         value.insert("completed_at".to_owned(), json!(header.completed_at));
     }
     if header.abort_requested_at != 0 {
-        value.insert("abort_requested_at".to_owned(), json!(header.abort_requested_at));
+        value.insert(
+            "abort_requested_at".to_owned(),
+            json!(header.abort_requested_at),
+        );
         value.insert("abort_source".to_owned(), json!(header.abort_source));
     }
     if !header.interrupted_reason.is_empty() {
-        value.insert("interruptedReason".to_owned(), json!(header.interrupted_reason));
+        value.insert(
+            "interruptedReason".to_owned(),
+            json!(header.interrupted_reason),
+        );
     }
     envelope["version"] = json!(header.version);
     envelope["updated_at_ms"] = json!(header.updated_at_ms);
@@ -1857,23 +1940,55 @@ mod tests {
         let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         let task_id = "conversation-attempt:old-worker";
         // Seed an older-version document; current public admission requires a live claim.
-        checkpoint_inner(&database, &mut transaction, task_id,
+        checkpoint_inner(
+            &database,
+            &mut transaction,
+            task_id,
             serde_json::to_vec(&json!({"task_id":task_id,"user_id":11,
-                "conv_id":"","status":"running","content":"paid evidence"})).unwrap(),
-            0, 2_001, None, false).unwrap();
+                "conv_id":"","status":"running","content":"paid evidence"}))
+            .unwrap(),
+            0,
+            2_001,
+            None,
+            false,
+        )
+        .unwrap();
         let live = live_key(&transaction, task_id).unwrap();
-        assert!(database.entity_get(&mut transaction, &live).unwrap().is_none());
-        database.entity_put(&mut transaction, live.clone(), 11_u64.to_le_bytes().to_vec()).unwrap();
+        assert!(database
+            .entity_get(&mut transaction, &live)
+            .unwrap()
+            .is_none());
+        database
+            .entity_put(
+                &mut transaction,
+                live.clone(),
+                11_u64.to_le_bytes().to_vec(),
+            )
+            .unwrap();
         database.commit(transaction).unwrap();
         let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         let key = document_key(&transaction, task_id).unwrap();
         let before = database.entity_get(&mut transaction, &key).unwrap();
-        let result: Value = serde_json::from_slice(&recover_running(&database, &mut transaction,
-            &RecoverRunningRequest {interrupted_reason:"server_restart".into(),
-                maximum_rows:32, scan_limit:10_000, updated_at_ms:3_000}).unwrap()).unwrap();
+        let result: Value = serde_json::from_slice(
+            &recover_running(
+                &database,
+                &mut transaction,
+                &RecoverRunningRequest {
+                    interrupted_reason: "server_restart".into(),
+                    maximum_rows: 32,
+                    scan_limit: 10_000,
+                    updated_at_ms: 3_000,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert!(result["recovered"].as_array().unwrap().is_empty());
         assert_eq!(database.entity_get(&mut transaction, &key).unwrap(), before);
-        assert!(database.entity_get(&mut transaction, &live).unwrap().is_none());
+        assert!(database
+            .entity_get(&mut transaction, &live)
+            .unwrap()
+            .is_none());
         database.commit(transaction).unwrap();
     }
 

@@ -1,4 +1,4 @@
-"""Task tool metadata -> final wire on the your-llm-gateway.example.com Anthropic face.
+"""Task tool metadata -> final wire on a declared gateway's Anthropic face.
 
 The root/general surface keeps its task-owned execution authority while the
 provider wire hides the longest optional names to stay under the gateway's
@@ -15,7 +15,10 @@ from tests.llm.test_tool_wire_name_budget import (
     CODE_FLOOR, OVER_BUDGET_NAMES, ROOT_WIRE_NAMES, SANKUAI_ANTHROPIC, _joined_bytes,
     _names, _tool)
 
-pytestmark = pytest.mark.unit
+from tests.support.gateway_profiles import (  # noqa: F401 (fixture)
+    CLAUDE_TOOL_NAME_BUDGET_BYTES, claude_tool_name_budget_gateway)
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('claude_tool_name_budget_gateway')]
 
 _SEARCHABLE = ('send_agent_message', 'get_agent_messages', 'update_memory')
 # R61's MCP names, still pinned as an older conversation recorded them; MCP
@@ -61,7 +64,7 @@ def test_hidden_root_tools_stay_discoverable_and_executable():
     wire_names = _names(body['tools'])
     hidden = [name for name in _SURFACE_NAMES if name not in wire_names]
 
-    assert _joined_bytes(wire_names) <= tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+    assert _joined_bytes(wire_names) <= CLAUDE_TOOL_NAME_BUDGET_BYTES
     assert set(_MCP_NAMES) <= set(hidden)
     budget_hidden = set(hidden) - set(_MCP_NAMES)
     assert budget_hidden and budget_hidden <= set(projection.budget_dropped_names)

@@ -7,6 +7,8 @@ from threading import Event
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 pytestmark = pytest.mark.unit
 
 
@@ -91,6 +93,7 @@ def test_provider_never_borrows_another_devices_task(search_context, provider_na
             assert provider.knowledge_scope is scope
 
 
+@requires_yourprovider_overlay
 @pytest.mark.parametrize('cancelled', [False, True])
 def test_native_search_carries_task_cancellation(search_context, monkeypatch, cancelled):
     from lib.browser import adapters

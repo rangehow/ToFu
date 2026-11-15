@@ -227,7 +227,8 @@ fn is_payload_path(store_relative: &Path) -> bool {
         return false;
     };
     let first = first.as_os_str().to_string_lossy();
-    if first == "blocks" || first == crate::block::OVERFLOW_DIRECTORY || first == "payload-segments" {
+    if first == "blocks" || first == crate::block::OVERFLOW_DIRECTORY || first == "payload-segments"
+    {
         return true;
     }
     // Only a top-level component remains for WAL names.
@@ -625,9 +626,13 @@ impl EncryptingVfs {
     }
 
     fn rename_reencrypt(&self, source: &Path, destination: &Path) -> io::Result<()> {
-        let mut source_file = self.open(source, OpenRequest {
-            read: true, ..OpenRequest::default()
-        })?;
+        let mut source_file = self.open(
+            source,
+            OpenRequest {
+                read: true,
+                ..OpenRequest::default()
+            },
+        )?;
         let source_length = source_file.len()?;
         let parent = destination.parent().ok_or_else(|| {
             io::Error::new(
@@ -1104,7 +1109,8 @@ mod tests {
         let chunk = vec![0x63; 1024 * 1024];
         let mut file = vfs.open(&source, writable(true)).unwrap();
         for index in 0..65_u64 {
-            file.write_all_at(index * chunk.len() as u64, &chunk).unwrap();
+            file.write_all_at(index * chunk.len() as u64, &chunk)
+                .unwrap();
         }
         let tail_offset = 65 * chunk.len() as u64;
         let tail = b"exact partial region";
@@ -1115,16 +1121,24 @@ mod tests {
         assert!(!source.exists());
         drop(vfs);
         let reopened = encrypting(directory.path(), test_key(17));
-        let mut file = reopened.open(&destination, OpenRequest {
-            read: true, ..OpenRequest::default()
-        }).unwrap();
+        let mut file = reopened
+            .open(
+                &destination,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )
+            .unwrap();
         assert_eq!(file.len().unwrap(), tail_offset + tail.len() as u64);
         let mut actual = vec![0; chunk.len()];
         for index in 0..65_u64 {
-            file.read_exact_at(index * chunk.len() as u64, &mut actual).unwrap();
+            file.read_exact_at(index * chunk.len() as u64, &mut actual)
+                .unwrap();
             assert_eq!(actual, chunk);
         }
-        file.read_exact_at(tail_offset, &mut actual[..tail.len()]).unwrap();
+        file.read_exact_at(tail_offset, &mut actual[..tail.len()])
+            .unwrap();
         assert_eq!(&actual[..tail.len()], tail);
     }
 

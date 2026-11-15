@@ -1,7 +1,7 @@
 """The Global Router's Claude requests fit the Sankuai tool-name budget.
 
 docs/LLM_COST_OPTIMIZATION.md section 6 ("Coordinator-role surfaces"): Claude
-on your-llm-gateway.example.com's Anthropic face reuses its prompt cache only while the
+on a declared gateway's Anthropic face (the budget test gateway) reuses its prompt cache only while the
 joined tool names stay under the route budget. The Router's role surface was
 35 tools / 687 bytes, all required-direct with no search_tools/execute_tools,
 so every Claude round re-wrote its whole prompt (56/56 and 27/27 rounds on
@@ -22,11 +22,14 @@ from lib.tasks_pkg.coordinator_policy import (
     COORDINATOR_TOOLS, coordinator_call_rejection, prepare_coordinator_tool_surface)
 from tests.llm.test_tool_wire_name_budget import SANKUAI_ANTHROPIC, _joined_bytes, _names, _tool
 
-pytestmark = pytest.mark.unit
+from tests.support.gateway_profiles import (  # noqa: F401 (fixture)
+    CLAUDE_TOOL_NAME_BUDGET_BYTES, claude_tool_name_budget_gateway)
+
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('claude_tool_name_budget_gateway')]
 
 OWNER = 7
 DISCOVERY = frozenset({'search_tools', 'execute_tools'})
-BUDGET = tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+BUDGET = CLAUDE_TOOL_NAME_BUDGET_BYTES
 
 # Provider tool names of a production Global Router Claude round in wire
 # order (2026-11-08, M-TraceId 471826bef57b484bb1e120cf96fdefaa), with poll in
@@ -154,7 +157,7 @@ def test_recorded_router_surface_keeps_its_direct_core_on_the_claude_route(route
 @pytest.mark.parametrize('protocol,base_url,model', [
     ('anthropic', SANKUAI_ANTHROPIC, 'kimi-k3.1-pro'),
     ('anthropic', 'https://api.anthropic.com/v1', 'claude-opus-5.5'),
-    ('openai', 'https://api.openai.com/v1', 'claude-opus-5.5'),
+    ('openai', 'https://claude-gateway.example.test/v1/openai/native', 'claude-opus-5.5'),
 ])
 def test_routes_without_a_name_budget_keep_the_whole_role_surface_direct(
         router, protocol, base_url, model):

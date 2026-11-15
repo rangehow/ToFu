@@ -218,7 +218,7 @@ def test_carrier_transforms_fire():
 
 
 def test_provider_symmetry_no_gateway_divergence():
-    """provider_id='' (auto-detect) and explicit non-sankuai agree on the
+    """provider_id='' (auto-detect) and explicit non-example-corp agree on the
     carrier transforms — proving only _sanitize_messages is provider-gated."""
     from lib.tasks_pkg.wire_messages import apply_wire_sanitize
     from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
@@ -231,14 +231,19 @@ def test_provider_symmetry_no_gateway_divergence():
     _ok('provider symmetry: carrier transforms provider-independent')
 
 
-def test_wire_preview_uses_gateway_family_and_wire_shape_rules():
+def test_wire_preview_uses_gateway_family_and_wire_shape_rules(monkeypatch):
     """Preview and real build share family gating plus call/result repair."""
     from lib.tasks_pkg.wire_messages import (
         _gateway_sanitize_enabled,
         apply_wire_sanitize,
     )
+    from tests.support.gateway_profiles import install_gateway_profiles
 
-    assert _gateway_sanitize_enabled('sankuai_anthropic') is True
+    install_gateway_profiles(monkeypatch, {
+        'id': 'test-keyword-filter', 'provider_ids': ['acme*'],
+        'traits': {'blocked_term_sanitize': True}})
+    assert _gateway_sanitize_enabled('acme_anthropic') is True
+    assert _gateway_sanitize_enabled('openai') is False
     source = [
         {'role': 'assistant', 'content': '', 'tool_calls': [{
             'id': '', 'function': {'name': '', 'arguments': {}},

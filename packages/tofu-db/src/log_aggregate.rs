@@ -13,12 +13,12 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
     LOG_AGGREGATE_DOCUMENT_NAMESPACE, LOG_AGGREGATE_SEQUENCE_NAMESPACE,
-    LOG_AGGREGATE_SWEEP_INDEX_NAMESPACE, MAX_LOG_AGGREGATE_DOCUMENT_BYTES,
-    MAX_LOG_AGGREGATE_FINGERPRINT_CHARACTERS, MAX_LOG_AGGREGATE_FLUSH_BATCH,
-    MAX_LOG_AGGREGATE_LEVEL_CHARACTERS, MAX_LOG_AGGREGATE_LOGGER_CHARACTERS,
-    MAX_LOG_AGGREGATE_QUERY_ROWS, MAX_LOG_AGGREGATE_ROW_COUNT, MAX_LOG_AGGREGATE_SAMPLE_CHARACTERS,
-    MAX_LOG_AGGREGATE_SCAN_ROWS, MAX_LOG_AGGREGATE_SWEEP_BATCH,
-    MAX_LOG_AGGREGATE_TEMPLATE_CHARACTERS, MAX_LEGACY_DOCUMENT_BYTES,
+    LOG_AGGREGATE_SWEEP_INDEX_NAMESPACE, MAX_LEGACY_DOCUMENT_BYTES,
+    MAX_LOG_AGGREGATE_DOCUMENT_BYTES, MAX_LOG_AGGREGATE_FINGERPRINT_CHARACTERS,
+    MAX_LOG_AGGREGATE_FLUSH_BATCH, MAX_LOG_AGGREGATE_LEVEL_CHARACTERS,
+    MAX_LOG_AGGREGATE_LOGGER_CHARACTERS, MAX_LOG_AGGREGATE_QUERY_ROWS, MAX_LOG_AGGREGATE_ROW_COUNT,
+    MAX_LOG_AGGREGATE_SAMPLE_CHARACTERS, MAX_LOG_AGGREGATE_SCAN_ROWS,
+    MAX_LOG_AGGREGATE_SWEEP_BATCH, MAX_LOG_AGGREGATE_TEMPLATE_CHARACTERS,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -300,7 +300,9 @@ pub(crate) fn flush(
                         .checked_add(row.count)
                         .filter(|count| *count <= MAX_LOG_AGGREGATE_ROW_COUNT)
                         .ok_or_else(|| {
-                            crate::resource_exhaustion::domain_bound("log-aggregate counter exceeds its bound")
+                            crate::resource_exhaustion::domain_bound(
+                                "log-aggregate counter exceeds its bound",
+                            )
                         })?,
                     last_seen: row.last_seen,
                     sample: row.sample.clone(),
@@ -310,7 +312,11 @@ pub(crate) fn flush(
             None => {
                 let next = read_sequence(database, transaction)?
                     .checked_add(1)
-                    .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("log-aggregate sequence overflow"))?;
+                    .ok_or_else(|| {
+                        crate::resource_exhaustion::accounting_overflow(
+                            "log-aggregate sequence overflow",
+                        )
+                    })?;
                 write_sequence(database, transaction, next)?;
                 AggregateDocument {
                     fingerprint: row.fingerprint.clone(),
@@ -405,7 +411,9 @@ pub(crate) fn query(
         for (key, _) in &page {
             scanned += 1;
             if scanned > MAX_LOG_AGGREGATE_SCAN_ROWS {
-                return Err(crate::resource_exhaustion::domain_bound("log-aggregate scan exceeds its bound"));
+                return Err(crate::resource_exhaustion::domain_bound(
+                    "log-aggregate scan exceeds its bound",
+                ));
             }
             let fingerprint = std::str::from_utf8(key.key_bytes())
                 .map_err(|_| invalid_data("log-aggregate fingerprint key is malformed"))?;
@@ -469,7 +477,9 @@ pub(crate) fn query(
                     + 1,
             )
             .filter(|bytes| *bytes <= MAX_LEGACY_DOCUMENT_BYTES)
-            .ok_or_else(|| crate::resource_exhaustion::domain_bound("log-aggregate response exceeds 8 MiB"))?;
+            .ok_or_else(|| {
+                crate::resource_exhaustion::domain_bound("log-aggregate response exceeds 8 MiB")
+            })?;
         items.push(item);
     }
     serde_json::to_vec(&json!({

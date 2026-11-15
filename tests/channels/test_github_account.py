@@ -8,7 +8,7 @@ import pytest
 
 from lib.channels.github import account as github_account
 from lib.channels.model import CONTRACT, ChannelError, ThreadKey
-from tests.channels.conftest import GH_NOW, GH_TOKEN, GH_USER, OWNER, ROUTER, github_adapter
+from tests.channels.conftest import DX_INSTALLED, GH_NOW, GH_TOKEN, GH_USER, OWNER, ROUTER, github_adapter
 
 pytestmark = pytest.mark.unit
 
@@ -256,7 +256,8 @@ def test_enabling_again_or_replacing_the_token_keeps_the_live_session_status(
 
 @pytest.fixture
 def app(records, router, vault, github, monkeypatch):
-    monkeypatch.setattr('lib.channels.dx.supervisor.notify_account_changed', lambda owner: None)
+    if DX_INSTALLED:
+        monkeypatch.setattr('tofu_yourprovider.dx.supervisor.notify_account_changed', lambda owner: None)
     # The real probe and client, answered by the fake server.
     monkeypatch.setattr('lib.channels.github.account.probe',
                         lambda api_base, token: _ORIGINAL_PROBE(api_base, token, transport=github))

@@ -7,8 +7,8 @@
 - The public repository's history was reset: `main` is one fresh root commit
   of the cleaned tree, and the old `master` branch and older version tags were
   removed. Existing clones re-clone once (see README, "History reset").
-- Rootless-VM and evaluation host storage no longer assume one site's shared
-  volume: a deployment declares it with `TOFU_REQUIRED_HOST_VOLUME`. The
+- Rootless-VM and evaluation host storage keep writable roots on whichever
+  `/mnt/<volume>` network volume holds the checkout, not one named site. The
   Terminal-Bench ingress branch comes from `TOFU_TB_INGRESS_BRANCH` or
   `run --branch`.
 

@@ -162,7 +162,7 @@ _LIB_INIT_MAX_ENV_READS = 11
 # sanctioned exception class is the sidecar-shared contract set above:
 # lib/event_envelope.py joined it 2026-09-18 when the event-format stamp was
 # wired into the sidecar write authority.)
-_LIB_TOPLEVEL_MAX_FILES = 111
+_LIB_TOPLEVEL_MAX_FILES = 110
 
 
 def _under(path: Path, root: Path) -> bool:

@@ -13,8 +13,8 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MAX_ENTITY_RANGE_ROWS, PROVIDER_COUNT_NAMESPACE,
-    PROVIDER_CREATED_INDEX_NAMESPACE, PROVIDER_DOCUMENT_NAMESPACE, PROVIDER_ID_CLAIM_NAMESPACE,
+    MAX_ENTITY_RANGE_ROWS, PROVIDER_COUNT_NAMESPACE, PROVIDER_CREATED_INDEX_NAMESPACE,
+    PROVIDER_DOCUMENT_NAMESPACE, PROVIDER_ID_CLAIM_NAMESPACE,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -276,12 +276,15 @@ pub(crate) fn list(
         // Every page uses this transaction's original snapshot and OCC witnesses.
         let rows = database.entity_scan(transaction, &start, &end, MAX_ENTITY_RANGE_ROWS)?;
         let page_count = rows.len();
-        if page_count == 0 { break; }
+        if page_count == 0 {
+            break;
+        }
         let next_start = rows.last().unwrap().0.clone().exact_range()?.1;
         for (_, raw) in rows {
             let identity: Value = serde_json::from_slice(&raw)
                 .map_err(|_| invalid_data("provider created index is malformed"))?;
-            let provider_id = identity["id"].as_str()
+            let provider_id = identity["id"]
+                .as_str()
                 .ok_or_else(|| invalid_data("provider created index ID is malformed"))?;
             if identity["tenant_id"] != label {
                 return Err(invalid_data("provider created index label differs"));
@@ -291,7 +294,9 @@ pub(crate) fn list(
             document.remove("api_key_ciphertext");
             documents.push(Value::Object(document));
         }
-        if page_count < MAX_ENTITY_RANGE_ROWS { break; }
+        if page_count < MAX_ENTITY_RANGE_ROWS {
+            break;
+        }
         start = next_start;
     }
     if documents.len() != expected {
@@ -314,7 +319,8 @@ pub(crate) fn create(
         .ok_or_else(|| invalid_input("provider document must be an object"))?;
     validate_document(&document, transaction.owner_user_id(), label, provider_id)?;
     let count = read_count(database, transaction, label)?;
-    let next_count = count.checked_add(1)
+    let next_count = count
+        .checked_add(1)
         .ok_or_else(|| invalid_data("provider count overflow"))?;
     let claim = claim_key(transaction, provider_id)?;
     if database.entity_get(transaction, &claim)?.is_some() {
@@ -481,7 +487,6 @@ pub(crate) fn delete(
     )?;
     Ok(br#"{"deleted":true}"#.to_vec())
 }
-
 
 #[cfg(test)]
 #[path = "provider_demand_tests.rs"]

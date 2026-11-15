@@ -31,8 +31,22 @@ const LLM_ROUNDS: usize = 12;
 
 fn filler(seed: u64, bytes: usize) -> String {
     const WORDS: [&str; 16] = [
-        "fn", "let", "match", "Some(value)", "=>", "{", "}", "\"quoted\"",
-        "path/to/file.rs:42", "error:", "汉字", "😀", "\\n", "tab\t", "0x1f", "result",
+        "fn",
+        "let",
+        "match",
+        "Some(value)",
+        "=>",
+        "{",
+        "}",
+        "\"quoted\"",
+        "path/to/file.rs:42",
+        "error:",
+        "汉字",
+        "😀",
+        "\\n",
+        "tab\t",
+        "0x1f",
+        "result",
     ];
     let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
     let mut text = String::with_capacity(bytes + 32);
@@ -41,7 +55,7 @@ fn filler(seed: u64, bytes: usize) -> String {
         state ^= state >> 7;
         state ^= state << 17;
         text.push_str(WORDS[(state % 16) as usize]);
-        text.push(if state % 11 == 0 { '\n' } else { ' ' });
+        text.push(if state.is_multiple_of(11) { '\n' } else { ' ' });
     }
     text
 }
@@ -72,7 +86,7 @@ fn api_round(index: usize) -> Value {
 }
 
 fn timeline_entry(index: usize) -> Value {
-    json!({"kind": if index % 2 == 0 { "tool" } else { "llm" }, "at": 1_790_000_000_000_u64 + index as u64 * 500,
+    json!({"kind": if index.is_multiple_of(2) { "tool" } else { "llm" }, "at": 1_790_000_000_000_u64 + index as u64 * 500,
         "label": format!("step {index}"), "durationMs": 120 + index})
 }
 
@@ -85,16 +99,25 @@ pub(super) fn production_projection() -> Map<String, Value> {
     projection.insert("content".into(), json!(filler(1, 40 * 1024)));
     projection.insert("thinking".into(), json!(filler(2, 120 * 1024)));
     projection.insert("segments".into(), json!([]));
-    projection.insert("toolRounds".into(),
-        Value::Array((0..HISTORY_ROUNDS).map(|i| tool_round(i, true)).collect()));
-    projection.insert("apiRounds".into(),
-        Value::Array((0..HISTORY_ROUNDS).map(api_round).collect()));
-    projection.insert("activityTimeline".into(),
-        Value::Array((0..2 * HISTORY_ROUNDS).map(timeline_entry).collect()));
+    projection.insert(
+        "toolRounds".into(),
+        Value::Array((0..HISTORY_ROUNDS).map(|i| tool_round(i, true)).collect()),
+    );
+    projection.insert(
+        "apiRounds".into(),
+        Value::Array((0..HISTORY_ROUNDS).map(api_round).collect()),
+    );
+    projection.insert(
+        "activityTimeline".into(),
+        Value::Array((0..2 * HISTORY_ROUNDS).map(timeline_entry).collect()),
+    );
     projection.insert("timingTrace".into(), json!({"spans": (0..400).map(|i| json!({
         "name": format!("span-{i}"), "startMs": i * 10, "endMs": i * 10 + 7})).collect::<Vec<_>>()}));
     projection.insert("model".into(), json!("claude-opus"));
-    projection.insert("usage".into(), json!({"input_tokens": 1, "output_tokens": 1}));
+    projection.insert(
+        "usage".into(),
+        json!({"input_tokens": 1, "output_tokens": 1}),
+    );
     stable(&projection)
 }
 
@@ -124,17 +147,29 @@ impl Producer {
             Class::Text | Class::ToolProgress => {
                 let mut next = self.committed.clone();
                 if class == Class::Text {
-                    let field = if self.sequence % 3 == 0 { "content" } else { "thinking" };
+                    let field = if self.sequence.is_multiple_of(3) {
+                        "content"
+                    } else {
+                        "thinking"
+                    };
                     let mut text = next[field].as_str().unwrap().to_owned();
                     text.push_str(&filler(self.sequence, 240));
                     next.insert(field.into(), json!(text));
                 }
                 let pick = |projection: &Map<String, Value>| {
-                    Map::from_iter(["content", "thinking"].iter()
-                        .map(|field| ((*field).to_owned(), projection[*field].clone())))
+                    Map::from_iter(
+                        ["content", "thinking"]
+                            .iter()
+                            .map(|field| ((*field).to_owned(), projection[*field].clone())),
+                    )
                 };
                 let patch = crate::turn_projection_patch::build_projection_patch(
-                    &pick(&self.committed), &pick(&next), self.revision, self.revision + 1).unwrap();
+                    &pick(&self.committed),
+                    &pick(&next),
+                    self.revision,
+                    self.revision + 1,
+                )
+                .unwrap();
                 (patch, next, false)
             }
             Class::Fold | Class::Phase | Class::ToolStart | Class::ToolResult => {
@@ -144,7 +179,10 @@ impl Producer {
                     // A model-fallback phase: one top-level field, the
                     // execution-frame witness grammar.
                     Class::Phase => {
-                        next.insert("fallbackModel".into(), json!(format!("model-{}", self.sequence % 4)));
+                        next.insert(
+                            "fallbackModel".into(),
+                            json!(format!("model-{}", self.sequence % 4)),
+                        );
                     }
                     Class::Fold => {
                         let mut text = next["content"].as_str().unwrap().to_owned();
@@ -153,31 +191,51 @@ impl Producer {
                     }
                     Class::ToolStart => {
                         let index = self.rounds;
-                        next["toolRounds"].as_array_mut().unwrap().push(tool_round(index, false));
-                        next["apiRounds"].as_array_mut().unwrap().push(api_round(index));
-                        next["activityTimeline"].as_array_mut().unwrap().push(timeline_entry(2 * index));
+                        next["toolRounds"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(tool_round(index, false));
+                        next["apiRounds"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(api_round(index));
+                        next["activityTimeline"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(timeline_entry(2 * index));
                     }
                     Class::ToolResult => {
                         let index = self.rounds;
                         let rounds = next["toolRounds"].as_array_mut().unwrap();
                         *rounds.last_mut().unwrap() = tool_round(index, true);
-                        next["activityTimeline"].as_array_mut().unwrap().push(timeline_entry(2 * index + 1));
+                        next["activityTimeline"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(timeline_entry(2 * index + 1));
                         self.rounds += 1;
                     }
                     _ => unreachable!(),
                 }
                 let next = stable(&next);
                 let patch = crate::turn_projection_patch::build_projection_patch(
-                    &previous, &next, self.revision, self.revision + 1).unwrap();
+                    &previous,
+                    &next,
+                    self.revision,
+                    self.revision + 1,
+                )
+                .unwrap();
                 (patch, next, true)
             }
         };
         self.committed = next;
         self.revision += 1;
         let kind = match class {
-            Class::Text => "delta", Class::Fold => "delta", Class::Phase => "phase",
+            Class::Text => "delta",
+            Class::Fold => "delta",
+            Class::Phase => "phase",
             Class::ToolStart => "tool_start",
-            Class::ToolProgress => "tool_progress", Class::ToolResult => "tool_result",
+            Class::ToolProgress => "tool_progress",
+            Class::ToolResult => "tool_result",
         };
         base_request(self.sequence, self.now_ms, kind, Some(patch), stable_flag)
     }
@@ -189,63 +247,124 @@ pub(super) fn terminal_request(producer: &mut Producer) -> EventRecordRequest {
     producer.now_ms += 300;
     let patch = json!({"version": 1, "baseRevision": producer.revision,
         "targetRevision": producer.revision + 1, "operations": []});
-    let mut request = base_request(producer.sequence, producer.now_ms, "done",
-        patch.as_object().cloned(), false);
+    let mut request = base_request(
+        producer.sequence,
+        producer.now_ms,
+        "done",
+        patch.as_object().cloned(),
+        false,
+    );
     request.terminal = true;
     request.status = "completed".into();
     request.settlement = json!({"outcome": "completed", "cause": "finished", "resumeOptions": []})
-        .as_object().unwrap().clone();
+        .as_object()
+        .unwrap()
+        .clone();
     producer.revision += 1;
     request
 }
 
-pub(super) fn base_request(sequence: u64, now_ms: u64, kind: &str, patch: Option<Map<String, Value>>,
-    projection_segments_stable: bool) -> EventRecordRequest
-{
+pub(super) fn base_request(
+    sequence: u64,
+    now_ms: u64,
+    kind: &str,
+    patch: Option<Map<String, Value>>,
+    projection_segments_stable: bool,
+) -> EventRecordRequest {
     EventRecordRequest {
-        worker_claim: None, model_continuation: Value::Null, attempt_id: ATTEMPT.into(),
-        task_id: TASK.into(), terminal: false, status: "running".into(), slim: false,
-        content: String::new(), thinking: String::new(), projection: Value::Null,
-        projection_patch: patch, projection_segments_stable,
-        settlement: Map::new(), error: Map::new(), event_type: "projection_updated".into(),
-        event_payload: Map::from_iter([("phase".into(), Value::Null),
-            ("updateKind".into(), json!(kind))]),
+        worker_claim: None,
+        model_continuation: Value::Null,
+        attempt_id: ATTEMPT.into(),
+        task_id: TASK.into(),
+        terminal: false,
+        status: "running".into(),
+        slim: false,
+        content: String::new(),
+        thinking: String::new(),
+        projection: Value::Null,
+        projection_patch: patch,
+        projection_segments_stable,
+        settlement: Map::new(),
+        error: Map::new(),
+        event_type: "projection_updated".into(),
+        event_payload: Map::from_iter([
+            ("phase".into(), Value::Null),
+            ("updateKind".into(), json!(kind)),
+        ]),
         background_command_ack: None,
         task_event: Some(IndexedStreamAppendItem {
-            worker_claim: None, task_id: TASK.into(), application_sequence: sequence,
+            worker_claim: None,
+            task_id: TASK.into(),
+            application_sequence: sequence,
             event_type: kind.into(),
             payload_json: serde_json::to_vec(&json!({"type": kind, "sequence": sequence})).unwrap(),
-            created_at_ms: now_ms as i64, require_attempts_live: Vec::new() }),
-        preceding_task_events: Vec::new(), flow_root_attempt_id: String::new(), now_ms,
+            created_at_ms: now_ms as i64,
+            require_attempts_live: Vec::new(),
+        }),
+        preceding_task_events: Vec::new(),
+        flow_root_attempt_id: String::new(),
+        now_ms,
     }
 }
 
 pub(super) fn single_event_ir(request: EventRecordRequest) -> TransactionIr {
     let payload = serde_json::to_vec(&json!({"sequence": request.now_ms,
-        "patch": request.projection_patch})).unwrap();
-    TransactionIr { tenant_id: 7, owner_user_id: 11, operation: "turn.event.record".into(),
+        "patch": request.projection_patch}))
+    .unwrap();
+    TransactionIr {
+        tenant_id: 7,
+        owner_user_id: 11,
+        operation: "turn.event.record".into(),
         operation_kind: StorageOperationKind::Command,
-        result: TransactionIrResult::SlotOrLiteral { slot: 0, missing: b"null".to_vec() },
-        command_effects: Some(TransactionIrCommandEffects { legacy_receipt_owner_bound: true,
+        result: TransactionIrResult::SlotOrLiteral {
+            slot: 0,
+            missing: b"null".to_vec(),
+        },
+        command_effects: Some(TransactionIrCommandEffects {
+            legacy_receipt_owner_bound: true,
             command_id: format!("load-event-{}", request.now_ms),
-            request_digest: Sha256::digest(&payload).into(), alternate_request_digest: None,
-            request_id: format!("load-request-{}", request.now_ms), schema_version: 1,
-            registry_version: 1, committed_at_ms: request.now_ms, outbox_payload: payload,
-            store_receipt: false }),
-        steps: vec![TransactionIrStep::TurnEventRecord { request, slot: 0 }] }
+            request_digest: Sha256::digest(&payload).into(),
+            alternate_request_digest: None,
+            request_id: format!("load-request-{}", request.now_ms),
+            schema_version: 1,
+            registry_version: 1,
+            committed_at_ms: request.now_ms,
+            outbox_payload: payload,
+            store_receipt: false,
+        }),
+        steps: vec![TransactionIrStep::TurnEventRecord { request, slot: 0 }],
+    }
 }
 
 pub(super) fn seed(database: &mut AuthorityDatabase, projection: &Map<String, Value>) -> u64 {
     let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-    append_settled(database, &mut tx, &AppendSettledRequest {
-        conversation_id: CONVERSATION.into(), actor: ACTOR.into(), status: "pending".into(),
-        projection_json: b"{}".to_vec(), projection_timestamp: None,
-        settlement_json: b"{}".to_vec(), lane_id: "main".into(), command_id: "seed-load".into(),
-        kind: "reply".into(), run_id: String::new(), turn_id: TURN.into(),
-        attempt_id: Some(ATTEMPT.into()), created_at_ms: 1000, committed_at_ms: 1000,
-        defaults: TurnDefaults { allow_create: true, title: "Load".into(),
-            settings_json: b"{}".to_vec(), created_at_ms: 1000 },
-    }).unwrap();
+    append_settled(
+        database,
+        &mut tx,
+        &AppendSettledRequest {
+            conversation_id: CONVERSATION.into(),
+            actor: ACTOR.into(),
+            status: "pending".into(),
+            projection_json: b"{}".to_vec(),
+            projection_timestamp: None,
+            settlement_json: b"{}".to_vec(),
+            lane_id: "main".into(),
+            command_id: "seed-load".into(),
+            kind: "reply".into(),
+            run_id: String::new(),
+            turn_id: TURN.into(),
+            attempt_id: Some(ATTEMPT.into()),
+            created_at_ms: 1000,
+            committed_at_ms: 1000,
+            defaults: TurnDefaults {
+                allow_create: true,
+                title: "Load".into(),
+                settings_json: b"{}".to_vec(),
+                created_at_ms: 1000,
+            },
+        },
+    )
+    .unwrap();
     database.commit(tx).unwrap();
     let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
     attempt_bind(database, &mut tx, ATTEMPT, TASK, "", 1100).unwrap();
@@ -253,7 +372,8 @@ pub(super) fn seed(database: &mut AuthorityDatabase, projection: &Map<String, Va
     let mut first = base_request(1, 1200, "tool_progress", None, false);
     first.projection = Value::Object(projection.clone());
     let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-    let response: Value = serde_json::from_slice(&event_record(database, &mut tx, &first).unwrap()).unwrap();
+    let response: Value =
+        serde_json::from_slice(&event_record(database, &mut tx, &first).unwrap()).unwrap();
     database.commit(tx).unwrap();
     response["projection_revision"].as_u64().unwrap()
 }
@@ -262,20 +382,36 @@ pub(super) fn current_head(database: &AuthorityDatabase) -> Option<ProjectionHea
     let mut probe = base_request(0, 0, "tool_progress", None, false);
     probe.task_event = None;
     let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-    load_event_record_state(database, &mut tx, &probe, false).unwrap().unwrap().1.projection_head
+    load_event_record_state(database, &mut tx, &probe, false)
+        .unwrap()
+        .unwrap()
+        .1
+        .projection_head
 }
 
 fn chunk_hashes(revision: u64, projection: &Map<String, Value>) -> (usize, Vec<[u8; 32]>) {
     let bytes = serde_json::to_vec(&json!({"attemptId": ATTEMPT, "revision": revision,
-        "projection": projection})).unwrap();
-    (bytes.len(), bytes.chunks(crate::blob::BLOB_CHUNK_BYTES)
-        .map(|chunk| *blake3::hash(chunk).as_bytes()).collect())
+        "projection": projection}))
+    .unwrap();
+    (
+        bytes.len(),
+        bytes
+            .chunks(crate::blob::BLOB_CHUNK_BYTES)
+            .map(|chunk| *blake3::hash(chunk).as_bytes())
+            .collect(),
+    )
 }
 
 const STAGES: [(&str, usize); 10] = [
-    ("materialize", crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE),
+    (
+        "materialize",
+        crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE,
+    ),
     ("load", crate::fsync_stats::STAGE_TURN_EVENT_LOAD),
-    ("projection", crate::fsync_stats::STAGE_TURN_EVENT_PROJECTION),
+    (
+        "projection",
+        crate::fsync_stats::STAGE_TURN_EVENT_PROJECTION,
+    ),
     ("store", crate::fsync_stats::STAGE_TURN_EVENT_STORE),
     ("publish", crate::fsync_stats::STAGE_TURN_EVENT_PUBLISH),
     ("blobEncode", crate::fsync_stats::STAGE_BLOB_ENCODE),
@@ -298,7 +434,9 @@ struct ClassTotals {
 }
 
 fn percentile(sorted: &[u64], fraction: f64) -> f64 {
-    if sorted.is_empty() { return 0.0; }
+    if sorted.is_empty() {
+        return 0.0;
+    }
     let index = ((sorted.len() as f64 - 1.0) * fraction).round() as usize;
     sorted[index] as f64 / 1000.0
 }
@@ -331,8 +469,13 @@ fn run_scenario(scenario: &str, schedule: &[Class]) {
     let projection = production_projection();
     let projection_bytes = serde_json::to_vec(&projection).unwrap().len();
     let revision = seed(&mut database, &projection);
-    let mut producer = Producer { committed: projection, revision, sequence: 10, now_ms: 5000,
-        rounds: HISTORY_ROUNDS };
+    let mut producer = Producer {
+        committed: projection,
+        revision,
+        sequence: 10,
+        now_ms: 5000,
+        rounds: HISTORY_ROUNDS,
+    };
     let mut totals = std::collections::BTreeMap::<Class, ClassTotals>::new();
     let mut previous_head = current_head(&database);
     let mut previous_chunks: Option<Vec<[u8; 32]>> = None;
@@ -344,27 +487,42 @@ fn run_scenario(scenario: &str, schedule: &[Class]) {
         let ir = single_event_ir(request);
         let before = crate::fsync_stats::counters();
         let stages_before = stage_snapshot();
-        let materialize_before = crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE);
+        let materialize_before =
+            crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE);
         let clock = Instant::now();
-        let prepared = prepare_transaction_ir_with_deadline(&mut database, &ir, Duration::MAX).unwrap();
-        database.commit(prepared.transaction.expect("applied event commits")).unwrap();
+        let prepared =
+            prepare_transaction_ir_with_deadline(&mut database, &ir, Duration::MAX).unwrap();
+        database
+            .commit(prepared.transaction.expect("applied event commits"))
+            .unwrap();
         let micros = clock.elapsed().as_micros() as u64;
         let after = crate::fsync_stats::counters();
         let stages_after = stage_snapshot();
-        let materialize_after = crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE);
+        let materialize_after =
+            crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE);
         let response: Value = serde_json::from_slice(&prepared.response.into_bytes()).unwrap();
         assert_eq!(response["applied"], true, "{class:?}");
         assert_eq!(response["projection_revision"], target_revision);
         let head = current_head(&database);
-        let rewrote = head.as_ref().is_some_and(|head| head.patch_count == 0
-            && previous_head.as_ref().is_none_or(|old| old.head_id != head.head_id));
+        let rewrote = head.as_ref().is_some_and(|head| {
+            head.patch_count == 0
+                && previous_head
+                    .as_ref()
+                    .is_none_or(|old| old.head_id != head.head_id)
+        });
         if rewrote {
-            let (bytes, chunks) = chunk_hashes(head.as_ref().unwrap().base_revision, &producer.committed);
+            let (bytes, chunks) =
+                chunk_hashes(head.as_ref().unwrap().base_revision, &producer.committed);
             written_logical += bytes;
             let reused: std::collections::HashSet<_> = previous_chunks.iter().flatten().collect();
-            written_new_chunk_bytes += chunks.iter().enumerate()
+            written_new_chunk_bytes += chunks
+                .iter()
+                .enumerate()
                 .filter(|(_, hash)| !reused.contains(hash))
-                .map(|(index, _)| (bytes - index * crate::blob::BLOB_CHUNK_BYTES).min(crate::blob::BLOB_CHUNK_BYTES))
+                .map(|(index, _)| {
+                    (bytes - index * crate::blob::BLOB_CHUNK_BYTES)
+                        .min(crate::blob::BLOB_CHUNK_BYTES)
+                })
                 .sum::<usize>();
             previous_chunks = Some(chunks);
         }
@@ -372,12 +530,18 @@ fn run_scenario(scenario: &str, schedule: &[Class]) {
         let entry = totals.entry(class).or_default();
         entry.events += 1;
         entry.materializations += materialize_after - materialize_before;
-        entry.checkpoint_decoded += after.projection_checkpoint_bytes - before.projection_checkpoint_bytes;
-        entry.patches_applied += after.projection_patches_applied - before.projection_patches_applied;
+        entry.checkpoint_decoded +=
+            after.projection_checkpoint_bytes - before.projection_checkpoint_bytes;
+        entry.patches_applied +=
+            after.projection_patches_applied - before.projection_patches_applied;
         entry.wal += after.wal_encoded_bytes - before.wal_encoded_bytes;
         entry.checkpoint_writes += usize::from(rewrote);
         entry.micros.push(micros);
-        for (slot, (after, before)) in entry.stage_nanos.iter_mut().zip(stages_after.iter().zip(stages_before)) {
+        for (slot, (after, before)) in entry
+            .stage_nanos
+            .iter_mut()
+            .zip(stages_after.iter().zip(stages_before))
+        {
             *slot += after - before;
         }
     }
@@ -391,8 +555,13 @@ fn run_scenario(scenario: &str, schedule: &[Class]) {
         all.wal += entry.wal;
         all.checkpoint_writes += entry.checkpoint_writes;
         all.micros.extend(&entry.micros);
-        for (slot, nanos) in all.stage_nanos.iter_mut().zip(entry.stage_nanos) { *slot += nanos; }
-        println!("event_load scenario={scenario} class={class:?} {}", summary(entry));
+        for (slot, nanos) in all.stage_nanos.iter_mut().zip(entry.stage_nanos) {
+            *slot += nanos;
+        }
+        println!(
+            "event_load scenario={scenario} class={class:?} {}",
+            summary(entry)
+        );
     }
     let mut total = summary(&mut all);
     total["projectionBytes"] = json!(projection_bytes);
@@ -408,41 +577,63 @@ fn run_scenario(scenario: &str, schedule: &[Class]) {
     let before = crate::fsync_stats::counters();
     let clock = Instant::now();
     let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-    let turn: Value = serde_json::from_slice(&get(&database, &mut tx, CONVERSATION, TURN).unwrap().unwrap()).unwrap();
+    let turn: Value = serde_json::from_slice(
+        &get(&database, &mut tx, CONVERSATION, TURN)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     drop(tx);
     let read_micros = clock.elapsed().as_micros() as u64;
     let after = crate::fsync_stats::counters();
-    assert_eq!(turn["projection"], Value::Object(expected), "{scenario}: final public projection");
-    println!("event_load scenario={scenario} liveRead {}", json!({
-        "ms": read_micros as f64 / 1000.0, "chainPatches": head.patch_count,
-        "textTail": head.text_tail.is_some(),
-        "checkpointDecodedBytes": after.projection_checkpoint_bytes - before.projection_checkpoint_bytes,
-        "patchesReplayed": after.projection_patches_applied - before.projection_patches_applied,
-    }));
+    assert_eq!(
+        turn["projection"],
+        Value::Object(expected),
+        "{scenario}: final public projection"
+    );
+    println!(
+        "event_load scenario={scenario} liveRead {}",
+        json!({
+            "ms": read_micros as f64 / 1000.0, "chainPatches": head.patch_count,
+            "textTail": head.text_tail.is_some(),
+            "checkpointDecodedBytes": after.projection_checkpoint_bytes - before.projection_checkpoint_bytes,
+            "patchesReplayed": after.projection_patches_applied - before.projection_patches_applied,
+        })
+    );
     // Settlement retires the live head in one transaction.
     let ir = single_event_ir(terminal_request(&mut producer));
     let (before, stages_before) = (crate::fsync_stats::counters(), stage_snapshot());
-    let materialize_before = crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE);
+    let materialize_before =
+        crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE);
     let clock = Instant::now();
     let prepared = prepare_transaction_ir_with_deadline(&mut database, &ir, Duration::MAX).unwrap();
-    database.commit(prepared.transaction.expect("terminal event commits")).unwrap();
+    database
+        .commit(prepared.transaction.expect("terminal event commits"))
+        .unwrap();
     let micros = clock.elapsed().as_micros() as u64;
     let (after, stages_after) = (crate::fsync_stats::counters(), stage_snapshot());
     let response: Value = serde_json::from_slice(&prepared.response.into_bytes()).unwrap();
     assert_eq!(response["applied"], true, "{scenario}: terminal");
-    println!("event_load scenario={scenario} terminal {}", json!({
-        "ms": micros as f64 / 1000.0,
-        "materializations": crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE) - materialize_before,
-        "checkpointDecodedBytes": after.projection_checkpoint_bytes - before.projection_checkpoint_bytes,
-        "walBytes": after.wal_encoded_bytes - before.wal_encoded_bytes,
-        "stageMs": Map::from_iter(STAGES.iter().zip(stages_after.iter().zip(stages_before)).map(|((name, _), (after, before))|
-            ((*name).to_owned(), json!(((after - before) as f64 / 1e4).round() / 100.0)))),
-    }));
+    println!(
+        "event_load scenario={scenario} terminal {}",
+        json!({
+            "ms": micros as f64 / 1000.0,
+            "materializations": crate::fsync_stats::stage_calls(crate::fsync_stats::STAGE_PROJECTION_HEAD_MATERIALIZE) - materialize_before,
+            "checkpointDecodedBytes": after.projection_checkpoint_bytes - before.projection_checkpoint_bytes,
+            "walBytes": after.wal_encoded_bytes - before.wal_encoded_bytes,
+            "stageMs": Map::from_iter(STAGES.iter().zip(stages_after.iter().zip(stages_before)).map(|((name, _), (after, before))|
+                ((*name).to_owned(), json!(((after - before) as f64 / 1e4).round() / 100.0)))),
+        })
+    );
     // Every public surface after a cold reopen, for a byte diff between engines.
     drop(database);
     let reopened = AuthorityDatabase::open(directory.path()).unwrap();
     let dump = std::env::temp_dir().join(format!("turn-event-load-{scenario}.json"));
-    std::fs::write(&dump, serde_json::to_vec_pretty(&public_state(&reopened)).unwrap()).unwrap();
+    std::fs::write(
+        &dump,
+        serde_json::to_vec_pretty(&public_state(&reopened)).unwrap(),
+    )
+    .unwrap();
     println!("event_load scenario={scenario} state={}", dump.display());
 }
 
@@ -451,13 +642,50 @@ pub(super) fn public_state(database: &AuthorityDatabase) -> Value {
     let parse = |bytes: Vec<u8>| serde_json::from_slice::<Value>(&bytes).unwrap();
     let turn = parse(get(database, &mut tx, CONVERSATION, TURN).unwrap().unwrap());
     let attempt = parse(attempt_get(database, &mut tx, ATTEMPT).unwrap().unwrap());
-    let events = parse(events_list(database, &mut tx, ATTEMPT, 0, 1000, true, &mut || false).unwrap().unwrap());
-    let hydrated = parse(events_list(database, &mut tx, ATTEMPT, 0, 1000, false, &mut || false).unwrap().unwrap());
-    let sync = parse(sync_changes(database, &mut tx, CONVERSATION, 0, 1000, &mut || false).unwrap().unwrap());
-    let header = parse(crate::conversation_header::get(database, &mut tx, CONVERSATION, false, 0, None, &mut || false).unwrap().unwrap());
-    let raw = parse(crate::indexed_stream::list(database, &mut tx, &crate::indexed_stream::ListRequest {
-        task_id: TASK.into(), after_sequence: None, limit: 1000, types: Vec::new(), type_prefixes: Vec::new(),
-        payload_types: None, inspector_projection: false }).unwrap());
+    let events = parse(
+        events_list(database, &mut tx, ATTEMPT, 0, 1000, true, &mut || false)
+            .unwrap()
+            .unwrap(),
+    );
+    let hydrated = parse(
+        events_list(database, &mut tx, ATTEMPT, 0, 1000, false, &mut || false)
+            .unwrap()
+            .unwrap(),
+    );
+    let sync = parse(
+        sync_changes(database, &mut tx, CONVERSATION, 0, 1000, &mut || false)
+            .unwrap()
+            .unwrap(),
+    );
+    let header = parse(
+        crate::conversation_header::get(
+            database,
+            &mut tx,
+            CONVERSATION,
+            false,
+            0,
+            None,
+            &mut || false,
+        )
+        .unwrap()
+        .unwrap(),
+    );
+    let raw = parse(
+        crate::indexed_stream::list(
+            database,
+            &mut tx,
+            &crate::indexed_stream::ListRequest {
+                task_id: TASK.into(),
+                after_sequence: None,
+                limit: 1000,
+                types: Vec::new(),
+                type_prefixes: Vec::new(),
+                payload_types: None,
+                inspector_projection: false,
+            },
+        )
+        .unwrap(),
+    );
     json!({"turn": turn, "attempt": attempt, "events": events, "hydrated": hydrated, "sync": sync,
         "header": header, "raw": raw})
 }
@@ -473,7 +701,12 @@ fn production_shaped_streaming_rounds() {
         for step in 0..10 {
             schedule.push(if step == 5 { Class::Fold } else { Class::Text });
         }
-        schedule.extend([Class::ToolStart, Class::ToolProgress, Class::ToolProgress, Class::ToolResult]);
+        schedule.extend([
+            Class::ToolStart,
+            Class::ToolProgress,
+            Class::ToolProgress,
+            Class::ToolResult,
+        ]);
     }
     run_scenario("streaming", &schedule);
 }
@@ -483,6 +716,8 @@ fn production_shaped_streaming_rounds() {
 #[test]
 #[ignore = "opt-in production-shape measurement; run alone with --nocapture --test-threads=1"]
 fn production_shaped_tool_burst() {
-    let schedule: Vec<_> = (0..48).flat_map(|_| [Class::ToolStart, Class::ToolResult]).collect();
+    let schedule: Vec<_> = (0..48)
+        .flat_map(|_| [Class::ToolStart, Class::ToolResult])
+        .collect();
     run_scenario("tool-burst", &schedule);
 }

@@ -34,6 +34,8 @@ import sys
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import lib.mcp.client as mc  # noqa: E402
@@ -64,6 +66,7 @@ def test_default_overleaf_uses_the_owned_source_and_shared_isolated_runner():
     assert (source/'pyproject.toml').read_bytes() == before
 
 
+@requires_yourprovider_overlay
 def test_vendored_registry_covers_all_three_internal_servers():
     """All three internal servers are registered — xuecheng-mcp was MISSING.
 

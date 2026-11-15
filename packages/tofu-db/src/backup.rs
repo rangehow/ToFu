@@ -101,7 +101,10 @@ fn invalid_data(message: impl Into<String>) -> io::Error {
 /// through a read-only handle, so restoring never creates or changes a file
 /// in the backup. A backup without the lock file (a read-only or mirrored
 /// copy) has no writer to exclude; reads verify every block either way.
-fn acquire_backup_read_lease(backup_dir: &Path, vfs: &dyn Vfs) -> io::Result<Option<Box<dyn VfsFile>>> {
+fn acquire_backup_read_lease(
+    backup_dir: &Path,
+    vfs: &dyn Vfs,
+) -> io::Result<Option<Box<dyn VfsFile>>> {
     let mut lease = match vfs.open(
         &backup_dir.join(BACKUP_LOCK),
         OpenRequest {
@@ -126,7 +129,10 @@ fn acquire_backup_read_lease(backup_dir: &Path, vfs: &dyn Vfs) -> io::Result<Opt
     Ok(Some(lease))
 }
 
-pub(crate) fn acquire_backup_lease(backup_dir: &Path, vfs: &dyn Vfs) -> io::Result<Box<dyn VfsFile>> {
+pub(crate) fn acquire_backup_lease(
+    backup_dir: &Path,
+    vfs: &dyn Vfs,
+) -> io::Result<Box<dyn VfsFile>> {
     let mut lease = vfs.open(
         &backup_dir.join(BACKUP_LOCK),
         OpenRequest {
@@ -170,7 +176,11 @@ pub(crate) fn resolved_candidate(path: &Path) -> io::Result<PathBuf> {
     Ok(resolved)
 }
 
-pub(crate) fn require_disjoint_paths(left: &Path, right: &Path, relationship: &str) -> io::Result<()> {
+pub(crate) fn require_disjoint_paths(
+    left: &Path,
+    right: &Path,
+    relationship: &str,
+) -> io::Result<()> {
     let canonical_left = resolved_candidate(left)?;
     let canonical_right = resolved_candidate(right)?;
     if canonical_left == canonical_right
@@ -191,7 +201,12 @@ pub(crate) fn bounded_directory_bytes(root: &Path) -> io::Result<u64> {
             if metadata.file_type().is_symlink() {
                 return Err(invalid_data("capacity preflight refuses symbolic links"));
             }
-            entries.push((entry.path(), metadata.is_dir(), metadata.is_file(), metadata.len()));
+            entries.push((
+                entry.path(),
+                metadata.is_dir(),
+                metadata.is_file(),
+                metadata.len(),
+            ));
         }
         Ok(entries)
     })
@@ -199,9 +214,7 @@ pub(crate) fn bounded_directory_bytes(root: &Path) -> io::Result<u64> {
 
 fn bounded_directory_bytes_inner(
     root: &Path,
-    mut read_entries: impl FnMut(
-        &Path,
-    ) -> io::Result<Vec<(std::path::PathBuf, bool, bool, u64)>>,
+    mut read_entries: impl FnMut(&Path) -> io::Result<Vec<(std::path::PathBuf, bool, bool, u64)>>,
 ) -> io::Result<u64> {
     // The walk holds one directory's entries and the pending directory stack,
     // so the number of files bounds no memory and refuses nothing.
@@ -511,7 +524,9 @@ pub(crate) fn initialize_or_open_closed_backup(
             vfs.create_dir(store_dir)?;
             sync_directory_barrier(
                 vfs.as_ref(),
-                store_dir.parent().ok_or_else(|| invalid_input("closed backup store has no parent"))?,
+                store_dir
+                    .parent()
+                    .ok_or_else(|| invalid_input("closed backup store has no parent"))?,
             )?;
         }
         Err(error) => return Err(error),
@@ -522,7 +537,12 @@ pub(crate) fn initialize_or_open_closed_backup(
                 "closed backup store directory holds an unmarked store",
             ));
         }
-        publish_small_file(store_dir, CLOSED_STORE_MARKER, CLOSED_STORE_MARKER_BYTES, vfs.as_ref())?;
+        publish_small_file(
+            store_dir,
+            CLOSED_STORE_MARKER,
+            CLOSED_STORE_MARKER_BYTES,
+            vfs.as_ref(),
+        )?;
     }
     initialize_or_open_backup(store_dir, vfs)
 }
@@ -531,7 +551,13 @@ fn closed_store_marker_present(store_dir: &Path, vfs: &dyn Vfs) -> io::Result<bo
     let path = store_dir.join(CLOSED_STORE_MARKER);
     match vfs.metadata(&path) {
         Ok(FileKind::File) => {
-            let mut file = vfs.open(&path, OpenRequest { read: true, ..OpenRequest::default() })?;
+            let mut file = vfs.open(
+                &path,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )?;
             if file.read_all(CLOSED_STORE_MARKER_BYTES.len())? != CLOSED_STORE_MARKER_BYTES {
                 return Err(invalid_data("closed backup store marker is not recognized"));
             }
@@ -584,7 +610,11 @@ pub(crate) fn destination_policy(store_dir: &Path, vfs: &dyn Vfs) -> io::Result<
             }
             sync_directory_barrier(vfs, &overflow)?;
         }
-        Ok(FileKind::File) => return Err(invalid_data("backup block overflow path is not a directory")),
+        Ok(FileKind::File) => {
+            return Err(invalid_data(
+                "backup block overflow path is not a directory",
+            ))
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
@@ -596,7 +626,12 @@ pub(crate) fn destination_policy(store_dir: &Path, vfs: &dyn Vfs) -> io::Result<
 }
 
 /// Publishes one small file atomically: synced temporary, rename, barrier.
-pub(crate) fn publish_small_file(directory: &Path, name: &str, bytes: &[u8], vfs: &dyn Vfs) -> io::Result<()> {
+pub(crate) fn publish_small_file(
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+    vfs: &dyn Vfs,
+) -> io::Result<()> {
     let temporary = directory.join(format!(".new-{}", Uuid::new_v4()));
     let result = (|| {
         let mut file = vfs.open(
@@ -624,7 +659,13 @@ fn read_untyped_copies(store_dir: &Path, vfs: &dyn Vfs) -> io::Result<HashSet<Bl
     let path = store_dir.join(UNTYPED_COPIES_FILE);
     let bytes = match vfs.metadata(&path) {
         Ok(FileKind::File) => {
-            let mut file = vfs.open(&path, OpenRequest { read: true, ..OpenRequest::default() })?;
+            let mut file = vfs.open(
+                &path,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )?;
             let length = usize::try_from(file.len()?)
                 .map_err(|_| invalid_data("untyped copy record length overflow"))?;
             file.read_all(length)?
@@ -640,12 +681,18 @@ fn read_untyped_copies(store_dir: &Path, vfs: &dyn Vfs) -> io::Result<HashSet<Bl
         return Err(invalid_data("untyped copy record magic mismatch"));
     }
     Ok(bytes[UNTYPED_COPIES_MAGIC.len()..]
-        .chunks_exact(32)
-        .map(|raw| BlockId(raw.try_into().unwrap()))
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .map(|raw| BlockId(*raw))
         .collect())
 }
 
-pub(crate) fn append_untyped_copies(store_dir: &Path, vfs: Arc<dyn Vfs>, ids: &[BlockId]) -> io::Result<()> {
+pub(crate) fn append_untyped_copies(
+    store_dir: &Path,
+    vfs: Arc<dyn Vfs>,
+    ids: &[BlockId],
+) -> io::Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
@@ -686,7 +733,11 @@ pub(crate) fn append_untyped_copies(store_dir: &Path, vfs: Arc<dyn Vfs>, ids: &[
     Ok(())
 }
 
-fn rewrite_untyped_copies(store_dir: &Path, vfs: Arc<dyn Vfs>, ids: &HashSet<BlockId>) -> io::Result<()> {
+fn rewrite_untyped_copies(
+    store_dir: &Path,
+    vfs: Arc<dyn Vfs>,
+    ids: &HashSet<BlockId>,
+) -> io::Result<()> {
     let mut sorted = ids.iter().copied().collect::<Vec<_>>();
     sorted.sort_unstable();
     let mut bytes = Vec::with_capacity(UNTYPED_COPIES_MAGIC.len() + sorted.len() * 32);
@@ -844,7 +895,10 @@ fn publish_prune_plan(backup_dir: &Path, plan: &PrunePlan, vfs: &dyn Vfs) -> io:
     result
 }
 
-pub(crate) fn existing_manifests(snapshots_path: &Path, vfs: &dyn Vfs) -> io::Result<Vec<BackupManifest>> {
+pub(crate) fn existing_manifests(
+    snapshots_path: &Path,
+    vfs: &dyn Vfs,
+) -> io::Result<Vec<BackupManifest>> {
     let entries = vfs.read_directory(snapshots_path)?;
     if entries.len() > MAX_BACKUP_GENERATIONS * 2 {
         return Err(invalid_data("backup directory entry bound exceeded"));
@@ -914,7 +968,10 @@ impl CopyGraph for GenerationGraph<'_> {
     }
 
     fn is_leaf(&self, node: &GenerationNode) -> bool {
-        matches!(node, GenerationNode::Leaf(_) | GenerationNode::TransactionReference(_))
+        matches!(
+            node,
+            GenerationNode::Leaf(_) | GenerationNode::TransactionReference(_)
+        )
     }
 
     fn is_untyped(&self, node: &GenerationNode) -> bool {
@@ -940,7 +997,8 @@ impl CopyGraph for GenerationGraph<'_> {
                     payload,
                     &mut tally,
                     |key, value| {
-                        if let Some(id) = crate::stream::stored_segment_block_reference(key, value)? {
+                        if let Some(id) = crate::stream::stored_segment_block_reference(key, value)?
+                        {
                             values.push(GenerationNode::Leaf(id));
                         }
                         if let Some(reference) = semantic_value_blob_reference(key, value)? {
@@ -962,7 +1020,11 @@ impl CopyGraph for GenerationGraph<'_> {
                 )?;
                 references.extend(values);
             }
-            GenerationNode::BlobManifest { tenant_id, owner_user_id, reference } => {
+            GenerationNode::BlobManifest {
+                tenant_id,
+                owner_user_id,
+                reference,
+            } => {
                 crate::blob::visit_blob_references(
                     *tenant_id,
                     *owner_user_id,
@@ -978,19 +1040,30 @@ impl CopyGraph for GenerationGraph<'_> {
             }
             GenerationNode::HistoryManifestPage(_) => {
                 let page = HistoryManifest::page_references(payload)?;
-                references.extend(page.child_pages.into_iter().map(GenerationNode::HistoryManifestPage));
+                references.extend(
+                    page.child_pages
+                        .into_iter()
+                        .map(GenerationNode::HistoryManifestPage),
+                );
                 for segment in page.segments {
                     if let Some(index) = segment.payload_index_block_id {
                         references.push(GenerationNode::Leaf(index));
                     }
                     references.push(GenerationNode::HistorySegment(segment));
                 }
-                references.extend(page.payload_index_root_id.map(GenerationNode::PayloadRoutingRoot));
+                references.extend(
+                    page.payload_index_root_id
+                        .map(GenerationNode::PayloadRoutingRoot),
+                );
             }
             GenerationNode::HistorySegment(reference) => {
                 for transaction in crate::history::decode_segment_views(payload, reference)? {
                     references.extend(
-                        transaction.envelope.block_ids.into_iter().map(GenerationNode::TransactionReference),
+                        transaction
+                            .envelope
+                            .block_ids
+                            .into_iter()
+                            .map(GenerationNode::TransactionReference),
                     );
                 }
             }
@@ -1019,11 +1092,19 @@ pub(crate) struct DestinationPolicy {
 
 impl DestinationPolicy {
     pub(crate) fn unverified() -> Self {
-        Self { trusted_presence: false, untyped: HashSet::new(), record_untyped: false }
+        Self {
+            trusted_presence: false,
+            untyped: HashSet::new(),
+            record_untyped: false,
+        }
     }
 
     fn fresh_target() -> Self {
-        Self { trusted_presence: true, untyped: HashSet::new(), record_untyped: false }
+        Self {
+            trusted_presence: true,
+            untyped: HashSet::new(),
+            record_untyped: false,
+        }
     }
 }
 
@@ -1053,6 +1134,7 @@ impl GenerationCopyMetrics {
 /// untyped copies, so no typed walk of the same copy can meet an untyped
 /// copy it made. The copied history manifest is then loaded from the
 /// destination with every whole-manifest witness.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn copy_generation(
     source: &BlockStore,
     destination: &BlockStore,
@@ -1063,24 +1145,34 @@ pub(crate) fn copy_generation(
     progress: Option<&GraphCopyProgress>,
     share: Option<&ForegroundShare>,
 ) -> io::Result<GenerationCopyMetrics> {
-    let graph = GenerationGraph { source, built: &plan.built };
+    let graph = GenerationGraph {
+        source,
+        built: &plan.built,
+    };
     // Shard workers record concurrently; appends to the one record file
     // must not interleave.
     let record_lock = std::sync::Mutex::new(());
     let record = |ids: &[BlockId]| -> io::Result<()> {
-        let store_dir = store_dir.ok_or_else(|| invalid_input("closed backup store has no directory"))?;
-        let _append = record_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let store_dir =
+            store_dir.ok_or_else(|| invalid_input("closed backup store has no directory"))?;
+        let _append = record_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         append_untyped_copies(store_dir, destination.vfs_shared(), ids)
     };
     let copy = GraphCopy {
         graph: &graph,
         destination,
         present: if policy.trusted_presence {
-            PresentBlocks::Closed { untyped: &policy.untyped }
+            PresentBlocks::Closed {
+                untyped: &policy.untyped,
+            }
         } else {
             PresentBlocks::Unverified
         },
-        record_untyped: policy.record_untyped.then_some(&record as UntypedRecorder<'_>),
+        record_untyped: policy
+            .record_untyped
+            .then_some(&record as UntypedRecorder<'_>),
         stop,
         progress,
         share,
@@ -1088,7 +1180,10 @@ pub(crate) fn copy_generation(
     let mut metrics = GenerationCopyMetrics::default();
     let mut closed_untyped = Vec::new();
     if let Some(root) = plan.manifest.authority_state_root.flatten() {
-        let outcome = copy_graph(&copy, vec![GenerationNode::Entity(ReachabilityNode::root(root, true))])?;
+        let outcome = copy_graph(
+            &copy,
+            vec![GenerationNode::Entity(ReachabilityNode::root(root, true))],
+        )?;
         metrics.entity = outcome.metrics;
         closed_untyped.extend(outcome.closed_untyped);
     }
@@ -1100,11 +1195,14 @@ pub(crate) fn copy_generation(
         if history.checkpoint_sequence != plan.manifest.checkpoint_sequence
             || history.checkpoint_hash != plan.manifest.checkpoint_hash
         {
-            return Err(invalid_data("backup history root does not match snapshot manifest"));
+            return Err(invalid_data(
+                "backup history root does not match snapshot manifest",
+            ));
         }
     }
     if policy.record_untyped && !closed_untyped.is_empty() {
-        let store_dir = store_dir.ok_or_else(|| invalid_input("closed backup store has no directory"))?;
+        let store_dir =
+            store_dir.ok_or_else(|| invalid_input("closed backup store has no directory"))?;
         let closed = closed_untyped.into_iter().collect::<HashSet<_>>();
         let mut recorded = read_untyped_copies(store_dir, destination.vfs_shared().as_ref())?;
         recorded.retain(|id| !closed.contains(id));
@@ -1230,7 +1328,9 @@ pub(crate) fn plan_anchored_generation(
     };
     let pages = extended.encode_pages()?;
     let history_manifest_block_id = BlockId::for_payload(
-        pages.last().ok_or_else(|| invalid_data("history manifest has no pages"))?,
+        pages
+            .last()
+            .ok_or_else(|| invalid_data("history manifest has no pages"))?,
     );
     for page in pages {
         built.insert(BlockId::for_payload(&page), page);
@@ -1365,7 +1465,10 @@ fn write_live_marks(
     let built = HashMap::new();
     let stop = AtomicBool::new(false);
     visit_graph(
-        &GenerationGraph { source, built: &built },
+        &GenerationGraph {
+            source,
+            built: &built,
+        },
         roots,
         source.supports_concurrent_file_publication(),
         &stop,
@@ -1375,7 +1478,9 @@ fn write_live_marks(
             ids.iter().try_for_each(|id| live.insert(*id))
         },
     )?;
-    let mut live = live.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut live = live
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let metrics = live.finish()?;
     Ok((live, metrics))
 }
@@ -1500,7 +1605,9 @@ pub(crate) fn prune_backup_with_share(
             .filter(|block_id| live_for_shard.binary_search(block_id).is_err())
             .collect();
         let removed = blocks.remove_blocks(&unreachable)?;
-        let mut removal_metrics = removal_metrics.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut removal_metrics = removal_metrics
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         removal_metrics.blocks_removed = removal_metrics
             .blocks_removed
             .checked_add(removed.blocks_removed)
@@ -1511,7 +1618,9 @@ pub(crate) fn prune_backup_with_share(
             .ok_or_else(|| invalid_data("removed block byte count overflow"))?;
         Ok(())
     })?;
-    let removal_metrics = removal_metrics.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let removal_metrics = removal_metrics
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     compact_untyped_copies_to_live(backup_dir, Arc::clone(&vfs), &live)?;
     live.cleanup()?;
     vfs.remove_file(&backup_dir.join(PRUNE_MARKER))?;
@@ -1545,7 +1654,10 @@ fn compact_untyped_copies_to_live(
     let mut kept = HashSet::new();
     for (shard, ids) in by_shard {
         let live_for_shard = live.live_for_shard(shard)?;
-        kept.extend(ids.into_iter().filter(|id| live_for_shard.binary_search(id).is_ok()));
+        kept.extend(
+            ids.into_iter()
+                .filter(|id| live_for_shard.binary_search(id).is_ok()),
+        );
     }
     if kept.len() != recorded.len() {
         rewrite_untyped_copies(store_dir, vfs, &kept)?;
@@ -1604,11 +1716,11 @@ fn validate_new_restore_target(target_dir: &Path, vfs: &dyn Vfs) -> io::Result<V
     }
     for path in &entries {
         let name = path.file_name().and_then(|value| value.to_str());
-        if name != Some("LOCK")
-            && !name.is_some_and(|value| value.starts_with(RESTORE_TEMP_PREFIX))
+        if name != Some("LOCK") && !name.is_some_and(|value| value.starts_with(RESTORE_TEMP_PREFIX))
         {
             return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists, "new restore target must be empty",
+                io::ErrorKind::AlreadyExists,
+                "new restore target must be empty",
             ));
         }
     }
@@ -1712,7 +1824,14 @@ fn validate_resume_layout(target_dir: &Path, vfs: &dyn Vfs) -> io::Result<()> {
         }
         if !matches!(
             name,
-            Some(RESTORE_MARKER | "blocks" | crate::block::OVERFLOW_DIRECTORY | "active.wal" | "CONTROL" | "LOCK")
+            Some(
+                RESTORE_MARKER
+                    | "blocks"
+                    | crate::block::OVERFLOW_DIRECTORY
+                    | "active.wal"
+                    | "CONTROL"
+                    | "LOCK"
+            )
         ) {
             return Err(invalid_data("restore target contains an unexpected entry"));
         }
@@ -1738,7 +1857,7 @@ fn open_or_initialize_restore_wal(target_dir: &Path, vfs: Arc<dyn Vfs>) -> io::R
     match vfs.metadata(&target_dir.join("active.wal")) {
         Ok(FileKind::File) => {
             let log = ActiveLog::open_with_vfs(target_dir, vfs)?;
-            if !log.is_empty()? {
+            if !log.is_empty() {
                 return Err(invalid_data("restore active WAL is not empty"));
             }
             Ok(log)
@@ -1830,7 +1949,10 @@ pub(crate) fn create_incremental_backup_with_vfs(
         &destination,
         Some(backup_dir),
         &policy,
-        &GenerationCopyPlan { manifest: &manifest, built: HashMap::new() },
+        &GenerationCopyPlan {
+            manifest: &manifest,
+            built: HashMap::new(),
+        },
         &stop,
         None,
         None,
@@ -2025,7 +2147,10 @@ fn restore_latest_backup_under_lease(
                 &destination,
                 None,
                 &DestinationPolicy::unverified(),
-                &GenerationCopyPlan { manifest: &completed, built: HashMap::new() },
+                &GenerationCopyPlan {
+                    manifest: &completed,
+                    built: HashMap::new(),
+                },
                 &stop,
                 None,
                 None,
@@ -2048,7 +2173,10 @@ fn restore_latest_backup_under_lease(
         &destination,
         None,
         &policy,
-        &GenerationCopyPlan { manifest: &manifest, built: HashMap::new() },
+        &GenerationCopyPlan {
+            manifest: &manifest,
+            built: HashMap::new(),
+        },
         &stop,
         None,
         None,
@@ -2119,7 +2247,10 @@ mod tests {
         fs::write(target.path().join("user-file"), b"preserve me").unwrap();
         let error = restore_latest_backup(backup.path(), target.path()).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
-        assert_eq!(fs::read(target.path().join("user-file")).unwrap(), b"preserve me");
+        assert_eq!(
+            fs::read(target.path().join("user-file")).unwrap(),
+            b"preserve me"
+        );
         assert!(!target.path().join(RESTORE_MARKER).exists());
         assert_eq!(fs::read_dir(backup.path().join("pins")).unwrap().count(), 0);
     }
@@ -2130,12 +2261,22 @@ mod tests {
         let backup = tempfile::tempdir().unwrap();
         let target = tempfile::tempdir().unwrap();
         let mut engine = Engine::initialize(source.path()).unwrap();
-        engine.commit_transaction(b"durable", &[b"payload"]).unwrap();
+        engine
+            .commit_transaction(b"durable", &[b"payload"])
+            .unwrap();
         create_incremental_backup(&mut engine, backup.path()).unwrap();
         let vfs = RealVfs;
-        let mut lease = vfs.open(&target.path().join("LOCK"), OpenRequest {
-            read: true, write: true, create: true, ..OpenRequest::default()
-        }).unwrap();
+        let mut lease = vfs
+            .open(
+                &target.path().join("LOCK"),
+                OpenRequest {
+                    read: true,
+                    write: true,
+                    create: true,
+                    ..OpenRequest::default()
+                },
+            )
+            .unwrap();
         lease.try_lock_exclusive().unwrap();
         let error = restore_latest_backup(backup.path(), target.path()).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
@@ -2323,7 +2464,10 @@ mod tests {
         let stop = AtomicBool::new(false);
         copy_graph(
             &GraphCopy {
-                graph: &GenerationGraph { source: &source_blocks, built: &HashMap::new() },
+                graph: &GenerationGraph {
+                    source: &source_blocks,
+                    built: &HashMap::new(),
+                },
                 destination: &destination_blocks,
                 present: PresentBlocks::Unverified,
                 record_untyped: None,
@@ -2331,7 +2475,9 @@ mod tests {
                 progress: None,
                 share: None,
             },
-            root.into_iter().map(|root| GenerationNode::Entity(ReachabilityNode::root(root, true))).collect(),
+            root.into_iter()
+                .map(|root| GenerationNode::Entity(ReachabilityNode::root(root, true)))
+                .collect(),
         )
         .unwrap();
         let metrics = crate::blob::visit_blob_graph(
@@ -2520,7 +2666,9 @@ mod tests {
         let leaf = Path::new("/leaf");
         let total = bounded_directory_bytes_inner(Path::new("/root"), |directory| {
             if directory == Path::new("/root") {
-                Ok((0..directories).map(|_| (leaf.to_path_buf(), true, false, 0)).collect())
+                Ok((0..directories)
+                    .map(|_| (leaf.to_path_buf(), true, false, 0))
+                    .collect())
             } else {
                 Ok((0..files_per_directory)
                     .map(|_| (std::path::PathBuf::new(), false, true, 3))
@@ -2532,7 +2680,9 @@ mod tests {
 
         let too_many_directories = bounded_directory_bytes_inner(Path::new("/root"), |directory| {
             if directory == Path::new("/root") {
-                Ok((0..MAX_PREFLIGHT_DIRECTORIES).map(|_| (leaf.to_path_buf(), true, false, 0)).collect())
+                Ok((0..MAX_PREFLIGHT_DIRECTORIES)
+                    .map(|_| (leaf.to_path_buf(), true, false, 0))
+                    .collect())
             } else {
                 Ok(Vec::new())
             }
@@ -2589,10 +2739,7 @@ mod tests {
         assert_eq!(metrics.removed_generations, 2);
         assert_eq!(metrics.removed_blocks, 2);
         assert!(metrics.removed_block_bytes > 0);
-        assert_eq!(
-            blocks.list_block_ids(before).unwrap().len(),
-            before - 2
-        );
+        assert_eq!(blocks.list_block_ids(before).unwrap().len(), before - 2);
 
         let (_, snapshots) = open_backup(backup.path(), Arc::new(RealVfs)).unwrap();
         let retained = existing_manifests(&snapshots, &RealVfs).unwrap();
@@ -2631,9 +2778,17 @@ mod tests {
             .unwrap();
         entities.commit(write).unwrap();
         create_incremental_backup(entities.writer_engine_mut().unwrap(), backup.path()).unwrap();
-        entities.writer_engine_mut().unwrap().commit(b"two").unwrap();
+        entities
+            .writer_engine_mut()
+            .unwrap()
+            .commit(b"two")
+            .unwrap();
         create_incremental_backup(entities.writer_engine_mut().unwrap(), backup.path()).unwrap();
-        entities.writer_engine_mut().unwrap().commit(b"three").unwrap();
+        entities
+            .writer_engine_mut()
+            .unwrap()
+            .commit(b"three")
+            .unwrap();
         entities.writer_engine_mut().unwrap().checkpoint().unwrap();
         assert_eq!(
             entities
@@ -2662,8 +2817,14 @@ mod tests {
         let pin_path = backup_dir
             .join("pins")
             .join(format!("restore-{}.pin", Uuid::new_v4().simple()));
-        publish_manifest_file(&backup_dir.join("pins"), &pin_path, manifest, ".pin-new-", &RealVfs)
-            .unwrap();
+        publish_manifest_file(
+            &backup_dir.join("pins"),
+            &pin_path,
+            manifest,
+            ".pin-new-",
+            &RealVfs,
+        )
+        .unwrap();
         pin_path
     }
 
@@ -2749,7 +2910,9 @@ mod tests {
         let mut write = database.begin(7, 11).unwrap();
         for index in 0..400_u32 {
             let key = EntityKey::new(7, 11, "record", format!("{index:05}").as_bytes()).unwrap();
-            database.put(&mut write, key, vec![(index % 251) as u8; 200]).unwrap();
+            database
+                .put(&mut write, key, vec![(index % 251) as u8; 200])
+                .unwrap();
         }
         database.commit(write).unwrap();
         database.merge_overlay_fully().unwrap();
@@ -2764,7 +2927,10 @@ mod tests {
                 store,
                 None,
                 &DestinationPolicy::unverified(),
-                &GenerationCopyPlan { manifest: &manifest, built: HashMap::new() },
+                &GenerationCopyPlan {
+                    manifest: &manifest,
+                    built: HashMap::new(),
+                },
                 &AtomicBool::new(false),
                 None,
                 None,
@@ -2806,7 +2972,10 @@ mod tests {
                 violations += 1;
             }
         }
-        assert_eq!(violations, 0, "crash points left a present root without its whole graph");
+        assert_eq!(
+            violations, 0,
+            "crash points left a present root without its whole graph"
+        );
     }
 
     /// Restore reads its source and nothing else: a backup on read-only
@@ -2821,7 +2990,9 @@ mod tests {
         let mut write = database.begin(7, 11).unwrap();
         for index in 0..64_u32 {
             let key = EntityKey::new(7, 11, "record", format!("{index:03}").as_bytes()).unwrap();
-            database.put(&mut write, key, vec![index as u8; 512]).unwrap();
+            database
+                .put(&mut write, key, vec![index as u8; 512])
+                .unwrap();
         }
         database.commit(write).unwrap();
         create_incremental_backup(database.writer_engine_mut().unwrap(), backup.path()).unwrap();
@@ -2831,13 +3002,23 @@ mod tests {
         let restored = restore_latest_backup(backup.path(), target.path());
         set_tree_writable(backup.path(), true);
         let restored = restored.expect("a read-only backup restores");
-        assert_eq!(tree_witness(backup.path()), before, "restore changed its backup source");
+        assert_eq!(
+            tree_witness(backup.path()),
+            before,
+            "restore changed its backup source"
+        );
         let reopened = EntityDatabase::open(target.path()).unwrap();
-        assert_eq!(reopened.writer_engine().unwrap().state().durable_sequence, restored.durable_sequence);
+        assert_eq!(
+            reopened.writer_engine().unwrap().state().durable_sequence,
+            restored.durable_sequence
+        );
         let mut read = reopened.begin(7, 11).unwrap();
         for index in 0..64_u32 {
             let key = EntityKey::new(7, 11, "record", format!("{index:03}").as_bytes()).unwrap();
-            assert_eq!(reopened.get(&mut read, &key).unwrap(), Some(vec![index as u8; 512]));
+            assert_eq!(
+                reopened.get(&mut read, &key).unwrap(),
+                Some(vec![index as u8; 512])
+            );
         }
     }
 
@@ -2855,7 +3036,9 @@ mod tests {
         let write_all = |database: &mut EntityDatabase, generation: u8| {
             let mut write = database.begin(7, 11).unwrap();
             for key in &keys {
-                database.put(&mut write, key.clone(), vec![generation; 256]).unwrap();
+                database
+                    .put(&mut write, key.clone(), vec![generation; 256])
+                    .unwrap();
             }
             database.commit(write).unwrap();
         };
@@ -2883,7 +3066,8 @@ mod tests {
         publish_restore_marker(target.path(), &interrupted, &RealVfs).unwrap();
         {
             let (source, _) = open_backup(backup.path(), Arc::new(RealVfs)).unwrap();
-            let partial = open_or_initialize_restore_blocks(target.path(), Arc::new(RealVfs)).unwrap();
+            let partial =
+                open_or_initialize_restore_blocks(target.path(), Arc::new(RealVfs)).unwrap();
             let mut copied = 0;
             visit_entity_page_graph_with_values(
                 interrupted.authority_state_root.flatten(),
@@ -2891,7 +3075,9 @@ mod tests {
                 |id, payload| {
                     if copied < 8 {
                         copied += 1;
-                        partial.put_loose(payload).map(|written| assert_eq!(written, id))
+                        partial
+                            .put_loose(payload)
+                            .map(|written| assert_eq!(written, id))
                     } else {
                         Ok(())
                     }
@@ -2904,13 +3090,22 @@ mod tests {
         write_all(&mut database, 2);
         create_incremental_backup(database.writer_engine_mut().unwrap(), backup.path()).unwrap();
         let newest = latest_manifest();
-        assert_ne!(newest.authority_state_root, interrupted.authority_state_root);
+        assert_ne!(
+            newest.authority_state_root,
+            interrupted.authority_state_root
+        );
         let metrics = prune_backup(backup.path(), 1).unwrap();
-        assert_eq!(metrics.retained_generations, 1, "nothing pins the interrupted generation");
+        assert_eq!(
+            metrics.retained_generations, 1,
+            "nothing pins the interrupted generation"
+        );
         drop(database);
 
         let restored = restore_latest_backup(backup.path(), target.path()).unwrap();
-        assert_eq!(restored, newest, "the resumed restore continues with the newest generation");
+        assert_eq!(
+            restored, newest,
+            "the resumed restore continues with the newest generation"
+        );
         assert_eq!(fs::read_dir(backup.path().join("pins")).unwrap().count(), 0);
         let reopened = EntityDatabase::open(target.path()).unwrap();
         let mut read = reopened.begin(7, 11).unwrap();

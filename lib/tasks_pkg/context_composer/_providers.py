@@ -479,6 +479,15 @@ def _project_blocks(request: ComposeRequest, query: str) -> list[ContextBlock]:
     del query
     # Project Brain pages and Coordinator bindings are application storage.
     storage_free = bool(((request.task or {}).get('config') or {}).get('_storageFreeRuntime'))
+    # One runtime read serves presence and Project Context's Active work, so both
+    # name the same live conversations.
+    live, live_error = None, None
+    if not storage_free and request.project_enabled and request.project_path:
+        try:
+            live = _live_project_peers(request)
+        except Exception as exc:
+            logger.debug('[ContextComposer] Project presence unavailable: %s', exc)
+            live_error = exc
     if 'project_context' in request.disabled_blocks:
         context = ""
         reason = "disabled"
@@ -496,6 +505,7 @@ def _project_blocks(request: ComposeRequest, query: str) -> list[ContextBlock]:
                 request.conv_id or '',
                 user_id=request.user_id,
                 task=request.task,
+                live_conversations=live,
             )
             reason = '' if context else 'empty'
         except Exception as exc:
@@ -522,75 +532,68 @@ def _project_blocks(request: ComposeRequest, query: str) -> list[ContextBlock]:
         presence_reason = 'project_disabled'
     elif (request.project_enabled and request.project_path
             and 'project_presence' not in request.disabled_blocks):
-        try:
-            presence = _project_presence_block(request)
-            presence_reason = '' if presence else 'empty'
-        except Exception as exc:
-            logger.debug('[ContextComposer] Project presence unavailable: %s', exc)
+        if live_error is not None:
             presence_reason = 'provider_unavailable'
+        else:
+            presence = _project_presence_block(live)
+            presence_reason = '' if presence else 'empty'
     return [_block('project_context', context, reason=reason),
             _block('project_coordinator', role, reason=role_reason),
             _block('project_presence', presence, reason=presence_reason)]
 
 
-def _project_presence_block(request: ComposeRequest) -> str:
-    """Render live same-project worker status for the bound Coordinator.
+# A live peer with no runtime update for this long is shown as stalled.
+_PRESENCE_STALLED_SECONDS = 120
 
-    Reads the in-memory task runtime — no DB writes, no new storage. Returns
-    empty string for non-Coordinator conversations so the block costs nothing
-    outside its intended scope.
+
+def _live_project_peers(request: ComposeRequest) -> dict[str, dict] | None:
+    """The bound Coordinator's live same-project conversations, one task each; None elsewhere.
+
+    Reads the in-memory task runtime of this execution host — no storage. A
+    Worker's task runs in its isolated checkout, so its path is mapped to the
+    canonical project root (``canonical_work_path``). Finished tasks and the
+    Coordinator's own conversation are not presence: a settlement reaches the
+    Coordinator through its Worker polls and wakes.
     """
-    # Only the bound Coordinator conversation gets presence.
     from lib.conversations.project_coordination import ProjectCoordinationRepository
     binding = ProjectCoordinationRepository(request.user_id).read(request.project_path)
     if (binding['availability'] != 'available'
             or binding['conversationId'] != request.conv_id):
-        return ''
+        return None
     from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    from lib.tasks_pkg.workspace_delivery import canonical_work_path
     from lib.conversations.project_identity import normalize_project_path
     project_path = normalize_project_path(request.project_path)
-    peers = chat_task_runtime.snapshot_owned(user_id=request.user_id)
-    rows: list[str] = []
-    for peer in peers:
-        peer_cfg = (peer.get('config') or {})
-        peer_path = normalize_project_path(peer_cfg.get('projectPath') or '')
-        if peer_path != project_path:
-            continue
+    live: dict[str, dict] = {}
+    for peer in chat_task_runtime.snapshot_owned(user_id=request.user_id):
         conv_id = str(peer.get('convId') or '')
-        status = str(peer.get('status') or '')
-        events = peer.get('events') or []
-        updated_at = float(peer.get('updated_at') or 0)
-        now = time.time()
-        elapsed = max(0, int(now - updated_at))
-        if status in ('pending', 'running'):
-            if elapsed > 120:
-                symbol = '◐'
-                elapsed_str = f'stalled {elapsed // 60}m'
-            else:
-                symbol = '●'
-                elapsed_str = f'running {elapsed // 60}m' if elapsed >= 60 else 'running <1m'
-        elif status in ('done', 'error', 'aborted'):
-            symbol = '○'
-            elapsed_str = f'{status} {elapsed // 60}m ago'
-        else:
+        if (not conv_id or conv_id == request.conv_id
+                or str(peer.get('status') or '') not in ('pending', 'running')):
             continue
-        last_event_text = ''
-        if events:
-            last = events[-1]
-            etype = str(last.get('type') or '')
-            if etype == 'tool_call':
-                tool_name = str(last.get('name') or '')
-                last_event_text = f'last: {tool_name}'
-            elif etype == 'text':
-                text = str(last.get('text') or '')[:60].replace('\n', ' ')
-                last_event_text = f'last: "{text}"'
+        peer_path = (peer.get('config') or {}).get('projectPath') or ''
+        if normalize_project_path(canonical_work_path(peer, peer_path) if peer_path else '') != project_path:
+            continue
+        current = live.get(conv_id)
+        if current is None or float(peer.get('updated_at') or 0) > float(current.get('updated_at') or 0):
+            live[conv_id] = peer
+    return live
+
+
+def _project_presence_block(live: dict[str, dict] | None) -> str:
+    """One row per live same-project conversation.
+
+    Rows carry no elapsed minutes or last event: unchanged presence renders
+    the same bytes, so the composer reuses it instead of re-sending it.
+    """
+    rows: list[str] = []
+    now = time.time()
+    for conv_id, peer in sorted((live or {}).items()):
+        stalled = now - float(peer.get('updated_at') or 0) > _PRESENCE_STALLED_SECONDS
         peer_meta = peer.get('meta')
         title = str(peer_meta.get('title') or '') if isinstance(peer_meta, dict) else ''
         label = f'"{title}"' if title else conv_id
-        parts = [f'{symbol} {label} ({conv_id}) — {elapsed_str}']
-        if last_event_text:
-            parts.append(f', {last_event_text}')
-        rows.append(''.join(parts))
+        state = ('stalled (no update for over 2 minutes)' if stalled else 'running')
+        rows.append(f"{'◐' if stalled else '●'} {label} ({conv_id}) — {state}")
     if not rows:
         return ''
     return '[Project Presence]\n' + '\n'.join(rows)

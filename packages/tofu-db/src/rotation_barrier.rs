@@ -50,8 +50,12 @@ impl RotationBarrier {
     /// Success or a terminal failure releases request waiters. A transient
     /// defer only signals the driver's ordinary wake generation.
     pub(crate) fn signal_completion(&self) {
-        let mut guard = self.generation.lock().unwrap_or_else(|error| error.into_inner());
-        self.completed.fetch_add(1, std::sync::atomic::Ordering::Release);
+        let mut guard = self
+            .generation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.completed
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
         *guard = guard.wrapping_add(1);
         drop(guard);
         self.condvar.notify_all();
@@ -59,9 +63,13 @@ impl RotationBarrier {
     }
 
     pub(crate) fn park_until_completed(&self, since: u64, slice: Duration) -> u64 {
-        let guard = self.generation.lock().unwrap_or_else(|error| error.into_inner());
-        let (_guard, _) = self.completion_condvar.wait_timeout_while(guard, slice,
-            |_| self.completed_generation() == since)
+        let guard = self
+            .generation
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (_guard, _) = self
+            .completion_condvar
+            .wait_timeout_while(guard, slice, |_| self.completed_generation() == since)
             .unwrap_or_else(|error| error.into_inner());
         self.completed_generation()
     }
@@ -97,7 +105,8 @@ mod tests {
         let waiter = Arc::clone(&barrier);
         let (tx, rx) = std::sync::mpsc::channel();
         let thread = std::thread::spawn(move || {
-            tx.send(waiter.park_until_completed(since, Duration::from_secs(5))).unwrap();
+            tx.send(waiter.park_until_completed(since, Duration::from_secs(5)))
+                .unwrap();
         });
         barrier.signal_install();
         assert!(rx.recv_timeout(Duration::from_millis(20)).is_err());

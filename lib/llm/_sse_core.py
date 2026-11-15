@@ -568,9 +568,7 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
             AnthropicSSETranslator, anthropic_messages_url,
             openai_body_to_anthropic,
         )
-        from lib.llm.catpaw_gateway import (
-            apply_catpaw_shape, is_catpaw_base_url,
-        )
+        from lib.llm.gateway_shape import apply_gateway_anthropic_shape
         _model_name = body.get('model', '')
         body = openai_body_to_anthropic(body)
         wire_translator = AnthropicSSETranslator(model=_model_name)
@@ -583,8 +581,8 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
             # the translator so response tool names are restored.
             body, _cloak_reverse = apply_claude_cloak(body)
             wire_translator.tool_name_reverse = _cloak_reverse
-        elif is_catpaw_base_url(base_url):
-            body = apply_catpaw_shape(body)
+        else:
+            body = apply_gateway_anthropic_shape(body, base_url)
         logger.debug('%s [Anthropic] Translated request for Messages API', log_prefix)
     else:
         from lib.llm.openai_outbound import openai_body_to_chat
@@ -662,9 +660,9 @@ def prepare_request(body, *, attempt=0, log_prefix='', api_key=None,
             # Subscription tokens are rejected on Authorization: Bearer
             # (401 since 2026); the token must ride x-api-key only.
             hdrs.pop('Authorization', None)
-        elif is_catpaw_base_url(base_url):
-            from lib.llm.catpaw_gateway import catpaw_headers
-            hdrs.update(catpaw_headers())  # gateway rejects missing/empty
+        else:
+            from lib.llm.gateway_shape import gateway_anthropic_headers
+            hdrs.update(gateway_anthropic_headers(base_url))
     else:
         hdrs = headers()
         if api_key:
@@ -1080,7 +1078,7 @@ class SSEAccumulator:
         # calls), or (b) the model/gateway emitting the concatenated name
         # itself. The existing raw_sse_anomaly.log could NOT decide it: its
         # tool_calls samples are 100% ``toolu_bdrk_`` (bedrock line), zero
-        # frames from the sankuai OpenAI-compat line where the incident
+        # frames from the example-corp OpenAI-compat line where the incident
         # happened. So sample the shape here, on whatever line is live.
         # These counters change NO behaviour.
         self._tc_obs_index_absent = 0
@@ -1566,7 +1564,7 @@ class SSEAccumulator:
         # and the opaque Claude signature, in separate chunks:
         #   [{"type":"thinking","thinking":"…"}]    ← text delta
         #   [{"type":"thinking","signature":"…"}]   ← signature (once per turn)
-        # The Meituan/sankuai OpenAI-compat gateway uses exactly this shape
+        # The YourProvider/example-corp OpenAI-compat gateway uses exactly this shape
         # for Claude models, so harvest both keys here.
         rd_parts = delta.get('reasoning_details')
         if isinstance(rd_parts, list):
@@ -2400,7 +2398,7 @@ class SSEAccumulator:
             )
 
         # Diagnostics: tool_calls finish reason with ZERO payload
-        # (2026-08-06 kimi-k3/sankuai incident, conv msh3qeplzneph5 R3).
+        # (2026-08-06 kimi-k3/example-corp incident, conv msh3qeplzneph5 R3).
         # The gateway closed the stream cleanly reporting
         # finish_reason=tool_calls, yet not one tool_call delta accumulated
         # — the model's tool calls were lost UPSTREAM. Downstream this used

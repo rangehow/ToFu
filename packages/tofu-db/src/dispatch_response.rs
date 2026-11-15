@@ -31,16 +31,25 @@ impl DispatchedResponse {
         }
     }
     pub(crate) fn cache_admission(&self) -> Option<crate::query_result_cache::Admission> {
-        if self.canonical.is_some() { self.snapshot_stable } else { None }
+        if self.canonical.is_some() {
+            self.snapshot_stable
+        } else {
+            None
+        }
     }
     #[cfg(test)]
-    pub(crate) fn snapshot_cacheable(&self) -> bool { self.cache_admission().is_some() }
+    pub(crate) fn snapshot_cacheable(&self) -> bool {
+        self.cache_admission().is_some()
+    }
     pub(crate) fn snapshot_cache_copy(&self) -> Option<IrResponse> {
-        self.cache_admission().map(|admission|
-            IrResponse::from_snapshot_cache(self.response.payload.clone(), admission))
+        self.cache_admission().map(|admission| {
+            IrResponse::from_snapshot_cache(self.response.payload.clone(), admission)
+        })
     }
     pub(crate) fn canonical_payload(&self) -> Option<&[u8]> {
-        self.canonical.as_ref().map(|_| self.response.payload.as_slice())
+        self.canonical
+            .as_ref()
+            .map(|_| self.response.payload.as_slice())
     }
     pub(crate) fn into_response(self) -> Response {
         self.response
@@ -48,10 +57,16 @@ impl DispatchedResponse {
 }
 impl From<Response> for DispatchedResponse {
     fn from(response: Response) -> Self {
-        Self { response, canonical: None, snapshot_stable: None }
+        Self {
+            response,
+            canonical: None,
+            snapshot_stable: None,
+        }
     }
 }
 impl std::ops::Deref for DispatchedResponse {
     type Target = Response;
-    fn deref(&self) -> &Self::Target { &self.response }
+    fn deref(&self) -> &Self::Target {
+        &self.response
+    }
 }

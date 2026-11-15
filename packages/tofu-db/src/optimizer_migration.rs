@@ -21,13 +21,12 @@ use std::io;
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MIGRATION_SESSION_MAX_PAGE_ROWS,
-    OPTIMIZER_ACTION_ACTIVE_APPLIED_INDEX_NAMESPACE, OPTIMIZER_ACTION_APPLIED_INDEX_NAMESPACE,
-    OPTIMIZER_ACTION_COUNT_NAMESPACE, OPTIMIZER_ACTION_DOCUMENT_NAMESPACE,
-    OPTIMIZER_ACTION_EXPIRY_INDEX_NAMESPACE, OPTIMIZER_ACTION_PROPOSAL_INDEX_NAMESPACE,
-    OPTIMIZER_PROPOSAL_COUNT_NAMESPACE, OPTIMIZER_PROPOSAL_CREATED_INDEX_NAMESPACE,
-    OPTIMIZER_PROPOSAL_DOCUMENT_NAMESPACE, OPTIMIZER_PROPOSAL_STATUS_INDEX_NAMESPACE,
-    OPTIMIZER_PROPOSAL_STATUS_NAMESPACE,
+    MIGRATION_SESSION_MAX_PAGE_ROWS, OPTIMIZER_ACTION_ACTIVE_APPLIED_INDEX_NAMESPACE,
+    OPTIMIZER_ACTION_APPLIED_INDEX_NAMESPACE, OPTIMIZER_ACTION_COUNT_NAMESPACE,
+    OPTIMIZER_ACTION_DOCUMENT_NAMESPACE, OPTIMIZER_ACTION_EXPIRY_INDEX_NAMESPACE,
+    OPTIMIZER_ACTION_PROPOSAL_INDEX_NAMESPACE, OPTIMIZER_PROPOSAL_COUNT_NAMESPACE,
+    OPTIMIZER_PROPOSAL_CREATED_INDEX_NAMESPACE, OPTIMIZER_PROPOSAL_DOCUMENT_NAMESPACE,
+    OPTIMIZER_PROPOSAL_STATUS_INDEX_NAMESPACE, OPTIMIZER_PROPOSAL_STATUS_NAMESPACE,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -359,7 +358,9 @@ fn restore_proposal(
         };
     }
     let count = read_count(database, transaction, OPTIMIZER_PROPOSAL_COUNT_NAMESPACE)?;
-    let next_count = count.checked_add(1).ok_or_else(|| invalid_data("optimizer owner count overflow"))?;
+    let next_count = count
+        .checked_add(1)
+        .ok_or_else(|| invalid_data("optimizer owner count overflow"))?;
     let mut stored = serde_json::to_value(&proposal).unwrap();
     stored
         .as_object_mut()
@@ -438,7 +439,9 @@ fn restore_action(
         return Err(invalid_input("Optimizer proposal does not exist"));
     }
     let count = read_count(database, transaction, OPTIMIZER_ACTION_COUNT_NAMESPACE)?;
-    let next_count = count.checked_add(1).ok_or_else(|| invalid_data("optimizer owner count overflow"))?;
+    let next_count = count
+        .checked_add(1)
+        .ok_or_else(|| invalid_data("optimizer owner count overflow"))?;
     let mut stored = serde_json::to_value(&action).unwrap();
     stored
         .as_object_mut()

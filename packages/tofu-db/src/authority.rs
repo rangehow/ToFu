@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 #[path = "authority_query_view.rs"]
 mod query_view;
-pub(crate) use query_view::PublishedQueryView;
 pub use query_view::PublishedQueryObserver;
+pub(crate) use query_view::PublishedQueryView;
 
 use crate::authority_gc::{
     AuthorityGarbageCollectionBudget, AuthorityGarbageCollectionMetrics,
@@ -179,7 +179,9 @@ impl AuthorityTransaction {
         self.system_task_changes.note(system_key, held);
     }
 
-    pub(crate) fn note_worker_queue_change(&mut self) { self.worker_queue_changed = true; }
+    pub(crate) fn note_worker_queue_change(&mut self) {
+        self.worker_queue_changed = true;
+    }
     pub(crate) fn note_worker_cancellation(&mut self, task_id: &str) {
         self.worker_cancelled_tasks.insert(task_id.to_owned());
     }
@@ -221,8 +223,7 @@ impl AuthorityTransaction {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[derive(serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationCommitNotice {
     pub user_id: u64,
@@ -279,9 +280,11 @@ pub(crate) struct BackupAnchorCapture {
     pub source: Arc<crate::block::BlockStore>,
 }
 
-pub use crate::canonical_json_bytes::cache::{CanonicalProofCacheObserver, CanonicalProofCacheMetrics};
+pub use crate::canonical_json_bytes::cache::{
+    CanonicalProofCacheMetrics, CanonicalProofCacheObserver,
+};
 
-pub use crate::blob::decode_cache::{DecodedChunkCacheObserver, DecodedChunkCacheMetrics};
+pub use crate::blob::decode_cache::{DecodedChunkCacheMetrics, DecodedChunkCacheObserver};
 
 pub struct AuthorityDatabase {
     published_query_options: Option<Arc<std::sync::RwLock<query_view::ReadOptions>>>,
@@ -296,12 +299,8 @@ pub struct AuthorityDatabase {
     foreground_admissions: std::sync::Arc<std::sync::atomic::AtomicU64>,
     logical_outbox: Option<LogicalOutboxRuntime>,
     timer_live_capacity: usize,
-    online_gc: std::sync::Mutex<
-        Option<crate::authority_gc_online::OnlineGarbageCollectionHandle>,
-    >,
-    backup_anchors: std::sync::Mutex<
-        Vec<(u64, crate::online_backup::BackupAnchorProjection)>,
-    >,
+    online_gc: std::sync::Mutex<Option<crate::authority_gc_online::OnlineGarbageCollectionHandle>>,
+    backup_anchors: std::sync::Mutex<Vec<(u64, crate::online_backup::BackupAnchorProjection)>>,
     search_invalidations: std::sync::Mutex<Option<Arc<crate::search_dirty::SearchInvalidations>>>,
     resident_projections: Arc<crate::turn::projection_residency::ResidentProjections>,
     system_task_holds: Arc<crate::scheduler::SystemTaskHolds>,
@@ -340,7 +339,9 @@ fn decode_counter(value: Option<Vec<u8>>, name: &str) -> io::Result<u64> {
 
 impl AuthorityDatabase {
     /// Committed live Turn projections shared by the writer and its replicas.
-    pub(crate) fn resident_projections(&self) -> &crate::turn::projection_residency::ResidentProjections {
+    pub(crate) fn resident_projections(
+        &self,
+    ) -> &crate::turn::projection_residency::ResidentProjections {
         &self.resident_projections
     }
 
@@ -355,7 +356,8 @@ impl AuthorityDatabase {
     }
 
     pub(crate) fn note_foreground_admission(&self) {
-        self.foreground_admissions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.foreground_admissions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn initialize(data_dir: &Path) -> io::Result<Self> {
@@ -410,10 +412,13 @@ impl AuthorityDatabase {
         data_dir: &Path,
         key: Option<crate::at_rest::AtRestKey>,
     ) -> io::Result<Self> {
-        let engine = crate::engine_log::lifecycle_step("startup_timing", "engine_open",
-            || Engine::open_with_key(data_dir, key))?;
-        let entities = crate::engine_log::lifecycle_step("startup_timing", "entity_overlay_replay",
-            || EntityDatabase::open_engine(engine))?;
+        let engine = crate::engine_log::lifecycle_step("startup_timing", "engine_open", || {
+            Engine::open_with_key(data_dir, key)
+        })?;
+        let entities =
+            crate::engine_log::lifecycle_step("startup_timing", "entity_overlay_replay", || {
+                EntityDatabase::open_engine(engine)
+            })?;
         Ok(Self {
             entities,
             event_read_epoch: Uuid::new_v4(),
@@ -491,7 +496,9 @@ impl AuthorityDatabase {
     }
 
     pub(crate) fn open_with_vfs_until(
-        data_dir: &Path, vfs: Arc<dyn Vfs>, should_stop: &dyn Fn() -> bool,
+        data_dir: &Path,
+        vfs: Arc<dyn Vfs>,
+        should_stop: &dyn Fn() -> bool,
     ) -> io::Result<Self> {
         let engine = Engine::open_with_vfs_until(data_dir, vfs, should_stop)?;
         let entities = EntityDatabase::open_engine(engine)?;
@@ -598,8 +605,6 @@ impl AuthorityDatabase {
         Ok(())
     }
 
-
-
     /// Resize the hot-data caches from the probed launch budget. Both caches
     /// live in this process's own heap (unreclaimable on swapless hosts), so
     /// keeping the live working set here instead of in the kernel page cache
@@ -613,20 +618,38 @@ impl AuthorityDatabase {
             .set_cache_capacity_bytes(block_cache_bytes)?;
         self.entities
             .set_page_cache_capacity_bytes(entity_page_cache_bytes)?;
-        self.canonical_json_cache.configure_capacity(block_cache_bytes / crate::canonical_json_bytes::cache::HOT_CACHE_BUDGET_DIVISOR);
-        self.decoded_chunk_cache.configure_capacity(block_cache_bytes / crate::blob::decode_cache::HOT_CACHE_BUDGET_DIVISOR);
+        self.canonical_json_cache.configure_capacity(
+            block_cache_bytes / crate::canonical_json_bytes::cache::HOT_CACHE_BUDGET_DIVISOR,
+        );
+        self.decoded_chunk_cache.configure_capacity(
+            block_cache_bytes / crate::blob::decode_cache::HOT_CACHE_BUDGET_DIVISOR,
+        );
         if let Some(cache) = &self.published_query_results {
-            cache.configure(block_cache_bytes / crate::canonical_json_bytes::cache::HOT_CACHE_BUDGET_DIVISOR);
+            cache.configure(
+                block_cache_bytes / crate::canonical_json_bytes::cache::HOT_CACHE_BUDGET_DIVISOR,
+            );
         }
         Ok(())
     }
 
-    pub(crate) fn configure_blob_codecs(&self, snapshot: crate::resource_probe::LaunchResourceSnapshot) -> io::Result<()> {
-        self.entities.writer_engine()?.shared_blob_encoder().configure(snapshot)
+    pub(crate) fn configure_blob_codecs(
+        &self,
+        snapshot: crate::resource_probe::LaunchResourceSnapshot,
+    ) -> io::Result<()> {
+        self.entities
+            .writer_engine()?
+            .shared_blob_encoder()
+            .configure(snapshot)
     }
 
-    pub(crate) fn blob_codec_pool_observer(&self) -> io::Result<crate::blob::BlobCodecPoolObserver> {
-        Ok(self.entities.writer_engine()?.shared_blob_encoder().observer())
+    pub(crate) fn blob_codec_pool_observer(
+        &self,
+    ) -> io::Result<crate::blob::BlobCodecPoolObserver> {
+        Ok(self
+            .entities
+            .writer_engine()?
+            .shared_blob_encoder()
+            .observer())
     }
 
     /// Applies the probe-derived write-path budgets at open: the overlay
@@ -652,21 +675,22 @@ impl AuthorityDatabase {
         Ok(())
     }
 
-    pub(crate) fn timer_live_capacity(&self) -> usize {
-        self.timer_live_capacity
-    }
-
     pub fn compact_history(
         &mut self,
         maximum_retained_segments: usize,
     ) -> io::Result<HistoryCompactionMetrics> {
         if maximum_retained_segments == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "history retained-segment bound is invalid"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "history retained-segment bound is invalid",
+            ));
         }
         // Explicit maintenance may materialize pending deltas; automatic
         // maintenance instead respects the replay fence without a full merge.
         self.entities.merge_overlay_fully()?;
-        self.entities.writer_engine_mut()?.compact_history(maximum_retained_segments)
+        self.entities
+            .writer_engine_mut()?
+            .compact_history(maximum_retained_segments)
     }
 
     pub fn history_routing(&mut self) -> io::Result<Option<crate::engine::HistoryRouting>> {
@@ -686,30 +710,44 @@ impl AuthorityDatabase {
             .expect("test engine always has the writer persona")
     }
 
-    pub(crate) fn try_prepare_history_compaction(&mut self, maximum: usize)
-        -> io::Result<Option<crate::engine::PreparedHistoryCompaction>> {
+    pub(crate) fn try_prepare_history_compaction(
+        &mut self,
+        maximum: usize,
+    ) -> io::Result<Option<crate::engine::PreparedHistoryCompaction>> {
         if maximum == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "history retained-segment bound is invalid"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "history retained-segment bound is invalid",
+            ));
         }
         let first = self.entities.overlay_replay_first_sequence()?;
         let engine = self.entities.writer_engine_mut()?;
         let retained = engine.history_retention_for_replay(maximum, first);
         let count = engine.history_segment_count();
-        if count <= retained { return Ok(None); }
+        if count <= retained {
+            return Ok(None);
+        }
         // This automatic publisher shares the CONTROL lane with WAL rotation.
         // Retire only a launch-sized source slice, then release the lane so
         // rotation can progress between rounds. Explicit operator compaction
         // retains its complete requested suffix behavior.
         let slice = (engine.checkpoint_materialize_batch_bytes
-            / crate::history::HISTORY_SEGMENT_MAX_BYTES as u64).max(1) as usize;
+            / crate::history::HISTORY_SEGMENT_MAX_BYTES as u64)
+            .max(1) as usize;
         engine.try_prepare_history_compaction(retained.max(count.saturating_sub(slice)))
     }
 
-    pub(crate) fn finish_history_compaction(&mut self, prepared: crate::engine::PreparedHistoryCompaction,
-        outcome: io::Result<crate::engine::HistoryCompactionOutcome>) -> io::Result<HistoryCompactionMetrics> {
-        self.entities.writer_engine_mut()?.finish_history_compaction(prepared, outcome)
+    pub(crate) fn finish_history_compaction(
+        &mut self,
+        prepared: crate::engine::PreparedHistoryCompaction,
+        outcome: io::Result<crate::engine::HistoryCompactionOutcome>,
+    ) -> io::Result<HistoryCompactionMetrics> {
+        self.entities
+            .writer_engine_mut()?
+            .finish_history_compaction(prepared, outcome)
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_completed_pack_if_capacity(&mut self) -> io::Result<bool> {
         self.entities
             .writer_engine_mut()?
@@ -721,7 +759,9 @@ impl AuthorityDatabase {
     pub(crate) fn try_prepare_pack_adoption(
         &mut self,
     ) -> io::Result<crate::engine::PackAdoptionPreparation> {
-        self.entities.writer_engine_mut()?.try_prepare_pack_adoption()
+        self.entities
+            .writer_engine_mut()?
+            .try_prepare_pack_adoption()
     }
 
     /// Mutex-free catalog publication, phase 3: installs the published
@@ -740,14 +780,21 @@ impl AuthorityDatabase {
         &mut self,
         durability: crate::wal::WalDurability,
     ) -> io::Result<()> {
-        self.entities.writer_engine_mut()?.set_wal_durability(durability)
+        self.entities
+            .writer_engine_mut()?
+            .set_wal_durability(durability)
     }
 
     /// Attaches a daemon-owned barrier coordinator: commits of either tier
     /// queue their frame, post their witness and wait outside the authority
     /// mutex (group-barrier pipelining).
-    pub(crate) fn attach_wal_barrier(&mut self, barrier: &crate::wal::WalBarrier) -> io::Result<()> {
-        self.entities.writer_engine_mut()?.attach_wal_barrier(barrier)
+    pub(crate) fn attach_wal_barrier(
+        &mut self,
+        barrier: &crate::wal::WalBarrier,
+    ) -> io::Result<()> {
+        self.entities
+            .writer_engine_mut()?
+            .attach_wal_barrier(barrier)
     }
 
     /// Capture under the authority mutex, wait outside it before publishing a
@@ -824,6 +871,7 @@ impl AuthorityDatabase {
     }
 
     /// Installs the checkpoint tail after the unlocked segment encoding.
+    #[cfg(test)]
     pub(crate) fn finish_rotation_checkpoint(
         &mut self,
         snapshot: Box<crate::engine::PreparedRotationCheckpoint>,
@@ -839,7 +887,9 @@ impl AuthorityDatabase {
         snapshot: Box<crate::engine::PreparedRotationCheckpoint>,
         outcome: io::Result<crate::engine::RotationSegmentOutcome>,
     ) -> io::Result<crate::engine::RotationPublication> {
-        self.entities.writer_engine_mut()?.prepare_rotation_publication(snapshot, outcome)
+        self.entities
+            .writer_engine_mut()?
+            .prepare_rotation_publication(snapshot, outcome)
     }
 
     pub(crate) fn finish_rotation_publication(
@@ -847,7 +897,9 @@ impl AuthorityDatabase {
         prepared: Box<crate::engine::PreparedRotationPublication>,
         outcome: io::Result<()>,
     ) -> io::Result<u64> {
-        self.entities.writer_engine_mut()?.finish_rotation_publication(prepared, outcome)
+        self.entities
+            .writer_engine_mut()?
+            .finish_rotation_publication(prepared, outcome)
     }
 
     /// The WAL worker must inherit the authority's actual VFS capabilities.
@@ -1008,17 +1060,17 @@ impl AuthorityDatabase {
             (capture, projection)
         };
         let anchor_token = self.register_backup_anchor(projection);
-        Ok(BackupAnchorCapture { anchor_token, ..capture })
+        Ok(BackupAnchorCapture {
+            anchor_token,
+            ..capture
+        })
     }
 
     /// Best-effort wipe of the online collector's spill runs; used by the
     /// driver on graceful stop so no GC scratch survives a clean shutdown.
     pub(crate) fn wipe_online_gc_work_directories(&self) -> io::Result<()> {
         let engine = self.entities.writer_engine()?;
-        crate::authority_gc_online::wipe_work_directories(
-            engine.data_dir(),
-            engine.vfs().as_ref(),
-        );
+        crate::authority_gc_online::wipe_work_directories(engine.data_dir(), engine.vfs().as_ref());
         Ok(())
     }
 
@@ -1061,7 +1113,10 @@ impl AuthorityDatabase {
     /// Captures one online-GC epoch's mark inputs under the caller's
     /// authority-mutex hold and re-arms the relink fence in the same hold
     /// (docs/TOFUDB_ONLINE_GC.md rules S2/S7/S9). Never performs file I/O.
-    pub(crate) fn online_gc_capture(&self, maximum_snapshot_bytes: u64) -> io::Result<OnlineGcCapture> {
+    pub(crate) fn online_gc_capture(
+        &self,
+        maximum_snapshot_bytes: u64,
+    ) -> io::Result<OnlineGcCapture> {
         let engine = self.entities.writer_engine()?;
         let mut pinned_roots: Vec<crate::block::BlockId> = self
             .entities
@@ -1075,17 +1130,21 @@ impl AuthorityDatabase {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         pinned_roots.extend(anchors.iter().filter_map(|(_, anchor)| anchor.root));
-        let mut snapshot = engine.capture_online_gc_mark_snapshot_off_authority(pinned_roots, maximum_snapshot_bytes)?;
+        let mut snapshot = engine
+            .capture_online_gc_mark_snapshot_off_authority(pinned_roots, maximum_snapshot_bytes)?;
         for (_, anchor) in anchors.iter() {
             snapshot
                 .history_segments
                 .extend(anchor.history_segments.iter().cloned());
-            snapshot.history_payload_metadata_ids
+            snapshot
+                .history_payload_metadata_ids
                 .extend(anchor.history_payload_metadata_ids.iter().copied());
             if let Some(manifest_id) = anchor.history_manifest_block_id {
                 snapshot.committed_block_ids.push(manifest_id);
             }
-            snapshot.committed_block_ids.extend(anchor.tail_block_ids.iter().copied());
+            snapshot
+                .committed_block_ids
+                .extend(anchor.tail_block_ids.iter().copied());
         }
         let snapshot = snapshot;
         let blocks = engine.block_store_shared();
@@ -1123,7 +1182,9 @@ impl AuthorityDatabase {
             return Ok(crate::block::LooseRemoval::Kept);
         }
         engine.require_control_slots_name_only_current_roots()?;
-        engine.block_store().remove_block_noting_absent(victim, unlinked)
+        engine
+            .block_store()
+            .remove_block_noting_absent(victim, unlinked)
     }
 
     /// `online_gc_delete_loose_victim` for each of `confirmed` in one call,
@@ -1174,7 +1235,9 @@ impl AuthorityDatabase {
     pub(crate) fn online_gc_orphan_observation_inputs(
         &self,
     ) -> io::Result<(std::collections::BTreeSet<Uuid>, bool)> {
-        self.entities.writer_engine()?.online_orphan_observation_inputs()
+        self.entities
+            .writer_engine()?
+            .online_orphan_observation_inputs()
     }
 
     /// Removes one twice-observed orphan segment file under the caller's
@@ -1262,7 +1325,10 @@ impl AuthorityDatabase {
         // Orphan fixtures need a real on-disk loose block that GC planning
         // can discover by scanning shards; the deferred write path stages
         // payloads in memory only, so it cannot model an orphan.
-        self.entities.writer_engine()?.block_store().put_loose(payload)
+        self.entities
+            .writer_engine()?
+            .block_store()
+            .put_loose(payload)
     }
 
     #[cfg(test)]
@@ -1393,11 +1459,15 @@ impl AuthorityDatabase {
         maximum_rows: usize,
     ) -> io::Result<IntegrationCheckoutBackfillProgress> {
         if tenant_id == 0 || owner_user_id == 0 {
-            return Err(invalid_input("checkout backfill scope IDs must be positive"));
+            return Err(invalid_input(
+                "checkout backfill scope IDs must be positive",
+            ));
         }
         let mut transaction = self.begin_with_identity_claim_scopes(tenant_id, owner_user_id)?;
         let batch = crate::integration_workspace::backfill_checkout_claims(
-            self, &mut transaction, maximum_rows,
+            self,
+            &mut transaction,
+            maximum_rows,
         )?;
         let durable_sequence = if batch.changed {
             self.commit(transaction)?.transaction_sequence
@@ -1868,9 +1938,14 @@ impl AuthorityDatabase {
             if expected_next_sequence != pending_next {
                 return Err(conflict("pending stream expected-position witness changed"));
             }
-            pending.events.len().checked_add(events.len())
+            pending
+                .events
+                .len()
+                .checked_add(events.len())
                 .and_then(|count| u32::try_from(count).ok())
-                .ok_or_else(|| invalid_input("pending stream event count exceeds its u32 representation"))?;
+                .ok_or_else(|| {
+                    invalid_input("pending stream event count exceeds its u32 representation")
+                })?;
             pending.events.extend(events);
             transaction.stream_bytes = next_stream_bytes;
             transaction.has_business_mutation = true;
@@ -1970,8 +2045,12 @@ impl AuthorityDatabase {
             .iter()
             .filter(|block_id| !transaction.staged_blob_block_ids.contains(block_id))
             .count();
-        if transaction.staged_blob_block_ids.len().checked_add(additional_block_ids)
-            .and_then(|count| u32::try_from(count).ok()).is_none()
+        if transaction
+            .staged_blob_block_ids
+            .len()
+            .checked_add(additional_block_ids)
+            .and_then(|count| u32::try_from(count).ok())
+            .is_none()
         {
             return Err(invalid_input(
                 "authority staged blob count exceeds its u32 representation",
@@ -2074,7 +2153,8 @@ impl AuthorityDatabase {
     }
 
     pub(crate) fn canonicalize_verified_blob<'a>(
-        &self, blob: &'a crate::blob::VerifiedBlobBytes,
+        &self,
+        blob: &'a crate::blob::VerifiedBlobBytes,
     ) -> Result<crate::canonical_json_bytes::CanonicalJsonBody<'a>, serde_json::Error> {
         self.canonical_json_cache.canonicalize_blob(blob)
     }
@@ -2085,7 +2165,14 @@ impl AuthorityDatabase {
         owner_user_id: u64,
         reference: BlobReference,
     ) -> io::Result<BlobReader<'_>> {
-        BlobReader::open(self.blob_read_backend(), self.entities.commit_witness()?, tenant_id, owner_user_id, reference).map(|reader| reader.with_decode_cache(&self.decoded_chunk_cache))
+        BlobReader::open(
+            self.blob_read_backend(),
+            self.entities.commit_witness()?,
+            tenant_id,
+            owner_user_id,
+            reference,
+        )
+        .map(|reader| reader.with_decode_cache(&self.decoded_chunk_cache))
     }
 
     pub(crate) fn reachable_blob_reader(
@@ -2094,7 +2181,13 @@ impl AuthorityDatabase {
         owner_user_id: u64,
         reference: BlobReference,
     ) -> io::Result<BlobReader<'_>> {
-        BlobReader::open_reachable(self.blob_read_backend(), tenant_id, owner_user_id, reference).map(|reader| reader.with_decode_cache(&self.decoded_chunk_cache))
+        BlobReader::open_reachable(
+            self.blob_read_backend(),
+            tenant_id,
+            owner_user_id,
+            reference,
+        )
+        .map(|reader| reader.with_decode_cache(&self.decoded_chunk_cache))
     }
 
     fn outbox_counter(
@@ -2157,7 +2250,9 @@ impl AuthorityDatabase {
         transaction: &mut AuthorityTransaction,
         capture: LogicalOutboxCapture,
     ) -> io::Result<u64> {
-        if transaction.logical_outbox_record.is_some() || transaction.deferred_outbox_capture.is_some() {
+        if transaction.logical_outbox_record.is_some()
+            || transaction.deferred_outbox_capture.is_some()
+        {
             return Err(invalid_input(
                 "authority transaction contains more than one logical outbox record",
             ));
@@ -2566,7 +2661,11 @@ impl AuthorityDatabase {
                 )?;
                 let mut response = Vec::new();
                 while let Some(chunk) = reader.next_chunk()? {
-                    response.try_reserve(chunk.len()).map_err(|_| crate::resource_exhaustion::reservation_failure("receipt materialization allocation failed"))?;
+                    response.try_reserve(chunk.len()).map_err(|_| {
+                        crate::resource_exhaustion::reservation_failure(
+                            "receipt materialization allocation failed",
+                        )
+                    })?;
                     response.extend_from_slice(&chunk);
                     if response.len() as u64 > reference.logical_bytes {
                         return Err(io::Error::new(
@@ -2751,11 +2850,16 @@ impl AuthorityDatabase {
         self.entities.merge_overlay()
     }
 
-    pub(crate) fn prepare_entity_overlay_merge(&self) -> io::Result<Option<crate::entity::OverlayMergePreparation>> {
+    pub(crate) fn prepare_entity_overlay_merge(
+        &self,
+    ) -> io::Result<Option<crate::entity::OverlayMergePreparation>> {
         self.entities.prepare_overlay_merge()
     }
 
-    pub(crate) fn finish_entity_overlay_merge(&mut self, prepared: crate::entity::PreparedOverlayMerge) -> io::Result<bool> {
+    pub(crate) fn finish_entity_overlay_merge(
+        &mut self,
+        prepared: crate::entity::PreparedOverlayMerge,
+    ) -> io::Result<bool> {
         self.entities.finish_overlay_merge(prepared)
     }
 
@@ -2771,17 +2875,14 @@ impl AuthorityDatabase {
     /// reported by scans.
     pub(crate) fn take_entity_tombstone_compaction_hint(
         &self,
-    ) -> io::Result<Option<(Vec<u8>, Vec<u8>, u32)>> {
+    ) -> io::Result<Option<crate::entity::TombstoneCompactionHint>> {
         self.entities.take_tombstone_compaction_hint()
     }
 
     /// Requeue one compaction window (another scope's hint or a partially
     /// swept window) into the advisory registry.
     #[cfg(test)]
-    pub(crate) fn set_entity_tombstone_reclaim_override_for_test(
-        &mut self,
-        enabled: Option<bool>,
-    ) {
+    pub(crate) fn set_entity_tombstone_reclaim_override_for_test(&mut self, enabled: Option<bool>) {
         self.entities
             .set_tombstone_reclaim_override_for_test(enabled);
     }
@@ -2839,7 +2940,11 @@ impl AuthorityDatabase {
 
     #[cfg(test)]
     pub(crate) fn history_blocks_for_test(&self) -> Vec<crate::block::BlockId> {
-        self.entities.writer_engine().unwrap().history_segment_block_ids().to_vec()
+        self.entities
+            .writer_engine()
+            .unwrap()
+            .history_segment_block_ids()
+            .to_vec()
     }
 
     /// Retire the active WAL window through the engine's own checkpoint
@@ -2855,19 +2960,27 @@ impl AuthorityDatabase {
     /// (`Engine::retire_wal_window_for_stop`); the caller merges the overlay
     /// first and has stopped every driver that shares the publication lane.
     pub(crate) fn retire_wal_window_for_stop(&mut self) -> io::Result<()> {
-        self.entities.writer_engine_mut()?.retire_wal_window_for_stop()
+        self.entities
+            .writer_engine_mut()?
+            .retire_wal_window_for_stop()
     }
 
     /// On a lock-free replica of the newest published head, the entity
     /// validation reads `commit` will perform for `transaction`, so they reach
     /// the shared caches before the writer is taken. Commit remains the only
     /// authority; a `WouldBlock` refusal here is one it would also return.
-    pub(crate) fn rehearse_commit_validation(&self, transaction: &AuthorityTransaction) -> io::Result<()> {
+    pub(crate) fn rehearse_commit_validation(
+        &self,
+        transaction: &AuthorityTransaction,
+    ) -> io::Result<()> {
         if transaction.authority_uuid != self.entities.authority_uuid() {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                "authority transaction belongs to a different database"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "authority transaction belongs to a different database",
+            ));
         }
-        self.entities.rehearse_overlay_validation(&transaction.entity)
+        self.entities
+            .rehearse_overlay_validation(&transaction.entity)
     }
 
     pub fn commit(
@@ -2881,19 +2994,24 @@ impl AuthorityDatabase {
             ));
         }
         if transaction.authority_uuid != self.entities.authority_uuid() {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                "authority transaction belongs to a different database"));
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "authority transaction belongs to a different database",
+            ));
         }
         let mut private_blobs_published = false;
-        if transaction.deferred_outbox_capture.is_some() || !transaction.deferred_indexes.is_empty() {
+        if transaction.deferred_outbox_capture.is_some() || !transaction.deferred_indexes.is_empty()
+        {
             {
                 let _timer = crate::fsync_stats::StageTimer::new(
-                    crate::fsync_stats::STAGE_AUTHORITY_COMMIT_VALIDATE_REBASE);
+                    crate::fsync_stats::STAGE_AUTHORITY_COMMIT_VALIDATE_REBASE,
+                );
                 self.require_write_admission()?;
                 // Validate business predicates before commit-owned index/counter
                 // maintenance. Independent business writes must not conflict on
                 // the physical representation of a shared secondary index.
-                self.entities.rebase_validated_for_commit(&mut transaction.entity)?;
+                self.entities
+                    .rebase_validated_for_commit(&mut transaction.entity)?;
             }
             if !transaction.deferred_indexes.is_empty() {
                 // Backfill may read a business document staged as a private
@@ -2901,19 +3019,22 @@ impl AuthorityDatabase {
                 // exclusive sequencer excludes GC deletion through commit.
                 if let Some(blobs) = &transaction.prepared_blobs {
                     let _timer = crate::fsync_stats::StageTimer::new(
-                        crate::fsync_stats::STAGE_AUTHORITY_COMMIT_PRIVATE_BLOB_PUBLISH);
+                        crate::fsync_stats::STAGE_AUTHORITY_COMMIT_PRIVATE_BLOB_PUBLISH,
+                    );
                     blobs.publish(self.entities.writer_engine()?)?;
                     private_blobs_published = true;
                 }
                 {
                     let _timer = crate::fsync_stats::StageTimer::new(
-                        crate::fsync_stats::STAGE_AUTHORITY_COMMIT_INDEXES);
+                        crate::fsync_stats::STAGE_AUTHORITY_COMMIT_INDEXES,
+                    );
                     self.flush_deferred_indexes(&mut transaction)?;
                 }
             }
             if let Some(capture) = transaction.deferred_outbox_capture.take() {
                 let _timer = crate::fsync_stats::StageTimer::new(
-                    crate::fsync_stats::STAGE_AUTHORITY_COMMIT_OUTBOX_CAPTURE);
+                    crate::fsync_stats::STAGE_AUTHORITY_COMMIT_OUTBOX_CAPTURE,
+                );
                 self.logical_outbox_capture(&mut transaction, capture)?;
             }
         }
@@ -2973,8 +3094,11 @@ impl AuthorityDatabase {
                 "configured logical outbox requires atomic capture",
             ));
         }
-        let stream_timer = (!stream_appends.is_empty()).then(|| crate::fsync_stats::StageTimer::new(
-            crate::fsync_stats::STAGE_AUTHORITY_COMMIT_STREAM_PREPARE));
+        let stream_timer = (!stream_appends.is_empty()).then(|| {
+            crate::fsync_stats::StageTimer::new(
+                crate::fsync_stats::STAGE_AUTHORITY_COMMIT_STREAM_PREPARE,
+            )
+        });
         let mut prepared_streams: Vec<PreparedStreamAppend> = Vec::new();
         for append in stream_appends {
             let committed_event_count =
@@ -2998,7 +3122,8 @@ impl AuthorityDatabase {
         if !private_blobs_published {
             if let Some(blobs) = prepared_blobs {
                 let _timer = crate::fsync_stats::StageTimer::new(
-                    crate::fsync_stats::STAGE_AUTHORITY_COMMIT_PRIVATE_BLOB_PUBLISH);
+                    crate::fsync_stats::STAGE_AUTHORITY_COMMIT_PRIVATE_BLOB_PUBLISH,
+                );
                 blobs.publish(self.entities.writer_engine()?)?;
             }
         }
@@ -3074,18 +3199,26 @@ impl AuthorityDatabase {
             .iter()
             .map(|prepared| prepared.committed_result(committed.sequence))
             .collect();
-        self.resident_projections.apply_committed(resident_projections);
-        self.system_task_holds.apply_committed(tenant_id, owner_user_id, system_task_changes);
-        self.worker_control.publish(worker_queue_changed, &worker_cancelled_tasks);
-        self.worker_control.publish_conversations(owner_user_id, conversation_notices.keys());
+        self.resident_projections
+            .apply_committed(resident_projections);
+        self.system_task_holds
+            .apply_committed(tenant_id, owner_user_id, system_task_changes);
+        self.worker_control
+            .publish(worker_queue_changed, &worker_cancelled_tasks);
+        self.worker_control
+            .publish_conversations(owner_user_id, conversation_notices.keys());
         if search_invalidated {
             self.note_search_invalidation_commit(tenant_id, owner_user_id);
         }
         Ok(AuthorityCommitResult {
-            conversation_notices: conversation_notices.into_iter()
+            conversation_notices: conversation_notices
+                .into_iter()
                 .map(|(key, sequence)| ConversationCommitNotice {
-                    user_id: owner_user_id, key, sequence,
-                }).collect(),
+                    user_id: owner_user_id,
+                    key,
+                    sequence,
+                })
+                .collect(),
             transaction_sequence: committed.sequence,
             stream_appends: stream_results,
         })
@@ -3094,37 +3227,37 @@ impl AuthorityDatabase {
 
 #[cfg(test)]
 mod tests {
-        #[test]
-        fn authority_gc_defers_while_a_read_replica_pin_is_active() {
-            let directory = tempfile::tempdir().unwrap();
-            let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-            let mut transaction = database.begin(7, 11).unwrap();
-            database
-                .entity_put(
-                    &mut transaction,
-                    crate::entity::EntityKey::new(7, 11, "conversation", b"k").unwrap(),
-                    b"v".to_vec(),
-                )
-                .unwrap();
-            database.commit(transaction).unwrap();
+    #[test]
+    fn authority_gc_defers_while_a_read_replica_pin_is_active() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let mut transaction = database.begin(7, 11).unwrap();
+        database
+            .entity_put(
+                &mut transaction,
+                crate::entity::EntityKey::new(7, 11, "conversation", b"k").unwrap(),
+                b"v".to_vec(),
+            )
+            .unwrap();
+        database.commit(transaction).unwrap();
 
-            let replica = database.build_read_replica().unwrap();
-            let error = database
-                .begin_garbage_collection(
-                    crate::authority_gc::AuthorityGarbageCollectionBudget::conservative(),
-                )
-                .err()
-                .unwrap();
-            assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-            drop(replica);
-            database
-                .begin_garbage_collection(
-                    crate::authority_gc::AuthorityGarbageCollectionBudget::conservative(),
-                )
-                .unwrap()
-                .finish()
-                .unwrap();
-        }
+        let replica = database.build_read_replica().unwrap();
+        let error = database
+            .begin_garbage_collection(
+                crate::authority_gc::AuthorityGarbageCollectionBudget::conservative(),
+            )
+            .err()
+            .unwrap();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        drop(replica);
+        database
+            .begin_garbage_collection(
+                crate::authority_gc::AuthorityGarbageCollectionBudget::conservative(),
+            )
+            .unwrap()
+            .finish()
+            .unwrap();
+    }
 
     use super::*;
 
@@ -3197,7 +3330,6 @@ mod tests {
             .is_err());
     }
 
-
     use crate::logical_outbox::decode_logical_outbox_family_record;
     use crate::transaction::decode_family_records;
     use crate::vfs::{DeterministicVfs, FaultAction, FaultRule, OpenRequest, Operation, Vfs};
@@ -3258,7 +3390,12 @@ mod tests {
         recovered
             .configure_logical_outbox(&[31; 32], 1024 * 1024, 128 * 1024)
             .unwrap();
-        let sequence = recovered.entities.writer_engine().unwrap().state().durable_sequence;
+        let sequence = recovered
+            .entities
+            .writer_engine()
+            .unwrap()
+            .state()
+            .durable_sequence;
         assert!(sequence <= 1);
         let mut inspect = recovered.begin(7, 11).unwrap();
         let entity = recovered
@@ -3300,7 +3437,12 @@ mod tests {
         recovered
             .configure_logical_outbox(&[31; 32], 1024 * 1024, 128 * 1024)
             .unwrap();
-        let durable_sequence = recovered.entities.writer_engine().unwrap().state().durable_sequence;
+        let durable_sequence = recovered
+            .entities
+            .writer_engine()
+            .unwrap()
+            .state()
+            .durable_sequence;
         assert!((1..=2).contains(&durable_sequence));
         let status = recovered.logical_outbox_status(7, 11).unwrap();
         let pending = recovered.logical_outbox_pending(7, 11, 1).unwrap();
@@ -3324,16 +3466,35 @@ mod tests {
             let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
             let mut transaction = database.begin(7, 11).unwrap();
             for (start, end) in [(0, 2500), (2500, 5001)] {
-                let events = (start..end).map(|ordinal| StreamEvent::new(
-                    ordinal, "updated", vec![(ordinal % 251) as u8; 2048]).unwrap()).collect();
-                database.stream_append(&mut transaction, large_key.clone(), start as u64 + 1, events).unwrap();
+                let events = (start..end)
+                    .map(|ordinal| {
+                        StreamEvent::new(ordinal, "updated", vec![(ordinal % 251) as u8; 2048])
+                            .unwrap()
+                    })
+                    .collect();
+                database
+                    .stream_append(
+                        &mut transaction,
+                        large_key.clone(),
+                        start as u64 + 1,
+                        events,
+                    )
+                    .unwrap();
             }
-            let small = (0..5001).map(|ordinal| StreamEvent::new(ordinal, "updated",
-                vec![(ordinal % 251) as u8]).unwrap()).collect();
-            database.stream_append(&mut transaction, small_key.clone(), 1, small).unwrap();
+            let small = (0..5001)
+                .map(|ordinal| {
+                    StreamEvent::new(ordinal, "updated", vec![(ordinal % 251) as u8]).unwrap()
+                })
+                .collect();
+            database
+                .stream_append(&mut transaction, small_key.clone(), 1, small)
+                .unwrap();
             let committed = database.commit(transaction).unwrap();
             assert_eq!(committed.stream_appends.len(), 2);
-            assert!(committed.stream_appends.iter().all(|append| append.transaction_sequence == 1));
+            assert!(committed
+                .stream_appends
+                .iter()
+                .all(|append| append.transaction_sequence == 1));
         }
         let database = AuthorityDatabase::open(directory.path()).unwrap();
         for (key, bytes) in [(large_key, 2048), (small_key, 1)] {
@@ -3346,7 +3507,9 @@ mod tests {
                     assert_eq!(row.event.payload, vec![(count % 251) as u8; bytes]);
                     count += 1;
                 }
-                if page.end_of_stream { break; }
+                if page.end_of_stream {
+                    break;
+                }
                 assert!(page.next_sequence > next);
                 next = page.next_sequence;
             }
@@ -3363,11 +3526,21 @@ mod tests {
             let mut transaction = database.begin(7, 11).unwrap();
             for ordinal in 0..2101_u64 {
                 let payload = ordinal.to_be_bytes();
-                let reference = database.stage_blob(&mut transaction,
-                    &mut payload.as_slice(), payload.len() as u64).unwrap();
+                let reference = database
+                    .stage_blob(
+                        &mut transaction,
+                        &mut payload.as_slice(),
+                        payload.len() as u64,
+                    )
+                    .unwrap();
                 // Persist every graph root in the same owning entity transaction.
-                database.entity_put(&mut transaction, entity_key(&payload),
-                    reference.manifest_block_id.0.to_vec()).unwrap();
+                database
+                    .entity_put(
+                        &mut transaction,
+                        entity_key(&payload),
+                        reference.manifest_block_id.0.to_vec(),
+                    )
+                    .unwrap();
                 references.push(reference);
             }
             assert!(transaction.staged_blob_block_ids.len() > 2048);
@@ -3377,8 +3550,12 @@ mod tests {
         let mut transaction = database.begin(7, 11).unwrap();
         for (ordinal, reference) in references.into_iter().enumerate() {
             let payload = (ordinal as u64).to_be_bytes();
-            assert_eq!(database.entity_get(&mut transaction, &entity_key(&payload)).unwrap(),
-                Some(reference.manifest_block_id.0.to_vec()));
+            assert_eq!(
+                database
+                    .entity_get(&mut transaction, &entity_key(&payload))
+                    .unwrap(),
+                Some(reference.manifest_block_id.0.to_vec())
+            );
             let mut reader = database.blob_reader(7, 11, reference).unwrap();
             assert_eq!(reader.next_chunk().unwrap().unwrap().as_slice(), payload);
             assert!(reader.next_chunk().unwrap().is_none());
@@ -3449,20 +3626,44 @@ mod tests {
                 .stream_append(&mut first, key.clone(), 1, vec![event(1)])
                 .unwrap();
             database.commit(first).unwrap();
-            database.entities.writer_engine_mut().unwrap().checkpoint().unwrap();
+            database
+                .entities
+                .writer_engine_mut()
+                .unwrap()
+                .checkpoint()
+                .unwrap();
             let mut second = database.begin(7, 11).unwrap();
             database
                 .stream_append(&mut second, key.clone(), 2, vec![event(2)])
                 .unwrap();
             database.commit(second).unwrap();
-            database.entities.writer_engine_mut().unwrap().checkpoint().unwrap();
+            database
+                .entities
+                .writer_engine_mut()
+                .unwrap()
+                .checkpoint()
+                .unwrap();
             assert_eq!(
-                database.entities.writer_engine().unwrap().history_segment_block_ids().len(),
+                database
+                    .entities
+                    .writer_engine()
+                    .unwrap()
+                    .history_segment_block_ids()
+                    .len(),
                 2
             );
-            latest_history = database.entities.writer_engine().unwrap().history_segment_block_ids()[1];
+            latest_history = database
+                .entities
+                .writer_engine()
+                .unwrap()
+                .history_segment_block_ids()[1];
             assert_eq!(
-                database.entities.writer_engine().unwrap().state().authority_state_root,
+                database
+                    .entities
+                    .writer_engine()
+                    .unwrap()
+                    .state()
+                    .authority_state_root,
                 Some(database.entities.snapshot().root)
             );
         }
@@ -3546,9 +3747,17 @@ mod tests {
             .stream_append(&mut append, key.clone(), 1, vec![event(1), event(2)])
             .unwrap();
         database.commit(append).unwrap();
-        crate::backup::create_incremental_backup(database.entities.writer_engine_mut().unwrap(), backup.path())
-            .unwrap();
-        let expected_root = database.entities.writer_engine().unwrap().state().authority_state_root;
+        crate::backup::create_incremental_backup(
+            database.entities.writer_engine_mut().unwrap(),
+            backup.path(),
+        )
+        .unwrap();
+        let expected_root = database
+            .entities
+            .writer_engine()
+            .unwrap()
+            .state()
+            .authority_state_root;
         drop(database);
 
         let restored_manifest =
@@ -3557,7 +3766,12 @@ mod tests {
         let mut restored = AuthorityDatabase::open(target.path()).unwrap();
         restored.set_write_overlay_for_test(false);
         assert_eq!(
-            restored.entities.writer_engine().unwrap().state().authority_state_root,
+            restored
+                .entities
+                .writer_engine()
+                .unwrap()
+                .state()
+                .authority_state_root,
             expected_root
         );
         assert_eq!(
@@ -3811,11 +4025,17 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         database.set_write_overlay_for_test(false);
-        database.engine_mut_for_test().set_checkpoint_materialize_batch_bytes(
-            crate::history::HISTORY_SEGMENT_MAX_BYTES as u64).unwrap();
+        database
+            .engine_mut_for_test()
+            .set_checkpoint_materialize_batch_bytes(
+                crate::history::HISTORY_SEGMENT_MAX_BYTES as u64,
+            )
+            .unwrap();
         for index in 0..5_u8 {
             let mut tx = database.begin(7, 11).unwrap();
-            database.entity_put(&mut tx, entity_key(&[index]), vec![index; 64]).unwrap();
+            database
+                .entity_put(&mut tx, entity_key(&[index]), vec![index; 64])
+                .unwrap();
             database.commit(tx).unwrap();
             database.engine_mut_for_test().checkpoint().unwrap();
         }
@@ -3823,18 +4043,29 @@ mod tests {
         for remaining in (1..5).rev() {
             let prepared = database.try_prepare_history_compaction(1).unwrap().unwrap();
             let encoded = crate::engine::encode_history_compaction(&prepared);
-            let progress = database.finish_history_compaction(prepared, encoded).unwrap();
+            let progress = database
+                .finish_history_compaction(prepared, encoded)
+                .unwrap();
             assert_eq!(progress.retired_segments, 1);
             assert_eq!(progress.retained_segments, remaining);
             // The physical lane is released between publications.
-            assert!(database.engine_mut_for_test().require_write_admission().is_ok());
+            assert!(database
+                .engine_mut_for_test()
+                .require_write_admission()
+                .is_ok());
         }
-        assert!(database.try_prepare_history_compaction(1).unwrap().is_none());
+        assert!(database
+            .try_prepare_history_compaction(1)
+            .unwrap()
+            .is_none());
         drop(database);
-        let mut reopened = AuthorityDatabase::open(directory.path()).unwrap();
+        let reopened = AuthorityDatabase::open(directory.path()).unwrap();
         let mut tx = reopened.begin(7, 11).unwrap();
         for index in 0..5_u8 {
-            assert_eq!(reopened.entity_get(&mut tx, &entity_key(&[index])).unwrap(), Some(vec![index;64]));
+            assert_eq!(
+                reopened.entity_get(&mut tx, &entity_key(&[index])).unwrap(),
+                Some(vec![index; 64])
+            );
         }
     }
 
@@ -3843,12 +4074,19 @@ mod tests {
         let vfs = Arc::new(DeterministicVfs::new(None));
         vfs.create_dir(Path::new("/data")).unwrap();
         vfs.sync_directory(Path::new("/")).unwrap();
-        let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
         database.set_write_overlay_for_test(true);
         for round in 0..3_u16 {
             let mut tx = database.begin(7, 11).unwrap();
             for index in 0..512_u16 {
-                database.entity_put(&mut tx, entity_key(&(round * 512 + index).to_be_bytes()), vec![round as u8; 32]).unwrap();
+                database
+                    .entity_put(
+                        &mut tx,
+                        entity_key(&(round * 512 + index).to_be_bytes()),
+                        vec![round as u8; 32],
+                    )
+                    .unwrap();
             }
             database.commit(tx).unwrap();
             let engine = database.engine_mut_for_test();
@@ -3858,43 +4096,70 @@ mod tests {
                 other => panic!("expected rotation, got {other:?}"),
             };
             let outcome = crate::engine::encode_rotation_segments(&prepared).unwrap();
-            engine.finish_rotation_checkpoint(prepared, Ok(outcome)).unwrap();
+            engine
+                .finish_rotation_checkpoint(prepared, Ok(outcome))
+                .unwrap();
         }
         assert_eq!(database.engine_mut_for_test().history_segment_count(), 3);
-        assert!(database.try_prepare_history_compaction(1).unwrap().is_none());
+        assert!(database
+            .try_prepare_history_compaction(1)
+            .unwrap()
+            .is_none());
         let first = database.entities.overlay_replay_first_sequence().unwrap();
         assert!(database.entities.merge_overlay().unwrap());
-        assert_eq!(database.entities.overlay_replay_first_sequence().unwrap(), first,
-            "partial sequence coverage must retain its boundary transaction");
-        assert!(database.try_prepare_history_compaction(1).unwrap().is_none());
+        assert_eq!(
+            database.entities.overlay_replay_first_sequence().unwrap(),
+            first,
+            "partial sequence coverage must retain its boundary transaction"
+        );
+        assert!(database
+            .try_prepare_history_compaction(1)
+            .unwrap()
+            .is_none());
         // Crash before a full merge must recover every acknowledged value.
         std::mem::forget(database);
         vfs.crash().unwrap();
-        let mut database = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        let mut database =
+            AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
         let mut read = database.begin(7, 11).unwrap();
         for round in 0..3_u16 {
             for index in 0..512_u16 {
-                assert_eq!(database.entity_get(&mut read, &entity_key(&(round * 512 + index).to_be_bytes())).unwrap(), Some(vec![round as u8; 32]));
+                assert_eq!(
+                    database
+                        .entity_get(&mut read, &entity_key(&(round * 512 + index).to_be_bytes()))
+                        .unwrap(),
+                    Some(vec![round as u8; 32])
+                );
             }
         }
         drop(read);
         database.entities.merge_overlay_fully().unwrap();
         let prepared = database.try_prepare_history_compaction(1).unwrap().unwrap();
         let outcome = crate::engine::encode_history_compaction(&prepared);
-        let metrics = database.finish_history_compaction(prepared, outcome).unwrap();
+        let metrics = database
+            .finish_history_compaction(prepared, outcome)
+            .unwrap();
         assert_eq!(metrics.retired_segments, 2);
         std::mem::forget(database);
         vfs.crash().unwrap();
-        let mut database = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        let mut database =
+            AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
         let mut read = database.begin(7, 11).unwrap();
         for round in 0..3_u16 {
             for index in 0..512_u16 {
-                assert_eq!(database.entity_get(&mut read, &entity_key(&(round * 512 + index).to_be_bytes())).unwrap(), Some(vec![round as u8; 32]));
+                assert_eq!(
+                    database
+                        .entity_get(&mut read, &entity_key(&(round * 512 + index).to_be_bytes()))
+                        .unwrap(),
+                    Some(vec![round as u8; 32])
+                );
             }
         }
         drop(read);
         let mut tx = database.begin(7, 11).unwrap();
-        database.entity_put(&mut tx, entity_key(b"after-prune"), b"new epoch".to_vec()).unwrap();
+        database
+            .entity_put(&mut tx, entity_key(b"after-prune"), b"new epoch".to_vec())
+            .unwrap();
         database.commit(tx).unwrap();
         let engine = database.engine_mut_for_test();
         engine.attach_rotation_driver();
@@ -3903,12 +4168,19 @@ mod tests {
             other => panic!("expected rotation, got {other:?}"),
         };
         let outcome = crate::engine::encode_rotation_segments(&prepared).unwrap();
-        engine.finish_rotation_checkpoint(prepared, Ok(outcome)).unwrap();
+        engine
+            .finish_rotation_checkpoint(prepared, Ok(outcome))
+            .unwrap();
         std::mem::forget(database);
         vfs.crash().unwrap();
         let database = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs).unwrap();
         let mut read = database.begin(7, 11).unwrap();
-        assert_eq!(database.entity_get(&mut read, &entity_key(b"after-prune")).unwrap(), Some(b"new epoch".to_vec()));
+        assert_eq!(
+            database
+                .entity_get(&mut read, &entity_key(b"after-prune"))
+                .unwrap(),
+            Some(b"new epoch".to_vec())
+        );
     }
 
     #[test]
@@ -3941,7 +4213,12 @@ mod tests {
                 )
                 .unwrap();
             database.commit(transaction).unwrap();
-            database.entities.writer_engine_mut().unwrap().checkpoint().unwrap();
+            database
+                .entities
+                .writer_engine_mut()
+                .unwrap()
+                .checkpoint()
+                .unwrap();
             for (name, value) in [
                 (b"later-1".as_slice(), b"one".as_slice()),
                 (b"later-2", b"two"),
@@ -3951,7 +4228,12 @@ mod tests {
                     .entity_put(&mut later, entity_key(name), value.to_vec())
                     .unwrap();
                 database.commit(later).unwrap();
-                database.entities.writer_engine_mut().unwrap().checkpoint().unwrap();
+                database
+                    .entities
+                    .writer_engine_mut()
+                    .unwrap()
+                    .checkpoint()
+                    .unwrap();
             }
             let metrics = database.compact_history(1).unwrap();
             assert_eq!(metrics.retired_segments, 2);
@@ -4010,7 +4292,15 @@ mod tests {
             database.commit(second).unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
-        assert_eq!(database.entities.writer_engine().unwrap().state().durable_sequence, 1);
+        assert_eq!(
+            database
+                .entities
+                .writer_engine()
+                .unwrap()
+                .state()
+                .durable_sequence,
+            1
+        );
     }
 
     #[test]
@@ -4164,16 +4454,26 @@ mod tests {
             .configure_logical_outbox(&key, pending_bytes, pending_bytes as usize)
             .unwrap();
         let mut second = database.begin(7, 11).unwrap();
-        database.entity_put(&mut second, entity_key(b"second"), b"created".to_vec()).unwrap();
-        database.logical_outbox_capture(&mut second, outbox_capture(payload, None)).unwrap();
+        database
+            .entity_put(&mut second, entity_key(b"second"), b"created".to_vec())
+            .unwrap();
+        database
+            .logical_outbox_capture(&mut second, outbox_capture(payload, None))
+            .unwrap();
         database.commit(second).unwrap();
         assert!(database.logical_outbox_status(7, 11).unwrap().pending_bytes > pending_bytes);
-        let pending = database.logical_outbox_pending_bounded(7, 11, 10, 1).unwrap();
+        let pending = database
+            .logical_outbox_pending_bounded(7, 11, 10, 1)
+            .unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].record.identity.sequence, 1);
         let mut inspect = database.begin(7, 11).unwrap();
-        assert_eq!(database.entity_get(&mut inspect, &entity_key(b"second")).unwrap(), Some(b"created".to_vec()));
-
+        assert_eq!(
+            database
+                .entity_get(&mut inspect, &entity_key(b"second"))
+                .unwrap(),
+            Some(b"created".to_vec())
+        );
     }
 
     #[test]
@@ -4186,15 +4486,31 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         database.configure_logical_outbox(&key, 1, 1).unwrap();
         let mut write = database.begin(7, 11).unwrap();
-        database.entity_put(&mut write, entity_key(b"large-demand"), b"committed".to_vec()).unwrap();
-        database.logical_outbox_capture(&mut write, outbox_capture(payload.clone(), Some("large-demand"))).unwrap();
+        database
+            .entity_put(
+                &mut write,
+                entity_key(b"large-demand"),
+                b"committed".to_vec(),
+            )
+            .unwrap();
+        database
+            .logical_outbox_capture(
+                &mut write,
+                outbox_capture(payload.clone(), Some("large-demand")),
+            )
+            .unwrap();
         database.commit(write).unwrap();
         drop(database);
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
         database.configure_logical_outbox(&key, 0, 0).unwrap();
-        let pending = database.logical_outbox_pending_bounded(7, 11, 1, 1).unwrap();
+        let pending = database
+            .logical_outbox_pending_bounded(7, 11, 1, 1)
+            .unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(database.logical_outbox_decrypt(&pending[0].record).unwrap(), payload);
+        assert_eq!(
+            database.logical_outbox_decrypt(&pending[0].record).unwrap(),
+            payload
+        );
         let sink_path = tempfile::tempdir().unwrap();
         let mut sink = EngineLogicalOutboxSink::initialize(sink_path.path(), 7, 11, 1).unwrap();
         let started = std::time::Instant::now();
@@ -4203,11 +4519,23 @@ mod tests {
         let repeated = publish_batch(&mut sink, &pending, budget).unwrap();
         assert_eq!(published.receipts, repeated.receipts);
         let receipt = published.receipts[0];
-        let acknowledged = database.logical_outbox_acknowledge(7, 11, receipt.sequence, receipt.event_id).unwrap();
+        let acknowledged = database
+            .logical_outbox_acknowledge(7, 11, receipt.sequence, receipt.event_id)
+            .unwrap();
         assert_eq!(acknowledged.pending_bytes, 0);
-        assert_eq!(database.logical_outbox_acknowledge(7, 11, receipt.sequence, receipt.event_id).unwrap(), acknowledged);
+        assert_eq!(
+            database
+                .logical_outbox_acknowledge(7, 11, receipt.sequence, receipt.event_id)
+                .unwrap(),
+            acknowledged
+        );
         let mut read = database.begin(7, 11).unwrap();
-        assert_eq!(database.entity_get(&mut read, &entity_key(b"large-demand")).unwrap(), Some(b"committed".to_vec()));
+        assert_eq!(
+            database
+                .entity_get(&mut read, &entity_key(b"large-demand"))
+                .unwrap(),
+            Some(b"committed".to_vec())
+        );
         eprintln!("outbox_large payload_bytes={} record_bytes={} publish_retry_us={} acknowledged_pending_bytes=0",
             payload.len(), pending[0].record_bytes, started.elapsed().as_micros());
     }
@@ -4395,11 +4723,12 @@ mod tests {
     }
 
     fn seeded_spill_database(vfs: Arc<DeterministicVfs>) -> AuthorityDatabase {
-        let mut database =
-            AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs).unwrap();
+        let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs).unwrap();
         database.set_write_overlay_for_test(false);
         let mut seed = database.begin(7, 11).unwrap();
-        database.entity_put(&mut seed, entity_key(b"seed"), b"seed".to_vec()).unwrap();
+        database
+            .entity_put(&mut seed, entity_key(b"seed"), b"seed".to_vec())
+            .unwrap();
         database.commit(seed).unwrap();
         database
     }
@@ -4422,16 +4751,26 @@ mod tests {
         vfs.crash().unwrap();
         vfs.arm_fault(None).unwrap();
         let mut recovered = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs).unwrap();
-        let sequence = recovered.entities.writer_engine().unwrap().state().durable_sequence;
+        let sequence = recovered
+            .entities
+            .writer_engine()
+            .unwrap()
+            .state()
+            .durable_sequence;
         assert!((1..=2).contains(&sequence), "recovered sequence {sequence}");
         let mut inspect = recovered.begin(7, 11).unwrap();
         assert_eq!(
-            recovered.entity_get(&mut inspect, &entity_key(b"seed")).unwrap(),
+            recovered
+                .entity_get(&mut inspect, &entity_key(b"seed"))
+                .unwrap(),
             Some(b"seed".to_vec())
         );
         for row in 0..SPILL_ROWS {
             let value = recovered
-                .entity_get(&mut inspect, &entity_key(format!("spill-{row:05}").as_bytes()))
+                .entity_get(
+                    &mut inspect,
+                    &entity_key(format!("spill-{row:05}").as_bytes()),
+                )
                 .unwrap();
             match sequence {
                 1 => assert_eq!(value, None),
@@ -4440,7 +4779,9 @@ mod tests {
         }
         drop(inspect);
         let mut after = recovered.begin(7, 11).unwrap();
-        recovered.entity_put(&mut after, entity_key(b"after"), b"after".to_vec()).unwrap();
+        recovered
+            .entity_put(&mut after, entity_key(b"after"), b"after".to_vec())
+            .unwrap();
         recovered.commit(after).unwrap();
     }
 
@@ -4448,20 +4789,43 @@ mod tests {
     fn oversized_reference_commit_spills_into_one_catalogued_segment() {
         let vfs = prepared_simulated_vfs();
         let mut database = seeded_spill_database(vfs.clone());
-        let segments_before = database.entities.writer_engine().unwrap().payload_segment_count();
-        let loose_before = database.block_store_shared().list_block_ids(1 << 20).unwrap().len();
+        let segments_before = database
+            .entities
+            .writer_engine()
+            .unwrap()
+            .payload_segment_count();
+        let loose_before = database
+            .block_store_shared()
+            .list_block_ids(1 << 20)
+            .unwrap()
+            .len();
         let spills_before = crate::fsync_stats::counters().flush_deferred;
         vfs.arm_fault(None).unwrap();
         commit_spill(&mut database).unwrap();
         let trace = vfs.trace().unwrap();
-        assert!(crate::fsync_stats::counters().flush_deferred > spills_before, "commit did not spill");
         assert!(
-            database.entities.writer_engine().unwrap().payload_segment_count() > segments_before,
+            crate::fsync_stats::counters().flush_deferred > spills_before,
+            "commit did not spill"
+        );
+        assert!(
+            database
+                .entities
+                .writer_engine()
+                .unwrap()
+                .payload_segment_count()
+                > segments_before,
             "spilled pages must be published in a payload segment"
         );
-        let loose_after = database.block_store_shared().list_block_ids(1 << 20).unwrap().len();
+        let loose_after = database
+            .block_store_shared()
+            .list_block_ids(1 << 20)
+            .unwrap()
+            .len();
         // Only the published catalog manifest may appear as a new loose file.
-        assert!(loose_after <= loose_before + 1, "loose {loose_before} -> {loose_after}");
+        assert!(
+            loose_after <= loose_before + 1,
+            "loose {loose_before} -> {loose_after}"
+        );
         let syncs = trace
             .iter()
             .filter(|operation| matches!(operation, Operation::SyncAll | Operation::SyncData))
@@ -4491,7 +4855,11 @@ mod tests {
             for action in actions {
                 let vfs = prepared_simulated_vfs();
                 let mut database = seeded_spill_database(vfs.clone());
-                vfs.arm_fault(Some(FaultRule { operation_number, action })).unwrap();
+                vfs.arm_fault(Some(FaultRule {
+                    operation_number,
+                    action,
+                }))
+                .unwrap();
                 let _ = commit_spill(&mut database);
                 drop(database);
                 assert_recovered_spill_prefix(vfs);
@@ -4643,14 +5011,25 @@ mod history_retention_boundary_tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let mut transaction = database.begin(7, 11).unwrap();
-        database.entity_put(&mut transaction,
-            crate::entity::EntityKey::new(7, 11, "conversation", b"k").unwrap(), b"v".to_vec()).unwrap();
+        database
+            .entity_put(
+                &mut transaction,
+                crate::entity::EntityKey::new(7, 11, "conversation", b"k").unwrap(),
+                b"v".to_vec(),
+            )
+            .unwrap();
         database.commit(transaction).unwrap();
         database.merge_entity_overlay_fully().unwrap();
         database.checkpoint_wal_window().unwrap();
         for retained in [crate::history::MAX_HISTORY_SEGMENTS + 1, usize::MAX] {
-            assert!(database.try_prepare_history_compaction(retained).unwrap().is_none());
-            assert_eq!(database.compact_history(retained).unwrap().retired_segments, 0);
+            assert!(database
+                .try_prepare_history_compaction(retained)
+                .unwrap()
+                .is_none());
+            assert_eq!(
+                database.compact_history(retained).unwrap().retired_segments,
+                0
+            );
         }
         assert!(database.try_prepare_history_compaction(0).is_err());
         assert!(database.compact_history(0).is_err());

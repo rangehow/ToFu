@@ -115,7 +115,20 @@ pub const MAX_AUTHORITY_GC_ORPHAN_PAYLOAD_SEGMENT_FILES_REMOVED: usize = 1;
 pub const MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED: usize = 16;
 pub const MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS: usize = 128;
 pub const DESKTOP_PREFERENCE_NAMESPACE: &str = "desktop_egress_preferences";
-pub const BILLING_LEDGER_KINDS: &[&str] = &["adjust_credit", "adjust_debit", "bonus", "debit", "native_admission", "redeem", "refund", "request_admission", "request_invoice", "reserve", "reserve_release", "topup"];
+pub const BILLING_LEDGER_KINDS: &[&str] = &[
+    "adjust_credit",
+    "adjust_debit",
+    "bonus",
+    "debit",
+    "native_admission",
+    "redeem",
+    "refund",
+    "request_admission",
+    "request_invoice",
+    "reserve",
+    "reserve_release",
+    "topup",
+];
 pub const BILLING_NATIVE_ADMISSION_KIND: &str = "native_admission";
 pub const BILLING_REQUEST_ADMISSION_KIND: &str = "request_admission";
 pub const BILLING_REQUEST_INVOICE_KIND: &str = "request_invoice";
@@ -241,7 +254,16 @@ pub const MAX_SWARM_AGENT_ID_CHARACTERS: usize = 512;
 pub const MAX_SWARM_OBJECTIVE_CHARACTERS: usize = 100000;
 pub const MAX_SWARM_AGENT_IDS_PER_DELIVERY: usize = 1000;
 pub const MAX_SWARM_ROUNDS_USED: u64 = 1000000;
-pub const SWARM_CHECKPOINT_MARKER_RESULT_FIELDS: &[&str] = &["actuals_complete", "checkpoint_phase", "completion_tokens", "cost_usd", "elapsed_seconds", "prompt_tokens", "rounds_used", "total_tokens"];
+pub const SWARM_CHECKPOINT_MARKER_RESULT_FIELDS: &[&str] = &[
+    "actuals_complete",
+    "checkpoint_phase",
+    "completion_tokens",
+    "cost_usd",
+    "elapsed_seconds",
+    "prompt_tokens",
+    "rounds_used",
+    "total_tokens",
+];
 pub const MAX_SWARM_CHECKPOINT_MARKER_TEXT_CHARACTERS: usize = 64;
 pub const INTEGRATION_WORKSPACE_NAMESPACE: &str = "integration_workspace_documents";
 pub const INTEGRATION_NATURAL_CLAIM_NAMESPACE: &str = "integration_workspace_natural_claims";
@@ -535,10 +557,18 @@ pub const MAX_MODEL_ROUTING_KEY_HINT_CHARACTERS: usize = 64;
 pub const MAX_MODEL_ROUTING_PRUNED_PER_COMMAND: usize = 256;
 pub const MAX_MODEL_ROUTING_TIMESTAMP_SECONDS: f64 = 32503680000.0;
 pub const WORKER_PROCESS_OWNER_PREFIX: &str = "tofu.worker-process/v1:";
-pub const WORKER_JOB_STATES: &[&str] = &["queued", "running", "suspended", "succeeded", "failed", "cancelled"];
+pub const WORKER_JOB_STATES: &[&str] = &[
+    "queued",
+    "running",
+    "suspended",
+    "succeeded",
+    "failed",
+    "cancelled",
+];
 pub const WORKER_EXECUTION_WITNESS_FORMAT: &str = "tofu.conversation-worker-execution/v1";
 pub const WORKER_EXECUTION_CONFIG_KEY: &str = "_conversationWorkerExecution";
-pub const WORKER_EXECUTION_PROCESS_FIELDS: &[&str] = &["host", "boot", "pid_namespace", "pid", "started"];
+pub const WORKER_EXECUTION_PROCESS_FIELDS: &[&str] =
+    &["host", "boot", "pid_namespace", "pid", "started"];
 pub const AUTOMATION_ACTIVE_NAMESPACE: &str = "automation.active.v1";
 pub const AUTOMATION_CURSOR_NAMESPACE: &str = "automation.cursors.v1";
 pub const AUTOMATION_DEFINITION_NAMESPACE: &str = "automation.definitions.v1";
@@ -557,7 +587,8 @@ pub const MAX_AUTOMATION_STEPS: usize = 64;
 pub const MAX_AUTOMATION_DEFINITION_BYTES: usize = 131072;
 pub const MAX_AUTOMATION_PUBLICATION_REQUEST_BYTES: usize = 2097152;
 pub const AUTOMATION_PUBLICATION_METADATA_RESERVE_BYTES: usize = 4096;
-pub const AUTOMATION_RESERVED_WORKER_TASK_KINDS: &[&str] = &["automation-clock", "automation-event", "automation-run"];
+pub const AUTOMATION_RESERVED_WORKER_TASK_KINDS: &[&str] =
+    &["automation-clock", "automation-event", "automation-run"];
 pub const MAX_AUTOMATION_CLOCK_FAILURE_KIND_CHARACTERS: usize = 128;
 pub const AUTOMATION_CLOCK_JOB_CONTRACT: &str = "tofu.automation-clock/v1";
 pub const AUTOMATION_EVENT_JOB_CONTRACT: &str = "tofu.automation-event/v1";
@@ -574,7 +605,8 @@ pub const MAX_AUTOMATION_EVENT_ERROR_CHARACTERS: usize = 128;
 pub const AUTOMATION_PROJECT_CONTRACT: &str = "tofu.automation-project/v1";
 pub const AUTOMATION_SKILL_SOURCE_CONTRACT: &str = "tofu.automation-skill-source/v1";
 pub const AUTOMATION_SKILL_SOURCE_ID: &str = "mtskills";
-pub const AUTOMATION_SKILL_SOURCE_CREDENTIAL_SCOPE_DOMAIN: &str = "tofu.mtskills-credential-scope/v1";
+pub const AUTOMATION_SKILL_SOURCE_CREDENTIAL_SCOPE_DOMAIN: &str =
+    "tofu.mtskills-credential-scope/v1";
 pub const AUTOMATION_SKILL_SOURCE_ENVIRONMENTS: &[&str] = &["prod", "test", "dev"];
 pub const MAX_AUTOMATION_PROJECT_ROOT_CHARACTERS: usize = 2048;
 pub const MAX_AUTOMATION_PROJECT_LABEL_CHARACTERS: usize = 160;
@@ -582,7 +614,8 @@ pub const MAX_AUTOMATION_EVENT_CLOCK_SKEW_MS: u64 = 86400000;
 pub const MAX_AUTOMATION_TRIGGER_CHAIN: usize = 16;
 pub const AUTOMATION_ACTION_CATALOG_JSON: &str = "{\"actions\":[{\"effect\":\"agent\",\"id\":\"project.responsibility.run\",\"input\":{\"additionalProperties\":false,\"properties\":{\"projectPath\":{\"maxLength\":4096,\"minLength\":1,\"type\":\"string\"},\"responsibilityId\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"projectPath\",\"responsibilityId\"],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"properties\":{\"occurrenceId\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"},\"responsibilityId\":{\"maxLength\":256,\"minLength\":1,\"type\":\"string\"},\"status\":{\"enum\":[\"queued\",\"running\",\"succeeded\",\"failed\",\"cancelled\"]}},\"required\":[\"responsibilityId\",\"occurrenceId\",\"status\"],\"type\":\"object\"},\"recovery\":\"reconcile\",\"requiredScopes\":[\"automations:execute\",\"chat\"],\"version\":1},{\"effect\":\"presentation\",\"id\":\"task.show_time\",\"input\":{\"additionalProperties\":false,\"properties\":{\"timezone\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"}},\"required\":[],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"properties\":{\"startedAt\":{\"exclusiveMinimum\":0,\"type\":\"number\"},\"text\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"timezone\":{\"maxLength\":100,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"startedAt\",\"timezone\",\"text\"],\"type\":\"object\"},\"recovery\":\"replay\",\"requiredScopes\":[\"automations:execute\"],\"version\":1},{\"effect\":\"read\",\"id\":\"skills.check\",\"input\":{\"additionalProperties\":false,\"properties\":{\"initialize\":{\"enum\":[\"baseline\",\"process\"]},\"names\":{\"items\":{\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9_.-]{0,159}(?![\\\\s\\\\S])\",\"type\":\"string\"},\"maxItems\":32,\"minItems\":1,\"type\":\"array\",\"uniqueItems\":true},\"provider\":{\"enum\":[\"mtskills\"]}},\"required\":[\"provider\",\"names\",\"initialize\"],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"properties\":{\"baselineEstablished\":{\"type\":\"boolean\"},\"changed\":{\"type\":\"boolean\"},\"revisions\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"digest\":{\"pattern\":\"^[a-f0-9]{64}(?![\\\\s\\\\S])\",\"type\":\"string\"},\"skillId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"sourceId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"version\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"skillId\",\"version\",\"digest\",\"sourceId\"],\"type\":\"object\"},\"maxItems\":32,\"minItems\":1,\"type\":\"array\",\"uniqueItems\":true},\"snapshotId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"changed\",\"revisions\",\"snapshotId\",\"baselineEstablished\"],\"type\":\"object\"},\"recovery\":\"replay\",\"requiredScopes\":[\"skills:read\"],\"version\":1},{\"effect\":\"write\",\"id\":\"skills.activate\",\"input\":{\"additionalProperties\":false,\"properties\":{\"snapshotId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"snapshotId\"],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"properties\":{\"activated\":{\"type\":\"boolean\"},\"revisions\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"digest\":{\"pattern\":\"^[a-f0-9]{64}(?![\\\\s\\\\S])\",\"type\":\"string\"},\"skillId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"sourceId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"version\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"skillId\",\"version\",\"digest\",\"sourceId\"],\"type\":\"object\"},\"maxItems\":32,\"minItems\":1,\"type\":\"array\",\"uniqueItems\":true},\"snapshotId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"snapshotId\",\"revisions\",\"activated\"],\"type\":\"object\"},\"recovery\":\"reconcile\",\"requiredScopes\":[\"skills:install\"],\"version\":1},{\"effect\":\"agent\",\"id\":\"agent.run\",\"input\":{\"additionalProperties\":false,\"properties\":{\"conversationId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"conversationPolicy\":{\"enum\":[\"new\",\"reuse\"]},\"objective\":{\"maxLength\":24000,\"minLength\":1,\"type\":\"string\"},\"skillSnapshotId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"targetMcpIds\":{\"items\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"maxItems\":32,\"minItems\":1,\"type\":\"array\",\"uniqueItems\":true}},\"required\":[\"objective\",\"conversationPolicy\"],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"status\":{\"const\":\"done\"}}},\"then\":{\"required\":[\"resultRef\"]}}],\"properties\":{\"attemptId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"conversationId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"resultRef\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"status\":{\"enum\":[\"queued\",\"running\",\"done\",\"failed\",\"cancelled\"]},\"taskId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"turnId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"conversationId\",\"taskId\",\"turnId\",\"attemptId\",\"status\"],\"type\":\"object\"},\"recovery\":\"reconcile\",\"requiredScopes\":[\"conversation.execute\"],\"version\":1},{\"effect\":\"agent\",\"id\":\"flow.run\",\"input\":{\"additionalProperties\":false,\"properties\":{\"definitionId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"inputs\":{\"type\":\"object\"}},\"required\":[\"definitionId\",\"inputs\"],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"status\":{\"const\":\"done\"}}},\"then\":{\"required\":[\"resultRef\"]}}],\"properties\":{\"conversationId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"resultRef\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"runId\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"status\":{\"enum\":[\"queued\",\"running\",\"done\",\"failed\",\"cancelled\"]}},\"required\":[\"runId\",\"conversationId\",\"status\"],\"type\":\"object\"},\"recovery\":\"reconcile\",\"requiredScopes\":[\"conversation.execute\"],\"version\":1},{\"effect\":\"agent\",\"id\":\"condition.agent\",\"input\":{\"additionalProperties\":false,\"properties\":{\"evidence\":{\"type\":\"object\"},\"question\":{\"maxLength\":8000,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"question\",\"evidence\"],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"properties\":{\"evidenceRefs\":{\"items\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"maxItems\":32,\"type\":\"array\"},\"matches\":{\"type\":\"boolean\"},\"reason\":{\"maxLength\":4000,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"matches\",\"reason\",\"evidenceRefs\"],\"type\":\"object\"},\"recovery\":\"reconcile\",\"requiredScopes\":[\"conversation.execute\"],\"version\":1},{\"effect\":\"read\",\"id\":\"result.verify\",\"input\":{\"additionalProperties\":false,\"properties\":{\"checks\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"kind\":{\"enum\":[\"project_check\",\"artifact\",\"mcp_contract\"]}},\"required\":[\"kind\",\"id\"],\"type\":\"object\"},\"maxItems\":32,\"minItems\":1,\"type\":\"array\",\"uniqueItems\":true},\"resultRef\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"}},\"required\":[\"checks\",\"resultRef\"],\"type\":\"object\"},\"output\":{\"additionalProperties\":false,\"properties\":{\"checks\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"evidenceRef\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"id\":{\"maxLength\":200,\"minLength\":1,\"type\":\"string\"},\"passed\":{\"type\":\"boolean\"}},\"required\":[\"id\",\"passed\",\"evidenceRef\"],\"type\":\"object\"},\"maxItems\":32,\"minItems\":1,\"type\":\"array\"},\"passed\":{\"type\":\"boolean\"}},\"required\":[\"passed\",\"checks\"],\"type\":\"object\"},\"recovery\":\"replay\",\"requiredScopes\":[\"automations:execute\"],\"version\":1}],\"contract\":\"tofu.automation-actions/v1\",\"schemaVersion\":1}";
 pub const AUTOMATION_TERMINAL_RUN_STATES: &[&str] = &["succeeded", "failed", "cancelled"];
-pub const AUTOMATION_ACTIVE_EFFECT_STEP_STATES: &[&str] = &["dispatching", "waiting_agent", "reconciliation_required"];
+pub const AUTOMATION_ACTIVE_EFFECT_STEP_STATES: &[&str] =
+    &["dispatching", "waiting_agent", "reconciliation_required"];
 pub const AUTOMATION_CANCELLABLE_PENDING_STEP_STATES: &[&str] = &["pending", "waiting_permission"];
 pub const WORKER_JOB_DOCUMENT_NAMESPACE: &str = "worker_job_documents";
 pub const WORKER_JOB_IDEMPOTENCY_NAMESPACE: &str = "worker_job_idempotency";
@@ -623,8 +656,7 @@ pub const CONVERSATION_TRASH_METADATA_NAMESPACE: &str = "conversation_trash_meta
 pub const CONVERSATION_TRASH_AGE_INDEX_NAMESPACE: &str = "conversation_trash_by_age";
 pub const CONVERSATION_TRASH_SETTINGS_OVERLAY_NAMESPACE: &str =
     "conversation_trash_settings_overlays";
-pub const CONVERSATION_RECENCY_DIRECTORY_NAMESPACE: &str =
-    "conversation_recency_directory";
+pub const CONVERSATION_RECENCY_DIRECTORY_NAMESPACE: &str = "conversation_recency_directory";
 pub const CONVERSATION_RECENCY_DIRECTORY_STATE_NAMESPACE: &str =
     "conversation_recency_directory_state";
 pub const MAX_RECENCY_DIRECTORY_ENTRIES: usize = 128;

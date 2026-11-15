@@ -1780,8 +1780,9 @@ class ScheduledTaskManager:
                 # existing tick (docs/CHANNELS.md C6): no timer, backoff or
                 # retry count of their own.
                 try:
-                    from lib.channels.dx.supervisor import reconcile_channel_bridges
-                    reconcile_channel_bridges(self._process_principal)
+                    from lib.channels.adapters import installed_channel_adapters
+                    for adapter in installed_channel_adapters().values():
+                        adapter.supervisor.reconcile_channel_bridges(self._process_principal)
                 except Exception as e:
                     logger.warning(
                         "[Scheduler] channel bridge reconcile failed: %s", e)

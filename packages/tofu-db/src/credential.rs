@@ -16,8 +16,8 @@ use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
     CREDENTIAL_CORE_NAMESPACE, CREDENTIAL_OWNER_COUNT_NAMESPACE, CREDENTIAL_OWNER_INDEX_NAMESPACE,
     CREDENTIAL_SECRET_INDEX_NAMESPACE, CREDENTIAL_SETTINGS_NAMESPACE, CREDENTIAL_STATE_NAMESPACE,
-    MAX_CREDENTIAL_DOCUMENT_BYTES,
-    MAX_CREDENTIAL_RESPONSE_BYTES, MAX_CREDENTIAL_SCOPES, MAX_CREDENTIAL_TIMESTAMP_SECONDS,
+    MAX_CREDENTIAL_DOCUMENT_BYTES, MAX_CREDENTIAL_RESPONSE_BYTES, MAX_CREDENTIAL_SCOPES,
+    MAX_CREDENTIAL_TIMESTAMP_SECONDS,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -417,7 +417,8 @@ pub(crate) fn create(
     if only_if_owner_empty && count > 0 {
         return Ok(None);
     }
-    let next_count = count.checked_add(1)
+    let next_count = count
+        .checked_add(1)
         .ok_or_else(|| invalid_data("credential owner count overflows"))?;
     if !request.account_user_id.is_empty()
         && !crate::tenant_user::account_is_active_owner(
@@ -520,19 +521,28 @@ pub(crate) fn list(
     let expected_count = read_count(database, transaction, boundary)?;
     let prefix = index_prefix(boundary);
     let (mut start, end) = EntityKey::prefix_range(
-        transaction.tenant_id(), TENANT_GLOBAL_OWNER_ID,
-        CREDENTIAL_OWNER_INDEX_NAMESPACE, &prefix,
+        transaction.tenant_id(),
+        TENANT_GLOBAL_OWNER_ID,
+        CREDENTIAL_OWNER_INDEX_NAMESPACE,
+        &prefix,
     )?;
     let mut values = Vec::new();
     loop {
         // Every bounded traversal window retains the same snapshot and OCC.
-        let rows = database.entity_scan(transaction, &start, &end,
-            crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS)?;
+        let rows = database.entity_scan(
+            transaction,
+            &start,
+            &end,
+            crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS,
+        )?;
         let page_count = rows.len();
-        if page_count == 0 { break; }
+        if page_count == 0 {
+            break;
+        }
         let successor = rows.last().unwrap().0.clone().exact_range()?.1;
-        values.try_reserve(page_count)
-            .map_err(|_| crate::resource_exhaustion::reservation_failure("credential list allocation failed"))?;
+        values.try_reserve(page_count).map_err(|_| {
+            crate::resource_exhaustion::reservation_failure("credential list allocation failed")
+        })?;
         for (_, raw) in rows {
             let id = std::str::from_utf8(&raw)
                 .map_err(|_| invalid_data("credential owner index is malformed"))?;
@@ -546,7 +556,9 @@ pub(crate) fn list(
             }
             values.push(public(&core, &settings, &state)?);
         }
-        if page_count < crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS || successor >= end { break; }
+        if page_count < crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS || successor >= end {
+            break;
+        }
         start = successor;
     }
     if values.len() != expected_count {
@@ -777,8 +789,12 @@ mod tests {
         let started = std::time::Instant::now();
         for batch in 0..10 {
             let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-            for index in batch*200..((batch+1)*200).min(1801) {
-                let mut item = request(&format!("large-{index:04}"), &format!("{index:064x}"), 100.0+index as f64);
+            for index in batch * 200..((batch + 1) * 200).min(1801) {
+                let mut item = request(
+                    &format!("large-{index:04}"),
+                    &format!("{index:064x}"),
+                    100.0 + index as f64,
+                );
                 item.metadata = json!({"note":"x".repeat(6000)});
                 create(&database, &mut tx, &item, false).unwrap().unwrap();
             }
@@ -787,56 +803,151 @@ mod tests {
         let boundary = request("unused", &"e".repeat(64), 3000.0).boundary;
         let mut stale = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         let encoded = list(&database, &mut stale, &boundary).unwrap();
-        assert!(encoded.len() > 8*1024*1024);
+        assert!(encoded.len() > 8 * 1024 * 1024);
         let rows: Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(rows.as_array().unwrap().len(), 1801);
         assert_eq!(rows[0]["id"], "large-1800");
         assert_eq!(rows[1800]["id"], "large-0000");
-        assert!(rows.as_array().unwrap().iter().all(|row| row.get("secret_hash").is_none()));
+        assert!(rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("secret_hash").is_none()));
         assert_eq!(read_count(&database, &mut stale, &boundary).unwrap(), 1801);
-        assert!(create(&database, &mut stale, &request("bootstrap", &"d".repeat(64), 3000.0), true).unwrap().is_none());
-        eprintln!("credential demand: 1801 live rows, {} public bytes, {:?}", encoded.len(), started.elapsed());
+        assert!(create(
+            &database,
+            &mut stale,
+            &request("bootstrap", &"d".repeat(64), 3000.0),
+            true
+        )
+        .unwrap()
+        .is_none());
+        eprintln!(
+            "credential demand: 1801 live rows, {} public bytes, {:?}",
+            encoded.len(),
+            started.elapsed()
+        );
         let mut foreign = database.begin_with_identity_claim_scopes(7, 12).unwrap();
-        assert_eq!(list(&database, &mut foreign, &Boundary { owner_user_id:12, tenant_label:"personal".into() }).unwrap(), b"[]");
+        assert_eq!(
+            list(
+                &database,
+                &mut foreign,
+                &Boundary {
+                    owner_user_id: 12,
+                    tenant_label: "personal".into()
+                }
+            )
+            .unwrap(),
+            b"[]"
+        );
         drop(foreign);
         let mut other_label = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert_eq!(list(&database, &mut other_label, &Boundary { owner_user_id:11, tenant_label:"elsewhere".into() }).unwrap(), b"[]");
+        assert_eq!(
+            list(
+                &database,
+                &mut other_label,
+                &Boundary {
+                    owner_user_id: 11,
+                    tenant_label: "elsewhere".into()
+                }
+            )
+            .unwrap(),
+            b"[]"
+        );
         drop(other_label);
         let mut duplicate = database.begin_with_identity_claim_scopes(7, 12).unwrap();
         let mut occupied = request("different-id", &format!("{:064x}", 1800), 3000.0);
-        occupied.boundary.owner_user_id=12;
-        assert_eq!(create(&database, &mut duplicate, &occupied, false).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        occupied.boundary.owner_user_id = 12;
+        assert_eq!(
+            create(&database, &mut duplicate, &occupied, false)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
         drop(duplicate);
         let mut change = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        let update_request = UpdateRequest { name:Some("changed".into()), physical_updated_at_ms:3000, ..Default::default() };
-        update(&database, &mut change, &boundary, "large-0000", &update_request).unwrap().unwrap();
+        let update_request = UpdateRequest {
+            name: Some("changed".into()),
+            physical_updated_at_ms: 3000,
+            ..Default::default()
+        };
+        update(
+            &database,
+            &mut change,
+            &boundary,
+            "large-0000",
+            &update_request,
+        )
+        .unwrap()
+        .unwrap();
         database.commit(change).unwrap();
-        touch(&database, &mut stale, &boundary, "large-1800", 3001.0, 3000.0).unwrap();
-        assert_eq!(database.commit(stale).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        touch(
+            &database,
+            &mut stale,
+            &boundary,
+            "large-1800",
+            3001.0,
+            3000.0,
+        )
+        .unwrap();
+        assert_eq!(
+            database.commit(stale).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         let mut revocation = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         revoke(&database, &mut revocation, &boundary, "large-1800", 3002.0).unwrap();
         database.commit(revocation).unwrap();
         let mut current = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert_eq!(read_count(&database, &mut current, &boundary).unwrap(), 1800);
-        assert!(validate(&database, &mut current, &format!("{:064x}", 1800), 3003.0).unwrap().is_none());
-        let listed:Value=serde_json::from_slice(&list(&database, &mut current, &boundary).unwrap()).unwrap();
+        assert_eq!(
+            read_count(&database, &mut current, &boundary).unwrap(),
+            1800
+        );
+        assert!(
+            validate(&database, &mut current, &format!("{:064x}", 1800), 3003.0)
+                .unwrap()
+                .is_none()
+        );
+        let listed: Value =
+            serde_json::from_slice(&list(&database, &mut current, &boundary).unwrap()).unwrap();
         assert_eq!(listed.as_array().unwrap().len(), 1800);
         drop(current);
-        assert_eq!(database.snapshot_pin_metrics().unwrap().active_handles,0);
-        assert_eq!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes,0);
+        assert_eq!(database.snapshot_pin_metrics().unwrap().active_handles, 0);
+        assert_eq!(
+            database
+                .snapshot_pin_metrics()
+                .unwrap()
+                .retained_transaction_bytes,
+            0
+        );
     }
 
     #[test]
     fn credential_count_overflow_precedes_document_secret_and_index_mutations() {
-        let directory=tempfile::tempdir().unwrap();
-        let database=AuthorityDatabase::initialize(directory.path()).unwrap();
-        let mut tx=database.begin_with_identity_claim_scopes(7,11).unwrap();
-        let item=request("overflow", &"c".repeat(64),100.0);
-        let key=count_key(&tx,&item.boundary).unwrap();
-        database.entity_put(&mut tx,key,serde_json::to_vec(&json!({"owner_user_id":11,"tenant_id":"personal","count":u64::MAX})).unwrap()).unwrap();
-        assert_eq!(create(&database,&mut tx,&item,false).unwrap_err().kind(),io::ErrorKind::InvalidData);
-        assert!(read_core(&database,&mut tx,&item.credential_id).unwrap().is_none());
-        assert!(lookup_secret(&database,&mut tx,&item.secret_hash).unwrap().is_none());
+        let directory = tempfile::tempdir().unwrap();
+        let database = AuthorityDatabase::initialize(directory.path()).unwrap();
+        let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        let item = request("overflow", &"c".repeat(64), 100.0);
+        let key = count_key(&tx, &item.boundary).unwrap();
+        database
+            .entity_put(
+                &mut tx,
+                key,
+                serde_json::to_vec(
+                    &json!({"owner_user_id":11,"tenant_id":"personal","count":u64::MAX}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            create(&database, &mut tx, &item, false).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(read_core(&database, &mut tx, &item.credential_id)
+            .unwrap()
+            .is_none());
+        assert!(lookup_secret(&database, &mut tx, &item.secret_hash)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

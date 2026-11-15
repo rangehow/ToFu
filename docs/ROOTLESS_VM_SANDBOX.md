@@ -68,10 +68,8 @@ Host scratch allocation is explicit through `rootless_vm.host_paths`: owner-root
 scratch, `ROOTLESS_VM_TMPDIR`, `TOFU_EVAL_ROOT/.runtime/tmp`, then checkout
 `.eval-runs/.runtime/tmp`. Host `/tmp`, `/var/tmp`, `/dev/shm`, symlink components,
 and unsafe scratch permissions are rejected. Guest/jail `/tmp` remains private
-and is not rewritten. A deployment whose checkout lives on a shared volume
-declares that volume's mount root in `TOFU_REQUIRED_HOST_VOLUME` (no default;
-a DolphinFS deployment sets its mount root), and the shared host policy then
-keeps writable roots on it when the checkout resides there. `child_storage_environment` gives launchers,
+and is not rewritten. When the checkout resides on a shared `/mnt/<volume>`
+network volume, the shared host policy keeps writable roots on that volume. `child_storage_environment` gives launchers,
 preparation tools and the bootstrap private HOME/tmp/caches; Harbor freezes
 those child paths in its `runtime_storage` manifest.
 
@@ -379,8 +377,8 @@ The harness is an explicit score/provenance dimension. Inspect the registry with
 | --- | --- | --- | --- |
 | `deepseek-minimal` | model and credentials host-only; tools in QEMU | ATIF-v1.7 plus redacted host dispatch audit | Published DeepSeek Harness Minimal result |
 | `tofu` | model and credentials host-only; tools in QEMU | ATIF-v1.7 plus redacted host dispatch audit | Tofu recovery/checkpoint harness |
-| `tofu-kimi` | production AgentRuntime and Kimi credentials host-only; two exclusive client tools in QEMU | native events + runtime/tool audit + ATIF-v1.7 | Formal Tofu candidate over the same Meituan Kimi |
-| `codex-kimi` | pinned Codex in QEMU; Kimi credential in launcher-owned host proxy | raw Codex JSONL + tagged proxy usage + ATIF-v1.7 | Codex CLI 0.149.1 over the same Meituan Kimi |
+| `tofu-kimi` | production AgentRuntime and Kimi credentials host-only; two exclusive client tools in QEMU | native events + runtime/tool audit + ATIF-v1.7 | Formal Tofu candidate over the same YourProvider Kimi |
+| `codex-kimi` | pinned Codex in QEMU; Kimi credential in launcher-owned host proxy | raw Codex JSONL + tagged proxy usage + ATIF-v1.7 | Codex CLI 0.149.1 over the same YourProvider Kimi |
 | `codex` | Codex CLI, model access, and credential inside QEMU | Harbor's native ATIF-v1.7 conversion | Harbor Codex installed agent |
 | `claude-code` | Claude Code CLI, model access, and credential inside QEMU | Harbor's native ATIF-v1.7 conversion | Harbor Claude Code installed agent |
 
@@ -410,7 +408,7 @@ The published DeepSeek-V4-Flash reference uses the exact one-line system prompt
 result must not be presented as a Minimal reproduction.
 
 The Minimal profile uses DeepSeek Harness's 256,000-token default output cap.
-For the physically selected Meituan deployment it records the observed 393,216
+For the physically selected YourProvider deployment it records the observed 393,216
 combined context limit and conservatively shrinks the per-turn completion
 budget as the prompt grows. This preserves the official cap for ordinary turns
 while preventing `input + max_tokens` from becoming a harness-induced HTTP 400.
@@ -518,7 +516,7 @@ after any run:
 python scripts/rootless_terminal_bench_21.py collect-trajectories \
   $TOFU_EVAL_ROOT/tb21/jobs/deepseek-v4-attempt-1 \
   --output-root $TOFU_EVAL_ROOT/tb21/trajectory-bundle \
-  --expected-model deepseek-v4-flash-meituan
+  --expected-model deepseek-v4-flash-yourprovider
 ```
 
 The bundle contains one sanitized ATIF file and `attribution.json` per trial,
@@ -617,7 +615,7 @@ Long tool trajectories are checkpointed before 300,000 prompt tokens by
 default (`--context-checkpoint-tokens`). The disposable VM and its files keep
 running while old chat turns are replaced with the original task plus recent
 terminal evidence. A provider `PromptTooLongError` triggers the same recovery
-once as a defensive fallback. The threshold leaves room below the Meituan
+once as a defensive fallback. The threshold leaves room below the YourProvider
 route's observed context ceiling for the configured 32,768-token completion;
 checkpoint count and threshold remain in the audit metadata.
 If `submit_result` supplies the exact same command that immediately preceded

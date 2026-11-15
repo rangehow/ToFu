@@ -475,8 +475,8 @@ def test_selector_cli_runs_each_package_suite_from_its_directory(selection_repo)
     scripts.mkdir()
     shutil.copyfile(_SCRIPT, scripts / 'test_select.py')
     shutil.copyfile(os.path.join(os.path.dirname(_SCRIPT), 'test_execution.py'), scripts / 'test_execution.py')
-    shutil.copyfile(os.path.join(os.path.dirname(_SCRIPT), 'agent_wheel_manifest.py'),
-                    scripts / 'agent_wheel_manifest.py')
+    for sibling in ('agent_wheel_manifest.py', 'check_static_gates.py'):
+        shutil.copyfile(os.path.join(os.path.dirname(_SCRIPT), sibling), scripts / sibling)
     (root / 'pyproject.toml').write_text(
         '[tool.pytest.ini_options]\naddopts = "-p pytest_timeout"\n'
         'markers = ["unit", "api", "visual", "slow", "live_llm"]\n')
@@ -625,7 +625,7 @@ def test_selector_cli_runs_api_and_unit_without_opt_in_tiers(selection_repo):
     scripts = root / 'scripts'
     scripts.mkdir()
     shutil.copyfile(_SCRIPT, scripts / 'test_select.py')
-    for sibling in ('test_execution.py', 'agent_wheel_manifest.py'):
+    for sibling in ('test_execution.py', 'agent_wheel_manifest.py', 'check_static_gates.py'):
         shutil.copyfile(os.path.join(os.path.dirname(_SCRIPT), sibling), scripts / sibling)
     (root / 'pyproject.toml').write_text(
         '[tool.pytest.ini_options]\naddopts = "-p pytest_timeout"\n'
@@ -655,7 +655,7 @@ def _selector_repo_with_spec(root):
     scripts = root / 'scripts'
     scripts.mkdir()
     shutil.copyfile(_SCRIPT, scripts / 'test_select.py')
-    for sibling in ('test_execution.py', 'agent_wheel_manifest.py'):
+    for sibling in ('test_execution.py', 'agent_wheel_manifest.py', 'check_static_gates.py'):
         shutil.copyfile(os.path.join(os.path.dirname(_SCRIPT), sibling), scripts / sibling)
     (root / 'pyproject.toml').write_text(
         '[tool.pytest.ini_options]\naddopts = "-p pytest_timeout"\n'

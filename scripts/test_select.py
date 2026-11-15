@@ -7,7 +7,8 @@ advisory reverse index, supplemented by blast-radius rules, live guards and the
 agent wheel boundary guard (a change to a module the tofu-agent wheel ships).
 Vitest specs (vitest.config.mjs include) get the same static treatment through
 relative string literals and repository-path literals; --run executes them with
-npm's test:unit script after pytest. The pytest configuration owns execution
+npm's test:unit script after pytest. --run first applies the lint gates of
+scripts/check_static_gates.py to the changed files. The pytest configuration owns execution
 plugins. docs/TESTING_STRATEGY.md owns the verification ladder; domain, browser
 and release gates remain mandatory.
 """
@@ -560,6 +561,9 @@ def main(argv: list[str]) -> int:
         print('[test-select] pass --run to execute, --print to list')
         return 0
     vitest_cmd = build_vitest_command(specs) if specs else None
+    static_code = subprocess.run(
+        [sys.executable, os.path.join(ROOT, 'scripts', 'check_static_gates.py'), '--', *changed],
+        cwd=ROOT).returncode
     env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD='1')
     pytest_code = 0
     for package, cmd in build_pytest_sessions(existing, jobs, ROOT):
@@ -575,10 +579,10 @@ def main(argv: list[str]) -> int:
     if vitest_cmd:
         print('[test-select] $', ' '.join(vitest_cmd), flush=True)
         vitest_code = subprocess.run(vitest_cmd, cwd=ROOT).returncode
-    # The gate reports only the output tail: name both runners there.
-    print(f'[test-select] pytest exit={pytest_code}, vitest exit='
+    # The gate reports only the output tail: name every runner there.
+    print(f'[test-select] static gates exit={static_code}, pytest exit={pytest_code}, vitest exit='
           + (str(vitest_code) if vitest_cmd else 'not selected'))
-    return pytest_code or vitest_code
+    return static_code or pytest_code or vitest_code
 
 
 if __name__ == '__main__':

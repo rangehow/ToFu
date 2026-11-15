@@ -22,7 +22,8 @@ import pytest
 
 import lib.scheduler.manager as manager_module
 from tests.scheduler.test_agent_scheduling import (  # noqa: F401 (fixtures)
-    COORDINATOR, OWNER, audit, creators, owner_http, storage, workspace,
+    COORDINATOR, OWNER, audit as audit, creators as creators, owner_http as owner_http,
+    storage as storage, workspace as workspace,
 )
 
 pytestmark = pytest.mark.unit

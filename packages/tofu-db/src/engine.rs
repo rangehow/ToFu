@@ -2,10 +2,14 @@
 
 #[path = "engine_history_compaction.rs"]
 mod history_compaction;
-pub(crate) use history_compaction::{encode_history_compaction, PreparedHistoryCompaction, HistoryCompactionOutcome};
+pub(crate) use history_compaction::{
+    encode_history_compaction, HistoryCompactionOutcome, PreparedHistoryCompaction,
+};
 #[path = "engine_rotation_publication.rs"]
 mod rotation_publication;
-pub(crate) use rotation_publication::{publish_rotation_publication, RotationPublication, PreparedRotationPublication};
+pub(crate) use rotation_publication::{
+    publish_rotation_publication, PreparedRotationPublication, RotationPublication,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -370,7 +374,6 @@ pub(crate) struct OnlineGcMarkSnapshot {
     pub staged_history: Vec<HistorySegmentReference>,
     pub committed_block_ids: Vec<BlockId>,
     pub payload_manifest_block_id: Option<BlockId>,
-    pub durable_sequence: u64,
     pub generation: u64,
 }
 
@@ -398,7 +401,6 @@ pub struct CommittedTransaction {
 /// Borrowed logical metadata; no raw logged-byte ownership is promised.
 pub(crate) struct TransactionMetadataRef<'a> {
     pub sequence: u64,
-    pub record_hash: [u8; 32],
     pub envelope: &'a TransactionEnvelope,
 }
 
@@ -432,16 +434,24 @@ impl Drop for Engine {
     /// earlier publication (restart_required) is never retried here.
     fn drop(&mut self) {
         if self.wal.buffered_writes_enabled()
-            && !self.restart_required.load(std::sync::atomic::Ordering::Relaxed)
-            && self.wal.sync_pending().is_err() {
-            self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+            && !self
+                .restart_required
+                .load(std::sync::atomic::Ordering::Relaxed)
+            && self.wal.sync_pending().is_err()
+        {
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self.wal.detach_barrier();
         if let Some(driver) = self.wal_barrier_driver.take() {
             let _ = driver.stop_and_join();
         }
         self.wal_barrier = None;
-        if self.control_dirty && !self.restart_required.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.control_dirty
+            && !self
+                .restart_required
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
             if let Err(error) = self.flush_dirty_control() {
                 // No-panic/no-retry semantics stay: the failure only means
                 // the next open replays the WAL, but it is now observable.
@@ -453,7 +463,10 @@ impl Drop for Engine {
             }
         }
         if let Err(error) = self.blocks.save_read_hints() {
-            crate::engine_log::warn("read_hints", &format!("optional read hints could not be saved: {error}"));
+            crate::engine_log::warn(
+                "read_hints",
+                &format!("optional read hints could not be saved: {error}"),
+            );
         }
     }
 }
@@ -641,12 +654,19 @@ impl Engine {
     /// Cooperative open cancellation is checked between complete recovery
     /// operations. Durable validation and publication keep their existing owner.
     pub(crate) fn open_with_vfs_until(
-        data_dir: &Path, vfs: Arc<dyn Vfs>, should_stop: &dyn Fn() -> bool,
+        data_dir: &Path,
+        vfs: Arc<dyn Vfs>,
+        should_stop: &dyn Fn() -> bool,
     ) -> io::Result<Self> {
         let check_cancelled = || {
             if should_stop() {
-                Err(io::Error::new(io::ErrorKind::Interrupted, "storage open cancelled"))
-            } else { Ok(()) }
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "storage open cancelled",
+                ))
+            } else {
+                Ok(())
+            }
         };
         check_cancelled()?;
         use crate::recovery_profile::{Phase, Work};
@@ -669,15 +689,24 @@ impl Engine {
             let path = crate::wal::active_log_path(data_dir, next_generation)?;
             match vfs.metadata(&path) {
                 Ok(FileKind::File) => {
-                    let successor = ActiveLog::open_generation_with_vfs(data_dir, next_generation, Arc::clone(&vfs))?;
-                    if !successor.is_empty()? {
+                    let successor = ActiveLog::open_generation_with_vfs(
+                        data_dir,
+                        next_generation,
+                        Arc::clone(&vfs),
+                    )?;
+                    if !successor.is_empty() {
                         return Err(io::Error::new(io::ErrorKind::InvalidData,
                             "unreferenced successor WAL contains records; CONTROL outcome is uncertain"));
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error),
-                Ok(_) => return Err(io::Error::new(io::ErrorKind::InvalidData, "successor WAL path is not a file")),
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "successor WAL path is not a file",
+                    ))
+                }
             }
         }
         let mut wal = ActiveLog::open_generation_with_vfs(
@@ -691,14 +720,24 @@ impl Engine {
         profile.advance(Phase::WalScan);
         check_cancelled()?;
         let selected = crate::wal::scan_selected_generation_chain(
-            data_dir, &state, &mut wal, Arc::clone(&vfs),
+            data_dir,
+            &state,
+            &mut wal,
+            Arc::clone(&vfs),
         )?;
         let predecessor_record_count = selected.predecessor_record_count;
         let mut recovery = selected.recovery;
         profile.set_work(Work::WalRecords, recovery.records.len() as u64);
         profile.set_work(Work::SealedWalRecords, predecessor_record_count as u64);
         if profile.enabled() {
-            profile.set_work(Work::WalPayloadBytes, recovery.records.iter().map(|record| record.payload.len() as u64).sum());
+            profile.set_work(
+                Work::WalPayloadBytes,
+                recovery
+                    .records
+                    .iter()
+                    .map(|record| record.payload.len() as u64)
+                    .sum(),
+            );
         }
         profile.advance(Phase::BlockCatalog);
         check_cancelled()?;
@@ -714,7 +753,12 @@ impl Engine {
         // Decode one bounded WAL record at a time; retain only IDs, not a
         // second copy of carried payloads. Cover every selected reference so
         // a larger WAL cannot fall back to repeated whole-catalog lookups.
-        profile.set_work(Work::PayloadSegments, payload_manifest.as_ref().map_or(0, |manifest| manifest.segments.len() as u64));
+        profile.set_work(
+            Work::PayloadSegments,
+            payload_manifest
+                .as_ref()
+                .map_or(0, |manifest| manifest.segments.len() as u64),
+        );
         profile.advance(Phase::RecoveryIds);
         check_cancelled()?;
         let mut recovery_ids = BTreeSet::new();
@@ -724,11 +768,15 @@ impl Engine {
         for record in &recovery.records {
             check_cancelled()?;
             // Replay below remains the authority for malformed/ambiguous tails.
-            let Ok(envelope) = TransactionEnvelope::decode_skipping_carried(&record.payload) else { break; };
+            let Ok(envelope) = TransactionEnvelope::decode_skipping_carried(&record.payload) else {
+                break;
+            };
             has_payload_references |= !envelope.block_ids.is_empty()
                 || matches!(envelope.authority_state_update, Some(Some(_)));
             recovery_ids.extend(envelope.block_ids);
-            if let Some(Some(root)) = envelope.authority_state_update { recovery_ids.insert(root); }
+            if let Some(Some(root)) = envelope.authority_state_update {
+                recovery_ids.insert(root);
+            }
         }
         profile.set_work(Work::SelectedRecoveryIds, recovery_ids.len() as u64);
         profile.advance(Phase::PackedLookup);
@@ -761,9 +809,14 @@ impl Engine {
             None => None,
         };
         if let Some(manifest) = &history_manifest {
-            let routing = manifest.payload_index_root_id.map(|id| {
-                crate::history_payload::RoutingRoot::decode(&blocks.get_materialized_shared(id)?)
-            }).transpose()?;
+            let routing = manifest
+                .payload_index_root_id
+                .map(|id| {
+                    crate::history_payload::RoutingRoot::decode(
+                        &blocks.get_materialized_shared(id)?,
+                    )
+                })
+                .transpose()?;
             blocks.install_history_payload_catalog(manifest, routing)?;
         }
         blocks.prepare_history_recovery_until(&mut carried_recovery, should_stop)?;
@@ -785,7 +838,8 @@ impl Engine {
                     // Restaging an already packed copy would create another
                     // segment on every read-only daemon reopen.
                     Some(payload) => {
-                        let restored = blocks.restore_carried_with_lookup(payload, &mut carried_recovery)?;
+                        let restored =
+                            blocks.restore_carried_with_lookup(payload, &mut carried_recovery)?;
                         if restored != *block_id {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -829,7 +883,8 @@ impl Engine {
                     // Same catalog-aware recovery as ordinary block slots;
                     // loose-file reads stay off the carried recovery path.
                     Some(payload) => {
-                        let restored = blocks.restore_carried_with_lookup(payload, &mut carried_recovery)?;
+                        let restored =
+                            blocks.restore_carried_with_lookup(payload, &mut carried_recovery)?;
                         if restored != root {
                             return Err(io::Error::new(
                                 io::ErrorKind::InvalidData,
@@ -882,7 +937,10 @@ impl Engine {
         check_cancelled()?;
         if keep_records != recovery.records.len() || recovery.truncated_bytes > 0 {
             if keep_records < predecessor_record_count {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "sealed WAL replay lost its durable prefix"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "sealed WAL replay lost its durable prefix",
+                ));
             }
             let end_offset = if keep_records == predecessor_record_count {
                 0
@@ -940,11 +998,14 @@ impl Engine {
         if recovered_sequence > state.durable_sequence
             || recovered_authority_state_root != state.authority_state_root
         {
-            let recovered_hash = recovery.records.last()
+            let recovered_hash = recovery
+                .records
+                .last()
                 .map_or(state.root_hash, |record| record.record_hash);
             let next = ControlState {
-                generation: state.generation.checked_add(1)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?,
+                generation: state.generation.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
+                })?,
                 durable_sequence: recovered_sequence,
                 authority_uuid: state.authority_uuid,
                 root_hash: recovered_hash,
@@ -972,7 +1033,10 @@ impl Engine {
                 Arc::clone(&vfs),
                 // A sealed WAL is still authoritative. Queue only its own
                 // predecessor for cleanup until recovery installs this prefix.
-                state.sealed_log.as_ref().map_or(state.active_log_generation, |sealed| sealed.generation),
+                state
+                    .sealed_log
+                    .as_ref()
+                    .map_or(state.active_log_generation, |sealed| sealed.generation),
             )),
             blocks,
             vfs,
@@ -1012,16 +1076,24 @@ impl Engine {
         if let Some(sealed) = engine.state.sealed_log.clone() {
             profile.advance(Phase::SealedPrepare);
             check_cancelled()?;
-            let split = engine.committed.partition_point(|transaction| transaction.sequence <= sealed.terminal_sequence);
+            let split = engine
+                .committed
+                .partition_point(|transaction| transaction.sequence <= sealed.terminal_sequence);
             let successor = engine.committed.split_off(split);
-            engine.unstaged_history_bytes = engine.committed.iter().map(transaction_history_bytes).sum();
+            engine.unstaged_history_bytes =
+                engine.committed.iter().map(transaction_history_bytes).sum();
             engine.rotation_in_flight = true;
             let snapshot = match engine.prepare_rotation_checkpoint_inner()? {
                 RotationCheckpointPreparation::Ready(snapshot) => snapshot,
-                _ => return Err(io::Error::other("sealed WAL recovery did not prepare its prefix")),
+                _ => {
+                    return Err(io::Error::other(
+                        "sealed WAL recovery did not prepare its prefix",
+                    ))
+                }
             };
             engine.committed = successor;
-            engine.unstaged_history_bytes = engine.committed.iter().map(transaction_history_bytes).sum();
+            engine.unstaged_history_bytes =
+                engine.committed.iter().map(transaction_history_bytes).sum();
             profile.advance(Phase::SealedEncode);
             check_cancelled()?;
             let outcome = encode_rotation_segments(&snapshot);
@@ -1036,7 +1108,10 @@ impl Engine {
     }
 
     pub fn require_usable_authority(&self) -> io::Result<()> {
-        if self.restart_required.load(std::sync::atomic::Ordering::Relaxed) {
+        if self
+            .restart_required
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Err(reopen_required(
                 io::ErrorKind::Other,
                 "tofu-db authority outcome is uncertain; close and reopen the engine".to_owned(),
@@ -1064,7 +1139,8 @@ impl Engine {
         // `Strict` mode); a barrier failure is as ambiguous as a publication
         // failure.
         if let Err(error) = self.wal.sync_pending() {
-            self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             return Err(error);
         }
         // Synchronous publishers refuse to queue a CONTROL write behind an
@@ -1085,14 +1161,16 @@ impl Engine {
             // A failed CONTROL write or fsync can have reached stable storage even
             // when the caller observes an error. The in-memory generation must not
             // be used for another publication until recovery selects the authority.
-            self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             return Err(error);
         }
         Ok(())
     }
 
     pub fn is_restart_required(&self) -> bool {
-        self.restart_required.load(std::sync::atomic::Ordering::Relaxed)
+        self.restart_required
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Shared handle to the restart latch for read-replica liveness checks.
@@ -1186,6 +1264,7 @@ impl Engine {
     /// Whether a rotation checkpoint currently owns the rotation lane. The
     /// server layer reads this (with the WAL length) to park appends for the
     /// install window instead of rejecting them.
+    #[cfg(test)]
     pub(crate) fn rotation_in_flight(&self) -> bool {
         self.rotation_in_flight
     }
@@ -1206,6 +1285,7 @@ impl Engine {
         self.publish_payload_manifest(manifest, &[])
     }
 
+    #[cfg(test)]
     pub(crate) fn set_rotation_threshold_bytes_for_test(&mut self, bytes: u64) {
         self.rotation_threshold_bytes = bytes;
     }
@@ -1226,7 +1306,8 @@ impl Engine {
         match self.wal.sync_pending() {
             Ok(flushed) => Ok(flushed),
             Err(error) => {
-                self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.restart_required
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 Err(error)
             }
         }
@@ -1378,10 +1459,7 @@ impl Engine {
                     // disk. Recovery must select/truncate that outcome before the
                     // live file can accept another transaction. Maintenance
                     // never rejects an append after it reaches the WAL.
-                    return Err(fence_failed_wal_append(
-                        &self.restart_required,
-                        error,
-                    ));
+                    return Err(fence_failed_wal_append(&self.restart_required, error));
                 }
             }
         };
@@ -1516,10 +1594,7 @@ impl Engine {
             {
                 Ok(hashes) => hashes,
                 Err(error) => {
-                    return Err(fence_failed_wal_append(
-                        &self.restart_required,
-                        error,
-                    ));
+                    return Err(fence_failed_wal_append(&self.restart_required, error));
                 }
             };
         let final_sequence = first_sequence
@@ -1599,7 +1674,10 @@ impl Engine {
 
     /// Publish an internally captured immutable payload. Durable/pending
     /// dedup and WAL carrying follow the same path as ordinary blob writes.
-    pub(crate) fn write_prepared_blob_block(&self, payload: &crate::block::PreparedBlockPayload) -> io::Result<BlockId> {
+    pub(crate) fn write_prepared_blob_block(
+        &self,
+        payload: &crate::block::PreparedBlockPayload,
+    ) -> io::Result<BlockId> {
         self.require_write_admission()?;
         let (block_id, _) = self.blocks.put_deferred_prepared(payload)?;
         Ok(block_id)
@@ -1617,7 +1695,10 @@ impl Engine {
     /// copy-on-write page and root-directory paths). Skips the durable dedup
     /// probe; see `BlockStore::put_deferred_fresh`.
     /// Captured immutable fresh pages retain ordinary admission and WAL staging.
-    pub(crate) fn write_block_fresh_prepared(&self, payload: &crate::block::PreparedBlockPayload) -> io::Result<BlockId> {
+    pub(crate) fn write_block_fresh_prepared(
+        &self,
+        payload: &crate::block::PreparedBlockPayload,
+    ) -> io::Result<BlockId> {
         self.require_write_admission()?;
         let (id, _) = self.blocks.put_deferred_fresh_prepared(payload)?;
         Ok(id)
@@ -1645,7 +1726,9 @@ impl Engine {
     /// publication owns the physical lane, or a single block spills, the loose
     /// batch covers all of it.
     fn spill_referenced_blocks(
-        &mut self, block_ids: &[BlockId], authority_root: Option<BlockId>,
+        &mut self,
+        block_ids: &[BlockId],
+        authority_root: Option<BlockId>,
     ) -> io::Result<()> {
         let references: BTreeSet<BlockId> =
             block_ids.iter().copied().chain(authority_root).collect();
@@ -1681,7 +1764,9 @@ impl Engine {
     /// identifier-only references; the checkpoint path uses
     /// `materialize_deferred_blocks`.
     fn flush_deferred_blocks(
-        &self, block_ids: &[BlockId], authority_root: Option<BlockId>,
+        &self,
+        block_ids: &[BlockId],
+        authority_root: Option<BlockId>,
     ) -> io::Result<()> {
         crate::fsync_stats::note_flush_deferred();
         let references = block_ids.iter().copied().chain(authority_root).collect();
@@ -1772,6 +1857,7 @@ impl Engine {
 
     /// One idle maintenance publication; a full catalog stays with the
     /// foreground merge/loose fallback rather than extending this round.
+    #[cfg(test)]
     pub(crate) fn publish_completed_pack_if_capacity(&mut self) -> io::Result<bool> {
         self.require_usable_authority()?;
         if self.payload_segment_count() >= MAX_PAYLOAD_SEGMENTS {
@@ -1840,9 +1926,9 @@ impl Engine {
         // manifest reference, slot stabilization, each generation+1.
         let mut generation = self.state.generation;
         let catchup = if self.control_dirty {
-            generation = generation.checked_add(1).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
-            })?;
+            generation = generation
+                .checked_add(1)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?;
             Some(ControlState {
                 generation,
                 ..self.state.clone()
@@ -1850,17 +1936,17 @@ impl Engine {
         } else {
             None
         };
-        generation = generation.checked_add(1).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
-        })?;
+        generation = generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?;
         let manifest_next = ControlState {
             generation,
             payload_manifest_block_id: Some(manifest_block_id),
             ..self.state.clone()
         };
-        generation = generation.checked_add(1).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
-        })?;
+        generation = generation
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?;
         let stabilize_next = ControlState {
             generation,
             ..manifest_next.clone()
@@ -1923,7 +2009,8 @@ impl Engine {
                 // The CONTROL chain may have partially landed; the in-memory
                 // generation is unusable until recovery, exactly like a
                 // synchronous publication failure.
-                self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.restart_required
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 Err(error)
             }
             Ok(()) => {
@@ -1997,7 +2084,9 @@ impl Engine {
     /// copies. Returns the routed bytes and the chunk IDs a full catalog
     /// could not absorb; those stay staged for the caller's loose batch.
     fn pack_staged_payloads(
-        &mut self, sorted: Vec<(BlockId, u64)>, byte_budget: u64,
+        &mut self,
+        sorted: Vec<(BlockId, u64)>,
+        byte_budget: u64,
     ) -> io::Result<(u64, BTreeSet<BlockId>)> {
         let existing = self
             .payload_manifest
@@ -2063,7 +2152,9 @@ impl Engine {
     fn next_checkpoint_segment_id(&mut self) -> Uuid {
         #[cfg(test)]
         if let Some(ids) = self.checkpoint_segment_test_ids.as_mut() {
-            return ids.next().expect("fixture checkpoint ID sequence exhausted");
+            return ids
+                .next()
+                .expect("fixture checkpoint ID sequence exhausted");
         }
         Uuid::new_v4()
     }
@@ -2109,7 +2200,10 @@ impl Engine {
         // slot zero rewrites an ever-growing segment under the authority lock.
         // Choose the least historical payload that can fit this chunk using
         // already-validated metadata only (no candidate file reads).
-        let candidate = plan.references.iter().enumerate()
+        let candidate = plan
+            .references
+            .iter()
+            .enumerate()
             .filter(|(_, reference)| {
                 reference.block_count as usize + chunk_ids.len() <= MAX_SEGMENT_BLOCKS
                     && reference.payload_bytes + chunk_payload_bytes <= MAX_SEGMENT_PAYLOAD_BYTES
@@ -2143,11 +2237,15 @@ impl Engine {
                     if self.blocks.pending_payload(block_id)?.is_some() {
                         return self.blocks.get(block_id);
                     }
-                    self.blocks.payload_segment_store()?
+                    self.blocks
+                        .payload_segment_store()?
                         .get_with_handle(&oldest_segment, block_id)?
-                        .ok_or_else(|| io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "checkpoint merge source block is missing"))
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "checkpoint merge source block is missing",
+                            )
+                        })
                 })?;
         let reference = PayloadSegmentReference::new(
             segment.metadata(),
@@ -2156,7 +2254,12 @@ impl Engine {
         )?;
         // The merged-away segment's IDs are in the packed filter while it
         // covers that segment; only the chunk is new.
-        self.blocks.verify_merged_payload_segment(&reference, &oldest, &oldest_segment, chunk_ids)?;
+        self.blocks.verify_merged_payload_segment(
+            &reference,
+            &oldest,
+            &oldest_segment,
+            chunk_ids,
+        )?;
         plan.references[merge_index] = reference;
         plan.merged_away.push(oldest.segment_id);
         plan.packed.extend(chunk_ids.iter().copied());
@@ -2221,10 +2324,7 @@ impl Engine {
     /// authority open (`AuthorityDatabase::configure_write_path_budgets`).
     /// Bounds match the operator override: 1..=half one segment's payload
     /// budget. Background packers started afterwards inherit the value.
-    pub fn set_checkpoint_materialize_batch_bytes(
-        &mut self,
-        batch_bytes: u64,
-    ) -> io::Result<()> {
+    pub fn set_checkpoint_materialize_batch_bytes(&mut self, batch_bytes: u64) -> io::Result<()> {
         const CEILING: u64 = crate::payload_segment::MAX_SEGMENT_PAYLOAD_BYTES / 2;
         if batch_bytes == 0 || batch_bytes > CEILING {
             return Err(io::Error::new(
@@ -2263,12 +2363,15 @@ impl Engine {
     }
 
     fn active_transaction_batches(&self) -> impl Iterator<Item = &[CommittedTransaction]> {
-        self.rotation_read_batches.iter().map(|batch| batch.as_slice())
+        self.rotation_read_batches
+            .iter()
+            .map(|batch| batch.as_slice())
             .chain(std::iter::once(self.committed.as_slice()))
     }
 
     fn active_transactions(&self) -> impl Iterator<Item = &CommittedTransaction> {
-        self.active_transaction_batches().flat_map(|batch| batch.iter())
+        self.active_transaction_batches()
+            .flat_map(|batch| batch.iter())
     }
 
     #[cfg(test)]
@@ -2328,7 +2431,13 @@ impl Engine {
     /// authority owner's durable replay boundary. Policy cannot prune it.
     pub(crate) fn history_retention_for_replay(&self, maximum: usize, first: u64) -> usize {
         self.history_manifest.as_ref().map_or(maximum, |manifest| {
-            maximum.max(manifest.segments.iter().filter(|segment| segment.last_sequence >= first).count())
+            maximum.max(
+                manifest
+                    .segments
+                    .iter()
+                    .filter(|segment| segment.last_sequence >= first)
+                    .count(),
+            )
         })
     }
 
@@ -2346,8 +2455,10 @@ impl Engine {
 
     pub(crate) fn require_physical_maintenance_available(&self) -> io::Result<()> {
         if self.async_publication_in_flight {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,
-                "background publication owns materialization"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "background publication owns materialization",
+            ));
         }
         Ok(())
     }
@@ -2377,7 +2488,9 @@ impl Engine {
         let unpublished = self.blocks.protected_segment_ids()?;
         let skip_temporary = !unpublished.is_empty();
         referenced_ids.extend(unpublished);
-        if referenced_ids.len() >= crate::generated_tofudb_ir::MAX_AUTHORITY_GC_PAYLOAD_SEGMENT_FILES_SCANNED {
+        if referenced_ids.len()
+            >= crate::generated_tofudb_ir::MAX_AUTHORITY_GC_PAYLOAD_SEGMENT_FILES_SCANNED
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "payload manifest exceeds orphan scan admission bound",
@@ -2455,7 +2568,10 @@ impl Engine {
             .unlink_orphan_file(candidate)
     }
 
-    fn control_slots_name_only_payload_manifest(&self, installed: Option<BlockId>) -> io::Result<bool> {
+    fn control_slots_name_only_payload_manifest(
+        &self,
+        installed: Option<BlockId>,
+    ) -> io::Result<bool> {
         Ok(self
             .control
             .lock()
@@ -2500,8 +2616,10 @@ impl Engine {
         if candidate.segment_id.is_none()
             && !self.blocks.unpublished_background_segment_ids()?.is_empty()
         {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,
-                "background pack owns temporary segment files"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "background pack owns temporary segment files",
+            ));
         }
         if candidate.segment_id.is_some_and(|segment_id| {
             self.payload_segment_references()
@@ -2728,23 +2846,24 @@ impl Engine {
     /// GC-only capture: metadata source reads belong to off-authority marks.
     /// Other snapshot consumers retain the original eager validation boundary.
     pub(crate) fn capture_online_gc_mark_snapshot_off_authority(
-        &self, pinned_roots: Vec<BlockId>, maximum_snapshot_bytes: u64,
+        &self,
+        pinned_roots: Vec<BlockId>,
+        maximum_snapshot_bytes: u64,
     ) -> io::Result<OnlineGcMarkSnapshot> {
         self.capture_online_gc_snapshot_inputs(pinned_roots, Some(maximum_snapshot_bytes))
     }
 
     fn capture_online_gc_snapshot_inputs(
-        &self, pinned_roots: Vec<BlockId>, maximum_snapshot_bytes: Option<u64>,
+        &self,
+        pinned_roots: Vec<BlockId>,
+        maximum_snapshot_bytes: Option<u64>,
     ) -> io::Result<OnlineGcMarkSnapshot> {
-        let authority_state_root = self
-            .state
-            .authority_state_root
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "online GC refuses a legacy CONTROL root",
-                )
-            })?;
+        let authority_state_root = self.state.authority_state_root.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "online GC refuses a legacy CONTROL root",
+            )
+        })?;
         // The covered prefix of an in-flight rotation is still WAL-owned, and
         // open publication windows hold loose blocks that engine state names
         // only after they install (rule S9). Both are marked by identity.
@@ -2756,10 +2875,14 @@ impl Engine {
         let (selected_history_metadata, history_payload_metadata_ids) =
             match (maximum_snapshot_bytes, self.history_manifest.as_ref()) {
                 (Some(budget), Some(manifest)) => (
-                    Some(crate::block::HistoryPayloadMetadataSelection::capture(manifest, budget)?),
+                    Some(crate::block::HistoryPayloadMetadataSelection::capture(
+                        manifest, budget,
+                    )?),
                     Vec::new(),
                 ),
-                (None, Some(manifest)) => (None, self.blocks.history_payload_metadata_ids(manifest)?),
+                (None, Some(manifest)) => {
+                    (None, self.blocks.history_payload_metadata_ids(manifest)?)
+                }
                 (_, None) => (None, Vec::new()),
             };
         Ok(OnlineGcMarkSnapshot {
@@ -2775,7 +2898,6 @@ impl Engine {
             staged_history: self.staged_history.clone(),
             committed_block_ids,
             payload_manifest_block_id: self.state.payload_manifest_block_id,
-            durable_sequence: self.state.durable_sequence,
             generation: self.state.generation,
         })
     }
@@ -2930,7 +3052,10 @@ impl Engine {
         let mut all_excluded_are_clean = true;
         let mut total_retained = 0_usize;
         for (victim, retained_ids) in victims.iter().zip(retained_per_victim.iter()) {
-            let all_block_ids = store.open_segment(victim.segment_id)?.block_ids().collect::<Vec<_>>();
+            let all_block_ids = store
+                .open_segment(victim.segment_id)?
+                .block_ids()
+                .collect::<Vec<_>>();
             let mut retained_ids = retained_ids.clone();
             retained_ids.sort_unstable();
             if retained_ids.windows(2).any(|pair| pair[0] == pair[1])
@@ -3097,7 +3222,8 @@ impl Engine {
                 ));
             }
         }
-        self.blocks.remove_block_noting_absent(block_id, &mut Vec::new())
+        self.blocks
+            .remove_block_noting_absent(block_id, &mut Vec::new())
     }
 
     fn publish_payload_manifest(
@@ -3137,7 +3263,8 @@ impl Engine {
         let install_timer =
             crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CATALOG_INSTALL);
         if let Err(error) = self.blocks.install_payload_manifest(manifest.clone()) {
-            self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             return Err(error);
         }
         drop(install_timer);
@@ -3186,7 +3313,9 @@ impl Engine {
             }
         }
         if let Some(manifest) = &self.history_manifest {
-            for id in self.blocks.history_payload_metadata_ids(manifest)? { visitor(id)?; }
+            for id in self.blocks.history_payload_metadata_ids(manifest)? {
+                visitor(id)?;
+            }
             for reference in &manifest.segments {
                 visitor(reference.block_id)?;
                 for transaction in decode_segment(&self.blocks.get(reference.block_id)?, reference)?
@@ -3228,57 +3357,108 @@ impl Engine {
     /// alive at a time; active WAL transactions are borrowed. History scans do
     /// not populate the foreground block cache. Missing/pruned required history
     /// fails closed, and a callback error stops before loading another segment.
-    pub(crate) fn visit_transaction_metadata_from<F>(&self, first_sequence: u64, mut visitor: F) -> io::Result<()>
-    where F: for<'a> FnMut(TransactionMetadataRef<'a>) -> io::Result<()> {
+    pub(crate) fn visit_transaction_metadata_from<F>(
+        &self,
+        first_sequence: u64,
+        mut visitor: F,
+    ) -> io::Result<()>
+    where
+        F: for<'a> FnMut(TransactionMetadataRef<'a>) -> io::Result<()>,
+    {
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_HISTORY_RANGE);
         self.require_usable_authority()?;
         if first_sequence == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "transaction suffix must start after sequence zero"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "transaction suffix must start after sequence zero",
+            ));
         }
         let head = self.state.durable_sequence;
-        if first_sequence > head { return Ok(()); }
+        if first_sequence > head {
+            return Ok(());
+        }
         let mut expected = first_sequence;
         if expected <= self.state.checkpoint_sequence {
-            let manifest = self.history_manifest.as_ref().ok_or_else(||
-                io::Error::new(io::ErrorKind::InvalidData, "required transaction suffix has no history manifest"))?;
-            let start = manifest.segments.partition_point(|reference| reference.last_sequence < expected);
+            let manifest = self.history_manifest.as_ref().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "required transaction suffix has no history manifest",
+                )
+            })?;
+            let start = manifest
+                .segments
+                .partition_point(|reference| reference.last_sequence < expected);
             for reference in &manifest.segments[start..] {
                 if reference.first_sequence > expected {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "required transaction suffix history is missing"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "required transaction suffix history is missing",
+                    ));
                 }
                 let source = self.blocks.get_materialized_uncached(reference.block_id)?;
                 let transactions = crate::history::decode_segment_views(&source, reference)?;
-                for transaction in transactions.iter().filter(|transaction| transaction.sequence >= first_sequence) {
+                for transaction in transactions
+                    .iter()
+                    .filter(|transaction| transaction.sequence >= first_sequence)
+                {
                     if transaction.sequence != expected {
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, "required transaction suffix contains a sequence gap"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "required transaction suffix contains a sequence gap",
+                        ));
                     }
-                    visitor(TransactionMetadataRef { sequence: transaction.sequence,
-                        record_hash: transaction.record_hash, envelope: &transaction.envelope })?;
-                    if expected == head { return Ok(()); }
+                    visitor(TransactionMetadataRef {
+                        sequence: transaction.sequence,
+                        envelope: &transaction.envelope,
+                    })?;
+                    if expected == head {
+                        return Ok(());
+                    }
                     expected += 1; // expected < head, including a possible u64::MAX head.
                 }
             }
             if expected <= self.state.checkpoint_sequence {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "required transaction suffix history ends early"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "required transaction suffix history ends early",
+                ));
             }
         }
         for batch in self.active_transaction_batches() {
-            let Some(first) = batch.first() else { continue; };
-            let offset = usize::try_from(expected.saturating_sub(first.sequence)).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "active transaction suffix offset overflow")
-            })?;
-            let Some(suffix) = batch.get(offset..) else { continue; };
+            let Some(first) = batch.first() else {
+                continue;
+            };
+            let offset =
+                usize::try_from(expected.saturating_sub(first.sequence)).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "active transaction suffix offset overflow",
+                    )
+                })?;
+            let Some(suffix) = batch.get(offset..) else {
+                continue;
+            };
             for transaction in suffix {
                 if transaction.sequence != expected {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "active transaction suffix contains a sequence gap"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "active transaction suffix contains a sequence gap",
+                    ));
                 }
-                visitor(TransactionMetadataRef { sequence: transaction.sequence,
-                        record_hash: transaction.record_hash, envelope: &transaction.envelope })?;
-                if expected == head { return Ok(()); }
+                visitor(TransactionMetadataRef {
+                    sequence: transaction.sequence,
+                    envelope: &transaction.envelope,
+                })?;
+                if expected == head {
+                    return Ok(());
+                }
                 expected += 1;
             }
         }
-        Err(io::Error::new(io::ErrorKind::InvalidData, "active transaction suffix ends early"))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "active transaction suffix ends early",
+        ))
     }
 
     /// Loads at most one bounded history segment for an exact sequence.
@@ -3290,13 +3470,26 @@ impl Engine {
         }
         if sequence > self.state.checkpoint_sequence {
             for batch in self.active_transaction_batches() {
-                let Some(first) = batch.first() else { continue; };
-                let Some(index) = sequence.checked_sub(first.sequence).and_then(|offset| usize::try_from(offset).ok()) else { continue; };
-                if let Some(transaction) = batch.get(index).filter(|transaction| transaction.sequence == sequence) {
+                let Some(first) = batch.first() else {
+                    continue;
+                };
+                let Some(index) = sequence
+                    .checked_sub(first.sequence)
+                    .and_then(|offset| usize::try_from(offset).ok())
+                else {
+                    continue;
+                };
+                if let Some(transaction) = batch
+                    .get(index)
+                    .filter(|transaction| transaction.sequence == sequence)
+                {
                     return Ok(Some(transaction.clone()));
                 }
             }
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "active transaction sequence is missing"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "active transaction sequence is missing",
+            ));
         }
         let manifest = self.history_manifest.as_ref().ok_or_else(|| {
             io::Error::new(
@@ -3343,7 +3536,8 @@ impl Engine {
     }
 
     pub fn checkpoint(&mut self) -> io::Result<u64> {
-        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CHECKPOINT_TOTAL);
+        let _timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CHECKPOINT_TOTAL);
         self.require_usable_authority()?;
         if self.rotation_in_flight {
             // A prepared rotation owns the history pipeline; synchronous
@@ -3393,7 +3587,7 @@ impl Engine {
                 let block_id = self.blocks.put(&segment.encoded)?;
                 new_references.push(HistorySegmentReference {
                     block_id,
-                payload_index_block_id: None,
+                    payload_index_block_id: None,
                     first_sequence: segment.first_sequence,
                     last_sequence: segment.last_sequence,
                     parent_hash: segment.parent_hash,
@@ -3412,7 +3606,10 @@ impl Engine {
             manifest_page_ids: Vec::new(),
             checkpoint_sequence: self.state.durable_sequence,
             checkpoint_hash: self.state.root_hash,
-            payload_index_root_id: self.history_manifest.as_ref().and_then(|manifest| manifest.payload_index_root_id),
+            payload_index_root_id: self
+                .history_manifest
+                .as_ref()
+                .and_then(|manifest| manifest.payload_index_root_id),
             segments,
         };
         let manifest_block_id = {
@@ -3437,7 +3634,7 @@ impl Engine {
                     next_active_generation,
                     Arc::clone(&self.vfs),
                 )?;
-                if !log.is_empty()? {
+                if !log.is_empty() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "orphan next-generation WAL is not empty",
@@ -3508,11 +3705,12 @@ impl Engine {
         if self.committed.is_empty() {
             return Ok(RotationCheckpointPreparation::Empty);
         }
-        if self.rotation_driver_attached {
-            if self.async_publication_in_flight
-                || (self.blocks.background_packer_running() && !self.wal_retirement.ready_for_rotation()?) {
-                return Ok(RotationCheckpointPreparation::Busy);
-            }
+        if self.rotation_driver_attached
+            && (self.async_publication_in_flight
+                || (self.blocks.background_packer_running()
+                    && !self.wal_retirement.ready_for_rotation()?))
+        {
+            return Ok(RotationCheckpointPreparation::Busy);
         }
         if self.rotation_driver_attached && self.blocks.background_packer_running() {
             self.blocks.request_background_drain();
@@ -3540,9 +3738,11 @@ impl Engine {
     /// Opens the in-flight rotation's online-GC window (rule S9), seeded with
     /// the staged history segments the snapshot took out of engine state.
     fn open_rotation_gc_window(&mut self, staged_history: &[HistorySegmentReference]) {
-        let window = self.blocks.open_publication_window(staged_history.iter().flat_map(|reference| {
-            std::iter::once(reference.block_id).chain(reference.payload_index_block_id)
-        }));
+        let window = self
+            .blocks
+            .open_publication_window(staged_history.iter().flat_map(|reference| {
+                std::iter::once(reference.block_id).chain(reference.payload_index_block_id)
+            }));
         if let Some(previous) = self.rotation_gc_window.replace(window) {
             self.blocks.close_publication_window(previous);
         }
@@ -3575,55 +3775,72 @@ impl Engine {
     /// successor starts empty and chains from the sealed terminal witness;
     /// no transaction bytes are copied to it.
     fn seal_wal_for_checkpoint(&mut self) -> io::Result<()> {
-        let _stage = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_GENERATION_HANDOVER);
+        let _stage = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ROTATION_GENERATION_HANDOVER,
+        );
         if self.state.sealed_log.is_some() {
             return Err(rotation_backpressure());
         }
         self.flush_dirty_control()?;
-        let generation = self.state.active_log_generation.checked_add(1)
+        let generation = self
+            .state
+            .active_log_generation
+            .checked_add(1)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WAL generation overflow"))?;
         let mut successor = match ActiveLog::initialize_generation_with_vfs(
-            &self.data_dir, generation, Arc::clone(&self.vfs),
+            &self.data_dir,
+            generation,
+            Arc::clone(&self.vfs),
         ) {
             Ok(log) => log,
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                let mut log = ActiveLog::open_generation_with_vfs(&self.data_dir, generation, Arc::clone(&self.vfs))?;
+                let mut log = ActiveLog::open_generation_with_vfs(
+                    &self.data_dir,
+                    generation,
+                    Arc::clone(&self.vfs),
+                )?;
                 log.resync_empty_generation(&self.data_dir, self.vfs.as_ref())?;
                 log
             }
             Err(error) => return Err(error),
         };
-        let next = ControlState {
-            generation: self.state.generation.checked_add(1)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?,
-            active_log_generation: generation,
-            sealed_log: Some(crate::control::SealedLog {
-                generation: self.state.active_log_generation,
-                terminal_sequence: self.state.durable_sequence,
-                terminal_hash: self.state.root_hash,
-            }),
-            ..self.state.clone()
-        };
+        let next =
+            ControlState {
+                generation: self.state.generation.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
+                })?,
+                active_log_generation: generation,
+                sealed_log: Some(crate::control::SealedLog {
+                    generation: self.state.active_log_generation,
+                    terminal_sequence: self.state.durable_sequence,
+                    terminal_hash: self.state.root_hash,
+                }),
+                ..self.state.clone()
+            };
         self.publish_control(&next)?;
         successor.set_durability(self.wal_durability);
-        if let Some(barrier) = &self.wal_barrier { successor.attach_barrier(barrier); }
+        if let Some(barrier) = &self.wal_barrier {
+            successor.attach_barrier(barrier);
+        }
         self.wal = successor;
         self.state = next;
         self.control_dirty = false;
         Ok(())
     }
 
-    fn prepare_rotation_checkpoint_inner(
-        &mut self,
-    ) -> io::Result<RotationCheckpointPreparation> {
+    fn prepare_rotation_checkpoint_inner(&mut self) -> io::Result<RotationCheckpointPreparation> {
         // Resolve artifact ownership before moving transaction buffers. A
         // sealed installation keeps its current successor; a fresh handover
         // prepares exactly the old active generation's successor.
         let next_active_log_generation = if self.state.sealed_log.is_some() {
             self.state.active_log_generation
         } else {
-            self.state.active_log_generation.checked_add(1)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WAL generation overflow"))?
+            self.state
+                .active_log_generation
+                .checked_add(1)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "WAL generation overflow")
+                })?
         };
         // The next publication may retire one more WAL only after its
         // predecessor has been reclaimed. Failed cleanup defers checkpointing.
@@ -3655,17 +3872,16 @@ impl Engine {
                     &mut self.staged_history_transactions,
                     0,
                 ),
-                unstaged_history_bytes: std::mem::replace(
-                    &mut self.unstaged_history_bytes,
-                    0,
-                ),
+                unstaged_history_bytes: std::mem::replace(&mut self.unstaged_history_bytes, 0),
                 covered,
                 parent_hash,
                 history_manifest_segments: self
                     .history_manifest
                     .as_ref()
                     .map_or_else(Vec::new, |manifest| manifest.segments.clone()),
-                history_payload_index_root_id: self.history_manifest.as_ref()
+                history_payload_index_root_id: self
+                    .history_manifest
+                    .as_ref()
                     .and_then(|manifest| manifest.payload_index_root_id),
                 blocks: Arc::clone(&self.blocks),
                 data_dir: self.data_dir.clone(),
@@ -3691,7 +3907,8 @@ impl Engine {
         let result = self.finish_rotation_checkpoint_inner(snapshot, outcome);
         if let Err(error) = &result {
             if error.kind() != io::ErrorKind::WouldBlock || self.deferred_rotation.is_none() {
-                self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.restart_required
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 // No further reads are admitted after a terminal install error.
                 // A partially published transition is recovered only from disk;
                 // reader pins must not retain the failed snapshot until reopen.
@@ -3715,14 +3932,16 @@ impl Engine {
             Err(error) => {
                 let _ = self.blocks.restore_rotation_pending();
                 self.restore_rotation_snapshot(snapshot);
-                self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+                self.restart_required
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 return Err(error);
             }
         };
         if self.rotation_driver_attached && self.blocks.background_packer_running() {
             self.rotation_install_fenced = true;
         }
-        if self.rotation_driver_attached && self.blocks.background_packer_running()
+        if self.rotation_driver_attached
+            && self.blocks.background_packer_running()
             && self.async_publication_in_flight
         {
             self.blocks.request_background_drain();
@@ -3737,25 +3956,28 @@ impl Engine {
             // manifest's hash chain (integrity failure under load).
             self.rotation_in_flight = true;
             self.deferred_rotation = Some((snapshot, outcome));
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,
-                "background publication owns materialization; rotation deferred"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "background publication owns materialization; rotation deferred",
+            ));
         }
         // Every carried byte in the covered prefix has an immutable indexed
         // history copy. Identifier-only references were durable before their
         // commit. The active WAL may retire without a duplicate materialization.
         let PreparedRotationCheckpoint {
             covered,
-            staged_history,
+            staged_history: _,
             staged_history_transactions,
             unstaged_history_bytes: _,
             parent_hash: _,
             history_manifest_segments,
-            blocks: _,
             ..
         } = *snapshot;
         debug_assert!(staged_history_transactions <= covered.len());
         {
-            let _stage = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_DIRTY_CONTROL);
+            let _stage = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_INSTALL_DIRTY_CONTROL,
+            );
             self.flush_dirty_control()?;
         }
         crate::fsync_stats::note_checkpoint();
@@ -3763,17 +3985,33 @@ impl Engine {
         // Final small segment covering the window commits (usually tiny).
         let mut outcome = outcome;
         let window = {
-            let _capture = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_WINDOW_CAPTURE);
-            crate::fsync_stats::note_rotation_window(self.committed.len(), self.unstaged_history_bytes);
+            let _capture = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_WINDOW_CAPTURE,
+            );
+            crate::fsync_stats::note_rotation_window(
+                self.committed.len(),
+                self.unstaged_history_bytes,
+            );
             std::mem::take(&mut self.committed)
         };
         if !window.is_empty() {
-            let _stage = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_WINDOW);
-            append_rotation_suffix(&self.blocks, &window, self.state.checkpoint_hash,
-                &history_manifest_segments, &mut outcome)?;
+            let _stage = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_INSTALL_WINDOW,
+            );
+            append_rotation_suffix(
+                &self.blocks,
+                &window,
+                self.state.checkpoint_hash,
+                &history_manifest_segments,
+                &mut outcome,
+            )?;
         }
-        let RotationSegmentOutcome { new_references, payload_index_root_id,
-            payload_routing, indexed_payload_ids } = outcome;
+        let RotationSegmentOutcome {
+            new_references,
+            payload_index_root_id,
+            payload_routing,
+            indexed_payload_ids,
+        } = outcome;
         let mut segments = history_manifest_segments;
         segments.extend(new_references);
         let mut manifest = HistoryManifest {
@@ -3784,7 +4022,9 @@ impl Engine {
             segments,
         };
         let manifest_block_id = {
-            let _stage = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_MANIFEST);
+            let _stage = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_INSTALL_MANIFEST,
+            );
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_MANIFEST);
             manifest.store(&self.blocks)?
         };
@@ -3793,7 +4033,9 @@ impl Engine {
             .active_log_generation
             .checked_add(1)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "WAL generation overflow"))?;
-        let wal_stage = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_WAL);
+        let wal_stage = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ROTATION_INSTALL_WAL,
+        );
         let next_wal = match ActiveLog::initialize_generation_with_vfs(
             &self.data_dir,
             next_active_generation,
@@ -3806,7 +4048,7 @@ impl Engine {
                     next_active_generation,
                     Arc::clone(&self.vfs),
                 )?;
-                if !log.is_empty()? {
+                if !log.is_empty() {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "orphan next-generation WAL is not empty",
@@ -3819,23 +4061,26 @@ impl Engine {
         };
         drop(wal_stage);
         let previous_wal_generation = self.state.active_log_generation;
-        let next = ControlState {
-            generation: self.state.generation.checked_add(1).ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
-            })?,
-            durable_sequence: self.state.durable_sequence,
-            authority_uuid: self.state.authority_uuid,
-            root_hash: self.state.root_hash,
-            checkpoint_sequence: self.state.durable_sequence,
-            checkpoint_hash: self.state.root_hash,
-            history_manifest_block_id: Some(manifest_block_id),
-            payload_manifest_block_id: self.state.payload_manifest_block_id,
-            authority_state_root: self.state.authority_state_root,
-            active_log_generation: next_active_generation,
-            sealed_log: None,
-        };
+        let next =
+            ControlState {
+                generation: self.state.generation.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
+                })?,
+                durable_sequence: self.state.durable_sequence,
+                authority_uuid: self.state.authority_uuid,
+                root_hash: self.state.root_hash,
+                checkpoint_sequence: self.state.durable_sequence,
+                checkpoint_hash: self.state.root_hash,
+                history_manifest_block_id: Some(manifest_block_id),
+                payload_manifest_block_id: self.state.payload_manifest_block_id,
+                authority_state_root: self.state.authority_state_root,
+                active_log_generation: next_active_generation,
+                sealed_log: None,
+            };
         {
-            let _stage = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL);
+            let _stage = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL,
+            );
             let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_CONTROL);
             self.publish_control(&next)?;
         }
@@ -3849,10 +4094,14 @@ impl Engine {
             }
             self.wal = next_wal;
         }
-        let _release = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_RELEASE);
+        let _release = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ROTATION_INSTALL_RELEASE,
+        );
         self.state = next;
-        self.blocks.install_history_payload_catalog(&manifest, payload_routing)?;
-        self.blocks.release_history_carried_payloads(&indexed_payload_ids)?;
+        self.blocks
+            .install_history_payload_catalog(&manifest, payload_routing)?;
+        self.blocks
+            .release_history_carried_payloads(&indexed_payload_ids)?;
         self.blocks.restore_rotation_pending()?;
         self.history_manifest = Some(manifest);
         self.close_rotation_gc_window();
@@ -3873,7 +4122,9 @@ impl Engine {
         snapshot: Box<PreparedRotationCheckpoint>,
         outcome: io::Result<RotationSegmentOutcome>,
     ) -> io::Result<u64> {
-        let _stage = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_PREDECESSOR_INSTALL);
+        let _stage = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ROTATION_PREDECESSOR_INSTALL,
+        );
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -3890,20 +4141,29 @@ impl Engine {
             // the retried install publishes the current state. Successor
             // appends remain independent of how long that publisher takes.
             self.deferred_rotation = Some((snapshot, outcome));
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,
-                "background publication owns materialization; rotation deferred"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "background publication owns materialization; rotation deferred",
+            ));
         }
         let sealed = snapshot.sealed_log.as_ref().unwrap();
         if self.state.sealed_log.as_ref() != Some(sealed) {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "checkpoint lost its sealed WAL ownership"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "checkpoint lost its sealed WAL ownership",
+            ));
         }
         self.flush_dirty_control()?;
         crate::fsync_stats::note_checkpoint();
         // Zero residual encoding under authority: all successor bytes remain
         // WAL-owned. This metric remains comparable to the legacy install.
         crate::fsync_stats::note_checkpoint_history_tail(0);
-        let RotationSegmentOutcome { new_references, payload_index_root_id,
-            payload_routing, indexed_payload_ids } = outcome;
+        let RotationSegmentOutcome {
+            new_references,
+            payload_index_root_id,
+            payload_routing,
+            indexed_payload_ids,
+        } = outcome;
         let mut segments = snapshot.history_manifest_segments;
         segments.extend(new_references);
         let mut manifest = HistoryManifest {
@@ -3914,27 +4174,37 @@ impl Engine {
             segments,
         };
         let manifest_block_id = {
-            let _timer = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_MANIFEST);
+            let _timer = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_INSTALL_MANIFEST,
+            );
             manifest.store(&self.blocks)?
         };
-        let next = ControlState {
-            generation: self.state.generation.checked_add(1)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?,
-            checkpoint_sequence: sealed.terminal_sequence,
-            checkpoint_hash: sealed.terminal_hash,
-            history_manifest_block_id: Some(manifest_block_id),
-            sealed_log: None,
-            ..self.state.clone()
-        };
+        let next =
+            ControlState {
+                generation: self.state.generation.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
+                })?,
+                checkpoint_sequence: sealed.terminal_sequence,
+                checkpoint_hash: sealed.terminal_hash,
+                history_manifest_block_id: Some(manifest_block_id),
+                sealed_log: None,
+                ..self.state.clone()
+            };
         {
-            let _timer = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL);
+            let _timer = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL,
+            );
             self.publish_control(&next)?;
         }
         self.state = next;
         self.control_dirty = false;
-        let _release = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_RELEASE);
-        self.blocks.install_history_payload_catalog(&manifest, payload_routing)?;
-        self.blocks.release_history_carried_payloads(&indexed_payload_ids)?;
+        let _release = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ROTATION_INSTALL_RELEASE,
+        );
+        self.blocks
+            .install_history_payload_catalog(&manifest, payload_routing)?;
+        self.blocks
+            .release_history_carried_payloads(&indexed_payload_ids)?;
         self.blocks.restore_rotation_pending()?;
         self.history_manifest = Some(manifest);
         self.close_rotation_gc_window();
@@ -3959,7 +4229,7 @@ impl Engine {
         self.rotation_read_batches.clear();
         // Only diagnostic/test retention can leave another Arc at rollback.
         let mut committed = Arc::try_unwrap(covered).unwrap_or_else(|shared| (*shared).clone());
-        committed.extend(self.committed.drain(..));
+        committed.append(&mut self.committed);
         self.committed = committed;
         self.staged_history = staged_history;
         self.staged_history_transactions = staged_history_transactions;
@@ -3975,13 +4245,28 @@ impl Engine {
     #[cfg(test)]
     pub(crate) fn prepare_pack_publication_for_test(&mut self) -> Box<PreparedPackAdoption> {
         self.write_block(b"test publication handoff").unwrap();
-        let (segment_id, reserved) = self.blocks.begin_background_pack(1, checkpoint_materialize_batch_bytes()).unwrap().unwrap();
-        let segment = self.blocks.payload_segment_store().unwrap()
-            .create(segment_id, reserved.clone(), |id| self.blocks.get(id)).unwrap();
-        let reference = PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id()).unwrap();
+        let (segment_id, reserved) = self
+            .blocks
+            .begin_background_pack(1, checkpoint_materialize_batch_bytes())
+            .unwrap()
+            .unwrap();
+        let segment = self
+            .blocks
+            .payload_segment_store()
+            .unwrap()
+            .create(segment_id, reserved.clone(), |id| self.blocks.get(id))
+            .unwrap();
+        let reference = PayloadSegmentReference::new(
+            segment.metadata(),
+            segment.first_block_id(),
+            segment.last_block_id(),
+        )
+        .unwrap();
         self.blocks.verify_payload_segment(&reference).unwrap();
         self.blocks.note_packed(&reserved).unwrap();
-        self.blocks.complete_background_pack(segment_id, reference).unwrap();
+        self.blocks
+            .complete_background_pack(segment_id, reference)
+            .unwrap();
         match self.try_prepare_pack_adoption().unwrap() {
             PackAdoptionPreparation::Ready(prepared) => prepared,
             _ => panic!("completed pack must prepare a CONTROL publication"),
@@ -4011,9 +4296,7 @@ impl Engine {
     /// Hands a prepared rotation to the daemon's rotation driver.
     /// Work handed to the rotation driver: a fresh snapshot to encode, or a
     /// parked (snapshot, encoded-segments) pair to install directly.
-    pub(crate) fn take_prepared_rotation(
-        &mut self,
-    ) -> io::Result<Option<RotationWork>> {
+    pub(crate) fn take_prepared_rotation(&mut self) -> io::Result<Option<RotationWork>> {
         if let Some((snapshot, outcome)) = self.deferred_rotation.take() {
             // The in-flight guard travels with the retry: handing the parked
             // pair out without it let a second rotation prepare while the
@@ -4026,7 +4309,8 @@ impl Engine {
         // The driver owns preparation as well as encoding/publication. A
         // recovered backlog needs no later business write to start catchup.
         if self.pending_rotation.is_none()
-            && (self.blocks.background_drain_requested() || self.wal.len() >= self.rotation_threshold_bytes)
+            && (self.blocks.background_drain_requested()
+                || self.wal.len() >= self.rotation_threshold_bytes)
         {
             if let RotationCheckpointPreparation::Ready(prepared) =
                 self.try_prepare_rotation_checkpoint()?
@@ -4086,7 +4370,9 @@ impl Engine {
             return Ok(None);
         }
         match self.try_prepare_rotation_checkpoint()? {
-            RotationCheckpointPreparation::Ready(prepared) => Ok(Some(RotationWork::Fresh(prepared))),
+            RotationCheckpointPreparation::Ready(prepared) => {
+                Ok(Some(RotationWork::Fresh(prepared)))
+            }
             RotationCheckpointPreparation::Empty => Ok(None),
             RotationCheckpointPreparation::Busy => Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
@@ -4098,7 +4384,10 @@ impl Engine {
     /// Publishes a suffix-only history manifest without touching the active WAL.
     /// The immutable retired segments remain available to retained backups until
     /// their explicit GC; normal open reads only this new bounded manifest.
-    pub fn compact_history(&mut self, maximum_retained_segments: usize) -> io::Result<HistoryCompactionMetrics> {
+    pub fn compact_history(
+        &mut self,
+        maximum_retained_segments: usize,
+    ) -> io::Result<HistoryCompactionMetrics> {
         match self.try_prepare_history_compaction(maximum_retained_segments)? {
             Some(mut prepared) => {
                 prepared.use_streaming_routing_retirement();
@@ -4106,9 +4395,14 @@ impl Engine {
                 self.finish_history_compaction(prepared, outcome)
             }
             None => {
-                let current = self.history_manifest.as_ref().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "history is empty"))?;
-                Ok(HistoryCompactionMetrics { retained_first_sequence: current.segments[0].first_sequence,
-                    retained_segments: current.segments.len() as u32, retired_segments: 0 })
+                let current = self.history_manifest.as_ref().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "history is empty")
+                })?;
+                Ok(HistoryCompactionMetrics {
+                    retained_first_sequence: current.segments[0].first_sequence,
+                    retained_segments: current.segments.len() as u32,
+                    retired_segments: 0,
+                })
             }
         }
     }
@@ -4120,15 +4414,21 @@ impl Engine {
         let must_rotate = self
             .wal
             .would_exceed(encoded_transaction, ACTIVE_LOG_CHECKPOINT_BYTES)?;
-        self.prepare_append_maintenance(needs_rotation, must_rotate,
-            encoded_transaction.len() + WAL_RECORD_OVERHEAD_BYTES)
+        self.prepare_append_maintenance(
+            needs_rotation,
+            must_rotate,
+            encoded_transaction.len() + WAL_RECORD_OVERHEAD_BYTES,
+        )
     }
 
     /// A running authority appends independently of maintenance progress.
     /// Thresholds notify the existing driver; they never reserve CONTROL,
     /// materialize historical bytes, or refuse this accepted append.
     fn prepare_append_maintenance(
-        &mut self, needs_rotation: bool, must_rotate: bool, upcoming_wal_bytes: usize,
+        &mut self,
+        needs_rotation: bool,
+        must_rotate: bool,
+        upcoming_wal_bytes: usize,
     ) -> io::Result<()> {
         if self.rotation_driver_attached {
             if needs_rotation {
@@ -4266,7 +4566,7 @@ impl Engine {
         self.staged_history_transactions += count;
         self.staged_history.push(HistorySegmentReference {
             block_id,
-                payload_index_block_id: None,
+            payload_index_block_id: None,
             first_sequence: segment.first_sequence,
             last_sequence: segment.last_sequence,
             parent_hash: segment.parent_hash,
@@ -4316,9 +4616,7 @@ impl Engine {
                 Ok(drained) => drained,
                 // The adoption driver's in-flight publication owns the
                 // pending set this round; the next commit retries.
-                Err(error) if is_publication_owns_materialization(&error) => {
-                    return Ok(())
-                }
+                Err(error) if is_publication_owns_materialization(&error) => return Ok(()),
                 Err(error) => return Err(error),
             }
         };
@@ -4326,9 +4624,8 @@ impl Engine {
         // completed files whose catalog publication is still pending. They
         // must not turn a soft threshold into a blocking checkpoint.
         if drained == 0 && !self.blocks.has_pending_payloads()? {
-            let _timer = crate::fsync_stats::StageTimer::new(
-                crate::fsync_stats::STAGE_CK_MATERIALIZE,
-            );
+            let _timer =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_MATERIALIZE);
             self.checkpoint()?;
         }
         Ok(())
@@ -4466,10 +4763,7 @@ impl Engine {
                 // their WAL append has the same ambiguous complete/torn-tail
                 // outcome as every other commit path. Recovery must select it
                 // before this authority can assign another sequence.
-                return Err(fence_failed_wal_append(
-                    &self.restart_required,
-                    error,
-                ));
+                return Err(fence_failed_wal_append(&self.restart_required, error));
             }
         };
         let next = ControlState {
@@ -4534,7 +4828,9 @@ pub(crate) struct PreparedRotationCheckpoint {
 /// idempotent; failures only mean the install pays the create in-hold, as
 /// before (logged and tolerated by the driver).
 pub(crate) fn prestage_rotation_wal(prepared: &PreparedRotationCheckpoint) -> io::Result<()> {
-    if prepared.sealed_log.is_some() { return Ok(()); }
+    if prepared.sealed_log.is_some() {
+        return Ok(());
+    }
     match crate::wal::ActiveLog::initialize_generation_with_vfs(
         &prepared.data_dir,
         prepared.next_active_log_generation,
@@ -4551,7 +4847,9 @@ pub(crate) fn prestage_rotation_wal(prepared: &PreparedRotationCheckpoint) -> io
 /// synchronous drain must return WouldBlock so adoption can acquire authority.
 fn is_publication_owns_materialization(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::WouldBlock
-        && error.to_string().contains("publication owns materialization")
+        && error
+            .to_string()
+            .contains("publication owns materialization")
 }
 
 /// Pre-mutation refusal for a legacy non-generational installation fence.
@@ -4608,7 +4906,9 @@ pub(crate) fn reopen_required(kind: io::ErrorKind, message: String) -> io::Error
 }
 
 pub(crate) fn requires_reopen(error: &io::Error) -> bool {
-    error.get_ref().is_some_and(|inner| inner.is::<ReopenRequired>())
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<ReopenRequired>())
 }
 
 /// Rotation work handed to the driver (see
@@ -4637,7 +4937,10 @@ impl std::fmt::Debug for PreparedRotationCheckpoint {
             .debug_struct("PreparedRotationCheckpoint")
             .field("covered", &self.covered.len())
             .field("staged_history", &self.staged_history.len())
-            .field("staged_history_transactions", &self.staged_history_transactions)
+            .field(
+                "staged_history_transactions",
+                &self.staged_history_transactions,
+            )
             .finish_non_exhaustive()
     }
 }
@@ -4661,10 +4964,12 @@ pub(crate) fn encode_rotation_segments(
     let mut indexed_payload_ids = BTreeSet::new();
     for reference in &snapshot.staged_history {
         let encoded = snapshot.blocks.get(reference.block_id)?;
-        let (reference, index) = crate::history_payload::persist_segment(&snapshot.blocks, &encoded, reference.clone())?;
+        let (reference, index) =
+            crate::history_payload::persist_segment(&snapshot.blocks, &encoded, reference.clone())?;
         locations.extend(index.locations());
         indexed_payload_ids.extend(index.entries.iter().map(|entry| entry.0));
-        indexed_payload_ids.insert(reference.block_id);indexed_payload_ids.extend(reference.payload_index_block_id);
+        indexed_payload_ids.insert(reference.block_id);
+        indexed_payload_ids.extend(reference.payload_index_block_id);
         new_references.push(reference);
     }
     let remaining = &snapshot.covered[snapshot.staged_history_transactions..];
@@ -4679,25 +4984,53 @@ pub(crate) fn encode_rotation_segments(
                 parent_hash: segment.parent_hash,
                 terminal_hash: segment.terminal_hash,
             };
-            let (reference, index) = crate::history_payload::persist_segment(&snapshot.blocks, &segment.encoded, reference)?;
+            let (reference, index) = crate::history_payload::persist_segment(
+                &snapshot.blocks,
+                &segment.encoded,
+                reference,
+            )?;
             locations.extend(index.locations());
             indexed_payload_ids.extend(index.entries.iter().map(|entry| entry.0));
-            indexed_payload_ids.insert(reference.block_id);indexed_payload_ids.extend(reference.payload_index_block_id);
+            indexed_payload_ids.insert(reference.block_id);
+            indexed_payload_ids.extend(reference.payload_index_block_id);
             new_references.push(reference);
             Ok(())
         })?;
     }
-    let previous = snapshot.history_payload_index_root_id.map(|id| {
-        crate::history_payload::RoutingRoot::decode(&snapshot.blocks.get_materialized_shared(id)?)
-    }).transpose()?;
+    let previous = snapshot
+        .history_payload_index_root_id
+        .map(|id| {
+            crate::history_payload::RoutingRoot::decode(
+                &snapshot.blocks.get_materialized_shared(id)?,
+            )
+        })
+        .transpose()?;
     let payload_routing = if previous.is_some() || !locations.is_empty() {
         // Exactly the segments of the manifest every install publishes.
-        let retained: BTreeSet<BlockId> = snapshot.history_manifest_segments.iter().chain(&new_references)
-            .map(|reference| reference.block_id).collect();
-        Some(previous.unwrap_or_default().append(&snapshot.blocks, &locations, &retained)?)
-    } else { None };
-    let payload_index_root_id = payload_routing.as_ref().map(|root| snapshot.blocks.put_loose(&root.encode()?)).transpose()?;
-    Ok(RotationSegmentOutcome { new_references, payload_index_root_id, payload_routing, indexed_payload_ids })
+        let retained: BTreeSet<BlockId> = snapshot
+            .history_manifest_segments
+            .iter()
+            .chain(&new_references)
+            .map(|reference| reference.block_id)
+            .collect();
+        Some(
+            previous
+                .unwrap_or_default()
+                .append(&snapshot.blocks, &locations, &retained)?,
+        )
+    } else {
+        None
+    };
+    let payload_index_root_id = payload_routing
+        .as_ref()
+        .map(|root| snapshot.blocks.put_loose(&root.encode()?))
+        .transpose()?;
+    Ok(RotationSegmentOutcome {
+        new_references,
+        payload_index_root_id,
+        payload_routing,
+        indexed_payload_ids,
+    })
 }
 
 fn append_rotation_suffix(
@@ -4707,9 +5040,14 @@ fn append_rotation_suffix(
     retained_history: &[HistorySegmentReference],
     outcome: &mut RotationSegmentOutcome,
 ) -> io::Result<()> {
-    let _window = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_WINDOW_ENCODE);
+    let _window = crate::fsync_stats::StageTimer::diagnostic(
+        crate::fsync_stats::STAGE_ROTATION_WINDOW_ENCODE,
+    );
     let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_CK_SEGMENTS);
-    let parent = outcome.new_references.last().map_or(parent_fallback, |reference| reference.terminal_hash);
+    let parent = outcome
+        .new_references
+        .last()
+        .map_or(parent_fallback, |reference| reference.terminal_hash);
     let mut locations = BTreeMap::new();
     visit_segments(window, parent, |segment| {
         let reference = HistorySegmentReference {
@@ -4720,18 +5058,30 @@ fn append_rotation_suffix(
             parent_hash: segment.parent_hash,
             terminal_hash: segment.terminal_hash,
         };
-        let (reference, index) = crate::history_payload::persist_segment(blocks, &segment.encoded, reference)?;
+        let (reference, index) =
+            crate::history_payload::persist_segment(blocks, &segment.encoded, reference)?;
         locations.extend(index.locations());
-        outcome.indexed_payload_ids.extend(index.entries.iter().map(|entry| entry.0));
+        outcome
+            .indexed_payload_ids
+            .extend(index.entries.iter().map(|entry| entry.0));
         outcome.indexed_payload_ids.insert(reference.block_id);
-        outcome.indexed_payload_ids.extend(reference.payload_index_block_id);
+        outcome
+            .indexed_payload_ids
+            .extend(reference.payload_index_block_id);
         outcome.new_references.push(reference);
         Ok(())
     })?;
     if !locations.is_empty() {
-        let retained: BTreeSet<BlockId> = retained_history.iter().chain(&outcome.new_references)
-            .map(|reference| reference.block_id).collect();
-        let root = outcome.payload_routing.take().unwrap_or_default().append(blocks, &locations, &retained)?;
+        let retained: BTreeSet<BlockId> = retained_history
+            .iter()
+            .chain(&outcome.new_references)
+            .map(|reference| reference.block_id)
+            .collect();
+        let root = outcome
+            .payload_routing
+            .take()
+            .unwrap_or_default()
+            .append(blocks, &locations, &retained)?;
         outcome.payload_index_root_id = Some(blocks.put_loose(&root.encode()?)?);
         outcome.payload_routing = Some(root);
     }
@@ -4778,12 +5128,17 @@ impl PreparedPackAdoption {
     }
 
     fn stop_requested(&self) -> bool {
-        self.stop.as_ref().is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Acquire))
+        self.stop
+            .as_ref()
+            .is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Acquire))
     }
 }
 
 fn adoption_stopped_before_publication() -> io::Error {
-    io::Error::new(io::ErrorKind::WouldBlock, "pack adoption stopped before its CONTROL publication")
+    io::Error::new(
+        io::ErrorKind::WouldBlock,
+        "pack adoption stopped before its CONTROL publication",
+    )
 }
 
 /// A pack adoption whose WAL cover the barrier worker had not synchronized
@@ -4795,7 +5150,11 @@ struct AdoptionAbandonedUncovered(io::Error);
 
 impl std::fmt::Display for AdoptionAbandonedUncovered {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "pack adoption abandoned before its CONTROL publication: {}", self.0)
+        write!(
+            formatter,
+            "pack adoption abandoned before its CONTROL publication: {}",
+            self.0
+        )
     }
 }
 
@@ -4816,7 +5175,9 @@ fn abandon_if_uncovered(error: io::Error) -> io::Error {
 /// Whether `error` is a pack adoption abandoned before publication because
 /// its WAL cover missed the barrier deadline ([`AdoptionAbandonedUncovered`]).
 pub(crate) fn abandoned_uncovered(error: &io::Error) -> bool {
-    error.get_ref().is_some_and(|inner| inner.is::<AdoptionAbandonedUncovered>())
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<AdoptionAbandonedUncovered>())
 }
 
 #[cfg(test)]
@@ -4858,7 +5219,11 @@ pub(crate) fn publish_prepared_pack_adoption(
     let mut retired = Vec::with_capacity(2);
     if let Some((incoming, merge_id)) = prepared.overflow {
         let store = prepared.blocks.payload_segment_store()?;
-        let candidate = prepared.manifest.segments.iter().enumerate()
+        let candidate = prepared
+            .manifest
+            .segments
+            .iter()
+            .enumerate()
             .filter(|(_, old)| {
                 old.block_count as usize + incoming.block_count as usize <= MAX_SEGMENT_BLOCKS
                     && old.payload_bytes + incoming.payload_bytes <= MAX_SEGMENT_PAYLOAD_BYTES
@@ -4873,17 +5238,25 @@ pub(crate) fn publish_prepared_pack_adoption(
             ids.dedup();
             let stop = prepared.stop.clone();
             let merged = store.create(merge_id, ids, |id| {
-                if stop.as_ref().is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Acquire)) {
+                if stop
+                    .as_ref()
+                    .is_some_and(|stop| stop.load(std::sync::atomic::Ordering::Acquire))
+                {
                     return Err(adoption_stopped_before_publication());
                 }
                 // Incoming WAL-carried copies retain recovery repair priority.
                 let handle = if added.contains(id) { &added } else { &source };
                 store.get_with_handle(handle, id)?.ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "pack merge source block is missing")
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "pack merge source block is missing",
+                    )
                 })
             })?;
             let reference = PayloadSegmentReference::new(
-                merged.metadata(), merged.first_block_id(), merged.last_block_id(),
+                merged.metadata(),
+                merged.first_block_id(),
+                merged.last_block_id(),
             )?;
             prepared.blocks.verify_payload_segment(&reference)?;
             let mut references = prepared.manifest.segments.clone();
@@ -4895,7 +5268,9 @@ pub(crate) fn publish_prepared_pack_adoption(
             // durable loose-block representation is the lossless overflow path.
             // Its entire write/fsync batch runs outside the authority mutex.
             match &prepared.stop {
-                Some(stop) => prepared.blocks.flush_pending_subset_until(&prepared.packed, stop)?,
+                Some(stop) => prepared
+                    .blocks
+                    .flush_pending_subset_until(&prepared.packed, stop)?,
                 None => prepared.blocks.flush_pending_subset(&prepared.packed)?,
             }
         }
@@ -4908,7 +5283,9 @@ pub(crate) fn publish_prepared_pack_adoption(
     if prepared.stop_requested() {
         return Err(adoption_stopped_before_publication());
     }
-    if let Some(cover) = &prepared.wal_cover { cover.sync().map_err(abandon_if_uncovered)?; }
+    if let Some(cover) = &prepared.wal_cover {
+        cover.sync().map_err(abandon_if_uncovered)?;
+    }
     let mut control = prepared
         .control
         .lock()
@@ -4922,7 +5299,9 @@ pub(crate) fn publish_prepared_pack_adoption(
     drop(control);
     // Both CONTROL slots now reference the replacement. Install the shared
     // read catalog before reclaiming files; racing readers retry its new view.
-    prepared.blocks.install_payload_manifest(prepared.manifest.clone())?;
+    prepared
+        .blocks
+        .install_payload_manifest(prepared.manifest.clone())?;
     prepared.blocks.retire_staged_payloads(&prepared.packed)?;
     prepared.blocks.flush_pending_subset(&BTreeSet::new())?;
     // Retired sources are parked, not unlinked: a reader holding the

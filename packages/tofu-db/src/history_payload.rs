@@ -76,7 +76,7 @@ impl SegmentIndex {
         for transaction in transactions {
             envelope_offset += TRANSACTION_HEADER_BYTES;
             TransactionEnvelope::visit_carried(
-                &transaction.encoded_envelope,
+                transaction.encoded_envelope,
                 &mut |id, offset, payload| {
                     if BlockId::for_payload(payload) != id {
                         return Err(invalid(
@@ -136,6 +136,7 @@ impl SegmentIndex {
         Ok(out)
     }
 
+    #[cfg(test)]
     pub(crate) fn decode(bytes: &[u8], source: BlockId) -> io::Result<Self> {
         if bytes.len() < INDEX_HEADER_BYTES
             || bytes.len() > MAX_BLOCK_BYTES
@@ -155,7 +156,10 @@ impl SegmentIndex {
             return Err(invalid("history payload index length mismatch"));
         }
         let mut entries = Vec::with_capacity(count);
-        for entry in bytes[INDEX_HEADER_BYTES..].chunks_exact(INDEX_ENTRY_BYTES) {
+        for entry in bytes[INDEX_HEADER_BYTES..]
+            .as_chunks::<INDEX_ENTRY_BYTES>()
+            .0
+        {
             entries.push((
                 BlockId(entry[..32].try_into().unwrap()),
                 u32::from_le_bytes(entry[32..36].try_into().unwrap()),
@@ -252,14 +256,18 @@ enum RecoveryCandidate {
 
 impl RecoveryLookup {
     pub(crate) fn visit_locations(
-        &self, id: BlockId, visit: &mut dyn FnMut(PayloadLocation) -> io::Result<bool>,
+        &self,
+        id: BlockId,
+        visit: &mut dyn FnMut(PayloadLocation) -> io::Result<bool>,
     ) -> Option<io::Result<()>> {
         let entries = self.entries.get(&id)?;
         Some((|| {
             for entry in entries {
                 match entry {
                     RecoveryCandidate::Location(location) => {
-                        if visit(*location)? { break; }
+                        if visit(*location)? {
+                            break;
+                        }
                     }
                     RecoveryCandidate::PageError(error) => {
                         return Err(io::Error::new(error.kind(), Arc::clone(error)));
@@ -294,11 +302,19 @@ impl Catalog {
         visit: &mut dyn FnMut(PayloadLocation) -> io::Result<bool>,
     ) -> io::Result<()> {
         self.root.visit_locations(blocks, id, &mut |location| {
-            if self.sources.contains(&location.source) { visit(location) } else { Ok(false) }
+            if self.sources.contains(&location.source) {
+                visit(location)
+            } else {
+                Ok(false)
+            }
         })
     }
 
-    pub(crate) fn lookup(&self, blocks: &BlockStore, id: BlockId) -> io::Result<Option<PayloadLocation>> {
+    pub(crate) fn lookup(
+        &self,
+        blocks: &BlockStore,
+        id: BlockId,
+    ) -> io::Result<Option<PayloadLocation>> {
         let mut found = None;
         self.visit_locations(blocks, id, &mut |location| {
             found = Some(location);
@@ -308,10 +324,13 @@ impl Catalog {
     }
 
     pub(crate) fn prepare_recovery_lookup(
-        &self, blocks: &BlockStore, ids: impl Iterator<Item = BlockId>,
+        &self,
+        blocks: &BlockStore,
+        ids: impl Iterator<Item = BlockId>,
         should_stop: &dyn Fn() -> bool,
     ) -> io::Result<RecoveryLookup> {
-        self.root.prepare_recovery_lookup(blocks, ids, &self.sources, should_stop)
+        self.root
+            .prepare_recovery_lookup(blocks, ids, &self.sources, should_stop)
     }
 }
 
@@ -448,7 +467,10 @@ impl<'a> RunCursor<'a> {
         }
     }
     /// The next location whose source the publishing manifest retains.
-    fn next_retained(&mut self, retained: &BTreeSet<BlockId>) -> io::Result<Option<(BlockId, PayloadLocation)>> {
+    fn next_retained(
+        &mut self,
+        retained: &BTreeSet<BlockId>,
+    ) -> io::Result<Option<(BlockId, PayloadLocation)>> {
         while let Some(entry) = self.next()? {
             if retained.contains(&entry.1.source) {
                 return Ok(Some(entry));
@@ -475,7 +497,12 @@ impl<'a> RunCursor<'a> {
 /// Merges two runs, dropping every location whose source `retained` no
 /// longer names. Both sides are filtered before duplicate IDs resolve: any
 /// retained location of a content-addressed block answers with its bytes.
-fn merge_runs(blocks: &BlockStore, older: &Run, newer: &Run, retained: &BTreeSet<BlockId>) -> io::Result<Run> {
+fn merge_runs(
+    blocks: &BlockStore,
+    older: &Run,
+    newer: &Run,
+    retained: &BTreeSet<BlockId>,
+) -> io::Result<Run> {
     let mut old = RunCursor::new(blocks, older);
     let mut new = RunCursor::new(blocks, newer);
     let mut a = old.next_retained(retained)?;
@@ -531,20 +558,31 @@ impl RoutingRoot {
     /// to affected IDs until replay actually needs that position in the run.
     /// Locations in sources `retained` does not name are not candidates.
     pub(crate) fn prepare_recovery_lookup(
-        &self, blocks: &BlockStore, ids: impl Iterator<Item = BlockId>,
-        retained: &BTreeSet<BlockId>, should_stop: &dyn Fn() -> bool,
+        &self,
+        blocks: &BlockStore,
+        ids: impl Iterator<Item = BlockId>,
+        retained: &BTreeSet<BlockId>,
+        should_stop: &dyn Fn() -> bool,
     ) -> io::Result<RecoveryLookup> {
         let mut entries: BTreeMap<_, Vec<_>> = ids.map(|id| (id, Vec::new())).collect();
         for run in self.levels.iter().flatten() {
             for page in &run.pages {
                 if should_stop() {
-                    return Err(io::Error::new(io::ErrorKind::Interrupted, "history recovery lookup cancelled"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "history recovery lookup cancelled",
+                    ));
                 }
-                if entries.range(page.first..=page.last).next().is_none() { continue; }
+                if entries.range(page.first..=page.last).next().is_none() {
+                    continue;
+                }
                 let bytes = self.read_verified_page(blocks, page).map_err(Arc::new);
                 for (id, candidates) in entries.range_mut(page.first..=page.last) {
                     if should_stop() {
-                        return Err(io::Error::new(io::ErrorKind::Interrupted, "history recovery lookup cancelled"));
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "history recovery lookup cancelled",
+                        ));
                     }
                     match &bytes {
                         Ok(bytes) => {
@@ -554,7 +592,9 @@ impl RoutingRoot {
                                 candidates.push(RecoveryCandidate::Location(location));
                             }
                         }
-                        Err(error) => candidates.push(RecoveryCandidate::PageError(Arc::clone(error))),
+                        Err(error) => {
+                            candidates.push(RecoveryCandidate::PageError(Arc::clone(error)))
+                        }
                     }
                 }
             }
@@ -562,15 +602,23 @@ impl RoutingRoot {
         Ok(RecoveryLookup { entries })
     }
 
-    fn read_verified_page(&self, blocks: &BlockStore, page: &PageReference) -> io::Result<Arc<Vec<u8>>> {
+    fn read_verified_page(
+        &self,
+        blocks: &BlockStore,
+        page: &PageReference,
+    ) -> io::Result<Arc<Vec<u8>>> {
         let bytes = blocks.get_materialized_shared(page.id)?;
-        let verified = self.verified_pages.lock()
+        let verified = self
+            .verified_pages
+            .lock()
             .map_err(|_| io::Error::other("history page verification lock poisoned"))?
-            .get(&page.id).and_then(Weak::upgrade)
+            .get(&page.id)
+            .and_then(Weak::upgrade)
             .is_some_and(|old| Arc::ptr_eq(&old, &bytes));
         if !verified {
             validate_page(&bytes, page)?;
-            self.verified_pages.lock()
+            self.verified_pages
+                .lock()
                 .map_err(|_| io::Error::other("history page verification lock poisoned"))?
                 .insert(page.id, Arc::downgrade(&bytes));
         }
@@ -593,9 +641,14 @@ impl RoutingRoot {
         if entries.is_empty() {
             return Ok(self.clone());
         }
-        if entries.values().any(|location| !retained.contains(&location.source)) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                "history routing appends a location its manifest does not retain"));
+        if entries
+            .values()
+            .any(|location| !retained.contains(&location.source))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "history routing appends a location its manifest does not retain",
+            ));
         }
         let mut writer = RunWriter::new(blocks);
         for (&id, &location) in entries {
@@ -639,7 +692,9 @@ impl RoutingRoot {
             };
             let bytes = self.read_verified_page(blocks, page)?;
             if let Some(location) = lookup_page(&bytes, page, id) {
-                if visit(location)? { return Ok(()); }
+                if visit(location)? {
+                    return Ok(());
+                }
             }
         }
         Ok(())
@@ -688,7 +743,11 @@ impl RoutingRoot {
     }
 
     pub(crate) fn version(&self) -> u32 {
-        if self.holds_retired { LAZY_ROOT_VERSION } else { VERSION }
+        if self.holds_retired {
+            LAZY_ROOT_VERSION
+        } else {
+            VERSION
+        }
     }
 
     pub(crate) fn entries(&self) -> u64 {
@@ -708,8 +767,12 @@ impl RoutingRoot {
         blocks: &BlockStore,
         keep: &BTreeSet<BlockId>,
     ) -> io::Result<Self> {
-        let mut cursors: Vec<RunCursor> =
-            self.levels.iter().flatten().map(|run| RunCursor::new(blocks, run)).collect();
+        let mut cursors: Vec<RunCursor> = self
+            .levels
+            .iter()
+            .flatten()
+            .map(|run| RunCursor::new(blocks, run))
+            .collect();
         let mut heads = cursors
             .iter_mut()
             .map(|cursor| cursor.next_retained(keep))
@@ -721,7 +784,9 @@ impl RoutingRoot {
                 .enumerate()
                 .filter_map(|(level, head)| head.map(|(id, location)| (id, level, location)))
                 .min_by_key(|&(id, level, _)| (id, level));
-            let Some((id, _, location)) = lowest else { break };
+            let Some((id, _, location)) = lowest else {
+                break;
+            };
             writer.push((id, location))?;
             for (cursor, head) in cursors.iter_mut().zip(heads.iter_mut()) {
                 if head.is_some_and(|(other, _)| other == id) {
@@ -736,7 +801,11 @@ impl RoutingRoot {
         let level = size_level(run.entries);
         let mut levels = vec![None; level + 1];
         levels[level] = Some(run);
-        Ok(Self { levels, verified_pages: Arc::default(), holds_retired: false })
+        Ok(Self {
+            levels,
+            verified_pages: Arc::default(),
+            holds_retired: false,
+        })
     }
 
     pub(crate) fn page_ids(&self) -> impl Iterator<Item = BlockId> + '_ {
@@ -752,7 +821,11 @@ impl RoutingRoot {
         }
         let mut out = Vec::new();
         out.extend_from_slice(ROOT_MAGIC);
-        let version = if self.holds_retired { LAZY_ROOT_VERSION } else { VERSION };
+        let version = if self.holds_retired {
+            LAZY_ROOT_VERSION
+        } else {
+            VERSION
+        };
         out.extend_from_slice(&version.to_le_bytes());
         out.extend_from_slice(&(self.levels.len() as u32).to_le_bytes());
         for run in &self.levels {
@@ -793,7 +866,9 @@ impl RoutingRoot {
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> io::Result<Self> {
-        let version = bytes.get(8..12).map(|field| u32::from_le_bytes(field.try_into().unwrap()));
+        let version = bytes
+            .get(8..12)
+            .map(|field| u32::from_le_bytes(field.try_into().unwrap()));
         if bytes.len() < 16
             || bytes.len() > MAX_BLOCK_BYTES
             || &bytes[..8] != ROOT_MAGIC
@@ -880,33 +955,78 @@ mod tests {
         let blocks = store();
         let id = BlockId([20; 32]);
         let absent = BlockId([21; 32]);
-        let location = |source| PayloadLocation { source: BlockId([source; 32]), source_bytes: 16, offset: 0, length: 1 };
+        let location = |source| PayloadLocation {
+            source: BlockId([source; 32]),
+            source_bytes: 16,
+            offset: 0,
+            length: 1,
+        };
         let make_run = |source| {
             let mut writer = RunWriter::new(&blocks);
             writer.push((id, location(source))).unwrap();
             writer.push((BlockId([22; 32]), location(source))).unwrap();
             writer.finish().unwrap()
         };
-        let root = RoutingRoot { levels: vec![Some(make_run(2)), Some(make_run(1))], verified_pages: Arc::default(), holds_retired: false };
+        let root = RoutingRoot {
+            levels: vec![Some(make_run(2)), Some(make_run(1))],
+            verified_pages: Arc::default(),
+            holds_retired: false,
+        };
         blocks.set_cache_capacity_bytes(0).unwrap();
         let both = BTreeSet::from([BlockId([1; 32]), BlockId([2; 32])]);
-        let prepared = root.prepare_recovery_lookup(&blocks, [id, absent].into_iter(), &both, &|| false).unwrap();
+        let prepared = root
+            .prepare_recovery_lookup(&blocks, [id, absent].into_iter(), &both, &|| false)
+            .unwrap();
         for selected in [id, absent] {
             let mut ordinary = Vec::new();
-            root.visit_locations(&blocks, selected, &mut |location| { ordinary.push(location); Ok(false) }).unwrap();
+            root.visit_locations(&blocks, selected, &mut |location| {
+                ordinary.push(location);
+                Ok(false)
+            })
+            .unwrap();
             let mut batched = Vec::new();
-            prepared.visit_locations(selected, &mut |location| { batched.push(location); Ok(false) }).unwrap().unwrap();
+            prepared
+                .visit_locations(selected, &mut |location| {
+                    batched.push(location);
+                    Ok(false)
+                })
+                .unwrap()
+                .unwrap();
             assert_eq!(batched, ordinary);
         }
-        assert!(prepared.visit_locations(BlockId([23; 32]), &mut |_| panic!("unselected ID")).is_none());
+        assert!(prepared
+            .visit_locations(BlockId([23; 32]), &mut |_| panic!("unselected ID"))
+            .is_none());
         let mut first = Vec::new();
-        prepared.visit_locations(id, &mut |location| { first.push(location); Ok(true) }).unwrap().unwrap();
+        prepared
+            .visit_locations(id, &mut |location| {
+                first.push(location);
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
         assert_eq!(first, vec![location(2)]);
-        let newer_retired = root.prepare_recovery_lookup(
-            &blocks, [id].into_iter(), &BTreeSet::from([BlockId([1; 32])]), &|| false).unwrap();
+        let newer_retired = root
+            .prepare_recovery_lookup(
+                &blocks,
+                [id].into_iter(),
+                &BTreeSet::from([BlockId([1; 32])]),
+                &|| false,
+            )
+            .unwrap();
         let mut remaining = Vec::new();
-        newer_retired.visit_locations(id, &mut |location| { remaining.push(location); Ok(false) }).unwrap().unwrap();
-        assert_eq!(remaining, vec![location(1)], "a retired source is never a recovery candidate");
+        newer_retired
+            .visit_locations(id, &mut |location| {
+                remaining.push(location);
+                Ok(false)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            remaining,
+            vec![location(1)],
+            "a retired source is never a recovery candidate"
+        );
     }
 
     #[test]
@@ -919,29 +1039,83 @@ mod tests {
         let id = BlockId([20; 32]);
         let run = |source| {
             let mut writer = RunWriter::new(&blocks);
-            writer.push((id, PayloadLocation { source: BlockId([source; 32]), source_bytes: 1, offset: 0, length: 1 })).unwrap();
+            writer
+                .push((
+                    id,
+                    PayloadLocation {
+                        source: BlockId([source; 32]),
+                        source_bytes: 1,
+                        offset: 0,
+                        length: 1,
+                    },
+                ))
+                .unwrap();
             writer.finish().unwrap()
         };
-        let root = RoutingRoot { levels: vec![Some(run(2)), Some(run(1))], verified_pages: Arc::default(), holds_retired: false };
+        let root = RoutingRoot {
+            levels: vec![Some(run(2)), Some(run(1))],
+            verified_pages: Arc::default(),
+            holds_retired: false,
+        };
         let both = BTreeSet::from([BlockId([1; 32]), BlockId([2; 32])]);
         let old_page = root.levels[1].as_ref().unwrap().pages[0].id.to_hex();
         let path = format!("/data/blocks/{}/{old_page}.blk", &old_page[..2]);
-        vfs.open(Path::new(&path), OpenRequest { write: true, ..OpenRequest::default() }).unwrap()
-            .write_all_at(16, b"!").unwrap();
+        vfs.open(
+            Path::new(&path),
+            OpenRequest {
+                write: true,
+                ..OpenRequest::default()
+            },
+        )
+        .unwrap()
+        .write_all_at(16, b"!")
+        .unwrap();
         blocks.set_cache_capacity_bytes(0).unwrap();
-        let prepared = root.prepare_recovery_lookup(&blocks, [id].into_iter(), &both, &|| false).unwrap();
-        prepared.visit_locations(id, &mut |_| Ok(true)).unwrap().unwrap();
-        assert_eq!(prepared.visit_locations(id, &mut |_| Ok(false)).unwrap().unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let prepared = root
+            .prepare_recovery_lookup(&blocks, [id].into_iter(), &both, &|| false)
+            .unwrap();
+        prepared
+            .visit_locations(id, &mut |_| Ok(true))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            prepared
+                .visit_locations(id, &mut |_| Ok(false))
+                .unwrap()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
         // A non-repairable I/O error encountered during preparation must not
         // disappear just because the transient fault has been consumed.
-        vfs.arm_fault(Some(FaultRule { operation_number: 1,
-            action: FaultAction::ErrorBefore(io::ErrorKind::PermissionDenied) })).unwrap();
-        let failed = root.prepare_recovery_lookup(&blocks, [id].into_iter(), &both, &|| false).unwrap();
+        vfs.arm_fault(Some(FaultRule {
+            operation_number: 1,
+            action: FaultAction::ErrorBefore(io::ErrorKind::PermissionDenied),
+        }))
+        .unwrap();
+        let failed = root
+            .prepare_recovery_lookup(&blocks, [id].into_iter(), &both, &|| false)
+            .unwrap();
         vfs.arm_fault(None).unwrap();
-        assert_eq!(failed.visit_locations(id, &mut |_| panic!("failed first page")).unwrap()
-            .unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-        assert_eq!(root.prepare_recovery_lookup(&blocks, [id].into_iter(), &both, &|| true).err().unwrap().kind(), io::ErrorKind::Interrupted);
-        assert!(vfs.trace().unwrap().is_empty(), "cancelled preparation performed I/O");
+        assert_eq!(
+            failed
+                .visit_locations(id, &mut |_| panic!("failed first page"))
+                .unwrap()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            root.prepare_recovery_lookup(&blocks, [id].into_iter(), &both, &|| true)
+                .err()
+                .unwrap()
+                .kind(),
+            io::ErrorKind::Interrupted
+        );
+        assert!(
+            vfs.trace().unwrap().is_empty(),
+            "cancelled preparation performed I/O"
+        );
     }
 
     #[test]
@@ -951,7 +1125,12 @@ mod tests {
         // the newer run's copy of the same block names a retired source.
         let blocks = store();
         let (retired, older, newer) = (BlockId([11; 32]), BlockId([12; 32]), BlockId([13; 32]));
-        let location = |source| PayloadLocation { source, source_bytes: 16, offset: 0, length: 1 };
+        let location = |source| PayloadLocation {
+            source,
+            source_bytes: 16,
+            offset: 0,
+            length: 1,
+        };
         let shared = BlockId([20; 32]);
         let mut writer = RunWriter::new(&blocks);
         writer.push((shared, location(older))).unwrap();
@@ -961,12 +1140,20 @@ mod tests {
         writer.push((shared, location(retired))).unwrap();
         writer.push((BlockId([22; 32]), location(newer))).unwrap();
         let new_run = writer.finish().unwrap();
-        let merged = merge_runs(&blocks, &old_run, &new_run, &BTreeSet::from([older, newer])).unwrap();
+        let merged =
+            merge_runs(&blocks, &old_run, &new_run, &BTreeSet::from([older, newer])).unwrap();
         assert_eq!(merged.entries, 2);
-        let root = RoutingRoot { levels: vec![Some(merged)], verified_pages: Arc::default(), holds_retired: false };
+        let root = RoutingRoot {
+            levels: vec![Some(merged)],
+            verified_pages: Arc::default(),
+            holds_retired: false,
+        };
         assert_eq!(root.lookup(&blocks, shared).unwrap(), Some(location(older)));
         assert_eq!(root.lookup(&blocks, BlockId([21; 32])).unwrap(), None);
-        assert_eq!(root.lookup(&blocks, BlockId([22; 32])).unwrap(), Some(location(newer)));
+        assert_eq!(
+            root.lookup(&blocks, BlockId([22; 32])).unwrap(),
+            Some(location(newer))
+        );
         assert_eq!(RoutingRoot::decode(&root.encode().unwrap()).unwrap(), root);
     }
 
@@ -976,20 +1163,49 @@ mod tests {
         // sources answer, for ordinary and prepared recovery lookups alike.
         let blocks = store();
         let (retired, retained) = (BlockId([11; 32]), BlockId([12; 32]));
-        let location = |source| PayloadLocation { source, source_bytes: 16, offset: 0, length: 1 };
+        let location = |source| PayloadLocation {
+            source,
+            source_bytes: 16,
+            offset: 0,
+            length: 1,
+        };
         let (id, kept) = (BlockId([20; 32]), BlockId([21; 32]));
         let root = RoutingRoot::default()
-            .append(&blocks, &BTreeMap::from([(id, location(retired)), (kept, location(retained))]),
-                &BTreeSet::from([retired, retained]))
+            .append(
+                &blocks,
+                &BTreeMap::from([(id, location(retired)), (kept, location(retained))]),
+                &BTreeSet::from([retired, retained]),
+            )
             .unwrap();
-        let catalog = Catalog { root, sources: BTreeSet::from([retained]) };
-        assert_eq!(catalog.root.lookup(&blocks, id).unwrap(), Some(location(retired)), "the page still holds it");
+        let catalog = Catalog {
+            root,
+            sources: BTreeSet::from([retained]),
+        };
+        assert_eq!(
+            catalog.root.lookup(&blocks, id).unwrap(),
+            Some(location(retired)),
+            "the page still holds it"
+        );
         assert_eq!(catalog.lookup(&blocks, id).unwrap(), None);
-        assert_eq!(catalog.lookup(&blocks, kept).unwrap(), Some(location(retained)));
-        let prepared = catalog.prepare_recovery_lookup(&blocks, [id, kept].into_iter(), &|| false).unwrap();
-        prepared.visit_locations(id, &mut |_| panic!("a retired source answered")).unwrap().unwrap();
+        assert_eq!(
+            catalog.lookup(&blocks, kept).unwrap(),
+            Some(location(retained))
+        );
+        let prepared = catalog
+            .prepare_recovery_lookup(&blocks, [id, kept].into_iter(), &|| false)
+            .unwrap();
+        prepared
+            .visit_locations(id, &mut |_| panic!("a retired source answered"))
+            .unwrap()
+            .unwrap();
         let mut found = Vec::new();
-        prepared.visit_locations(kept, &mut |location| { found.push(location); Ok(false) }).unwrap().unwrap();
+        prepared
+            .visit_locations(kept, &mut |location| {
+                found.push(location);
+                Ok(false)
+            })
+            .unwrap()
+            .unwrap();
         assert_eq!(found, vec![location(retained)]);
     }
 
@@ -998,16 +1214,37 @@ mod tests {
     fn layered_root(blocks: &BlockStore) -> (RoutingRoot, BTreeSet<BlockId>) {
         let source = |n: u8| BlockId([n; 32]);
         let id = |i: usize| BlockId::for_payload(format!("layered {i}").as_bytes());
-        let location = |source, i: usize| PayloadLocation { source, source_bytes: 4096, offset: (i % 4000) as u32, length: 1 };
-        let all = BTreeSet::from([source(1), source(2), source(3), source(4)]);
-        let run = |range: std::ops::Range<usize>, pick: &dyn Fn(usize) -> BlockId| -> BTreeMap<_, _> {
-            range.map(|i| (id(i), location(pick(i), i))).collect()
+        let location = |source, i: usize| PayloadLocation {
+            source,
+            source_bytes: 4096,
+            offset: (i % 4000) as u32,
+            length: 1,
         };
+        let all = BTreeSet::from([source(1), source(2), source(3), source(4)]);
+        let run =
+            |range: std::ops::Range<usize>, pick: &dyn Fn(usize) -> BlockId| -> BTreeMap<_, _> {
+                range.map(|i| (id(i), location(pick(i), i))).collect()
+            };
         let root = RoutingRoot::default()
-            .append(blocks, &run(0..16_384, &|_| source(1)), &all).unwrap()
-            .append(blocks, &run(8_192..16_384, &|i| source(if i % 2 == 0 { 2 } else { 4 })), &all).unwrap()
-            .append(blocks, &run(12_288..16_384, &|i| source(if i % 3 == 0 { 4 } else { 3 })), &all).unwrap();
-        assert_eq!(root.levels.iter().flatten().count(), 3, "the fixture keeps three separate runs");
+            .append(blocks, &run(0..16_384, &|_| source(1)), &all)
+            .unwrap()
+            .append(
+                blocks,
+                &run(8_192..16_384, &|i| source(if i % 2 == 0 { 2 } else { 4 })),
+                &all,
+            )
+            .unwrap()
+            .append(
+                blocks,
+                &run(12_288..16_384, &|i| source(if i % 3 == 0 { 4 } else { 3 })),
+                &all,
+            )
+            .unwrap();
+        assert_eq!(
+            root.levels.iter().flatten().count(),
+            3,
+            "the fixture keeps three separate runs"
+        );
         (root, BTreeSet::from([source(1), source(2), source(3)]))
     }
 
@@ -1020,7 +1257,11 @@ mod tests {
     }
 
     fn files_written(vfs: &DeterministicVfs) -> usize {
-        vfs.trace().unwrap().iter().filter(|operation| **operation == crate::vfs::Operation::Rename).count()
+        vfs.trace()
+            .unwrap()
+            .iter()
+            .filter(|operation| **operation == crate::vfs::Operation::Rename)
+            .count()
     }
 
     /// Bulk retention merged the runs pairwise from the oldest level down and
@@ -1035,7 +1276,11 @@ mod tests {
         vfs.arm_fault(None).unwrap();
         let streamed = root.retain_sources(&blocks, &keep).unwrap();
         let streamed_pages = streamed.page_ids().count();
-        assert_eq!(files_written(&vfs), streamed_pages, "only the retained run is written");
+        assert_eq!(
+            files_written(&vfs),
+            streamed_pages,
+            "only the retained run is written"
+        );
 
         let (pairwise_vfs, pairwise_blocks) = counting_store();
         let (pairwise_root, _) = layered_root(&pairwise_blocks);
@@ -1048,16 +1293,33 @@ mod tests {
             });
         }
         let merged = merged.unwrap();
-        assert!(files_written(&pairwise_vfs) > streamed_pages, "the pairwise merge writes an intermediate run");
-        assert_eq!(streamed.levels.iter().flatten().collect::<Vec<_>>(), vec![&merged]);
+        assert!(
+            files_written(&pairwise_vfs) > streamed_pages,
+            "the pairwise merge writes an intermediate run"
+        );
+        assert_eq!(
+            streamed.levels.iter().flatten().collect::<Vec<_>>(),
+            vec![&merged]
+        );
         assert_eq!(streamed.version(), VERSION);
 
-        let catalog = Catalog { root: root.clone(), sources: keep.clone() };
+        let catalog = Catalog {
+            root: root.clone(),
+            sources: keep.clone(),
+        };
         for i in 0..16_384 {
             let id = BlockId::for_payload(format!("layered {i}").as_bytes());
-            assert_eq!(streamed.lookup(&blocks, id).unwrap(), catalog.lookup(&blocks, id).unwrap(), "ID {i}");
+            assert_eq!(
+                streamed.lookup(&blocks, id).unwrap(),
+                catalog.lookup(&blocks, id).unwrap(),
+                "ID {i}"
+            );
         }
-        assert_eq!(streamed.entries(), 16_384, "every ID keeps its run-1 location at least");
+        assert_eq!(
+            streamed.entries(),
+            16_384,
+            "every ID keeps its run-1 location at least"
+        );
     }
 
     #[test]
@@ -1067,35 +1329,70 @@ mod tests {
         // still hold retired locations must fail its open instead.
         let blocks = store();
         let (retired, retained) = (BlockId([11; 32]), BlockId([12; 32]));
-        let location = |source| PayloadLocation { source, source_bytes: 16, offset: 0, length: 1 };
+        let location = |source| PayloadLocation {
+            source,
+            source_bytes: 16,
+            offset: 0,
+            length: 1,
+        };
         let root = RoutingRoot::default()
-            .append(&blocks, &BTreeMap::from([(BlockId([20; 32]), location(retired)),
-                (BlockId([21; 32]), location(retained))]), &BTreeSet::from([retired, retained]))
+            .append(
+                &blocks,
+                &BTreeMap::from([
+                    (BlockId([20; 32]), location(retired)),
+                    (BlockId([21; 32]), location(retained)),
+                ]),
+                &BTreeSet::from([retired, retained]),
+            )
             .unwrap();
-        let version = |root: &RoutingRoot| u32::from_le_bytes(root.encode().unwrap()[8..12].try_into().unwrap());
+        let version = |root: &RoutingRoot| {
+            u32::from_le_bytes(root.encode().unwrap()[8..12].try_into().unwrap())
+        };
         assert_eq!(version(&root), VERSION);
         let lazy = root.with_retired_sources();
         assert_eq!(version(&lazy), LAZY_ROOT_VERSION);
         assert_eq!(RoutingRoot::decode(&lazy.encode().unwrap()).unwrap(), lazy);
         assert!(lazy.page_ids().eq(root.page_ids()), "no page is rewritten");
         let appended = lazy
-            .append(&blocks, &BTreeMap::from([(BlockId([22; 32]), location(retained))]), &BTreeSet::from([retained]))
+            .append(
+                &blocks,
+                &BTreeMap::from([(BlockId([22; 32]), location(retained))]),
+                &BTreeSet::from([retained]),
+            )
             .unwrap();
-        assert_eq!(version(&appended), LAZY_ROOT_VERSION, "an untouched run may still hold retired locations");
-        let rewritten = lazy.retain_sources(&blocks, &BTreeSet::from([retained])).unwrap();
+        assert_eq!(
+            version(&appended),
+            LAZY_ROOT_VERSION,
+            "an untouched run may still hold retired locations"
+        );
+        let rewritten = lazy
+            .retain_sources(&blocks, &BTreeSet::from([retained]))
+            .unwrap();
         assert_eq!(version(&rewritten), VERSION);
         assert_eq!(rewritten.lookup(&blocks, BlockId([20; 32])).unwrap(), None);
         let mut unknown = lazy.encode().unwrap();
         unknown[8..12].copy_from_slice(&3_u32.to_le_bytes());
-        assert_eq!(RoutingRoot::decode(&unknown).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            RoutingRoot::decode(&unknown).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
     fn appends_refuse_locations_their_manifest_does_not_retain() {
         let blocks = store();
-        let location = PayloadLocation { source: BlockId([11; 32]), source_bytes: 16, offset: 0, length: 1 };
+        let location = PayloadLocation {
+            source: BlockId([11; 32]),
+            source_bytes: 16,
+            offset: 0,
+            length: 1,
+        };
         let error = RoutingRoot::default()
-            .append(&blocks, &BTreeMap::from([(BlockId([20; 32]), location)]), &BTreeSet::new())
+            .append(
+                &blocks,
+                &BTreeMap::from([(BlockId([20; 32]), location)]),
+                &BTreeSet::new(),
+            )
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
@@ -1104,33 +1401,76 @@ mod tests {
     fn routing_merges_overlapping_runs_and_drop_retired_sources() {
         let blocks = store();
         let (old, new, newest) = (BlockId([11; 32]), BlockId([12; 32]), BlockId([13; 32]));
-        let location = |source, batch| PayloadLocation { source, source_bytes: 16, offset: batch, length: 1 };
+        let location = |source, batch| PayloadLocation {
+            source,
+            source_bytes: 16,
+            offset: batch,
+            length: 1,
+        };
         let id = |index: u32| BlockId::for_payload(&index.to_le_bytes());
         let mut root = RoutingRoot::default();
         // Batches 0-2 route IDs 0..5000 to `old`; batches 3-6 route 2500..7500
         // to `new`, superseding half of them.
         for batch in 0..7_u32 {
-            let (source, ids) = if batch < 3 { (old, 0..5000) } else { (new, 2500..7500) };
-            let entries = ids.map(|index| (id(index), location(source, batch))).collect();
-            root = root.append(&blocks, &entries, &BTreeSet::from([old, new])).unwrap();
+            let (source, ids) = if batch < 3 {
+                (old, 0..5000)
+            } else {
+                (new, 2500..7500)
+            };
+            let entries = ids
+                .map(|index| (id(index), location(source, batch)))
+                .collect();
+            root = root
+                .append(&blocks, &entries, &BTreeSet::from([old, new]))
+                .unwrap();
             assert_eq!(RoutingRoot::decode(&root.encode().unwrap()).unwrap(), root);
         }
         for index in [2500_u32, 4999, 7499] {
             let mut candidates = Vec::new();
-            root.visit_locations(&blocks, id(index), &mut |location| { candidates.push(location); Ok(false) }).unwrap();
+            root.visit_locations(&blocks, id(index), &mut |location| {
+                candidates.push(location);
+                Ok(false)
+            })
+            .unwrap();
             assert!(!candidates.is_empty());
             assert!(candidates.iter().all(|location| location.source == new));
         }
-        assert_eq!(root.lookup(&blocks, id(0)).unwrap().map(|location| location.source), Some(old));
+        assert_eq!(
+            root.lookup(&blocks, id(0))
+                .unwrap()
+                .map(|location| location.source),
+            Some(old)
+        );
         // `old` retires. The eighth append carries through every level, so
         // its merges rewrite every run and drop `old`'s remaining locations.
-        let entries = (10_000..10_010).map(|index| (id(index), location(newest, 7))).collect();
-        root = root.append(&blocks, &entries, &BTreeSet::from([new, newest])).unwrap();
+        let entries = (10_000..10_010)
+            .map(|index| (id(index), location(newest, 7)))
+            .collect();
+        root = root
+            .append(&blocks, &entries, &BTreeSet::from([new, newest]))
+            .unwrap();
         assert_eq!(root.levels.iter().flatten().count(), 1);
-        assert_eq!(root.levels.iter().flatten().map(|run| run.entries).sum::<u64>(), 5010);
+        assert_eq!(
+            root.levels
+                .iter()
+                .flatten()
+                .map(|run| run.entries)
+                .sum::<u64>(),
+            5010
+        );
         assert_eq!(root.lookup(&blocks, id(0)).unwrap(), None);
-        assert_eq!(root.lookup(&blocks, id(2500)).unwrap().map(|location| location.source), Some(new));
-        assert_eq!(root.lookup(&blocks, id(10_009)).unwrap().map(|location| location.source), Some(newest));
+        assert_eq!(
+            root.lookup(&blocks, id(2500))
+                .unwrap()
+                .map(|location| location.source),
+            Some(new)
+        );
+        assert_eq!(
+            root.lookup(&blocks, id(10_009))
+                .unwrap()
+                .map(|location| location.source),
+            Some(newest)
+        );
         assert_eq!(RoutingRoot::decode(&root.encode().unwrap()).unwrap(), root);
     }
 
@@ -1150,7 +1490,9 @@ mod tests {
                 )
             })
             .collect();
-        let root = RoutingRoot::default().append(&blocks, &entries, &BTreeSet::from([BlockId([42; 32])])).unwrap();
+        let root = RoutingRoot::default()
+            .append(&blocks, &entries, &BTreeSet::from([BlockId([42; 32])]))
+            .unwrap();
         assert_eq!(root.page_ids().count(), 2);
         blocks.set_cache_capacity_bytes(0).unwrap();
         for (&id, &location) in entries
@@ -1183,7 +1525,11 @@ mod tests {
         assert!(bad.encode().is_err());
         let blocks = store();
         let root = RoutingRoot::default()
-            .append(&blocks, &index.locations().collect(), &BTreeSet::from([source]))
+            .append(
+                &blocks,
+                &index.locations().collect(),
+                &BTreeSet::from([source]),
+            )
             .unwrap();
         let bytes = root.encode().unwrap();
         for length in 0..bytes.len() {

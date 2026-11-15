@@ -132,6 +132,21 @@ def _refuse_live_root(root: Path) -> None:
             raise SystemExit(f'refusing {resolved}: it lies inside a live Tofu checkout ({parent})')
 
 
+def _refuse_memory_root(root: Path) -> None:
+    """A root that outlives the run (--reuse-seed) must not live in RAM.
+
+    Its seed fixture, authority and checkout copy stay until removed by hand;
+    on tmpfs they are charged to the memory cgroup and cannot be reclaimed.
+    """
+    from serverctl_pkg.local_placement import describe_volume, temporary_root
+    volume = describe_volume(root)
+    if volume.storage_class == 'memory-filesystem':
+        raise SystemExit(
+            f'refusing {root}: {volume.mount_point} is a memory filesystem '
+            f'({volume.filesystem_type}); the root persists after the run, so place it '
+            f'on disk, e.g. under {temporary_root()}')
+
+
 def _pin_engine(engine: Path, root: Path) -> tuple[Path, str]:
     digest = hashlib.sha256(engine.read_bytes()).hexdigest()
     pinned_dir = root / 'engine' / digest[:16]
@@ -804,6 +819,7 @@ def main(argv=None) -> int:
     if args.child:
         return child_main(args)
     root = Path(args.root).expanduser()
+    _refuse_memory_root(root)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     root.chmod(0o700)
     _refuse_live_root(root)

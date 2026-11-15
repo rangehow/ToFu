@@ -21,7 +21,11 @@ pub(super) struct ReadOptions {
 impl ReadOptions {
     fn capture(database: &AuthorityDatabase) -> Self {
         Self {
-            blob_encoder: database.entities.writer_engine().ok().map(|engine| engine.shared_blob_encoder()),
+            blob_encoder: database
+                .entities
+                .writer_engine()
+                .ok()
+                .map(|engine| engine.shared_blob_encoder()),
             event_read_epoch: database.event_read_epoch,
             worker_lease_clock: Arc::clone(&database.worker_lease_clock),
             worker_control: Arc::clone(&database.worker_control),
@@ -76,21 +80,45 @@ impl CachedQueryResult {
 // progress: they take no authority mutex, so they cannot prove that a holder
 // released it, and counting them would hide a wedged holder from the watch.
 impl PublishedQueryView {
-    pub(crate) fn try_cached(&self, key: crate::query_result_cache::Lookup<'_>) -> Option<CachedQueryResult> {
+    pub(crate) fn try_cached(
+        &self,
+        key: crate::query_result_cache::Lookup<'_>,
+    ) -> Option<CachedQueryResult> {
         // Empty, uncacheable and evicted keys avoid health/publication locks.
         // The owned candidate is never an answer until live generation proof.
         let (stored, response) = self.results.candidate(key)?;
         // Contended or poisoned configuration refuses the candidate.
         let _options = self.options.try_read().ok()?;
-        if !self.entities.with_healthy_current_snapshot(|snapshot| snapshot == stored)? { return None; }
+        if !self
+            .entities
+            .with_healthy_current_snapshot(|snapshot| snapshot == stored)?
+        {
+            return None;
+        }
         Some(CachedQueryResult { response })
     }
-    pub(crate) fn remember(&self, request: &crate::protocol::Request,
-        snapshot: crate::entity::EntitySnapshot, response: &crate::server::response::DispatchedResponse) {
-        if request.command_id.is_some() { return; }
-        let Some(admission) = response.cache_admission() else { return; };
+    pub(crate) fn remember(
+        &self,
+        request: &crate::protocol::Request,
+        snapshot: crate::entity::EntitySnapshot,
+        response: &crate::server::response::DispatchedResponse,
+    ) {
+        if request.command_id.is_some() {
+            return;
+        }
+        let Some(admission) = response.cache_admission() else {
+            return;
+        };
         self.entities.with_healthy_current_snapshot(|current| {
-            if current == snapshot { self.results.insert(request.into(), snapshot, response.payload.len(), admission, || response.snapshot_cache_copy()); }
+            if current == snapshot {
+                self.results.insert(
+                    request.into(),
+                    snapshot,
+                    response.payload.len(),
+                    admission,
+                    || response.snapshot_cache_copy(),
+                );
+            }
         });
     }
     pub(crate) fn try_build(&self) -> Option<io::Result<AuthorityDatabase>> {
@@ -133,9 +161,22 @@ impl AuthorityDatabase {
                 options
             }
         };
-        let results = self.published_query_results.get_or_insert_with(||
-            Arc::new(crate::query_result_cache::QueryResultCache::new(self.canonical_json_cache.observer().metrics().capacity_bytes))).clone();
-        Ok(PublishedQueryView { entities, options, results })
+        let results = self
+            .published_query_results
+            .get_or_insert_with(|| {
+                Arc::new(crate::query_result_cache::QueryResultCache::new(
+                    self.canonical_json_cache
+                        .observer()
+                        .metrics()
+                        .capacity_bytes,
+                ))
+            })
+            .clone();
+        Ok(PublishedQueryView {
+            entities,
+            options,
+            results,
+        })
     }
     pub(super) fn refresh_published_query_options(&self) {
         if let Some(options) = &self.published_query_options {

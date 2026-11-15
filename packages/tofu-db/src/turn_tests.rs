@@ -123,7 +123,7 @@
                 conversation_id: "conv-1\"\\\n\u{1f}",
                 occurred_at_ms,
                 payload: TurnUpsertPayload {
-                    attempts: attempt.iter().map(|value| *value).collect(),
+                    attempts: attempt.iter().copied().collect(),
                     conversation_revision: revision,
                     queue_item_upserts: Vec::new(),
                     removed_queue_ids: Vec::new(),
@@ -534,6 +534,33 @@
             restart_settlement(&thinking_only)["resumeOptions"][0],
             json!({"operation": "continue",
                    "anchor": {"type": "replay_only", "contentChars": 0}})
+        );
+
+        // No one stopped a restart's work: a Turn that produced nothing yet
+        // resumes from its input (docs/contracts/TURN_SETTLEMENT.md).
+        let unproduced = json!({"content": "", "thinking": "", "toolRounds": []})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            restart_settlement(&unproduced)["resumeOptions"],
+            json!([
+                {"operation": "continue",
+                 "anchor": {"type": "replay_only", "contentChars": 0}},
+                {"operation": "regenerate", "anchor": {"type": "turn_start"}}
+            ])
+        );
+        // A first-round cut call keeps regenerate alone: continuing from the
+        // input would repeat its unconfirmed side effect.
+        let cut_call = json!({"toolRounds": [
+            {"toolCallId": "call-1", "toolName": "write_file", "toolArgs": {}}
+        ]})
+        .as_object()
+        .unwrap()
+        .clone();
+        assert_eq!(
+            restart_settlement(&cut_call)["resumeOptions"],
+            json!([{"operation": "regenerate", "anchor": {"type": "turn_start"}}])
         );
     }
 
@@ -2917,8 +2944,7 @@
                 &BTreeMap::new(),
                 10,
             )
-            .err()
-            .expect("aggregate Turn delta must stay within its response budget")
+            .expect_err("aggregate Turn delta must stay within its response budget")
             .kind(),
             io::ErrorKind::OutOfMemory
         );
@@ -3049,7 +3075,7 @@
 
         let mut remove = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         delete(
-            &mut database,
+            &database,
             &mut remove,
             "cascade-conversation",
             &["cascade-turn".to_owned()],

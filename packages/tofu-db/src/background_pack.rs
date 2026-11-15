@@ -76,8 +76,7 @@ const PACE_ABSOLUTE_CALM_NANOS: f64 = 1_000_000.0;
 const PACE_MIN_RATE_BYTES_PER_SECOND: u64 = 1024 * 1024;
 const PACE_UNPACE_THRESHOLD_BYTES_PER_SECOND: u64 = 4 * 1024 * 1024 * 1024;
 /// Starting rate on network-class volumes; local volumes start unpaced.
-pub(crate) const ADAPTIVE_NETWORK_START_BYTES_PER_SECOND: Option<u64> =
-    Some(64 * 1024 * 1024);
+pub(crate) const ADAPTIVE_NETWORK_START_BYTES_PER_SECOND: Option<u64> = Some(64 * 1024 * 1024);
 /// Idle windows (~1 s) before the packer fully unpaces.
 const PACE_IDLE_WINDOWS_UNTIL_UNPACED: u32 = 4;
 /// Staged pressure that forces packing even while the foreground is hot;
@@ -93,10 +92,19 @@ impl AdaptivePackController {
             unpaced: start_rate.is_none(),
             last_tick: std::time::Instant::now(),
             last_wal: (
-                crate::fsync_stats::component_stage_calls(crate::fsync_stats::COMPONENT_FOREGROUND, crate::fsync_stats::STAGE_WAL),
-                crate::fsync_stats::component_stage_nanos(crate::fsync_stats::COMPONENT_FOREGROUND, crate::fsync_stats::STAGE_WAL),
+                crate::fsync_stats::component_stage_calls(
+                    crate::fsync_stats::COMPONENT_FOREGROUND,
+                    crate::fsync_stats::STAGE_WAL,
+                ),
+                crate::fsync_stats::component_stage_nanos(
+                    crate::fsync_stats::COMPONENT_FOREGROUND,
+                    crate::fsync_stats::STAGE_WAL,
+                ),
             ),
-            last_commit: crate::fsync_stats::component_stage_calls(crate::fsync_stats::COMPONENT_FOREGROUND, crate::fsync_stats::STAGE_ENGINE_COMMIT),
+            last_commit: crate::fsync_stats::component_stage_calls(
+                crate::fsync_stats::COMPONENT_FOREGROUND,
+                crate::fsync_stats::STAGE_ENGINE_COMMIT,
+            ),
             baseline_nanos_per_call: PACE_ABSOLUTE_CALM_NANOS,
             packed_since_tick: false,
             idle_streak: 0,
@@ -125,7 +133,10 @@ impl AdaptivePackController {
     /// batches (its fsync storm would collide with user latency at p99);
     /// only real staged pressure or an explicit drain overrides.
     fn should_pack_now(&self, staged_bytes: u64, drain_requested: bool) -> bool {
-        if drain_requested || !self.foreground_hot || self.last_progress.elapsed() >= Duration::from_secs(2) {
+        if drain_requested
+            || !self.foreground_hot
+            || self.last_progress.elapsed() >= Duration::from_secs(2)
+        {
             return true;
         }
         staged_bytes >= PACK_DEFER_PRESSURE_BYTES
@@ -140,9 +151,18 @@ impl AdaptivePackController {
             return false;
         }
         self.last_tick = now;
-        let wal_calls = crate::fsync_stats::component_stage_calls(crate::fsync_stats::COMPONENT_FOREGROUND, crate::fsync_stats::STAGE_WAL);
-        let wal_nanos = crate::fsync_stats::component_stage_nanos(crate::fsync_stats::COMPONENT_FOREGROUND, crate::fsync_stats::STAGE_WAL);
-        let commits = crate::fsync_stats::component_stage_calls(crate::fsync_stats::COMPONENT_FOREGROUND, crate::fsync_stats::STAGE_ENGINE_COMMIT);
+        let wal_calls = crate::fsync_stats::component_stage_calls(
+            crate::fsync_stats::COMPONENT_FOREGROUND,
+            crate::fsync_stats::STAGE_WAL,
+        );
+        let wal_nanos = crate::fsync_stats::component_stage_nanos(
+            crate::fsync_stats::COMPONENT_FOREGROUND,
+            crate::fsync_stats::STAGE_WAL,
+        );
+        let commits = crate::fsync_stats::component_stage_calls(
+            crate::fsync_stats::COMPONENT_FOREGROUND,
+            crate::fsync_stats::STAGE_ENGINE_COMMIT,
+        );
         let delta_calls = wal_calls.saturating_sub(self.last_wal.0);
         let delta_nanos = wal_nanos.saturating_sub(self.last_wal.1);
         let delta_commits = commits.saturating_sub(self.last_commit);
@@ -150,7 +170,17 @@ impl AdaptivePackController {
         self.last_commit = commits;
         let packed = std::mem::replace(&mut self.packed_since_tick, false);
         let hot = crate::fsync_stats::foreground_recently_hot(&mut self.pressure);
-        self.tick_with(delta_calls, delta_nanos, if hot { delta_commits.max((4.0 * elapsed.as_secs_f64()).ceil() as u64) } else { delta_commits }, elapsed, packed)
+        self.tick_with(
+            delta_calls,
+            delta_nanos,
+            if hot {
+                delta_commits.max((4.0 * elapsed.as_secs_f64()).ceil() as u64)
+            } else {
+                delta_commits
+            },
+            elapsed,
+            packed,
+        )
     }
 
     /// Pure decision core, split from sampling so every branch is a
@@ -193,21 +223,21 @@ impl AdaptivePackController {
             return previous != self.current_rate();
         }
 
-        let pain_threshold = (PACE_RELATIVE_PAIN * self.baseline_nanos_per_call)
-            .max(PACE_ABSOLUTE_PAIN_NANOS);
-        let calm_threshold = (PACE_RELATIVE_CALM * self.baseline_nanos_per_call)
-            .max(PACE_ABSOLUTE_CALM_NANOS);
+        let pain_threshold =
+            (PACE_RELATIVE_PAIN * self.baseline_nanos_per_call).max(PACE_ABSOLUTE_PAIN_NANOS);
+        let calm_threshold =
+            (PACE_RELATIVE_CALM * self.baseline_nanos_per_call).max(PACE_ABSOLUTE_CALM_NANOS);
         if mean_nanos > pain_threshold {
             self.recover_streak = 0;
             self.unpaced = false;
-            self.rate_bytes_per_second = (self.rate_bytes_per_second / 2)
-                .max(PACE_MIN_RATE_BYTES_PER_SECOND);
+            self.rate_bytes_per_second =
+                (self.rate_bytes_per_second / 2).max(PACE_MIN_RATE_BYTES_PER_SECOND);
         } else if mean_nanos < calm_threshold {
             self.recover_streak = self.recover_streak.saturating_add(1);
             if self.recover_streak >= PACE_RECOVER_WINDOWS_PER_STEP {
                 self.recover_streak = 0;
-                self.rate_bytes_per_second = (self.rate_bytes_per_second * 3 / 2)
-                    .min(MAX_PACK_PACE_BYTES_PER_SECOND);
+                self.rate_bytes_per_second =
+                    (self.rate_bytes_per_second * 3 / 2).min(MAX_PACK_PACE_BYTES_PER_SECOND);
                 if self.rate_bytes_per_second >= PACE_UNPACE_THRESHOLD_BYTES_PER_SECOND {
                     self.unpaced = true;
                 }
@@ -250,9 +280,7 @@ impl PackPacer {
     /// The bucket never goes negative, so an idle worker resumes instantly
     /// while a bursting one is rate-limited.
     fn charge(&mut self, bytes: u64, now: std::time::Instant) -> std::time::Instant {
-        let cost = std::time::Duration::from_secs_f64(
-            bytes as f64 / self.bytes_per_second as f64,
-        );
+        let cost = std::time::Duration::from_secs_f64(bytes as f64 / self.bytes_per_second as f64);
         self.next_allowed = if self.next_allowed > now {
             self.next_allowed + cost
         } else {
@@ -347,11 +375,7 @@ impl BackgroundPackerObserver {
 
     pub fn pacing(&self) -> Option<BackgroundPackerPacing> {
         let shared = self.shared.upgrade()?;
-        shared
-            .pacing
-            .lock()
-            .ok()
-            .map(|pacing| *pacing)
+        shared.pacing.lock().ok().map(|pacing| *pacing)
     }
 
     pub fn require_healthy(&self) -> io::Result<()> {
@@ -440,7 +464,11 @@ impl BackgroundPacker {
             wal_retirement,
             state: Mutex::new(PackerState::default()),
             wake: Condvar::new(),
-            pacer: Mutex::new(if adaptive { None } else { PackPacer::new(fixed_pace.unwrap_or(0)) }),
+            pacer: Mutex::new(if adaptive {
+                None
+            } else {
+                PackPacer::new(fixed_pace.unwrap_or(0))
+            }),
             adaptive: adaptive && fixed_pace.is_none(),
             adaptive_start_rate,
             pacing: Mutex::new(BackgroundPackerPacing {
@@ -609,10 +637,7 @@ fn run_worker(shared: &Arc<Shared>) {
                 }
                 let defer = controller.as_ref().is_some_and(|controller| {
                     !controller.should_pack_now(
-                        shared
-                            .blocks
-                            .pending_staged_bytes()
-                            .unwrap_or(u64::MAX),
+                        shared.blocks.pending_staged_bytes().unwrap_or(u64::MAX),
                         shared.blocks.background_drain_requested(),
                     )
                 });
@@ -706,12 +731,19 @@ fn catalog_nearly_full(shared: &Arc<Shared>) -> bool {
 /// An explicit operator rate remains binding. All waits are wakeable on stop.
 fn wait_after_pack(shared: &Arc<Shared>, payload_bytes: u64) -> io::Result<()> {
     let began = std::time::Instant::now();
-    let deadline = shared.pacer.lock()
+    let deadline = shared
+        .pacer
+        .lock()
         .map_err(|_| io::Error::other("packer pacer poisoned"))?
-        .as_mut().map(|pacer| pacer.charge(payload_bytes, began));
-    let Some(deadline) = deadline else { return Ok(()); };
+        .as_mut()
+        .map(|pacer| pacer.charge(payload_bytes, began));
+    let Some(deadline) = deadline else {
+        return Ok(());
+    };
     {
-        let mut state = shared.state.lock()
+        let mut state = shared
+            .state
+            .lock()
             .map_err(|_| io::Error::other("packer state poisoned"))?;
         state.metrics.pacing_waits += 1;
     }
@@ -720,28 +752,45 @@ fn wait_after_pack(shared: &Arc<Shared>, payload_bytes: u64) -> io::Result<()> {
             // Observe the revision BEFORE checking predicates: a drain/stop
             // between the checks and the park must never be a lost wakeup.
             let observed = shared.blocks.background_pack_revision();
-            if shared.state.lock()
-                .map_err(|_| io::Error::other("packer state poisoned"))?.stopping {
+            if shared
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("packer state poisoned"))?
+                .stopping
+            {
                 return Ok(());
             }
             if shared.adaptive && shared.blocks.foreground_drain_requested() {
-                if let Some(pacer) = shared.pacer.lock()
-                    .map_err(|_| io::Error::other("packer pacer poisoned"))?.as_mut() {
+                if let Some(pacer) = shared
+                    .pacer
+                    .lock()
+                    .map_err(|_| io::Error::other("packer pacer poisoned"))?
+                    .as_mut()
+                {
                     // Do not repay this debt after the write lane reopens.
                     pacer.next_allowed = std::time::Instant::now();
                 }
-                shared.state.lock()
+                shared
+                    .state
+                    .lock()
                     .map_err(|_| io::Error::other("packer state poisoned"))?
-                    .metrics.foreground_drain_unpaces += 1;
+                    .metrics
+                    .foreground_drain_unpaces += 1;
                 return Ok(());
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() { return Ok(()); }
-            shared.blocks.wait_for_background_pack_change(observed, remaining)?;
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            shared
+                .blocks
+                .wait_for_background_pack_change(observed, remaining)?;
         }
     })();
     if let Ok(mut state) = shared.state.lock() {
-        state.metrics.pacing_wait_nanoseconds = state.metrics.pacing_wait_nanoseconds
+        state.metrics.pacing_wait_nanoseconds = state
+            .metrics
+            .pacing_wait_nanoseconds
             .saturating_add(began.elapsed().as_nanos().min(u64::MAX as u128) as u64);
     }
     result
@@ -752,7 +801,11 @@ fn pack_once(shared: &Arc<Shared>) -> PackOutcome {
         return PackOutcome::Idle;
     }
     let Some((segment_id, ids)) = (match shared.blocks.begin_background_pack(
-        if shared.blocks.background_drain_requested() { 1 } else { MINIMUM_WORKER_BATCH_BYTES },
+        if shared.blocks.background_drain_requested() {
+            1
+        } else {
+            MINIMUM_WORKER_BATCH_BYTES
+        },
         pain_bounded_batch_bytes(shared),
     ) {
         Ok(batch) => batch,
@@ -841,7 +894,10 @@ mod tests {
         assert_eq!(pacer.charge(100_000, now), now + Duration::from_millis(100));
         assert_eq!(pacer.charge(400_000, now), now + Duration::from_millis(500));
         let later = now + Duration::from_secs(10);
-        assert_eq!(pacer.charge(100_000, later), later + Duration::from_millis(100));
+        assert_eq!(
+            pacer.charge(100_000, later),
+            later + Duration::from_millis(100)
+        );
     }
 
     fn pacing_test_shared(store: Arc<BlockStore>, adaptive: bool) -> Arc<Shared> {
@@ -854,7 +910,8 @@ mod tests {
             adaptive,
             adaptive_start_rate: Some(1),
             pacing: Mutex::new(BackgroundPackerPacing {
-                adaptive, pace_bytes_per_second: Some(1),
+                adaptive,
+                pace_bytes_per_second: Some(1),
             }),
             materialize_batch_bytes: 8 * 1024 * 1024,
         })
@@ -873,7 +930,8 @@ mod tests {
             });
             let limit = std::time::Instant::now() + Duration::from_secs(2);
             while shared.state.lock().unwrap().metrics.pacing_waits == 0
-                && std::time::Instant::now() < limit {
+                && std::time::Instant::now() < limit
+            {
                 std::thread::yield_now();
             }
             let started = shared.state.lock().unwrap().metrics.pacing_waits == 1;
@@ -882,18 +940,41 @@ mod tests {
             store.request_foreground_drain();
             let fenced = done_rx.recv_timeout(if adaptive {
                 Duration::from_secs(2)
-            } else { Duration::from_millis(20) });
+            } else {
+                Duration::from_millis(20)
+            });
             // Always unblock and join before asserting, including failed cases.
             shared.state.lock().unwrap().stopping = true;
             store.wake_background_packer().unwrap();
-            if fenced.is_err() { done_rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap(); }
+            if fenced.is_err() {
+                done_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap()
+                    .unwrap();
+            }
             worker.join().unwrap();
             assert!(started);
-            assert!(matches!(early, Err(std::sync::mpsc::RecvTimeoutError::Timeout)));
-            if adaptive { fenced.unwrap().unwrap(); }
-            else { assert!(matches!(fenced, Err(std::sync::mpsc::RecvTimeoutError::Timeout))); }
-            assert_eq!(shared.state.lock().unwrap().metrics.foreground_drain_unpaces,
-                u64::from(adaptive));
+            assert!(matches!(
+                early,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ));
+            if adaptive {
+                fenced.unwrap().unwrap();
+            } else {
+                assert!(matches!(
+                    fenced,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                ));
+            }
+            assert_eq!(
+                shared
+                    .state
+                    .lock()
+                    .unwrap()
+                    .metrics
+                    .foreground_drain_unpaces,
+                u64::from(adaptive)
+            );
             store.finish_background_drain();
             assert!(!store.foreground_drain_requested());
             assert!(!store.background_drain_requested());
@@ -981,7 +1062,9 @@ mod tests {
         let mut guard = 0;
         while controller.current_rate().is_some() && guard < 64 {
             controller.tick_with(64, 64 * 500_000, 16, PACE_TICK, true);
-            rate = controller.current_rate().unwrap_or(MAX_PACK_PACE_BYTES_PER_SECOND);
+            rate = controller
+                .current_rate()
+                .unwrap_or(MAX_PACK_PACE_BYTES_PER_SECOND);
             guard += 1;
         }
         assert!(controller.current_rate().is_none(), "calm mounts unpace");

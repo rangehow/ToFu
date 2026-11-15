@@ -16,10 +16,14 @@ use super::tests::{
 };
 use super::*;
 use crate::entity::EntityKey;
-use crate::vfs::{sync_all_barrier, sync_directory_barrier, DeterministicVfs, FaultAction, OpenRequest, Operation};
+use crate::vfs::{
+    sync_all_barrier, sync_directory_barrier, DeterministicVfs, FaultAction, OpenRequest, Operation,
+};
 
 /// Reopens one seeded crash image for a campaign case.
-fn open_fork(seed: &Arc<DeterministicVfs>) -> (Arc<DeterministicVfs>, Arc<Mutex<AuthorityDatabase>>) {
+fn open_fork(
+    seed: &Arc<DeterministicVfs>,
+) -> (Arc<DeterministicVfs>, Arc<Mutex<AuthorityDatabase>>) {
     let vfs = Arc::new(seed.fork_durable().unwrap());
     let database = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     (vfs, Arc::new(Mutex::new(database)))
@@ -53,7 +57,10 @@ fn fault_cases(trace: &[Operation]) -> Vec<(Operation, usize, FaultAction)> {
 /// The (kind, occurrence) pair targeting the traced operation at `index`.
 fn occurrence_at(trace: &[Operation], index: usize) -> (Operation, usize) {
     let operation = trace[index];
-    let occurrence = trace[..=index].iter().filter(|op| **op == operation).count();
+    let occurrence = trace[..=index]
+        .iter()
+        .filter(|op| **op == operation)
+        .count();
     (operation, occurrence)
 }
 
@@ -70,7 +77,9 @@ fn control_write_indexes(trace: &[Operation]) -> Vec<usize> {
         .filter(|(index, operation)| {
             **operation == Operation::Write
                 && !matches!(
-                    index.checked_sub(1).and_then(|previous| trace.get(previous)),
+                    index
+                        .checked_sub(1)
+                        .and_then(|previous| trace.get(previous)),
                     Some(Operation::Open | Operation::Write)
                 )
                 && matches!(trace.get(index + 1), Some(Operation::SyncAll))
@@ -183,8 +192,10 @@ fn rewrite_seed(checkpoint: bool) -> RewriteSeed {
         let dead_id = database_guard
             .write_orphan_block_for_test(&dead_payload)
             .unwrap();
-        let packed = database_guard.engine_mut_for_test()
-            .compact_payload_blocks(&[live_id, dead_id]).unwrap();
+        let packed = database_guard
+            .engine_mut_for_test()
+            .compact_payload_blocks(&[live_id, dead_id])
+            .unwrap();
         if checkpoint {
             database_guard.checkpoint_for_test().unwrap();
         }
@@ -229,14 +240,19 @@ fn exercise_epoch_fault(
     operation: Operation,
     occurrence: usize,
     action: FaultAction,
-) -> (Arc<DeterministicVfs>, Arc<Mutex<AuthorityDatabase>>, OnlineGarbageCollector) {
+) -> (
+    Arc<DeterministicVfs>,
+    Arc<Mutex<AuthorityDatabase>>,
+    OnlineGarbageCollector,
+) {
     for _ in 0..16 {
         let (vfs, database) = open_fork(seed);
         let mut collector = OnlineGarbageCollector::new(test_budget());
         if faulted_epoch == 2 {
             run_epoch(&mut collector, &database);
         }
-        vfs.arm_operation_fault(operation, occurrence, action).unwrap();
+        vfs.arm_operation_fault(operation, occurrence, action)
+            .unwrap();
         let _ = collector.run_epoch(&database, &AtomicBool::new(false));
         if vfs.operation_fault_fired().unwrap() {
             return (vfs, database, collector);
@@ -282,7 +298,9 @@ fn every_online_epoch_mark_fault_preserves_live_blocks() {
         {
             let database_guard = database.lock().unwrap();
             assert_eq!(
-                database_guard.read_block_for_test(seed.live_payload_id).unwrap(),
+                database_guard
+                    .read_block_for_test(seed.live_payload_id)
+                    .unwrap(),
                 seed.live_payload
             );
             assert!(database_guard.read_block_for_test(seed.orphan).is_ok());
@@ -297,7 +315,9 @@ fn every_online_epoch_mark_fault_preserves_live_blocks() {
         {
             let database_guard = database.lock().unwrap();
             assert_eq!(
-                database_guard.read_block_for_test(seed.live_payload_id).unwrap(),
+                database_guard
+                    .read_block_for_test(seed.live_payload_id)
+                    .unwrap(),
                 seed.live_payload
             );
             assert_eq!(
@@ -339,7 +359,9 @@ fn every_online_epoch_delete_fault_keeps_control_slots_reopenable() {
         {
             let database_guard = database.lock().unwrap();
             assert_eq!(
-                database_guard.read_block_for_test(seed.live_payload_id).unwrap(),
+                database_guard
+                    .read_block_for_test(seed.live_payload_id)
+                    .unwrap(),
                 seed.live_payload
             );
         }
@@ -350,7 +372,9 @@ fn every_online_epoch_delete_fault_keeps_control_slots_reopenable() {
         {
             let database_guard = database.lock().unwrap();
             assert_eq!(
-                database_guard.read_block_for_test(seed.live_payload_id).unwrap(),
+                database_guard
+                    .read_block_for_test(seed.live_payload_id)
+                    .unwrap(),
                 seed.live_payload
             );
             assert_eq!(
@@ -427,7 +451,10 @@ fn every_online_epoch_rewrite_build_fault_preserves_live_blocks() {
             );
             assert_eq!(database_guard.payload_segment_count_for_test(), 1);
             assert_ne!(
-                database_guard.engine_mut_for_test().payload_segment_references()[0].segment_id,
+                database_guard
+                    .engine_mut_for_test()
+                    .payload_segment_references()[0]
+                    .segment_id,
                 seed.victim_segment
             );
         }
@@ -439,7 +466,9 @@ fn every_online_epoch_rewrite_build_fault_preserves_live_blocks() {
             .block_store_shared()
             .sweep_deferred_segment_retirements(std::time::Duration::ZERO)
             .unwrap();
-        let segments = vfs.read_directory(Path::new("/data/payload-segments")).unwrap();
+        let segments = vfs
+            .read_directory(Path::new("/data/payload-segments"))
+            .unwrap();
         assert_eq!(
             segments.len(),
             1,
@@ -468,8 +497,12 @@ fn online_gc_rewrite_publish_control_fault_keeps_old_segment_until_clean_rerun()
     let (vfs, database) = open_fork(&seed.vfs);
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
-    vfs.arm_operation_fault(operation, occurrence, FaultAction::ErrorBefore(io::ErrorKind::Interrupted))
-        .unwrap();
+    vfs.arm_operation_fault(
+        operation,
+        occurrence,
+        FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+    )
+    .unwrap();
     let error = collector
         .run_epoch(&database, &AtomicBool::new(false))
         .unwrap_err();
@@ -488,7 +521,10 @@ fn online_gc_rewrite_publish_control_fault_keeps_old_segment_until_clean_rerun()
         assert!(database_guard.read_block_for_test(seed.dead_id).is_ok());
         assert_eq!(database_guard.payload_segment_count_for_test(), 1);
         assert_eq!(
-            database_guard.engine_mut_for_test().payload_segment_references()[0].segment_id,
+            database_guard
+                .engine_mut_for_test()
+                .payload_segment_references()[0]
+                .segment_id,
             seed.victim_segment,
             "old segment is still the catalog member"
         );
@@ -523,7 +559,10 @@ fn online_gc_rewrite_publish_control_fault_keeps_old_segment_until_clean_rerun()
         );
         assert_eq!(database_guard.payload_segment_count_for_test(), 1);
         assert_ne!(
-            database_guard.engine_mut_for_test().payload_segment_references()[0].segment_id,
+            database_guard
+                .engine_mut_for_test()
+                .payload_segment_references()[0]
+                .segment_id,
             seed.victim_segment
         );
     }
@@ -573,9 +612,14 @@ fn online_gc_rewrite_old_segment_removal_fault_preserves_live_blocks() {
     // the unlink belongs to the deferred-retirement sweep, not the epoch.
     {
         let mut database_guard = database.lock().unwrap();
-        assert!(!database_guard.engine_mut_for_test().payload_segment_references().iter()
-            .any(|reference| reference.segment_id == seed.victim_segment),
-            "the actual victim must be replaced in the catalog");
+        assert!(
+            !database_guard
+                .engine_mut_for_test()
+                .payload_segment_references()
+                .iter()
+                .any(|reference| reference.segment_id == seed.victim_segment),
+            "the actual victim must be replaced in the catalog"
+        );
     }
     // Arm the sweep's unlink of the parked victim to fail.
     vfs.arm_operation_fault(
@@ -625,17 +669,36 @@ fn online_gc_rewrite_old_segment_removal_fault_preserves_live_blocks() {
             seed.live_payload
         );
     }
-    database.lock().unwrap().block_store_shared()
-        .sweep_deferred_segment_retirements(std::time::Duration::ZERO).unwrap();
-    let segments = vfs.read_directory(Path::new("/data/payload-segments")).unwrap();
+    database
+        .lock()
+        .unwrap()
+        .block_store_shared()
+        .sweep_deferred_segment_retirements(std::time::Duration::ZERO)
+        .unwrap();
+    let segments = vfs
+        .read_directory(Path::new("/data/payload-segments"))
+        .unwrap();
     // Physical layout may include an independently carried coverage cursor.
     // Require exactly the published catalog files, with no orphan or loss.
-    let expected = database.lock().unwrap().engine_mut_for_test()
-        .payload_segment_references().iter()
-        .map(|reference| Path::new("/data/payload-segments").join(format!("{}.pseg", reference.segment_id.simple())))
+    let expected = database
+        .lock()
+        .unwrap()
+        .engine_mut_for_test()
+        .payload_segment_references()
+        .iter()
+        .map(|reference| {
+            Path::new("/data/payload-segments")
+                .join(format!("{}.pseg", reference.segment_id.simple()))
+        })
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(segments.iter().cloned().collect::<std::collections::BTreeSet<_>>(), expected,
-        "exact catalog members remain; all retired/orphan files swept");
+    assert_eq!(
+        segments
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected,
+        "exact catalog members remain; all retired/orphan files swept"
+    );
     assert!(
         !segments.iter().any(|path| path
             .to_string_lossy()
@@ -695,7 +758,10 @@ fn online_gc_loose_batch_mid_removal_fault_recovers_remaining_victims() {
                 .is_ok()
         })
         .count();
-    assert_eq!(surviving, 1, "exactly one victim was removed before the fault");
+    assert_eq!(
+        surviving, 1,
+        "exactly one victim was removed before the fault"
+    );
     // Fault-free rerun: the survivor is re-confirmed and deleted.
     vfs.arm_fault(None).unwrap();
     run_epoch(&mut collector, &database);
@@ -776,7 +842,9 @@ fn online_gc_process_restart_mid_epoch_recovers_and_cleans_spill_residue() {
     {
         let database_guard = database.lock().unwrap();
         assert_eq!(
-            database_guard.read_block_for_test(seed.live_payload_id).unwrap(),
+            database_guard
+                .read_block_for_test(seed.live_payload_id)
+                .unwrap(),
             seed.live_payload
         );
         assert!(database_guard.read_block_for_test(seed.orphan).is_ok());
@@ -825,7 +893,11 @@ fn marked_epoch_for_test(
     collector: &OnlineGarbageCollector,
     database: &Arc<Mutex<AuthorityDatabase>>,
 ) -> Epoch {
-    let capture = database.lock().unwrap().online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
+    let capture = database
+        .lock()
+        .unwrap()
+        .online_gc_capture(test_budget().maximum_temporary_bytes)
+        .unwrap();
     let suspects_directory = capture
         .data_dir
         .join(WORK_DIRECTORY)
@@ -924,7 +996,10 @@ fn every_online_epoch_rewrite_sync_loss_keeps_control_slots_reopenable() {
             );
             assert_eq!(database_guard.payload_segment_count_for_test(), 1);
             assert_ne!(
-                database_guard.engine_mut_for_test().payload_segment_references()[0].segment_id,
+                database_guard
+                    .engine_mut_for_test()
+                    .payload_segment_references()[0]
+                    .segment_id,
                 seed.victim_segment,
                 "rewrite finished and stayed published across the crash"
             );
@@ -953,17 +1028,27 @@ fn every_online_epoch_rewrite_sync_loss_keeps_control_slots_reopenable() {
 /// collector must converge with both slots recoverable.
 #[test]
 fn every_online_epoch_fallback_stabilization_fault_keeps_both_slots_recoverable() {
-    use super::tests_fallback_slot::{durable_slots, key, pruned_history_authority, recover_from_fallback};
+    use super::tests_fallback_slot::{
+        durable_slots, key, pruned_history_authority, recover_from_fallback,
+    };
     let seed = Arc::new(DeterministicVfs::new(None));
     seed.create_dir(Path::new("/data")).unwrap();
     seed.sync_directory(Path::new("/")).unwrap();
     drop(pruned_history_authority(seed.clone()));
     seed.crash().unwrap();
     let trace = epoch_trace(&seed, 2);
-    assert_eq!(control_write_indexes(&trace).len(), 1, "the deleting epoch stabilizes once: {trace:?}");
+    assert_eq!(
+        control_write_indexes(&trace).len(),
+        1,
+        "the deleting epoch stabilizes once: {trace:?}"
+    );
     assert!(trace.contains(&Operation::RemoveFile));
     let cases = fault_cases(&trace);
-    eprintln!("fallback stabilization fault matrix: {} cases / {} operations", cases.len(), trace.len());
+    eprintln!(
+        "fallback stabilization fault matrix: {} cases / {} operations",
+        cases.len(),
+        trace.len()
+    );
 
     for (operation, occurrence, action) in cases {
         let case = format!("{operation:?} occurrence={occurrence} action={action:?}");

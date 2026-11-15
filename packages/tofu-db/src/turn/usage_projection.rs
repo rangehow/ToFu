@@ -307,8 +307,14 @@ pub(crate) fn main_lane(
 mod tests {
     use super::*;
 
-    fn append(database: &AuthorityDatabase, write: &mut AuthorityTransaction,
-              ordinal: u64, actor: &str, projection: Value, created_at_ms: u64) {
+    fn append(
+        database: &AuthorityDatabase,
+        write: &mut AuthorityTransaction,
+        ordinal: u64,
+        actor: &str,
+        projection: Value,
+        created_at_ms: u64,
+    ) {
         append_settled(
             database,
             write,
@@ -340,7 +346,14 @@ mod tests {
 
     fn read(database: &AuthorityDatabase) -> io::Result<Option<MainLaneUsage>> {
         let mut read = database.begin(7, 11).unwrap();
-        main_lane(database, &mut read, "usage-conversation", (150, 280), 5, &mut || false)
+        main_lane(
+            database,
+            &mut read,
+            "usage-conversation",
+            (150, 280),
+            5,
+            &mut || false,
+        )
     }
 
     #[test]
@@ -361,18 +374,43 @@ mod tests {
             },
         )
         .unwrap();
-        append(&database, &mut write, 0, "human",
-               json!({"content": "first question", "timestamp": 100}), 100);
-        append(&database, &mut write, 1, "assistant", json!({
-            "content": "x".repeat(20_000), "timestamp": 200,
-            "usage": {"prompt_tokens": 7}, "apiRounds": [{"round": 1}],
-            "model": "model-x", "providerId": "provider-y",
-        }), 200);
-        append(&database, &mut write, 2, "assistant",
-               json!({"timestamp": 300, "usage": {"prompt_tokens": 9}}), 210);
+        append(
+            &database,
+            &mut write,
+            0,
+            "human",
+            json!({"content": "first question", "timestamp": 100}),
+            100,
+        );
+        append(
+            &database,
+            &mut write,
+            1,
+            "assistant",
+            json!({
+                "content": "x".repeat(20_000), "timestamp": 200,
+                "usage": {"prompt_tokens": 7}, "apiRounds": [{"round": 1}],
+                "model": "model-x", "providerId": "provider-y",
+            }),
+            200,
+        );
+        append(
+            &database,
+            &mut write,
+            2,
+            "assistant",
+            json!({"timestamp": 300, "usage": {"prompt_tokens": 9}}),
+            210,
+        );
         // No projection time: the Turn's creation time places it.
-        append(&database, &mut write, 3, "assistant",
-               json!({"usage": {"prompt_tokens": 11}}), 260);
+        append(
+            &database,
+            &mut write,
+            3,
+            "assistant",
+            json!({"usage": {"prompt_tokens": 11}}),
+            260,
+        );
         database.commit(write).unwrap();
         let expected = json!([
             {"index": 1, "timestamp": 200, "usage": {"prompt_tokens": 7},

@@ -35,7 +35,7 @@ import export_pkg._publish as publish  # noqa: E402
 pytestmark = pytest.mark.unit
 
 REPO = Path(__file__).resolve().parents[2]
-PACKAGED = 'lib/channels/dx/robot_builtin.json'
+PACKAGED = 'bundles/yourprovider/tofu_yourprovider/dx/robot_builtin.json'
 CLIENT_ID = 'f00dfeed42'  # synthetic, shaped like an application client_id
 SECRET = '0123456789abcdef0123456789abcdef'  # synthetic, shaped like a client secret
 
@@ -44,8 +44,9 @@ SECRET = '0123456789abcdef0123456789abcdef'  # synthetic, shaped like a client s
 def project(tmp_path, monkeypatch):
     root = tmp_path / 'proj'
     (root / 'data' / 'config').mkdir(parents=True)
-    (root / 'contracts').mkdir()
-    shutil.copy(REPO / 'contracts' / 'channels_v1.schema.json', root / 'contracts')
+    facts = root / 'bundles' / 'yourprovider' / 'tofu_yourprovider' / 'dx'
+    facts.mkdir(parents=True)
+    shutil.copy(REPO / 'bundles' / 'yourprovider' / 'tofu_yourprovider' / 'dx' / 'facts.json', facts)
     monkeypatch.setattr(internal, 'ROOT', root)
     monkeypatch.setattr(publish, 'ROOT', root)
     return root
@@ -58,9 +59,9 @@ def write_values(root: Path) -> Path:
     return path
 
 
-def test_the_contract_names_the_packaged_path():
-    contract = json.loads((REPO / 'contracts' / 'channels_v1.schema.json').read_text(encoding='utf-8'))
-    assert contract['x-dxRobot']['builtinCredentialFile'] == PACKAGED
+def test_the_overlay_facts_name_the_packaged_path():
+    facts = json.loads((REPO / 'bundles' / 'yourprovider' / 'tofu_yourprovider' / 'dx' / 'facts.json').read_text(encoding='utf-8'))
+    assert facts['x-dxRobot']['builtinCredentialFile'] == PACKAGED
 
 
 def test_this_repository_can_never_commit_the_packaged_file():

@@ -385,10 +385,12 @@ one append; malformed evidence and live exclusions retain their existing boundar
 not the two-hour demo.
 
 The same declarations decide whether a Turn whose execution process died needs review before it resumes.
-Durable worker recovery names only `reconcile` occurrences whose committed `entered`/`unknown` intent has no
-result (`unknownEffects` in the Turn settlement error); read-only and idempotent occurrences, and calls with
-no committed intent, leave the Turn resumable by itself
-([Turn settlement](TURN_SETTLEMENT.md), worker recovery paragraph).
+Durable worker recovery classifies every occurrence whose committed `entered`/`unknown` intent has no result
+(`lib/tools/restart_effect_class.py`) and names only those of class `unknown` (`unknownEffects` in the Turn
+settlement error); read-only, idempotent and verifiable occurrences (a `run_command` that only reads, or one
+confined to the Worker's isolated worktree without network effect), and calls with no committed intent,
+leave the Turn resumable by itself ([Run continuity](../RUN_CONTINUITY.md), "A restart-cut call is
+classified by its declared effect"; [Turn settlement](TURN_SETTLEMENT.md), worker recovery paragraph).
 
 ## New-write admission after an unresolved file operation
 

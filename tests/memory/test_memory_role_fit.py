@@ -104,12 +104,12 @@ def test_a_forward_selects_by_the_owner_words_not_the_router_evidence():
 
 
 @pytest.mark.parametrize('steered', [False, True])
-def test_a_worker_selects_by_the_owner_request_and_its_brief_not_the_envelope(monkeypatch, steered):
+def test_a_worker_selects_by_its_brief_not_the_envelope(monkeypatch, steered):
     """The envelope comes from the real producer, so a change to its format fails here.
 
-    A forwarded request carries the Router's evidence after the owner's words; an
-    owner message steered into a nonhuman Coordinator reply is the request itself,
-    named on the source line by its steer.
+    The input carries the brief and a source line linking the owner's request
+    (an owner message steered into a nonhuman Coordinator reply is named by its
+    steer); neither the owner's words nor the Router's evidence is repeated.
     """
     from types import SimpleNamespace
 
@@ -132,8 +132,8 @@ def test_a_worker_selects_by_the_owner_request_and_its_brief_not_the_envelope(mo
         'brief': 'Carry the lane with cherry-pick -x and run integration_checkpoint.'})
     assert ('message steer-1' in envelope) is steered
     query = _extract_current_user_request(_authored(envelope))
-    assert query == ('Finish the unfinished work\n'
-                     'Carry the lane with cherry-pick -x and run integration_checkpoint.')
+    assert 'Finish the unfinished work' not in envelope and 'Router note' not in envelope
+    assert query == 'Carry the lane with cherry-pick -x and run integration_checkpoint.'
 
 
 def test_a_follow_up_selects_by_its_instruction():

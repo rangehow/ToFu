@@ -46,6 +46,7 @@ impl TaskStartedContext {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn enqueue_task_start(
     db: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,
@@ -164,19 +165,11 @@ fn task_payload(
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Default)]
 pub struct DeliveryCursor {
     pub index: usize,
     pub after_key: String,
     pub processed: u64,
-}
-impl Default for DeliveryCursor {
-    fn default() -> Self {
-        Self {
-            index: 0,
-            after_key: String::new(),
-            processed: 0,
-        }
-    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -212,7 +205,9 @@ fn prefixes(owner: u64, context: &TaskStartedContext) -> Vec<String> {
     }
     let mut ranges = Vec::new();
     for scope in ["all", context.origin.as_str()] {
-        for project in &projects { ranges.push(format!("{base}{scope}:{project}:")); }
+        for project in &projects {
+            ranges.push(format!("{base}{scope}:{project}:"));
+        }
     }
     ranges
 }

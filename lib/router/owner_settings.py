@@ -29,7 +29,7 @@ Authority classes (R11 inventory):
 Entry points: call (tool dispatch), register_settings_backend (composition
 root), channel_preconditions (read-only probe).
 Dependencies: lib.router.owner_delegation, lib.lifecycle_approval,
-lib.channels account services, lib.channels.dx.{adapter,login,supervisor}.
+lib.channels account services and installed channel adapters (lib.channels.adapters).
 """
 from __future__ import annotations
 
@@ -236,28 +236,19 @@ def _update_channel(owner: int, channel: str, update: dict) -> dict:
 def channel_preconditions(owner: int, channel: str) -> dict:
     """What the owner must know before a channel toggle. No side effects, no login request.
 
-    For 大象 it asks the question the supervisor asks before every launch
-    (``launcher_session`` for the account's login MIS, then ``approval_required``,
-    the SSO adapter's status that never requests an approval itself).
+    A channel an overlay installs answers its own login facts
+    (``login_preconditions`` of ``lib.channels.adapters``; for 大象 the question
+    the supervisor asks before every launch, without requesting an approval).
     """
     view = _channel_view(owner, channel) or {}
     status = view.get('status') or {}
     result = {'channel': channel, 'enabled': bool(view.get('enabled')),
               'status': {'state': status.get('state'), 'detail': status.get('detail')},
               'running_session': None, 'sso_login_state': None, 'relaunch_would_push_login_card': False}
-    if channel != 'dx':
-        return result
-    from lib.channels.dx import supervisor
-    from lib.channels.dx.adapter import launcher_session
-    from lib.channels.dx.login import approval_required
-    result['running_session'] = supervisor.running_adapter(owner) is not None
-    session = launcher_session(owner, view.get('loginMis'))
-    if session.mis is None:
-        result['sso_login_state'] = 'no_account'
-    elif approval_required(owner, session):
-        result.update(sso_login_state='approval_required', relaunch_would_push_login_card=True)
-    else:
-        result['sso_login_state'] = 'usable'
+    from lib.channels.adapters import channel_adapter
+    adapter = channel_adapter(channel)
+    if adapter is not None:
+        result.update(adapter.login_preconditions(owner, view))
     return result
 
 

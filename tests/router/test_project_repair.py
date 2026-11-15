@@ -17,7 +17,7 @@ from lib.lifecycle_approval import DelegationRefused
 from lib.router import project_repair
 from lib.scheduler.conversation_dispatch import ScheduledTurnDispatch
 from lib.storage.errors import StorageError
-from tests.router.test_delegated_action import approvals, delegation  # noqa: F401  (fixtures)
+from tests.router.test_delegated_action import approvals, delegation as delegation  # noqa: F401  (fixtures)
 from tests.router.test_standing_instructions import OWNER, r as standing  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.unit

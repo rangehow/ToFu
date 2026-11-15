@@ -64,10 +64,7 @@ fn sync_event_round_trip_get_and_scan_preserves_bytes() {
     )
     .unwrap();
     // The exact caller-supplied bytes are returned verbatim (hex).
-    assert_eq!(
-        got["event_json_hex"],
-        json!(hex(&envelope("conv-a", 7)))
-    );
+    assert_eq!(got["event_json_hex"], json!(hex(&envelope("conv-a", 7))));
     let scanned = execute(
         &mut db,
         7,
@@ -172,7 +169,10 @@ fn sync_event_scan_pages_with_cursor() {
         json!({"tenant_id":7,"owner_user_id":11}),
     )
     .unwrap();
-    assert_eq!(first["rows"].as_array().unwrap().len(), MIGRATION_SESSION_MAX_PAGE_ROWS);
+    assert_eq!(
+        first["rows"].as_array().unwrap().len(),
+        MIGRATION_SESSION_MAX_PAGE_ROWS
+    );
     let cursor = first["cursor"].as_str().unwrap().to_owned();
     assert!(cursor.starts_with("sync-events:"));
     let second = execute(

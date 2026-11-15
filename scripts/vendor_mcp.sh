@@ -74,6 +74,8 @@ import importlib.util
 import os
 import sys
 
+# vendored.py merges overlay rows through the repo-root tofu_extensions module.
+sys.path.insert(0, os.environ["REPO_ROOT"])
 path = os.path.join(os.environ["REPO_ROOT"], "lib", "mcp", "vendored.py")
 spec = importlib.util.spec_from_file_location("_tofu_vendored", path)
 try:

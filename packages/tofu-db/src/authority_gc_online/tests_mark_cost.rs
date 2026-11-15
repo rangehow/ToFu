@@ -70,22 +70,36 @@ impl Vfs for CountingVfs {
         } else if path.extension().is_some_and(|extension| extension == "blk") {
             self.log.lock().unwrap().loose_opens += 1;
             Source::Loose
-        } else if path.extension().is_some_and(|extension| extension == "mark") {
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "mark")
+        {
             Source::MarkRun
         } else {
             return Ok(file);
         };
-        Ok(Box::new(CountingFile { inner: file, source, log: Arc::clone(&self.log) }))
+        Ok(Box::new(CountingFile {
+            inner: file,
+            source,
+            log: Arc::clone(&self.log),
+        }))
     }
-    fn open_positioned_reader(&self, path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+    fn open_positioned_reader(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
         // Segment reads count through whichever handle serves them; loose and
         // history sources keep their accounting above.
-        Ok(match (self.inner.open_positioned_reader(path)?, segment_of(path)) {
-            (Some(inner), Some(segment)) => {
-                Some(Arc::new(CountingReader { inner, segment, log: Arc::clone(&self.log) }))
-            }
-            (reader, _) => reader,
-        })
+        Ok(
+            match (self.inner.open_positioned_reader(path)?, segment_of(path)) {
+                (Some(inner), Some(segment)) => Some(Arc::new(CountingReader {
+                    inner,
+                    segment,
+                    log: Arc::clone(&self.log),
+                })),
+                (reader, _) => reader,
+            },
+        )
     }
     fn create_dir(&self, path: &Path) -> io::Result<()> {
         self.inner.create_dir(path)
@@ -102,7 +116,11 @@ impl Vfs for CountingVfs {
     fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
         self.inner.read_directory(path)
     }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
     fn match_directory_prefix_bounded(
@@ -112,7 +130,8 @@ impl Vfs for CountingVfs {
         maximum: usize,
         matches: usize,
     ) -> io::Result<BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         self.inner.sync_directory(path)
@@ -131,7 +150,11 @@ impl VfsPositionedReader for CountingReader {
     }
     fn read_exact_at(&self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
         self.inner.read_exact_at(offset, bytes)?;
-        self.log.lock().unwrap().segment_reads.push((self.segment, offset, bytes.len()));
+        self.log
+            .lock()
+            .unwrap()
+            .segment_reads
+            .push((self.segment, offset, bytes.len()));
         Ok(())
     }
 }
@@ -263,14 +286,18 @@ fn write_records(authority: &mut AuthorityDatabase) {
             .map(|position| char::from(b'a' + ((position * 7 + document as usize) % 26) as u8))
             .collect();
         let mut transaction = authority.begin(7, 11).unwrap();
-        crate::versioned_document::put(authority, &mut transaction, crate::versioned_document::PutRequest {
-            key: EntityKey::new(7, 11, "markdocs", logical_key.as_bytes()).unwrap(),
-            namespace: "markdocs".into(),
-            logical_key,
-            value_json: serde_json::to_vec(&text).unwrap(),
-            expected_version: None,
-            updated_at_ms: 1,
-        })
+        crate::versioned_document::put(
+            authority,
+            &mut transaction,
+            crate::versioned_document::PutRequest {
+                key: EntityKey::new(7, 11, "markdocs", logical_key.as_bytes()).unwrap(),
+                namespace: "markdocs".into(),
+                logical_key,
+                value_json: serde_json::to_vec(&text).unwrap(),
+                expected_version: None,
+                updated_at_ms: 1,
+            },
+        )
         .unwrap();
         authority.commit(transaction).unwrap();
     }
@@ -280,10 +307,17 @@ fn write_records(authority: &mut AuthorityDatabase) {
         let events = (0..4_u64)
             .map(|index| {
                 let sequence = append * 4 + index;
-                crate::stream::StreamEvent::new(sequence as i64, "delta", vec![sequence as u8; 16 * 1024]).unwrap()
+                crate::stream::StreamEvent::new(
+                    sequence as i64,
+                    "delta",
+                    vec![sequence as u8; 16 * 1024],
+                )
+                .unwrap()
             })
             .collect();
-        authority.stream_append(&mut transaction, stream.clone(), append * 4 + 1, events).unwrap();
+        authority
+            .stream_append(&mut transaction, stream.clone(), append * 4 + 1, events)
+            .unwrap();
         authority.commit(transaction).unwrap();
     }
 }
@@ -298,8 +332,12 @@ fn mark_cost_authority() -> (Arc<CountingVfs>, Arc<Mutex<AuthorityDatabase>>) {
     let inner = Arc::new(DeterministicVfs::new(None));
     inner.create_dir(Path::new("/data")).unwrap();
     inner.sync_directory(Path::new("/")).unwrap();
-    let vfs = Arc::new(CountingVfs { inner, log: Arc::default() });
-    let mut authority = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let vfs = Arc::new(CountingVfs {
+        inner,
+        log: Arc::default(),
+    });
+    let mut authority =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     write_records(&mut authority);
     authority.merge_entity_overlay_fully().unwrap();
     authority.checkpoint_wal_window().unwrap();
@@ -307,10 +345,19 @@ fn mark_cost_authority() -> (Arc<CountingVfs>, Arc<Mutex<AuthorityDatabase>>) {
     let mut authority = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     let blocks = authority.block_store_shared();
     let store = blocks.payload_segment_store().unwrap();
-    let previous = blocks.installed_payload_manifest().unwrap().unwrap().segments;
+    let previous = blocks
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap()
+        .segments;
     let mut packed = Vec::new();
     for reference in &previous {
-        packed.extend(store.open_segment(reference.segment_id).unwrap().block_ids());
+        packed.extend(
+            store
+                .open_segment(reference.segment_id)
+                .unwrap()
+                .block_ids(),
+        );
     }
     let mut state = 0x9e37_79b9_7f4a_7c15_u64;
     for index in (1..packed.len()).rev() {
@@ -328,20 +375,38 @@ fn mark_cost_authority() -> (Arc<CountingVfs>, Arc<Mutex<AuthorityDatabase>>) {
                 (BlockId::for_payload(&payload), payload)
             })
             .collect();
-        let ids = packed.iter().skip(segment).step_by(SEGMENTS).copied().chain(filler.keys().copied()).collect();
+        let ids = packed
+            .iter()
+            .skip(segment)
+            .step_by(SEGMENTS)
+            .copied()
+            .chain(filler.keys().copied())
+            .collect();
         let created = store
-            .create(Uuid::from_u128(0x6d61_726b_636f_7374 << 64 | segment as u128), ids, |id| {
-                filler.get(&id).map_or_else(|| blocks.get(id), |payload| Ok(payload.clone()))
-            })
+            .create(
+                Uuid::from_u128(0x6d61_726b_636f_7374 << 64 | segment as u128),
+                ids,
+                |id| {
+                    filler
+                        .get(&id)
+                        .map_or_else(|| blocks.get(id), |payload| Ok(payload.clone()))
+                },
+            )
             .unwrap();
         references.push(
-            PayloadSegmentReference::new(created.metadata(), created.first_block_id(), created.last_block_id())
-                .unwrap(),
+            PayloadSegmentReference::new(
+                created.metadata(),
+                created.first_block_id(),
+                created.last_block_id(),
+            )
+            .unwrap(),
         );
     }
     authority
         .engine_mut_for_test()
-        .publish_payload_manifest_for_test(crate::payload_manifest::PayloadManifest::new(references).unwrap())
+        .publish_payload_manifest_for_test(
+            crate::payload_manifest::PayloadManifest::new(references).unwrap(),
+        )
         .unwrap();
     for reference in &previous {
         store.remove_segment(reference.segment_id).unwrap();
@@ -441,33 +506,63 @@ fn located_mark_reads_each_index_once_and_one_candidate_per_block_with_identical
     let (vfs, database) = mark_cost_authority();
     let blocks = database.lock().unwrap().block_store_shared();
     let store = blocks.payload_segment_store().unwrap();
-    let catalog = blocks.installed_payload_manifest().unwrap().unwrap().segments;
+    let catalog = blocks
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap()
+        .segments;
     assert_eq!(catalog.len(), SEGMENTS);
     let index_bytes: u64 = catalog
         .iter()
         .map(|reference| u64::from(reference.block_count) * SEGMENT_INDEX_ENTRY_BYTES)
         .sum();
-    blocks.set_segment_index_cache_bytes((index_bytes / 4) as usize).unwrap();
+    blocks
+        .set_segment_index_cache_bytes((index_bytes / 4) as usize)
+        .unwrap();
     let collector = OnlineGarbageCollector::new(test_budget());
 
     let resident = store.resident_index_ids_for_test();
     let (located_marks, located) = mark(&vfs, &database, &collector, &catalog, true);
     report("location_table", &located);
-    assert_eq!(store.resident_index_ids_for_test(), resident, "a located mark admits no verified index");
-    let admitted: Vec<_> = located_marks.iter().filter(|id| blocks.cache_contains_for_test(**id)).collect();
-    assert!(admitted.is_empty(), "a located mark admitted {admitted:?} to the payload cache");
+    assert_eq!(
+        store.resident_index_ids_for_test(),
+        resident,
+        "a located mark admits no verified index"
+    );
+    let admitted: Vec<_> = located_marks
+        .iter()
+        .filter(|id| blocks.cache_contains_for_test(**id))
+        .collect();
+    assert!(
+        admitted.is_empty(),
+        "a located mark admitted {admitted:?} to the payload cache"
+    );
     let (exact_marks, exact) = mark(&vfs, &database, &collector, &catalog, false);
     report("exact_catalog_path", &exact);
 
-    assert_eq!(located_marks, exact_marks, "the location table changes no mark");
-    let resident_catalogued =
-        catalog.iter().filter(|reference| resident.contains(&reference.segment_id)).count() as u64;
-    assert_eq!(located.whole_index_reads, SEGMENTS as u64 - resident_catalogued);
+    assert_eq!(
+        located_marks, exact_marks,
+        "the location table changes no mark"
+    );
+    let resident_catalogued = catalog
+        .iter()
+        .filter(|reference| resident.contains(&reference.segment_id))
+        .count() as u64;
+    assert_eq!(
+        located.whole_index_reads,
+        SEGMENTS as u64 - resident_catalogued
+    );
     assert_eq!(located.most_whole_reads_of_one_index, 1);
     assert_eq!(located.witness_checks, 0);
-    assert_eq!(located.location_candidates, located.payload_reads, "one candidate per located block");
+    assert_eq!(
+        located.location_candidates, located.payload_reads,
+        "one candidate per located block"
+    );
     assert!(located.index_entry_reads <= located.payload_reads);
-    assert_eq!((located.payload_reads, located.payload_bytes), (exact.payload_reads, exact.payload_bytes));
+    assert_eq!(
+        (located.payload_reads, located.payload_bytes),
+        (exact.payload_reads, exact.payload_bytes)
+    );
     assert_eq!(located.loose_opens, exact.loose_opens);
     assert!(exact.whole_index_reads > located.whole_index_reads);
     assert!(exact.witness_checks > 0);
@@ -481,15 +576,25 @@ const PINNED_ROOTS: u32 = 8;
 /// open transactions each pin the root of one more single-record update, so
 /// neighbouring roots share every page but one leaf-to-root path. Every root
 /// declares the same persistent pin, whose root shares all but its own path.
-fn pinned_roots_authority() -> (Arc<CountingVfs>, Arc<Mutex<AuthorityDatabase>>, Vec<AuthorityTransaction>) {
+fn pinned_roots_authority() -> (
+    Arc<CountingVfs>,
+    Arc<Mutex<AuthorityDatabase>>,
+    Vec<AuthorityTransaction>,
+) {
     let inner = Arc::new(DeterministicVfs::new(None));
     inner.create_dir(Path::new("/data")).unwrap();
     inner.sync_directory(Path::new("/")).unwrap();
-    let vfs = Arc::new(CountingVfs { inner, log: Arc::default() });
-    let mut authority = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let vfs = Arc::new(CountingVfs {
+        inner,
+        log: Arc::default(),
+    });
+    let mut authority =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     write_records(&mut authority);
     let mut transaction = authority.begin(7, 11).unwrap();
-    authority.stage_persistent_snapshot_pin(&mut transaction, b"mark-cost-pin").unwrap();
+    authority
+        .stage_persistent_snapshot_pin(&mut transaction, b"mark-cost-pin")
+        .unwrap();
     authority.commit(transaction).unwrap();
     authority.merge_entity_overlay_fully().unwrap();
     authority.checkpoint_wal_window().unwrap();
@@ -502,7 +607,13 @@ fn pinned_roots_authority() -> (Arc<CountingVfs>, Arc<Mutex<AuthorityDatabase>>,
         pins.push(authority.begin(7, 11).unwrap());
         let mut transaction = authority.begin(7, 11).unwrap();
         let key = EntityKey::new(7, 11, "markcost", &(root * 300 + 150).to_be_bytes()).unwrap();
-        authority.entity_put(&mut transaction, key, format!("pinned-root-update-{root}").into_bytes()).unwrap();
+        authority
+            .entity_put(
+                &mut transaction,
+                key,
+                format!("pinned-root-update-{root}").into_bytes(),
+            )
+            .unwrap();
         authority.commit(transaction).unwrap();
     }
     (vfs, Arc::new(Mutex::new(authority)), pins)
@@ -545,8 +656,14 @@ fn per_root_walks(blocks: &BlockStore, roots: &[Option<BlockId>]) -> PerRootWalk
             |id, _| {
                 marked.borrow_mut().insert(id);
                 inserts.set(inserts.get() + 1);
-                page_inserts.borrow_mut().entry(id).or_insert(1 + leaf_references.replace(0));
-                distinct_page_reads.borrow_mut().entry(id).or_insert(std::mem::take(&mut *page_reads.borrow_mut()));
+                page_inserts
+                    .borrow_mut()
+                    .entry(id)
+                    .or_insert(1 + leaf_references.replace(0));
+                distinct_page_reads
+                    .borrow_mut()
+                    .entry(id)
+                    .or_insert(std::mem::take(&mut *page_reads.borrow_mut()));
                 Ok(())
             },
             |key, value| {
@@ -583,10 +700,18 @@ fn per_root_walks(blocks: &BlockStore, roots: &[Option<BlockId>]) -> PerRootWalk
 fn mark_reads_and_inserts_each_page_shared_by_pinned_roots_once() {
     let (vfs, database, pins) = pinned_roots_authority();
     let blocks = database.lock().unwrap().block_store_shared();
-    let catalog = blocks.installed_payload_manifest().unwrap().unwrap().segments;
+    let catalog = blocks
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap()
+        .segments;
     let collector = OnlineGarbageCollector::new(test_budget());
     let roots = {
-        let capture = database.lock().unwrap().online_gc_capture(test_budget().maximum_temporary_bytes).unwrap();
+        let capture = database
+            .lock()
+            .unwrap()
+            .online_gc_capture(test_budget().maximum_temporary_bytes)
+            .unwrap();
         let mut roots = vec![capture.snapshot.authority_state_root];
         roots.extend(capture.snapshot.pinned_roots.iter().copied().map(Some));
         roots
@@ -596,12 +721,18 @@ fn mark_reads_and_inserts_each_page_shared_by_pinned_roots_once() {
     vfs.take();
     read_path_counters::take();
     let per_root = per_root_walks(&blocks, &roots);
-    let per_root_cost = mark_cost(vfs.take(), &catalog, per_root.marked.len(), read_path_counters::take());
+    let per_root_cost = mark_cost(
+        vfs.take(),
+        &catalog,
+        per_root.marked.len(),
+        read_path_counters::take(),
+    );
     let (marked, cost, inserts) = mark_capture(&vfs, &database, &collector, &catalog, true, |_| {});
-    let (_, rootless, rootless_inserts) = mark_capture(&vfs, &database, &collector, &catalog, true, |capture| {
-        capture.snapshot.authority_state_root = None;
-        capture.snapshot.pinned_roots.clear();
-    });
+    let (_, rootless, rootless_inserts) =
+        mark_capture(&vfs, &database, &collector, &catalog, true, |capture| {
+            capture.snapshot.authority_state_root = None;
+            capture.snapshot.pinned_roots.clear();
+        });
     let distinct_page_catalogued_reads = per_root
         .distinct_page_reads
         .values()
@@ -624,13 +755,19 @@ fn mark_reads_and_inserts_each_page_shared_by_pinned_roots_once() {
         cost.most_reads_of_one_payload,
     );
 
-    assert!(per_root.marked.is_subset(&marked), "the mark covers every root");
+    assert!(
+        per_root.marked.is_subset(&marked),
+        "the mark covers every root"
+    );
     assert_eq!(
         per_root_cost.most_reads_of_one_payload,
         2 * (u64::from(PINNED_ROOTS) + 1),
         "walked root by root, a shared page is read by every root and every walk of its persistent pin"
     );
-    assert_eq!(cost.payload_reads - rootless.payload_reads, distinct_page_catalogued_reads);
+    assert_eq!(
+        cost.payload_reads - rootless.payload_reads,
+        distinct_page_catalogued_reads
+    );
     assert_eq!(inserts - rootless_inserts, per_root.distinct_page_inserts);
     drop(pins);
 }
@@ -653,14 +790,23 @@ fn segment_window_scan_reads_each_mark_run_once() {
     let blocks = Arc::clone(&capture.blocks);
     let protected = capture.snapshot.payload_manifest_block_id;
     let store = blocks.payload_segment_store().unwrap();
-    let catalog = blocks.installed_payload_manifest().unwrap().unwrap().segments;
+    let catalog = blocks
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap()
+        .segments;
     assert_eq!(catalog.len(), SEGMENTS);
     let window_len = MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
     let mut live = Vec::new();
     let mut expected_dead = BTreeMap::new();
     for (segment, reference) in catalog.iter().enumerate() {
         let mut dead = Vec::new();
-        for (position, id) in store.open_segment(reference.segment_id).unwrap().block_ids().enumerate() {
+        for (position, id) in store
+            .open_segment(reference.segment_id)
+            .unwrap()
+            .block_ids()
+            .enumerate()
+        {
             if segment < window_len && position % 4 == segment % 4 && Some(id) != protected {
                 dead.push(id);
             } else {
@@ -700,8 +846,12 @@ fn segment_window_scan_reads_each_mark_run_once() {
     }
     inner.sync_directory(Path::new("/")).unwrap();
     inner.sync_directory(Path::new("/window-marks")).unwrap();
-    let marks_vfs = Arc::new(CountingVfs { inner, log: Arc::default() });
-    let mut marks = SpillMarkSet::initialize(Path::new("/window-marks"), marks_vfs.clone()).unwrap();
+    let marks_vfs = Arc::new(CountingVfs {
+        inner,
+        log: Arc::default(),
+    });
+    let mut marks =
+        SpillMarkSet::initialize(Path::new("/window-marks"), marks_vfs.clone()).unwrap();
     for id in inserts {
         marks.insert(id).unwrap();
     }

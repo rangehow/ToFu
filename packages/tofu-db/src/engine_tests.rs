@@ -2282,7 +2282,8 @@
         // before writing anything leaves the log exactly as it was.
         let single = |engine: &mut Engine| engine.commit(b"single").map(|_| ());
         let grouped = |engine: &mut Engine| engine.commit_batch(&batch(2)).map(|_| ());
-        let commits: [(&str, &dyn Fn(&mut Engine) -> io::Result<()>, Vec<Vec<u8>>); 2] = [
+        type Commit<'a> = (&'a str, &'a dyn Fn(&mut Engine) -> io::Result<()>, Vec<Vec<u8>>);
+        let commits: [Commit<'_>; 2] = [
             ("single", &single, vec![b"single".to_vec()]),
             ("batch", &grouped, vec![b"turn-00".to_vec(), b"turn-01".to_vec()]),
         ];
@@ -2821,7 +2822,7 @@
         drop(engine);
         vfs.crash().unwrap();
         vfs.arm_fault(None).unwrap();
-        let mut reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
         // The in-memory park does not survive the crash; the unreferenced
         // file becomes an ordinary orphan candidate and the authority still
         // opens and serves (no stale-snapshot reader survives a restart).
@@ -3316,7 +3317,7 @@
         assert_eq!(engine.wal_unsynced_bytes(), 0);
         std::mem::forget(engine);
         vfs.crash().unwrap();
-        let mut reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
+        let reopened = Engine::open_with_vfs(Path::new("/data"), vfs).unwrap();
         let record = reopened.transaction_at(1).unwrap().unwrap();
         assert_eq!(record.envelope.inline_payload, b"pre-attachment");
         driver.stop_and_join().unwrap();
@@ -4589,8 +4590,7 @@
         engine.commit(b"window-before-install").unwrap();
         let error = engine
             .finish_rotation_checkpoint(prepared, Ok(outcome))
-            .err()
-            .expect("publication-owned materialization must defer the rotation");
+            .expect_err("publication-owned materialization must defer the rotation");
         assert!(is_publication_owns_materialization(&error));
         assert!(matches!(
             engine.try_prepare_rotation_checkpoint().unwrap(),

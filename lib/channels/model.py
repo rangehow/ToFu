@@ -29,10 +29,6 @@ BRIDGE_CONTRACT = CONTRACT['x-bridge']
 # messages that are human input) and whether quote replies exist.
 CHANNEL_TRAITS = CONTRACT['x-channelTraits']
 GITHUB = CONTRACT['x-github']
-DX_ROBOT = CONTRACT['x-dxRobot']
-# 大象 message types, the rich-text subtype, the voice format and the Web
-# SDK's file hosts (docs/CHANNELS.md C9).
-DX = CONTRACT['x-dx']
 # Bot platforms (docs/CHANNELS.md C12): a bot account the owner registered,
 # whose provider IDs are opaque strings carried in thread keys as base32.
 BOT_CHANNELS = tuple(CONTRACT['x-botChannels'])
@@ -533,7 +529,7 @@ def session_owns_status(account: dict[str, Any] | None) -> bool:
 __all__ = [
     'ACCOUNT_STATES', 'ACTIVE_OUTBOX_STATES', 'BRIDGE_CONTRACT', 'CHANGE_KINDS', 'CHANNELS', 'CHANNEL_TRAITS',
     'CONFIGURABLE_MODES', 'CONTRACT', 'ChannelChange', 'ChannelError', 'ChannelEvent', 'ChannelMedia',
-    'DEFAULT_MODE_BY_KIND', 'DEFAULT_REPLY_POLICY', 'DISCLOSURE_LABEL', 'DX', 'DX_ROBOT',
+    'DEFAULT_MODE_BY_KIND', 'DEFAULT_REPLY_POLICY', 'DISCLOSURE_LABEL',
     'EVENT_DISPOSITIONS', 'GITHUB', 'LIMITS', 'MEDIA_KINDS', 'MEDIA_STATES', 'NAMESPACE',
     'OUTBOX_MARKER_FIELD', 'BOT_CHANNELS', 'QQ', 'SENDER_KINDS', 'WECHAT', 'WECOM',
     'OUTBOX_STATES', 'OutboxItem', 'PROVIDER_LIMITS', 'QUOTED_ATTACHMENT_KINDS', 'QUOTES', 'QuotedAttachment',

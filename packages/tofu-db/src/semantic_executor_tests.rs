@@ -10268,11 +10268,9 @@
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         database.configure_logical_outbox(&[74; 32], 4 * 1024 * 1024, 512 * 1024).unwrap();
-        let events = vec![
-            json!({"type": "delta", "content": "x".repeat(2048)}),
+        let events = [json!({"type": "delta", "content": "x".repeat(2048)}),
             json!({"type": "round_start", "roundNum": 2}),
-            json!({"type": "delta", "content": "y".repeat(2048)}),
-        ];
+            json!({"type": "delta", "content": "y".repeat(2048)})];
         for (index, event) in events.iter().enumerate() {
             let append = request("event.append", 11,
                 json!({"task_id": "time-spine", "sequence": index, "event": event}),
@@ -23688,7 +23686,7 @@
             other => panic!("unexpected variant: {other:?}"),
         }
         // Multibyte input truncates on a char boundary, never mid-UTF-8.
-        match integrity_failure(&"界".repeat(200)) {
+        match integrity_failure("界".repeat(200)) {
             SemanticExecutionError::Integrity(message) => {
                 assert!(message.len() <= 403, "len={}", message.len());
                 assert!(std::str::from_utf8(message.as_bytes()).is_ok());

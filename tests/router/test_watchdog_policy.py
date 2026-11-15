@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.dx_overlay import requires_dx
+
 from lib.router.home import router_home_location
 from lib.router.policy import ROUTER_TOOLS
 from lib.router.watchdog.binding import is_watchdog_scope, watchdog_location
@@ -189,13 +191,19 @@ def test_review_counts_owner_wide_facts_once_across_project_pages(monkeypatch):
 def test_every_channel_has_a_supervisor_that_reports_bridge_state():
     import importlib
     from lib.channels.model import CHANNELS
+    from lib.channels.adapters import installed_channel_adapters
     from lib.router.watchdog.snapshot import CHANNEL_SUPERVISORS
-    assert set(CHANNEL_SUPERVISORS) == set(CHANNELS)
-    for module in CHANNEL_SUPERVISORS.values():
-        assert importlib.import_module(module).bridge_state(OWNER) in {'not_hosted', 'stopped', 'running'}
+    overlay = installed_channel_adapters()
+    # Built-in channels name their supervisor; 大象's comes from its overlay adapter.
+    assert set(CHANNEL_SUPERVISORS) | {'dx'} == set(CHANNELS) and 'dx' not in CHANNEL_SUPERVISORS
+    supervisors = [importlib.import_module(module) for module in CHANNEL_SUPERVISORS.values()]
+    supervisors += [adapter.supervisor for adapter in overlay.values()]
+    for supervisor in supervisors:
+        assert supervisor.bridge_state(OWNER) in {'not_hosted', 'stopped', 'running'}
 
 
-@pytest.mark.parametrize('module, entry', [('lib.channels.dx.supervisor', 'reconcile_channel_bridges'),
+@pytest.mark.parametrize('module, entry', [pytest.param('tofu_yourprovider.dx.supervisor', 'reconcile_channel_bridges',
+                                                        marks=requires_dx),
                                            ('lib.channels.github.supervisor', 'reconcile_github_sessions')])
 def test_each_channel_supervisor_tick_reports_its_account_to_the_watchdog(monkeypatch, module, entry):
     import importlib

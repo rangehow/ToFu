@@ -55,12 +55,18 @@ impl PreparedBlobStore {
             .state
             .lock()
             .map_err(|_| io::Error::other("prepared blob store is poisoned"))?;
-        Ok(state.payloads.values().map(crate::block::PreparedBlockPayload::byte_len).sum())
+        Ok(state
+            .payloads
+            .values()
+            .map(crate::block::PreparedBlockPayload::byte_len)
+            .sum())
     }
 
     pub(super) fn publish(&self, engine: &Engine) -> io::Result<()> {
         self.check_live()?;
-        let _publish = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_PREPARED_BLOB_PUBLISH);
+        let _publish = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_PREPARED_BLOB_PUBLISH,
+        );
         let state = self
             .state
             .lock()
@@ -91,9 +97,9 @@ impl BlobStagingIo for PreparedBlobStore {
             .lock()
             .map_err(|_| io::Error::other("prepared blob store is poisoned"))?;
         if !state.payloads.contains_key(&id) {
-            state
-                .memory
-                .reserve_transaction_bytes(encoded.len().saturating_add(PREPARED_BLOCK_METADATA_BYTES))?;
+            state.memory.reserve_transaction_bytes(
+                encoded.len().saturating_add(PREPARED_BLOCK_METADATA_BYTES),
+            )?;
             state.payloads.insert(id, source.capture());
         }
         Ok(id)
@@ -163,7 +169,10 @@ impl AuthorityDatabase {
             blocks: self.entities.block_store_shared(),
             restart_required: self.entities.restart_flag(),
             encoder,
-            state: Mutex::new(PreparedBlobState { payloads: BTreeMap::new(), memory }),
+            state: Mutex::new(PreparedBlobState {
+                payloads: BTreeMap::new(),
+                memory,
+            }),
         }));
         Ok(self)
     }
@@ -173,13 +182,18 @@ impl AuthorityDatabase {
     /// performed on this rehearsal replica against the transaction's own
     /// snapshot so the exclusive execution finds them cached as well. The
     /// transaction is then dropped by the caller, never committed.
-    pub(crate) fn rehearse_commit_owned_effects(&self, transaction: &mut AuthorityTransaction) -> io::Result<()> {
+    pub(crate) fn rehearse_commit_owned_effects(
+        &self,
+        transaction: &mut AuthorityTransaction,
+    ) -> io::Result<()> {
         for append in &transaction.stream_appends {
             persisted_event_count(&self.entities, &mut transaction.entity, &append.key)?;
         }
         self.flush_deferred_indexes(transaction)?;
         match transaction.deferred_outbox_capture.take() {
-            Some(capture) => self.logical_outbox_capture(transaction, capture).map(|_| ()),
+            Some(capture) => self
+                .logical_outbox_capture(transaction, capture)
+                .map(|_| ()),
             None => Ok(()),
         }
     }
@@ -197,7 +211,11 @@ impl AuthorityDatabase {
                 let blocks = self.entities.block_store_shared();
                 let mut total = 0_usize;
                 for id in &transaction.staged_blob_block_ids {
-                    total = total.saturating_add(blocks.pending_payload(*id)?.map_or(0, |payload| payload.len()));
+                    total = total.saturating_add(
+                        blocks
+                            .pending_payload(*id)?
+                            .map_or(0, |payload| payload.len()),
+                    );
                 }
                 total
             }
@@ -217,9 +235,11 @@ impl AuthorityDatabase {
         transaction: &AuthorityTransaction,
         carried_bytes: usize,
     ) -> bool {
-        self.entities.commits_without_overlay_drain(&transaction.entity)
-            && carried_bytes <= crate::transaction::MAX_CARRIED_PAYLOAD_BYTES
-                - crate::transaction::CARRIED_TRANSACTION_HEADROOM_BYTES
+        self.entities
+            .commits_without_overlay_drain(&transaction.entity)
+            && carried_bytes
+                <= crate::transaction::MAX_CARRIED_PAYLOAD_BYTES
+                    - crate::transaction::CARRIED_TRANSACTION_HEADROOM_BYTES
     }
 
     pub(crate) fn defer_index_update(
@@ -253,14 +273,25 @@ impl AuthorityDatabase {
         // counts/activity coverage current before recency backfill reads them.
         for mutation in &mutations {
             if let crate::conversation_header::recency::DeferredMutation::Created {
-                conversation_id, created_at_ms, updated_at_ms,
-            } = mutation {
-                crate::conversation_header::apply_created_metadata(self, transaction,
-                    conversation_id, *created_at_ms, *updated_at_ms)?;
+                conversation_id,
+                created_at_ms,
+                updated_at_ms,
+            } = mutation
+            {
+                crate::conversation_header::apply_created_metadata(
+                    self,
+                    transaction,
+                    conversation_id,
+                    *created_at_ms,
+                    *updated_at_ms,
+                )?;
             }
         }
         for mutation in mutations {
-            if !matches!(mutation, crate::conversation_header::recency::DeferredMutation::Created { .. }) {
+            if !matches!(
+                mutation,
+                crate::conversation_header::recency::DeferredMutation::Created { .. }
+            ) {
                 mutation.apply(self, transaction)?;
             }
         }
@@ -369,19 +400,47 @@ mod tests {
     fn publication_reuses_every_private_block_allocation_and_reopens_exact_content() {
         let (vfs, mut db) = authority();
         let (transaction, blob) = prepared(&db);
-        let allocations: Vec<_> = transaction.prepared_blobs.as_ref().unwrap().state.lock().unwrap()
-            .payloads.iter().map(|(id, bytes)| (*id, bytes.shared())).collect();
+        let allocations: Vec<_> = transaction
+            .prepared_blobs
+            .as_ref()
+            .unwrap()
+            .state
+            .lock()
+            .unwrap()
+            .payloads
+            .iter()
+            .map(|(id, bytes)| (*id, bytes.shared()))
+            .collect();
         assert!(!allocations.is_empty());
         db.commit(transaction).unwrap();
         let blocks = db.block_store_shared();
         for (id, bytes) in allocations {
-            let published = blocks.pending_payload(id).unwrap().expect("new private bytes remain WAL-carried");
-            assert!(Arc::ptr_eq(&published, &bytes), "publication must retain the captured allocation");
+            let published = blocks
+                .pending_payload(id)
+                .unwrap()
+                .expect("new private bytes remain WAL-carried");
+            assert!(
+                Arc::ptr_eq(&published, &bytes),
+                "publication must retain the captured allocation"
+            );
         }
-        assert_eq!(db.snapshot_pin_metrics().unwrap().retained_transaction_bytes, 0);
+        assert_eq!(
+            db.snapshot_pin_metrics()
+                .unwrap()
+                .retained_transaction_bytes,
+            0
+        );
         let durable = Arc::new(vfs.fork_durable().unwrap());
         let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), durable).unwrap();
-        assert_eq!(reopened.blob_reader(1, 1, blob).unwrap().next_chunk().unwrap().unwrap(), b"private payload");
+        assert_eq!(
+            reopened
+                .blob_reader(1, 1, blob)
+                .unwrap()
+                .next_chunk()
+                .unwrap()
+                .unwrap(),
+            b"private payload"
+        );
     }
 
     #[test]
@@ -627,18 +686,48 @@ mod tests {
             vfs.arm_fault(None).unwrap();
             let (tx, blob) = std::thread::spawn(move || {
                 let mut tx = replica.begin(1, 1).unwrap();
-                let blob = replica.stage_blob(&mut tx, &mut b"cross-thread private".as_slice(), 100).unwrap();
-                replica.entity_put(&mut tx, key(), b"cross-thread".to_vec()).unwrap();
+                let blob = replica
+                    .stage_blob(&mut tx, &mut b"cross-thread private".as_slice(), 100)
+                    .unwrap();
+                replica
+                    .entity_put(&mut tx, key(), b"cross-thread".to_vec())
+                    .unwrap();
                 (tx, blob)
-            }).join().unwrap();
+            })
+            .join()
+            .unwrap();
             assert!(!vfs.trace().unwrap().contains(&Operation::Write));
-            assert!(db.snapshot_pin_metrics().unwrap().retained_transaction_bytes > 0);
+            assert!(
+                db.snapshot_pin_metrics()
+                    .unwrap()
+                    .retained_transaction_bytes
+                    > 0
+            );
             assert!(db.blob_reader(1, 1, blob).is_err());
             if commit {
                 db.commit(tx).unwrap();
-                assert_eq!(db.blob_reader(1, 1, blob).unwrap().next_chunk().unwrap().unwrap(), b"cross-thread private");
-                let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), Arc::new(vfs.fork_durable().unwrap())).unwrap();
-                assert_eq!(reopened.blob_reader(1, 1, blob).unwrap().next_chunk().unwrap().unwrap(), b"cross-thread private");
+                assert_eq!(
+                    db.blob_reader(1, 1, blob)
+                        .unwrap()
+                        .next_chunk()
+                        .unwrap()
+                        .unwrap(),
+                    b"cross-thread private"
+                );
+                let reopened = AuthorityDatabase::open_with_vfs(
+                    Path::new("/data"),
+                    Arc::new(vfs.fork_durable().unwrap()),
+                )
+                .unwrap();
+                assert_eq!(
+                    reopened
+                        .blob_reader(1, 1, blob)
+                        .unwrap()
+                        .next_chunk()
+                        .unwrap()
+                        .unwrap(),
+                    b"cross-thread private"
+                );
             } else {
                 std::thread::spawn(move || drop(tx)).join().unwrap();
                 assert!(db.blob_reader(1, 1, blob).is_err());
@@ -648,5 +737,4 @@ mod tests {
             assert_eq!(released.retained_transaction_bytes, 0);
         }
     }
-
 }

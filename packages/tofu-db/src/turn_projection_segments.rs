@@ -81,9 +81,7 @@ fn valid_segments(value: Option<&Value>) -> Option<Vec<Map<String, Value>>> {
             return None;
         }
         if matches!(segment_type, "text" | "thinking" | "system_note") {
-            if segment.get("text").and_then(Value::as_str).is_none() {
-                return None;
-            }
+            segment.get("text").and_then(Value::as_str)?;
         } else if !segment.get("result").is_some_and(Value::is_object) {
             return None;
         }
@@ -154,8 +152,7 @@ fn segments_missing_tool_round(
     if rounds.is_empty() {
         return false;
     }
-    let mut covered: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut covered: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for segment in segments {
         if segment.get("type").and_then(Value::as_str) != Some("tool_use") {
             continue;
@@ -169,8 +166,7 @@ fn segments_missing_tool_round(
             *covered.entry(call_id.to_owned()).or_default() += 1;
         }
     }
-    let mut seen: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for round in rounds {
         let Some(round) = round.as_object() else {
             continue;
@@ -213,10 +209,7 @@ fn live_content_already_narrated(
             && !json_truthy(segment.get("terminal"))
             && !json_truthy(segment.get("deliverable"))
         {
-            return segment
-                .get("text")
-                .and_then(Value::as_str)
-                .map(str::trim)
+            return segment.get("text").and_then(Value::as_str).map(str::trim)
                 == Some(content.trim());
         }
     }
@@ -234,13 +227,11 @@ fn synchronize_terminal_blocks(
     status: &str,
     ensure_assistant_text_placeholder: bool,
 ) {
-    let terminal_text_index = (0..segments.len())
-        .rev()
-        .find(|index| {
-            segments[*index].get("type").and_then(Value::as_str) == Some("text")
-                && (json_truthy(segments[*index].get("terminal"))
-                    || json_truthy(segments[*index].get("deliverable")))
-        });
+    let terminal_text_index = (0..segments.len()).rev().find(|index| {
+        segments[*index].get("type").and_then(Value::as_str) == Some("text")
+            && (json_truthy(segments[*index].get("terminal"))
+                || json_truthy(segments[*index].get("deliverable")))
+    });
     let mut terminal_text_index = terminal_text_index;
     if terminal_text_index.is_none()
         && (!content.is_empty() || (ensure_assistant_text_placeholder && actor != "human"))
@@ -248,7 +239,10 @@ fn synchronize_terminal_blocks(
     {
         segments.push(Map::from_iter([
             ("type".to_owned(), Value::String("text".to_owned())),
-            ("blockId".to_owned(), Value::String("text:terminal".to_owned())),
+            (
+                "blockId".to_owned(),
+                Value::String("text:terminal".to_owned()),
+            ),
             ("text".to_owned(), Value::String(content.to_owned())),
             ("deliverable".to_owned(), Value::Bool(true)),
             ("terminal".to_owned(), Value::Bool(true)),
@@ -329,11 +323,7 @@ fn fallback_block_id(segment: &Map<String, Value>, position: usize) -> String {
     if json_truthy(segment.get("terminal")) {
         return format!("{segment_type}:terminal");
     }
-    if segment
-        .get("llmRound")
-        .and_then(Value::as_u64)
-        .is_some()
-    {
+    if segment.get("llmRound").and_then(Value::as_u64).is_some() {
         let llm_round = segment.get("llmRound").and_then(Value::as_u64).unwrap();
         let attempt_id = segment.get("attemptId").and_then(Value::as_str);
         let task_id = segment.get("taskId").and_then(Value::as_str);
@@ -352,8 +342,7 @@ fn fallback_block_id(segment: &Map<String, Value>, position: usize) -> String {
 /// keep declared block ids, derive fallback ids, disambiguate repeats with
 /// the `~n` suffix, and retire the `_round` mirror from stored documents.
 fn stable_block_ids(segments: Vec<Map<String, Value>>) -> Vec<Value> {
-    let mut claimed: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut claimed: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut normalized = Vec::with_capacity(segments.len());
     for (position, mut segment) in segments.into_iter().enumerate() {
         let preferred = segment
@@ -381,17 +370,34 @@ fn stable_block_ids(segments: Vec<Map<String, Value>>) -> Vec<Value> {
 /// Preserve explicit fields; derive legacy files only when no object exists.
 pub(crate) fn normalize_file_changes(projection: &mut Map<String, Value>) {
     if !projection.get("fileChanges").is_some_and(Value::is_object) {
-        let Some(files) = projection.get("modifiedFileList").and_then(Value::as_array)
-            .filter(|files| !files.is_empty()) else { return; };
-        let count = projection.get("modifiedFiles").and_then(Value::as_u64).unwrap_or(0);
+        let Some(files) = projection
+            .get("modifiedFileList")
+            .and_then(Value::as_array)
+            .filter(|files| !files.is_empty())
+        else {
+            return;
+        };
+        let count = projection
+            .get("modifiedFiles")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         let sidecar = serde_json::json!({"count": count.max(files.len() as u64), "files": files});
         projection.insert("fileChanges".into(), sidecar);
     }
-    let sidecar = projection.get_mut("fileChanges").and_then(Value::as_object_mut).unwrap();
-    if sidecar.get("blockId").and_then(Value::as_str).is_none_or(str::is_empty) {
+    let sidecar = projection
+        .get_mut("fileChanges")
+        .and_then(Value::as_object_mut)
+        .unwrap();
+    if sidecar
+        .get("blockId")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
         sidecar.insert("blockId".into(), Value::String("file-changes".into()));
     }
-    sidecar.entry("state").or_insert_with(|| Value::String("applied".into()));
+    sidecar
+        .entry("state")
+        .or_insert_with(|| Value::String("applied".into()));
 }
 
 /// Normalize one locked storage projection to the producer patch baseline.
@@ -412,7 +418,11 @@ pub(crate) fn stabilize_for_patch(
 }
 
 /// Whether [`stabilize_for_patch`] would return `projection` unchanged.
-pub(crate) fn is_stable_for_patch(projection: &Map<String, Value>, actor: &str, status: &str) -> bool {
+pub(crate) fn is_stable_for_patch(
+    projection: &Map<String, Value>,
+    actor: &str,
+    status: &str,
+) -> bool {
     stable_fields(projection, actor, status).is_ok_and(|fields| fields.unchanged_in(projection))
 }
 
@@ -435,9 +445,11 @@ impl StableFields {
     }
 
     /// `apply_to`, advancing the projection's exact encoded length if known.
-    pub(crate) fn apply_to_measured(self, projection: &mut Map<String, Value>,
-        mut encoded_bytes: Option<usize>) -> Option<usize>
-    {
+    pub(crate) fn apply_to_measured(
+        self,
+        projection: &mut Map<String, Value>,
+        mut encoded_bytes: Option<usize>,
+    ) -> Option<usize> {
         use crate::turn_projection_patch::insert_measured;
         if let Some(file_changes) = self.file_changes {
             encoded_bytes = insert_measured(projection, encoded_bytes, "fileChanges", file_changes);
@@ -510,9 +522,7 @@ pub(crate) fn stable_fields(
         // The producer materializes the live prose prefix before absent tool
         // blocks. Preserve existing order/identities and count repeated call
         // IDs, which can recur across continued provider attempts.
-        synchronize_terminal_blocks(
-            &mut segments, &content, &thinking, actor, status, false,
-        );
+        synchronize_terminal_blocks(&mut segments, &content, &thinking, actor, status, false);
         let mut covered = std::collections::HashMap::<String, usize>::new();
         for segment in &segments {
             if segment.get("type").and_then(Value::as_str) == Some("tool_use") {
@@ -524,13 +534,23 @@ pub(crate) fn stable_fields(
         let mut seen = std::collections::HashMap::<String, usize>::new();
         if let Some(rounds) = projection.get("toolRounds").and_then(Value::as_array) {
             for (position, round) in rounds.iter().enumerate() {
-                let Some(round) = round.as_object() else { continue; };
-                if SYNTHETIC_INBOX_MARKERS.iter().any(|field| json_truthy(round.get(*field))) {
+                let Some(round) = round.as_object() else {
+                    continue;
+                };
+                if SYNTHETIC_INBOX_MARKERS
+                    .iter()
+                    .any(|field| json_truthy(round.get(*field)))
+                {
                     continue;
                 }
-                let id = round.get("toolCallId").and_then(Value::as_str)
-                    .map(str::trim).unwrap_or("");
-                if id.is_empty() { continue; }
+                let id = round
+                    .get("toolCallId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("");
+                if id.is_empty() {
+                    continue;
+                }
                 let occurrence = seen.entry(id.to_owned()).or_default();
                 *occurrence += 1;
                 if *occurrence > covered.get(id).copied().unwrap_or(0) {
@@ -541,16 +561,12 @@ pub(crate) fn stable_fields(
             }
         }
     }
-    synchronize_terminal_blocks(
-        &mut segments,
-        &content,
-        &thinking,
-        actor,
-        status,
-        true,
-    );
+    synchronize_terminal_blocks(&mut segments, &content, &thinking, actor, status, true);
     let segments = drop_narrated_live_terminal_mirror(segments, &content, status);
-    Ok(StableFields { file_changes, segments: Value::Array(stable_block_ids(segments)) })
+    Ok(StableFields {
+        file_changes,
+        segments: Value::Array(stable_block_ids(segments)),
+    })
 }
 
 #[cfg(test)]
@@ -568,18 +584,32 @@ mod tests {
     #[test]
     fn legacy_file_sidecar_is_a_valid_nested_patch_base_and_replay_is_complete() {
         let mut raw = empty_live_projection();
-        raw.insert("modifiedFileList".into(), json!([{"path":"answer.txt","added":1}]));
+        raw.insert(
+            "modifiedFileList".into(),
+            json!([{"path":"answer.txt","added":1}]),
+        );
         raw.insert("modifiedFiles".into(), json!(3));
         let stable = stabilize_for_patch(&raw, "assistant", "running").unwrap();
-        assert_eq!(stable["fileChanges"], json!({"blockId":"file-changes","state":"applied",
-            "count":3,"files":[{"path":"answer.txt","added":1}]}));
+        assert_eq!(
+            stable["fileChanges"],
+            json!({"blockId":"file-changes","state":"applied",
+            "count":3,"files":[{"path":"answer.txt","added":1}]})
+        );
         assert!(!raw.contains_key("fileChanges"));
         let patch = json!({"version":1,"baseRevision":18,"targetRevision":19,"operations":[
-            {"op":"set","path":["fileChanges","taskId"],"value":"flow-root"}]}).as_object().unwrap().clone();
+            {"op":"set","path":["fileChanges","taskId"],"value":"flow-root"}]})
+        .as_object()
+        .unwrap()
+        .clone();
         assert!(crate::turn_projection_patch::apply_projection_patch(Some(&raw), &patch).is_err());
-        let next = crate::turn_projection_patch::apply_projection_patch(Some(&stable), &patch).unwrap();
-        let replay = crate::turn_projection_patch::build_projection_patch(&raw, &next, 18, 19).unwrap();
-        assert_eq!(crate::turn_projection_patch::apply_projection_patch(Some(&raw), &replay).unwrap(), next);
+        let next =
+            crate::turn_projection_patch::apply_projection_patch(Some(&stable), &patch).unwrap();
+        let replay =
+            crate::turn_projection_patch::build_projection_patch(&raw, &next, 18, 19).unwrap();
+        assert_eq!(
+            crate::turn_projection_patch::apply_projection_patch(Some(&raw), &replay).unwrap(),
+            next
+        );
         assert_eq!(next["fileChanges"]["taskId"], "flow-root");
     }
 
@@ -589,7 +619,10 @@ mod tests {
         let sidecar = json!({"blockId":"files:owned","state":"reverted","count":0,"files":[]});
         value.insert("fileChanges".into(), sidecar.clone());
         value.insert("modifiedFileList".into(), json!([{"path":"stale.txt"}]));
-        assert_eq!(stabilize_for_patch(&value, "assistant", "running").unwrap()["fileChanges"], sidecar);
+        assert_eq!(
+            stabilize_for_patch(&value, "assistant", "running").unwrap()["fileChanges"],
+            sidecar
+        );
     }
 
     #[test]
@@ -620,8 +653,7 @@ mod tests {
 
     #[test]
     fn terminal_seed_is_idempotent() {
-        let once =
-            stabilize_for_patch(&empty_live_projection(), "assistant", "running").unwrap();
+        let once = stabilize_for_patch(&empty_live_projection(), "assistant", "running").unwrap();
         let twice = stabilize_for_patch(&once, "assistant", "running").unwrap();
         assert_eq!(once, twice);
     }
@@ -703,10 +735,16 @@ mod tests {
         assert_eq!(tools[1]["result"]["content"], "second");
         assert_eq!(tools[1]["attemptId"], "resumed");
         let prefix = blocks.iter().position(|v| v["text"] == "prefix").unwrap();
-        let appended = blocks.iter().position(|v| v["id"] == "same" && v["blockId"] != "original").unwrap();
+        let appended = blocks
+            .iter()
+            .position(|v| v["id"] == "same" && v["blockId"] != "original")
+            .unwrap();
         assert!(prefix < appended);
         assert_eq!(normalized["toolRounds"], projection["toolRounds"]);
-        assert_eq!(stabilize_for_patch(&normalized, "assistant", "running").unwrap(), normalized);
+        assert_eq!(
+            stabilize_for_patch(&normalized, "assistant", "running").unwrap(),
+            normalized
+        );
     }
 
     #[test]
@@ -762,8 +800,7 @@ mod tests {
     #[test]
     fn resumable_status_marks_the_terminal_block() {
         let stabilized =
-            stabilize_for_patch(&empty_live_projection(), "assistant", "interrupted")
-                .unwrap();
+            stabilize_for_patch(&empty_live_projection(), "assistant", "interrupted").unwrap();
         assert_eq!(stabilized["segments"][0]["resumable"], json!(true));
     }
 
@@ -782,18 +819,31 @@ mod tests {
                 {"type": "tool_use", "id": "call_1", "result": {"content": "r"}}],
                 "toolRounds": [{"toolCallId": "call_1"}],
                 "modifiedFileList": ["a.rs"], "modifiedFiles": 3, "other": {"k": 1}})
-                .as_object().unwrap().clone(),
+            .as_object()
+            .unwrap()
+            .clone(),
             json!({"content": "", "segments": [], "fileChanges": null, "modifiedFileList": []})
-                .as_object().unwrap().clone(),
+                .as_object()
+                .unwrap()
+                .clone(),
             json!({"content": "x", "segments": [], "fileChanges": {"files": []}})
-                .as_object().unwrap().clone(),
+                .as_object()
+                .unwrap()
+                .clone(),
         ];
-        for (actor, status) in [("assistant", "running"), ("human", "completed"), ("assistant", "interrupted")] {
+        for (actor, status) in [
+            ("assistant", "running"),
+            ("human", "completed"),
+            ("assistant", "interrupted"),
+        ] {
             for projection in &cases {
                 let stable = stabilize_for_patch(projection, actor, status).unwrap();
                 let fields = stable_fields(projection, actor, status).unwrap();
                 assert_eq!(fields.unchanged_in(projection), stable == *projection);
-                assert_eq!(is_stable_for_patch(projection, actor, status), stable == *projection);
+                assert_eq!(
+                    is_stable_for_patch(projection, actor, status),
+                    stable == *projection
+                );
                 let mut applied = projection.clone();
                 fields.apply_to(&mut applied);
                 assert_eq!(applied, stable);

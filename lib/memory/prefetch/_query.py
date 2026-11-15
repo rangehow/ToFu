@@ -68,16 +68,16 @@ def _selection_text(text: str) -> str:
     and every delegation envelope repeats the same scaffolding; keyed on
     either, selection injected the same unrelated lessons into most delegated
     turns (design record "Owner understanding", Decision 8). Both are dropped,
-    so a coordination role selects by the owner's own words. A Worker keeps
-    its Coordinator's brief beside the owner's request: the brief is its task.
-    The envelope owners define the markers.
+    so a coordination role selects by the owner's own words. A Worker selects
+    by its Coordinator's brief: the brief is its task, and the owner's request
+    is only linked, not repeated, in its input. The envelope owners define the
+    markers.
     """
-    from lib.project_dispatch.delegation import follow_up_instruction, worker_input_parts
+    from lib.project_dispatch.delegation import follow_up_instruction, worker_input_brief
     from lib.router.forwarding import strip_router_evidence
-    parts = worker_input_parts(text)
-    if parts is not None:
-        request, brief = parts
-        return strip_router_evidence(request) + '\n' + brief
+    brief = worker_input_brief(text)
+    if brief is not None:
+        return brief
     instruction = follow_up_instruction(text)
     return strip_router_evidence(text) if instruction is None else instruction
 

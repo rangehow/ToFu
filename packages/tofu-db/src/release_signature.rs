@@ -98,7 +98,7 @@ fn hex_decode(value: &str, expected_bytes: usize, label: &str) -> io::Result<Vec
     }
     let mut out = Vec::with_capacity(expected_bytes);
     let bytes = value.as_bytes();
-    for pair in bytes.chunks_exact(2) {
+    for pair in bytes.as_chunks::<2>().0 {
         let high = (pair[0] as char).to_digit(16).expect("validated hex");
         let low = (pair[1] as char).to_digit(16).expect("validated hex");
         out.push(((high << 4) | low) as u8);

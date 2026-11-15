@@ -803,7 +803,6 @@ def _transplant(working: dict, access: dict, bundle: dict,
         for row in working.get('deployments') or []
     }
     connections = _access_connections(working, access_id)
-    by_url = {_norm_url(row.get('base_url')): row for row in connections}
     bundle_connections = {
         row['connection_id']: row for row in bundle['connections']
     }

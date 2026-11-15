@@ -9,9 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io;
 
-use super::{
-    conversation_prefix, decode_u64, entity_key, invalid_data, invalid_input,
-};
+use super::{conversation_prefix, decode_u64, entity_key, invalid_data, invalid_input};
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
@@ -29,7 +27,9 @@ struct Restore {
     owner_user_id: u64,
     conversation_id: String,
     sync_sequence: u64,
-    updated_at_ms: i64,
+    // Admitted and type-checked as part of the request shape; never stored.
+    #[serde(rename = "updated_at_ms")]
+    _updated_at_ms: i64,
 }
 
 #[derive(Deserialize)]
@@ -158,7 +158,9 @@ fn scan(
         let conversation_id = std::str::from_utf8(conversation_bytes)
             .map_err(|_| invalid_data("conversation sync head key is not UTF-8"))?;
         if key != &head_key(tx, conversation_id)? {
-            return Err(invalid_data("conversation sync head catalog identity differs"));
+            return Err(invalid_data(
+                "conversation sync head catalog identity differs",
+            ));
         }
         rows.push(document(tx, conversation_id, sync_sequence));
     }
@@ -213,7 +215,9 @@ pub(crate) fn execute(
             scope(&tx, input.tenant_id, input.owner_user_id)?;
             scan(database, &mut tx, &input)
         }
-        _ => Err(invalid_input("unknown conversation sync head migration operation")),
+        _ => Err(invalid_input(
+            "unknown conversation sync head migration operation",
+        )),
     }
 }
 

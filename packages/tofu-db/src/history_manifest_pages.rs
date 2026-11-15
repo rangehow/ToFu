@@ -151,7 +151,9 @@ impl HistoryManifest {
             || encoded.len() > HISTORY_SEGMENT_MAX_BYTES
             || &encoded[..8] != MANIFEST_MAGIC
         {
-            return Err(invalid_data("history manifest page identity or size mismatch"));
+            return Err(invalid_data(
+                "history manifest page identity or size mismatch",
+            ));
         }
         let version = u32::from_le_bytes(encoded[8..12].try_into().unwrap());
         if version != PAGED_MANIFEST_VERSION {
@@ -172,16 +174,17 @@ impl HistoryManifest {
             _ => return Err(invalid_data("invalid paged history payload root presence")),
         };
         let children = u32::from_le_bytes(encoded[93..97].try_into().unwrap()) as usize;
-        if children < 2
-            || children > CHILDREN_PER_PAGE
+        if !(2..=CHILDREN_PER_PAGE).contains(&children)
             || encoded.len() != PAGED_HEADER_BYTES + children * 32
         {
             return Err(invalid_data("invalid paged history manifest bounds"));
         }
         Ok(ManifestPageReferences {
             child_pages: encoded[PAGED_HEADER_BYTES..]
-                .chunks_exact(32)
-                .map(|raw| BlockId(raw.try_into().unwrap()))
+                .as_chunks::<32>()
+                .0
+                .iter()
+                .map(|raw| BlockId(*raw))
                 .collect(),
             segments: Vec::new(),
             payload_index_root_id,
@@ -239,8 +242,7 @@ impl HistoryManifest {
         if checkpoint_sequence == 0
             || count == 0
             || count > checkpoint_sequence
-            || children < 2
-            || children > CHILDREN_PER_PAGE
+            || !(2..=CHILDREN_PER_PAGE).contains(&children)
             || children as u64 > count
             || encoded.len() != PAGED_HEADER_BYTES + children * 32
         {
@@ -253,8 +255,8 @@ impl HistoryManifest {
             manifest_page_ids: Vec::new(),
             segments: Vec::new(),
         };
-        for raw in encoded[PAGED_HEADER_BYTES..].chunks_exact(32) {
-            let child_id = BlockId(raw.try_into().unwrap());
+        for raw in encoded[PAGED_HEADER_BYTES..].as_chunks::<32>().0 {
+            let child_id = BlockId(*raw);
             let mut child = Self::load_page(child_id, read, seen, depth + 1)?;
             if child.payload_index_root_id != payload_index_root_id
                 || (child.segments.len() as u64) >= count
@@ -369,7 +371,15 @@ mod tests {
     /// `load` validates, for compact leaves and paged interiors alike.
     #[test]
     fn page_references_walk_every_page_and_segment_of_a_paged_manifest() {
-        for (count, leaf, fanout) in [(13, 2, 2), (40, 3, 4), (MAX_INDEXED_HISTORY_SEGMENTS + 1, MAX_INDEXED_HISTORY_SEGMENTS, CHILDREN_PER_PAGE)] {
+        for (count, leaf, fanout) in [
+            (13, 2, 2),
+            (40, 3, 4),
+            (
+                MAX_INDEXED_HISTORY_SEGMENTS + 1,
+                MAX_INDEXED_HISTORY_SEGMENTS,
+                CHILDREN_PER_PAGE,
+            ),
+        ] {
             let mut source = manifest(count);
             let (root, pages) = encoded(&mut source, leaf, fanout);
             let mut pending = vec![root];
@@ -383,7 +393,11 @@ mod tests {
                 segments.extend(references.segments);
                 pending.extend(references.child_pages.into_iter().rev());
             }
-            assert_eq!(visited_pages, pages.keys().copied().collect(), "count={count}");
+            assert_eq!(
+                visited_pages,
+                pages.keys().copied().collect(),
+                "count={count}"
+            );
             assert_eq!(segments, source.segments, "count={count}");
             assert_eq!(routing_roots, BTreeSet::from([BlockId([7; 32])]));
         }

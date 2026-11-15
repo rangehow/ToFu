@@ -79,12 +79,17 @@ fn checkpoint_crash_child() {
     lease.begin(0).unwrap();
     if mode == "tools_pending_kill" {
         lease.pending(&pending_state()).unwrap();
-        let mut file = std::fs::OpenOptions::new().create(true).append(true)
-            .open(std::path::Path::new(&path).join("effect.txt")).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&path).join("effect.txt"))
+            .unwrap();
         std::io::Write::write_all(&mut file, b"once\n").unwrap();
         file.sync_all().unwrap();
         std::fs::write(std::path::Path::new(&path).join("tool-returned"), b"ready").unwrap();
-        loop { std::thread::park(); }
+        loop {
+            std::thread::park();
+        }
     } else if mode != "inflight" {
         lease.complete(&state()).unwrap();
     }
@@ -110,37 +115,65 @@ fn pending_state() -> Value {
 fn paid_tool_frontier_survives_sigkill_and_never_replays_the_write() {
     struct Child(std::process::Child);
     impl Drop for Child {
-        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
     let directory = tempfile::tempdir().unwrap();
     drop(AuthorityDatabase::initialize(directory.path()).unwrap());
-    let mut child = Child(std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact","native_checkpoint_store::adapter::tests::checkpoint_crash_child","--nocapture"])
-        .env("TOFU_CHECKPOINT_STORE_TEST_DIRECTORY", directory.path())
-        .env("TOFU_CHECKPOINT_STORE_TEST_STAGE", "tools_pending_kill")
-        .stdout(std::process::Stdio::null()).spawn().unwrap());
+    let mut child = Child(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_checkpoint_store::adapter::tests::checkpoint_crash_child",
+                "--nocapture",
+            ])
+            .env("TOFU_CHECKPOINT_STORE_TEST_DIRECTORY", directory.path())
+            .env("TOFU_CHECKPOINT_STORE_TEST_STAGE", "tools_pending_kill")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while !directory.path().join("tool-returned").exists() {
-        assert!(child.0.try_wait().unwrap().is_none(), "writer exited before its durable barrier");
-        assert!(std::time::Instant::now() < deadline, "writer did not reach the tool boundary");
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "writer exited before its durable barrier"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "writer did not reach the tool boundary"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     child.0.kill().unwrap();
     assert!(!child.0.wait().unwrap().success());
     let db = store(AuthorityDatabase::open(directory.path()).unwrap());
     let j = journal(&db);
-    assert_eq!(j.acquire("ordinary-retry").err(),Some(Error::Ineligible));
+    assert_eq!(j.acquire("ordinary-retry").err(), Some(Error::Ineligible));
     let lease = j.recover("verified-dead-writer").unwrap();
     let mut saved = lease.load().unwrap().unwrap();
-    assert_eq!(j.recover("competing-recovery").err(),Some(Error::Ineligible));
-    assert_eq!(saved,pending_state());
-    assert_eq!(std::fs::read(directory.path().join("effect.txt")).unwrap(),b"once\n");
+    assert_eq!(
+        j.recover("competing-recovery").err(),
+        Some(Error::Ineligible)
+    );
+    assert_eq!(saved, pending_state());
+    assert_eq!(
+        std::fs::read(directory.path().join("effect.txt")).unwrap(),
+        b"once\n"
+    );
     saved.as_object_mut().unwrap().remove("tools_pending");
-    saved["messages"].as_array_mut().unwrap().push(json!({"role":"tool","tool_call_id":"write-1","content":"existing publication proved"}));
+    saved["messages"].as_array_mut().unwrap().push(
+        json!({"role":"tool","tool_call_id":"write-1","content":"existing publication proved"}),
+    );
     lease.complete(&saved).unwrap();
     lease.begin(1).unwrap();
-    assert_eq!(std::fs::read(directory.path().join("effect.txt")).unwrap(),b"once\n");
-    assert_eq!(saved["usage"],json!([{"total_tokens":23,"cost_usd":0.01}]));
+    assert_eq!(
+        std::fs::read(directory.path().join("effect.txt")).unwrap(),
+        b"once\n"
+    );
+    assert_eq!(saved["usage"], json!([{"total_tokens":23,"cost_usd":0.01}]));
 }
 
 #[test]
@@ -863,16 +896,25 @@ fn persisted_task_terminal_fence_survives_reopen_and_delegate_failure() {
     assert!(journal(&db).acquire("restart").is_err());
 }
 
-fn manual_barrier_store() -> (Arc<NativeCheckpointStore>, crate::wal::WalBarrier, Arc<DeterministicVfs>) {
+fn manual_barrier_store() -> (
+    Arc<NativeCheckpointStore>,
+    crate::wal::WalBarrier,
+    Arc<DeterministicVfs>,
+) {
     manual_barrier_store_with_durability(crate::wal::WalDurability::Strict)
 }
-fn manual_barrier_store_with_durability(durability: crate::wal::WalDurability) -> (
-    Arc<NativeCheckpointStore>, crate::wal::WalBarrier, Arc<DeterministicVfs>,
+fn manual_barrier_store_with_durability(
+    durability: crate::wal::WalDurability,
+) -> (
+    Arc<NativeCheckpointStore>,
+    crate::wal::WalBarrier,
+    Arc<DeterministicVfs>,
 ) {
     let vfs = Arc::new(DeterministicVfs::new(None));
     vfs.create_dir(std::path::Path::new("/data")).unwrap();
     vfs.sync_directory(std::path::Path::new("/")).unwrap();
-    let mut database = AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone()).unwrap();
+    let mut database =
+        AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone()).unwrap();
     database.set_wal_durability(durability).unwrap();
     let barrier = crate::wal::WalBarrier::default();
     database.attach_wal_barrier(&barrier).unwrap();
@@ -1107,33 +1149,49 @@ fn checkpoint_source_ack_waits_for_its_shared_wal_after_target_and_archive_deliv
 #[test]
 #[ignore = "manual pending checkpoint component measurement"]
 fn measure_pending_checkpoint_cost() {
-    for bytes in [32768,262144] {
-        for pending in [false,true] {
-            let directory=tempfile::tempdir().unwrap();
-            let db=store(AuthorityDatabase::initialize(directory.path()).unwrap());
-            let j=journal(&db);let lease=j.acquire("measurement").unwrap();lease.load().unwrap();
-            let mut timings=Vec::new();let mut logical_bytes=0;
+    for bytes in [32768, 262144] {
+        for pending in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let db = store(AuthorityDatabase::initialize(directory.path()).unwrap());
+            let j = journal(&db);
+            let lease = j.acquire("measurement").unwrap();
+            lease.load().unwrap();
+            let mut timings = Vec::new();
+            let mut logical_bytes = 0;
             for index in 0..40 {
                 lease.begin(index).unwrap();
-                let mut saved=pending_state();
-                saved["messages"][0]["content"]=json!("x".repeat(bytes));
-                saved["next_round"]=json!(index+1);saved["tool_calls"]=json!(index+1);
-                saved["round_limit"]=Value::Null;saved["tool_limit"]=Value::Null;
-                saved["usage"]=json!(vec![json!({"total_tokens":23});index as usize+1]);
-                let mut complete=saved.clone();complete.as_object_mut().unwrap().remove("tools_pending");
-                complete["messages"].as_array_mut().unwrap().push(json!({"role":"tool","tool_call_id":"write-1","content":"observed"}));
-                let start=std::time::Instant::now();
-                if pending { lease.pending(&saved).unwrap(); }
+                let mut saved = pending_state();
+                saved["messages"][0]["content"] = json!("x".repeat(bytes));
+                saved["next_round"] = json!(index + 1);
+                saved["tool_calls"] = json!(index + 1);
+                saved["round_limit"] = Value::Null;
+                saved["tool_limit"] = Value::Null;
+                saved["usage"] = json!(vec![json!({"total_tokens":23}); index as usize + 1]);
+                let mut complete = saved.clone();
+                complete.as_object_mut().unwrap().remove("tools_pending");
+                complete["messages"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"role":"tool","tool_call_id":"write-1","content":"observed"}));
+                let start = std::time::Instant::now();
+                if pending {
+                    lease.pending(&saved).unwrap();
+                }
                 lease.complete(&complete).unwrap();
-                let elapsed=start.elapsed().as_secs_f64()*1000.0;
-                if index>=8 {
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                if index >= 8 {
                     timings.push(elapsed);
-                    logical_bytes+=serde_json::to_vec(&complete).unwrap().len();
-                    if pending {logical_bytes+=serde_json::to_vec(&saved).unwrap().len();}
+                    logical_bytes += serde_json::to_vec(&complete).unwrap().len();
+                    if pending {
+                        logical_bytes += serde_json::to_vec(&saved).unwrap().len();
+                    }
                 }
             }
             timings.sort_by(f64::total_cmp);
-            println!("PENDING_COST {}",json!({"source_bytes":bytes,"pending":pending,"samples":timings.len(),"p50_ms":timings[timings.len()/2],"p95_ms":timings[timings.len()*95/100],"logical_snapshot_bytes_per_round":logical_bytes/timings.len(),"snapshot_replacements_per_round":if pending {2} else {1},"settlement_snapshot_reads_per_round":usize::from(pending)}));
+            println!(
+                "PENDING_COST {}",
+                json!({"source_bytes":bytes,"pending":pending,"samples":timings.len(),"p50_ms":timings[timings.len()/2],"p95_ms":timings[timings.len()*95/100],"logical_snapshot_bytes_per_round":logical_bytes/timings.len(),"snapshot_replacements_per_round":if pending {2} else {1},"settlement_snapshot_reads_per_round":usize::from(pending)})
+            );
         }
     }
 }

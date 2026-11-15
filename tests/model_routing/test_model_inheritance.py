@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 from lib.llm.body import build_body
 from lib.llm.reasoning import ReasoningContractError
 from lib.model_routing import empty_document, normalize_document, plan_legacy_migration
@@ -16,9 +18,10 @@ from lib.provider.provider_template_recipes import compile_provider_template_bun
 pytestmark = pytest.mark.unit
 
 
+@requires_yourprovider_overlay
 @pytest.mark.parametrize('model_id,effort', [('kimi-k3', 'max'), ('grok-4.6', 'xhigh')])
 def test_mainstream_templates_share_model_profile_and_presets(model_id, effort):
-    providers = ('catpaw', 'meituan') if model_id == 'kimi-k3' else ('xai', 'meituan')
+    providers = ('catpaw', 'yourprovider') if model_id == 'kimi-k3' else ('xai', 'yourprovider')
     bundles = [compile_provider_template_bundle(key, selected_model_ids=[model_id])
                for key in providers]
     assert bundles[0]['models'] == bundles[1]['models']

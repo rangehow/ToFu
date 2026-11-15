@@ -7,7 +7,9 @@
 
 use super::tests::{metrics, run_epoch, test_budget};
 use super::*;
-use crate::vfs::{BoundedDirectoryEntries, BoundedDirectoryMatches, DeterministicVfs, OpenRequest, VfsFile};
+use crate::vfs::{
+    BoundedDirectoryEntries, BoundedDirectoryMatches, DeterministicVfs, OpenRequest, VfsFile,
+};
 
 /// Hooks one commit between an epoch's capture hold and its scan, and fails
 /// one directory barrier after the unlink it publishes.
@@ -62,7 +64,11 @@ impl Vfs for RebirthVfs {
         self.listing_hook(path);
         self.inner.read_directory(path)
     }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<BoundedDirectoryEntries> {
         self.listing_hook(path);
         self.inner.read_directory_bounded(path, maximum)
     }
@@ -73,7 +79,8 @@ impl Vfs for RebirthVfs {
         maximum: usize,
         matches: usize,
     ) -> io::Result<BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         let fail = {
@@ -110,11 +117,19 @@ fn garbage_fixture(payload: &[u8]) -> (Arc<RebirthVfs>, Arc<Mutex<AuthorityDatab
 }
 
 /// Commits a reference to `payload` after the next epoch's capture hold.
-fn commit_after_next_capture(vfs: &RebirthVfs, database: &Arc<Mutex<AuthorityDatabase>>, payload: &[u8]) {
+fn commit_after_next_capture(
+    vfs: &RebirthVfs,
+    database: &Arc<Mutex<AuthorityDatabase>>,
+    payload: &[u8],
+) {
     let database = Arc::clone(database);
     let payload = payload.to_vec();
     *vfs.before_segment_listing.lock().unwrap() = Some(Box::new(move || {
-        database.lock().unwrap().commit_block_payloads_for_test(&[payload]).unwrap();
+        database
+            .lock()
+            .unwrap()
+            .commit_block_payloads_for_test(&[payload])
+            .unwrap();
     }));
 }
 
@@ -131,13 +146,30 @@ fn assert_reborn_block_survives(
     block_id: BlockId,
     payload: &[u8],
 ) {
-    assert!(vfs.before_segment_listing.lock().unwrap().is_none(), "the commit ran inside the epoch");
-    assert_eq!(read_block(database, block_id).expect("the committed reborn block survives"), payload);
+    assert!(
+        vfs.before_segment_listing.lock().unwrap().is_none(),
+        "the commit ran inside the epoch"
+    );
+    assert_eq!(
+        read_block(database, block_id).expect("the committed reborn block survives"),
+        payload
+    );
     run_epoch(collector, database);
-    assert_eq!(read_block(database, block_id).expect("the next mark keeps the reference"), payload);
-    let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), Arc::new(vfs.inner.fork_durable().unwrap()))
-        .expect("the crash image reopens");
-    assert_eq!(reopened.read_block_for_test(block_id).expect("the reborn block is durable"), payload);
+    assert_eq!(
+        read_block(database, block_id).expect("the next mark keeps the reference"),
+        payload
+    );
+    let reopened = AuthorityDatabase::open_with_vfs(
+        Path::new("/data"),
+        Arc::new(vfs.inner.fork_durable().unwrap()),
+    )
+    .expect("the crash image reopens");
+    assert_eq!(
+        reopened
+            .read_block_for_test(block_id)
+            .expect("the reborn block is durable"),
+        payload
+    );
 }
 
 /// Epoch 2 confirms and unlinks the garbage block; a commit writes the same
@@ -151,14 +183,21 @@ fn block_reborn_after_its_unlink_survives_the_next_epoch() {
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
     run_epoch(&mut collector, &database);
-    assert_eq!(read_block(&database, block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        read_block(&database, block_id).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
     let reclaimed = metrics(&collector).total_reclaimed_blocks;
     assert!(reclaimed >= 1);
 
     commit_after_next_capture(&vfs, &database, &payload);
     run_epoch(&mut collector, &database);
     assert_reborn_block_survives(&vfs, &database, &mut collector, block_id, &payload);
-    assert_eq!(metrics(&collector).total_reclaimed_blocks, reclaimed, "epochs 3 and 4 unlink nothing");
+    assert_eq!(
+        metrics(&collector).total_reclaimed_blocks,
+        reclaimed,
+        "epochs 3 and 4 unlink nothing"
+    );
 }
 
 /// The unlink reaches the volume but its shard barrier fails, so epoch 2
@@ -171,15 +210,24 @@ fn block_reborn_after_a_failed_epochs_unlink_survives_the_retry() {
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
     *vfs.fail_directory_sync.lock().unwrap() = Some(shard_directory(block_id));
-    let error = collector.run_epoch(&database, &AtomicBool::new(false)).unwrap_err();
+    let error = collector
+        .run_epoch(&database, &AtomicBool::new(false))
+        .unwrap_err();
     assert_eq!(error.to_string(), "injected shard barrier failure");
-    assert_eq!(read_block(&database, block_id).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        read_block(&database, block_id).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
     let reclaimed = metrics(&collector).total_reclaimed_blocks;
 
     commit_after_next_capture(&vfs, &database, &payload);
     run_epoch(&mut collector, &database);
     assert_reborn_block_survives(&vfs, &database, &mut collector, block_id, &payload);
-    assert_eq!(metrics(&collector).total_reclaimed_blocks, reclaimed, "the retry and the next epoch unlink nothing");
+    assert_eq!(
+        metrics(&collector).total_reclaimed_blocks,
+        reclaimed,
+        "the retry and the next epoch unlink nothing"
+    );
 }
 
 /// Blob writes stage complete bytes without probing for a loose duplicate,
@@ -202,17 +250,36 @@ fn garbage_block_restaged_by_a_blob_write_survives_its_confirmation() {
             let mut guard = database.lock().unwrap();
             let engine = guard.engine_mut_for_test();
             assert_eq!(engine.write_blob_block(&payload).unwrap(), block_id);
-            engine.commit_references(b"blob chunk reference", &[block_id]).unwrap();
+            engine
+                .commit_references(b"blob chunk reference", &[block_id])
+                .unwrap();
         }));
     }
     run_epoch(&mut collector, &database);
-    assert!(vfs.before_segment_listing.lock().unwrap().is_none(), "the commit ran inside the epoch");
-    assert_eq!(read_block(&database, block_id).expect("the staged committed block survives"), payload);
+    assert!(
+        vfs.before_segment_listing.lock().unwrap().is_none(),
+        "the commit ran inside the epoch"
+    );
+    assert_eq!(
+        read_block(&database, block_id).expect("the staged committed block survives"),
+        payload
+    );
     database.lock().unwrap().checkpoint_for_test().unwrap();
     run_epoch(&mut collector, &database);
-    assert_eq!(read_block(&database, block_id).expect("the checkpointed block survives"), payload);
-    let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), Arc::new(vfs.inner.fork_durable().unwrap()))
-        .expect("the crash image reopens");
-    assert_eq!(reopened.read_block_for_test(block_id).expect("the block is durable"), payload);
+    assert_eq!(
+        read_block(&database, block_id).expect("the checkpointed block survives"),
+        payload
+    );
+    let reopened = AuthorityDatabase::open_with_vfs(
+        Path::new("/data"),
+        Arc::new(vfs.inner.fork_durable().unwrap()),
+    )
+    .expect("the crash image reopens");
+    assert_eq!(
+        reopened
+            .read_block_for_test(block_id)
+            .expect("the block is durable"),
+        payload
+    );
     assert_eq!(metrics(&collector).total_reclaimed_blocks, 0);
 }

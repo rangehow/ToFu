@@ -48,7 +48,7 @@ from lib.provider.provider_probe_policy import resolve_provider_probe_budget
 
 # Verdict for cells whose capabilities have no probe surface we implement
 # (anything outside image_gen / embedding / transcription). Chat-probing a
-# non-chat model is a guaranteed false positive (the Meituan gateway's Java
+# non-chat model is a guaranteed false positive (the YourProvider gateway's Java
 # router hits ``Random.nextInt(0)`` → "bound must be positive" when the
 # chat-binding candidate list is empty), so unknown non-chat cells are
 # skipped rather than chat-probed. Known non-chat modalities are probed via
@@ -322,12 +322,11 @@ def probe_one_cell(base_url, api_key, model_id, extra_headers, timeout,
             'messages': [{'role': 'user', 'content': _CHAT_PROBE_PROMPT}],
             'max_tokens': _CHAT_PROBE_MAX_TOKENS,
         }
-        from lib.llm.catpaw_gateway import (
-            apply_catpaw_shape, catpaw_headers, is_catpaw_base_url,
+        from lib.llm.gateway_shape import (
+            apply_gateway_anthropic_shape, gateway_anthropic_headers,
         )
-        if is_catpaw_base_url(base_url):
-            headers.update(catpaw_headers())
-            payload = apply_catpaw_shape(payload)
+        headers.update(gateway_anthropic_headers(base_url))
+        payload = apply_gateway_anthropic_shape(payload, base_url)
     else:
         url = base_url.rstrip('/') + '/chat/completions'
         headers = {'Authorization': 'Bearer %s' % api_key} if api_key else {}
@@ -440,7 +439,7 @@ def _reasoning_text(value) -> str:
     Thinking-native models under the tiny probe budget can spend EVERY token
     on one thinking block (stop_reason 'max_tokens', no text part) — that
     block is still generated output, so the cell provably routes,
-    authenticates and generates. 2026-09-08: 25/339 sankuai Anthropic-dialect
+    authenticates and generates. 2026-09-08: 25/339 example-corp Anthropic-dialect
     cells (glm / MiniMax / LongCat families) were falsely invalid_response
     because only text parts counted.
     """
@@ -1396,7 +1395,7 @@ def run_cell_probe_task(task: dict, work: list, timeout: int, *, on_complete=Non
         caps = item[4] if len(item) > 4 else None
         # Per-cell wire face (account/face separation). A work tuple may carry
         # its own (base_url, protocol) because ONE account can expose several
-        # wire faces — e.g. the Meituan gateway serves Claude over
+        # wire faces — e.g. the YourProvider gateway serves Claude over
         # /v1/anthropic and everything else over /v1/openai/native with the
         # same keys. Probing a cell on the wrong face returns a false
         # 'not_found'. Older 5-tuples fall back to the task-level values.

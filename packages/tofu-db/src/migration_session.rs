@@ -279,7 +279,10 @@ fn process(
             }
             if operation.starts_with("migration.legacy.receipt.") {
                 return crate::legacy_receipt::migration::execute(
-                    database, tenant, operation, request.payload,
+                    database,
+                    tenant,
+                    operation,
+                    request.payload,
                 );
             }
             let transaction = database.begin(tenant, owner)?;
@@ -888,7 +891,13 @@ mod tests {
             json!({"namespace":"prefs","key":key,
             "value_json":raw,"version":1042,"updated_at_ms":123456789}),
         );
-        process(db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default())
+        process(
+            db,
+            7,
+            11,
+            req,
+            &mut crate::turn::attempt_event_migration::ParentValidationMemo::default(),
+        )
     }
 
     #[test]
@@ -908,7 +917,14 @@ mod tests {
             "migration.record.get",
             json!({"namespace":"prefs","key":"a"}),
         );
-        let value = process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap();
+        let value = process(
+            &mut db,
+            7,
+            11,
+            req,
+            &mut crate::turn::attempt_event_migration::ParentValidationMemo::default(),
+        )
+        .unwrap();
         assert_eq!(value["value_json"], raw);
         assert_eq!(value["version"], 1042);
         assert_eq!(value["updated_at_ms"], 123456789);
@@ -931,10 +947,27 @@ mod tests {
                 2 => req.operation = "record.put".into(),
                 _ => req.payload["namespace"] = json!("task_results"),
             }
-            assert!(process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).is_err());
+            assert!(process(
+                &mut db,
+                7,
+                11,
+                req,
+                &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()
+            )
+            .is_err());
         }
         let req = request(&db, "migration.record.scan", json!({"cursor":null}));
-        assert_eq!(process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap()["records"], json!([]));
+        assert_eq!(
+            process(
+                &mut db,
+                7,
+                11,
+                req,
+                &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()
+            )
+            .unwrap()["records"],
+            json!([])
+        );
     }
 
     #[test]
@@ -949,7 +982,14 @@ mod tests {
         let mut count = 0;
         loop {
             let req = request(&db, "migration.record.scan", json!({"cursor":cursor}));
-            let page = process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap();
+            let page = process(
+                &mut db,
+                7,
+                11,
+                req,
+                &mut crate::turn::attempt_event_migration::ParentValidationMemo::default(),
+            )
+            .unwrap();
             let rows = page["records"].as_array().unwrap();
             assert!(rows.len() <= MIGRATION_SESSION_MAX_PAGE_ROWS);
             count += rows.len();
@@ -962,9 +1002,29 @@ mod tests {
         let raw = versioned_document::record_key(7, 11, "prefs", &longest).unwrap();
         let cursor: String = raw.key_bytes().iter().map(|b| format!("{b:02x}")).collect();
         let req = request(&db, "migration.record.scan", json!({"cursor":cursor}));
-        assert_eq!(process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap()["records"], json!([]));
+        assert_eq!(
+            process(
+                &mut db,
+                7,
+                11,
+                req,
+                &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()
+            )
+            .unwrap()["records"],
+            json!([])
+        );
         let req = request(&db, "migration.record.scan", json!({"cursor":null}));
-        assert_eq!(process(&mut db, 7, 12, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap()["records"], json!([]));
+        assert_eq!(
+            process(
+                &mut db,
+                7,
+                12,
+                req,
+                &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()
+            )
+            .unwrap()["records"],
+            json!([])
+        );
     }
 
     fn paper_restore_and_marker(db: &mut AuthorityDatabase) -> io::Result<()> {
@@ -976,7 +1036,13 @@ mod tests {
             json!({"namespace":"paper.build.artifact.v1","key":"11:doc:build",
             "value_json":raw,"version":7,"updated_at_ms":424242}),
         );
-        process(db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default())?;
+        process(
+            db,
+            7,
+            11,
+            req,
+            &mut crate::turn::attempt_event_migration::ParentValidationMemo::default(),
+        )?;
         let marker = EntityKey::new(7, 11, "migration_paper_test", b"verified-prefix").unwrap();
         let mut transaction = db.begin(7, 11)?;
         if db.entity_get(&mut transaction, &marker)?.is_none() {
@@ -992,7 +1058,14 @@ mod tests {
             "migration.record.get",
             json!({"namespace":"paper.build.artifact.v1","key":"11:doc:build"}),
         );
-        process(db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap()
+        process(
+            db,
+            7,
+            11,
+            req,
+            &mut crate::turn::attempt_event_migration::ParentValidationMemo::default(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -1018,7 +1091,14 @@ mod tests {
             json!({"namespace":"paper.build.artifact.v1","key":"11:doc:build",
             "value_json":"{}","version":7,"updated_at_ms":424242}),
         );
-        assert!(process(&mut db, 7, 11, divergent, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).is_err());
+        assert!(process(
+            &mut db,
+            7,
+            11,
+            divergent,
+            &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()
+        )
+        .is_err());
     }
 
     #[test]
@@ -1039,13 +1119,30 @@ mod tests {
                 json!({"namespace":namespace,"key":key,
                 "value_json":"{\"v\":1}","version":1,"updated_at_ms":1}),
             );
-            assert_eq!(process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap()["inserted"], true);
+            assert_eq!(
+                process(
+                    &mut db,
+                    7,
+                    11,
+                    req,
+                    &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()
+                )
+                .unwrap()["inserted"],
+                true
+            );
         }
         let mut seen = Vec::new();
         let mut cursor = Value::Null;
         loop {
             let req = request(&db, "migration.record.scan", json!({"cursor":cursor}));
-            let page = process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()).unwrap();
+            let page = process(
+                &mut db,
+                7,
+                11,
+                req,
+                &mut crate::turn::attempt_event_migration::ParentValidationMemo::default(),
+            )
+            .unwrap();
             for row in page["records"].as_array().unwrap() {
                 seen.push((
                     row["namespace"].as_str().unwrap().to_owned(),
@@ -1080,7 +1177,16 @@ mod tests {
                 command_id: Some(Uuid::new_v4().to_string()),
                 deadline_unix_ms: now_ms().unwrap() + 60_000,
             };
-            assert_eq!(process(&mut db, 7, 11, req, &mut crate::turn::attempt_event_migration::ParentValidationMemo::default())?["inserted"], true);
+            assert_eq!(
+                process(
+                    &mut db,
+                    7,
+                    11,
+                    req,
+                    &mut crate::turn::attempt_event_migration::ParentValidationMemo::default()
+                )?["inserted"],
+                true
+            );
             let marker = EntityKey::new(7, 11, "migration_paper_test", b"verified-prefix").unwrap();
             let mut transaction = db.begin(7, 11)?;
             db.entity_put(&mut transaction, marker, b"verified-prefix-1".to_vec())?;

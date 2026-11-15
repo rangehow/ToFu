@@ -617,7 +617,11 @@ mod tests {
             if metrics.acknowledged_records == count {
                 return;
             }
-            assert!(!metrics.terminal, "relay stopped: {:?}", relay.terminal_error());
+            assert!(
+                !metrics.terminal,
+                "relay stopped: {:?}",
+                relay.terminal_error()
+            );
             assert!(
                 Instant::now() < deadline,
                 "relay did not drain {count} records: {metrics:?}"
@@ -916,8 +920,13 @@ mod tests {
         commit_outbox(&mut database, 2);
         let authority = Arc::new(Mutex::new(database));
         let sink = EngineLogicalOutboxSink::initialize_with_vfs(
-            sink_path, sink_vfs.clone(), 7, 11, 1024 * 1024,
-        ).unwrap();
+            sink_path,
+            sink_vfs.clone(),
+            7,
+            11,
+            1024 * 1024,
+        )
+        .unwrap();
         let worker =
             LogicalOutboxWorker::start(sink, LogicalOutboxWorkerConfig::default()).unwrap();
         let relay = LogicalOutboxRelay::start(
@@ -955,7 +964,8 @@ mod tests {
             2
         );
         let reopened_sink =
-            EngineLogicalOutboxSink::open_with_vfs(sink_path, sink_vfs, 7, 11, 1024 * 1024).unwrap();
+            EngineLogicalOutboxSink::open_with_vfs(sink_path, sink_vfs, 7, 11, 1024 * 1024)
+                .unwrap();
         assert_eq!(reopened_sink.status().durable_sequence, 2);
     }
 
@@ -1052,8 +1062,11 @@ mod tests {
         commit_outbox_scope(&mut database, quiet.tenant_id, quiet.owner_user_id, 1);
         let authority = Arc::new(Mutex::new(database));
         let sink = MultiplexedEngineLogicalOutboxSink::initialize_with_vfs(
-            sink_path, sink_vfs.clone(), sink_config.clone(),
-        ).unwrap();
+            sink_path,
+            sink_vfs.clone(),
+            sink_config.clone(),
+        )
+        .unwrap();
         let worker =
             LogicalOutboxWorker::start(sink, LogicalOutboxWorkerConfig::default()).unwrap();
         let relay = LogicalOutboxRelay::start_scopes(

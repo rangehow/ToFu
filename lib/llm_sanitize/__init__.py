@@ -40,6 +40,7 @@ from lib.llm_sanitize._gateway import (  # noqa: E402,F401
     _GATEWAY_BLOCKED_TERMS,
     _sanitize_gateway_content,
     _sanitize_messages,
+    gateway_blocked_term_sanitize,
 )
 
 
@@ -83,6 +84,7 @@ __all__ = [
     '_API_MESSAGE_FIELDS',
     '_sanitize_gateway_content',
     '_sanitize_messages',
+    'gateway_blocked_term_sanitize',
     '_strip_non_api_fields',
     '_strip_tool_calls',
     '_fix_orphaned_tool_calls',

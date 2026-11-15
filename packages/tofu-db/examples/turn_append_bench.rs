@@ -101,7 +101,7 @@ fn main() -> std::io::Result<()> {
         }],
         result: TransactionIrResult::Literal(b"null".to_vec()),
         command_effects: Some(TransactionIrCommandEffects {
-                alternate_request_digest: None,
+            alternate_request_digest: None,
             legacy_receipt_owner_bound: false,
             command_id: "bench-create".to_owned(),
             request_digest: [3; 32],
@@ -176,7 +176,7 @@ fn main() -> std::io::Result<()> {
                 }],
                 result: TransactionIrResult::Literal(b"null".to_vec()),
                 command_effects: Some(TransactionIrCommandEffects {
-                alternate_request_digest: None,
+                    alternate_request_digest: None,
                     legacy_receipt_owner_bound: false,
                     command_id: format!("bench-create-{slot}"),
                     request_digest: [3; 32],

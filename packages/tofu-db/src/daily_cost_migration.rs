@@ -24,8 +24,7 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::daily_cost::{upsert, valid_date, UpsertRequest};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    DAILY_COST_COUNT_NAMESPACE, DAILY_COST_DOCUMENT_NAMESPACE,
-    MIGRATION_SESSION_MAX_PAGE_ROWS,
+    DAILY_COST_COUNT_NAMESPACE, DAILY_COST_DOCUMENT_NAMESPACE, MIGRATION_SESSION_MAX_PAGE_ROWS,
 };
 
 fn invalid_input(message: &str) -> io::Error {

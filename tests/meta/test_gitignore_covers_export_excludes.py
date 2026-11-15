@@ -48,6 +48,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.support.export_toolchain import require_export_toolchain
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -72,6 +73,8 @@ _EXTRA_KEEPERS = {
     'tests/evaluations/test_yourprovider_sandbox_score.py',
     'tests/evaluations/test_owner_memory_benchmark.py',
     'tests/deploy/test_migrate_host.py',
+    # Verifies the internal-only bundles/yourprovider/skills source, absent publicly.
+    'tests/skills/test_internal_platform_bundle.py',
     # Portable diagnostic dependencies are owned by the public keep-list;
     # this set contains only deliberately private source.
     'export.py',                                 # export infra (sanitization patterns)
@@ -291,8 +294,7 @@ def test_no_tracked_file_is_opensource_excluded():
     left tracked, so a direct ``git push`` of the working repo would leak it.
     """
     _require_git_repo()
-    export = pytest.importorskip(
-        'export', reason='export.py not shipped in opensource tree')
+    export = require_export_toolchain()
     tracked = _tracked_files()
     assert tracked, 'git ls-files returned nothing — not a real checkout?'
 
@@ -314,7 +316,7 @@ def test_keepers_are_actually_tracked_and_excluded():
     keeps the allow-list honest so it can't quietly grow into a blanket bypass.
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = set(_tracked_files())
     stale = []
     for k in _keeper_set(export):
@@ -339,7 +341,7 @@ def test_keeper_prefixes_are_live_and_narrow():
     shippable territory).
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = _tracked_files()
     for p in _KEEPER_PREFIXES:
         assert p.endswith('/'), (
@@ -367,7 +369,7 @@ def test_neuter_guard_has_teeth():
     run comes back green for the wrong reason.
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = _tracked_files()
 
     real_extra = _EXTRA_KEEPERS.copy()
@@ -402,7 +404,7 @@ def test_neuter_keeper_prefix_is_load_bearing():
     subtrees — anything else means the exact-path keepers drifted.
     """
     _require_git_repo()
-    export = pytest.importorskip('export', reason='export.py not shipped')
+    export = require_export_toolchain()
     tracked = _tracked_files()
 
     real_prefixes = tuple(_KEEPER_PREFIXES)

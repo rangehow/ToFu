@@ -201,6 +201,7 @@ __pycache__/
 !/benchmarks/event_append_congestion.py
 !/benchmarks/event_schema.py
 !/benchmarks/ocr_gil_ticks.py
+!/benchmarks/native_workspace_compare.py
 
 !/benchmarks/conversation_snapshot_cpu.py
 !/benchmarks/conversation_change_page_stall.py
@@ -330,6 +331,9 @@ __pycache__/
 !/scripts/gen_storage_operation_catalog.py
 !/scripts/generated_storage_operations.py
 !/scripts/gen_storage_v2_contract.py
+# Shared rustfmt const layout imported by gen_storage_v2_contract.py and
+# tofudb_contract_codegen/generation.py.
+!/scripts/rust_const_layout.py
 !/scripts/gen_tofudb_ir_contract.py
 
 # Storage engine certification (docs/NATIVE_STORAGE_LIFECYCLE.md, "Engine certification gate").

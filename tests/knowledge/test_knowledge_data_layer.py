@@ -639,7 +639,6 @@ def test_video_evidence_beyond_200_frames_persists_and_late_failure_rolls_back(
 @pytest.mark.auth_mode('open')
 def test_large_document_upload_preserves_original_and_digest_identity(
         isolated_knowledge, flask_client):
-    from werkzeug.datastructures import FileStorage
     import zipfile
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_STORED) as archive:
@@ -663,9 +662,16 @@ def test_large_document_upload_preserves_original_and_digest_identity(
     raw = buffer.getvalue()
     assert len(raw) > 50 * 1024 * 1024
     def upload():
-        return flask_client.post('/api/v4/media/attachments', form={}, files={
-            'file': FileStorage(stream=io.BytesIO(raw), filename='large-source.odt',
-                                content_type='application/vnd.oasis.opendocument.text')})
+        # The request body is written whole: Quart's test-client multipart
+        # encoder grows its body by bytes concatenation per 16 KiB chunk,
+        # quadratic in the original (minutes for 51 MiB).
+        boundary = 'media-complete-original'
+        header = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+                  'filename="large-source.odt"\r\n'
+                  'Content-Type: application/vnd.oasis.opendocument.text\r\n\r\n').encode()
+        body = header + raw + f'\r\n--{boundary}--\r\n'.encode()
+        return flask_client.post('/api/v4/media/attachments', data=body,
+            headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
     first = upload()
     assert first.status_code == 200, first.get_json()
     attachment = first.get_json()['attachment']

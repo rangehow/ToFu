@@ -731,3 +731,33 @@ def test_restart_scheduling_and_attempts_are_logged(caplog):
     assert any(level == logging.WARNING and 'scheduling restart' in message
                for level, message in records)
     runtime.stop(timeout=5.0)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX flock contract')
+def test_lease_probe_defers_a_spawn_without_the_host_lifecycle_manager(
+        tmp_path, monkeypatch):
+    """Packaged consumers (plugins on tofu-agent) ship no ``server_manager``.
+
+    The spawn guard imported the lease reader from that host-only module, so
+    every packaged supervisor start failed with ModuleNotFoundError before it
+    could defer or spawn (tofu-trading CI, 2026-11-15).
+    """
+    import fcntl
+    import sys
+
+    from lib.storage.errors import StorageStartDeferred
+
+    monkeypatch.setitem(sys.modules, 'server_manager', None)
+
+    def refuse_spawn(*_args, **_kwargs):
+        raise AssertionError('a held lease must defer before any spawn')
+
+    monkeypatch.setattr(supervisor_mod.subprocess, 'Popen', refuse_spawn)
+    data_dir = tmp_path / 'data'
+    data_dir.mkdir()
+    with (data_dir / '.storage-sidecar.lock').open('a+b') as owner:
+        fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        supervisor = StorageSupervisor(
+            project_root=tmp_path, backend='sqlite', startup_timeout=5.0)
+        with pytest.raises(StorageStartDeferred, match='lease is held'):
+            supervisor.start()

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from lib.provider.provider_template_recipes import offering_recipes
+from tests.support.overlay import private_overlay_installed
 
 pytestmark = pytest.mark.unit
 
@@ -19,10 +20,9 @@ EXPECTED_CAPS = {'text', 'thinking'}
 def test_glm53_is_in_official_and_yourprovider_templates():
     # The yourprovider template moved under bundles/yourprovider/ in 6e19b6d14 (site
     # packs); the loader chain still merges it (docs/SITE_PACKS.md §4).
-    locations = (
-        ROOT / 'static/provider_templates' / 'glm.json',
-        ROOT / 'bundles/yourprovider/provider_templates' / 'yourprovider.json',
-    )
+    locations = [ROOT / 'static/provider_templates' / 'glm.json']
+    if private_overlay_installed():
+        locations.append(ROOT / 'bundles/yourprovider/provider_templates' / 'yourprovider.json')
     for path in locations:
         filename = path.name
         template = json.loads(path.read_text(encoding='utf-8'))

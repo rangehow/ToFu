@@ -317,8 +317,8 @@ def test_tofu_data_projects_non_subscription_route_to_selected_model(
     live_config.mkdir()
     source = {
         'providers': [
-            {'id': 'default', 'api_keys': ['kept-in-isolated-copy'],
-             'base_url': 'https://api.openai.com/v1',
+            {'id': 'acme', 'api_keys': ['kept-in-isolated-copy'],
+             'base_url': 'https://gateway.acme.test/v1/openai/native',
              'models': [
                  {'model_id': 'kimi-k3', 'enabled': True},
                  {'model_id': 'unrelated', 'enabled': True}]},
@@ -327,27 +327,27 @@ def test_tofu_data_projects_non_subscription_route_to_selected_model(
         'model_catalog': {
             'models': {'kimi-k3': {}, 'unrelated': {}},
             'offerings': {
-                'wanted': {'provider_id': 'example-corp',
+                'wanted': {'provider_id': 'acme',
                            'model_id': 'kimi-k3'},
                 'other': {'provider_id': 'other', 'model_id': 'kimi-k3'},
             },
             'routes': {'kimi-k3': {}, 'unrelated': {}},
         },
-        'proxy_bypass_domains': ['.internal.example.com', '.example.test'],
+        'proxy_bypass_domains': ['.acme.test', '.example.test'],
     }
     (live_config / 'server_config.json').write_text(json.dumps(source))
     monkeypatch.setattr(benchmark_runtime, 'TOFU_CONFIG_SOURCE', live_config)
     monkeypatch.setattr(benchmark_runtime, 'TOFU_RUNTIME', tmp_path / 'runtime')
     monkeypatch.setattr(
         benchmark_runtime, 'TOFU_DATA_ROOT', tmp_path / 'isolated')
-    monkeypatch.setattr(benchmark_runtime, 'BENCHMARK_PROVIDER_ID', 'example-corp')
+    monkeypatch.setattr(benchmark_runtime, 'BENCHMARK_PROVIDER_ID', 'acme')
     monkeypatch.setattr(benchmark_runtime, 'BENCHMARK_MODEL_ID', 'kimi-k3')
 
     data_dir = benchmark_runtime._prepare_tofu_data(tmp_path / 'attempt')
     projected = json.loads(
         (data_dir / 'config' / 'server_config.json').read_text())
 
-    assert [row['id'] for row in projected['providers']] == ['example-corp']
+    assert [row['id'] for row in projected['providers']] == ['acme']
     assert [row['model_id'] for row in projected['providers'][0]['models']] == [
         'kimi-k3']
     assert list(projected['model_catalog']['offerings']) == ['wanted']
@@ -421,8 +421,8 @@ def test_benchmark_can_explicitly_trust_authenticated_proxy_probe_block():
 def test_benchmark_proxy_removes_selected_provider_from_no_proxy(
         monkeypatch):
     monkeypatch.setattr(
-        benchmark_runtime, 'BENCHMARK_ALLOW_HOSTS', 'your-llm-gateway.example.com')
-    no_proxy = 'localhost,127.0.0.1,.internal.example.com,.example.test'
+        benchmark_runtime, 'BENCHMARK_ALLOW_HOSTS', 'gateway.acme.test')
+    no_proxy = 'localhost,127.0.0.1,.acme.test,.example.test'
     monkeypatch.setenv('no_proxy', no_proxy)
     monkeypatch.setenv('NO_PROXY', no_proxy)
 
@@ -431,7 +431,7 @@ def test_benchmark_proxy_removes_selected_provider_from_no_proxy(
               if value == '--env']
     rendered = next(value for value in values if value.startswith('NO_PROXY='))
 
-    assert '.internal.example.com' not in rendered
+    assert '.acme.test' not in rendered
     assert '.example.test' in rendered
     assert '127.0.0.1' in rendered
 

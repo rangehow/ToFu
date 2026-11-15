@@ -68,9 +68,16 @@ def test_plain_git_commit_starts_automatic_maintenance(repository_due_for_gc, tm
     result = git(repo, 'commit', '--allow-empty', '-q', '-m', 'control',
                  env={**plain, 'GIT_TRACE': str(trace)})
     assert result.returncode == 0, result.stderr
-    assert marker.read_text() == 'started\n'
-    # Git 2.29+ asks `maintenance run --auto`, which consults the hook itself.
+    # Git before 2.29 runs `gc --auto` from its writers; later Git runs
+    # `maintenance run --auto`, whose tasks depend on `maintenance.strategy`
+    # (a geometric repack never consults pre-auto-gc), so the spawn is the
+    # version-independent evidence that the writer started maintenance.
     assert any(child in trace.read_text() for child in ('gc --auto', 'maintenance run --auto'))
+    # The repository is due: `gc --auto` decides to collect and runs the
+    # pre-auto-gc hook (githooks(5)), which vetoes the work.
+    marker.unlink(missing_ok=True)
+    assert git(repo, 'gc', '--auto', '--quiet', env=plain).returncode == 0
+    assert marker.read_text() == 'started\n'
 
 
 def test_harness_git_writers_never_start_automatic_maintenance(

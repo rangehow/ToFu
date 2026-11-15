@@ -1284,7 +1284,7 @@ class StorageSupervisor:
         A child started now could only fail on the lease and count as a failed
         start; the restart worker retries on its existing backoff instead.
         """
-        from server_manager import read_storage_lease_status
+        from lib.storage.lease_status import read_storage_lease_status
         if self._project_root is not None:
             data_dir = self._project_root / 'data'
         else:

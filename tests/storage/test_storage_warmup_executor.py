@@ -170,7 +170,8 @@ def test_unstarted_probe_failure_does_not_suppress_other_reads(monkeypatch, fail
     original = threading.Thread.start
     count = 0
     expected_failures = ['conversation.list'] if failed_starts == 2 else []
-    rendezvous = threading.Barrier(6 - len(expected_failures), timeout=10)
+    probes = len(warmup._operations(1))
+    rendezvous = threading.Barrier(probes - len(expected_failures), timeout=10)
     called = []
     lock = threading.Lock()
 
@@ -193,9 +194,9 @@ def test_unstarted_probe_failure_does_not_suppress_other_reads(monkeypatch, fail
     try:
         stats = warmup.run_warmup_pass(Client(), budget_seconds=15)
         assert stats['failed'] == expected_failures
-        assert len(stats['warmed']) == 6 - len(expected_failures)
+        assert len(stats['warmed']) == probes - len(expected_failures)
         assert ('conversation.list' in called) == (failed_starts == 1)
-        assert len(called) == len(set(called)) == 6 - len(expected_failures)
+        assert len(called) == len(set(called)) == probes - len(expected_failures)
     finally:
         pool.shutdown(wait=True)
     assert not warmup._inflight
@@ -224,7 +225,7 @@ def test_cancelled_and_broken_workers_keep_per_probe_outcomes(monkeypatch):
     stats = warmup.run_warmup_pass(_SlowClient(0), budget_seconds=5)
     assert stats['skipped'] == ['conversation.count']
     assert stats['failed'] == ['conversation.list']
-    assert len(stats['warmed']) == 4
+    assert len(stats['warmed']) == len(warmup._operations(1)) - 2
     assert not warmup._inflight
 
 

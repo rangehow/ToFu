@@ -251,7 +251,7 @@ def router_office_read():
         try:
             return api_ok(validate(snapshot(_owner()), 'officeFacts'))
         except OfficeFactsClosed as error:
-            return api_error(str(error), 503, code='office_facts_stopping')
+            return api_error(str(error), status=503, error_code='office_facts_stopping')
     except _TYPED_FAILURES as error:
         return _typed_error(error)
 

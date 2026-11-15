@@ -52,7 +52,9 @@ class _LoopCarrierStarter:
         self._lock = threading.Lock()
         self._requests: queue.SimpleQueue | None = None
         self._pid = 0
-        os.register_at_fork(after_in_child=self._forget_after_fork)
+        # Windows has no fork, so there is no child state to forget.
+        if hasattr(os, 'register_at_fork'):
+            os.register_at_fork(after_in_child=self._forget_after_fork)
 
     def _forget_after_fork(self) -> None:
         # The parent's thread does not exist in a forked child.
@@ -62,8 +64,8 @@ class _LoopCarrierStarter:
     def start(self, executor: 'DemandExecutor', item: '_WorkItem',
               threads: tuple[threading.Thread, ...]) -> bool:
         """Hand over one owner's reservation; False when no starter can run."""
-        requests = self._requests
-        if requests is None or self._pid != os.getpid():
+        pending = self._requests
+        if pending is None or self._pid != os.getpid():
             with self._lock:
                 if self._requests is None or self._pid != os.getpid():
                     created = queue.SimpleQueue()
@@ -72,15 +74,15 @@ class _LoopCarrierStarter:
                     except RuntimeError:
                         return False
                     self._requests, self._pid = created, os.getpid()
-                requests = self._requests
-        requests.put((executor, item, threads))
+                pending = self._requests
+        pending.put((executor, item, threads))
         return True
 
     @staticmethod
-    def _serve(requests: queue.SimpleQueue) -> None:
+    def _serve(pending: queue.SimpleQueue) -> None:
         threading.current_thread().name = 'tofu-carrier-starter'
         while True:
-            executor, item, threads = requests.get()
+            executor, item, threads = pending.get()
             try:
                 executor._start_owned_carriers(item, threads, None, delegated=True)
             except BaseException as error:

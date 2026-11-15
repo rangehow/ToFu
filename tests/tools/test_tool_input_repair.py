@@ -2221,7 +2221,7 @@ def test_display_text_shortening_is_deterministic_for_idempotent_retries():
     ('alpha beta gamma', 12, 'alpha beta…'),
     ('alpha betagamma delta', 12, 'alpha…'),
     ('修复工具调用设计问题', 6, '修复工具调…'),
-    ('Fix /mnt/your-fs now', 22, 'Fix /mnt/your-fs'),
+    ('Fix /mnt/clusterfs/ssd_pool now', 22, 'Fix /mnt/clusterfs/…'),
     ('cafe\u0301 au lait', 5, 'caf…'),
     ('family 👨\u200d👩\u200d👧 photos', 10, 'family…'),
     ('Abcdefghijklmnop', 8, 'Abcdefg…'),

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import orjson
 
@@ -69,7 +69,9 @@ def validate_finite_json_numbers(value: Any) -> None:
         if identity in visited_containers:
             continue
         visited_containers.add(identity)
-        pending.extend(item.values() if is_mapping else item)
+        pending.extend(
+            cast(Mapping[Any, Any], item).values() if is_mapping
+            else cast('list[Any] | tuple[Any, ...]', item))
 
 
 def materialize_json_mappings(value: Any) -> Any:

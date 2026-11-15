@@ -1099,7 +1099,14 @@ def test_batch_metrics_distinguish_frames_slots_and_merges(monkeypatch):
     assert 'tofu_task_event_delivery_merged_progress_total 62' in body
 
 
+def _new_delivery_threads(before):
+    # Other coordinators in the same xdist worker may own delivery threads.
+    return [thread for thread in threading.enumerate()
+            if thread not in before and thread.name.startswith('task-event-delivery_')]
+
+
 def test_independent_lanes_start_all_callbacks_above_idle_and_residency_hints():
+    before = set(threading.enumerate())
     owner = EventDeliveryCoordinator(workers=1, capacity=1, byte_capacity=1)
     barrier = threading.Barrier(32, timeout=10)
     lanes = [DeliveryLane({'id': f'demand-{index}'}) for index in range(32)]
@@ -1127,10 +1134,11 @@ def test_independent_lanes_start_all_callbacks_above_idle_and_residency_hints():
     finally:
         assert owner.close(5)
     assert not owner.workers and not owner._pumps
-    assert not any(thread.name.startswith('task-event-delivery_') for thread in threading.enumerate())
+    assert not _new_delivery_threads(before)
 
 
 def test_unstarted_event_worker_failure_retains_only_its_lane_and_recovers(monkeypatch):
+    before = set(threading.enumerate())
     owner = EventDeliveryCoordinator(workers=1, capacity=1, byte_capacity=1)
     entered, release, independent = threading.Event(), threading.Event(), threading.Event()
     first = DeliveryLane({'id': 'active'})
@@ -1174,7 +1182,7 @@ def test_unstarted_event_worker_failure_retains_only_its_lane_and_recovers(monke
     finally:
         release.set()
         assert owner.close(5)
-    assert not any(thread.name.startswith('task-event-delivery_') for thread in threading.enumerate())
+    assert not _new_delivery_threads(before)
 
 
 @pytest.mark.parametrize('stale_parent', [False, True])

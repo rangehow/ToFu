@@ -19,6 +19,7 @@ import os
 import pytest
 
 from lib.skills.paths import PROJECT_SKILL_ROOTS, skill_scan_dirs
+from tests.support.export_toolchain import requires_export_toolchain
 
 pytestmark = pytest.mark.unit
 
@@ -41,6 +42,7 @@ def test_declared_root_is_actually_scanned(subdir, visibility, exported_in):
     assert roots  # sanity: the call returns a mapping-like list at all
 
 
+@requires_export_toolchain
 @pytest.mark.parametrize('subdir,visibility,exported_in', PROJECT_SKILL_ROOTS)
 def test_declared_export_visibility_matches_exporter(subdir, visibility, exported_in):
     from export_pkg._excludes import _should_exclude
@@ -86,6 +88,7 @@ def test_per_machine_roots_never_reach_opensource(subdir, visibility, exported_i
     )
 
 
+@requires_export_toolchain
 def test_internal_carry_pass_matches_scanned_roots():
     """The internal-only carry pass must restore roots the scanner searches.
 
@@ -129,6 +132,7 @@ def test_internal_carry_pass_matches_scanned_roots():
         src for src, _dst in _SKILL_STATE_ROOTS)
 
 
+@requires_export_toolchain
 def test_carry_pass_never_reaches_public_modes():
     """Personal and opensource exports must not carry a skill catalogue."""
     from export_pkg._internal import _carried_skill_state_roots
@@ -137,6 +141,7 @@ def test_carry_pass_never_reaches_public_modes():
     assert _carried_skill_state_roots('personal') == ()
 
 
+@requires_export_toolchain
 def test_carry_pass_merges_and_skips_transient_lock(tmp_path, monkeypatch):
     """Restoring skills must not destroy the destination's own packages."""
     from export_pkg import _internal

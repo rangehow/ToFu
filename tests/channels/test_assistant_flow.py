@@ -8,7 +8,7 @@ import asyncio
 
 import pytest
 
-from tests.support.overlay import requires_yourprovider_overlay
+from tests.support.overlay import requires_private_overlay
 
 from lib.channels import outbox, service, tools
 from lib.channels.delivery import EVENT_COMMAND_PREFIX
@@ -178,7 +178,7 @@ def test_subscriptions_are_owner_decisions(channel, turns):
                     ) == 'human_turn_required'
 
 
-@requires_yourprovider_overlay
+@requires_private_overlay
 def test_owner_notes_reach_only_the_routers_review(channel, dispatch, turns):
     service.update_account(OWNER, {'assistantNote': '我是阮俊豪，回复简短 <口语>'}, store=channel)
     service.configure_thread(OWNER, PRIVATE, note='这是我的经理，语气正式', store=channel)
@@ -231,7 +231,7 @@ def test_a_review_refusal_says_what_the_review_may_do(channel, dispatch, turns):
     assert coordinator_call_rejection(owner, 'delegate_project_work', {}) is None
 
 
-@requires_yourprovider_overlay
+@requires_private_overlay
 def test_settings_set_notes_and_read_the_audit_over_http(channel, monkeypatch):
     from tests.channels.test_routes import _validate
     from quart import Quart, g, request

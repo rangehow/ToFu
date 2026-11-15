@@ -8,10 +8,18 @@ import ctypes
 import ctypes.util
 from pathlib import Path
 import re
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "packages" / "tofu-db" / "src" / "generated_unicode_simple_fold.rs"
+# --check exit status when this interpreter's SQLite links no ICU: there is no
+# reference table to compare with, so drift was not checked.
+ICU_UNAVAILABLE_EXIT = 3
+
+
+class IcuUnavailable(RuntimeError):
+    pass
 
 
 def _icu_symbol(library: ctypes.CDLL, base: str):
@@ -44,7 +52,7 @@ def _load_icu() -> ctypes.CDLL:
     ).stdout
     match = re.search(r"libicuuc\.so\.\d+ => (\S+)", ldd)
     if not match:
-        raise RuntimeError("_sqlite3 dependency chain has no libicuuc")
+        raise IcuUnavailable("_sqlite3 dependency chain has no libicuuc")
     return ctypes.CDLL(match.group(1))
 
 
@@ -96,7 +104,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
-    rendered = _render()
+    try:
+        rendered = _render()
+    except IcuUnavailable as unavailable:
+        print(f"{unavailable}: the linked SQLite has no ICU to freeze or check against",
+              file=sys.stderr)
+        return ICU_UNAVAILABLE_EXIT
     if args.check:
         if not OUTPUT.exists() or OUTPUT.read_text(encoding="utf-8") != rendered:
             raise SystemExit(f"{OUTPUT.relative_to(ROOT)} is stale for the linked ICU")

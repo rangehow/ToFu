@@ -49,21 +49,35 @@ def test_docker_copies_workspace_members_before_frozen_sync():
 
 
 def test_docker_dependency_stage_installs_the_toolchain_the_kernel_builds_with():
-    """`tofu-repo-kernel` compiles its Rust helper, so the stage needs cargo.
+    """`tofu-repo-kernel` compiles its Rust helpers, so the stage needs cargo.
 
     The kernel wheel is built in this stage, and its ``setup.py`` shells out to
-    ``cargo build``. Debian ships ``cargo`` and ``rustc`` as separate packages,
-    so installing only ``rustc`` let the image fail late with
-    ``error: [Errno 2] No such file or directory: 'cargo'``. Keep both names
-    pinned here so removing either one fails this contract instead of the
-    release build.
+    ``cargo build``. Its gix discovery crate declares a ``rust-version`` newer
+    than Debian's packaged rustc, so the stage installs the toolchain pinned by
+    the native release builds through a checksum-verified ``rustup-init``.
     """
+    import re
+    import tomllib
+
     deps = _dependency_stage()
     packages = deps[deps.index('apt-get install'):deps.index('rm -rf /var/lib/apt/lists/*')]
     installed = set(packages.replace('\\', ' ').split())
-    assert {'gcc', 'g++', 'rustc', 'cargo'} <= installed
+    assert {'gcc', 'g++', 'curl', 'ca-certificates'} <= installed
+    assert 'rustc' not in installed, "Debian's rustc is older than the discovery crate's MSRV"
+
+    hashes = re.findall(r'rustup_sha256=([0-9a-f]{64})', deps)
+    assert len(hashes) == 2, 'amd64 and arm64 rustup-init must each be checksum-pinned'
+    assert deps.index('sha256sum -c') < deps.index('/tmp/rustup-init -y')
+
+    toolchain = re.search(r'--default-toolchain (\d+\.\d+\.\d+)', deps)
+    assert toolchain, 'the stage must install an exact Rust toolchain'
+    desktop = _read('.github/workflows/build-desktop.yml')
+    assert f"RUSTUP_TOOLCHAIN: '{toolchain.group(1)}'" in desktop
+    discovery = tomllib.loads(_read('packages/tofu-repo-kernel/rust/discovery/Cargo.toml'))
+    required = tuple(int(part) for part in discovery['package']['rust-version'].split('.'))
+    assert tuple(int(part) for part in toolchain.group(1).split('.')) >= required
     # The kernel is built in this stage, so the toolchain must precede it.
-    assert deps.index('cargo') < deps.index('uv build --wheel --out-dir /native-wheelhouse')
+    assert deps.index('cargo --version') < deps.index('uv build --wheel --out-dir /native-wheelhouse')
 
 
 def test_docker_uv_pin_tracks_the_committed_lock():

@@ -45,6 +45,8 @@ def _header_bytes(row):
 def _context_row(turn):
     """The Turn itself, or ``{'pagedTurn': head}`` when it has more than one page."""
     first = turn_projection_page(turn, 0)
+    if first is None:
+        raise StorageError('database_integrity', 'turn projection has no first page')
     return {'pagedTurn': first['turn']} if first['pageCount'] > 1 else turn
 
 

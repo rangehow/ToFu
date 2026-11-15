@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import queue
 import threading
 import time
+from typing import Any
 
 from lib.storage.errors import StorageError
 
@@ -54,7 +55,7 @@ class _IdleSlots:
 
 @dataclass(slots=True)
 class ConnectionSlot:
-    connection: object
+    connection: Any
     created_at: float
     last_used_at: float
     leased: bool = False

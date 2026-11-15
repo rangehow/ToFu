@@ -35,7 +35,7 @@ def test_prepaint_landing_uses_the_world_feature_key():
 
 
 def test_prepaint_landing_opens_the_office_unless_classic_was_chosen():
-    require_node_modules()
+    require_node_modules('jsdom')
     harness = r"""
 const { JSDOM } = require(require('path').join(process.argv[1], 'node_modules', 'jsdom'));
 const SCRIPT = process.argv[2];

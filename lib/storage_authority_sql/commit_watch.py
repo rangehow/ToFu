@@ -57,7 +57,7 @@ class CommitWatch:
         with self._condition:
             current = self._cursor()
             observed = None
-            if cursor == current and not self._closed:
+            if cursor is not None and cursor == current and not self._closed:
                 waiter, hints = object(), set()
                 self._waiters[waiter] = hints
                 try:

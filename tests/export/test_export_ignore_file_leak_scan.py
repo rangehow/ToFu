@@ -43,7 +43,7 @@ require_export_toolchain()
 pytestmark = pytest.mark.unit
 
 # Fragment-assembled internal markers (never contiguous literals in-file).
-_INTERNAL_HOST = 'secret-host.' + 'example-corp' + '.com'
+_INTERNAL_HOST = 'secret-host.' + 'sankuai' + '.com'
 _MNT = '/mnt/' + 'dolphin' + 'fs'
 
 
@@ -72,7 +72,7 @@ class IgnoreFileLeakScanTest(unittest.TestCase):
         import re as _re
         with tempfile.TemporaryDirectory() as tmp:
             root = self._make_tree(tmp)
-            pat = _re.escape('.' + 'example-corp' + '.com')
+            pat = _re.escape('.' + 'sankuai' + '.com')
             hits = _rg_files_with_matches(root, [pat])
         self.assertIn('section_source.js', hits,
                       'control: ordinary sources are scanned')

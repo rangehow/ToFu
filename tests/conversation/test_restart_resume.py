@@ -504,7 +504,7 @@ def test_the_terminal_observer_recovers_a_failed_notice_through_real_turn_storag
     Nothing is marked reviewed; the failed Turn keeps its error and evidence.
     """
     from lib.channels import autoreply
-    from tofu_yourprovider.dx import supervisor
+    from tofu_meituan.dx import supervisor
     c = chats
     owner = OWNER
     read = {'toolName': 'get_conversation', 'status': 'done', 'toolCallId': 'call-read',

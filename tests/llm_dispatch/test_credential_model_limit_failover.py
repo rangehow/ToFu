@@ -2,7 +2,7 @@
 
 Incident 2026-11-10/11: a Watchdog Turn retried round 1 for 22 hours, about
 4,800 times, all HTTP 429 "App:**4861在模型:kunlunbedrock.claude-opus-5.5-m17
-每分钟请求次数超过限制" (the example-corp AppId is the calling key; the limit is per
+每分钟请求次数超过限制" (the sankuai AppId is the calling key; the limit is per
 AppId per model). The warm key is paced for one provider window to keep its
 prompt cache (docs/modules/llm_io.md). After that window the request leaves
 the pair: another key serves it, or, with no eligible pair left, dispatch

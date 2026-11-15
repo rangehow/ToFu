@@ -214,7 +214,7 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     import routes
     import lib.app.plugin_registry as plugin_registry
     import runtime_guards
-    import tofu_yourprovider.dx.supervisor as channel_supervisor
+    import tofu_meituan.dx.supervisor as channel_supervisor
 
     calls = []
     monkeypatch.setattr(channel_supervisor, '_ADAPTERS', {})
@@ -258,7 +258,7 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
 @requires_private_overlay
 def test_background_service_shutdown_is_paired_and_idempotent(monkeypatch):
     import lib.channels.bots.supervisor as bot_supervisor
-    import tofu_yourprovider.dx.supervisor as channel_supervisor
+    import tofu_meituan.dx.supervisor as channel_supervisor
     import lib.channels.github.supervisor as github_supervisor
     import lib.database_panel.maintenance as database_panel_maintenance
     import lib.knowledge.enrichment as knowledge_enrichment
@@ -318,7 +318,7 @@ def test_background_service_shutdown_is_paired_and_idempotent(monkeypatch):
 @requires_dx
 def test_background_service_shutdown_retains_latch_on_timeout(monkeypatch):
     import lib.channels.bots.supervisor as bot_supervisor
-    import tofu_yourprovider.dx.supervisor as channel_supervisor
+    import tofu_meituan.dx.supervisor as channel_supervisor
     import lib.channels.github.supervisor as github_supervisor
     import lib.database_panel.maintenance as database_panel_maintenance
     import lib.knowledge.enrichment as knowledge_enrichment
@@ -366,7 +366,7 @@ def test_the_drain_asks_only_loaded_hosting_channel_owners_to_begin_stopping(mon
     unloaded."""
     import sys
     import lib.channels.bots.supervisor as bot_supervisor
-    import tofu_yourprovider.dx.supervisor as channel_supervisor
+    import tofu_meituan.dx.supervisor as channel_supervisor
     import lib.channels.github.supervisor as github_supervisor
 
     asked = []

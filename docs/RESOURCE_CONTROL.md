@@ -494,7 +494,9 @@ exists, every Tofu-owned local write lands there:
   (`native_engine.cargo_target_directory`), else in the checkout as before:
   the test engine's `target-differential` and the bench's `target-bench`. Each
   carries a `CACHEDIR.TAG`, because Cargo tags only target directories it
-  creates itself.
+  creates itself. A checkout already on the local disk keeps its target in
+  the checkout; its first creation is a copy-on-write seed from a sibling
+  checkout ("Filesystem and Git artifact lifecycles" below).
 - Test temp: `tests/conftest.py` calls `pin_temporary_directory()` before the
   suite creates a file. Pytest roots, the suite's data roots and spawned
   processes then never fall back to `/var/tmp` or follow a launcher's `TMPDIR`
@@ -537,6 +539,8 @@ Specifications: `tests/server/test_local_placement.py`,
   `/var/tmp`.
 - One Cargo target shared across a repository's checkouts: it deduplicates
   dependencies, but concurrent lanes would serialize on Cargo's directory lock.
+  Copy-on-write seeding gives the deduplication without the lock ("Filesystem
+  and Git artifact lifecycles" below).
 
 Still under `$HOME`:
 - `lib/storage_authority_sql/fastpath.py` prefers `~/.local/state/tofu-fastpath`
@@ -550,7 +554,152 @@ Still under `$HOME`:
 the scratch disk, and a `TMPDIR=/dev/shm/<dir>` rerun of slow `maintenance::` tests; its
 scratch-disk and private-tmpfs-directory wording is held with the engine-package changes.
 
-Per-checkout compiler caches have no retention yet.
+Placed compiler caches go when their checkout is gone ("Filesystem and Git
+artifact lifecycles" below).
+
+## Filesystem and Git artifact lifecycles
+
+**Inventory (measured on this host 2026-11-15/16; `du -sk`, file counts from
+`find`, Git counts from `count-objects -v` and `for-each-ref`).** Growth is
+what the artifact gained since the host's 2026-11-15 15:58 start unless noted.
+The lifecycle owner is what removes it. Re-measure with
+`python3 scripts/resource_inventory.py --project <checkout> [--record]`: it
+measures the same artifacts (allocated blocks, hard links once), names each
+lifecycle owner, and with `--record` appends to `data/resource-inventory.jsonl`
+and prints growth since the previous record (a full run took 15 min here,
+most of it the 1.0 TiB of other `/tmp` entries). Verify
+`tests/meta/test_resource_inventory.py`.
+
+| Artifact | Bytes / files | Growth | Lifecycle owner |
+|---|---|---|---|
+| Task checkouts `/tmp/tofu-<uid>-workspaces` | 12.0 GiB / 398k (22 checkouts of ~300 MB, 4 spares) | one checkout per live Worker | delivery or discard reclaims or recycles into a spare (`task_delta_delivery.checkout_reconstructible`, `task_spares.recycle`; project_integration.md "Task checkouts start at once") |
+| Stray files beside task checkouts (`u1/noov`, logs; `basewt` is a registered worktree) | 316 MB / 20 entries | Worker scratch written to `..` | prevented: commands in a task checkout get `TMPDIR=<owner dir>/.tmp-<checkout>`, removed when the checkout retires; AGENTS.md sends scratch there. Files an agent names itself have no owner that could tell them from deliverables; `basewt` follows `git_hygiene.py --remove-clean-worktrees` |
+| Lanes `/tmp/tofu-<uid>-lanes` | 1.5 GiB / 74k | per lane | `git_land` recycles the clean checkout; `lane.py remove` |
+| Landing verification checkouts | inside lanes and data root | per landing | `landing_verification` (warm merge checkout, reused) |
+| Runtime replicas | 3.0 GiB / 66k (application + interpreter, one generation) | per source generation | `runtime_replica` replaces a generation on the next build |
+| Native compiler caches `/tmp/tofu-<uid>-native-builds` | 1.8 GiB / 4k (one checkout) | per checkout that builds | each names its checkout (`CHECKOUT`); a build preparation removes caches whose checkout is gone |
+| Cargo targets in local checkouts (`packages/tofu-db/target-*`) | 3.3 GB per checkout that ran the test engine | per checkout | the checkout's lifecycle; first creation is a copy-on-write seed (below) |
+| Agent-chosen Cargo targets (`~/.cache/tofu-own-answer-target`) | 3.1 GiB, reclaimed (built 2026-11-15 17:08-17:11 by a Worker, tofu-db + tofu-runtime; no process held it, Cargo locks free) | per agent | prevented: `packages/tofu-db/AGENTS.md` sends targets to the checkout's seeded target or `$TMPDIR/target` |
+| Search projection namespaces `/tmp/tofu-<uid>-indexes/tofudb-search/<authority hash>` | serving 180.5 GiB; 13 orphans 45.2 GiB reclaimed | one namespace per authority path ever opened (drill copies) | none for orphans (finding below) |
+| Test bundle cache `/tmp/tofu-test-bundle-cache-<uid>` | 2.0 GiB / 24k | per frontend revision | `tests/_runtime_sections.py` prune (7-day age) |
+| Test scratch `tofu-runtime-sections-*`, `tofu-frontend-test-root-*`, `chat-sidecar-*` | 5.53 GiB / 513 dirs, reclaimed | 110 dirs (5.5 GiB) in 10 hours | owner-process exit (below) |
+| Other test scratch (`tofu-standalone-storage-*`, `tofu_primary_*`, `proj_a_*`, `no-bundles-*`) | < 2 MiB / ~100 dirs | per run | none; bytes negligible |
+| Worker command scratch (`/tmp/audit`, `/tmp/recov`, `tofu-os-export-*`, …) | `tofu-os-export-*` 1.7 GiB; ~1,950 `/tmp` entries | per Worker task | from now: the task checkout's `TMPDIR` (above). Existing named `/tmp` entries have no owner Tofu can prove and are left to the operator |
+| Owner migration scratch `/tmp/tofu-migration-*` | 43.7 GiB / 5 dirs | today's host move | the operator (left untouched) |
+| Playwright browsers `~/.cache/ms-playwright` | 907 MiB / 914 (chromium 1228, headless shell 1228 and 1234, ffmpeg) | per browser release | one shared registry: `apply_tool_paths` pins every child's `PLAYWRIGHT_BROWSERS_PATH` to it, and no checkout holds a copy (checked: no other `ms-playwright`); Playwright's own `install` removes revisions no installation links (`.links`) |
+| Package caches `~/.cache/pip`, `~/.cache/uv` | 29.6 GiB, 23.2 GiB | per install | the tools' own `cache purge`/`cache prune`; Tofu never runs them |
+| Node build outputs `static/` | 38 MiB / 529 | replaced per build | Vite publication (`vite_asset_publication.mjs`) |
+| `logs/` | 91 MiB / 18 | rotating | `lib/logging_pkg/log_retention.py` |
+| `data/mcp-cache` | 460 MiB allocated (2.1 GiB apparent) / 82k: pip 229 MiB, uv 142 MiB, installed uv tools 65 MiB, npm 24 MiB | per tool install | one shared tool cache and installed MCP tools for all commands (`tool_cache_root`), so already single; installed tools are durable runtime, caches follow the tools' own prune |
+| `data/host-state` | 1.36 GiB / 5.6k | per `migrate_host --save` | kept: the host move's copy of local-only user state |
+| `data/export` | 517 MiB / 28k: `tofu-open` 405 MiB, `publication-audit-2026-11-15` 113 MiB | per export | kept: release state. Not deduplicated: DolphinFS has no reflinks and hard links would let an edit of one tree change the other |
+| `data/backups` | 1.05 GiB / 583k | per online backup | native online backup retention (STORAGE_OPERATIONS.md) |
+| `data/git-hygiene` | 1.0 GiB (task-ref archive bundle) | per archival pass | none: archived user work, kept |
+| Git refs | before: 9,330 refs (`refs/heads` 2,915 + `recovered/*` 1,952, `refs/tofu/checkpoints` 3,033, `inputs` 823, `workspace-wip` 214, `delivery-*` 265, `host-move` 6); after: 5,145 | ~120 task refs a day | delivered tasks: `retire_task_refs`; others: `scripts/git_task_ref_archive.py` (below) |
+| Git objects | before: 151,519 loose (2.20 GiB), 40 packs (8.07 GiB), `.git/objects` 10.27 GiB; after the archive and one pass: 1 pack (1.40 GiB) and 43,271 loose (9.71 GiB, the now-unreachable objects, prunable from 2026-11-17 02:21 because archiving freshened their pack), `.git/objects` 11.10 GiB until that prune | ~7 GiB pinned by task refs | `git_object_maintenance` after delivery commits (below) |
+
+**Problem.** Four producers grew without an owner. Module-level test scratch
+relied on `atexit`, which xdist workers that leave through `os._exit` or are
+killed never run, so every session leaked its bundle directories (the chat
+Sidecar fixture also removed only a child of its root). Every local checkout
+that built the test engine compiled all 192 crates into its own
+`target-differential`, because placement keeps a checkout that is already on
+the local disk in place. Task checkpoint refs of finished assignments pinned
+7.1 GiB of objects no branch references, 6.5 GiB of it Cargo targets agents
+built in checkouts under names `.gitignore` missed, which every capture then
+versioned. And Git object maintenance only ran when an operator ran it.
+
+**Decision.** Each lifecycle follows an event, never a timer:
+- Test scratch is named after its owner PID
+  (`tests/support/process_scratch.py`); creating one removes this user's
+  directories of the same prefix whose owner has exited, and a normal exit
+  removes its own. A live PID, possibly reused, only defers removal.
+- A local checkout's first Cargo target is a copy-on-write clone of the most
+  recently built sibling target of the same repository whose `.build.lock` is
+  free (`native_engine._seed_cargo_target`), excluding its `stable` engine
+  copy. Measured: clone 0.22 s and 7 MiB of new blocks; the first debug build
+  of tofu-db compiled 4 crates instead of 192, 58 s instead of 91 s (host load
+  6-18). The test harness's engine preparation
+  (`tests/support/tofudb_binary.ensure_engine_binary`, alternating
+  cold/seeded/cold/seeded on 2026-11-16, host load 54-184) took 285 s and
+  318 s cold, 145 s and 146 s seeded; the cold arms ended at load 178 and
+  184, much of it their own 192 parallel crate builds. Worker start is
+  unchanged: none of these commits touches the start path, and the three
+  task-start specifications in `tests/storage/test_task_spares.py` (spare
+  claim, no admission, branch input) summed 8.1/9.4/7.1 s without these
+  commits and 6.2/5.7/6.8 s with them (alternating rounds, same local disk). Each checkout keeps its own target, so concurrent builds never share
+  a Cargo lock, and the target goes with its checkout. No reflink support, or
+  every sibling building, leaves an empty target as before.
+- `.gitignore` ignores `target/` and `target-*/` anywhere and `/.venv-*`.
+  `scripts/git_task_ref_archive.py` removes the task refs of tasks with no
+  registered worktree and no live integration row: refs the branch contains
+  are deleted, the rest first go into one verified bundle (CACHEDIR.TAG-tagged
+  build directories reset to the merge base). Delivered tasks' refs keep
+  going at settlement through `retire_task_refs`.
+- A delivery commit starts `git_object_maintenance.run_when_due`: one
+  background pass per repository when Git's own `gc.auto` or
+  `gc.autoPackLimit` is exceeded beyond the residue the last pass recorded,
+  or when that residue's expiry has passed.
+
+The first pass over the shared repository (FUSE, host load 6-40) took 49.6 min
+(repack 46 min, prune 2.6 min). It could not drop the archived objects yet:
+the archive rewrote trees that already existed in the 8 GiB pack, and Git
+freshens a pack whose object is written again, so the safe repack
+(`-A --unpack-unreachable=1.days.ago`) loosened them instead. The recorded
+residue (43,271 loose objects) keeps every later delivery from starting a pass
+that could not remove them; the first delivery after its expiry does, and only
+then does the object store shrink to about 1.5 GiB.
+
+Measured reclamation on this host: test scratch 5.53 GiB (513 directories);
+orphan search projections 45.2 GiB (13 namespaces, no open descriptor, LOCK
+free, no existing authority hashing to them); refs 4,335 task refs to 141 live
+ones, 635 deleted as reachable and 3,559 archived; objects pinned only by
+`refs/tofu` 7.1 GiB to 43 MiB.
+
+**Alternatives rejected:** one shared `CARGO_TARGET_DIR` (serializes
+concurrent builds on Cargo's lock, and workspace crates of different checkouts
+would overwrite each other's fingerprints); sccache (a new tool and daemon
+for what the filesystem already shares, and it does not cache the dominant
+workspace crate's incremental state); deleting test scratch by age (a timer
+knob that can remove a live session's bundles); deleting unmerged task refs
+without a bundle (loses work); archiving them with their build directories
+(a 7 GiB archive of reconstructible output); running maintenance on a timer
+or at every delivery (the storm GIT_WORKSPACE_GUARD.md records).
+
+**Findings without an owner here.** Search projection namespaces outlive the
+authority path they were opened for: the namespace is a hash of that path
+(`projection_paths.namespace_identity`), so nothing can tell an orphan from a
+stopped authority. Proposal for the storage owner: write the authority path
+into the namespace when it is created and remove, at each authority open, the
+sibling namespaces whose authority no longer exists and whose LOCK is free.
+
+**Worker command scratch (2026-11-16).** Problem: Worker scratch landed in the
+shared `/tmp` and beside the task checkouts, where nothing could tell whose it
+was. Decision: a command whose environment root is a pooled task checkout runs
+with `TMPDIR=<owner dir>/.tmp-<checkout>` (`task_spares.checkout_scratch`,
+set in `run_command._get_cmd_env`), outside the tree Git captures, and
+delivery reclamation and discard remove it with the checkout
+(`task_spares.retire_scratch`). It lives as long as the assignment, so a file
+one command writes is there for the next and for background commands.
+Measured cost: `_get_cmd_env` median 1.27 ms without, 1.30 ms with (four
+alternating rounds of 300). Alternatives rejected: a per-command `TMPDIR`
+(multi-command work loses its files); removal at attempt end (a background
+command outlives its attempt); deleting stray names by age (a timer that
+cannot tell scratch from deliverables).
+
+**Deleting a build target skips the undo trash (2026-11-16).** Problem: the
+recoverable-delete shim moved every `rm` operand into `<checkout>/.tofu_trash`,
+which only its 7-day TTL or the checkout's retirement empties; removing Cargo
+targets during this measurement left 26 GiB there in one task checkout.
+Decision: an operand that is a directory tagged with `CACHEDIR.TAG` (the Cache
+Directory Tagging convention; Cargo tags every target it creates, Tofu tags
+the ones it creates) is deleted directly; everything else is still trashed.
+Verify `TestRmTrashWrap::test_cache_tagged_directories_are_deleted_not_trashed`.
+
+**Placed compiler caches (2026-11-16).** Each placed cache records its
+checkout path (`CHECKOUT`); every build preparation removes the caches whose
+checkout no longer exists (`native_engine._retire_orphaned_build_caches`). A
+cache from before the record is kept until its checkout prepares once.
 
 ## Memory prefetch corpus index retention
 

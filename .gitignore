@@ -37,6 +37,7 @@ __pycache__/
 # trailing slash on .venv: a lane links it as a symlink, which a
 # directory-only pattern does not ignore.
 /.venv
+/.venv-*
 /venv/
 /.texlive/
 /.pytest_cache/
@@ -276,6 +277,8 @@ __pycache__/
 !/scripts/git_land.py
 !/scripts/lane.py
 !/scripts/git_maintenance.py
+!/scripts/git_task_ref_archive.py
+!/scripts/resource_inventory.py
 !/scripts/generate_research_progress.py
 !/scripts/gen_tofudb_cert_binding.py
 !/scripts/audit_model_configuration.py
@@ -687,9 +690,13 @@ static/vite/
 # ── PyInstaller / desktop build artifacts ──
 build/
 dist/
-/packages/tofu-db/target/
-# tofu-db out-of-tree cargo target dirs (differential/perf/cert harnesses)
-/packages/tofu-db/target-*/
+# Cargo target directories wherever a build or an agent puts them (Tofu's
+# differential/perf/cert harnesses use target-*). Cargo tags each one with
+# CACHEDIR.TAG, which Git does not read: before this rule, task checkpoint refs
+# captured 6.5 GiB of agent-made targets (.verify_tmp/target,
+# tofu-db-verify/target) that no branch referenced.
+target/
+target-*/
 *.spec.bak
 installer_output/
 static/icons/tofu.ico

@@ -560,6 +560,11 @@ def _get_cmd_env(cwd=None, credential_env=None, strip_credential_vars=None,
     else:
         cache_root = tool_cache_root()
     apply_tool_paths(env, cache_root=cache_root)
+    if root:
+        from lib.project_mod.task_spares import checkout_scratch
+        scratch = checkout_scratch(root)
+        if scratch is not None:
+            env['TMPDIR'] = scratch
     # A server activation marker does not identify the command's interpreter.
     env.pop('VIRTUAL_ENV', None)
     env.pop('PYTHONHOME', None)
@@ -777,6 +782,11 @@ def _maybe_wrap_rm_with_trash(command, cwd):
         'case "$_a" in -*) continue;; esac; '
         '[ -e "$_a" ] || [ -L "$_a" ] || continue; '
         + outside_branch +
+        # A directory tagged per the Cache Directory Tagging spec (every Cargo
+        # target) is reconstructible build output: undo would only keep
+        # gigabytes of it in the trash until the TTL.
+        'if [ -d "$_a" ] && [ ! -L "$_a" ] && [ -f "$_a/CACHEDIR.TAG" ]; then '
+        'command rm -rf -- "$_a" || _rc=$?; continue; fi; '
         'if [ -z "$_td" ]; then '
         '_td="{trash}/$(date +%Y%m%d_%H%M%S_%N)"; mkdir -p "$_td"; '
         '[ -f "{trash}/.gitignore" ] || printf "*\\n" > "{trash}/.gitignore" 2>/dev/null; '

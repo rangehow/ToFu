@@ -1344,10 +1344,52 @@ def _placed_build_cache(root: Path, environment: dict) -> Path | None:
             project_key = hashlib.sha256(os.fsencode(root)).hexdigest()
             selected = Path(placement.root) / project_key
             ensure_private_directory(selected)
+            _record_build_cache_checkout(selected, root)
+            _retire_orphaned_build_caches(Path(placement.root), selected)
             return selected
     except OSError as exc:
         _report_progress(f'Local compiler cache unavailable: {exc}; using the checkout cache.')
     return None
+
+
+# Names the checkout a placed compiler cache belongs to; the directory name is
+# only a hash of that path.
+_BUILD_CACHE_CHECKOUT = 'CHECKOUT'
+
+
+def _record_build_cache_checkout(cache: Path, root: Path) -> None:
+    marker = cache / _BUILD_CACHE_CHECKOUT
+    if not marker.exists():
+        staged = cache / f'.{_BUILD_CACHE_CHECKOUT}.{os.getpid()}'
+        staged.write_text(str(root), encoding='utf-8')
+        os.replace(staged, marker)
+
+
+def _retire_orphaned_build_caches(placement_root: Path, current: Path) -> list[Path]:
+    """Remove placed compiler caches whose checkout no longer exists.
+
+    A checkout's cache is keyed by its path, so a removed checkout (a retired
+    lane or data-root checkout) left its cache behind forever. Each cache names
+    its checkout; the next build preparation of any checkout removes the caches
+    of checkouts that are gone. A cache without that name (made before it was
+    recorded) is kept, since nothing tells whose it is.
+    """
+    removed = []
+    try:
+        entries = list(placement_root.iterdir())
+    except OSError:
+        return removed
+    for entry in entries:
+        if entry == current or not entry.is_dir() or entry.is_symlink():
+            continue
+        try:
+            checkout = (entry / _BUILD_CACHE_CHECKOUT).read_text(encoding='utf-8').strip()
+        except OSError:
+            continue
+        if checkout and not os.path.lexists(checkout):
+            shutil.rmtree(entry, ignore_errors=True)
+            removed.append(entry)
+    return removed
 
 
 def _build_cache_root(root: Path, environment: dict) -> Path:
@@ -1417,6 +1459,8 @@ def cargo_target_directory(root: Path, name: str,
     root = Path(root).resolve()
     placed = _placed_build_cache(root, dict(os.environ if environment is None else environment))
     target = placed / name if placed is not None else root / 'packages/tofu-db' / name
+    if placed is None and not target.exists():
+        _seed_cargo_target(root, name, target)
     target.mkdir(mode=0o700, parents=True, exist_ok=True)
     tag = target / 'CACHEDIR.TAG'
     if not tag.exists():
@@ -1424,6 +1468,77 @@ def cargo_target_directory(root: Path, name: str,
         staged.write_text(CACHEDIR_TAG, encoding='utf-8')
         os.replace(staged, tag)
     return target
+
+
+# Not cloned into a seeded target: the checkout's own build writes its stable copy
+# and build lock; a sibling's engine binary must never stand in for this checkout's.
+_SEED_EXCLUDED_NAMES = frozenset({'stable', '.build.lock'})
+
+
+def _sibling_cargo_targets(root: Path, name: str) -> list[Path]:
+    """NAME targets of the other checkouts of ROOT's repository, most recently built first."""
+    try:
+        listing = subprocess.run(
+            ['git', '-C', str(root), 'worktree', 'list', '--porcelain'],
+            capture_output=True, text=True, timeout=60, check=False,
+            env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found = []
+    for line in listing.stdout.splitlines():
+        if not line.startswith('worktree '):
+            continue
+        checkout = Path(line[len('worktree '):])
+        candidate = checkout / 'packages/tofu-db' / name
+        try:
+            if checkout.resolve() == root or not (candidate / 'debug').is_dir():
+                continue
+            found.append((candidate.stat().st_mtime, candidate))
+        except OSError:
+            continue
+    return [candidate for _mtime, candidate in sorted(found, reverse=True)]
+
+
+def _seed_cargo_target(root: Path, name: str, target: Path) -> bool:
+    """Start a checkout's first build from a sibling checkout's target, sharing its extents.
+
+    Every task checkout and lane on a local disk otherwise compiled the same
+    dependencies into its own target (3.3 GB each). The seed is a copy-on-write
+    clone (``cp --reflink=always``): it occupies no new blocks until a build
+    rewrites them, and Cargo reuses each artifact whose fingerprint still
+    holds. A volume without reflinks, or a sibling whose build lock is held
+    (its files may be half written), leaves the target empty as before: the
+    seed is never a full copy and never waits. Only the first creation seeds;
+    the target then lives and goes with its checkout.
+    """
+    import fcntl
+
+    for source in _sibling_cargo_targets(root, name):
+        try:
+            lock = open(source / '.build.lock', 'a+b')
+        except OSError:
+            continue
+        with lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                continue
+            staged = target.with_name(f'.{name}.seed-{os.getpid()}')
+            shutil.rmtree(staged, ignore_errors=True)
+            try:
+                staged.mkdir(mode=0o700, parents=True)
+                entries = [str(entry) for entry in source.iterdir()
+                           if entry.name not in _SEED_EXCLUDED_NAMES]
+                if entries:
+                    subprocess.run(['cp', '-a', '--reflink=always', *entries, str(staged)],
+                                   capture_output=True, check=True)
+                os.rename(staged, target)
+            except (OSError, subprocess.SubprocessError):
+                shutil.rmtree(staged, ignore_errors=True)
+                return False
+            _report_progress(f'Cargo target {target} seeded from {source} (copy-on-write).')
+            return True
+    return False
 
 
 def _cache_compiler_path(executable: str | None) -> str | None:

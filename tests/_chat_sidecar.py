@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
-import tempfile
 import uuid
 
 import pytest
+
+from tests.support.process_scratch import process_scratch_directory
 
 
 @pytest.fixture(scope='module')
@@ -25,8 +26,8 @@ def _chat_sidecar_runtime():
     """Start one real SQLite-backed Sidecar for an opted-in test module."""
     from lib.storage import StorageRuntime, StorageSupervisor
     from lib.storage.service import install_runtime_for_test
-    project_root = Path(tempfile.mkdtemp(prefix='chat-sidecar-')) / (
-        uuid.uuid4().hex[:8])
+    scratch = process_scratch_directory('chat-sidecar-')
+    project_root = scratch / uuid.uuid4().hex[:8]
     project_root.mkdir(parents=True, exist_ok=True)
     runtime = StorageRuntime(
         StorageSupervisor(
@@ -43,7 +44,7 @@ def _chat_sidecar_runtime():
             runtime.stop()
         except Exception:
             pass
-        shutil.rmtree(project_root, ignore_errors=True)
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def require_authority_for_owner(request, owner: int) -> None:

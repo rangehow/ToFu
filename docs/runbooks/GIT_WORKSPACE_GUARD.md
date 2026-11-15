@@ -141,8 +141,12 @@ the foreground. Pytest drops the inherited value before importing the project
 ([`TESTING_STRATEGY.md`](../TESTING_STRATEGY.md), "Inherited Git selection
 environment"); the server's own environment never carries it, so its admission
 is unchanged. Maintenance is the explicit, supervised
-`python3 scripts/git_maintenance.py --repo <checkout> [--expire-days N] [--apply]`.
-It only reports by default. `--apply` holds the repository's workspace Git
+`python3 scripts/git_maintenance.py --repo <checkout> [--expire-days N] [--apply]`,
+whose pass the delivery receiver also starts in the background after a
+delivery commit when Git's own thresholds say it is due and the last pass's
+residue does not explain them (`lib/project_mod/git_object_maintenance.py`;
+[project_integration.md](../modules/project_integration.md), "Repository
+hygiene"). The script only reports by default. `--apply` holds the repository's workspace Git
 metadata lease and runs `pack-refs --all --prune`,
 `repack -d -l -A --unpack-unreachable=N.days.ago`, `prune --expire=N.days.ago`
 and `commit-graph write --reachable`, then `commit-graph verify`. In a shallow
@@ -158,8 +162,11 @@ shallow, local disk, host load 20-57): the report took 220 s; `--apply
 --expire-days 1` took 195 s (repack 166 s, prune 26 s) and left 2,809 of 89,759
 loose objects (771 MiB to 30 MiB) and one pack instead of 42 (7.76 GiB to
 7.75 GiB); an idempotent second run took 253 s; afterwards `git fsck` (333 s)
-and `commit-graph verify` were clean. The shared checkout sits on FUSE and will
-be slower.
+and `commit-graph verify` were clean. On the shared FUSE checkout (2026-11-16,
+after archiving 3,559 task refs) `--apply --expire-days 1` took 49.6 min
+(repack 46 min, prune 2.6 min): 40 packs (8.07 GiB) became one (1.40 GiB) and
+151,526 loose objects 43,271, the newly unreachable ones, loosened because the
+write that orphaned them had freshened their pack.
 
 Alternatives rejected: keeping foreground automatic maintenance (the measured
 cost per commit, without converging); detached maintenance (escapes the process

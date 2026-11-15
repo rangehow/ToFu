@@ -918,6 +918,7 @@ def _retire_captured_workspace(row, root, workspace, baseline, checkpoint):
     from lib.project_mod import task_spares
     if not task_spares.recycle(root, workspace):
         ic._remove_controlled_worktree(root, workspace)
+    task_spares.retire_scratch(workspace)
     if workspace.exists():
         raise ic.IntegrationError('Source retirement did not remove the owned checkout')
     return True

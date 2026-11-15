@@ -303,7 +303,7 @@ def test_cache_directory_symlink_cannot_escape_private_placement(project, tmp_pa
     monkeypatch.setattr(local_placement, 'choose_local_root', lambda *a, **k:
         local_placement.Placement(True, 'native-build', 'auto', 'selected', root=str(cache)))
     selected = engines._build_cache_root(project, {})
-    selected.rmdir()
+    shutil.rmtree(selected)
     outside = tmp_path / 'outside'; outside.mkdir()
     selected.symlink_to(outside, target_is_directory=True)
     assert engines._build_cache_root(project, {}) == project / 'packages/tofu-db/target'
@@ -340,6 +340,80 @@ def test_checkout_cargo_targets_follow_the_compiler_cache_and_carry_a_cache_tag(
     tag.write_text(_CACHEDIR_SIGNATURE + '\n# written by cargo\n')
     assert engines.cargo_target_directory(project, 'target-differential', {}) == target
     assert tag.read_text() == _CACHEDIR_SIGNATURE + '\n# written by cargo\n'
+
+
+def _git(cwd, *args):
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    subprocess.run(['git', '-C', str(cwd), *args], env=env, check=True, capture_output=True)
+
+
+def _reflinks(directory: Path) -> bool:
+    (directory / 'probe').write_bytes(b'x' * 4096)
+    copied = subprocess.run(['cp', '--reflink=always', str(directory / 'probe'),
+                             str(directory / 'probe.clone')], capture_output=True)
+    return copied.returncode == 0
+
+
+@pytest.mark.parametrize('sibling_building', [False, True])
+def test_a_new_checkout_target_is_seeded_from_a_sibling_by_copy_on_write(
+        tmp_path, monkeypatch, sibling_building):
+    """Local checkouts no longer each compile every dependency: the first target
+    of a checkout clones a sibling checkout's (never its stable engine copy), and
+    a sibling whose build holds the lock, or a volume without reflinks, seeds
+    nothing and waits for nothing."""
+    import fcntl
+
+    main, second = tmp_path / 'main', tmp_path / 'second'
+    main.mkdir()
+    _git(main, 'init', '-q', '-b', 'main')
+    _git(main, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+         'commit', '-q', '--allow-empty', '-m', 'base')
+    _git(main, 'worktree', 'add', '-q', '--detach', str(second))
+    built = main / 'packages/tofu-db/target-differential'
+    (built / 'debug/build/dep-1').mkdir(parents=True)
+    (built / 'debug/build/dep-1/out.rlib').write_bytes(b'artifact' * 1024)
+    (built / 'stable').mkdir()
+    (built / 'stable/tofu-db').write_bytes(b'sibling engine')
+    monkeypatch.setattr(local_placement, 'choose_local_root',
+                        lambda source, purpose, **kwargs: local_placement.Placement(
+                            False, purpose, 'auto', 'source-local'))
+    lock = open(built / '.build.lock', 'w')
+    if sibling_building:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+
+    target = engines.cargo_target_directory(second, 'target-differential', {})
+    lock.close()
+
+    assert target == second.resolve() / 'packages/tofu-db/target-differential'
+    assert not (target / 'stable').exists() and not (target / '.build.lock').exists()
+    seeded = (target / 'debug/build/dep-1/out.rlib').exists()
+    assert seeded == (not sibling_building and _reflinks(tmp_path))
+    if seeded:
+        assert (target / 'debug/build/dep-1/out.rlib').read_bytes() == b'artifact' * 1024
+    assert (target / 'CACHEDIR.TAG').read_text().startswith(_CACHEDIR_SIGNATURE)
+
+
+def test_a_build_preparation_removes_caches_of_checkouts_that_are_gone(tmp_path, monkeypatch):
+    cache_root = tmp_path / 'native-builds'
+    monkeypatch.setattr(local_placement, 'choose_local_root',
+                        lambda source, purpose, **kwargs: local_placement.Placement(
+                            True, purpose, 'auto', 'selected', root=str(cache_root)))
+    kept, gone, current = tmp_path / 'kept', tmp_path / 'gone', tmp_path / 'current'
+    kept.mkdir()
+    gone.mkdir()
+    current.mkdir()
+    kept_cache = engines._build_cache_root(kept, {})
+    gone_cache = engines._build_cache_root(gone, {})
+    (gone_cache / 'release').mkdir()
+    unnamed = cache_root / ('0' * 64)
+    unnamed.mkdir()
+    gone.rmdir()
+
+    assert engines._build_cache_root(current, {}).is_dir()
+
+    assert kept_cache.is_dir() and unnamed.is_dir()
+    assert not gone_cache.exists()
+    assert (kept_cache / 'CHECKOUT').read_text() == str(kept.resolve())
 
 
 def test_matching_local_engine_is_reused_before_network_or_compiler(project, tmp_path, monkeypatch):

@@ -167,6 +167,10 @@ def test_a_delivered_checkout_becomes_a_pristine_spare_the_next_task_takes(
     (checkout / 'new.txt').write_text('delivered file\n')
     (checkout / '.tofu' / 'file-history').mkdir(parents=True)
     (checkout / '.tofu' / 'file-history' / 'snapshots.jsonl').write_text('{"id": "undo"}\n')
+    from lib.project_mod.run_command import _get_cmd_env
+    scratch = Path(_get_cmd_env(str(checkout), project_root=str(checkout))['TMPDIR'])
+    assert scratch.parent == checkout.parent and scratch.is_dir()
+    (scratch / 'build.o').write_text('a worker temporary\n')
 
     delivery.settle_task_workspace(str(root), 'worker', user_id=OWNER, outcome='completed')
     delivery.resume_pending_workspace_deliveries()
@@ -176,6 +180,7 @@ def test_a_delivered_checkout_becomes_a_pristine_spare_the_next_task_takes(
     assert row['origin']['sourceRetirement'] == 'reclaimed'
     assert (root / 'new.txt').read_text() == 'delivered file\n'
     assert not checkout.exists() and str(checkout) not in worktrees(root)
+    assert not scratch.exists(), "a delivered assignment's command scratch goes with its checkout"
     [spare] = spares(root)
     assert locked(root, spare)
     assert git(spare, 'rev-parse', 'HEAD') == git(root, 'rev-parse', 'HEAD')
@@ -187,6 +192,17 @@ def test_a_delivered_checkout_becomes_a_pristine_spare_the_next_task_takes(
     assert not spare.exists() and following.is_dir()
     assert (following / 'new.txt').read_text() == 'delivered file\n'
     assert not (following / '.tofu').exists()
+
+
+def test_command_scratch_exists_only_beside_pooled_task_checkouts(layout, tmp_path):
+    checkout = create(layout)
+    scratch = Path(task_spares.checkout_scratch(checkout))
+
+    assert scratch == checkout.parent / f'.tmp-{checkout.name}' and scratch.is_dir()
+    assert task_spares.checkout_scratch(tmp_path / 'elsewhere') is None
+    assert task_spares.checkout_scratch(layout['root']) is None
+    task_spares.retire_scratch(checkout)
+    assert scratch.is_dir(), 'a live checkout keeps its scratch'
 
 
 def test_spares_give_back_space_oldest_first_when_the_volume_nears_its_reserve(

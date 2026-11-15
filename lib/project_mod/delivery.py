@@ -761,8 +761,9 @@ def _checkpoint_delivered_workspace(row: dict) -> None:
     if acknowledgement.get('status') == 'committed':
         # The branch moved: the next Worker, often a dependent woken below,
         # takes a spare already at the new HEAD.
-        from lib.project_mod import task_spares
+        from lib.project_mod import git_object_maintenance, task_spares
         task_spares.ensure(Path(row['project_root']))
+        git_object_maintenance.run_when_due(Path(row['project_root']))
     _wake_delivered_dependents(row, receipt)
 
 

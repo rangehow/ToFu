@@ -1,0 +1,255 @@
+"""Coordinator input repair preserves exact revisions and refuses removed limits."""
+from copy import deepcopy
+import json
+
+import pytest
+
+from lib.tool_input_repair import ingest_tool_call, validate_then_repair
+from lib.tools.contracts import compile_execution_contract_documents
+from lib.tools.coordinator import COORDINATOR_TOOLS
+from lib.tools.poll import coordinator_poll_tool
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def documents():
+    return compile_execution_contract_documents(COORDINATOR_TOOLS + [coordinator_poll_tool()])
+
+
+def ingest(name, arguments, documents):
+    return ingest_tool_call(
+        {'id': 'call-coordinator', 'function': {
+            'name': name, 'arguments': json.dumps(arguments)}},
+        known_tools=set(documents), contract_documents_by_name=documents,
+        emit_audit=False)
+
+
+@pytest.mark.parametrize(('name', 'arguments', 'expected', 'repair'), [
+    ('dispatch_project_assignment',
+     {'assignment_id': 'worker-a', 'expected_revision': '7'},
+     {'assignment_id': 'worker-a', 'expected_revision': 7},
+     ('expected_revision', 'stringified_primitive')),
+    ('get_project_workers', {'limit': '3'}, {'limit': 3},
+     ('limit', 'stringified_primitive')),
+    ('poll', {'ids': '["worker-a","worker-b"]'}, {'ids': ['worker-a', 'worker-b']},
+     ('ids', 'stringified_json')),
+    ('delegate_project_work',
+     {'title': 'Check evidence', 'brief': 'Verify the source and return evidence.',
+      'idempotency_key': 'delegation-a',
+      'rework_of': '{"assignmentId": "worker-a", "grantRevision": 7, "resultRevision": 3}'},
+     {'title': 'Check evidence', 'brief': 'Verify the source and return evidence.',
+      'idempotency_key': 'delegation-a',
+      'rework_of': {'assignmentId': 'worker-a', 'grantRevision': 7, 'resultRevision': 3}},
+     ('rework_of', 'stringified_json')),
+])
+def test_coordinator_repairs_types_before_authoritative_validation(
+        name, arguments, expected, repair, documents):
+    original = deepcopy(arguments)
+    repaired, log = validate_then_repair(name, arguments)
+    assert repaired == expected
+    assert repair in log
+    call = ingest(name, arguments, documents)
+    assert call.parse_error is None and call.contract_error is None
+    assert all(call.fn_args[key] == value for key, value in expected.items())
+    assert repair in call.repair_log
+    assert arguments == original
+
+
+@pytest.mark.parametrize(('name', 'arguments', 'expected'), [
+    ('await_project_workers', {'assignment_ids': ['worker-a'], 'timeout_seconds': 600, 'wait_for': 'delivery'},
+     {'ids': ['worker-a'], 'wait_s': 600}),
+    ('await_project_workers', {'assignment_ids': ['worker-a'], 'timeout_seconds': 1800},
+     {'ids': ['worker-a'], 'wait_s': 1500}),
+    ('await_agents', {'agent_ids': ['agent-a'], 'timeout_seconds': 60}, {'ids': ['agent-a'], 'wait_s': 60}),
+    ('await_task', {'action': 'wait', 'task_id': 'task-a', 'timeout': 120},
+     {'action': 'wait', 'task_id': 'task-a', 'wait_s': 120}),
+])
+def test_a_retired_wait_is_repaired_to_poll_and_keeps_its_wait(name, arguments, expected, documents):
+    """Name repair routes the retired wait surfaces to poll. Schema defaults fill
+    wait_s=0, so their own spellings must become poll's first; otherwise every
+    repaired wait returned an instant snapshot."""
+    call = ingest(name, arguments, documents)
+    assert call.fn_name == 'poll' and call.parse_error is None and call.contract_error is None
+    assert call.fn_args == expected
+
+
+def test_missing_coordinator_argument_has_actionable_schema_hint(documents):
+    call = ingest('dispatch_project_assignment', {'assignment_id': 'worker-a'}, documents)
+    assert call.contract_error['path'] == '$'
+    assert 'expected_revision*(integer)' in call.parse_error
+    assert 'NOT executed' in call.parse_error
+    assert call.fn_args == {'assignment_id': 'worker-a'}
+
+
+_DELEGATE = {'title': 'Check evidence', 'brief': 'Verify the source and return evidence.',
+             'idempotency_key': 'delegation-a'}
+_PIN = {'assignmentId': 'worker-a', 'grantRevision': 7, 'resultRevision': 3}
+_AUTHORITY_CASES = [
+    ('dispatch_project_assignment',
+     {'assignment_id': 'worker-a', 'expected_revision': value}, '$.expected_revision')
+    for value in (0, -1)
+] + [
+    ('review_project_work',
+     {'assignment_id': 'worker-a', 'result_revision': value, 'decision': 'accept',
+      'note': 'Reviewed the retained evidence.'},
+     '$.result_revision')
+    for value in (0, -1)
+] + [
+    # An acceptance verdict names the check it judges; a bound never picks another one.
+    ('review_project_work',
+     {'assignment_id': 'worker-a', 'result_revision': 1, 'decision': 'accept',
+      'note': 'Reviewed the retained evidence.',
+      'acceptance_results': [{'check': value, 'verdict': 'met', 'evidence': 'pytest passed'}]},
+     '$.acceptance_results[0].check')
+    for value in (0, -1)
+] + [
+    # Workers have no spending ceiling (docs/PROJECT_COORDINATION.md, "No
+    # spending ceiling"): a stale allowance, even a formerly valid or
+    # stringified one, is an unknown argument, never coerced or dropped.
+    ('delegate_project_work', {**_DELEGATE, field: value}, '$')
+    for field in ('max_tokens', 'max_model_requests', 'max_tool_calls')
+    for value in (0, 1, '1000')
+] + [
+    ('delegate_project_work',
+     {**_DELEGATE, container: ([{**_PIN, field: 0}] if container == 'dependencies'
+                              else {**_PIN, field: 0})},
+     f'$.{container}' + ('[0]' if container == 'dependencies' else '') + f'.{field}')
+    for container in ('dependencies', 'rework_of')
+    for field in ('grantRevision', 'resultRevision')
+]
+
+
+@pytest.mark.parametrize(('name', 'arguments', 'path'), _AUTHORITY_CASES)
+def test_invalid_revision_or_allowance_is_rejected_without_semantic_repair(
+        name, arguments, path, documents):
+    original = deepcopy(arguments)
+    repaired, log = validate_then_repair(name, arguments)
+    assert repaired == original
+    assert not any(pattern.startswith('clamp_') for _, pattern in log)
+    call = ingest(name, arguments, documents)
+    assert call.contract_error is not None
+    assert call.contract_error['path'] == path
+    assert call.contract_error['code'] == (
+        'unknown_arguments' if path == '$' else 'invalid_argument_value')
+    assert 'NOT executed' in call.parse_error
+    assert call.fn_args == original
+    assert arguments == original
+
+
+def test_coordinator_page_size_still_repairs_to_its_declared_limit(documents):
+    call = ingest('get_project_workers', {'limit': 1000}, documents)
+    assert call.parse_error is None
+    assert call.fn_args['limit'] == 32
+    assert ('$.limit', 'clamp_maximum') in call.repair_log
+
+
+@pytest.mark.parametrize('revision', [0, -1, '0'])
+def test_invalid_revision_reaches_model_without_dispatch_or_approval(
+        revision, documents, monkeypatch):
+    from lib.tasks_pkg.tool_dispatch import _parse, _pipeline
+    from tests.tools.test_tool_settle_all_lanes import _mk_task
+
+    task = _mk_task(config={}, toolRounds=[],
+                    _executable_tool_catalog=COORDINATOR_TOOLS,
+                    _toolContractDocumentsByName=documents)
+    assistant = {'role': 'assistant', 'tool_calls': [{
+        'id': 'bad-revision', 'type': 'function',
+        'function': {'name': 'dispatch_project_assignment', 'arguments': json.dumps({
+            'assignment_id': 'worker-a', 'expected_revision': revision})}}]}
+    parsed, _ = _parse.parse_tool_calls(assistant, task, 0, 0, False)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Invalid revision must be rejected before any effect or approval')
+
+    monkeypatch.setattr(_pipeline, '_execute_tool_one', forbidden)
+    monkeypatch.setattr(_pipeline, '_approval_stops_tool_call', forbidden)
+    messages = []
+    _pipeline.execute_tool_pipeline(
+        task, parsed, task['config'], None, False, COORDINATOR_TOOLS,
+        messages, [], 0, 'test-model')
+    assert len(messages) == 1
+    assert messages[0]['tool_call_id'] == 'bad-revision'
+    assert 'expected_revision' in messages[0]['content']
+    assert 'NOT executed' in messages[0]['content']
+    assert task['toolRounds'][0]['status'] == 'rejected'
+
+
+def test_overlong_delegate_title_runs_once_and_reports_the_shortening(
+        documents, monkeypatch):
+    """A display title over its limit never discards the call (owner report
+    2026-11-11: 166 > 160 chars threw away a 6,000-character brief)."""
+    from lib.tasks_pkg.executor._finalize import _finalize_tool_round
+    from lib.tasks_pkg.tool_dispatch import _parse, _pipeline
+    from tests.tools.test_tool_settle_all_lanes import _mk_task
+
+    task = _mk_task(config={}, toolRounds=[],
+                    _executable_tool_catalog=COORDINATOR_TOOLS,
+                    _toolContractDocumentsByName=documents)
+    title = 'Audit recent tool failures and fix harness design defects ' * 3
+    brief = 'Acceptance criteria and context. ' * 180
+    assistant = {'role': 'assistant', 'tool_calls': [{
+        'id': 'long-title', 'type': 'function',
+        'function': {'name': 'delegate_project_work', 'arguments': json.dumps({
+            'title': title, 'brief': brief, 'idempotency_key': 'delegation-a'})}}]}
+    parsed, _ = _parse.parse_tool_calls(assistant, task, 0, 0, False)
+    effects = []
+
+    def execute(task, tc, name, call_id, arguments, round_num, entry,
+                cfg, project_path, project_enabled, all_tools=None):
+        effects.append(deepcopy(arguments))
+        _finalize_tool_round(task, round_num, entry, [])
+        return call_id, '{"assignment_id": "worker-a"}', False
+
+    monkeypatch.setattr(_pipeline, '_execute_tool_one', execute)
+    messages = []
+    _pipeline.execute_tool_pipeline(
+        task, parsed, task['config'], None, False, COORDINATOR_TOOLS,
+        messages, [], 0, 'test-model')
+
+    assert len(effects) == 1
+    assert effects[0]['brief'] == brief
+    assert len(effects[0]['title']) <= 160 and effects[0]['title'].endswith('…')
+    assert title.startswith(effects[0]['title'][:-1].rstrip())
+    content = json.loads(messages[0]['content'])
+    assert content['assignment_id'] == 'worker-a'
+    [warning] = content['argument_warnings']
+    assert '$.title' in warning and str(len(title)) in warning
+    round_entry = task['toolRounds'][0]
+    assert round_entry['status'] == 'done'
+    assert 'truncate_max_length' in round_entry['_repaired']['patterns']
+    assert json.loads(round_entry['toolContent']) == content
+
+
+def test_stringified_revision_is_repaired_and_dispatched_once(documents, monkeypatch):
+    from lib.tasks_pkg.executor._finalize import _finalize_tool_round
+    from lib.tasks_pkg.tool_dispatch import _parse, _pipeline
+    from tests.tools.test_tool_settle_all_lanes import _mk_task
+
+    task = _mk_task(config={}, toolRounds=[],
+                    _executable_tool_catalog=COORDINATOR_TOOLS,
+                    _toolContractDocumentsByName=documents)
+    assistant = {'role': 'assistant', 'tool_calls': [{
+        'id': 'valid-revision', 'type': 'function',
+        'function': {'name': 'dispatch_project_assignment', 'arguments': json.dumps({
+            'assignment_id': 'worker-a', 'expected_revision': '7'})}}]}
+    parsed, _ = _parse.parse_tool_calls(assistant, task, 0, 0, False)
+    effects = []
+
+    def execute(task, tc, name, call_id, arguments, round_num, entry,
+                cfg, project_path, project_enabled, all_tools=None):
+        effects.append((name, deepcopy(arguments)))
+        _finalize_tool_round(task, round_num, entry, [])
+        return call_id, '{"dispatch":"accepted"}', False
+
+    monkeypatch.setattr(_pipeline, '_execute_tool_one', execute)
+    messages = []
+    _pipeline.execute_tool_pipeline(
+        task, parsed, task['config'], None, False, COORDINATOR_TOOLS,
+        messages, [], 0, 'test-model')
+    assert effects == [('dispatch_project_assignment', {
+        'assignment_id': 'worker-a', 'expected_revision': 7})]
+    assert len(messages) == 1
+    assert messages[0]['tool_call_id'] == 'valid-revision'
+    assert 'accepted' in messages[0]['content']
+    assert task['toolRounds'][0]['status'] == 'done'

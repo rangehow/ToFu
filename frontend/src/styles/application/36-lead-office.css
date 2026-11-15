@@ -1,0 +1,60 @@
+/* Lead office (features/lead-office/office.ts): the team view beneath a lead's
+ * sidebar entry. Presence places it in a slot right after the entry, where the
+ * list of conversations the lead started used to open; that list follows as the
+ * entry's archive. The painted world is theme-invariant, so its frame uses the
+ * studio walnut; the status line follows the sidebar theme. A tall team scrolls
+ * inside the slot (as the archive's list does) so the conversation list keeps
+ * its share of the sidebar. */
+.lead-office-slot {
+  flex-shrink: 0;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: calc(-1 * var(--space-1)) var(--space-2) var(--space-2);
+  border: var(--control-edge-inset) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--studio-walnut);
+}
+.lead-office-slot[hidden] { display: none; }
+.lead-office { display: flex; flex-direction: column; }
+.lead-office[hidden] { display: none; }
+
+.lead-office-stage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+.lead-office-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-secondary);
+  color: var(--error-text);
+  font: var(--font-size-xs)/var(--leading-body) var(--font-ui);
+}
+.lead-office-status[hidden] { display: none; }
+
+/* The shared game stage (features/office-game/engine/stage.ts), styled here
+ * for its one host. The tap-only
+ * stage leaves vertical touch panning to the sidebar. */
+.lead-office .evo-stage { outline: none; }
+.lead-office .evo-stage:focus-visible { box-shadow: inset 0 0 0 var(--space-0) var(--studio-brass); }
+.lead-office .evo-stage-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; touch-action: pan-y; }
+.lead-office .evo-stage-targets { position: absolute; inset: 0; pointer-events: none; }
+.lead-office .evo-target {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: var(--space-1);
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+.lead-office .evo-target:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--studio-brass-bright);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--studio-brass) 14%, transparent);
+}

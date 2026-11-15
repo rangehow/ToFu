@@ -1,0 +1,80 @@
+/* Owner-bound human guidance layout; behavioral radio/button styles belong to the kit. */
+.rich-choices { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.rich-choices fieldset { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; border: 0; padding: 0; margin: 0; }
+.rich-choices legend {
+  padding: 0; margin-bottom: var(--space-2);
+  color: var(--text-secondary); font-size: var(--font-size-sm); font-weight: var(--weight-medium);
+}
+.rich-choices p { margin: 0; overflow-wrap: anywhere; }
+
+/* The owned question is Markdown prose at reading size, not a heading. */
+.rich-guidance-question {
+  min-width: 0; color: var(--text-primary);
+  font-size: var(--conversation-font-size); line-height: var(--leading-body); overflow-wrap: anywhere;
+}
+.rich-guidance-question > :first-child { margin-top: 0; }
+.rich-guidance-question > :last-child { margin-bottom: 0; }
+.rich-guidance-question :is(p, ul, ol) { margin: 0 0 var(--space-2); }
+.rich-guidance-question :is(ul, ol) { padding-inline-start: var(--space-5); }
+.rich-guidance-question li + li { margin-top: var(--space-1); }
+
+/* Each option is one card: radio, label and its explanation share a click target. */
+.rich-choices .rich-choice-option {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  max-width: 100%; padding: var(--space-2) var(--space-3);
+  border: var(--control-edge-inset) solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-primary); line-height: var(--leading-body); overflow-wrap: anywhere; user-select: text;
+  transition: border-color var(--motion-fast) var(--ease-standard),
+    background var(--motion-fast) var(--ease-standard);
+}
+.rich-choices .rich-choice-option > input { margin-top: calc((1lh - var(--space-4)) / 2); line-height: inherit; }
+.rich-choices .rich-choice-option:hover:not(:has(:disabled)) { border-color: var(--text-tertiary); }
+.rich-choices .rich-choice-option:has(:checked) { border-color: var(--accent); background: var(--accent-subtle); }
+.rich-choices .rich-choice-option:has(:focus-visible) { box-shadow: var(--focus-ring); }
+.rich-choices .rich-choice-option > input:focus-visible { box-shadow: none; }
+.rich-choice-option__text { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.rich-choice-description { color: var(--text-secondary); font-size: var(--font-size-sm); }
+
+/* The own-answer card closes every option list: dashed until chosen, its
+ * field hangs under the label column so the radio column stays clean. */
+.rich-choices .rich-choice-own-card {
+  display: flex; flex-direction: column; gap: var(--space-2); min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: var(--control-edge-inset) dashed var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  transition: border-color var(--motion-fast) var(--ease-standard),
+    background var(--motion-fast) var(--ease-standard);
+}
+.rich-choices .rich-choice-own-card:hover:not(:has(:disabled)) { border-color: var(--text-tertiary); }
+.rich-choices .rich-choice-own-card:has(.rich-choice-option :checked) {
+  border-style: solid; border-color: var(--accent); background: var(--accent-subtle);
+}
+.rich-choices .rich-choice-own-card > .rich-choice-option {
+  padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-secondary);
+}
+.rich-choices .rich-choice-own-card > .rich-choice-option:has(:checked) { color: var(--text-primary); }
+.rich-choices .rich-choice-own-input {
+  width: auto; min-height: 0; margin-inline-start: calc(var(--space-4) + var(--space-3));
+}
+.rich-guidance-own-input { margin-top: var(--space-2); }
+.hg-own-answer-label { margin-top: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-sm); }
+
+.rich-guidance-status { color: var(--text-secondary); font-size: var(--font-size-sm); line-height: var(--leading-body); }
+.rich-guidance-status:empty { display: none; }
+.rich-guidance-actions { flex-wrap: wrap; }
+.rich-guidance-form .rich-guidance-question { font-size: inherit; font-weight: inherit; }
+.rich-guidance-form .rich-guidance-question > * { display: inline; }
+.rich-guidance-form details > summary { color: var(--text-secondary); font-size: var(--font-size-sm); cursor: pointer; }
+.rich-guidance-form details > p { margin: var(--space-1) 0 0; color: var(--text-secondary); font-size: var(--font-size-sm); }
+
+/* An ask_human tool row already names the request; its mounted rich wrapper
+ * shows only the question and its controls, without the generic titles. */
+[data-renderer-mode="native-choice"] > .rich-response > :is(h2, p:empty),
+[data-renderer-mode="native-choice"] .rich-block[data-rich-block="human-choice"] > summary { display: none; }
+[data-renderer-mode="native-choice"] .rich-block[data-rich-block="human-choice"] > :not(summary) { margin-top: 0; }
+/* A narrow row lets the question's state shrink beside its title instead of
+ * wrapping under the glyph column. */
+.conversation-surface .hg-question-summary[data-action-summary] > .ptool-badge {
+  flex-shrink: 1; min-width: 0; margin-inline-start: auto; white-space: normal; text-align: end;
+}
+.hg-batch-own-input { margin-top: var(--space-2); }

@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tofu.desktop-node/v1",
+  "title": "Tofu node control protocol: pairing, permission tiers, node listing",
+  "description": "Every Tofu desktop install is a node. A node dials OUT to each server it joined (bridge transport: contracts/desktop_bridge_v3.schema.json, POST /api/desktop/poll) so NAT, ssh tunnels and reverse proxies need no inbound route. A node joins a server by redeeming a one-time pairing link; the server lists nodes per owner and tools address one by node id or name. Owner: lib/desktop_wire/node_protocol.py; design: docs/modules/remote_execution.md#nodes-and-pairing.",
+  "type": "object",
+  "x-protocol-version": 1,
+  "x-transport": {
+    "schema": "contracts/desktop_bridge_v3.schema.json",
+    "poll_path": "/api/desktop/poll",
+    "pair_path": "/api/desktop/pair",
+    "direction": "node-to-server"
+  },
+  "x-pairing": {
+    "fragment_key": "tofu-pair",
+    "via_key": "via",
+    "link_secret_bytes": 24,
+    "short_code_digits": 6,
+    "ttl_seconds": 300
+  },
+  "x-permission-tiers": {
+    "order": ["read", "write", "exec", "gui", "egress", "codex_login"],
+    "default": {
+      "read": true,
+      "write": false,
+      "exec": false,
+      "gui": false,
+      "egress": false,
+      "codex_login": false
+    },
+    "permission_keys": {
+      "write": "allow_write",
+      "exec": "allow_exec",
+      "gui": "allow_gui",
+      "egress": "allow_egress",
+      "codex_login": "allow_codex_login"
+    }
+  },
+  "x-command-tiers": {
+    "desktop_list_files": "read",
+    "desktop_read_file": "read",
+    "desktop_system_info": "read",
+    "paper_resolve": "read",
+    "project_list_dir": "read",
+    "project_read_files": "read",
+    "project_grep_search": "read",
+    "project_find_files": "read",
+    "desktop_write_file": "write",
+    "desktop_move_file": "write",
+    "project_write_file": "write",
+    "project_apply_diff": "write",
+    "project_edit_file": "write",
+    "desktop_run_command": "exec",
+    "desktop_open_file": "exec",
+    "desktop_open_app": "exec",
+    "project_run_command": "exec",
+    "paper_build": "exec",
+    "desktop_gui_action": "gui",
+    "desktop_screenshot": "gui",
+    "desktop_clipboard": "gui",
+    "egress_http": "egress",
+    "egress_http_stream": "egress",
+    "adapter_ensure": "egress",
+    "adapter_status": "egress",
+    "adapter_stop": "egress",
+    "codex_login_read": "codex_login",
+    "egress_cancel": "control",
+    "paper_build_cancel": "control"
+  },
+  "x-command-param-tiers": {
+    "desktop_system_info": {
+      "param": "type",
+      "values": {"kill": "exec"}
+    }
+  },
+  "x-migration": {
+    "legacy_remote_server_key": "remote_server",
+    "attachments_key": "attachments",
+    "legacy_connect_line": "<server-url> <agents:bridge token>, whitespace separated; accepted by the join dialog and stored as an attachment"
+  },
+  "properties": {
+    "pairing_link": {"$ref": "#/$defs/PairingLink"},
+    "pair_request": {"$ref": "#/$defs/PairRequest"},
+    "pair_response": {"$ref": "#/$defs/PairResponse"},
+    "pair_code_response": {"$ref": "#/$defs/PairCodeResponse"},
+    "attachment": {"$ref": "#/$defs/Attachment"},
+    "node_listing": {"$ref": "#/$defs/NodeListing"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "HttpUrl": {
+      "type": "string",
+      "pattern": "^https?://[^\\s#?]+$",
+      "maxLength": 2048
+    },
+    "Tiers": {
+      "type": "object",
+      "required": ["read", "write", "exec", "gui", "egress", "codex_login"],
+      "properties": {
+        "read": {"type": "boolean"},
+        "write": {"type": "boolean"},
+        "exec": {"type": "boolean"},
+        "gui": {"type": "boolean"},
+        "egress": {"type": "boolean"},
+        "codex_login": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "PairingLink": {
+      "description": "Parsed form of '<server-base>/#tofu-pair=<secret>[&via=<url-encoded base>]*'. The base is the page address the owner's browser uses (any path prefix kept, any SPA route dropped); via entries are extra routes tried FIRST (e.g. a direct LAN address that bypasses an SSO edge).",
+      "type": "object",
+      "required": ["server_url", "secret", "candidates"],
+      "properties": {
+        "server_url": {"$ref": "#/$defs/HttpUrl"},
+        "secret": {"type": "string", "pattern": "^[A-Za-z0-9_-]{6,64}$"},
+        "candidates": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/HttpUrl"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "PairRequest": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1, "maxLength": 64},
+        "node_id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"},
+        "name": {"type": "string", "maxLength": 80},
+        "platform": {"type": "string", "maxLength": 40}
+      },
+      "additionalProperties": false
+    },
+    "PairResponse": {
+      "type": "object",
+      "required": ["id", "name", "token", "scopes", "owner_id"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "token": {"type": "string", "minLength": 1},
+        "scopes": {"const": ["agents:bridge"]},
+        "owner_id": {"type": "integer"},
+        "node_id": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "PairCodeResponse": {
+      "type": "object",
+      "required": ["code", "link", "expires_at", "ttl"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[0-9]{6}$"},
+        "link": {"type": "string", "minLength": 1, "maxLength": 8192},
+        "expires_at": {"type": "number"},
+        "ttl": {"type": "integer"},
+        "pending": {"type": "array"}
+      },
+      "additionalProperties": false
+    },
+    "Attachment": {
+      "description": "Node-side record of one joined server (desktop_agent.json 'attachments'). A node runs one outbound bridge loop per attachment, sharing one permission set.",
+      "type": "object",
+      "required": ["id", "url", "secret"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-f0-9]{12}$"},
+        "url": {"$ref": "#/$defs/HttpUrl"},
+        "secret": {"type": "string", "minLength": 1},
+        "candidates": {"type": "array", "items": {"$ref": "#/$defs/HttpUrl"}},
+        "label": {"type": "string", "maxLength": 200},
+        "paired_at": {"type": "number"},
+        "state": {"enum": ["active", "revoked"]}
+      },
+      "additionalProperties": false
+    },
+    "Node": {
+      "type": "object",
+      "required": ["node_id", "name", "online", "tiers", "credential"],
+      "properties": {
+        "node_id": {"type": ["string", "null"]},
+        "name": {"type": "string"},
+        "online": {"type": "boolean"},
+        "last_seen": {"type": ["number", "null"]},
+        "platform": {"type": "string"},
+        "version": {"type": "string"},
+        "outdated": {"type": "boolean"},
+        "system": {"type": ["object", "null"]},
+        "share_roots": {"type": "array"},
+        "tiers": {"$ref": "#/$defs/Tiers"},
+        "credential": {
+          "type": ["object", "null"],
+          "required": ["id", "name"],
+          "properties": {
+            "id": {"type": "string"},
+            "name": {"type": ["string", "null"]},
+            "created_at": {}
+          },
+          "additionalProperties": false
+        },
+        "attachment": {"enum": ["paired", "process"]}
+      },
+      "additionalProperties": false
+    },
+    "NodeListing": {
+      "type": "object",
+      "required": ["nodes"],
+      "properties": {
+        "nodes": {"type": "array", "items": {"$ref": "#/$defs/Node"}}
+      },
+      "additionalProperties": false
+    }
+  }
+}

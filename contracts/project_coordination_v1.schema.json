@@ -1,0 +1,595 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Project coordination binding v1",
+  "description": "An owner/project coordinator created as a new empty conversation. Existing valid bindings are retained on reads/retries; explicit creation at the current revision replaces them without deleting the old chat. Historical conversations cannot be selected. This grants no execution or messaging permission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "projectPath",
+    "conversationId",
+    "revision",
+    "availability",
+    "capabilities"
+  ],
+  "properties": {
+    "projectPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "conversationId": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "availability": {
+      "enum": [
+        "unbound",
+        "available",
+        "unavailable"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assign",
+        "sendMessage",
+        "steerSubagent"
+      ],
+      "properties": {
+        "assign": {
+          "const": false
+        },
+        "sendMessage": {
+          "const": false
+        },
+        "steerSubagent": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+
+    "conversationPage": {
+      "description": "A bounded owner-catalog page filtered to this project. Empty pages can have a cursor; shells are conversations, not execution assignments. Reads never create, authorize or launch work.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversations", "nextCursor", "coverage"],
+      "properties": {
+        "conversations": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/conversationEntry"}},
+        "nextCursor": {"anyOf": [{"type": "string", "maxLength": 1024}, {"type": "null"}]},
+        "coverage": {"enum": ["page", "complete"]}
+      }
+    },
+    "conversationEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversationId", "title", "turnCount", "coordinatorId", "folderId"],
+      "properties": {
+        "conversationId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "title": {"type": "string", "maxLength": 200},
+        "turnCount": {"type": "integer", "minimum": 0},
+        "coordinatorId": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 256}, {"type": "null"}]},
+        "folderId": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 512}, {"type": "null"}], "description": "The stored sidebar folder (null when unfiled), read from the same catalog header as sidebar rows. A client that adopts the row as a catalog shell keeps it, otherwise a filed conversation projects as uncategorized."},
+        "createdAt": {"type": "integer", "minimum": 0},
+        "updatedAt": {"type": "integer", "minimum": 0},
+        "busy": {"const": true, "description": "Present exactly when the owner's task registry holds live work for the conversation (same projection as sidebar catalog rows)."}
+      }
+    },
+    "createRequest": {
+      "description": "At the current revision, create a fresh empty ordinary conversation and CAS-bind it, replacing any prior binding without deleting its chat. A stale retry returns the current available binding without creating another conversation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "folderId",
+        "expectedRevision"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "folderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "bindRequest": {
+      "description": "Clear a binding with an empty conversationId, or reaffirm the current available binding. Selecting another existing conversation is rejected; use createRequest.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "conversationId",
+        "expectedRevision"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "conversationId": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "reportScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner",
+        "projectPath",
+        "coordinatorId",
+        "bindingRevision"
+      ],
+      "properties": {
+        "owner": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "projectPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "coordinatorId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "bindingRevision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "reportRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "message",
+        "kind",
+        "idempotency_key"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "pattern": "\\S"
+        },
+        "kind": {
+          "enum": [
+            "progress",
+            "decision",
+            "blocked",
+            "delivery"
+          ]
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "reportPointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "turnId",
+        "ordinal",
+        "title",
+        "kind",
+        "createdAt"
+      ],
+      "properties": {
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "pattern": "^[^\\r\\n]+$"
+        },
+        "kind": {
+          "enum": [
+            "progress",
+            "decision",
+            "blocked",
+            "delivery"
+          ]
+        },
+        "createdAt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "reportIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "request"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/reportScope"
+        },
+        "request": {
+          "$ref": "#/$defs/reportRequest"
+        }
+      }
+    },
+    "reportHead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "latest",
+        "readOrdinal"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/reportScope"
+        },
+        "latest": {
+          "$ref": "#/$defs/reportPointer"
+        },
+        "readOrdinal": {
+          "type": "integer",
+          "minimum": -1
+        }
+      }
+    },
+    "reportState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectPath",
+        "conversationId",
+        "bindingRevision",
+        "latest",
+        "unread"
+      ],
+      "properties": {
+        "projectPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "conversationId": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "bindingRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latest": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "turnId",
+                "ordinal",
+                "title",
+                "kind",
+                "createdAt",
+                "content"
+              ],
+              "properties": {
+                "turnId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "ordinal": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120,
+                  "pattern": "^[^\\r\\n]+$"
+                },
+                "kind": {
+                  "enum": [
+                    "progress",
+                    "decision",
+                    "blocked",
+                    "delivery"
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 4250
+                }
+              }
+            }
+          ]
+        },
+        "unread": {
+          "type": "boolean"
+        }
+      }
+    },
+    "reportReadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "conversationId",
+        "bindingRevision",
+        "turnId"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "bindingRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "progressTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One task the human cares about, in the human's terms. Never a session, worker or question for the human.",
+      "required": ["title", "status"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+        "status": {"enum": ["pending", "in_progress", "completed", "cancelled"]},
+        "progress": {"type": "string", "minLength": 1, "maxLength": 280, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+        "due": {"type": "string", "minLength": 16, "maxLength": 40, "pattern": "^\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,6})?)?(Z|[+-]\\d{2}:?\\d{2})?$", "description": "ISO 8601 date-time (with offset; without one it is the server's local time) by which the Coordinator committed to the owner that this task is done or reported. A task carrying it while pending or in_progress is an open commitment (docs/PROJECT_COORDINATION.md, Commitments on the task board)."}
+      }
+    },
+    "progressCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Platform-written receipt of one board task carrying due, kept in the board head beside the board: reconstructible from board writes, never evidence or authority. state open: pending or in_progress; kept: completed by its due; late: completed after it; cancelled: dropped. wake names the due time it woke the Coordinator for, once per due time.",
+      "required": ["title", "firstDueAt", "dueAt", "slips", "createdAt", "state"],
+      "properties": {
+        "title": {"$ref": "#/$defs/progressTask/properties/title"},
+        "firstDueAt": {"type": "integer", "minimum": 0},
+        "dueAt": {"type": "integer", "minimum": 0},
+        "slips": {"type": "integer", "minimum": 0},
+        "createdAt": {"type": "integer", "minimum": 0},
+        "state": {"enum": ["open", "kept", "late", "cancelled"]},
+        "closedAt": {"type": "integer", "minimum": 0},
+        "wake": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["dueAt", "at", "via", "commandId"],
+          "properties": {
+            "dueAt": {"type": "integer", "minimum": 0},
+            "at": {"type": "integer", "minimum": 0},
+            "via": {"enum": ["notice", "continuation"]},
+            "commandId": {"type": "string", "minLength": 1, "maxLength": 256},
+            "disposition": {"type": "string", "minLength": 1, "maxLength": 32}
+          }
+        }
+      }
+    },
+    "progressRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The Coordinator's complete current task board; every update replaces the previous board.",
+      "required": ["summary", "tasks"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1, "maxLength": 280, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+        "tasks": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressTask"}}
+      }
+    },
+    "progressBoard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "updatedAt", "summary", "tasks"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "updatedAt": {"type": "integer", "minimum": 0},
+        "summary": {"$ref": "#/$defs/progressRequest/properties/summary"},
+        "tasks": {"$ref": "#/$defs/progressRequest/properties/tasks"}
+      }
+    },
+    "progressTranslation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Display translation of the current board's own texts into the owner's reading language, derived by the shared translation engine while the Coordinator conversation auto-translates. Reconstructible from the board; never evidence or authority. Each entry pairs one exact board text (the summary, a task title or a progress note) with its translation; a text without an entry is shown as written. 49 entries = the summary plus a title and a note for each of the board's 24 tasks.",
+      "required": ["target", "texts"],
+      "properties": {
+        "target": {"type": "string", "minLength": 1, "maxLength": 64},
+        "texts": {
+          "type": "array",
+          "maxItems": 49,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "text"],
+            "properties": {
+              "source": {"type": "string", "minLength": 1, "maxLength": 280, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+              "text": {"type": "string", "minLength": 1, "maxLength": 560, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"}
+            }
+          }
+        }
+      }
+    },
+    "progressHead": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "board"],
+      "properties": {
+        "scope": {"$ref": "#/$defs/reportScope"},
+        "board": {"$ref": "#/$defs/progressBoard"},
+        "translation": {"$ref": "#/$defs/progressTranslation"},
+        "commitments": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressCommitment"}},
+        "taskKeys": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressHistoryKey"}, "description": "History identity of each board task, in board order, written in the same CAS as the board. Absent on a head written before task history: its first changed board seeds the history from the Coordinator's transcript (docs/PROJECT_COORDINATION.md, Task history)."}
+      }
+    },
+    "progressHistoryKey": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "Stable identity of one task across board writes of one binding (docs/PROJECT_COORDINATION.md, Task history identity)."
+    },
+    "progressHistoryRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Stored history of one task identity: created when the task first appears, rewritten when it changes or leaves the board, never deleted by a later board. Times are epoch milliseconds of board writes; revisions are board revisions. departedAt/departedRevision are present while the task is off the board.",
+      "required": ["scope", "key", "title", "status", "firstSeenAt", "firstSeenRevision", "lastSeenAt", "lastSeenRevision", "changedAt", "changedRevision"],
+      "properties": {
+        "scope": {"$ref": "#/$defs/reportScope"},
+        "key": {"$ref": "#/$defs/progressHistoryKey"},
+        "title": {"$ref": "#/$defs/progressTask/properties/title"},
+        "formerTitles": {"type": "array", "items": {"$ref": "#/$defs/progressTask/properties/title"}, "description": "Earlier titles of this task, oldest first, each once."},
+        "status": {"$ref": "#/$defs/progressTask/properties/status"},
+        "progress": {"$ref": "#/$defs/progressTask/properties/progress"},
+        "due": {"$ref": "#/$defs/progressTask/properties/due"},
+        "dueAt": {"type": "integer", "minimum": 0},
+        "firstSeenAt": {"type": "integer", "minimum": 0},
+        "firstSeenRevision": {"type": "integer", "minimum": 1},
+        "lastSeenAt": {"type": "integer", "minimum": 0},
+        "lastSeenRevision": {"type": "integer", "minimum": 1},
+        "changedAt": {"type": "integer", "minimum": 0},
+        "changedRevision": {"type": "integer", "minimum": 1},
+        "departedAt": {"type": "integer", "minimum": 0},
+        "departedRevision": {"type": "integer", "minimum": 1},
+        "completedAt": {"type": "integer", "minimum": 0}
+      }
+    },
+    "progressHistoryTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One task of the history as shown. A task on the current board shows that board's text; lastSeenAt is then the board's update time. dropped: the task left the board while pending or in progress. dueOutcome: met = completed by its due; missed = completed after it, or still not completed once it passed; open = not completed and not yet due; withdrawn = cancelled.",
+      "required": ["key", "title", "status", "onBoard", "dropped", "firstSeenAt", "lastSeenAt", "changedAt"],
+      "properties": {
+        "key": {"$ref": "#/$defs/progressHistoryKey"},
+        "title": {"$ref": "#/$defs/progressTask/properties/title"},
+        "formerTitles": {"$ref": "#/$defs/progressHistoryRecord/properties/formerTitles"},
+        "status": {"$ref": "#/$defs/progressTask/properties/status"},
+        "onBoard": {"type": "boolean"},
+        "dropped": {"type": "boolean"},
+        "progress": {"$ref": "#/$defs/progressTask/properties/progress"},
+        "due": {"$ref": "#/$defs/progressTask/properties/due"},
+        "dueAt": {"type": "integer", "minimum": 0},
+        "dueOutcome": {"enum": ["met", "missed", "open", "withdrawn"]},
+        "firstSeenAt": {"type": "integer", "minimum": 0},
+        "lastSeenAt": {"type": "integer", "minimum": 0},
+        "changedAt": {"type": "integer", "minimum": 0},
+        "departedAt": {"type": "integer", "minimum": 0},
+        "completedAt": {"type": "integer", "minimum": 0}
+      }
+    },
+    "progressHistoryGroup": {
+      "enum": ["in_progress", "pending", "dropped", "completed", "cancelled"],
+      "description": "History groups in display order. A task is in its status group, except that a pending or in-progress task that left the board is dropped."
+    },
+    "progressHistoryPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One page of every task the current binding's board ever showed, ordered by group (progressHistoryGroup order), then newest activity first. counts cover every task matching the query, per group. Pages hold at most 64 tasks, the coordination API's page bound (conversationPage). recorded is false while the board predates task history and the Coordinator has not changed it since: the page then holds only the current board.",
+      "required": ["projectPath", "conversationId", "bindingRevision", "recorded", "counts", "tasks", "nextCursor", "coverage"],
+      "properties": {
+        "projectPath": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "conversationId": {"type": "string", "maxLength": 256},
+        "bindingRevision": {"type": "integer", "minimum": 0},
+        "recorded": {"type": "boolean"},
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["in_progress", "pending", "dropped", "completed", "cancelled"],
+          "properties": {
+            "in_progress": {"type": "integer", "minimum": 0},
+            "pending": {"type": "integer", "minimum": 0},
+            "dropped": {"type": "integer", "minimum": 0},
+            "completed": {"type": "integer", "minimum": 0},
+            "cancelled": {"type": "integer", "minimum": 0}
+          }
+        },
+        "tasks": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/progressHistoryTask"}},
+        "nextCursor": {"anyOf": [{"type": "string", "maxLength": 1024}, {"type": "null"}]},
+        "coverage": {"enum": ["page", "complete"]}
+      }
+    },
+    "progressState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectPath", "conversationId", "bindingRevision", "board"],
+      "properties": {
+        "commitments": {"type": "array", "maxItems": 24, "items": {"$ref": "#/$defs/progressCommitment"}},
+        "projectPath": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "conversationId": {"type": "string", "maxLength": 256},
+        "bindingRevision": {"type": "integer", "minimum": 0},
+        "board": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/progressBoard"}]},
+        "translation": {"$ref": "#/$defs/progressTranslation"}
+      }
+    }
+  },
+  "reporting": {
+    "headNamespace": "project.coordinator.reports.v1",
+    "pendingNamespace": "project.coordinator.reports.pending.v1",
+    "casAttempts": 8,
+    "recoveryPageSize": 32
+  },
+  "taskProgress": {
+    "namespace": "project.coordinator.progress.v1",
+    "historyNamespace": "project.coordinator.progress.history.v1",
+    "casAttempts": 8
+  }
+}

@@ -1,0 +1,149 @@
+/* Published attachment card (any response file) and, for .pptx, the
+   one-page-at-a-time preview inside it. Markup: rich-response/artifact-delivery.ts. */
+.artifact-file-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-6) var(--space-8, var(--space-6));
+  color: var(--text-primary);
+}
+.artifact-file-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-4);
+  border: thin solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+.artifact-file-card-badge {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: var(--font-size-sm);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.04em;
+}
+.artifact-file-card-identity {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.artifact-file-card-eyebrow,
+.artifact-file-card-summary {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+.artifact-file-card-name {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-xl);
+  font-weight: var(--weight-semibold);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-file-card-download { flex: 0 0 auto; }
+.artifact-file-card-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+  line-height: 1.55;
+}
+.artifact-file-card-details {
+  border-top: thin solid var(--border);
+  padding-top: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+.artifact-file-card-details > summary {
+  cursor: pointer;
+  width: fit-content;
+  border-radius: var(--radius-xs);
+}
+.artifact-file-card-details > summary:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.artifact-file-card-details dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: var(--space-3) 0 0;
+}
+.artifact-file-card-details dt { color: var(--text-tertiary); }
+.artifact-file-card-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+@media (max-width: 560px) {
+  .artifact-file-card { padding: var(--space-4) var(--space-3); }
+  .artifact-file-card-head { flex-wrap: wrap; }
+  .artifact-file-card-download { width: 100%; }
+  .artifact-file-card-details dl { grid-template-columns: minmax(0, 1fr); }
+}
+
+.artifact-page-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.artifact-page-preview [hidden] { display: none; }
+.artifact-page-preview-status {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+.artifact-page-preview[data-state='failed'] .artifact-page-preview-status { color: var(--error-text); }
+.artifact-page-preview-stage {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: var(--page-aspect, 16 / 9);
+  overflow: hidden;
+  border: thin solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+}
+.artifact-page-preview-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.artifact-page-preview-links { position: absolute; inset: 0; }
+.artifact-page-preview-link {
+  position: absolute;
+  left: calc(var(--link-x) * 100%);
+  top: calc(var(--link-y) * 100%);
+  width: calc(var(--link-w) * 100%);
+  height: calc(var(--link-h) * 100%);
+  border-radius: var(--radius-xs);
+}
+.artifact-page-preview-link:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* --focus-ring is a box-shadow value, not a color. */
+.artifact-page-preview-link:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.artifact-page-preview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+.artifact-page-preview-indicator {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}

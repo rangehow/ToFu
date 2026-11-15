@@ -1,0 +1,86 @@
+/* ───────────────────────────────────────────────────────────────
+ * COMPACTED tool-row label  (per UX directive: solid colors, no opacity)
+ *
+ * When a tool result has been replaced by a server-side compaction
+ * placeholder, the row carries a SOLID label right before its intent
+ * that says exactly what happened: the layer name and a from→to token
+ * reduction, so the reader knows both that compaction happened and how
+ * much was saved. Fills are theme roles inverted against the canvas, so
+ * every theme keeps its own palette and the role's ≥4.5:1 contrast.
+ *
+ * Layers:
+ *   L0 (born too big — model never saw full text)        — error role
+ *   L1 (aged out of hot tail — replaced on next call)    — accent role
+ *   L3 (LLM summary in transcript archive, most lossy)   — warning role
+ *
+ * Compacted rows themselves stay at full text opacity — the LABEL
+ * carries the signal, not a faded row.
+ *
+ * Anti-flicker: pure static styling, no transitions, no animations.
+ * ─────────────────────────────────────────────────────────────── */
+.ptool-compaction-label{
+  display:inline-flex;
+  align-items:center;
+  gap:var(--space-1);
+  flex-shrink:0;
+  height:18px;
+  padding:0 var(--space-1) 0 var(--space-2);
+  border-radius:var(--radius-sm);
+  font-family:var(--font-mono);
+  font-size:var(--font-size-xs);
+  font-weight:var(--weight-semibold);
+  line-height:1;
+  letter-spacing:.02em;
+  white-space:nowrap;
+  cursor:help;
+  user-select:none;
+  /* Solid base — per-layer fills below. No opacity on the row, no
+   * transparency on the label background. */
+  color:var(--bg-primary);
+  background:var(--text-secondary);
+}
+.ptool-compaction-text{
+  /* The "COMPACTED L1" portion — kept tight and uppercase. */
+  letter-spacing:.04em;
+}
+.ptool-compaction-delta{
+  /* The token reduction ("280k→2k") sits in an inset block so the layer
+   * name and the savings number read as two pieces of information rather
+   * than one long string. */
+  display:inline-flex;
+  align-items:center;
+  height:14px;
+  padding:0 var(--space-1);
+  border-radius:var(--radius-xs);
+  background:color-mix(in srgb, currentColor 20%, transparent);
+  font-weight:var(--weight-medium);
+  letter-spacing:0;
+}
+
+/* L0 — result was born too big and persisted to disk before the model
+ * ever saw the full text. Strongest demotion → error role. */
+.ptool-compaction-l0{
+  background:var(--error-text);
+}
+
+/* L1 — was visible once, then aged out of the hot tail → accent role. */
+.ptool-compaction-l1{
+  background:var(--accent);
+  color:var(--text-on-accent);
+}
+
+/* L3 — replaced by an LLM-generated summary in the transcript archive
+ * (the most lossy form) → warning role, so the reader can tell at a
+ * glance "this was rewritten, not just truncated". */
+.ptool-compaction-l3{
+  background:var(--warning-text);
+}
+
+/* The tool name on a compacted row stays at full color so the user
+ * can still read what was called.  No more dotted underline / opacity
+ * fade — the LABEL carries the signal. */
+.ptool-line .ptool-compaction-label + .ptool-text,
+.ptool-line .ptool-compaction-label ~ .ptool-text{
+  /* No-op rule, intentionally — kept as documentation that we leave
+   * the text alone on compacted rows. */
+}

@@ -1,0 +1,1277 @@
+"""Bounded, dependency-free runtime metrics.
+
+The project deliberately does not depend on ``prometheus_client``.  This
+module owns the small amount of process-local state needed by the HTTP,
+executor, transport and LLM hot paths, while :mod:`routes.metrics` owns the
+authenticated exposition endpoint.
+
+All label values pass through a closed or bounded normalizer.  In particular,
+request/conversation/task ids are never accepted as labels.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import logging
+import math
+import re
+import threading
+import time
+import weakref
+from bisect import bisect_left
+from collections import defaultdict
+from contextlib import contextmanager
+from contextvars import ContextVar
+from itertools import accumulate, groupby
+
+from functools import wraps
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, AsyncIterator, Iterable
+
+from lib.log import get_logger
+
+
+logger = get_logger(__name__)
+
+_HTTP_BUCKETS = (0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
+_WAIT_BUCKETS = (0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0)
+_STORAGE_BUCKETS = (0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1,
+                    0.25, 0.5, 1.0, 2.5, 5.0)
+_STORAGE_RPC_OUTCOMES = frozenset({'success', 'error'})
+_LLM_BUCKETS = (0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 180.0)
+_ROUND_BUCKETS = (1, 2, 3, 4, 6, 8, 12, 20, 40, 80)
+_TOKEN_BUCKETS = (1_000, 4_000, 16_000, 32_000, 64_000, 128_000, 256_000)
+_COST_BUCKETS = (0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 20.0)
+_CGROUP_RELIEF_BUCKETS = (0.001, 0.005, 0.01, 0.025, 0.05, 0.1,
+                          0.25, 0.5, 1.0, 2.5, 5.0)
+_METHODS = frozenset({'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'})
+_TRANSPORTS = frozenset({'sse', 'ws'})
+_CONNECTION_OUTCOMES = frozenset({'completed', 'disconnected', 'error'})
+_STREAM_ADMISSION_OUTCOMES = frozenset({
+    'admitted', 'capacity', 'evicted', 'stale', 'superseded',
+})
+_BACKGROUND_JOB_KINDS = frozenset({'pricing_refresh'})
+_BACKGROUND_JOB_OUTCOMES = frozenset({'success', 'error', 'cancelled'})
+_RUNTIME_PROBE_SOURCES = frozenset({'loadavg', 'cgroup_memory'})
+_EXECUTION_OUTCOMES = frozenset({
+    'completed', 'failed', 'cancelled', 'timed_out',
+})
+_TASK_STARTUP_STAGES = frozenset({
+    'input_build', 'turn_persist', 'executor_start', 'acknowledgement',
+    'context', 'registration', 'preparation', 'binding', 'submission',
+    'context_read', 'context_rebuild',
+    'registration_route', 'registration_mint', 'registration_checkpoint',
+    'preparation_account', 'preparation_abort_fence', 'preparation_native',
+    'claim_wake', 'claim_horizon', 'claim_next', 'claim_proof', 'claim_accepted',
+    'dispatch', 'dispatch_binding', 'dispatch_entry', 'request_policy',
+    'worker_entry', 'cleanup', 'workspace_binding', 'input_translation',
+    'worker_entry_authority', 'worker_entry_start', 'worker_entry_running',
+    'worker_entry_signal',
+    'startup_config', 'startup_resume', 'startup_project', 'startup_tools',
+    'startup_resume_view', 'startup_memory', 'startup_context', 'startup_history',
+    'startup_context_compose', 'startup_context_guidance',
+    'memory_list', 'memory_rank', 'memory_hydrate',
+    'resume_view_read', 'resume_view_witness', 'resume_view_verify',
+    'workspace_provision', 'workspace_roots', 'workspace_identity',
+    'workspace_root_binding', 'workspace_persist',
+    'workspace_snapshot', 'workspace_materialize', 'workspace_registration',
+    'workspace_destination_wait', 'workspace_repo_wait',
+    'workspace_index_seed', 'workspace_index_add', 'workspace_index_tree',
+    'workspace_snapshot_commit', 'workspace_index_validate',
+    'workspace_metadata', 'workspace_checkout',
+    'workspace_preflight', 'workspace_lookup', 'workspace_mode', 'workspace_input',
+    'workspace_spare', 'workspace_link', 'workspace_bind',
+})
+# Content-free completion details a startup stage may add to its anchor.
+_TASK_STARTUP_DETAILS = frozenset({
+    'listing', 'snapshotAgeMs', 'replay', 'turns', 'slowestProvider', 'slowestProviderMs',
+})
+_TASK_COMPLETION_STAGES = frozenset({
+    'persistence', 'workspace_delivery', 'workspace_evidence', 'terminal_listeners',
+})
+_TASK_PHASE_OUTCOMES = frozenset({'success', 'error', 'deferred'})
+_EXECUTION_RESOURCE_DISPOSITIONS = frozenset({
+    'released', 'deferred', 'failed',
+})
+_LABEL_CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f]")
+
+_DYNAMIC_SEGMENT = re.compile(
+    r'^(?:\d+|[0-9a-f]{8,}|[A-Za-z0-9_-]{16,})$', re.IGNORECASE)
+
+
+def _bounded(value: Any, *, fallback: str = 'unknown', limit: int = 96) -> str:
+    text = str(value or fallback).strip()
+    if not text:
+        text = fallback
+    # Prometheus escaping happens at rendering.  Drop control characters here
+    # so labels remain one logical value even when fed hostile provider names.
+    # Replacement preserves character count, so bounded prefixes are sufficient.
+    return _LABEL_CONTROL_CHARACTERS.sub(' ', text[:limit])
+
+
+def normalize_route_template(value: Any) -> str:
+    """Return a bounded-cardinality route label.
+
+    Prefer Quart's matched rule (``/api/tasks/<task_id>``).  The fallback is
+    intentionally lossy: identifier-looking path segments collapse to
+    ``<id>`` and all static assets collapse to one template.
+    """
+    path = _bounded(value, fallback='unmatched', limit=180).split('?', 1)[0]
+    if path.startswith('/static/'):
+        return '/static/<path>'
+    if path in ('', '/'):
+        return path or '/'
+    parts = []
+    for segment in path.split('/'):
+        parts.append('<id>' if _DYNAMIC_SEGMENT.match(segment or '') else segment)
+    return _bounded('/'.join(parts), fallback='unmatched', limit=140)
+
+
+def route_template_for_request(req: Any) -> str:
+    rule = getattr(getattr(req, 'url_rule', None), 'rule', None)
+    if rule:
+        return normalize_route_template(rule)
+    path = str(getattr(req, 'path', '') or '')
+    return '/static/<path>' if path.startswith('/static/') else 'unmatched'
+
+
+class _Histogram:
+    """Record one disjoint bucket; derive inclusive counts when scraping.
+
+    The first observation owns the exposed boundaries and their order. Sorted
+    distinct non-NaN bounds support lookup even for repeated/unordered bounds;
+    NaN bounds retain their original never-matching comparison behavior.
+    The containing store owns synchronization.
+    """
+
+    __slots__ = ('buckets', 'bounds', 'counts', 'sum', 'count')
+
+    def __init__(self, buckets: tuple[float, ...]) -> None:
+        self.buckets = buckets
+        self.bounds = tuple(sorted({
+            upper for upper in buckets if not math.isnan(upper)}))
+        self.counts = [0] * len(self.bounds)
+        self.sum = 0.0
+        self.count = 0
+
+    def observe(self, number: float) -> None:
+        self.sum += number
+        self.count += 1
+        index = bisect_left(self.bounds, number)
+        if index < len(self.bounds):
+            self.counts[index] += 1
+
+    def snapshot(self) -> dict[str, Any]:
+        cumulative = dict(zip(self.bounds, accumulate(self.counts)))
+        return {
+            'buckets': self.buckets,
+            'counts': [cumulative.get(upper, 0) for upper in self.buckets],
+            'sum': self.sum,
+            'count': self.count,
+        }
+
+
+class _Store:
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self.counters: dict[tuple[str, tuple[tuple[str, str], ...]], float] = defaultdict(float)
+        self.gauges: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
+        self.label_values: dict[tuple[str, str], set[str]] = defaultdict(set)
+        self.histograms: dict[
+            tuple[str, tuple[tuple[str, str], ...]], _Histogram
+        ] = {}
+        # The normalized value for a (name, axis, raw-text) triple is stable:
+        # once a value has been admitted or folded to 'other', re-presenting
+        # the same triple always yields the same series.  Hot counters
+        # (task-event eviction, replay) re-resolve the same tiny closed set
+        # of kinds every call, so memoize the bounding + cap-fold instead of
+        # re-running strip/regex/slice and set membership on each increment.
+        # Bound the memo itself so a hostile caller cannot grow it without
+        # limit; a full memo simply falls back to the uncached path.
+        self._label_memo: dict[tuple[str, str, str], str] = {}
+
+    def _label_value(self, name: str, axis: str, value: Any) -> str:
+        text = _bounded(value)
+        seen = self.label_values[(name, axis)]
+        # The route inventory is larger than provider/task dimensions but
+        # still finite.  Once a bad caller exceeds the cap, fold novel
+        # values into one stable series instead of growing forever.
+        cap = 512 if axis == 'route' else 128
+        if text not in seen:
+            if len(seen) >= cap:
+                text = 'other'
+            seen.add(text)
+        return text
+
+    def _labels(self, name: str, labels: dict[str, Any] | None) \
+            -> tuple[tuple[str, str], ...]:
+        if not labels:
+            return ()
+        memo = self._label_memo
+        normalized = []
+        for key, value in labels.items():
+            axis = str(key)
+            raw = value if type(value) is str else None
+            cache_key = (name, axis, raw) if raw is not None else None
+            if cache_key is not None:
+                cached = memo.get(cache_key)
+                if cached is None:
+                    cached = self._label_value(name, axis, raw)
+                    if len(memo) < 8192:
+                        memo[cache_key] = cached
+                normalized.append((axis, cached))
+            else:
+                normalized.append((axis, self._label_value(name, axis, value)))
+        return tuple(sorted(normalized))
+
+    def inc(self, name: str, value: float = 1.0, **labels: Any) -> None:
+        with self.lock:
+            key = (name, self._labels(name, labels))
+            self.counters[key] += float(value)
+
+    def set(self, name: str, value: float, **labels: Any) -> None:
+        with self.lock:
+            key = (name, self._labels(name, labels))
+            self.gauges[key] = float(value)
+
+    def add_gauge(self, name: str, delta: float, **labels: Any) -> None:
+        with self.lock:
+            key = (name, self._labels(name, labels))
+            self.gauges[key] = self.gauges.get(key, 0.0) + float(delta)
+
+    def observe(self, name: str, value: float, buckets: Iterable[float],
+                **labels: Any) -> None:
+        bucket_tuple = tuple(float(v) for v in buckets)
+        with self.lock:
+            key = (name, self._labels(name, labels))
+            state = self.histograms.get(key)
+            if state is None:
+                state = _Histogram(bucket_tuple)
+                self.histograms[key] = state
+            state.observe(max(0.0, float(value)))
+
+    def snapshot(self) -> tuple[dict, dict, dict]:
+        with self.lock:
+            counters = dict(self.counters)
+            gauges = dict(self.gauges)
+            histograms = {
+                key: value.snapshot()
+                for key, value in self.histograms.items()
+            }
+        return counters, gauges, histograms
+
+
+_STORE = _Store()
+
+
+def record_http_request(method: Any, route: Any, status: Any, duration_s: float) -> None:
+    method_label = str(method or 'OTHER').upper()
+    if method_label not in _METHODS:
+        method_label = 'OTHER'
+    try:
+        status_label = str(int(status))
+    except (TypeError, ValueError) as exc:
+        logger.debug('invalid HTTP status for metrics: %r (%s)', status, exc)
+        status_label = '0'
+    labels = {
+        'method': method_label,
+        'route': normalize_route_template(route),
+        'status': status_label,
+    }
+    _STORE.inc('tofu_http_requests_total', **labels)
+    _STORE.observe('tofu_http_request_duration_seconds', duration_s,
+                   _HTTP_BUCKETS, **labels)
+
+
+def set_event_loop_lag(seconds: float) -> None:
+    _STORE.set('tofu_event_loop_lag_seconds', max(0.0, float(seconds)))
+
+
+def record_runtime_probe_failure(source: Any) -> None:
+    """Aggregate host-probe failures without emitting periodic log noise.
+
+    Probe names come from a closed inventory so exceptions, paths and host
+    identifiers can never create unbounded Prometheus label cardinality.
+    """
+    source_text = str(source)
+    source_label = source_text if source_text in _RUNTIME_PROBE_SOURCES \
+        else 'other'
+    _STORE.inc('tofu_runtime_probe_failures_total', source=source_label)
+
+
+def record_cgroup_relief(
+    *,
+    duration_s: float,
+    cgroup_reclaimed_bytes: int | None,
+    process_rss_reclaimed_bytes: int | None,
+    cgroup_cache_reclaimed_bytes: int | None,
+    heap_window_reclaimed_bytes: int | None,
+    log_window_reclaimed_bytes: int | None,
+    cache_entries_dropped: int,
+    log_files_advised: int,
+    log_bytes_advised: int,
+) -> None:
+    """Record one relief pass without claiming shared deltas are causal.
+
+    ``process_rss`` is process-owned. The remaining byte sources are observed
+    shared-cgroup counter windows and can include concurrent sibling activity;
+    their closed labels make that distinction explicit and cardinality finite.
+    """
+    _STORE.inc('tofu_cgroup_relief_attempts_total')
+    sources = {
+        'shared_cgroup': cgroup_reclaimed_bytes,
+        'process_rss': process_rss_reclaimed_bytes,
+        'cgroup_cache': cgroup_cache_reclaimed_bytes,
+        'heap_window': heap_window_reclaimed_bytes,
+        'log_window': log_window_reclaimed_bytes,
+    }
+    for source, raw_value in sources.items():
+        if raw_value is None:
+            continue
+        value = max(0.0, float(raw_value))
+        _STORE.inc(
+            'tofu_cgroup_relief_reclaimed_bytes_total', value, source=source)
+        _STORE.set(
+            'tofu_cgroup_relief_reclaimed_bytes_latest', value, source=source)
+    _STORE.inc(
+        'tofu_cgroup_relief_cache_entries_dropped_total',
+        max(0, int(cache_entries_dropped)))
+    _STORE.inc(
+        'tofu_cgroup_relief_log_files_advised_total',
+        max(0, int(log_files_advised)))
+    _STORE.inc(
+        'tofu_cgroup_relief_log_bytes_advised_total',
+        max(0, int(log_bytes_advised)))
+    _STORE.observe(
+        'tofu_cgroup_relief_duration_seconds', duration_s,
+        _CGROUP_RELIEF_BUCKETS)
+
+
+def record_task_queue_wait(kind: Any, seconds: float) -> None:
+    _STORE.observe('tofu_task_queue_wait_seconds', seconds, _WAIT_BUCKETS,
+                   kind=_bounded(kind, fallback='chat', limit=48))
+
+
+_STARTUP_IDENTITY: ContextVar[dict | None] = ContextVar('startup_identity', default=None)
+_TASK_STARTUP_ANCHOR = '[TaskStartupTiming] %s'
+_TASK_COMPLETION_ANCHOR = '[TaskCompletionTiming] %s'
+
+
+class _PairedAnchorEvidence(logging.Filter):
+    """Exempt paired timing anchors from app.log flood insurance.
+
+    A stage writes one start and one completion per attempt, so their volume
+    follows task starts, never a hot loop. LogBudgetFilter dropped them in the
+    restart bursts they exist to explain (docs/LOGGING.md). The mark is set on
+    the producing logger because a QueueHandler replaces ``msg`` before the
+    app.log handler filters the record.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg in (_TASK_STARTUP_ANCHOR, _TASK_COMPLETION_ANCHOR):
+            record.tofu_log_budget_exempt = True
+        return True
+
+
+logger.addFilter(_PairedAnchorEvidence())
+
+
+def _admit_phase_identity(fields: dict, identity) -> None:
+    """Copy bounded identifiers that exist; a blank one stays absent."""
+    for key in ('conversation_id', 'turn_id', 'attempt_id', 'task_id', 'user_id'):
+        value = (identity or {}).get(key)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                fields[key] = _bounded(text, limit=128)
+
+
+def _admit_phase_details(details) -> dict:
+    """Closed detail keys only: short labels and finite durations."""
+    admitted = {}
+    for key, value in (details or {}).items():
+        if key not in _TASK_STARTUP_DETAILS or isinstance(value, bool):
+            continue
+        if isinstance(value, str):
+            admitted[key] = _bounded(value, limit=32)
+        elif isinstance(value, (int, float)) and math.isfinite(value):
+            admitted[key] = round(float(value), 3)
+    return admitted
+
+
+def _phase_anchor(log_format, stage, boundary, fields, observed_at_ms=None, **values):
+    try:
+        import json
+        logger.info(log_format, json.dumps({
+            'stage': stage, 'boundary': boundary,
+            'observedAtMs': (int(time.time() * 1000) if observed_at_ms is None
+                             else observed_at_ms),
+            **fields, **values}, separators=(',', ':')))
+    except Exception:
+        pass  # Diagnostics must not replace the execution verdict.
+
+
+def _observe_phase(metric_name, stage, elapsed, outcome):
+    try:
+        _STORE.observe(metric_name, elapsed, _HTTP_BUCKETS,
+                       stage=stage, outcome=outcome)
+    except Exception as error:
+        # An unavailable diagnostic sink cannot change settlement.
+        logger.debug('%s observation failed: %s', metric_name, error)
+
+
+@contextmanager
+def _measure_task_phase(stage: str, *, identity, metric_name: str, log_format: str,
+                        details=None, deferral=None):
+    """Paired content-free spans; callers own closed stage/metric families.
+
+    Yields ``(state, bind_identity)``. Identity created inside the span (the
+    Turn a stage persisted) joins its completion and spans opened after it;
+    the start keeps the identity known at entry. ``details`` is read at
+    completion, so the stage may fill it while it runs. ``deferral(error)``
+    names an exception that hands the stage's work to another owner: the span
+    completes ``deferred`` instead of ``error`` and the exception propagates.
+    """
+    fields = dict(_STARTUP_IDENTITY.get() or {})
+    _admit_phase_identity(fields, identity)
+    paired = bool(fields)
+    started = time.monotonic()
+
+    def anchor(boundary, **values):
+        if paired:
+            _phase_anchor(log_format, stage, boundary, fields, **values)
+
+    def bind_identity(created) -> None:
+        _admit_phase_identity(fields, created)
+
+    anchor('start')
+    state = {'outcome': 'success'}
+    token = _STARTUP_IDENTITY.set(fields)
+    try:
+        yield state, bind_identity
+    except BaseException as error:
+        state['outcome'] = 'error'
+        try:
+            if deferral is not None and deferral(error):
+                state['outcome'] = 'deferred'
+        except Exception:
+            # A broken classifier must not replace the stage's own failure.
+            logger.warning('[TaskPhase] deferral classifier of stage %s failed', stage,
+                           exc_info=True)
+        raise
+    finally:
+        _STARTUP_IDENTITY.reset(token)
+        elapsed = max(0.0, time.monotonic() - started)
+        outcome = state.get('outcome')
+        outcome = outcome if outcome in _TASK_PHASE_OUTCOMES else 'error'
+        anchor('complete', outcome=outcome, durationMs=round(elapsed * 1000, 3),
+               **_admit_phase_details(details))
+        _observe_phase(metric_name, stage, elapsed, outcome)
+
+
+@contextmanager
+def measure_task_startup(stage: str, *, identity=None, details=None, deferral=None):
+    """Measure dispatch with paired anchors; IDs are logs, never metric labels.
+
+    Yields ``bind_identity(mapping)`` for identity the stage itself creates.
+    ``details`` is a caller-filled mapping whose ``_TASK_STARTUP_DETAILS``
+    entries join the completion anchor (docs/LOGGING.md). ``deferral`` is the
+    caller's predicate for an exception that defers the stage's work rather
+    than failing it.
+    """
+    stage = stage if stage in _TASK_STARTUP_STAGES else 'other'
+    with _measure_task_phase(stage, identity=identity,
+                             metric_name='tofu_task_startup_stage_seconds',
+                             log_format=_TASK_STARTUP_ANCHOR,
+                             details=details,
+                             deferral=deferral) as (_state, bind_identity):
+        yield bind_identity
+
+
+class TaskStartupIntervals:
+    """Startup stages measured before the identity that pairs their anchors.
+
+    A durable claim measures its wake, horizon probe, claim and fence proof
+    before the claimed job names its attempt. The domain that owns that
+    identity calls :meth:`publish`; each stage then writes the same
+    start/complete pair and histogram observation as
+    :func:`measure_task_startup`, each record carrying the stage's actual
+    wall-clock ``observedAtMs``. A stage measured again (a transient storage
+    retry) replaces its earlier interval, so one claim publishes at most one
+    pair per stage. Stages never published are dropped. The claim's own
+    thread records and publishes them.
+    """
+
+    __slots__ = ('_stages',)
+
+    def __init__(self):
+        self._stages = {}
+
+    @staticmethod
+    def instant():
+        """One boundary: wall-clock milliseconds and monotonic seconds."""
+        return int(time.time() * 1000), time.monotonic()
+
+    def add(self, stage: str, started, *, outcome: str = 'success') -> None:
+        """Record ``stage`` from an earlier :meth:`instant` until now."""
+        started_at_ms, started_monotonic = started
+        ended_at_ms, ended_monotonic = self.instant()
+        self._stages.pop(stage, None)
+        self._stages[stage] = (started_at_ms, ended_at_ms,
+                               max(0.0, ended_monotonic - started_monotonic), outcome)
+
+    @contextmanager
+    def measure(self, stage: str):
+        started = self.instant()
+        outcome = 'error'
+        try:
+            yield
+            outcome = 'success'
+        finally:
+            self.add(stage, started, outcome=outcome)
+
+    def publish(self, identity) -> None:
+        """Write every recorded stage once under ``identity``."""
+        stages, self._stages = self._stages, {}
+        fields = {}
+        _admit_phase_identity(fields, identity)
+        if not fields:
+            return
+        for stage, (started_at_ms, ended_at_ms, elapsed, outcome) in stages.items():
+            stage = stage if stage in _TASK_STARTUP_STAGES else 'other'
+            outcome = outcome if outcome in _TASK_PHASE_OUTCOMES else 'error'
+            _phase_anchor(_TASK_STARTUP_ANCHOR, stage, 'start', fields, started_at_ms)
+            _phase_anchor(_TASK_STARTUP_ANCHOR, stage, 'complete', fields, ended_at_ms,
+                          outcome=outcome, durationMs=round(elapsed * 1000, 3))
+            _observe_phase('tofu_task_startup_stage_seconds', stage, elapsed, outcome)
+
+
+@contextmanager
+def measure_task_completion(stage: str, *, identity=None):
+    """Inclusive completion spans; deferred is not a successful delivery ACK."""
+    stage = stage if stage in _TASK_COMPLETION_STAGES else 'other'
+    with _measure_task_phase(stage, identity=identity,
+                             metric_name='tofu_task_completion_stage_seconds',
+                             log_format=_TASK_COMPLETION_ANCHOR) as (state, _bind_identity):
+        yield state
+
+
+def observe_task_completion(stage: str):
+    """Time a synchronous task receiver, retaining its exact return/exception."""
+    def decorate(receiver):
+        @wraps(receiver)
+        def measured(task, *args, **kwargs):
+            identity = {'task_id': task.get('id'), 'conversation_id': task.get('convId'),
+                        'turn_id': task.get('_turnId'), 'attempt_id': task.get('_attemptId'),
+                        'user_id': task.get('_userId')}
+            with measure_task_completion(stage, identity=identity) as state:
+                result = receiver(task, *args, **kwargs)
+                if result is False:
+                    state['outcome'] = 'deferred'
+                return result
+        return measured
+    return decorate
+
+
+def record_storage_rpc(
+    kind: Any,
+    operation: Any,
+    seconds: float,
+    outcome: str = 'success',
+) -> None:
+    """Record one client-side storage RPC (retries included in the total).
+
+    This is the persistence leg of the route → storage-RPC → LLM-dispatch
+    latency triad; ``operation`` is bounded by the registered operation
+    catalog, so label cardinality stays closed.
+    """
+    labels = {
+        'kind': _bounded(kind, fallback='query', limit=24),
+        'operation': _bounded(operation, fallback='unknown', limit=96),
+        'outcome': outcome if outcome in _STORAGE_RPC_OUTCOMES else 'error',
+    }
+    _STORE.observe('tofu_storage_rpc_seconds', seconds, _STORAGE_BUCKETS,
+                   **labels)
+
+
+def storage_rpc_snapshot() -> list[dict[str, Any]]:
+    """This process's ``tofu_storage_rpc_seconds`` series for another exporter.
+
+    The resident execution host has no HTTP listener; the API host's
+    ``/metrics`` reads this through the private execution control. Counts are
+    cumulative per declared bucket, as rendered here.
+    """
+    with _STORE.lock:
+        series = [(labels, state.snapshot()) for (name, labels), state in _STORE.histograms.items()
+                  if name == 'tofu_storage_rpc_seconds']
+    return [{'labels': dict(labels), 'buckets': list(state['buckets']),
+             'counts': list(state['counts']), 'sum': state['sum'], 'count': state['count']}
+            for labels, state in sorted(series, key=lambda item: item[0])]
+
+
+_ROUTE_SELECTION_SCOPES = frozenset({'pinned', 'shared'})
+_ROUTE_SELECTION_OUTCOMES = frozenset({'selected', 'none'})
+
+
+def record_route_selection(seconds: float, *, scope: str, outcome: str) -> None:
+    """Record one dispatcher pick, including its wait for the dispatcher lock.
+
+    ``scope`` is ``pinned`` (a provider-pinned route group) or ``shared``
+    (the configured pool); ``outcome`` is ``selected`` or ``none``.
+    """
+    _STORE.observe(
+        'tofu_llm_route_selection_seconds', seconds, _WAIT_BUCKETS,
+        scope=scope if scope in _ROUTE_SELECTION_SCOPES else 'other',
+        outcome=outcome if outcome in _ROUTE_SELECTION_OUTCOMES else 'other')
+
+
+def record_llm_first_token(model: Any, seconds: float, provider: Any = '') -> None:
+    labels = {
+        'provider': _bounded(provider, fallback='unknown', limit=64),
+        'model': _bounded(model, fallback='unknown', limit=96),
+    }
+    _STORE.observe('tofu_llm_first_token_seconds', seconds, _LLM_BUCKETS, **labels)
+
+
+def record_llm_task(
+    model: Any,
+    provider: Any,
+    duration_s: float,
+    api_rounds: int,
+    usage: dict | None,
+    cost_usd: float = 0.0,
+    outcome: str = 'success',
+) -> None:
+    """Record one terminal LLM task without using task/request ids as labels."""
+    labels = {
+        'provider': _bounded(provider, fallback='unknown', limit=64),
+        'model': _bounded(model, fallback='unknown', limit=96),
+        'outcome': outcome if outcome in {'success', 'error', 'aborted', 'budget'}
+        else 'error',
+    }
+    try:
+        from lib.cost import normalize_usage
+        normalized = normalize_usage(usage)
+    except Exception as exc:
+        logger.debug('LLM usage normalization failed for metrics: %s', exc)
+        normalized = {'input': 0, 'output': 0, 'cache_write': 0,
+                      'cache_read': 0}
+    context_tokens = (int(normalized.get('input') or 0)
+                      + int(normalized.get('cache_write') or 0)
+                      + int(normalized.get('cache_read') or 0))
+    rounds = max(0, int(api_rounds or 0))
+    cost = max(0.0, float(cost_usd or 0.0))
+    _STORE.inc('tofu_llm_tasks_total', **labels)
+    _STORE.observe('tofu_llm_total_duration_seconds', duration_s,
+                   _LLM_BUCKETS, **labels)
+    _STORE.observe('tofu_llm_api_rounds', rounds, _ROUND_BUCKETS, **labels)
+    _STORE.observe('tofu_llm_context_tokens', context_tokens,
+                   _TOKEN_BUCKETS, **labels)
+    _STORE.observe('tofu_llm_estimated_cost_usd', cost,
+                   _COST_BUCKETS, **labels)
+    token_labels = {key: labels[key] for key in ('provider', 'model')}
+    _STORE.inc('tofu_llm_context_tokens_total', context_tokens, **token_labels)
+    _STORE.inc('tofu_llm_cache_read_tokens_total',
+               int(normalized.get('cache_read') or 0), **token_labels)
+    _STORE.inc('tofu_llm_output_tokens_total',
+               int(normalized.get('output') or 0), **token_labels)
+    _STORE.inc('tofu_llm_estimated_cost_usd_total', cost, **token_labels)
+    if int(normalized.get('cache_read') or 0) > 0:
+        _STORE.inc('tofu_llm_cache_hit_tasks_total', **token_labels)
+
+
+def connection_open(transport: str, channel: Any) -> None:
+    transport = transport if transport in _TRANSPORTS else 'other'
+    labels = {'transport': transport, 'channel': _bounded(channel, limit=48)}
+    _STORE.inc('tofu_stream_connections_total', **labels)
+    _STORE.add_gauge('tofu_stream_connections_active', 1, **labels)
+
+
+def connection_close(transport: str, channel: Any, outcome: str) -> None:
+    transport = transport if transport in _TRANSPORTS else 'other'
+    outcome = outcome if outcome in _CONNECTION_OUTCOMES else 'error'
+    base = {'transport': transport, 'channel': _bounded(channel, limit=48)}
+    _STORE.add_gauge('tofu_stream_connections_active', -1, **base)
+    _STORE.inc('tofu_stream_disconnects_total', outcome=outcome, **base)
+
+
+def record_replay(transport: str, kind: Any, count: int, *, reset: bool = False) -> None:
+    labels = {
+        'transport': transport if transport in _TRANSPORTS else 'other',
+        'kind': _bounded(kind, limit=48),
+        'reset': 'true' if reset else 'false',
+    }
+    _STORE.inc('tofu_stream_replayed_events_total', max(0, int(count)), **labels)
+
+
+def record_stream_admission(channel: Any, outcome: str, count: int = 1) -> None:
+    """Count bounded stream ownership/admission decisions without IDs."""
+    normalized_outcome = (
+        outcome if outcome in _STREAM_ADMISSION_OUTCOMES else 'capacity')
+    _STORE.inc(
+        'tofu_stream_admission_total',
+        max(0, int(count)),
+        channel=_bounded(channel, limit=48),
+        outcome=normalized_outcome,
+    )
+
+
+def record_registry_eviction(kind: Any, reason: str, count: int = 1) -> None:
+    """Count bounded task-registry removals without labeling task ids."""
+    reason_label = reason if reason in {'ttl', 'discard', 'capacity', 'pressure'} \
+        else 'other'
+    amount = max(0, int(count or 0))
+    if amount:
+        _STORE.inc(
+            'tofu_task_registry_evictions_total', amount,
+            kind=_bounded(kind, fallback='unknown', limit=48),
+            reason=reason_label,
+        )
+
+
+def record_task_event_eviction(kind: Any, count: int = 1) -> None:
+    """Count replay events removed by the bounded in-memory retention ring."""
+    amount = max(0, int(count or 0))
+    if amount:
+        _STORE.inc(
+            'tofu_task_event_evictions_total', amount,
+            kind=_bounded(kind, fallback='unknown', limit=48),
+        )
+
+
+def record_execution_started(kind: Any, phase: Any = 'created') -> None:
+    """Account one active resource-owning execution without identity labels."""
+    labels = {
+        'kind': _bounded(kind, fallback='execution', limit=64),
+        'phase': _bounded(phase, fallback='created', limit=32),
+    }
+    _STORE.inc('tofu_execution_sessions_started_total', kind=labels['kind'])
+    _STORE.add_gauge('tofu_execution_sessions_active', 1, **labels)
+
+
+def record_execution_phase_transition(kind: Any, source: Any, target: Any) -> None:
+    kind_label = _bounded(kind, fallback='execution', limit=64)
+    source_label = _bounded(source, fallback='unknown', limit=32)
+    target_label = _bounded(target, fallback='unknown', limit=32)
+    _STORE.add_gauge(
+        'tofu_execution_sessions_active', -1,
+        kind=kind_label, phase=source_label,
+    )
+    if target_label not in _EXECUTION_OUTCOMES:
+        _STORE.add_gauge(
+            'tofu_execution_sessions_active', 1,
+            kind=kind_label, phase=target_label,
+        )
+
+
+def record_execution_resource_release(
+    kind: Any,
+    resource: Any,
+    disposition: Any,
+) -> None:
+    disposition_text = str(disposition)
+    disposition_label = (
+        disposition_text
+        if disposition_text in _EXECUTION_RESOURCE_DISPOSITIONS else 'failed'
+    )
+    _STORE.inc(
+        'tofu_execution_resource_releases_total',
+        kind=_bounded(kind, fallback='execution', limit=64),
+        resource=_bounded(resource, fallback='unknown', limit=64),
+        disposition=disposition_label,
+    )
+
+
+def record_execution_terminal(
+    kind: Any,
+    outcome: Any,
+    invariants_satisfied: bool,
+    duration_seconds: float,
+) -> None:
+    outcome_text = str(outcome)
+    outcome_label = outcome_text if outcome_text in _EXECUTION_OUTCOMES else 'failed'
+    labels = {
+        'kind': _bounded(kind, fallback='execution', limit=64),
+        'outcome': outcome_label,
+        'invariants': 'satisfied' if invariants_satisfied else 'failed',
+    }
+    execution_settling_phase = 'settling'
+    _STORE.add_gauge(
+        'tofu_execution_sessions_active', -1,
+        kind=labels['kind'], phase=execution_settling_phase,
+    )
+    _STORE.inc('tofu_execution_sessions_terminal_total', **labels)
+    _STORE.observe(
+        'tofu_execution_session_duration_seconds', duration_seconds,
+        _LLM_BUCKETS, **labels,
+    )
+
+
+def record_execution_deadline(kind: Any) -> None:
+    _STORE.inc(
+        'tofu_execution_deadlines_total',
+        kind=_bounded(kind, fallback='execution', limit=64),
+    )
+
+
+def background_job_started(kind: Any) -> None:
+    """Record one owned process-local job using a closed kind inventory."""
+    kind_label = str(kind) if str(kind) in _BACKGROUND_JOB_KINDS else 'other'
+    _STORE.inc('tofu_background_jobs_started_total', kind=kind_label)
+    _STORE.add_gauge('tofu_background_jobs_active', 1, kind=kind_label)
+
+
+def background_job_finished(kind: Any, outcome: Any, duration_s: float) -> None:
+    """Balance an owned job and record its finite terminal outcome."""
+    kind_label = str(kind) if str(kind) in _BACKGROUND_JOB_KINDS else 'other'
+    outcome_text = str(outcome)
+    outcome_label = outcome_text if outcome_text in _BACKGROUND_JOB_OUTCOMES \
+        else 'error'
+    labels = {'kind': kind_label, 'outcome': outcome_label}
+    _STORE.add_gauge('tofu_background_jobs_active', -1, kind=kind_label)
+    _STORE.inc('tofu_background_jobs_completed_total', **labels)
+    _STORE.observe('tofu_background_job_duration_seconds', duration_s,
+                   _LLM_BUCKETS, **labels)
+
+
+async def instrument_sse(generator: Any, channel: str = 'task') -> AsyncIterator[Any]:
+    """Wrap a sync/async SSE iterable without changing its yielded frames."""
+    connection_open('sse', channel)
+    outcome = 'completed'
+    try:
+        if hasattr(generator, '__aiter__'):
+            async for item in generator:
+                yield item
+        else:
+            # A synchronous producer may wait for the next event. Iterate on
+            # Quart's serving-loop executor so that wait cannot stop unrelated
+            # HTTP requests or disconnect processing on the ASGI loop.
+            from quart.utils import run_sync_iterable
+            async for item in run_sync_iterable(iter(generator)):
+                yield item
+    except (asyncio.CancelledError, GeneratorExit):
+        outcome = 'disconnected'
+        raise
+    except BaseException:
+        outcome = 'error'
+        raise
+    finally:
+        connection_close('sse', channel, outcome)
+        closer = getattr(generator, 'aclose', None)
+        if callable(closer):
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+
+
+_EXECUTOR_GAUGES = ('workers', 'queued', 'active', 'resident_threads', 'abandoned')
+_EXECUTOR_OBSERVATION_LOCK = threading.Lock()
+# Observation -> weak reference to the executor it reads at scrape time.
+_EXECUTOR_OBSERVATIONS = weakref.WeakKeyDictionary()
+# Every observed pool name: one whose owners are all gone reports zeros.
+_EXECUTOR_POOL_NAMES: set[str] = set()
+# One refresh at a time, so an older read never overwrites a newer one.
+_EXECUTOR_SCRAPE_LOCK = threading.Lock()
+
+
+def _executor_idle(snapshot: dict[str, int]) -> bool:
+    return not any(snapshot[key] for key in ('resident_threads', 'queued', 'active'))
+
+
+class ExecutorObservation:
+    """One executor owner's gauges, summed per pool name when scraped.
+
+    Scrapes read the attached executor's exact ``metric_snapshot()``, so
+    accepted jobs never publish metrics or take these process-wide locks.
+    Peers sharing a pool name skip idle owners, as a retired generation
+    publishes nothing; a sole owner (``include_idle``) keeps reporting its
+    idle capacity hint until it stops. A retired owner leaves once its
+    carriers have exited.
+    """
+
+    def __init__(self, name, *, include_idle=False):
+        self.name = name
+        self.include_idle = include_idle
+        self.closing = False
+
+    def attach(self, executor) -> None:
+        with _EXECUTOR_OBSERVATION_LOCK:
+            _EXECUTOR_POOL_NAMES.add(self.name)
+            if not self.closing:
+                _EXECUTOR_OBSERVATIONS[self] = weakref.ref(executor)
+
+    def retire(self) -> None:
+        with _EXECUTOR_OBSERVATION_LOCK:
+            self.closing = True
+            reference = _EXECUTOR_OBSERVATIONS.get(self)
+        executor = None if reference is None else reference()
+        # An interrupted join keeps its live carriers observed; the first
+        # scrape after they exit removes this owner.
+        if executor is None or _executor_idle(executor.metric_snapshot()):
+            with _EXECUTOR_OBSERVATION_LOCK:
+                _EXECUTOR_OBSERVATIONS.pop(self, None)
+
+
+def _publish_executor_observations() -> None:
+    """Set every observed pool's gauges from its owners' current state."""
+    with _EXECUTOR_OBSERVATION_LOCK:
+        owners = list(_EXECUTOR_OBSERVATIONS.items())
+        names = set(_EXECUTOR_POOL_NAMES)
+    totals = {name: dict.fromkeys(_EXECUTOR_GAUGES, 0) for name in names}
+    departed = []
+    for observation, reference in owners:
+        executor = reference()
+        snapshot = None if executor is None else executor.metric_snapshot()
+        if snapshot is None or (observation.closing and _executor_idle(snapshot)):
+            departed.append(observation)
+            continue
+        if not observation.include_idle and _executor_idle(snapshot):
+            continue
+        total = totals.setdefault(observation.name, dict.fromkeys(_EXECUTOR_GAUGES, 0))
+        for key in _EXECUTOR_GAUGES:
+            total[key] += snapshot[key]
+    if departed:
+        with _EXECUTOR_OBSERVATION_LOCK:
+            for observation in departed:
+                _EXECUTOR_OBSERVATIONS.pop(observation, None)
+    for name, total in totals.items():
+        try:
+            publish_executor_state(name, **total)
+        except Exception:
+            logger.debug('Executor observation failed', exc_info=True)
+
+
+# ThreadPoolExecutor is required by asyncio.set_default_executor. The facade
+# below keeps that type while the shared executor owns actual worker delivery.
+_SYNC_COMPAT_POOLS = weakref.WeakSet()
+_SYNC_COMPAT_LOCK = threading.Lock()
+_SYNC_EXIT_REGISTERED = False
+_SYNC_COMPAT_EXITING = False
+
+
+def _shutdown_sync_compat_pools() -> None:
+    global _SYNC_COMPAT_EXITING
+    with _SYNC_COMPAT_LOCK:
+        _SYNC_COMPAT_EXITING = True
+        pools = tuple(_SYNC_COMPAT_POOLS)
+    # Event pumps use these carriers. Their existing close deadline releases
+    # transient persistence waits before CPython's non-daemon thread joins.
+    from lib.tasks_pkg.event_delivery import shutdown_event_delivery
+    shutdown_event_delivery()
+    for pool in pools:
+        pool.shutdown(wait=False)
+    for pool in pools:
+        pool.shutdown(wait=True)
+
+
+class InstrumentedThreadPoolExecutor(ThreadPoolExecutor):
+    """Asyncio-compatible demand delivery; max_workers is idle reuse only.
+
+    Standard initializer, failure, cancellation and non-daemon exit ownership
+    remain. The stdlib carrier queue is unused: the shared recoverable executor
+    is the sole scheduling/accounting owner. Idle replacement stays loop-owned.
+    """
+    def __init__(self, max_workers: int | None = None, thread_name_prefix: str = '',
+                 initializer: Any = None, initargs: tuple = (), *, metric_pool: str,
+                 idle_retain_threads: int = 0) -> None:
+        global _SYNC_EXIT_REGISTERED
+        # CPython 3.14 removed ThreadPoolExecutor._initializer/_initargs, so
+        # the facade keeps its own constructor arguments.
+        super().__init__(max_workers, thread_name_prefix, initializer, initargs)
+        from lib.agent_core.worker_executor import RecoverableAgentExecutor
+        self.metric_pool = _bounded(metric_pool, limit=32)
+        self._observation = ExecutorObservation(self.metric_pool)
+        try:
+            self._demand = RecoverableAgentExecutor(
+                max_workers=self._max_workers, queue_capacity=0,
+                max_abandoned_workers=self._max_workers,
+                thread_name_prefix=self._thread_name_prefix,
+                metric_pool=self.metric_pool, idle_retain_threads=idle_retain_threads,
+                initializer=initializer, initargs=initargs,
+                daemon_workers=False, observation=self._observation)
+            with _SYNC_COMPAT_LOCK:
+                if _SYNC_COMPAT_EXITING:
+                    self._demand.shutdown(wait=False, cancel_futures=True)
+                    raise RuntimeError('cannot create executor after interpreter shutdown')
+                _SYNC_COMPAT_POOLS.add(self._demand)
+                if not _SYNC_EXIT_REGISTERED:
+                    # Same pre-join hook used by the stdlib executor. A normal
+                    # atexit callback runs too late for non-daemon thread joins.
+                    threading._register_atexit(_shutdown_sync_compat_pools)
+                    _SYNC_EXIT_REGISTERED = True
+        except BaseException:
+            demand = getattr(self, '_demand', None)
+            if demand is not None:
+                demand.shutdown(wait=False, cancel_futures=True)
+            self._observation.retire()
+            raise
+
+    @property
+    def _threads(self):
+        demand = getattr(self, '_demand', None)
+        return demand.worker_threads_snapshot() if demand is not None else self._compat_threads
+
+    @_threads.setter
+    def _threads(self, value):
+        self._compat_threads = value
+
+    def submit(self, fn, /, *args, **kwargs):
+        return self._demand.submit(fn, *args, **kwargs)
+
+    def shutdown(self, wait=True, *, cancel_futures=False):
+        self._shutdown = True
+        return self._demand.shutdown(wait=wait, cancel_futures=cancel_futures)
+
+    def idle_retirement_snapshot(self, idle_seconds, *, now=None):
+        return self._demand.idle_retirement_snapshot(idle_seconds, now=now)
+
+    def record_idle_retirement(self, resident_threads):
+        self._demand.record_idle_retirement(resident_threads)
+
+
+# Independent filesystem round trips (metadata validation, small reads) on a
+# network volume are latency-bound: issued one after another they serialize the
+# volume's latency. They run as eight ordered physical I/O groups through a
+# demand executor (docs/INDEX_FASTPATH.md); the width is hardware-independent
+# and derives no fan-out or admission limit. Fewer items run inline.
+IO_GROUP_COUNT = 8
+IO_GROUP_MIN_ITEMS = 128
+
+
+def map_in_io_groups(executor, items, function) -> list:
+    """Return ``[function(item) for item in items]``, overlapping their round trips.
+
+    ``executor`` is a caller-owned demand executor whose lifetime the caller
+    joins; ``None`` (or fewer than ``IO_GROUP_MIN_ITEMS`` items) runs inline.
+    Results keep input order. A raising item ends its own group; the earliest
+    failing group's error propagates while the other groups run to completion
+    under the executor the caller joins.
+    """
+    if executor is None or len(items) < IO_GROUP_MIN_ITEMS:
+        return [function(item) for item in items]
+    width = (len(items) + IO_GROUP_COUNT - 1) // IO_GROUP_COUNT
+    groups = [items[start:start + width] for start in range(0, len(items), width)]
+    futures = [executor.submit(lambda group=group: [function(item) for item in group])
+               for group in groups]
+    return [value for future in futures for value in future.result()]
+
+
+def publish_executor_state(
+    pool: str,
+    *,
+    workers: int,
+    queued: int,
+    active: int,
+    resident_threads: int,
+    abandoned: int = 0,
+) -> None:
+    """Publish one internally-consistent executor scheduling snapshot.
+
+    Demand executors are read when metrics are scraped (``ExecutorObservation``);
+    lanes that own their own scheduler publish their full bounded snapshot
+    after each state transition.
+    """
+    metric_pool = _bounded(pool, limit=32)
+    _STORE.set('tofu_executor_workers', max(0, int(workers)), pool=metric_pool)
+    _STORE.set('tofu_executor_queued', max(0, int(queued)), pool=metric_pool)
+    _STORE.set('tofu_executor_active', max(0, int(active)), pool=metric_pool)
+    _STORE.set(
+        'tofu_executor_resident_threads',
+        max(0, int(resident_threads)),
+        pool=metric_pool,
+    )
+    _STORE.set(
+        'tofu_executor_abandoned', max(0, int(abandoned)), pool=metric_pool,
+    )
+
+
+def observe_executor_queue_wait(pool: str, seconds: float) -> None:
+    """Record how long one accepted executor job waited before entry."""
+    _STORE.observe(
+        'tofu_executor_queue_wait_seconds',
+        max(0.0, float(seconds)),
+        _WAIT_BUCKETS,
+        pool=_bounded(pool, limit=32),
+    )
+
+
+def record_executor_rejection(pool: str, *, reason: str) -> None:
+    """Record one bounded-executor refusal without exposing job identity."""
+    metric_pool = _bounded(pool, limit=32)
+    _STORE.inc(
+        'tofu_executor_rejected_total', pool=metric_pool,
+    )
+    _STORE.inc(
+        'tofu_executor_rejection_reasons_total',
+        pool=metric_pool,
+        reason=_bounded(reason, limit=32),
+    )
+
+
+def record_executor_startup_recovery(pool: str, *, outcome: str) -> None:
+    """Observe bounded pre-entry recovery separately from refused submissions."""
+    _STORE.inc('tofu_executor_startup_recoveries_total',
+        pool=_bounded(pool, limit=32),
+        outcome=outcome if outcome in {'accepted', 'failed', 'cancelled'} else 'unknown')
+
+
+def record_executor_abandonment(
+    pool: str,
+    *,
+    recovered: bool,
+    failure_reason: str = 'budget_exhausted',
+) -> None:
+    """Record whether a wedged physical worker received a logical replacement."""
+    _STORE.inc(
+        'tofu_executor_abandonments_total',
+        pool=_bounded(pool, limit=32),
+        outcome=(
+            'recovered' if recovered
+            else _bounded(failure_reason or 'unknown', limit=32)
+        ),
+    )
+
+
+def record_executor_idle_retirement(pool: str, resident_threads: int) -> None:
+    """Record one owner-approved idle generation retirement."""
+    metric_pool = _bounded(pool, limit=32)
+    retired = max(0, int(resident_threads))
+    _STORE.inc('tofu_executor_idle_retirements_total', pool=metric_pool)
+    _STORE.inc(
+        'tofu_executor_idle_retired_threads_total', retired, pool=metric_pool,
+    )
+
+
+_HELP = {
+    'tofu_http_requests_total': 'HTTP requests grouped by method, route template and status.',
+    'tofu_http_request_duration_seconds': 'HTTP request duration in seconds.',
+    'tofu_event_loop_lag_seconds': 'Latest measured event-loop scheduling lag.',
+    'tofu_runtime_probe_failures_total': 'Best-effort runtime host probe failures.',
+    'tofu_cgroup_relief_attempts_total': 'Process-local memory relief passes.',
+    'tofu_cgroup_relief_reclaimed_bytes_total': 'Observed bytes reclaimed during memory relief.',
+    'tofu_cgroup_relief_reclaimed_bytes_latest': 'Latest observed bytes reclaimed during memory relief.',
+    'tofu_cgroup_relief_cache_entries_dropped_total': 'TTL cache entries dropped by memory relief.',
+    'tofu_cgroup_relief_log_files_advised_total': 'Log files given a DONTNEED page-cache hint.',
+    'tofu_cgroup_relief_log_bytes_advised_total': 'Apparent log bytes covered by DONTNEED hints.',
+    'tofu_cgroup_relief_duration_seconds': 'Memory relief pass duration in seconds.',
+    'tofu_task_queue_wait_seconds': 'Task queue wait before a worker starts.',
+    'tofu_task_startup_stage_seconds': 'Conversation executor startup stage duration.',
+    'tofu_llm_first_token_seconds': 'LLM time to first token.',
+    'tofu_llm_route_selection_seconds': 'Dispatcher slot selection, including dispatcher-lock wait.',
+    'tofu_llm_tasks_total': 'Terminal LLM tasks by bounded outcome.',
+    'tofu_llm_total_duration_seconds': 'End-to-end LLM task duration.',
+    'tofu_llm_api_rounds': 'Model API rounds per terminal task.',
+    'tofu_llm_context_tokens': 'Context tokens consumed per terminal task.',
+    'tofu_llm_estimated_cost_usd': 'Estimated USD cost per terminal task.',
+    'tofu_llm_context_tokens_total': 'Context tokens consumed by LLM tasks.',
+    'tofu_llm_cache_read_tokens_total': 'Cached prompt tokens read by LLM tasks.',
+    'tofu_llm_output_tokens_total': 'Output tokens produced by LLM tasks.',
+    'tofu_llm_estimated_cost_usd_total': 'Estimated USD cost of LLM tasks.',
+    'tofu_llm_cache_hit_tasks_total': 'LLM tasks with at least one cached token.',
+    'tofu_stream_connections_total': 'SSE and WebSocket connections opened.',
+    'tofu_stream_connections_active': 'Currently open SSE and WebSocket connections.',
+    'tofu_stream_disconnects_total': 'Stream connection terminal outcomes.',
+    'tofu_stream_replayed_events_total': 'Events replayed after reconnect.',
+    'tofu_stream_admission_total': 'Bounded stream admission and ownership decisions.',
+    'tofu_task_registry_evictions_total': 'Tasks removed from an in-process registry.',
+    'tofu_task_event_evictions_total': 'Task replay events removed at the retention limit.',
+    'tofu_execution_sessions_started_total': 'Resource-owning execution sessions started.',
+    'tofu_execution_sessions_active': 'Active execution sessions by monotonic phase.',
+    'tofu_execution_sessions_terminal_total': 'Execution terminal outcomes and invariant verdicts.',
+    'tofu_execution_session_duration_seconds': 'Execution lifetime through terminal resource settlement.',
+    'tofu_execution_resource_releases_total': 'Execution resources released, deferred to recovery, or failed.',
+    'tofu_execution_deadlines_total': 'Execution deadlines that requested owner cancellation.',
+    'tofu_executor_workers': 'Configured executor worker capacity.',
+    'tofu_executor_resident_threads': 'Currently materialized executor worker threads.',
+    'tofu_executor_active': 'Executor jobs currently running.',
+    'tofu_executor_queued': 'Executor jobs waiting to start.',
+    'tofu_executor_abandoned': 'Wedged executor jobs quarantined behind replacement workers.',
+    'tofu_executor_rejected_total': 'Executor submissions rejected before acceptance.',
+    'tofu_executor_rejection_reasons_total': 'Executor submission refusals grouped by bounded reason.',
+    'tofu_executor_abandonments_total': 'Wedged executor jobs grouped by bounded recovery outcome.',
+    'tofu_executor_queue_wait_seconds': 'Executor queue wait before work starts.',
+    'tofu_executor_idle_retirements_total': 'Idle executor generations retired.',
+    'tofu_executor_idle_retired_threads_total': 'Worker threads released by idle retirement.',
+    'tofu_background_jobs_started_total': 'Owned process-local background jobs started.',
+    'tofu_background_jobs_active': 'Owned process-local background jobs currently active.',
+    'tofu_background_jobs_completed_total': 'Owned background job terminal outcomes.',
+    'tofu_background_job_duration_seconds': 'Owned background job duration in seconds.',
+}
+
+
+def _escape(value: str) -> str:
+    return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+
+
+def _label_text(labels: tuple[tuple[str, str], ...]) -> str:
+    if not labels:
+        return ''
+    return '{' + ','.join(f'{key}="{_escape(value)}"' for key, value in labels) + '}'
+
+
+def prometheus_lines() -> list[str]:
+    """Render a consistent snapshot in Prometheus text format."""
+    with _EXECUTOR_SCRAPE_LOCK:
+        _publish_executor_observations()
+        counters, gauges, histograms = _STORE.snapshot()
+    lines: list[str] = []
+    counter_names = {key[0] for key in counters}
+    scalar_values = {key: value for key, value in gauges.items()
+                     if key[0] not in counter_names}
+    scalar_values.update(counters)
+    for name, samples in groupby(
+            sorted(scalar_values.items()), key=lambda item: item[0][0]):
+        metric_type = 'counter' if name in counter_names else 'gauge'
+        lines.extend((f'# HELP {name} {_HELP.get(name, name)}',
+                      f'# TYPE {name} {metric_type}'))
+        for (_, labels), value in samples:
+            lines.append(f'{name}{_label_text(labels)} {value}')
+
+    for name, samples in groupby(
+            sorted(histograms.items()), key=lambda item: item[0][0]):
+        lines.extend((f'# HELP {name} {_HELP.get(name, name)}',
+                      f'# TYPE {name} histogram'))
+        for (_, labels), state in samples:
+            label_text = _label_text(labels)
+            bucket_prefix = label_text[:-1] + ',' if labels else '{'
+            for upper, count in zip(state['buckets'], state['counts']):
+                lines.append(
+                    f'{name}_bucket{bucket_prefix}le="{upper}"}} {count}')
+            lines.append(f'{name}_bucket{bucket_prefix}le="+Inf"}} '
+                         f'{state["count"]}')
+            lines.append(f'{name}_sum{label_text} {state["sum"]}')
+            lines.append(f'{name}_count{label_text} {state["count"]}')
+    return lines
+
+
+def reset_for_tests() -> None:
+    with _STORE.lock:
+        _STORE.counters.clear()
+        _STORE.gauges.clear()
+        _STORE.histograms.clear()
+        _STORE.label_values.clear()
+        _STORE._label_memo.clear()
+    with _EXECUTOR_OBSERVATION_LOCK:
+        _EXECUTOR_POOL_NAMES.clear()
+
+
+__all__ = [
+    'InstrumentedThreadPoolExecutor', 'connection_close', 'connection_open',
+    'background_job_finished', 'background_job_started',
+    'instrument_sse', 'normalize_route_template', 'prometheus_lines', 'storage_rpc_snapshot',
+    'record_http_request', 'record_llm_first_token', 'record_llm_task',
+    'observe_executor_queue_wait', 'publish_executor_state',
+    'record_executor_abandonment', 'record_executor_idle_retirement',
+    'record_executor_rejection',
+    'record_registry_eviction', 'record_replay', 'record_task_event_eviction',
+    'record_stream_admission',
+    'record_execution_deadline', 'record_execution_phase_transition',
+    'record_execution_resource_release', 'record_execution_started',
+    'record_execution_terminal',
+    'record_cgroup_relief',
+    'record_runtime_probe_failure',
+    'record_task_queue_wait', 'measure_task_startup', 'TaskStartupIntervals',
+    'reset_for_tests', 'route_template_for_request',
+    'set_event_loop_lag',
+]

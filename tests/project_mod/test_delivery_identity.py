@@ -1,0 +1,119 @@
+"""Delivery identity batches reads without caching repository authority."""
+import os
+import subprocess
+from types import SimpleNamespace
+
+import pytest
+
+from lib import integration_control as ic
+from lib.project_mod import delivery, task_delta_delivery
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def repository(tmp_path):
+    root = tmp_path / 'repo'
+    root.mkdir()
+    ic._git(root, ['init'], check=True)
+    ic._git(root, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                   'commit', '--allow-empty', '-m', 'base'], check=True)
+    return root
+
+
+@pytest.mark.parametrize('linked', [False, True])
+def test_identity_subprocess_count_and_relative_cwd(repository, tmp_path, monkeypatch, linked):
+    root = repository
+    workspace = root
+    if linked:
+        workspace = tmp_path / 'linked'
+        ic._git(root, ['worktree', 'add', '--detach', str(workspace)], check=True)
+    nested = workspace / 'nested'
+    nested.mkdir()
+    original = ic._git
+    calls = []
+
+    def observe(cwd, args, **kwargs):
+        calls.append(args)
+        return original(cwd, args, **kwargs)
+
+    monkeypatch.setattr(ic, '_git', observe)
+    assert delivery._canonical(str(nested)) == (root, workspace)
+    assert len(calls) == (3 if linked else 2)
+
+
+@pytest.mark.parametrize('output', ['', '/root\n', '/root\n\n', '/root\n/common\nextra\n'])
+def test_incomplete_identity_refuses(repository, monkeypatch, output):
+    monkeypatch.setattr(ic, '_git', lambda *a, **kw: SimpleNamespace(stdout=output))
+    with pytest.raises(ic.IntegrationError, match='Incomplete'):
+        delivery._canonical(str(repository))
+
+
+def test_linked_identity_rechecks_canonical_repository(repository, tmp_path, monkeypatch):
+    workspace = tmp_path / 'linked'
+    ic._git(repository, ['worktree', 'add', '--detach', str(workspace)], check=True)
+    assert delivery._canonical(str(workspace)) == (repository, workspace)
+    # A later observation cannot reuse earlier canonical identity. Simulate
+    # replacement after the identity read, before canonical validation.
+    original = ic._git
+
+    def changed(cwd, args, **kwargs):
+        result = original(cwd, args, **kwargs)
+        if args[:1] == ['rev-parse'] and '--git-common-dir' in args:
+            monkeypatch.setattr(ic, '_common_dir', lambda path: tmp_path / 'other.git')
+        return result
+
+    monkeypatch.setattr(ic, '_git', changed)
+    with pytest.raises(ic.IntegrationError, match='repository differ'):
+        delivery._canonical(str(workspace))
+
+
+def test_git_failure_propagates(repository, monkeypatch):
+    def fail(*args, **kwargs):
+        raise ic.IntegrationError('identity unavailable')
+    monkeypatch.setattr(ic, '_git', fail)
+    with pytest.raises(ic.IntegrationError, match='identity unavailable'):
+        delivery._canonical(str(repository))
+
+
+def test_identity_reads_outlast_a_wall_clock_deadline(repository, tmp_path, monkeypatch):
+    """On a loaded volume these reads are slow, not stuck: only a stall ends them."""
+    workspace = tmp_path / 'linked'
+    ic._git(repository, ['worktree', 'add', '--detach', str(workspace)], check=True)
+    retired = tmp_path / 'retired'
+    retired.mkdir()
+    original = subprocess.run
+
+    def deadline_expires(argv, *args, **kwargs):
+        if (argv and os.path.basename(str(argv[0])).startswith('git')
+                and any(word in argv for word in ('rev-parse', 'worktree'))):
+            raise subprocess.TimeoutExpired(argv, kwargs.get('timeout') or 30.0)
+        return original(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'run', deadline_expires)
+    assert delivery._canonical(str(workspace)) == (repository, workspace)
+    assert task_delta_delivery.retired_workspace_placeholder(repository, retired)
+
+
+def test_retired_placeholder_reads_registrations_without_a_listing(repository, tmp_path,
+                                                                    monkeypatch):
+    """A registered checkout whose .git is gone is no placeholder; Git is not asked to list."""
+    registered = tmp_path / 'registered'
+    ic._git(repository, ['worktree', 'add', '--detach', str(registered)], check=True)
+    (registered / '.git').unlink()
+    for name in os.listdir(registered):
+        if name != '.git':
+            os.remove(registered / name)
+    retired = tmp_path / 'retired'
+    retired.mkdir()
+    original = ic._git
+    calls = []
+
+    def observe(cwd, args, **kwargs):
+        calls.append(args)
+        return original(cwd, args, **kwargs)
+
+    monkeypatch.setattr(ic, '_git', observe)
+    assert not task_delta_delivery.retired_workspace_placeholder(repository, registered)
+    assert task_delta_delivery.retired_workspace_placeholder(repository, retired)
+    assert not [args for args in calls if args[:1] == ['worktree']]

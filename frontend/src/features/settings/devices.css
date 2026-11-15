@@ -1,0 +1,81 @@
+/* Devices Settings presentation owned and loaded with devices.ts.
+ * Shared .stg-* chrome remains in the application stylesheet. The independent
+ * remote-project device picker remains eager in the retained stylesheet. */
+
+.devices-agent-row td { font-weight: 600; }
+/* Offline agents recede while their status remains readable. */
+.devices-agent-row.devices-offline td { color: var(--s-ink-soft); }
+.devices-agent-row.devices-offline td:first-child { text-decoration: none; }
+.devices-online-dot {
+  color: #16a34a;
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: -1px;
+  text-shadow: 0 0 0 currentColor;
+}
+
+/* Empty lanes sit in the same quiet card as populated ones (as on Display). */
+#settingsTab_devices .stg-empty {
+  border: var(--s-border);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+}
+
+/* Granted permission tiers read as a quiet summary next to the device. */
+.devices-tiers { font-weight: 500; color: var(--s-ink-soft); }
+/* Remove revokes and disconnects a node; it stays compact inside the row. */
+.devices-remove-btn {
+  flex: none;
+  padding: 5px 12px;
+  font-size: 11px;
+}
+/* The one way to add another computer: pairing in Local Control. */
+.devices-add-btn { margin-top: 10px; }
+
+/* Device waits: conversations that continue when one of the devices reconnects. */
+.devices-wait-row {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  border: var(--s-border-sm);
+  border-radius: var(--s-radius);
+  background: var(--s-white);
+  box-shadow: var(--s-shadow-xs);
+  font-size: 12.5px;
+  color: var(--s-ink);
+}
+.devices-wait-row:last-child { margin-bottom: 0; }
+.devices-wait-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.devices-wait-device { font-weight: 700; }
+.devices-wait-row .stg-dim { margin-left: 6px; }
+.devices-wait-reason {
+  display: block;
+  margin-top: 3px;
+  color: var(--s-ink-soft);
+  white-space: pre-wrap;
+}
+.devices-wait-cancel-btn { flex: none; }
+
+/* A failed read is distinct from a successful empty device list. */
+.devices-load-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: var(--s-border-sm);
+  border-color: var(--s-blocked);
+  border-radius: var(--s-radius);
+  background: rgba(248, 113, 113, 0.07);
+  color: var(--s-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+.devices-load-failed-icon { flex: none; color: var(--s-blocked); font-size: 13px; }
+.devices-load-failed-detail {
+  font-weight: 600;
+  color: var(--s-ink-soft);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  word-break: break-word;
+}

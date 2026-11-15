@@ -1,0 +1,399 @@
+/* Conversation prose: one readable column with explicit content rhythm.
+ * Owner: typed text blocks. Scope excludes tool output, reasoning and editors.
+ * Tokens: 00-design-tokens.css; delivery: ordered application manifest.
+ */
+.conversation-surface .conversation-block--text > .md-content {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-font-size-body);
+  font-weight: var(--weight-regular);
+  line-height: var(--conversation-leading-prose);
+  overflow-wrap: anywhere;
+}
+
+
+/* ---- Interim narration well ---------------------------------------------
+ * A reply's interim round prose shares ONE bounded, scrolling body, so many
+ * rounds never stretch the reply while the answer below stays on the open
+ * page. The well is the activity card's last fold: its card chrome and
+ * disclosure row live with the card (23-reading-tool-panel.css). Scroll
+ * shadows use local-attached backgrounds: they appear only on the side that
+ * has more to read. */
+.conversation-surface .conversation-narration__body {
+  --narration-shade: color-mix(in srgb, var(--text-primary) 10%, transparent);
+  max-height: var(--conversation-process-scroll-max);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  padding-inline: var(--space-4) var(--space-3);
+  background:
+    linear-gradient(var(--turn-process-panel), transparent) top / 100% var(--space-6) no-repeat local,
+    linear-gradient(transparent, var(--turn-process-panel)) bottom / 100% var(--space-6) no-repeat local,
+    radial-gradient(farthest-side at 50% 0, var(--narration-shade), transparent) top / 100% var(--space-3) no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, var(--narration-shade), transparent) bottom / 100% var(--space-3) no-repeat scroll;
+}
+
+.conversation-surface .conversation-narration__body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 0 0 var(--conversation-process-radius) var(--conversation-process-radius);
+}
+
+.conversation-surface .conversation-narration__body > .conversation-block--text {
+  margin: 0;
+  padding-block: var(--space-3);
+}
+
+.conversation-surface .conversation-narration__body > .conversation-block--text + .conversation-block--text {
+  border-block-start: var(--control-edge-inset) dashed var(--turn-process-line);
+}
+
+.conversation-surface .conversation-narration__body > .conversation-block--text > .md-content {
+  color: var(--text-secondary);
+}
+/* ---- Coordinator report --------------------------------------------------
+ * The Coordinator's own message to the owner, read inside the reply that sent
+ * it, or as its own Turn when sent outside every reply. One accent edge marks
+ * it as a report, never as that reply's answer. Its spacing is prose spacing
+ * (23-turn-reading-system.css). */
+.conversation-surface .conversation-coordinator-report,
+.conversation-surface .conversation-turn--coordinator-report .conversation-turn-blocks > .conversation-block--text {
+  border-inline-start: calc(2 * var(--control-edge-inset)) solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--turn-process-panel);
+}
+
+.conversation-surface .conversation-turn--coordinator-report .conversation-turn-blocks > .conversation-block--text {
+  padding: var(--space-2) var(--space-3);
+}
+
+/* In a reply the report is one folded row in the process folds' grammar
+ * (23-reading-tool-panel.css): label, title, time, trailing chevron. The
+ * title gives way to an ellipsis first; opened, it only hides, because the
+ * body starts with it, so the row keeps its geometry. */
+.conversation-surface .conversation-coordinator-report__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-md);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--conversation-process-font-size);
+  line-height: var(--leading-title);
+  list-style: none;
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.conversation-surface .conversation-coordinator-report__head::-webkit-details-marker {
+  display: none;
+}
+
+.conversation-surface .conversation-coordinator-report__head:hover {
+  background: var(--turn-process-hover);
+}
+
+.conversation-surface .conversation-coordinator-report__head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.conversation-surface .conversation-coordinator-report__label {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.conversation-surface .conversation-coordinator-report__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-surface .conversation-coordinator-report__fold[open] > .conversation-coordinator-report__head > .conversation-coordinator-report__title {
+  visibility: hidden;
+}
+
+.conversation-surface .conversation-coordinator-report__time {
+  flex: 0 0 auto;
+  font-size: var(--conversation-font-size-meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.conversation-surface .conversation-coordinator-report__chevron.conversation-disclosure-chevron {
+  color: var(--text-tertiary);
+  transform: rotate(-90deg);
+}
+
+.conversation-surface .conversation-coordinator-report__fold[open] > .conversation-coordinator-report__head > .conversation-coordinator-report__chevron.conversation-disclosure-chevron {
+  transform: none;
+}
+
+.conversation-surface .conversation-coordinator-report__fold > [data-coordinator-report-body] {
+  margin: 0 var(--space-3);
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+/* The rubric is a reading toolbar. Text starts on the exact prose baseline;
+ * secondary navigation sits opposite it, never in an extra leading slot. */
+.conversation-surface .conversation-answer-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  margin-block: 0 var(--space-3);
+  padding-block-end: var(--space-1);
+  border-block-end: var(--control-edge-inset) solid var(--turn-rule);
+  color: var(--text-secondary);
+  font-size: var(--conversation-process-font-size);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-title);
+}
+.conversation-surface .conversation-answer-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-primary);
+}
+.conversation-surface .conversation-answer-outline { position: relative; }
+.conversation-surface .conversation-answer-outline > summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
+  gap: var(--space-2);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-sm);
+  list-style: none;
+  cursor: pointer;
+  font-size: var(--conversation-font-size-meta);
+  font-weight: var(--weight-medium);
+}
+.conversation-surface .conversation-answer-outline > summary::after {
+  content: '';
+  width: var(--space-2);
+  height: var(--space-2);
+  border-inline-end: var(--control-edge-inset) solid currentColor;
+  border-block-end: var(--control-edge-inset) solid currentColor;
+  transform: rotate(-45deg);
+}
+.conversation-surface .conversation-answer-outline[open] > summary::after { transform: rotate(45deg); }
+.conversation-surface .conversation-answer-outline > summary::-webkit-details-marker { display: none; }
+.conversation-surface .conversation-answer-outline > summary:hover { background: var(--bg-hover); }
+.conversation-surface .conversation-answer-outline > nav {
+  position: absolute;
+  z-index: 5;
+  inset-inline-end: 0;
+  inset-block-start: calc(100% + var(--space-1));
+  display: grid;
+  gap: var(--space-1);
+  width: min(var(--tool-source-chip-measure), 65vw);
+  max-height: 50vh;
+  overflow: auto;
+  padding: var(--space-2);
+  border: var(--control-edge-inset) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  box-shadow: var(--shadow);
+}
+.conversation-surface .conversation-answer-outline > nav > button { justify-content: flex-start; text-align: start; }
+.conversation-surface .conversation-answer-outline > summary:focus-visible {
+  outline: var(--control-edge-inset) solid var(--accent);
+  outline-offset: var(--space-1);
+}
+.conversation-surface .conversation-block--text[data-deliverable="true"] > .md-content > :is(h1, h2, h3):first-child {
+  margin-block-start: 0;
+  font-size: var(--conversation-font-size-heading-1);
+  line-height: var(--leading-tight);
+  letter-spacing: -.025em;
+}
+
+.conversation-surface .conversation-block--text > .md-content :is(p, ul, ol, pre, table, blockquote) {
+  margin-block: var(--space-3);
+}
+
+.conversation-surface .conversation-block--text > .md-content > :first-child {
+  margin-block-start: 0;
+}
+
+.conversation-surface .conversation-block--text > .md-content > :last-child {
+  margin-block-end: 0;
+}
+
+.conversation-surface .conversation-block--text > .md-content :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: var(--space-5) var(--space-2);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-title);
+  letter-spacing: normal;
+  border: 0;
+  padding: 0;
+}
+
+.conversation-surface .conversation-block--text > .md-content h1 {
+  font-size: var(--conversation-font-size-heading-1);
+}
+
+.conversation-surface .conversation-block--text > .md-content h2 {
+  font-size: var(--conversation-font-size-heading-2);
+}
+
+.conversation-surface .conversation-block--text > .md-content :is(h3, h4, h5, h6) {
+  font-size: var(--conversation-font-size-heading-3);
+}
+
+.conversation-surface .conversation-block--text > .md-content :is(ul, ol) {
+  padding-inline-start: var(--space-6);
+}
+
+.conversation-surface .conversation-block--text > .md-content li {
+  margin-block: var(--space-1);
+  padding-inline-start: var(--space-1);
+}
+
+.conversation-surface .conversation-block--text > .md-content li::marker {
+  color: var(--text-secondary);
+}
+
+.conversation-surface .conversation-block--text > .md-content blockquote {
+  padding: var(--space-1) var(--space-4);
+  border-inline-start: 2px solid var(--border);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.conversation-surface .conversation-block--text > .md-content pre {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.conversation-surface .conversation-block--text > .md-content pre code {
+  font-family: var(--font-mono);
+  display: block;
+  padding: var(--space-3);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+  font-size: var(--conversation-font-size-content);
+  line-height: var(--conversation-leading-compact);
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.conversation-surface .conversation-block--text > .md-content table {
+  max-width: 100%;
+  font-size: var(--conversation-font-size-table);
+  line-height: var(--conversation-leading-compact);
+  border-color: var(--border);
+}
+
+.conversation-surface .conversation-block--text > .md-content .md-table-wrapper {
+  max-width: 100%;
+  margin-block: var(--space-4);
+}
+
+.conversation-surface .conversation-block--text > .md-content .md-table-wrapper > table {
+  margin: 0;
+}
+
+.conversation-surface .conversation-block--text > .md-content :is(.code-header, .table-header) {
+  min-height: var(--control-h-md);
+  padding: var(--space-1) var(--space-3);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-font-size-meta);
+}
+
+.conversation-surface .conversation-block--text > .md-content :is(.code-header, .table-header) button {
+  min-height: var(--control-h-sm);
+  font-size: var(--conversation-font-size-meta);
+  color: var(--text-secondary);
+}
+
+.conversation-surface .conversation-block--text > .md-content :is(th, td) {
+  padding: var(--space-2) var(--space-3);
+  border-color: var(--border);
+  text-align: start;
+}
+
+.conversation-surface .conversation-block--text > .md-content th {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+  background: var(--bg-secondary);
+}
+
+.conversation-surface .conversation-block--text > .md-content a {
+  color: var(--accent);
+  text-decoration-thickness: from-font;
+  text-underline-offset: .18em;
+}
+
+.conversation-surface .conversation-block--text > .md-content a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Projected Markdown images are reading content, not attachment thumbnails. */
+.conversation-surface .md-content img.md-image {
+  display: inline-block;
+  max-width: 100%;
+  max-height: none;
+  height: auto;
+  object-fit: contain;
+  vertical-align: middle;
+  margin: 0;
+  cursor: default;
+}
+
+.conversation-surface .md-content img.md-image:hover {
+  opacity: 1;
+}
+
+.conversation-surface .md-content p.md-image-only {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.conversation-surface .md-content p.md-image-only img.md-image {
+  display: block;
+}
+
+.conversation-surface .md-content p.md-image-only > br {
+  display: none;
+}
+
+.conversation-surface .md-content img.md-preview-image {
+  cursor: zoom-in;
+}
+
+.conversation-surface .md-content a img.md-image {
+  cursor: pointer;
+}
+
+.conversation-surface .md-content img.md-preview-image:focus-visible {
+  outline: calc(2 * var(--control-edge-inset)) solid var(--accent);
+  outline-offset: calc(-2 * var(--control-edge-inset));
+}
+
+.conversation-surface .md-content p.md-image-only > a {
+  display: block;
+  max-width: 100%;
+}

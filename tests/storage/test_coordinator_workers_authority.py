@@ -1,0 +1,270 @@
+"""One accepted Coordinator request delegates via actual native Turn admission.
+
+No paid provider: substitute transport only, retain native authorization, budgets,
+ordinary tool resolution, isolated Git workspaces and report/unread persistence.
+"""
+from pathlib import Path
+import threading
+import uuid
+
+import pytest
+
+from tests.storage.test_native_project_dispatch import native_dispatch_authority as native_dispatch_authority, _git
+
+pytest_plugins = ('tests.support.semantic_authorities',)
+pytestmark = [pytest.mark.api,
+              pytest.mark.parametrize('semantic_authority', ['native'], indirect=True)]
+
+
+@pytest.mark.parametrize('continue_after_restart', [False, True])
+def test_native_delegate_execute_await_report_and_restart(native_dispatch_authority, tmp_path, monkeypatch, continue_after_restart):
+    from lib import turn_lifecycle as turns, integration_control as ic
+    from lib.project_mod import modifications, delivery
+    from lib.conversations.coordinator_tools import execute_coordinator_tool
+    from lib.conversations import coordinator_workers
+    from lib.conversations.project_coordination import ProjectCoordinationRepository
+    from lib.conversations.coordinator_reports import CoordinatorReports
+    from lib.conversations.repository import ConversationRepository
+    from lib.conversation_sync.command_service import ConversationTurnCommandService
+    from lib.project_dispatch import admission
+    from lib.project_dispatch.repository import ProjectDispatchRepository
+    from lib.project_dispatch.service import ProjectDispatchService
+    from lib.project_dispatch.delegation import capture_worker_policy
+    from lib.identity import PrincipalContext
+    from lib.tasks_pkg.workspace_delivery import bind_worker_workspace
+    from lib.tasks_pkg.executor._execute import _execute_tool_one
+    from lib.tasks_pkg.orchestrator._tool_assembly_prep import assemble_round_tools
+    from lib.agent_core.execution_budget import model_budget_admission
+    import json
+
+    factory, owner, engine = native_dispatch_authority
+    root = tmp_path / 'canonical'; root.mkdir()
+    _git(root, 'init', '-b', 'coordinator-workers')
+    _git(root, 'config', 'user.name', 'Test')
+    _git(root, 'config', 'user.email', 'test@example.invalid')
+    (root / 'base.txt').write_text('base\n')
+    _git(root, 'add', 'base.txt'); _git(root, 'commit', '-m', 'base')
+    monkeypatch.setenv('TOFU_INTEGRATION_WORKSPACE_DIR', str(tmp_path / 'workspaces'))
+    monkeypatch.setattr(modifications, 'SESSIONS_DIR', str(tmp_path / 'sessions'))
+    monkeypatch.setattr(modifications, '_live_change_listeners', [])
+    monkeypatch.setattr(ic, '_start_or_wake_worker', lambda: None)
+    monkeypatch.setattr(ic, '_push', lambda *a, **kw: None)
+    monkeypatch.setattr(ic, '_gate_commands', lambda *a, **kw: (True, 'fixture verification'))
+    monkeypatch.setattr(delivery, '_canonical_in_use', lambda *a: False)
+    monkeypatch.setattr(delivery, '_RECOVERY_CURSOR', 0)
+    # Births run inline so this journey observes each delegation's outcome; their
+    # own thread is specified in tests/project_mod/test_coordinator_births.py.
+    from lib.conversations import coordinator_births
+    monkeypatch.setattr(coordinator_births, 'spawn', lambda body, name: body())
+    binding = ProjectCoordinationRepository(owner).create(str(root), folder_id='native-folder',
+        expected_revision=0, command_id='coordinator')
+    conv = binding['conversationId']
+    pair = turns.create_turn_pair(conv, user_id=owner, command_id='original-request',
+        input_projection={'content': 'Implement both parts and verify the result'}, config={})
+    root_id = 'native-file-coordinator-' + uuid.uuid4().hex
+    turns.bind_task(pair['attempt']['attemptId'], root_id, user_id=owner)
+    turns.mark_task_started(pair['attempt']['attemptId'], root_id, user_id=owner)
+    task = {'id': root_id, 'convId': conv, '_userId': owner, '_attended': True, 'messages': [],
+            '_turnId': pair['attempt']['turnId'], '_attemptId': pair['attempt']['attemptId'],
+            '_principalContext': PrincipalContext.user(subject_id=f'user:{owner}', owner_user_id=owner,
+                tenant_id='native-test', scopes=[]).to_payload(),
+            'config': {'projectPath': str(root), 'codeExecEnabled': True, 'autoApply': True,
+                       # As pinned at Coordinator request ingress.
+                       'tools': {'programmaticCalling': 'off'},
+                       '_coordinatorSubmittedToolSettings': {'programmaticCalling': 'on'},
+                       # Server-stamped into every accepted attempt config (docs/PROJECT_COORDINATION.md,
+                       # "Conversation execution identity boundary"); tool assembly reads the owner here.
+                       '_turnOwnerUserId': owner}}
+    from lib.project_dispatch.repository import CONTRACT
+    names = ['read_files', 'write_file', 'run_command', 'spawn_agents', 'timer_create']
+    if continue_after_restart:
+        names += CONTRACT['continuationTools']
+    capture_worker_policy(task, task['config'], [{'function': {'name': n}} for n in names], 'fixture-model',
+                          worker_model='fixture-model')
+    if continue_after_restart:
+        # Capture the original ceiling through actual root assembly, then later
+        # recover it from a planning-only synthetic Coordinator catalog.
+        assemble_round_tools(task['config'], task, {'model': 'fixture-model',
+            'project_path': str(root), 'project_enabled': True, 'search_mode': 'off', 'search_enabled': False,
+            'fetch_enabled': False, 'code_exec_enabled': True, 'browser_enabled': False,
+            'desktop_enabled': False, 'image_gen_enabled': False})
+        assert 'get_project_workers' in task['_coordinatorWorkerPolicy'].coordinator_tools
+    repo = ProjectDispatchRepository(owner, str(root))
+    from lib.project_dispatch.request_budget import bind_source_account, usage
+    source_budget = bind_source_account(task, repository=repo)
+    source_lease = task['_executionBudget'].reserve_model(task, input_tokens=5, max_output_tokens=5)
+    source_lease.mark_dispatched(); source_lease.settle({'prompt_tokens': 5, 'completion_tokens': 5})
+    sends, workspaces, work_ids = [], [], []
+
+    def transport(conv, cfg, data, watermark, bind, **kwargs):
+        identity = 'native-file-worker-' + uuid.uuid4().hex
+        bind(identity)
+        worker = {'id': identity, 'convId': conv, 'config': cfg, 'status': 'running',
+            'messages': [], 'usage': {}, 'toolRounds': [], 'events': [], '_userId': owner,
+            '_principalContext': admission.principal_for(cfg[admission.KEY]).to_payload(),
+            '_tenant_id': admission.principal_for(cfg[admission.KEY]).tenant_id,
+            '_attended': False, '_turnId': cfg['_turnId'], '_attemptId': cfg['_attemptId'],
+            'abort_event': threading.Event()}
+        admission.bind_account(worker)
+        if conv == binding['conversationId']:
+            assert not admission.requires_isolated_workspace(worker)
+            schemas, available = assemble_round_tools(cfg, worker, {'model': 'fixture-model',
+                'project_path': str(root), 'project_enabled': True, 'search_mode': 'off', 'search_enabled': False,
+                'fetch_enabled': False, 'code_exec_enabled': True, 'browser_enabled': False,
+                'desktop_enabled': False, 'image_gen_enabled': False})
+            assert available
+            catalog = {s['function']['name'] for s in worker['_executable_tool_catalog']}
+            assert {'delegate_project_work', 'get_project_workers', 'finish_project_request'} <= catalog
+            assert not {'write_file', 'run_command', 'spawn_agents'} & catalog
+            worker['_testCoordinatorSchemas'] = schemas
+            lease = model_budget_admission(worker)(input_tokens=4, max_output_tokens=6)
+            lease.mark_dispatched(); lease.settle({'prompt_tokens': 4, 'completion_tokens': 6})
+            continuations.append(worker)
+            return identity, None
+        bind_worker_workspace(worker)
+        work = Path(worker['config']['projectPath']); workspaces.append(work)
+        # The checkout belongs to the assignment's work id, not the physical task.
+        work_ids.append(admission.owned_workspace(worker)['task_id'])
+        assert work != root and work_ids[-1] != identity
+        schemas, available = assemble_round_tools(cfg, worker, {'model': 'fixture-model',
+            'project_path': str(work), 'project_enabled': True, 'search_mode': 'off', 'search_enabled': False,
+            'fetch_enabled': False, 'code_exec_enabled': True, 'browser_enabled': False,
+            'desktop_enabled': False, 'image_gen_enabled': False})
+        assert available
+        catalog = {s['function']['name'] for s in worker['_executable_tool_catalog']}
+        # Same capabilities as the human's ordinary conversation, minus role
+        # tools and deferred wakes that would outlive the grant.
+        assert {'read_files', 'write_file', 'run_command', 'spawn_agents'} <= catalog
+        assert not {'timer_create', 'delegate_project_work'} & catalog
+        assert cfg['tools']['programmaticCalling'] == 'on'
+        from lib.tasks_pkg.orchestrator._tool_assembly_prep import attach_gateway_contract_documents
+        assert attach_gateway_contract_documents(worker, 'off')
+        assert 'execute_program' in worker['_tool_gateway_names']
+        lease = model_budget_admission(worker)(input_tokens=4, max_output_tokens=6)
+        lease.mark_dispatched(); sends.append(identity)
+        lease.settle({'prompt_tokens': 4, 'completion_tokens': 6})
+        args = {'path': 'result.txt', 'content': 'native independent worker result\n'}
+        entry = {'name': 'write_file', 'arguments': args, 'query': 'Implement the assigned result'}
+        result = _execute_tool_one(worker, {}, 'write_file', 'native-write', args, 0, entry,
+                                   cfg, str(work), True, schemas)
+        assert 'Error:' not in str(result[1]), result
+        assert (work / 'result.txt').read_text() == args['content']
+        assert not (root / 'result.txt').exists()
+        command = {'command': 'python3 -c "from pathlib import Path; assert Path(\'result.txt\').read_text().startswith(\'native independent\')"'}
+        checked = _execute_tool_one(worker, {}, 'run_command', 'native-check', command, 1,
+            {'name': 'run_command', 'arguments': command, 'query': 'Verify written result'}, cfg, str(work), True, schemas)
+        assert 'Error:' not in str(checked[1]), checked
+        # A Worker's sub-agent borrows the Worker's live grant and isolated workspace.
+        from lib.tasks_pkg.child_invocation import create_child_invocation, close_unstarted_child_invocation
+        child = create_child_invocation(worker, model='fixture-model',
+            tools=[s for s in schemas if s['function']['name'] in ('read_files', 'run_command')],
+            objective='Inspect result.txt', project_path=str(work),
+            event_sink=lambda event: None, abort_check=lambda: False)
+        try:
+            assert admission.validate_task(child) == admission.validate_task(worker)
+            child_cfg = child['config']
+            child_read = _execute_tool_one(child, {}, 'read_files', 'native-child-read', {'path': 'result.txt'}, 0,
+                {'name': 'read_files', 'arguments': {'path': 'result.txt'}, 'query': 'Inspect'},
+                child_cfg, child_cfg['projectPath'], True, schemas)
+            assert 'native independent worker result' in str(child_read[1]), child_read
+            assert not child.get('aborted')
+            # Stopping the Worker fences its sub-agent through the same live root.
+            worker['aborted'] = True
+            try:
+                with pytest.raises(Exception):
+                    admission.validate_task(child)
+            finally:
+                worker['aborted'] = False
+        finally:
+            close_unstarted_child_invocation(child, reason='spec complete', cause='child_admission_failed')
+        factory(write=True).command('turn.event.record', dict(user_id=owner,
+            attempt_id=cfg['_attemptId'], task_id=identity, terminal=True, status='completed',
+            projection={'content': 'Verified independent worker bytes'},
+            settlement={'outcome': 'completed', 'cause': 'stop', 'resumeOptions': []}), uuid.uuid4().hex)
+        return identity, None
+
+    continuations = []
+    commands = ConversationTurnCommandService(build_user_message=lambda message, *args: message,
+        was_aborted_after=lambda *args: False, start_task=transport)
+    service = ProjectDispatchService(repo, commands=commands)
+    monkeypatch.setattr(coordinator_workers, 'ProjectDispatchService', lambda repository: service)
+    brief = 'Write and verify result.txt.\n' + 'Keep the original authorization and every constraint.\n' * 100
+    arguments = {'title': 'Independent implementation', 'brief': brief, 'idempotency_key': 'implementation'}
+    first = json.loads(execute_coordinator_tool(task, 'delegate_project_work', arguments))
+    assert first.get('status') == 'completed', first
+    second = json.loads(execute_coordinator_tool(task, 'delegate_project_work', arguments))
+    assert second == first and len(sends) == 1
+    worker = ConversationRepository().get(first['conversation_id'], user_id=owner, include_messages=False)
+    assert worker.metadata['settings']['folderId'] == 'native-folder'
+    evidence = json.loads(execute_coordinator_tool(task, 'poll', {'ids': [first['assignment_id']], 'wait_s': 1500}))
+    assert evidence['wait'] == 'settled' and evidence['workers'][0]['result_excerpt'] == 'Verified independent worker bytes'
+    row = repo.read(first['assignment_id'])
+    assert row['request']['brief'] == brief
+    assert row['modelAttempts'][0]['reported_tokens'] == 10
+    assert usage(repo, repo._load()[0], source_budget['id'])['tokens'] == 20
+    assert row['toolAttempts'][0]['phase'] == 'executor_returned'
+    assert row['toolAttempts'][1]['phase'] == 'executor_returned'
+    assert work_ids == ['project-worker:' + first['assignment_id']]
+    delivery.settle_task_workspace(str(root), work_ids[0], user_id=owner, outcome='completed')
+    delivery.resume_pending_workspace_deliveries()
+    view = service.view_for_coordinator(first['assignment_id'], scope={'user_id': owner,
+        'project_path': str(root), 'conversation_id': conv, 'binding_revision': binding['revision']})
+    assert view['delivery']['status'] == 'blocked' and not view['canonicalDelivery']
+    # A completed Worker with a held receipt settles a wait at once and names its cause.
+    held = json.loads(execute_coordinator_tool(task, 'poll', {'ids': [first['assignment_id']], 'wait_s': 60}))
+    assert held['wait'] == 'settled' and held['workers'][0]['delivery'] == view['delivery'], held
+    assert 'delivery.reason' in held['instruction']
+    if continue_after_restart:
+        factory(write=True).command('turn.event.record', dict(user_id=owner,
+            attempt_id=task['_attemptId'], task_id=task['id'], terminal=True, status='completed',
+            projection={'content': 'Delegated independent implementation'},
+            settlement={'outcome': 'completed', 'cause': 'stop', 'resumeOptions': []}), uuid.uuid4().hex)
+        engine.crash_cycle()
+        from lib.project_dispatch.recovery import recover_persisted_dispatch
+        from lib.project_dispatch.continuation import recover_coordinator
+        monkeypatch.setattr('lib.project_dispatch.recovery.ProjectDispatchService', lambda repository: service)
+        recover_persisted_dispatch(client=factory())
+        assert len(continuations) == 1
+        task = continuations[0]
+        assert task['_principalContext']['kind'] == 'system'
+        assert recover_coordinator(repo, service=service) == []
+        page = json.loads(execute_coordinator_tool(task, 'get_project_workers', {}))
+        assert page['workers'][0]['assignment_id'] == first['assignment_id'], page
+        assert page['request_usage']['id'] == source_budget['id']
+        assert page['request_usage']['usage']['tokens'] >= 20
+        result = _execute_tool_one(task, {}, 'get_project_workers', 'native-control-read', {}, 0,
+            {'name': 'get_project_workers', 'arguments': {}, 'query': 'Follow Worker results'},
+            task['config'], str(root), True, task['_testCoordinatorSchemas'])
+        assert first['assignment_id'] in str(result[1]) and 'Error:' not in str(result[1]), result
+    reviewed = json.loads(execute_coordinator_tool(task, 'review_project_work', {
+        'assignment_id': first['assignment_id'], 'result_revision': view['execution']['resultRevision'],
+        'decision': 'accept', 'note': 'Worker file bytes and command verification confirmed.',
+        'checkpoint_sha': view['delivery']['checkpointSha']}))
+    assert reviewed.get('decision') == 'accept', reviewed
+    assert reviewed['canonical_delivery'] is False
+    delivery.resume_pending_workspace_deliveries()
+    # Once publication was requested the Worker settles at its canonical delivery.
+    delivered = json.loads(execute_coordinator_tool(task, 'poll', {'ids': [first['assignment_id']], 'wait_s': 0}))
+    assert delivered['wait'] == 'settled' and delivered['workers'][0]['canonical_delivery'], delivered
+    assert delivered['workers'][0]['publication_requested'], delivered
+    assert (root / 'result.txt').read_text() == 'native independent worker result\n'
+    report = json.loads(execute_coordinator_tool(task, 'report_to_user', {
+        'title': 'Implementation delivered', 'message': 'Worker verification passed and canonical delivery is confirmed.',
+        'kind': 'delivery', 'idempotency_key': 'verified'}))
+    assert report.get('turnId'), report
+    from lib.conversations.coordinator_budget import read_state
+    engine.crash_cycle()
+    persisted = read_state(owner, str(root))
+    assert persisted['request']['id'] == source_budget['id'] and 'policy' not in persisted['request']
+    assert persisted['request']['usage']['tokens'] >= 20
+    assert CoordinatorReports(owner, str(root)).read()['unread'] is True
+    assert json.loads(execute_coordinator_tool(task, 'delegate_project_work', arguments)) == first
+    assert len(sends) == 1 and not workspaces[0].exists()
+    assert (root / 'result.txt').read_text() == 'native independent worker result\n'
+    if continue_after_restart:
+        receipt = json.loads(execute_coordinator_tool(task, 'finish_project_request', {
+            'report_turn_id': report['turnId'], 'outcome': 'complete'}))
+        assert receipt.get('reason') == 'complete', receipt
+        engine.crash_cycle()
+        assert recover_coordinator(repo, service=service) == []
+        assert len(continuations) == 1

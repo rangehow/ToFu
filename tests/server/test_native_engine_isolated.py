@@ -1,0 +1,250 @@
+"""Isolated certification must never publish into a running deployment."""
+import hashlib
+from pathlib import Path
+
+import pytest
+
+from serverctl_pkg import native_engine as engines
+from tests.server.test_native_engine_update import binary
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def source(tmp_path):
+    root = tmp_path / 'source'
+    crate = root / 'packages/tofu-db'
+    (crate / 'src').mkdir(parents=True)
+    (crate / 'Cargo.toml').write_text('[package]\nname="tofu-db"\nversion="0.1.0"\n')
+    (crate / 'src/lib.rs').write_text('source')
+    (root / '.env').write_text('TOFUDB_EXPECTED_SHA256=live-pin\n')
+    return root
+
+
+def test_isolated_candidate_preserves_configuration(source, tmp_path, monkeypatch):
+    candidate = binary(tmp_path / 'candidate/tofu-db', engines.source_fingerprint(source))
+    before = (source / '.env').read_bytes()
+    probes = []
+    monkeypatch.setattr(engines, '_validate_candidate', lambda *args: probes.append(args))
+    monkeypatch.setattr(engines, '_build', lambda *a, **k: pytest.fail('explicit candidate must not build'))
+    result = engines.prepare_isolated(source, tmp_path / 'isolated', candidate=candidate,
+                                     environment={'TOFUDB_EXPECTED_SHA256': 'live-pin'})
+    assert result.read_bytes() == candidate.read_bytes()
+    assert probes[0][0] == candidate
+    assert 'TOFUDB_EXPECTED_SHA256' not in probes[0][2]
+    assert (source / '.env').read_bytes() == before
+    assert not (source / 'packages/tofu-db/target').exists()
+    assert result.with_name(result.name + '.sha256').is_file()
+
+
+def test_explicit_stale_candidate_fails_without_build(source, tmp_path, monkeypatch):
+    candidate = binary(tmp_path / 'candidate/tofu-db', '0' * 64)
+    monkeypatch.setattr(engines, '_build', lambda *a, **k: pytest.fail('no replacement'))
+    with pytest.raises(engines.EnginePreparationError, match='does not match'):
+        engines.prepare_isolated(source, tmp_path / 'isolated', candidate=candidate, environment={})
+    assert not (tmp_path / 'isolated/tofu-db').exists()
+
+
+@pytest.mark.parametrize('failure', ['probe', 'source'])
+def test_certification_failure_never_publishes(source, tmp_path, monkeypatch, failure):
+    candidate = binary(tmp_path / 'candidate/tofu-db', engines.source_fingerprint(source))
+    def probe(*args):
+        if failure == 'probe':
+            raise engines.EnginePreparationError('probe failed')
+        (source / 'packages/tofu-db/src/lib.rs').write_text('changed')
+    monkeypatch.setattr(engines, '_validate_candidate', probe)
+    with pytest.raises(engines.EnginePreparationError):
+        engines.prepare_isolated(source, tmp_path / 'isolated', candidate=candidate, environment={})
+    assert not (tmp_path / 'isolated/tofu-db').exists()
+
+
+def test_build_uses_private_root_and_cleans_it(source, tmp_path, monkeypatch):
+    seen = []
+    def build(root, staging, env, *, build_root):
+        seen.append(build_root)
+        assert build_root.is_relative_to(tmp_path / 'isolated')
+        return binary(build_root / 'release/tofu-db', engines.source_fingerprint(root))
+    monkeypatch.setattr(engines, '_build', build)
+    monkeypatch.setattr(engines, '_validate_candidate', lambda *a: None)
+    engines.prepare_isolated(source, tmp_path / 'isolated', environment={})
+    assert not seen[0].exists()
+    assert not (source / 'packages/tofu-db/target').exists()
+
+
+def test_existing_or_checkout_output_refused(source, tmp_path):
+    with pytest.raises(FileExistsError):
+        engines.prepare_isolated(source, tmp_path, environment={})
+    with pytest.raises(engines.EnginePreparationError, match='outside'):
+        engines.prepare_isolated(source, source / 'new', environment={})
+
+
+def test_pytest_explicit_candidate_is_certified_and_repinned(tmp_path, monkeypatch):
+    from tests.conftest import _configure_explicit_test_engine
+    candidate = tmp_path / 'tofu-db'
+    candidate.write_bytes(b'candidate')
+    seen = []
+    monkeypatch.setattr(engines, 'verify_current', lambda *args: seen.append(args))
+    env = {'TOFU_TEST_TOFUDB_BIN': str(candidate), 'TOFUDB_EXPECTED_SHA256': 'live-pin'}
+    _configure_explicit_test_engine(env)
+    assert seen[0][0] == candidate
+    assert env['TOFUDB_BIN'] == str(candidate)
+    assert env['TOFUDB_EXPECTED_SHA256'] == hashlib.sha256(b'candidate').hexdigest()
+
+
+def test_pytest_explicit_candidate_refusal_is_fatal(tmp_path, monkeypatch):
+    from tests.conftest import _configure_explicit_test_engine
+    def refuse(*args):
+        raise engines.EnginePreparationError('stale')
+    monkeypatch.setattr(engines, 'verify_current', refuse)
+    with pytest.raises(pytest.UsageError, match='Explicit test engine refused'):
+        _configure_explicit_test_engine({'TOFU_TEST_TOFUDB_BIN': str(tmp_path / 'missing')})
+
+
+def test_pytest_explicit_candidate_serves_differential_fixtures_without_building(tmp_path, monkeypatch):
+    from tests.conftest import _configure_explicit_test_engine
+    from tests.support import tofudb_binary as binary_support
+    candidate = tmp_path / 'tofu-db'
+    candidate.write_bytes(b'candidate')
+    candidate.chmod(0o755)
+    monkeypatch.setattr(engines, 'verify_current', lambda *args: None)
+    env = {'TOFU_TEST_TOFUDB_BIN': str(candidate)}
+    _configure_explicit_test_engine(env)
+    monkeypatch.setenv('TOFUDB_DIFFERENTIAL_BIN', env.get('TOFUDB_DIFFERENTIAL_BIN', ''))
+    monkeypatch.setattr(binary_support, '_RESOLVED', None)
+    monkeypatch.setattr(binary_support, '_RESOLUTION_ATTEMPTED', False)
+    monkeypatch.setattr(binary_support, '_FAILURE', None)
+    monkeypatch.setattr(binary_support, '_cargo_build', lambda *args: pytest.fail(
+        'an explicit test engine must not start an in-tree cargo build'))
+    assert binary_support.ensure_engine_binary(tmp_path) == candidate
+    explicit = {'TOFU_TEST_TOFUDB_BIN': str(candidate), 'TOFUDB_DIFFERENTIAL_BIN': '/supplied/tofu-db'}
+    _configure_explicit_test_engine(explicit)
+    assert explicit['TOFUDB_DIFFERENTIAL_BIN'] == '/supplied/tofu-db'
+def _refuse_inherited_engine():
+    raise engines.EngineAdmissionRefusedError(
+        'Storage engine does not match this application.')
+
+
+def test_shared_test_storage_skips_an_inherited_engine_built_from_other_source(monkeypatch):
+    import lib.storage
+    from tests.conftest import _start_test_storage
+    monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
+    monkeypatch.setattr(lib.storage, 'start_storage', _refuse_inherited_engine)
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        _start_test_storage()
+    reason = str(skipped.value)
+    assert 'does not match this application' in reason
+    assert 'TOFU_TEST_TOFUDB_BIN' in reason
+    assert 'TOFU_PERSONAL_STORAGE_BACKEND=sqlite' in reason
+
+
+def test_shared_test_storage_refusal_stays_fatal_for_an_explicit_engine(tmp_path, monkeypatch):
+    import lib.storage
+    from tests.conftest import _start_test_storage
+    monkeypatch.setenv('TOFU_TEST_TOFUDB_BIN', str(tmp_path / 'tofu-db'))
+    monkeypatch.setattr(lib.storage, 'start_storage', _refuse_inherited_engine)
+    with pytest.raises(engines.EnginePreparationError):
+        _start_test_storage()
+
+
+@pytest.mark.parametrize('phase', ['pytest_runtest_setup', 'pytest_runtest_call'])
+def test_native_refusal_in_any_fixture_or_test_body_skips_with_the_remedy(phase, monkeypatch):
+    import tests.conftest as conftest
+    monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
+    hook = getattr(conftest, phase)(item=None)
+    next(hook)
+    with pytest.raises(pytest.skip.Exception) as skipped:
+        hook.throw(engines.EngineAdmissionRefusedError(
+            'Storage engine does not match this application.'))
+    reason = str(skipped.value)
+    assert 'does not match this application' in reason
+    assert 'TOFU_TEST_TOFUDB_BIN' in reason
+    assert 'TOFU_PERSONAL_STORAGE_BACKEND=sqlite' in reason
+
+
+@pytest.mark.parametrize('phase', ['pytest_runtest_setup', 'pytest_runtest_call'])
+def test_native_refusal_stays_fatal_in_an_explicit_engine_lane(phase, tmp_path, monkeypatch):
+    import tests.conftest as conftest
+    monkeypatch.setenv('TOFU_TEST_TOFUDB_BIN', str(tmp_path / 'tofu-db'))
+    hook = getattr(conftest, phase)(item=None)
+    next(hook)
+    with pytest.raises(engines.EnginePreparationError):
+        hook.throw(engines.EngineAdmissionRefusedError('stale'))
+
+
+def test_only_the_typed_engine_refusal_becomes_a_skip(monkeypatch):
+    import tests.conftest as conftest
+    monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
+    hook = conftest.pytest_runtest_setup(item=None)
+    next(hook)
+    with pytest.raises(RuntimeError, match='authority defect'):
+        hook.throw(RuntimeError('authority defect'))
+
+
+@pytest.mark.parametrize('phase', ['pytest_runtest_setup', 'pytest_runtest_call'])
+def test_other_preparation_failures_are_not_reported_as_engine_refusals(phase, monkeypatch):
+    # The execution service shares the preparation runner; its timeout is a
+    # failure of the code under test, never a missing engine prerequisite.
+    import tests.conftest as conftest
+    monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
+    hook = getattr(conftest, phase)(item=None)
+    next(hook)
+    with pytest.raises(engines.EnginePreparationError, match='timed out'):
+        try:
+            hook.throw(engines.EnginePreparationError(
+                'Execution service preparation timed out after 120.0s (time budget exhausted).'))
+        except pytest.skip.Exception as skipped:
+            pytest.fail(f'a preparation failure was reported as a skip: {skipped}')
+
+
+def test_engine_identity_mismatch_is_the_typed_admission_refusal(tmp_path, monkeypatch):
+    monkeypatch.setattr(engines, 'source_fingerprint', lambda root: '1' * 64)
+    monkeypatch.setattr(engines, 'build_identity', lambda binary: {'source_sha256': '0' * 64})
+    with pytest.raises(engines.EngineAdmissionRefusedError, match='does not match'):
+        engines.verify_current(tmp_path / 'tofu-db', tmp_path)
+
+
+def test_unanswered_identity_probe_refuses_admission_with_its_cause(tmp_path, monkeypatch):
+    def timeout(*args, **kwargs):
+        raise engines.EnginePreparationError('Storage engine preparation timed out after 10.0s')
+    monkeypatch.setattr(engines, '_run', timeout)
+    with pytest.raises(engines.EngineAdmissionRefusedError, match='timed out') as refused:
+        engines.build_identity(tmp_path / 'tofu-db')
+    assert type(refused.value.__cause__) is engines.EnginePreparationError
+
+
+def test_child_process_prerequisite_refuses_like_the_application(monkeypatch):
+    import lib.storage.supervisor as supervisor
+    from tests.support.native_engine_prerequisite import require_native_engine_for_checkout
+    monkeypatch.delenv('TOFU_TEST_TOFUDB_BIN', raising=False)
+    monkeypatch.setattr(supervisor, '_resolve_tofudb_binary', _refuse_inherited_engine)
+    with pytest.raises(pytest.skip.Exception, match='TOFU_TEST_TOFUDB_BIN'):
+        require_native_engine_for_checkout()
+
+
+def test_isolated_output_symlink_is_never_followed(source, tmp_path):
+    target = tmp_path / 'existing'
+    target.mkdir()
+    link = tmp_path / 'linked'
+    link.symlink_to(target, target_is_directory=True)
+    with pytest.raises(FileExistsError):
+        engines.prepare_isolated(source, link, environment={})
+    assert list(target.iterdir()) == []
+
+
+def test_build_routes_snapshot_and_cargo_target_to_private_directory(source, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import runtime_guards
+
+    private = tmp_path / 'private'
+    private.mkdir()
+    calls = []
+    monkeypatch.setattr(engines.shutil, 'which', lambda name, **kw: '/toolchain/' + name)
+    monkeypatch.setattr(engines, '_c_compiler_accepts_date_time', lambda _: True)
+    monkeypatch.setattr(runtime_guards, 'probe_system_resources', lambda env: SimpleNamespace(
+        effective_cpu_count=2, effective_memory_available_mb=2048))
+    monkeypatch.setattr(engines, '_run', lambda command, **kw: calls.append(kw))
+    result = engines._build(source, private, {}, build_root=private)
+    assert result.is_relative_to(private)
+    assert calls[0]['cwd'].is_relative_to(private)
+    assert Path(calls[0]['environment']['CARGO_TARGET_DIR']).is_relative_to(private)
+    assert not (source / 'packages/tofu-db/target').exists()

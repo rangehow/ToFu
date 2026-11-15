@@ -1,0 +1,1437 @@
+"""lib/tools/registry/_build.py — Built-in tool-spec builders + registration.
+
+Each ``_build_*`` reproduces exactly one legacy ``if feature: …`` branch
+(including its logging + lazy imports), and :func:`_register_builtins` wires
+them into the registry in the canonical, prompt-cache-stable order:
+
+    search → fetch → read_files → inspect_image → project|code_exec →
+    browser → desktop → image_gen → conv_ref → human_guidance →
+    ⟨base/capability boundary⟩ → memory → skills → todo → scheduler →
+    swarm → mcp → custom (always last)
+
+:func:`_register_builtins` is invoked once at package import (from
+``lib/tools/registry/__init__.py``) so ``_TOOL_SPECS`` is populated as a
+side-effect of importing ``lib.tools.registry`` — the behaviour the monolith
+had. Heavy schema imports stay inside the builders (called at request time).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+from lib.log import get_logger
+
+from lib.tools.environment_capabilities import BROWSER, DEVICES, GIT, SHELL
+from lib.tools.registry._spec import (
+    StreamStartPort,
+    ToolContext,
+    ToolSpec,
+    register_tool_spec,
+)
+
+logger = get_logger(__name__)
+
+
+# ══════════════════════════════════════════════════════════
+#  Built-in spec builders — each reproduces one legacy branch
+#  exactly (including its logging).  Heavy imports stay lazy.
+# ══════════════════════════════════════════════════════════
+
+def _build_search(ctx: ToolContext) -> list[dict]:
+    # 'single' is a retired mode kept as a legacy alias for old conversations
+    # — it now behaves like 'multi' (the one-shot SEARCH_TOOL_SINGLE schema
+    # was removed). The composer exposure gate decides whether its schema is
+    # visible; the builder describes runtime availability only.
+    from lib.tools.search import build_search_tool
+    return [build_search_tool()]
+
+
+def _build_retained_agents(ctx: ToolContext) -> list[dict]:
+    if not ctx.durable_state_available:
+        return []
+    from lib.tools.retained_agents import LIST_AGENTS_TOOL, MANAGE_AGENTS_TOOL
+    return [LIST_AGENTS_TOOL, MANAGE_AGENTS_TOOL]
+
+
+def _build_search_settings(ctx: ToolContext) -> list[dict]:
+    # update_search_settings tunes the pipeline web_search/fetch_url run on,
+    # so its wire exposure rides the SAME gate. Registered as its own spec
+    # appended at the END of the base phase: inserting it into the search spec
+    # put it mid-list (position 2), which broke the cache-stable tool-order ratchet
+    # (tests/tools/test_tool_registry.py::TestOrdering).
+    if not ctx.durable_state_available:
+        return []
+    from lib.tools.search import build_update_search_settings_tool
+    return [build_update_search_settings_tool()]
+
+
+def _build_knowledge(ctx: ToolContext) -> list[dict]:
+    # The corpus owns its own persisted enable switch. Crucially, an empty or
+    # disabled corpus contributes ZERO schema tokens — no phantom knowledge
+    # tool in fresh installs and no invitation for the model to call a tool
+    # that cannot return evidence.
+    if not ctx.durable_state_available:
+        return []
+    from lib.knowledge.tool import build_tool
+    return build_tool(ctx)
+
+
+def _handle_knowledge(*args, **kwargs):
+    """Lazy dispatch shim; keeps knowledge storage out of registry import."""
+    from lib.knowledge.tool import handle_tool
+    return handle_tool(*args, **kwargs)
+
+
+def _build_fetch(ctx: ToolContext) -> list[dict]:
+    from lib.tools.search import build_fetch_url_tool
+    return [build_fetch_url_tool()]
+
+
+def _build_browser_download(ctx: ToolContext) -> list[dict]:
+    """Append-only explicit server-location download capability."""
+    from lib.tools.search import build_browser_download_url_to_server_tool
+    return [build_browser_download_url_to_server_tool()]
+
+
+def _build_read_files(ctx: ToolContext) -> list[dict]:
+    # read_files is ALWAYS on — handles project-relative AND absolute local
+    # paths (images, PDFs, Office docs, text), so the model can read local
+    # content even with no project attached.
+    from lib.tools.project import READ_FILES_TOOL
+    return [READ_FILES_TOOL]
+
+
+def _build_inspect_image(ctx: ToolContext) -> list[dict]:
+    # inspect_image is ALWAYS on (like read_files) — it re-renders a region
+    # of any local image at full resolution so the model can read detail the
+    # initial downscale discarded. No project / vision toggle gates it; the
+    # dispatch path drops the resulting image for text-only models anyway.
+    from lib.tools.image_edit import INSPECT_IMAGE_TOOL
+    return [INSPECT_IMAGE_TOOL]
+
+
+def _build_inspect_video(ctx: ToolContext) -> list[dict]:
+    # Always available like inspect_image. A deployment without ffmpeg or
+    # with video analysis disabled answers the call with a typed error.
+    from lib.tools.video_inspect import INSPECT_VIDEO_TOOL
+    return [INSPECT_VIDEO_TOOL]
+
+
+def _build_project_result_meta(
+    tool_name: str,
+    tool_args: dict,
+    tool_content: str,
+) -> dict:
+    """Lazy project-plugin adapter for the core result-metadata seam."""
+    from lib.tools.meta import build_project_tool_meta
+    return build_project_tool_meta(tool_name, tool_args, tool_content)
+
+
+def project_dispatch_tool_schemas(names) -> list[dict]:
+    """Copy canonical file declarations for an already admitted dispatch profile."""
+    from copy import deepcopy
+    from lib.tools.project import READ_FILES_TOOL, PROJECT_TOOL_WRITE_FILE, PROJECT_TOOL_EDIT_FILE
+    return [deepcopy(tool) for tool in (
+        READ_FILES_TOOL, PROJECT_TOOL_WRITE_FILE, PROJECT_TOOL_EDIT_FILE,
+    ) if tool['function']['name'] in names]
+
+
+def _build_project_or_code_exec(ctx: ToolContext) -> list[dict]:
+    # ``project_ready`` is evaluated from the current request, so attaching or
+    # detaching Project Brain changes the next assembled tool surface directly.
+    from lib.tools.code_exec import CODE_EXEC_TOOL
+    from lib.tools.project import project_tools_for_runtime
+    project_tools = project_tools_for_runtime()
+    if ctx.project_ready:
+        # Environment-specific routing guidance belongs in the context
+        # composer's trailing user carrier. Tool declarations stay canonical
+        # across local/remote and single/multi-root requests.
+        tools = list(project_tools)
+    else:
+        tools = [CODE_EXEC_TOOL]
+    if ctx.no_saved_conversation:
+        from lib.tools.background_guidance import project_no_saved_conversation_tools
+        tools = project_no_saved_conversation_tools(tools)
+    elif not ctx.delivers_deferred_completions:
+        from lib.tools.background_guidance import project_run_completion_tools
+        tools = project_run_completion_tools(tools)
+    return tools
+
+
+def _build_browser(ctx: ToolContext) -> list[dict]:
+    from lib.browser.availability import browser_extension_availability
+    if browser_extension_availability(ctx.owner_user_id)['available']:
+        from lib.browser.advanced import ADVANCED_BROWSER_TOOLS
+        from lib.tools.browser import browser_tools
+        tools = browser_tools() + list(ADVANCED_BROWSER_TOOLS)
+        logger.debug('[Task %s] Browser extension connected — browser tools '
+                     'enabled (%d tools)', ctx.tid, len(tools))
+        return tools
+    logger.debug('[Task %s] Browser tools unavailable: extension not connected',
+                 ctx.tid)
+    return []
+
+
+def _browser_tool_spec() -> ToolSpec:
+    """Spec for the extension-driven browser family (see build_builtin_specs)."""
+    return ToolSpec('browser', _build_browser, phase='base',
+                    # 15 names = BROWSER_TOOLS (13) + ADVANCED_BROWSER_TOOLS (2).
+                    # v2 (): the ten retired names are NOT
+                    # declared — their tool_registry registration shrank with
+                    # BROWSER_TOOL_NAMES, so there is no handler left to declare
+                    # (their display formatters remain for history rendering).
+                    provides=frozenset({
+                        'browser_navigate', 'browser_read_page', 'browser_list_tabs',
+                        'browser_research_page', 'browser_devtools', 'browser_site',
+                        'browser_close_tab', 'browser_click', 'browser_type',
+                        'browser_press_key', 'browser_execute_js',
+                        'browser_screenshot', 'browser_get_cookies',
+                        'browser_get_history', 'browser_fill_form',
+                        'browser_menu_click',
+                        'browser_check', 'browser_select_option',
+                        'browser_scroll',
+                    }),
+                    # search_hints: private retrieval aliases/intents (ranking
+                    # weight ×3, never serialized into the wire schema). Without
+                    # them, terse wire descriptions let BM25 mis-rank core intents
+                    # ("click a button" → get_cookies, "read the page" →
+                    # list_tabs, "go to a url" → list_tabs). Each action verb is
+                    # pinned to its tool; browser_fill_form yields click/button
+                    # terms to browser_click.
+                    search_hints={
+                        'browser_click': (
+                            'click press button link tap element click on '
+                            'single one 点击 按钮 链接 点击元素 单击'),
+                        'browser_navigate': (
+                            'navigate go to open website url visit load page '
+                            '打开网址 访问 跳转 进入网站'),
+                        'browser_read_page': (
+                            'read see view page content text what is on extract '
+                            '看页面 读取内容 页面文字 提取'),
+                        'browser_type': (
+                            'type enter input text field write 输入 填写 打字'),
+                        'browser_fill_form': (
+                            'fill form multiple fields several at once upload '
+                            'file attach batch 填表 表单 上传文件 批量填写 多个字段'),
+                        'browser_press_key': (
+                            'press key enter escape tab keyboard shortcut hotkey '
+                            '按键 回车 快捷键'),
+                        'browser_check': (
+                            'check uncheck checkbox radio toggle switch '
+                            '勾选 复选框 单选 开关'),
+                        'browser_select_option': (
+                            'select option dropdown combobox pick choose '
+                            '下拉选择 选项 下拉框'),
+                        'browser_menu_click': (
+                            'menu right click context hover dropdown submenu '
+                            '菜单 右键 悬停 子菜单'),
+                        'browser_screenshot': (
+                            'screenshot capture image picture snap 截图 截屏'),
+                        'browser_list_tabs': (
+                            'list tabs open tabs current tab 标签页 列出标签'),
+                        'browser_close_tab': 'close tab 关闭标签页',
+                        'browser_execute_js': (
+                            'run javascript execute js code evaluate script '
+                            '执行js 运行脚本'),
+                        'browser_scroll': (
+                            'scroll down up top bottom page reveal more content '
+                            '滚动 下拉 翻页 到底部 查看更多'),
+                    },
+                    # These DRIVE the user's real browser session, so they belong
+                    # in the write partition + behind the Manual approval gate
+                    # (_pipeline.py derives needs_approval from it). Until this
+                    # was declared, browser_execute_js could run arbitrary JS in
+                    # the user's page with no prompt.
+                    # NOTE: this makes them SERIAL — a deliberate behaviour change;
+                    # concurrent clicks on one page were never actually safe.
+                    write_tools=frozenset({
+                        'browser_navigate', 'browser_click', 'browser_type',
+                        'browser_press_key', 'browser_execute_js',
+                        'browser_research_page', 'browser_devtools', 'browser_site',
+                        'browser_fill_form', 'browser_menu_click',
+                        'browser_close_tab',
+                        'browser_check', 'browser_select_option',
+                    }),
+                    # Read-only observers stay parallel-safe AND cacheable within
+                    # a task. browser_read_page/screenshot are deliberately NOT
+                    # idempotent — the page changes under us between calls.
+                    idempotent_tools=frozenset({
+                        'browser_list_tabs',
+                    }),
+                    # Read-only/idempotent does not mean snapshot-stable. Tabs,
+                    # page DOM, history and cookies may change between identical
+                    # calls, so this live family opts out of same-task reuse.
+                    cacheable_tools=frozenset(),
+                    # The composer flag is always on and has no toggle, so no
+                    # human choice pins this family: it stays Tool-Search
+                    # deferred instead of riding every request eagerly.
+                    discovery_policy='searchable',
+                    category='browser', description='Browser automation tools',
+                    gate='安装并连接浏览器扩展（设置 → 网络）',
+                    exposure_gate=lambda ctx: ctx.browser_enabled)
+
+
+def _build_desktop(ctx: ToolContext) -> list[dict]:
+    from lib.desktop import is_desktop_agent_connected
+    if is_desktop_agent_connected():
+        from lib.desktop_tools import DESKTOP_TOOLS
+        logger.debug('[Task %s] 🖥️ Desktop agent connected — %d desktop tools '
+                     'enabled', ctx.tid, len(DESKTOP_TOOLS))
+        return list(DESKTOP_TOOLS)
+    logger.debug('[Task %s] Desktop tools unavailable: agent not connected',
+                 ctx.tid)
+    return []
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _build_page_preview(ctx: ToolContext) -> list[dict]:
+    # Server-side rendered page preview (browser_preview_page). Gated on a
+    # project being attached — the primary mode renders a project file —
+    # and deliberately NOT on browser_enabled / the extension: the render
+    # runs in the shared server-side Playwright pool. Pool unavailability
+    # is reported by the handler at call time, never here (schema build
+    # must not launch Chromium).
+    if not ctx.project_ready:
+        return []
+    from lib.tools.browser import BROWSER_TOOL_PREVIEW_PAGE
+    logger.debug('[Task %s] Page-preview tool enabled (server-side render)',
+                 ctx.tid)
+    return [BROWSER_TOOL_PREVIEW_PAGE]
+
+
+def _build_conv_ref(ctx: ToolContext) -> list[dict]:
+    # CONV_REF_TOOLS = [list_conversations, get_conversation] — BOTH are
+    # read-only (discover siblings + open one). Register them in two cases:
+    #   (a) the user @-mentioned a conversation (the classic explicit path), OR
+    #   (b) we're in project mode — the always-on cross-conv digest
+    #       (Context Composer) names sibling conversations for ambient
+    #       awareness, so the model must be ABLE to open a surfaced sibling
+    #       rather than being told about phantom tools. Gating only on
+    #       has_conv_ref meant the digest header advertised tools absent from
+    #       the schema on a plain project turn (the conv_tools_available
+    #       branch). Registering them in project mode closes that gap.
+    # Both branches require at least one base tool (current_count > 0): with no
+    # tools at all there's no schema to extend.
+    #
+    # Project Brain is signal-driven and contributes no tool schemas.  The
+    # adjacent project_integration spec owns the two retained execution tools.
+    if not ctx.durable_state_available or ctx.current_count <= 0:
+        return []
+    if ctx.has_conv_ref or (ctx.project_enabled and ctx.project_path):
+        from lib.tools.conversation import CONV_REF_TOOLS
+        logger.debug('[Task %s] 💬 conv_ref tools enabled (has_conv_ref=%s '
+                     'project=%s)', ctx.tid, ctx.has_conv_ref,
+                     bool(ctx.project_enabled and ctx.project_path))
+        return list(CONV_REF_TOOLS)
+    return []
+
+
+def _build_project_integration(ctx: ToolContext) -> list[dict]:
+    """Expose only execution controls for an existing isolated workspace."""
+    if not ctx.durable_state_available or ctx.current_count <= 0:
+        return []
+    if ctx.project_enabled and ctx.project_path:
+        from lib.tools.conversation import INTEGRATION_TOOLS
+        from lib.conversations.project_messages import TOOLS
+        return list(INTEGRATION_TOOLS) + list(TOOLS)
+    return []
+
+
+def _project_integration_tool_spec() -> ToolSpec:
+    """Project Brain contributes zero schemas.  These two tools belong to
+    the isolated execution pipeline and are bound to the automatic work
+    ID; they do not read or mutate Board/Feed/Charter state."""
+    return ToolSpec('project_integration', _build_project_integration, phase='base',
+                    provides=frozenset({
+                        'integration_checkpoint', 'integration_submit',
+                        'send_project_message', 'get_project_messages', 'consider_project_message',
+                    }),
+                    write_tools=frozenset({'send_project_message', 'consider_project_message'}),
+                    # Both create checkpoint refs of the isolated worktree, so
+                    # they are effects, never reads. Repeating one captures the
+                    # same workspace again (a submitted one refuses), so they
+                    # stay retry-safe without a write approval; a checkpoint is
+                    # never served from an earlier result.
+                    idempotent_tools=frozenset({'integration_checkpoint', 'integration_submit'}),
+                    cacheable_tools=frozenset(),
+                    # Workspace checkpoints are Git refs of the isolated worktree.
+                    environment_requirements_by_name={
+                        'integration_checkpoint': frozenset({GIT}),
+                        'integration_submit': frozenset({GIT}),
+                    },
+                    # The mailbox belongs to the sending conversation; the
+                    # integration tools address the task's own workspace instead.
+                    saved_conversation_tools=frozenset({
+                        'send_project_message', 'get_project_messages',
+                        'consider_project_message',
+                    }),
+                    discovery_policy='searchable',
+                    search_hints={
+                        'integration_checkpoint': (
+                            'snapshot isolated worktree progress milestone '
+                            '保存隔离工作区检查点'),
+                        'integration_submit': (
+                            'submit isolated work for human review merge queue '
+                            '提交隔离任务人工审查'),
+                    },
+                    category='conversation',
+                    description='Isolated project integration execution controls',
+                    gate='项目模式')
+
+
+def canonical_human_guidance_schema() -> dict:
+    """Return the registry-owned canonical ``ask_human`` wire schema.
+
+    Core callers use this registry seam instead of importing the concrete
+    human-guidance plugin module directly.
+    """
+    from lib.tools.human_guidance import ASK_HUMAN_TOOL
+    return ASK_HUMAN_TOOL
+
+
+def _build_coordinator(ctx: ToolContext) -> list[dict]:
+    from lib.project_dispatch.admission import KEY, repository_for
+    from lib.tasks_pkg.coordinator_policy import coordinator_scope
+    if KEY in ctx.cfg:
+        # Catalog assembly has a config, not the executing task/account. Resolve
+        # its immutable grant here; the assembler and every call check the real
+        # physical task separately. Never construct a synthetic human task.
+        binding = ctx.cfg[KEY]
+        row = repository_for(binding).validate(binding)
+        if (row['request'].get('profile', {}).get('mode') != 'coordinator'
+                or binding['owner'] != ctx.owner_user_id or binding['recipientId'] != ctx.conv_id):
+            return []
+        # A continuation's role is the conversation its grant is bound to: the Global
+        # Router's continuation assembles the Router's tools (docs/ROUTER.md R15).
+        from lib.project_dispatch.scope import coordinator_grant_scope
+        scope = coordinator_grant_scope(row)
+    else:
+        scope = coordinator_scope({'_userId': ctx.owner_user_id, 'convId': ctx.conv_id,
+                                   'config': ctx.cfg}, ctx.project_path) if ctx.owner_user_id else None
+        if not scope:
+            return []
+    from lib.tools.coordinator import COORDINATOR_TOOLS, ROUTER_TOOL_SCHEMAS, WATCHDOG_TOOL_SCHEMAS
+    from lib.router.policy import is_router_scope
+    from lib.router.watchdog.binding import is_watchdog_scope
+    # The owner's Global Router (docs/ROUTER.md) adds its routing tools and the
+    # Watchdog (R7) its monitoring tools; the coordinator policy enforces the
+    # same role ceiling on every call.
+    return list(COORDINATOR_TOOLS) + (list(ROUTER_TOOL_SCHEMAS) if is_router_scope(scope) else []) + (
+        list(WATCHDOG_TOOL_SCHEMAS) if is_watchdog_scope(scope) else [])
+
+
+def _start_coordinator_call(task, name, arguments):
+    from lib.conversations.coordinator_tools import start_streamed_call
+    start_streamed_call(task, name, arguments)
+
+
+def _settle_coordinator_calls(task):
+    from lib.conversations.coordinator_births import BIRTHS_KEY
+    if not task.get(BIRTHS_KEY):
+        return
+    from lib.conversations.coordinator_workers import settle_streamed_delegations
+    settle_streamed_delegations(task)
+
+
+# delegate_project_work alone is idempotent by key with an attempt-owned effect
+# and a cancel path. report_to_user, create_conversation and control_conversation
+# carry keys too, but their effect (a human-visible report, a sidebar shell, a
+# Session command) has no withdrawal, so they wait for the final response.
+_COORDINATOR_STREAM_START = StreamStartPort(
+    start=_start_coordinator_call, settle=_settle_coordinator_calls)
+
+
+def _coordinator_tool_spec() -> ToolSpec:
+    """Coordinator family, including the Global Router's routing tools and the
+    Watchdog's monitoring tools (schemas only for that role; see _build_coordinator)."""
+    return ToolSpec(
+        'coordinator', _build_coordinator, phase='base',
+        category='coordination',
+        description='Independent worker conversations and authorized dispatch',
+        gate='项目中绑定的 Coordinator 对话',
+        # poll waits on Workers (lib.tools.poll.coordinator_poll_tool).
+        compatibility_tools=frozenset({'await_project_workers'}),
+        provides=frozenset({
+            'router_project',
+            'get_conversation_status', 'control_conversation',
+            'create_conversation', 'dispatch_project_assignment', 'get_project_assignment',
+            'report_to_user', 'update_task_progress', 'delegate_project_work', 'await_project_workers',
+            'review_project_work', 'get_project_workers', 'cancel_project_work', 'finish_project_request',
+            'list_project_leads',
+            'request_user_decision', 'route_to_project', 'get_router_projects', 'router_instruction_create',
+            'router_portfolio',
+            'router_instruction_list', 'router_instruction_cancel', 'restart_server', 'owner_settings',
+            'repair_project',
+            'watchdog_snapshot', 'watchdog_resolve_signals', 'watchdog_schedule_recheck',
+            'watchdog_message', 'watchdog_notify_router', 'watchdog_configure_review'}),
+        write_tools=frozenset({
+            'router_project',
+            'control_conversation',
+            'create_conversation', 'dispatch_project_assignment', 'report_to_user', 'update_task_progress',
+            'delegate_project_work', 'review_project_work', 'cancel_project_work',
+            'finish_project_request', 'request_user_decision',
+            'route_to_project', 'router_instruction_create', 'router_instruction_cancel',
+            'router_portfolio',
+            'restart_server', 'owner_settings', 'repair_project',
+            'watchdog_resolve_signals', 'watchdog_schedule_recheck', 'watchdog_message',
+            'watchdog_notify_router', 'watchdog_configure_review'}),
+        idempotent_tools=frozenset({
+            'router_project',
+            'get_conversation_status', 'control_conversation', 'list_project_leads',
+            'get_project_assignment', 'report_to_user', 'update_task_progress', 'delegate_project_work',
+            'await_project_workers', 'review_project_work', 'get_project_workers', 'cancel_project_work',
+            'finish_project_request', 'request_user_decision', 'route_to_project', 'get_router_projects',
+            'router_instruction_create', 'router_instruction_list', 'router_instruction_cancel',
+            'router_portfolio',
+            'restart_server', 'owner_settings', 'repair_project',
+            'watchdog_snapshot', 'watchdog_resolve_signals', 'watchdog_schedule_recheck',
+            'watchdog_message', 'watchdog_notify_router', 'watchdog_configure_review'}),
+        cacheable_tools=frozenset(),
+        stream_start_by_name={'delegate_project_work': _COORDINATOR_STREAM_START})
+
+
+def _build_device_wait(ctx: ToolContext) -> list[dict]:
+    """await_device where device tools are (desktop or a remote worktree) and for routers.
+
+    A wake continues this task's own conversation, so headless requests and
+    child invocations get nothing. The coordinator family (base phase) has
+    already resolved the router role for this assembly; its tools in the
+    executable catalog are that verdict, so no second binding read is made.
+    """
+    if (not ctx.durable_state_available or not ctx.delivers_deferred_completions
+            or not ctx.owner_user_id or not ctx.conv_id):
+        return []
+    router = any((tool.get('function') or {}).get('name') == 'delegate_project_work'
+                 for tool in ctx.executable_tool_catalog)
+    if not (ctx.desktop_enabled or ctx.project_remote or router):
+        return []
+    from lib.desktop.device_waits import AWAIT_DEVICE_TOOL
+    return [AWAIT_DEVICE_TOOL]
+
+
+_DESKTOP_TOOL_NAMES = frozenset({
+    'desktop_list_files', 'desktop_read_file',
+    'desktop_write_file',
+    'desktop_open_file', 'desktop_open_app',
+    'desktop_run_command', 'desktop_screenshot',
+    'desktop_gui_action', 'desktop_clipboard',
+    'desktop_system_info',
+})
+
+
+def _desktop_tool_spec() -> ToolSpec:
+    """Connected desktop agent family (device tools gated by the desktop toggle)."""
+    return ToolSpec('desktop', _build_desktop, phase='base',
+                    # provides = LLM 可见的 10 个(desktop_move_file 刻意不
+                    # 暴露,见 lib/desktop_tools.py;它仍列在 write_tools 里)。
+                    provides=_DESKTOP_TOOL_NAMES,
+                    # A loopback-only phone kernel refuses device pairing.
+                    environment_requirements_by_name={
+                        name: frozenset({DEVICES}) for name in _DESKTOP_TOOL_NAMES},
+                    # 约束③:desktop 写/执行工具进串行写分区 + Manual 批准门 ——
+                    # 此前未声明,既进并行派发池(竞态)又绕过批准门。
+                    # desktop_system_info 豁免(其 kill 分支由 agent 侧参数级
+                    # exec 门把守);GUI/screenshot 走 allow_gui 层,不进写分区。
+                    write_tools=frozenset({
+                        'desktop_write_file', 'desktop_move_file',
+                        'desktop_run_command', 'desktop_open_app',
+                        'desktop_open_file',
+                    }),
+                    search_hints={
+                        'desktop_screenshot': (
+                            'capture display monitor current screen desktop '
+                            '截屏 屏幕 桌面画面'),
+                        'desktop_clipboard': 'copy paste clipboard 剪贴板 复制 粘贴',
+                        'desktop_list_files': 'list computer files 查看电脑文件',
+                        'desktop_read_file': 'read computer file 读取电脑文件',
+                        'desktop_write_file': 'write save computer file 保存电脑文件',
+                        'desktop_run_command': 'run local command shell 执行本地命令',
+                        'desktop_open_app': 'launch application 打开应用',
+                        'desktop_open_file': 'open local file 打开文件',
+                        'desktop_gui_action': 'mouse keyboard click type 鼠标 键盘',
+                        'desktop_system_info': 'computer system information 系统信息',
+                    },
+                    discovery_policy='searchable',
+                    category='desktop', description='Desktop agent tools',
+                    gate='连接桌面 agent（设置 → 设备）',
+                    exposure_gate=lambda ctx: ctx.desktop_enabled,
+                    pin_on_exposure=True)
+
+
+def _device_wait_tool_spec() -> ToolSpec:
+    """Durable device-online continuation (docs/modules/remote_execution.md)."""
+    return ToolSpec(
+        'device_wait', _build_device_wait, phase='capability',
+        provides=frozenset({'await_device'}),
+        environment_requirements_by_name={'await_device': frozenset({DEVICES})},
+        direct_wire_tools=frozenset({'await_device'}),
+        # It persists a wait that outlives the turn and later starts one.
+        write_tools=frozenset({'await_device'}),
+        idempotent_tools=frozenset({'await_device'}),
+        cacheable_tools=frozenset(), discovery_policy='searchable',
+        search_hints={'await_device': (
+            'device offline reconnect online again wait for computer laptop desktop agent '
+            '设备离线 等待设备上线 电脑重新连接')},
+        category='desktop', description='Wake this conversation when a device reconnects',
+        gate='桌面工具或远程工作区可用，或路由器对话；会话持久存储可用')
+
+
+def _build_channels(ctx: ToolContext) -> list[dict]:
+    """Channel tools for the owner's Global Router; channel_read for subscribers.
+
+    ``lib.channels.tools`` owns the authority boundary; this projection never
+    widens it and every call is checked again at execution.
+    """
+    if (not ctx.durable_state_available or ctx.no_saved_conversation
+            or not ctx.owner_user_id or not ctx.conv_id):
+        return []
+    from lib.channels.tools import visible_tools
+    return visible_tools(ctx.owner_user_id, ctx.conv_id)
+
+
+def _channel_tool_spec() -> ToolSpec:
+    """Channel family: the Global Router's channel tools, channel_read for subscribers."""
+    tools = frozenset({'channel_threads', 'channel_read', 'channel_send', 'channel_configure_thread',
+                       'channel_subscribe', 'channel_unsubscribe', 'channel_outbox',
+                       'channel_outbox_approve'})
+    return ToolSpec('channels', _build_channels, phase='base',
+                    category='channels',
+                    description='External channel threads, subscriptions and outbox (大象, GitHub)',
+                    gate='Global Router 对话（已配置大象或 GitHub 账号）；订阅者仅 channel_read',
+                    provides=tools,
+                    write_tools=frozenset({'channel_send', 'channel_configure_thread',
+                                           'channel_subscribe', 'channel_unsubscribe',
+                                           'channel_outbox_approve'}),
+                    idempotent_tools=tools,
+                    cacheable_tools=frozenset())
+
+
+def _build_human_guidance(ctx: ToolContext) -> list[dict]:
+    if ctx.current_count > 0:
+        logger.debug('[Task %s] 🙋 Human guidance (ask_human) tool available',
+                     ctx.tid)
+        return [canonical_human_guidance_schema()]
+    return []
+
+
+def _build_memory(ctx: ToolContext) -> list[dict]:
+    # Memory tools and memory context are one user-facing capability: the
+    # Memory switch controls both. They still require a real base tool.
+    # ``ctx.lean`` is a retained seam (chat_mode.is_lean_mode, currently always
+    # False after the air/pro merge) for a future auto-retract-tools feature
+    # that would ship only the base search/fetch/read tools on a simple turn.
+    if (not ctx.durable_state_available or ctx.lean or not ctx.has_base_tools
+            or not bool(ctx.cfg.get('memoryEnabled', True))):
+        return []
+    from copy import deepcopy
+    from lib.memory.tools import ALL_MEMORY_TOOLS
+    # Project availability is runtime context, not a reason to rewrite the
+    # declaration. The composer tells no-project turns to use global scope;
+    # the handler remains the authority boundary.
+    return deepcopy(ALL_MEMORY_TOOLS)
+
+
+def _build_skills(ctx: ToolContext) -> list[dict]:
+    # Compact read/discovery tools stay direct: installed-skill routing should
+    # not pay an extra gateway round before load_skill can amplify the task.
+    if ctx.lean or (not ctx.has_base_tools and not ctx.cfg.get('skillSelection')):
+        return []
+    from lib.skills import SKILL_READ_TOOLS
+    return list(SKILL_READ_TOOLS)
+
+
+def _build_skill_install(ctx: ToolContext) -> list[dict]:
+    # The safety-sensitive mutator stays in the immutable executable catalog
+    # but is Tool-Search deferred on larger surfaces. Small surfaces retain it
+    # directly because an extra discovery round would cost more than its schema.
+    if ctx.lean or not ctx.has_base_tools:
+        return []
+    from lib.skills import SKILL_INSTALL_TOOLS
+    return list(SKILL_INSTALL_TOOLS)
+
+
+def _build_todo(ctx: ToolContext) -> list[dict]:
+    # Structured task checklist (todo_write). Attaches whenever ANY base tool
+    # exists — it's a lightweight, always-useful progress tracker that also
+    # feeds the continuation enforcer, so it needs no user-facing toggle
+    # (mirrors the memory-tools attachment rule). A pure-chat turn with no
+    # tools does not get it (nothing to track). ``ctx.lean`` is a retained seam
+    # (always False today; see _build_memory) for a future auto-retract.
+    if ctx.lean or not ctx.has_base_tools:
+        return []
+    from lib.tools.todo import TODO_WRITE_TOOL
+    return [TODO_WRITE_TOOL]
+
+
+
+
+def _build_scheduler(ctx: ToolContext) -> list[dict]:
+    # Scheduler tools are a DEFAULT capability (like memory / todo): they
+    # attach whenever ANY base tool exists, NOT gated on a user toggle. The
+    # scheduler_enabled flag survives on the ToolContext for back-compat but no
+    # longer controls tool exposure — there is no composer toggle anymore.
+    # ``ctx.lean`` is a retained seam (always False today; see _build_memory)
+    # for a future auto-retract.
+    if (not ctx.durable_state_available
+            or ctx.lean or not ctx.has_base_tools):
+        return []
+    from lib.scheduler.tool_defs import SCHEDULER_TOOLS
+    logger.debug('[Task %s] ⏰ Scheduler tools enabled (%d tools)',
+                 ctx.tid, len(SCHEDULER_TOOLS))
+    tools = [tool for tool in SCHEDULER_TOOLS
+             if tool["function"]["name"] != "timer_create"]
+    if not ctx.delivers_deferred_completions:
+        from lib.scheduler.tool_defs import schedule_tools_without_current_conversation
+        tools = schedule_tools_without_current_conversation(
+            tools, reason=('this request has no saved conversation'
+                           if ctx.no_saved_conversation else
+                           'this task has no conversation of its own'))
+    return tools
+
+
+def _build_timer_watcher(ctx: ToolContext) -> list[dict]:
+    """Keep the readiness handoff discoverable without a catalog search."""
+    # A fired timer continues the task's own conversation; a headless job
+    # label or a task without a conversation has none (the handler refuses a
+    # stray call as well).
+    if (not ctx.durable_state_available or not ctx.delivers_deferred_completions
+            or ctx.lean or not ctx.has_base_tools):
+        return []
+    from lib.scheduler.tool_defs import TIMER_TOOL_CREATE
+    return [TIMER_TOOL_CREATE]
+
+
+def _build_tool_effect_inspection(ctx: ToolContext) -> list[dict]:
+    if not ctx.durable_state_available or not ctx.conv_id:
+        return []
+    from lib.tools.tool_effect_inspection import TOOL_EFFECT_INSPECTION
+    return [TOOL_EFFECT_INSPECTION.provider_schema()]
+
+
+def _build_tool_result_artifacts(ctx: ToolContext) -> list[dict]:
+    if not ctx.durable_state_available:
+        return []
+    from lib.context_experiment_flags import normalize_context_experiment_flags
+    if normalize_context_experiment_flags(
+            ctx.cfg)["tools"]["resultEnvelope"] != "v2":
+        return []
+    from lib.tools.tool_result_artifacts import build_tool_result_artifact_tools
+    return build_tool_result_artifact_tools()
+
+
+def _build_working_facts(ctx: ToolContext) -> list[dict]:
+    if not ctx.durable_state_available:
+        return []
+    from lib.tools.working_facts import WORKING_FACT_CONTRACTS
+    return [contract.provider_schema() for contract in WORKING_FACT_CONTRACTS]
+
+
+def _handle_working_facts(*args, **kwargs):
+    from lib.tasks_pkg.handlers.working_facts import handle_working_facts
+    return handle_working_facts(*args, **kwargs)
+
+
+def _build_swarm(ctx: ToolContext) -> list[dict]:
+    # NOT gated on has_base_tools — a bare-conversation research swarm is a
+    # valid use case (mirrors the read_files decoupling). await_agents is
+    # retired from the emitted surface (unified ``poll`` absorbs it) but
+    # stays registered for conversation-latched schemas.
+    from lib.swarm.tools import (
+        GET_AGENT_RESULT_TOOL,
+        SPAWN_AGENTS_TOOL,
+    )
+
+    from lib.swarm.message_contract import SEND_AGENT_MESSAGE_TOOL, GET_AGENT_MESSAGES_TOOL
+    from lib.tasks_pkg.approval_delegate import SET_APPROVAL_DELEGATE_TOOL
+    logger.debug('[Task %s] 🐝 Async swarm enabled — spawn_agents / '
+                 'get_agent_result (project_enabled=%s)',
+                 ctx.tid, ctx.project_enabled)
+    return [SPAWN_AGENTS_TOOL, GET_AGENT_RESULT_TOOL,
+            SET_APPROVAL_DELEGATE_TOOL, SEND_AGENT_MESSAGE_TOOL, GET_AGENT_MESSAGES_TOOL]
+
+
+def _build_background(ctx: ToolContext) -> list[dict]:
+    # poll/kill are the control plane for background work: they attach
+    # whenever the model can START background work (run_command via project
+    # or code_exec, swarm via spawn_agents), and are deliberately NOT
+    # retracted by the lean seam — retracting them while keeping
+    # run_command(background=true) would strand live handles behind a
+    # dead-end pointer. A task without a saved conversation keeps them: its
+    # handed-off commands reach only its own run (no conversation to publish
+    # into), which is exactly when an explicit control is needed.
+    from lib.tools.coordinator import COORDINATOR_TOOL_NAMES
+    from lib.tools.poll import KILL_TOOL, POLL_TOOL, coordinator_poll_tool
+    names = {tool.get('function', {}).get('name') for tool in ctx.executable_tool_catalog}
+    starts_background = (ctx.project_ready or ctx.code_exec_enabled
+                         or ctx.has_base_tools or 'spawn_agents' in names)
+    if names & COORDINATOR_TOOL_NAMES:
+        # A bound Coordinator starts Workers, never commands or sub-agents, so
+        # its poll waits on their assignments only. The coordinator family
+        # (base phase) is that role's verdict for this assembly; no second
+        # binding read is made. kill still follows the ordinary gate: the role
+        # ceiling withholds it from the Coordinator (cancel_project_work stops
+        # a Worker), while its Workers inherit this catalog's names
+        # (lib.project_dispatch.delegation.capture_worker_policy).
+        return [coordinator_poll_tool()] + ([KILL_TOOL] if starts_background else [])
+    if not starts_background:
+        return []
+    if ctx.no_saved_conversation:
+        # Such a request starts no sub-agent, but a command still running
+        # after AUTO_BACKGROUND_AFTER_S hands off, so poll and kill address
+        # its bg_* handles and cross-conversation task handles.
+        from lib.tools.background_guidance import project_no_saved_conversation_tools
+        return project_no_saved_conversation_tools([POLL_TOOL, KILL_TOOL])
+    if not ctx.delivers_deferred_completions:
+        from lib.tools.background_guidance import project_run_completion_tools
+        return project_run_completion_tools([POLL_TOOL, KILL_TOOL])
+    return [POLL_TOOL, KILL_TOOL]
+
+
+def _mcp_read_only_by_name(tools: list[dict], snapshot) -> dict[str, bool]:
+    """Bind read recovery to unique live metadata for the assembled schema."""
+    definitions = {
+        (tool.get('function') or {}).get('name'): tool for tool in tools}
+    read_only = {}
+    for row in snapshot:
+        if not isinstance(row, Mapping):
+            continue
+        name = row.get('namespaced_name')
+        if not isinstance(name, str) or name not in definitions:
+            continue
+        if name in read_only:
+            # Ambiguous declarations cannot establish repeatability.
+            read_only[name] = False
+            continue
+        read_only[name] = (
+            row.get('read_only_hint') is True
+            and row.get('openai_def') == definitions[name])
+    return read_only
+
+
+def _build_mcp(ctx: ToolContext) -> list[dict]:
+    """Publish the owner's connected MCP tools as search-only task authority.
+
+    MCP tools never join the wire (``lib/tools/mcp_exposure.py``): the whole
+    live catalog, with its read-only and discovery metadata, becomes the
+    task's executable authority, so ``search_tools`` finds every tool and
+    ``execute_tools`` runs it. The builder contributes no schema.
+    """
+    # Clear prior assembly grants even when a reused context is disconnected.
+    ctx.cfg['_mcpAllowedToolCatalog'] = []
+    ctx.cfg['_mcpToolReadOnlyByName'] = {}
+    ctx.cfg['_mcpToolSearchTextByName'] = {}
+    if ctx.owner_user_id < 1 or not ctx.cfg.get('mcpEnabled', True):
+        return []
+    try:
+        from lib.mcp import get_bridge
+        bridge = get_bridge(ctx.owner_user_id)
+        if bridge.connected:
+            # Definitions are values frozen once per exact catalog generation
+            # and shared by every assembly of it; projections copy before
+            # changing a field, so an unchanged round copies nothing.
+            frozen_defs = getattr(bridge, 'get_frozen_openai_tool_defs', None)
+            if frozen_defs is not None:
+                mcp_tools = list(frozen_defs()[1])
+            else:
+                # Lightweight/fake bridges have no generation: isolate per call.
+                from copy import deepcopy
+                mcp_tools = deepcopy(bridge.get_openai_tool_defs())
+            ctx.cfg['_mcpAllowedToolCatalog'] = mcp_tools
+            if mcp_tools:
+                try:
+                    _fingerprint, snapshot = bridge.get_tool_catalog_projection()
+                except AttributeError as exc:
+                    logger.debug('[Tools] bridge catalog projection unavailable: %s',
+                                 exc)
+                    try:
+                        snapshot = bridge.get_tool_catalog_snapshot()
+                    except AttributeError as snapshot_exc:
+                        logger.debug('[Tools] bridge catalog snapshot unavailable: %s',
+                                     snapshot_exc)
+                        # Compatibility for lightweight third-party/fake bridges.
+                        snapshot = [{
+                            'openai_def': tool,
+                            'namespaced_name': (
+                                (tool.get('function') or {}).get('name') or ''),
+                            'meta': {},
+                        } for tool in mcp_tools]
+                ctx.cfg['_mcpToolReadOnlyByName'] = _mcp_read_only_by_name(
+                    mcp_tools, snapshot)
+                # Keep rich MCP discovery metadata beside the schemas. It is
+                # consumed by local retrieval only and must never be copied
+                # into the provider-visible function definitions.
+                try:
+                    _search_text_by_name = (
+                        bridge.get_tool_catalog_search_text_projection())
+                except AttributeError:
+                    from lib.mcp.tool_search import catalog_search_text_by_name
+                    _search_text_by_name = catalog_search_text_by_name(snapshot)
+                ctx.cfg['_mcpToolSearchTextByName'] = _search_text_by_name
+                logger.info('[Task %s] MCP search-only authority: %d tools from '
+                            '%d servers, none on the wire', ctx.tid,
+                            len(mcp_tools), bridge.server_count)
+    except Exception as exc:
+        # Assembly may have published a partial catalog before the outage.
+        # Nothing is declared on the wire, so the round simply lacks MCP.
+        ctx.cfg['_mcpAllowedToolCatalog'] = []
+        ctx.cfg['_mcpToolReadOnlyByName'] = {}
+        ctx.cfg['_mcpToolSearchTextByName'] = {}
+        logger.warning('[Task %s] MCP catalog unavailable; continuing '
+                       'without MCP tools: %s', ctx.tid, exc)
+    return []
+
+
+def _build_custom(ctx: ToolContext) -> list[dict]:
+    # Per-request custom tools brought by a headless /api/v1/agent/run caller.
+    # The route validates + mints a ToolEnvironment, stashes its clean schemas
+    # on cfg['_customToolSchemas'], and attaches the env as task['_tool_env']
+    # (whose handlers the executor resolves before the global registry).
+    # Registered LAST so the cache-stable built-in ordering is untouched.
+    schemas = ctx.cfg.get('_customToolSchemas')
+    if not schemas or not isinstance(schemas, list):
+        return []
+    logger.info('[Task %s] 🧩 Custom tools injected: %d', ctx.tid, len(schemas))
+    return list(schemas)
+
+
+def build_builtin_specs() -> list[ToolSpec]:
+    """Register the built-in tool specs in canonical (cache-stable) order."""
+
+    from lib.tools.rich_response import build_spec as build_rich_spec
+    from lib.tools.tool_effect_inspection import TOOL_EFFECT_INSPECTION
+    from lib.tools.tool_result_artifacts import TOOL_RESULT_ARTIFACT_CONTRACTS
+    from lib.tools.working_facts import WORKING_FACT_CONTRACTS
+    from lib.tools.gateway import GATEWAY_TOOL_NAMES
+
+    builtins = [
+        # ── base phase (counted toward has_real_tools) ──
+        ToolSpec('search', _build_search, phase='base',
+                 provides=frozenset({'web_search'}),
+                 idempotent_tools=frozenset({'web_search'}),
+                 timeout_ms_by_name={'web_search': 60_000},
+                 category='search', description='Web search',
+                 gate='输入框 → 搜索模式（联网/multi）',
+                 exposure_gate=lambda ctx: ctx.search_mode in (
+                     'single', 'multi')),
+        ToolSpec('fetch', _build_fetch, phase='base',
+                 provides=frozenset({'fetch_url'}),
+                 idempotent_tools=frozenset({'fetch_url'}),
+                 programmatic_tools=frozenset({'fetch_url'}),
+                 timeout_ms_by_name={'fetch_url': 60_000},
+                 script_safe=True,
+                 category='search', description='Fetch a URL',
+                 gate='搜索开启或抓取开关（默认开）',
+                 exposure_gate=lambda ctx: (
+                     ctx.fetch_enabled or ctx.search_enabled)),
+        ToolSpec('read_files', _build_read_files, phase='base',
+                 provides=frozenset({'read_files'}),
+                 idempotent_tools=frozenset({'read_files'}),
+                 programmatic_tools=frozenset({'read_files'}),
+                 result_recovery_by_name={'read_files': 'source'},
+                 script_safe=True,
+                 category='project', description='Read local files',
+                 gate='常开（无需项目）'),
+        ToolSpec('inspect_image', _build_inspect_image, phase='base',
+                 provides=frozenset({'inspect_image'}),
+                 idempotent_tools=frozenset({'inspect_image'}),
+                 category='project', description='Zoom/rotate/crop image viewer',
+                 gate='常开（无需项目）'),
+        ToolSpec('project', _build_project_or_code_exec, phase='base',
+                 compatibility_tools=frozenset({'apply_diff', 'apply_diffs', 'check_background_command', 'kill_background_command', 'grep_search'}),
+                 provides=frozenset({
+                     'search_files', 'grep_search', 'find_files',
+                     'write_file', 'edit_file', 'apply_diff', 'apply_diffs',
+                     'run_command',
+                     'check_background_command', 'kill_background_command',
+                     'repo_map',
+                 }),
+                 write_tools=frozenset({
+                     'write_file', 'edit_file', 'apply_diff', 'apply_diffs',
+                     'run_command', 'kill_background_command',
+                 }),
+                 idempotent_tools=frozenset({
+                     'search_files', 'grep_search', 'find_files',
+                     'check_background_command', 'repo_map',
+                 }),
+                 programmatic_tools=frozenset({
+                     'search_files', 'grep_search', 'find_files',
+                 }),
+                 # The repository outline is a rare structural aid: no prompt,
+                 # result or recovery pointer names it, so it stays deferred.
+                 discovery_policy_by_name={'repo_map': 'searchable'},
+                 search_hints={
+                     'search_files': (
+                         'symbol references usages occurrences who calls '
+                         'code content search grep ripgrep 查找引用 谁调用了'),
+                     'find_files': (
+                         'locate filenames glob config files 查找文件 配置文件'),
+                     'write_file': 'create overwrite save file 写入 保存文件',
+                     'edit_file': (
+                         'edit insert add replace patch source code '
+                         '修改代码 插入内容 替换'),
+                     'apply_diff': (
+                         'edit change modify fix implementation source code '
+                         '修改代码 修复实现'),
+                     'apply_diffs': 'edit modify fix several files 批量修改代码',
+                     'run_command': 'shell terminal execute command 运行命令',
+                     'check_background_command': (
+                         'check background command output status 后台命令状态'),
+                     'kill_background_command': (
+                         'kill stop background command process 停止后台进程'),
+                     'repo_map': 'repository map symbols outline 代码地图 符号大纲',
+                 },
+                 environment_requirements_by_name={
+                     'run_command': frozenset({SHELL})},
+                 category='project', description='Project file tools / code exec',
+                 gate='挂载项目（输入框 → 项目）或开启代码执行',
+                 exposure_gate=lambda ctx: (
+                     ctx.project_ready or ctx.code_exec_enabled),
+                 result_meta_builder=_build_project_result_meta),
+        _browser_tool_spec(),
+        _desktop_tool_spec(),
+        # End of base phase: appending HERE keeps every earlier prefix
+        # byte-stable for the prompt cache (the produce note above).
+        ToolSpec('page_preview', _build_page_preview, phase='base',
+                 provides=frozenset({'browser_preview_page'}),
+                 environment_requirements_by_name={
+                     'browser_preview_page': frozenset({BROWSER})},
+                 discovery_policy='searchable',
+                 search_hints={
+                     'browser_preview_page': (
+                         'render preview test html webpage frontend headless '
+                         'chromium screenshot 真实浏览器 渲染网页 页面预览 '
+                         '看看效果 前端界面'),
+                 },
+                 category='browser',
+                 description='Server-side rendered page preview',
+                 gate='挂载项目后可用'),
+        ToolSpec('conv_ref', _build_conv_ref, phase='base',
+                 provides=frozenset({'list_conversations', 'get_conversation'}),
+                 write_tools=frozenset(),
+                 idempotent_tools=frozenset({'list_conversations',
+                                             'get_conversation'}),
+                 # Sibling turns can advance while this long task is running.
+                 cacheable_tools=frozenset(),
+                 unchanged_receipt_tools=frozenset({
+                     'list_conversations', 'get_conversation',
+                 }),
+                 programmatic_tools=frozenset({
+                     'list_conversations', 'get_conversation',
+                 }),
+                 # Eager: an @-referenced conversation is an explicit user
+                 # pointer, and project delegation briefs tell workers to use
+                 # get_conversation for the complete request.
+                 category='conversation', description='Conversation reference tools',
+                 gate='项目模式 或 @ 提及一个会话'),
+        _project_integration_tool_spec(),
+        _coordinator_tool_spec(),
+        _channel_tool_spec(),
+        ToolSpec('human_guidance', _build_human_guidance, phase='base',
+                 provides=frozenset({'ask_human'}),
+                 category='human', description='Ask the human for guidance',
+                 gate='输入框 → 人类指导开关',
+                 exposure_gate=lambda ctx: ctx.human_guidance_enabled),
+        # update_search_settings — appended at the END of the base phase so
+        # every earlier tool's position stays byte-stable for the prompt
+        # cache (the "appending HERE" rule this module's header documents).
+        # It mutates server-GLOBAL config every conversation feels, so it is
+        # approval-gated + serial like the other state-changing tools.
+        ToolSpec('search_settings', _build_search_settings, phase='base',
+                 provides=frozenset({'update_search_settings'}),
+                 write_tools=frozenset({'update_search_settings'}),
+                 discovery_policy='searchable',
+                 category='search', description='Search/fetch pipeline settings',
+                 gate='输入框 → 搜索模式（联网/multi）',
+                 exposure_gate=lambda ctx: ctx.cfg.get('searchSettingsEnabled') is True),
+        # Local knowledge is appended at the END of the base phase so existing
+        # tool positions remain prompt-cache-stable when it is available.
+        ToolSpec('knowledge', _build_knowledge, phase='base',
+                 provides=frozenset({'search_knowledge'}),
+                 idempotent_tools=frozenset({'search_knowledge'}),
+                 programmatic_tools=frozenset({'search_knowledge'}),
+                 discovery_policy='searchable', script_safe=True,
+                 category='knowledge',
+                 description='Enabled local knowledge base',
+                 gate='本地知识库存在且已开启',
+                 handler=_handle_knowledge,
+                 catalog_active_only=True),
+        # Explicit server-file semantics are append-only so every established
+        # hot tool keeps its prompt-cache position. It rides the same runtime
+        # availability gate as fetch_url but has its own stable contract/name.
+        ToolSpec('browser_download', _build_browser_download, phase='base',
+                 provides=frozenset({'browser_download_url_to_server'}),
+                 cacheable_tools=frozenset(),
+                 search_hints={
+                     'browser_download_url_to_server': (
+                         'download_url_to_server download save copy export fetch '
+                         'archive zip install unzip latest file to server project '
+                         'logged-in browser link button cookies intranet SSO '
+                         '下载 保存 拷贝 复制 导出 安装 解压 最新版 服务器 本地 '
+                         '内网 登录 文件 压缩包 链接 按钮'
+                     ),
+                 },
+                 # Rare domain capability: deferred behind Tool Search. Shell
+                 # guidance names it and run_command reroutes authenticated
+                 # downloads to it, so the exact name stays reachable.
+                 discovery_policy='searchable',
+                 native_route_groups=frozenset({
+                     'search', 'fetch', 'browser', 'download'}),
+                 category='browser',
+                 description='Download a URL or page link to server staging',
+                 gate='抓取开关（默认开）或连接浏览器扩展',
+                 exposure_gate=lambda ctx: (
+                     ctx.fetch_enabled or ctx.search_enabled
+                     or ctx.search_mode in ('single', 'multi')
+                     or ctx.browser_enabled)),
+        # paper_build is appended at the END of the base phase so every
+        # earlier tool keeps its prompt-cache position. It is NOT a write
+        # tool: compilation only produces bounded cache artifacts under the
+        # build service's supervision (identical in kind to produce_*
+        # rendering), and approval-gating it would break the
+        # edit→compile→fix loop that is its entire purpose. Results change
+        # with source files, so it opts out of same-task result reuse.
+        # Track C: PID-anchored citations. Search/audit are read-only network
+        # lookups; paper_cite_insert mutates .bib/.tex through the journaled
+        # write tools, so it rides the write partition + Manual
+        # approval like paper_import_arxiv. Results change with the
+        # literature indexes and source files, so nothing is cacheable.
+        # paper_quality follows paper_build at the END of the base phase.
+        # All three tools are read-only: the gate only reads the live source
+        # tree and retained build artifacts, the dossier is deterministic
+        # text, and the scaffold is a text proposal — no write partition,
+        # no approval gate, no same-task result reuse.
+        # inspect_video is appended at the END of the base phase so every
+        # earlier tool keeps its prompt-cache position. Read-only and always
+        # available like inspect_image, and eager for the same reason: model-
+        # visible results name it (read_files' video/audio refusal, fetch_url's
+        # staged video/audio note, the page-media inventory footer), so a pointer-
+        # named tool stays on the wire and routing keeps it in _ALWAYS. The
+        # hints still rank it when a schema budget routes the surface through
+        # local Tool Search. Never cached: a staged path can change outside
+        # this task's write fence.
+        ToolSpec('inspect_video', _build_inspect_video, phase='base',
+                 provides=frozenset({'inspect_video'}),
+                 idempotent_tools=frozenset({'inspect_video'}),
+                 cacheable_tools=frozenset(),
+                 search_hints={
+                     'inspect_video': (
+                         'watch view analyze understand describe summarize '
+                         'video clip movie recording screencast mp4 mov webm mkv '
+                         'avi key frames extract frames screenshots timestamps '
+                         'scenes transcript subtitles speech audio what happens '
+                         'in the video downloaded staged '
+                         'listen hear audio file sound podcast episode song '
+                         'music voice memo mp3 m4a aac wav ogg opus flac '
+                         'transcribe audio speech-to-text what is said '
+                         '看视频 视频 理解视频 分析视频 视频内容 讲了什么 抽帧 关键帧 '
+                         '截图 字幕 转录 语音 录屏 '
+                         '听 听一下 音频 播客 录音 音乐 歌曲 说了什么 转写'),
+                 },
+                 category='project',
+                 description='Video frames, probe facts and transcript viewer',
+                 gate='常开（无需项目）'),
+        # ── capability phase ──
+        ToolSpec('memory', _build_memory, phase='capability',
+                 discovery_policy_by_name={name: 'searchable' for name in ('update_memory', 'delete_memory', 'merge_memories')},
+                 provides=frozenset({
+                     'search_memories', 'create_memory', 'update_memory',
+                     'delete_memory', 'merge_memories',
+                 }),
+                 write_tools=frozenset({
+                     'create_memory', 'update_memory',
+                     'delete_memory', 'merge_memories',
+                 }),
+                 idempotent_tools=frozenset({'search_memories'}),
+                 # Memory CRUD can change the same query inside one task.
+                 cacheable_tools=frozenset(),
+                 unchanged_receipt_tools=frozenset({'search_memories'}),
+                 programmatic_tools=frozenset({'search_memories'}),
+                 search_hints={
+                     'search_memories': (
+                         'recall remember previous decision past conversation '
+                         '回忆 找回之前决定 拍板'),
+                     'create_memory': 'remember save durable fact 记住 保存记忆',
+                     'update_memory': 'correct revise saved memory 修改记忆',
+                     'delete_memory': 'forget remove saved memory 忘记 删除记忆',
+                     'merge_memories': 'combine duplicate memories 合并记忆',
+                 },
+                 category='memory', description='Memory CRUD tools',
+                 gate='Memory 开关开启且有任意基础工具'),
+        ToolSpec('skills', _build_skills, phase='capability',
+                 provides=frozenset({
+                     'search_skills', 'load_skill', 'read_skill_resource',
+                 }),
+                 idempotent_tools=frozenset({
+                     'search_skills', 'load_skill', 'read_skill_resource',
+                 }),
+                 search_hints={
+                     'search_skills': (
+                         'find install discover workflow skill 技能 查找 安装'),
+                     'load_skill': 'load workflow instructions 加载技能说明',
+                     'read_skill_resource': (
+                         'read skill reference script resource 技能资源'),
+                 },
+                 category='skills',
+                 description='Bounded skill discovery and disclosure',
+                 gate='有任意基础工具'),
+        ToolSpec('skill_install', _build_skill_install, phase='capability',
+                 provides=frozenset({'request_skill_install'}),
+                 write_tools=frozenset({'request_skill_install'}),
+                 confirmation_tools=frozenset({'request_skill_install'}),
+                 auto_approval_tools=frozenset({'request_skill_install'}),
+                 search_hints={
+                     'request_skill_install': (
+                         'install verified catalog skill 安装技能'),
+                 },
+                 discovery_policy='searchable',
+                 category='skills',
+                 description='Verified skill catalog installation',
+                 gate='有任意基础工具；Auto 自动安装已验证包，Manual 真人确认'),
+        ToolSpec('todo', _build_todo, phase='capability',
+                 discovery_policy='searchable',
+                 provides=frozenset({'todo_write'}),
+                 category='task', description='Structured task checklist',
+                 gate='常开（有任意基础工具即挂载）'),
+        ToolSpec('scheduler', _build_scheduler, phase='capability',
+                 compatibility_tools=frozenset({'await_task'}),
+                 provides=frozenset({
+                     'schedule_create', 'schedule_list', 'schedule_manage',
+                     'timer_manage', 'await_task',
+                 }),
+                 # These persist state that OUTLIVES the turn (cron jobs,
+                 # polling watchers) and can execute shell/python on a
+                 # schedule — approval-eligible + serial. schedule_list /
+                 # await_task are pure reads and stay parallel.
+                 write_tools=frozenset({
+                     'schedule_create', 'schedule_manage',
+                     'timer_manage',
+                 }),
+                 idempotent_tools=frozenset({'schedule_list'}),
+                 # Create/manage calls and the scheduler worker mutate this.
+                 cacheable_tools=frozenset(),
+                 unchanged_receipt_tools=frozenset({'schedule_list'}),
+                 programmatic_tools=frozenset({'schedule_list'}),
+                 discovery_policy='searchable',
+                 search_hints={
+                     'schedule_create': (
+                         'create recurring reminder cron once: calendar clock '
+                         'scheduled agent countdown daily weekly '
+                         '创建定时任务 闹钟 循环 提醒 倒计时 计时器'),
+                     'schedule_list': 'show scheduled jobs reminders 查看定时任务',
+                     'schedule_manage': (
+                         'cancel stop disable remove scheduled job reminder '
+                         '取消提醒 停止定时任务'),
+                     'timer_create': (
+                         'wait until ready poll watcher condition satisfied '
+                         'CI build download file exists '
+                         '创建条件监视 条件满足 等到就绪 轮询 监视'),
+                     'timer_manage': 'cancel stop timer 取消计时器',
+                     'await_task': 'wait poll background task 等待后台任务',
+                 },
+                 category='scheduler', description='Scheduler / proactive agent tools',
+                 gate='常开（有任意基础工具即挂载）'),
+        ToolSpec('timer_watcher', _build_timer_watcher, phase='capability',
+                 provides=frozenset({'timer_create'}),
+                 direct_wire_tools=frozenset({'timer_create'}),
+                 write_tools=frozenset({'timer_create'}),
+                 cacheable_tools=frozenset(), discovery_policy='searchable',
+                 category='scheduler', description='Durable readiness continuation',
+                 gate='常开（有基础工具和持久存储即挂载）'),
+        ToolSpec('tool_effect_inspection', _build_tool_effect_inspection, phase='capability',
+                 provides=frozenset({'inspect_tool_effect'}),
+                 idempotent_tools=frozenset({'inspect_tool_effect'}),
+                 cacheable_tools=frozenset(),
+                 programmatic_tools=frozenset({'inspect_tool_effect'}),
+                 contracts=(TOOL_EFFECT_INSPECTION,),
+                 discovery_policy='eager', catalog_active_only=True, script_safe=True,
+                 timeout_ms_by_name={'inspect_tool_effect': 30_000},
+                 category='general', description='Inspect interrupted file publication',
+                 gate='会话持久存储可用',
+                 search_hints={'inspect_tool_effect': 'recover unknown write outcome 核实写入 恢复未知操作'}),
+        ToolSpec(
+            'tool_result_artifacts', _build_tool_result_artifacts,
+            phase='capability',
+            provides=frozenset({'read_tool_artifact', 'search_tool_artifact'}),
+            idempotent_tools=frozenset({
+                'read_tool_artifact', 'search_tool_artifact'}),
+            programmatic_tools=frozenset({
+                'read_tool_artifact', 'search_tool_artifact'}),
+            # A V2 envelope can instruct the model to continue only if the
+            # continuation function is already callable on that same wire
+            # turn. Keeping it behind Tool Search created a dead-end pointer:
+            # models repeatedly reissued the source read because the recovery
+            # tool named by the result was absent from their visible surface.
+            discovery_policy='eager',
+            script_safe=True,
+            catalog_active_only=True,
+            search_hints={
+                'read_tool_artifact': 'continue large result range cursor 继续读取',
+                'search_tool_artifact': 'search prior tool result 搜索工具结果',
+            },
+            category='artifacts',
+            description='Bounded continuation for large tool results',
+            gate='tools.resultEnvelope=v2',
+            contracts=TOOL_RESULT_ARTIFACT_CONTRACTS,
+        ),
+        ToolSpec('working_facts', _build_working_facts, phase='capability',
+                 provides=frozenset({'read_working_facts', 'record_working_fact'}),
+                 write_tools=frozenset({'record_working_fact'}),
+                 idempotent_tools=frozenset({'read_working_facts'}), cacheable_tools=frozenset(),
+                 programmatic_tools=frozenset({'read_working_facts'}),
+                 contracts=WORKING_FACT_CONTRACTS, script_safe=True,
+                 discovery_policy_by_name={'record_working_fact': 'searchable'},
+                 # Facts are an aggregate of the owned saved conversation.
+                 saved_conversation_tools=frozenset({'read_working_facts', 'record_working_fact'}),
+                 catalog_active_only=True, handler=_handle_working_facts,
+                 category='memory', description='Conversation working facts with versioned sources',
+                 gate='持久会话存储可用'),
+        ToolSpec('swarm', _build_swarm, phase='capability',
+                 compatibility_tools=frozenset({'await_agents'}),
+                 contextual_tools=frozenset({'store_artifact', 'read_artifact', 'list_artifacts'}),
+                 discovery_policy_by_name={name: 'searchable' for name in (
+                     'get_agent_result', 'send_agent_message',
+                     'get_agent_messages', 'set_approval_delegate')},
+                 # Sub-agents and approval delegates register in, and report
+                 # into, a saved conversation; the handlers refuse a stray
+                 # spawn_agents call as well.
+                 saved_conversation_tools=frozenset({
+                     'spawn_agents', 'get_agent_result', 'send_agent_message',
+                     'get_agent_messages', 'set_approval_delegate',
+                 }),
+                 # provides lists every name this family has a handler for on
+                 # the MAIN dispatch registry (@tool_registry.tool_set over
+                 # SWARM_TOOL_NAMES), which is wider than what build() puts in
+                 # the master schema:
+                 #   * spawn_agents/get_agent_result — in the master schema
+                 #   * await_agents — legacy dispatch only; poll owns waiting
+                 #   * store/read/list_artifact(s)  — NOT in the master schema;
+                 #     they are injected into SUB-AGENTS only
+                 #     (SubAgent._inject_artifact_tools) and executed inside the
+                 #     sub-agent's own loop. Declared anyway because the handler
+                 #     IS reachable on the main registry, so an undeclared name
+                 #     would be invisible to the partition tables and to the
+                 #     custom-tool collision check in lib/tools/tool_env.py.
+                 provides=frozenset({
+                     'spawn_agents', 'await_agents', 'get_agent_result',
+                     'send_agent_message', 'get_agent_messages',
+                     'store_artifact', 'read_artifact', 'list_artifacts',
+                     'set_approval_delegate',
+                 }),
+                 write_tools=frozenset({'send_agent_message'}),
+                 search_hints={
+                     'get_agent_result': (
+                         'recover completed subagent results reread earlier wave '
+                         '重新读取子代理结果 恢复历史结果'),
+                     'send_agent_message': 'send message running child subagent steer context 给子agent发消息 补充指令',
+                     'get_agent_messages': 'child message input receipt delivery confirmation 子agent 消息 回执',
+                 },
+                 # store_artifact is deliberately NOT in write_tools. It writes
+                 # to an in-process, per-run ArtifactStore (thread-safe under
+                 # its own lock, TTL-expiring, lost on process exit) — it
+                 # touches no filesystem, no network, and nothing that outlives
+                 # the run. Approval-prompting it would be pure noise, and the
+                 # serial-dispatch half of the partition buys nothing over the
+                 # store's own lock. This is a deliberate departure from the
+                 # "every state-changing tool is partitioned" rule, recorded
+                 # here so it reads as a decision rather than an omission.
+                 # set_approval_delegate is likewise NOT in write_tools: it
+                 # registers a task-scoped adjudication policy in the task
+                 # config (no filesystem/network side effect), and gating the
+                 # approval-policy tool behind approval would be recursive.
+                 idempotent_tools=frozenset({'list_artifacts'}),
+                 # Sub-agents can publish artifacts between two list calls.
+                 cacheable_tools=frozenset(),
+                 unchanged_receipt_tools=frozenset({
+                     'get_agent_result', 'list_artifacts',
+                 }),
+                 category='swarm', description='Async multi-agent swarm',
+                 gate='常开（默认工具，无开关）'),
+        ToolSpec('mcp', _build_mcp, phase='capability',
+                 compatibility_tools=frozenset({'search_mcp_tools', 'call_mcp_read_tool', 'call_mcp_write_tool'}),
+                 provides=frozenset({
+                     'search_mcp_tools', 'call_mcp_read_tool',
+                     'call_mcp_write_tool',
+                 }),
+                 write_tools=frozenset({'call_mcp_write_tool'}),
+                 idempotent_tools=frozenset({'search_mcp_tools'}),
+                 discovery_policy='searchable',
+                 category='mcp', description='External MCP-server tools',
+                 gate='设置 → MCP（需已连接服务器；仅经 Tool Search 发现与执行）'),
+        # The discovery schema is injected at the final wire boundary
+        # according to the resolved provider/search strategy, not during
+        # ordinary registry assembly. Declaring it here keeps ownership,
+        # idempotency and custom-tool collision checks authoritative.
+        # ``execute_tools`` is declared for ownership/collision/admission and
+        # is injected only alongside local Tool Search at the wire boundary;
+        # nested calls remain bounded by the executable task catalog.
+        ToolSpec('tool_gateway', lambda _ctx: [], phase='capability',
+                 provides=GATEWAY_TOOL_NAMES,
+                 idempotent_tools=frozenset({'search_tools'}),
+                 category='tools',
+                 description='Local tool discovery and stable execution gateway',
+                 gate='工具搜索启用时出现'),
+        # ── unified async handles: append-only position before custom ──
+        ToolSpec('background', _build_background, phase='capability',
+                 provides=frozenset({'poll', 'kill'}),
+                 write_tools=frozenset({'kill'}),
+                 idempotent_tools=frozenset({'poll'}),
+                 # Background state changes constantly; never cacheable across rounds.
+                 cacheable_tools=frozenset(),
+                 # Lifecycle control is never a discovery-only capability.
+                 pin_on_exposure=True,
+                 search_hints={
+                     'poll': ('check wait background command agent task status '
+                              'result 后台 命令 任务 状态 结果 等待'),
+                     'kill': ('kill stop background command agent process '
+                              '停止 终止 后台 进程 任务'),
+                 },
+                 category='background',
+                 description='Unified async handles (poll / kill)',
+                 gate='Durable runtime with base, shell, or swarm capability'),
+        ToolSpec('retained_agents', _build_retained_agents,
+                 phase='capability',
+                 provides=frozenset({'list_agents', 'manage_agents'}),
+                 # A retained agent is a sub-agent: its assignment registers
+                 # in, and reports into, a saved conversation; the handler
+                 # refuses a stray assignment as well.
+                 saved_conversation_tools=frozenset({'list_agents', 'manage_agents'}),
+                 write_tools=frozenset({'manage_agents'}),
+                 discovery_policy='searchable',
+                 search_hints={'list_agents': (
+                     'show inspect persistent team agents memory roster '
+                     '查看 团队 智能体 记忆'),
+                     'manage_agents': (
+                     'persistent reusable team agent colleague remember '
+                     'create assign reset archive long-term subagent '
+                     '常驻 长期 子智能体 团队 记忆 派工')},
+                 category='swarm', description='Reusable team agents',
+                 gate='Durable application runtime with a saved conversation',
+                 exposure_gate=lambda ctx: ctx.durable_state_available),
+        build_rich_spec(),
+        _device_wait_tool_spec(),
+        # ── per-request custom tools (always last; handlers are task-local) ──
+        ToolSpec('custom', _build_custom, phase='capability',
+                 category='custom',
+                 description='Per-request custom tools (handlers via task[_tool_env])',
+                 gate='API /api/v1/agent/run 请求自带 tools 时出现'),
+    ]
+    return builtins
+
+
+def _register_builtins() -> None:
+    """Install the canonical built-in declarations once."""
+    for spec in build_builtin_specs():
+        register_tool_spec(spec)

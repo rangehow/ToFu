@@ -1,0 +1,411 @@
+"""One persistence lifecycle independent of agent creation provenance."""
+from copy import deepcopy
+from threading import Event
+from types import SimpleNamespace
+
+import pytest
+
+from lib.storage.errors import StorageError
+from lib.tasks_pkg import persistence_wait as owner
+from lib.tasks_pkg.persistence_wait import wait_for_persistence
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def fast_backoff(monkeypatch):
+    monkeypatch.setattr(owner, '_BASE_DELAY_SECONDS', 0.0)
+
+
+def task(parent=False):
+    return {'id': 'agent', 'config': {}, 'abort_event': Event(),
+            '_parentTaskId': 'creator' if parent else None}
+
+
+@pytest.mark.parametrize('parent', [False, True])
+@pytest.mark.parametrize('code', ['database_busy', 'database_timeout', 'database_unavailable'])
+def test_pressure_outlives_old_retry_ceiling_without_agent_failure(parent, code):
+    carrier = task(parent)
+    attempts = []
+    previous = carrier['phase'] = {'phase': 'working'}
+    def write():
+        attempts.append(1)
+        if len(attempts) <= 25:
+            if len(attempts) > 1:
+                assert carrier['_storageWaits']
+                assert carrier['phase']['phase'] == 'retrying'
+            raise StorageError(code, 'temporary pressure', retryable=False)
+        return 'acknowledged'
+    assert wait_for_persistence(carrier, write, label='exact checkpoint') == 'acknowledged'
+    assert len(attempts) == 26
+    assert carrier['phase'] is previous
+    assert not carrier['_storageWaits']
+    assert not carrier.get('aborted') and not carrier.get('error')
+
+
+def test_in_call_storage_wait_is_presented_and_ended_by_its_owner():
+    """A supervised client waits inside the call while its authority lives.
+
+    The owner still presents that wait, ends it on Stop, and hands shutdown
+    debt back with the original failure, exactly as for a raised failure.
+    """
+    from lib.llm.llm_errors import AbortedError
+    from lib.storage.retry import observe_storage_wait
+    failure = StorageError('database_timeout', 'deadline_elapsed', retryable=False)
+    carrier = task()
+    previous = carrier['phase'] = {'phase': 'working'}
+    shown = []
+
+    def slow_write():
+        observe_storage_wait(failure)
+        shown.append(dict(carrier['phase']))
+        return 'acknowledged'
+
+    assert wait_for_persistence(carrier, slow_write, label='exact checkpoint') == 'acknowledged'
+    assert shown[0]['phase'] == 'retrying' and shown[0]['detail'] == 'Waiting for storage'
+    assert carrier['phase'] is previous and not carrier['_storageWaits']
+
+    dispatched = []
+
+    def stopped_write():
+        dispatched.append(1)
+        carrier['abort_event'].set()
+        observe_storage_wait(failure)
+        pytest.fail('Stop must end the in-call wait')
+
+    with pytest.raises(AbortedError):
+        wait_for_persistence(carrier, stopped_write, label='intent')
+    assert dispatched == [1] and not carrier['_storageWaits']
+
+    debt = task()
+    debt['_abort_reason'] = 'server_shutdown'
+
+    def shutdown_write():
+        observe_storage_wait(failure)
+        pytest.fail('shutdown must end the in-call wait')
+
+    with pytest.raises(StorageError) as raised:
+        wait_for_persistence(debt, shutdown_write, label='terminal', cancellable=False)
+    assert raised.value is failure and not debt['_storageWaits']
+
+
+@pytest.mark.parametrize('parent', [False, True])
+def test_stop_during_backpressure_prevents_another_dispatch(parent):
+    from lib.llm.llm_errors import AbortedError
+    carrier = task(parent)
+    attempts = []
+    def write():
+        attempts.append(1)
+        carrier['abort_event'].set()
+        raise StorageError('database_busy', 'pressure')
+    with pytest.raises(AbortedError):
+        wait_for_persistence(carrier, write, label='intent')
+    assert attempts == [1]
+    assert carrier['aborted'] and not carrier['_storageWaits']
+
+
+def test_terminal_evidence_commits_after_stop_without_changing_outcome():
+    carrier = task()
+    carrier.update(aborted=True, error=None, content='completed effect')
+    attempts = []
+    def write():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise StorageError('database_busy', 'pressure')
+        return True
+    assert wait_for_persistence(carrier, write, label='terminal', cancellable=False)
+    assert carrier['content'] == 'completed effect' and carrier['error'] is None
+    assert len(attempts) == 2
+
+
+def test_permanent_and_wrapped_transient_failures_have_distinct_verdicts():
+    carrier = task()
+    failure = StorageError('database_integrity', 'invalid checksum')
+    with pytest.raises(StorageError) as raised:
+        wait_for_persistence(carrier, lambda: (_ for _ in ()).throw(failure), label='write')
+    assert raised.value is failure and not carrier['_storageWaits']
+    attempts = []
+    def wrapped():
+        attempts.append(1)
+        if len(attempts) == 1:
+            try:
+                raise StorageError('database_busy', 'pressure')
+            except StorageError as error:
+                raise RuntimeError('evidence not acknowledged') from error
+        return True
+    assert wait_for_persistence(carrier, wrapped, label='wrapped')
+    assert len(attempts) == 2
+
+
+def test_only_producer_rebased_projection_conflicts_are_retryable():
+    from lib.storage.errors import ProjectionRebaseRequired, is_transient_storage_error
+    original = StorageError('turn_projection_stale', 'stale editor patch', True)
+    assert not is_transient_storage_error(original)
+    assert not is_transient_storage_error(StorageError.from_payload(original.to_payload()))
+    carrier = task()
+    calls = []
+
+    def rebased_write():
+        calls.append(1)
+        if len(calls) <= 25:
+            raise ProjectionRebaseRequired('turn_projection_stale', 'baseline invalidated', True)
+        return 'committed'
+
+    assert wait_for_persistence(carrier, rebased_write, label='rebased event') == 'committed'
+    assert len(calls) == 26
+    assert not carrier['_storageWaits']
+
+
+def test_shutdown_returns_rebase_debt_to_its_original_owner():
+    from lib.storage.errors import ProjectionRebaseRequired
+    carrier = task()
+    stopping = Event()
+    failure = ProjectionRebaseRequired('turn_projection_stale', 'baseline invalidated', True)
+    calls = []
+
+    def write():
+        calls.append(1)
+        stopping.set()
+        raise failure
+
+    with pytest.raises(ProjectionRebaseRequired) as caught:
+        wait_for_persistence(carrier, write, label='rebased event',
+                             cancellable=False, stopping=stopping.is_set)
+    assert caught.value is failure and calls == [1]
+    assert not carrier['_storageWaits']
+
+
+def test_wait_does_not_mask_deadline_but_is_not_a_liveness_stall():
+    from lib.tasks_pkg.invocation import invocation_abort_requested
+    from lib.llm.llm_errors import AbortedError
+    carrier = task()
+    observations = []
+    carrier['_invocationProgressBeacon'] = SimpleNamespace(
+        is_making_progress=lambda key: not observations)
+    def write():
+        if not observations:
+            observations.append('pressure')
+            raise StorageError('database_busy', 'pressure')
+        assert not invocation_abort_requested(carrier)
+        carrier['_invocationDeadline'] = 0
+        raise StorageError('database_busy', 'pressure')
+    with pytest.raises(AbortedError):
+        wait_for_persistence(carrier, write, label='write')
+    assert carrier['_invocationStopReason'] == 'deadline'
+
+
+def test_shutdown_retains_original_error_and_never_authorizes_effect():
+    carrier = task()
+    failure = StorageError('database_busy', 'pressure')
+    attempts = []
+    def write():
+        attempts.append(1)
+        carrier['_abort_reason'] = 'server_shutdown'
+        raise failure
+    with pytest.raises(StorageError) as raised:
+        wait_for_persistence(carrier, write, label='terminal', cancellable=False)
+    assert raised.value is failure and len(attempts) == 1
+
+
+def test_caller_classified_local_deadline_is_waited_out_and_logged(caplog):
+    class StillInFlight(TimeoutError):
+        pass
+    carrier = task()
+    attempts = []
+    def read():
+        attempts.append(1)
+        if len(attempts) < 3:
+            if len(attempts) > 1:
+                assert carrier['phase']['storageOperation'] == 'owner read'
+            raise StillInFlight('read still running after its patience window')
+        return 'fresh'
+    with caplog.at_level('INFO', logger=owner.__name__):
+        assert wait_for_persistence(carrier, read, label='owner read',
+            transient=lambda error: isinstance(error, StillInFlight)) == 'fresh'
+    assert len(attempts) == 3 and not carrier['_storageWaits']
+    assert not carrier.get('aborted') and carrier.get('phase') is None
+    logged = '\n'.join(record.getMessage() for record in caplog.records)
+    assert 'operation=owner read waiting attempt=1' in logged and 'StillInFlight' in logged
+    assert 'operation=owner read succeeded after 2 transient failures' in logged
+    # The default classifier still refuses the unclassified local timeout at once.
+    refused = []
+    def unclassified():
+        refused.append(1)
+        raise StillInFlight('not storage pressure')
+    with pytest.raises(StillInFlight):
+        wait_for_persistence(task(), unclassified, label='write')
+    assert refused == [1]
+
+
+def test_shutdown_cancels_an_effect_free_read_instead_of_returning_its_failure():
+    from lib.llm.llm_errors import AbortedError
+    carrier = task()
+    attempts = []
+    def read():
+        attempts.append(1)
+        # The fields quiesce_running_tasks publishes for every running task.
+        carrier.update(aborted=True, _abort_reason='server_shutdown')
+        carrier['abort_event'].set()
+        raise StorageError('database_unavailable', 'authority restarting')
+    with pytest.raises(AbortedError):
+        wait_for_persistence(carrier, read, label='owner read', effect_free=True)
+    assert attempts == [1] and not carrier['_storageWaits']
+
+
+def test_swarm_command_reuses_frozen_receipt_after_lost_ack(monkeypatch):
+    from lib.swarm import persistence
+    attempts, committed = [], {}
+    def command(operation, payload, command_id):
+        attempts.append((operation, deepcopy(payload), command_id))
+        committed.setdefault(command_id, deepcopy(payload))
+        if len(attempts) == 1:
+            raise StorageError('database_unavailable', 'lost acknowledgement')
+        return {'ok': True}
+    monkeypatch.setattr(persistence, '_storage', lambda **kw: SimpleNamespace(command=command))
+    persistence.save_agent('wave', 'agent', role='coder', objective='verify', status='running',
+        messages=[{'role': 'user', 'content': 'retained input'}], required=True, task=task())
+    assert len(attempts) == 2 and attempts[0] == attempts[1]
+    assert len(committed) == 1
+
+
+def test_swarm_command_replays_the_bytes_encoded_once_for_its_receipt(monkeypatch):
+    from lib.storage.v2_semantics import request_payload
+    from lib.swarm import persistence
+    from tofu_db.wire import _payload_bytes
+    transcript = [{'role': 'user', 'content': 'retained input'}]
+    sent, frozen = [], []
+    def command(operation, payload, command_id):
+        frozen.append(payload)
+        sent.append((command_id, _payload_bytes(request_payload(operation, payload, owner_id=7))))
+        if len(sent) == 1:
+            # A transcript change after the first attempt is not part of this receipt.
+            transcript.append({'role': 'assistant', 'content': 'later round'})
+            raise StorageError('database_unavailable', 'lost acknowledgement')
+        return {'saved': True}
+    monkeypatch.setattr(persistence, '_storage', lambda **kw: SimpleNamespace(command=command))
+    persistence.save_agent('wave', 'agent', role='coder', objective='verify', status='running',
+        messages=transcript, required=True, task=task())
+    assert len(sent) == 2 and sent[0] == sent[1]
+    assert frozen[0] is frozen[1] and frozen[0].encoded['messages'] == (
+        b'[{"role":"user","content":"retained input"}]')
+
+
+def test_registration_wait_keeps_child_identity_and_no_execution(monkeypatch):
+    from lib.tasks_pkg.invocation_registration import register_child_invocation
+    import lib.storage as storage
+    import lib.tasks_pkg.manager as manager
+    child = task(True)
+    parent = {'id': 'creator', 'convId': 'conversation'}
+    attempts = []
+    def command(operation, payload, command_id):
+        attempts.append((operation, deepcopy(payload), command_id))
+        if len(attempts) <= 20:
+            raise StorageError('database_busy', 'pressure')
+        return {'archive_scope': 'owned-child'}
+    monkeypatch.setattr(storage, 'get_storage_client', lambda **kw: SimpleNamespace(command=command))
+    monkeypatch.setattr(manager, 'task_user_id', lambda parent: 771)
+    register_child_invocation(child, parent)
+    assert child['_archiveScope'] == 'owned-child'
+    assert len(attempts) == 21 and all(entry == attempts[0] for entry in attempts)
+
+
+def test_common_retry_never_replays_an_admitted_tool(monkeypatch):
+    from lib.tasks_pkg.orchestrator._finalize import _maybe_auto_retry_turn
+    carrier = task()
+    carrier.update(toolCallCount=1, error={'kind': 'network'}, config={})
+    assert not _maybe_auto_retry_turn(carrier, {})
+
+
+def test_nested_waits_keep_one_base_phase_and_do_not_grow_with_retries(record_property):
+    import sys
+    carrier = task()
+    base = carrier['phase'] = {'phase': 'working'}
+    outer_calls, inner_calls, sizes = [], [], []
+    def inner():
+        inner_calls.append(1)
+        sizes.append(sys.getsizeof(carrier['_storageWaits']) + sum(
+            sys.getsizeof(value) for value in carrier['_storageWaits'].values()))
+        if len(inner_calls) <= 50:
+            raise StorageError('database_busy', 'pressure')
+        return True
+    def outer():
+        outer_calls.append(1)
+        if len(outer_calls) == 1:
+            raise StorageError('database_busy', 'pressure')
+        assert wait_for_persistence(carrier, inner, label='inner')
+        assert len(carrier['_storageWaits']) == 1
+        return True
+    assert wait_for_persistence(carrier, outer, label='outer')
+    assert carrier['phase'] is base and not carrier['_storageWaits']
+    assert len(set(sizes[1:])) == 1
+    record_property('nested_wait_bytes', max(sizes))
+    record_property('retry_count', len(inner_calls))
+    assert not carrier.get('_storageWaitPreviousPhase')
+
+
+def test_scheduler_beacon_retains_wait_witness_and_retires_on_ack(monkeypatch):
+    from lib.swarm.liveness import ProgressBeacon
+    clock = [1.0]
+    monkeypatch.setattr('lib.swarm.liveness.time.monotonic', lambda: clock[0])
+    carrier = task()
+    beacon = carrier['_invocationProgressBeacon'] = ProgressBeacon(stall_timeout=1)
+    carrier['_invocationProgressKey'] = 'agent'
+    beacon.touch('agent')
+    attempts = []
+    def write():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise StorageError('database_busy', 'pressure')
+        clock[0] = 100
+        assert beacon.is_making_progress('agent') and beacon.is_making_progress()
+        assert not beacon.stalled_agents()
+        return True
+    assert wait_for_persistence(carrier, write, label='checkpoint')
+    assert not beacon._persistence_waits
+    clock[0] = 102
+    assert not beacon.is_making_progress('agent')
+    beacon.forget('agent')
+    assert not beacon.tracked_agents()
+
+
+@pytest.mark.parametrize('status', ['pending', 'done'])
+def test_task_checkpoint_waits_with_same_receipt_and_per_rpc_budget(monkeypatch, status):
+    from lib.tasks_pkg.manager import _persist
+    import lib.storage as storage
+    carrier = task()
+    carrier.update(_userId=771, convId='', created_at=1, status=status)
+    attempts = []
+    def query(operation, payload, **kwargs):
+        return None
+    def command(operation, payload, command_id, **kwargs):
+        attempts.append((deepcopy(payload), command_id, deepcopy(kwargs)))
+        if len(attempts) <= 25:
+            raise StorageError('database_busy', 'pressure')
+        return {'version': 1, 'guard_contract': _persist.TASK_RESULT_CHECKPOINT_GUARD_CONTRACT}
+    monkeypatch.setattr(storage, 'get_storage_client', lambda **kw: SimpleNamespace(query=query, command=command))
+    assert _persist._upsert_task_row(carrier, '', content='retained', thinking='', status=status,
+        error_json=None, tr_json=None, meta_json=None,
+        admission_budget_seconds=.5 if status == 'pending' else None)
+    assert len(attempts) == 26 and all(row == attempts[0] for row in attempts)
+    assert attempts[0][1] and not carrier['_storageWaits']
+    if status == 'pending':
+        assert attempts[0][2]['deadline'] == .5
+
+
+@pytest.mark.parametrize('source', ['account', 'local'])
+def test_execution_deadline_stops_storage_wait_before_another_write(source):
+    from lib.llm.llm_errors import AbortedError
+    carrier = task(True)
+    attempts = []
+    def write():
+        attempts.append(1)
+        if source == 'account':
+            carrier['_executionBudget'] = SimpleNamespace(limits={'deadline': 0})
+        else:
+            carrier['config']['executionLimits'] = {'deadline': 0}
+        raise StorageError('database_busy', 'pressure')
+    with pytest.raises(AbortedError):
+        wait_for_persistence(carrier, write, label='registration')
+    assert attempts == [1]
+    assert carrier['_executionLimitReason'] == 'execution_deadline_exceeded'
+    assert not carrier['_storageWaits']

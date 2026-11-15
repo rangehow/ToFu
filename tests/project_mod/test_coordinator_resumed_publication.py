@@ -1,0 +1,212 @@
+"""A request's accepted review stays publishable after a restart.
+
+RESTART-DRILL-1 coord-p-pk (2026-11-13: R3 240ca7ccf3, ship+fix, R4 carry): the
+Coordinator Turn resumed after the kill accepted its Worker's result without
+checkpoint_sha, so no publication pin was recorded and the receiver held the
+delivery as project_publication_authority_missing (PublicationAwaitsReview). The
+restart changed no authority: the pin's subject is the request's original
+delegation, and the resumed attempt's own review passed every live check.
+
+An accept recorded without a pin could gain one only by repeating the identical
+review, and that stopped working once the Worker Turn gained a projection revision
+(e93634d4, DB-3-R2: accepted at result 6681, current 6683 on 2026-11-13). Accepts
+recorded without a pin on purpose ('accepted as evidence', the code shipping
+elsewhere) hold the same way and stay unpublished. Re-affirming an accepted review
+with the registered checkpoint at the current result revision now publishes it,
+exactly as it already re-pinned a published accept; only the same request's
+attempts or the owner's own steering may do it.
+"""
+import threading
+from types import SimpleNamespace
+
+import pytest
+
+from lib.project_dispatch import admission, publication
+from lib.project_dispatch.repository import PublicationAwaitsReview
+from lib.project_dispatch.request_budget import bind_source_account
+from tests.project_mod.test_coordinator_continuation import (
+    run as run, runtime, base_runtime, context, activate, delegate, end,
+)
+from tests.project_mod.test_coordinator_dependency_links import completed
+from tests.project_mod.test_coordinator_worker_handoff import next_human_attempt
+from tests.project_mod.test_coordinator_workers import _commitment_wake
+
+pytestmark = pytest.mark.unit
+
+NOTE = 'Drill accept.'
+
+
+def _restart_resume(r):
+    """What a restart leaves and resumes: the request Turn's Attempt interrupted
+    and the same Turn continued by a new Attempt running as a new task."""
+    previous = r.task
+    r.attempts[previous['_attemptId']]['status'] = 'interrupted'
+    r.attempts['resumed-attempt'] = {
+        **r.attempts[previous['_attemptId']], 'attemptId': 'resumed-attempt',
+        'taskId': 'conversation-attempt:resumed-attempt', 'status': 'running', 'createdAt': 1_003_000}
+    r.turns[previous['_turnId']].update(currentAttemptId='resumed-attempt')
+    r.task = {key: value for key, value in previous.items()
+              if key not in ('_coordinatorRequestBudget', '_executionBudget')}
+    r.task.update(id='conversation-attempt:resumed-attempt', _attemptId='resumed-attempt',
+                  usage={}, abort_event=threading.Event())
+    if previous.get('_coordinatorRequestBudget') is not None:
+        bind_source_account(r.task, repository=r.c.repo)
+
+
+def _receiver_verdict(r, worker, monkeypatch):
+    """The delivery receiver's verdict on the Worker's registered checkout."""
+    from lib import integration_control
+    binding = r.c.repo.admission(worker['id'])
+    task_id = worker['execution']['taskId']
+    workspace = r.workspaces[task_id]
+    row = {**workspace, 'task_id': task_id, 'user_id': binding['owner'], 'project_root': binding['projectPath'],
+           'origin': {**workspace['origin'], admission.KEY: binding, 'sourceSnapshot': 'b' * 40}}
+    monkeypatch.setattr(integration_control, '_git', lambda *a, **k: SimpleNamespace(stdout=''))
+    monkeypatch.setattr(publication, '_ASSIGNMENT_DECIDED', {})
+    return publication.publication_reason(row, {})
+
+
+def _publishing(r):
+    woken, released = [], []
+    r.service.publication_wake = lambda: woken.append(True)
+    r.service.publication_release = lambda project, task_id, *, user_id: released.append(task_id)
+    return woken, released
+
+
+@pytest.mark.parametrize('drift', [0, 2])
+@pytest.mark.parametrize('accepted_by', ['interrupted', 'resumed'])
+def test_a_resumed_request_publishes_its_accepted_review_at_the_current_result(
+        run, monkeypatch, accepted_by, drift):
+    """coord-p-pk: the accept carried no checkpoint_sha, and the Worker Turn may have
+    gained projection revisions since (drift). The same request publishes it."""
+    r = run; worker, pin = completed(r)
+    woken, released = _publishing(r)
+    if accepted_by == 'resumed':
+        _restart_resume(r)
+    accepted = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
+                      decision='accept', note=NOTE)
+    assert 'error' not in accepted and accepted['checkpoint_sha'] is None, accepted
+    assert 'same note, the current result_revision and checkpoint_sha' in accepted['next_step']
+    binding, task_id = r.c.repo.admission(worker['id']), worker['execution']['taskId']
+    with pytest.raises(PublicationAwaitsReview):
+        r.c.repo.validate_publication(binding, task_id)
+    assert _receiver_verdict(r, worker, monkeypatch) == 'project_publication_authority_missing'
+    if accepted_by == 'interrupted':
+        _restart_resume(r)
+    current = 1 + drift
+    r.turns[worker['execution']['turnId']]['projectionRevision'] = current
+
+    published = r.call('review_project_work', assignment_id=worker['id'], result_revision=current,
+                       decision='accept', note=NOTE, checkpoint_sha=pin['checkpointSha'])
+
+    assert 'error' not in published, published
+    assert published['checkpoint_sha'] == pin['checkpointSha'] and published['canonical_delivery'], published
+    assert woken == [True] and released == [task_id]
+    row = r.c.repo.read(worker['id'])
+    assert row['review'] == {'actor': 'coordinator', 'decision': 'accept', 'note': NOTE, 'resultRevision': current}
+    assert (row['publication']['checkpointSha'], row['publication']['resultRevision']) == (pin['checkpointSha'], current)
+    # Authority is the request's: the pin names its original delegation, not the resumed attempt.
+    assert row['publication']['subject'] == 'coordinator:' + worker['request']['delegation']['taskId']
+    assert row['publication']['subject'] != 'coordinator:' + r.task['id']
+    assert r.c.repo.validate_publication(binding, task_id)['id'] == worker['id']
+    assert _receiver_verdict(r, worker, monkeypatch) == ''
+
+
+def _accepted_by_another_request(r):
+    """A continuation of the first request, and an accepted Worker of a later human request."""
+    first = delegate(r); end(r, first)
+    original = next_human_attempt(r, new_input=True)
+    later, other = r.task, delegate(r, 'other-request')
+    r.attempts['resumed-attempt']['status'] = 'completed'
+    r.task = original
+    assert r.wake() == ['accepted']
+    activate(r)
+    end(r, other)
+    workspace = r.workspaces[other['execution']['taskId']]
+    workspace.update(checkpoint_sha='a' * 40, state='integrated')
+    workspace['origin']['delivery']['checkpointSha'] = workspace['checkpoint_sha']
+    # The later request's own attempt accepted it without a pin.
+    continuation, r.task = r.task, later
+    r.attempts['resumed-attempt']['status'] = 'running'
+    accepted = r.call('review_project_work', assignment_id=other['id'], result_revision=1,
+                      decision='accept', note=NOTE)
+    assert 'error' not in accepted, accepted
+    r.attempts['resumed-attempt']['status'] = 'completed'
+    r.task = continuation
+    return other
+
+
+@pytest.mark.parametrize('refusal', [
+    'nonhuman_request', 'another_request', 'revoked_grant', 'other_decision', 'owner_review',
+    'changed_note', 'unregistered_checkpoint', 'earlier_result'])
+def test_publishing_an_accepted_review_keeps_every_authority_refusal(run, monkeypatch, refusal):
+    r = run
+    if refusal == 'another_request':
+        worker, checkpoint = _accepted_by_another_request(r), 'a' * 40
+    else:
+        worker, pin = completed(r)
+        checkpoint = pin['checkpointSha']
+        if refusal == 'owner_review':
+            # The owner's own review route records an accept the Coordinator never made.
+            r.c.repo.record_review(worker['id'], 'accept', NOTE, 1, worker['grant']['revision'])
+        else:
+            decision = 'rework' if refusal == 'other_decision' else 'accept'
+            recorded = r.call('review_project_work', assignment_id=worker['id'], result_revision=1,
+                              decision=decision, note=NOTE)
+            assert 'error' not in recorded, recorded
+        _restart_resume(r)
+        r.turns[worker['execution']['turnId']]['projectionRevision'] = 3
+    before = r.c.repo.read(worker['id'])
+    woken, _ = _publishing(r)
+    arguments = {'assignment_id': worker['id'], 'result_revision': 3, 'decision': 'accept', 'note': NOTE,
+                 'checkpoint_sha': checkpoint}
+    if refusal == 'nonhuman_request':
+        _commitment_wake(r)
+    elif refusal == 'another_request':
+        arguments['result_revision'] = 1
+    elif refusal == 'revoked_grant':
+        r.c.repo.revoke(worker['id'], expected_revision=worker['grant']['revision'])
+        before = r.c.repo.read(worker['id'])
+    elif refusal == 'changed_note':
+        arguments['note'] = 'Accepted after the restart.'
+    elif refusal == 'unregistered_checkpoint':
+        arguments['checkpoint_sha'] = 'c' * 40
+    elif refusal == 'earlier_result':
+        arguments['result_revision'] = 1
+
+    refused = r.call('review_project_work', **arguments)
+
+    assert 'error' in refused, refused
+    after = r.c.repo.read(worker['id'])
+    assert after['review'] == before['review'] and after.get('publication') is None
+    assert woken == []
+    if refusal == 'nonhuman_request':
+        assert refused['code'] == 'nonhuman_request', refused
+    elif refusal == 'another_request':
+        assert 'only its original request' in refused['error'], refused
+    elif refusal == 'changed_note':
+        # Publishing repeats the recorded judgment; the refusal names how.
+        assert refused['execution_started'] is False, refused
+        assert 'recorded note' in refused['recovery'] and 'current result_revision' in refused['recovery']
+
+
+@pytest.mark.parametrize('note', ['identical', 'regenerated'])
+def test_a_resumed_attempt_repeating_its_published_accept_changes_nothing(run, note):
+    """The publish call was cut after it committed: the resumed attempt repeats it
+    (its model may word the note anew). One publication stands, so one merge."""
+    r = run; worker, pin = completed(r)
+    _publishing(r)
+    arguments = {'assignment_id': worker['id'], 'result_revision': 1, 'decision': 'accept', 'note': NOTE,
+                 'checkpoint_sha': pin['checkpointSha']}
+    assert 'error' not in r.call('review_project_work', **arguments)
+    recorded = r.c.repo.read(worker['id'])
+    _restart_resume(r)
+    if note == 'regenerated':
+        arguments['note'] = 'Accepted; publishing the reviewed checkpoint.'
+
+    again = r.call('review_project_work', **arguments)
+
+    assert 'error' not in again, again
+    assert again['checkpoint_sha'] == pin['checkpointSha'] and again['canonical_delivery'], again
+    row = r.c.repo.read(worker['id'])
+    assert row['review'] == recorded['review'] and row['publication'] == recorded['publication']

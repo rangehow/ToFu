@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""The NC-guard belt must heal ONLY genuine NC poison, never legit mid-run work.
+
+WHY (production incident 2026-07-25 — the "phantom reverter")
+-------------------------------------------------------------
+``tests/conftest.py::_restore_nc_patched_sources`` snapshotted every guarded
+source at SESSION START and, after EVERY test, rewrote any guarded file whose
+bytes differed from that baseline. On a shared-HEAD tree where commits land
+MID-RUN, a long suite (pid observed 1h17m) became a phantom reverter: a real
+commit (lib/message_queue.py VU-preemption block, 83c7f1ed) was silently
+unwritten from the working tree ~every 4-6 minutes (the suite's per-test
+completion cadence) for over an hour — strace proved O_WRONLY|O_TRUNC from
+the pytest pid. The belt could not distinguish "crashed-NC leftover" from
+"legitimate new committed work".
+
+FIX
+---
+Heal ONLY when the current bytes carry the NC poison signature: every on-disk
+NC patch embeds an ``NC-WORD`` marker in its replacement text (project
+convention: ``# NC-STORM``, ``pass  # NC-OBSERVE``, ``'nc-deny-forced'`` …).
+A file that merely differs from baseline with NO marker is legit work
+(committed mid-run or uncommitted sibling WIP) and must be left alone —
+the belt's own session-start warning (``warn_on_nc_source_poison_at_session_start``)
+already covers the "started on a poisoned baseline" case for humans.
+
+NEUTER (manual A/B): revert the marker gate in conftest.py (restore the
+unconditional "differs → rewrite" branch) and
+test_legit_mid_run_work_is_never_rewritten goes red.
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
+_unit = pytest.mark.unit
+
+
+def _load_conftest_belt(tmp_path, monkeypatch):
+    """Load the belt's state + restore fn with a REDIRECTED root so the test
+    never touches the real tree."""
+    import tests.conftest as cf
+    return cf
+
+
+@_unit
+def test_legit_mid_run_work_is_never_rewritten(tmp_path, monkeypatch):
+    """THE BUG: baseline = OLD bytes (session start, pre-commit); the tree
+    file then gains LEGITIMATE new content (a mid-run commit, NO NC marker).
+    The belt must NOT rewrite it."""
+    import tests.conftest as cf
+
+    target = tmp_path / 'lib' / 'message_queue.py'
+    target.parent.mkdir(parents=True)
+    baseline = "def old():\n    return 1\n"
+    legit_new = baseline + "\n# Owner-ratified preemption (2026-07-25)\ndef new():\n    return 2\n"
+    target.write_text(legit_new, encoding='utf-8')
+
+    monkeypatch.setitem(cf._nc_source_snapshots, str(target), baseline)
+    try:
+        healed = cf.restore_drifted_nc_sources()
+    finally:
+        cf._nc_source_snapshots.pop(str(target), None)
+
+    assert str(target) not in [os.path.join(str(tmp_path), h) for h in healed]
+    assert target.read_text(encoding='utf-8') == legit_new, (
+        'the belt rewrote LEGITIMATE mid-run work back to its session-start '
+        'baseline — this is the phantom reverter that un-wrote commit 83c7f1ed'
+    )
+
+
+@_unit
+def test_nc_marked_leftover_is_healed(tmp_path, monkeypatch):
+    """The belt's actual job must keep working: a file left in its NEUTERED
+    state (carries the NC marker) by a crashed patch IS restored to baseline."""
+    import tests.conftest as cf
+
+    target = tmp_path / 'lib' / 'message_queue.py'
+    target.parent.mkdir(parents=True)
+    baseline = "def real():\n    return 'real'\n"
+    poisoned = "pass  # NC-OBSERVE (marker propagation disabled)\n"
+    target.write_text(poisoned, encoding='utf-8')
+
+    monkeypatch.setitem(cf._nc_source_snapshots, str(target), baseline)
+    try:
+        cf.restore_drifted_nc_sources()
+    finally:
+        cf._nc_source_snapshots.pop(str(target), None)
+
+    assert target.read_text(encoding='utf-8') == baseline, (
+        'an NC-marked leftover must still be healed to the baseline'
+    )
+
+
+@_unit
+def test_identical_file_untouched(tmp_path, monkeypatch):
+    import tests.conftest as cf
+    target = tmp_path / 'lib' / 'x.py'
+    target.parent.mkdir(parents=True)
+    target.write_text('same\n', encoding='utf-8')
+    monkeypatch.setitem(cf._nc_source_snapshots, str(target), 'same\n')
+    try:
+        cf.restore_drifted_nc_sources()
+    finally:
+        cf._nc_source_snapshots.pop(str(target), None)
+    assert target.read_text(encoding='utf-8') == 'same\n'
+
+
+@pytest.mark.parametrize('inside_unrelated_repository', [False, True])
+def test_source_snapshot_has_no_git_baseline(tmp_path, monkeypatch, inside_unrelated_repository):
+    """An exported source tree cannot be diagnosed against a missing/parent HEAD."""
+    import subprocess
+    import tests.conftest as cf
+
+    if inside_unrelated_repository:
+        subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    root = tmp_path / 'exported-source'
+    root.mkdir()
+    (root / 'guarded.py').write_text('retained source\n')
+    if inside_unrelated_repository:
+        subprocess.run(['git', 'add', 'exported-source/guarded.py'], cwd=tmp_path, check=True)
+        subprocess.run(['git', '-c', 'gc.auto=0', '-c', 'user.name=Fixture',
+                        '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'unrelated baseline'],
+                       cwd=tmp_path, check=True)
+        (root / 'guarded.py').write_text('independent exported source\n')
+    monkeypatch.setattr(cf, '_ROOT_DIR', str(root))
+    monkeypatch.setattr(cf, '_NC_GUARDED_SOURCES', ['guarded.py'])
+    assert cf.warn_on_nc_source_poison_at_session_start() == []
+
+
+def test_git_checkout_still_reports_guarded_source_drift(tmp_path, monkeypatch):
+    """Validate the real Git exit statuses, including an actual dirty checkout."""
+    import subprocess
+    import tests.conftest as cf
+
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    source = tmp_path / 'guarded.py'
+    source.write_text('retained source\n')
+    subprocess.run(['git', 'add', 'guarded.py'], cwd=tmp_path, check=True)
+    subprocess.run(['git', '-c', 'gc.auto=0', '-c', 'user.name=Fixture',
+                    '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'baseline'],
+                   cwd=tmp_path, check=True)
+    monkeypatch.setattr(cf, '_ROOT_DIR', str(tmp_path))
+    monkeypatch.setattr(cf, '_NC_GUARDED_SOURCES', ['guarded.py'])
+    assert cf.warn_on_nc_source_poison_at_session_start() == []
+    source.write_text('changed source\n')
+    assert cf.warn_on_nc_source_poison_at_session_start() == ['guarded.py']
+    assert source.read_text() == 'changed source\n'
+
+
+def test_session_start_probe_never_writes_or_locks_the_checkout_index(tmp_path, monkeypatch):
+    """Every pytest process runs the probe in the checkout under test with a timeout.
+
+    Porcelain ``git diff`` met stat-only drift by rewriting the index under
+    ``index.lock`` even with ``GIT_OPTIONAL_LOCKS=0`` (Git 2.34), and the
+    timeout's SIGKILL during that whole-index refresh left zero-byte locks that
+    blocked the checkout's writers. A writer's own lock is never touched.
+    """
+    import subprocess
+    import tests.conftest as cf
+
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    clean, deleted = tmp_path / 'guarded.py', tmp_path / 'deleted.py'
+    clean.write_text('retained source\n')
+    deleted.write_text('retained source\n')
+    subprocess.run(['git', 'add', 'guarded.py', 'deleted.py'], cwd=tmp_path, check=True)
+    subprocess.run(['git', '-c', 'gc.auto=0', '-c', 'user.name=Fixture',
+                    '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'baseline'],
+                   cwd=tmp_path, check=True)
+    monkeypatch.setattr(cf, '_ROOT_DIR', str(tmp_path))
+    monkeypatch.setattr(cf, '_NC_GUARDED_SOURCES', ['guarded.py', 'deleted.py', 'untracked.py'])
+    (tmp_path / 'untracked.py').write_text('not in HEAD\n')
+    before_stat = clean.stat()
+    os.utime(clean, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns - 2_000_000_000))
+    index = tmp_path / '.git' / 'index'
+    lock = tmp_path / '.git' / 'index.lock'
+    before = (index.read_bytes(), index.stat().st_mtime_ns, index.stat().st_ino)
+
+    assert cf.warn_on_nc_source_poison_at_session_start() == []
+    assert (index.read_bytes(), index.stat().st_mtime_ns, index.stat().st_ino) == before
+    assert not lock.exists()
+
+    lock.write_bytes(b'')  # a concurrent writer's reservation
+    clean.write_text('changed source\n')
+    deleted.unlink()
+    assert cf.warn_on_nc_source_poison_at_session_start() == ['guarded.py', 'deleted.py']
+    assert lock.read_bytes() == b''
+    assert (index.read_bytes(), index.stat().st_mtime_ns, index.stat().st_ino) == before

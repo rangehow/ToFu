@@ -1,0 +1,80 @@
+        <div class="settings-tab-panel" id="settingsTab_advanced">
+          <div class="settings-section-title" data-i18n="settings.responsesExperiments">工具发现与编排</div>
+          <p class="settings-desc" data-i18n="settings.responsesExperimentsDesc">配置工具发现与程序化工具调用。</p>
+          <div class="settings-group">
+            <div class="settings-row two-col">
+              <div class="settings-field"><label for="settingToolSearch" data-i18n="settings.responsesToolSearch">Tool Search</label><select id="settingToolSearch"><option value="local">local</option><option value="off">off</option></select></div>
+              <div class="settings-field"><label for="settingProgrammaticCalling" data-i18n="settings.responsesPtc">Programmatic Tool Calling</label><select id="settingProgrammaticCalling"><option value="on">on</option><option value="off">off</option></select></div>
+            </div>
+          </div>
+
+          <div class="settings-divider"></div>
+          <div class="settings-section-title" data-i18n="settings.responsesApiTitle">OpenAI Responses 参数</div>
+          <div class="settings-group">
+            <div class="settings-row two-col">
+              <div class="settings-field"><label for="settingResponsesPromptProfile">GPT-5.6 提示词档位</label><select id="settingResponsesPromptProfile"><option value="auto">auto</option><option value="lean">lean</option><option value="full">full</option></select></div>
+              <div class="settings-field"><label for="settingResponsesTransport" data-i18n="settings.responsesTransport">传输</label><select id="settingResponsesTransport"><option value="sse">SSE</option><option value="websocket">WebSocket</option></select></div>
+            </div>
+            <div class="settings-row two-col">
+              <div class="settings-field"><label for="settingResponsesReasoning" data-i18n="settings.responsesReasoning">推理模式</label><select id="settingResponsesReasoning"><option value="standard">standard</option><option value="pro">pro</option></select></div>
+              <div class="settings-field"><label for="settingResponsesVerbosity" data-i18n="settings.responsesVerbosity">输出详细度</label><select id="settingResponsesVerbosity"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div>
+            </div>
+            <div class="settings-row two-col">
+              <div class="settings-field"><label for="settingResponsesImageDetail" data-i18n="settings.responsesImageDetail">图像细节</label><select id="settingResponsesImageDetail"><option value="auto">auto</option><option value="original">original</option></select></div>
+              <div class="settings-field"></div>
+            </div>
+          </div>
+          <div class="settings-divider"></div>
+
+          <!-- 成本优化 A/B 实验 moved to the maintainer-only Experiments tab
+               (static/settings_panels/experiments.html) — see
+               lib/settings_panels.MAINTAINER_ONLY_TABS. -->
+
+          <details class="settings-disclosure">
+            <summary><strong data-i18n="settings.importExport">导入 / 导出</strong></summary>
+            <div class="settings-disclosure-body">
+          <p class="settings-desc" data-i18n="settings.importExportDesc">将所有服务器端配置导出为 JSON，或从文件导入。</p>
+          <div class="settings-row" style="gap:10px;">
+            <button class="btn btn-secondary btn-sm" data-tofu-action="exportServerConfig()" data-i18n="settings.exportJson">⬇ 导出 JSON</button>
+            <button class="btn btn-secondary btn-sm" data-tofu-action="document.getElementById('settingsImportFile').click()" data-i18n="settings.importJson">⬆ 导入 JSON</button>
+            <input type="file" id="settingsImportFile" accept=".json" style="display:none" data-tofu-action-change="importServerConfig(event)">
+          </div>
+            </div>
+          </details>
+
+          <details class="settings-disclosure">
+            <summary><strong data-i18n="settings.pricingOverride">价格覆盖</strong></summary>
+            <div class="settings-disclosure-body">
+          <p class="settings-desc" data-i18n="settings.pricingOverrideDesc">模型定价（美元 / 每百万 Token）。编辑以下 JSON 进行自定义。</p>
+          <textarea id="settingPricing" class="settings-textarea settings-mono" rows="8" placeholder="正在加载价格数据..." data-i18n-placeholder="settings.loadingPricing"></textarea>
+            </div>
+          </details>
+
+          <details class="settings-disclosure">
+            <summary><strong data-i18n="settings.localCache">本地缓存</strong></summary>
+            <div class="settings-disclosure-body">
+          <p class="settings-desc" data-i18n="settings.localCacheDesc">浏览器中的对话缓存，用于快速打开；清除不影响服务器数据。</p>
+          <div class="settings-row" style="gap:10px; align-items:center;">
+            <span class="settings-info-value" id="settingsCacheStats" style="font-size:13px;opacity:0.7;">—</span>
+            <button class="btn btn-secondary btn-sm" id="settingsClearCacheBtn" data-tofu-action="_clearConvCacheFromSettings()" data-i18n="settings.clearCache">清除缓存</button>
+          </div>
+            </div>
+          </details>
+
+          <details class="settings-disclosure">
+            <summary><strong data-i18n="settings.serverInfo">服务器信息</strong></summary>
+            <div class="settings-disclosure-body">
+          <div class="settings-server-info" id="settingsServerInfo">
+            <div class="settings-info-row"><span class="settings-info-label" data-i18n="settings.status">状态</span><span class="settings-info-value" id="settingsSrvStatus">—</span></div>
+          </div>
+            </div>
+          </details>
+
+          <details class="settings-disclosure">
+            <summary><strong data-i18n="settings.credentialsVault">凭证保管库</strong></summary>
+            <div class="settings-disclosure-body">
+          <p class="settings-desc" data-i18n="settings.credentialsVaultDesc">加密保存在本机服务器，不随配置导出。</p>
+          <div id="credentialsVaultList"></div>
+            </div>
+          </details>
+        </div>

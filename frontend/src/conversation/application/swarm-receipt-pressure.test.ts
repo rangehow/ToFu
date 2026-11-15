@@ -1,0 +1,136 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { createSwarmPushPresentationController, swarmPresentationOverlay } from './swarm-presentation-overlay';
+import { applyMessageReceipts, projectMessageReceipts } from '../presentation/agent-message-receipts';
+
+afterEach(() => vi.restoreAllMocks());
+
+function receiptPressureState(count = 32): any {
+  const receipts = Array.from({ length: count }, (_, index) => ({
+    swarmRunId: 'run', agentId: 'agent', messageId: `message-${index}`,
+    state: 'input_confirmed', inputConfirmedAt: index + 1,
+  }));
+  const turn = (id: string, rounds: any[]) => ({ turnId: id, actor: 'assistant',
+    projectionRevision: 1, projection: { toolRounds: rounds }, updatedAt: 1 });
+  return { conversationId: 'pressure', laneOrder: { main: ['launch', 'sender'] }, turnsById: {
+    launch: turn('launch', [{ toolName: 'spawn_agents', _swarm: true, _swarmRunId: 'run',
+      _swarmAgents: [{ id: 'agent', status: 'done', messageReceipts: receipts }] },
+    ...Array.from({ length: 100 }, (_, i) => ({ toolName: 'run_command',
+      toolContent: `large unrelated output ${i}: ${'x'.repeat(8192)}` }))]),
+    sender: turn('sender', receipts.map(receipt => ({ toolName: 'send_agent_message',
+      toolArgs: { content: `Body ${receipt.messageId}` }, toolContent: JSON.stringify({
+        swarm_run_id: 'run', agent_id: 'agent', message_id: receipt.messageId,
+      }) }))),
+  } };
+}
+
+it.each([1, 32])('bounds transcript parsing/copying independently of %i receipts', count => {
+  const state = receiptPressureState(count), before = structuredClone(state);
+  const clone = vi.spyOn(globalThis, 'structuredClone');
+  const parse = JSON.parse;
+  const outputReads = new Map<string, number>();
+  vi.spyOn(JSON, 'parse').mockImplementation((value, reviver) => {
+    if (String(value).startsWith('large unrelated output')) {
+      outputReads.set(value, (outputReads.get(value) || 0) + 1);
+    }
+    return parse(value, reviver);
+  });
+  const result = swarmPresentationOverlay.compose('pressure', state, state, () => null);
+  expect(clone.mock.calls.length).toBeLessThanOrEqual(4);
+  expect(Math.max(...outputReads.values())).toBeLessThanOrEqual(3);
+  expect(state).toEqual(before);
+  const messages = result.turnsById.launch!.projection.toolRounds![0]._swarmMessageReceipts as any[];
+  expect(messages).toHaveLength(count);
+  expect(messages.every(message => message.state === 'input_confirmed'
+    && message.content === `Body ${message.messageId}` && message.runEnded)).toBe(true);
+  expect(result.turnsById.sender!.projection.toolRounds!.every((round: any) =>
+    round._agentMessageReceipt.state === 'input_confirmed')).toBe(true);
+});
+
+it('shares every round and segment that presentation never writes', () => {
+  const state = receiptPressureState(4);
+  const reply = (id: string) => ({ turnId: id, actor: 'assistant', projectionRevision: 1, updatedAt: 1,
+    projection: { content: 'answer', segments: [{ type: 'thinking', blockId: `${id}-t`, text: 'x'.repeat(4096),
+      signature: 's'.repeat(8192) }], toolRounds: Array.from({ length: 50 }, (_, i) => ({
+      toolName: 'read_files', toolCallId: `${id}-${i}`, thinking: 'z'.repeat(4096),
+      toolContent: `file ${i}` })) } });
+  state.turnsById.plain = reply('plain');
+  state.laneOrder.main.push('plain');
+  const before = structuredClone(state);
+  const clone = vi.spyOn(globalThis, 'structuredClone');
+  const [plain, sender, launch] = swarmPresentationOverlay.selectCandidates('pressure', state, () => null);
+  const durable = state.turnsById;
+  // Plain history is read through, not copied: no clone, same round/segment identities.
+  expect(plain.projection.segments![0]).toBe(durable.plain.projection.segments[0]);
+  expect(plain.projection.toolRounds!.every((round, i) => round === durable.plain.projection.toolRounds[i])).toBe(true);
+  expect(launch.projection.toolRounds!.slice(1).every((round, i) =>
+    round === durable.launch.projection.toolRounds[i + 1])).toBe(true);
+  // Written rounds are private copies, at most one clone batch per Turn.
+  expect(launch.projection.toolRounds![0]).not.toBe(durable.launch.projection.toolRounds[0]);
+  expect(sender.projection.toolRounds!.every((round: any) => round._agentMessageReceipt)).toBe(true);
+  expect(clone.mock.calls.length).toBeLessThanOrEqual(2);
+  expect(state).toEqual(before);
+});
+
+it('a receipt frame copies only the Turns the receipt applies to', () => {
+  const state = receiptPressureState(4);
+  for (let index = 0; index < 40; index += 1) {
+    state.turnsById[`plain-${index}`] = { turnId: `plain-${index}`, actor: 'assistant',
+      projectionRevision: 1, updatedAt: 1, projection: { toolRounds: Array.from({ length: 20 }, (_, i) => ({
+        toolName: 'read_files', toolCallId: `plain-${index}-${i}`, toolContent: `file ${i}: ${'y'.repeat(4096)}`,
+      })) } };
+    state.laneOrder.main.unshift(`plain-${index}`);
+  }
+  const overlays = new Map<string, any>();
+  const controller = createSwarmPushPresentationController({
+    findConversation: id => ({ id }), readTurnState: () => state,
+    readOverlay: (_conversation, turnId) => overlays.get(turnId) ?? null,
+    upsertOverlay: (_conversation, turn) => { overlays.set(turn.turnId, turn); },
+    removeOverlay: () => {}, hydrateConversation: () => null, attachAutoContinue: () => {},
+    reducePhase: () => {}, reduceAgent: () => {}, debug: () => {}, warn: () => {},
+  });
+  const before = structuredClone(state);
+  const clone = vi.spyOn(globalThis, 'structuredClone');
+  controller.handleFrame({ type: 'swarm_message_receipt', conversationId: 'pressure',
+    swarmRunId: 'run', agentId: 'agent', messageId: 'message-new', state: 'submitted' });
+  // Candidates clone writable rounds once per swarm Turn; only the two Turns
+  // holding the receipt's run are copied for an overlay. Plain history never.
+  expect(clone.mock.calls.length).toBeLessThanOrEqual(6);
+  expect([...overlays.keys()].sort()).toEqual(['launch', 'sender']);
+  expect(overlays.get('launch').projection.toolRounds[0]._swarmMessageReceipts
+    .some((message: any) => message.messageId === 'message-new')).toBe(true);
+  expect(state).toEqual(before);
+});
+
+it('applies mirrored receipts once instead of replaying their copies as new work', () => {
+  const state = receiptPressureState(32);
+  const projection = state.turnsById.sender.projection;
+  for (const round of projection.toolRounds) round.toolArgs = JSON.stringify(round.toolArgs);
+  const receipts = state.turnsById.launch.projection.toolRounds[0]._swarmAgents[0].messageReceipts;
+  const parse = JSON.parse;
+  let argumentReads = 0;
+  vi.spyOn(JSON, 'parse').mockImplementation((value, reviver) => {
+    if (String(value).startsWith('{"content":')) argumentReads++;
+    return parse(value, reviver);
+  });
+  applyMessageReceipts(projection, Array.from({ length: 32 }, () => receipts).flat());
+  expect(argumentReads).toBe(32);
+  expect(projection.toolRounds.every((round: any) =>
+    round._agentMessageReceipt.state === 'input_confirmed')).toBe(true);
+});
+
+it('preserves receipt order, exact run identity and monotone facts in a batch', () => {
+  const state = receiptPressureState(2);
+  const projection = state.turnsById.launch.projection;
+  projectMessageReceipts(projection);
+  const receipt = { swarmRunId: 'run', agentId: 'agent', messageId: 'message-0' };
+  applyMessageReceipts(projection, [
+    { ...receipt, state: 'submitted', inputConfirmedAt: 500 },
+    { ...receipt, swarmRunId: 'other', state: 'unconfirmed' },
+    { ...receipt, messageId: '', state: 'input_confirmed' },
+  ]);
+  expect(projection.toolRounds[0]._swarmMessageReceipts.map((r: any) => r.messageId))
+    .toEqual(['message-0', 'message-1']);
+  expect(projection.toolRounds[0]._swarmMessageReceipts[0]).toMatchObject({
+    state: 'input_confirmed', inputConfirmedAt: 1, runEnded: true,
+  });
+});

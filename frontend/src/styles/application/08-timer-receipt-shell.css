@@ -1,0 +1,157 @@
+/* Timer receipt shell, explicit state and identity. Metadata and checks own their own bodies. */
+.timer-watcher-block {
+  margin: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: var(--control-edge-inset) solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: var(--font-size-md)/var(--leading-body) var(--font-ui);
+  overflow: hidden;
+}
+.timer-watcher-active, .timer-watcher-orphaned { border-color: var(--warning-border); }
+.timer-watcher-triggered { border-color: var(--success-border); }
+.timer-watcher-warn { border-color: var(--error-border); }
+.timer-watcher-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  min-block-size: var(--control-h-md);
+  border-bottom: var(--control-edge-inset) solid var(--border);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  touch-action: manipulation;
+}
+.timer-watcher-header:hover { background: var(--bg-hover); }
+.timer-watcher-header:focus-visible,
+.timer-meta-row-instr:focus-visible,
+.timer-poll-has-detail:focus-visible {
+  outline: calc(2 * var(--control-edge-inset)) solid var(--accent);
+  outline-offset: calc(-1 * var(--control-edge-inset));
+}
+.timer-watcher-icon { display: inline-flex; flex: 0 0 auto; color: var(--text-secondary); }
+.timer-watcher-active .timer-watcher-icon, .timer-watcher-orphaned .timer-watcher-icon { color: var(--warning-text); }
+.timer-watcher-triggered .timer-watcher-icon { color: var(--success-text); }
+.timer-watcher-warn .timer-watcher-icon { color: var(--error-text); }
+.timer-watcher-label { flex: 1 1 12ch; min-inline-size: 0; font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
+.timer-toggle { display: inline-flex; flex: 0 0 auto; color: var(--text-secondary); transition: transform var(--motion-fast) var(--ease-standard); }
+.timer-watcher-header[aria-expanded="false"] .timer-toggle { transform: rotate(-90deg); }
+.timer-watcher-body { display: none; padding: var(--space-2) var(--space-3); }
+.timer-watcher-body.expanded { display: block; }
+.timer-id-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-block-size: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: var(--control-edge-inset) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font: var(--font-size-sm)/var(--leading-title) var(--font-mono);
+  cursor: pointer;
+}
+.timer-id-chip:hover, .timer-id-chip.copied { color: var(--text-primary); border-color: var(--accent); }
+.timer-id-chip:focus-visible { outline: calc(2 * var(--control-edge-inset)) solid var(--accent); outline-offset: var(--space-1); }
+.timer-id-txt { max-inline-size: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timer-kind-badge, .timer-poll-toolcount, .timer-poll-model, .timer-poll-id {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  border: var(--control-edge-inset) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: var(--leading-body);
+  overflow-wrap: anywhere;
+}
+.timer-kind-badge { flex: 0 0 auto; }
+.timer-kind-code { color: var(--success-text); border-color: var(--success-border); }
+.timer-kind-hybrid { color: var(--info-text); border-color: var(--info-border); }
+/* Delivery receipt: how a fired timer's continuation reached the conversation. */
+.timer-panel-item .tpi-decision.steered { background: var(--info-text); }
+.timer-panel-item .tpi-decision.queued { background: var(--warning-text); }
+/* Inside an open grouped tool panel a watch is one call of the card, like a
+ * parallel run or a tool search (23-reading-tool-panel.css): no frame, fill,
+ * radius or inset. The state label takes the intent edge; the copyable id
+ * (monospace: the exact identity) and the condition tier follow as quiet
+ * metadata; the caret closes the row after any outcome, inside the rows'
+ * --space-6 end lane; the checks hang from the title's edge to the card's
+ * side. Lines beneath the row hang on the same edge. */
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-block {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-block > .timer-watcher-header {
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--conversation-process-inset);
+  border-radius: var(--radius-sm);
+  font-size: var(--conversation-process-font-size);
+  line-height: var(--leading-title);
+}
+/* One row per call on phones too: the label wraps beside its metadata. An
+ * attention step still breaks its identity onto a line of its own. */
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"]:not([data-action-state="attention"]) .timer-watcher-block > .timer-watcher-header {
+  flex-wrap: nowrap;
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > .timer-watcher-icon {
+  order: -2;
+  width: var(--space-4);
+  height: var(--space-4);
+  color: var(--tool-row-glyph-ink);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > .timer-watcher-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-active .timer-watcher-icon {
+  color: var(--tool-row-glyph-ink-live);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] :is(.timer-watcher-orphaned, .timer-watcher-warn) .timer-watcher-icon {
+  color: var(--tool-row-glyph-ink-attention);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > .timer-watcher-label {
+  flex: 1 1 auto;
+  order: -1;
+  color: var(--tool-row-intent-ink);
+  font-weight: var(--weight-regular);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-active .timer-watcher-label {
+  color: var(--tool-row-intent-ink-live);
+  font-weight: var(--weight-medium);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > :is(.timer-id-chip, .timer-kind-badge) {
+  min-block-size: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--tool-row-meta-ink);
+  font-size: var(--conversation-font-size-meta);
+  line-height: var(--leading-title);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > .timer-id-chip:is(:hover, .copied) {
+  color: var(--text-primary);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > .timer-toggle {
+  order: 3;
+  width: var(--space-3);
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > .timer-toggle svg {
+  width: 100%;
+  height: auto;
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-header > .ptool-error-reason {
+  margin-inline-start: calc(var(--space-4) + var(--space-2));
+}
+.conversation-surface .conversation-tool-panel[data-tool-panel-state="open"] ~ .conversation-block[data-turn-zone="process"] .timer-watcher-body {
+  margin-inline-start: calc(var(--space-4) + var(--space-2));
+  padding: var(--space-1) 0 var(--space-2);
+}

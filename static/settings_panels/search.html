@@ -1,0 +1,88 @@
+        <div class="settings-tab-panel" id="settingsTab_search">
+          <div class="settings-section-title" data-i18n="settings.searchFetch">搜索与网页访问</div>
+
+          <!-- ── 搜索 API：一个密钥接入多家商用搜索，每个来源是一个独立引擎。仅在发行层提供网关目录（或已保存自定义网关）时显示 ── -->
+          <div class="search-pipeline-card" id="searchGatewayCard" hidden>
+            <div class="search-pipeline-title">搜索 API</div>
+            <div class="settings-toggle-row">
+              <div>
+                <span class="settings-toggle-label">启用搜索 API</span>
+                <div class="settings-toggle-desc">并行查询勾选的来源，按次计费。</div>
+              </div>
+              <label class="stg-toggle">
+                <input type="checkbox" id="settingSearchGatewayEnabled" data-tofu-action-change="_refreshSearchGatewayStatus()">
+                <span class="stg-toggle-track"><span class="stg-toggle-thumb"></span></span>
+              </label>
+            </div>
+            <div class="settings-row two-col">
+              <div class="settings-field">
+                <label for="settingSearchGatewayId">服务</label>
+                <select id="settingSearchGatewayId" data-tofu-action-change="_searchGatewayChanged()"></select>
+              </div>
+              <div class="settings-field">
+                <label for="settingSearchGatewayKey" id="settingSearchGatewayKeyLabel">API Key</label>
+                <input type="password" id="settingSearchGatewayKey" autocomplete="off" spellcheck="false" data-tofu-action-input="_refreshSearchGatewayStatus()">
+                <span class="settings-field-hint" id="settingSearchGatewayKeyHint"></span>
+              </div>
+            </div>
+            <div class="settings-field">
+              <label>来源</label>
+              <div id="settingSearchGatewaySources" class="search-gateway-sources"></div>
+            </div>
+            <div class="settings-row two-col">
+              <div class="settings-field">
+                <label for="settingSearchFreeEngines" title="DDG / Brave / Bing / SearXNG / Marginalia">免费引擎</label>
+                <select id="settingSearchFreeEngines">
+                  <option value="fallback">兜底：搜索 API 没有相关结果时才运行（推荐）</option>
+                  <option value="parallel">并行：始终与搜索 API 同时运行</option>
+                  <option value="off">关闭：只用搜索 API</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label for="settingSearchGatewayContent">网页正文</label>
+                <select id="settingSearchGatewayContent">
+                  <option value="fetch">Tofu 抓取（默认，搜索结果最快返回）</option>
+                  <option value="provider">由搜索服务抓取（绕开反爬与代理，中文站点正文更全）</option>
+                </select>
+              </div>
+            </div>
+            <div class="search-pipeline-hint" id="searchGatewayStatus"></div>
+          </div>
+
+          <!-- ── 浏览器连接：扩展状态 + 站点适配器 ── -->
+          <div class="search-pipeline-card" id="searchBrowserCard">
+            <div class="search-pipeline-title" data-i18n="settings.browserConnection">浏览器连接</div>
+            <div id="searchBrowserStatus" class="search-status-strip"></div>
+            <div class="settings-field-hint" id="searchAdapterSummary" data-i18n="settings.browserAdaptersLoading">正在读取站点适配器…</div>
+            <div class="stg-btn-row">
+              <button type="button" class="stg-btn-secondary" data-tofu-action="_testSearchBrowser()" data-i18n="settings.browserTestConnection">测试连接</button>
+              <button type="button" class="stg-btn-secondary" data-tofu-action="closeSettings();openLocalControlModal()" data-i18n="settings.browserInstallUpgrade">安装或升级扩展</button>
+            </div>
+          </div>
+
+          <!-- ── 访问边界：三道闸 —— 屏蔽域名 / 内网放行 / 浏览器读取授权 ── -->
+          <details class="settings-disclosure">
+            <summary>
+              <span data-i18n="settings.accessBoundaries">访问边界</span>
+              <span class="search-advanced-sub" data-i18n="settings.accessBoundariesSub">屏蔽域名 · 内网放行 · 浏览器读取授权</span>
+            </summary>
+            <div class="settings-disclosure-body">
+              <div class="search-pipeline-title search-boundary-head" data-i18n="settings.blockedDomains">屏蔽域名</div>
+              <p class="settings-desc" data-i18n="settings.blockedDomainsDesc">助手网页工具不会访问的 URL。可填域名（example.com，含子域名）、域名加路径前缀（example.com/private），或用 * 代表一段路径（github.com/*/repo）。同时作用于搜索结果、fetch_url、浏览器导航和命令中的 URL 传输。输入后按回车添加；粘贴含逗号或空格的内容会自动拆分。</p>
+              <div id="settingSkipDomains" class="chip-input" data-placeholder="youtube.com"></div>
+              <div class="search-pipeline-title search-boundary-head" data-i18n="settings.privateHostsBrowserSplit">内网主机放行（仅服务器抓取）</div>
+              <p class="settings-desc" data-i18n="settings.privateHostsDesc">默认禁止抓取内网地址（防 SSRF）。确需访问的内网主机名加到这里，填父域名可覆盖其子域。只放行「能否访问」，不含登录凭证。</p>
+              <div id="privateHostsList" class="private-hosts-list"></div>
+              <div class="search-pipeline-title search-boundary-head" data-i18n="settings.browserReadControl">浏览器读取授权</div>
+              <p class="settings-desc" data-i18n="settings.browserAccessDesc">浏览器只读默认允许；可在这里拒绝域名、查看适配器健康状态，以及撤销长期写授权。</p>
+              <div id="browserAccessList" class="auth-sources-list"></div>
+              <div class="search-deny-row">
+                <input type="text" id="browserReadDenyInput" placeholder="example.com">
+                <button type="button" class="stg-btn-secondary" data-tofu-action="_browserAccessDenyRead()" data-i18n="settings.browserDenyRead">拒绝浏览器读取</button>
+              </div>
+              <div class="search-pipeline-title search-boundary-head" data-i18n="settings.sitePacks">站点包</div>
+              <p class="settings-desc" data-i18n="settings.sitePacksDesc">一个站点包把一个站点接入浏览器自动化（登录方式、读取/搜索操作、给模型的路由提示）。内置与发行层包只读；粘贴 tofu.site-pack/v1 JSON 可安装用户层包，保存即热生效。</p>
+              <div id="sitePacksList" class="site-packs-list"></div>
+            </div>
+          </details>
+        </div>

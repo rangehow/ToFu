@@ -1,0 +1,545 @@
+"""Channel vocabulary: thread keys, normalized events and outbox items.
+
+Responsibility: the channel-neutral shapes shared by every channel module,
+derived from the single contract ``contracts/channels_v1.schema.json``
+(enums, defaults, limits, provider limits, tool schemas).
+Entry points: ``ThreadKey``, ``ChannelEvent``, ``ChannelMedia``, ``QuotedMessage``, ``OutboxItem``,
+``ChannelError`` and the contract vocabularies below. Dependencies: the contract file only; no
+storage, network or task imports, so adapters and tests can use it freely.
+"""
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+CONTRACT = json.loads((Path(__file__).resolve().parents[2]
+                       / 'contracts/channels_v1.schema.json').read_text(encoding='utf-8'))
+_DEFS = CONTRACT['$defs']
+
+NAMESPACE = CONTRACT['x-namespace']
+DISCLOSURE_LABEL = CONTRACT['x-disclosureLabel']
+OUTBOX_MARKER_FIELD = CONTRACT['x-outboxMarkerField']
+LIMITS = CONTRACT['x-limits']
+PROVIDER_LIMITS = CONTRACT['x-providerLimits']
+BRIDGE_CONTRACT = CONTRACT['x-bridge']
+# Per-channel capabilities: whether the channel has a command chat (owner
+# messages that are human input) and whether quote replies exist.
+CHANNEL_TRAITS = CONTRACT['x-channelTraits']
+GITHUB = CONTRACT['x-github']
+DX_ROBOT = CONTRACT['x-dxRobot']
+# 大象 message types, the rich-text subtype, the voice format and the Web
+# SDK's file hosts (docs/CHANNELS.md C9).
+DX = CONTRACT['x-dx']
+# Bot platforms (docs/CHANNELS.md C12): a bot account the owner registered,
+# whose provider IDs are opaque strings carried in thread keys as base32.
+BOT_CHANNELS = tuple(CONTRACT['x-botChannels'])
+WECOM = CONTRACT['x-wecom']
+QQ = CONTRACT['x-qq']
+WECHAT = CONTRACT['x-wechat']
+DEFAULT_MODE_BY_KIND = dict(CONTRACT['x-defaults']['modeByKind'])
+DEFAULT_REPLY_POLICY = CONTRACT['x-defaults']['replyPolicy']
+# The owner's assistant for other people's messages (docs/CHANNELS.md C11).
+ASSISTANT = CONTRACT['x-assistant']
+# Quote replies: authors, states and unreadable reasons of a resolved quote (docs/CHANNELS.md C13).
+QUOTES = CONTRACT['x-quotes']
+OWNER_NOTE_MAX_CHARS = _DEFS['OwnerNote']['maxLength']
+
+CHANNELS = tuple(_DEFS['Channel']['enum'])
+THREAD_KINDS = tuple(_DEFS['ThreadKind']['enum'])
+THREAD_MODES = tuple(_DEFS['ThreadMode']['enum'])
+CONFIGURABLE_MODES = tuple(_DEFS['ConfigurableThreadMode']['enum'])
+REPLY_POLICIES = tuple(_DEFS['ReplyPolicy']['enum'])
+ACCOUNT_STATES = tuple(_DEFS['AccountState']['enum'])
+# States a starting (its identity confirmation included), running or restarting
+# session reports for itself. An owner command on an account that is already
+# enabled leaves them alone: a session writes each transition once, so a
+# 'starting' written over its 'connected' would stick.
+SESSION_REPORTED_STATES = frozenset({'starting', 'authorizing', 'connected', 'disconnected'})
+EVENT_DISPOSITIONS = tuple(_DEFS['EventDisposition']['enum'])
+OUTBOX_AUTHORITIES = tuple(_DEFS['OutboxAuthority']['enum'])
+OUTBOX_STATES = tuple(_DEFS['OutboxState']['enum'])
+# Terminal outbox states leave the per-thread active index; ``failed`` stays
+# listed (non-blocking) until the owner discards it.
+TERMINAL_OUTBOX_STATES = frozenset({'sent', 'discarded'})
+ACTIVE_OUTBOX_STATES = tuple(s for s in OUTBOX_STATES if s not in TERMINAL_OUTBOX_STATES)
+
+TOOLS = CONTRACT['tools']
+TOOL_NAMES = frozenset(tool['function']['name'] for tool in TOOLS)
+# Tool arguments that are message content (channel_send's text and files): tool-call logs show
+# them only by size and digest (docs/CHANNEL_PROTOCOL.md P14).
+TOOL_CONTENT_ARGUMENTS = frozenset({'text', 'attachments'})
+
+_THREAD_KEY_RE = re.compile(_DEFS['ThreadKey']['pattern'])
+_EVENT_ID_RE = re.compile(_DEFS['EventId']['pattern'])
+_EXTERNAL_ID_RE = re.compile(r'^[0-9]{1,32}$')
+# The thread part of a GitHub key: ``<owner>/<repo>#<number>``. GitHub owner
+# and repository names are case-insensitive, so keys are stored lowercase and
+# one issue or pull request has exactly one spelling (exact dedup and lookup).
+_GITHUB_THREAD_RE = re.compile(r'^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}#[1-9][0-9]{0,9}$')
+# Kinds per channel, as in the contract ThreadKey pattern. GitHub's REST API
+# treats every pull request as an issue (same number space, same comments
+# endpoint), so both are one kind.
+_KINDS_BY_CHANNEL = {'dx': frozenset({'gid', 'uid', 'pid'}), 'github': frozenset({'issue'}),
+                     **{channel: frozenset({'uid', 'gid'}) for channel in BOT_CHANNELS}}
+# A bot platform's provider ID (user, group or chat ID) as unpadded lowercase
+# RFC 4648 base32 (lib.channels.bots.ids): reversible and lowercase ASCII.
+_PROVIDER_KEY_RE = re.compile(r'^[a-z2-7]{1,128}$')
+_GITHUB_PREFIX = 'github:'
+# Event keys sort by the provider ID; the contract caps IDs at 32 digits.
+_ORDER_KEY_WIDTH = 32
+
+
+class ChannelError(ValueError):
+    """A caller-visible channel refusal with a stable machine code."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def require_external_id(value: Any, *, field_name: str = 'external_id') -> str:
+    text = str(value or '')
+    if not _EXTERNAL_ID_RE.fullmatch(text):
+        raise ChannelError('invalid_external_id', f'{field_name} must be a provider numeric ID')
+    return text
+
+
+def _canonical_github(text: str) -> str:
+    """Lowercase the owner/repository part of a GitHub key (event ID suffix kept)."""
+    return _GITHUB_PREFIX + text[len(_GITHUB_PREFIX):].lower()
+
+
+@dataclass(frozen=True, order=True)
+class ThreadKey:
+    """One event stream.
+
+    大象: ``dx:gid:<gid>``, ``dx:uid:<uid>`` or ``dx:pid:<pid>``. GitHub:
+    ``github:<owner>/<repo>#<number>`` (kind ``issue``; ``external_id`` holds
+    ``<owner>/<repo>#<number>``), one thread per issue or pull request.
+    """
+
+    channel: str
+    kind: str
+    external_id: str
+
+    def __post_init__(self):
+        kinds = _KINDS_BY_CHANNEL.get(self.channel)
+        if self.channel not in CHANNELS or kinds is None or self.kind not in kinds:
+            raise ChannelError('invalid_thread', 'Invalid channel thread key')
+        if self.channel == 'github':
+            valid = (_GITHUB_THREAD_RE.fullmatch(self.external_id) is not None
+                     # '.' and '..' are path segments, never repository names.
+                     and self.external_id.split('#', 1)[0].split('/', 1)[1] not in ('.', '..'))
+        elif self.channel in BOT_CHANNELS:
+            valid = _PROVIDER_KEY_RE.fullmatch(self.external_id) is not None
+        else:
+            valid = _EXTERNAL_ID_RE.fullmatch(self.external_id) is not None
+        if not valid:
+            raise ChannelError('invalid_thread', 'Invalid channel thread key')
+
+    def __str__(self) -> str:
+        if self.channel == 'github':
+            return _GITHUB_PREFIX + self.external_id
+        return f'{self.channel}:{self.kind}:{self.external_id}'
+
+    @classmethod
+    def parse(cls, text: Any) -> 'ThreadKey':
+        if isinstance(text, str) and text[:len(_GITHUB_PREFIX)].lower() == _GITHUB_PREFIX:
+            text = _canonical_github(text)
+        if not isinstance(text, str) or not _THREAD_KEY_RE.fullmatch(text):
+            raise ChannelError('invalid_thread', 'Thread key must look like dx:gid:<digits> or '
+                                                 'github:<owner>/<repo>#<number>')
+        if text.startswith(_GITHUB_PREFIX):
+            return cls('github', 'issue', text[len(_GITHUB_PREFIX):])
+        channel, kind, external_id = text.split(':', 2)
+        return cls(channel, kind, external_id)
+
+    @classmethod
+    def github(cls, repository: str, number: int) -> 'ThreadKey':
+        """The thread of issue or pull request ``number`` in ``owner/repo``."""
+        return cls('github', 'issue', f'{str(repository).lower()}#{int(number)}')
+
+    @property
+    def is_private(self) -> bool:
+        return self.kind == 'uid'
+
+    @property
+    def repository(self) -> str:
+        """``owner/repo`` of a GitHub thread."""
+        return self.external_id.split('#', 1)[0]
+
+    @property
+    def number(self) -> int:
+        """Issue or pull request number of a GitHub thread."""
+        return int(self.external_id.rsplit('#', 1)[1])
+
+
+def parse_event_id(text: Any) -> tuple[ThreadKey, str]:
+    """Split ``<thread key>/<external id>`` (the chain-of-recall event ID).
+
+    External IDs are digits and GitHub thread keys contain ``/``, so the split
+    is at the last slash.
+    """
+    if isinstance(text, str) and text[:len(_GITHUB_PREFIX)].lower() == _GITHUB_PREFIX:
+        text = _canonical_github(text)
+    if not isinstance(text, str) or not _EVENT_ID_RE.fullmatch(text):
+        raise ChannelError('invalid_event_id', 'Event ID must look like dx:gid:<digits>/<digits> or '
+                                               'github:<owner>/<repo>#<number>/<digits>')
+    thread, external_id = text.rsplit('/', 1)
+    return ThreadKey.parse(thread), external_id
+
+
+def order_key(external_id: str) -> str:
+    return require_external_id(external_id).zfill(_ORDER_KEY_WIDTH)
+
+
+def external_id_after(left: str, right: str | None) -> bool:
+    """Numeric comparison of provider IDs (snowflakes are time ordered)."""
+    return right is None or right == '' or int(left) > int(right)
+
+
+# Who authored a message, as the platform says (the channel protocol's Sender.kind):
+# a person, an automated account the platform flags, or a platform notice.
+SENDER_KINDS = ('user', 'bot', 'system')
+# Kinds of downloadable originals and their resolution states (C9).
+MEDIA_KINDS = ('image', 'file', 'voice')
+MEDIA_STATES = ('pending', 'attached', 'failed')
+
+
+@dataclass(frozen=True)
+class ChannelMedia:
+    """One downloadable original of an event: protocol facts, then its resolution.
+
+    ``source`` and ``token`` locate the provider original for the adapter's
+    download port only. A media URL or file token is a credential-bearing
+    locator, so neither is ever recorded, rendered or shown in a ``repr``.
+    ``attachment`` is the owner-scoped attachment ref once the original is
+    stored (``lib.media_attachments``); voice also carries its transcript.
+    """
+
+    kind: str
+    name: str
+    mime_type: str = ''
+    size_bytes: int = 0
+    duration_s: int = 0
+    source: str = field(default='', repr=False, compare=False)
+    token: str = field(default='', repr=False, compare=False)
+    status: str = 'pending'
+    detail: str = ''
+    attachment: dict[str, Any] | None = None
+    transcript: str = ''
+    transcript_status: str = ''
+    transcript_detail: str = ''
+
+    def __post_init__(self):
+        if self.kind not in MEDIA_KINDS or self.status not in MEDIA_STATES:
+            raise ChannelError('invalid_media', 'Unknown channel media kind or state')
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            'kind': self.kind, 'name': self.name, 'mimeType': self.mime_type,
+            'sizeBytes': int(self.size_bytes), 'durationS': int(self.duration_s),
+            'status': self.status, 'detail': self.detail, 'attachment': self.attachment,
+            'transcript': self.transcript, 'transcriptStatus': self.transcript_status,
+            'transcriptDetail': self.transcript_detail,
+        }
+
+    @classmethod
+    def from_record(cls, value: dict[str, Any]) -> 'ChannelMedia':
+        return cls(
+            kind=value['kind'], name=value.get('name', ''), mime_type=value.get('mimeType', ''),
+            size_bytes=int(value.get('sizeBytes') or 0), duration_s=int(value.get('durationS') or 0),
+            status=value.get('status') or 'pending', detail=value.get('detail', ''),
+            attachment=value.get('attachment'), transcript=value.get('transcript', ''),
+            transcript_status=value.get('transcriptStatus', ''),
+            transcript_detail=value.get('transcriptDetail', ''))
+
+
+# Kinds of a quoted message's attachments: descriptors only, never downloaded (protocol QuotedAttachmentPart).
+QUOTED_ATTACHMENT_KINDS = ('image', 'file', 'voice', 'video')
+
+
+@dataclass(frozen=True)
+class QuotedAttachment:
+    """An attachment of a quoted message, described only: the core never downloads a quoted original."""
+
+    kind: str
+    name: str
+    mime_type: str = ''
+    size_bytes: int = 0
+    duration_s: int = 0
+
+    def __post_init__(self):
+        if self.kind not in QUOTED_ATTACHMENT_KINDS or not self.name:
+            raise ChannelError('invalid_event', 'A quoted attachment needs a known kind and a name')
+
+
+@dataclass(frozen=True)
+class QuotedMessage:
+    """A quoted message as the platform has it (protocol ``QuotedMessage``): raw facts, no policy.
+
+    It is the platform's copy inside a quote, or the answer to the one-message
+    lookup. ``sender_kind`` is '' when the platform names no sender. ``marker``
+    and ``host_sent`` are the platform's echo facts on the quoted message, from
+    which the core recognizes one Tofu sent (``x-selfEcho``). ``recalled``: the
+    platform holds it as withdrawn (its text is then empty). The core never
+    records it: a later recall must leave no copy of the text in Tofu (P2).
+    """
+
+    sender_id: str = ''
+    sender_name: str = ''
+    sender_kind: str = ''
+    sent_at_ms: int | None = None
+    text: str = ''
+    attachments: tuple[QuotedAttachment, ...] = ()
+    marker: str = ''
+    host_sent: bool = False
+    recalled: bool = False
+
+    def __post_init__(self):
+        if self.sender_kind not in ('', *SENDER_KINDS) or not isinstance(self.text, str):
+            raise ChannelError('invalid_event', 'A quoted message needs a known sender kind and text')
+        if not all(isinstance(item, QuotedAttachment) for item in self.attachments):
+            raise ChannelError('invalid_event', 'Quoted attachments must be QuotedAttachment')
+
+
+@dataclass(frozen=True)
+class ChannelEvent:
+    """One inbound message normalized by an adapter; facts only, no policy.
+
+    ``sent_at_ms`` is the provider server time when the adapter can derive it.
+    ``mentioned_ids``/``mentions_all`` and ``reply_to_sender_id`` are protocol
+    facts; ingress compares them with the bound owner identity. ``media`` are
+    the event's downloadable originals; ``text`` is its own text or, for a
+    non-text message, a readable description. ``sender_kind`` is the
+    platform's own fact about the author (``SENDER_KINDS``: a person, a bot
+    account, a platform notice). A quote reply names the quoted message by
+    ``reply_to_external_id`` (its ordered ID, when the platform gives one) and
+    ``reply_to_message_id`` (its platform ID, when that differs: opaque bot
+    platform IDs), with ``reply_to_sender_id``; ``quoted`` is the quoted
+    message as the platform carried it inside the quote (None without one),
+    which the core resolves before routing (``lib.channels.quotes``) and never
+    records. ``own_connection``: this
+    session sent it. ``host_sent``: another engine process of this server sent
+    it as the account (the engine's own sent-message record holds it), so it
+    is Tofu's send, not the owner's.
+    """
+
+    thread: ThreadKey
+    external_id: str
+    sender_id: str
+    sender_name: str
+    text: str
+    sent_at_ms: int
+    thread_title: str = ''
+    sender_kind: str = 'user'
+    message_type: int = 1
+    mentioned_ids: tuple[str, ...] = ()
+    mentions_all: bool = False
+    reply_to_external_id: str = ''
+    reply_to_sender_id: str = ''
+    reply_to_message_id: str = ''
+    quoted: QuotedMessage | None = None
+    client_id: str = ''
+    outbox_marker: str = ''
+    own_connection: bool = False
+    host_sent: bool = False
+    url: str = ''
+    media: tuple[ChannelMedia, ...] = ()
+
+    def __post_init__(self):
+        require_external_id(self.external_id)
+        if not isinstance(self.text, str) or not isinstance(self.sender_id, str):
+            raise ChannelError('invalid_event', 'Channel event text and sender must be strings')
+        if self.sender_kind not in SENDER_KINDS:
+            raise ChannelError('invalid_event', f'Unknown channel sender kind {self.sender_kind!r}')
+        if not all(isinstance(item, ChannelMedia) for item in self.media):
+            raise ChannelError('invalid_event', 'Channel event media must be ChannelMedia')
+        if self.quoted is not None and not isinstance(self.quoted, QuotedMessage):
+            raise ChannelError('invalid_event', 'A quoted message must be QuotedMessage')
+
+    @property
+    def channel(self) -> str:
+        return self.thread.channel
+
+    @property
+    def event_id(self) -> str:
+        return f'{self.thread}/{self.external_id}'
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            'eventId': self.event_id, 'thread': str(self.thread),
+            'externalId': self.external_id, 'senderId': self.sender_id,
+            'senderName': self.sender_name, 'senderKind': self.sender_kind, 'text': self.text,
+            'sentAtMs': int(self.sent_at_ms), 'threadTitle': self.thread_title,
+            'messageType': int(self.message_type),
+            'mentionedIds': list(self.mentioned_ids), 'mentionsAll': bool(self.mentions_all),
+            'replyToExternalId': self.reply_to_external_id,
+            'replyToSenderId': self.reply_to_sender_id, 'replyToMessageId': self.reply_to_message_id,
+            'clientId': self.client_id, 'url': self.url, 'media': [item.to_record() for item in self.media],
+        }
+
+    @classmethod
+    def from_record(cls, value: dict[str, Any]) -> 'ChannelEvent':
+        return cls(
+            thread=ThreadKey.parse(value['thread']), external_id=value['externalId'],
+            sender_id=value.get('senderId', ''), sender_name=value.get('senderName', ''),
+            sender_kind=value.get('senderKind') or 'user',
+            text=value.get('text', ''), sent_at_ms=int(value.get('sentAtMs') or 0),
+            thread_title=value.get('threadTitle', ''),
+            message_type=int(value.get('messageType') or 1),
+            mentioned_ids=tuple(value.get('mentionedIds') or ()),
+            mentions_all=bool(value.get('mentionsAll')),
+            reply_to_external_id=value.get('replyToExternalId', ''),
+            reply_to_sender_id=value.get('replyToSenderId', ''),
+            reply_to_message_id=value.get('replyToMessageId', ''),
+            client_id=value.get('clientId', ''), url=value.get('url', ''),
+            media=tuple(ChannelMedia.from_record(item) for item in value.get('media') or ()))
+
+
+# A message changed after it was sent (the channel protocol's edit and recall events).
+CHANGE_KINDS = ('edit', 'recall')
+
+
+@dataclass(frozen=True)
+class ChannelChange:
+    """An edit or a recall of a message, normalized by an adapter; facts only, no policy.
+
+    ``target`` is the changed message's external ID ('' when the adapter's
+    facts could not name it); ``change_id`` is the platform's stable identity
+    of this change, so a redelivered change is applied once. An edit carries
+    the message's new ``text``; a recall carries none. ``sent_at_ms`` is the
+    platform time of the change when the platform gives one.
+    """
+
+    kind: str
+    thread: ThreadKey
+    target: str
+    change_id: str
+    sender_id: str
+    text: str = ''
+    sent_at_ms: int = 0
+
+    def __post_init__(self):
+        if self.kind not in CHANGE_KINDS:
+            raise ChannelError('invalid_event', f'Unknown channel change kind {self.kind!r}')
+        if self.target:
+            require_external_id(self.target, field_name='target')
+        if not self.change_id or not isinstance(self.text, str):
+            raise ChannelError('invalid_event', 'A channel change needs its ID and text')
+
+
+# Outbound 大象 attachment facts: accepted types, size bound, preview sources (C10).
+DX_ATTACHMENTS = CONTRACT['x-dxAttachments']
+
+
+@dataclass
+class OutboxItem:
+    """One durable outbound message; ``state`` follows ``OutboxState``.
+
+    ``extra['attachments']`` holds its attachment records (C10), originals in
+    the order given and each original's preview copies after it.
+    """
+
+    id: str
+    thread: str
+    text: str
+    idempotency_key: str
+    state: str
+    origin: dict[str, str]
+    created_at_ms: int
+    updated_at_ms: int
+    queued_at_ms: int = 0
+    queue_seq: int = 0
+    reply_to: str | None = None
+    external_id: str | None = None
+    client_id: str | None = None
+    error: str | None = None
+    attempt_at_ms: int = 0
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            'id': self.id, 'thread': self.thread, 'text': self.text,
+            'idempotencyKey': self.idempotency_key, 'state': self.state,
+            'origin': dict(self.origin), 'createdAtMs': self.created_at_ms,
+            'updatedAtMs': self.updated_at_ms, 'queuedAtMs': self.queued_at_ms,
+            'queueSeq': self.queue_seq, 'replyTo': self.reply_to, 'externalId': self.external_id,
+            'clientId': self.client_id, 'error': self.error,
+            'attemptAtMs': self.attempt_at_ms, **self.extra,
+        }
+
+    @classmethod
+    def from_record(cls, value: dict[str, Any]) -> 'OutboxItem':
+        known = {'id', 'thread', 'text', 'idempotencyKey', 'state', 'origin', 'createdAtMs',
+                 'updatedAtMs', 'queuedAtMs', 'queueSeq', 'replyTo', 'externalId', 'clientId', 'error',
+                 'attemptAtMs'}
+        if value.get('state') not in OUTBOX_STATES:
+            raise ChannelError('invalid_outbox_item', 'Stored outbox item has an unknown state')
+        return cls(
+            id=value['id'], thread=value['thread'], text=value['text'],
+            idempotency_key=value['idempotencyKey'], state=value['state'],
+            origin=dict(value.get('origin') or {}),
+            created_at_ms=int(value.get('createdAtMs') or 0),
+            updated_at_ms=int(value.get('updatedAtMs') or 0),
+            queued_at_ms=int(value.get('queuedAtMs') or 0),
+            queue_seq=int(value.get('queueSeq') or 0), reply_to=value.get('replyTo'),
+            external_id=value.get('externalId'), client_id=value.get('clientId'),
+            error=value.get('error'), attempt_at_ms=int(value.get('attemptAtMs') or 0),
+            extra={k: v for k, v in value.items() if k not in known})
+
+    def view(self, thread_title: str = '') -> dict[str, Any]:
+        """The contract ``OutboxItemView`` projection."""
+        return {
+            'id': self.id, 'thread': self.thread, 'threadTitle': thread_title,
+            'text': self.text, 'replyTo': self.reply_to, 'state': self.state,
+            'origin': {'kind': self.origin.get('kind', 'tool'),
+                       'conversationId': self.origin.get('conversationId', ''),
+                       'turnId': self.origin.get('turnId', '')},
+            'createdAtMs': self.created_at_ms, 'updatedAtMs': self.updated_at_ms,
+            'externalId': self.external_id, 'error': self.error,
+            'attachments': [
+                {'index': index, 'name': record['name'], 'type': record['type'], 'size': int(record['size']),
+                 'sha256': record['sha256'], 'kind': record['kind'], 'renditionOf': record.get('renditionOf'),
+                 'state': record.get('state') or 'pending', 'error': record.get('error'),
+                 **({'project': record['source']['project']} if (record.get('source') or {}).get('project')
+                    else {})}
+                for index, record in enumerate(self.extra.get('attachments') or ())],
+            'approvalCode': approval_code(self.id),
+            # Items recorded before authorities existed came from the router's own requests.
+            'authority': self.extra.get('authority') or 'nonhuman',
+            'decision': self.extra.get('decision'),
+        }
+
+
+def approval_code(item_id: str) -> str:
+    """The short code the owner's own words name to decide a draft (``x-assistant``).
+
+    Outbox item IDs are ``ob`` plus hex digest digits, so the code is the
+    first digest digits, upper case.
+    """
+    return str(item_id)[2:2 + ASSISTANT['approvalCodeLength']].upper()
+
+
+def session_owns_status(account: dict[str, Any] | None) -> bool:
+    """Whether an enable command must keep this account's status (``SESSION_REPORTED_STATES``)."""
+    account = account or {}
+    return bool(account.get('enabled')) and (account.get('status') or {}).get('state') in SESSION_REPORTED_STATES
+
+
+__all__ = [
+    'ACCOUNT_STATES', 'ACTIVE_OUTBOX_STATES', 'BRIDGE_CONTRACT', 'CHANGE_KINDS', 'CHANNELS', 'CHANNEL_TRAITS',
+    'CONFIGURABLE_MODES', 'CONTRACT', 'ChannelChange', 'ChannelError', 'ChannelEvent', 'ChannelMedia',
+    'DEFAULT_MODE_BY_KIND', 'DEFAULT_REPLY_POLICY', 'DISCLOSURE_LABEL', 'DX', 'DX_ROBOT',
+    'EVENT_DISPOSITIONS', 'GITHUB', 'LIMITS', 'MEDIA_KINDS', 'MEDIA_STATES', 'NAMESPACE',
+    'OUTBOX_MARKER_FIELD', 'BOT_CHANNELS', 'QQ', 'SENDER_KINDS', 'WECHAT', 'WECOM',
+    'OUTBOX_STATES', 'OutboxItem', 'PROVIDER_LIMITS', 'QUOTED_ATTACHMENT_KINDS', 'QUOTES', 'QuotedAttachment',
+    'QuotedMessage', 'REPLY_POLICIES', 'SESSION_REPORTED_STATES',
+    'TERMINAL_OUTBOX_STATES', 'THREAD_KINDS', 'THREAD_MODES', 'TOOLS', 'TOOL_CONTENT_ARGUMENTS', 'TOOL_NAMES',
+    'ThreadKey',
+    'external_id_after', 'order_key', 'parse_event_id', 'require_external_id', 'session_owns_status',
+    'DX_ATTACHMENTS', 'ASSISTANT', 'OUTBOX_AUTHORITIES', 'OWNER_NOTE_MAX_CHARS', 'approval_code',
+]

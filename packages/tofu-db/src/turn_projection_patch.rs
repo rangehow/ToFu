@@ -1,0 +1,954 @@
+//! Deterministic bounded patches for live Turn projection documents.
+//!
+//! This is the Rust authority twin of `lib/turn_projection_patch.py` and the
+//! browser projection-patch runtime. It owns only pure JSON diff/application;
+//! Turn revision fencing, durable patch heads, and event publication remain in
+//! the Turn transaction layer.
+
+use std::collections::BTreeSet;
+use std::fmt;
+
+use serde_json::{json, Map, Value};
+
+use crate::generated_tofudb_ir::{
+    MAX_TURN_PROJECTION_PATCH_DEPTH, MAX_TURN_PROJECTION_PATCH_OPERATIONS,
+};
+
+pub(crate) const PROJECTION_PATCH_VERSION: u64 = 1;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectionPatchError(&'static str);
+
+impl fmt::Display for ProjectionPatchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl std::error::Error for ProjectionPatchError {}
+
+fn error(message: &'static str) -> ProjectionPatchError {
+    ProjectionPatchError(message)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PathPart {
+    Object(String),
+    Array(usize),
+}
+
+fn parse_path(value: &Value) -> Result<Vec<PathPart>, ProjectionPatchError> {
+    let parts = value
+        .as_array()
+        .ok_or_else(|| error("Projection patch path is invalid"))?;
+    if parts.len() > MAX_TURN_PROJECTION_PATCH_DEPTH {
+        return Err(error("Projection patch path exceeds its depth bound"));
+    }
+    parts
+        .iter()
+        .map(|part| match part {
+            Value::String(value) => Ok(PathPart::Object(value.clone())),
+            Value::Number(value) => value
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+                .map(PathPart::Array)
+                .ok_or_else(|| error("Projection patch path is invalid")),
+            _ => Err(error("Projection patch path is invalid")),
+        })
+        .collect()
+}
+
+fn descend<'a>(root: &'a Value, path: &[PathPart]) -> Option<&'a Value> {
+    path.iter().try_fold(root, |current, part| match (current, part) {
+        (Value::Object(object), PathPart::Object(key)) => object.get(key),
+        (Value::Array(array), PathPart::Array(index)) => array.get(*index),
+        _ => None,
+    })
+}
+
+fn descend_mut<'a>(
+    root: &'a mut Value,
+    path: &[PathPart],
+) -> Result<&'a mut Value, ProjectionPatchError> {
+    let mut current = root;
+    for part in path {
+        current = match (current, part) {
+            (Value::Object(object), PathPart::Object(key)) => object
+                .get_mut(key)
+                .ok_or_else(|| error("Projection patch object path is invalid"))?,
+            (Value::Array(array), PathPart::Array(index)) => array
+                .get_mut(*index)
+                .ok_or_else(|| error("Projection patch array path is out of bounds"))?,
+            _ => return Err(error("Projection patch path container differs")),
+        };
+    }
+    Ok(current)
+}
+
+fn set_at_path(
+    root: &mut Value,
+    path: &[PathPart],
+    replacement: Value,
+) -> Result<(), ProjectionPatchError> {
+    let Some((leaf, parent_path)) = path.split_last() else {
+        *root = replacement;
+        return Ok(());
+    };
+    let parent = descend_mut(root, parent_path)?;
+    match (parent, leaf) {
+        (Value::Object(object), PathPart::Object(key)) => {
+            object.insert(key.clone(), replacement);
+            Ok(())
+        }
+        (Value::Array(array), PathPart::Array(index)) if *index < array.len() => {
+            array[*index] = replacement;
+            Ok(())
+        }
+        (Value::Array(_), PathPart::Array(_)) => {
+            Err(error("Projection patch array path is out of bounds"))
+        }
+        _ => Err(error("Projection patch object path is invalid")),
+    }
+}
+
+fn remove_at_path(root: &mut Value, path: &[PathPart]) -> Result<(), ProjectionPatchError> {
+    let (leaf, parent_path) = path
+        .split_last()
+        .ok_or_else(|| error("Projection patch cannot remove its root"))?;
+    let parent = descend_mut(root, parent_path)?;
+    match (parent, leaf) {
+        (Value::Object(object), PathPart::Object(key)) => {
+            object.remove(key);
+            Ok(())
+        }
+        (Value::Array(array), PathPart::Array(index)) if *index < array.len() => {
+            array.remove(*index);
+            Ok(())
+        }
+        (Value::Array(_), PathPart::Array(_)) => {
+            Err(error("Projection patch array removal is out of bounds"))
+        }
+        _ => Err(error("Projection patch object removal is invalid")),
+    }
+}
+
+pub(crate) fn apply_projection_patch(
+    projection: Option<&Map<String, Value>>,
+    raw_patch: &Map<String, Value>,
+) -> Result<Map<String, Value>, ProjectionPatchError> {
+    let operations = checked_projection_patch_operations(raw_patch)?;
+    apply_projection_patch_operations_owned(projection.cloned().unwrap_or_default(), operations, None)
+        .map(|(next, _)| next)
+}
+
+/// Exact `serde_json::to_vec(value)?.len()`, counted without buffering.
+pub(crate) fn encoded_len<T: serde::Serialize + ?Sized>(value: &T) -> serde_json::Result<usize> {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value)?;
+    Ok(counter.0)
+}
+
+/// `apply_projection_patch_owned` plus the exact encoded length of the result,
+/// advanced from `projection_bytes` (the exact encoded length of `projection`)
+/// by encoding only what each operation replaces, removes or adds. `None`
+/// when the supplied length cannot be the input's (it would go negative).
+pub(crate) fn apply_projection_patch_owned_measured(
+    projection: Map<String, Value>,
+    projection_bytes: usize,
+    raw_patch: &Map<String, Value>,
+) -> Result<(Map<String, Value>, Option<usize>), ProjectionPatchError> {
+    let operations = checked_projection_patch_operations(raw_patch)?;
+    let bytes = i128::try_from(projection_bytes).ok();
+    let (next, bytes) = apply_projection_patch_operations_owned(projection, operations, bytes)?;
+    Ok((next, bytes.and_then(|bytes| usize::try_from(bytes).ok())))
+}
+
+/// Consume a private reconstruction buffer. An error's partial value never
+/// escapes; callers borrowing published projections retain copy semantics.
+pub(crate) fn apply_projection_patch_owned(
+    projection: Map<String, Value>,
+    raw_patch: &Map<String, Value>,
+) -> Result<Map<String, Value>, ProjectionPatchError> {
+    let operations = checked_projection_patch_operations(raw_patch)?;
+    apply_projection_patch_operations_owned(projection, operations, None).map(|(next, _)| next)
+}
+
+pub(crate) fn checked_projection_patch_operations(
+    raw_patch: &Map<String, Value>,
+) -> Result<&[Value], ProjectionPatchError> {
+    // Byte admission belongs to the request, reconstructed Turn and durable
+    // event envelopes. A private patch quota used to reject checkpoint
+    // reconstruction even when all three enclosing documents were admissible.
+    if raw_patch.get("version").and_then(Value::as_u64) != Some(PROJECTION_PATCH_VERSION) {
+        return Err(error("Projection patch version is unsupported"));
+    }
+    let operations = raw_patch
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or_else(|| error("Projection patch operations must be an array"))?;
+    if operations.len() > MAX_TURN_PROJECTION_PATCH_OPERATIONS {
+        return Err(error("Projection patch operation count exceeds its bound"));
+    }
+    Ok(operations.as_slice())
+}
+
+fn encoded<T: serde::Serialize + ?Sized>(value: &T) -> Result<i128, ProjectionPatchError> {
+    encoded_len(value)
+        .map(|bytes| bytes as i128)
+        .map_err(|_| error("Projection patch value cannot be encoded"))
+}
+
+fn encoded_sum(values: &[Value]) -> Result<i128, ProjectionPatchError> {
+    values.iter().try_fold(0, |sum, value| Ok(sum + encoded(value)?))
+}
+
+fn members_commas(members: usize) -> i128 {
+    members.saturating_sub(1) as i128
+}
+
+/// `len(encode(new)) - len(encode(old))`, encoding only what differs: shared
+/// members are compared, and a string extending the old one adds its suffix's
+/// escaped bytes (serde_json escapes each character independently).
+fn encoded_delta(old: &Value, new: &Value) -> Result<i128, ProjectionPatchError> {
+    let member = |key: &str, value: &Value| Ok::<_, ProjectionPatchError>(encoded(key)? + 1 + encoded(value)?);
+    Ok(match (old, new) {
+        (Value::String(old), Value::String(new)) => match new.strip_prefix(old.as_str()) {
+            Some(suffix) => encoded(suffix)? - 2,
+            None => encoded(new)? - encoded(old)?,
+        },
+        (Value::Array(old), Value::Array(new)) => {
+            let shared = old.len().min(new.len());
+            let mut delta = members_commas(new.len()) - members_commas(old.len());
+            for (old, new) in old[..shared].iter().zip(&new[..shared]) {
+                delta += encoded_delta(old, new)?;
+            }
+            delta + encoded_sum(&new[shared..])? - encoded_sum(&old[shared..])?
+        }
+        (Value::Object(old), Value::Object(new)) => {
+            let mut delta = members_commas(new.len()) - members_commas(old.len());
+            for (key, value) in old {
+                delta += match new.get(key) {
+                    Some(replacement) => encoded_delta(value, replacement)?,
+                    None => -member(key, value)?,
+                };
+            }
+            for (key, value) in new {
+                if !old.contains_key(key) {
+                    delta += member(key, value)?;
+                }
+            }
+            delta
+        }
+        _ if old == new => 0,
+        _ => encoded(new)? - encoded(old)?,
+    })
+}
+
+fn object_set_delta(object: &Map<String, Value>, key: &str, value: &Value) -> Result<i128, ProjectionPatchError> {
+    Ok(match object.get(key) {
+        Some(old) => encoded_delta(old, value)?,
+        None => encoded(key)? + 1 + encoded(value)? + i128::from(!object.is_empty()),
+    })
+}
+
+/// `object.insert(key, value)` that also advances the object's exact encoded
+/// length; `None` stays unknown.
+pub(crate) fn insert_measured(
+    object: &mut Map<String, Value>,
+    encoded_bytes: Option<usize>,
+    key: &str,
+    value: Value,
+) -> Option<usize> {
+    let bytes = encoded_bytes.and_then(|bytes| {
+        let next = bytes as i128 + object_set_delta(object, key, &value).ok()?;
+        usize::try_from(next).ok()
+    });
+    object.insert(key.to_owned(), value);
+    bytes
+}
+
+/// The change in the document's exact serde_json length one operation makes,
+/// read before it is applied: `{"k":v,...}` / `[v,...]` with one comma
+/// between members. `None` for an operation that application refuses.
+fn operation_encoded_delta(
+    root: &Value,
+    kind: Option<&str>,
+    path: &[PathPart],
+    operation: &Map<String, Value>,
+) -> Result<Option<i128>, ProjectionPatchError> {
+    let comma = |members: usize| i128::from(members > 0);
+    let Some((leaf, parent_path)) = path.split_last() else {
+        return Ok(match kind {
+            Some("set") => Some(encoded(operation.get("value").unwrap_or(&Value::Null))? - encoded(root)?),
+            _ => None,
+        });
+    };
+    let Some(parent) = descend(root, parent_path) else { return Ok(None) };
+    let replacement = || operation.get("value").unwrap_or(&Value::Null);
+    Ok(match (kind, parent, leaf) {
+        (Some("set"), Value::Object(object), PathPart::Object(key)) => {
+            Some(object_set_delta(object, key, replacement())?)
+        }
+        (Some("set"), Value::Array(array), PathPart::Array(index)) => match array.get(*index) {
+            Some(old) => Some(encoded_delta(old, replacement())?),
+            None => None,
+        },
+        (Some("remove"), Value::Object(object), PathPart::Object(key)) => Some(match object.get(key) {
+            Some(old) => -(encoded(key)? + 1 + encoded(old)? + comma(object.len() - 1)),
+            None => 0,
+        }),
+        (Some("remove"), Value::Array(array), PathPart::Array(index)) => match array.get(*index) {
+            Some(old) => Some(-(encoded(old)? + comma(array.len() - 1))),
+            None => None,
+        },
+        (Some("append_text" | "append" | "truncate"), _, _) => {
+            let target = descend(parent, std::slice::from_ref(leaf));
+            match (kind, target) {
+                // serde_json escapes each character independently, so the
+                // suffix adds exactly its own escaped bytes, without quotes.
+                (Some("append_text"), Some(Value::String(_))) => match operation.get("value") {
+                    Some(suffix @ Value::String(_)) => Some(encoded(suffix)? - 2),
+                    _ => None,
+                },
+                (Some("append"), Some(Value::Array(target))) => match operation.get("value") {
+                    Some(Value::Array(items)) if items.is_empty() => Some(0),
+                    Some(Value::Array(items)) => Some(encoded_sum(items)?
+                        + items.len() as i128 - 1 + comma(target.len())),
+                    _ => None,
+                },
+                (Some("truncate"), Some(Value::Array(target))) => {
+                    match operation.get("length").and_then(Value::as_u64)
+                        .and_then(|length| usize::try_from(length).ok())
+                    {
+                        Some(length) if length == target.len() => Some(0),
+                        Some(length) if length < target.len() => {
+                            let removed = &target[length..];
+                            Some(-(encoded_sum(removed)? + removed.len() as i128 - 1 + comma(length)))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+fn apply_projection_patch_operations_owned(
+    projection: Map<String, Value>,
+    operations: &[Value],
+    mut encoded_bytes: Option<i128>,
+) -> Result<(Map<String, Value>, Option<i128>), ProjectionPatchError> {
+    let mut next = Value::Object(projection);
+    for operation in operations {
+        let operation = operation
+            .as_object()
+            .ok_or_else(|| error("Projection patch operation must be an object"))?;
+        let path = parse_path(
+            operation
+                .get("path")
+                .ok_or_else(|| error("Projection patch path is missing"))?,
+        )?;
+        if let Some(bytes) = encoded_bytes {
+            let delta = operation_encoded_delta(
+                &next, operation.get("op").and_then(Value::as_str), &path, operation)?;
+            encoded_bytes = delta.map(|delta| bytes + delta).filter(|bytes| *bytes >= 0);
+        }
+        match operation.get("op").and_then(Value::as_str) {
+            Some("set") => set_at_path(
+                &mut next,
+                &path,
+                operation.get("value").cloned().unwrap_or(Value::Null),
+            )?,
+            Some("remove") => remove_at_path(&mut next, &path)?,
+            Some("append_text") => {
+                let suffix = operation
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| error("Projection text append value must be a string"))?;
+                let target = descend_mut(&mut next, &path)?;
+                let Value::String(target) = target else {
+                    return Err(error("Projection text append target must be a string"));
+                };
+                target.push_str(suffix);
+            }
+            Some("append") => {
+                let suffix = operation
+                    .get("value")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| error("Projection list append value must be an array"))?;
+                let target = descend_mut(&mut next, &path)?;
+                let target = target
+                    .as_array_mut()
+                    .ok_or_else(|| error("Projection list append target must be an array"))?;
+                target.extend(suffix.iter().cloned());
+            }
+            Some("truncate") => {
+                let length = operation
+                    .get("length")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| error("Projection list truncation length is invalid"))?;
+                let target = descend_mut(&mut next, &path)?;
+                let target = target
+                    .as_array_mut()
+                    .ok_or_else(|| error("Projection list truncation target is invalid"))?;
+                if length > target.len() {
+                    return Err(error("Projection list truncation target is invalid"));
+                }
+                target.truncate(length);
+            }
+            _ => return Err(error("Projection patch operation is unsupported")),
+        }
+    }
+    match next {
+        Value::Object(object) => Ok((object, encoded_bytes)),
+        _ => Err(error("Projection patch result must be an object")),
+    }
+}
+
+fn push_operation(
+    operations: &mut Vec<Value>,
+    operation: Value,
+) -> Result<(), ProjectionPatchError> {
+    if operations.len() >= MAX_TURN_PROJECTION_PATCH_OPERATIONS {
+        return Err(error("Projection patch operation count exceeds its bound"));
+    }
+    operations.push(operation);
+    Ok(())
+}
+
+fn path_json(path: &[PathPart]) -> Value {
+    Value::Array(
+        path.iter()
+            .map(|part| match part {
+                PathPart::Object(value) => Value::String(value.clone()),
+                PathPart::Array(value) => Value::from(*value),
+            })
+            .collect(),
+    )
+}
+
+fn diff_value(
+    before: &Value,
+    after: &Value,
+    path: &mut Vec<PathPart>,
+    operations: &mut Vec<Value>,
+) -> Result<(), ProjectionPatchError> {
+    if before == after {
+        return Ok(());
+    }
+    if path.len() > MAX_TURN_PROJECTION_PATCH_DEPTH {
+        return Err(error("Projection patch path exceeds its depth bound"));
+    }
+    match (before, after) {
+        (Value::String(before), Value::String(after)) if after.starts_with(before) => {
+            let suffix = &after[before.len()..];
+            if !suffix.is_empty() {
+                push_operation(
+                    operations,
+                    json!({"op": "append_text", "path": path_json(path), "value": suffix}),
+                )?;
+            }
+        }
+        (Value::Object(before), Value::Object(after)) => diff_objects(before, after, path, operations)?,
+        (Value::Array(before), Value::Array(after)) => {
+            let (start, evicted) = evicted_run(before, after);
+            for _ in 0..evicted {
+                path.push(PathPart::Array(start));
+                push_operation(operations, json!({"op": "remove", "path": path_json(path)}))?;
+                path.pop();
+            }
+            let retained = before.len() - evicted;
+            let shared = retained.min(after.len());
+            for index in start..shared {
+                path.push(PathPart::Array(index));
+                diff_value(&before[index + evicted], &after[index], path, operations)?;
+                path.pop();
+            }
+            if after.len() < retained {
+                push_operation(
+                    operations,
+                    json!({"op": "truncate", "path": path_json(path), "length": after.len()}),
+                )?;
+            } else if after.len() > retained {
+                push_operation(
+                    operations,
+                    json!({"op": "append", "path": path_json(path), "value": &after[retained..]}),
+                )?;
+            }
+        }
+        _ => push_operation(
+            operations,
+            json!({"op": "set", "path": path_json(path), "value": after}),
+        )?,
+    }
+    Ok(())
+}
+
+/// Items re-sent when `after[i]` is diffed against `before[offset + i]`.
+fn unaligned_items(before: &[Value], after: &[Value], offset: usize) -> usize {
+    let retained = &before[offset..];
+    let overlap = retained.len().min(after.len());
+    let changed = retained[..overlap]
+        .iter()
+        .zip(&after[..overlap])
+        .filter(|(before, after)| before != after)
+        .count();
+    changed + (after.len() - overlap)
+}
+
+/// `(start, count)`: the first divergence and the run a bounded window evicted
+/// there, mirroring the Python producer. Full sliding windows (activity
+/// timeline, trace status history) shift every later index per new row; the
+/// run starts at the head or behind rows the window retains (an error, a
+/// compaction receipt). The count is zero unless it re-sends fewer items than
+/// the index alignment. Items before `start` are equal; the caller diffs from
+/// there.
+fn evicted_run(before: &[Value], after: &[Value]) -> (usize, usize) {
+    let shared = before.len().min(after.len());
+    let Some(start) = (0..shared).find(|&index| before[index] != after[index]) else {
+        return (shared, 0);
+    };
+    let Some(evicted) =
+        (1..before.len() - start).find(|&offset| before[start + offset] == after[start])
+    else {
+        return (start, 0);
+    };
+    let (before, after) = (&before[start..], &after[start..]);
+    if evicted + unaligned_items(before, after, evicted) < unaligned_items(before, after, 0) {
+        (start, evicted)
+    } else {
+        (start, 0)
+    }
+}
+
+fn diff_objects(
+    before: &Map<String, Value>,
+    after: &Map<String, Value>,
+    path: &mut Vec<PathPart>,
+    operations: &mut Vec<Value>,
+) -> Result<(), ProjectionPatchError> {
+    let before_keys = before.keys().cloned().collect::<BTreeSet<_>>();
+    let after_keys = after.keys().cloned().collect::<BTreeSet<_>>();
+    for key in before_keys.difference(&after_keys) {
+        path.push(PathPart::Object(key.clone()));
+        push_operation(operations, json!({"op": "remove", "path": path_json(path)}))?;
+        path.pop();
+    }
+    for key in after_keys.difference(&before_keys) {
+        path.push(PathPart::Object(key.clone()));
+        push_operation(
+            operations,
+            json!({"op": "set", "path": path_json(path), "value": after[key]}),
+        )?;
+        path.pop();
+    }
+    for key in before_keys.intersection(&after_keys) {
+        path.push(PathPart::Object(key.clone()));
+        diff_value(&before[key], &after[key], path, operations)?;
+        path.pop();
+    }
+    Ok(())
+}
+
+pub(crate) fn build_projection_patch(
+    before: &Map<String, Value>,
+    after: &Map<String, Value>,
+    base_revision: u64,
+    target_revision: u64,
+) -> Result<Map<String, Value>, ProjectionPatchError> {
+    let mut operations = Vec::new();
+    diff_objects(before, after, &mut Vec::new(), &mut operations)?;
+    let Value::Object(patch) = json!({
+        "version": PROJECTION_PATCH_VERSION,
+        "baseRevision": base_revision,
+        "targetRevision": target_revision,
+        "operations": operations,
+    }) else { unreachable!("projection patch construction is an object"); };
+    Ok(patch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_projection_chain_preserves_untouched_buffers_and_text_capacity() {
+        let mut content = String::with_capacity(256 * 1024);
+        content.push_str("seed");
+        let evidence = "stable".repeat(32 * 1024);
+        let content_pointer = content.as_ptr() as usize;
+        let evidence_pointer = evidence.as_ptr() as usize;
+        let mut projection = Map::new();
+        projection.insert("content".to_owned(), Value::String(content));
+        projection.insert("evidence".to_owned(), Value::String(evidence));
+        for revision in 1..=64 {
+            let patch = json!({"version": 1, "baseRevision": revision - 1,
+                "targetRevision": revision, "operations": [
+                    {"op": "append_text", "path": ["content"], "value": "追加🧈".repeat(64)}
+                ]});
+            projection = apply_projection_patch_owned(projection, patch.as_object().unwrap()).unwrap();
+            assert_eq!(projection["evidence"].as_str().unwrap().as_ptr() as usize, evidence_pointer,
+                "a small patch must not clone unrelated large evidence");
+            assert_eq!(projection["content"].as_str().unwrap().as_ptr() as usize, content_pointer,
+                "text replay must reuse available capacity");
+        }
+        assert_eq!(projection["content"], Value::String(format!("seed{}", "追加🧈".repeat(64 * 64))));
+        assert_eq!(projection["evidence"], Value::String("stable".repeat(32 * 1024)));
+    }
+
+    #[test]
+    fn deterministic_patch_round_trip_matches_the_shared_wire_vocabulary() {
+        let before = json!({
+            "content": "hello",
+            "thinking": "old",
+            "toolRounds": [{"status": "running", "results": [1, 2]}],
+            "obsolete": true,
+        });
+        let after = json!({
+            "content": "hello world",
+            "thinking": "new",
+            "toolRounds": [
+                {"status": "done", "results": [1]},
+                {"status": "running", "results": []},
+            ],
+            "usage": {"tokens": 7},
+        });
+        let patch = build_projection_patch(
+            before.as_object().unwrap(),
+            after.as_object().unwrap(),
+            41,
+            42,
+        )
+        .unwrap();
+        assert_eq!(patch["version"], 1);
+        assert_eq!(patch["baseRevision"], 41);
+        assert_eq!(patch["targetRevision"], 42);
+        let operation_kinds = patch["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|operation| operation["op"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert!(operation_kinds.contains("append_text"));
+        assert!(operation_kinds.contains("append"));
+        assert!(operation_kinds.contains("truncate"));
+        assert!(operation_kinds.contains("remove"));
+        assert!(operation_kinds.contains("set"));
+        assert_eq!(
+            apply_projection_patch(Some(before.as_object().unwrap()), &patch).unwrap(),
+            *after.as_object().unwrap(),
+        );
+    }
+
+    #[test]
+    fn full_window_eviction_removes_the_head_instead_of_rewriting_rows() {
+        let row = |index: u64| json!({"id": format!("status:{index}"), "count": 1, "tEnd": 1000 + index});
+        let rows = (0..128).map(row).collect::<Vec<_>>();
+        let mut updated_tail = rows[127].clone();
+        updated_tail["count"] = json!(2);
+        let mut retained = rows[1..127].to_vec();
+        retained.extend([updated_tail, row(128)]);
+        let before = json!({"timingTrace": {"statusHistory": rows}});
+        let after = json!({"timingTrace": {"statusHistory": retained}});
+        let patch = build_projection_patch(
+            before.as_object().unwrap(),
+            after.as_object().unwrap(),
+            7,
+            8,
+        )
+        .unwrap();
+        assert_eq!(
+            patch["operations"],
+            json!([
+                {"op": "remove", "path": ["timingTrace", "statusHistory", 0]},
+                {"op": "set", "path": ["timingTrace", "statusHistory", 126, "count"], "value": 2},
+                {"op": "append", "path": ["timingTrace", "statusHistory"], "value": [row(128)]},
+            ]),
+        );
+        assert_eq!(
+            apply_projection_patch(Some(before.as_object().unwrap()), &patch).unwrap(),
+            *after.as_object().unwrap(),
+        );
+    }
+
+    #[test]
+    fn eviction_behind_a_retained_head_removes_only_the_evicted_rows() {
+        let row = |index: u64| json!({"id": format!("activity:{index}"), "seq": index});
+        let rows = (0..128).map(row).collect::<Vec<_>>();
+        let mut retained = vec![rows[0].clone()];
+        retained.extend(rows[3..].iter().cloned());
+        retained.push(row(128));
+        let before = json!({"activityTimeline": {"entries": rows}});
+        let after = json!({"activityTimeline": {"entries": retained}});
+        let patch = build_projection_patch(
+            before.as_object().unwrap(),
+            after.as_object().unwrap(),
+            7,
+            8,
+        )
+        .unwrap();
+        assert_eq!(
+            patch["operations"],
+            json!([
+                {"op": "remove", "path": ["activityTimeline", "entries", 1]},
+                {"op": "remove", "path": ["activityTimeline", "entries", 1]},
+                {"op": "append", "path": ["activityTimeline", "entries"], "value": [row(128)]},
+            ]),
+        );
+        assert_eq!(
+            apply_projection_patch(Some(before.as_object().unwrap()), &patch).unwrap(),
+            *after.as_object().unwrap(),
+        );
+    }
+
+    #[test]
+    fn rotation_keeps_index_alignment_when_eviction_would_resend_more() {
+        let before = json!({"items": ["a", "b", "c", "d"]});
+        let after = json!({"items": ["d", "a", "b", "c"]});
+        let patch = build_projection_patch(
+            before.as_object().unwrap(),
+            after.as_object().unwrap(),
+            1,
+            2,
+        )
+        .unwrap();
+        let operations = patch["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 4);
+        assert!(operations.iter().all(|operation| operation["op"] == "set"));
+        assert_eq!(
+            apply_projection_patch(Some(before.as_object().unwrap()), &patch).unwrap(),
+            *after.as_object().unwrap(),
+        );
+    }
+
+    #[test]
+    fn malformed_patch_paths_and_root_results_fail_closed() {
+        let base = json!({"items": [1], "text": "a"});
+        for patch in [
+            json!({"version": 2, "operations": []}),
+            json!({"version": 1, "operations": [{"op": "remove", "path": []}]}),
+            json!({"version": 1, "operations": [{"op": "append", "path": ["text"], "value": []}]}),
+            json!({"version": 1, "operations": [{"op": "truncate", "path": ["items"], "length": 2}]}),
+            json!({"version": 1, "operations": [{"op": "set", "path": [], "value": []}]}),
+        ] {
+            assert!(apply_projection_patch(
+                Some(base.as_object().unwrap()),
+                patch.as_object().unwrap(),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn patch_depth_and_operation_budgets_reject_before_application() {
+        let deep_path = (0..=MAX_TURN_PROJECTION_PATCH_DEPTH)
+            .map(|index| Value::String(format!("level-{index}")))
+            .collect::<Vec<_>>();
+        let deep = json!({
+            "version": 1,
+            "operations": [{"op": "set", "path": deep_path, "value": 1}],
+        });
+        assert!(apply_projection_patch(None, deep.as_object().unwrap()).is_err());
+
+        let too_many = json!({
+            "version": 1,
+            "operations": (0..=MAX_TURN_PROJECTION_PATCH_OPERATIONS)
+                .map(|_| json!({"op": "set", "path": ["x"], "value": 1}))
+                .collect::<Vec<_>>(),
+        });
+        assert!(apply_projection_patch(None, too_many.as_object().unwrap()).is_err());
+
+    }
+    fn assert_measured(before: &Value, patch: &Value) -> Map<String, Value> {
+        let before = before.as_object().unwrap().clone();
+        let bytes = serde_json::to_vec(&before).unwrap().len();
+        assert_eq!(encoded_len(&before).unwrap(), bytes);
+        let expected = apply_projection_patch(Some(&before), patch.as_object().unwrap()).unwrap();
+        let (next, next_bytes) =
+            apply_projection_patch_owned_measured(before, bytes, patch.as_object().unwrap()).unwrap();
+        assert_eq!(next, expected);
+        assert_eq!(next_bytes, Some(serde_json::to_vec(&next).unwrap().len()), "{patch}");
+        next
+    }
+
+    fn ops(operations: Value) -> Value {
+        json!({"version": 1, "baseRevision": 1, "targetRevision": 2, "operations": operations})
+    }
+
+    #[test]
+    fn measured_application_matches_the_encoded_length_for_every_operation_shape() {
+        let base = json!({
+            "a": 1, "content": "plain \"quoted\" \\ \n\t\u{1}", "empty": {}, "list": [],
+            "nested": {"x": {"y": [1, 2.5, -0.0, 1e300, "汉字😀"]}, "only": true},
+            "toolRounds": [
+                {"toolCallId": "c0", "status": "done", "toolContent": "r0"},
+                {"toolCallId": "c1", "status": "running"},
+            ],
+            "zz": null,
+        });
+        for operations in [
+            json!([]),
+            json!([{"op": "set", "path": ["nested", "x", "y", 1], "value": 0.1}]),
+            json!([{"op": "set", "path": ["nested", "x", "new"], "value": {"k": ["\u{2028}\u{7f}"]}}]),
+            json!([{"op": "set", "path": ["empty", "first"], "value": []}]),
+            json!([{"op": "set", "path": ["a"], "value": {"deep": {"er": [{}]}}}]),
+            json!([{"op": "remove", "path": ["a"]}]),
+            json!([{"op": "remove", "path": ["zz"]}]),
+            json!([{"op": "remove", "path": ["nested", "only"]}, {"op": "remove", "path": ["nested", "x"]}]),
+            json!([{"op": "remove", "path": ["absent"]}]),
+            json!([{"op": "remove", "path": ["nested", "x", "y", 0]}, {"op": "remove", "path": ["nested", "x", "y", 3]}]),
+            json!([{"op": "remove", "path": ["toolRounds", 0]}, {"op": "remove", "path": ["toolRounds", 0]}]),
+            json!([{"op": "append", "path": ["list"], "value": [1, "two", {"3": [3]}]}]),
+            json!([{"op": "append", "path": ["list"], "value": []}]),
+            json!([{"op": "append", "path": ["toolRounds"], "value": [{"toolCallId": "c2", "status": "running"}]}]),
+            json!([{"op": "set", "path": ["toolRounds", 1], "value": {"toolCallId": "c1", "status": "done",
+                "toolContent": "tab\t newline\n 😀 \u{0}"}}]),
+            json!([{"op": "set", "path": ["toolRounds", 1, "status"], "value": "done"},
+                {"op": "set", "path": ["toolRounds", 1, "finishedAt"], "value": 1_790_000_000_500_u64}]),
+            json!([{"op": "truncate", "path": ["toolRounds"], "length": 1}]),
+            json!([{"op": "truncate", "path": ["toolRounds"], "length": 0}]),
+            json!([{"op": "truncate", "path": ["toolRounds"], "length": 2}]),
+            json!([{"op": "append_text", "path": ["content"], "value": "\"\\\u{8}\u{c}\r 追加🧈 \u{1f}"}]),
+            json!([{"op": "append_text", "path": ["nested", "x", "y", 4], "value": ""}]),
+            json!([{"op": "set", "path": [], "value": {"replaced": [1]}}]),
+            json!([{"op": "set", "path": ["list"], "value": [1]}, {"op": "remove", "path": ["list", 0]},
+                {"op": "append", "path": ["list"], "value": [{}]}, {"op": "remove", "path": ["list"]}]),
+        ] {
+            assert_measured(&base, &ops(operations));
+        }
+        // Removing every key, first and last included, down to `{}`.
+        let mut keys = base.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        keys.rotate_left(1);
+        let removals = keys.iter().map(|key| json!({"op": "remove", "path": [key]})).collect::<Vec<_>>();
+        assert!(assert_measured(&base, &ops(Value::Array(removals))).is_empty());
+    }
+
+    #[test]
+    fn measured_insertion_matches_the_encoded_length() {
+        let mut object = Map::new();
+        let mut bytes = Some(2);
+        for (key, value) in [("segments", json!([{"t": "汉\n"}])), ("fileChanges", json!({})),
+            ("segments", json!([])), ("\"k\\", json!(0.5))]
+        {
+            bytes = insert_measured(&mut object, bytes, key, value);
+            assert_eq!(bytes, Some(serde_json::to_vec(&object).unwrap().len()), "{key}");
+        }
+        assert_eq!(insert_measured(&mut object, None, "x", json!(1)), None);
+    }
+
+    #[test]
+    fn measured_application_reports_no_length_for_an_impossible_input_length() {
+        let before = json!({"content": "x".repeat(64)}).as_object().unwrap().clone();
+        let patch = ops(json!([{"op": "remove", "path": ["content"]}]));
+        let (next, bytes) =
+            apply_projection_patch_owned_measured(before, 3, patch.as_object().unwrap()).unwrap();
+        assert!(next.is_empty());
+        assert_eq!(bytes, None);
+    }
+
+    struct Random(u64);
+
+    impl Random {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % bound
+        }
+
+        fn text(&mut self) -> String {
+            const PIECES: [&str; 10] = ["a", "\"", "\\", "\n", "\u{1}", "汉", "😀", "\u{2028}", "key", " "];
+            (0..self.next(6)).map(|_| PIECES[self.next(10) as usize]).collect()
+        }
+
+        fn value(&mut self, depth: u32) -> Value {
+            match self.next(if depth == 0 { 6 } else { 8 }) {
+                0 => Value::Null,
+                1 => Value::Bool(self.next(2) == 0),
+                2 => json!(self.next(1 << 40) as i64 - (1 << 39)),
+                3 => json!((self.next(1 << 30) as f64) / 7.0 * if self.next(2) == 0 { 1e-9 } else { 1e12 }),
+                4 | 5 => Value::String(self.text()),
+                6 => Value::Array((0..self.next(4)).map(|_| self.value(depth - 1)).collect()),
+                _ => Value::Object((0..self.next(4)).map(|_| (self.text(), self.value(depth - 1))).collect()),
+            }
+        }
+
+        /// Mutate one random node: replace, delete a member, add a member,
+        /// extend/shrink/evict an array or extend a string.
+        fn mutate(&mut self, value: &mut Value, depth: u32) {
+            let descend = self.next(3) != 0;
+            match value {
+                Value::Object(object) if descend && !object.is_empty() => {
+                    let key = object.keys().nth(self.next(object.len() as u64) as usize).unwrap().clone();
+                    match self.next(4) {
+                        0 => { object.remove(&key); }
+                        1 => { object.insert(self.text(), self.value(depth)); }
+                        _ => self.mutate(object.get_mut(&key).unwrap(), depth),
+                    }
+                }
+                Value::Array(array) if descend && !array.is_empty() => match self.next(5) {
+                    0 => { array.remove(self.next(array.len() as u64) as usize); }
+                    1 => { array.truncate(self.next(array.len() as u64) as usize); }
+                    2 => { for _ in 0..=self.next(3) { array.push(self.value(depth)); } }
+                    _ => {
+                        let index = self.next(array.len() as u64) as usize;
+                        self.mutate(&mut array[index], depth);
+                    }
+                },
+                Value::String(text) if descend => text.push_str(&self.text()),
+                _ => *value = self.value(depth),
+            }
+        }
+    }
+
+    #[test]
+    fn measured_application_matches_the_encoded_length_for_random_documents_and_patches() {
+        let mut random = Random(0x9E37_79B9_7F4A_7C15);
+        for _ in 0..2000 {
+            let mut before = Value::Object((0..random.next(6))
+                .map(|_| (random.text(), random.value(3))).collect());
+            for _ in 0..3 {
+                let mut after = before.clone();
+                for _ in 0..=random.next(4) {
+                    random.mutate(&mut after, 2);
+                }
+                if !after.is_object() { continue; }
+                assert_eq!(encoded_delta(&before, &after).unwrap(),
+                    encoded(&after).unwrap() - encoded(&before).unwrap());
+                let patch = build_projection_patch(
+                    before.as_object().unwrap(), after.as_object().unwrap(), 1, 2).unwrap();
+                assert_eq!(Value::Object(assert_measured(&before, &Value::Object(patch))), after);
+                before = after;
+            }
+        }
+    }
+
+    #[test]
+    fn wire_patch_can_exceed_the_compact_head_budget_without_losing_bytes() {
+        let before = serde_json::Map::new();
+        let after = json!({"content": "x".repeat(9 * 1024 * 1024)})
+            .as_object()
+            .unwrap()
+            .clone();
+        let patch = build_projection_patch(&before, &after, 1, 2).unwrap();
+        assert!(
+            serde_json::to_vec(&patch).unwrap().len()
+                > crate::generated_tofudb_ir::MAX_TURN_PROJECTION_PATCH_BYTES
+        );
+        assert_eq!(
+            apply_projection_patch(Some(&before), &patch).unwrap(),
+            after
+        );
+    }
+}

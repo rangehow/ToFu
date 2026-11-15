@@ -1,0 +1,362 @@
+"""Completed isolated work reaches the configured Git checkpoint and retires safely."""
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import threading
+
+import pytest
+
+from lib import integration_control as ic, integration_state_repository as state
+from lib.project_mod import delivery, task_delta_delivery
+from lib.project_mod.workspace_lease import WorkspaceBusyError, workspace_file_write_lease
+from lib.tasks_pkg import workspace_delivery
+from tests.storage.test_integration_delivery import automatic_workspace, git, repo as repo
+
+pytestmark = pytest.mark.unit
+
+
+def finish(root):
+    return delivery.settle_task_workspace(str(root), 'automatic', user_id=1, outcome='completed')
+
+
+def test_delivered_clone_is_reclaimed_with_checkpoint_recovery(repo, monkeypatch):
+    root, _, owner = repo
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    result = finish(root)
+    assert result['state'] == 'delivered', result
+    assert not work.exists()
+    assert git(root, 'show', result['checkpointSha'] + ':task.txt') == 'finished task'
+    assert (root / 'task.txt').read_text() == 'finished task\n'
+    assert finish(root) == result
+    assert state.get_workspace(str(root), 'automatic', user_id=owner)['checkpoint_sha'] == result['checkpointSha']
+
+
+def test_delivered_managed_clone_with_shared_data_links_is_reclaimed(repo, monkeypatch):
+    from lib.project_mod.managed_repository import (
+        ContentPolicy, link_shared_paths, prepare_managed_repository,
+    )
+    root, _, owner = repo
+    plain = (root.parent / 'plain-folder').resolve()
+    plain.mkdir()
+    (plain / 'notes.md').write_text('notes\n')
+    (plain / 'panel.bin').write_bytes(b'p' * 2048)
+    prepare_managed_repository(str(plain), policy=ContentPolicy(large_file_bytes=1024))
+    work = automatic_workspace((plain, None, owner), monkeypatch)
+    assert link_shared_paths(plain, work) == ['panel.bin']
+    (work / 'task.txt').write_text('finished task\n')
+    result = finish(plain)
+    assert result['state'] == 'delivered', result
+    assert not work.exists()  # links are reconstructible, not retained uncaptured work
+    assert (plain / 'panel.bin').read_bytes() == b'p' * 2048
+    assert (plain / 'task.txt').read_text() == 'finished task\n'
+
+
+def test_a_checkout_retained_under_an_earlier_rule_is_reconsidered_once_at_recovery(
+        repo, monkeypatch):
+    """Undo history kept delivered checkouts before 2026-11-12; recovery retires them once."""
+    root, _, owner = repo
+    (root / '.gitignore').write_text('.tofu*\n')
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    (work / '.tofu' / 'file-history').mkdir(parents=True)
+    (work / '.tofu' / 'file-history' / 'snapshots.jsonl').write_text('{"id": "undo"}\n')
+    with monkeypatch.context() as held:
+        held.setattr(task_delta_delivery, 'reclaim_delivered_workspace', lambda _row: False)
+        assert finish(root)['state'] == 'delivered'
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    assert row['origin']['sourceRetirementRule'] == task_delta_delivery.RECLAMATION_RULE
+    # As recorded before the rule had a revision.
+    state.set_workspace_meta(project_root=str(root), task_id='automatic', user_id=owner,
+                             now=ic._now(), patch={'sourceRetirementRule': None})
+
+    # The ordinary pass acknowledges the delivery commit and never rescans the checkout.
+    assert not delivery.resume_pending_workspace_deliveries()
+    assert work.exists()
+    assert delivery._retained_under_earlier_rule(
+        state.get_workspace(str(root), 'automatic', user_id=owner))
+    delivery.request_workspace_delivery_scan(recovery=True)
+    delivery.resume_due_workspace_deliveries()
+
+    assert not work.exists()
+    origin = state.get_workspace(str(root), 'automatic', user_id=owner)['origin']
+    assert (origin['sourceRetirement'], origin['sourceRetirementRule']) == (
+        'reclaimed', task_delta_delivery.RECLAMATION_RULE)
+    assert (root / 'task.txt').read_text() == 'finished task\n'
+
+
+def test_source_cleanup_retries_lost_ack_without_reapplying_delivery(repo, monkeypatch):
+    root, _, owner = repo
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    original = state.set_workspace_meta
+
+    def lose_ack(**kwargs):
+        if 'sourceRetirement' in kwargs.get('patch', {}):
+            raise RuntimeError('cleanup ACK unavailable')
+        return original(**kwargs)
+
+    monkeypatch.setattr(state, 'set_workspace_meta', lose_ack)
+    assert finish(root)['state'] == 'delivered'
+    assert not work.exists()
+    monkeypatch.setattr(state, 'set_workspace_meta', original)
+    monkeypatch.setattr(delivery, '_deliver_task_delta', lambda *a: pytest.fail('replayed delivered bytes'))
+    delivery.resume_pending_workspace_deliveries()
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    assert row['origin']['sourceRetirement'] == 'reclaimed'
+
+
+@pytest.mark.parametrize('mode', ['enabled', 'disabled', 'failing_gate'])
+def test_recovered_delivery_commits_after_the_original_turn_has_finished(repo, monkeypatch, mode):
+    root, _, owner = repo
+    git(root, 'config', '--local', 'tofu.linearCheckpoint', 'false' if mode == 'disabled' else 'true')
+    if mode == 'failing_gate':
+        git(root, 'config', '--local', 'tofu.linearCheckpointTestCommand', 'python3 -c "raise SystemExit(1)"')
+    before = git(root, 'rev-parse', 'HEAD')
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    original = delivery._deliver_task_delta
+    monkeypatch.setattr(delivery, '_deliver_task_delta', lambda row, receipt: delivery._save(
+        row, receipt, state='blocked', phase='workspace_adoption', reason='workspace_busy'))
+    assert finish(root)['state'] == 'blocked'
+    monkeypatch.setattr(delivery, '_deliver_task_delta', original)
+    assert delivery.resume_pending_workspace_deliveries()
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    if mode == 'enabled':
+        assert git(root, 'show', 'HEAD:task.txt') == 'finished task'
+        assert git(root, 'status', '--porcelain') == ''
+        assert row['origin']['deliveryCheckpoint']['repositories'][0]['stableUpdated']
+    else:
+        assert git(root, 'rev-parse', 'HEAD') == before
+        assert (root / 'task.txt').read_text() == 'finished task\n'
+        if mode == 'disabled':
+            assert row['origin']['deliveryCheckpoint']['status'] == 'disabled'
+        else:
+            assert not row['origin']['deliveryCheckpoint']['repositories'][0]['stableUpdated']
+    head = git(root, 'rev-parse', 'HEAD')
+    assert not delivery.resume_pending_workspace_deliveries()
+    assert git(root, 'rev-parse', 'HEAD') == head
+
+
+def test_busy_source_cleanup_retries_after_writer_retires(repo, monkeypatch):
+    root, _, owner = repo
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    original = task_delta_delivery.reclaim_delivered_workspace
+    monkeypatch.setattr(task_delta_delivery, 'reclaim_delivered_workspace',
+                        lambda row: (_ for _ in ()).throw(RuntimeError('temporary retirement failure')))
+    assert finish(root)['state'] == 'delivered'
+    assert work.exists()
+    monkeypatch.setattr(task_delta_delivery, 'reclaim_delivered_workspace', original)
+    delivery.resume_pending_workspace_deliveries()
+    assert not work.exists()
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    assert row['origin']['sourceRetirement'] == 'reclaimed'
+
+
+@pytest.mark.parametrize('late', ['file', 'ignored', 'index'])
+def test_reclamation_preserves_uncaptured_work_but_not_ignored_output(repo, monkeypatch, late):
+    """Ignored files are disposable (owner decision 2026-11-12); other late work is kept."""
+    root, _, _ = repo
+    (root / '.gitignore').write_text('private-output\n')
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    original = delivery._deliver_task_delta
+
+    def publish(*args):
+        result = original(*args)
+        if late == 'index':
+            (work / 'base.txt').write_text('staged only\n')
+            git(work, 'add', 'base.txt')
+            (work / 'base.txt').write_text('base\n')
+        else:
+            (work / ('private-output' if late == 'ignored' else 'later.txt')).write_text('keep me\n')
+        return result
+
+    monkeypatch.setattr(delivery, '_deliver_task_delta', publish)
+    assert finish(root)['state'] == 'delivered'
+    if late == 'ignored':
+        assert not work.exists()
+        return
+    assert work.exists()
+    if late == 'index':
+        assert git(work, 'show', ':base.txt') == 'staged only'
+    else:
+        assert (work / ('private-output' if late == 'ignored' else 'later.txt')).read_text() == 'keep me\n'
+
+
+def test_empty_file_history_store_does_not_retain_delivered_clone(repo, monkeypatch):
+    from lib.file_history import store as history_store
+
+    root, _, owner = repo
+    (root / '.gitignore').write_text('.tofu*\n')
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    history_store.ensure_store(str(work))  # bootstrap only: no undo history
+    assert finish(root)['state'] == 'delivered'
+    assert not work.exists()
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    assert row['origin']['sourceRetirement'] == 'reclaimed'
+
+
+def test_file_history_undo_history_never_retains_a_delivered_clone(repo, monkeypatch):
+    """Owner decision 2026-11-12: a task checkout's undo history goes with it."""
+    from lib.file_history import api as history
+
+    monkeypatch.setenv('TOFU_FILE_HISTORY', '1')
+    root, _, owner = repo
+    (root / '.gitignore').write_text('.tofu*\n')
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    assert history.track_edit(str(work), 'task.txt', pre_content=b'') is not None
+    assert history.make_snapshot(str(work), task_id='automatic') is not None
+    assert (work / '.tofu' / 'file-history' / 'snapshots.jsonl').is_file()
+    assert finish(root)['state'] == 'delivered'
+    assert (root / 'task.txt').read_text() == 'finished task\n'
+    assert not work.exists()
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    assert row['origin']['sourceRetirement'] == 'reclaimed'
+
+
+def test_unrelated_file_writer_progresses_during_delivery_capture(repo, monkeypatch):
+    root, _, _ = repo
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    entered, release = threading.Event(), threading.Event()
+    original = ic._alternate_index_tree
+
+    def capture(checkout, *args, **kwargs):
+        if Path(checkout) == root:
+            entered.set()
+            assert release.wait(15)
+        return original(checkout, *args, **kwargs)
+
+    monkeypatch.setattr(ic, '_alternate_index_tree', capture)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        result = pool.submit(finish, root)
+        try:
+            assert entered.wait(15)
+            with pytest.raises(WorkspaceBusyError):
+                with workspace_file_write_lease(root / 'task.txt', timeout=0):
+                    pytest.fail('overlapping writer was admitted')
+            with workspace_file_write_lease(root / 'other.txt', timeout=0):
+                (root / 'other.txt').write_text('peer work\n')
+        finally:
+            release.set()
+        assert result.result(timeout=20)['state'] == 'delivered'
+    assert (root / 'other.txt').read_text() == 'peer work\n'
+
+
+def test_completed_delivery_reaches_opted_in_checkpoint_through_the_delivery_worker(repo, monkeypatch):
+    from lib import file_history as history
+    import lib.project_mod as project_mod
+    from lib.tasks_pkg.commit_round import _commit, _derive
+
+    root, _, _ = repo
+    git(root, 'config', '--local', 'tofu.linearCheckpoint', 'true')
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('finished task\n')
+    task = {'id': 'automatic', 'convId': 'conv', '_userId': 1, 'status': 'done',
+            'finishReason': 'stop', 'config': {'projectPath': str(root)}, 'toolRounds': []}
+    events = []
+    monkeypatch.setattr(_derive, 'derive_round_modified_files', lambda *a, **kw: ([], 0, False))
+    monkeypatch.setattr(history, 'is_enabled', lambda: False)
+    monkeypatch.setattr(project_mod, 'get_modifications', lambda *a, **kw: [])
+    monkeypatch.setattr(_commit, 'append_event', lambda task, event: events.append(event))
+    monkeypatch.setattr(_commit, '_patch_turn_projection_with_file_list', lambda *a, **kw: None)
+    before = git(root, 'rev-parse', 'HEAD')
+    _commit._run_commit_round_async(task, str(root), None, False)
+    event = next(event for event in events if event['type'] == 'round_committed')
+    # The round acknowledges intent; an unconfirmed delivery never borrows the checkpoint.
+    assert event['workspaceDelivery']['repositories'][0]['deliveryStatus'] == 'pending', event
+    assert git(root, 'rev-parse', 'HEAD') == before
+    assert delivery.resume_pending_workspace_deliveries()
+    assert git(root, 'show', 'HEAD:task.txt') == 'finished task'
+    assert git(root, 'status', '--porcelain') == ''
+    row = state.get_workspace(str(root), 'automatic', user_id=1)
+    assert row['origin']['deliveryCheckpoint']['repositories'][0]['stableUpdated']
+
+
+@pytest.mark.parametrize('status,mode', [('pending', 'working_tree'), ('blocked', 'working_tree'),
+                                       ('preserved', 'working_tree'), ('delivered', 'committed')])
+def test_unconfirmed_or_committed_delivery_does_not_borrow_shared_checkpoint(repo, status, mode):
+    root, work, _ = repo
+    receipt = {'repositories': [{'canonicalRoot': str(root), 'workspacePath': str(work),
+                                 'deliveryStatus': status, 'deliveryPublicationMode': mode}]}
+    assert workspace_delivery.checkpoint_roots_without_workspaces([str(root), str(work)], receipt) == []
+
+
+@pytest.mark.parametrize('changed', [False, True])
+def test_empty_checkpoint_settles_without_write_authority_but_changes_stay_blocked(repo, monkeypatch, changed):
+    root, _, owner = repo
+    before = git(root, 'rev-parse', 'HEAD')
+    work = automatic_workspace(repo, monkeypatch)
+    if changed:
+        (work / 'task.txt').write_text('unpublished\n')
+    monkeypatch.setattr('lib.project_dispatch.publication.publication_reason',
+                        lambda *_: 'project_publication_authority_missing')
+    if changed:
+        monkeypatch.setattr(task_delta_delivery, '_canonical_tree',
+                            lambda *_: pytest.fail('refused delivery scanned canonical bytes'))
+    receipt = finish(root)
+    assert git(root, 'rev-parse', 'HEAD') == before
+    assert not (root / 'task.txt').exists()
+    if changed:
+        assert receipt['state'] == 'blocked'
+        assert (work / 'task.txt').read_text() == 'unpublished\n'
+    else:
+        assert receipt['state'] == 'delivered'
+        assert receipt['phase'] == 'no_changes'
+        assert not work.exists()
+        assert finish(root) == receipt
+        assert state.get_workspace(str(root), 'automatic', user_id=owner)['origin']['sourceRetirement'] == 'reclaimed'
+
+
+@pytest.mark.parametrize('replacement', ['symlink', 'independent_repository'])
+def test_retirement_preserves_a_replaced_workspace_identity(repo, monkeypatch, replacement):
+    root, _, owner = repo
+    work = automatic_workspace(repo, monkeypatch)
+    with monkeypatch.context() as held:
+        held.setattr(task_delta_delivery, 'reclaim_delivered_workspace', lambda _: False)
+        assert finish(root)['state'] == 'delivered'
+    git(root, 'worktree', 'remove', str(work))
+    foreign = root.parent / 'foreign-source'
+    foreign.mkdir()
+    (foreign / 'experiment.txt').write_text('independent content\n')
+    if replacement == 'symlink':
+        work.symlink_to(foreign, target_is_directory=True)
+    else:
+        work.mkdir()
+        git(work, 'init')
+        (work / 'experiment.txt').write_text('new repository\n')
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    delivery._reclaim_completed_source(row)
+    assert work.exists()
+    assert (foreign / 'experiment.txt').read_text() == 'independent content\n'
+    if replacement == 'independent_repository':
+        assert (work / 'experiment.txt').read_text() == 'new repository\n'
+    assert state.get_workspace(str(root), 'automatic', user_id=owner)['origin']['sourceRetirement'] == 'retained'
+
+
+@pytest.mark.parametrize('durable', [False, True])
+def test_retired_placeholder_is_rechecked_without_deleting_new_durable_content(repo, monkeypatch, durable):
+    from lib.file_history import store as history_store
+
+    root, _, owner = repo
+    work = automatic_workspace(repo, monkeypatch)
+    (work / 'task.txt').write_text('completed\n')
+    with monkeypatch.context() as held:
+        held.setattr(task_delta_delivery, 'reclaim_delivered_workspace', lambda _row: False)
+        assert finish(root)['state'] == 'delivered'
+    git(root, 'worktree', 'remove', '--force', str(work))
+    work.mkdir()
+    history_store.ensure_store(str(work))
+    if durable:
+        (work / 'experiment.txt').write_text('preserve this experiment\n')
+    row = state.get_workspace(str(root), 'automatic', user_id=owner)
+    assert row['origin']['sourceRetirement'] == 'retained'
+    delivery._reclaim_completed_source(row)
+    if durable:
+        assert (work / 'experiment.txt').read_text() == 'preserve this experiment\n'
+    else:
+        assert not work.exists()
+        assert state.get_workspace(str(root), 'automatic', user_id=owner)['origin']['sourceRetirement'] == 'reclaimed'

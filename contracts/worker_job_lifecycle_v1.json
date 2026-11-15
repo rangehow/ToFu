@@ -1,0 +1,215 @@
+{
+  "format": "tofu.worker-job-lifecycle/v1",
+  "states": [
+    "queued",
+    "running",
+    "suspended",
+    "succeeded",
+    "failed",
+    "cancelled"
+  ],
+  "terminalStates": [
+    "succeeded",
+    "failed",
+    "cancelled"
+  ],
+  "claimableStates": [
+    "queued",
+    "suspended"
+  ],
+  "operations": {
+    "worker_job.active.list": {
+      "kind": "query",
+      "receiptRequired": false,
+      "input": {
+        "user_id": "required: positive integer owner filter or explicit null for the trusted application system scope",
+        "task_kinds": "same explicit nonempty kind filter as claim_next"
+      },
+      "result": "complete list of {taskId,userId,taskKind,conversationId,status,createdAtMs}, ordered by createdAtMs then taskId; no claim, principal or effect authority",
+      "semantics": "Read queued, running and suspended jobs through their existing active indexes in the authenticated tenant. Filter owner before projection. Terminal history is never scanned. No truncation; existing transport byte limits report a typed error."
+    },
+    "worker_job.defer": {
+      "kind": "command",
+      "receiptRequired": false,
+      "input": {
+        "task_id": "string:1..256",
+        "worker_id": "string:1..256",
+        "fencing_token": "positive-integer",
+        "now_ms": "nonnegative-clock",
+        "available_at_ms": "clock:not-before-now",
+        "replay_cursor": "nonnegative-integer",
+        "observed_cancel_sequence": "nonnegative-integer: acknowledged by domain settlement handler",
+        "observed_wake_sequence": "optional nonnegative-integer: fixed claim observation, legacy default zero"
+      },
+      "atomic": [
+        "live claim proof",
+        "running -> suspended",
+        "release lease and claim authority; retain last holder identity as diagnostic evidence",
+        "queue at available time",
+        "monotonic replay cursor",
+        "an unseen cancellation forces immediate availability; acknowledged cancellation may back off while effects settle",
+        "an unseen domain wake forces immediate availability; heartbeat observations never acknowledge a domain wake"
+      ],
+      "replay": "same suspended fencing token, available time, and cursor; no lease or schedule extension"
+    },
+    "worker_job.request_cancel": {
+      "suspended": "request cancellation, retain suspended state, wake immediately for domain settlement; never mark an active external effect terminal"
+    },
+    "worker_job.claim_next": {
+      "suspended": "same priority/availability order as queued jobs; new claim advances fencing token and attempt number",
+      "retainedAcknowledgement": "retain_claim=true requires an exact command ID and stores the acquisition ACK in the existing command receipt. A process-bound runner retains one identity/payload until ACK, then revalidates claim_state; the receipt alone never authorizes dispatch. Idle horizons create no receipt."
+    }
+  },
+  "invariants": [
+    "Only a running claim with matching owner/token and current authority epoch may emit progress or effects. Process-bound claims retain ownership until proved process exit or explicit release; elapsed time alone never revokes them. Legacy opaque workers still require an unexpired lease.",
+    "Suspension is durable nonterminal waiting. It holds no executor or heartbeat thread.",
+    "Cancellation of a suspended job wakes domain settlement instead of completing unknown external effects.",
+    "The canonical runner invokes a registered cancellation handler before terminal settlement when a domain requires cleanup.",
+    "Terminal domain accounting settles before terminal worker-job accounting.",
+    "Claim, defer, cancel and complete update every affected index in the same transaction.",
+    "SQLite serializes the writer; PostgreSQL cancel, defer and automation progress hold the current worker row through commit; native OCC validates its current-job dependency.",
+    "Only the current backend epoch and backend-owned advancing clock prove legacy leases or schedule process liveness rechecks; caller clocks never grant ownership."
+  ],
+  "conversationPublication": {
+    "operations": [
+      "turn.attempt.start",
+      "turn.event.record",
+      "turn.event.record_batch",
+      "turn.visible.sync",
+      "task_results.checkpoint"
+    ],
+    "binding": "conversation-attempt:{attemptId}, established only by turn.attempt.dispatch_worker",
+    "proofField": "worker_claim",
+    "proof": {
+      "worker_id": "string:1..256",
+      "fencing_token": "positive-signed-64-bit-integer"
+    },
+    "atomic": "Validate the bound job, user, kind, attempt, live holder/token and backend lease epoch/time in the same transaction as publication. SQL holds the worker row until commit; native records its OCC dependency.",
+    "missingOrStale": "database_conflict; no Turn, task event, replay or terminal accounting writes; omission cannot select legacy authority",
+    "cancelled": "Start is refused. A current claim may drain evidence and checkpoints only after durable startedAt proves entry; an unentered cancelled attempt permits terminal cleanup only. The initial tool_effect entered event without reconciliation is a new effect admission: reject it after cancellation inside Turn and standalone replay transactions, including terminal wrappers and batches. A previously admitted effect can still return or attach reconciliation evidence. Cancellation never revokes the obligation to commit received evidence. Lost claims and expired legacy claims remain refused for every write.",
+    "flow": "Visible phases and their progress/terminal events borrow the immutable root attempt's worker claim; caller-supplied root hints never grant authority.",
+    "batch": "Each entry carries the proof. Any refusal rolls back the entire batch including a valid prefix.",
+    "legacy": "An attempt with a non-durable binding retains its existing authority and accepts no worker claim.",
+    "scope": "Publication authority and the existing durable entry barrier. Tool entry and model dispatch must explicitly revalidate the current uncancelled claim at their shared boundaries; this grants no crash replay and alone does not qualify a production worker kind."
+  },
+  "conversationModelAdmission": {
+    "owner": "ExecutionBudget.mark_model_dispatched, shared by root, descendants, Python and native model transports",
+    "composition": "An explicit root invocation port is captured before account creation; configuration cannot install authority. Existing domain model/account observers remain installed.",
+    "barrier": "After domain intent observers, revalidate the already-entered root through turn.attempt.start in its current Turn/worker transaction, then recheck local cancellation before permitting the physical send. Idempotent start revalidates proof and Stop; no cached receipt or new accounting row grants permission.",
+    "detachedDescendant": "A descendant of a settled root (a detached Swarm whose spawning attempt's job still holds the claim) cannot be acknowledged by turn.attempt.start, so it revalidates that current claim and its Stop through worker_job.claim_state instead. The root itself never uses this path; a settled root refuses.",
+    "refusal": "Human Stop is AbortedError; lost or refused authority is ModelAdmissionRefused. Neither permits credential rotation, model fallback or HTTP retry.",
+    "settlement": "Already dispatched requests still settle observed usage through their original ExecutionBudget and domain observer after authority ends. Live children and unknown provider usage keep completeness false. No new ledger, refund or effect replay is introduced.",
+    "crash": "The committed root entry proves external effects are possible. It cannot prove a particular provider call happened or completed; entered work requires domain recovery evidence and is never replayed from a fresh lease alone."
+  },
+  "conversationReplayPublication": {
+    "operations": [
+      "event.append",
+      "event.append_batch"
+    ],
+    "proofField": "worker_claim",
+    "binding": "A conversation-attempt:{attemptId} stream and every descendant resolved through immutable invocation births require the current root claim, even when require_attempts_live or worker_claim is omitted. Pure legacy batches retain their bulk append path only after ancestry resolution.",
+    "owner": "Standalone replay producers carry explicit user_id alongside worker_claim; batching retains each row's owner.",
+    "atomic": "Validate the same worker authority inside the append transaction. Turn-carried replay rows use the enclosing Turn publication proof.",
+    "stale": "Return inserted=false,rejected=worker_claim_stale for that row; preserve independent sibling results. Invalid proof shape refuses the transaction.",
+    "cancelled": "An entered attempt's current claim may drain already-produced evidence. Without durable entry, only done, error and aborted replay frames may pass.",
+    "legacy": "Non-worker streams retain their existing semantics; they cannot carry worker_claim."
+  },
+  "conversationCancellation": {
+    "kind": "conversation-attempt",
+    "reason": "Human Stop uses user_stop. Internal cancellation serializes {contract: tofu.conversation-cancel/v1, reason, detail} into the existing opaque reason field, subject to its existing wire limit without truncation. The first durable request wins; local and remote carriers consume that acknowledged cause, not a later caller's cause.",
+    "admission": "Stop commits worker_job.request_cancel before signalling a local carrier; registry absence never grants terminal publication authority.",
+    "queued": "Retain the queued job and make cancellation immediately claimable. The domain cancel handler must commit the terminal Turn before transport completion; queued cancellation cannot orphan a pending Turn.",
+    "unentered": "A current cancelled claim plus an attempt with no startedAt permits terminal cleanup without model context, prompt hooks, task registration or model/tool execution.",
+    "entered": "The original invocation must join and discharge domain/account persistence, or recovery must supply that evidence. Lease ownership alone never authorizes effect replay or completion."
+  },
+  "conversationRecoveryOwnership": {
+    "bindingPrefix": "conversation-attempt:",
+    "owner": "Claimed conversation recovery owns both the root and Flow phases sharing its task ID, including queued and expired leases.",
+    "legacyRecovery": "turn.recover and task_results.recover_running never settle these bindings. API process absence and lease expiry grant no physical-exit, effect or accounting evidence.",
+    "derivedIndexes": "Legacy restart indexes contain only legacy recovery candidates. Old worker-owned index entries are verified against their canonical owner and retired without modifying durable execution facts."
+  },
+  "conversationExecutionWitness": {
+    "format": "tofu.conversation-worker-execution/v1",
+    "configKey": "_conversationWorkerExecution",
+    "processField": "worker_process",
+    "processFields": [
+      "host",
+      "boot",
+      "pid_namespace",
+      "pid",
+      "started"
+    ],
+    "entry": "turn.attempt.start may carry the actual invocation process identity. Store its exact process and original worker claim in private accepted configuration in the same transaction as first startedAt. Identical retries revalidate authority; changed witnesses and late introduction after entry refuse.",
+    "visibility": "Private owner-only execution reads; never public Attempt or client-controlled accepted configuration.",
+    "absence": "Missing or unavailable process evidence grants no physical-exit proof and never permits replay. It does not prevent initial execution.",
+    "retention": "One fixed-shape entry witness per durable Attempt in its existing lifetime; no heartbeat history, second registry or process journal."
+  },
+  "leaseAuthority": {
+    "clock": "backend-owned UTC-offset high-water plus monotonic elapsed time",
+    "lifetime": "native/SQLite: existing shared store epoch; PostgreSQL: random named server-shared clock epoch scoped by database OID; never a Sidecar-local UUID",
+    "callerTime": "now_ms is observation/evidence only; never a live-lease proof or lease extension",
+    "restart": "previous-epoch claims fail closed and indexed recovery advances the existing fencing token",
+    "legacy": "empty epoch is non-live; indexed recovery adopts a new epoch without rewriting user state",
+    "leaseIndexMarker": 255,
+    "epochCharacters": 32,
+    "maximumLeaseMilliseconds": 300000,
+    "serverClock": {
+      "format": "tofu.worker-lease-clock/v1",
+      "minimumPostgresMajor": 17,
+      "maximumStateBytes": 128,
+      "fields": [
+        "format",
+        "epoch",
+        "nowMs",
+        "utcMs",
+        "stateBytes"
+      ]
+    },
+    "eligibilityClock": "backend-owned current UTC; absolute queue availability never uses the advancing lease high-water",
+    "epochRangesPerKind": 4,
+    "processBoundOwner": {
+      "prefix": "tofu.worker-process/v1:",
+      "fields": [
+        "boot",
+        "pid_namespace",
+        "pid",
+        "started",
+        "instance"
+      ],
+      "encoding": "Colon-separated canonical lowercase boot UUID, positive decimal PID namespace inode, PID (1..2147483647), kernel start ticks, and lowercase 32-hex invocation instance. Fits the existing 256-character claimOwner field.",
+      "authority": "Matching owner/token/current epoch remains valid across a heartbeat deadline unless the storage host proves process death in the same boot and PID namespace. Foreign, inaccessible or unavailable process evidence cannot authorize takeover.",
+      "recovery": "Current-epoch expired entries are traversed in lease-index order, skipping protected processes without hiding other expired or queued jobs. Recheck protected entries after their existing heartbeat lease interval; this is a recovery wake horizon, never an execution limit.",
+      "lifecycle": "The local worker service captures its process identity before claiming. A joined invocation explicitly releases an unsettled claim before returning; transient storage failures wait without a task deadline. Process crash permits takeover after the recovery horizon; authority epoch changes still fence previous claims.",
+      "compatibility": "Opaque worker IDs retain the existing finite lease behavior. Platforms without an observable kernel process identity retain that legacy behavior; no process-death evidence is fabricated.",
+      "retention": "One bounded identity replaces the existing claimOwner value; no new row, heartbeat history, or registry."
+    }
+  },
+  "wakeAuthority": {
+    "field": "wake_sequence",
+    "legacyDefault": 0,
+    "sqlSchemaVersion": 65,
+    "lifetime": "bounded canonical job field; no wake ledger or resident waiter",
+    "authority": "only an owner/tenant-proved domain transition advances the counter and availability atomically",
+    "claimObservation": "captured at claim; never advanced by heartbeat or cached run reads",
+    "deferral": "unseen wake wins over an older requested availability"
+  },
+  "conversationExecutionExit": {
+    "format": "tofu.conversation-worker-exit/v1",
+    "metadataKey": "conversationWorkerExit",
+    "proofs": [
+      "joined",
+      "process_dead"
+    ],
+    "binding": "SHA-256 of canonical sorted compact JSON of the immutable execution witness",
+    "authority": "existing owner-scoped task_results checkpoint with the current root publication claim",
+    "joined": "the common task worker has exited including invocation cleanup; terminal task persistence must be acknowledged",
+    "processDead": "the existing process_owner owner_state proves death in the same host, boot and PID namespace; absence or foreign evidence remains unknown",
+    "unknown": "retain output, domain invoice and known usage; mark incomplete usage and disable automatic effect replay; never release an uncertain admission as zero cost",
+    "retention": "one fixed-shape exit receipt in the existing result metadata; no process or cost journal",
+    "settlements": [
+      "confirmed",
+      "unknown"
+    ],
+    "terminalReplay": "Only a joined exit receipt confirms all required completion consumers. Process death alone preserves known output and accounting but leaves overall settlement unknown even if a terminal result exists."
+  }
+}

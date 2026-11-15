@@ -1,0 +1,342 @@
+{
+ "contract": "tofu.office-facts/v1",
+ "description": "Recorded from lib/router/office_facts.py with in-memory authorities and the 2026-11-13 tofu team identifiers (GAME-UI-2 recorded-shapes.ts); streamIds normalized. Sequence: the REPORTER finishes (busy cleared, result set); the RUNNER sends a kind=report project message; the lead accepts the result (result cleared, document set), takes the message, reports a delivery to the owner and moves its board; the owner marks the report read; the lead asks the owner a question; a fault opens a Watchdog alarm; the owner answers; the Watchdog resolves the alarm. Reader rule: apply a frame only with the snapshot streamId and seq == last + 1; otherwise, and after every push reconnect, re-read GET /api/v4/router/office.",
+ "snapshot": {
+  "contract": "tofu.office-facts/v1",
+  "streamId": "5f1c0a9e2b7d4c13:1",
+  "seq": 0,
+  "facts": [
+   {
+    "fact": "board",
+    "key": "board:/path/to/your/project",
+    "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+    "source": "task_board",
+    "projectPath": "/path/to/your/project",
+    "revision": 12
+   },
+   {
+    "fact": "busy",
+    "key": "busy:worker-15082de381a8dafbf673dde3",
+    "conversationId": "worker-15082de381a8dafbf673dde3",
+    "source": "attempt",
+    "attemptId": "171ad418-61a0-4f6f-be89-20ddab98c523",
+    "projectPath": "/path/to/your/project",
+    "assignmentId": "3c3d9702-19a5-5fcf-ba5d-7685af881da6",
+    "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625"
+   },
+   {
+    "fact": "busy",
+    "key": "busy:worker-dfaa412580f8e85ff5bf48d6",
+    "conversationId": "worker-dfaa412580f8e85ff5bf48d6",
+    "source": "attempt",
+    "attemptId": "aa44af72-e554-4727-bcb0-420f458ac3f2",
+    "projectPath": "/path/to/your/project",
+    "assignmentId": "e35878e1-c894-5164-989c-67f956abd872",
+    "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625"
+   },
+   {
+    "fact": "report",
+    "key": "report:coordinator-1a390889aa954da2b18551d1b4a32625:1187ce16-c17c-4ff6-81fc-943d19fee295",
+    "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+    "source": "coordinator_report",
+    "projectPath": "/path/to/your/project",
+    "turnId": "1187ce16-c17c-4ff6-81fc-943d19fee295",
+    "ordinal": 528,
+    "reportKind": "progress",
+    "unread": false
+   }
+  ],
+  "coverage": {
+   "busy": "complete",
+   "reports": "newest_page",
+   "decisions": "complete",
+   "documents": "newest_page",
+   "boards": "complete",
+   "alarms": "complete"
+  }
+ },
+ "frames": [
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 1,
+   "state": "cleared",
+   "fact": "busy",
+   "key": "busy:worker-15082de381a8dafbf673dde3",
+   "conversationId": "worker-15082de381a8dafbf673dde3",
+   "source": "attempt",
+   "attemptId": "171ad418-61a0-4f6f-be89-20ddab98c523",
+   "projectPath": "/path/to/your/project",
+   "assignmentId": "3c3d9702-19a5-5fcf-ba5d-7685af881da6",
+   "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625"
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 2,
+   "state": "set",
+   "fact": "report",
+   "key": "result:3c3d9702-19a5-5fcf-ba5d-7685af881da6:711",
+   "source": "assignment_result",
+   "conversationId": "worker-15082de381a8dafbf673dde3",
+   "attemptId": "171ad418-61a0-4f6f-be89-20ddab98c523",
+   "projectPath": "/path/to/your/project",
+   "assignmentId": "3c3d9702-19a5-5fcf-ba5d-7685af881da6",
+   "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "turnId": "2587198f-b0dd-40c8-bff1-64a3bbfbd3d1",
+   "ordinal": 3,
+   "revision": 711
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 3,
+   "state": "set",
+   "fact": "report",
+   "key": "message:6e52bacd-5aaa-5ae8-ad1b-d60f52f6589d",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "project_message",
+   "projectPath": "/path/to/your/project",
+   "messageId": "6e52bacd-5aaa-5ae8-ad1b-d60f52f6589d",
+   "senderId": "worker-dfaa412580f8e85ff5bf48d6"
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 4,
+   "state": "cleared",
+   "fact": "report",
+   "key": "report:coordinator-1a390889aa954da2b18551d1b4a32625:1187ce16-c17c-4ff6-81fc-943d19fee295",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "coordinator_report",
+   "projectPath": "/path/to/your/project",
+   "turnId": "1187ce16-c17c-4ff6-81fc-943d19fee295",
+   "ordinal": 528,
+   "reportKind": "progress",
+   "unread": false
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 5,
+   "state": "set",
+   "fact": "report",
+   "key": "report:coordinator-1a390889aa954da2b18551d1b4a32625:b2c3a9e0-5c1d-4f0e-9a51-0f1e2d3c4b5a",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "coordinator_report",
+   "projectPath": "/path/to/your/project",
+   "turnId": "b2c3a9e0-5c1d-4f0e-9a51-0f1e2d3c4b5a",
+   "ordinal": 531,
+   "reportKind": "delivery",
+   "unread": true
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 6,
+   "state": "cleared",
+   "fact": "report",
+   "key": "message:6e52bacd-5aaa-5ae8-ad1b-d60f52f6589d",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "project_message",
+   "projectPath": "/path/to/your/project",
+   "messageId": "6e52bacd-5aaa-5ae8-ad1b-d60f52f6589d",
+   "senderId": "worker-dfaa412580f8e85ff5bf48d6"
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 7,
+   "state": "set",
+   "fact": "board",
+   "key": "board:/path/to/your/project",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "task_board",
+   "projectPath": "/path/to/your/project",
+   "revision": 13
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 8,
+   "state": "cleared",
+   "fact": "report",
+   "key": "result:3c3d9702-19a5-5fcf-ba5d-7685af881da6:711",
+   "source": "assignment_result",
+   "conversationId": "worker-15082de381a8dafbf673dde3",
+   "attemptId": "171ad418-61a0-4f6f-be89-20ddab98c523",
+   "projectPath": "/path/to/your/project",
+   "assignmentId": "3c3d9702-19a5-5fcf-ba5d-7685af881da6",
+   "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "turnId": "2587198f-b0dd-40c8-bff1-64a3bbfbd3d1",
+   "ordinal": 3,
+   "revision": 711
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 9,
+   "state": "set",
+   "fact": "document",
+   "key": "document:3c3d9702-19a5-5fcf-ba5d-7685af881da6:711",
+   "source": "accepted_result",
+   "conversationId": "worker-15082de381a8dafbf673dde3",
+   "projectPath": "/path/to/your/project",
+   "assignmentId": "3c3d9702-19a5-5fcf-ba5d-7685af881da6",
+   "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "revision": 711,
+   "turnId": "2587198f-b0dd-40c8-bff1-64a3bbfbd3d1"
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 10,
+   "state": "set",
+   "fact": "report",
+   "key": "report:coordinator-1a390889aa954da2b18551d1b4a32625:b2c3a9e0-5c1d-4f0e-9a51-0f1e2d3c4b5a",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "coordinator_report",
+   "projectPath": "/path/to/your/project",
+   "turnId": "b2c3a9e0-5c1d-4f0e-9a51-0f1e2d3c4b5a",
+   "ordinal": 531,
+   "reportKind": "delivery",
+   "unread": false
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 11,
+   "state": "set",
+   "fact": "decision",
+   "key": "question:coordinator-1a390889aa954da2b18551d1b4a32625:hg_069759980950",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "owner_question",
+   "projectPath": "/path/to/your/project",
+   "turnId": "6364198d-7e89-45fd-a7b4-22fe15be7e8f",
+   "ordinal": 530,
+   "guidanceId": "hg_069759980950",
+   "blocking": true
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 12,
+   "state": "set",
+   "fact": "alarm",
+   "key": "alarm:turn_failure:9f0e1d2c3b4a5968",
+   "conversationId": "worker-dfaa412580f8e85ff5bf48d6",
+   "source": "watchdog_signal",
+   "signalId": "turn_failure:9f0e1d2c3b4a5968"
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 13,
+   "state": "cleared",
+   "fact": "decision",
+   "key": "question:coordinator-1a390889aa954da2b18551d1b4a32625:hg_069759980950",
+   "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+   "source": "owner_question",
+   "projectPath": "/path/to/your/project",
+   "turnId": "6364198d-7e89-45fd-a7b4-22fe15be7e8f",
+   "ordinal": 530,
+   "guidanceId": "hg_069759980950",
+   "blocking": true
+  },
+  {
+   "type": "office.fact",
+   "userId": 1,
+   "streamId": "5f1c0a9e2b7d4c13:1",
+   "seq": 14,
+   "state": "cleared",
+   "fact": "alarm",
+   "key": "alarm:turn_failure:9f0e1d2c3b4a5968",
+   "conversationId": "worker-dfaa412580f8e85ff5bf48d6",
+   "source": "watchdog_signal",
+   "signalId": "turn_failure:9f0e1d2c3b4a5968"
+  }
+ ],
+ "expectedAfterFrames": [
+  "board:/path/to/your/project",
+  "busy:worker-dfaa412580f8e85ff5bf48d6",
+  "document:3c3d9702-19a5-5fcf-ba5d-7685af881da6:711",
+  "report:coordinator-1a390889aa954da2b18551d1b4a32625:b2c3a9e0-5c1d-4f0e-9a51-0f1e2d3c4b5a"
+ ],
+ "gap": {
+  "description": "A frame was lost in transit: seq 3 arrives after seq 1, so the reader re-reads the snapshot.",
+  "delivered": [
+   1,
+   3
+  ],
+  "expect": "resnapshot"
+ },
+ "restart": {
+  "description": "The server restarted: the next frame or reconnect carries another streamId, so the reader re-reads the snapshot.",
+  "snapshot": {
+   "contract": "tofu.office-facts/v1",
+   "streamId": "9a04e6d1c8b25f70:1",
+   "seq": 0,
+   "facts": [
+    {
+     "fact": "board",
+     "key": "board:/path/to/your/project",
+     "conversationId": "coordinator-1a390889aa954da2b18551d1b4a32625",
+     "source": "task_board",
+     "projectPath": "/path/to/your/project",
+     "revision": 12
+    },
+    {
+     "fact": "busy",
+     "key": "busy:worker-15082de381a8dafbf673dde3",
+     "conversationId": "worker-15082de381a8dafbf673dde3",
+     "source": "attempt",
+     "attemptId": "171ad418-61a0-4f6f-be89-20ddab98c523",
+     "projectPath": "/path/to/your/project",
+     "assignmentId": "3c3d9702-19a5-5fcf-ba5d-7685af881da6",
+     "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625"
+    }
+   ],
+   "coverage": {
+    "busy": "complete",
+    "reports": "newest_page",
+    "decisions": "complete",
+    "documents": "newest_page",
+    "boards": "complete",
+    "alarms": "complete"
+   }
+  },
+  "frames": [
+   {
+    "type": "office.fact",
+    "userId": 1,
+    "streamId": "9a04e6d1c8b25f70:1",
+    "seq": 1,
+    "state": "cleared",
+    "fact": "busy",
+    "key": "busy:worker-15082de381a8dafbf673dde3",
+    "conversationId": "worker-15082de381a8dafbf673dde3",
+    "source": "attempt",
+    "attemptId": "171ad418-61a0-4f6f-be89-20ddab98c523",
+    "projectPath": "/path/to/your/project",
+    "assignmentId": "3c3d9702-19a5-5fcf-ba5d-7685af881da6",
+    "coordinatorId": "coordinator-1a390889aa954da2b18551d1b4a32625"
+   }
+  ],
+  "expectedAfterFrames": [
+   "board:/path/to/your/project"
+  ]
+ }
+}

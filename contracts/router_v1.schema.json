@@ -1,0 +1,1168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tofu.router/v1",
+  "title": "Global Router v1",
+  "description": "Global Router tool arguments, standing-instruction records and the /api/v4/router wire shapes (docs/ROUTER.md). The router is the bound Coordinator of the owner's router home; its binding view is the project coordination binding (project_coordination_v1.schema.json). Pages are bounded by the project dispatch history page (contracts/project_dispatch_v1.schema.json historyPage), the convention of get_project_workers.",
+  "namespaces": {
+    "instructions": "router.instruction.v1",
+    "applications": "router.instruction.application.v1",
+    "watchdogSignals": "router.watchdog.signal.v1",
+    "watchdogOpenSignals": "router.watchdog.open.v1",
+    "portfolio": "router.portfolio.opportunity.v1"
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+    "projectPath": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S"},
+    "cursor": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "routeToProject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_path"],
+      "properties": {
+        "project_path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S",
+          "description": "Absolute local path of the target project. A project without an available Project Router gets a new one."},
+        "source_turn_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "Without instruction_id (then this or source_steer_id is required): the Turn ID of the owner's own message in your current request; that exact text is forwarded as their request. With instruction_id: the Turn that carried the triggering event, when it has its own Turn."},
+        "source_steer_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "Instead of source_turn_id: the steer_id of an owner message sent while you were replying (labelled 'Owner message sent while you were replying \u00b7 steer_id=...'); that exact text is forwarded as their request. Not combined with source_turn_id, event_id or instruction_id."},
+        "note": {"type": "string", "minLength": 1, "pattern": "\\S",
+          "description": "Optional context for the Project Router; for an instruction, the triggering event. Delivered separately as nonhuman context, never as part of the owner's request."},
+        "instruction_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "Apply this active standing instruction: its frozen owner text is forwarded instead of a current message."},
+        "event_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "Channel event ID that triggered the instruction. With instruction_id, give event_id or source_turn_id."}
+      }
+    },
+    "getRouterProjects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "after_id": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "The next_cursor of the previous page (get_project_workers convention)."}
+      }
+    },
+    "routerProject": {
+      "description": "Create, register, read or configure one of the owner's projects (docs/ROUTER.md R12). list and get are passive. Every other action acts under the owner's delegation (R9, scope project_lifecycle): it needs reason, the owner's trigger and an idempotency_key, and one key applies once. A project is a folder preset; its Project Router is the Coordinator of its primary root. Projects are never deleted or unregistered here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": {"enum": ["list", "get", "create", "register", "update_defaults", "configure_router"]},
+        "folder_id": {"$ref": "#/$defs/id", "description": "get: the project id from list; update_defaults: required."},
+        "project_path": {"$ref": "#/$defs/projectPath",
+                         "description": "An existing project directory: required for register and configure_router, optional for get."},
+        "parent": {"type": "string", "minLength": 1, "maxLength": 4096,
+                   "description": "create: the existing parent directory of the new project folder."},
+        "folder_name": {"type": "string", "minLength": 1, "maxLength": 512,
+                        "description": "create: the new folder's name, one path segment without slashes."},
+        "name": {"type": "string", "maxLength": 80,
+                 "description": "create/register: the project name; the folder's own name when omitted."},
+        "color": {"type": "string", "maxLength": 7, "pattern": "^(?:#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6})?$"},
+        "defaults": {"type": "object", "additionalProperties": false,
+                     "description": "update_defaults: the project settings dialog's own fields; the first of projectPaths is the primary root whose Project Router is ensured. Omit every field that stays unchanged.",
+                     "properties": {
+                       "name": {"type": "string", "minLength": 1, "maxLength": 80},
+                       "color": {"type": "string", "maxLength": 7,
+                                 "pattern": "^(?:#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6})?$"},
+                       "projectPath": {"type": "string", "maxLength": 512},
+                       "projectPaths": {"type": "array", "maxItems": 32,
+                                        "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+                       "readOnlyPaths": {"type": "array", "maxItems": 32,
+                                         "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+                       "collapsed": {"type": "boolean"},
+                       "order": {"type": "integer", "minimum": 0}
+                     }},
+        "expected_revision": {"type": "integer", "minimum": 0,
+                              "description": "update_defaults: the project revision read; a stale edit is refused like the UI's."},
+        "settings": {"type": "object",
+                     "description": "configure_router: the Project Router's settings in the composer's own keys, e.g. model, thinkingDepth, searchMode, fetchEnabled, codeExecEnabled, browserEnabled, memoryEnabled, imageGenEnabled, autoApply, autoTranslate. Only composer-authored keys are settable; every setting not named keeps its current value.",
+                     "additionalProperties": true},
+        "worker_model": {"type": "string", "maxLength": 256,
+                         "description": "configure_router: the model its Workers run on (must be routable); empty returns to the owner's default. Omit to leave it unchanged."},
+        "reason": {"$ref": "#/$defs/ownerDelegationReason"},
+        "source_turn_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_turn_id"},
+        "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
+        "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
+        "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
+                            "description": "One delegated action per key: a retry returns the recorded outcome and never repeats the change."}
+      },
+      "allOf": [{
+        "if": {"properties": {"action": {"enum": ["create", "register", "update_defaults", "configure_router"]}}},
+        "then": {"required": ["reason", "idempotency_key"]}
+      }]
+    },
+    "instructionCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_turn_id", "label", "idempotency_key"],
+      "properties": {
+        "source_turn_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "Turn ID of the owner's own message in your current request that states the instruction; its exact text is frozen."},
+        "label": {"type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$",
+          "description": "Short plain-text label for lists. Presentation only, never authority."},
+        "project_path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S",
+          "description": "Target project the instruction may be applied to. Omit only when the owner named none."},
+        "thread": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "\\S",
+          "description": "Optional channel thread key the instruction is scoped to (for example dx:gid:<gid> or github:<owner>/<repo>#<number>)."},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"}
+      }
+    },
+    "instructionList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "instruction_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S", "description": "Read one instruction with a page of its recorded applications."},
+        "include_cancelled": {"type": "boolean"},
+        "after_id": {"type": "string", "minLength": 1, "maxLength": 4096,
+                     "description": "The next_cursor of the previous page (get_project_workers convention)."}
+      }
+    },
+    "instructionCancel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instruction_id"],
+      "properties": {
+        "instruction_id": {"$ref": "#/$defs/id"}
+      }
+    },
+    "instruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "instructionId", "state", "routerConversationId", "sourceTurnId",
+                   "sourceProjectionRevision", "text", "label", "projectPath", "thread", "createdAt", "cancelledAt"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"type": "integer", "minimum": 1},
+        "instructionId": {"$ref": "#/$defs/id"},
+        "state": {"enum": ["active", "paused", "cancelled"],
+          "description": "Only an active instruction can be applied. The owner pauses and resumes it; cancellation is final."},
+        "routerConversationId": {"$ref": "#/$defs/id"},
+        "sourceTurnId": {"$ref": "#/$defs/id"},
+        "sourceProjectionRevision": {"type": "integer", "minimum": 0},
+        "text": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1, "maxLength": 120},
+        "projectPath": {"anyOf": [{"$ref": "#/$defs/projectPath"}, {"type": "null"}]},
+        "thread": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 512}, {"type": "null"}]},
+        "createdAt": {"type": "integer", "minimum": 0},
+        "cancelledAt": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "pausedAt": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}],
+          "description": "When the owner paused it; null after a resume; absent when it was never paused."}
+      }
+    },
+    "instructionApplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "instructionId", "applicationId", "projectPath", "coordinatorConversationId",
+                   "eventId", "triggerTurnId", "note", "commandId", "disposition", "createdAt"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"type": "integer", "minimum": 1},
+        "instructionId": {"$ref": "#/$defs/id"},
+        "applicationId": {"$ref": "#/$defs/id"},
+        "projectPath": {"$ref": "#/$defs/projectPath"},
+        "coordinatorConversationId": {"$ref": "#/$defs/id"},
+        "eventId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "triggerTurnId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "note": {"anyOf": [{"type": "string", "minLength": 1}, {"type": "null"}]},
+        "commandId": {"$ref": "#/$defs/id"},
+        "disposition": {"enum": ["started", "steered", "queued"]},
+        "createdAt": {"type": "integer", "minimum": 0}
+      }
+    },
+    "instructionPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instructions", "nextCursor"],
+      "properties": {
+        "instructions": {"type": "array", "items": {"$ref": "#/$defs/instruction"}},
+        "nextCursor": {"anyOf": [{"$ref": "#/$defs/cursor"}, {"type": "null"}]}
+      }
+    },
+    "instructionDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instruction", "applications", "nextCursor"],
+      "properties": {
+        "instruction": {"$ref": "#/$defs/instruction"},
+        "applications": {"type": "array", "items": {"$ref": "#/$defs/instructionApplication"}},
+        "nextCursor": {"anyOf": [{"$ref": "#/$defs/cursor"}, {"type": "null"}]}
+      }
+    },
+    "routerState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectPath", "conversationId", "revision", "availability", "capabilities", "workerModel"],
+      "properties": {
+        "projectPath": {"type": "string"},
+        "conversationId": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 0},
+        "availability": {"enum": ["unbound", "available", "unavailable"]},
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["assign", "sendMessage", "steerSubagent"],
+          "properties": {
+            "assign": {"const": false},
+            "sendMessage": {"const": false},
+            "steerSubagent": {"type": "boolean"}
+          }
+        },
+        "workerModel": {"type": "string", "description": "Explicit Worker model; empty means the owner's default model."}
+      }
+    },
+    "ensureRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {}
+    },
+    "workerModelRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "workerModel"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S", "description": "Router home or project path of the bound coordinator."},
+        "workerModel": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"}, {"type": "null"}],
+          "description": "Model for delegated Workers; null returns to the owner's default model."}
+      }
+    },
+    "sessionModelRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversationId", "model", "reason"],
+      "properties": {
+        "conversationId": {"$ref": "#/$defs/id"},
+        "model": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"}, {"type": "null"}],
+          "description": "Model for this session's next accepted attempt; null restores its original model."},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "\\S",
+          "description": "Why the owner changed the model (for example a provider content-filter refusal)."}
+      }
+    },
+    "instructionListQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "instructionId": {"$ref": "#/$defs/id"},
+        "includeCancelled": {"enum": ["true", "false"]},
+        "cursor": {"$ref": "#/$defs/cursor"}
+      }
+    },
+    "instructionCancelRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instructionId"],
+      "properties": {
+        "instructionId": {"$ref": "#/$defs/id"}
+      }
+    },
+    "instructionPauseRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instructionId"],
+      "properties": {
+        "instructionId": {"$ref": "#/$defs/id"}
+      }
+    },
+    "instructionResumeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instructionId"],
+      "properties": {
+        "instructionId": {"$ref": "#/$defs/id"}
+      }
+    },
+    "workerModelQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S", "description": "Router home or project path of the bound coordinator."}
+      }
+    },
+    "watchdogSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "after_id": {"type": "string", "minLength": 1, "maxLength": 4096,
+                     "description": "The projects next_cursor of the previous snapshot page."},
+        "signals_after_id": {"type": "string", "minLength": 1, "maxLength": 4096,
+                             "description": "The open_signals_next_cursor of the previous snapshot page."}
+      }
+    },
+    "watchdogResolveSignals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signal_ids", "resolution"],
+      "properties": {
+        "signal_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "resolution": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
+                       "description": "What you verified or did, with the evidence (conversation/Turn IDs)."}
+      }
+    },
+    "watchdogScheduleRecheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["after_minutes", "reason", "idempotency_key"],
+      "properties": {
+        "after_minutes": {"type": "integer", "minimum": 1,
+                          "description": "Minutes from now until the re-check wakes you."},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
+                   "description": "What to re-check and how recovery shows; it returns to you verbatim."},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"}
+      }
+    },
+    "watchdogMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation_id", "content", "idempotency_key"],
+      "properties": {
+        "conversation_id": {"$ref": "#/$defs/id",
+                            "description": "A Project Router, the Global Router or a Worker conversation of the owner."},
+        "content": {"type": "string", "minLength": 1, "pattern": "\\S",
+                    "description": "The finding with its evidence and the suggested correction."},
+        "kind": {"enum": ["reference", "question", "steer"]},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"}
+      }
+    },
+    "watchdogNotifyRouter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message", "idempotency_key"],
+      "properties": {
+        "message": {"type": "string", "minLength": 1, "pattern": "\\S",
+                    "description": "The anomaly, its evidence and what the owner may need to decide or do."},
+        "signal_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S"}
+      }
+    },
+    "watchdogReviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedule": {"type": "string", "minLength": 9, "maxLength": 512, "pattern": "\\S", "default": "7,37 * * * *",
+                     "description": "Five-field local-time cron of the periodic review (lib/scheduler/cron.py). The default reviews every 30 minutes at :07 and :37, off the :00/:30 contention minutes. Omitted, an existing review keeps its cadence and a new one uses the default."}
+      }
+    },
+    "watchdogReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "schedule", "taskId"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedule": {"type": "string", "minLength": 1},
+        "taskId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}],
+                   "description": "The owner-visible scheduled task; null until the review is first configured."}
+      }
+    },
+    "watchdogState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectPath", "conversationId", "revision", "availability", "capabilities", "review"],
+      "properties": {
+        "projectPath": {"type": "string"},
+        "conversationId": {"type": "string"},
+        "revision": {"type": "integer", "minimum": 0},
+        "availability": {"enum": ["unbound", "available", "unavailable"]},
+        "capabilities": {"$ref": "#/$defs/routerState/properties/capabilities"},
+        "review": {"$ref": "#/$defs/watchdogReview"}
+      }
+    },
+    "officeFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One office fact (docs/PROJECT_COORDINATION.md \"Office team facts\"), keyed by the real identifiers it was derived from. The office.fact push frame (docs/contracts/EVENTS.md) carries the same fields plus userId, streamId, seq and state. Never a tool call, title or transcript text.",
+      "required": ["fact", "key", "conversationId"],
+      "properties": {
+        "fact": {"enum": ["busy", "report", "document", "decision", "board", "alarm"]},
+        "key": {"type": "string", "minLength": 1, "maxLength": 8192, "description": "Stable identity: busy:<conversationId>, report:<leadId>:<turnId>, message:<messageId>, result:<assignmentId>:<resultRevision>, document:<assignmentId>:<resultRevision>, question:<conversationId>:<guidanceId>, board:<projectPath>, alarm:<signalId>."},
+        "conversationId": {"$ref": "#/$defs/id"},
+        "source": {"enum": ["attempt", "coordinator_report", "project_message", "assignment_result", "accepted_result", "owner_question", "task_board", "watchdog_signal"]},
+        "projectPath": {"$ref": "#/$defs/projectPath"},
+        "coordinatorId": {"$ref": "#/$defs/id", "description": "The lead of a delegated Worker."},
+        "turnId": {"$ref": "#/$defs/id"},
+        "ordinal": {"type": "integer", "minimum": 0},
+        "attemptId": {"$ref": "#/$defs/id"},
+        "assignmentId": {"$ref": "#/$defs/id"},
+        "messageId": {"$ref": "#/$defs/id"},
+        "senderId": {"$ref": "#/$defs/id"},
+        "guidanceId": {"$ref": "#/$defs/id"},
+        "signalId": {"$ref": "#/$defs/id"},
+        "revision": {"type": "integer", "minimum": 0},
+        "reportKind": {"enum": ["progress", "decision", "blocked", "delivery"]},
+        "unread": {"type": "boolean"},
+        "blocking": {"type": "boolean"}
+      }
+    },
+    "officeFactsCoverage": {
+      "enum": ["complete", "newest_page", "unavailable", "unsupported"],
+      "description": "complete: every fact of the source; newest_page: the newest history page the office reads; unavailable: the last read failed, the previous facts stand; unsupported: this build does not derive the source, so keep its own reads."
+    },
+    "officeFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/v4/router/office: the owner's office facts. Apply office.fact frames with this streamId and seq == last + 1; a gap, another streamId or a reconnected push socket means read this again.",
+      "required": ["contract", "streamId", "seq", "facts", "coverage"],
+      "properties": {
+        "contract": {"const": "tofu.office-facts/v1"},
+        "streamId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "seq": {"type": "integer", "minimum": 0},
+        "facts": {"type": "array", "items": {"$ref": "#/$defs/officeFact"}},
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["busy", "reports", "decisions", "documents", "boards", "alarms"],
+          "properties": {
+            "busy": {"$ref": "#/$defs/officeFactsCoverage"},
+            "reports": {"$ref": "#/$defs/officeFactsCoverage"},
+            "decisions": {"$ref": "#/$defs/officeFactsCoverage"},
+            "documents": {"$ref": "#/$defs/officeFactsCoverage"},
+            "boards": {"$ref": "#/$defs/officeFactsCoverage"},
+            "alarms": {"$ref": "#/$defs/officeFactsCoverage"}
+          }
+        }
+      }
+    },
+    "watchdogTurnErrorKind": {
+      "description": "Error kinds (lib/error_envelope KINDS) of a failed Turn that are infrastructure faults: provider/API, transport, runtime and storage failures, and the state recovery around them. Only these open a Watchdog turn signal; task outcomes (tool loops, content filters, Stop, human withdrawal) stay with the Coordinator that already wakes on Worker settlement.",
+      "enum": ["quota", "ratelimit", "permission", "oauth_reauth", "no_slot", "dispatch_exhausted", "timeout",
+               "network", "endpoint_unreachable", "upstream_error", "premature_close", "abnormal_stop",
+               "server_offline", "server_busy", "task_start_failed", "event_delivery_failed", "worker_lost",
+               "internal", "generic", "storage_fence", "storage_unavailable", "dispatch_authority_lost",
+               "execution_token_usage_unknown"]
+    },
+    "watchdogUnhealthyChannelState": {
+      "description": "Channel account states (channels_v1 AccountState) that open a Watchdog channel signal.",
+      "enum": ["disconnected", "needs_login", "runtime_unavailable", "kicked", "error"]
+    },
+    "watchdogSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "signalId", "source", "state", "subject", "error", "createdAt",
+                   "resolvedAt", "resolution"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"type": "integer", "minimum": 1},
+        "signalId": {"$ref": "#/$defs/id"},
+        "source": {"enum": ["turn", "recovery", "outbox", "channel", "compute", "quota", "client", "storage", "patrol"]},
+        "state": {"enum": ["open", "resolved"]},
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role"],
+          "properties": {
+            "role": {"enum": ["global_router", "project_router", "worker", "watchdog", "dispatch", "outbox", "channel", "compute", "quota", "browser", "storage"]},
+            "conversationId": {"$ref": "#/$defs/id"},
+            "turnId": {"$ref": "#/$defs/id"},
+            "attemptId": {"$ref": "#/$defs/id"},
+            "projectPath": {"$ref": "#/$defs/projectPath"},
+            "assignmentId": {"$ref": "#/$defs/id"},
+            "outboxItemId": {"$ref": "#/$defs/id"},
+            "thread": {"type": "string", "minLength": 1, "maxLength": 512},
+            "channel": {"type": "string", "minLength": 1, "maxLength": 64},
+            "runId": {"$ref": "#/$defs/id"},
+            "operationId": {"$ref": "#/$defs/id"},
+            "keyTail": {"type": "string", "minLength": 1, "maxLength": 4,
+                        "description": "quota: the AppId (key) by its last four characters, as the provider's own 429 masks it; never the key."},
+            "model": {"type": "string", "minLength": 1, "maxLength": 160,
+                      "description": "quota: the wire model whose per-AppId minute limit rejected conversation rounds."},
+            "pageInstanceId": {"$ref": "#/$defs/id",
+                               "description": "client: the crashed browser page instance (client_crash_v1), the identity of one crash episode."},
+            "patrol": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+                       "description": "patrol: the off-host liveness patrol that published the flag (docs/COMPUTE_PATROL.md)."},
+            "jobId": {"$ref": "#/$defs/id",
+                      "description": "patrol: the external compute job (a Hope app id) the flag is about."},
+            "queue": {"type": "string", "minLength": 1, "maxLength": 512,
+                      "description": "patrol: the job's queue."}
+          }
+        },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "detail"],
+          "properties": {
+            "kind": {"type": "string", "minLength": 1, "maxLength": 64},
+            "detail": {"type": "string", "maxLength": 4000},
+            "hint": {"type": "string", "maxLength": 4000}
+          }
+        },
+        "createdAt": {"type": "integer", "minimum": 0},
+        "resolvedAt": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "resolution": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 2000}, {"type": "null"}]}
+      }
+    },
+    "ownerDelegationReason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
+      "description": "Why you act for the owner, naming what they asked for; it is kept in the owner's audit log."},
+    "ownerDelegationTrigger": {
+      "description": "The owner trigger of an action under the owner's delegation (docs/ROUTER.md R9): exactly one of source_turn_id or source_steer_id names the owner's message, or instruction_id names an active standing instruction together with exactly one of event_id or source_turn_id for what triggered it. Provider tool schemas cannot carry this cross-field rule, so the delegated tools state it in their descriptions and lib.router.owner_delegation.resolve_trigger validates it before any effect; a violation is a recorded refusal (owner_delegation_trigger_missing when no trigger is named, else owner_delegation_trigger_malformed).",
+      "type": "object",
+      "properties": {
+        "source_turn_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_turn_id"},
+        "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
+        "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
+        "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"}
+      },
+      "if": {"required": ["instruction_id"]},
+      "then": {
+        "description": "With instruction_id, give exactly one of event_id or source_turn_id (the event that triggered the standing instruction, or the Turn that carried it) and no source_steer_id.",
+        "oneOf": [{"required": ["event_id"]}, {"required": ["source_turn_id"]}],
+        "not": {"required": ["source_steer_id"]}
+      },
+      "else": {
+        "description": "Name the owner's message that asks for this with exactly one of source_turn_id or source_steer_id, or an active standing instruction with instruction_id; event_id only accompanies instruction_id.",
+        "oneOf": [{"required": ["source_turn_id"]}, {"required": ["source_steer_id"]}],
+        "not": {"required": ["event_id"]}
+      }
+    },
+    "ownerDelegationAuthority": {
+      "description": "Act under the owner's delegation (docs/ROUTER.md R9). Name exactly one trigger: source_turn_id (the owner's own message of your current request), source_steer_id (an owner message sent while you were replying) or instruction_id with exactly one of event_id or source_turn_id (an active standing instruction and what triggered it). Any other combination is refused before anything runs (ownerDelegationTrigger).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {
+        "reason": {"$ref": "#/$defs/ownerDelegationReason"},
+        "source_turn_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "Without instruction_id: the Turn ID of the owner's own message in your current request that asks for this. With instruction_id: the Turn that carried the triggering event, instead of event_id."},
+        "source_steer_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "The steer_id of an owner message sent while you were replying that asks for this. Never combined with source_turn_id, instruction_id or event_id."},
+        "instruction_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "An active standing instruction of the owner that covers this. Give it with exactly one of event_id or source_turn_id naming what triggered it; instruction_id alone is refused before anything runs."},
+        "event_id": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S",
+          "description": "With instruction_id: the event that triggered it, instead of source_turn_id. Never without instruction_id."}
+      }
+    },
+    "restartServer": {
+      "description": "restart_server arguments (docs/ROUTER.md R9). The trigger fields follow ownerDelegationTrigger, which lib.router.owner_delegation.resolve_trigger enforces before anything runs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "idempotency_key"],
+      "properties": {
+        "reason": {"$ref": "#/$defs/ownerDelegationReason"},
+        "source_turn_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_turn_id"},
+        "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
+        "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
+        "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "interrupt_running_conversations": {"type": "boolean", "default": false,
+          "description": "The Settings restart's force: true interrupts other running conversations (they resume from their checkpoint by themselves afterwards). Set it only when the owner asked to restart even though work is running. Protected steps (a git_land landing or an export) refuse the restart either way."},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
+          "description": "One restart per key: a retry with the same key returns the recorded restart and never restarts again. A new owner request needs a new key."}
+      }
+    },
+    "ownerSettings": {
+      "description": "The Global Router reads or changes a reversible owner setting through the Settings page's own Save and read, under the owner's delegation (ROUTER.md R9, R11). list/get read; set writes one settings key; channel reads or toggles a messaging channel after reporting its preconditions. Class (d) human-only actions and class (b)/(c) irreversible or external actions are never performed.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": {"enum": ["list", "get", "set", "channel"],
+                   "description": "list: the reversible settings keys and their current values; get: one key; set: write one key through the Settings save backend; channel: read (enabled omitted) or toggle a messaging channel (enabled given), reporting preconditions first."},
+        "path": {"type": "string", "minLength": 1,
+                 "description": "The dotted settings key for get/set: model_defaults.default_model, model_defaults.fallback_model, hidden_models, hidden_ig_models, search.skip_domains or proxy_bypass_domains. Any other key returns needs_owner_action (secret-bearing: mt_provider, feishu, proxy, search.gateway, providers), owner_settings_not_delegated (destructive or external) or owner_settings_unsupported."},
+        "value": {"description": "The new value for set. Its type and validation are exactly the Settings backend's; invalid values return the backend's own error."},
+        "channel": {"type": "string", "enum": ["dx", "github", "wecom", "qq", "wechat"],
+                    "description": "For action=channel: which messaging channel to read or toggle."},
+        "enabled": {"type": "boolean",
+                    "description": "For action=channel: the desired enabled state. Omit to read status without changing anything. A relaunch that would push a 大象 login card is never triggered automatically, and a kicked 大象 account reconnects only on the owner's own message; both return needs_owner_action."},
+        "reason": {"$ref": "#/$defs/ownerDelegationReason"},
+        "source_turn_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_turn_id"},
+        "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
+        "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
+        "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
+                            "description": "One setting change per key: a retry with the same key returns the recorded change and never applies it twice."}
+      }
+    },
+    "projectRepair": {
+      "description": "repair_project arguments (docs/ROUTER.md R9 project_repair, owner decision 2026-11-12). The trigger fields follow ownerDelegationTrigger, which lib.router.owner_delegation.resolve_trigger enforces before anything runs; the trigger's owner words become the repair conversation's request and the note travels with them as nonhuman evidence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_path", "title", "note", "reason", "idempotency_key"],
+      "properties": {
+        "project_path": {"type": "string", "minLength": 1, "maxLength": 4096, "pattern": "\\S",
+                         "description": "Absolute local path of the project whose Project Router cannot run."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S",
+                  "description": "Title of the repair conversation, naming the failure it repairs."},
+        "note": {"type": "string", "minLength": 1, "pattern": "\\S",
+                 "description": "The repair brief: the failure with its evidence (conversation, Turn, error, log lines), what to fix and how to verify it. Delivered after the owner's words as labelled nonhuman evidence, never as part of their request."},
+        "reason": {"$ref": "#/$defs/ownerDelegationReason"},
+        "source_turn_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_turn_id"},
+        "source_steer_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/source_steer_id"},
+        "instruction_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/instruction_id"},
+        "event_id": {"$ref": "#/$defs/ownerDelegationAuthority/properties/event_id"},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S",
+                            "description": "One repair conversation per key: a retry with the same key returns the recorded repair and never starts a second one."}
+      }
+    },
+    "ownerDelegationProvenance": {
+      "description": "Who made an owner decision (lib/lifecycle_approval.py). human-ui comes only from the owner's same-origin browser request; authenticated-request is any other authenticated owner request (revocation only).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["human-ui", "authenticated-request"]},
+        "ownerUserId": {"type": "integer", "minimum": 1},
+        "subject": {"type": "string"},
+        "credential": {"type": "string"},
+        "browser": {"type": "string", "description": "Same-origin browser evidence: fetch-metadata or origin; empty when absent."},
+        "userAgent": {"type": "string"},
+        "remoteAddr": {"type": "string"}
+      }
+    },
+    "ownerDelegationRouter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "conversationId", "bindingRevision", "tenant"],
+      "properties": {
+        "kind": {"const": "global_router"},
+        "conversationId": {"$ref": "#/$defs/id"},
+        "bindingRevision": {"type": "integer", "minimum": 1},
+        "tenant": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "turnId": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "attemptId": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "ownerDelegationGrant": {
+      "description": "The owner's delegation to their Global Router, held by the lifecycle approval gate. A grant names its grantee and never carries over to a replaced router. assurance is authenticated for a UI session and advisory in open mode, which has no authentication.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "state", "revision", "coverage", "scopes", "grantee", "grantedAt",
+                   "grantedBy", "assurance", "revokedAt", "revokedBy", "updatedAt"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"type": "integer", "minimum": 1},
+        "state": {"enum": ["granted", "revoked"]},
+        "revision": {"type": "integer", "minimum": 0},
+        "coverage": {"enum": ["full", "enumerated"],
+                     "description": "full: every scope the delegation can cover, including one added later; the owner's switch grants it. enumerated: exactly the scopes listed when it was granted, never more."},
+        "scopes": {"type": "array", "items": {"enum": ["restart", "conversation_control", "owner_settings", "project_lifecycle", "project_repair", "scheduler"]},
+                   "description": "The scopes this grant covers now (lib.lifecycle_approval.covered_scopes): restart, conversation_control (Continue, checkpoint resume and Stop of an exact Attempt), owner_settings (reversible owner settings, R11), project_lifecycle (creating and configuring projects, R12), project_repair (one repair conversation in a project whose Project Router cannot run) and scheduler (pause or resume an owner, service or system scheduled task)."},
+        "grantee": {"anyOf": [{"$ref": "#/$defs/ownerDelegationRouter"}, {"type": "null"}]},
+        "grantedAt": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]},
+        "grantedBy": {"anyOf": [{"$ref": "#/$defs/ownerDelegationProvenance"}, {"type": "null"}]},
+        "assurance": {"anyOf": [{"enum": ["authenticated", "advisory"]}, {"type": "null"}]},
+        "revokedAt": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]},
+        "revokedBy": {"anyOf": [{"$ref": "#/$defs/ownerDelegationProvenance"}, {"type": "null"}]},
+        "updatedAt": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "ownerDelegatedAction": {
+      "description": "One audit record of an action the Global Router took, or tried, under the owner's delegation: who (requester), why (reason, trigger), when and the outcome (status, code, detail).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "owner", "scope", "requester", "reason", "trigger", "target", "grantRevision",
+                   "grantedBy", "requestedAt", "status", "code", "detail", "updatedAt"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "owner": {"type": "integer", "minimum": 1},
+        "scope": {"enum": ["restart", "conversation_control", "owner_settings", "project_lifecycle", "project_repair", "scheduler"]},
+        "requester": {"$ref": "#/$defs/ownerDelegationRouter"},
+        "reason": {"type": "string"},
+        "trigger": {"anyOf": [{
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "turnId", "text"],
+          "properties": {
+            "kind": {"enum": ["owner_message", "owner_steer", "standing_instruction"]},
+            "turnId": {"$ref": "#/$defs/id"},
+            "steerId": {"$ref": "#/$defs/id"},
+            "instructionId": {"$ref": "#/$defs/id"},
+            "eventId": {"$ref": "#/$defs/id"},
+            "triggerTurnId": {"$ref": "#/$defs/id"},
+            "text": {"type": "string", "minLength": 1, "description": "The owner's own words that ask for this."}
+          }}, {"type": "null"}]},
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {"enum": ["server", "conversation", "owner_settings", "project", "scheduled_task"]},
+            "conversationId": {"$ref": "#/$defs/id"},
+            "turnId": {"$ref": "#/$defs/id"},
+            "attemptId": {"$ref": "#/$defs/id"},
+            "taskId": {"$ref": "#/$defs/id"},
+            "taskScope": {"enum": ["owner", "service", "system"]},
+            "action": {"type": "string", "minLength": 1},
+            "path": {"type": "string", "description": "A settings key path, or an absolute project path."},
+            "channel": {"type": "string", "description": "A messaging channel id for a channel toggle."},
+            "folderId": {"$ref": "#/$defs/id"},
+            "model": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}],
+              "description": "set_model only: the model chosen for the session's next attempt; null restores its original model (docs/ROUTER.md R5)."}
+          }
+        },
+        "grantRevision": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "grantedBy": {"anyOf": [{"$ref": "#/$defs/ownerDelegationProvenance"}, {"type": "null"}]},
+        "requestedAt": {"type": "number", "minimum": 0},
+        "acceptedAt": {"type": "number", "minimum": 0},
+        "interrupted": {"type": "array", "items": {"type": "string"},
+                        "description": "Conversations a restart interrupted because the owner asked for it."},
+        "status": {"enum": ["accepted", "restarting", "completed", "refused", "failed"]},
+        "code": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "detail": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "updatedAt": {"type": "number", "minimum": 0}
+      }
+    },
+    "ownerDelegationState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grant", "active", "router", "actions"],
+      "properties": {
+        "grant": {"$ref": "#/$defs/ownerDelegationGrant"},
+        "active": {"type": "boolean", "description": "Granted to the owner's current Global Router."},
+        "router": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["conversationId", "revision", "availability"],
+          "properties": {
+            "conversationId": {"type": "string"},
+            "revision": {"type": "integer", "minimum": 0},
+            "availability": {"enum": ["unbound", "available", "unavailable"]}
+          }
+        },
+        "actions": {"type": "array", "items": {"$ref": "#/$defs/ownerDelegatedAction"},
+                    "description": "Retained delegated actions, newest first; audit.log keeps every event."}
+      }
+    },
+    "ownerDelegationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["granted"],
+      "properties": {
+        "granted": {"type": "boolean", "description": "true grants (only the owner acting in the Tofu UI); false revokes at once."}
+      }
+    },
+    "portfolioValueUnit": {
+      "enum": ["cny_per_day", "hours_per_week", "failures_per_week", "claims_settled"],
+      "description": "Units the owner values (docs/ROUTER.md R10, portfolio): cost reduced (CNY per day), time saved (owner or agent hours per week), reliability gained (failed turns or incidents avoided per week), evidence gained (owner decisions or report claims settled by measurement). Ranking compares value only within one unit."
+    },
+    "portfolioValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "unit", "probability", "basis"],
+      "properties": {
+        "amount": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000000000},
+        "unit": {"$ref": "#/$defs/portfolioValueUnit"},
+        "probability": {"type": "number", "exclusiveMinimum": 0, "maximum": 1,
+                        "description": "Chance the value materializes once validated; the expected value is amount x probability."},
+        "basis": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
+                  "description": "How the amount was derived and the measured inputs it rests on."}
+      }
+    },
+    "portfolioCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gpuHours", "modelCny", "wallHours"],
+      "properties": {
+        "gpuHours": {"type": "number", "minimum": 0, "maximum": 1000000000},
+        "modelCny": {"type": "number", "minimum": 0, "maximum": 1000000000000},
+        "wallHours": {"type": "number", "minimum": 0, "maximum": 1000000000}
+      }
+    },
+    "portfolioKillCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metric", "comparator", "threshold", "withinHours"],
+      "description": "Falsifiable stop rule: the initiative closes as a negative result when its measured metric satisfies metric <comparator> threshold, or when no measured outcome arrives within withinHours of its start.",
+      "properties": {
+        "metric": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S",
+                   "description": "What the validation measures, with its unit."},
+        "comparator": {"enum": ["<", "<=", ">", ">=", "=="]},
+        "threshold": {"type": "number"},
+        "withinHours": {"type": "number", "exclusiveMinimum": 0, "maximum": 8760}
+      }
+    },
+    "portfolioApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "reason", "grantedTurnId", "grantedAt"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
+                   "description": "Why only the owner can decide (a new external or irreversible action, a quality or cost trade-off, a production restart), or why the standing authority covers it."},
+        "grantedTurnId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}],
+                          "description": "The owner's own Global Router message that approved it; only a genuine human Turn sets it."},
+        "grantedAt": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "portfolioInitiative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startedAt", "startedBy", "reviewId", "promise", "trigger", "admission", "commandId",
+                   "disposition", "dispatchedAt", "request"],
+      "properties": {
+        "startedAt": {"type": "integer", "minimum": 0},
+        "startedBy": {"enum": ["review", "router"]},
+        "reviewId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+        "trigger": {"type": "string", "pattern": "^portfolio:po-[0-9a-f]{32}:[0-9]+$",
+                    "description": "The start attempt this initiative forwards: its forward is idempotent on retry and distinct from an earlier attempt the Project Router did not accept."},
+        "admission": {"$ref": "#/$defs/portfolioAdmission"},
+        "promise": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["amount", "unit", "probability", "metric", "dueAt"],
+          "description": "The expected outcome frozen before the start: the ledger's promised side.",
+          "properties": {
+            "amount": {"type": "number", "exclusiveMinimum": 0},
+            "unit": {"$ref": "#/$defs/portfolioValueUnit"},
+            "probability": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+            "metric": {"type": "string", "minLength": 1, "maxLength": 500},
+            "dueAt": {"type": "integer", "minimum": 0}
+          }
+        },
+        "commandId": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 512}, {"type": "null"}],
+                      "description": "The deterministic forward command of the start; a retried start delivers at most once."},
+        "disposition": {"anyOf": [{"enum": ["started", "steered", "queued"]}, {"type": "null"}],
+                        "description": "null until the Project Router accepted the forward: an unconfirmed start the next review repeats with the same command."},
+        "dispatchedAt": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "request": {
+          "anyOf": [{"type": "null"}, {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["conversationId", "bindingRevision", "inputTurnId"],
+            "properties": {
+              "conversationId": {"$ref": "#/$defs/id"},
+              "bindingRevision": {"type": "integer", "minimum": 1},
+              "inputTurnId": {"$ref": "#/$defs/id"}
+            }
+          }],
+          "description": "The Project Router request this initiative opened: its source Turn names the usage account the digest reports as its cost."
+        }
+      }
+    },
+    "portfolioAdmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rank", "ranked", "score", "valueShare", "dominantResourceShare", "authority", "resources"],
+      "description": "Why this start was admitted, recorded before its forward: its place in the review's ranking, the authority applied and the resources measured available.",
+      "properties": {
+        "rank": {"type": "integer", "minimum": 1},
+        "ranked": {"type": "integer", "minimum": 1},
+        "score": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}],
+                  "description": "valueShare / dominantResourceShare; null for a validation with no measured cost (ranked ahead of every priced one)."},
+        "valueShare": {"type": "number", "minimum": 0, "maximum": 1},
+        "dominantResourceShare": {"type": "number", "minimum": 0, "maximum": 1},
+        "authority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": {"enum": ["instruction", "approval"]},
+            "id": {"$ref": "#/$defs/id", "description": "The standing instruction applied, or the owner's approving Turn."}
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "observedAt"],
+          "properties": {
+            "model": {"type": "string", "minLength": 1, "maxLength": 512,
+                      "description": "The Project Router's model, which had an admissible route."},
+            "observedAt": {"type": "integer", "minimum": 0},
+            "gpuQueue": {"type": "string", "minLength": 1, "maxLength": 256,
+                         "description": "The GPU queue that showed the requested GPUs available."}
+          }
+        }
+      }
+    },
+    "portfolioDeferral": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "detail", "observedAt", "retryAt", "observed"],
+      "description": "The latest measured reason a review did not start a proposal. A fact, never an estimate: the review records what it read and the next review reads again.",
+      "properties": {
+        "reason": {"enum": ["provider_rate_limited", "model_route_unavailable", "gpu_queue_full",
+                            "gpu_queue_unreadable", "start_failed"],
+                   "description": "provider_rate_limited: every route of the Project Router's model is held. model_route_unavailable: no route can serve it. gpu_queue_full / gpu_queue_unreadable: the named queue showed too few GPUs, or could not be read. start_failed: the Project Router accepted nothing (its executor could not start, Plan mode, a missing conversation), so it stays a proposal."},
+        "detail": {"type": "string", "maxLength": 2000},
+        "observedAt": {"type": "integer", "minimum": 0},
+        "retryAt": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}],
+                    "description": "The reset the provider itself named (epoch ms); no review asks before it. null: the next review measures again."},
+        "observed": {"type": "object", "description": "What was read: route holds, queue rows, or the refused disposition."}
+      }
+    },
+    "portfolioGpuQueue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connection", "queue", "gpuType", "gpuCount"],
+      "description": "Where a GPU validation runs; its real state admits the start.",
+      "properties": {
+        "connection": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+                       "description": "The registered read-only compute connection that exposes get_queue_resource."},
+        "queue": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+        "gpuType": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 200}, {"type": "null"}],
+                    "description": "The queue's GPU name the job needs; null accepts any."},
+        "gpuCount": {"type": "integer", "minimum": 1, "maximum": 100000}
+      }
+    },
+    "portfolioOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verdict", "reason", "amount", "metricValue", "evidence", "note", "closedAt"],
+      "properties": {
+        "verdict": {"enum": ["delivered", "negative", "dropped"]},
+        "reason": {"enum": ["measured", "kill_condition", "no_value", "no_outcome_by_due", "authority_refused",
+                            "expired", "dropped"]},
+        "amount": {"anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}],
+                   "description": "Measured value in the promised unit; null when nothing was measured."},
+        "metricValue": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        "evidence": {"type": "array", "maxItems": 50, "items": {"type": "string", "minLength": 1, "maxLength": 2000}},
+        "note": {"type": "string", "maxLength": 4000},
+        "closedAt": {"type": "integer", "minimum": 0}
+      }
+    },
+    "portfolioOpportunity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "owner", "opportunityId", "state", "projectPath", "title", "problem", "kind", "source",
+                   "evidence", "value", "validation", "approval", "dependencies", "killCondition", "deadline",
+                   "instructionId", "createdAt", "updatedAt", "initiative", "outcome", "deferral", "startAttempt"],
+      "properties": {
+        "version": {"const": 1},
+        "owner": {"type": "integer", "minimum": 1},
+        "opportunityId": {"$ref": "#/$defs/portfolioOpportunityId"},
+        "state": {"enum": ["proposed", "started", "delivered", "negative", "dropped"]},
+        "projectPath": {"$ref": "#/$defs/projectPath"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+        "problem": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S"},
+        "kind": {"enum": ["project", "cross_project"]},
+        "source": {"$ref": "#/$defs/portfolioSource"},
+        "evidence": {"$ref": "#/$defs/portfolioEvidence"},
+        "value": {"$ref": "#/$defs/portfolioValue"},
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["step", "cost", "gpuQueue"],
+          "properties": {
+            "step": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"},
+            "cost": {"$ref": "#/$defs/portfolioCost"},
+            "gpuQueue": {"anyOf": [{"$ref": "#/$defs/portfolioGpuQueue"}, {"type": "null"}],
+                         "description": "Required when the validation needs GPU hours."}
+          }
+        },
+        "approval": {"$ref": "#/$defs/portfolioApproval"},
+        "dependencies": {"type": "array", "maxItems": 50, "uniqueItems": true,
+                         "items": {"$ref": "#/$defs/portfolioOpportunityId"},
+                         "description": "Opportunities that must be delivered before this one starts."},
+        "killCondition": {"$ref": "#/$defs/portfolioKillCondition"},
+        "deadline": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}],
+                     "description": "When the opportunity's value expires (epoch ms); a proposal past it closes as dropped (expired)."},
+        "instructionId": {"anyOf": [{"$ref": "#/$defs/id"}, {"type": "null"}],
+                          "description": "The standing instruction a start applies (R4); without one nothing starts."},
+        "createdAt": {"type": "integer", "minimum": 0},
+        "updatedAt": {"type": "integer", "minimum": 0},
+        "initiative": {"anyOf": [{"$ref": "#/$defs/portfolioInitiative"}, {"type": "null"}]},
+        "outcome": {"anyOf": [{"$ref": "#/$defs/portfolioOutcome"}, {"type": "null"}]},
+        "deferral": {"anyOf": [{"$ref": "#/$defs/portfolioDeferral"}, {"type": "null"}]},
+        "startAttempt": {"type": "integer", "minimum": 0,
+                         "description": "Start attempts the Project Router did not accept; the next start forwards attempt startAttempt."}
+      }
+    },
+    "portfolioOpportunityId": {"type": "string", "pattern": "^po-[0-9a-f]{32}$"},
+    "portfolioSource": {
+      "enum": ["repeated_failure", "stale_project", "unverified_claim", "user_friction", "evaluation_gap",
+               "reusable_component", "deadline", "report_contradiction"]
+    },
+    "portfolioEvidence": {
+      "type": "array", "minItems": 1, "maxItems": 50,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"},
+      "description": "Paths, commits, Turn IDs or result files the claim rests on."
+    },
+    "routerPortfolio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation"],
+      "properties": {
+        "operation": {"enum": ["list", "propose", "approve", "start", "settle"],
+                      "description": "list: the ranked registry and ledger. propose: record a new opportunity (idempotency_key) or revise a proposed one (opportunity_id). approve: record the owner's approval from their own message of your current request (source_turn_id). start: start a startable opportunity now, exactly as the scheduled review would. settle: record a started initiative's measured outcome, or drop a proposal (drop_reason)."},
+        "opportunity_id": {"$ref": "#/$defs/portfolioOpportunityId"},
+        "idempotency_key": {"$ref": "#/$defs/id", "description": "Identity of a new opportunity; retrying the same key never records two."},
+        "project_path": {"$ref": "#/$defs/projectPath", "description": "The bound project that does the work; cross-project platform work belongs to the project that owns the platform."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^\\r\\n]*\\S[^\\r\\n]*$"},
+        "problem": {"type": "string", "minLength": 1, "maxLength": 4000, "pattern": "\\S"},
+        "kind": {"enum": ["project", "cross_project"]},
+        "source": {"$ref": "#/$defs/portfolioSource"},
+        "evidence": {"$ref": "#/$defs/portfolioEvidence"},
+        "value": {"$ref": "#/$defs/portfolioValue"},
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["step", "gpu_hours", "model_cny", "wall_hours"],
+          "description": "The cheapest step that proves or kills the value, and its expected cost.",
+          "properties": {
+            "step": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"},
+            "gpu_hours": {"type": "number", "minimum": 0, "maximum": 1000000000},
+            "model_cny": {"type": "number", "minimum": 0, "maximum": 1000000000000},
+            "wall_hours": {"type": "number", "minimum": 0, "maximum": 1000000000},
+            "gpu_queue": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["connection", "queue", "gpu_count"],
+              "description": "Required when gpu_hours > 0: the queue whose real state admits the start (a start waits until it shows gpu_count GPUs available).",
+              "properties": {
+                "connection": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$",
+                               "description": "The registered read-only compute connection that exposes get_queue_resource."},
+                "queue": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"},
+                "gpu_type": {"type": "string", "minLength": 1, "maxLength": 200},
+                "gpu_count": {"type": "integer", "minimum": 1, "maximum": 100000}
+              }
+            }
+          }
+        },
+        "approval_required": {"type": "boolean", "description": "true when only the owner can decide: a new external or irreversible action, a quality or cost trade-off, a production restart."},
+        "approval_reason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S"},
+        "dependencies": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"$ref": "#/$defs/portfolioOpportunityId"}},
+        "kill_condition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["metric", "comparator", "threshold", "within_hours"],
+          "properties": {
+            "metric": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "\\S"},
+            "comparator": {"enum": ["<", "<=", ">", ">=", "=="]},
+            "threshold": {"type": "number"},
+            "within_hours": {"type": "number", "exclusiveMinimum": 0, "maximum": 8760}
+          }
+        },
+        "deadline": {"type": "string", "minLength": 10, "maxLength": 64, "description": "ISO date-time after which the opportunity has no value."},
+        "instruction_id": {"$ref": "#/$defs/id", "description": "The active standing instruction whose authority a start applies."},
+        "source_turn_id": {"$ref": "#/$defs/id", "description": "approve: the owner's own message of your current request that approves it."},
+        "outcome": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["amount", "evidence"],
+          "description": "settle: what was measured, in the promised unit.",
+          "properties": {
+            "amount": {"type": "number", "minimum": 0, "maximum": 1000000000000},
+            "metric_value": {"type": "number", "description": "The kill-condition metric as measured."},
+            "evidence": {"$ref": "#/$defs/portfolioEvidence"},
+            "note": {"type": "string", "maxLength": 4000}
+          }
+        },
+        "drop_reason": {"type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S",
+                        "description": "settle: why a proposal is dropped, or why a started initiative ends without a measurement."},
+        "cursor": {"$ref": "#/$defs/cursor", "description": "list: the closed_cursor of the previous page of closed initiatives."}
+      }
+    },
+    "portfolioReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "schedule", "taskId", "lastRun", "lastResult"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "schedule": {"type": "string", "default": "30 9 * * *",
+                     "description": "Local-time cron of the portfolio review: daily after quiet hours end, so a started initiative reports in the owner's day."},
+        "taskId": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "lastRun": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "lastResult": {"anyOf": [{"type": "string"}, {"type": "null"}]}
+      }
+    },
+    "portfolioLedgerRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "initiatives", "running", "delivered", "negative", "promised", "measured"],
+      "properties": {
+        "unit": {"$ref": "#/$defs/portfolioValueUnit"},
+        "initiatives": {"type": "integer", "minimum": 0},
+        "running": {"type": "integer", "minimum": 0},
+        "delivered": {"type": "integer", "minimum": 0},
+        "negative": {"type": "integer", "minimum": 0},
+        "promised": {"type": "number", "minimum": 0, "description": "Sum of amount x probability promised at start over every started initiative."},
+        "measured": {"type": "number", "minimum": 0, "description": "Sum of the measured amounts of delivered initiatives."}
+      }
+    },
+    "portfolioState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review", "counts", "ledger"],
+      "properties": {
+        "review": {"$ref": "#/$defs/portfolioReview"},
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["proposed", "started", "delivered", "negative", "dropped", "awaitingOwner"],
+          "properties": {
+            "proposed": {"type": "integer", "minimum": 0},
+            "started": {"type": "integer", "minimum": 0},
+            "delivered": {"type": "integer", "minimum": 0},
+            "negative": {"type": "integer", "minimum": 0},
+            "dropped": {"type": "integer", "minimum": 0},
+            "awaitingOwner": {"type": "integer", "minimum": 0, "description": "Proposals that only start after the owner approves them."}
+          }
+        },
+        "ledger": {"type": "array", "items": {"$ref": "#/$defs/portfolioLedgerRow"}}
+      }
+    },
+    "portfolioReviewRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean", "description": "false pauses automatic starts; started work keeps its authority. true resumes them."}
+      }
+    },
+    "routerProjectsQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {
+        "cursor": {"$ref": "#/$defs/cursor"}
+      }
+    },
+    "routerProjectSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One bound project of get_router_projects in wire form; the router home and the Watchdog are not projects. Activity facts exist only for an available binding and each only when the tool produced it: activityError replaces the facts that could not be read, board and commitment facts need a task board, question facts an open owner question.",
+      "required": ["projectPath", "coordinatorConversationId", "bindingRevision", "availability"],
+      "properties": {
+        "projectPath": {"$ref": "#/$defs/projectPath"},
+        "coordinatorConversationId": {"type": "string"},
+        "bindingRevision": {"type": "integer", "minimum": 0},
+        "availability": {"$ref": "#/$defs/routerState/properties/availability"},
+        "activeWorkers": {"type": "integer", "minimum": 0},
+        "activeRequests": {"type": "integer", "minimum": 0},
+        "workersCoverage": {"enum": ["complete", "newest_page"],
+                            "description": "newest_page: the Worker counts cover only the project's newest dispatch history page."},
+        "lastReport": {
+          "description": "The lead's newest report (project_coordination_v1 reportPointer) and whether the owner has not read it yet; null before the first report.",
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["turnId", "kind", "title", "createdAt", "unread"],
+              "properties": {
+                "turnId": {"$ref": "#/$defs/id"},
+                "kind": {"enum": ["progress", "decision", "blocked", "delivery"]},
+                "title": {"type": "string", "minLength": 1},
+                "createdAt": {"type": "integer", "minimum": 0},
+                "unread": {"type": "boolean"}
+              }
+            },
+            {"type": "null"}
+          ]
+        },
+        "boardSummary": {"type": "string"},
+        "boardRevision": {"type": "integer", "minimum": 1},
+        "openCommitments": {"type": "integer", "minimum": 0},
+        "overdueCommitments": {"type": "integer", "minimum": 0},
+        "overdueTitles": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "openQuestions": {"type": "integer", "minimum": 1},
+        "blockingQuestions": {"type": "integer", "minimum": 0},
+        "oldestQuestionAgeHours": {"type": "integer", "description": "Whole hours since the oldest open question was asked."},
+        "activityError": {"type": "string", "description": "Why this project's activity could not be read; the other projects are unaffected."}
+      }
+    },
+    "routerProjectsPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/v4/router/projects: one page of get_router_projects in wire form. A page can hold fewer projects than its bound, even none, while nextCursor is set; pass nextCursor back as cursor until it is null.",
+      "required": ["projects", "nextCursor"],
+      "properties": {
+        "projects": {"type": "array", "items": {"$ref": "#/$defs/routerProjectSummary"}},
+        "nextCursor": {"anyOf": [{"$ref": "#/$defs/cursor"}, {"type": "null"}]}
+      }
+    }
+  }
+}

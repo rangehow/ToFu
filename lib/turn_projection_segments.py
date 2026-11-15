@@ -1,0 +1,2103 @@
+"""Canonical stable content blocks for every public Turn projection.
+
+Responsibility: derive or repair the ordered ``segments`` document at producer
+write boundaries and for settled legacy reads. Live public reads preserve the
+exact committed patch base; normalization is not a revision-free read repair.
+This module also derives the request-local browser reference view from the same
+authority without mutating it, and restores what that view omitted when a
+client writes an edited copy back (``projection_with_restored_browser_evidence``). Active tool documents are restored before replay;
+active normalization and lazy detail remain disabled. Provider replay evidence
+is omitted from active Turns only by path (``providerReplayPayload=none``), with
+the same transform applied to every stream patch
+(``projection_patch_without_provider_replay``).
+This module is pure: storage adapters decide
+when a normalized document is persisted, while HTTP/application adapters use
+the same functions for archived rows and snapshot representations.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Mapping
+import hashlib
+from typing import Any
+from urllib.parse import quote
+
+import orjson
+
+from lib.attachments import canonical_image_ref
+from lib.conversation_sync.settled_rows import (
+    SettledDict,
+    memo_get,
+    memo_put,
+    settle,
+    settle_unless_same,
+)
+from lib.tasks_pkg.segments import (
+    assemble_segments,
+    is_synthetic_inbox_round,
+    merge_injected_note_segments,
+    segments_to_json,
+    tool_use_segment_from_round,
+)
+from lib.swarm.presentation_budget import swarm_snapshot_for_browser
+from lib.task_replay.persistence_projection import trim_tool_round_for_persist
+from lib.tool_results.tool_round_identity import execution_identity, execution_llm_round
+from lib.turn_image_transport import (
+    MAX_TURN_IMAGES,
+    MIN_LAZY_TURN_IMAGE_ENCODED_CHARS,
+    legacy_turn_image_payload,
+)
+from lib.turn_projection_patch import normalize_projection_document
+
+
+_SEGMENT_TYPES = frozenset({"text", "thinking", "tool_use", "system_note"})
+_RESUMABLE_TURN_STATUSES = frozenset({"interrupted", "truncated"})
+_REFERENCEABLE_TURN_STATUS = "completed"
+_BROWSER_TERMINAL_TURN_STATUSES = frozenset({
+    "completed",
+    "failed",
+    "interrupted",
+    "truncated",
+})
+# Opaque provider replay evidence. Model requests read it from storage only;
+# the browser renders none of it, and an edit restores it from authority.
+_BROWSER_PRIVATE_TOOL_ROUND_FIELDS = frozenset({
+    "_responsesItems",
+    "_anthropicContentBlocks",
+    "thinkingSignature",
+})
+_BROWSER_PRIVATE_THINKING_SEGMENT_FIELDS = frozenset({"signature"})
+# Closed-world consumers: the finish footer clock (``presentTurnExecutionTiming``)
+# and compaction activity durations (``activityEntryWithTiming``). The Request
+# Inspector trace reads its own task-trace endpoint, never this projection.
+_BROWSER_TIMING_TRACE_FIELDS = frozenset({
+    "version",
+    "taskId",
+    "running",
+    "tEnd",
+    "clockSource",
+    "coverage",
+    "totalMs",
+})
+_BROWSER_TIMING_TRACE_SPAN_KINDS = frozenset({"compaction"})
+_BROWSER_API_ROUND_USAGE_FIELDS = frozenset({
+    "prompt_tokens",
+    "input_tokens",
+    "completion_tokens",
+    "output_tokens",
+    "cache_write_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_tokens",
+    "cache_read_input_tokens",
+    "reasoning_tokens",
+    "thinking_tokens",
+    "total_tokens",
+    "_dispatch",
+    "_subscription_quota",
+    "trace_id",
+})
+_BROWSER_API_ROUND_DISPATCH_FIELDS = frozenset({
+    "key",
+    "key_tail",
+    "model",
+    "provider_id",
+})
+_BROWSER_API_ROUND_COST_FIELDS = frozenset({"costCny"})
+# The lazily built cost popover reads only these allocation terms; the
+# recache cause duplicates the round's own ``cacheBreak``.
+_BROWSER_API_ROUND_WRITE_BREAKDOWN_FIELDS = frozenset({
+    "write",
+    "prevOutput",
+    "toolResults",
+    "contextWrite",
+    "recacheBody",
+    "envelope",
+    "readDrop",
+    "capped",
+})
+_BROWSER_API_ROUND_PROMPT_ADMISSION_FIELDS = frozenset({
+    "action",
+    "totalTokens",
+    "messageTokens",
+    "toolSchemaTokens",
+    "targetTokens",
+})
+_SHARED_TOOL_DOCUMENT_TURN_STATUSES = (
+    _BROWSER_TERMINAL_TURN_STATUSES | {"pending", "running"}
+)
+_SHARED_TOOL_DOCUMENT_FIELDS = ("toolContent", "results")
+_SHARED_TOOL_DOCUMENT_MIN_BYTES = 1024
+_SHARED_TOOL_DOCUMENT_MAX_DOCUMENTS = 256
+_SHARED_TOOL_DOCUMENT_MAX_REFERENCES = 4096
+_SNAPSHOT_DOCUMENT_REFS_FIELD = "_snapshotDocumentRefs"
+_SNAPSHOT_PROJECTION_REFS_FIELD = "snapshotProjectionRefs"
+_SNAPSHOT_CONTENT_MIN_BYTES = 128
+_SNAPSHOT_REFERENCE_MIN_SAVINGS = 64
+_SNAPSHOT_PROJECTION_MAX_REFERENCES = 4096
+
+
+def _preserved_notes(value: Any) -> list[dict[str, Any]]:
+    """Salvage display-only notes even when a sibling block needs rebuilding."""
+    from lib.tasks_pkg.segments._types import NOTE_KINDS, NOTE_ACTIONS
+    notes = []
+    seen = set()
+    for item in value if isinstance(value, list) else []:
+        if type(item) not in _DICT_KINDS and not isinstance(item, Mapping):
+            continue
+        if item.get('type') != 'system_note':
+            continue
+        if not isinstance(item.get('text'), str):
+            continue
+        note = dict(item)
+        if note.get('noteKind') not in NOTE_KINDS:
+            note['noteKind'] = 'system-intervention'
+        if note.get('action', 'prompt') not in NOTE_ACTIONS:
+            note['action'] = 'prompt'
+        identity = note.get('blockId')
+        identity = identity if isinstance(identity, str) and identity else None
+        if identity and identity in seen:
+            continue
+        if identity:
+            seen.add(identity)
+        notes.append(settle_unless_same(item, note) if type(item) is SettledDict else note)
+    return notes
+
+
+def _valid_segments(value: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list):
+        return None
+    segments: list[dict[str, Any]] = []
+    for item in value:
+        if type(item) is SettledDict:
+            # A settled block validates once; later steps replace, never edit.
+            segment = memo_get(item, _VALID_SEGMENT_KEY, _UNSET)
+            if segment is _UNSET:
+                segment = _valid_segment(item)
+                segment = memo_put(item, _VALID_SEGMENT_KEY, (
+                    None if segment is None else settle_unless_same(item, segment)))
+        else:
+            segment = _valid_segment(item)
+        if segment is None:
+            return None
+        segments.append(segment)
+    return segments
+
+
+_VALID_SEGMENT_KEY = ('valid-segment',)
+_UNSET = object()
+_DICT_KINDS = (dict, SettledDict)
+
+
+def _valid_segment(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, Mapping) or item.get("type") not in _SEGMENT_TYPES:
+        return None
+    segment = dict(item)
+    segment_type = segment["type"]
+    if segment_type in {"text", "thinking", "system_note"}:
+        if not isinstance(segment.get("text"), str):
+            return None
+    else:
+        result = segment.get("result")
+        if not isinstance(result, Mapping):
+            return None
+        # Legacy mirrors committed before the generated contract typed
+        # ``TurnToolResult.status`` as a string stamped ``status: None``
+        # on early-announced tools. The sibling round owns the verdict
+        # (the browser reconstructs it via resultFromRound), so the
+        # read boundary drops the invalid field instead of failing the
+        # whole conversation snapshot closed (2026-09-20, conv
+        # mu5p3vn9x32wcd: one null-status mirror 500'd every snapshot).
+        if "status" in result and not isinstance(result.get("status"), str):
+            segment["result"] = {
+                key: item_value for key, item_value in result.items()
+                if key != "status"
+            }
+    return segment
+
+
+def _fallback_block_id(segment: Mapping[str, Any], position: int) -> str:
+    segment_type = str(segment.get("type") or "text")
+    if segment_type == "tool_use":
+        call_id = str(segment.get("id") or "").strip()
+        if call_id:
+            return f"tool:{call_id}"
+    if segment.get("terminal"):
+        return f"{segment_type}:terminal"
+    llm_round = segment.get("llmRound")
+    if isinstance(llm_round, int) and not isinstance(llm_round, bool):
+        attempt_id, task_id = execution_identity(segment)
+        scope = attempt_id or task_id
+        prefix = f"attempt-{scope}:" if scope else ""
+        return f"{segment_type}:{prefix}llm-{llm_round}"
+    return f"{segment_type}:legacy-{position}"
+
+
+def _stable_block_ids(
+    segments: list[dict[str, Any]],
+    *,
+    reserved_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    claimed: dict[str, int] = {
+        block_id: 1 for block_id in (reserved_ids or set())
+    }
+    normalized: list[dict[str, Any]] = []
+    for position, source in enumerate(segments):
+        declared = source.get("blockId")
+        preferred = (
+            declared.strip()
+            if isinstance(declared, str) and declared.strip()
+            else _fallback_block_id(source, position)
+        )
+        occurrence = claimed.get(preferred, 0) + 1
+        claimed[preferred] = occurrence
+        block_id = preferred if occurrence == 1 else f"{preferred}~{occurrence}"
+        settled = type(source) is SettledDict
+        if (settled and type(declared) is str and declared == block_id
+                and "_round" not in source):
+            # Already stable: the normalized copy would equal its source.
+            normalized.append(source)
+            continue
+        segment = dict(source)
+        segment["blockId"] = block_id
+        segment.pop("_round", None)
+        normalized.append(settle(segment) if settled else segment)
+    return normalized
+
+
+def _segments_missing_tool_round(
+    segments: list[dict[str, Any]], tool_rounds: Any,
+) -> bool:
+    """True when a live tool round has no ``tool_use`` segment yet.
+
+    ``task['segments']`` is a CHECKPOINT-era assembly: rounds appended after
+    the last checkpoint (≥5s cadence) are absent from it even though they are
+    already in ``toolRounds``.  Ordinary rounds heal at the next checkpoint,
+    but human-wait rounds (ask_human / write-approval / stdin) BLOCK the
+    executor — no later checkpoint ever runs — so their interactive card
+    (question + answer UI, rendered only from a segment's tool block) would
+    never appear.  The authority boundary repairs the gap. Running turns
+    append only the missing tool blocks after their current live prefix;
+    settled turns can safely use finished-turn re-assembly.
+
+    One-directional by design: segments may legitimately be a SUPERSET of
+    ``toolRounds`` (manual compaction folds cold rounds out of the round list
+    while their render blocks stay), so only a round MISSING from the segment
+    ids triggers repair — never a count mismatch.  Synthetic inbox rows
+    and rounds without a toolCallId never become segments, so they must not
+    count as gaps (that would repair on every read, forever).
+    """
+    if not isinstance(tool_rounds, list) or not tool_rounds:
+        return False
+    covered: dict[str, int] = {}
+    for segment in segments:
+        if segment.get("type") != "tool_use":
+            continue
+        call_id = str(segment.get("id") or "").strip()
+        if call_id:
+            covered[call_id] = covered.get(call_id, 0) + 1
+    seen_rounds: dict[str, int] = {}
+    for round_record in tool_rounds:
+        call_id = _segment_call_id(round_record)
+        if not call_id:
+            continue
+        occurrence = seen_rounds.get(call_id, 0) + 1
+        seen_rounds[call_id] = occurrence
+        if occurrence > covered.get(call_id, 0):
+            return True
+    return False
+
+
+_SEGMENT_CALL_ID_KEY = ('segment-call-id',)
+
+
+def _round_segment_call_id(round_record: Any) -> str:
+    """A round's tool-call id when it must own a ``tool_use`` segment."""
+    if not isinstance(round_record, Mapping):
+        return ""
+    if is_synthetic_inbox_round(round_record):
+        return ""
+    return str(round_record.get("toolCallId") or "").strip()
+
+
+def _segment_call_id(round_record: Any) -> str:
+    if type(round_record) is SettledDict:
+        call_id = memo_get(round_record, _SEGMENT_CALL_ID_KEY)
+        if call_id is None:
+            call_id = memo_put(round_record, _SEGMENT_CALL_ID_KEY,
+                               _round_segment_call_id(round_record))
+        return call_id
+    return _round_segment_call_id(round_record)
+
+
+def _append_missing_live_tool_segments(
+    segments: list[dict[str, Any]], tool_rounds: Any,
+) -> list[dict[str, Any]]:
+    """Append absent live tool blocks without reordering streamed segments."""
+    if not isinstance(tool_rounds, list):
+        return segments
+    covered: dict[str, int] = {}
+    for segment in segments:
+        if segment.get("type") != "tool_use":
+            continue
+        call_id = str(segment.get("id") or "").strip()
+        if call_id:
+            covered[call_id] = covered.get(call_id, 0) + 1
+    seen_rounds: dict[str, int] = {}
+    appended: list[dict[str, Any]] = []
+    for position, source in enumerate(tool_rounds):
+        if not isinstance(source, Mapping):
+            continue
+        call_id = _segment_call_id(
+            source if type(source) is SettledDict else dict(source))
+        if not call_id:
+            continue
+        occurrence = seen_rounds.get(call_id, 0) + 1
+        seen_rounds[call_id] = occurrence
+        if occurrence <= covered.get(call_id, 0):
+            continue
+        appended.append(tool_use_segment_from_round(dict(source), position))
+        covered[call_id] = covered.get(call_id, 0) + 1
+    return [*segments, *segments_to_json(appended)]
+
+
+def _normalize_injection_lane(records: Any, channel: str) -> Any:
+    if not isinstance(records, list):
+        return records
+    claimed: dict[str, int] = {}
+    normalized: list[Any] = []
+    for item in records:
+        if not isinstance(item, Mapping):
+            normalized.append(item)
+            continue
+        record = dict(item)
+        declared = record.get("blockId")
+        round_value = record.get("round")
+        round_token = (
+            str(round_value)
+            if isinstance(round_value, int) and not isinstance(round_value, bool)
+            else "unknown"
+        )
+        preferred = (
+            declared.strip()
+            if isinstance(declared, str) and declared.strip()
+            else f"injection:{channel}:round-{round_token}"
+        )
+        occurrence = claimed.get(preferred, 0) + 1
+        claimed[preferred] = occurrence
+        record["blockId"] = (
+            preferred if occurrence == 1 else f"{preferred}~{occurrence}"
+        )
+        normalized.append(record)
+    return normalized
+
+
+def _normalize_sidecar_blocks(projection: dict[str, Any]) -> set[str]:
+    reserved: set[str] = set()
+    for field, fallback in (
+        ("origin", "origin"),
+        ("contextSnapshot", "turn-context"),
+        ("compaction", "compaction"),
+        ("imageGeneration", "image-generation"),
+        ("proposedPlan", "proposed-plan"),
+        ("planExecution", "plan-execution"),
+        ("activityTimeline", "activity-timeline"),
+    ):
+        sidecar = projection.get(field)
+        if not isinstance(sidecar, Mapping):
+            continue
+        normalized_sidecar = dict(sidecar)
+        normalized_sidecar["blockId"] = str(
+            normalized_sidecar.get("blockId") or fallback
+        )
+        projection[field] = normalized_sidecar
+        reserved.add(normalized_sidecar["blockId"])
+    if any(projection.get(field) for field in (
+        "images", "attachments", "videos", "pdfTexts", "convRefs",
+        "replyQuotes"
+    )):
+        reserved.add("attachments")
+    provenance = projection.get("provenance")
+    if isinstance(provenance, Mapping):
+        provenance_block = dict(provenance)
+        provenance_block["blockId"] = str(
+            provenance_block.get("blockId") or "provenance"
+        )
+        projection["provenance"] = provenance_block
+        reserved.add(provenance_block["blockId"])
+    for field, channel in (
+        ("_inboxInjects", "inbox"),
+        ("_peerInjects", "peer"),
+        ("_userSteerInjects", "user-steer"),
+        ("_bgCommandInjects", "background-command"),
+        ("_stallNudges", "stall-nudge"),
+    ):
+        if projection.get(field) is None:
+            continue
+        records = _normalize_injection_lane(projection[field], channel)
+        projection[field] = records
+        reserved.update(
+            str(item["blockId"])
+            for item in records
+            if isinstance(item, Mapping) and item.get("blockId")
+        )
+    raw_file_changes = projection.get("fileChanges")
+    legacy_files = projection.get("modifiedFileList")
+    if isinstance(raw_file_changes, Mapping):
+        file_changes = dict(raw_file_changes)
+    elif isinstance(legacy_files, list) and legacy_files:
+        raw_count = projection.get("modifiedFiles")
+        count = raw_count if isinstance(raw_count, int) else 0
+        file_changes = {
+            "blockId": "file-changes",
+            "count": max(count, len(legacy_files)),
+            "state": "applied",
+            "files": [dict(item) if isinstance(item, Mapping) else item
+                      for item in legacy_files],
+        }
+    else:
+        file_changes = None
+    rolled_back = projection.get("rolledBack")
+    if isinstance(rolled_back, list):
+        claimed_rolled: dict[str, int] = {}
+        normalized_rolled: list[dict[str, Any]] = []
+        for item in rolled_back:
+            if not isinstance(item, Mapping):
+                continue
+            record = dict(item)
+            declared = record.get("blockId")
+            preferred = (
+                declared.strip()
+                if isinstance(declared, str) and declared.strip()
+                else "rolled-back"
+            )
+            occurrence = claimed_rolled.get(preferred, 0) + 1
+            claimed_rolled[preferred] = occurrence
+            record["blockId"] = (
+                preferred if occurrence == 1 else f"{preferred}~{occurrence}"
+            )
+            normalized_rolled.append(record)
+            reserved.add(record["blockId"])
+        if normalized_rolled:
+            projection["rolledBack"] = normalized_rolled
+    if file_changes is not None:
+        file_changes["blockId"] = str(
+            file_changes.get("blockId") or "file-changes"
+        )
+        file_changes.setdefault("state", "applied")
+        projection["fileChanges"] = file_changes
+        reserved.add(file_changes["blockId"])
+    return reserved
+
+
+def _live_content_already_narrated(
+    segments: list[dict[str, Any]],
+    content: str,
+    status: str,
+) -> bool:
+    """True when the live accumulator prose is already visible as narration.
+
+    The tool-call prelude stamps the just-streamed prose as a non-terminal
+    narration segment BEFORE ``_discard_pretool_prose`` zeroes the content
+    accumulator (DELTA_RESET). Inside that window a terminal mirror of
+    ``content`` renders the identical sentence a second time; the next
+    revision (emptied content) drops the mirror, which is why the duplicate
+    only flashed briefly. Only the LATEST narration can own the current
+    accumulator text — new live prose that happens to repeat an older
+    round's narration must still mirror. And only a RUNNING turn has this
+    transient: a settled/resumable turn's content is the deliverable and
+    mirrors even when the model repeats earlier prose verbatim.
+    """
+    if status != "running" or not content.strip():
+        return False
+    for segment in reversed(segments):
+        if (segment.get("type") == "text" and not segment.get("terminal")
+                and not segment.get("deliverable")):
+            return str(segment.get("text") or "").strip() == content.strip()
+    return False
+def _drop_narrated_live_terminal_mirror(
+    segments: list[dict[str, Any]],
+    projection: Mapping[str, Any],
+    status: str,
+) -> list[dict[str, Any]]:
+    """Remove an EXISTING terminal text mirror that duplicates live narration.
+
+    The append guard in ``_synchronize_terminal_blocks`` only covers mirrors
+    this boundary creates. Assemble/checkpoint-era segment lists can already
+    carry the duplicate (``assemble_segments`` emits narration from the
+    round's stamped ``assistantContent`` plus the terminal segment from the
+    not-yet-zeroed ``task['content']`` accumulator), and the frontend renders
+    a terminal text segment with ``projection.content`` overriding its stored
+    text — so blanking the mirror would not hide it; it must be removed.
+    Running turns only: a settled/resumable turn's terminal segment IS the
+    deliverable chronology and survives even verbatim repeats. Self-heals:
+    once the accumulator grows past the narration (or is zeroed by
+    DELTA_RESET) the predicate stops matching and the mirror returns.
+    """
+    content = str(projection.get("content") or "")
+    if not _live_content_already_narrated(segments, content, status):
+        return segments
+    return [
+        segment for segment in segments
+        if not (segment.get("type") == "text"
+                and (segment.get("terminal") or segment.get("deliverable")))
+    ]
+
+
+def _synchronize_terminal_blocks(
+    segments: list[dict[str, Any]],
+    projection: Mapping[str, Any],
+    *,
+    actor: str,
+    status: str,
+    ensure_assistant_text_placeholder: bool = True,
+) -> None:
+    content = str(projection.get("content") or "")
+    thinking = str(projection.get("thinking") or "")
+    terminal_text_index = next((
+        index for index in range(len(segments) - 1, -1, -1)
+        if segments[index].get("type") == "text"
+        and (segments[index].get("terminal")
+             or segments[index].get("deliverable"))
+    ), None)
+    if terminal_text_index is None and (
+        content or (ensure_assistant_text_placeholder and actor != "human")
+    ) and not _live_content_already_narrated(segments, content, status):
+        segments.append({
+            "type": "text",
+            "blockId": "text:terminal",
+            "text": content,
+            "deliverable": True,
+            "terminal": True,
+        })
+        terminal_text_index = len(segments) - 1
+    if terminal_text_index is not None:
+        source = segments[terminal_text_index]
+        # A settled block is replaced copy-on-write (kept when unchanged).
+        terminal_text = dict(source) if type(source) is SettledDict else source
+        terminal_text["text"] = content
+        terminal_text["deliverable"] = True
+        terminal_text["terminal"] = True
+        if status in _RESUMABLE_TURN_STATUSES:
+            terminal_text["resumable"] = True
+        else:
+            terminal_text.pop("resumable", None)
+        if terminal_text is not source:
+            segments[terminal_text_index] = settle_unless_same(source, terminal_text)
+
+    terminal_thinking_index = next((
+        index for index in range(len(segments) - 1, -1, -1)
+        if segments[index].get("type") == "thinking"
+        and segments[index].get("terminal")
+    ), None)
+    if terminal_thinking_index is not None:
+        source = segments[terminal_thinking_index]
+        if type(source) is SettledDict:
+            segments[terminal_thinking_index] = settle_unless_same(
+                source, {**source, "text": thinking})
+        else:
+            source["text"] = thinking
+    elif thinking:
+        thinking_segment = {
+            "type": "thinking",
+            "blockId": "thinking:terminal",
+            "text": thinking,
+            "deliverable": False,
+            "terminal": True,
+        }
+        if terminal_text_index is None:
+            segments.append(thinking_segment)
+        else:
+            segments.insert(terminal_text_index, thinking_segment)
+
+
+def _unique_rounds_by_call_id(tool_rounds: Any) -> dict[str, Mapping[str, Any]]:
+    """Index only unambiguous real rounds for projection reconciliation."""
+    if not isinstance(tool_rounds, list):
+        return {}
+    indexed: dict[str, Mapping[str, Any]] = {}
+    duplicates: set[str] = set()
+    for round_record in tool_rounds:
+        if not isinstance(round_record, Mapping):
+            continue
+        call_id = str(round_record.get("toolCallId") or "").strip()
+        if not call_id:
+            continue
+        if call_id in indexed:
+            duplicates.add(call_id)
+            continue
+        indexed[call_id] = round_record
+    for call_id in duplicates:
+        indexed.pop(call_id, None)
+    return indexed
+
+
+def _tool_segment_id_counts(segments: Any) -> Counter[str]:
+    if not isinstance(segments, list):
+        return Counter()
+    return Counter(
+        str(segment.get("id") or "").strip()
+        for segment in segments
+        if isinstance(segment, Mapping)
+        and segment.get("type") == "tool_use"
+        and str(segment.get("id") or "").strip()
+    )
+
+
+def _tool_segment_matches_round(
+    segment: Mapping[str, Any], round_record: Mapping[str, Any],
+) -> bool:
+    """Fail closed unless two carriers describe one tool occurrence."""
+    segment_id = str(segment.get("id") or "").strip()
+    round_id = str(round_record.get("toolCallId") or "").strip()
+    if not segment_id or segment_id != round_id:
+        return False
+    segment_name = str(segment.get("name") or "").strip()
+    round_name = str(round_record.get("toolName") or "").strip()
+    if segment_name and round_name and segment_name != round_name:
+        return False
+    if (
+        ("input" in segment) != ("toolArgs" in round_record)
+        or (
+            "input" in segment
+            and segment.get("input") != round_record.get("toolArgs")
+        )
+    ):
+        return False
+    segment_attempt, segment_task = execution_identity(segment)
+    round_attempt, round_task = execution_identity(round_record)
+    if segment_attempt and round_attempt and segment_attempt != round_attempt:
+        return False
+    if segment_task and round_task and segment_task != round_task:
+        return False
+    segment_scope = segment_attempt or segment_task
+    round_scope = round_attempt or round_task
+    if segment_scope and round_scope and segment_scope != round_scope:
+        return False
+    segment_llm_round = execution_llm_round(segment)
+    round_llm_round = execution_llm_round(round_record)
+    return not (
+        segment_llm_round is not None
+        and round_llm_round is not None
+        and segment_llm_round != round_llm_round
+    )
+
+
+def _round_has_explicit_payload_compaction(
+    round_record: Mapping[str, Any],
+) -> bool:
+    return (
+        round_record.get("compactionLayer") == "L1"
+        or round_record.get("_persistCompacted") is True
+    )
+
+
+def _segment_result_from_round(round_record: Mapping[str, Any]) -> dict[str, Any]:
+    """Mirror the generated browser's ``resultFromRound`` reconstruction."""
+    source = round_record.get("result")
+    result = dict(source) if isinstance(source, Mapping) else {}
+    explicitly_compacted = _round_has_explicit_payload_compaction(round_record)
+    has_content = isinstance(source, Mapping) and "content" in source
+    has_status = isinstance(source, Mapping) and "status" in source
+    if (explicitly_compacted or not has_content) and "toolContent" in round_record:
+        result["content"] = round_record["toolContent"]
+    if round_record.get('toolModelContent') is not None and not explicitly_compacted:
+        result['modelContent'] = round_record['toolModelContent']
+    elif explicitly_compacted:
+        result.pop('modelContent', None)
+    if (explicitly_compacted or not has_status) and "status" in round_record:
+        result["status"] = round_record["status"]
+    return result
+
+
+def _synchronize_compacted_tool_segment_results(
+    segments: list[dict[str, Any]], tool_rounds: Any,
+) -> list[dict[str, Any]]:
+    """Prevent a durable compacted round's segment mirror restoring old bytes."""
+    if not isinstance(tool_rounds, list) or not any(
+        (type(round_record) in _DICT_KINDS or isinstance(round_record, Mapping))
+        and _round_has_explicit_payload_compaction(round_record)
+        for round_record in tool_rounds
+    ):
+        return segments
+    rounds_by_id = _unique_rounds_by_call_id(tool_rounds)
+    segment_id_counts = _tool_segment_id_counts(segments)
+    if not rounds_by_id or not segment_id_counts:
+        return segments
+    changed = False
+    synchronized: list[dict[str, Any]] = []
+    for source in segments:
+        call_id = (
+            str(source.get("id") or "").strip()
+            if source.get("type") == "tool_use"
+            else ""
+        )
+        round_record = rounds_by_id.get(call_id)
+        if (
+            not call_id
+            or segment_id_counts.get(call_id) != 1
+            or round_record is None
+            or not _round_has_explicit_payload_compaction(round_record)
+            or not _tool_segment_matches_round(source, round_record)
+        ):
+            synchronized.append(source)
+            continue
+        round_result = _segment_result_from_round(round_record)
+        if "content" not in round_result:
+            synchronized.append(source)
+            continue
+        result = dict(source["result"])
+        result["content"] = round_result["content"]
+        if "status" in round_result:
+            result["status"] = round_result["status"]
+        if result == source["result"]:
+            synchronized.append(source)
+            continue
+        segment = dict(source)
+        segment["result"] = result
+        synchronized.append(segment)
+        changed = True
+    return synchronized if changed else segments
+
+
+def projection_with_stable_segments(
+    raw_projection: Any,
+    *,
+    actor: str = "assistant",
+    status: str = "completed",
+    injected_notes: Any = None,
+) -> dict[str, Any]:
+    """Return stable blocks, folding captured notes only at producer boundaries."""
+    projection = normalize_projection_document(raw_projection)
+    reserved_ids = _normalize_sidecar_blocks(projection)
+    normalized_actor = str(actor or "assistant")
+    normalized_status = str(status or "")
+    segments = _valid_segments(projection.get("segments"))
+    preserved_notes = _preserved_notes(projection.get('segments'))
+    if segments is not None:
+        notes_by_id = {
+            note['blockId']: note for note in preserved_notes
+            if isinstance(note.get('blockId'), str) and note['blockId']
+        }
+        seen_notes = set()
+        normalized_segments = []
+        for item in segments:
+            if item.get('type') == 'system_note':
+                identity = item.get('blockId')
+                identity = identity if isinstance(identity, str) and identity else None
+                if identity and identity in seen_notes:
+                    continue
+                seen_notes.add(identity)
+                item = notes_by_id.get(identity, item)
+            normalized_segments.append(item)
+        segments = normalized_segments
+    if segments is not None and _segments_missing_tool_round(
+        segments, projection.get("toolRounds"),
+    ):
+        if normalized_status == "running":
+            # A complete tool call can be announced before parsing attaches
+            # the current thinking/text to its round. Materialize that live
+            # prefix first, then append only the missing tools; finished-turn
+            # assembly would incorrectly put those tools before the prefix.
+            _synchronize_terminal_blocks(
+                segments,
+                projection,
+                actor=normalized_actor,
+                status=normalized_status,
+                ensure_assistant_text_placeholder=False,
+            )
+            segments = _append_missing_live_tool_segments(
+                segments, projection.get("toolRounds"),
+            )
+        else:
+            segments = None
+    if segments is None:
+        task = {
+            "content": str(projection.get("content") or ""),
+            "thinking": str(projection.get("thinking") or ""),
+        }
+        assembled = assemble_segments(
+            task,
+            merged=(list(projection.get("toolRounds") or [])
+                    if isinstance(projection.get("toolRounds"), list) else []),
+        )
+        segments = segments_to_json(assembled)
+        # Reconstruction follows the same injection-before-round ordering as
+        # checkpoint/live assembly. Preserve any existing display metadata.
+        segments = merge_injected_note_segments(segments, [
+            {**note, 'kind': note.get('noteKind') or 'system-intervention'}
+            for note in preserved_notes
+        ])
+        preserved_by_id = {note.get('blockId'): note for note in preserved_notes
+                           if note.get('blockId')}
+        segments = [preserved_by_id.get(segment.get('blockId'), segment)
+                    if segment.get('type') == 'system_note' else segment
+                    for segment in segments]
+    _synchronize_terminal_blocks(
+        segments,
+        projection,
+        actor=normalized_actor,
+        status=normalized_status,
+    )
+    segments = _synchronize_compacted_tool_segment_results(
+        segments, projection.get("toolRounds"),
+    )
+    segments = _drop_narrated_live_terminal_mirror(
+        segments, projection, normalized_status,
+    )
+    segments = merge_injected_note_segments(segments, injected_notes)
+    projection["segments"] = _stable_block_ids(
+        segments, reserved_ids=reserved_ids,
+    )
+    return projection
+
+
+def public_turn_with_stable_segments(raw_turn: Any) -> Any:
+    """Adapt settled history while preserving every live revision's wire base.
+
+    A pending/running document is the base of subsequent positional patches.
+    Synthesizing a blank terminal block on read makes the next block append
+    duplicate it; refreshing a slim-write text mirror makes its next suffix
+    append twice. Neither transformation advances the revision, so the client
+    cannot detect that its base differs. Producers still normalize explicitly
+    before committing structural changes, including all repairs in replay.
+    """
+    if not isinstance(raw_turn, Mapping) or not isinstance(
+        raw_turn.get("projection"), Mapping
+    ):
+        return raw_turn
+    if raw_turn.get("status") in {"pending", "running"}:
+        return raw_turn
+    turn = dict(raw_turn)
+    turn["projection"] = projection_with_stable_segments(
+        turn["projection"],
+        actor=str(turn.get("actor") or "assistant"),
+        status=str(turn.get("status") or "completed"),
+    )
+    return turn
+
+
+def _is_turn_record(value: Any) -> bool:
+    return (isinstance(value, Mapping) and "turnId" in value
+            and "projectionRevision" in value
+            and isinstance(value.get("projection"), Mapping))
+
+
+def public_value_with_stable_segments(value: Any) -> Any:
+    """Adapt nested public Turns without rewriting live replay baselines."""
+    if isinstance(value, list):
+        return [public_value_with_stable_segments(item) for item in value]
+    if not isinstance(value, Mapping):
+        return value
+    if _is_turn_record(value):
+        return public_turn_with_stable_segments(value)
+    return {
+        key: public_value_with_stable_segments(item)
+        for key, item in value.items()
+    }
+
+
+def _public_turn_records(turns: Any) -> Any:
+    """Adapt one declared TurnRecord list; the same list when none changed."""
+    if not isinstance(turns, list):
+        return turns
+    adapted = [public_turn_with_stable_segments(turn) if _is_turn_record(turn)
+               else turn for turn in turns]
+    if all(new is old for new, old in zip(adapted, turns)):
+        return turns
+    return adapted
+
+
+def public_change_with_stable_segments(change: Any) -> Any:
+    """Adapt the TurnRecords one ConversationChange carries; share the rest.
+
+    The change contract places TurnRecords only at ``payload.turns`` and, for
+    ``attempt.event``, at ``payload.event.payload.turns``. Projection patches,
+    attempts, queue items and diagnostic bodies never hold one, so they are
+    shared by reference instead of walked and rebuilt: a replay page costs
+    the Turn records it carries, not the size of everything else. Only the
+    containers on the path to an adapted (settled) Turn are copied.
+    """
+    if not isinstance(change, Mapping):
+        return change
+    payload = change.get("payload")
+    if not isinstance(payload, Mapping):
+        return change
+    if change.get("type") != "attempt.event":
+        turns = payload.get("turns")
+        adapted = _public_turn_records(turns)
+        if adapted is turns:
+            return change
+        return {**change, "payload": {**payload, "turns": adapted}}
+    attempt = payload.get("event")
+    body = attempt.get("payload") if isinstance(attempt, Mapping) else None
+    if not isinstance(body, Mapping):
+        return change
+    turns = body.get("turns")
+    adapted = _public_turn_records(turns)
+    if adapted is turns:
+        return change
+    return {**change, "payload": {**payload, "event": {
+        **attempt, "payload": {**body, "turns": adapted},
+    }}}
+
+
+def _tool_rounds_for_browser(
+    tool_rounds: Any,
+    *,
+    omit_provider_replay: bool,
+) -> Any:
+    """Project closed-world tool-round presentation without changing storage.
+
+    Terminal views drop opaque provider replay bodies. Every terminal view
+    also normalizes reconstructible historical Swarm tool timelines to their
+    current resource budget. Nested values are shallow-shared unless changed.
+    """
+    if not isinstance(tool_rounds, list):
+        return tool_rounds
+    restorable_rounds = _unique_rounds_by_call_id(tool_rounds)
+    changed = False
+    projected: list[Any] = []
+    for source in tool_rounds:
+        if not isinstance(source, Mapping):
+            projected.append(source)
+            continue
+        browser_source = trim_tool_round_for_persist(source)
+        # An edited browser copy can restore evidence only with an unambiguous
+        # call identity. Keep it inline for legacy duplicate or missing IDs.
+        omit_round_replay = omit_provider_replay and restorable_rounds.get(
+            str(source.get("toolCallId") or "").strip()
+        ) is source
+        has_private_replay = (
+            omit_round_replay
+            and not _BROWSER_PRIVATE_TOOL_ROUND_FIELDS.isdisjoint(browser_source)
+        )
+        source_swarm_snapshot = browser_source.get("_swarmSnapshot")
+        browser_swarm_snapshot = swarm_snapshot_for_browser(
+            source_swarm_snapshot
+        )
+        if (
+            browser_source is source
+            and not has_private_replay
+            and browser_swarm_snapshot is source_swarm_snapshot
+        ):
+            projected.append(source)
+            continue
+        round_record = {
+            key: value for key, value in browser_source.items()
+            if not (
+                omit_round_replay
+                and key in _BROWSER_PRIVATE_TOOL_ROUND_FIELDS
+            )
+        }
+        if browser_swarm_snapshot is not source_swarm_snapshot:
+            round_record["_swarmSnapshot"] = browser_swarm_snapshot
+        projected.append(round_record)
+        changed = True
+    return projected if changed else tool_rounds
+
+
+def _api_round_usage_for_browser(usage: Any) -> Any:
+    """Keep the closed-world cost/quota/context usage read model."""
+    if not isinstance(usage, Mapping):
+        return usage
+    projected = {
+        key: value for key, value in usage.items()
+        if key in _BROWSER_API_ROUND_USAGE_FIELDS
+    }
+    dispatch = projected.get("_dispatch")
+    if isinstance(dispatch, Mapping):
+        browser_dispatch = {
+            key: value for key, value in dispatch.items()
+            if key in _BROWSER_API_ROUND_DISPATCH_FIELDS
+        }
+        if len(browser_dispatch) == len(dispatch) and all(
+            browser_dispatch.get(key) is value
+            for key, value in dispatch.items()
+        ):
+            browser_dispatch = dispatch
+        projected["_dispatch"] = browser_dispatch
+    if len(projected) == len(usage) and all(
+        projected.get(key) is value for key, value in usage.items()
+    ):
+        return usage
+    return projected
+
+
+def _closed_world_mapping(value: Any, fields: frozenset[str]) -> Any:
+    """Keep only browser-consumed keys; share the source when none drop."""
+    if not isinstance(value, Mapping) or value.keys() <= fields:
+        return value
+    return {key: item for key, item in value.items() if key in fields}
+
+
+def _timing_trace_for_browser(trace: Any) -> Any:
+    """Keep the settled clock and any span list a compaction row can read.
+
+    Spans are kept or omitted as one list, never filtered: a later positional
+    patch must fail and resynchronize rather than address a shifted index.
+    """
+    if not isinstance(trace, Mapping):
+        return trace
+    spans = trace.get("spans")
+    keep_spans = isinstance(spans, list) and any(
+        isinstance(span, Mapping)
+        and span.get("kind") in _BROWSER_TIMING_TRACE_SPAN_KINDS
+        for span in spans
+    )
+    return _closed_world_mapping(
+        trace,
+        _BROWSER_TIMING_TRACE_FIELDS | {"spans"}
+        if keep_spans
+        else _BROWSER_TIMING_TRACE_FIELDS,
+    )
+
+
+def _api_rounds_for_browser(api_rounds: Any) -> Any:
+    """Keep only fields consumed by the completed-round browser read model."""
+    if not isinstance(api_rounds, list):
+        return api_rounds
+    changed = False
+    projected_rounds: list[Any] = []
+    for source in api_rounds:
+        if not isinstance(source, Mapping):
+            projected_rounds.append(source)
+            continue
+        write_breakdown = source.get("writeBreakdown")
+        browser_write_breakdown = _closed_world_mapping(
+            write_breakdown, _BROWSER_API_ROUND_WRITE_BREAKDOWN_FIELDS,
+        )
+        prompt_admission = source.get("promptAdmission")
+        browser_prompt_admission = _closed_world_mapping(
+            prompt_admission, _BROWSER_API_ROUND_PROMPT_ADMISSION_FIELDS,
+        )
+        usage = source.get("usage")
+        browser_usage = _api_round_usage_for_browser(usage)
+        cost = source.get("cost")
+        browser_cost = cost
+        if isinstance(cost, Mapping):
+            projected_cost = {
+                key: value
+                for key, value in cost.items()
+                if key in _BROWSER_API_ROUND_COST_FIELDS
+            }
+            if len(projected_cost) == len(cost) and all(
+                projected_cost.get(key) is value
+                for key, value in cost.items()
+            ):
+                browser_cost = cost
+            else:
+                browser_cost = projected_cost or None
+        if (
+            browser_usage is usage
+            and browser_cost is cost
+            and browser_write_breakdown is write_breakdown
+            and browser_prompt_admission is prompt_admission
+        ):
+            projected_rounds.append(source)
+            continue
+        round_record = dict(source)
+        if browser_usage is not usage:
+            round_record["usage"] = browser_usage
+        if browser_write_breakdown is not write_breakdown:
+            round_record["writeBreakdown"] = browser_write_breakdown
+        if browser_prompt_admission is not prompt_admission:
+            round_record["promptAdmission"] = browser_prompt_admission
+        if browser_cost is not cost:
+            if browser_cost is None:
+                round_record.pop("cost", None)
+            else:
+                round_record["cost"] = browser_cost
+        projected_rounds.append(round_record)
+        changed = True
+    return projected_rounds if changed else api_rounds
+
+
+# ``providerReplayPayload=none``: the provider replay keys omitted from every
+# item of each list, whatever the item's type or the Turn's status.
+_PROVIDER_REPLAY_ITEM_FIELDS = {
+    "toolRounds": _BROWSER_PRIVATE_TOOL_ROUND_FIELDS,
+    "segments": _BROWSER_PRIVATE_THINKING_SEGMENT_FIELDS,
+}
+
+
+def _is_position(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _item_without_keys(item: Any, keys: frozenset[str]) -> Any:
+    if not isinstance(item, Mapping) or keys.isdisjoint(item):
+        return item
+    return {key: value for key, value in item.items() if key not in keys}
+
+
+def _items_without_keys(items: Any, keys: frozenset[str]) -> Any:
+    if not isinstance(items, list):
+        return items
+    stripped = [_item_without_keys(item, keys) for item in items]
+    if all(new is old for new, old in zip(stripped, items)):
+        return items
+    return stripped
+
+
+def projection_without_provider_replay(projection: Any) -> Any:
+    """Omit provider replay evidence by path, for every Turn status.
+
+    Only the ``_PROVIDER_REPLAY_ITEM_FIELDS`` keys of ``toolRounds`` and
+    ``segments`` items are removed, never an item, so every position is kept
+    and a patch transformed by ``projection_patch_without_provider_replay``
+    applies to this view exactly as the stored patch applies to storage.
+    Unchanged containers are shared; the source is never mutated.
+    """
+    if not isinstance(projection, Mapping):
+        return projection
+    changed: dict[str, Any] = {}
+    for field, keys in _PROVIDER_REPLAY_ITEM_FIELDS.items():
+        if field in projection:
+            value = _items_without_keys(projection[field], keys)
+            if value is not projection[field]:
+                changed[field] = value
+    return {**projection, **changed} if changed else projection
+
+
+def turn_without_provider_replay(turn: Any) -> Any:
+    """Apply ``projection_without_provider_replay`` to one TurnRecord."""
+    if not isinstance(turn, Mapping) or not isinstance(turn.get("projection"), Mapping):
+        return turn
+    projection = projection_without_provider_replay(turn["projection"])
+    return turn if projection is turn["projection"] else {**turn, "projection": projection}
+
+
+def _patch_value_without_provider_replay(path: list[Any], operation: str, value: Any) -> Any:
+    """Strip omitted keys from a value written at or above their items."""
+    if not path:
+        return projection_without_provider_replay(value) if operation == "set" else value
+    keys = _PROVIDER_REPLAY_ITEM_FIELDS.get(path[0]) if isinstance(path[0], str) else None
+    if keys is None:
+        return value
+    if len(path) == 1 and operation in {"set", "append"}:
+        return _items_without_keys(value, keys)
+    if len(path) == 2 and operation == "set" and _is_position(path[1]):
+        return _item_without_keys(value, keys)
+    return value
+
+
+def projection_patch_without_provider_replay(patch: Any) -> Any:
+    """Transform one stored projection patch into the omitted view.
+
+    An operation that writes inside an omitted key is dropped; a value written
+    at a container of omitted keys (the root, a list, or one item) loses them.
+    Applied to ``projection_without_provider_replay(base)`` the result equals
+    ``projection_without_provider_replay(apply(base, patch))``, with the same
+    revisions. A patch whose operations all write omitted evidence advances
+    the revision with no operation.
+    """
+    operations = patch.get("operations") if isinstance(patch, Mapping) else None
+    if not isinstance(operations, list):
+        return patch
+    projected: list[Any] = []
+    changed = False
+    for operation in operations:
+        path = operation.get("path") if isinstance(operation, Mapping) else None
+        if not isinstance(path, list):
+            projected.append(operation)
+            continue
+        keys = (
+            _PROVIDER_REPLAY_ITEM_FIELDS.get(path[0])
+            if path and isinstance(path[0], str) else None
+        )
+        if keys is not None and len(path) >= 3 and _is_position(path[1]) and path[2] in keys:
+            changed = True
+            continue
+        if "value" in operation:
+            value = _patch_value_without_provider_replay(
+                path, str(operation.get("op") or ""), operation["value"],
+            )
+            if value is not operation["value"]:
+                operation = {**operation, "value": value}
+                changed = True
+        projected.append(operation)
+    return {**patch, "operations": projected} if changed else patch
+
+
+def _projection_payload_without_provider_replay(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    changed: dict[str, Any] = {}
+    for field, transform in (
+        ("projection", projection_without_provider_replay),
+        ("projectionPatch", projection_patch_without_provider_replay),
+    ):
+        if field in payload:
+            value = transform(payload[field])
+            if value is not payload[field]:
+                changed[field] = value
+    turns = payload.get("turns")
+    if isinstance(turns, list):
+        stripped = [turn_without_provider_replay(turn) for turn in turns]
+        if any(new is not old for new, old in zip(stripped, turns)):
+            changed["turns"] = stripped
+    changes = payload.get("turnPatches")
+    if isinstance(changes, list):
+        stripped_changes: list[Any] = []
+        for change in changes:
+            source = change.get("projectionPatch") if isinstance(change, Mapping) else None
+            patch = projection_patch_without_provider_replay(source)
+            stripped_changes.append(
+                change if patch is source else {**change, "projectionPatch": patch})
+        if any(new is not old for new, old in zip(stripped_changes, changes)):
+            changed["turnPatches"] = stripped_changes
+    return {**payload, **changed} if changed else payload
+
+
+def change_without_provider_replay(change: Any) -> Any:
+    """Apply the omitted view to every projection, patch and Turn of a change.
+
+    ``attempt.event`` carries them in the attempt event's payload; Turn
+    changes carry ``turns`` and ``turnPatches`` directly.
+    """
+    payload = change.get("payload") if isinstance(change, Mapping) else None
+    if not isinstance(payload, Mapping):
+        return change
+    if change.get("type") == "attempt.event":
+        event = payload.get("event")
+        body = event.get("payload") if isinstance(event, Mapping) else None
+        if not isinstance(body, Mapping):
+            return change
+        stripped = _projection_payload_without_provider_replay(body)
+        if stripped is body:
+            return change
+        return {**change, "payload": {**payload, "event": {**event, "payload": stripped}}}
+    stripped = _projection_payload_without_provider_replay(payload)
+    return change if stripped is payload else {**change, "payload": stripped}
+
+
+def projection_with_reference_tool_segments(
+    stable_projection: Any,
+    *,
+    status: str,
+) -> Any:
+    """Deduplicate settled tool blocks against their sibling round authority.
+
+    The input must already have passed ``projection_with_stable_segments``.
+    All terminal Turns may receive a bounded historical Swarm presentation.
+    Terminal Turns omit server-only provider evidence. Resuming reads that
+    evidence from storage; it never takes replay authority from this view.
+    Running/pending Turns remain byte-identical for incremental patches.
+
+    ``TurnToolUseSegment.result`` remains an object for backward-compatible
+    generated types. ``roundRef`` makes the empty object explicit; the browser
+    materializes its local full shape from the uniquely matching tool round.
+    Opaque Responses/Anthropic provider-replay bodies, thinking signatures,
+    per-request stream / pricing evidence, unrendered admission and recache
+    detail, and task-trace spans with no browser consumer are also
+    server-only and omitted from this terminal browser view. Per-round token,
+    cost, cache-break, dispatch, quota, trace, write-allocation and settled
+    clock facts remain. Model requests read signatures from storage, and
+    ``projection_with_restored_browser_evidence`` restores every omission
+    before a client edit is persisted. This function copies only changed
+    containers and never mutates the shared snapshot returned by
+    ``ConversationSnapshotQuery``.
+    """
+    turn_status = str(status or "")
+    if (
+        turn_status not in _BROWSER_TERMINAL_TURN_STATUSES
+        or not isinstance(stable_projection, Mapping)
+    ):
+        return stable_projection
+    completed = turn_status == _REFERENCEABLE_TURN_STATUS
+    source_rounds = stable_projection.get("toolRounds")
+    browser_rounds = _tool_rounds_for_browser(
+        source_rounds,
+        omit_provider_replay=True,
+    )
+    source_api_rounds = stable_projection.get("apiRounds")
+    browser_api_rounds = _api_rounds_for_browser(source_api_rounds)
+    rounds_by_id = _unique_rounds_by_call_id(browser_rounds)
+    segments = stable_projection.get("segments")
+
+    segment_id_counts: dict[str, int] = {}
+    if isinstance(segments, list):
+        for segment in segments:
+            if (
+                not isinstance(segment, Mapping)
+                or segment.get("type") != "tool_use"
+            ):
+                continue
+            call_id = str(segment.get("id") or "").strip()
+            if call_id:
+                segment_id_counts[call_id] = (
+                    segment_id_counts.get(call_id, 0) + 1
+                )
+
+    source_timing_trace = stable_projection.get("timingTrace")
+    browser_timing_trace = _timing_trace_for_browser(source_timing_trace)
+
+    segments_changed = False
+    referenced_segments: list[Any] = []
+    iterable_segments = segments if isinstance(segments, list) else []
+    for source in iterable_segments:
+        segment_type = (
+            source.get("type") if isinstance(source, Mapping) else None
+        )
+        if (
+            segment_type == "thinking"
+            and not _BROWSER_PRIVATE_THINKING_SEGMENT_FIELDS.isdisjoint(source)
+        ):
+            referenced_segments.append({
+                key: value for key, value in source.items()
+                if key not in _BROWSER_PRIVATE_THINKING_SEGMENT_FIELDS
+            })
+            segments_changed = True
+            continue
+        if segment_type != "tool_use":
+            referenced_segments.append(source)
+            continue
+        call_id = str(source.get("id") or "").strip()
+        round_record = rounds_by_id.get(call_id)
+        if (
+            round_record is None
+            or segment_id_counts.get(call_id) != 1
+            or (
+                not completed
+                and str(round_record.get("status") or "") != "done"
+            )
+        ):
+            referenced_segments.append(source)
+            continue
+        if (
+            not _tool_segment_matches_round(source, round_record)
+            or source.get("result") != _segment_result_from_round(round_record)
+        ):
+            referenced_segments.append(source)
+            continue
+        referenced = dict(source)
+        referenced.pop("input", None)
+        referenced["result"] = {}
+        referenced["roundRef"] = call_id
+        referenced_segments.append(referenced)
+        segments_changed = True
+
+    if (
+        not segments_changed
+        and browser_rounds is source_rounds
+        and browser_api_rounds is source_api_rounds
+        and browser_timing_trace is source_timing_trace
+    ):
+        return stable_projection
+    projection = dict(stable_projection)
+    if segments_changed:
+        projection["segments"] = referenced_segments
+    if browser_rounds is not source_rounds:
+        projection["toolRounds"] = browser_rounds
+    if browser_api_rounds is not source_api_rounds:
+        projection["apiRounds"] = browser_api_rounds
+    if browser_timing_trace is not source_timing_trace:
+        projection["timingTrace"] = browser_timing_trace
+    return projection
+
+
+def turn_with_reference_tool_segments(stable_turn: Any) -> Any:
+    """Return one stable TurnRecord in the request-local reference view."""
+    if not isinstance(stable_turn, Mapping) or not isinstance(
+        stable_turn.get("projection"), Mapping
+    ):
+        return stable_turn
+    projection = projection_with_reference_tool_segments(
+        stable_turn["projection"],
+        status=str(stable_turn.get("status") or ""),
+    )
+    if projection is stable_turn["projection"]:
+        return stable_turn
+    turn = dict(stable_turn)
+    turn["projection"] = projection
+    return turn
+
+
+def turns_with_reference_tool_segments(stable_turns: Any) -> Any:
+    """Project a Turn list without recursively copying conversation payloads."""
+    if not isinstance(stable_turns, list):
+        return stable_turns
+    return [turn_with_reference_tool_segments(turn) for turn in stable_turns]
+
+
+def _paired_sources(
+    client_items: list[Any],
+    authority_items: list[Any],
+    identity: Any,
+) -> list[Any]:
+    """Return the stored item each client item was read from, or ``None``.
+
+    A browser edit keeps the list it read, so equal length and the same
+    identity at every position pair items by position, including duplicate or
+    missing identities. Otherwise an identity must be unique on both sides.
+    """
+    client_ids = [identity(item) for item in client_items]
+    authority_ids = [identity(item) for item in authority_items]
+    if client_ids == authority_ids:
+        return list(authority_items)
+    client_counts = Counter(client_ids)
+    authority_counts = Counter(authority_ids)
+    authority_by_id = {
+        item_id: item for item_id, item in zip(authority_ids, authority_items)
+        if item_id and authority_counts[item_id] == 1
+    }
+    return [
+        authority_by_id.get(item_id) if item_id and client_counts[item_id] == 1 else None
+        for item_id in client_ids
+    ]
+
+
+def _with_stored_replay_evidence(
+    item: Mapping[str, Any],
+    source: Mapping[str, Any],
+    fields: frozenset[str],
+    signed_field: str,
+) -> dict[str, Any] | None:
+    """Give one paired item exactly the stored provider replay evidence.
+
+    The evidence is server-owned and valid only for the exact reasoning it
+    signed: an unchanged ``signed_field`` carries the stored values, a changed
+    one carries none. A client copy, possibly stale, never survives. Returns
+    ``None`` when the item already holds exactly that evidence.
+    """
+    signed = item.get(signed_field) == source.get(signed_field)
+    evidence = {field: source[field] for field in fields if signed and field in source}
+    current = {field: item[field] for field in fields if field in item}
+    if current == evidence:
+        return None
+    restored = {key: value for key, value in item.items() if key not in fields}
+    restored.update(evidence)
+    return restored
+
+
+def _round_identity(round_record: Any) -> str | None:
+    if not isinstance(round_record, Mapping):
+        return None
+    return str(round_record.get("toolCallId") or "").strip()
+
+
+def _segment_identity(segment: Any) -> tuple[Any, Any] | None:
+    if not isinstance(segment, Mapping):
+        return None
+    return segment.get("type"), segment.get("blockId")
+
+
+def _restored_tool_rounds(client_rounds: Any, authority_rounds: Any) -> Any:
+    if not isinstance(client_rounds, list) or not isinstance(
+        authority_rounds, list
+    ):
+        return client_rounds
+    sources = _paired_sources(client_rounds, authority_rounds, _round_identity)
+    changed = False
+    restored: list[Any] = []
+    for round_record, source in zip(client_rounds, sources):
+        if not isinstance(round_record, Mapping) or not isinstance(source, Mapping):
+            restored.append(round_record)
+            continue
+        updated = _with_stored_replay_evidence(
+            round_record, source, _BROWSER_PRIVATE_TOOL_ROUND_FIELDS, "thinking",
+        )
+        snapshot = source.get("_swarmSnapshot")
+        client_snapshot = round_record.get("_swarmSnapshot")
+        if (
+            snapshot is not None
+            and client_snapshot is not None
+            and client_snapshot != snapshot
+            and client_snapshot == swarm_snapshot_for_browser(snapshot)
+        ):
+            updated = {**(updated or round_record), "_swarmSnapshot": snapshot}
+        if updated is None:
+            restored.append(round_record)
+            continue
+        restored.append(updated)
+        changed = True
+    return restored if changed else client_rounds
+
+
+def _restored_thinking_segments(
+    client_segments: Any, authority_segments: Any,
+) -> Any:
+    if not isinstance(client_segments, list) or not isinstance(
+        authority_segments, list
+    ):
+        return client_segments
+    sources = _paired_sources(client_segments, authority_segments, _segment_identity)
+    changed = False
+    restored: list[Any] = []
+    for segment, source in zip(client_segments, sources):
+        updated = (
+            _with_stored_replay_evidence(
+                segment, source, _BROWSER_PRIVATE_THINKING_SEGMENT_FIELDS, "text",
+            )
+            if isinstance(segment, Mapping) and isinstance(source, Mapping)
+            else None
+        )
+        if updated is None:
+            restored.append(segment)
+            continue
+        restored.append(updated)
+        changed = True
+    return restored if changed else client_segments
+
+
+def projection_with_restored_browser_evidence(
+    projection: Any,
+    authority: Any,
+) -> Any:
+    """Restore server evidence a browser view omitted from a client edit.
+
+    Whole-projection edits are built from the browser's TurnStore copy, so a
+    Turn arrives without provider replay and thinking signatures (every Turn
+    under ``providerReplayPayload=none``), a terminal Turn without unrendered
+    diagnostics or task-trace detail, and a terminal swarm timeline arrives
+    budgeted. ``authority`` is the stored projection at the CAS-fenced
+    revision the edit was based on. A round or segment pairs with the stored
+    one it was read from (by position when the lists still align, otherwise
+    by unique identity) and then carries exactly the stored provider replay
+    evidence while its signed thinking is unchanged, and none once it changed:
+    a client copy, possibly stale, never survives. Other omitted values are
+    restored only where the client left them absent or equal to the browser
+    view. Clients therefore cannot mint server evidence, and an unrelated edit
+    cannot silently drop it.
+    """
+    if not isinstance(projection, Mapping) or not isinstance(authority, Mapping):
+        return projection
+    restored = dict(projection)
+    changed = False
+    rounds = _restored_tool_rounds(
+        projection.get("toolRounds"), authority.get("toolRounds"),
+    )
+    if rounds is not projection.get("toolRounds"):
+        restored["toolRounds"] = rounds
+        changed = True
+    segments = _restored_thinking_segments(
+        projection.get("segments"), authority.get("segments"),
+    )
+    if segments is not projection.get("segments"):
+        restored["segments"] = segments
+        changed = True
+    for field, browser_view in (
+        ("apiRounds", _api_rounds_for_browser),
+        ("timingTrace", _timing_trace_for_browser),
+    ):
+        if field not in projection or field not in authority:
+            continue
+        stored = authority[field]
+        if projection[field] != stored and projection[field] == browser_view(stored):
+            restored[field] = stored
+            changed = True
+    return restored if changed else projection
+
+
+def _unique_text_segment_references(
+    segments: list[Any],
+) -> dict[tuple[str, str], str]:
+    """Index exact text authorities with globally unique block identities.
+
+    A snapshot can reference many content/thinking values from one Turn. Build
+    the index once so each lookup does not rescan the same segment list. Any
+    duplicate text authority, invalid block identity, or block identity reused
+    by another segment remains absent and therefore fails closed.
+    """
+    block_id_counts: Counter[str] = Counter()
+    candidates: dict[tuple[str, str], str | None] = {}
+    for segment in segments:
+        if not isinstance(segment, Mapping):
+            continue
+        block_id = segment.get("blockId")
+        if isinstance(block_id, str):
+            block_id_counts[block_id] += 1
+        segment_type = segment.get("type")
+        text = segment.get("text")
+        if segment_type not in {"text", "thinking"} or not isinstance(text, str):
+            continue
+        key = (segment_type, text)
+        candidate = block_id if isinstance(block_id, str) and block_id else None
+        candidates[key] = None if key in candidates else candidate
+
+    return {
+        key: block_id
+        for key, block_id in candidates.items()
+        if block_id is not None and block_id_counts[block_id] == 1
+    }
+
+
+def _snapshot_reference_saves_bytes(inline: Any, reference: Any) -> bool:
+    """Require a conservative net win before introducing wire indirection."""
+    try:
+        inline_size = len(orjson.dumps(inline))
+        reference_size = len(orjson.dumps(reference))
+    except TypeError:
+        return False
+    return inline_size - reference_size >= _SNAPSHOT_REFERENCE_MIN_SAVINGS
+
+
+def _turns_with_referenced_projection_fields(
+    stable_turns: Any,
+) -> tuple[Any, dict[str, dict[str, Any]]]:
+    """Reference exact terminal projection fields from stable segments."""
+    if not isinstance(stable_turns, list):
+        return stable_turns, {}
+
+    turn_id_counts: Counter[str] = Counter()
+    for turn in stable_turns:
+        if not isinstance(turn, Mapping):
+            continue
+        turn_id = turn.get("turnId")
+        if isinstance(turn_id, str) and turn_id:
+            turn_id_counts[turn_id] += 1
+    replacements: dict[int, dict[str, Any]] = {}
+    projection_references: dict[str, dict[str, Any]] = {}
+    reference_count = 0
+    for turn_index, turn in enumerate(stable_turns):
+        if reference_count >= _SNAPSHOT_PROJECTION_MAX_REFERENCES:
+            break
+        if (
+            not isinstance(turn, Mapping)
+            or str(turn.get("status") or "")
+            not in _BROWSER_TERMINAL_TURN_STATUSES
+        ):
+            continue
+        turn_id = turn.get("turnId")
+        if (
+            not isinstance(turn_id, str)
+            or not turn_id
+            or turn_id_counts[turn_id] != 1
+        ):
+            continue
+        projection = turn.get("projection")
+        if not isinstance(projection, Mapping):
+            continue
+        segments = projection.get("segments")
+        if not isinstance(segments, list):
+            continue
+        segment_references = _unique_text_segment_references(segments)
+        turn_references: dict[str, Any] = {}
+        projected_projection: dict[str, Any] | None = None
+
+        content = projection.get("content")
+        if isinstance(content, str):
+            content_block_id = segment_references.get(("text", content))
+            content_reference_saves_bytes = False
+            if content_block_id is not None:
+                try:
+                    encoded_content_size = len(orjson.dumps(content))
+                    # The compact object's only extra bytes are its key/braces;
+                    # reuse the exact string size, including UTF-8 and escapes.
+                    content_reference_saves_bytes = (
+                        encoded_content_size >= _SNAPSHOT_CONTENT_MIN_BYTES
+                        and encoded_content_size + len(b'{"content":}')
+                        - len(orjson.dumps({turn_id: {"content": content_block_id}}))
+                        >= _SNAPSHOT_REFERENCE_MIN_SAVINGS
+                    )
+                except TypeError:
+                    pass
+            if content_reference_saves_bytes:
+                projected_projection = dict(projection)
+                projected_projection.pop("content", None)
+                turn_references["content"] = content_block_id
+                reference_count += 1
+
+        source_rounds = projection.get("toolRounds")
+        projected_rounds: list[Any] | None = None
+        round_thinking_references: dict[str, str] = {}
+        if (
+            isinstance(source_rounds, list)
+            and reference_count < _SNAPSHOT_PROJECTION_MAX_REFERENCES
+        ):
+            call_id_counts: Counter[str] = Counter(
+                round_record.get("toolCallId")
+                for round_record in source_rounds
+                if isinstance(round_record, Mapping)
+                and isinstance(round_record.get("toolCallId"), str)
+                and round_record.get("toolCallId")
+            )
+            for round_index, round_record in enumerate(source_rounds):
+                if reference_count >= _SNAPSHOT_PROJECTION_MAX_REFERENCES:
+                    break
+                if not isinstance(round_record, Mapping):
+                    continue
+                call_id = round_record.get("toolCallId")
+                thinking = round_record.get("thinking")
+                if (
+                    not isinstance(call_id, str)
+                    or not call_id
+                    or call_id != call_id.strip()
+                    or call_id_counts[call_id] != 1
+                    or not isinstance(thinking, str)
+                ):
+                    continue
+                thinking_block_id = segment_references.get(
+                    ("thinking", thinking)
+                )
+                if thinking_block_id is None or not _snapshot_reference_saves_bytes(
+                    {"thinking": thinking},
+                    {call_id: thinking_block_id},
+                ):
+                    continue
+                if projected_rounds is None:
+                    projected_rounds = list(source_rounds)
+                projected_round = dict(round_record)
+                projected_round.pop("thinking", None)
+                projected_rounds[round_index] = projected_round
+                round_thinking_references[call_id] = thinking_block_id
+                reference_count += 1
+
+        if round_thinking_references:
+            turn_references["roundThinking"] = round_thinking_references
+        if not turn_references:
+            continue
+        if projected_projection is None:
+            projected_projection = dict(projection)
+        if projected_rounds is not None:
+            projected_projection["toolRounds"] = projected_rounds
+        replacements[turn_index] = {
+            **turn,
+            "projection": projected_projection,
+        }
+        projection_references[turn_id] = turn_references
+
+    if not replacements:
+        return stable_turns, {}
+    projected_turns = list(stable_turns)
+    for turn_index, turn in replacements.items():
+        projected_turns[turn_index] = turn
+    return projected_turns, projection_references
+
+
+def _shared_document_key(encoded: bytes) -> str:
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _turns_with_shared_tool_documents(
+    stable_turns: Any,
+) -> tuple[Any, dict[str, Any]]:
+    """Intern repeated large round fields within one immutable snapshot view.
+
+    Pending/running fields are lossless because the browser restores them before
+    TurnStore or replay; this must not enable active normalization or lazy detail.
+    Storage and the default/full API remain unchanged.  The reference view
+    keeps a bounded request-local dictionary and shallow-copies only affected
+    Turn/projection/round containers.  Full SHA-256 keys plus an equality
+    check make a collision fall back to inline values rather than aliasing two
+    documents.  The browser restores these exact objects before TurnStore.
+    """
+    if not isinstance(stable_turns, list):
+        return stable_turns, {}
+
+    # Equal canonical documents have equal encoded lengths, so only documents
+    # whose length repeats can ever be shared; the rest skip SHA-256 entirely.
+    # The first document of each length waits (request-local) for a second.
+    positions: list[tuple[int, int, str]] = []
+    document_keys: list[str | None] = []
+    waiting_by_size: dict[int, tuple[int, bytes]] = {}
+    shared_sizes: set[int] = set()
+    for turn_index, turn in enumerate(stable_turns):
+        if (
+            not isinstance(turn, Mapping)
+            or str(turn.get("status") or "")
+            not in _SHARED_TOOL_DOCUMENT_TURN_STATUSES
+        ):
+            continue
+        projection = turn.get("projection")
+        rounds = (
+            projection.get("toolRounds")
+            if isinstance(projection, Mapping)
+            else None
+        )
+        if not isinstance(rounds, list):
+            continue
+        for round_index, round_record in enumerate(rounds):
+            if not isinstance(round_record, Mapping):
+                continue
+            # A stored field with the representation-only name is ambiguous;
+            # leave the whole round inline so the browser never guesses which
+            # authority minted it.
+            if _SNAPSHOT_DOCUMENT_REFS_FIELD in round_record:
+                continue
+            for field in _SHARED_TOOL_DOCUMENT_FIELDS:
+                if field not in round_record:
+                    continue
+                try:
+                    encoded = orjson.dumps(
+                        round_record[field], option=orjson.OPT_SORT_KEYS
+                    )
+                except TypeError:
+                    continue
+                size = len(encoded)
+                if size < _SHARED_TOOL_DOCUMENT_MIN_BYTES:
+                    continue
+                position = len(positions)
+                positions.append((turn_index, round_index, field))
+                document_keys.append(None)
+                if size in shared_sizes:
+                    document_keys[position] = _shared_document_key(encoded)
+                elif size in waiting_by_size:
+                    first_position, first_encoded = waiting_by_size.pop(size)
+                    document_keys[first_position] = _shared_document_key(
+                        first_encoded
+                    )
+                    document_keys[position] = _shared_document_key(encoded)
+                    shared_sizes.add(size)
+                else:
+                    waiting_by_size[size] = (position, encoded)
+                if len(positions) >= _SHARED_TOOL_DOCUMENT_MAX_REFERENCES:
+                    break
+            if len(positions) >= _SHARED_TOOL_DOCUMENT_MAX_REFERENCES:
+                break
+        if len(positions) >= _SHARED_TOOL_DOCUMENT_MAX_REFERENCES:
+            break
+    waiting_by_size.clear()
+
+    candidates: list[tuple[int, int, str, str]] = []
+    counts: Counter[str] = Counter()
+    samples: dict[str, Any] = {}
+    collisions: set[str] = set()
+    for (turn_index, round_index, field), document_key in zip(
+        positions, document_keys,
+    ):
+        if document_key is None:
+            continue
+        value = stable_turns[turn_index]["projection"]["toolRounds"][
+            round_index
+        ][field]
+        if document_key in samples and samples[document_key] != value:
+            collisions.add(document_key)
+        else:
+            samples.setdefault(document_key, value)
+        candidates.append((turn_index, round_index, field, document_key))
+        counts[document_key] += 1
+
+    eligible: set[str] = set()
+    for _turn_index, _round_index, _field, document_key in candidates:
+        if (
+            document_key in eligible
+            or document_key in collisions
+            or counts[document_key] < 2
+        ):
+            continue
+        if len(eligible) >= _SHARED_TOOL_DOCUMENT_MAX_DOCUMENTS:
+            break
+        eligible.add(document_key)
+    if not eligible:
+        return stable_turns, {}
+
+    refs_by_round: dict[tuple[int, int], dict[str, str]] = {}
+    shared_documents: dict[str, Any] = {}
+    for turn_index, round_index, field, document_key in candidates:
+        if document_key not in eligible:
+            continue
+        refs_by_round.setdefault((turn_index, round_index), {})[
+            field
+        ] = document_key
+        shared_documents.setdefault(document_key, samples[document_key])
+
+    projected_turns: list[Any] = []
+    for turn_index, turn in enumerate(stable_turns):
+        if not isinstance(turn, Mapping):
+            projected_turns.append(turn)
+            continue
+        projection = turn.get("projection")
+        rounds = (
+            projection.get("toolRounds")
+            if isinstance(projection, Mapping)
+            else None
+        )
+        if not isinstance(rounds, list):
+            projected_turns.append(turn)
+            continue
+        projected_rounds: list[Any] = []
+        changed = False
+        for round_index, round_record in enumerate(rounds):
+            field_refs = refs_by_round.get((turn_index, round_index))
+            if not field_refs or not isinstance(round_record, Mapping):
+                projected_rounds.append(round_record)
+                continue
+            projected_round = {
+                key: value
+                for key, value in round_record.items()
+                if key not in field_refs
+            }
+            projected_round[_SNAPSHOT_DOCUMENT_REFS_FIELD] = field_refs
+            projected_rounds.append(projected_round)
+            changed = True
+        if not changed:
+            projected_turns.append(turn)
+            continue
+        projected_turns.append({
+            **turn,
+            "projection": {**projection, "toolRounds": projected_rounds},
+        })
+    return projected_turns, shared_documents
+
+
+def _turns_with_lazy_legacy_images(
+    turns: Any,
+    *,
+    conversation_id: Any,
+    owner_cache_scope: str,
+) -> Any:
+    """Replace duplicate historical image bytes with immutable fetch URLs."""
+    if (
+        not isinstance(turns, list)
+        or not isinstance(conversation_id, str)
+        or not conversation_id
+        or len(conversation_id) > 256
+        or not isinstance(owner_cache_scope, str)
+        or not owner_cache_scope
+        or len(owner_cache_scope) > 64
+    ):
+        return turns
+    turn_id_counts = Counter(
+        turn.get("turnId")
+        for turn in turns
+        if isinstance(turn, Mapping)
+        and isinstance(turn.get("turnId"), str)
+        and turn.get("turnId")
+    )
+    projected_turns: list[Any] = []
+    encoded_conversation_id = quote(conversation_id, safe="")
+    for turn in turns:
+        if not isinstance(turn, Mapping) or turn.get("status") != "completed":
+            projected_turns.append(turn)
+            continue
+        turn_id = turn.get("turnId")
+        revision = turn.get("projectionRevision")
+        projection = turn.get("projection")
+        if (
+            not isinstance(turn_id, str)
+            or not turn_id
+            or len(turn_id) > 128
+            or turn_id_counts[turn_id] != 1
+            or not isinstance(revision, int)
+            or isinstance(revision, bool)
+            or revision < 1
+            or not isinstance(projection, Mapping)
+        ):
+            projected_turns.append(turn)
+            continue
+        images = projection.get("images")
+        if not isinstance(images, list):
+            projected_turns.append(turn)
+            continue
+        projected_images: list[Any] = []
+        changed = False
+        encoded_turn_id = quote(turn_id, safe="")
+        for image_index, image in enumerate(images):
+            uploaded_image_ref = (
+                canonical_image_ref(image.get("url"))
+                if isinstance(image, Mapping)
+                else ""
+            )
+            if uploaded_image_ref:
+                projected_image = {
+                    key: value
+                    for key, value in image.items()
+                    if key != "base64"
+                }
+                projected_image["url"] = uploaded_image_ref
+                projected_image["preview"] = uploaded_image_ref
+                projected_images.append(projected_image)
+                changed = changed or projected_image != image
+                continue
+            payload = (
+                legacy_turn_image_payload(image)
+                if image_index < MAX_TURN_IMAGES
+                else None
+            )
+            if (
+                payload is None
+                or payload.encoded_length
+                < MIN_LAZY_TURN_IMAGE_ENCODED_CHARS
+            ):
+                projected_images.append(image)
+                continue
+            projected_image = {
+                key: value
+                for key, value in image.items()
+                if key != "base64"
+            }
+            projected_image["preview"] = (
+                f"/api/v4/conversations/{encoded_conversation_id}/turns/"
+                f"{encoded_turn_id}/images/{image_index}"
+                f"?projectionRevision={revision}&ownerScope="
+                f"{quote(owner_cache_scope, safe='')}"
+            )
+            projected_images.append(projected_image)
+            changed = True
+        if not changed:
+            projected_turns.append(turn)
+            continue
+        projected_turns.append({
+            **turn,
+            "projection": {**projection, "images": projected_images},
+        })
+    return projected_turns
+
+
+def snapshot_with_reference_tool_segments(
+    stable_snapshot: Any,
+    *,
+    owner_cache_scope: str = "",
+    lazy_tool_results: bool = False,
+    provider_replay: str = "full",
+) -> Any:
+    """Build the generated browser's exact, request-local snapshot view.
+
+    ``provider_replay="none"`` also omits provider replay evidence from every
+    Turn, live ones included, matching the stream that patches them.
+    """
+    if not isinstance(stable_snapshot, Mapping):
+        return stable_snapshot
+    referenced = dict(stable_snapshot)
+    # This representation field is minted here only. Never forward a stored
+    # lookalike into the generated browser boundary.
+    referenced.pop("sharedToolDocuments", None)
+    referenced.pop(_SNAPSHOT_PROJECTION_REFS_FIELD, None)
+    referenced_turns = turns_with_reference_tool_segments(
+        stable_snapshot.get("turns")
+    )
+    if provider_replay == "none" and isinstance(referenced_turns, list):
+        referenced_turns = [
+            turn_without_provider_replay(turn) for turn in referenced_turns
+        ]
+    referenced_turns = _turns_with_lazy_legacy_images(
+        referenced_turns,
+        conversation_id=stable_snapshot.get("conversationId"),
+        owner_cache_scope=owner_cache_scope,
+    )
+    referenced_turns, projection_references = (
+        _turns_with_referenced_projection_fields(referenced_turns)
+    )
+    if lazy_tool_results:
+        from lib.conversation_sync.tool_results import turns_with_lazy_tool_results
+        referenced_turns = turns_with_lazy_tool_results(
+            referenced_turns,
+            conversation_id=stable_snapshot.get("conversationId"),
+            owner_scope=owner_cache_scope,
+        )
+    referenced_turns, shared_documents = _turns_with_shared_tool_documents(
+        referenced_turns
+    )
+    referenced["turns"] = referenced_turns
+    if shared_documents:
+        referenced["sharedToolDocuments"] = shared_documents
+    if projection_references:
+        referenced[_SNAPSHOT_PROJECTION_REFS_FIELD] = projection_references
+    return referenced
+
+
+__all__ = [
+    "change_without_provider_replay",
+    "projection_patch_without_provider_replay",
+    "projection_with_reference_tool_segments",
+    "projection_with_restored_browser_evidence",
+    "projection_with_stable_segments",
+    "projection_without_provider_replay",
+    "public_change_with_stable_segments",
+    "public_turn_with_stable_segments",
+    "public_value_with_stable_segments",
+    "snapshot_with_reference_tool_segments",
+    "turn_with_reference_tool_segments",
+    "turn_without_provider_replay",
+    "turns_with_reference_tool_segments",
+]

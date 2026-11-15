@@ -1,0 +1,173 @@
+"""Environment-insensitive request normalization for LLM record/replay.
+
+The recorder and the replayer MUST compute request identity through this one
+module so environment differences (checkout path, tmp root, home directory,
+host OS release, the current date) never break replay matching.
+Normalization is deliberately small and stable: when a legitimate product
+change alters the request itself the rule is **fix fixtures, not
+normalizers** — re-record the scenario and review the diff instead of
+teaching this module a new special case.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import platform
+import re
+import tempfile
+
+# ISO calendar dates (``2026-09-17``) plus the long renderings a composed
+# system prompt uses when it spells the date out for the model
+# (``September 17, 2026`` / ``17 September 2026``).  A leading weekday name
+# (``Thursday, September 17, 2026``) is covered because the month-anchored
+# pattern matches the tail.
+_MONTHS = (
+    r'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|'
+    r'Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|'
+    r'Nov(?:ember)?|Dec(?:ember)?'
+)
+_DATE_PATTERNS = (
+    re.compile(r'\b\d{4}-\d{2}-\d{2}\b'),
+    re.compile(rf'\b(?:{_MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?,\s*\d{{4}}\b'),
+    re.compile(rf'\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTHS})\s+\d{{4}}\b'),
+)
+
+
+def _host_os_names() -> list[str]:
+    """This host's OS as a composed prompt prints it (``Linux 4.18.0``).
+
+    Anchored on the system name so a bare release such as Windows ``10``
+    never rewrites unrelated numbers.
+    """
+    system, release = platform.system(), platform.release()
+    if not system or not release:
+        return []
+    return [f'{system} {release}', f'{system} {release.split("-", 1)[0]}']
+
+
+def _path_pattern(path: str) -> re.Pattern:
+    """``path`` only where it is a path: it begins the name and ends at a
+    separator or the end of the name.
+
+    A host path is also prose: under ``HOME=/root`` a tool description's
+    "failure/root cause" must stay text, as must ``./root``, ``~/root`` and
+    ``/srv/root``. A following name character makes another name
+    (``/rootfs``, ``/root.bak``); a sentence's closing period does not.
+    """
+    return re.compile(r'(?<![A-Za-z0-9_.~-])' + re.escape(path)
+                      + r'(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])')
+
+
+def _environment_replacements(cwd: str) -> list[tuple[str, re.Pattern, str]]:
+    """Ordered (needle, pattern, placeholder) host-fact rewrites, longest first."""
+    paths: list[tuple[str, str]] = []
+    if cwd:
+        paths.append((os.path.normpath(str(cwd)), '{{CWD}}'))
+    tmp = os.path.normpath(tempfile.gettempdir())
+    paths.append((tmp, '{{CWD}}'))
+    home = os.path.normpath(os.path.expanduser('~'))
+    if home and home != os.sep:
+        paths.append((home, '{{HOME}}'))
+    rewrites = [(needle, _path_pattern(needle), placeholder) for needle, placeholder in paths]
+    rewrites.extend((name, re.compile(re.escape(name)), '{{OS}}')
+                    for name in _host_os_names())
+    # Longest first so a nested cwd wins over its tmp/home parent.
+    rewrites.sort(key=lambda rewrite: len(rewrite[0]), reverse=True)
+    # Drop duplicates (cwd may BE the tmp dir) while preserving order.
+    seen: set[str] = set()
+    unique: list[tuple[str, re.Pattern, str]] = []
+    for rewrite in rewrites:
+        if rewrite[0] and rewrite[0] not in seen:
+            seen.add(rewrite[0])
+            unique.append(rewrite)
+    return unique
+
+
+def _normalize_text(text: str, replacements: list[tuple[str, re.Pattern, str]]) -> str:
+    for needle, pattern, placeholder in replacements:
+        if needle in text:
+            text = pattern.sub(placeholder, text)
+    for pattern in _DATE_PATTERNS:
+        text = pattern.sub('{{DATE}}', text)
+    return text
+
+
+def normalize_value(value, *, cwd: str):
+    """Deep-normalize one JSON-ish value for environment-stable digests.
+
+    Strings are rewritten: absolute ``cwd``/tmp paths become ``{{CWD}}``, the
+    user's home directory becomes ``{{HOME}}`` (each only where it is a path,
+    never inside other text), this host's OS name and
+    release become ``{{OS}}``, and calendar dates become ``{{DATE}}``.  Dicts
+    and lists are recursed; scalars pass through.
+    """
+    replacements = _environment_replacements(cwd)
+    return _normalize(value, replacements)
+
+
+def _normalize(value, replacements: list[tuple[str, str]]):
+    if isinstance(value, str):
+        return _normalize_text(value, replacements)
+    if isinstance(value, dict):
+        return {
+            _normalize_text(str(key), replacements): _normalize(
+                item, replacements)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize(item, replacements) for item in value]
+    return value
+
+
+def json_digest(value) -> str:
+    """sha256 of the canonical JSON encoding: the one identity function."""
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True,
+        separators=(',', ':'), allow_nan=False).encode('utf-8')
+    return hashlib.sha256(payload).hexdigest()
+
+
+_DIGEST_FIELDS = ('model', 'messages', 'system', 'tools')
+
+
+def normalized_projection(body, *, cwd: str) -> dict:
+    """Project the semantic request fields, stripped and normalized.
+
+    ``body`` may be a plain dict or an ``AdmittedRequest`` mapping; internal
+    ``_``-prefixed execution metadata never participates in identity.
+    """
+    from lib.llm.request import strip_internal_request_fields
+    wire = strip_internal_request_fields(body)
+    projection = {key: wire.get(key) for key in _DIGEST_FIELDS}
+    return normalize_value(projection, cwd=cwd)
+
+
+def projection_field_digests(projection: dict) -> dict[str, str]:
+    """Per-top-level-field digests of one normalized projection."""
+    return {key: json_digest(value) for key, value in projection.items()}
+
+
+def normalized_request_digest(body, *, cwd: str) -> str:
+    """Content identity of one provider request, environment-independent."""
+    return json_digest(normalized_projection(body, cwd=cwd))
+
+
+def normalized_field_digests(body, *, cwd: str) -> dict[str, str]:
+    """Per-top-level-field digests; they address the recorded request store."""
+    return projection_field_digests(normalized_projection(body, cwd=cwd))
+
+
+def chat_request_proxy(messages, model, extra=None) -> dict:
+    """Project one non-streaming ``chat()`` call into digestable body shape.
+
+    ``chat()`` takes ``messages``/``model`` positionally and carries tools
+    inside ``extra``; recorder and replayer must reduce the call to the same
+    proxy before digesting so ``chat`` steps match stream-step semantics.
+    """
+    proxy: dict = {'model': model, 'messages': messages}
+    tools = (extra or {}).get('tools')
+    if tools is not None:
+        proxy['tools'] = tools
+    return proxy

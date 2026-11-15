@@ -1,0 +1,14 @@
+        <div class="settings-tab-panel" id="settingsTab_devices">
+          <!-- Devices: the caller's nodes (paired computers) + device waits.
+               数据全部由 settings/devices.ts 经 Api.desktop 拉取渲染；添加电脑走本机控制的配对流程。 -->
+          <div class="stg-section">
+            <div class="settings-section-title" data-i18n="devices.agentsTitle">我的电脑</div>
+            <p class="settings-desc" data-i18n="devices.agentsDesc">已配对的电脑都会显示在这里，可在项目面板中挂载其共享目录。</p>
+            <div id="devicesAgentsList"></div>
+          </div>
+          <div class="stg-section">
+            <div class="settings-section-title" data-i18n="devices.waitsTitle">等待设备上线</div>
+            <p class="settings-desc" data-i18n="devices.waitsDesc">你的设备重新上线后，这些对话会自动继续。</p>
+            <div id="devicesWaitsList"></div>
+          </div>
+        </div>

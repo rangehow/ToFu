@@ -1,0 +1,46 @@
+/* World workspace shell layout (application-shell/page-host.ts). The office HUD spans the top; below it the
+ * scene fills the window and the application's own conversation column docks beside it: `head` holds the
+ * world's person panel header and `body` either the brief or the classic transcript with its composer.
+ * page-host sets data-conversation-dock; this sheet places the column and shows it only when docked. Every
+ * other piece of classic chrome in .main (top bar, presence strip, the coordinators' headers) stays hidden.
+ * Below 1024px an open column takes the whole width under the HUD, so the HUD's classic switch stays visible.
+ * Before the application names a workspace, html[data-landing] (index.html's pre-paint script) already shows
+ * the office backdrop instead of the classic chrome. */
+body[data-workspace="world"] .sidebar,
+body[data-workspace="world"] .main > :not(#worldPageContainer):not(.chat-wrapper),
+html[data-landing="world"] body:not([data-workspace]) .sidebar,
+html[data-landing="world"] body:not([data-workspace]) .main > :not(#worldPageContainer) { display: none; }
+html[data-landing="world"] body:not([data-workspace]) .main { background: var(--world-backdrop); }
+#worldPageContainer { display: none; }
+body[data-workspace="world"] #worldPageContainer { display: contents; }
+
+body[data-workspace="world"] .main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-areas: "hud hud" "scene head" "scene body";
+  min-width: 0;
+  min-height: 0;
+  height: 100dvh;
+  background: var(--world-backdrop);
+}
+body[data-workspace="world"][data-conversation-dock="brief"] .main,
+body[data-workspace="world"][data-conversation-dock="chat"] .main {
+  grid-template-columns: minmax(0, 1fr) min(44vw, 760px);
+}
+body[data-workspace="world"]:not([data-conversation-dock="chat"]) .main > .chat-wrapper { display: none; }
+/* The docked chat keeps the theme's own reading surface: classic turns are written for it, not the floor. */
+body[data-workspace="world"] .main > .chat-wrapper {
+  grid-area: body;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+@media (max-width: 1023px) {
+  body[data-workspace="world"][data-conversation-dock="brief"] .main,
+  body[data-workspace="world"][data-conversation-dock="chat"] .main {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+}

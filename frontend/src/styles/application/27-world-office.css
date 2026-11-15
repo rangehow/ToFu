@@ -1,0 +1,423 @@
+/* Office world (features/world): the live actors over the painted floor (art-worker.ts), the HUD and the
+ * person panel. The art is theme-invariant, so is everything drawn over it (studio and world palettes).
+ * Every animation conveys a state (a running attempt, a decision waiting, a document arriving, a person
+ * walking a real report) and stops under prefers-reduced-motion. Grid areas come from 01-workspace-dock.css. */
+
+.w-stage {
+  grid-area: scene;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--world-backdrop);
+  color: var(--studio-cream);
+  font-family: var(--font-ui);
+  font-size: var(--font-size-md);
+}
+.w-office {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--studio-walnut-raised) transparent;
+}
+.w-office:focus-visible { outline: none; }
+.w-world { position: relative; margin-inline: auto; opacity: 0; transition: opacity 0.35s ease; }
+.w-world[data-art="ready"] { opacity: 1; }
+.w-art { position: absolute; left: 0; top: 0; display: block; }
+.w-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+
+/* People: a sprite box shows the seated upper body; a running attempt alternates two frames on one beat. */
+.w-person {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: var(--still);
+  cursor: pointer;
+}
+/* Contact shadows are baked into the sheets (assets/README.md); typing and waiting swap cells on the beat. */
+.w-world[data-beat="1"] .w-person[data-busy], .w-world[data-beat="1"] .w-person[data-waiting] { background-position: var(--beat); }
+.w-person[data-walking] { visibility: hidden; }
+.w-person:focus-visible, .w-doc:focus-visible { outline: none; box-shadow: var(--world-focus-glow); border-radius: 0.4em; }
+.w-person[aria-current]::after {
+  content: '';
+  position: absolute;
+  left: -20%;
+  right: -20%;
+  bottom: -0.35em;
+  height: 0.5em;
+  border-radius: 50%;
+  border: 0.14em solid var(--studio-brass-bright);
+  box-shadow: 0 0 0.6em var(--studio-brass);
+}
+.w-arrive { animation: w-arrive 0.5s ease-out; }
+@keyframes w-arrive { from { opacity: 0; transform: translateY(0.4em); } to { opacity: 1; transform: none; } }
+
+/* Emblems over a head: the decision bubble or the exception badge (art EMBLEMS); the glyph text stays for
+ * hooks but is not painted. */
+.w-mark {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  width: 20px;
+  height: 22px;
+  color: transparent;
+  font-size: 0;
+  background: center / 100% 100% no-repeat;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.w-mark:empty { display: none; }
+.w-person[data-emphasis="decision"] .w-mark { background-image: var(--art-emblem-decision); }
+/* The bubble lifts on the shared beat (paint-only offset; no per-element animation layer). */
+.w-world[data-beat="1"] .w-person[data-emphasis="decision"] .w-mark { bottom: calc(100% + 0.125rem); }
+.w-person[data-emphasis="exception"] .w-mark { height: 20px; background-image: var(--art-emblem-exception); }
+/* Waiting at the owner's door with a real question, holding the material in the hand (art hand anchor). */
+.w-person[data-waiting]::before {
+  content: '';
+  position: absolute;
+  left: var(--hand-x);
+  top: var(--hand-y);
+  width: 11px;
+  height: 13px;
+  background: var(--art-carry-report) center / 100% 100% no-repeat;
+}
+
+/* The owner's whiteboard: one note per task on the Global Router's board; it opens the Router. */
+.w-board {
+  position: absolute;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: 0.8em;
+  gap: 0.2em;
+  align-content: start;
+  padding: 0.5em 0.45em;
+  border: 0;
+  border-radius: 0.15em;
+  background: transparent;
+  font-size: 15px;
+  cursor: pointer;
+}
+.w-board[hidden] { display: none; }
+.w-note { display: block; background: var(--art-note-pending) center / contain no-repeat; }
+.w-note[data-status="in_progress"] { background-image: var(--art-note-active); }
+.w-note[data-status="completed"] { background-image: var(--art-note-done); }
+.w-note[data-status="blocked"] { background-image: var(--art-note-blocked); }
+.w-note-more { display: grid; place-items: center; color: var(--studio-ink); font: 700 0.55em/1 var(--font-ui); }
+
+/* Trophies: accepted deliveries on the owner's shelf; each opens that Worker's result. */
+.w-trophy {
+  position: absolute;
+  width: 10px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.w-trophy::before { content: ''; position: absolute; inset: 0; background: var(--art-trophy) center bottom / contain no-repeat; }
+.w-trophy-more {
+  position: absolute;
+  width: 10px;
+  color: var(--studio-cream);
+  font: 700 8px/14px var(--font-ui);
+  text-align: center;
+  pointer-events: none;
+}
+.w-board:focus-visible, .w-trophy:focus-visible { outline: none; box-shadow: var(--world-focus-glow); }
+
+/* A lit screen means an attempt is running now; nothing animates per tool call. */
+/* Box and position come from the desk prop's screen slot (skin.ts screenBox). */
+.w-screen { position: absolute; display: none; pointer-events: none; background: 0 0 / 100% 100% no-repeat; }
+.w-screen[data-on] { display: block; }
+.w-screen[data-on][data-facing="up"] { background-image: var(--art-screen-front); }
+.w-screen[data-on][data-facing="down"] { background-image: var(--art-screen-glow); }
+
+/* Team signs and plates */
+.w-banner {
+  --c: var(--studio-brass);
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: 999px;
+  background: var(--world-glass);
+  border: 1px solid color-mix(in srgb, var(--c) 75%, transparent);
+  color: var(--studio-cream);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  box-shadow: 0 0.15em 0.4em var(--world-ink-shadow);
+}
+.w-banner::before { content: ''; width: 0.6em; height: 0.6em; border-radius: 50%; background: var(--c); box-shadow: 0 0 0.5em var(--c); }
+.w-banner-name { font: 700 var(--font-size-md)/1.2 'Pixelify Sans', var(--font-ui); letter-spacing: 0.02em; }
+.w-banner-tally { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--studio-cream-muted); }
+.w-banner-tally::after { content: attr(data-label); font-size: var(--font-size-xs); }
+.w-banner-bar {
+  position: relative;
+  width: 3.4em;
+  height: 0.35em;
+  border-radius: 1em;
+  overflow: hidden;
+  background: var(--world-hairline);
+}
+.w-banner-bar::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--done, 0) * 100%); background: var(--studio-good); }
+.w-banner-routine { color: var(--studio-cream-muted); font-size: var(--font-size-xs); }
+.w-banner[hidden], .w-banner-tally[hidden], .w-banner-routine[hidden], .w-plate[hidden] { display: none; }
+.w-banner[data-stale] { opacity: 0.72; border-style: dashed; }
+.w-plate {
+  position: absolute;
+  padding: var(--space-1) var(--space-2);
+  border-radius: 0.5em;
+  background: var(--world-glass);
+  color: var(--studio-cream);
+  font: 700 var(--font-size-xs)/1.2 'Pixelify Sans', var(--font-ui);
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* Documents on the owner's desk: plain paper for a report, a gold folder with a ribbon for a deliverable. */
+.w-doc {
+  position: absolute;
+  width: 19px;
+  height: 23px;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  font-size: 15px;
+  background: center / 100% 100% no-repeat;
+  transform: rotate(-4deg);
+}
+.w-doc[data-kind="report"] { background-image: var(--art-doc-report); }
+.w-doc[data-kind="deliverable"] { background-image: var(--art-doc-deliverable); transform: rotate(3deg); }
+.w-doc:hover { filter: brightness(1.08); }
+/* Workers' results stack in the in-tray: the pile art shows the stack, the badge counts it. */
+.w-doc.w-pile {
+  width: 21px;
+  height: 26px;
+  background-image: var(--art-doc-pile);
+  transform: rotate(-2deg);
+}
+.w-pile::after {
+  content: attr(data-pile);
+  position: absolute;
+  right: -0.55em;
+  top: -0.7em;
+  min-width: 1.15em;
+  padding: 0 0.2em;
+  border-radius: 0.6em;
+  background: var(--studio-walnut);
+  color: var(--studio-cream);
+  font: 700 0.6em/1.15em var(--font-ui);
+  text-align: center;
+  transform: rotate(4deg);
+}
+.w-pile[data-pile="1"]::after { content: none; }
+/* The Watchdog's beacon: a static glow, shown only while an incident is open. */
+.w-alarm {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  background: var(--art-alarm) center / 100% 100% no-repeat;
+  pointer-events: none;
+}
+.w-alarm[hidden] { display: none; }
+.w-drop { animation: w-drop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+@keyframes w-drop { from { opacity: 0; transform: translateY(-0.8em) rotate(-12deg); } to { opacity: 1; } }
+
+/* A real report walking in: the author carries the document until it lands on the desk. */
+.w-walker {
+  position: absolute;
+  left: 0;
+  top: 0;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  will-change: transform;
+  z-index: 30;
+}
+/* The carried document sits at the frame's hand anchor; walking away (back view) it is in front of the body. */
+.w-walker[data-carry]::after {
+  content: '';
+  position: absolute;
+  left: var(--hand-x);
+  top: var(--hand-y);
+  width: 11px;
+  height: 13px;
+  background: var(--art-carry-report) center / 100% 100% no-repeat;
+}
+.w-walker[data-carry="deliverable"]::after { background-image: var(--art-carry-deliverable); }
+.w-walker[data-layer="back"]::after { display: none; }
+
+.w-empty {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  max-width: 28em;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 0.8em;
+  background: var(--world-glass-strong);
+  color: var(--studio-cream);
+  text-align: center;
+  line-height: 1.5;
+  transform: translate(-50%, -50%);
+}
+.w-empty[hidden] { display: none; }
+
+.w-tip {
+  position: absolute;
+  z-index: 50;
+  max-width: 20em;
+  padding: var(--space-1) var(--space-2);
+  border-radius: 0.5em;
+  border: 1px solid var(--world-hairline);
+  background: var(--world-glass-strong);
+  color: var(--studio-cream);
+  font-size: var(--font-size-sm);
+  line-height: 1.35;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+}
+.w-tip b { display: block; font-weight: 700; }
+.w-tip span { color: var(--studio-cream-muted); }
+
+/* HUD: one walnut bar across the top of the workspace, above the floor and the panel. */
+.w-hud {
+  grid-area: hud;
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-2) var(--space-4);
+  background: var(--studio-walnut);
+  border-bottom: 1px solid var(--world-hairline);
+  box-shadow: var(--studio-bevel), 0 0.2em 0.6em var(--world-ink-shadow);
+  color: var(--studio-cream);
+  font-family: var(--font-ui);
+}
+.w-brand { display: flex; align-items: center; gap: var(--space-2); font: 700 var(--font-size-xl)/1 'Pixelify Sans', var(--font-ui); color: var(--studio-brass-bright); letter-spacing: 0.06em; }
+.w-live { width: 0.55em; height: 0.55em; border-radius: 50%; background: var(--studio-warn); box-shadow: 0 0 0.6em var(--studio-warn); }
+.w-live[data-state="live"] { background: var(--studio-good); box-shadow: 0 0 0.6em var(--studio-good); }
+.w-live[data-state="offline"] { background: var(--studio-bad); box-shadow: 0 0 0.6em var(--studio-bad); }
+.w-digest { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; min-width: 0; color: var(--studio-cream-muted); font-size: var(--font-size-sm); }
+.w-chip { padding: var(--space-1) var(--space-2); border-radius: 999px; background: var(--world-glass); white-space: nowrap; }
+.w-chip[data-tone] { font-weight: 700; color: var(--studio-ink); }
+.w-chip[data-tone="decision"] { background: var(--studio-ask); }
+.w-chip[data-tone="exception"] { background: var(--studio-bad); color: var(--studio-cream); }
+.w-chip[data-tone="deliverable"] { background: var(--world-folder); }
+.w-chip[data-tone="loading"] { background: var(--world-glass-strong); color: var(--studio-cream); }
+/* Digits stay in the interface font: the pixel face makes 2/8 and 5/9 ambiguous at HUD size. */
+.w-clock { margin-left: auto; color: var(--studio-cream-muted); font: 700 var(--font-size-md)/1 var(--font-ui); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.w-classic { flex: none; }
+@media (max-width: 1023px) {
+  .w-hud { gap: var(--space-2); padding: var(--space-2) var(--space-3); }
+  .w-digest { flex-wrap: nowrap; overflow: hidden; }
+  .w-chip:not([data-tone]) { display: none; }
+}
+
+/* Person panel: walnut header, parchment brief; the classic chat takes the same column when chatting. */
+.w-panel-head {
+  --c: var(--studio-brass);
+  grid-area: head;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--studio-walnut);
+  color: var(--studio-cream);
+  border-bottom: 1px solid var(--world-hairline);
+  box-shadow: inset 0.25em 0 0 var(--c);
+}
+.w-panel-head[hidden], .w-brief[hidden] { display: none; }
+.w-portrait {
+  flex: none;
+  border-radius: 0.7em;
+  background-color: color-mix(in srgb, var(--c) 30%, var(--studio-walnut-raised));
+  background-repeat: no-repeat;
+  box-shadow: inset 0 0 0 1px var(--world-hairline);
+}
+.w-panel-titles { min-width: 0; flex: 1; }
+.w-panel-titles h2 { margin: 0; font-size: var(--font-size-xl); line-height: 1.25; overflow-wrap: anywhere; }
+.w-panel-titles p { margin: 0; color: var(--studio-cream-muted); font-size: var(--font-size-sm); }
+.w-tabs { display: flex; gap: var(--space-1); padding: var(--space-1); border-radius: 999px; background: var(--studio-walnut-raised); }
+.w-tab {
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--studio-cream-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.w-tab[aria-pressed="true"] { background: var(--studio-brass); color: var(--studio-ink); }
+.w-tab:focus-visible { outline: 2px solid var(--studio-brass-bright); outline-offset: 2px; }
+.w-brief {
+  --c: var(--studio-brass);
+  grid-area: body;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4) var(--space-5) var(--space-8);
+  background: var(--studio-parchment);
+  color: var(--studio-ink);
+  font-size: var(--font-size-lg);
+  line-height: 1.55;
+}
+.w-brief:focus-visible { outline: none; }
+.w-brief-section { margin-bottom: var(--space-6); }
+.w-brief-head { margin: 0 0 var(--space-2); color: var(--studio-ink-muted); font-size: var(--font-size-xs); font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+.w-tone-decision { color: var(--studio-warn-ink); }
+.w-tone-exception { color: var(--studio-bad-ink); }
+.w-tone-deliverable { color: var(--studio-good-ink); }
+.w-brief-title { margin: 0 0 var(--space-2); font-size: var(--font-size-xl); font-weight: 700; }
+.w-meta { margin: 0 0 var(--space-2); color: var(--studio-ink-muted); font-size: var(--font-size-sm); }
+.w-markdown { overflow-wrap: anywhere; }
+.w-markdown p, .w-markdown ul, .w-markdown ol { margin: 0 0 var(--space-2); }
+.w-markdown ul, .w-markdown ol { padding-left: var(--space-5); }
+.w-markdown h4 { margin: var(--space-3) 0 var(--space-1); font-size: var(--font-size-md); }
+.w-markdown code { padding: 0 var(--space-1); border-radius: 0.3em; background: var(--studio-parchment-deep); font-family: var(--font-mono); font-size: 0.88em; }
+.w-markdown pre { overflow: auto; padding: var(--space-2); border-radius: 0.4em; background: var(--studio-parchment-deep); font-family: var(--font-mono); font-size: var(--font-size-sm); }
+.w-decision {
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--studio-warn);
+  border-radius: 0.7em;
+  background: color-mix(in srgb, var(--studio-ask) 26%, var(--studio-parchment));
+}
+.w-link { padding: 0; border: 0; background: none; color: var(--studio-info-ink); font: inherit; font-size: var(--font-size-sm); text-decoration: underline; cursor: pointer; }
+.w-link-primary { padding: var(--space-1) var(--space-3); border-radius: 999px; background: var(--studio-brass); color: var(--studio-ink); font-weight: 700; text-decoration: none; }
+.w-link:focus-visible { outline: 2px solid var(--studio-info-ink); outline-offset: 2px; }
+.w-checks { margin: 0 0 var(--space-3); padding: 0; list-style: none; }
+.w-check { display: flex; gap: var(--space-2); margin-bottom: var(--space-2); }
+.w-check-icon { flex: none; width: 1.4em; height: 1.4em; display: grid; place-items: center; border-radius: 50%; background: var(--studio-parchment-deep); font-weight: 800; font-size: var(--font-size-sm); }
+.w-check[data-verdict="met"] .w-check-icon { background: var(--studio-good); color: var(--studio-good-ink); }
+.w-check[data-verdict="unmet"] .w-check-icon { background: var(--studio-bad); color: var(--studio-cream); }
+.w-check[data-verdict="unknown"] .w-check-icon { background: var(--studio-warn); color: var(--studio-warn-ink); }
+.w-check-text { min-width: 0; overflow-wrap: anywhere; }
+.w-check-evidence { color: var(--studio-ink-muted); font-size: var(--font-size-sm); }
+.w-review, .w-delivery { margin: 0 0 var(--space-2); font-size: var(--font-size-md); }
+.w-review[data-decision="accept"] { color: var(--studio-good-ink); }
+.w-review[data-decision="rework"], .w-review[data-decision="reject"] { color: var(--studio-bad-ink); }
+.w-delivery[data-status="blocked"] { color: var(--studio-bad-ink); }
+.w-delivery code { font-family: var(--font-mono); }
+.w-progress { position: relative; height: 0.5em; margin-bottom: var(--space-1); border-radius: 1em; overflow: hidden; background: var(--studio-parchment-deep); }
+.w-progress::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: calc(var(--done, 0) * 100%); background: var(--studio-good-ink); }
+.w-tasks, .w-list { margin: var(--space-2) 0 0; padding-left: var(--space-5); font-size: var(--font-size-md); }
+.w-tasks li[data-status="in_progress"] { font-weight: 700; }
+
+@media (prefers-reduced-motion: reduce) {
+  .w-world { transition: none; }
+  .w-arrive, .w-drop { animation: none; }
+  /* The decision bubble does not lift; its still stand-in carries a heavier ring instead. */
+  .w-person[data-emphasis="decision"] .w-mark { width: 26px; height: 28px; background-image: var(--art-emblem-decision-still); }
+  /* Switched on while the beat is up: every person still shows its state's named still cell. */
+  .w-world[data-beat="1"] .w-person[data-busy], .w-world[data-beat="1"] .w-person[data-waiting] { background-position: var(--still); }
+  .w-world[data-beat="1"] .w-person[data-emphasis="decision"] .w-mark { bottom: 100%; }
+}

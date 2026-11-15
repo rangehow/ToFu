@@ -1,0 +1,167 @@
+"""Unified async-handle tools: ``poll`` and ``kill``.
+
+One contract for everything that runs in the background and reports back
+later: background shell commands (``run_command`` with background=true),
+swarm sub-agents (``spawn_agents``), tasks in other conversations, and a
+bound Coordinator's Workers (``delegate_project_work`` assignment IDs), the
+only handles a Coordinator reaches (``coordinator_poll_tool``).
+
+Design contract (owner ruling):
+
+* ``poll()`` with no id is a snapshot dashboard of everything this user
+  owns; ``poll(id, wait_s)`` blocks (at most ``POLL_WAIT_CAP_S``) until that
+  handle finishes, new input arrives for the turn, or the task stops. A long
+  wait costs no model request; a short cap only forced extra rounds that
+  re-read the whole prompt (owner decision 2026-10-28). There is no
+  partial-result spam — a running handle reports a compact status, a
+  finished handle reports its full result once.
+* ``kill`` is THE way background work stops. run_command has no timeout:
+  commands run to completion unless killed or stopped by the user. A
+  command still running after ``AUTO_BACKGROUND_AFTER_S`` returns a bg_*
+  handle instead of holding its tool call, in every task composition.
+* The retired per-family surfaces (``check_background_command``,
+  ``await_agents``, ``await_task``, ``kill_background_command``,
+  ``await_project_workers``) stay dispatchable for conversation-latched
+  schemas; fresh name mistakes are routed here by name repair.
+"""
+
+from copy import deepcopy
+
+# Below the stuck-task reaper's 30-minute silence threshold with margin; the
+# handler clamps it further when an operator lowers that threshold.
+POLL_WAIT_CAP_S = 1500
+# Owner decision 2026-11-03: a foreground command returns control to the model
+# inside the provider's 5-minute prompt-cache TTL, so the next request reads a
+# warm prefix and a stuck command cannot hold the agent. Waiting longer is the
+# model's explicit `poll`, which costs no model request. Measured from process
+# spawn (lib/tasks_pkg/handlers/_background_command.py).
+AUTO_BACKGROUND_AFTER_S = 120
+
+POLL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "poll",
+        "description": (
+            "Check or wait on background work: background shell commands "
+            "(bg_* handles from run_command), swarm "
+            "sub-agents from spawn_agents, or tasks running in other "
+            "conversations. With no id, returns a snapshot of everything "
+            "currently running. With an id, returns that handle's status — "
+            "and its full result once finished. Set wait_s to block until "
+            "completion: the wait returns as soon as the handle finishes, "
+            "new input arrives for this turn, or the task is stopped, so a "
+            "long wait costs no extra model requests (capped at "
+            f"{POLL_WAIT_CAP_S} s = {POLL_WAIT_CAP_S // 60} minutes; on cap "
+            "returns the running snapshot — call again to keep waiting). "
+            "Background command "
+            "completions are also delivered automatically, so only wait "
+            "when there is nothing else to do."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": (
+                        "One handle: a bg_* command id, a swarm agent id, or "
+                        "a task id. Legacy aliases command_id / agent_id / "
+                        "task_id are accepted."
+                    )
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Several handles in one call.",
+                },
+                "wait_s": {
+                    "type": "integer", "minimum": 0, "maximum": POLL_WAIT_CAP_S, "default": 0,
+                    "description": (
+                        "Seconds to block waiting for completion (at most "
+                        f"{POLL_WAIT_CAP_S}; returns as soon as the handle "
+                        "finishes). Omit for an instant snapshot."
+                    )
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["any", "all"],
+                    "description": (
+                        "With multiple command ids or multiple swarm-agent ids: 'any' (default) "
+                        "returns as soon as one finishes; 'all' waits for "
+                        "every match."
+                    )
+                },
+            },
+        },
+    },
+}
+
+KILL_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "kill",
+        "description": (
+            "Stop background work by handle: a bg_* background command "
+            "(its process tree receives SIGTERM then SIGKILL) or a RUNNING "
+            "swarm sub-agent. There is no timeout auto-kill — this is how "
+            "background work is stopped. Tasks in other conversations "
+            "cannot be killed from here; use that conversation's Stop "
+            "control. Call poll with no arguments first if unsure what is "
+            "running."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": (
+                        "Handle to stop: a bg_* command id or a swarm agent "
+                        "id. Legacy alias command_id is accepted."
+                    )
+                },
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Several handles in one call.",
+                },
+            },
+        },
+    },
+}
+
+BACKGROUND_TOOL_NAMES = frozenset({'poll', 'kill'})
+
+
+def coordinator_poll_tool() -> dict:
+    """``poll`` as a bound Coordinator sees it: the same name, parameters and validation.
+
+    A Coordinator's only handles are its Workers' assignment IDs; the handler
+    refuses everything else (docs/PROJECT_COORDINATION.md, "Waiting for Workers").
+    """
+    tool = deepcopy(POLL_TOOL)
+    function = tool['function']
+    function['description'] = (
+        'Check or wait on your Workers by the assignment IDs delegate_project_work returned. '
+        'Without wait_s it returns their state at once. With wait_s it waits, without model requests, '
+        'until any Worker of yours settles, listed or not (mode=all: every listed one), new input arrives '
+        'for you (a human message or steer, a project message or a background completion: answer it, then '
+        'poll the pending IDs it names), you are stopped, or wait_s passes '
+        f'(at most {POLL_WAIT_CAP_S} s); a settlement you were not told about yet returns at once. Each '
+        'settlement is reported once in workers; unchanged names listed Workers already reported, and '
+        'pending separates running executions from accepted deliveries still publishing without you. '
+        'A timeout leaves Workers running: poll the pending IDs again, '
+        'never recreate work. A Worker settles when it needs you or is final: its execution ended '
+        '(review its evidence), or, after you accepted it with a checkpoint, its delivery became '
+        'canonical or was held (act on delivery.reason). Results carry evidence excerpts, conversation/'
+        'Turn links and the recorded error of a failed Worker; a delegation that could not start '
+        'reports failed_to_start with its error and recovery. Without IDs it lists this request\'s '
+        'Workers that are running or starting. Worker settlement also resumes you automatically.')
+    properties = function['parameters']['properties']
+    properties['id']['description'] = 'One Worker assignment ID.'
+    properties['ids']['description'] = 'Several Worker assignment IDs in one call.'
+    properties['mode']['description'] = ("'any' (default) returns as soon as one Worker "
+                                         "settles; 'all' waits for every listed one.")
+    return tool
+
+
+__all__ = ['POLL_TOOL', 'KILL_TOOL', 'BACKGROUND_TOOL_NAMES', 'POLL_WAIT_CAP_S',
+           'AUTO_BACKGROUND_AFTER_S', 'coordinator_poll_tool']

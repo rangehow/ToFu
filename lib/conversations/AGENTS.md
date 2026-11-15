@@ -1,0 +1,117 @@
+# Conversation and Project Brain guidance
+
+## Scope
+
+This package owns owner-scoped conversations and the signal-driven Project
+Brain application boundary. Turn synchronization lives in
+`lib/conversation_sync/`; Project Brain event/projection transactions live in
+`lib/storage_authority_sql/operations_pkg/_project_brain.py`; Git publication lives
+in `lib/integration_control.py`. Read
+`docs/modules/conversations_project_brain.md`.
+
+## Editing rules
+
+- Scope every query and command by explicit owner plus the canonical project
+  key. Do not add a process-global user or storage/path shortcut.
+- Work items derive only from successful runtime signals. Their conversation
+  is immutable and their state is exactly active/completed/failed/cancelled;
+  never add claim, lease, block, reopen, transfer, or autonomous dispatch.
+- Project Context is a final user-role dynamic suffix. Never modify the system
+  prompt, replay snapshots, or acknowledge narrative before provider success.
+- Cross-conversation overlap advice comes from the integration radar
+  (`lib/project_mod/integration_radar.py`): task-local, bounded delivery; its
+  repository files are reconstructible advice, never coordination state or
+  authority, and never a reason to wait or refuse. Push is a UI hint.
+- Charter decisions require an immutable registered Checker version. Checker
+  processes use argv without a shell, bounded output/time, and fail publication
+  without changing terminal work state.
+- Git/ref behavior delegates to integration control and its repository contract.
+
+## Coordination message owners
+
+`session_control.py` adapts Coordinator session status and Continue/Stop to the
+ordinary conversation command/query owners; its `follow_up` gives an ended Worker
+session its next instruction through `ProjectDispatchService.follow_up`, or a
+successor assignment in that conversation once the result is final. Preserve
+target accepted config, exact Attempt identity, dispatch grants and uncertain-ACK replay. Verify the
+session-control suites in `tests/project_mod/` and `tests/conversation/`; policy
+and scope live in `docs/PROJECT_COORDINATION.md#session-execution-control`.
+
+`compaction_policy.py` reads owned coordinator/source protections for the default
+ConversationStore's manual admission and commit recheck. The reusable engine
+uses that store port; policy and verification live in `docs/CONTEXT_COMPACTION.md`.
+
+`project_coordination.py` owns explicit coordinator metadata binding and the
+ordinary root role guidance; it starts no execution.
+`project_messages.py` owns passive project originals (same-project, and between
+the owner's project leads across projects, `docs/ROUTER.md` R13) and
+consideration receipts; `contracts/project_messages_v1.json` is the shared tool/wire authority
+and its `history` section the durable segment layout (verify both
+`test_project_message_history.py` suites, unit and three-authority).
+Neither module dispatches work or extends ProjectWorkItem lifecycle. Optional
+input budget and exact physical-request witnesses live in
+`lib/tasks_pkg/message_input_{budget,receipts}.py`; do not copy those policies
+into queue, HTTP, UI or message handlers. Regenerate coordination TypeScript
+with `scripts/gen_project_coordination_contract.py` after schema changes.
+
+`lead_attachments.py` is the one admission boundary for files a sender attaches to
+a delegation brief, follow_up instruction or project message: default deny, only
+files the sending task can read, stored through `lib.media_attachments`; never a
+second attachment store. Verify `test_lead_attachments.py` (real Sidecar) and
+`test_lead_attachment_delivery.py`.
+
+`coordinator_reports.py` publishes human-facing reports through canonical
+assistant Turns. Its portable records contain a transient retry intent and a
+latest-report/read pointer; never put a second transcript or model executor
+there. `project_coordination_v1.schema.json` owns report shapes. Verify with
+`test_coordinator_reports.py`, `test_coordinator_reports_authority.py`, the
+coordination HTTP journey and the real Coordinator browser journey.
+
+`coordinator_workers.py` adapts current-request delegation, result waiting and
+review, cancellation and paged status to ProjectDispatchService. No private executor or synthetic human input.
+A Coordinator waits with `poll` (`poll_workers`); its wait ends by the rule every
+`poll` shares (`lib/tasks_pkg/wait_interruption.py`), and `await_workers` is the
+retired `await_project_workers` entry over the same wait.
+The source/policy authority is `lib/project_dispatch/delegation.py`; verify
+`test_coordinator_workers.py` and native `test_coordinator_workers_authority.py`.
+`coordinator_births.py` holds the Worker births that complete after
+`delegate_project_work` returned, on the Coordinator task only: storage stays
+the authority for born Workers; Worker polls, Worker pages, cancel and finish read
+births first. Verify `test_coordinator_births.py`. A delegation also starts while
+its response streams (`ToolSpec.stream_start_by_name`); its ordinary dispatch
+adopts that birth and `settle_streamed_delegations` withdraws unadopted ones
+("A delegation starts when its arguments are complete"); verify
+`test_coordinator_stream_start.py`.
+
+`coordinator_progress.py` owns the Coordinator-authored task board
+(`progress*` in `project_coordination_v1.schema.json`): one CAS head per
+owner/project for the current binding, full replacement, no authority. It is
+the human's whole progress view; questions never live there (they are
+`ask_human` cards). It is also the Coordinator's only checklist: both
+`update_task_progress` and `todo_write` write the head under the task's
+progress lock, the task's todo state is its plan projection, and each write's
+round carries `progress_view` for the live board and rail ("One progress
+source" in `docs/PROJECT_COORDINATION.md`); never add a second progress store
+or a push-only refresh. While the Coordinator auto-translates, the head also
+carries a reconstructible display translation of the board's own texts;
+`coordinator_progress_translation.py` derives it with one optional job on the
+shared translation lane through `lib/translate/display_texts.py`. Verify
+`test_coordinator_progress.py` and `tests/translate/test_display_texts.py`.
+
+`coordinator_task_history.py` keeps every task the board ever showed: one
+record per task identity, written inside the board's head CAS attempt (only
+changed tasks), the head holding the board's `taskKeys`. The identity rule and
+the transcript seed of a pre-history head are "Task history" in
+`docs/PROJECT_COORDINATION.md`; it is a history view, not a second progress
+store, and the board stays the only checklist. Verify
+`test_coordinator_task_history.py` and the history HTTP journey.
+
+`coordinator_budget.py` owns the passive request usage projection from dispatch
+receipts. Requests have no spending ceiling, so there are no defaults to save.
+Verify the usage HTTP owner journey and native restart.
+
+## Verification
+
+Run `tests/project_mod/test_project_brain_signal_driven.py`, then the Sidecar cutover,
+context-composer, integration-control, API, and frontend gates for crossed
+boundaries.

@@ -1,0 +1,460 @@
+{
+ "generator": "scripts/gen_world_art.py",
+ "bars": {
+  "text_and_glyphs": 4.5,
+  "non_text_boundaries": 3.0
+ },
+ "checks": [
+  {
+   "name": "emblem and document boundary (ring #2A1A0A + halo #FFF7EC) vs floor",
+   "theme": "light",
+   "fg": "#2A1A0A",
+   "bg": "#D7A86E",
+   "ratio": 7.77,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #2A1A0A + halo #FFF7EC) vs floor_alt",
+   "theme": "light",
+   "fg": "#2A1A0A",
+   "bg": "#C9975C",
+   "ratio": 6.45,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #2A1A0A + halo #FFF7EC) vs desk_top",
+   "theme": "light",
+   "fg": "#2A1A0A",
+   "bg": "#E3C79A",
+   "ratio": 10.32,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #2A1A0A + halo #FFF7EC) vs owner_desk",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#7A4B2C",
+   "ratio": 6.89,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #2A1A0A + halo #FFF7EC) vs pad",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#3F5D48",
+   "ratio": 6.89,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "character contour vs floor",
+   "theme": "light",
+   "fg": "#3B2A1F",
+   "bg": "#D7A86E",
+   "ratio": 6.32,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "character contour vs floor_alt",
+   "theme": "light",
+   "fg": "#3B2A1F",
+   "bg": "#C9975C",
+   "ratio": 5.25,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "decision glyph \"?\" vs amber",
+   "theme": "light",
+   "fg": "#2A1A0A",
+   "bg": "#F4B740",
+   "ratio": 9.35,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "exception glyph \"!\" vs red",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#B8322A",
+   "ratio": 5.6,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "deliverable / done glyph vs seal green",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#26684A",
+   "ratio": 6.25,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "waiting glyph vs slate",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#56607A",
+   "ratio": 5.9,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "deliverable seal vs gold folder",
+   "theme": "light",
+   "fg": "#26684A",
+   "bg": "#E8B04A",
+   "ratio": 3.4,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "report header vs paper",
+   "theme": "light",
+   "fg": "#5A7A9C",
+   "bg": "#FBF7EE",
+   "ratio": 4.18,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "code glyph vs code card",
+   "theme": "light",
+   "fg": "#8FD3E0",
+   "bg": "#2E3443",
+   "ratio": 7.44,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs owner",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#5A4A6E",
+   "ratio": 7.49,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs router",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#3E6E72",
+   "ratio": 5.37,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs lead",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#4A5E7E",
+   "ratio": 6.19,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs watchdog",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#3A4560",
+   "ratio": 8.98,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs engineer",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#4C5C78",
+   "ratio": 6.36,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs researcher",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#4E716E",
+   "ratio": 5.05,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs reviewer",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#5E6644",
+   "ratio": 5.71,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs writer",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#62506C",
+   "ratio": 6.86,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs analyst",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#4D6E52",
+   "ratio": 5.39,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs executor",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#6E5A44",
+   "ratio": 6.16,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs general",
+   "theme": "light",
+   "fg": "#FFF7EC",
+   "bg": "#56607A",
+   "ratio": 5.9,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #FFF3D1 + halo #2A1A0A) vs floor",
+   "theme": "dark",
+   "fg": "#FFF3D1",
+   "bg": "#4A3426",
+   "ratio": 10.49,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #FFF3D1 + halo #2A1A0A) vs floor_alt",
+   "theme": "dark",
+   "fg": "#FFF3D1",
+   "bg": "#43301F",
+   "ratio": 11.3,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #FFF3D1 + halo #2A1A0A) vs desk_top",
+   "theme": "dark",
+   "fg": "#FFF3D1",
+   "bg": "#8C6A48",
+   "ratio": 4.45,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #FFF3D1 + halo #2A1A0A) vs owner_desk",
+   "theme": "dark",
+   "fg": "#FFF3D1",
+   "bg": "#4A2E1C",
+   "ratio": 11.18,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "emblem and document boundary (ring #FFF3D1 + halo #2A1A0A) vs pad",
+   "theme": "dark",
+   "fg": "#FFF3D1",
+   "bg": "#2F3A2E",
+   "ratio": 10.76,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "character contour vs floor",
+   "theme": "dark",
+   "fg": "#D8C3A0",
+   "bg": "#4A3426",
+   "ratio": 6.76,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "character contour vs floor_alt",
+   "theme": "dark",
+   "fg": "#D8C3A0",
+   "bg": "#43301F",
+   "ratio": 7.28,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "decision glyph \"?\" vs amber",
+   "theme": "dark",
+   "fg": "#2A1A0A",
+   "bg": "#F4B740",
+   "ratio": 9.35,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "exception glyph \"!\" vs red",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#B8322A",
+   "ratio": 5.6,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "deliverable / done glyph vs seal green",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#26684A",
+   "ratio": 6.25,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "waiting glyph vs slate",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#56607A",
+   "ratio": 5.9,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "deliverable seal vs gold folder",
+   "theme": "dark",
+   "fg": "#26684A",
+   "bg": "#E8B04A",
+   "ratio": 3.4,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "report header vs paper",
+   "theme": "dark",
+   "fg": "#5A7A9C",
+   "bg": "#EFE7D6",
+   "ratio": 3.63,
+   "min": 3.0,
+   "ok": true
+  },
+  {
+   "name": "code glyph vs code card",
+   "theme": "dark",
+   "fg": "#8FD3E0",
+   "bg": "#2E3443",
+   "ratio": 7.44,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs owner",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#5A4A6E",
+   "ratio": 7.49,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs router",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#3E6E72",
+   "ratio": 5.37,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs lead",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#4A5E7E",
+   "ratio": 6.19,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs watchdog",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#3A4560",
+   "ratio": 8.98,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs engineer",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#4C5C78",
+   "ratio": 6.36,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs researcher",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#4E716E",
+   "ratio": 5.05,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs reviewer",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#5E6644",
+   "ratio": 5.71,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs writer",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#62506C",
+   "ratio": 6.86,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs analyst",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#4D6E52",
+   "ratio": 5.39,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs executor",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#6E5A44",
+   "ratio": 6.16,
+   "min": 4.5,
+   "ok": true
+  },
+  {
+   "name": "role emblem glyph vs general",
+   "theme": "dark",
+   "fg": "#FFF7EC",
+   "bg": "#56607A",
+   "ratio": 5.9,
+   "min": 4.5,
+   "ok": true
+  }
+ ],
+ "failures": []
+}

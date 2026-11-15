@@ -1,0 +1,150 @@
+/* Edit previews and settled batch disclosures; shared design-token chrome. */
+.ptool-diff-preview {
+  padding: var(--space-2) 0;
+  max-height: 340px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.55;
+}
+.ptool-diff-line {
+  display: flex;
+  padding: var(--control-edge-inset) var(--space-3);
+  min-height: 20px;
+}
+.ptool-diff-sign {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+  font-weight: var(--weight-bold);
+  user-select: none;
+}
+.ptool-diff-code { flex: 1; white-space: pre-wrap; word-break: break-all; }
+.ptool-diff-del { background: var(--error-bg); color: var(--error-text); }
+.ptool-diff-del .ptool-diff-sign { color: var(--error-text); }
+.ptool-diff-add { background: var(--success-bg); color: var(--success-text); }
+.ptool-diff-add .ptool-diff-sign { color: var(--success-text); }
+.ptool-diff-ellipsis { opacity: 0.55; font-style: italic; }
+.ptool-diff-separator {
+  height: 1px;
+  margin: var(--space-1) var(--space-3);
+  background: var(--border);
+}
+
+/* Batch apply_diff preview. */
+.ptool-batch-preview { padding: var(--space-1) 0; }
+.ptool-batch-header {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.ptool-batch-edit { border-bottom: 1px solid var(--border); }
+.ptool-batch-edit[open] { background: var(--bg-secondary); }
+.ptool-batch-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  color: var(--text-secondary);
+  user-select: none;
+  transition: background var(--motion-fast);
+}
+.ptool-batch-summary:hover { background: var(--bg-secondary); }
+.ptool-batch-idx {
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  min-width: 22px;
+}
+.ptool-batch-path {
+  color: var(--info-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+}
+.ptool-batch-desc {
+  flex: 1;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ptool-batch-stats {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  opacity: 0.7;
+}
+.ptool-batch-edit .ptool-diff-preview {
+  max-height: 200px;
+  border-top: 1px solid var(--border);
+}
+.ptool-batch-more {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* Settled edit rows already carry their own status/ordinal/operation chrome.
+ * Do not stack the generic result rail and a second nested-list inset. */
+.ptool-batch-done-block { border-radius: var(--radius-sm); overflow: hidden; }
+.ptool-batch-done-block > summary { list-style: none; cursor: pointer; }
+.ptool-batch-done-block > summary::-webkit-details-marker { display: none; }
+.ptool-batch-done-block > summary::marker { display: none; content: ""; }
+/* The disclosure caret belongs to the summary row (an atomic flex item), not
+ * to the wrapping label — inline label text produced an extra line holding
+ * only the caret. Owner: 23-reading-process.css shared disclosure grammar. */
+.ptool-batch-done-block > .ptool-result-body {
+  margin: 0;
+  padding: 0;
+  border-left: 0;
+}
+.ptool-batch-done-list {
+  padding: var(--space-1) 0 var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ptool-batch-done-edit {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.ptool-batch-done-edit[open] { border-color: var(--border-light); }
+
+/* Exact per-edit evidence, retained even when the model output was compacted. */
+.ptool-batch-fail-detail {
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-8);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--error-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-top: 1px solid var(--border);
+}
+/* Reasons belong to individual edit rows, not the batch count header. */
+.ptool-batch-fail-reason {
+  display: inline-block;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: baseline;
+  color: var(--error-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  opacity: 0.85;
+}
+.ptool-batch-done-single { border-radius: var(--radius-sm); overflow: hidden; }

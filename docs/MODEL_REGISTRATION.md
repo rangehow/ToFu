@@ -1,0 +1,2055 @@
+# Model-routing v2 contract
+
+The machine authority for models, service providers, access, and runtime route
+selection is
+[`contracts/model_routing_v2.schema.json`](../contracts/model_routing_v2.schema.json).
+`lib/model_routing/` validates and persists one revisioned
+`tofu.model-routing/v2` aggregate per owner. There is no configured `Route`,
+provider model array, alias pool, or separate BYO routing authority.
+
+Runtime execution Slots carry the effective Model/Offering `context_window`.
+Managed Codex Offerings keep `catalog_context_window` as their last admitted
+subscription-directory baseline. Refresh updates the window only while its
+value still matches that baseline; differing owner overrides and unmarked
+legacy limits survive. A matching unmarked value may establish provenance.
+Model context remains the official creator specification, independently of
+subscription supply. Repairing ambiguous legacy values uses the registration
+CAS boundary with explicit evidence, never a catalog guess or runtime write.
+When a managed Codex catalog first declares a context window, it replaces the
+Offering's inherited Model fallback and establishes the admitted catalog
+baseline. Explicit owner limits remain overrides. Problem: preserving the old
+inheritance marker forever ignored newly available subscription limits, so a
+stale 128K Model could keep forcing premature compaction even after catalog
+refresh. Decision: transition only inherited fallback metadata to declared
+supply, bounded by the current Model; repair incorrect official Model facts
+separately through registration. Alternatives rejected: rewriting Model facts
+from subscription defaults conflates two authorities; retaining inheritance
+ignores supplier evidence and can also exceed a smaller subscription window.
+Specifications: `tests/oauth/test_oauth_outbound.py`.
+Compaction resolves it inside the task's owner/pin boundary; exact selected-slot
+admission and output clamping recheck it after fallback. Legacy model-name
+estimates are fallback knowledge only, never a replacement for configured route
+metadata. Provider-observed shrink remains bounded by the declared Offering.
+See `docs/CONTEXT_COMPACTION.md` for budget and cache-rewrite policy.
+
+## Entity meanings
+
+```text
+Creator ── Model
+              ↑
+Provider ── ProviderAccess ── Offering
+                 ├─ Connection └─ Deployment → wire_model_id
+                 └─ Credential ── authorizes Connection / Model
+```
+
+| Entity | Identity and responsibility |
+|---|---|
+| `Creator` | Public creator identity and display metadata. |
+| `Model` | One official model, unique by `(creator_id, model_id)`. Owns official capabilities, list price, context limit, lifecycle, and quality rank. Preview and dated snapshots remain distinct models. |
+| `Provider` | A service provider. Public rows are shared metadata; owner-scoped rows represent private services without weakening owner isolation. |
+| `ProviderAccess` | The owner's one access pool for one Provider. Owns enablement and account-level quota/balance policy. |
+| `Connection` | One protocol endpoint inside a ProviderAccess. Region and gateway namespace are connection metadata, not model identity. |
+| `CredentialMetadata` | Redacted credential kind, hint, quota policy, and authorization over Connections and official Models. Plaintext is stored only by the repository's encrypted secret operation. |
+| `Offering` | What one ProviderAccess actually supplies: confirmed or pending identity, actual capability subset, actual context, transaction price, priority, stale state, and enablement. |
+| `Deployment` | Exactly one Offering on one Connection under one real upstream `wire_model_id`. Probe status and identity confidence are diagnostic evidence, not enablement gates; optional `max_output_tokens` records the concrete route's verified output ceiling. |
+
+Problem: relays spell a creator's own id under the creator's publisher
+namespace (`x-ai/grok-*`, `z-ai/glm-*`, `thinkingmachines/inkling-*`,
+`inclusionai/ling-*`). Only namespaces on a hand-kept list were stripped, so
+every other creator's spelling kept its namespace inside `Model.model_id`: a
+second identity of one trained model, a withheld release-watch respelling and
+a pricing miss, patched three times (a `thinkingmachines/` id prefix, an
+OpenRouter leaf-slug fallback, an intake rule to decline `z-ai/` respellings).
+Decision: `_creator_identity.strip_creator_namespace` strips a namespace on
+the explicit list, or a `/` publisher path the family taxonomy attributes to
+the same creator as the bare id; `strip_routing_decoration` uses it. Two
+independent pieces of evidence must agree, so an unattributed namespace
+(`aion-labs/`) or one naming another creator stays. Normalization re-keys a
+sole legacy row whose namespace agrees with its creator and repoints Offerings
+and Credential grants, preserving exact `Deployment.wire_model_id`; a legacy
+row beside its bare twin merges as a trained-model alias. The prefix does not
+mean distinct variants (`grok-4.20`, `grok-4.20-multi-agent`) are the same
+model. Alternatives rejected: hiding the prefix in the browser, which leaves
+duplicate identities and broken matching in storage; extending the explicit
+list per creator (the list missed eight attributed creators' OpenRouter
+namespaces). Specifications: `tests/model_catalog/test_creator_identity.py`,
+`tests/model_routing/test_publisher_namespace_rekey.py`.
+
+Problem: relay recipes spell versions with dots (`claude-opus-5.5`,
+`claude-opus-4.7`) while developer templates spell the same Models with dashes
+(`claude-opus-5-5`). Exact-key lookups missed, so template compile minted those
+Models and Offerings at the 128,000 import default instead of the official 1M
+context. Decision: every maintained catalog lookup — `model_defaults`
+(`apply_model_defaults`, `has_exact_model_defaults`), the legacy/template
+identity match in `migration._identity_match`, the template compile pre-fill
+and the cutover context repair — matches the exact identity first, else only
+the single entry of the same creator sharing its canonical spelling: the
+spelling key of `model_defaults.spelling_identity`, which folds case and
+dot/dash/underscore/space separators only. The respelling keeps its own Model
+identity and wire ID but takes that entry's developer facts (capabilities,
+context, quality rank, inference profile, list price), which bound its
+Offering exactly like an exact match. Entries sharing the key whose borrowed
+facts are identical are one entry (the defaults catalogue declares eleven
+Models in both dot and dash spellings, so a third spelling still resolves);
+entries whose facts differ, another creator, another version, a snapshot date
+or a quantization suffix never match; a Model without an official entry
+(`claude-fable-5`) keeps the import default. Alternatives rejected: borrowing
+facts by `_creator_identity.canonical_key`, which also strips trailing
+YYYYMMDD dates, quantization suffixes (`fp8`, `awq`, …) and expert-width
+tokens so the registry can merge trained-model aliases — as a fact key it gave
+`o3-2025-04-16` the facts of `o3` and would silently misprice any dated
+snapshot or quantized variant whose facts differ from its moving alias (alias
+merging keeps that key); rebinding the relay spelling to the developer's
+identity at import (it would collapse dated snapshots the importer keeps
+distinct and churn installed Offering IDs; the registry's trained-model alias
+merge already converges true respellings); listing every spelling in every
+table (the defaults catalogue does so and still misses the next respelling);
+a name-based context estimate for relays (templates no longer apply a second
+name-based ceiling).
+Specification: `tests/model_routing/test_catalog_canonical_identity.py`.
+
+An Offering's optional `inherited_model_fields` lists `capabilities` and/or
+`context_window` inherited from its Model. Authority normalization refreshes
+the materialized values on every read/save; changing the Model therefore
+updates inherited provider metadata and runtime eligibility together. Removing
+a field from that list makes its value an explicit provider override. Legacy
+unmarked values are preserved on ordinary reads/writes; the startup provenance
+migration described below classifies them once. Pending identities can carry
+inheritance
+intent with conservative local fallback values until a Model is bound.
+Fallbacks (including the historical 32,768-token discovery budget) are not
+provider measurements. `/models` preserves explicit positive context limits
+from `context_window`/`context_length`, and marks missing context/capability
+declarations for inheritance. A successful small chat probe cannot establish
+context capacity. Specifications: `tests/model_routing/test_offering_metadata_inheritance.py`.
+The authority GET advertises `metadata_inheritance_supported`; new browser
+model additions omit the optional field when talking to an older server.
+
+Provider rows display Model list prices as **reference prices** when no
+provider price is configured. The tooltip states their Model source and
+per-million-token unit. Inherited context similarly identifies its Model
+source and is not presented as a capacity-probe result.
+
+Provider install, OAuth refresh and interrupted-cutover recovery share
+`catalog_merge.merge_missing_catalog_entities`: they may add an absent identity,
+but cannot union provider capabilities or maximum context back into an existing
+Model, replace its inference profile, display name, price or quality rank.
+Only Model settings own those changes. Templates validate against that Model;
+they no longer apply a second name-based `context_profile` ceiling afterward.
+Discovery/local/desktop adapters use `offering_metadata` to preserve declared
+context evidence; an unbound listing gets one 32,768-token admission budget,
+not a guessed model specification. Subscription catalogs retain real context
+fields and inherit when absent. Refresh preserves confirmed bindings, scoped
+metadata and credential exclusions. No metadata migration claims a live probe.
+
+
+Managed Codex Offerings additionally retain `catalog_capabilities`, the last
+admitted catalog-derived capability list. During refresh, `capabilities` follows
+the new catalog only if it still equals that per-field baseline; a narrower
+owner-authored list stays explicit. The source of an `inference_profile` alone
+is *not* evidence that capabilities have the same author. Legacy unmarked
+Offerings remain explicit rather than being silently expanded; a one-time
+owner-authorized CAS repair may update a verified legacy row through the
+ordinary registration/admission boundary. Disabled ProviderAccesses/Offerings,
+credential grants, context overrides and owner-authored profiles remain intact.
+Neither the catalog nor this baseline may claim capabilities absent from the
+official Model. This is deliberately narrower than inferring `thinking` from a
+model ID or an isolated successful response.
+
+Problem: custom OAuth entries can share the `oauth: codex` protocol but do not
+own the managed `oauth_codex` catalog baseline. Decision: refresh creates
+`catalog_capabilities` only for the actual `oauth_codex` Provider, not every
+Codex-protocol entry. The domain rejects that field on other Providers;
+loosening the domain rule would incorrectly grant catalog authorship to a
+custom endpoint. A custom entry still inherits missing context without
+rewriting the Model.
+
+Startup classifies legacy unmarked Offerings once, within the owner CAS:
+matching Model copies inherit, known provider-catalog limits remain overrides,
+and generated catalog/subscription defaults require exact stable-ID/value
+fingerprints. Redacted cutover receipts distinguish omitted fields from explicit
+provider limits, even when both materialized as 128,000. Different values and
+explicit markers (including `[]`) are retained. This fingerprint migration
+cannot recover unrecorded edits that exactly matched an old generated value;
+ambiguous differing limits remain scoped rather than being silently raised.
+Pending identities remain unknown. The migration adds no persistent history,
+worker, cache or credentials and is idempotent; its report includes identifiers
+and reasons only. See `tests/model_routing/test_model_metadata_authority.py` and the read-only
+`scripts/audit_model_configuration.py --authority export.json
+--plan-metadata-migration`. The audit checks declared control/compiler agreement,
+not provider availability or maximum context capacity.
+
+One provider-scoped wire ID may identify only one Deployment. Every distinct
+wire ID is a distinct Deployment; `aliases` and `request_ids` are rejected in
+v2 documents. A pending identity remains inspectable through an explicit
+`{provider_id, offering_id}` selection but cannot execute until identity and
+registration are complete.
+Output ceilings are applied after slot selection. Provider-error learning is
+scoped by Provider, Offering, Deployment, and protocol rather than globally by
+model name; exclusive upper bounds normalize to the largest accepted integer
+before one same-route retry.
+
+Request-name access is per-wire within a credential's grant. The visible
+ProviderAccess, Connection, Credential and Offering switches and credential
+ModelRef grants determine configured access; a credential grant carries an
+`excluded_wire_model_ids` list that withholds individual request names of
+that model, so two request names sharing a ModelRef can be enabled
+independently. A probe failure or missing successful probe does not
+override those controls. Confirmed identity remains an Offering mapping;
+pending Offerings still require an explicit provider-scoped selection.
+
+For existing v2 documents and older clients, Deployment `enabled` is accepted
+only as a deprecated boolean input and discarded by `normalize_document`.
+Canonical reads and saves omit it. True, false and missing values converge
+without modifying visible switches, grants, probe evidence or revisions on
+read; the next normal CAS save stores the normalized document. Consequently,
+a previously hidden-disabled request name is eligible whenever the retained
+controls permit it. No background migration rewrites user settings.
+The chat picker, Settings model defaults and compatibility model listings also
+consume these request names without an enablement/probe filter; removing the
+legacy field must not make configured models disappear from those selectors.
+
+## Prices, capabilities, and limits
+
+Official `Model` facts and actual `Offering` facts are deliberately separate.
+An Offering's capabilities must be a subset of its confirmed Model's
+capabilities, and its effective context must not exceed the official limit.
+
+Managed pricing-tier tags (`cheap`, owned by
+`lib/llm_dispatch/config/_pricing.py`) are exempt from the subset check:
+they derive from each provider's own price book and are re-synced from live
+prices, so a reseller undercutting the creator's list price legitimately
+carries a tier the official Model row lacks.
+Prices use `{input, output, currency, unit}` with optional cache rates;
+`unit` is `per_million_tokens`. A task price budget is a hard filter—missing or
+currency-mismatched actual pricing does not pass a requested limit.
+
+A provider may document only how it bills relative to the creator's price.
+FRIDAY (the YourProvider gateway) documents Claude cache multipliers of the base
+input but no base price, so it has no complete transaction price for an
+Offering's `actual_pricing`. Its rule lives in `lib/pricing` as provider rows
+that keep each Model's maintained base and replace only the cache
+multipliers; the evidence, gaps and rejected alternatives are recorded in
+[`modules/auth_providers_billing.md`](modules/auth_providers_billing.md)
+("Billing flow").
+
+Account RPM, TPM, daily token allowance, and balance belong to
+ProviderAccess/Credential quota policy. They are not copied into a Model or
+used as model identity.
+
+Context windows are in the serving model's own tokens, and admission compares
+them with requests measured in those units
+([serving-unit measurement](CONTEXT_BUDGET_POLICY.md#serving-unit-measurement)).
+The measured relation between Tofu's local count and each tokenizer family's
+provider-reported count is a maintained fact, not a registration field:
+`lib/model_info/token_unit_facts.json`, contract `tofu.token-unit-facts/v1`,
+validated by `lib/model_info/token_units.py`. Each family (Claude, Kimi,
+DeepSeek, GLM, Gemini, GPT; family predicates in `_family.py`) records the
+observed `provider_per_local` minimum and maximum, the sample count per member
+model, the conversations and the measurement window, all against one local
+encoding. `scripts/measure_token_units.py` derives the document from
+`debug/inspect_conversation.py --json` dumps of persisted rounds (provider
+prompt tokens over `_request_identity.admitted_local_tokens`; older rows'
+`admitted_input_tokens` was that local count) and validates it before
+`--write`. Registering a model of a new tokenizer family needs no fact: its
+requests are measured `local_unbounded` until rounds exist to measure, never a
+guessed ratio. Regenerate the facts when a family's provider count falls
+outside its range (the counter logs it) or a member's tokenizer changes.
+
+`lib/model_info/capability_taxonomy.py` remains the vocabulary authority for
+capability tags and publishes the taxonomy through `/api/v4/capabilities`.
+Adding a tag updates that one taxonomy and its parity test; routing consumes
+the Offering subset and does not maintain another list.
+
+`reranking` identifies relevance scoring rather than text conversation. It is
+excluded from the browser chat picker and chat dispatch, including stale
+pricing-tier tags. The shared provider probe reports an unsupported ranking
+probe as skipped without issuing a chat request or recommending disablement.
+This classification does not claim that a rerank HTTP executor is installed.
+
+## Model kinds and media facts
+
+`MODEL_KINDS` in
+[`capability_taxonomy.py`](../lib/model_info/capability_taxonomy.py) names
+every Model's task family (chat, image/video/audio generation, speech
+synthesis and recognition, embedding, reranking) and the media price units
+each kind bills in. `model_kind()` derives the kind from capabilities; it is
+never stored. Input-modality, feature and price tags never change it: `video`
+is video input, generated video is `video_gen`, music and sound is
+`audio_gen`. `CHAT_EXCLUDED_CAPS` is the union of the non-chat kinds' task
+capabilities, so a new kind cannot reach a chat picker by omission. The
+taxonomy payload publishes `model_kinds` and `media_price_units`; the browser
+adopts them atomically over its parity-pinned fallback.
+
+Media kinds are described by media facts, not a token context window:
+`media_pricing` holds official per-unit rates (optionally per tier, with
+`estimated` marking an amount a creator publishes while billing tokens) and
+`media_profile` holds documented generation or recognition constraints, where
+absence means undocumented, never unsupported. Their shapes are
+`mediaPricing` and `mediaProfile` in
+[`model_routing_v2.schema.json`](../contracts/model_routing_v2.schema.json);
+normalization rejects malformed facts with their field. Admission accepts a
+media price as the price evidence of a media kind. A unit that no kind of the
+Model bills in keeps it a draft, and chat, embedding and reranking Models still
+need token prices. Registration evidence may cite both facts.
+
+[`media_model_facts.json`](../lib/model_info/media_model_facts.json) holds
+maintained official facts per exact Creator/Model identity with checked dates
+and HTTPS sources; [`media_facts.py`](../lib/model_info/media_facts.py)
+validates it against the same schema definitions. `public_projection` stamps
+them as read-only `official_media_pricing` / `official_media_profile` on
+media-kind rows that registered none, never projects a maintained price whose
+units the row's kinds cannot bill, and normalization strips both on write.
+Capability routes carry the effective profile, so `/api/v4/images/models`
+lets the composer offer only documented aspect ratios and resolutions.
+
+Discovery derives a task family from an unmistakable model id, including bare
+`/models` rows that otherwise prove only `text` (`task_capability`). The public
+catalogue feed lets a generated medium decide the kind of a row that also
+emits text: video output is `video_gen`, image output `image_gen`, and audio
+made from no audio input is `audio_gen` or `tts` only when an unmistakable id
+says which (otherwise the row is not seeded); audio in and out stays an audio
+chat route. No video- or music-generation executor exists: kinds and facts
+make such Models registrable, priced, visible and reviewable without letting
+them reach chat routes or probes.
+
+Maintained media facts put Models in the registry.
+`model_defaults.maintained_media_directory` makes every identity in
+`media_model_facts.json` a developer directory Model, offered by a template or
+not; its maintained kind wins over a relay recipe that seeds it as chat. A row
+states only what facts prove: its kind's task capability, a `vendor_official`
+context rule or the import default, and reasoning `unsupported` (media
+requests compile no reasoning controls). Admission counts maintained media
+facts as exact knowledge for release-date evidence, the standing of an exact
+pricing or defaults rule, but the date itself still comes from a
+`_release.py` rule: without one the Model stays withheld, and with no live
+catalogue listing it is never a release-watch candidate. World sync also
+converges stale drafts (`converge_media_kinds`): supply seeded media
+identities as chat drafts before media kinds existed (Nano Banana GA ids
+tagged text/thinking/vision, Lyria 3 tagged text/vision), and the insert-only
+sync never revisited them. A draft converges to its maintained kind only
+where nothing but supply could have set its kind: `pending_metadata` or
+`pending_validation` (never an admitted or legacy-unmarked Model), no
+`registration_metadata`, and every bound Offering inheriting `capabilities`
+(an explicit Offering claim would fail the capability-subset invariant).
+Admission then decides readiness as for any draft; an owner who wants
+another kind registers it with evidence.
+
+Problem: the media kinds made media Models describable, but only templates and
+feeds put Models in the registry, so the maintained official facts reached no
+one, and intake declined every media generator as a non-text model. Decision:
+maintained media facts are directory knowledge, intake records them, and
+provably supply-made drafts converge. Alternatives rejected: an official
+template per media creator endpoint (Veo and Lyria are Agent Platform APIs no
+template can call); rewriting every stored kind that disagrees (overrides
+owner facts and explicit Offering claims); declining media models until an
+executor exists (the registry lists Models that exist, not ones Tofu can call
+today). Specification: `tests/model_routing/test_media_models_reach_registry.py`.
+
+Problem: media Models were described with chat facts (zero token prices, an
+import-default context window, raw tags), three hand-copied non-chat lists
+had drifted (two missed `reranking`), and relays seeded image and video
+generators as chat routes. Decision: one derived kind per Model, typed and
+admitted media facts, and a maintained official catalogue projected
+read-only. Alternatives rejected: a stored `kind` field (a second
+classification that can contradict capabilities); media units inside
+`list_pricing` (budgets, the cost frontier and compaction cost would read a
+per-image price as per-token); a free-form profile (unvalidated facts cannot
+drive pickers); name-based media facts at request time (the guessing that
+registration forbids for context and prices). Specifications:
+`tests/model_routing/test_capability_taxonomy_parity.py`,
+`tests/model_routing/test_media_model_facts.py`,
+`tests/llm_dispatch/test_discovery_inference_profiles.py`,
+`tests/providers/test_provider_template_feed.py`.
+
+## Local model artifact publication
+
+Problem: an independent search distribution needs reproducible local weights
+without duplicating Model facts or importing the Tofu host at runtime.
+Decision: [`local_model_artifacts_v1.schema.json`](../contracts/local_model_artifacts_v1.schema.json)
+references the existing Model/Creator schema and adds immutable repository,
+revision, file-size/hash and execution metadata. The developer catalog in
+`lib/model_info/local_model_artifacts.json` passes
+`lib/model_info/local_artifacts.py` and the same
+`registration.prepare_registration_document` admission as repository writes.
+Export refuses incomplete, disabled or draft Models; it creates no Provider,
+Offering, credentials, downloads, runtime rows or resident model.
+
+`scripts/gen_packaged_local_models.py` generates the package-local
+`tofu_search/generated_local_models.py`. Its detached catalog uses only stdlib;
+`--check` rejects drift without writing. Schema/admission failures preserve any
+previous generated output. This immutable artifact description is neither
+runtime enablement nor permission to invoke an endpoint.
+
+The initial Qwen3-Reranker-0.6B artifact records the creator's 2025-06-05
+release, documented 32K context and closed yes/no ranking interface. Its
+per-field evidence includes the [creator announcement](https://qwenlm.github.io/blog/qwen3-embedding/)
+and [pinned model card](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B/blob/e61197ed45024b0ed8a2d74b80b4d909f1255473/README.md).
+The model's published SiliconFlow API price is reference metadata, sourced
+from the [provider model page](https://www.siliconflow.com/models/qwen3-reranker-0-6b)
+and [provider pricing discussion](https://www.siliconflow.com/articles/en/most-accurate-reranker-for-rag-pipelines).
+It is not a local execution charge or an enabled paid supply. Local inference
+has download/compute costs; missing API prices must never be invented as zero.
+
+Alternatives rejected: importing host model modules from the standalone package
+breaks its installation boundary; a hand-maintained package registry can bypass
+admission and drift; activating a provider while publishing metadata grants
+execution authority that this build step does not own. Specifications:
+`tests/model_routing/test_local_model_artifacts.py`,
+`tests/meta/test_packaged_local_models.py`, and
+`packages/tofu-search/tests/test_local_model_manifest.py`.
+
+## Registration admission and evidence
+
+Problem: parallel import paths accepted incomplete Models and deferred failures
+to chat. Decision: both production and in-memory repository CAS operations call
+`registration.prepare_registration_document`; UI, templates, discovery, daily
+refresh and internal callers cannot publish a new usable Model around it.
+New incomplete Models are saved as `pending_metadata`; an uncompileable declared
+reasoning wire becomes `pending_validation`. Only complete, locally validated
+Models become `ready`; `disabled` is explicit and research never enables it.
+Client-supplied readiness and issue lists are checked/recomputed, not trusted.
+An invalid edit of a ready Model is rejected atomically, preserving the last
+working revision, unless the owner explicitly moves it back to a draft state.
+
+Problem: provider templates/public feeds contain supply candidates but do not
+establish first-party release, pricing, context, capability, and reasoning
+facts. World-catalog sync used to insert every candidate, so Settings showed
+automatically generated `pending_metadata`/`pending_validation` registrations.
+Decision: auto-publication checks the same projected facts as admission and
+inserts only complete, ready Models. Missing-fact candidates stay outside the
+global Model registry. An explicitly saved incomplete row or legacy import
+remains a **non-callable draft** through shared admission, preserving research,
+owner work, and migration compatibility. Sync does not prune existing drafts
+solely because their facts are missing. Alternative rejected: reject all
+incomplete repository writes, which would block legacy/provider recovery and
+safe draft research. Specifications: `tests/model_routing/test_world_catalog_sync.py`,
+`tests/model_routing/test_model_routing_contract.py`.
+
+xAI evidence boundary (checked 2026-09-24): the official [Grok 4.7 API
+page](https://docs.x.ai/developers/grok-4-7) establishes the bare ID,
+500K context, text/image input, text output, and high-default effort ladder;
+[reasoning](https://docs.x.ai/developers/model-capabilities/text/reasoning)
+cannot be disabled, [model pricing](https://docs.x.ai/developers/models/grok-4.7)
+and [release notes](https://docs.x.ai/developers/release-notes) establish
+$2/$0.50/$6 per million base input/cache/output tokens with higher rates
+above 200K prompt tokens; the [dated news index](https://x.ai/news) records
+2026-09-21. Thus `grok-4.7` is a complete exact registration, not an
+`x-ai/`-prefixed second Model. The official [multi-agent API
+guide](https://docs.x.ai/developers/model-capabilities/text/multi-agent)
+confirms the distinct unversioned `grok-4.20-multi-agent` API ID, but does
+not prove its alias-specific context and tiered prices; the dated `-0309`
+model card must not be copied onto that alias without an official mapping.
+This variant is not auto-registered, and an existing owner draft remains
+non-callable until independently evidenced.
+
+The YourProvider AIGC gateway serves Grok 4.7 only under its `aws.` deployment
+spelling: live probe 2026-10-20 returned HTTP 429 with a per-model RPM message
+for `aws.grok-4.7`, while the bare `grok-4.7` returned 400
+`不支持的模型类型` (no such deployment). The recipe therefore keeps
+`model_id: grok-4.7` and puts `aws.grok-4.7` in `request_ids`, and the mirror
+carries its own `MODEL_PRICING` / `DEFAULT_SLOT_CONFIGS` rows because cost and
+slot seeding key on the wire id.
+
+Kimi K3.1 Pro exact knowledge (checked 2026-10-27): the official
+[quickstart](https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart)
+establishes the `kimi-k3.1-pro` API id, image and video input, always-on
+thinking controlled by top-level `reasoning_effort` `low`/`high`/`max`
+(default `max`; no disable rung, so `off` degrades to `low`), and fixed
+sampling (`temperature`, `top_p` and both penalties are omitted). Its
+"Important limits" (checked 2026-11-11) set `max_completion_tokens` to a
+131,072 default and a 1,048,576 maximum, so K3.1 Pro has its own output
+ceiling instead of the K3 family's 32,768 (`lib/model_info/_max_output.py`);
+a Claude refusal fallback keeps its 128,000 budget. Moonshot's
+[pricing page](https://www.kimi.ai/resources/kimi-k3-1-pro-pricing) gives flat
+$2/$0.20/$10 input/cache-read/output per million and a 1,048,576-token window.
+The [launch post](https://www.kimi.ai/blog/kimi-k3-1-pro) says the API is
+available "today", and OpenRouter's dated `moonshotai/kimi-k3.1-pro-20261023`
+endpoint fixes that day as 2026-10-23 (US time). The contract matches K3's, but
+K3.1 Pro is its own exact group with its own evidence, not an alias. The
+`kimi-k3` release and context needles are substrings of `kimi-k3.1-pro`, so the
+K3.1 rules must precede them. Pricing is keyed on the exact id, so the model
+needs its own `MODEL_PRICING` row. The YourProvider AIGC gateway serves the public
+wire id: a live probe on 2026-10-27 got HTTP 200 on both faces, and a streamed
+effort ladder and a tool round-trip were clean on each. The recipe keeps the
+`kimi-k3` Anthropic-face pin so the K3 line rides one face. The `-highspeed`
+sibling returns 400 `不支持的模型类型` / `invalid model name` on both faces
+there and is not registered on any template. OpenRouter, Novita and NanoGPT
+listed `moonshotai/kimi-k3.1-pro` in their public `/models` catalogs on
+2026-10-27, so their curated recipes carry that wire, bound to the same Model.
+Together and Chutes self-host open weights, which Moonshot will publish by
+2026-11-04, so they wait for a listing. Specifications:
+`tests/model_routing/test_kimi_k31_pro_registration.py` and
+`bundles/yourprovider/tests/test_yourprovider_gateway_protocol_faces.py`.
+
+Tencent Hy4 exact knowledge (checked 2026-11-05): Tencent's
+[announcement](https://www.tencent.com/zh-cn/tencent-launches-hy4-joining-the-ranks-of-the-worlds-leading-open-source-ai-models/)
+releases Hy4 on 11月4日, live on Tencent Cloud TokenHub that day; OpenRouter's
+Tencent-served `tencent/hy4-20261104` endpoint fixes the year. Hy4 adds image
+understanding over Hy4 Preview and keeps its list price: ¥6/¥18 input/output
+and ¥0.3 cache hit per million, recorded like the preview row at the shared
+7.24 rate as $0.829/$2.486 with a 5% cache read. The international
+[price table](https://intl.cloud.tencent.com/zh/document/product/1300/78937)
+lists the same price as $0.834/$2.501/$0.042. TokenHub bills 50% of list until
+2026-12-31; the discount is not the list price. The TokenHub
+[model list](https://intl.cloud.tencent.com/zh/document/product/1300/78934)
+gives the `hy4` API id, a 1M window (960k max input, 64k max output), image
+understanding, structured output and function calling. The
+[deep-thinking guide](https://intl.cloud.tencent.com/zh/document/product/1300/80637)
+turns thinking on by default and documents `reasoning_effort` `high` (default)
+and `no_think`, so `no_think` is the in-ladder `disabled_effort` and every
+enabled depth resolves to `high`. The
+[tool-call guide](https://intl.cloud.tencent.com/zh/document/product/1300/80638)
+asks callers to return `reasoning_content` within a tool-call loop and accepts
+only `auto` and `none` for `tool_choice`, so the profile declares
+`preserve_history: replay` (see "Declared inference profiles"). `hy4` is a substring of
+`hy4-preview`, so the Hy4 release and context needles follow the preview's;
+the preview's own reasoning profile stays unregistered. OpenRouter's public
+catalogue lists `tencent/hy4`, and the dynamic feed carries that wire.
+Specification: `tests/model_routing/test_hy4_registration.py`.
+
+LongCat-2.5 knowledge and YourProvider gateway supply (checked 2026-11-06): the
+LongCat API [change log](https://longcat.chat/platform/docs/change-log) makes
+LongCat-2.5 available on 2026-11-02 (LongCat-2.5-Preview on 2026-09-25, so the
+preview release needle precedes its substring). The
+[model-parameter page](https://longcat.chat/platform/docs/api/model-params)
+fixes a 1,048,576 context, a 262,144 `max_tokens` limit, temperature pinned by
+the server (1.0 thinking on, 0.7 off) and the `thinking` enabled/disabled
+switch, the same `thinking_type` wire LongCat-2.0 declares; there is no effort
+ladder, so `supported_efforts` is `[]` (`thinking_budget` is a token cap, not an
+effort). The change log and
+[launch blog](https://longcat.ai/blog/longcat-2.5/) announce native image
+understanding. The official LongCat template lists the Model beside
+LongCat-2.0. The list price is the LongCat API platform's pricing card (behind
+the platform login; the docs `/pricing` path 404s), supplied by the owner on
+2026-11-06: ¥2/¥8 input/output and ¥0.04 cache hit per million, recorded at
+the shared 7.24 rate as $0.276/$1.105 with a 2% cache read, which makes the
+Model `ready` and `cheap`. The YourProvider recipe keeps the gateway's internal
+`cost: 0.0` like LongCat-2.0. Live probes on
+your-llm-gateway.example.com that day: `LongCat-2.5` answered 200 with thinking on and off
+and described an image; `LongCat-2.5-Thinking` is not a model name there
+(400). `hy4` answered 429 with a per-model RPM message (served, App-level
+quota), so the YourProvider template carries `hy4` beside `hy4-preview` with the
+Tencent facts above. Specification:
+`tests/model_routing/test_longcat_25_registration.py`.
+
+The Models settings projection shows `ready` rows and legacy unmarked rows
+awaiting migration, not persisted `pending_*` or `disabled` drafts. Drafts
+remain in authority for research/admission and provider diagnostics; hiding
+them only in presentation does not grant route eligibility or delete state.
+
+Required facts are release date, prices/currency/unit, capabilities, positive
+context, and explicit reasoning support. Supported reasoning declares the wire,
+disable behavior, effort ladder (`[]` for toggle/budget only), and default for a
+nonempty ladder. The actual compiler validates on/off/native effort controls
+without a generation request. Unknown, unsupported and explicit zero pricing
+are distinct. Model reference prices never become provider transaction prices.
+Dates inferred from a name fragment cannot complete an unknown registration:
+use exact maintained knowledge or sourced `registration_metadata`.
+
+Admission also validates each Deployment's resolved provider inference profile.
+It recomputes `registration_issues` on every write and excludes incomplete
+Deployments. An invalid update of an enabled, previously valid provider supply
+is rejected; explicitly disable the Offering to stage incomplete changes.
+Compiler checks reuse up to 128 request-local profile results (keys capped at
+16 KiB); this creates no resident cache or background worker.
+
+Routing excludes incomplete/disabled Models, and unbound pending identities.
+They remain inspectable/probeable, but a provider-scoped selection cannot bypass
+registration. Request preparation does not silently discard requested reasoning.
+Unchanged legacy unmarked Models remain compatible during migration. The daily
+job classifies at most 32 unused legacy rows per pass; active legacy Models keep
+their prior authority until a complete researched replacement passes admission.
+
+Problem: discovered subscription models could remain incomplete until manual
+repair, and supplier fallback values could be mistaken for official facts.
+Decision: retain pending supply as the retry source and use one sourced admission
+service. Alternative rejected: synchronous research during chat or trusting a
+supplier listing as a complete first-party registration.
+
+The owner-scoped daily intelligence job and the existing Codex catalog worker
+share `model_catalog.registration_research`. Exact maintained facts run first:
+a previously stored draft can become ready through admission without a search
+or LLM call. An incomplete new remote Codex identity remains a pending Offering
+outside the Model registry; its conservative transport fallback is never an
+official context/capability fact. Research gathers release date, list price,
+context, capabilities and reasoning, then atomically publishes a complete Model
+and binds its exact pending supplies through the existing identity reconciler.
+Existing drafts and owner-authored facts remain intact.
+
+Research fetches only exact creator/official documentation hosts (including
+OpenAI's developer and ChatGPT Learn hosts), accepts page text rather than
+search snippets, and permits one bounded LLM extraction per Model. Every
+proposed fact names fetched citation URLs with matching verbatim excerpts;
+per-field URLs and the actual verification date persist with the facts. These
+checks establish provenance, not infallible factual correctness. Unsupported
+pricing schedules, missing facts and contradictions stay unresolved. A complete
+Model and each actual Deployment must pass the ordinary registration compiler;
+research does not invent wire controls or paid probe success. Missing reasoning
+fields can be filled individually without replacing configured controls.
+
+Research cannot rewrite existing identities, context/capabilities, provider
+wires, credentials, prices or owner policy. A Model-content comparison and CAS
+fence concurrent edits; removed or re-bound pending supplies cannot publish a
+late proposal. Shutdown/account-change checks and the deadline apply before
+extraction and before commit. Extraction excludes the target model and yields
+on shared contention so an incomplete selection cannot research itself.
+
+Resource budget: the existing process-wide nonblocking research flight, at most
+two Models, two searches (15s each), four 4,000-character pages per Model, and
+two LLM calls (20s and 2,048 output tokens each). No new worker, queue, cache or
+history is retained; pending supply is the retry source. A 2,000-candidate scan
+on the development host measured 70.6ms and 820 KiB temporary heap peak; it
+adds no resident worker or persisted retry row. The daily parent keeps
+its 300s deadline. Codex research uses its existing polling thread outside the
+catalog refresh lock, with a 90s deadline: startup/new catalog data triggers a
+pass, unchanged unresolved supply retries at most hourly. Research failure does
+not terminate token/catalog polling. Catalog admission failures still preserve
+the last-good catalog. Active candidates are prioritized and date-based
+rotation (hourly for Codex, daily for the scheduled pass) avoids always retrying
+the same first entry. Complete exact registrations precede unresolved research.
+
+GPT-6.1 Sol exact knowledge (checked 2026-09-30): the official
+[model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol) supplies
+1,050,000 context, 128,000 maximum output, text/image input, text output,
+$2/$0.10/$10 input/cache-read/output per million, and low/medium/high/xhigh/max
+reasoning with medium default and no disable rung. The
+[ChatGPT/Codex changelog](https://learn.chatgpt.com/docs/changelog) establishes
+2026-09-29 availability. Its exact source recipe/defaults do not copy the older
+Sol's disable behavior. The shared OpenAI price compiler derives cache-read
+multipliers per Model, preserving this model's 5% cache price and the existing
+long-context tiers. The YourProvider AIGC gateway serves the public wire id
+`gpt-6.1-sol` (live probe 2026-10-19: HTTP 429 per-model RPM, not 400
+`不支持的模型类型`). Do not pin `X-Custom-Header` or Kunlun
+serving aliases on that provider template; gray cells are temporary (see
+`bundles/yourprovider/provider_templates/yourprovider.json` `_extra_headers_note`).
+The YourProvider AIGC gateway serves the public wire id
+`gpt-6.1-sol` (live probe 2026-10-19: HTTP 429 per-model RPM, not 400
+`不支持的模型类型`). Do not pin `X-Custom-Header`: it selects a named
+gray cell, and when `your-header-value` was decommissioned on 2026-09-21
+the whole provider 502'd on both faces (see
+`bundles/yourprovider/provider_templates/yourprovider.json` `_extra_headers_note`).
+
+Kunlun serving aliases (2026-10-20): a *deployment* selector is acceptable
+where a gray *cell* is not, because it names a live deployment instead of a
+temporary cell, and it must stay scoped to one face. Measured on App `**0733`
+for `gpt-6.1-sol`:
+
+| request | result |
+|---|---|
+| `/v1/openai/native`, `gpt-6.1-sol` | 429 per-model RPM (repeated at 0/20/40/60s, plus one global `96/96` concurrency 429) |
+| `/v1/responses`, `gpt-6.1-sol` | same RPM wall |
+| `/v1/responses`, `gpt-6.1-sol` + `x-context-provider: kunlun` | 400 `该模型在 provider 下无可用账号` |
+| `/v1/openai/native`, `kunlunbedrock.gpt-6.1-sol-m17` | 400 `配置不存在` |
+| `/v1/responses`, `kunlunbedrock.gpt-6.1-sol-m17` | 200 + `invalid_prompt` `配置不存在` |
+| `/v1/responses`, `kunlunbedrock.gpt-6.1-sol-m17` + selector | 200, streams; tool calls and `reasoning.encrypted_content` intact |
+
+So the selector belongs to the *deployment*, not the account: it lives on a
+face (`faces.kunlun`) and reaches only the wire ids that name it in the
+recipe's `request_faces` map. Three consequences, each enforced by tests in
+`tests/providers/test_provider_face_per_wire.py` and
+`bundles/yourprovider/tests/test_yourprovider_served_catalog_sync.py`:
+
+* the alias is a SECOND entry of the Offering's `request_ids`; the public id
+  stays first, so a retired `-m17` revision costs one probe verdict and never
+the model;
+* the selector must not be lifted to the provider (or another face) — with it,
+every model not served under that selector answers 400; template-supply probes
+obey the same rule (`test_template_supply_sync.py::test_template_probe_sends_each_face_only_its_own_headers`),
+as does `scripts/yourprovider_template_sync.py` through the same header and recipe
+face-pin helpers, and a `gateway_namespace` (face) Connection never supplies
+the endpoint or headers of default-endpoint cells
+(`::test_probe_plan_never_gives_default_cells_a_face_connection`);
+* that endpoint rejects sampling (`temperature` → 400 `Unsupported parameter`),
+  declared as `faces.kunlun.inference_profile.sampling.temperature='omit'`
+  because that is where it was measured.
+
+A card installed **before** the kunlun pin exists (the 2026-10-20 user's
+case) holds only the public wire. Template-supply convergence is insert-only,
+so it would never revisit the existing Offering — and the new kunlun face URL
+(`/v1`) also breaks the template fingerprint, skipping the access entirely.
+`_backfill_request_faces` closes that: it treats a selector-only face as
+optional during fingerprint matching, creates the missing kunlun Connection
+(deterministic id) with its `x-context-provider` header and
+`sampling.temperature='omit'` profile, grants it to the access credentials,
+and appends the alias Deployment onto the existing Offering. Existing wires,
+connections and credential exclusions are never modified; the pass is
+idempotent. Specification:
+`tests/model_routing/test_template_supply_sync.py::test_face_pinned_alias_is_backfilled_onto_existing_offering`.
+**Declared face capabilities converge too (2026-10-21).** Insert-only
+convergence left another gap: a card that already rode the kunlun face kept
+the profile that face had when it was created. That endpoint streams opaque
+`reasoning` items whose only payload is `reasoning.encrypted_content`, asked
+for or not. Without `features.responses_reasoning_replay` the route cannot
+send such an item back, so it loses reasoning continuity between tool rounds;
+before 2026-11-09 Tofu also retained the item, and checked conversion then
+refused the next request in `request-prepare` as
+`protocol_conversion:mandatory_continuity_unrepresentable` (two live
+conversations died at tool rounds 4–5). Retention now follows the request's
+replay decision ([LLM I/O](modules/llm_io.md#encrypted-reasoning-one-replay-decision)),
+so an undeclared route degrades instead of failing. `_converge_declared_face`
+now applies the face's declared `extra_headers`, `responses_profile` and
+`inference_profile` onto the Connection the template itself created
+(`gateway_namespace` non-empty), per section for the profile and per key for
+`features`, so owner-declared features survive. It never touches a
+namespace-less (owner) Connection, never writes a key the recipe does not
+declare, and is idempotent; `repaired_connections` reports it. Declaring the
+feature is the right direction rather than dropping the item: undeclared
+replay is the closed-world default, and this face both emits the item and
+serves the wire id that produces it, so declared replay keeps the reasoning
+round-tripping. Specifications:
+`tests/model_routing/test_template_supply_sync.py::test_declared_face_capability_converges_onto_installed_face_connection`
+and `::test_declared_face_convergence_never_touches_an_owner_connection`.
+**Adding a request name by hand had the same defect from the other side.**
+The Add-request-name action bound the new Deployment to "the first enabled
+Connection", so `kunlunbedrock.gpt-6.1-sol-m17` landed on the card's
+`/v1/anthropic` face and answered 400 `配置不存在` — the name existed in the
+matrix and could never work, which reads as "the model is broken". Two
+invariants now hold:
+
+* **Wiring is per wire, not per card.** `planRequestNameFaces` (browser)
+  resolves each new request name to its template face and stages/extends that
+  face Connection (base URL, protocol, selector headers, responses profile)
+  with the credential grant dispatch requires. It deliberately asks the
+  template, because the panel cannot know that one id needs
+  `x-context-provider` and another must not carry it.
+* **The face per wire comes from the shared resolver.** Server-side
+  convergence calls `llm_dispatch.provider_face.resolve_face` — the resolver
+  the provider probe already uses and the template compiler encodes — instead
+  of re-deriving "default vs pinned" in the supply pass. That keeps Claude
+  models on the Anthropic wire while retargeting a mis-wired alias. Only a
+  Connection the template namespaced is retargeted; a wire on a generic
+  (namespace-less) Connection is left alone, because no template face claims
+  that endpoint.
+
+Corrections discard the row's probe evidence (a 400 from the wrong endpoint is
+not evidence about the model) and are idempotent. Specifications:
+`tests/model_routing/test_template_supply_incremental.py`,
+`tests/frontend/test_request_name_faces.py`, and
+`tests/providers/test_provider_model_add.py`.
+
+**A `kunlunbedrock.*` spelling does not imply the kunlun face.** The prefix
+names a deployment, not a transport: the face still comes from
+`resolve_face`'s family rule, so a Claude model's alias belongs on the
+Anthropic Connection with no `x-context-provider` selector. `claude-opus-5.5`
+carries `kunlunbedrock.claude-opus-5.5-m17`, which answers Anthropic Messages
+and 400s on `/v1/responses` (`该模型在 provider 下无可用账号`), and it LEADS
+`request_ids` because the `aws.` spelling is already at its per-App envelope
+while the alias answers — the reverse of the default rule that keeps the
+public id first, applied only where a measurement says so. Specification:
+`tests/providers/test_provider_face_per_wire.py::test_the_shipped_recipe_keeps_the_claude_alias_on_the_anthropic_face`.
+
+`_backfill_request_faces` and `_transplant` match a declared face by
+`gateway_namespace` before considering endpoint/protocol. URL or protocol
+matching alone is invalid when `kunlun` and `tokrouter` share `/v1`: it can
+retarget one selector's Deployment onto the other face and send the wrong
+`x-context-provider`. The default-face lookup must likewise exclude named
+selector Connections: before the repair, processing Claude first found the
+TokRouter Connection for Anthropic, then the TokRouter-pinned alias matched
+Kunlun's Responses Connection and was retargeted there. A later sync therefore
+changed the effective selector to `kunlun` even though TokRouter's Connection
+was intact. `resolveProviderFaceConnection` enforces the same exact namespace
+match in the browser; an unowned same-URL legacy row is eligible only before
+multiple faces share that URL. Specifications:
+`tests/model_routing/test_template_supply_sync.py::test_claude_default_face_does_not_steal_a_tokrouter_connection`
+and `tests/provider_connection_staging.test.cjs`.
+
+An owner endpoint with no namespace is never claimed by a face that shares
+its URL with another declared face.
+
+Two measured gateway rules decide whether a failure belongs to the recipe: an
+unserved id and a served-but-ungranted one answer the SAME 400, so only a 200
+proves service; and a per-App `每分钟请求次数超过限制` 429 is *served* evidence.
+Because the shared-project gate is keyed per provider+model, one saturated App
+credential parks the whole family and burns a turn's `max_429_attempts` while
+sibling credentials answer — withdraw that credential's grant (owner-scoped and
+reversible) instead of declaring the model broken.
+
+Specifications:
+`tests/model_routing/test_subscription_registration_research.py`,
+`tests/oauth/test_codex_catalog.py`, and
+`bundles/yourprovider/tests/test_yourprovider_served_catalog_sync.py`.
+
+TokRouter request names (checked 2026-11-10): `x-context-provider: tokrouter`
+is a distinct selector on `/v1/responses`; it must not reuse the `kunlun`
+Connection or leak onto the default/Anthropic faces. Per-model 429s established
+`tokrouter.claude-opus-5.5`, `tokrouter.claude-sonnet-5.5`,
+`tokrouter.gemini-3.8-flash-m17` and `tokrouter.gemini-4-argon-m17` as served
+request names of their existing Claude/Gemini identities, explicitly pinned to
+this Responses face. They are Deployments, never new dotted/distilled Models.
+The exact `tokrouter.gpt-5.5.distill-m17` and
+`tokrouter.gpt-5.6-sol.distill-m17` probes returned 200 with verified generated
+text on two saved credentials and per-model 429s on the other two. Neither
+OpenAI nor the accessible ModelPlaza card binds either spelling to the proposed
+base Model or defines a separate distilled model, so these two remain
+non-callable pending identities with the conservative 32K discovery fallback,
+not aliases of GPT-5.5/GPT-5.6-Sol. `tokrouter.gpt-5.6-luna-coding` got
+provider-no-account 400s on Responses across all four credentials and an
+inconsistent credit-exhausted response on the no-selector face; it is not
+registered as served. Owner monitoring is SSO-permission-gated for this account.
+
+GPT-5.5's [official model page](https://developers.openai.com/api/docs/models/gpt-5.5)
+and [API changelog](https://developers.openai.com/api/docs/changelog) establish
+the 2026-04-24 API release (the default snapshot is dated 2026-04-23),
+1,050,000 context, text/image input, none/low/medium/high/xhigh reasoning with
+medium default, $5/$0.50/$30 input/cache-read/output per million and 2x
+input/1.5x output above 272K. The YourProvider card supplies only the separate
+actual CNY price (¥31.16/¥186.95 per million), never the Model's USD reference.
+Gemini 4 Argon's official recipe now carries the established 1,048,576 window
+so relay supply no longer narrows the Model to the older 128K provider card.
+Specification: `bundles/yourprovider/tests/test_yourprovider_tokrouter_request_names.py`.
+
+GPT-6.1 Terra exact knowledge (checked 2026-10-28): the official
+[model page](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
+supplies the `gpt-6.1-terra` id, 1,050,000 context, 128,000 maximum output,
+text/image input, text output, and $1/$0.05/$5 input/cache-read/output per
+million with $1.25 30-minute cache writes; prompts above 272K tokens cost 2x
+input/cache and 1.5x output for the whole request, matching the
+[pricing page](https://developers.openai.com/api/docs/pricing). Unlike GPT-6.1
+Sol, Terra accepts the `none` effort: the model page and the
+[GPT-6 guide](https://developers.openai.com/api/docs/guides/latest-model) list
+none/low/medium/high/xhigh/max with medium as default, and the guide drops
+`temperature` whenever effort is not `none`. The
+[ChatGPT & Codex changelog](https://learn.chatgpt.com/docs/changelog) and the
+dated [deployment-safety index](https://deploymentsafety.openai.com/) both
+record 2026-10-26. Terra is its own row in the shared OpenAI contract, so
+pricing tiers, context, output clamp and Responses features derive from that
+row; it copies no Sol fact. The Codex subscription lists the same slug with its
+own low…ultra ladder (default low) and a 500K window. That supply binds to this
+Model on the next Codex catalog refresh or world-catalog sync, and the missing
+`none` rung narrows its inherited disable claim to `can_disable: false` on that
+route. The YourProvider gateway was not probed for Terra, so no gateway recipe
+carries it. Specification: `tests/model_routing/test_gpt_61_terra_registration.py`.
+
+Gemini 4 Argon evidence boundary (checked 2026-10-17): the first GA Gemini 4
+model. The official
+[model page](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon)
+establishes the stable `gemini-4-argon` id, 1,048,576 unified input/output
+context, 65,536 default max output (up to 1M with long decode), text/image/
+video/audio/PDF input with text output, and thinking levels low/medium/high;
+the [thinking doc](https://ai.google.dev/gemini-api/docs/thinking) pins the
+default as On(medium) with no disable rung, and the
+[pricing page](https://ai.google.dev/gemini-api/docs/pricing) gives intro
+$2/$10 input/output (+$0.10 cache-read) per million tokens through
+2026-11-30, then $4/$20 (+$0.20). The YourProvider AIGC gateway serves it:
+live probe 2026-10-17 returned HTTP 429 with a per-model RPM message (the
+deployment exists; the project key holds no quota), not the 400
+`不支持的模型类型` that unserved ids (e.g. `mimo-v2.6-pro`) return.
+
+Gemini 4 Carbon exact knowledge (checked 2026-11-12): the official
+[model page](https://ai.google.dev/gemini-api/docs/models/gemini-4-carbon.md)
+lists the stable `gemini-4-carbon` id, a 1,048,576-token unified input/output
+window, 65,536 default max output (up to 1,048,576 with long decode),
+text/image/video/audio/PDF input and text output. The
+[changelog](https://ai.google.dev/gemini-api/docs/changelog.md) and the
+[GA post](https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-4-carbon-now-available/)
+date general availability on the Gemini API (paid tier only) to 2026-11-10.
+The [pricing page](https://ai.google.dev/gemini-api/docs/pricing.md) gives
+$2/$10 input/output and $0.10 cached input (implicit caching only) per
+million through 2026-11-30, then $4/$20 and $0.20, with no long-context tier;
+like Argon's, the `MODEL_PRICING` row holds the price in effect, so both rows
+take the standard price from 2026-12-01. The
+[thinking guide](https://ai.google.dev/gemini-api/docs/thinking) gives Argon
+and Carbon low/medium (default)/high, no `minimal` rung and no way to
+disable thinking; sampling parameters are ignored and therefore omitted, and
+thought signatures ride the existing Gemini tool-call handling. That is
+Argon's maintained profile, so Carbon joins Argon's group instead of
+copying it. No gateway recipe carries Carbon yet. Specification:
+`tests/model_routing/test_gemini_4_carbon_registration.py`.
+
+Gemini 4 Hydrogen exact knowledge (checked 2026-11-13): the official
+[model page](https://ai.google.dev/gemini-api/docs/models/gemini-4-hydrogen.md)
+lists only the stable `gemini-4-hydrogen` id, a 2026-11-12 release date, a
+1,048,576-token unified input/output window, 65,536 default max output (up to
+1,048,576 with long decode), text/image/video/audio/PDF input and text output.
+The [changelog](https://ai.google.dev/gemini-api/docs/changelog.md) and the
+[Vertex model page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen?hl=en)
+date general availability (free and paid tiers) to 2026-11-12. The
+[pricing page](https://ai.google.dev/gemini-api/docs/pricing.md) gives a
+standard paid price of $1.50/$7.50 input/output (output includes thinking) and
+$0.075 cached input (implicit caching only) per million, with no intro price,
+and the [what's new page](https://ai.google.dev/gemini-api/docs/whats-new-gemini-4-hydrogen.md)
+keeps it flat across the whole 1M window. Batch/Flex ($0.75/$3.75) and
+Priority ($2.70/$13.50) are service tiers, so the `MODEL_PRICING` row records
+only the standard price. Unlike Argon and Carbon, the
+[thinking guide](https://ai.google.dev/gemini-api/docs/thinking.md) gives
+Hydrogen low/medium/high/xhigh with `high` as the default; `minimal` is
+rejected on Gemini 4 and thinking cannot be disabled, so Off degrades to
+`low`. The [OpenAI compatibility page](https://ai.google.dev/gemini-api/docs/openai.md)
+maps `reasoning_effort` `minimal` to `low` and accepts `xhigh` for Hydrogen
+only. Hydrogen therefore has its own maintained group, whose `effort_map` sends
+`minimal` to `low` and `max`/`ultra` to `xhigh`, instead of joining Argon's.
+Temperature, top_p and top_k are ignored and therefore omitted, function
+calling and structured output are supported, and thought signatures ride the
+existing Gemini tool-call handling. The 65,536 default output ceiling is the
+Gemini family's in `lib/model_info/_max_output.py`. No gateway recipe carries
+Hydrogen yet. Specification:
+`tests/model_routing/test_gemini_4_hydrogen_registration.py`.
+
+Claude Sonnet/Haiku 5.5 evidence boundary (checked
+2026-10-08): Sonnet 5.5 (GA 2026-09-28, $2/$10, 1M ctx, adaptive thinking
+default ON, API default effort high, lowest rung between_tools) and Haiku 5.5
+(GA 2026-10-07, prompt-tiered $0.10/$0.50 ≤100K else $0.50/$2.50, 1M ctx,
+default effort medium, disable works only ≤ high) register from the official
+model pages [sonnet-5-5](https://platform.claude.com/docs/en/models/sonnet-5-5/overview)
+and [haiku-5-5](https://platform.claude.com/docs/en/models/haiku-5-5/overview)
+plus the dated [news index](https://www.anthropic.com/news). Haiku joins the
+1M context line at 5.5 in `lib/model_info/_context.py` (the 200K Claude family
+estimate no longer applies at that floor).
+
+Claude Fable 5.2 exact knowledge (checked 2026-11-12): the
+[release notes](https://platform.claude.com/docs/en/release-notes/overview) and
+the [model overview](https://platform.claude.com/docs/en/models/fable-5-2/overview)
+date `claude-fable-5-2` to 2026-11-09; the
+[what's new page](https://platform.claude.com/docs/en/models/fable-5-2/whats-new-fable-5-2)
+names no dated snapshot. The 1M window is default and maximum (no beta
+header), with 128k max output, text/image (and PDF) input and text output.
+The [pricing page](https://platform.claude.com/docs/en/about-claude/pricing)
+lists $8/$40 input/output per million, $10 5-minute and $16 1-hour cache
+writes and $0.20 cache reads at standard rates across the whole window. Thinking
+is adaptive only and always on: `{type: enabled}` with `budget_tokens` and
+`{type: disabled}` return 400, so Off sends adaptive thinking at the lowest
+effort; the [effort guide](https://platform.claude.com/docs/en/build-with-claude/effort)
+lists low/medium/high/xhigh/max with the API default high, and non-default
+`temperature`, `top_p` or `top_k` return 400
+([thinking](https://platform.claude.com/docs/en/build-with-claude/thinking)),
+so they are omitted. The
+[preserved-thinking guide](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)
+requires thinking blocks back within a tool-use turn and enforces its prefix
+check with HTTP 400, so the profile declares `preserve_history: replay`:
+compaction keeps the traces, signed blocks replay unchanged, and `build_body`
+still strips an unsigned trace (another model's) before the Claude wire. Forced
+`tool_choice` (`any`/`tool`) and assistant prefill also return 400; the profile
+schema has no field for either, so neither is recorded. The `fable-5-2`
+release needle precedes the `claude-fable-5` prefix, and OpenRouter's
+`anthropic/claude-fable-5.2` folds into this Model by separator respelling.
+Specification: `tests/model_routing/test_claude_fable_5_2_registration.py`.
+
+Muse Ember exact knowledge (checked 2026-11-12): Meta's research
+[blog index](https://research.meta.ai/blog) and
+[launch post](https://research.meta.ai/blog/muse-ember) release its smallest
+model on 2026-11-09, available that day on Muse Code and the Meta Model API;
+the [model page](https://dev.meta.ai/docs/muse-ember) names `muse-ember-1.0`
+the standard-mode model ID. Meta documents a 1,048,576-token window, 524,288
+max output, text/image/video/audio/PDF input and text output. The
+[pricing page](https://dev.meta.ai/docs/pricing-rate-limits) bills
+$0.10/$0.50 per million (cached $0.004) up to 200K input tokens and
+$0.30/$1.50 (cached $0.012) for the whole of a longer request, with no
+contributor tier; the `MODEL_PRICING` row carries both as USD `contextTiers`
+(the `QWEN_PRICING_CNY` tier lists are CNY). The
+[reasoning guide](https://dev.meta.ai/docs/reasoning) keeps reasoning always
+on with efforts minimal through max (default max) and answers `none` with HTTP
+400, so Off degrades to `minimal`. The
+[Chat Completions page](https://dev.meta.ai/docs/protocols/chat-completions)
+cannot carry reasoning across turns for external API keys
+(`preserve_history: none`), takes `temperature` or `top_p` but not both
+(temperature is omitted, as for Muse Spark), and rejects the frequency and
+presence penalties and, on reasoning models, `stop`, so those are omitted too.
+Its `tool_choice` accepts only `auto`, which the profile schema cannot
+express. Documented video input carries the `video` tag, and the 524,288 cap
+joins Muse Spark's in the family output table. Specification:
+`tests/model_routing/test_muse_ember_registration.py`.
+
+Inkling 2 Small exact knowledge (checked 2026-11-13): Thinking Machines'
+[announcement](https://thinkingmachines.ai/news/inkling-2-small/) introduces
+its second model generation, a Mixture-of-Experts model with 594B total and 17B
+active parameters that supports image input and variable effort, and the
+[model card](https://thinkingmachines.ai/model-card/inkling-2-small/) dates the
+release to 2026-11-05; Apache-2.0 weights followed on Hugging Face
+(`thinkingmachines/Inkling-2-Small`) on 2026-11-12. The announcement gives a
+context window of up to 1M tokens and the published `config.json` a
+`model_max_length` of 1,048,576; input is text and image, output text. No
+maximum output is published, so none is recorded. The only first-party paid
+API is Tinker serverless inference, in beta: its
+[models and pricing table](https://tinker-docs.thinkingmachines.ai/tinker/models/models_and_pricing/)
+lists `thinkingmachines/Inkling-2-Small:peft:262144` at $0.30 input, $0.03
+cached input and $1.00 output per million with a 256K window, which is that
+deployment's serving limit, not the Model's context. The
+[Tinker pricing page](https://thinkingmachines.ai/tinker/pricing/) adds
+"Discount reflected in pricing" without naming an undiscounted rate, so the
+`MODEL_PRICING` row records the listed price; no cache-write price is
+published. Tinker's
+[OpenAI-compatible endpoint](https://tinker-docs.thinkingmachines.ai/tinker/compatible-apis/openai/)
+takes `reasoning_effort` as none/minimal/low/medium/high/xhigh or a raw float
+and defaults to 0.9 (high) when it is omitted, and the
+[thinking-effort guide](https://tinker-docs.thinkingmachines.ai/cookbook/inkling/thinking-effort/)
+says effort 0.0 only conditions the model toward no reasoning. `none` is
+therefore no disable rung, and the compiler reserves `none` for disabling, so
+the ladder is minimal through xhigh with `high` the default, `can_disable`
+false (Off degrades to `minimal`) and `max`/`ultra` mapped to `xhigh`. No page
+requires prior reasoning to be passed back, so no `preserve_history` is
+declared, and no sampling restriction is documented. No official template is
+added: Tinker's OpenAI-compatible examples name only `tinker://` checkpoint
+paths, so the model name that endpoint accepts for this Model is unverified.
+The Model reaches the registry through public relay listings instead:
+OpenRouter's `thinkingmachines/inkling-2-small` folds into the creator's id
+(see "Entity meanings"), and world-catalogue sync publishes it `ready` from
+this maintained knowledge. Specification:
+`tests/model_routing/test_inkling_2_small_registration.py`.
+
+Mistral Large 4 exact knowledge (checked 2026-11-02): the official
+[model page](https://docs.mistral.ai/models/mistral-large-4-0.md) lists the API
+names `mistral-large-4` and `mistral-large-4-0`, 1M context, text and image
+input, Public Preview since 2026-10-06, and $0.70/$0.07/$2.10 per million
+input/cache-read/output tokens. Mistral's
+[lifecycle page](https://legal.mistral.ai/ai-governance/models/mistral-large-4/)
+retires the 2026-10-06 preview version in favour of the 2026-10-29 version
+served under the same ids, which cut the preview list price of $1.36/$4.18.
+The [reasoning doc](https://docs.mistral.ai/studio/conversations/reasoning)
+replaces the preview's `none`/`high` ladder with `low`/`medium`/`high`
+(`high` the recommended default) and rejects `none`, `minimal`, `xhigh` and
+`max`, so `can_disable` is false and an off request degrades to `low`. The
+preview profile is listed under `previous_profiles`, so catalogue sync replaces
+installed copies of it instead of treating it as an owner edit. The
+recipe names the Model "Mistral Large 4", which is also how Artificial
+Analysis lists the bare model (`mistral-large-4`); its preview and
+medium-effort rows stay separate identities. Max output and the
+omitted-`reasoning_effort` default are undocumented and not claimed.
+Specification: `tests/model_routing/test_mistral_large_4_registration.py`.
+
+Step 5 Preview exact knowledge (checked 2026-11-02): the official
+[model page](https://platform.stepfun.ai/docs/en/guides/models/step-5-preview.md)
+fixes the `step-5-preview` id, a 1M-token window, 64K max output,
+text/image/video input and the `low`/`medium`/`high` `reasoning_effort` ladder
+(`output_config.effort` on the Messages API). The
+[reasoning guide](https://platform.stepfun.ai/docs/en/guides/developer/reasoning.md)
+names `medium` the default recommendation and documents no off rung, so
+`can_disable` is false. The
+[USD price card](https://platform.stepfun.ai/docs/en/guides/pricing/details.md)
+lists $1.00/$0.10/$2.70 per million cache-miss input/cache-hit/output tokens;
+the cache-miss rate includes the cache write. The CNY card on
+platform.stepfun.com is ¥7/¥0.70/¥20. StepFun's
+[news post](https://www.stepfun.com/news/step-5-preview) opened the API to
+all users on 2026-09-20. Specification:
+`tests/model_routing/test_step_5_preview_registration.py`.
+
+Qwen3.8-27B exact knowledge (checked 2026-11-02): the Model Studio
+[model page](https://help.aliyun.com/zh/model-studio/qwen3-8-27b) fixes the
+`qwen3.8-27b` id, a 1,000,000-token window, 131,072 max output,
+text/image/video input, and Beijing list prices of ¥3/¥12 per million
+input/output tokens with ¥0.6 implicit cache hits (the Qwen table converts at
+7.24). The
+[newly released models](https://help.aliyun.com/zh/model-studio/newly-released-models)
+notes date API availability to 2026-08-17; open weights shipped 2026-08-14.
+The maintained `enable_thinking` toggle stays valid. The API also accepts a
+`reasoning_effort` ladder (`low`/`medium`/`xhigh`, default `xhigh`) that this
+registration does not expose yet. Once the release date is known, a stored
+`pending_metadata` draft becomes ready at its next admission. Specification:
+`tests/model_routing/test_qwen38_27b_registration.py`.
+
+Qwen toggle profile completion (checked 2026-10-08): the maintained Alibaba
+`enable_thinking` (can_disable) and `reasoning_split` (always-on) groups in
+`model_inference_defaults.json` now declare `supported_efforts: []` — the
+explicit empty ladder for toggle/budget-only models required by
+`registration_missing_fields`. Without it those Qwen Models stayed
+non-callable drafts, which is why the Models settings listed only a couple of
+Alibaba rows despite full pricing/context knowledge.
+
+Alternatives rejected: name-based reasoning guesses; background research during
+chat; API-only validation; and forcing existing active legacy configurations
+through a strict read validator that can prevent startup. Specifications:
+`tests/model_routing/test_registration_lifecycle.py`, `tests/model_routing/test_model_registration_admission.py`.
+
+## Declared inference profiles
+
+Models settings exposes the shared reasoning baseline (support, ordered native
+efforts, default effort, disable capability and request representation).
+Provider settings can stage differing reasoning fields on an Offering or
+restore Model inheritance; other profile sections and providers remain intact.
+Both forms edit the existing Settings draft and use its owner CAS save.
+
+Reasoning history (checked 2026-11-05). `reasoning.preserve_history` declares
+whether a destination needs an assistant turn's `reasoning_content` passed
+back on later requests: `replay` sends it back verbatim (DeepSeek V4 thinking
+mode rejects a blanked trace with HTTP 400; Tencent Hy4's tool-call guide
+requires it within a tool loop), `clear_thinking_false` and `keep_all` replay
+it plus the GLM or Kimi retention flag the request compiler sends, and `none`
+lets callers drop it. `lib.model_info.model_requires_reasoning_content_replay`
+reads the selected route's profile, then the Model's maintained defaults;
+DeepSeek's family rule applies only when neither declares the fact (gateway
+spellings outside maintained identities). Compaction `strip_thinking`,
+history reconstruction and request repair all use that predicate. Problem:
+the predicate was `is_deepseek(model)`, so compaction blanked Hy4's tool-loop
+reasoning and ignored the GLM-5.2/5.3 and Kimi K2.7 Code profiles that already
+declared preserved thinking. Decision: the declared profile is the authority,
+and intake records the fact for every reasoning model. Alternatives rejected:
+extending a model-name list (a second place every registration must
+remember), and replaying every trace (it keeps tokens no vendor asked for in
+every request). Specification:
+`tests/model_routing/test_reasoning_history_replay.py`.
+
+Hy4 and the DeepSeek V4 group declare `replay` in the maintained defaults;
+each lists its earlier shipped profile under `previous_profiles`, so installed
+copies converge. The declarations were withdrawn on 2026-11-05, when a server
+started before boot-pinned defaults (`a44c8054d`) re-read the JSON with its
+older schema and every model-routing read failed
+(`inference_profile: invalid inference profile`), and restored after the live
+server restarted onto boot-pinned defaults on 2026-11-12.
+
+DeepSeek V4 Pro on the Baidu wire (checked 2026-11-03): the creator's
+[thinking-mode guide](https://api-docs.deepseek.com/guides/thinking_mode/)
+documents `thinking: {"type": "enabled/disabled"}`. Baidu's
+[deep-thinking guide](https://cloud.baidu.com/doc/qianfan-docs/s/Wm95lyynv)
+lists V4 Pro for `thinking` control and separately documents
+`reasoning_effort`, with `low` mapped to `high`. Captured production-route
+evidence rejects `disabled`, omission, and `reasoning_effort: "low"` with
+HTTP 400 `请求格式有误` / `ext.error.stage=validation`; `thinking: {"type":
+"enabled"}` returns HTTP 200. The same route's content-part translation body
+also fails validation while its string-content equivalent returns HTTP 200,
+so the Deployment declares `chat_cache_breakpoints: unsupported` as well.
+The `deepseek-v4-pro-baidu` Deployment therefore overrides only `can_disable:
+false` and cache-marker support, preserving the creator Model and its wire
+format. Product Off compiles to that route's enabled control rather than
+a fabricated effort substitution. Alternatives rejected: a model-name request
+exception (bypasses the profile authority), global V4 Pro capability removal
+(confuses provider supply with creator capability), and credential rotation
+(replays the unchanged shape). Specification:
+`tests/llm/test_reasoning_contract_compiler.py::test_baidu_deployment_requires_enabled_thinking_for_translation`.
+
+When a provider narrows the effort ladder, `resolve_inference_profile` prunes an
+inherited `default_effort`/`disabled_effort` that no longer resolves on that
+route. The same narrowing must also retire an inherited `can_disable` that the
+smaller ladder can no longer honor on an effort-ladder wire: with neither a
+`'none'` rung nor an in-ladder `disabled_effort`, the off intent cannot compile,
+so the merged deployment profile would be stamped `registration_issues`
+(`unrepresentable_reasoning`) and every candidate rejected. Problem: a Codex
+catalog import supplied `supported_efforts` `[low…ultra]` (no `'none'`) while the
+Model's official defaults supplied `can_disable: true`; the merge left the claim
+intact and the only enabled gpt-6-sol route became unroutable. Decision: when
+the offering narrows the ladder without re-declaring `can_disable`, and the new
+ladder has no off-rung, narrow `can_disable` to `false` (off degrades to the
+lightest rung) instead of emitting an uncompilable profile. Alternatives
+rejected: synthesizing an off-rung the wire does not support (fabricates a
+control), and leaving `can_disable: true` (uncompilable deployment). A narrowed
+ladder that retains an off-rung keeps `can_disable`; an explicit provider/owner
+`can_disable` always wins over narrowing. Specification:
+`tests/model_routing/test_route_inference_contract.py::test_narrowed_ladder_drops_unrepresentable_can_disable`.
+Asynchronous AA repaints retain only currently mounted reasoning forms (the
+existing 240-model view budget), including typed input and focus. A changed
+profile or unmounted Model releases its old form; no detached-form cache is kept.
+
+Composer `depths` contain native `supported_efforts`, preserving declared order;
+`effort_map` aliases are compatibility input only and never add slider rungs.
+A requested token that is itself a native effort takes precedence over a legacy
+alias of the same name. `ultra` remains distinct from `max`. Off is exposed only
+when the selected route can actually disable. Auto-provider choices intersect
+eligible routes; `default_depth` is reported only when their defaults agree.
+The server also projects a bounded `restoration` table for unavailable saved UI
+preferences after that intersection. Native rungs remain unchanged; known effort
+names move downward, unavailable Off/Lowest chooses the lightest native rung,
+and an unknown old token maps to Default. This compatibility table is advisory:
+composer rendering never applies it or commits a replacement. An unavailable
+saved depth remains visible as an unavailable rung, so switching back restores
+the original choice. Only a user gesture changes the saved preference. Unknown
+capabilities and absent routes omit the table. Explicit request validation
+remains strict and never substitutes an unsupported saved depth.
+Reasoning ability and route availability are separate: `availability=no_route`
+retains declared Model/Offering controls for a visible, disabled composer with
+an authorization/enablement notice. It never grants credentials or widens the
+runtime candidate set. Unknown profiles show an explicit configuration notice;
+non-reasoning models remain hidden. Models declaring only a thinking switch
+offer Off/On rather than fabricated effort rungs; fixed thinking has one setting.
+The exported-configuration audit reports these missing profiles and unavailable
+routes in `requires_attention`, separately from wire-compilation failures.
+The Default button is separate from the slider's native positions, and both
+tick count and labels derive from these controls. Saved defaults resolve to
+the declared default rung when known. Specifications:
+`tests/model_routing/test_model_reasoning_controls.py`, `tests/thinking_depth_slider.test.cjs`,
+`tests/model_routing/test_model_reasoning_settings_browser.py`.
+
+The bounded exact-identity defaults catalogue accepts at most eight
+`previous_profiles` per group. Corrections replace only exact prior shipped
+profiles; any different owner field or `source=configured` remains authoritative.
+
+Problem: rereading the maintained JSON after a checkout update pairs newer
+inference vocabulary with a running server's older schema and can prevent
+every route from loading. Decision: `lib/model_info/model_inference_defaults.json`
+remains the authored catalogue; `scripts/gen_api_v1_model_routing_contract.py`
+also derives `lib/model_routing/generated_inference_defaults.py`. Runtime
+normalization reads that imported snapshot, so the existing boot source pin
+keeps defaults with the schema and compiler until restart, including first use
+after a merge. Owner configuration still follows its repository revision.
+Run the generator and its `--check` mode whenever the catalogue changes.
+Alternatives rejected: hot-reloading only the schema leaves the compiler on
+its old vocabulary; catching validation errors and dropping defaults hides
+invalid metadata; restarting on every merge interrupts active tasks.
+Specification: `tests/model_routing/test_inference_defaults_snapshot.py`.
+
+Claude profiles for models whose API default is `display: "omitted"` (Opus
+4.7/4.8/5/5.5, Sonnet 5/5.5, Haiku 5.5, Fable/Mythos 5.x) declare
+`reasoning.display: "summarized"` ([controlling thinking display](https://platform.claude.com/docs/en/build-with-claude/thinking)):
+Tofu renders the reasoning trace and progress notes between tool calls, and
+omission saves latency, not cost. The superseded display-less seed is kept in
+`previous_profiles`, so installed authorities upgrade while an owner's own
+`display` choice is retained. `tests/llm/test_anthropic_signed_thinking_replay.py`
+pins the compiled v2 wire; the legacy adapter test alone could not catch the
+earlier removal.
+Evidence for the maintained depth declarations: [Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+[Gemini thinking](https://ai.google.dev/gemini-api/docs/thinking),
+[GPT-5.5](https://developers.openai.com/api/docs/models/gpt-5.5),
+[DeepSeek thinking](https://api-docs.deepseek.com/guides/thinking_mode/), and
+[LongCat's thinking switch](https://longcat.chat/platform/docs/api/chat.html).
+
+Model, Offering, Connection and Deployment accept the bounded optional
+`inference_profile` defined in the v2 schema. Resolution follows that order;
+reasoning and sampling subfields merge, while features and source use the
+most-specific declaration. Explicit unsupported reasoning clears inherited
+enabling details. Unknown models and endpoints do not imply capabilities.
+When a scope narrows the ladder, inapplicable inherited defaults, disabled
+efforts and aliases are removed. Explicit fields that contradict a declared
+ladder are rejected at configuration validation. Partial scope overrides remain
+valid; binary thinking switches may omit effort positions. Plugin dialect names
+are portable metadata, with installation/executability checked by the shared
+runtime/control resolver rather than requiring a plugin during import.
+`lib/model_routing/inference.py` owns validation and resolution; both pooled
+and request-scoped slots receive detached profiles through the same helper.
+
+Catalog `supported_reasoning_levels` (strings or `{effort}` entries) and
+`default_reasoning_level` migrate into Offering/Deployment profiles; only
+official directory rows contribute Model inference metadata. Legacy model
+`thinking_format` becomes Deployment `reasoning.wire_format`. Connection
+`thinking_format` and `responses_profile` (`compatible`, `openai`, `codex`)
+remain validated authority fields; protocol faces override provider defaults.
+For a declared supported effort ladder, Responses Connections bind
+`reasoning_effort` when the wire format is absent or is a built-in
+Chat/Anthropic body dialect (`thinking_type`, `enable_thinking`,
+`chat_template_kwargs`, `reasoning_split`), dropping the dialect's
+`effort_field`: Responses carries reasoning only as `reasoning.effort`, so a
+Claude Model supplied on a Responses face (`tokrouter.claude-opus-5.5`) keeps
+its ladder instead of failing preparation with
+`reasoning_wire_unrepresentable`. This applies to saved catalogs at binding
+time. Protocol alone grants no reasoning support and never overrides `none`, a
+registered plugin dialect, or a ladderless switch
+(`tests/model_routing/test_responses_reasoning_dialect.py`). Codex catalog imports declare that
+wire format when publishing their ladder.
+Managed refresh preserves saved inference configuration. Profiles contain no
+arbitrary payloads or credentials: effort lists/maps, feature maps and source
+strings are bounded, and reasoning budgets are positive, bounded integers.
+Executable specification: `tests/model_routing/test_route_inference_contract.py`.
+
+Request ingress preserves three distinct values: absent reasoning selection
+uses the destination default; explicit off requires a representable disable
+contract; explicit depth is compiled unchanged against the selected route.
+Sync/async streaming and non-streaming dispatch accept `thinking_depth` and
+default `thinking_enabled` to `None`. Headless task resolution must not turn
+an absent switch into off/on or use a model identity as an effort token.
+Capability rendering cannot rewrite saved intent while metadata is loading.
+Direct SSE errors retain bounded compiler reasons without exposing arbitrary
+adapter exception payloads. Specifications: `tests/chat/test_chat_stream_direct.py`,
+`tests/tasks_pkg/test_reasoning_retry_lifecycle.py`, and the real-app reasoning browser tests.
+
+The Models settings registry is the shared baseline across providers. At
+catalog/install time developer recipes and the identities in
+`lib/model_info/model_inference_defaults.json` (exact spelling, else the
+creator's only canonical spelling) seed missing Model profiles.
+The latter migrates maintained protocol contracts out of name-based request
+logic; it is packaged, limited to 256 KiB / 2,048 identities and one cached
+file revision. Its Alibaba coverage enumerates each Qwen / QwQ / QVQ /
+DeepSeek-R1-distill variant explicitly (hybrid `enable_thinking`, thinking-only
+`reasoning_split`, or unsupported `none`) from the official 百炼 deep-thinking,
+vision, omni, coder, and mt capability matrices — name-based inference stays
+disabled. Runtime reads only the installed owner aggregate. A missing
+v2 declaration stays `unknown`, never reactivating legacy name inference.
+Provider overrides remain in Offering/Connection/Deployment. Narrowing an
+effort ladder discards inherited defaults outside that ladder. Legacy direct
+library calls without a bound v2 profile retain their compatibility adapter.
+Composer choices and final protocol payloads derive from the same resolver;
+saved unavailable depths are displayed without becoming selectable rungs.
+An identical metadata refresh cannot interrupt an active depth drag.
+
+## Selection and computed routes
+
+Native chat and agent requests use a structured model reference:
+
+```json
+{
+  "model": {"creator_id": "openai", "model_id": "gpt-x"},
+  "routing": {
+    "preferred_provider_id": "provider-a",
+    "required_context": 131072,
+    "required_capabilities": ["text", "thinking"],
+    "price_budget": {
+      "max_input": 2.0,
+      "max_output": 8.0,
+      "currency": "USD"
+    }
+  }
+}
+```
+
+`preferred_provider_id` is a stable preference, not a hard Connection or
+Deployment pin. Pending identity selection instead uses
+`{"provider_id":"provider-a","offering_id":"offering-x"}` and cannot
+escape that Provider.
+
+OpenAI/Anthropic-compatible requests retain their standard string `model`.
+They may add `tofu.creator_id` and `tofu.preferred_provider_id` (or the
+documented top-level extension aliases). A non-unique string returns
+`model_selector_ambiguous` with candidates. `model@provider` always returns
+`legacy_model_selector_removed`; it is never guessed.
+
+The candidate compiler applies owner authorization, enabled/stale/pending
+state, capabilities, context, protocol, cooldown, quota, and price gates. It
+then orders by preferred Provider, operator priority, health, cache affinity,
+connection/deployment priority, latency, and actual price. Cross-provider
+failover occurs only after the preferred Provider is unavailable or fails.
+After all routes for an official Model fail, a compatible higher-quality
+fallback Model may be considered under the same hard request policy, preferring
+the original Provider.
+
+The dispatcher snapshots compiled candidates into its slot pool at
+initialization. Every Settings mutation that commits the authority — the
+model-routing CAS replace behind the provider template card, ProviderAccess
+create/replace/delete, credential secret rotation, and migration commit —
+rebuilds that pool in-process, so a saved disable/enable takes effect on
+the next pick without a restart; the health sweep, template supply,
+catalogue sync, and local-serve registration do the same after their own
+authority writes. The rebuild normalizes and indexes the aggregate once
+through a single build-local `RouteCandidateCompiler` and resolves each
+unique credential secret once, not per slot. In Settings, adding a model
+commits the authority immediately through a serialized chain
+(`_persistModelRoutingNow`), so a matrix probe on the fresh row never
+scopes against a draft the server has not seen; the global Save then
+skips the whole-document replace when the staged aggregate already
+matches the committed one, and the server-config POST skips the
+dispatcher reset when presets/model_defaults are unchanged. Grant and
+exclusion toggles still stage for the global Save. Executable
+specification: `tests/api/test_api_v1_model_routing_contract.py`
+(`DispatcherHotReloadTest`),
+`tests/llm_dispatch/test_dispatcher_model_routing_v2.py`,
+`tests/api/test_api_v1_integration.py`
+(`test_server_config_skips_dispatch_reset_for_unchanged_presets`).
+
+Reload invalidates configured slots in the existing dispatcher; active
+request groups keep the same Slot objects, pins, candidate order, health and
+in-flight reservations until their owning request disposes them. New groups
+compile from the current authority. Settings and health-triggered rebuilds
+share this lifecycle, never duplicate temporary slots or seed them from
+benchmarks. A failed build discards partial configured slots while retaining
+request-owned handles for retry/cleanup. The existing ceiling remains 1,024
+live ephemeral slots per process, with no reload history retained.
+`tests/llm_dispatch/test_dispatcher_reload_lifecycle.py` covers continuity, isolation,
+settlement, rebuild failure and repeated-reload resource bounds.
+
+When admission yields no candidates, `model_route_unavailable` keeps its stable
+error kind and includes fixed rejection codes from that same compiler pass.
+Codes distinguish missing supply, disabled Offering/Connection/credential,
+model or connection authorization, wire exclusions, capability/context/protocol
+requirements, pricing policy and health. Counts describe paths rejected at the
+first failed gate, not a separate inventory of account permissions. Diagnostics
+contain no credential references, endpoints, secrets or upstream response bodies.
+
+Registration gates raise typed causes instead. A registered draft Model or a
+Deployment with `registration_issues` raises `model_registration_incomplete`;
+a selected supply that no registered Model claims (an unbound pending identity)
+raises `model_identity_pending`, whose remedy is registering the official Model,
+after which the pending supply binds. Problem: folding both into the first kind
+sent owners to repair registration metadata that did not exist. Alternative
+rejected: one generic "incomplete" kind, which cannot name the remedy. The
+turn-start envelope names the selected model; a provider-scoped selection
+carries no `model_id`, so the envelope falls back to the request name the
+browser sent as `config.model`. Specifications:
+`tests/model_routing/test_model_routing_contract.py::test_unbound_pending_identity_reports_identity_pending_not_registration`
+and `tests/conversation/test_conversation_sync_v3.py::test_v3_route_start_provider_scoped_selection_names_its_request_name`.
+
+## Health and traceability
+
+Configured enablement and runtime health are separate. Route-missing (an
+explicit 400, a gateway 404 saying the model does not support the request's
+wire protocol, or a gateway 5xx whose `model_not_found` / distributor
+no-channel verdict says no enabled channel serves the wire model) affects a
+Deployment; network failures affect a Connection; 401/402 affects a
+Credential; 403 affects the Credential×Deployment authorization. Health rows,
+probe work, candidate slots, and snapshots are bounded and expire through
+their owning lifecycle.
+
+Protocol-unsupported 404 — Problem: on 2026-10-31 the YourProvider AIGC gateway
+stopped serving `deepseek-v4.1-flash-m17` over Anthropic Messages and answered
+HTTP 404 `not_found_error` "模型 [deepseek-v4.1-flash-m17] 不支持协议
+ANTHROPIC_MESSAGES". Every 404 was request-scoped, so dispatch surfaced it
+without excluding the wire, and each cheap translation (capability `cheap`, no
+fixed model) that picked that slot ended instead of failing over. Decision: a
+404 whose body carries the gateway's explicit protocol-unsupported phrase
+(`GATEWAY_PROTOCOL_UNSUPPORTED_MARKERS` in `lib/llm/llm_errors.py`, Chinese
+and English forms) raises `ModelRouteMissingError` with `status_code=404`, the
+same Deployment verdict as the 400 markers: dispatch excludes that wire for
+the call, disables the provider/wire route's slots in this process, and fails
+over. An escaped verdict still renders the `not_found` envelope and retry
+notices carry 404; the 400 verdict keeps status 0, so its envelope is
+unchanged. Every other 404 stays request-scoped. A request-scoped v2 group
+disables only its own slots, so each newly minted group pays one 404 before
+failing over. Alternatives rejected: treating every 404 as route-missing would
+suppress models on genuine request errors (unknown path, missing resource);
+editing the user's routing configuration is not code-owned and leaves the next
+protocol drop unrecoverable. Specification:
+`tests/llm_dispatch/test_dispatch_route_missing_exclusion.py`.
+
+Owner aggregates retain every admitted entity without entity-count or document
+byte quotas. Credential grants and connection/exclusion reference lists also
+retain all valid identities. Schema, duplicate/foreign references, registration
+admission, encrypted credential ownership and atomic revision CAS remain
+mandatory. Native authority, backups and migration receipts use blob-capable
+storage rather than an 8 MiB refusal; ciphertext migration keeps its separate
+existing envelope bound.
+
+Problem: valid owner authority was refused by entity counts and duplicated
+8 MiB checks in the repository, SQL storage, native executor, IR validation and
+blob access. Decision: keep the complete authority and migration originals,
+validate shape and identity, and use the existing owner-bound blob codec.
+Model-routing document bodies do not consume the IR metadata-literal quota;
+tenant carriers, timestamp/slot validation and revision fences remain.
+Alternatives: raising each independent number still leaves other refusal paths;
+truncating entities or prior migration evidence changes durable owner state.
+A traced in-memory commit of 11,000 Creator rows / 8,943,204 input UTF-8 bytes
+took 7.18 seconds with 10,704,345 bytes peak on the test host; input construction
+was excluded. This measures normalization/CAS with tracing, not native I/O or
+model throughput. Aggregate updates still normalize the owner's complete document.
+Verification: eight entity collections exceed their former ceilings; large grants
+retain connection/exclusion identities. In-memory, SQLite and native authorities
+preserve an 8,943,204-byte input plus the complete >8 MiB migration receipt and
+prior document, reject stale CAS, isolate tenant labels and survive restart.
+The embedded SDK grows its response buffer to the C ABI's required capacity
+without a private byte quota. Non-growing or unrepresentable native capacity
+returns, out-of-buffer writes and real allocation failures fail explicitly. It decodes
+owned values before reuse and preserves joined close/abandon behavior.
+Registration/native-route neighbors passed 74 checks; native model-routing
+fault/replay neighbors passed 10 checks, with generated contracts checked for drift.
+
+A request retains all eligible primary and fallback candidates by default and
+disposes its handles at teardown. An explicit positive `max_candidates` selects
+a caller shortlist without an upper quota. A planned route witness searches the
+complete eligible primary set before resolving its credential and mints only
+that exact route; it never silently changes route or adds fallback identities.
+Capability-group queries share one owner revision without a group-count gate,
+and reasoning controls retain every authorized group without tail truncation.
+Problem: a 64-candidate default hid valid routes and could misclassify a late
+planned witness as changed; separate group/control limits hid configured models.
+Decision: retain complete eligible results by default with exact ownership,
+registration, capability, egress, ranking and credential checks. Alternatives:
+larger constants merely move the failure; changing the witness or discarding
+fallbacks violates the caller's route identity. No new pool or global plaintext
+cache is introduced.
+Verification: 131 primary candidates retain every handle and compiler rank;
+a planned witness after the former 64-route prefix matches exactly, while a
+changed revision fails before mint/secret resolution. An explicit 100-route
+shortlist remains valid, and 70 primary routes precede the eligible fallback.
+A 34-group query reads one owner revision. For 8,193 configured unroutable
+Offerings the controls retain all 8,193 offering rows plus two aggregate rows;
+a traced projection took 4.41 seconds / 14,276,466 peak bytes, excluding input
+construction. This measures projection, not inference or browser rendering. Runtime health retains at most 4,096 rows for one
+hour (the diagnostic projection returns at most 256). The shared optional
+probe lane starts tasks and cells on demand, with no matrix-size or active
+worker quota; call validation retains a 120-second timeout and five attempts. A persisted
+RouteSnapshot is at most 16 KiB, with at most 32 transitions and 16 degradation
+reasons; oldest trace detail is trimmed before persistence, never durable user
+state.
+
+Request groups retain compiler rank independently from latency/cost jitter;
+eligible sticky routes keep their existing affinity. Candidate construction
+does not record failover.
+
+Conversation affinity is exact-or-absent: ``get_preferred_key`` honours only
+the entry recorded under the request's own route scope (model/capability) and
+never falls back to the legacy unscoped ``conv_id`` alias. That alias records
+only "the last key that served this conversation on any provider", so honouring
+it let a conversation that once landed on provider X re-pick X's key on a later
+turn whose preset preferred provider Y — the wrong provider became sticky (conv
+mtxxaf2l). A missing scoped entry falls through to score-based selection, which
+honours the preset's provider rank; the unscoped alias survives only as a
+read-only diagnostic and is never read by a scoped pick. Each dispatch records only actual transport
+invocations in its own bounded trace, so a skipped candidate or a previous
+round cannot invent a failed Provider. Sync, async and non-streaming calls
+share this ancestry rule without mutating reusable slot snapshots.
+
+Every new turn persists a redacted `RouteSnapshot`: requested structured
+identity, Provider preference, actual ProviderAccess/Offering/Deployment/
+Connection, credential metadata, wire ID, and transition reasons. Provider or
+model failover is appended to the activity timeline without changing the
+conversation's saved preference. Old turns are projected with a legacy
+snapshot at read time and are not rewritten.
+
+## Detection matrix recommendations
+
+Manual matrix probes are observational: starting, polling, completing, or
+restoring a snapshot updates verdicts only, never the routing draft, identity,
+enablement switches or credential grants. Manual and automatic detection both
+probe only enabled Offerings. Disabled Connections and ungranted cells on those
+Offerings remain probeable. Detection neither requires global **Save** nor
+closes Settings; completion never reloads and replaces the draft.
+
+**Problem:** full-provider detection spent provider calls on disabled models,
+while manual planning filtered locally edited request names by saved enablement
+and could yield an empty selection. **Decision:** all planning probes only
+enabled Offerings; manual planning remains an explicit mode that retains draft
+request names and disabled Connections without enabling them. The browser sends
+bounded temporary
+`{offering_id, connection_id, wire_model_id}` targets plus ordered credential IDs;
+the server validates them against the current owner/provider bundle before
+resolving secrets. Only the request name can be draft data: endpoint, protocol,
+headers, credentials, model identity and capabilities come from saved authority.
+Temporary names are never registered or persisted. Changed credential columns,
+unknown/cross-access references and conflicting duplicate names fail closed with
+an actionable **Probe not started** message. Existing new-model persistence may
+finish before detection, but a failed prerequisite save stops it.
+**Alternatives rejected:** probing disabled models adds work the owner has
+excluded; disabling Detect for every unsaved request name prevents draft
+diagnostics; automatically saving the full draft changes unrelated settings;
+accepting an arbitrary endpoint or credential in a diagnostic payload bypasses
+ownership.
+Scheduled identity reconciliation and Apply Recommendations are separate
+explicit policies, not manual-probe completion effects.
+
+The grant a credential holds for one ModelRef is
+`{creator_id, model_id, excluded_wire_model_ids}`. A green dot on a
+(credential × request name) cell means the model grant exists AND this
+request name is not in its exclusion list — so two request names sharing a
+ModelRef (`glm-5.3` vs `glm-53-yourprovider`) toggle independently. Toggling a
+cell adds/removes that wire's exclusion; the model grant itself is minted
+when the first cell is enabled and dropped when the last reachable cell is
+disabled. A mint excludes every sibling request name without a positive
+verdict, matching the automatic path, so enabling one cell never lights up the
+rest of its column. The adjacent probe pip describes that exact credential ×
+request name. Neither implies the other. Manually added/catalog-listed request
+names record `unprobed` instead of fabricating a successful inference.
+
+Probe evidence is stored per `(column, wire id)` where the column is a
+position, so every snapshot also records `credential_ids` — the ordered
+credential identities the columns measured. On read, evidence is re-bound to
+the columns of the CURRENT document: a cell whose credential is gone is
+dropped and a reordered column keeps its own verdicts. Before that binding, a
+deleted key left its 401 verdicts on the same index and repainted whichever
+key inherited it, so an untouched, working credential could show a failing
+probe on every model. Legacy snapshots that predate `credential_ids` cannot be
+attributed and are discarded rather than guessed.
+
+**Problem:** positional probe keys survived credential edits, so evidence was
+misattributed after any key deletion or reorder. **Decision:** the snapshot
+carries its column identities and reads reconcile them. **Alternatives
+rejected:** clearing the whole cache on every credential edit throws away
+still-valid verdicts; renumbering by wire id alone cannot distinguish two keys
+probing the same supply.
+
+**Apply Recommendations** is symmetric: a `recommend_disable` verdict
+excludes that wire (the model grant drops only when every probed wire of
+the model is flagged), and an `ok` verdict on a withheld wire mints the
+grant or lifts its exclusion. It never changes probe/identity evidence or
+enables an Offering. Global **Save** remains the persistence boundary.
+Historical discovery snapshots marked `deployment_enabled=false` stay
+non-actionable; fresh probes no longer emit this retired marker.
+Executable specifications: `tests/providers/test_provider_model_add.py`,
+`tests/auth/test_access_matrix.py`, `tests/model_routing/test_probe_plan_request_names.py`.
+
+A chat probe's `ok` verdict requires protocol-valid generated output, and reasoning output counts as generated output in every dialect: OpenAI `reasoning_content`/`reasoning` message fields, Anthropic `thinking`/`redacted_thinking` content blocks, Responses `reasoning` output items (id/encrypted payload suffices when the summary never materialized), and Anthropic SSE `thinking_delta`/`signature_delta` events. A 2xx carrying neither text nor reasoning stays `invalid_response`. Probe budgets are deliberately not raised to hide this — the validator must recognize reasoning instead. Executable specification: `tests/provider_probe/test_probe_cells.py`.
+
+A final `rate_limited` (HTTP 429) verdict recommends disabling the credential's
+model grant by default, including per-minute/per-hour rate limits. Existing
+saved 429 snapshots receive the same recommendation on read. Probe retries
+still treat any successful attempt as healthy; this policy does not change
+transient 429 handling during ordinary dispatch. Applying a 429
+recommendation withholds only the flagged request name; it drops the whole
+grant solely when every probed wire of the model 429s. Users control access
+with the visible toggles, without a successful-probe prerequisite.
+Executable specification: `tests/provider_probe/test_probe_rate_limit_defaults.py`.
+
+## Repository and migration
+
+All reads and writes pass an explicit owner/tenant boundary to the repository.
+The ProviderAccess aggregate is replaced with revision compare-and-swap;
+credential secret writes use a separate encrypted operation. SQLite details,
+filesystem paths, and single-user globals do not cross that layer.
+
+The one-way importer converts legacy faces/endpoints, API keys, OAuth/local
+identity, provider models, key access, and every alias/request ID into v2
+entities. It first emits a redacted plan and backup, validates counts,
+references, secrets, and candidate routes, then switches the authority in one
+CAS commit. A rejected or failed plan stores a recovery receipt and leaves v2
+inactive. After activation, legacy rows are migration input only: there is no
+dual write or projection back to `providers[].models`.
+
+If an interrupted first cutover left an active v2 aggregate without a
+migration marker (for example, OAuth reconciliation committed before the
+legacy aggregate could fit in a storage receipt), startup compares exact
+legacy Provider identities with the active authority and imports only the
+missing ProviderAccess bundles. The merge uses the same validation, encrypted
+secret channel, and revision CAS, so resources already written to v2 are
+preserved and the repair is idempotent.
+
+## World catalogue sync
+
+The Models settings page is the registry of models that EXIST, not models a
+configured provider currently supplies. At startup
+`lib/model_routing/world_catalog.sync_world_model_catalog` compiles every
+package provider template and inserts the missing Creator/Model rows into the
+owner authority, preferring developer catalog facts to relay recipes. Existing
+owner fields are preserved; missing declared profiles are filled. Unique exact
+pending identities bind to existing Models without changing Offering/Deployment
+IDs, probe verdicts or credential exclusions. New grants preserve only previously
+reachable pending wires. Ambiguous/version-suffixed names remain pending.
+This repair is idempotent and also covers installed providers; saved scoped
+selections retain reasoning controls after binding. Maintained media identities
+join the compiled catalogue, and unevidenced drafts of them converge to their
+maintained kind (summary `media_kinds_converged`; see "Model kinds and media
+facts"). Executable specifications:
+`tests/model_routing/test_world_catalog_sync.py`, `tests/model_routing/test_model_inheritance.py`.
+
+Problem: the first v2 cutover plans without an official directory, so a Model
+none of whose legacy rows declared a context is minted at the 128,000 import
+default (`migration._DEFAULT_CONTEXT_WINDOW`) — for example a legacy
+`claude-opus-5` row without context, although the developer directory holds
+that exact identity at 1M. The startup metadata migration then correctly marks
+its Offerings as inheriting the Model value, and the insert-only sync never
+revisits the Model. Decision: one provenance exception to never-overwrite.
+The sync replays the authority's own committed first-cutover receipt
+(`from_revision` 0, `receipt_id` equal to the document's `migration` marker)
+without a directory, exactly as the cutover ran. A Model whose legacy rows all
+omitted context, that still holds 128,000 and that has no
+`registration_metadata` takes the official directory context (exact, else the
+unique canonical spelling); Offerings inheriting context follow and explicit
+provider limits stay. The proof is evaluated once per cutover: the same sync
+records `migration.context_repair_receipt_id` (equal to the cutover
+`receipt_id`), so a later owner value of exactly 128,000 is never re-derived
+from the immutable receipt and the legacy plan is not replayed on every sync.
+The receipt is read only on that first sync and only while the migrated
+authority holds an evidence-less 128,000 Model; the developer directory is
+compiled only when the replay proves one. Alternatives rejected: re-deriving
+the generated set on every sync (it reverts a deliberate owner edit back to
+the official value each time); a per-Model provenance flag (the Model schema
+has no provenance field, and `registration_metadata` is admission evidence
+that would need invented release dates);
+re-resolving inheritance (the Offering already inherits; the Model is wrong);
+rewriting every 128,000 Model from the directory (without the receipt it is
+indistinguishable from an owner choice); trusting recovery receipts (planned
+against existing Models, they cannot prove generation); only a manual
+registration CAS (correct for one owner, but every other affected installation
+would keep compacting at 128,000). Specification:
+`tests/model_routing/test_generated_model_context_repair.py`.
+
+`display_name` is the MODEL's name. Recipes may author it, and the sync adopts
+it for a row whose stored name merely echoes its `model_id` (that value is
+what migration wrote when nothing was declared); any other stored name is an
+owner edit and wins. It is deliberately separate from
+`MODEL_PRICING[wire_id].name`: a pricing row is keyed on the ids routed on the
+wire and exists so cost and display fall back sensibly, while a registry row
+names one Model. The two V4 Flash generations are the worked example —
+`deepseek-v4-flash` (aa 34.3, 2026-05) and `deepseek-v4.1-flash`
+(aa 39.5, 2026-09-10) are different Models even while upstream routes the
+older ids to the newer one. A deployment's checkpoint, not its wire-name
+spelling alone, determines its Model. On 2026-11-02 ModelPlaza explicitly
+named `deepseek-v4-flash-yourprovider` the 1017 deployment; it belongs to the
+1017 snapshot. Its Azure/Baidu/Huawei/Tencent V4 cloud cards name only
+DeepSeek V4 Flash, so those wires stay on the separate V4 Model. The
+corresponding V4.1 cloud wires stay with V4.1. Alternative rejected:
+grouping every `deepseek-v4-flash-*` deployment under 1017 conflated
+unconfirmed cloud checkpoints and incorrectly retired the V4 Offering.
+
+DeepSeek V4.1 Flash 1017 exact knowledge (checked 2026-10-27): the official
+[release note](https://api-docs.deepseek.com/news/news261017/) establishes the
+2026-10-17 minor checkpoint. The [API price card](https://api-docs.deepseek.com/quick_start/pricing/)
+keeps the rolling `deepseek-flash` name, 1M context, native vision, dual
+thinking modes, and unchanged off-peak prices of $0.15/$0.003/$0.60 per million
+uncached-input/cache-read/output tokens. The [thinking guide](https://api-docs.deepseek.com/guides/thinking_mode/)
+supplies the `thinking.type` contract and low/high/max efforts with high as the
+default; the official [1017 model card](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017)
+corroborates that this is a minor checkpoint rather than a new generation.
+It therefore registers separately as `deepseek-v4.1-flash-1017`, with explicit
+release evidence, rather than silently relabelling the September V4.1 Model.
+The YourProvider ModelPlaza row `DeepSeek-V4.1-Flash（版本：1017）` names the actual
+request ID `deepseek-v4.1-flash`; on 2026-10-27 both configured credentials
+returned per-model HTTP 429 for that ID, proving the deployment exists, while
+the guessed literal dated spellings returned HTTP 400. The recipe maps only that
+confirmed undated ID (plus its reviewed rolling aliases); it does not invent a
+literal `…-1017` gateway alias.
+
+The Codex OAuth catalogue request carries a `client_version` that upstream
+uses to gate newly released models. `lib/oauth/codex_version.py` resolves it
+at fetch time from the npm `@openai/codex` `latest` dist-tag (bounded cache,
+floor at the version pinned in `lib/oauth/outbound.py`), so new models reach
+the catalogue without a Tofu release; a registry outage degrades to the floor
+rather than failing the refresh. Executable specification:
+`tests/oauth/test_codex_version.py`.
+
+## Daily model intelligence update
+
+`Model Intelligence Update` is enabled on personal scheduler startup at
+`30 8 * * *` (08:30 server-local time); reconciliation preserves
+user-disabled state. The `model_intelligence_daily` action delegates to
+`lib/model_catalog/auto_update.run_model_intelligence_update` with the row
+owner's `providers` principal and runs one bounded pass over every canonical
+Model at once: (1) refreshes the bounded provider-owned public feeds described
+in [provider recipes](PROVIDER_TEMPLATE_RECIPES.md#dynamic-feed), then re-runs
+the world catalogue sync so template data shipped or hot-edited
+since boot lands without a restart; (2) force-fetches
+the public OpenRouter catalogue and CAS-writes `list_pricing` fills under the
+same policy as `POST /api/v4/model-intelligence/openrouter-pricing/refresh`
+(officially priced or officially covered Models are never rewritten, all-zero
+rows never become a $0 list price); (3) force-refreshes the Artificial
+Analysis dataset only when the owner has an effective key, warming the
+24-hour cache ordinary reads serve. One failing phase is recorded in the
+run summary and never masks the others; the summary is counts-only with a
+truncated applied-key sample. The scores phase records the published-score
+count and AA's `index_version`, so a drop after an AA major version bump is
+attributable from run history alone. The server must be running at 08:30; missed
+cron occurrences are not backfilled. Tests:
+`tests/model_routing/test_model_catalog_auto_update.py`.
+
+## New-model intake workflow
+
+Problem: a new upstream model reached Tofu only when an owner asked an agent
+to register it. The daily update refreshes the public feeds, but world-catalogue
+sync publishes only Models whose admission facts already exist in maintained
+knowledge, and research covers only stored drafts and enabled pending supply;
+a model that only a public catalogue listed was withheld silently. Decision: a
+deterministic release watch finds exactly those identities, and a scheduled
+proactive agent runs one fixed intake procedure for them. The agent, never the
+watch, establishes facts.
+
+**Release watch.** `lib/model_catalog/release_watch.py` (CLI and scheduler
+predicate `scripts/model_release_watch.py`) reads the cached feeds, never the
+network, and keeps the `world_catalog.withheld_catalog_models` rows (the sync's
+own projection) that only a live public catalogue supplies; a
+repository-authored template row is owner-authored supply, not a release. The
+first report records the current candidates as a baseline and reports none; a
+catalogue first seen later contributes its standing listings the same way.
+The state also records each catalogue's first observation: the fetch time of
+the first snapshot the watch classified. A lead is standing when its catalogue
+is first observed in that report or its upstream listing time
+(`catalog_feed.listed_at`, the feed row's `created`) predates that first
+observation; a candidate whose every lead is standing joins the baseline
+automatically and is never new. A missing, zero or invalid listing time is
+unknown, never old: such a candidate is new when it appears after the baseline.
+Reviews record `deferred` or `declined` with reason, date and checked HTTPS
+sources, only for a currently listed identity, so an announced but unlisted
+model cannot be pre-suppressed. Deferred candidates appear in every report;
+only unreviewed ones are new. Registration needs no flag: once maintained
+knowledge makes an identity admissible it is no longer withheld. Exit 0 means
+new candidates, 1 none, 2 no cached live catalogue or unreadable state (never
+evidence that nothing shipped); `--review` and `--baseline` are commands, not
+predicates, and exit 0 once done or 2 when refused.
+`data/config/model_release_watch.json` is
+deployment maintainer state (one baseline list, each catalogue's first
+observation, and one review per decided identity), not owner data. A version-1
+file upgrades on its next report or review, keeping its baseline and reviews
+and taking `initialized_at` as every known catalogue's first observation; a
+corrupt file (including a version-1 file without `initialized_at`) fails
+closed instead of re-baselining, and a deleted one re-baselines on the next
+report.
+
+**Rotated listings.** Problem: OpenRouter lists far more models than the feed
+keeps. The projection sorts rows newest-first by `created` and keeps 256 seeds
+per source, so whenever a newer model leaves that window an older one enters
+it. Compared only with the identities seen at first observation, the old row
+looked like a release: on 2026-10-30 the watch reported `openai/gpt-5-nano`
+(listed 2025-08-07) as new, and each false alarm costs a full scheduled agent
+run. Decision: the feed cache keeps every projected seed's upstream listing
+time per source, the template merge surfaces it only as
+`catalog_feed.listed_at`, and the watch classifies each lead by it against the
+recorded first observation of its catalogue, as above. The cut-off is the
+snapshot's fetch time, not the report time: a model listed between that fetch
+and the first report was in no baseline, so it must be new. Listing times are
+optional at the same feed cache version, so a cache written before them reads
+as unknown times (the previous behaviour) until its next refresh. Alternatives
+rejected: a recency window or age threshold (a tuning knob that still misfires
+on any rotation older than it and hides any release younger than it); a wider
+feed window (moves the rotation boundary without removing it, and the window
+bounds onboarding seeds, not the watch); declining each rotated listing by
+review or a per-model exception (pays the agent run the watch exists to save,
+once per rotation); listing times inside offering recipes (recipes compile
+into owner bundles, which would then carry catalogue evidence no Offering
+owns); a new feed cache version (today's cache would become unreadable and the
+predicate would exit 2 until the next 08:30 refresh).
+
+**Schedule.** The owner runs it as one `schedule_create` agent task after the
+08:30 update (`17 9 * * *`): `condition_command` runs the watch from the
+deployment checkout, and `command` says to act only when the predicate output
+lists `NEW` candidates and then follow this section. That pairing is hybrid;
+the poll LLM sees the predicate output, and consecutive agreements promote it
+to zero-LLM code polling ([scheduling](modules/scheduling_ops.md)). A busy
+target conversation refuses the turn; the candidate stays new for the next run.
+
+**Intake procedure**, for each new candidate and then each deferred one:
+
+1. Identify the creator, exact public API id and Model kind (the lead's
+   capabilities name a generated medium). A creator's publisher namespace is
+   already folded into the creator's id (see "Entity meanings"). Decline
+   safety classifiers, routers, relay-only listings and tasks no Model kind
+   describes. A dated snapshot or preview is
+   its own Model. A media model (image, video or music generation, speech
+   synthesis or recognition) is registered, not declined: its maintained
+   official facts go in `lib/model_info/media_model_facts.json` (kind, official
+   `media_pricing` and `media_profile`, checked date, HTTPS sources) with its
+   `_release.py` rule; no chat profile, token price or template is needed.
+2. Take facts only from the creator's official pages (model, pricing,
+   reasoning guide, changelog or news): API availability date, list prices per
+   million with cache rates and tiers, context, maximum output, modalities,
+   reasoning support/wire/efforts/default/disable behavior, whether prior
+   reasoning must be passed back (`preserve_history`) and sampling
+   restrictions. Feed and relay values are leads; never copy a sibling's facts.
+3. If a required fact or a public API is missing, record `deferred` with the
+   gap and the checked URLs.
+4. Otherwise register exact knowledge in an isolated worktree, as the GPT-6.1
+   Terra and Kimi K3.1 Pro registrations above do:
+   `lib/model_info/model_inference_defaults.json`, `lib/model_info/_release.py`,
+   `MODEL_PRICING` in `lib/pricing/_tables.py`, `lib/model_info/_context.py`
+   where needle order matters, the official template recipe, a dated evidence
+   paragraph in this document, and `tests/model_routing/test_<model>_registration.py`
+   proving world-catalogue sync publishes the Model `ready`.
+5. Add relay or gateway recipes only with served evidence: a public catalogue
+   listing, or a live 200/429 probe through the existing probe tooling (an
+   unserved gateway id answers 400).
+6. Regenerate the inference-defaults snapshot with
+   `python3 scripts/gen_api_v1_model_routing_contract.py`, then run its `--check`
+   mode. Run the focused test, `tests/model_routing/test_world_catalog_sync.py`,
+   `test_model_info_release.py`, `test_model_registration_admission.py`,
+   `tests/providers/test_provider_template_recipes.py` and
+   `tests/context/test_context_profile_contract.py`; the watch must stop listing
+   the identity.
+7. Merge per `AGENTS.md`. If concurrent edits refuse the merge, keep the
+   branch and record `deferred` naming it.
+8. Report what was registered, deferred and declined, with evidence links.
+
+Alternatives rejected: letting daily research publish feed-only Models into
+owner storage (bypasses maintained knowledge and tests; one extraction proves
+provenance, not correctness); triaging the 128 standing listings found at
+introduction (mostly old relay rows); a new scheduler task type (the proactive
+agent already owns clock-gated full-tool turns). Specification:
+`tests/model_catalog/test_release_watch.py`; listing-time retention:
+`tests/providers/test_provider_template_feed.py`.
+
+## Browser projection
+
+Provider matrices always show a Model header followed by separate request-name
+rows, including when the strings are identical. Each request name can be edited
+or removed without changing Model identity. Editing preserves credential wire
+exclusions and clears probe status. Removing the final name retains an empty
+Offering; no Model ID is synthesized into a Deployment or probe cell. Adding a
+catalog Model uses an exact endpoint-matched template's declared `request_ids`,
+or an explicit, editable default equal to the Model ID when no recipe exists.
+The YourProvider recipe binds V4.1 Flash identity to its declared V4 Flash wire names.
+`tests/providers/test_provider_request_names_browser.py` covers the real Settings flow.
+
+### Where a request-name header actually lives
+
+Outbound headers have two layers: Connection `extra_headers` (the face, e.g.
+the `kunlun` template face's `x-context-provider`) and Deployment
+`extra_headers` (that one request name). Dispatch merges them Connection-under-
+Deployment, so the effective set is `connection ∪ deployment` and the
+Deployment wins a shared name. A Deployment can therefore add or override a
+header but never subtract one.
+
+The editor shows the EFFECTIVE set: rows inherited from the request name's
+Connection appear prefilled and marked `继承连接`, and the matrix badge counts
+them too. Otherwise a face-pinned alias — whose selector is intentionally on
+the face, so no sibling face can receive it — opened an empty form and looked
+like the header had been lost.
+
+Submitting an inherited value unchanged stores NOTHING on the Deployment (no
+second owner for one value). Editing it writes a Deployment override, reusing
+the Connection's spelling so the merge cannot emit two spellings of one header.
+Deleting it means "stop sending it from the Connection": allowed only when no
+other request name rides that Connection, refused with an actionable message
+otherwise. `tests/frontend/test_request_name_panel.py` pins the layer split and
+`tests/frontend/test_request_name_panel_jsdom.py` the widget.
+
+
+The browser projects the v2 authority along the same semantic boundary as the
+dispatcher:
+
+- The chat picker lists each confirmed `(creator_id, model_id)` once. Its
+  secondary control is `Auto Provider` or a preferred Provider; choosing a
+  Provider never changes the Model identity. Pending identities remain in a
+  separate Provider-scoped section.
+- Settings has separate **Models** and **Providers** pages. Models is a
+  read-only Creator/Model catalog for official models: it groups Models by
+  Creator and may project Model-owned quality rank and list pricing, but it
+  never reads ProviderAccess, Offering, Deployment, wire identifier, alias, or
+  route state. The catalog renders one row per semantic Model: provider
+  namespaces (``kimi/kimi-k2.5``) and supply-channel variants
+  (``Qwen3_8-27B-YourProvider``, FP8 re-registrations, a trailing ``instruct`` tag
+  on an otherwise identical registration) are the same Model rented through
+  different supply paths, so they collapse into the canonical bare
+  registration under its developer, with facts the canonical row lacks
+  (pricing, benchmark score) filled from the hidden twins. Near-name twins
+  that are genuinely distinct Models never merge: ``gpt-3.5-turbo-instruct``
+  (own pricing, 4096 context) is pinned as separate from ``gpt-3.5-turbo``.
+  The adjacent Artificial Analysis source is external benchmark
+  enrichment keyed by that exact Creator/Model identity; its encrypted
+  owner-scoped key, cache status, and score attribution do not create or alter
+  a Provider. A future owner-created custom Model uses an explicit editable
+  branch. Providers owns the supply projection: each Provider card names its
+  canonical Models and may show that Provider's differing wire identifiers as
+  aliases. The same exact Model may therefore appear under several Providers.
+- The catalog's **Cost × AA Index** Pareto chart plots a Model only when it
+  has both an external quality score and an official `list_pricing`
+  (3:1 blended input/output USD cost). Scores attach by exact normalized
+  identity only: a variant the external source never benchmarked (dated
+  snapshot, turbo/highspeed spin, regional supply alias) carries no score
+  rather than inheriting the base model's result. Registrations that resolve
+  to the same benchmarked model (a bare id and a provider-namespaced id
+  matched to the same external row) collapse to a single chart point, keeping
+  the priced, canonical registration. Scored-but-unpriced Models are not
+  points and are named in the chart note instead. A $0 official price renders
+  in a dedicated $0 lane left of the log axis while its tooltip keeps the raw
+  value. Markers that
+  would overlap (identical or colliding positions) fan out deterministically
+  inside the plot bounds; data positions, frontier computation, and tooltips
+  are unaffected by the visual spread.
+
+  Problem: after Artificial Analysis moved to Intelligence Index v5
+  (2026-10-27) the chart dropped to 22 points while the AA card claimed
+  "238 models matched": AA serves scores only for its current index version
+  (the response's `intelligence_index_version`; 92 of 722 listed rows scored
+  on 2026-11-02), and the card counted every matched row, scored or not,
+  including non-catalog drafts. Decision: the AA block carries
+  `index_version` (cached with the dataset) and only published scores; a
+  listed-but-unscored row still participates in matching, so it keeps a
+  shared identity ambiguous instead of ceding it to a scored sibling. The
+  card counts catalog Models with a published Intelligence Index score, the
+  card and chart titles name the version (`AA Index v5`), and the chart note
+  states how many catalog Models have no score. Alternatives rejected:
+  keeping older-version scores for Models AA has not re-run (AA says scores
+  are comparable only within one major version, and mixing them would
+  misplace every old Model on the frontier); dropping unscored rows before
+  matching (it would hand a bare name such as `qwen3.8-max` the score of the
+  dated row that owns its slug). AA no longer publishes Coding or Agentic
+  indices; those fields stay null. Specifications:
+  `tests/model_routing/test_model_intelligence_aa.py`,
+  `tests/model_routing/test_model_catalog_pareto.py`.
+- **Measured speed and the `fast` tier.** Problem: capability tags said what
+  a Model can do and what it costs (`cheap`), never how fast it answers, so
+  cost-sensitive optional work drifted onto slow reasoning Models: on
+  2026-11-11 translation calls on kimi-k3.1-pro (AA-measured 32 tokens/s) took
+  a median 13.6 s while deepseek-v4.1-flash (142 tokens/s) sat in the same
+  tier. Decision: the existing AA dataset (same free-shape endpoint, owner
+  key, cache and refresh) also keeps the Performance v3 means: output
+  tokens/s, time to first token and time to first answer token, averaged over
+  AA's 1k/10k/100k-token and multi-turn workloads on the Model's
+  representative endpoint. A Model is `fast` when its measured output speed
+  is above the median of every model the same snapshot measured; unmeasured
+  is never fast. The AA block adds `speeds` (keyed like `scores` but
+  independent of them, so a measured but unscored row reports speed without
+  becoming a score) and `speed_reference` (median and measured count); the
+  catalog shows a speed badge whose tooltip carries the measured times. The
+  tier is derived from the cache on read and never written into Model or
+  Offering capabilities: AA stays enrichment, not registration authority.
+  Routing reads it through `routing_speed_index()` from a fresh snapshot of
+  the current row schema only, by exact normalized Model id (an id two rows
+  claim carries no evidence). The cache stamps its row `schema`: a dataset
+  of an older schema is never fresh, because the 2026-11-11 cache predated
+  the speed fields and silently disabled every verdict while young enough to
+  count as fresh. A stale, missing or older-schema dataset gives no AA
+  verdict; the dispatcher then judges speed from measured route throughput
+  ([llm_io.md](modules/llm_io.md), fast-tier preference), a Settings read
+  schedules a background refresh, and boot schedules one with the owner's
+  key (`warm_routing_speed_evidence`), because the daily 08:30 pass does not
+  reconcile a run a restart skipped. Alternatives
+  rejected: a fixed tokens/s threshold (a magic number that ages as the field
+  speeds up); the `cheap` bracket's Sonnet 4.6 reference (AA no longer
+  measures it); time to first (answer) token as the criterion (it includes
+  reasoning time for models that hide their reasoning: gpt-6-luna measured
+  81 s at its default effort and 1.6 s without reasoning, while translation
+  disables reasoning); persisting a `fast` capability through registration
+  (derived external data would go stale inside owner authority between
+  refreshes); AA's Time per Task (Pro-only); trusting a stale dataset for
+  routing (measured route throughput already covers the gap without
+  extending external data past its TTL). Residual: AA measures the
+  creator's API, not a reseller route, so the tier is a Model-level prior;
+  measured throughput decides only Models without fresh AA evidence.
+  Specifications: `tests/model_routing/test_model_intelligence_aa_speed.py`,
+  `tests/model_routing/test_model_catalog_auto_update.py`.
+- A Provider can own multiple Credentials. Credential rotation is attempted
+  inside the Provider before the dispatcher crosses to another Provider that
+  supplies the same Model.
+- Connection and wire request identifiers are operational details. They are
+  bounded and lazy-rendered only in the Provider manager's connection and route
+  diagnostics views; ordinary chat cannot pin either resource.
+
+## Provider model discovery and identity
+
+Model picker groups represent developers; provider chips identify the supplying
+service. Unmatched request names appear as **Provider models**, with their
+provider shown separately. They require no manual confirmation. The provider
+matrix displays their request names and per-credential probe controls/results,
+including row, cell and full-provider probes, before an official ModelRef exists.
+
+Manual and daily probes include only enabled pending Offerings and publish
+diagnostic verdicts; manual completion never confirms identity, mints a grant or
+reloads the settings draft. Daily probes' complete fresh successful response
+plus a unique existing catalog match can confirm the
+Offering through the scheduled authority transaction. Matching preserves
+dated/preview variants and accepts only exact names, known publisher decoration
+or confirmed names within that provider. Enabled ambiguous/unmatched names remain
+available for diagnosis and probing, but cannot execute chat until their identity
+is resolved. A 429, timeout, authorization error or missing model never establishes
+identity. Scheduled confirmation preserves switches and existing credential
+grants/exclusions; a new ModelRef grant covers only successful names on already
+authorized connections. The existing cell/time/concurrency budgets also bound
+discovery.
+
+### Oversized listings
+
+Owner decision 2026-10-31. Problem: creating a provider from an authenticated
+`/models` listing sent every listed model in one `createProvider` request,
+whose 512-offering bound refused relays such as DemonRoute (1,347 models)
+outright, while the background catalog sync skips listings above 200.
+Decision: a listing above `DISCOVERY_RETAINED_MODEL_COUNT` (512,
+`lib/model_routing/discovered_provider.py`) imports a ranked part: ids the
+caller already chose (the `/setup` default and pinned rows), then chat models
+whose identity keys match a registered Model, then other chat models, then the
+rest, each group in listing order. Settings discovery, "+ Custom Provider" and
+the `/setup` import share that builder. **Add model → Load all models**
+(`POST /api/v1/providers/{provider_id}/listed-models/import`,
+`provider_catalog_sync.import_listed_models`) imports the remainder on request
+through the catalog sync's add-only append, without its automatic bounds.
+Provider write, response and probe-target arrays share the authority
+projection's 8192 bound, so a fully loaded provider can still be saved and
+probed. Alternatives rejected: importing every listed model at creation, which
+fills the card and model picker with tunes nobody chose; refusing oversized
+listings, which left such providers impossible to add; relaxing only the
+contract, which still imports everything by default.
+
+Measurement (in-memory repository, 2026-10-31), one relay provider at 512 vs
+1,347 pending offerings: routing document 353 → 928 KiB (about 690 bytes per
+model), `prepare_registration_document` 68 → 162 ms, authority read 6.5 →
+17 ms, `reasoning_controls` about 67 ms with one row per pending Offering.
+Specifications: `tests/model_routing/test_model_routing_discovered_provider.py`,
+`tests/providers/test_provider_catalog_sync.py::TestImportListedModels`,
+`tests/api/test_api_v1_model_routing_contract.py` and the load-all cases in
+`tests/providers/test_provider_mutations.py`.
+
+## Daily provider detection
+
+`Daily Provider Detection` is enabled on personal scheduler startup at `0 8 * * *`
+(08:00 server-local time); reconciliation preserves user-disabled state. The
+`provider_probe_daily` action delegates to `lib/model_routing/probe_automation.py`
+with the row owner's `providers` principal. It probes fresh matrices of enabled Offerings, including ungranted cells,
+through the existing shared lane (no additional cell pool). Providers with
+no enabled Offering are skipped without changing grants.
+Each known wire uses its own Deployment's enabled Connection, including its
+endpoint, protocol, adapter and headers; credential headers override connection
+headers exactly as in generation. Each credential retains its own OAuth mode,
+including mixed API-key/subscription columns. A disabled Connection is never
+probed through another Connection. Unprobed sibling wires supply no positive reachability evidence. Failure to resolve a stored secret aborts
+the run instead of sending an empty key and treating the resulting 401 as
+revocation evidence.
+Daily runs retain a 30-minute deadline and have no cell-count quota. Cells
+start on demand and check cancellation before dispatch; in-flight HTTP calls
+retain their normal timeout.
+Cancelled runs and worker failures publish an error terminal state with their
+partial results; neither reports successful completion nor runs the completion
+callback that updates model identity. Actual
+probes can incur provider charges, including image generation.
+Automatic maintenance consumes only positive evidence from complete fresh runs.
+Negative outcomes, including 429/5xx, credential expiry, missing models and local
+request/response defects, remain diagnostics; they never delete an existing
+model grant or add a persistent wire exclusion. Runtime health/retry state is
+separate from durable credential authorization. The matrix retains negative
+recommendations for explicit manual review.
+Completion counters must match actual result cells before authorization changes.
+Fresh successful cells may receive grants or have wire exclusions lifted. A new
+grant excludes all known failed or unprobed sibling wires, so one working request
+name cannot authorize an entire unverified supply. All changes use one revision
+CAS: failed/incomplete/cancelled runs and concurrent edits preserve authority.
+A complete all-negative run performs no authorization write. Results remain
+visible in the matrix cache and scheduler history.
+The server must be running at 08:00; missed cron occurrences are not backfilled.
+Tests: `tests/providers/test_provider_probe_automation.py`.

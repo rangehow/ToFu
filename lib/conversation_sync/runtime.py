@@ -1,0 +1,125 @@
+"""Runtime composition for the authoritative conversation command service.
+
+HTTP handlers and background queue dispatch share this composition root.
+Message construction, executor startup, and pending-abort storage remain
+injected ports; no route module is imported here.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from lib.conversation_sync.command_service import ConversationTurnCommandService
+from lib.error_envelope import BadRequest
+
+
+def _build_user_message(
+    message: Mapping[str, Any], config: Mapping[str, Any], conversation_id: str,
+    user_id: Any,
+) -> Any:
+    from lib.chat.turn_builder import build_user_msg_from_payload
+
+    # The command persists authored text; the accepted attempt (or the
+    # running lane it is delivered into) owns any send translation.
+    return build_user_msg_from_payload(
+        dict(message), dict(config), conv_id=conversation_id, user_id=user_id,
+        translate_input=False,
+    )
+
+
+def _was_aborted_after(
+    conversation_id: str, user_id: Any, started_at: float
+) -> bool:
+    from lib.conversation_sync.pending_abort import was_pending_abort_after
+
+    return was_pending_abort_after(conversation_id, user_id, started_at)
+
+
+def _mutate_file_changes(
+    operation: str,
+    task_id: str,
+    conversation_id: str,
+    user_id: Any,
+) -> Mapping[str, Any]:
+    """Resolve and mutate one executor task's project at the backend edge.
+
+    Only the file-history engine's typed refusals (``refused: True``) answer
+    as ``BadRequest``. Every other failure is a ``FileHistoryFault``: its
+    message, which the turn records as ``fileChanges.error``, discloses no
+    raw exception text, and the command boundary answers a redacted 500.
+    """
+    from lib.project_mod import (
+        redo_task_modifications,
+        resolve_base_path,
+        undo_task_modifications,
+    )
+    from lib.project_mod.modifications import FileHistoryFault
+
+    # TODO(enterprise): project modification journals need user-scoped
+    # ownership before multi-user deployment.  Keep identity explicit here so
+    # that upgrade is confined to this gateway instead of HTTP/UI callers.
+    del user_id
+    project_path = (
+        resolve_base_path(task_id=task_id)
+        or resolve_base_path(conv_id=conversation_id)
+    )
+    if not project_path:
+        raise BadRequest("No project is recorded for this turn")
+    mutate = (
+        undo_task_modifications
+        if operation == "undo"
+        else redo_task_modifications
+    )
+    try:
+        result = mutate(project_path, task_id)
+    except FileHistoryFault:
+        raise
+    except Exception as error:
+        raise FileHistoryFault(
+            f"Could not {operation} the turn's file changes: "
+            f"{FileHistoryFault.reason(error)}") from error
+    if not isinstance(result, Mapping):
+        raise FileHistoryFault("Project file command returned an invalid result")
+    outcome = dict(result)
+    failed = (outcome.get("details") or {}).get("failed") or []
+    # Row reasons are disclosable for refusals and faults alike.
+    reasons = "; ".join(
+        f"{row.get('path')}: {row.get('reason')}" for row in failed)
+    if any(row.get("refused") is not True for row in failed):
+        raise FileHistoryFault(f"Could not {operation} {reasons}")
+    if outcome.get("ok") is False:
+        if outcome.get("refused") is not True:
+            raise FileHistoryFault(
+                f"Could not {operation} the turn's file changes: internal error")
+        raise BadRequest(str(outcome.get("error") or "Project file command failed"))
+    if operation == "undo":
+        # A settled "undone" turn offers redo, which rewrites the turn's files
+        # unconditionally; a refused or empty undo must therefore stay applied.
+        if failed:
+            raise BadRequest("Could not undo " + reasons)
+        if not outcome.get("undone"):
+            raise BadRequest("No recorded file changes remain to undo for this turn")
+    return outcome
+
+
+def _retain_media_attachments(
+    projection: Mapping[str, Any], user_id: Any,
+) -> None:
+    attachments = projection.get("attachments")
+    if not isinstance(attachments, list) or not attachments:
+        return
+    from lib.media_attachments import resolve_client_refs
+
+    resolve_client_refs(attachments, user_id=int(user_id), retain=True)
+
+
+conversation_turn_commands = ConversationTurnCommandService(
+    build_user_message=_build_user_message,
+    was_aborted_after=_was_aborted_after,
+    mutate_file_changes=_mutate_file_changes,
+    retain_attachments=_retain_media_attachments,
+)
+
+
+__all__ = ["conversation_turn_commands"]

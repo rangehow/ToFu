@@ -1,0 +1,122 @@
+"""Declared route context limits for compaction and selected-slot admission.
+
+Read initialized slots or scoped compiled native metadata; no second registry.
+Pins and explicit owner identity bound pre-dispatch candidate reads. Exact-slot
+admission remains authoritative after fallback. No retained cache or lifecycle.
+"""
+
+def slot_context_window(slot) -> int:
+    """Offering restrictions win; learned shrink is scoped to the wire route."""
+    declared = int(getattr(slot, 'context_window', 0) or 0)
+    if declared <= 0:
+        return 0
+    from lib.context_limits import resolve_learned_context_limit
+    provider = getattr(slot, 'routing_provider_id', '') or slot.provider_id
+    # Successful probes cannot expand a configured provider restriction.
+    return min(declared, resolve_learned_context_limit(
+        provider, slot.model, declared))
+
+
+def pinned_context_profile(model, *, provider_id='', owner_user_id=None, pin=''):
+    """Conservative intersection of matching authorized candidates, no I/O.
+
+    With no owner or execution pin, use model knowledge rather than inspecting
+    another owner's slots. Missing declarations keep the knowledge fallback.
+    """
+    from lib.llm_dispatch.provider_pin import get_pinned_provider
+    pin = pin or get_pinned_provider() or ''
+    if not model or (not pin and not owner_user_id):
+        return None
+    from lib.llm_dispatch.factory import get_dispatcher
+    candidates = []
+    output_caps = []
+    exact = True
+    # The pin's own group, or configured slots only when unpinned; never a
+    # scan of every live slot (each running task owns one route group).
+    for slot in list(get_dispatcher().slots.scope(pin)):
+        if owner_user_id and getattr(slot, 'routing_owner_user_id', 0) != owner_user_id:
+            continue
+        if provider_id and not pin and provider_id not in (
+                slot.provider_id, getattr(slot, 'routing_provider_id', '')):
+            continue
+        if model not in (slot.model, slot.logical_model):
+            continue
+        window = slot_context_window(slot)
+        if not window:
+            from lib.model_info import resolved_context_profile
+            fallback = resolved_context_profile(
+                slot.logical_model or slot.model,
+                getattr(slot, 'routing_provider_id', '') or slot.provider_id)
+            window = fallback.get('window')
+            exact = exact and bool(fallback.get('exact'))
+        if not window:
+            return None
+        candidates.append(int(window))
+
+        from lib.model_info import _clamp_route_max_tokens, _route_output_limit_key
+        route_key = _route_output_limit_key(
+            provider_id=str(getattr(slot, 'routing_provider_id', '') or slot.provider_id or ''),
+            offering_id=str(getattr(slot, 'route_offering_id', '') or ''),
+            deployment_id=str(getattr(slot, 'route_deployment_id', '') or ''),
+            protocol=str(slot.protocol or 'openai'), model=str(slot.model or ''))
+        output_caps.append(_clamp_route_max_tokens(
+            slot.logical_model or slot.model, int(window), route_key=route_key,
+            declared_limit=int(getattr(slot, 'max_output_tokens', 0) or 0),
+            wire_model=slot.model))
+    if not candidates:
+        return None
+    return {'window': min(candidates), 'source': 'model_routing_v2', 'exact': exact,
+            'output_cap_tokens': min(output_caps)}
+
+
+def task_context_profile(task):
+    """Resolve the configured logical model within this task's route scope."""
+    task = task or {}
+    from .native_context_scope import native_task_context_profile
+    native = native_task_context_profile(task)
+    if native is not None:
+        return native
+    config = task.get('config') or {}
+    return pinned_context_profile(
+        config.get('model') or task.get('model') or '',
+        provider_id=task.get('provider_id') or config.get('providerId') or '',
+        owner_user_id=task.get('_userId'), pin=task.get('_pinned_provider_id') or '')
+
+
+def task_local_inference(task):
+    """Serving locality of this task's owned candidates; None means no binding.
+
+    A mixed group containing a local candidate keeps the local exclusion until
+    selection is narrower. Reading slots neither resolves credentials nor
+    creates a route, and cannot inspect another owner's request group.
+    """
+    from .native_context_scope import native_task_local_inference
+    native = native_task_local_inference(task)
+    if native is not None:
+        return native
+    owner = task.get('_userId')
+    if type(owner) is not int or owner <= 0:
+        return None
+    config = task.get('config') or {}
+    model = config.get('model') or task.get('model')
+    from .provider_pin import get_pinned_provider
+    pin = task.get('_pinned_provider_id') or get_pinned_provider() or ''
+    provider = task.get('provider_id') or config.get('provider_id') or config.get('providerId')
+    from .factory import get_dispatcher
+    from lib.model_routing.serving_locality import is_local_inference
+    localities = []
+    for slot in get_dispatcher().slots.scope(pin):
+        if getattr(slot, 'routing_owner_user_id', 0) != owner:
+            continue
+        if model not in (slot.model, slot.logical_model):
+            continue
+        if provider and not pin and provider not in (
+                slot.provider_id, getattr(slot, 'routing_provider_id', '')):
+            continue
+        local = getattr(slot, 'local_inference', None)
+        if type(local) is not bool:
+            credential = (getattr(slot, 'route_snapshot', {}) or {}).get('credential') or {}
+            local = is_local_inference(protocol=slot.protocol,
+                credential_kind=credential.get('kind', ''), base_url=slot.base_url)
+        localities.append(local)
+    return any(localities) if localities else None

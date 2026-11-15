@@ -1,0 +1,836 @@
+"""lib/llm/responses_outbound/_to_responses.py — Chat Completions → Responses API.
+
+Converts a canonical OpenAI Chat Completions request body into the OpenAI
+**Responses API** shape (``POST /v1/responses``). Extracted from
+``lib/oauth/codex.py:codex_translate_request`` (2026-07-31, epic
+) and generalised from a Codex-only converter into the shared
+boundary for EVERY Responses-speaking provider — the Codex-OAuth path is
+now just one profile of it.
+
+Conversion contract (the canonical body is the single IR — nothing else in
+the app knows about Responses):
+
+  * ``messages`` → ``input`` items: system → ``developer`` role; string
+    content → ``input_text`` / ``output_text`` by role; ``image_url``
+    blocks → ``input_image``; bare-tool_calls assistant messages →
+    top-level ``function_call`` items; ``role='tool'`` →
+    ``function_call_output`` keyed by ``call_id``.
+  * ``tools[].function`` flattened to top-level fields (``strict: False``).
+  * ``tool_choice`` function-dict flattened likewise; strings pass through.
+  * Tool names use collision-checked digest aliases within 64 characters,
+    with one request-local reverse mapping (all Responses upstreams).
+  * ``store: False`` always — Tofu owns conversation state; server-side
+    state (``previous_response_id``) is deliberately unused (DeepSeek
+    doesn't support it; see memory ``responses_协议调研与_tofu_接缝图``).
+
+Profile knobs (``RESPONSES_PROFILES``):
+
+  * ``default`` — generic providers (DeepSeek …): keeps ``temperature`` /
+    ``top_p``, maps ``max_tokens`` → ``max_output_tokens``, omits
+    ``instructions`` / ``include`` unless a declared extension requires them.
+    Readable summaries opt in only on a selected summary-capable route; native
+    caller summary settings, including null, remain authoritative.
+  * ``codex``   — chatgpt.com/backend-api/codex: ``instructions: ''``,
+    drops sampling params, ``include: ['reasoning.encrypted_content']``,
+    ``reasoning.summary: 'auto'``.
+"""
+
+from __future__ import annotations
+
+import json
+
+from lib.llm.conversion import (
+    ProtocolConversionError, checked_conversion, conversion_report, object_arguments,
+    stop_sequences, tool_name_reverse, validate_request,
+)
+from lib.llm.responses_outbound._message_phase import replay_phase_messages
+from lib.llm.responses_replay import ReplayOrderError, ordered_replay
+from lib.llm.tool_call_ids import tool_call_id_contract, wire_tool_call_ids
+from lib.log import get_logger
+from lib.tool_results.tool_history_pairing import adjacent_tool_call_result_pairs
+
+logger = get_logger(__name__)
+
+__all__ = [
+    'RESPONSES_PROFILES',
+    'openai_body_to_responses',
+    'responses_reasoning_replay',
+]
+
+#: Per-upstream dialect knobs. ``instructions=None`` → omit the field.
+RESPONSES_PROFILES: dict = {
+    'default': {
+        'instructions': None,
+        'drop_params': (),
+        'map_max_tokens': True,
+        'reasoning_summary': None,
+        'include': (),
+        'parallel_tool_calls': True,
+    },
+    'codex': {
+        'instructions': '',
+        'drop_params': ('temperature', 'top_p', 'max_tokens'),
+        'map_max_tokens': False,
+        'reasoning_summary': 'auto',
+        'include': ('reasoning.encrypted_content',),
+        'parallel_tool_calls': True,
+    },
+}
+
+#: OpenAI function-name hard limit (all Responses upstreams share it).
+_MAX_TOOL_NAME = 64
+
+# Opaque output items safe/necessary to replay when ``store=false``.  The
+# response adapters capture this same set.  Unknown items are observable but
+# are not blindly replayed onto an upstream protocol.
+_REPLAY_RESPONSE_ITEM_TYPES = frozenset({
+    'reasoning', 'program', 'program_output',
+    'tool_search_call', 'tool_search_output',
+    'multi_agent_call', 'multi_agent_call_output', 'agent_message',
+    'shell_call', 'shell_call_output', 'code_interpreter_call',
+    'web_search_call', 'file_search_call', 'computer_call',
+})
+
+
+def _is_gpt_56(model: str) -> bool:
+    """Return whether *model* is in the GPT-5.6 family.
+
+    The cache-breakpoint and server-compaction request fields are intentionally
+    scoped to this family.  Generic Responses-compatible providers frequently
+    reject unknown OpenAI fields instead of ignoring them.
+    """
+    from lib.model_info._openai_gpt56 import is_official_gpt56_model
+    return is_official_gpt56_model(model)
+
+
+def _legacy_feature_gates(body: dict, profile: str) -> tuple[bool, bool]:
+    """``(public, stateful)`` defaults for a caller without a route contract.
+
+    Preserve established stateless replay/cache for legacy callers. Public
+    extensions keep their separate gate; selected profiles stay closed-world.
+    The stateful fallback must ALSO stay closed-world: an EXPLICIT
+    compatible feature profile names a GENERIC Responses upstream (which
+    frequently rejects unknown OpenAI fields), so model-name inference may
+    never re-open replay/cache for it — the absent key keeps the
+    pre-route-features stateful gate, and the codex profile carries its own
+    replay/cache contract for codex models.
+    """
+    is_gpt_56 = _is_gpt_56(body.get('model', ''))
+    feature_profile = str(
+        body.get('_responses_feature_profile') or '').strip().lower()
+    public = is_gpt_56 and profile != 'codex' and feature_profile == 'openai'
+    stateful = (is_gpt_56 and (public or not feature_profile)) or profile == 'codex'
+    return public, stateful
+
+
+def responses_reasoning_replay(body: dict, *, profile: str = 'default') -> bool:
+    """Whether the Responses request for canonical ``body`` replays reasoning.
+
+    One decision binds both directions: the request asks for
+    ``reasoning.encrypted_content`` and resends stored items only when it is
+    true, and the response adapters retain ciphertext only when it is true.
+    Some gateways stream encrypted reasoning nobody asked for (the
+    your-llm-gateway.example.com Kunlun face); kept on a route that cannot send it back,
+    checked conversion refuses every later request as mandatory continuity.
+    """
+    from lib.llm.route_features import body_route_profile, route_feature
+    declared = route_feature(body_route_profile(body), 'responses_reasoning_replay',
+                             protocol='responses',
+                             oauth='codex' if profile == 'codex' else '')
+    return _legacy_feature_gates(body, profile)[1] if declared is None else declared
+
+
+def _add_stable_prefix_breakpoint(items: list[dict]) -> bool:
+    """Mark the stable developer/task prefix as an explicit cache.
+
+    GPT-5.6's implicit breakpoint follows the newest user/tool item, which is
+    dynamic in an agent loop.  A second, explicit breakpoint on the stable
+    instruction prefix provides a reliable cache floor when the long dynamic
+    prefix is evicted or cannot be reused.
+    """
+    candidate = None
+    saw_developer = False
+    for item in items:
+        if not isinstance(item, dict) or item.get('type') != 'message':
+            if saw_developer:
+                break
+            continue
+        if item.get('role') != 'developer':
+            if saw_developer:
+                break
+            continue
+        saw_developer = True
+        for part in item.get('content') or ():
+            if (isinstance(part, dict)
+                    and part.get('type') == 'input_text'
+                    and part.get('text')):
+                candidate = part
+    # Stateless/compat callers may not provide a system message. Their first
+    # user task is still stable across an agent loop and is the safest fallback
+    # cache floor; never mark a later dynamic tool/user item.
+    if candidate is None:
+        for item in items:
+            if (not isinstance(item, dict) or item.get('type') != 'message'
+                    or item.get('role') != 'user'):
+                continue
+            for part in item.get('content') or ():
+                if (isinstance(part, dict)
+                        and part.get('type') == 'input_text'
+                        and part.get('text')):
+                    candidate = part
+            break
+    if candidate is None:
+        return False
+    candidate['prompt_cache_breakpoint'] = {'mode': 'explicit'}
+    return True
+
+
+def _response_items(msg: dict, *, allow_compaction: bool) -> list[dict]:
+    """Return replay-safe opaque Responses items stored on a chat message."""
+    allowed = set(_REPLAY_RESPONSE_ITEM_TYPES)
+    if allow_compaction:
+        allowed.add('compaction')
+    out = []
+    for item in msg.get('_responses_items') or ():
+        if not isinstance(item, dict) or item.get('type') not in allowed:
+            continue
+        correlation_id = (
+            item.get('call_id') if 'call_id' in item else item.get('id')
+        )
+        if (item.get('type') in {'program', 'program_output'}
+                and not str(correlation_id or '').strip()):
+            # Reconciliation blanks orphan/ambiguous program correlations.
+            # Replaying one would either make the provider invent a parent or
+            # reject the entire next request. Keep it as local diagnostic
+            # evidence, but never put it back on the execution wire.
+            continue
+        # Shallow-copy the envelope so adding request-local metadata later can
+        # never mutate the persisted conversation row.
+        out.append(dict(item))
+    return out
+
+
+def _responses_text_format(response_format) -> dict | None:
+    """Map Chat-Completions ``response_format`` to Responses ``text.format``."""
+    if response_format is None:
+        return None
+    if not isinstance(response_format, dict):
+        raise ProtocolConversionError('response_format_unrepresentable')
+    kind = response_format.get('type')
+    if kind == 'json_schema':
+        schema = response_format.get('json_schema')
+        if (set(response_format) - {'type', 'json_schema'}
+                or not isinstance(schema, dict) or not isinstance(schema.get('schema'), dict)
+                or not isinstance(schema.get('name'), str) or not schema['name']
+                or set(schema) - {'name', 'schema', 'strict', 'description'}
+                or ('strict' in schema and not isinstance(schema['strict'], bool))
+                or ('description' in schema and not isinstance(schema['description'], str))):
+            raise ProtocolConversionError('response_format_unrepresentable')
+        return {'type': 'json_schema', **schema}
+    if kind in ('json_object', 'text') and set(response_format) == {'type'}:
+        return {'type': kind}
+    raise ProtocolConversionError('response_format_unrepresentable')
+
+
+def _programmatic_eligible_names() -> set[str]:
+    """Return native functions explicitly reviewed for GPT-5.6 PTC."""
+    try:
+        from lib.tools.programmatic import eligible_programmatic_tool_names
+        return eligible_programmatic_tool_names()
+    except Exception as exc:
+        logger.warning('[Responses] PTC eligibility lookup failed: %s', exc)
+        return set()
+
+
+def _enable_programmatic_tools(tools: list[dict], *,
+                               eligible: set[str] | None = None) -> list[dict]:
+    """Opt trusted read-only functions into direct + programmatic invocation."""
+    if eligible is None:
+        eligible = _programmatic_eligible_names()
+    from lib.tools.programmatic import programmatic_output_schema
+
+    converted: list[dict] = []
+    enabled = 0
+    for tool in tools:
+        copied = dict(tool)
+        if copied.get('type') == 'function' and copied.get('name') in eligible:
+            copied['allowed_callers'] = ['direct', 'programmatic']
+            # Native handlers return canonical text. The replay boundary wraps
+            # both direct and program-issued results in this exact envelope.
+            copied['output_schema'] = programmatic_output_schema()
+            enabled += 1
+        converted.append(copied)
+    if enabled:
+        converted.append({'type': 'programmatic_tool_calling'})
+    return converted
+
+
+def _truncate_name(name: str, reverse: dict) -> str:
+    """Resolve a bounded alias allocated against every request-local name."""
+    if len(name) <= _MAX_TOOL_NAME:
+        return name
+    for alias, original in reverse.items():
+        if original == name:
+            return alias
+    # Direct helper callers still get a deterministic collision-checked alias.
+    allocated = tool_name_reverse({'tools': [{'type': 'function', 'function': {
+        'name': name}}]})
+    alias = next(iter(allocated))
+    if alias in reverse and reverse[alias] != name:
+        raise ProtocolConversionError('tool_name_collision')
+    reverse.update(allocated)
+    return alias
+
+
+def openai_body_to_responses_checked(body: dict, *, profile: str = 'default',
+                                     stream: bool = False):
+    return checked_conversion(_convert_body_to_responses, body, profile=profile, stream=stream)
+
+
+def openai_body_to_responses(body: dict, *, profile: str = 'default',
+                             stream: bool = False) -> tuple:
+    result = openai_body_to_responses_checked(body, profile=profile, stream=stream)
+    return result.require_payload(), result.tool_name_reverse
+
+
+def _convert_body_to_responses(body: dict, *, profile: str = 'default',
+                             stream: bool = False) -> tuple:
+    """Translate a Chat Completions request body to Responses API format.
+
+    Args:
+        body: the canonical OpenAI-shaped body (mutated NOT — a new dict
+            is built from an allowlist, so internal keys like ``_task_id``
+            never leak onto the wire).
+        profile: key of :data:`RESPONSES_PROFILES`.
+        stream: value for the ``stream`` field.
+
+    Returns:
+        ``(responses_body, tool_name_reverse)`` — the Responses API request
+        body, plus the per-request reverse map ``{truncated: original}``
+        for tool names shortened to the 64-char function-name limit. The
+        map must ride the response-side translator so echoed names are
+        restored before tool dispatch (mirrors ``apply_claude_cloak``).
+    """
+    validate_request(body, 'responses')
+
+    if stop_sequences(body):
+        raise ProtocolConversionError('stop_sequences_unrepresentable')
+    if not isinstance(profile, str) or profile not in RESPONSES_PROFILES:
+        raise ProtocolConversionError('unsupported_responses_profile')
+    prof = RESPONSES_PROFILES[profile]
+
+    model = body.get('model', '')
+    is_gpt_56 = _is_gpt_56(model)
+    from lib.llm.route_features import body_route_profile, route_feature
+    selected = body_route_profile(body)
+    legacy_public, legacy_stateful = _legacy_feature_gates(body, profile)
+
+    def supports(feature, legacy=legacy_public):
+        declared = route_feature(selected, feature, protocol='responses',
+                                 oauth='codex' if profile == 'codex' else '')
+        return legacy if declared is None else declared
+
+    replay_enabled = responses_reasoning_replay(body, profile=profile)
+
+    summary_enabled = supports(
+        'responses_reasoning_summary', profile == 'codex' or legacy_public)
+    cache_enabled = supports('responses_prompt_cache', legacy_stateful)
+    compaction_enabled = supports('responses_compaction')
+    breakpoint_mode = str(
+        body.get('_gpt56_breakpoint_mode') or 'implicit').lower()
+    programmatic_mode = str(
+        body.get('_programmatic_tool_calling') or 'off').lower()
+    from lib.tools.programmatic import ACTIVE_PROGRAMMATIC_MODES
+    programmatic_enabled = (
+        supports('responses_programmatic')
+        and programmatic_mode in ACTIVE_PROGRAMMATIC_MODES)
+    # The wire boundary resolves native_openai vs local per request; a local
+    # resolution must never leak the hosted-only PTC fields onto a generic
+    # Responses upstream.  An absent key preserves the legacy gate verbatim.
+    _resolved_ptc = str(
+        body.get('_resolved_programmatic_backend') or '').lower()
+    if _resolved_ptc and _resolved_ptc != 'native_openai':
+        programmatic_enabled = False
+    multi_agent_enabled = (
+        supports('responses_multi_agent')
+        and str(body.get('_multi_agent_mode') or '').lower() == 'read_only')
+    # Like PTC, provider-native multi-agent is enabled by the final resolved
+    # backend, never by model-name inference inside this converter.  An absent
+    # key preserves direct-call compatibility with older callers.
+    _resolved_multi_agent = str(
+        body.get('_resolved_multi_agent_backend') or '').lower()
+    if (_resolved_multi_agent
+            and _resolved_multi_agent != 'native_openai'):
+        multi_agent_enabled = False
+    programmatic_names = (_programmatic_eligible_names()
+                          if programmatic_enabled else set())
+    out: dict = {
+        'model': model,
+        'store': False,
+        'stream': stream,
+    }
+    if prof['instructions'] is not None:
+        out['instructions'] = prof['instructions']
+    if 'parallel_tool_calls' in body:
+        out['parallel_tool_calls'] = body['parallel_tool_calls']
+    elif prof['parallel_tool_calls']:
+        out['parallel_tool_calls'] = True
+
+    # Sampling params — kept for generic providers, dropped for Codex.
+    drop = set(prof['drop_params'])
+    for k in ('temperature', 'top_p'):
+        if k in body and k not in drop:
+            out[k] = body[k]
+    if 'max_tokens' in body and 'max_tokens' not in drop:
+        if prof['map_max_tokens']:
+            out['max_output_tokens'] = body['max_tokens']
+        else:
+            out['max_tokens'] = body['max_tokens']
+
+    # Responses moved Chat Completions' ``response_format`` under
+    # ``text.format``.  Preserve any caller-supplied text options, then apply
+    # the canonical structured-output mapping and GPT-5.6 verbosity.
+    if 'text' in body and not isinstance(body['text'], dict):
+        raise ProtocolConversionError('text_config_object_required')
+    text_config = dict(body.get('text') or {})
+    text_format = _responses_text_format(body.get('response_format'))
+    if text_format is not None:
+        if 'format' in text_config and text_config['format'] != text_format:
+            raise ProtocolConversionError('response_format_conflict')
+        text_config['format'] = text_format
+    verbosity = str(body.get('_text_verbosity') or '').lower()
+    if (supports('responses_text_verbosity')
+            and verbosity in ('low', 'medium', 'high')):
+        text_config['verbosity'] = verbosity
+    if text_config:
+        out['text'] = text_config
+
+    # Effort, readable summary and opaque replay are separate capabilities.
+    # Only a declared/installed summary binding opts in automatically; generic
+    # compatible routes keep omission, while explicit native settings win.
+    if body.get('output_config'):
+        raise ProtocolConversionError('output_config_unrepresentable')
+    native_reasoning = body.get('reasoning', {})
+    if not isinstance(native_reasoning, dict):
+        raise ProtocolConversionError('reasoning_object_required')
+    if set(native_reasoning) - {'effort', 'summary', 'context', 'mode'}:
+        raise ProtocolConversionError('unsupported_reasoning_field')
+    from lib.llm.reasoning import (
+        ReasoningContractError, native_reasoning_effort, resolve_reasoning_control,
+    )
+    try:
+        effort = native_reasoning_effort(body)
+        if selected is not None and effort is not None:
+            # Direct native bodies can bypass compile_reasoning. Validate exact
+            # intent against this destination too, without model-name clamping.
+            declared_reasoning = selected.get('reasoning') or {}
+            disabled = declared_reasoning.get('disabled_effort', 'none')
+            mode = 'off' if effort in ('none', disabled) else 'exact'
+            fmt, _, resolved, _ = resolve_reasoning_control(declared_reasoning, mode, effort)
+            if fmt != 'reasoning_effort' or resolved != effort:
+                raise ProtocolConversionError('reasoning_wire_unrepresentable')
+    except ReasoningContractError as error:
+        raise ProtocolConversionError(error.kind) from None
+    if 'summary' in native_reasoning and native_reasoning['summary'] not in ('auto', 'concise', 'detailed', None):
+        raise ProtocolConversionError('invalid_reasoning_summary')
+    if 'context' in native_reasoning and native_reasoning['context'] != 'all_turns':
+        raise ProtocolConversionError('reasoning_context_conflict')
+    if 'context' in native_reasoning and not replay_enabled:
+        raise ProtocolConversionError('reasoning_context_unrepresentable')
+    if 'mode' in native_reasoning and (native_reasoning['mode'] != 'pro' or not supports('responses_reasoning_mode')):
+        raise ProtocolConversionError('reasoning_mode_unrepresentable')
+    if selected is None and is_gpt_56 and effort:
+        from lib.model_info._openai_gpt56 import (
+            normalize_gpt56_reasoning_effort)
+        effort = normalize_gpt56_reasoning_effort(effort)
+    if profile == 'codex' and selected is None and not effort:
+        effort = 'medium'
+    if profile == 'codex' and selected is None:
+        # ChatGPT's Codex Responses endpoint follows the CLIProxyAPI
+        # subscription registry, whose current top rung is xhigh before 5.6
+        # and max on 5.6+.  It also uses ``none`` rather than the legacy
+        # ``minimal`` spelling. Keep generic GPT/API providers untouched.
+        if effort in ('off', 'minimal'):
+            effort = 'none'
+        elif effort in ('max', 'ultra'):
+            effort = 'max' if is_gpt_56 else 'xhigh'
+    if selected is not None:
+        declared_reasoning = selected.get('reasoning') or {}
+        summary_enabled = (
+            summary_enabled
+            and declared_reasoning.get('support') == 'supported'
+            and effort not in ('none', declared_reasoning.get('disabled_effort', 'none'))
+        )
+    elif effort == 'none':
+        summary_enabled = False
+    if effort or native_reasoning or summary_enabled or replay_enabled:
+        reasoning: dict = dict(native_reasoning)
+        if effort:
+            reasoning['effort'] = effort
+        if summary_enabled:
+            reasoning.setdefault('summary', prof['reasoning_summary'] or 'auto')
+        if replay_enabled and (selected is not None or is_gpt_56):
+            # We resend encrypted reasoning items in stateless mode below, so
+            # GPT-5.6 can retain reasoning across the full agent loop.
+            if 'context' in reasoning and reasoning['context'] != 'all_turns':
+                raise ProtocolConversionError('reasoning_context_conflict')
+            reasoning['context'] = 'all_turns'
+            if (supports('responses_reasoning_mode')
+                    and str(body.get('_reasoning_mode') or '').lower()
+                    == 'pro'):
+                if 'mode' in reasoning and reasoning['mode'] != 'pro':
+                    raise ProtocolConversionError('reasoning_mode_conflict')
+                reasoning['mode'] = 'pro'
+        out['reasoning'] = reasoning
+
+    if supports('responses_safety_identifier') or multi_agent_enabled:
+        safety_identifier = str(body.get('_safety_identifier') or '').strip()
+        if safety_identifier and supports('responses_safety_identifier'):
+            out['safety_identifier'] = safety_identifier[:64]
+        if multi_agent_enabled:
+            # Tofu sets no subagent concurrency ceiling, so the optional
+            # max_concurrent_subagents field is omitted.
+            out['multi_agent'] = {'enabled': True}
+
+    includes = list(prof['include'])
+    if replay_enabled and 'reasoning.encrypted_content' not in includes:
+        includes.append('reasoning.encrypted_content')
+    if includes:
+        out['include'] = includes
+
+    reverse: dict = tool_name_reverse(body)  # truncated tool name → original (response side restores)
+
+    # A gateway carrier selects the upstream account (and its prompt cache),
+    # so ciphertext minted under another lineage is what the provider rejects
+    # as invalid_encrypted_content. A continued worker conversation (durable
+    # resume, retained agent, conversation-worker input) brings that foreign
+    # state into a new lineage: degrade it like the provider's own rejection
+    # instead of paying a 400. Unmarked history is never dropped here.
+    messages = body.get('messages') or []
+    retired_lineage_state = 0
+    if replay_enabled:
+        from lib.llm.cache_affinity import (
+            CACHE_AFFINITY_SCOPE_KEY, affinity_selects_cache_domain,
+            cache_affinity_headers, cache_affinity_key)
+        from lib.llm.responses_replay import retire_foreign_lineage_state
+        affinity_key = cache_affinity_key(body)
+        carriers = cache_affinity_headers(
+            selected, protocol='responses', oauth='codex' if profile == 'codex' else '',
+            key=affinity_key)
+        lineage_scope = ''
+        if any(affinity_selects_cache_domain(name) for name in carriers):
+            lineage_scope = (body.get(CACHE_AFFINITY_SCOPE_KEY) or body.get('_conv_id')
+                             or body.get('_task_id') or '')
+        if lineage_scope:
+            from copy import deepcopy
+            messages = deepcopy(messages)
+            retired_lineage_state = retire_foreign_lineage_state(messages, lineage_scope)
+
+    from lib.llm_sanitize.lineage import ProjectionLineage
+    lineage = ProjectionLineage(body, 'responses_projection')
+    out['input'] = _messages_to_input(
+        messages, reverse,
+        wire_ids=wire_tool_call_ids(
+            body.get('messages') or [],
+            tool_call_id_contract(
+                'responses', body.get('_admission_logical_model') or model)),
+        replay_response_items=replay_enabled,
+        allow_compaction=compaction_enabled,
+        programmatic_tool_names=programmatic_names,
+        lineage=lineage,
+        default_image_detail=(
+            'original' if (supports('responses_image_detail')
+                           and str(body.get('_image_detail') or '').lower()
+                           == 'original') else ''),
+    )
+
+    if cache_enabled:
+        from lib.llm.cache_affinity import cache_affinity_key
+        cache_key = cache_affinity_key(body) if cache_enabled else ''
+        if cache_key:
+            out['prompt_cache_key'] = cache_key
+
+    tools = body.get('tools')
+    if tools:
+        out['tools'] = _convert_tools(tools, reverse)
+        if programmatic_enabled:
+            out['tools'] = _enable_programmatic_tools(
+                out['tools'], eligible=programmatic_names)
+
+    # Mark the stable input floor. ``chatgpt.com/backend-api/codex`` is not the public
+    # Responses API and rejects this public per-content field on some models.
+    if supports('responses_cache_breakpoints'):
+        marked = _add_stable_prefix_breakpoint(out['input'])
+        if breakpoint_mode == 'explicit' and marked:
+            # Disable GPT-5.6's automatic latest-message breakpoint. Only the
+            # stable marker above remains eligible for cache writes.
+            out['prompt_cache_options'] = {'mode': 'explicit'}
+        elif breakpoint_mode == 'explicit':
+            logger.warning('[Responses] explicit-only cache requested but no '
+                           'stable text prefix was available; retaining '
+                           'implicit mode for this request')
+    choice = body.get('tool_choice')
+    if choice:
+        out['tool_choice'] = _convert_tool_choice(choice, reverse)
+
+    report = conversion_report(
+        body, 'responses', replay_reasoning=replay_enabled,
+        replay_types=_REPLAY_RESPONSE_ITEM_TYPES | ({'compaction'} if compaction_enabled else set()))
+    # These are optional generation hints, unlike stop/structured output which
+    # constrain response semantics. Keep omissions explicit and free of values.
+    for key in ('temperature', 'top_p', 'top_k', 'presence_penalty', 'frequency_penalty', 'max_tokens'):
+        if key in body and (key in drop or key in ('top_k', 'presence_penalty', 'frequency_penalty')):
+            report[f'{key}_omitted'] = 1
+    if retired_lineage_state:
+        report['foreign_lineage_reasoning_retired'] = retired_lineage_state
+    if report:
+        out['_conversion_report'] = report
+    lineage.finish(out)
+    return out, reverse
+
+
+def _input_image_part(block: dict, default_image_detail: str) -> dict:
+    """Project one validated canonical image for user or tool-result input."""
+    image = block['image_url']
+    url = image if isinstance(image, str) else image['url']
+    detail = '' if isinstance(image, str) else str(image.get('detail') or '').lower()
+    part = {'type': 'input_image', 'image_url': url}
+    if detail in ('low', 'high', 'auto', 'original'):
+        part['detail'] = detail
+    elif default_image_detail:
+        part['detail'] = default_image_detail
+    return part
+
+
+def _function_call_items(msg: dict, reverse: dict,
+                         wire_ids: dict | None = None) -> list[dict]:
+    """Compile current canonical calls once; native order cannot override them."""
+    wire_ids = wire_ids or {}
+    calls = []
+    for tc in msg.get('tool_calls') or []:
+        if tc.get('type', 'function') != 'function':
+            continue
+        func = tc.get('function') or {}
+        function_call = {
+            'type': 'function_call',
+            'call_id': wire_ids.get(tc.get('id', ''), tc.get('id', '')),
+            'name': _truncate_name(func.get('name', ''), reverse),
+            'arguments': (func.get('arguments', '{}')
+                          if isinstance(func.get('arguments', '{}'), str)
+                          else json.dumps(object_arguments(func.get('arguments')))),
+        }
+        caller = tc.get('caller')
+        if isinstance(caller, dict):
+            if caller.get('type') == 'multi_agent' and caller.get('agent_name'):
+                function_call['agent'] = {'agent_name': str(caller['agent_name'])}
+            else:
+                function_call['caller'] = dict(caller)
+        elif 'caller' in tc and caller is not None:
+            function_call['caller'] = caller
+        calls.append(function_call)
+    return calls
+
+
+def _messages_to_input(messages: list, reverse: dict, *,
+                       wire_ids: dict | None = None,
+                       replay_response_items: bool = False,
+                       allow_compaction: bool = False,
+                       programmatic_tool_names: set[str] | None = None,
+                       default_image_detail: str = '', lineage=None) -> list:
+    """OpenAI messages[] → Responses input[] items."""
+    items: list = []
+    ptc_names = programmatic_tool_names or set()
+
+    # role='tool' carries only call_id. Recover its function name from the
+    # adjacent owning assistant batch so direct and programmatic invocations
+    # share one output contract. Provider ids are not conversation-global:
+    # positional-id models can reuse ``call_0`` in later rounds.
+    call_name_by_result_object: dict[int, str] = {}
+    call_caller_by_result_object: dict[int, dict] = {}
+    for tool_call, result in adjacent_tool_call_result_pairs(messages):
+        function = tool_call.get('function') or {}
+        name = (str(function.get('name') or '')
+                if isinstance(function, dict) else '')
+        if name:
+            call_name_by_result_object[id(result)] = name
+        caller = tool_call.get('caller')
+        if isinstance(caller, dict):
+            # ``caller`` on role=tool is a protocol-private convenience field
+            # and the generic OpenAI body cleaner removes it.  Recover from
+            # the occurrence-owning assistant call, never from a global ID
+            # map: positional IDs can be recycled in later adjacent runs.
+            call_caller_by_result_object[id(result)] = dict(caller)
+
+    program_output_bytes: dict[str, int] = {}
+
+    # A compaction item carries the state of all earlier dynamic input.  Keep
+    # leading system/developer instructions current, but do not resend the old
+    # user/tool transcript before the newest compaction carrier.
+    compact_at = None
+    if replay_response_items and allow_compaction:
+        for index, msg in enumerate(messages):
+            if any(item.get('type') == 'compaction'
+                   for item in _response_items(msg, allow_compaction=True)):
+                compact_at = index
+
+    for index, msg in enumerate(messages):
+        role = msg.get('role', '')
+        content = msg.get('_anthropic_content_blocks') or msg.get('content')
+
+        if (compact_at is not None and index < compact_at
+                and role not in ('system', 'developer')):
+            continue
+
+        function_calls = (_function_call_items(msg, reverse, wire_ids)
+                          if role == 'assistant' else [])
+        if replay_response_items and role == 'assistant':
+            try:
+                native_order = ordered_replay(
+                    msg, function_calls,
+                    allowed_types=_REPLAY_RESPONSE_ITEM_TYPES | (
+                        {'compaction'} if allow_compaction else set()))
+            except ReplayOrderError as error:
+                raise ProtocolConversionError(error.code) from None
+            if native_order is not None:
+                items.extend(native_order)
+                continue
+            items.extend(_response_items(
+                msg, allow_compaction=allow_compaction))
+
+        if role == 'tool':
+            # Tool results join their call by occurrence inside the adjacent
+            # assistant/result run. The stream-side item id is only an
+            # in-stream index, and call_id is only a run-local queue selector.
+            has_images = isinstance(content, list) and any(
+                block.get('type') == 'image_url' for block in content)
+            if has_images:
+                # Responses accepts multimodal function_call_output arrays.
+                # JSON-encoding these blocks would turn pixels into plain
+                # text and can expand a small image into thousands of tokens.
+                output = [
+                    _input_image_part(block, default_image_detail)
+                    if block['type'] == 'image_url'
+                    else {'type': 'input_text', 'text': block['text']}
+                    for block in content
+                ]
+            else:
+                output = (content if isinstance(content, str)
+                          else json.dumps(content if content is not None else '',
+                                          ensure_ascii=False))
+            caller_present = 'caller' in msg
+            caller = msg.get('caller')
+            if not caller_present or caller is None:
+                caller = call_caller_by_result_object.get(id(msg), caller)
+            call_id = str(msg.get('tool_call_id') or '')
+            call_id = (wire_ids or {}).get(call_id, call_id)
+            tool_name = call_name_by_result_object.get(id(msg), '')
+            is_program = (isinstance(caller, dict)
+                          and caller.get('type') == 'program')
+            if is_program and has_images:
+                # The program interpreter's bounded JSON text lane cannot
+                # consume pixels. Never bypass its budget or stringify them.
+                raise ProtocolConversionError('programmatic_image_output_unrepresentable')
+            if not has_images and (is_program or tool_name in ptc_names):
+                from lib.tools.programmatic import (
+                    PROGRAMMATIC_MAX_OUTPUT_BYTES,
+                    encode_programmatic_output,
+                )
+                max_bytes = None
+                caller_id = ''
+                if is_program:
+                    caller_id = str(caller.get('caller_id') or '')
+                    used = program_output_bytes.get(caller_id, 0)
+                    max_bytes = max(0, PROGRAMMATIC_MAX_OUTPUT_BYTES - used)
+                output, consumed, _truncated = encode_programmatic_output(
+                    output, max_bytes=max_bytes)
+                if is_program:
+                    program_output_bytes[caller_id] = (
+                        program_output_bytes.get(caller_id, 0) + consumed)
+            tool_output = {
+                'type': 'function_call_output',
+                'call_id': call_id,
+                'output': output,
+            }
+            if (isinstance(caller, dict)
+                    and caller.get('type') != 'multi_agent'):
+                tool_output['caller'] = dict(caller)
+            elif (caller_present and caller is not None
+                  and not isinstance(caller, dict)):
+                # Never erase malformed attribution into an apparent root
+                # output.  The provider must reject this shape; fresh inbound
+                # calls are independently rejected by the common typed gate.
+                tool_output['caller'] = caller
+            items.append(tool_output)
+            continue
+
+        api_role = 'developer' if role == 'system' else role
+        content_parts: list = []
+        if isinstance(content, str) and content:
+            part_type = 'output_text' if role == 'assistant' else 'input_text'
+            content_parts.append({'type': part_type, 'text': content})
+        elif isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get('type')
+                if btype == 'text':
+                    part_type = ('output_text' if role == 'assistant'
+                                 else 'input_text')
+                    content_parts.append(
+                        {'type': part_type, 'text': block.get('text', '')})
+                elif btype == 'image_url' and role == 'user':
+                    content_parts.append(_input_image_part(block, default_image_detail))
+
+        # An assistant message with no text payload emits no message item —
+        # its tool calls below stand alone as function_call items.
+        phase_messages = replay_phase_messages(msg)
+        if phase_messages:
+            items.extend(phase_messages)
+        elif role != 'assistant' or content_parts:
+            items.append({'type': 'message', 'role': api_role,
+                          'content': content_parts})
+            if lineage is not None:
+                lineage.emit(index, msg.get('content'), content_parts,
+                             message=len(items) - 1, region='input')
+
+        # Current canonical calls, never captured executable shells.
+        items.extend(function_calls)
+    return items
+
+
+def _convert_tools(tools: list, reverse: dict) -> list:
+    """Chat-Completions tools[] → Responses tools[] (flattened function).
+
+    Non-function tools pass through untouched (server-side built-ins like
+    ``web_search`` have no chat-completions wrapper). Function fields are
+    carried from the source. Omitted strictness preserves Chat Completions'
+    non-strict default explicitly: Responses otherwise attempts to normalize
+    optional properties into a strict schema.
+    """
+    converted: list = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get('type') != 'function':
+            converted.append(tool)
+            continue
+        func = tool.get('function') or {}
+        t: dict = {'type': 'function',
+                   'name': _truncate_name(func.get('name', ''), reverse)}
+        if func.get('description'):
+            t['description'] = func['description']
+        if 'parameters' in func:
+            t['parameters'] = func['parameters']
+        t['strict'] = func.get('strict', False)
+        converted.append(t)
+    return converted
+
+
+def _convert_tool_choice(choice, reverse: dict):
+    if isinstance(choice, str):
+        return 'required' if choice == 'any' else choice
+    if isinstance(choice, dict) and choice.get('type') == 'function':
+        return {'type': 'function',
+                'name': _truncate_name(
+                    (choice.get('function') or {}).get('name', ''), reverse)}
+    return choice

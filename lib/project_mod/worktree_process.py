@@ -1,0 +1,197 @@
+"""Controlled worktree materialization, not general command execution.
+
+Entry: run_worktree_add. The integration owner supplies sanitized environment,
+lease FDs and an unowned destination. Git file-count progress renews an idle
+budget; output noise cannot extend it. One bounded reader drains the child,
+and teardown retires the process group before the caller can clean up. Pipe
+closure is then proven by a non-blocking drain, never by a join deadline.
+"""
+from __future__ import annotations
+
+import os
+import re
+import math
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+from lib.git_runtime import GIT_STALL_SECONDS
+from lib.log import get_logger
+from lib.project_mod.activity_supervised_process import (
+    ACTIVITY_SAMPLE_SECONDS, process_tree_activity,
+)
+
+logger = get_logger(__name__)
+
+_PROGRESS = re.compile(rb'(?:Updating|Checking out) files:\s*\d+%\s*\((\d+)/(\d+)\)')
+_OUTPUT_LIMIT = 8192
+# Linux's default pipe-max-size: once the owned group is retired, a pipe can
+# hold at most this much. Bytes beyond it come from a live escaped writer.
+_RETIRED_PIPE_BYTES = 1 << 20
+
+
+class WorktreeRetirementUnproven(RuntimeError):
+    """Caller must preserve the destination: a writer may still be alive."""
+
+
+def _drain_retired_output(fd: int, tail: bytearray, lock: threading.Lock) -> bool:
+    """True when every writer has closed the stopped reader's pipe.
+
+    A non-blocking read answers at once: buffered bytes, then EOF once no
+    writer is left, or EAGAIN while one outside the retired group still holds
+    the write end. The decision never depends on how soon a thread was
+    scheduled, and a writer that keeps producing cannot extend teardown.
+    """
+    drained = 0
+    while drained <= _RETIRED_PIPE_BYTES:
+        try:
+            chunk = os.read(fd, 65536)
+        except OSError:
+            return False
+        if not chunk:
+            return True
+        drained += len(chunk)
+        with lock:
+            tail.extend(chunk)
+            del tail[:-_OUTPUT_LIMIT]
+    return False
+
+
+def run_worktree_add(argv: list[str], *, cwd: Path, env: dict[str, str],
+                     pass_fds: tuple[int, ...] = (), cancellation=None,
+                     idle_timeout: float = GIT_STALL_SECONDS,
+                     progress=None) -> subprocess.CompletedProcess[str]:
+    """A healthy slow checkout may take any time; only a stalled one fails.
+
+    LC_ALL fixes Git's progress grammar. The idle window renews on increasing
+    completed-file counts with an unchanged positive total, and whenever some
+    thread of the Git process tree executed (the activity evidence of
+    ``activity_supervised_process``). Registration prints no file counts, and
+    a checkout reads its tree before its first count; on a contended volume
+    either phase alone outlasted the window (2026-11-06, lane c7081533: "files
+    0/unknown"). ``progress()`` runs on this waiting thread after each renewal,
+    so the caller can count it as its own liveness. Hooks must be disabled by
+    the caller. No command is replayed after a timeout or ambiguous write.
+    """
+    if not math.isfinite(idle_timeout) or idle_timeout <= 0:
+        raise ValueError('Worktree idle timeout must be positive')
+    process = subprocess.Popen(
+        argv, cwd=str(cwd), env={**env, 'LC_ALL': 'C'},
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        start_new_session=(os.name == 'posix'), pass_fds=pass_fds,
+    )
+    lock = threading.Lock()
+    tail = bytearray()
+    last_progress = time.monotonic()
+    completed = 0
+    total = None
+    reader_error = []
+
+    stop_reader = threading.Event()
+    eof = threading.Event()
+
+    def drain():
+        nonlocal last_progress, completed, total
+        carry = b''
+        try:
+            while not stop_reader.is_set():
+                try:
+                    chunk = os.read(process.stdout.fileno(), 4096)
+                except BlockingIOError:
+                    stop_reader.wait(0.01)
+                    continue
+                if not chunk:
+                    eof.set()
+                    return
+                data = carry + chunk
+                with lock:
+                    tail.extend(chunk)
+                    del tail[:-_OUTPUT_LIMIT]
+                    for match in _PROGRESS.finditer(data):
+                        count, size = map(int, match.groups())
+                        if size > 0 and 0 < count <= size:
+                            if total is None:
+                                total = size
+                            if size == total and count > completed:
+                                completed = count
+                                last_progress = time.monotonic()
+                carry = data[-256:]
+        except Exception as error:
+            reader_error.append(error)
+
+    reader = threading.Thread(target=drain, name='git-worktree-output', daemon=True)
+    try:
+        os.set_blocking(process.stdout.fileno(), False)
+        reader.start()
+        observed = process_tree_activity(process.pid)
+        sampled = time.monotonic()
+        reported = last_progress
+        while True:
+            if cancellation is not None and cancellation.is_set():
+                raise RuntimeError('Task cancelled during workspace materialization')
+            if time.monotonic() - sampled >= ACTIVITY_SAMPLE_SECONDS:
+                sample, sampled = process_tree_activity(process.pid), time.monotonic()
+                if sample != observed:
+                    observed = sample
+                    with lock:
+                        last_progress = max(last_progress, sampled)
+            with lock:
+                renewed = last_progress
+                idle = time.monotonic() - last_progress
+                detail = bytes(tail).decode('utf-8', errors='replace')
+            if progress is not None and renewed > reported:
+                reported = renewed
+                progress()
+            if reader_error:
+                raise RuntimeError('Git worktree output reader failed') from reader_error[0]
+            if idle >= idle_timeout:
+                raise RuntimeError(
+                    f'Git worktree materialization stalled for {idle_timeout:g}s: no '
+                    f'Git thread ran and no file completed (the checkout volume is '
+                    f'unresponsive; files {completed}/{total or "unknown"}): {detail[-1000:]}')
+            try:
+                returncode = process.wait(timeout=min(0.2, idle_timeout - idle))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
+        primary_error = sys.exc_info()[1]
+        retirement_error = None
+        try:
+            # Retire helpers too: subprocess.run(timeout=...) kills only the leader.
+            if os.name == 'posix':
+                from lib.project_mod.process_group import retire_process_group
+                retire_process_group(process.pid,
+                    wait_leader=lambda seconds: process.wait(timeout=seconds))
+            else:
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=2)
+                if primary_error is not None:
+                    raise WorktreeRetirementUnproven('Interrupted non-POSIX descendants are unproven')
+        except Exception as error:
+            logger.debug('run_worktree_add failure handled: %s', type(error).__name__)
+            retirement_error = error
+        finally:
+            if reader.ident is not None:
+                # The reader only makes non-blocking reads, so it leaves within
+                # one iteration however late it is scheduled; EOF is then
+                # established by the drain below, not by a join deadline.
+                stop_reader.set()
+                reader.join()
+                if not eof.is_set() and _drain_retired_output(
+                        process.stdout.fileno(), tail, lock):
+                    eof.set()
+            process.stdout.close()
+        if retirement_error is not None or (reader.ident is not None and not eof.is_set()):
+            # An escaped pipe holder is not in our owned group. Do not hang or
+            # destroy its destination based on the leader's exit alone.
+            raise WorktreeRetirementUnproven(
+                f'{primary_error or "Worktree exited"}; writer retirement unproven: '
+                f'{retirement_error or "output pipe remains held"}') from primary_error or retirement_error
+    if reader_error:
+        raise RuntimeError('Git worktree output reader failed') from reader_error[0]
+    detail = bytes(tail).decode('utf-8', errors='replace')
+    return subprocess.CompletedProcess(argv, returncode, stdout='', stderr=detail)

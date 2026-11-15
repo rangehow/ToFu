@@ -1,0 +1,61 @@
+"""Canonical assembly for prose-only assistant messages between LLM rounds.
+
+Tool-call assistant rows have their own builder in
+``conv_message_builder._toolcalls``.  This leaf owns the complementary shape:
+an assistant response with prose/reasoning and no tool calls.  Both terminal
+finalization and system-driven continuations use it so a continuation cannot
+drop the assistant response that triggered the nudge from the next request's
+context.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def build_assistant_prose_message(
+    assistant_message: dict[str, Any] | None,
+    *,
+    task: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return the replay-safe prose assistant row, or ``None`` if empty."""
+    if not isinstance(assistant_message, dict):
+        return None
+    content = assistant_message.get('content') or ''
+    reasoning = assistant_message.get('reasoning_content') or ''
+    responses_items = assistant_message.get('_responses_items') or []
+    anthropic_blocks = assistant_message.get('_anthropic_content_blocks') or []
+    if not (content or reasoning or responses_items or anthropic_blocks):
+        return None
+
+    message: dict[str, Any] = {'role': 'assistant', 'content': content}
+    if reasoning:
+        message['reasoning_content'] = reasoning
+    if responses_items:
+        message['_responses_items'] = responses_items
+        if task is not None:
+            task['_responsesItems'] = responses_items
+    if anthropic_blocks:
+        message['_anthropic_content_blocks'] = anthropic_blocks
+        if task is not None:
+            task['_anthropicContentBlocks'] = anthropic_blocks
+    return message
+
+
+def append_assistant_prose_message(
+    messages: list[dict[str, Any]],
+    assistant_message: dict[str, Any] | None,
+    *,
+    task: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Build and append one prose assistant row, returning the row appended."""
+    message = build_assistant_prose_message(assistant_message, task=task)
+    if message is not None:
+        messages.append(message)
+    return message
+
+
+__all__ = [
+    'append_assistant_prose_message',
+    'build_assistant_prose_message',
+]

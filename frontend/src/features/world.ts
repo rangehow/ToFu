@@ -1,0 +1,98 @@
+import '../styles/application/27-world-office.css';
+/** Lazy office-world composition: only this adapter knows the application shell. The world reads live
+ * data itself (read-only) and reaches the shell through explicit ports: the application's push owner for
+ * wake hints, the conversation dock, the classic conversation loader for chatting with a person (the same
+ * ConversationSurface and composer as the classic chat, with the same authority), and the persisted switch
+ * to the classic Session UI. */
+import { invokeFeatureEntry, type FeatureCallable } from '../runtime-bridge';
+import { featureRegistry, readLiveRuntimeBinding } from '../feature-registry';
+import { goToWorkspace, hasMountedWorkspace, mountWorkspacePage, showWorkspace } from '../application-shell/page-host';
+import { rememberLanding } from '../application-shell/landing';
+import { mountWorld, type WorldShell } from './world/app';
+import type { PushFrame, PushPort } from './world/live';
+
+type PushHandler = (frame: PushFrame) => void;
+
+function pushPort(): PushPort | null {
+  const subscribe = readLiveRuntimeBinding('pushSubscribe') as ((channel: string, taskId: string, handler: PushHandler) => void) | undefined;
+  const unsubscribe = readLiveRuntimeBinding('pushUnsubscribe') as ((channel: string, taskId: string, handler: PushHandler) => void) | undefined;
+  const connected = readLiveRuntimeBinding('pushIsConnected') as (() => boolean) | undefined;
+  const reconnect = readLiveRuntimeBinding('pushOnReconnect') as ((listener: () => void) => () => void) | undefined;
+  if (typeof subscribe !== 'function' || typeof unsubscribe !== 'function') return null;
+  return {
+    subscribe(channel, handler) {
+      subscribe(channel, '*', handler);
+      return () => unsubscribe(channel, '*', handler);
+    },
+    connected: () => typeof connected === 'function' && connected(),
+    onReconnect: listener => (typeof reconnect === 'function' ? reconnect(listener) : () => {}),
+  };
+}
+
+type OpenAtTurn = (conversationId: string, turn: { turnId: string; ordinal: number }) => Promise<void>;
+interface TurnStoreRuntime { ensureRuntimeStore?(conversationId: string): { subscribe(changed: () => void): () => void } }
+
+let pendingReveal: (() => void) | null = null;
+/** A Turn without a known ordinal is a recent one (a Worker's result): reveal it once the classic Turn store
+ * holds it; the subscription ends at the reveal, the next open, or teardown. */
+function revealWhenReady(conversationId: string, turnId: string) {
+  const presentation = readLiveRuntimeBinding('ConversationSurfacePresentation') as { revealTurn?(conversation: string, turn: string): boolean } | undefined;
+  const turns = readLiveRuntimeBinding('ConversationTurnStore') as TurnStoreRuntime | undefined;
+  const reveal = () => Boolean(presentation?.revealTurn?.(conversationId, turnId));
+  const store = turns?.ensureRuntimeStore?.(conversationId);
+  if (reveal() || !store) return;
+  let frame = 0;
+  const release = store.subscribe(() => {
+    if (frame) return;
+    frame = requestAnimationFrame(() => { frame = 0; if (reveal()) stop(); });
+  });
+  const stop = () => { if (frame) cancelAnimationFrame(frame); release(); if (pendingReveal === stop) pendingReveal = null; };
+  pendingReveal = stop;
+}
+
+export function openWorld(): void {
+  // Arriving in the office (the classic top bar's link, an address or the landing) makes it the landing view.
+  rememberLanding('world');
+  if (hasMountedWorkspace('world')) { showWorkspace('world'); return; }
+  const legacy = featureRegistry as unknown as Record<string, any>;
+  if (legacy.paperMode) legacy.exitPaperMode?.();
+  if (legacy.imageGenMode) legacy.exitImageGenMode?.();
+  showWorkspace('world');
+  const root = document.getElementById('worldPageContainer');
+  if (!root) throw new Error('World page container is missing');
+  let leaving = false;
+  const shell: WorldShell = {
+    openChat(conversationId, turn) {
+      pendingReveal?.();
+      const openAt = readLiveRuntimeBinding('openConversationAtTurn') as OpenAtTurn | undefined;
+      if (turn && typeof turn.ordinal === 'number' && typeof openAt === 'function') {
+        void openAt(conversationId, { turnId: turn.turnId, ordinal: turn.ordinal });
+        return;
+      }
+      legacy.loadConversation?.(conversationId);
+      if (turn) revealWhenReady(conversationId, turn.turnId);
+    },
+    // The dock is the body's data-conversation-dock (01-workspace-dock.css places the column from it).
+    // Re-announcing the workspace lets the shell resume or suspend the column's transcript transport;
+    // while the world is being left, the next workspace announces itself.
+    dock: mode => {
+      if (document.body.dataset.conversationDock === mode) return;
+      document.body.dataset.conversationDock = mode;
+      if (!leaving) showWorkspace('world', false);
+    },
+    classic: () => { rememberLanding('chat'); goToWorkspace('chat'); },
+    push: pushPort(),
+  };
+  const page = mountWorld(root, shell);
+  // The dock belongs to the office: leaving it leaves no dock behind in the next workspace.
+  mountWorkspacePage(() => {
+    leaving = true;
+    pendingReveal?.();
+    page.dispose();
+    delete document.body.dataset.conversationDock;
+  }, page.route);
+}
+(featureRegistry as unknown as Record<string, unknown>).openWorld = openWorld;
+export async function invoke(name: string, args: readonly unknown[], stub: FeatureCallable): Promise<unknown> {
+  return invokeFeatureEntry('world', name, args, stub);
+}

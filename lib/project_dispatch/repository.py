@@ -1,0 +1,1571 @@
+"""Owner-scoped dispatch authority; never starts tasks or grants tools.
+
+ProjectDispatchRepository commits selected evidence through an owned project CAS.
+Legacy records remain passively readable until the first authorized mutation.
+The canonical schema owns request/admission validation; conversation metadata,
+coordination binding and source-turn ports are rechecked at every admission.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import math
+from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from pathlib import Path
+
+from functools import lru_cache
+import time
+import uuid
+
+from lib.conversations.project_identity import normalize_project_path
+from lib.identity import PrincipalContext, require_user_id
+from lib.log import get_logger
+from lib.agent_core.storage_errors import StorageError
+from lib.utils import sha256_holding_gil
+
+CONTRACT = json.loads((Path(__file__).resolve().parents[2] /
+                       'contracts/project_dispatch_v1.schema.json').read_text())
+NAMESPACE = CONTRACT['namespace']
+LIMITS = CONTRACT['limits']
+
+
+logger = get_logger(__name__)
+
+# One live decision (validating a grant, resolving a delegation's source,
+# admitting a grant) reads each external authority record once: the
+# coordination binding, a Stop watermark, conversation metadata, a Turn, an
+# attempt. Its nested checks each re-read them before (a validation read the
+# binding three times). Separate decisions, such as a command's fences before
+# and after its Turn exists, never share reads; outside one every read is live.
+_DECISION_READS = ContextVar('project_dispatch_decision_reads', default=None)
+
+
+@contextmanager
+def one_decision():
+    if _DECISION_READS.get() is not None:
+        yield
+        return
+    token = _DECISION_READS.set({})
+    try:
+        yield
+    finally:
+        _DECISION_READS.reset(token)
+
+
+def decision_read(key, read):
+    """``read()`` once per open decision, as a fresh copy each time; live outside one."""
+    reads = _DECISION_READS.get()
+    if reads is None:
+        return read()
+    if key not in reads:
+        reads[key] = read()
+    return copy.deepcopy(reads[key])
+
+
+def _continuation_gap(previous, predecessor, successor, *, recipient, turn_id, attempt_id, task_id):
+    """The first missing piece of continuation evidence with its remedy, or ``''``.
+
+    A continuation advances only from the exact settled predecessor the
+    association names to an attempt of the continued Turn that no other
+    execution's task holds.
+    """
+    reread = ' Read get_conversation_status and pin the Worker\'s latest settled Turn.'
+    if not isinstance(predecessor, Mapping) or predecessor.get('attemptId') != previous['attemptId']:
+        return f"predecessor attempt {previous['attemptId']} was not found." + reread
+    if (predecessor.get('turnId'), predecessor.get('conversationId')) != (previous['turnId'], recipient):
+        return (f"predecessor attempt {previous['attemptId']} belongs to Turn {predecessor.get('turnId')} "
+                f"of {predecessor.get('conversationId')}, not to the association's Turn "
+                f"{previous['turnId']} of {recipient}." + reread)
+    if predecessor.get('status') in ('pending', 'running'):
+        return (f"predecessor attempt {previous['attemptId']} is still {predecessor.get('status')}; "
+                'a continuation starts only from a settled attempt. Wait until it settles; '
+                'send_project_message reaches a running Worker.')
+    if (not isinstance(successor, Mapping) or successor.get('attemptId') != attempt_id
+            or successor.get('turnId') != turn_id or successor.get('conversationId') != recipient):
+        return f'successor attempt {attempt_id} is not an attempt of Turn {turn_id} in {recipient}.' + reread
+    successor_task = successor.get('taskId')
+    # Start claiming and durable-worker binding both precede association
+    # advancement. Neither reserves a different execution's task.
+    start_claim = '@dispatching:' + attempt_id
+    claimed = isinstance(successor_task, str) and (
+        successor_task == start_claim or successor_task.startswith(start_claim + ':'))
+    worker_bound = successor_task == 'conversation-attempt:' + attempt_id
+    if (successor_task not in ('', task_id, predecessor.get('taskId'))
+            and not claimed and not worker_bound):
+        return (f'successor attempt {attempt_id} is bound to task {successor_task!r}, not to this '
+                f'execution ({task_id}); only an unbound attempt, its own start claim or its own '
+                'durable-worker binding continues it.' + reread)
+    if (previous.get('taskId') or task_id) != task_id:
+        return (f"the pinned association names task {previous.get('taskId')}, but the assignment "
+                f'continues task {task_id}.' + reread)
+    return ''
+
+
+class ProjectDispatchError(ValueError):
+    """Malformed request, unavailable authority or conflicting durable evidence."""
+
+
+class PublicationResultChanged(ProjectDispatchError):
+    """The pinned review result is no longer the Worker Turn's current projection."""
+
+
+class SyntheticSource(ProjectDispatchError):
+    """The authorization source is an existing Turn that is not genuine human input."""
+
+
+class NonhumanRequest(SyntheticSource):
+    """The executing Coordinator Turn answers nonhuman input and no owner message reached it.
+
+    Such a Turn has no request of its own, so it authorizes no Worker action. The
+    refusal names its effect and recovery so a caller reports it instead of
+    retrying it.
+    """
+    code = 'nonhuman_request'
+    execution_started = False
+    recovery = ('Nothing was started, and repeating the call fails the same way. Worker actions need '
+                'the owner\u2019s own message: one they send into this conversation while this turn runs '
+                'authorizes it; otherwise their next message does, and an open request continues on its '
+                'own. Here, read Workers, report_to_user or ask_human instead.')
+
+
+class DispatchGrantRevoked(ProjectDispatchError):
+    """The grant was revoked, or withdrawn by a durable conversation Stop."""
+
+
+class PublicationAwaitsReview(ProjectDispatchError):
+    """Publication waits for an accepting review and its publication pin.
+
+    Only a review or publish commit of this assignment can lift it, and both
+    commit paths then release the delivery hold explicitly.
+    """
+
+
+class CommandReused(ProjectDispatchError):
+    """A command identity already authorized another request; ``assignment_id`` names it."""
+
+    def __init__(self, message, assignment_id):
+        super().__init__(message)
+        self.assignment_id = assignment_id
+
+
+class RestartContinuationRefused(ProjectDispatchError):
+    """A restart-paused Turn a later input superseded, whose cut-off calls need review,
+    or that offers no continue never resumes automatically."""
+
+
+class DispatchContention(ProjectDispatchError):
+    """Bounded CAS attempts ended in conflicts or uncertain ACKs; retry the same command.
+
+    Other storage and integrity failures keep their own types.
+    """
+
+
+def transient_dispatch_failure(error):
+    """Whether ``error`` is contention or transient storage, never an authority verdict.
+
+    Every dispatch write commits through one head per owner/project, and every
+    index walk and commit base is fenced by it, so any Worker or Coordinator
+    write can make another lose its bounded CAS attempts. The nearest dispatch verdict in the
+    cause chain decides: ``DispatchContention`` is resolved by reading and
+    validating again; any other ``ProjectDispatchError`` (revocation, a changed
+    source or binding, malformed evidence) is final. Without one, the transient
+    storage codes decide, as for every other persistence wait.
+    """
+    from lib.agent_core.storage_errors import is_transient_storage_error
+    seen = set()
+    current = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, DispatchContention):
+            return True
+        if isinstance(current, ProjectDispatchError):
+            return False
+        seen.add(id(current))
+        current = current.__cause__ if current.__cause__ is not None else (
+            None if current.__suppress_context__ else current.__context__)
+    return is_transient_storage_error(error)
+
+
+@lru_cache(maxsize=None)
+def _validator(definition):
+    # Ordinary tool admission imports this authority without validating a grant.
+    from jsonschema import Draft202012Validator
+    return Draft202012Validator({**CONTRACT, '$ref': '#/$defs/' + definition})
+
+
+def _validate_schema(value, definition):
+    if not isinstance(value, dict) or not _validator(definition).is_valid(value):
+        raise ProjectDispatchError(f'Invalid dispatch {definition}')
+    # JSON Schema permits nonfinite Python floats; durable JSON does not.
+    try:
+        json.dumps(value, allow_nan=False).encode('utf-8')
+    except (ValueError, TypeError, UnicodeError) as exc:
+        raise ProjectDispatchError('Dispatch must be finite UTF-8 JSON') from exc
+
+
+# Schema validity is a pure function of (definition, exact JSON value). Each
+# stored row identity keeps the canonical digests of the content last proven
+# valid under one definition, one per top-level member: an unchanged row skips
+# the jsonschema walk, a changed row walks only its changed members (see
+# ``_members``), and only a completed validation records its digests, so a race
+# can repeat a validation but never skip changed content.
+_VALID_STORED_ROW_DIGESTS = {}
+
+
+@lru_cache(maxsize=None)
+def _members(definition):
+    """The member names of a definition whose validity is the conjunction of its members'.
+
+    A schema of exactly ``type: object``, ``additionalProperties: false``,
+    ``required`` and ``properties`` accepts an object iff its keys are declared,
+    the required keys are present and every member is valid under its own
+    property schema, so a member equal to an already validated one needs no
+    second walk. Any other schema shape returns None and is walked whole.
+    """
+    schema = CONTRACT['$defs'][definition]
+    if (set(schema) - {'description'} != {'type', 'additionalProperties', 'required', 'properties'}
+            or schema['type'] != 'object' or schema['additionalProperties'] is not False):
+        return None
+    return frozenset(schema['properties']), frozenset(schema['required'])
+
+
+def _member_digests(row, *, decoded):
+    """Canonical digest per member, or None when the row is not exact JSON."""
+    digests = {}
+    try:
+        for name, member in row.items():
+            canonical = json.dumps(member, ensure_ascii=False, sort_keys=True,
+                                   separators=(',', ':'), allow_nan=False)
+            # Tuples and non-string keys encode like lists and string keys but
+            # validate differently; only a value equal to its decoded JSON is
+            # keyed. A row decoded from stored JSON is that value by construction.
+            if not isinstance(name, str) or not decoded and json.loads(canonical) != member:
+                return None
+            digests[name] = sha256_holding_gil(canonical.encode('utf-8')).digest()
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return digests
+
+
+def _validate_stored_row(row, definition, identity, *, decoded=False):
+    """Validate ``row`` unless this exact content of ``identity`` was proven valid.
+
+    ``decoded`` states that the row is a value decoded from stored JSON.
+    """
+    shape = _members(definition)
+    digests = (_member_digests(row, decoded=decoded)
+               if shape is not None and isinstance(row, dict) and isinstance(identity, str) else None)
+    if digests is None:
+        _validate_schema(row, definition)
+        try:
+            json.dumps(row, ensure_ascii=False).encode('utf-8')
+        except (ValueError, TypeError, UnicodeError) as exc:
+            raise ProjectDispatchError('Invalid dispatch record JSON') from exc
+        return
+    key = (definition, identity)
+    proven = _VALID_STORED_ROW_DIGESTS.get(key)
+    if proven == digests:
+        return
+    if proven is None:
+        _validate_schema(row, definition)
+    else:
+        declared, required = shape
+        if not required <= digests.keys() <= declared or any(
+                proven.get(name) != digest and not _validator(f'{definition}/properties/{name}').is_valid(row[name])
+                for name, digest in digests.items()):
+            raise ProjectDispatchError(f'Invalid dispatch {definition}')
+    _VALID_STORED_ROW_DIGESTS[key] = digests
+
+
+def batch_requests(request):
+    """Validate/derive exact child requests, without reads, effects or authority.
+
+    The original objective/worker briefs remain in the manifest. Every worker
+    receives that objective in its immutable assignment brief; the existing
+    assignment schema still bounds the complete derived brief.
+    """
+    _validate_schema(request, 'batchRequest')
+    workers = request['workers']
+    recipients = [worker['recipientId'] for worker in workers]
+    if (len(recipients) != len(set(recipients))
+            or request['coordinatorId'] in recipients):
+        raise ProjectDispatchError('Batch requires distinct non-coordinator recipients')
+    if request['authorizationSource']['conversationId'] != request['coordinatorId']:
+        raise ProjectDispatchError('Authorization source must be in coordinator')
+    # An aggregate ceiling is optional; when the human declares one, every
+    # child must declare its share within it.
+    for cap in ('maxTokens', 'maxModelRequests'):
+        if cap in request['budget'] and (any(cap not in worker['budget'] for worker in workers)
+                or sum(worker['budget'][cap] for worker in workers) > request['budget'][cap]):
+            raise ProjectDispatchError('Batch child budgets exceed aggregate ' + cap)
+    if 'deadline' in request['budget'] and any(worker['budget'].get('deadline', float('inf')) > request['budget']['deadline']
+                                              for worker in workers):
+        raise ProjectDispatchError('Batch child deadline exceeds aggregate deadline')
+    common = {key: request[key] for key in ('projectPath', 'coordinatorId', 'authorizationSource')}
+    children = []
+    for worker in workers:
+        child = copy.deepcopy({**common, **worker})
+        child['brief'] = ('Original batch objective:\n' + request['objective']
+                          + '\n\nWorker responsibility:\n' + worker['brief'])
+        _validate_schema(child, 'request')
+        if child.get('profile') is not None:
+            from .scope import validate_profile
+            validate_profile(child)
+        children.append(child)
+    return children
+
+
+def _batch_assignment_identity(batch_id, ordinal):
+    """Domain-separated deterministic member IDs; never supplied by callers."""
+    return str(uuid.uuid5(uuid.UUID(batch_id), f'worker:{ordinal}'))
+
+
+def evidence_owner_matches(value, owner):
+    """Owner-scoped ports may omit identity, but present evidence must be typed."""
+    return all(type(value[key]) is int and value[key] > 0 and value[key] == owner
+               for key in ('user_id', 'owner_user_id') if key in value)
+
+
+def _positive_revision(value):
+    if type(value) is not int or value < 1:
+        raise ProjectDispatchError('A positive expected revision is required')
+
+
+def _identifier(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 256 or not value.strip():
+        raise ProjectDispatchError('A bounded nonempty identity is required')
+
+
+def _stop_key(owner, conversation_id):
+    owner = require_user_id(owner, context='project dispatch Stop watermark')
+    _identifier(conversation_id)
+    return f'{owner}:{hashlib.sha256(conversation_id.encode()).hexdigest()}'
+
+
+def stopped_after(owner, conversation_id, created_at, *, client):
+    row = decision_read(('stop', owner, conversation_id), lambda: client(write=False).query('record.get', {
+        'namespace': CONTRACT['stopNamespace'], 'key': _stop_key(owner, conversation_id)}))
+    if row is None:
+        return False
+    value = row.get('value')
+    _validate_schema(value, 'stop')
+    if value['owner'] != owner or value['conversationId'] != conversation_id:
+        raise ProjectDispatchError('Stop watermark identity mismatch')
+    return value['occurredAt'] >= created_at
+
+
+def record_stop(owner, conversation_id, occurred_at, *, client=None):
+    """One max-timestamp record per owned conversation; no project/TTL dependency."""
+    if client is None:
+        from lib.storage import get_storage_client
+        client = get_storage_client
+    value = {'owner': owner, 'conversationId': conversation_id, 'occurredAt': occurred_at}
+    _validate_schema(value, 'stop')
+    key = _stop_key(owner, conversation_id)
+    for _ in range(LIMITS['casAttempts']):
+        row = client(write=False).query('record.get', {'namespace': CONTRACT['stopNamespace'], 'key': key})
+        if row is not None:
+            previous = row.get('value')
+            _validate_schema(previous, 'stop')
+            if previous['owner'] != owner or previous['conversationId'] != conversation_id:
+                raise ProjectDispatchError('Stop watermark identity mismatch')
+            if previous['occurredAt'] >= occurred_at:
+                return previous['occurredAt']
+        try:
+            client(write=True).command('record.put', {
+                'namespace': CONTRACT['stopNamespace'], 'key': key, 'value': value,
+                'expected_version': row['version'] if row else 0}, 'project-dispatch-stop:' + uuid.uuid4().hex)
+            return occurred_at
+        except StorageError as exc:
+            if exc.code != 'database_conflict' and not exc.retryable:
+                raise
+    raise DispatchContention('Concurrent/uncertain Stop watermark; retry the same Stop')
+
+
+class ProjectDispatchRepository:
+    """Durable evidence scoped by explicit owner and canonical project.
+
+    Injected clients follow get_storage_client(write=False/True); conversations
+    follow ConversationRepository.get; turn_get follows get_turn(..., user_id=);
+    attempt_get follows get_attempt(..., user_id=, include_execution_config=).
+    binding_repository follows ProjectCoordinationRepository.read(project).
+    clock returns Unix seconds (the request budget deadline uses that unit).
+    """
+
+    def __init__(self, owner: int, project: str, *, client=None,
+                 conversations=None, turn_get=None, binding_repository=None,
+                 clock=None, attempt_get=None, workspace_get=None, turn_lister=None, storage_version=2):
+        self.owner = require_user_id(owner, context='project dispatch')
+        if not isinstance(project, str) or not project.strip() or len(project) > 4096:
+            raise ProjectDispatchError('A bounded project path is required')
+        self.project = normalize_project_path(project.strip())
+        if not self.project:
+            raise ProjectDispatchError('A canonical project is required')
+        if storage_version not in (1, 2):
+            raise ValueError('Unsupported dispatch storage contract')
+        self.storage_version = storage_version
+        self.binding = {'owner': self.owner, 'projectPath': self.project}
+        self.key = f'{self.owner}:{hashlib.sha256(self.project.encode()).hexdigest()}'
+        if client is None:
+            from lib.storage import get_storage_client
+            client = get_storage_client
+        if conversations is None:
+            from lib.conversations.repository import ConversationRepository
+            conversations = ConversationRepository(client)
+        if turn_get is None:
+            from lib.turn_lifecycle import get_turn
+            turn_get = get_turn
+        if binding_repository is None:
+            from lib.conversations.project_coordination import ProjectCoordinationRepository
+            binding_repository = ProjectCoordinationRepository(
+                self.owner, client=client, conversations=conversations)
+        self.client = client
+        self.conversations = conversations
+        self.turn_get = turn_get
+
+        self.attempt_get = attempt_get
+        self.model_lease_open = None
+
+        self.workspace_get = workspace_get
+        self.turn_lister = turn_lister
+        self.dependency_graph_limit = LIMITS['assignmentsPerProject']
+        self.binding_repository = binding_repository
+        self.clock = clock if clock is not None else time.time
+
+    def _check_record(self, value, *, segmented=False, decoded=False):
+        """``decoded``: every row of ``value`` was decoded from stored JSON."""
+        if (not isinstance(value, dict) or value.get('binding') != self.binding
+                or not isinstance(value.get('assignments'), list)
+                or not segmented and len(value['assignments']) > LIMITS['assignmentsPerProject']):
+            raise ProjectDispatchError('Invalid dispatch record binding/capacity')
+        # A segmented record has no byte capacity, and the row validation below
+        # proves its validated rows finite JSON; only the other fields are encoded.
+        rows = ('assignments', 'requestBudgets', 'coordinatorSettlements')
+        try:
+            size = len(json.dumps(value if not segmented else {k: v for k, v in value.items() if k not in rows},
+                                  ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8'))
+        except (ValueError, TypeError, UnicodeError) as exc:
+            raise ProjectDispatchError('Invalid dispatch record JSON') from exc
+        if not segmented and size > LIMITS['maxRecordBytes']:
+            raise ProjectDispatchError('Dispatch record byte capacity reached; no evidence evicted')
+
+        # The separate scope-change contract owns this same-record extension.
+        if not segmented:
+            _validate_stored_row({k: v for k, v in value.items() if k != 'scopeChanges'}, 'record', self.key,
+                                 decoded=decoded)
+        else:
+            for field, definition, identity in (
+                    ('assignments', 'assignment', 'id'),
+                    ('requestBudgets', 'coordinatorRequestBudget', 'id'),
+                    ('coordinatorSettlements', 'coordinatorSettlement', 'sourceAttemptId')):
+                for row in value.get(field, []):
+                    _validate_stored_row(row, definition, row.get(identity) if isinstance(row, dict) else None,
+                                         decoded=decoded)
+        if 'scopeChanges' in value:
+            from .scope_changes import check_extension
+            check_extension(self, value)
+        settlements = value.get('coordinatorSettlements', [])
+        budgets = value.get('requestBudgets', [])
+        if len({row['id'] for row in budgets}) != len(budgets):
+            raise ProjectDispatchError('Duplicate original request budget')
+        for row in budgets:
+            accounts = {account['taskId']: account for account in row['accounts']}
+            if len(accounts) != len(row['accounts']) or row['authorizationSource']['conversationId'] != row['coordinatorId']:
+                raise ProjectDispatchError('Invalid original request account identity')
+            if any(event['root_task_id'] not in accounts or event['account_nonce'] != accounts[event['root_task_id']]['nonce']
+                   for event in row['modelAttempts']):
+                raise ProjectDispatchError('Original request occurrence belongs to another account')
+            if len({(event['root_task_id'], event['attempt_ordinal']) for event in row['modelAttempts']}) != len(row['modelAttempts']):
+                raise ProjectDispatchError('Duplicate original request occurrence')
+        sources = {row['request'].get('delegation', {}).get('attemptId') for row in value['assignments']}
+        if (len({row['sourceAttemptId'] for row in settlements}) != len(settlements)
+                or any(row['sourceAttemptId'] not in sources for row in settlements)):
+            raise ProjectDispatchError('Coordinator settlement requires one exact retained request')
+        seen = set()
+        for assignment in value['assignments']:
+            if not isinstance(assignment, dict):
+                raise ProjectDispatchError('Invalid dispatch assignment')
+            _identifier(assignment.get('id'))
+            if assignment['id'] in seen:
+                raise ProjectDispatchError('Duplicate dispatch identity')
+            seen.add(assignment['id'])
+            # The complete record/assignment schema above already validates its
+            # nested request and model attempts. Keep the semantic checks below
+            # on every read without walking those same schemas a second time.
+
+            if assignment['request'].get('profile') is not None:
+                from .scope import validate_profile
+                validate_profile(assignment['request'])
+            tools = assignment.get('toolAttempts', [])
+            profile = assignment['request'].get('profile')
+            tool_limit = profile.get('maxToolCalls') if profile is not None else 0
+            if tool_limit is not None and len(tools) > tool_limit:
+                raise ProjectDispatchError('Dispatch tool-attempt capacity exceeded')
+            if tools:
+                from .scope import granted_tools
+                granted = granted_tools(profile, assignment=assignment) if profile is not None else frozenset()
+                if any(item['tool_name'] not in granted for item in tools):
+                    raise ProjectDispatchError('Dispatch tool occurrence exceeds its granted profile')
+            if len({(row['root_task_id'], row['tool_ordinal']) for row in tools}) != len(tools):
+                raise ProjectDispatchError('Duplicate dispatch tool occurrence')
+            grant = assignment.get('grant')
+            if (assignment['request']['projectPath'] != self.project
+                    or not isinstance(grant, dict) or grant.get('owner') != self.owner
+                    or type(grant.get('owner')) is not int
+                    or not isinstance(grant.get('subject'), str) or not grant['subject']
+                    or type(grant.get('revoked')) is not bool
+                    or type(grant.get('createdAt')) not in (int, float)
+                    or not math.isfinite(grant['createdAt'])
+                    or not isinstance(assignment.get('modelAttempts'), list)
+                    or 'execution' not in assignment or 'review' not in assignment):
+                raise ProjectDispatchError('Invalid dispatch grant/assignment')
+            _positive_revision(grant.get('revision'))
+
+            if 'bindingRevision' in grant:
+                _positive_revision(grant['bindingRevision'])
+            _validate_schema(self._admission(assignment), 'admission')
+            attempts = assignment['modelAttempts']
+            model_limit = assignment['request']['budget'].get('maxModelRequests')
+            if model_limit is not None and len(attempts) > model_limit:
+                raise ProjectDispatchError('Dispatch model-attempt capacity exceeded')
+            occurrences = set()
+            for attempt in attempts:
+                occurrence = (attempt['root_task_id'], attempt['attempt_ordinal'])
+                if occurrence in occurrences:
+                    raise ProjectDispatchError('Duplicate model occurrence')
+                occurrences.add(occurrence)
+            execution = assignment['execution']
+            if execution is not None:
+                if (not isinstance(execution, dict)
+                        or not {'turnId', 'attemptId'} <= set(execution)
+                        or set(execution) - {'turnId', 'attemptId', 'taskId'}):
+                    raise ProjectDispatchError('Invalid dispatch execution association')
+                _identifier(execution['turnId'])
+                _identifier(execution['attemptId'])
+                if 'taskId' in execution:
+                    _identifier(execution['taskId'])
+            review = assignment['review']
+            if review is not None:
+                if (not isinstance(review, dict) or review.get('decision') not in
+                        ('accept', 'rework', 'reject') or not isinstance(review.get('note'), str)
+                        or len(review['note']) > 2048):
+                    raise ProjectDispatchError('Invalid dispatch review')
+                _positive_revision(review.get('resultRevision'))
+
+        self._check_batches(value, segmented=segmented)
+
+        from .dependencies import check_graph
+        check_graph(value['assignments'], max(len(value['assignments']), self.dependency_graph_limit)
+                    if segmented else self.dependency_graph_limit, selected=segmented)
+
+    def _check_batches(self, value, *, segmented=False):
+        batches = value.get('batches', [])
+        if not segmented and len(batches) > LIMITS['batchesPerProject']:
+            raise ProjectDispatchError('Dispatch batch capacity reached; no evidence evicted')
+        rows = {row['id']: row for row in value['assignments']}
+        seen, members = set(), set()
+        for batch in batches:
+            _validate_schema(batch, 'batch')
+            _identifier(batch['id'])
+            if batch['id'] in seen or batch['id'] in rows:
+                raise ProjectDispatchError('Duplicate dispatch batch identity')
+            seen.add(batch['id'])
+            try:
+                expected_ids = [_batch_assignment_identity(batch['id'], ordinal)
+                                for ordinal in range(len(batch['request']['workers']))]
+            except (ValueError, AttributeError) as exc:
+                raise ProjectDispatchError('Invalid dispatch batch identity') from exc
+            children = batch_requests(batch['request'])
+            if (batch['request']['projectPath'] != self.project
+                    or batch['assignmentIds'] != expected_ids
+                    or members.intersection(expected_ids)):
+                raise ProjectDispatchError('Batch member identities differ or are duplicated')
+            members.update(expected_ids)
+            authority = None
+            for identity, child in zip(expected_ids, children):
+                row = rows.get(identity)
+                if row is None or row['request'] != child:
+                    raise ProjectDispatchError('Batch child request differs or is dangling')
+                grant = row['grant']
+                _positive_revision(grant.get('bindingRevision'))
+                if grant.get('lifecycleVersion') != 1:
+                    raise ProjectDispatchError('Batch child lacks versioned authority')
+                current = {key: grant.get(key) for key in (
+                    'subject', 'tenant', 'owner', 'bindingRevision', 'createdAt', 'lifecycleVersion')}
+                if authority is not None and current != authority:
+                    raise ProjectDispatchError('Batch child granter/binding epoch differs')
+                authority = current
+
+    def settle_ended_model_intents(self, assignment_id):
+        """Close durable model intents whose physical request provably ended.
+
+        A lost settlement observation (CAS exhaustion, storage outage, an
+        ambiguous intent ACK whose void is refused) or a process restart leaves
+        `dispatch_intent` rows that no live lease owns. Only a non-live
+        execution attempt plus no open process-local lease for the exact
+        (root, ordinal) qualifies; the receipt stays an unknown-usage lower bound.
+        """
+        row = self.read(assignment_id)
+        execution = row['execution']
+        if execution is None or not any(item['phase'] == 'dispatch_intent' for item in row['modelAttempts']):
+            return []
+        from lib.turn_lifecycle import LIVE_ATTEMPT_STATUSES
+        attempt = self.get_attempt(execution['attemptId'])
+        if (not isinstance(attempt, Mapping) or attempt.get('attemptId') != execution['attemptId']
+                or not attempt.get('status') or attempt['status'] in LIVE_ATTEMPT_STATUSES):
+            return []
+        lease_open = self.model_lease_open
+        if lease_open is None:
+            from lib.agent_core.execution_budget import model_lease_open as lease_open
+        closed = []
+
+        def close(assignment):
+            closed.clear()
+            for item in assignment['modelAttempts']:
+                if (item['phase'] == 'dispatch_intent'
+                        and not lease_open(item['root_task_id'], item['attempt_ordinal'])):
+                    item['phase'], item['usage_complete'] = 'settled', False
+                    closed.append('%s#%d' % (item['root_task_id'], item['attempt_ordinal']))
+        self.mutate(assignment_id, close)
+        if closed:
+            logger.warning('[ProjectDispatch] settled ended model intents as unknown usage '
+                           'assignment=%s attempt=%s intents=%s', assignment_id,
+                           execution['attemptId'], ','.join(closed))
+        return list(closed)
+
+    def restart_paused(self, assignment):
+        """Whether a service restart paused this execution and it may continue in place."""
+        resume = self.restart_resume(assignment)
+        return resume is not None and resume['option'] is not None
+
+    def restart_resume(self, assignment):
+        """How recovery continues a restart-interrupted execution in place, or why it cannot.
+
+        ``None`` unless a service restart settled the execution's Attempt and Turn
+        ``interrupted`` (and no review ended the assignment). Otherwise
+        ``{'turn', 'verdict', 'option'}``: ``verdict`` is the shared lane-tail
+        verdict and ``option`` the settlement's resume option (``continue``, else
+        ``checkpoint_resume``, with its anchor), unset when a later input
+        superseded the Turn (the newer input owns the lane), when its settlement
+        names calls the restart cut off with an unknown side effect (``review``:
+        their owner checks them first) or when the Turn offers only Regenerate
+        (it would redo its work). Appended records after the Turn (its own
+        reports) never unset it: a resume preserves every later Turn.
+        """
+        execution = assignment.get('execution')
+        if execution is None or assignment.get('review') is not None:
+            return None
+        attempt = self.get_attempt(execution['attemptId'])
+        if not isinstance(attempt, Mapping) or attempt.get('status') != 'interrupted':
+            return None
+        conversation_id = assignment['request']['recipientId']
+        turn = self.turn_get(conversation_id, execution['turnId'], user_id=self.owner,
+                             include_projection=False)
+        if (not isinstance(turn, Mapping) or turn.get('status') != 'interrupted'
+                or (turn.get('settlement') or {}).get('cause') != 'server_restart'):
+            return None
+        from lib.conversations.restart_resume import RESUME_OPERATIONS, unknown_effects_to_review
+        verdict = self.lane_tail_verdict(conversation_id, turn, interrupted_at=attempt.get('settledAt'))
+        review = unknown_effects_to_review(turn)
+        options = [option for option in turn['settlement'].get('resumeOptions') or ()
+                   if isinstance(option, Mapping)]
+        option = next((option for option in options if option.get('operation') in RESUME_OPERATIONS), None)
+        return {'turn': turn, 'verdict': verdict, 'review': review,
+                'option': (copy.deepcopy(option)
+                           if option is not None and not verdict['supersededBy'] and not review else None)}
+
+    def lane_tail_verdict(self, conversation_id, turn, *, interrupted_at=None):
+        """The shared lane-tail verdict of one Turn, from this owner's Turn reads."""
+        from lib.conversations.restart_resume import lane_tail_verdict
+        later = self.turn_list(conversation_id, user_id=self.owner, lane_id=turn.get('laneId') or 'main',
+                               after_ordinal=turn['ordinal'], light=True).get('turns') or []
+        return lane_tail_verdict(turn, later, interrupted_at=interrupted_at)
+
+    def get_attempt(self, attempt_id):
+        getter = self.attempt_get
+        if getter is None:
+            from lib.turn_lifecycle import get_attempt
+            getter = get_attempt
+        return decision_read(('attempt', attempt_id), lambda: getter(attempt_id, user_id=self.owner))
+
+    def read_turn(self, conversation_id, turn_id, *, projection=True):
+        """``turn_get`` of this owner's Turn, with or without its projection, once per decision."""
+        options = {} if projection else {'include_projection': False}
+        return decision_read(('turn', conversation_id, turn_id, projection), lambda: self.turn_get(
+            conversation_id, turn_id, user_id=self.owner, **options))
+
+    def turn_list(self, conversation_id, **kwargs):
+        getter = self.turn_lister
+        if getter is None:
+            from lib.turn_lifecycle import list_turns
+            getter = list_turns
+        return getter(conversation_id, **kwargs)
+
+    def accepted_attempt_config(self, attempt_id):
+        """The owner's accepted execution config of one attempt (private to dispatch)."""
+        getter = self.attempt_get
+        if getter is None:
+            from lib.turn_lifecycle import get_attempt
+            getter = get_attempt
+        return getter(attempt_id, user_id=self.owner, include_execution_config=True)['config']
+
+    def get_workspace(self, *args, **kwargs):
+        getter = self.workspace_get
+        if getter is None:
+            from lib.integration_state_repository import find_workspace
+            getter = find_workspace
+        return getter(*args, **kwargs)
+
+    def dependency_states(self, assignment, *, value=None):
+        from .dependencies import states
+        return states(self, assignment, value)
+
+    def _load(self, selected=None):
+        if self.storage_version == 2:
+            from .segmented import SegmentedDispatch
+            last_storage_error = None
+            for _ in range(LIMITS['casAttempts']):
+                try:
+                    return SegmentedDispatch(self).load(selected)
+                except StorageError as error:
+                    if error.code != 'database_conflict' and not error.retryable:
+                        raise
+                    last_storage_error = error
+            raise DispatchContention('Concurrent/uncertain dispatch snapshot; retry reading') from last_storage_error
+        row = self.client().query('record.get', {'namespace': NAMESPACE, 'key': self.key})
+        if row is None:
+            return {'binding': copy.deepcopy(self.binding), 'assignments': []}, 0
+        if (not isinstance(row, Mapping) or type(row.get('version')) is not int
+                or row['version'] < 1):
+            raise StorageError('database_integrity', 'Invalid dispatch record version')
+        try:
+            self._check_record(row.get('value'), decoded=True)
+        except ProjectDispatchError as exc:
+            raise StorageError('database_integrity', str(exc)) from exc
+        return copy.deepcopy(row['value']), row['version']
+
+    @staticmethod
+    def _find(value, assignment_id):
+        _identifier(assignment_id)
+        assignment = next((a for a in value['assignments'] if a['id'] == assignment_id), None)
+        if assignment is None:
+            raise ProjectDispatchError('Dispatch assignment not found in owned project')
+        return assignment
+
+    def _change(self, update, *, selected=None):
+        """Commit ``update`` optimistically and return its result.
+
+        An update that creates evidence, or decided from an index walk, commits
+        through the project head CAS. Every other update is a document commit:
+        only the documents it writes fence it, so writers of different rows
+        never conflict and never invalidate a walk (``segmented.commit``).
+        """
+        last_storage_error = None
+        for _ in range(LIMITS['casAttempts']):
+            original, version = self._load(selected)
+            value, result = self._apply_update(original, update)
+            if value == original:
+                return result
+            try:
+                if self._commit_value(original, value, version):
+                    return result
+            except StorageError as exc:
+                if exc.code != 'database_conflict' and not exc.retryable:
+                    raise
+                last_storage_error = exc
+        raise DispatchContention('Concurrent/uncertain dispatch update; read before retrying') from last_storage_error
+
+    def _apply_update(self, original, update):
+        """Run ``update`` on a copy of ``original``; return the validated copy and result."""
+        value = copy.deepcopy(original)
+        result = update(value)
+
+        retained = original.get('batches', [])
+        if value.get('batches', [])[:len(retained)] != retained:
+            raise ProjectDispatchError('Batch manifest is immutable')
+        receipts = original.get('coordinatorSettlements', [])
+        if value.get('coordinatorSettlements', [])[:len(receipts)] != receipts:
+            raise ProjectDispatchError('Coordinator settlement is immutable')
+        for old in original.get('requestBudgets', []):
+            current = next((row for row in value.get('requestBudgets', []) if row['id'] == old['id']), None)
+            if current is None or any(current[key] != old[key] for key in old
+                                      if key not in ('accounts', 'modelAttempts', 'settledModelUsage', 'pendingDecision')):
+                raise ProjectDispatchError('Original request budget authority is immutable')
+            for account in old['accounts']:
+                actual = next((row for row in current['accounts'] if row['taskId'] == account['taskId']), None)
+                if actual is None or any(actual[key] != account[key] for key in account if key != 'toolCalls') or actual['toolCalls'] < account['toolCalls']:
+                    raise ProjectDispatchError('Original request account cannot be reset')
+        self._check_record(value, segmented=self.storage_version == 2)
+        return value, copy.deepcopy(result)
+
+    def _commit_value(self, original, value, version):
+        """Commit through the head CAS; False when a migration prefix completed instead."""
+        from .segmented import SegmentedDispatch, Snapshot
+        if self.storage_version == 2:
+            store = SegmentedDispatch(self)
+            if not isinstance(version, Snapshot) or version.head['phase'] != 'ready':
+                store.ensure_ready()
+                return False
+            store.commit(original, value, version)
+            return True
+        self.client(write=True).command('record.put', {
+            'namespace': NAMESPACE, 'key': self.key, 'value': value,
+            'expected_version': version,
+        }, 'project-dispatch:' + uuid.uuid4().hex)
+        from .pending_wakes import notify_commit
+        notify_commit(self.owner, self.project)
+        return True
+
+    def _conversation(self, conversation_id):
+        def read():
+            snapshot = self.conversations.get(conversation_id, user_id=self.owner,
+                                              include_messages=False)
+            metadata = getattr(snapshot, 'metadata', snapshot)
+            if isinstance(metadata, Mapping) and isinstance(metadata.get('metadata'), Mapping):
+                metadata = metadata['metadata']
+            return metadata
+        metadata = decision_read(('conversation', self.owner, conversation_id), read)
+        settings = metadata.get('settings') if isinstance(metadata, Mapping) else None
+        if (not isinstance(settings, Mapping)
+                or normalize_project_path(settings.get('projectPath') or '') != self.project
+                or settings.get('archived') or settings.get('readOnly')
+                or metadata.get('archived') or metadata.get('readOnly')):
+            raise ProjectDispatchError('Conversation unavailable in owned project')
+        # Ownership is enforced by the owner-scoped getter; reject contradictory metadata too.
+        if not evidence_owner_matches(metadata, self.owner):
+            raise ProjectDispatchError('Conversation owner changed')
+
+    def validate_binding(self, coordinator_id, expected_revision=None):
+        """Return current typed binding epoch; retained authority must pin it."""
+        binding = decision_read(('binding', self.owner, self.project),
+                                lambda: self.binding_repository.read(self.project))
+        if (not isinstance(binding, Mapping) or binding.get('projectPath') != self.project
+                or binding.get('conversationId') != coordinator_id
+                or binding.get('availability') != 'available'
+                or type(binding.get('revision')) is not int or binding['revision'] < 1
+                or expected_revision is not None and (
+                    type(expected_revision) is not int or expected_revision != binding['revision'])):
+            raise ProjectDispatchError('Current coordination binding epoch does not authorize dispatch')
+        return binding['revision']
+
+    def _live_request(self, request, *, check_deadline=True, value=None, admitted=False):
+        """The live source/owner/binding gate; ``admitted`` marks the request of an existing grant."""
+        if request['projectPath'] != self.project:
+            raise ProjectDispatchError('Dispatch project must match canonical project exactly')
+        if request['coordinatorId'] == request['recipientId'] and request.get('profile', {}).get('mode') != 'coordinator':
+            raise ProjectDispatchError('Coordinator and recipient must be distinct')
+        if check_deadline and request['budget'].get('deadline') is not None and request['budget']['deadline'] <= self.clock():
+            raise ProjectDispatchError('Dispatch grant expired')
+        self._conversation(request['coordinatorId'])
+        self._conversation(request['recipientId'])
+        binding_revision = self.validate_binding(request['coordinatorId'])
+        source = request['authorizationSource']
+        if source['conversationId'] != request['coordinatorId']:
+            raise ProjectDispatchError('Authorization source must be in coordinator')
+        self.validate_human_source(source, admitted=admitted)
+        if request.get('delegation') is not None or request.get('profile', {}).get('mode') in ('project', 'coordinator'):
+            from .delegation import validate_source
+            validate_source(self, request, value=value)
+        return binding_revision
+
+    def validate_human_source(self, source, *, admitted=False):
+        """Reusable exact genuine-human source fence; caller owns project policy.
+
+        A steered source (``steerId``) is an owner message steered into a
+        Coordinator reply whose own input is not human. Its author is committed
+        once and never changes, so once the full check admitted it, the source of
+        an ``admitted`` grant is fenced by its reply Turn's identity and owner:
+        each live admission reads that Turn's metadata, never its body.
+        """
+        _validate_schema(source, 'source')
+
+        _positive_revision(source['projectionRevision'])
+        if 'steerId' in source:
+            self._validate_steered_source(source, admitted=admitted)
+            return
+        turn = self.read_turn(source['conversationId'], source['turnId'])
+        if (not isinstance(turn, Mapping)
+                or turn.get('conversationId') != source['conversationId']
+                or turn.get('turnId') != source['turnId']
+                or type(turn.get('projectionRevision')) is not int
+                or turn['projectionRevision'] != source['projectionRevision']):
+            raise ProjectDispatchError('Authorization source changed or is not human')
+        if turn.get('actor') != 'human':
+            raise SyntheticSource('Authorization source changed or is not human')
+
+        if not evidence_owner_matches(turn, self.owner):
+            raise ProjectDispatchError('Authorization source owner changed')
+        from lib.turn_initiation import require_human_turn
+        try:
+            require_human_turn(turn, user_id=self.owner)
+        except ValueError as exc:
+            raise SyntheticSource(str(exc)) from exc
+
+    def _validate_steered_source(self, source, *, admitted):
+        turn = self.read_turn(source['conversationId'], source['turnId'], projection=not admitted)
+        if (not isinstance(turn, Mapping)
+                or turn.get('conversationId') != source['conversationId']
+                or turn.get('turnId') != source['turnId'] or turn.get('actor') != 'assistant'):
+            raise ProjectDispatchError('Authorization source changed or is not human')
+        if not evidence_owner_matches(turn, self.owner):
+            raise ProjectDispatchError('Authorization source owner changed')
+        if admitted:
+            return
+        from lib.turn_initiation import require_human_turn, steered_input_turn
+        try:
+            require_human_turn(steered_input_turn(turn, source['steerId']), user_id=self.owner)
+        except ValueError as exc:
+            raise SyntheticSource(str(exc)) from exc
+
+    def command_identity(self, command_id):
+        _identifier(command_id)
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f'{NAMESPACE}:{self.key}:{command_id}'))
+
+    def find_command(self, command_id):
+        """Read an exact scoped command; absence is not proof of no in-flight write."""
+        identity = self.command_identity(command_id)
+        from .segmented import selection
+        return next((row for row in self._load(selection(assignments=[identity]))[0]['assignments'] if row['id'] == identity), None)
+
+    def batch_identity(self, command_id):
+        """Batch commands have a separate domain from legacy single grants."""
+        _identifier(command_id)
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f'{NAMESPACE}:batch:{self.key}:{command_id}'))
+
+    def find_batch(self, command_id):
+        """Read exact batch evidence; absence does not exclude an in-flight CAS."""
+        identity = self.batch_identity(command_id)
+        return next((row for row in self._load(self._selection(batches=[identity]))[0].get('batches', [])
+                     if row['id'] == identity), None)
+
+    def read_batch(self, batch_id):
+        """Read immutable batch evidence only; never dispatches or renews grants."""
+        _identifier(batch_id)
+        row = next((row for row in self._load(self._selection(batches=[batch_id]))[0].get('batches', [])
+                    if row['id'] == batch_id), None)
+        if row is None:
+            raise ProjectDispatchError('Dispatch batch not found in owned project')
+        return copy.deepcopy(row)
+
+    def authorize_batch(self, request, *, principal, command_id):
+        """Admit every child and manifest in one CAS, with no execution effects.
+
+        Exact replay returns the original manifest before checking live authority,
+        including after Stop, revoke, expiry or rebinding. Child grants, not caller
+        identity or replay, remain the sole authority for subsequent dispatch.
+        """
+        request = copy.deepcopy(request)
+        children = batch_requests(request)
+        identity = self.batch_identity(command_id)
+        if (not isinstance(principal, PrincipalContext) or principal.kind != 'user'
+                or principal.owner_user_id != self.owner):
+            raise ProjectDispatchError('Dispatch requires matching owning user principal')
+        principal.require_scope('chat')
+        granter = {'subject': principal.subject_id, 'tenant': principal.tenant_id,
+                   'owner': self.owner}
+        ids = [_batch_assignment_identity(identity, ordinal) for ordinal in range(len(children))]
+        manifest = {'id': identity, 'request': request, 'assignmentIds': ids}
+
+        def add(value):
+            old = next((row for row in value.get('batches', []) if row['id'] == identity), None)
+            if old is not None:
+                if old != manifest or any(
+                        any(self._find(value, member)['grant'].get(k) != v for k, v in granter.items())
+                        for member in old['assignmentIds']):
+                    raise ProjectDispatchError('Batch command identity reused with changed request/granter')
+                return old
+            if self.storage_version == 1 and len(value.get('batches', [])) >= LIMITS['batchesPerProject']:
+                raise ProjectDispatchError('Dispatch batch capacity reached; no evidence evicted')
+            if self.storage_version == 1 and len(value['assignments']) + len(children) > LIMITS['assignmentsPerProject']:
+                raise ProjectDispatchError('Dispatch assignment capacity reached; no evidence evicted')
+            if any(row['id'] in ids for row in value['assignments']):
+                raise ProjectDispatchError('Batch child identity already exists without manifest')
+            created_at = self.clock()
+            if request['budget'].get('deadline') is not None and request['budget']['deadline'] <= created_at:
+                raise ProjectDispatchError('Dispatch batch expired')
+            epoch, assignments = None, []
+            for member, child in zip(ids, children):
+                revision = self._live_request(child)
+                if epoch is not None and revision != epoch:
+                    raise ProjectDispatchError('Batch coordinator binding epoch changed during admission')
+                epoch = revision
+                predecessor = child.get('reworkOf')
+                if predecessor is not None:
+                    prior = self._find(value, predecessor['assignmentId'])
+                    if (prior['grant']['tenant'] != principal.tenant_id
+                            or prior['grant']['revision'] != predecessor['grantRevision']
+                            or prior['review'] is None or prior['review']['decision'] != 'rework'
+                            or prior['review']['resultRevision'] != predecessor['resultRevision']):
+                        raise ProjectDispatchError('Rework requires the exact owned review/grant/result revision')
+                assignment = {'id': member, 'request': copy.deepcopy(child),
+                              'grant': {**granter, 'bindingRevision': epoch, 'lifecycleVersion': 1,
+                                        'revision': 1, 'revoked': False, 'createdAt': created_at},
+                              'execution': None, 'review': None, 'modelAttempts': []}
+                self._check_stops(assignment)
+                assignments.append(assignment)
+            # Binding is a separate authority; recheck the shared epoch after all
+            # worker/source reads. Live dispatch rechecks it again before effects.
+            self.validate_binding(request['coordinatorId'], epoch)
+            value['assignments'].extend(assignments)
+            from .dependencies import check_graph
+            check_graph(value['assignments'], max(len(value['assignments']), self.dependency_graph_limit)
+                        if self.storage_version == 2 else self.dependency_graph_limit)
+            for assignment in assignments:
+                if any(state['status'] in ('invalid', 'unknown')
+                       for state in self.dependency_states(assignment, value=value)):
+                    raise ProjectDispatchError('Dependency requires exact completed current prerequisite evidence')
+            value.setdefault('batches', []).append(copy.deepcopy(manifest))
+            return manifest
+        required = list(ids)
+        for child in children:
+            required.extend(ref['assignmentId'] for ref in child.get('dependencies', []))
+            if child.get('reworkOf'):
+                required.append(child['reworkOf']['assignmentId'])
+        return self._change(add, selected=self._selection(assignments=required, batches=[identity]))
+
+    def authorize(self, request, principal, command_id):
+        _validate_schema(request, 'request')
+        if request.get('delegation') is not None or request.get('profile', {}).get('mode') in ('project', 'coordinator'):
+            raise ProjectDispatchError('Project worker policy is issued by the current Coordinator task')
+
+        if request.get('profile') is not None:
+            from .scope import validate_profile
+            validate_profile(request)
+        _identifier(command_id)
+        if (not isinstance(principal, PrincipalContext) or principal.kind != 'user'
+                or principal.owner_user_id != self.owner):
+            raise ProjectDispatchError('Dispatch requires matching owning user principal')
+        principal.require_scope('chat')
+        request = copy.deepcopy(request)
+        assignment_id = self.command_identity(command_id)
+        granter = {'subject': principal.subject_id, 'tenant': principal.tenant_id,
+                   'owner': self.owner}
+        return self._authorize_request(request, granter, assignment_id)
+
+    def authorize_from_coordinator(self, request, *, task, command_id, issued=False):
+        """An accepted human tool invocation may delegate its current request.
+
+        This is an internal tool-admission port, not a principal conversion.
+        Source, policy and physical attempt are server-issued and revalidated;
+        synthetic callers cannot acquire this authority by supplying an owner.
+        ``issued``: the birth of a delegation the attempt issued while it ran
+        (``source_for_task(issued=True)``).
+        """
+        from .delegation import source_for_task, policy_for_task, validate_delegation_policy, issued_worker_policy
+        from .continuation import original_delegation, original_granter, ensure_open
+        # One admission decision: the checks repeated inside the grant CAS
+        # observe the external authority read before it, so that read never
+        # widens the CAS window or repeats on each lost head CAS. Only the
+        # snapshot (open request, policy, replay) is fenced by the CAS itself.
+        with one_decision():
+            principal, source, attempt = source_for_task(self, task, issued=issued)
+            policy = policy_for_task(self, task, attempt)
+            issued = issued_worker_policy(self, task)
+            expected = original_delegation(task, policy, repository=self)
+            if (request.get('authorizationSource') != source or request.get('delegation') != expected
+                    or request.get('model') != issued.model
+                    or request.get('profile', {}).get('mode') != 'project'
+                    or request['profile']['tools'] != list(issued.tools)):
+                raise PermissionError('Worker request differs from its issued Coordinator policy')
+            _validate_schema(request, 'request')
+            from .scope import validate_profile
+            validate_profile(request)
+            granter = original_granter(task, principal)
+            def check(value):
+                source_for_task(self, task, issued=issued)
+                ensure_open(value, expected['attemptId'])
+                validate_delegation_policy(self, value, request)
+            return self._authorize_request(copy.deepcopy(request), granter, self.command_identity(command_id),
+                                           check=check)
+
+    def _authorize_request(self, request, granter, assignment_id, *, check=None):
+        def add(value):
+            old = next((a for a in value['assignments'] if a['id'] == assignment_id), None)
+            if old is not None:
+                if old['request'] != request or any(old['grant'].get(k) != v for k, v in granter.items()):
+                    raise CommandReused('Command identity reused with changed request/granter', old['id'])
+                return old
+            if check is not None:
+                check(value)
+            binding_revision = self._live_request(request)
+
+            predecessor = request.get('reworkOf')
+            if predecessor is not None:
+                old = self._find(value, predecessor['assignmentId'])
+                if (old['grant']['tenant'] != granter['tenant']
+                        or old['grant']['revision'] != predecessor['grantRevision']
+                        or old['review'] is None or old['review']['decision'] != 'rework'
+                        or old['review']['resultRevision'] != predecessor['resultRevision']):
+                    raise ProjectDispatchError('Rework requires the exact owned review/grant/result revision')
+            if self.storage_version == 1 and len(value['assignments']) >= LIMITS['assignmentsPerProject']:
+                raise ProjectDispatchError('Dispatch assignment capacity reached; no evidence evicted')
+            assignment = {'id': assignment_id, 'request': request,
+                          'grant': {**granter, 'bindingRevision': binding_revision,
+                                    'lifecycleVersion': 1, 'revision': 1, 'revoked': False,
+                                    'createdAt': self.clock()},
+                          'execution': None, 'review': None, 'modelAttempts': []}
+            value['assignments'].append(assignment)
+
+            from .dependencies import check_graph
+            check_graph(value['assignments'], max(len(value['assignments']), self.dependency_graph_limit)
+                        if self.storage_version == 2 else self.dependency_graph_limit)
+            if any(state['status'] in ('invalid', 'unknown')
+                   for state in self.dependency_states(assignment, value=value)):
+                raise ProjectDispatchError('Dependency requires exact completed current prerequisite evidence')
+            return assignment
+        selected = self._selection(assignments=[assignment_id] + [ref['assignmentId'] for ref in request.get('dependencies', [])])
+        if request.get('reworkOf'):
+            selected['assignments'].append(request['reworkOf']['assignmentId'])
+        delegation = request.get('delegation') or {}
+        budget = delegation.get('policy', {}).get('requestBudgetId')
+        if budget:
+            # Every grant of a request carries its first row's delegation (each
+            # was compared in this CAS), so that row stands for the cohort; its
+            # policy rows bring the budget and the source settlement.
+            selected['requestBudgets'].append(budget)
+            selected['firstOfBudgets'].append(budget)
+            selected['cohort'] = False
+            if request.get('profile', {}).get('mode') == 'coordinator':
+                # A wake's check re-derives the wake from the whole source
+                # cohort, as recover_coordinator derived it: from the first
+                # row alone it lists fewer Workers and never matches.
+                selected['sources'].append(delegation['attemptId'])
+        elif delegation:
+            selected['sources'].append(delegation['attemptId'])
+        return self._change(add, selected=selected)
+
+    def read(self, assignment_id):
+        return copy.deepcopy(self._find(self._load(self._selection(assignments=[assignment_id]))[0], assignment_id))
+
+    def read_point(self, assignment_id):
+        """The assignment row alone: no policy rows or prerequisites, for status views."""
+        return copy.deepcopy(self._find(self._load(self._point_selection(assignment_id))[0], assignment_id))
+
+    def assignment_version(self, assignment_id):
+        """The stored version of one assignment's evidence, or None before it is segmented.
+
+        Every commit that writes the assignment advances it, so an unchanged
+        version proves the row unchanged; one point read, no policy rows.
+        """
+        if self.storage_version != 2:
+            return None
+        from .segmented import SegmentedDispatch, key
+        row = SegmentedDispatch(self).query('get', collection='assignments', id=key(assignment_id))
+        return None if row is None else row['version']
+
+    def first_request_assignment(self, budget_id):
+        """The first assignment of an original request budget, or None before one exists.
+
+        Its immutable delegation is every later grant's, so a caller may keep it.
+        """
+        value, _ = self._load(self._selection(first_of_budgets=[budget_id], cohort=False, include_policy=False))
+        return next((copy.deepcopy(row) for row in value['assignments']
+                     if row['request'].get('delegation', {}).get('policy', {}).get('requestBudgetId') == budget_id),
+                    None)
+
+    @staticmethod
+    def _selection(**kwargs):
+        from .segmented import selection
+        return selection(**kwargs)
+
+    def _point_selection(self, assignment_id):
+        """Only the row itself: for an update whose callback sees just its own row."""
+        return self._selection(assignments=[assignment_id], include_policy=False, dependencies=False)
+
+    def _assignment_selection(self, assignment_id, *, capacity=False):
+        selected = self._selection(assignments=[assignment_id])
+        if capacity and self.storage_version == 2:
+            row = self.read(assignment_id)
+            delegation = row['request'].get('delegation') or {}
+            budget = delegation.get('policy', {}).get('requestBudgetId')
+            if budget:
+                selected['requestBudgets'].append(budget)
+            elif delegation:
+                selected['sources'].append(delegation['attemptId'])
+        return selected
+
+    def list(self):
+        return copy.deepcopy(self._load()[0]['assignments'])
+
+    def discover(self):
+        """Every assignment and every settled request id, for recovery passes only.
+
+        Recovery reads the whole project only to find lanes and requests to
+        retry; every decision is then made from its own point snapshot, CAS or
+        live admission. This read therefore has no snapshot witness: each
+        document is read once and checked alone, so concurrent writers never
+        make it uncertain, and it is never the basis of a write. Returns
+        ``(assignments, settled source attempt ids)`` in admission order.
+        """
+        if self.storage_version == 2:
+            from .segmented import SegmentedDispatch
+            return SegmentedDispatch(self).discover()
+        value, _ = self._load()
+        return (copy.deepcopy(value['assignments']),
+                {row['sourceAttemptId'] for row in value.get('coordinatorSettlements', [])})
+
+    def request_rows(self, source_attempt_id):
+        """Passive evidence of one Coordinator request: its rows and whether it is settled.
+
+        A request's Workers share ``request.delegation.attemptId``; the source
+        cohort index selects exactly them in one bounded snapshot. Rows keep
+        admission order. ``settled`` means the Coordinator finished the request.
+        """
+        _identifier(source_attempt_id)
+        value, _ = self._load(self._selection(sources=[source_attempt_id], cohort=False,
+                                              include_policy=False))
+        rows = [row for row in value['assignments']
+                if (row['request'].get('delegation') or {}).get('attemptId') == source_attempt_id]
+        settled = any(row.get('sourceAttemptId') == source_attempt_id
+                      for row in value.get('coordinatorSettlements', []))
+        return {'rows': copy.deepcopy(rows), 'settled': settled}
+
+    def history_page(self, cursor=None):
+        from .history import page
+        return page(self, cursor)
+
+    def _admission(self, assignment):
+        return {'version': 1, 'owner': self.owner, 'tenant': assignment['grant'].get('tenant'),
+                'projectPath': self.project, 'assignmentId': assignment['id'],
+                'revision': assignment['grant']['revision'],
+                'recipientId': assignment['request']['recipientId']}
+
+    def admission(self, assignment_id):
+        admission = self._admission(self.read(assignment_id))
+        _validate_schema(admission, 'admission')
+        return admission
+
+    def stopped(self, assignment):
+        """Whether a durable Stop of its Coordinator or recipient followed the grant."""
+        return any(stopped_after(self.owner, conversation_id, assignment['grant']['createdAt'], client=self.client)
+                   for conversation_id in (assignment['request']['coordinatorId'], assignment['request']['recipientId']))
+
+    def _check_stops(self, assignment):
+        for role, key in (('Coordinator', 'coordinatorId'), ('recipient', 'recipientId')):
+            conversation_id = assignment['request'][key]
+            if stopped_after(self.owner, conversation_id, assignment['grant']['createdAt'], client=self.client):
+                raise DispatchGrantRevoked(
+                    f'Grant withdrawn by durable conversation Stop in {role} conversation '
+                    f'{conversation_id} (assignment {assignment["id"]})')
+
+    def validate_grant_binding(self, assignment):
+        """Legacy records are evidence only; never manufacture a binding epoch."""
+        epoch = assignment['grant'].get('bindingRevision')
+        if type(epoch) is not int or epoch < 1:
+            raise ProjectDispatchError('Legacy grant lacks binding epoch; fresh human authorization required')
+        return self.validate_binding(assignment['request']['coordinatorId'], epoch)
+
+    def validate_own(self, admission, *, value=None):
+        """Check live own authority even when prerequisites defer executor birth."""
+        with one_decision():
+            return self._validate_own(admission, value=value)
+
+    def _validate_own(self, admission, *, value=None):
+        _validate_schema(admission, 'admission')
+        if admission['owner'] != self.owner or admission['projectPath'] != self.project:
+            raise ProjectDispatchError('Admission owner/project mismatch')
+        value = self._load(self._selection(assignments=[admission['assignmentId']]))[0] if value is None else value
+        assignment = self._find(value, admission['assignmentId'])
+        if assignment['grant']['revoked']:
+            raise DispatchGrantRevoked(
+                f'Grant revoked (assignment {assignment["id"]}, Coordinator conversation '
+                f'{assignment["request"]["coordinatorId"]})')
+        if admission != self._admission(assignment):
+            raise ProjectDispatchError('Admission tenant/recipient/revision mismatch')
+        self.validate_grant_binding(assignment)
+        self._check_stops(assignment)
+        self._live_request(assignment['request'], value=value, admitted=True)
+        return copy.deepcopy(assignment)
+
+    def validate(self, admission, *, value=None):
+        if value is None:
+            value = self._load(self._selection(assignments=[admission['assignmentId']]))[0]
+        assignment = self.validate_own(admission, value=value)
+        if any(state['status'] != 'ready' for state in self.dependency_states(assignment, value=value)):
+            raise ProjectDispatchError('Dispatch dependencies are not ready')
+        return assignment
+
+    def mutate(self, assignment_id, update_callback, *, check=None):
+        """Trusted internal ledger seam; callback may retry, never perform side effects.
+
+        In-place callbacks or callbacks returning a replacement dict are supported.
+        Authority and execution/review identity remain immutable through this seam.
+        The callback sees only its own assignment, so without an aggregate
+        ``check`` it reads and commits only that document; a ``check`` reads the
+        whole cohort and its commit fences the head.
+        """
+        def update(value):
+            assignment = self._find(value, assignment_id)
+            candidate = copy.deepcopy(assignment)
+            replacement = update_callback(candidate)
+            if replacement is not None:
+                candidate = replacement
+            if not isinstance(candidate, dict) or any(candidate.get(k) != assignment.get(k)
+                    for k in ('id', 'request', 'grant', 'execution', 'review', 'publication')):
+                raise ProjectDispatchError('Internal mutation cannot change dispatch authority/association')
+            index = value['assignments'].index(assignment)
+            value['assignments'][index] = copy.deepcopy(candidate)
+            if check is not None:
+                check(value)
+            return value['assignments'][index]
+        return self._change(update, selected=(self._point_selection(assignment_id) if check is None
+                                              else self._assignment_selection(assignment_id, capacity=True)))
+
+    def bind_execution(self, assignment_id, turn_id, attempt_id, *, task_id=None, admission=None):
+        """Bind the immutable birth association of an admitted grant.
+
+        An existing association is evidence: the identical one is returned
+        (also after revocation) and any other refused. Otherwise the grant is
+        validated live once, outside the CAS: its external authority (binding,
+        Stop, source Turns) is no more atomic with the commit inside it. The
+        CAS fences what the snapshot holds: revocation, the admitted revision
+        and the still-unbound association. ``admission`` defaults to the
+        grant's current revision.
+        """
+        _identifier(turn_id)
+        _identifier(attempt_id)
+        association = {'turnId': turn_id, 'attemptId': attempt_id}
+        if task_id is not None:
+            _identifier(task_id)
+            association['taskId'] = task_id
+
+        def existing(assignment):
+            current = {key: assignment['execution'][key]
+                       for key in association if key in assignment['execution']}
+            if current != association:
+                raise ProjectDispatchError('Execution association is immutable')
+            return assignment
+        value = self._load(self._selection(assignments=[assignment_id]))[0]
+        row = self._find(value, assignment_id)
+        if row['execution'] is not None:
+            return copy.deepcopy(existing(row))
+        admission = admission or self._admission(row)
+        self.validate(admission, value=value)
+        def bind(value):
+            assignment = self._find(value, assignment_id)
+            if assignment['execution'] is not None:
+                return existing(assignment)
+            if assignment['grant']['revoked']:
+                raise DispatchGrantRevoked(
+                    f'Grant revoked (assignment {assignment["id"]}, Coordinator conversation '
+                    f'{assignment["request"]["coordinatorId"]})')
+            if self._admission(assignment) != admission:
+                raise ProjectDispatchError('Admission tenant/recipient/revision mismatch')
+            assignment['execution'] = association
+            return assignment
+        return self._change(bind, selected=self._point_selection(assignment_id))
+
+    def workspace_task_id(self, assignment):
+        execution = assignment.get('execution') or {}
+        if execution.get('taskId'):
+            return execution['taskId']
+        if execution:
+            predecessor = self.get_attempt(execution['attemptId'])
+            if isinstance(predecessor, Mapping) and predecessor.get('taskId'):
+                return predecessor['taskId']
+        return 'project-worker:' + assignment['id']
+
+    def continue_execution(self, assignment_id, previous, turn_id, attempt_id):
+        """Advance from one exact settled predecessor to its accepted successor."""
+        for value in (turn_id, attempt_id):
+            _identifier(value)
+        def advance(value):
+            assignment = self._find(value, assignment_id)
+            execution = assignment['execution']
+            if execution is None:
+                raise ProjectDispatchError('Dispatch continuation has no execution')
+            task_id = execution.get('taskId') or self.workspace_task_id(assignment)
+            association = {'turnId': turn_id, 'attemptId': attempt_id, 'taskId': task_id}
+            if execution == association:
+                return assignment
+            if execution != previous or assignment['review'] is not None:
+                raise ProjectDispatchError('Execution continuation source changed')
+            gap = _continuation_gap(
+                previous, self.get_attempt(previous['attemptId']), self.get_attempt(attempt_id),
+                recipient=assignment['request']['recipientId'], turn_id=turn_id,
+                attempt_id=attempt_id, task_id=task_id)
+            if gap:
+                raise ProjectDispatchError(
+                    'Execution continuation requires exact predecessor/successor evidence: ' + gap)
+            self.validate(self._admission(assignment))
+            assignment['execution'] = association
+            return assignment
+        return self._change(advance, selected=self._assignment_selection(assignment_id))
+
+    def revoke(self, assignment_id, expected_revision):
+        """Return the existing execution association for the caller's cancellation port."""
+        _positive_revision(expected_revision)
+        def revoke(value):
+            assignment = self._find(value, assignment_id)
+            grant = assignment['grant']
+            if grant['revoked'] and grant['revision'] == expected_revision + 1:
+                return assignment['execution']
+            if grant['revision'] != expected_revision or grant['revoked']:
+                raise ProjectDispatchError('Grant revision changed')
+            grant.update(revision=expected_revision + 1, revoked=True)
+            return assignment['execution']
+        return self._change(revoke, selected=self._assignment_selection(assignment_id))
+
+    def validate_scope_change_source(self, request):
+        """Scope removal admits an owned worker's human input, never synthetic context."""
+        if request['projectPath'] != self.project:
+            raise ProjectDispatchError('Scope change requires exact canonical project')
+        self._conversation(request['coordinatorId'])
+        self._conversation(request['authorizationSource']['conversationId'])
+        binding = self.binding_repository.read(self.project)
+        if (not isinstance(binding, Mapping) or binding.get('projectPath') != self.project
+                or binding.get('conversationId') != request['coordinatorId']
+                or binding.get('availability') != 'available'):
+            raise ProjectDispatchError('Current coordination binding changed')
+        self.validate_human_source(request['authorizationSource'])
+
+    def validate_scope_change_notification(self, source, recipient):
+        """Passive receipts cannot migrate to archived or rebound conversations."""
+        self._conversation(source)
+        self._conversation(recipient)
+
+    def revoke_scope_change(self, request, *, principal, command_id):
+        """One CAS validates all pins, revokes them and retains immutable evidence."""
+        from .scope_changes import append_change, validate
+        validate(request, 'request')
+        request = copy.deepcopy(request)
+        _identifier(command_id)
+        return self._change(lambda value: append_change(
+            self, value, request, principal, command_id))
+
+    def scope_changes(self):
+        """Bounded scope-removal evidence; no execution or delivery."""
+        return copy.deepcopy(self._load()[0].get('scopeChanges', []))
+
+    def record_scope_change_outcome(self, change_id, collection, identity, outcome):
+        """Trusted receipt-only CAS; identity and revoked grants cannot be edited."""
+        from .scope_changes import record_outcome
+        return self._change(lambda value: record_outcome(
+            value, change_id, collection, identity, copy.deepcopy(outcome)))
+
+    def request_publication(self, assignment_id, *, principal, expected_revision, result_revision, expected_checkpoint_sha):
+        """A separate explicit human command; review alone cannot publish."""
+
+        _identifier(expected_checkpoint_sha)
+        _positive_revision(expected_revision)
+        _positive_revision(result_revision)
+        def publish(value):
+            row = self._find(value, assignment_id)
+            if (not isinstance(principal, PrincipalContext) or principal.kind != 'user'
+                    or principal.owner_user_id != self.owner or principal.tenant_id != row['grant']['tenant']):
+                raise PermissionError('Publication requires the owning human and tenant')
+            principal.require_scope('chat')
+            if (row['request'].get('profile', {}).get('mode') != 'files'
+                    or row['grant']['revoked'] or row['grant']['revision'] != expected_revision
+                    or row['execution'] is None or row['review'] != {
+                        'decision': 'accept', 'note': (row['review'] or {}).get('note', ''),
+                        'resultRevision': result_revision}):
+                raise ProjectDispatchError('Publication requires an accepted exact completed file-task result')
+            self.validate_own(self._admission(row), value=value)
+            old = row.get('publication')
+            if old is not None:
+                if (old['resultRevision'] != result_revision or old['grantRevision'] != expected_revision
+
+                        or old['checkpointSha'] != expected_checkpoint_sha
+                        or old['subject'] != principal.subject_id):
+                    raise ProjectDispatchError('Publication authorization is immutable')
+                return row
+            row['publication'] = {'resultRevision': result_revision, 'grantRevision': expected_revision,
+                                  'checkpointSha': expected_checkpoint_sha,
+                                  'subject': principal.subject_id, 'requestedAt': self.clock()}
+            return row
+        return self._change(publish, selected=self._assignment_selection(assignment_id))
+
+    def validate_publication(self, binding, task_id):
+        """Publication reuses live grant/source checks without model/tool spending."""
+        row = self.validate(binding)
+        publication = row.get('publication')
+        if (row['request'].get('profile', {}).get('mode') not in ('files', 'project') or publication is None
+                or publication['grantRevision'] != binding['revision'] or row['review'] is None
+                or row['review']['decision'] != 'accept'
+                or row['review']['resultRevision'] != publication['resultRevision']):
+            raise PublicationAwaitsReview('Project publication requires explicit human authorization')
+        if row['request'].get('profile', {}).get('mode') == 'project' and (
+                row['review'].get('actor') != 'coordinator' or publication['subject'] !=
+                'coordinator:' + row['request']['delegation']['taskId']):
+            raise PublicationAwaitsReview('Project worker publication requires its source Coordinator review')
+        # A missing model usage receipt is a recorded lower bound and must not
+        # block delivery; an in-flight model call still means the result may change.
+        if any(attempt['phase'] == 'dispatch_intent' for attempt in row['modelAttempts']):
+            if self.settle_ended_model_intents(row['id']):
+                row = self.validate(binding)
+        blocking = next((attempt for attempt in row['modelAttempts']
+                         if attempt['phase'] == 'dispatch_intent'), None)
+        if blocking is not None:
+            raise ProjectDispatchError(
+                'In-flight paid execution cannot publish: model attempt %s#%d (task %s) phase=%s'
+                % (blocking['root_task_id'], blocking['attempt_ordinal'],
+                   blocking['attempt_task_id'], blocking['phase']))
+        from .accounting import tool_operation_id, unsettled_tool_effect
+        blocking = next((attempt for attempt in row.get('toolAttempts', [])
+                         if unsettled_tool_effect(attempt, CONTRACT['terminalToolPhases'])), None)
+        if blocking is not None:
+            raise ProjectDispatchError(
+                'Unconfirmed tool execution cannot publish: tool attempt %s#%d %s %s phase=%s '
+                'operation_id=%s; the Worker settles it by verifying the effect and calling '
+                'inspect_tool_effect, or by continuing its Turn'
+                % (blocking['root_task_id'], blocking['tool_ordinal'], blocking['tool_name'],
+                   blocking['tool_call_id'], blocking['phase'], tool_operation_id(blocking)))
+        execution = row['execution']
+        if execution is None:
+            raise ProjectDispatchError('Publication has no execution association')
+        if self.attempt_get is None:
+            from lib.turn_lifecycle import get_attempt
+            attempt = get_attempt(execution['attemptId'], user_id=self.owner)
+        else:
+            attempt = self.attempt_get(execution['attemptId'], user_id=self.owner)
+        turn = self.turn_get(row['request']['recipientId'], execution['turnId'], user_id=self.owner,
+                             include_projection=False)
+        if (not isinstance(attempt, Mapping) or not isinstance(turn, Mapping)
+                or attempt.get('attemptId') != execution['attemptId']
+                or attempt.get('turnId') != execution['turnId']
+                or attempt.get('conversationId') != row['request']['recipientId']
+                or self.workspace_task_id(row) != task_id or attempt.get('status') != 'completed'
+                or turn.get('turnId') != execution['turnId']
+
+                or turn.get('actor') != 'assistant'
+                or turn.get('conversationId') != row['request']['recipientId']
+                or type(turn.get('projectionRevision')) is not int
+                or not all(evidence_owner_matches(item, self.owner) for item in (turn, attempt))):
+            raise ProjectDispatchError('Publication execution/result identity changed')
+        if turn['projectionRevision'] != publication['resultRevision']:
+            # Same execution, later projection (e.g. a late background-command
+            # completion). The pin stays fail-closed; the reviewer re-affirms.
+            raise PublicationResultChanged(
+                f'Publication result revision changed: accepted {publication["resultRevision"]}, '
+                f'current {turn["projectionRevision"]}')
+        return row
+
+    def record_review(self, assignment_id, decision, note, result_revision, expected_revision):
+        """Record an immutable review of a result revision, not delivery or completion.
+
+        expected_revision fences the grant revision; review does not modify it.
+        """
+        _positive_revision(result_revision)
+        _positive_revision(expected_revision)
+        if decision not in ('accept', 'rework', 'reject') or not isinstance(note, str) or len(note) > 2048:
+            raise ProjectDispatchError('Invalid report review')
+        review = {'decision': decision, 'note': note, 'resultRevision': result_revision}
+        def record(value):
+            assignment = self._find(value, assignment_id)
+            if assignment['review'] is not None:
+                if assignment['review'] != review:
+                    raise ProjectDispatchError('Report review/result revision is immutable')
+                return assignment
+            if assignment['grant']['revision'] != expected_revision:
+                raise ProjectDispatchError('Grant revision changed')
+            if assignment['execution'] is None:
+                raise ProjectDispatchError('Review requires an execution association')
+            assignment['review'] = review
+            return assignment
+        return self._change(record, selected=self._assignment_selection(assignment_id))
+
+
+__all__ = ['ProjectDispatchRepository', 'ProjectDispatchError', 'PublicationResultChanged', 'batch_requests']

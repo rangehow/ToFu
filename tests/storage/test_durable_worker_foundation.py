@@ -1,0 +1,700 @@
+"""Atomic dispatch and fail-closed durable-worker runner contracts."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+import threading
+import time
+import uuid
+
+import pytest
+
+from lib.durable_worker import (
+    SynchronousWorkerRunner,
+    WorkerConfigurationError,
+    WorkerExecutionContext,
+    WorkerJobClaim,
+    WorkerJobOutcome,
+    WorkerJobSuspension,
+    WorkerLeaseLost,
+    WorkerKindRegistration,
+    WorkerKindSafety,
+)
+from lib.identity import PrincipalContext
+from lib.storage.errors import StorageError
+
+
+pytest_plugins = ('tests._chat_sidecar',)
+pytestmark = pytest.mark.unit
+
+
+_READY_SAFETY = WorkerKindSafety(
+    durable_event_replay=True,
+    terminal_accounting_settlement=True,
+    cooperative_cancellation=True,
+    externally_visible_side_effect_fencing=True,
+)
+
+
+def _pending_attempt(chat_sidecar, *, user_id: int = 71):
+    del chat_sidecar
+    from lib.turn_lifecycle import create_turn_pair
+
+    nonce = uuid.uuid4().hex
+    created = create_turn_pair(
+        f'durable-worker-conv:{nonce}',
+        command_id=f'durable-worker-command:{nonce}',
+        input_projection={'content': 'execute durably'},
+        config={'model': 'test-model'},
+        user_id=user_id,
+        conversation_defaults={
+            'allowCreate': True,
+            'title': 'Durable worker test',
+            'settings': {},
+        },
+    )
+    return created
+
+
+def test_conversation_attempt_dispatch_atomically_binds_one_durable_job(
+    chat_sidecar,
+):
+    from lib.storage import get_storage_client
+    from lib.turn_lifecycle import dispatch_attempt_to_worker, get_attempt
+
+    created = _pending_attempt(chat_sidecar)
+    attempt_id = created['attempt']['attemptId']
+    principal = PrincipalContext.user(
+        subject_id='test-api-key',
+        owner_user_id=71,
+        tenant_id='tenant-test',
+        scopes={'conversation.execute'},
+    )
+    client = get_storage_client()
+    before_dispatch_head = client.query('turn.sync.snapshot', {
+        'conversation_id': created['turn']['conversationId'],
+        'user_id': 71,
+    })['syncSequence']
+
+    dispatched = dispatch_attempt_to_worker(
+        principal, attempt_id, now_ms=10_000)
+    task_id = f'conversation-attempt:{attempt_id}'
+    assert dispatched['created'] is True
+    assert dispatched['attempt']['taskId'] == task_id
+    # Dispatch BINDS (task_id + queued job) but leaves the attempt pending;
+    # the physical pending→running transition is a separate worker-entry
+    # operation (mark_task_started → turn.attempt.start).
+    assert dispatched['attempt']['status'] == 'pending'
+    assert dispatched['job']['taskId'] == task_id
+    assert dispatched['job']['status'] == 'queued'
+    assert dispatched['job']['payload'] == {
+        'contract': 'tofu.conversation-attempt-job/v1',
+        'conversationId': created['turn']['conversationId'],
+        'turnId': created['turn']['turnId'],
+        'attemptId': attempt_id,
+        'principal': principal.to_payload(),
+        'baseProjectionRevision': created['attempt']['baseProjectionRevision'],
+        'operation': 'generate',
+    }
+    dispatch_changes = client.query('turn.sync.changes', {
+        'conversation_id': created['turn']['conversationId'],
+        'user_id': 71,
+        'after': before_dispatch_head,
+    })['events']
+    assert len(dispatch_changes) == 1
+    assert dispatch_changes[0]['type'] == 'attempt.event'
+    assert dispatch_changes[0]['payload']['event']['payload']['status'] == (
+        'pending')
+
+    durable_attempt = get_attempt(attempt_id, user_id=71)
+    durable_job = client.query('worker_job.get', {
+        'task_id': task_id,
+        'user_id': 71,
+    })
+    assert durable_attempt['taskId'] == durable_job['taskId'] == task_id
+
+    replay = dispatch_attempt_to_worker(
+        principal, attempt_id, now_ms=20_000)
+    assert replay['created'] is False
+    assert replay['idempotentReplay'] is True
+    assert replay['job']['taskId'] == task_id
+
+
+def test_atomic_dispatch_rejects_principal_mismatch_without_creating_job(
+    chat_sidecar,
+):
+    from lib.storage import get_storage_client
+    from lib.turn_lifecycle import get_attempt
+
+    created = _pending_attempt(chat_sidecar)
+    attempt_id = created['attempt']['attemptId']
+    task_id = f'conversation-attempt:{attempt_id}'
+    other_owner = PrincipalContext.user(
+        subject_id='wrong-owner', owner_user_id=72)
+
+    with pytest.raises(StorageError) as raised:
+        get_storage_client(write=True).command(
+            'turn.attempt.dispatch_worker', {
+                'attempt_id': attempt_id,
+                'user_id': 71,
+                'principal': other_owner.to_payload(),
+                'now_ms': 10_000,
+            },
+            f'wrong-owner:{uuid.uuid4().hex}',
+        )
+    assert raised.value.code == 'database_conflict'
+    assert get_attempt(attempt_id, user_id=71)['taskId'] == ''
+    assert get_storage_client().query('worker_job.get', {
+        'task_id': task_id, 'user_id': 71,
+    }) is None
+
+
+def test_atomic_dispatch_payload_limit_rolls_back_attempt_binding(chat_sidecar):
+    from lib.storage import get_storage_client
+    from lib.turn_lifecycle import dispatch_attempt_to_worker, get_attempt
+
+    created = _pending_attempt(chat_sidecar)
+    attempt_id = created['attempt']['attemptId']
+    task_id = f'conversation-attempt:{attempt_id}'
+    oversized_scopes = {
+        f'scope:{index:05d}:' + ('x' * 110)
+        for index in range(9_000)
+    }
+    principal = PrincipalContext.user(
+        subject_id='oversized-principal',
+        owner_user_id=71,
+        scopes=oversized_scopes,
+    )
+
+    with pytest.raises(StorageError) as raised:
+        dispatch_attempt_to_worker(principal, attempt_id, now_ms=10_000)
+    assert raised.value.code == 'storage_payload_too_large'
+    assert get_attempt(attempt_id, user_id=71)['taskId'] == ''
+    assert get_storage_client().query('worker_job.get', {
+        'task_id': task_id, 'user_id': 71,
+    }) is None
+
+
+def _job_document(
+    *, task_kind: str = 'conversation-attempt', cancel_sequence: int = 0,
+) -> dict:
+    principal = PrincipalContext.user(
+        subject_id='runner-owner', owner_user_id=81, tenant_id='tenant-runner')
+    return {
+        'taskId': 'runner-job',
+        'userId': 81,
+        'tenantId': 'tenant-runner',
+        'taskKind': task_kind,
+        'payload': {
+            'contract': 'tofu.conversation-attempt-job/v1',
+            'conversationId': 'runner-conv',
+            'turnId': 'runner-turn',
+            'attemptId': 'runner-attempt',
+            'principal': principal.to_payload(),
+        },
+        'status': 'running',
+        'claimOwner': 'replica-a/worker-1',
+        'fencingToken': 7,
+        'leaseDeadlineMs': 61_000,
+        'replayCursor': 3,
+        'cancelSequence': cancel_sequence,
+        'cancelReason': 'owner stopped it' if cancel_sequence else '',
+    }
+
+
+class _FakeStore:
+    def __init__(
+        self,
+        document: Mapping | None,
+        *,
+        initial_state: Mapping | None = None,
+        heartbeat_response: Mapping | None = None,
+        terminal_response: Mapping | None = None,
+    ) -> None:
+        self.document = document
+        self.initial_state = initial_state or {
+            'ok': True,
+            'cancelSequence': 0,
+            'cancelReason': '',
+            'replayCursor': 3,
+        }
+        self.heartbeat_response = heartbeat_response or {
+            'ok': True,
+            'job': {
+                'cancelSequence': 0,
+                'cancelReason': '',
+                'replayCursor': 3,
+            },
+        }
+        self.terminal_response = terminal_response or {'ok': True, 'job': {}}
+        self.claim_calls: list[dict] = []
+        self.heartbeat_calls: list[dict] = []
+        self.complete_calls: list[WorkerJobOutcome] = []
+        self.heartbeat_called = threading.Event()
+
+    def claim_next(self, **kwargs):
+        self.claim_calls.append(dict(kwargs))
+        return self.document
+
+    def claim_state(self, claim: WorkerJobClaim, *, now_ms: int):
+        del claim, now_ms
+        return self.initial_state
+
+    def heartbeat(
+        self, claim: WorkerJobClaim, *, now_ms: int, lease_ms: int,
+        replay_cursor: int,
+    ):
+        self.heartbeat_calls.append({
+            'claim': claim,
+            'now_ms': now_ms,
+            'lease_ms': lease_ms,
+            'replay_cursor': replay_cursor,
+        })
+        self.heartbeat_called.set()
+        return self.heartbeat_response
+
+    def complete(
+        self, claim: WorkerJobClaim, *, now_ms: int,
+        outcome: WorkerJobOutcome,
+    ):
+        del claim, now_ms
+        self.complete_calls.append(outcome)
+        return self.terminal_response
+
+
+def _registration(
+    handler,
+    *,
+    task_kind: str = 'conversation-attempt',
+    safety: WorkerKindSafety = _READY_SAFETY,
+):
+    return WorkerKindRegistration(
+        task_kind=task_kind, handler=handler, safety=safety)
+
+
+def test_shutdown_revokes_local_dispatch_without_inventing_user_cancellation():
+    claim = WorkerJobClaim.from_document(_job_document(), expected_worker_id='replica-a/worker-1')
+    stopped = threading.Event()
+    context = WorkerExecutionContext(claim, shutdown_event=stopped)
+    context.checkpoint()
+    stopped.set()
+    with pytest.raises(WorkerLeaseLost):
+        context.checkpoint()
+    assert not context.cancellation_requested
+    assert context.cancellation_sequence == 0
+
+
+def test_shutdown_revokes_dispatch_but_not_the_settlement_of_entered_work():
+    """The runtime contract: revoke dispatch, await effects, then defer the owned claim.
+
+    Recorded 2026-11-10 04:35: the service stop also revoked the terminal writes of
+    four attempts the shutdown quiesce had already stopped; storage still served and
+    their leases were live, yet their usage metadata was lost.
+    """
+    claim = WorkerJobClaim.from_document(_job_document(), expected_worker_id='replica-a/worker-1')
+    stopped = threading.Event()
+    context = WorkerExecutionContext(claim, shutdown_event=stopped)
+    stopped.set()
+    with pytest.raises(WorkerLeaseLost):
+        context.checkpoint()
+    with pytest.raises(WorkerLeaseLost):
+        context.publication_claim()
+    assert context.publication_claim(terminal=True)['fencing_token'] == 7
+    assert context.publication_claim(draining=True)['fencing_token'] == 7
+    assert context.authority_lost  # the runner still defers the claim once the handler returns
+    context.mark_authority_lost()
+    with pytest.raises(WorkerLeaseLost):
+        context.publication_claim(terminal=True, draining=True)
+
+
+def test_publication_claim_preserves_identity_and_obeys_local_revocation():
+    from lib.durable_worker import WorkerCancellationRequested
+
+    claim = WorkerJobClaim.from_document(_job_document(), expected_worker_id='replica-a/worker-1')
+    context = WorkerExecutionContext(claim)
+    assert context.publication_claim() == {'worker_id': 'replica-a/worker-1', 'fencing_token': 7}
+    context.observe_claim_state({'ok': True, 'cancelSequence': 1, 'cancelReason': 'stop'})
+    with pytest.raises(WorkerCancellationRequested):
+        context.publication_claim()
+    assert context.publication_claim(terminal=True)['fencing_token'] == 7
+    context.mark_authority_lost()
+    with pytest.raises(WorkerLeaseLost):
+        context.publication_claim(terminal=True)
+
+
+def test_already_stopped_runner_never_claims_a_job():
+    class Store:
+        def claim_next(self, **kwargs):
+            raise AssertionError('Quiescing worker tried to acquire ownership')
+    runner = SynchronousWorkerRunner(worker_id='stopped-worker', store=Store(),
+        registrations=[_registration(lambda *args: None)])
+    stopped = threading.Event(); stopped.set()
+    assert runner.run_once(shutdown_event=stopped).state == 'idle'
+
+
+def test_runner_claims_only_kinds_with_all_safety_evidence():
+    store = _FakeStore(_job_document())
+
+    def handler(
+        context: WorkerExecutionContext, payload: Mapping,
+    ) -> WorkerJobOutcome:
+        assert payload['attemptId'] == 'runner-attempt'
+        assert context.principal.require_owner() == 81
+        assert context.fencing_token == 7
+        context.advance_replay_cursor(9)
+        return WorkerJobOutcome(
+            status='succeeded',
+            result_ref='turn-attempt:runner-attempt',
+            replay_cursor=9,
+        )
+
+    runner = SynchronousWorkerRunner(
+        worker_id='replica-a/worker-1',
+        store=store,
+        registrations=[
+            _registration(handler),
+            _registration(
+                handler,
+                task_kind='unsafe-kind',
+                safety=WorkerKindSafety(durable_event_replay=True),
+            ),
+        ],
+        now_ms=lambda: 1_000,
+    )
+    result = runner.run_once()
+
+    assert result.state == 'succeeded'
+    assert store.claim_calls[0]['task_kinds'] == ('conversation-attempt',)
+    assert store.complete_calls[0].replay_cursor == 9
+
+
+def test_runner_with_no_production_ready_kind_fails_before_claim():
+    store = _FakeStore(_job_document())
+    runner = SynchronousWorkerRunner(
+        worker_id='replica-a/worker-1',
+        store=store,
+        registrations=[_registration(
+            lambda _context, _payload: WorkerJobOutcome(status='succeeded'),
+            safety=WorkerKindSafety(durable_event_replay=True),
+        )],
+    )
+
+    with pytest.raises(
+        WorkerConfigurationError,
+        match='terminal_accounting_settlement',
+    ):
+        runner.run_once()
+    assert store.claim_calls == []
+
+
+def test_safety_evidence_requires_real_booleans():
+    with pytest.raises(TypeError, match='must be boolean'):
+        WorkerKindSafety(  # type: ignore[arg-type]
+            durable_event_replay='yes',
+            terminal_accounting_settlement=True,
+            cooperative_cancellation=True,
+            externally_visible_side_effect_fencing=True,
+        )
+
+
+def test_runner_never_executes_kind_outside_explicit_claim_filter():
+    called = False
+
+    def handler(_context, _payload):
+        nonlocal called
+        called = True
+        return WorkerJobOutcome(status='succeeded')
+
+    store = _FakeStore(_job_document(task_kind='unknown-kind'))
+    runner = SynchronousWorkerRunner(
+        worker_id='replica-a/worker-1',
+        store=store,
+        registrations=[_registration(handler)],
+    )
+
+    result = runner.run_once()
+    assert result.state == 'protocol_error'
+    assert called is False
+    assert store.complete_calls == []
+
+
+def test_runner_rejects_noncanonical_principal_before_handler():
+    called = False
+
+    def handler(_context, _payload):
+        nonlocal called
+        called = True
+        return WorkerJobOutcome(status='succeeded')
+
+    document = _job_document()
+    document['payload']['principal']['scopes'] = 'conversation.execute'
+    store = _FakeStore(document)
+    runner = SynchronousWorkerRunner(
+        worker_id='replica-a/worker-1',
+        store=store,
+        registrations=[_registration(handler)],
+    )
+
+    result = runner.run_once()
+    assert result.state == 'protocol_error'
+    assert called is False
+
+
+def test_runner_observes_durable_cancel_before_handler_and_acks_cancelled():
+    called = False
+
+    def handler(_context, _payload):
+        nonlocal called
+        called = True
+        return WorkerJobOutcome(status='succeeded')
+
+    store = _FakeStore(
+        _job_document(),
+        initial_state={
+            'ok': True,
+            'cancelSequence': 1,
+            'cancelReason': 'stop before execution',
+            'replayCursor': 3,
+        },
+    )
+    runner = SynchronousWorkerRunner(
+        worker_id='replica-a/worker-1',
+        store=store,
+        registrations=[_registration(handler)],
+    )
+
+    result = runner.run_once()
+    assert result.state == 'cancelled'
+    assert called is False
+    assert store.complete_calls[0].status == 'cancelled'
+
+
+def test_runner_heartbeat_fence_loss_prevents_terminal_write():
+    store = _FakeStore(
+        _job_document(),
+        heartbeat_response={'ok': False, 'error': 'stale_fence'},
+    )
+
+    def handler(
+        context: WorkerExecutionContext, _payload: Mapping,
+    ) -> WorkerJobOutcome:
+        assert store.heartbeat_called.wait(0.5)
+        deadline = time.monotonic() + 0.5
+        while not context.authority_lost and time.monotonic() < deadline:
+            threading.Event().wait(0.001)
+        context.checkpoint()
+        raise AssertionError('checkpoint must reject the old fence')
+
+    runner = SynchronousWorkerRunner(
+        worker_id='replica-a/worker-1',
+        store=store,
+        registrations=[_registration(handler)],
+        lease_ms=10_000,
+        heartbeat_interval_ms=5,
+    )
+
+    result = runner.run_once()
+    assert result.state == 'lease_lost'
+    assert store.heartbeat_calls
+    assert store.complete_calls == []
+
+
+def test_transient_claim_and_heartbeat_failures_do_not_revoke_authority():
+    class Store(_FakeStore):
+        initial_probes = 0
+        beats = 0
+        recovered = threading.Event()
+
+        def claim_state(self, *args, **kwargs):
+            self.initial_probes += 1
+            if self.initial_probes == 1:
+                raise StorageError('database_unavailable', 'temporarily stalled')
+            return super().claim_state(*args, **kwargs)
+
+        def heartbeat(self, *args, **kwargs):
+            self.beats += 1
+            if self.beats == 1:
+                raise StorageError('database_timeout', 'temporarily stalled')
+            self.recovered.set()
+            return super().heartbeat(*args, **kwargs)
+
+    store = Store(_job_document())
+    def handler(context, payload):
+        assert store.recovered.wait(5)
+        context.checkpoint()
+        return WorkerJobOutcome(status='succeeded')
+    runner = SynchronousWorkerRunner(worker_id='replica-a/worker-1', store=store,
+        registrations=[_registration(handler)], heartbeat_interval_ms=5)
+    assert runner.run_once().state == 'succeeded'
+    assert store.initial_probes == 2 and store.beats >= 2
+    assert len(store.complete_calls) == 1
+
+
+@pytest.mark.parametrize('process_bound', [False, True])
+def test_transient_deferral_retries_only_for_process_bound_owner(process_bound):
+    from lib.storage.worker_process import worker_process_id
+
+    worker = (worker_process_id(uuid.uuid4().hex, legacy_prefix='test')
+              if process_bound else 'replica-a/worker-1')
+
+    class Store(_FakeStore):
+        deferrals = 0
+
+        def defer(self, claim, **kwargs):
+            self.deferrals += 1
+            if self.deferrals == 1:
+                raise StorageError('database_unavailable', 'deferral reply unavailable')
+            return {'ok': True}
+
+    store = Store({**_job_document(), 'claimOwner': worker})
+    runner = SynchronousWorkerRunner(worker_id=worker, store=store,
+        registrations=[_registration(lambda *args: WorkerJobSuspension(available_at_ms=5000))],
+        heartbeat_interval_ms=5)
+    result = runner.run_once()
+    assert result.state == ('suspended' if process_bound else 'suspension_unconfirmed')
+    assert store.deferrals == (2 if process_bound else 1)
+
+
+def test_joined_process_bound_invocation_releases_unconfirmed_settlement():
+    from lib.storage.worker_process import worker_process_id
+    worker = worker_process_id(uuid.uuid4().hex, legacy_prefix='test')
+    released = []
+    class Store(_FakeStore):
+        def defer(self, claim, **kwargs):
+            released.append(claim)
+            assert len(self.complete_calls) == 1
+            return {'ok': True}
+    store = Store({**_job_document(), 'claimOwner': worker}, terminal_response={'unknown': True})
+    def unconfirmed(*args, **kwargs):
+        store.complete_calls.append(None)
+        raise StorageError('database_unavailable', 'lost acknowledgement')
+    store.complete = unconfirmed
+    runner = SynchronousWorkerRunner(worker_id=worker, store=store,
+        registrations=[_registration(lambda *args: WorkerJobOutcome(status='succeeded'))])
+    assert runner.run_once().state == 'terminal_unconfirmed'
+    assert len(released) == 1
+
+
+def test_lost_claim_ack_retries_same_receipt_without_hiding_owned_job():
+    from lib.durable_worker.service import _ObservedJobStore, _ClaimObservation
+    calls = []
+    horizons = []
+    class Client:
+        def query(self, operation, payload):
+            if operation == 'worker_job.claim_horizon':
+                horizons.append(payload)
+                assert len(horizons) == 1, 'retry must not hide the committed claim'
+                return {'claimableInMs': 0}
+            assert operation == 'worker_job.claim_state'
+            return {'ok': True}
+
+        def command(self, operation, payload, command_id):
+            if operation == 'worker_job.claim_next':
+                calls.append((payload, command_id))
+                if len(calls) == 1:
+                    raise StorageError('database_unavailable', 'ACK was lost after commit')
+                return _job_document()
+            assert operation == 'worker_job.complete'
+            return {'ok': True}
+    store = _ObservedJobStore(lambda **kwargs: Client(), _ClaimObservation(), threading.Event())
+    runner = SynchronousWorkerRunner(worker_id='replica-a/worker-1', store=store,
+        registrations=[_registration(lambda *args: WorkerJobOutcome(status='succeeded'))],
+        heartbeat_interval_ms=5)
+    assert runner.run_once().state == 'succeeded'
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert calls[0][0]['retain_claim'] is True and calls[0][1]
+
+
+def test_claim_acquisition_is_timed_before_the_handler_names_its_identity(monkeypatch):
+    """The woken probe's stages reach the handler, one pair each, a lost ACK included."""
+    import json
+    from lib import observability
+    from lib.durable_worker.service import _ObservedJobStore, _ClaimObservation
+    records = []
+    monkeypatch.setattr(observability.logger, 'info',
+                        lambda message, payload: records.append(json.loads(payload)))
+    claims = []
+
+    class Client:
+        def query(self, operation, payload):
+            if operation == 'worker_job.claim_horizon':
+                return {'claimableInMs': 0}
+            assert operation == 'worker_job.claim_state'
+            return {'ok': True}
+
+        def command(self, operation, payload, command_id):
+            if operation == 'worker_job.claim_next':
+                claims.append(command_id)
+                if len(claims) == 1:
+                    raise StorageError('database_unavailable', 'ACK was lost after commit')
+                return _job_document()
+            assert operation == 'worker_job.complete'
+            return {'ok': True}
+
+    def handler(context, payload):
+        assert records == []
+        context.startup.publish({'attempt_id': payload['attemptId']})
+        return WorkerJobOutcome(status='succeeded')
+
+    observation = _ClaimObservation(hinted_at=observability.TaskStartupIntervals.instant())
+    runner = SynchronousWorkerRunner(worker_id='replica-a/worker-1',
+        store=_ObservedJobStore(lambda **kwargs: Client(), observation, threading.Event()),
+        registrations=[_registration(handler)], heartbeat_interval_ms=5,
+        startup=observation.startup)
+    assert runner.run_once().state == 'succeeded'
+    assert len(claims) == 2
+    assert [(record['stage'], record['boundary'], record.get('outcome')) for record in records] == [
+        ('claim_wake', 'start', None), ('claim_wake', 'complete', 'success'),
+        ('claim_horizon', 'start', None), ('claim_horizon', 'complete', 'success'),
+        ('claim_next', 'start', None), ('claim_next', 'complete', 'success'),
+        ('claim_proof', 'start', None), ('claim_proof', 'complete', 'success')]
+    assert {record['attempt_id'] for record in records} == {'runner-attempt'}
+
+
+def test_runner_refused_terminal_cas_reports_lease_loss():
+    store = _FakeStore(
+        _job_document(),
+        terminal_response={
+            'ok': False,
+            'error': 'stale_fence_or_cancelled',
+        },
+    )
+    runner = SynchronousWorkerRunner(
+        worker_id='replica-a/worker-1',
+        store=store,
+        registrations=[_registration(
+            lambda _context, _payload: WorkerJobOutcome(status='succeeded'))],
+    )
+
+    result = runner.run_once()
+    assert result.state == 'lease_lost'
+    assert result.detail == 'stale_fence_or_cancelled'
+
+
+@pytest.mark.parametrize('acknowledgement,state',[(None,'terminal_unconfirmed'),({'ok':False},'lease_lost'),({'ok':True},'succeeded')])
+def test_registered_completion_requires_acknowledgement_and_never_falls_back(acknowledgement,state):
+    observed=[]
+    def complete(context,payload,outcome,now_ms):
+        observed.append((context.claim.task_id,outcome.status,
+            any(thread.name.startswith('durable-worker-heartbeat:') for thread in threading.enumerate())))
+        return acknowledgement
+    store=_FakeStore(_job_document())
+    registration=WorkerKindRegistration('conversation-attempt',lambda ctx,payload:WorkerJobOutcome('succeeded'),
+        _READY_SAFETY,completion_handler=complete)
+    result=SynchronousWorkerRunner(worker_id='replica-a/worker-1',store=store,registrations=[registration]).run_once()
+    assert result.state==state and observed==[(_job_document()['taskId'],'succeeded',False)]
+    assert store.complete_calls==[]
+
+
+@pytest.mark.parametrize('value', [None, True, '1', -1, 1.0])
+def test_claim_rejects_malformed_wake_observation(value):
+    from lib.durable_worker import WorkerProtocolError
+    document = _job_document()
+    document['wakeSequence'] = value
+    with pytest.raises(WorkerProtocolError):
+        WorkerJobClaim.from_document(document,expected_worker_id=document['claimOwner'])
+
+
+def test_legacy_claim_defaults_wake_observation_to_zero():
+    document = _job_document()
+    assert WorkerJobClaim.from_document(document,expected_worker_id=document['claimOwner']).wake_sequence == 0

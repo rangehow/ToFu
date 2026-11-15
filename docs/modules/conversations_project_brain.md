@@ -1,0 +1,353 @@
+# Conversations & Project Brain
+
+Project coordination has a separate binding owner (`lib/conversations/project_coordination.py`), not Board dispatch. Its [schema](../../contracts/project_coordination_v1.schema.json) owns binding CAS and availability. [PROJECT_COORDINATION.md](../PROJECT_COORDINATION.md) owns passive messages and explicit-human bounded dispatch and pinned publication; [RETAINED_AGENTS.md](../RETAINED_AGENTS.md) owns child steering. Binding starts no execution. The sidebar opens ordinary Coordinator chat directly; its task graph projects assignment dependencies and worker execution separately from delivery. A secondary lazy dialog retains management controls. The dispatch-only Coordinator delegates the current accepted human request into independent workers through ProjectDispatchService, waits without model polling and reviews exact results/checkpoints; it never executes task work itself. Frozen source capability and finite aggregate Worker allowances belong to `lib/project_dispatch/delegation.py`; arbitrary synthetic input cannot mint grants. `lib/project_dispatch/continuation.py` may derive finite system-principal Coordinator grants from the original issued policy after durable results or restart, sharing the same ordinary executor and accounting; explicit report-backed completion stops them. Navigation never silently reassigns removed/rebound targets; project rename requires explicit rebinding. Guard: `tests/project_mod/test_project_coordination.py`.
+
+Consultation authority is `lib/project_dispatch/*` and [project_dispatch_v1.schema.json](../../contracts/project_dispatch_v1.schema.json), separate from this read model. A current revision-bound human source grants one bounded system/chat, unattended execution via the existing command → turn/attempt → task owners. Physical-attempt accounting conserves tokens/requests and uses nonce-bound settlement; unknown paid usage fails closed. Consultation has no tools; explicit file profiles admit only scoped first-party read/write/edit with durable tool caps. Paid compaction, translation, opaque programs and children stay closed. The separate `project` profile derives bounded worker grants from the live human Coordinator request and uses ordinary tools in owned isolated workspaces. Coordinator review is explicitly labeled; verified publication reuses existing integration gates. Legacy linked rework needs a fresh human grant. Acceptance is not publication; `/publish` pins the checkpoint and existing `origin.delivery` alone proves delivery. New versioned grants retry through existing lane-idle/startup hooks; Stop withdraws authority durably, legacy grants never auto-upgrade. Exact `commandId` GET spends nothing. Persistence uses individually bounded documents under an atomic project-head CAS, with version-fenced legacy migration and no lifetime assignment ceiling. Eight CAS attempts and 64 requests/512 tools per grant remain; no eviction or new idle worker. Bounded P2 and version-pinned completed-result dependencies (up to eight backward references) are implemented; readiness belongs to `lib/project_dispatch/dependencies.py`, not Board. Post-ACK cross-lane wake reuses birth gates; pinned withdrawal distinguishes revocation/signal/terminal Stop. Finite responsibility reuses automation with aggregate debits; declared shared versions return exact untrusted DATA and require actual delivery for adoption. Authorities/guards: [PROJECT_COORDINATION.md](../PROJECT_COORDINATION.md). Passive bounded history pages preserve every assignment; aggregate-only allowance reads remain outstanding. Offline/static/native-fixture evidence is not deployment proof.
+
+Project Brain is a signal-driven, owner-scoped read model for project work. It
+does not ask a model to maintain coordination state and it never dispatches,
+claims, transfers, reopens, or blocks work. Git publication remains adjacent in [`project_integration.md`](project_integration.md).
+
+Schema: [`project_brain_v1.schema.json`](../../contracts/project_brain_v1.schema.json).
+## Ownership map
+
+| Concern | Runtime owner |
+|---|---|
+| Coordinator whole-request allowance and future defaults | `lib/project_dispatch/request_budget.py`, `lib/conversations/coordinator_budget.py` |
+| Event append, projection fold, receipt, checkpoint | `lib/storage_authority_sql/operations_pkg/_project_brain.py` |
+| Operation registration | `lib/storage_authority_sql/operation_domains/project_brain.py` |
+| Automatic work signals, context, overlap, Checkers | `lib/conversations/project_brain.py` |
+| Integration radar: cross-checkout change records, notices, landing notices | `lib/project_mod/integration_radar.py` |
+| Backup-backed cutover and restart reconciliation | `lib/conversations/project_brain_startup.py` |
+| Read projection and human command HTTP API | `routes/api_v1/project_brain.py` |
+| Retained browser UI | `frontend/src/runtime/sections/project-brain.js` |
+| Git candidate/quarantine and canonical delivery | `lib/integration_control.py`, `lib/project_mod/delivery.py` |
+| Registered task roots and terminal delivery intent | `lib/tasks_pkg/workspace_delivery.py` |
+
+Restart recovery records workspace terminal intent through
+`workspace_delivery.record_task_workspace_intents`; it does not run checkpoint
+capture or canonical delivery on the readiness path. The integration worker
+resumes the persisted pending receipt. Work outcome and delivery confirmation
+remain distinct; see [restart handoff](../CONTINUOUS_DELIVERY.md#decision-and-execution).
+
+## Authority and identity
+
+- `storage_events` is the only event authority. Every project event carries an
+  explicit `owner_user_id`, normalized `project_key`, and monotonic
+  `project_sequence`.
+- `storage_project_brain_projects` is a reconstructible fold, never a second
+  write authority. One semantic Sidecar transaction appends the event, folds
+  the projection, records the idempotency receipt, and returns a push hint.
+- Every call is scoped by positive `user_id + normalized project`; application
+  modules do not issue SQL or infer identity from a process global.
+- Project rename rekeys retained events and the projection atomically.
+- Work, narrative, cursor, changed-path, artifact, Checker, Watch and Charter
+  collections retain complete owner-scoped history without count quotas or
+  eviction. Identity and immutable-record conflicts remain strict.
+- Periodic projection checkpoint events retain the full rebuild state before an
+  old reconstructible event prefix is reclaimed. `project_brain.rebuild`
+  verifies ownership and every sequence before replacing a projection.
+
+## Automatic work lifecycle
+
+One physical task maps to one deterministic work ID:
+
+```text
+pw_ + sha256(taskId)[:24]
+```
+
+The first successful signal creates the item:
+
+1. accepted `todo_write`;
+2. successful project file write;
+3. an execution already started in an isolated workspace.
+
+Concurrent signals share one command identity: only one `work_started` event.
+Before tools run, the task adapter preserves owner/physical-task registrations.
+Ordinary unregistered canonical roots execute directly; explicit isolation or
+dispatched file grants create source-snapshot worktrees and persist origin
+metadata. Binding errors fail closed; [execution policy](project_integration.md#execution-policy-direct-by-default)
+is independent of the read model.
+Read-only roots, cwd visits and file receipts never authorize adoption of another tree.
+Project Work stays keyed by canonical project; its deterministic ID is distinct
+from the physical task ID used by delivery. The work-start signal is fail-soft,
+not the binding barrier. `conversationId` is immutable once created.
+Title priority is active todo, unfinished todo, Goal title, request first line,
+then first edited path. One later higher-priority signal may refine the title.
+
+`ProjectWorkItem.status` is exactly `active | completed | failed | cancelled`.
+`completed` requires the canonical completed verdict plus a terminal success
+status (a normal question reply can qualify); missing finish evidence, truncation
+and internal fences are `failed`, user abort/revocation is `cancelled`. There is
+no open/claimed/blocked/lease/dependency/reopen/transfer state. Later turns create
+new work. Neither work completion nor candidate `merged` confirms canonical
+delivery: settlement records intent separately in Integration `origin.delivery`.
+
+A terminal `work_result` narrative is emitted only when the work produced changed paths/artifacts or ended failed/cancelled. Ordinary no-output success does not grow Feed. Startup reads task metadata/verdict evidence for orphaned `active` items; it acknowledges workspace intent before `work.finish`, preserving active retry eligibility if intent persistence fails. Missing execution evidence fails closed, never adopts a sibling checkout or changes conversation ownership. Problem: a one-shot 1000-project snapshot blocked boot once project history reached the scan limit, even with no active work. Decision: the recovery operation returns bounded pages (1000 scanned projects plus one lookahead) with a storage-issued `nextCursor` whenever `capped` is true. Startup settles one page before reading the next, including empty active-work pages. The continuation names the last scanned project in the authority's stable project-identity order (native digest-keyed project documents, SQL primary key): settlement never moves a project across it, and a complete walk reads each project once. Offsets or update-time order would skip or revisit projects as settlement changes that order, and legacy native update-index rows repeated projects on every page. Missing/nonadvancing cursors fail closed. Raising the global limit or accepting incomplete recovery was rejected: neither guarantees complete recovery with bounded page memory. The request/page schema lives in `project_brain_v1.schema.json`.
+
+### `work_result` entry composition
+
+Problem: a sign-off alone does not identify completed work or overlapping files.
+Decision: compose summaries and render context at separate seams:
+
+- Settlement composes the stored summary (pure application layer, no storage
+  contract change): line one keeps the human/assistant outcome for the project
+  board, and a bounded `完成项:` line appends the final completed checklist
+  items (`todo_state_from_task`, at most the last five, 80 chars each). The
+  composition fits the 720-byte narrative budget. Workspace receipts append a
+  bounded `Workspace delivery:` status with an explicit not-confirmation caveat;
+  later candidate/delivery progress never rewrites the terminal work outcome.
+- Project Context rendering joins the entry with projection state and keeps
+  internal bookkeeping (`#sequence`, `[kind]`, the English page header) out of
+  the model-visible text. A `work_result` row is one plain sentence:
+  `- 本会话|同一项目的其他工作者 会话「title」(id) 完成了|未能完成|已取消:
+  <completed checklist items, else the stored outcome>。改动文件: <last five
+  paths>`. Other narrative kinds render as `- <text>`, with `decision`/`note`
+  prefixed by a plain `项目决策:`/`备注:` label.
+
+Alternative rejected: structured todo/path payloads would require a cross-engine
+contract migration (Python sidecar and native tofu-db) for no authority gain;
+render-time joins already read the same projection.
+
+## Project Context and narrative acknowledgement
+
+Problem: broad project feeds distract ordinary workers. Decision: only the exact available `ProjectCoordinationRepository` coordinator for the owner/project may acquire automatic context. Unbound, foreign, deleted, archived, read-only, moved or lookup-failed bindings deny access before cursor/projection/token acquisition. Preparation clears uncommitted delivery; ACK revalidates binding and task identity. With unseen narrative, one final user-role `[Project Context]` meta suffix includes Charter, Watch, other conversations' Active work and the next narrative page. Own coordinator work is excluded; system bytes stay unchanged, with no reminder wrapper. Workers retain existing scoped inbox/overlap advice; UI reads remain. Alternatives rejected: parallel state or text/LLM filters. Context acquisition and binding grant no dispatch.
+
+- New conversations and project switches initialize their cursor at the current
+  head and receive no history snapshot.
+- A steady-state turn with no unseen narrative injects zero Project Brain tokens.
+- A page contains at most 12 entries and 900 tokens in sequence order. Each
+  stored narrative summary is capped at 720 UTF-8 bytes so a row is never
+  clipped during delivery and then incorrectly acknowledged.
+- The cursor advances only after the first model call successfully returns.
+  Request failure or a lost acknowledgement replays the same page. The agent
+  core invokes the semantic `ConversationStore.confirm_project_context_delivery`
+  port; only the host adapter knows the Project Brain sidecar operation and
+  owner-scoped Push hint.
+- Compaction and restart restore the cursor projection and never synthesize a
+  snapshot fallback.
+- Human Watch mutations fold a bounded narrative on their existing event, so
+  current Watch state reaches the eligible coordinator without a second event.
+
+## Integration radar
+
+**Problem (2026-11-07).** Conversations editing the same code did not know about each
+other. The former file overlap advisory compared project-relative paths of tasks running
+at the same instant in the same process: a write in `.tofu/worktrees/a/lib/x.py` never
+matched `lib/x.py` in another worktree, the API host and the execution host saw different
+peers, work that was unlanded but idle was invisible, and the advice named no one. Yet
+34% of the landings between 11-01 and 11-07 had a branch living at the same time that
+changed the same source file. The earlier Board asked agents to post and claim work, which they
+forgot; per-module locks made writers wait for hours (owner decision 2026-10-28).
+
+**Decision.** `lib/project_mod/integration_radar.py` derives awareness from what
+writers actually do and checks it against Git. After every successful write
+(`note_file_signal`), the writer's paths are recorded relative to the Git checkout they
+were written in, under the repository's shared `<git-common-dir>/tofu-radar/`: one
+record per conversation and checkout, written only by that conversation, so every
+process and every worktree sees the same facts. A recorded path counts while that
+checkout still differs from its merge base with the shared checkout's current branch
+(committed, uncommitted, deleted or untracked); it stops counting once landed or
+reverted, and a record leaves with its checkout. Known generated outputs
+(`generated_integration.output_family`) are not recorded, because landing rebuilds
+them from the merged sources. Delivery is notify-only, at the moment it matters:
+
+- the writer of a file that another conversation's unlanded work also changes gets the
+  other conversation's title and id, checkout, branch, last edit time and the exact
+  `git diff` that shows their version; the other conversation gets the mirror notice at
+  its next round boundary;
+- the first write of a file in a linked worktree lists the commits the current branch
+  landed on it since the worktree's branch point;
+- after `git_land` publishes a merge, every conversation whose unlanded work changes a
+  landed file gets a notice to merge before verifying (or, in the shared checkout, that
+  its uncommitted edits were merged on top), and the landed checkout's records retire.
+
+Advice joins the task's existing bounded queue (at most 20 keys per task, deduplicated)
+at the next round boundary after it is computed, with a `path_overlap` UI hint; notices from other writers and
+landers wait in `notices/<conversation>.jsonl` until a round boundary of that
+conversation consumes them. The radar's files are reconstructible advice, never
+authority: no write, landing or tool call waits for or is refused by them, and every
+failure is fail-soft. Git runs only for a candidate overlap, a first touch or a landing.
+An ordinary write reads only the records that name its paths, through the path index
+`paths/<sha256(path)>/<record file>` (empty markers; a marker whose record no longer
+names the path is removed when found), plus its own atomic record write. A writer marks
+the paths it writes and, at a task's first write in a checkout, every path it recorded,
+so a record written before the index existed is found once its conversation writes
+again; landing still scans every record. Edits that bypass the write tools and the
+command journal reach the radar when they are committed.
+
+**Path index (2026-11-11).** Problem: the overlap check read every writer record on every
+write. Records accumulate for each conversation and recycled lane that ever wrote (217
+records, 2,564 paths in this repository on 2026-11-10), and on the shared volume that read
+took 3.5-5.3 s idle and up to tens of seconds under load: half of the post-write time of
+slow `edit_file` calls. Decision: index records by path; a lookup costs one listing per
+written path plus the records naming it (measured on a copy of that radar: 7-11 ms for an
+unshared path, 53-103 ms for 5 writers, 0.27-0.48 s for the most shared path, 31 writers).
+Alternatives rejected: a cache keyed by directory or file mtime is inexact on this volume
+(one-second timestamps, rename keeps the entry count); a one-time indexing of existing
+records took 110 s on the first write.
+
+**Write signals off the tool call (2026-11-11).** Problem: the write tools ran the radar
+and the work-change record before returning, so each slow Git query or storage round trip
+stalled the agent: in the 2026-11-11 14:10-18:52 log `edit_file` and `write_file` spent
+10,206 s over budget, most of it after the write itself. Decision (owner decision
+2026-11-11, no blocking mechanism on the agent path): `schedule_file_signal` computes the
+changed paths and the tool's success at the call, then runs the radar and
+`project_brain.work.change` after the tool returns, in order per task on a shared demand
+executor with the caller's context. Terminal settlement (`_post_commit`) first waits for
+that task's pending signals (`ConversationStore.flush_file_signals`; the default adapter
+calls `project_brain.flush_file_signals` and skips transient tasks), because it reads the changed paths
+and the lanes the task wrote in. The advisory list has one lock
+(`integration_radar._overlap_lock`) shared by every producer and by the round boundary's
+take and restore. Cost: overlap advice can reach the model one round later than before.
+Alternatives rejected: a new durable worker or queue for advisory and receipt-backed work
+that already fails soft; running only the Git queries in the background, which still
+leaves the storage round trip on the call.
+
+**Discovery ceiling (2026-11-11).** Problem: a misdirected `git init` left `/tmp/.git`.
+Every path under `/tmp` then resolved to it: the radar recorded 126 test writes into
+`/tmp/.git/tofu-radar`, and workspace binding (`workspace_delivery._checkout`) bound `/tmp`
+as a checkout, failing four plain-folder specs. Decision: both walkers honor
+`GIT_CEILING_DIRECTORIES` as Git does (`lib/git_runtime.beyond_git_ceiling`): a checkout at
+or above a ceiling that is a proper ancestor of the start directory is not found.
+`tests/conftest.py` sets ceilings at pytest's basetemp parent and the system temp root.
+Production sets none, so its discovery is unchanged. `workspace_lease` still discovers
+without Git environment overrides, as documented, and can create `tofu-workspace-leases/`
+in such a repository. Alternatives rejected: a Tofu-only list of excluded directories is a
+second discovery rule that Git would not share; recording only in repositories Tofu
+registered changes the per-checkout contract and needs an owner decision. Specification:
+`tests/project_mod/test_git_discovery_ceiling.py`, with Git's own discovery as the oracle.
+
+**Announced overlaps (2026-11-11).** Problem: after the path index, the remaining
+post-write cost was the Git query (`merge-base`, `diff`, `ls-files`) per other writer's
+checkout, rerun on every write of a shared file although the queue drops the repeated
+advice: in the 2026-11-11 14:10-18:52 log, 89 of 270 overlap reports repeated a
+(writer, peer, path) already reported by that task, and edit/write calls that reported
+overlaps spent 3,932 s after their write (one `edit_file`: 32 peers, 944 s). Decision: a
+task remembers each (peer writer, peer checkout, path) it announced and queries a peer's
+checkout only for paths not yet announced to it; a new task announces again. Alternative
+rejected: caching the Git answers per checkout is inexact without a change signal from
+the peer's working tree.
+
+**Reads never lock a peer's index (2026-11-12).** Problem: the radar's `git diff
+<merge-base> -- <paths>` in a peer's checkout met stat-only drift by refreshing and
+rewriting that writer's whole index under its `index.lock`, even with
+`--no-optional-locks` (Git 2.34.1 porcelain diff ignores it): the peer's own `git add` or
+`commit` could meet the radar's lock, and a radar process killed mid-refresh would leave
+it behind. Decision: the radar's Git reads go through
+`git_inspection_execution.prepare_git_index_read`, which gives porcelain diff a private
+index copy, like every other internal Git read; a peer's lock is honored and never taken.
+Cost: a stat-dirty peer index is refreshed in the private copy on each query instead of
+once in place. Alternative rejected: `diff.autoRefreshIndex=false` reports stat-only
+changes as edits. Specification: `test_reading_another_checkout_never_writes_or_locks_its_index`.
+
+The same write signal records the work item's changed paths with the receipt-backed
+`project_brain.work.change`, whose command id is a digest of the work id, paths and
+artifacts. A task sends each id once: repeating an acknowledged id only replays its
+recorded outcome, so repeated edits of one file wait on storage once, not per edit.
+
+**Alternatives rejected.** A self-reported Board or claims: agents do not maintain
+them and stale claims mislead. Locks or serialization per module: owner decision
+2026-10-28. Storing the records in the storage authority: a cross-engine contract for
+advisory data the repository already scopes. Querying every worktree's status per
+write: a whole-tree walk per checkout on the shared volume. Keeping the in-process
+snapshot: it cannot see the other host, other worktrees or idle unlanded work.
+Specifications: `tests/project_mod/test_integration_radar.py` and the overlap case in
+`tests/project_mod/test_project_brain_signal_driven.py`.
+
+## Executable Charter and Checkers
+
+`CheckerDefinition` versions are immutable. They carry `checkerId`, `version`,
+`label`, `argv`, `cwd`, `pathGlobs`, `timeoutMs`, and `enabled`. Execution passes
+`argv` directly to the process API with `shell=False`; `cwd` must remain inside
+the project and output is bounded.
+
+`CharterDecision` always references one registered `{id, version}` and records
+its source conversation/turn plus the latest verification. Assistant-turn
+promotion pre-fills the conclusion and requires the human to select an exact
+Checker version. Text without a Checker cannot enter Charter or prompt; the
+human may export it to docs manually.
+
+Checkers run manually, after a terminal work item whose changed paths match
+`pathGlobs`, and as a complete enabled set before Integration/release. Failure
+or timeout adds one narrative, and release is rejected or
+quarantined. It never changes a terminal work item or creates a block state.
+
+## HTTP and UI
+
+Read projections:
+
+- `GET /api/v1/project/board` → `{active, recentOutcomes}`
+- `GET /api/v1/project/feed` → `NarrativeEvent[]`
+- `GET /api/v1/project/charter`
+- `GET /api/v1/project/brain/status` and `/api/v1/project/brain/watch`
+
+Human commands:
+
+- Watch add/update/delete; Checker catalog/register/run;
+- `POST /api/v1/project/charter/decision/promote`;
+- existing Integration review/promote operations, keyed by registered workspace identity.
+
+Board has no mutation API or UI controls. Legacy Charter proposals, peer
+messaging/intervention, synthesized status Q&A, Board mutations, and Watch
+promotion/follow-up routes are not registered. Project Brain model tools retain only
+`integration_checkpoint` and `integration_submit`; all Project Brain read/write
+tools and `integration_status` are absent from the model schema.
+
+## Cutover and rollback
+
+Startup readiness first creates a standard SQLite backup (or requires an
+explicit platform PostgreSQL backup receipt), then runs one atomic cutover.
+Migration keeps current Watch state and its newest result. Legacy
+Charter/North Star/decision text and old Board, Feed, and Status history are
+not imported. Historical attention events in the event log stay inert and
+never re-materialize projection state. Verification
+precedes removal of legacy tables/records; any failure rolls back the Sidecar
+transaction and keeps readiness closed.
+
+There is no dual read/write or compatibility alias. Rollback means restore the
+pre-cutover backup and run the old release.
+
+## Verification
+
+Primary guard: `tests/project_mod/test_project_brain_signal_driven.py`.
+
+Also run storage process-boundary tests, Project Brain/Integration route tests,
+tool inventory generation, i18n/runtime composition checks, frontend build, and
+the docs catalog gate. Full-suite results are a moving target when another
+writer is changing shared generated/runtime files.
+
+Retired refresh lane — Problem: an unreferenced private bounded queue and its tests still encoded dropped refresh scopes after runtime owners moved away. Decision: remove the unreferenced private lane and its obsolete capacity/refusal tests; current runtime ownership stays in the referenced services. Alternative rejected: maintaining a second, unused scheduler invites accidental reinstatement of rejection behavior. A repository reference audit found no runtime consumers before removal.
+
+## Complete project-history admission
+
+**Problem:** 100-work, 500-narrative, 200-path, 100-artifact and fixed Checker/Watch/Charter/cursor ceilings rejected work or silently discarded retained project state. Rename merges and legacy cutover repeated those losses. **Decision:** preserve complete collections through live folds, owner-scoped reads, reconstruction, cutover and relink. Ordinary feed reads keep their requested positive limit and default while accepting values above 200; Board returns complete active and terminal work. Active-project enumeration pages to actual EOF rather than discarding projects beyond its first 1,000 index rows. Registered immutable identities, delivery receipts, ownership, event sequence and transaction publication remain strict. Relink keeps its existing cursor reset because merged narratives receive new sequence numbers. **Alternatives considered:** larger quotas postpone loss; FIFO eviction forgets unfinished work and causes cursor redelivery; blocking work makes an informational read model an execution gate. Blob-backed projection/checkpoint documents have no private byte quota; logical events retain their encoded u32 length and read through every physical page. Retained bytes now grow with project history; no new worker or queue is introduced. Regressions exceed every removed count limit and verify actual persistence/reopen, normal command admission, full rebuilding, relink preservation and immutable conflicts.
+
+Measured synthetic retained projection: 179,417 canonical JSON bytes for 242 work
+items, 1,101 cursors, 152 Checker versions, 152 Watch records, 302 decisions and
+complete narratives. This measures the retained logical payload, not compressed
+on-disk size, process RSS or production throughput. The regression also opens and
+reads 1,001 owner-scoped active projects beyond the former total-result quota.
+
+## Complete project payload admission
+
+**Problem:** native projections/checkpoints/restores refused 8 MiB content, and logical events had a separate 8 MiB quota. Removing the latter alone would leave a decoder that expected every chunk to fit one physical stream page. **Decision:** reuse authenticated blob documents with no private byte quota and retain the existing digest-bound event chunk codec. Read chunks across physical page continuations, validate declared count/length correspondence, contiguous ordinals and per-chunk sizes, and verify the final digest before JSON parsing. Grow output from actual validated bytes rather than allocating an untrusted header's claimed total. u32 totals/ordinals remain the existing physical format. Offline Watch folding now retains every item, matching live cutover. **Alternatives considered:** larger quotas postpone refusal; a single giant physical read exceeds its page window; dropping chunk validation weakens recovery; a new event authority duplicates the existing stream owner. Regressions round-trip 10,226,589 bytes of path data through real admission, receipt replay, transport, reopen, full stream rebuild and idempotent native restore; malformed large declarations, missing chunks and wrong digests still fail closed. Narrative/field truncation is a separate remaining application policy under review. No worker/queue is added; blob/chunk bytes scale with retained user data, and reconstruction retains the logical output plus one physical page rather than all physical pages.
+
+The large-command path also depends on the shared receipt contract in
+[STORAGE.md](../STORAGE.md): complete responses retain no private stored/decoded
+receipt quota. Native overflow continues through the existing authenticated blob
+owner; SQL retains its existing receipt transaction and compression codec.
+
+## Bounded transcript batch recovery
+
+Problem: the native transcript list rejects a batch at its response-byte budget using `database_resource_exhausted`, normalized to `database_unavailable` by the shared client. Reports split SQL frame-size refusals but propagated this native batch refusal and lost the whole report. Decision: recursively split the shared resource-bound refusal signal (`is_resource_bound_refusal`: the non-retryable `database_resource_exhausted` code of current engines, the retryable `database_unavailable` legacy shape, or the SQL protocol-size error), retaining explicit ownership and requested conversation order. Each split strictly reduces the batch; an unavailable single transcript still raises the original failure. Alternatives rejected: truncation silently omits report evidence; retrying the same batch repeats a deterministic rejection; splitting unrelated unavailability or integrity failures hides faults. Tests cover both backends' signals, order, ownership and terminal singleton errors.
+
+## Oversized transcript windows
+
+Problem: one conversation's whole transcript can exceed any single storage response (native turn-list and list byte budgets, about 64 MiB, refused as `database_resource_exhausted`; the SQL 64 MiB frame). Batch recovery stops at one ID and re-raises, so every report scan touching that conversation failed deterministically, and the daily report swallowed the failure as an empty day (2026-10-22/23: a 28-message, 98.6 MiB agent conversation). Decision: `scan_bounded(oversized_messages_since_ms=...)` is an explicit time-window contract. Ordinary conversations keep batched whole hydration; only a refused single conversation is read newest-first through `conversation.get` windows. Both authorities return sequences `[max(0, B-W), B)` in order with `message_page.start` as the next cursor, and refuse rather than shrink a window above their response bound, so the window starts at half the authoritative total and halves on the same refusal; a refused one-message window raises the original failure. That total comes from a one-message tail window's `message_page.total_count`, never the metadata listing, whose `msg_count` can be missing or stale. Reading stops at the newest message timestamped before the bound and the snapshot keeps the messages after it, while `msg_count` still counts the whole transcript and the snapshot's `message_start` is the absolute sequence of its first retained message (cost aggregation places untimestamped usage by that absolute position, as whole hydration would). A window ending short of its cursor means concurrent truncation and raises. Untimestamped messages after that boundary stay, exactly as in whole hydration. Untimestamped messages before it are not read: sequence order is append order, so they predate a pre-bound message (whole hydration still includes them under the legacy no-timestamp rule; Turn-native messages always carry `createdAt`). The daily report passes its day start and lets any extraction failure propagate; the scheduler records `extraction_failed` and saves nothing, so the date stays eligible for retry. Alternatives rejected: paging inside the daily report cannot resume a lazy scan generator after the refusal escapes, and the cursor and refusal classification are repository-owned storage details; windowing every conversation multiplies RPCs on ordinary days; reading the whole oversized transcript in windows and filtering is exact for legacy untimestamped rows but reads 98.6 MiB to summarize 7.9 MiB and grows with conversation age; larger storage budgets move the cliff; skipping the conversation or marking the day partial reports an incomplete day as complete. Tests cover both refusal signals, cursors, the time cut, terminal one-message refusal, truncation, real SQL Sidecar windows, digest parity with whole hydration and the scheduler/generator failure outcomes.
+
+## Whole-transcript reads
+
+Problem: the conversation GET and its preview, message-activity and debug-message projections read the whole transcript in one `conversation.get`. Once a conversation exceeds one storage response, every such request for it failed as an internal error, because the deterministic `database_resource_exhausted` refusal has no client status. Decision: `ConversationRepository.get_complete` keeps the single read when it fits. Only after the exact resource-bound refusal (`is_resource_bound_refusal`) does it read the transcript back through `_message_windows`, the newest-first window walk it shares with the time-window reader above. It stitches the windows only when every window reports the first window's revision and message count, and the first window ends at that count. A write between windows fails as `database_conflict` (409), which the caller retries as a whole; every other failure keeps its classification. Alternatives rejected: mapping the refusal to a client error leaves the transcript unreadable through the documented GET; stitching without the revision fence could combine two versions of one conversation; raising the bound only moves the failure to a longer conversation. Tests: `tests/conversation/test_whole_history_reads.py` on both authorities.
+
+A read that needs only metadata never takes this path. The pending-resume hint (`GET /api/v1/conversations/pending-resume`) titles its conversations with one owner-scoped `conversation.list` of exactly the pending IDs, without messages. Alternative rejected: a catalog page with a per-conversation fallback reads a whole transcript for every title outside the page. Tests: `tests/api_keys/test_pending_resume.py` on both authorities.

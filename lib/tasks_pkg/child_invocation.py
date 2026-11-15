@@ -1,0 +1,590 @@
+"""Child invocation construction, not an alternate agent runtime.
+
+Schedulers supply a parent, a scoped catalog and an ordered event port. Execution,
+model preparation, tools, checkpoints and terminal evidence belong to invocation.
+This module owns only input policy, borrowed resources and result delivery.
+"""
+from __future__ import annotations
+
+import copy
+from collections.abc import Callable
+import threading as threading
+from lib.agent_core.publication import (
+    ChildPublicationFence, commit_child_publication,
+)
+from lib.tasks_pkg.invocation import (
+    AFFINITY_LINEAGE_KEY, InvocationPolicy, execute_invocation,
+    settle_invocation_evidence,
+)
+
+
+def close_child_ingress(child):
+    """Drain once with a deadline, revoke publication, detach queued closures."""
+    from lib.tasks_pkg.manager._provider_ingress_guard import (
+        active_provider_ingress_token, end_provider_ingress,
+        detach_child_ingress,
+    )
+    token = active_provider_ingress_token(child)
+    if token is not None:
+        end_provider_ingress(child, token=token, disposing=True)
+    fence = child.get('_invocationPublicationFence')
+    if fence is not None:
+        fence.close()
+    detach_child_ingress(child)
+
+    child['_invocationPublicationClosed'] = True
+
+# Resolved environment/policy only: never inherit Turn/attempt IDs, checkpoint
+# state, route-group disposal, kickoff, or a parent's mutable execution buffers.
+_INHERITED_CONFIG = frozenset({
+    'projectPath', 'projectPaths', 'readOnlyPaths', 'canonicalProjectPath', 'canonicalProjectPaths',
+    'workspaceRuntimeRoots', 'project_remote', 'browserClientId',
+    'runtimeScope', 'systemPromptMode', 'systemPromptBlocks', '_storageFreeRuntime',
+    'contextExperiments', 'contextPolicy', 'grantedToolPermissions',
+    'memoryEnabled', 'preferencesEnabled', 'searchMode', 'fetchEnabled', 'codeExecEnabled',
+    'browserEnabled', 'desktopEnabled', 'imageGenEnabled', 'schedulerEnabled',
+    'thinkingEnabled', 'thinkingDepth', 'defaultThinkingDepth', 'maxTokens', 'temperature',
+    'enabledPlugins', 'toolApprovals', 'toolPermissions', 'planMode',
+    'workspace', 'workspacePolicy', 'compaction', 'responseFormat', '_toolOrchestration',
+    'disableModelFallback', 'disableAutoTurnRetry', 'autoTurnRetryMax', '_pinned_provider_id',
+})
+
+
+def inherit_child_config(parent_config: dict, overrides: dict | None = None) -> dict:
+    """Copy declared input policy; never borrow runtime state or invent defaults."""
+    aliases = {'thinking_enabled': 'thinkingEnabled', 'thinking_depth': 'thinkingDepth',
+               'max_tokens': 'maxTokens', 'search_mode': 'searchMode'}
+    config = {}
+    for source in (parent_config, overrides or {}):
+        config.update({key: copy.deepcopy(value) for key, value in source.items()
+                       if key in _INHERITED_CONFIG})
+        config.update({product: copy.deepcopy(source[key]) for key, product in aliases.items()
+                       if key in source})
+        # Carry explicit discovery/schema-cost policy, not tool visibility or
+        # execution-scope overrides. Child authority still has its own owner.
+        tools = source.get('tools')
+        for key in ('schemaBudgetTokens', 'toolSearch', 'programmaticCalling',
+                    'programmaticExposure', 'resultEnvelope'):
+            if isinstance(tools, dict) and key in tools:
+                config.setdefault('tools', {})[key] = copy.deepcopy(tools[key])
+            elif 'tools.' + key in source:
+                config.setdefault('tools', {})[key] = copy.deepcopy(source['tools.' + key])
+    return config
+
+
+def delegated_tool_discovery_policy(parent: dict, tools: list, direct_names=()) -> dict:
+    """Copy discovery metadata only for the child's already-authorized catalog.
+
+    ``direct_names`` were selected by exact name (a spawn ``tools`` allowlist):
+    the child sees them directly, because a narrowed catalog may hold none of
+    the discovery tools through which the parent reached a deferred tool. An
+    MCP tool stays search-only (lib/tools/mcp_exposure.py): the child reaches
+    it through search_tools/execute_tools, which a withheld MCP tool keeps on
+    the wire.
+    """
+    from lib.swarm.routing import tool_schema_name
+    from lib.tools.mcp_exposure import without_mcp_names
+    names = {tool_schema_name(tool) for tool in tools}
+    direct_candidates = set(without_mcp_names(names))
+    source = {**(parent.get('config') or {}), **parent}
+    initial = source.get('_toolInitialVisibleNames')
+    if initial is None and isinstance(parent.get('_tool_schema'), list):
+        initial = [tool_schema_name(tool) for tool in parent['_tool_schema']]
+    policy = {}
+    if initial is not None:
+        catalog = source.get('_executable_tool_catalog', source.get('_executableToolCatalog', tools))
+        parent_names = {tool_schema_name(tool) for tool in catalog}
+        # New child-owned helpers (e.g. artifacts) are not inherited hidden tools.
+        policy['_toolInitialVisibleNames'] = sorted(
+            direct_candidates & (set(initial) | (names - parent_names)))
+    for key in ('_toolDiscoveryPolicyByName', '_executableToolNamespaceByName',
+                '_executableToolSearchTextByName'):
+        policy[key] = {name: copy.deepcopy(value)
+                       for name, value in (source.get(key) or {}).items() if name in names}
+    for key in ('_requiredDirectToolNames', '_frontendSelectedToolNames'):
+        policy[key] = [name for name in (source.get(key) or []) if name in direct_candidates]
+    policy['_requiredDirectToolNames'] += sorted(
+        (set(direct_names) & direct_candidates) - set(policy['_requiredDirectToolNames']))
+    return policy
+
+
+def build_child_messages(*, objective: str, context: str = '', system_prompt: str = '',
+                         role_policy: str = '', artifact_hint: str = '',
+                         checkpoint_messages: list | None = None,
+                         swarm_message_binding: dict | None = None,
+                         output_contract: str = '') -> list:
+    """Retain dialogue and exact current-run input, never stale mailbox authority.
+
+    The scheduler must supply the same binding during both checkpoint rebuild
+    and task allocation. Its liveness/scope is revalidated at provider dispatch.
+    ``output_contract`` extends only a fresh objective message; a checkpoint's
+    retained objective message already carries its Result contract section.
+    The binding's per-run identifiers end the role part of ``worker_policy``,
+    so concurrent same-role siblings never send byte-identical tools+system
+    prefixes; with identical prefixes the Sankuai Claude route spread their
+    rounds across upstream cache domains (docs/LLM_COST_OPTIMIZATION.md,
+    "Sibling cache affinity").
+    """
+    from lib.tasks_pkg.context_composer import append_injection
+    fresh = []
+    if system_prompt.strip():
+        fresh.append({'role': 'system', 'content': system_prompt})
+    team = ''
+    if swarm_message_binding is not None:
+        from lib.swarm.team_messages import team_guidance
+        team = '\n' + team_guidance(swarm_message_binding)
+    append_injection(fresh, 'worker_policy', (
+        f'{role_policy}{team}\n\nWork only on the delegated objective. The supplied '
+        'tool catalog is your authority; never emulate missing privileged tools. '
+        'You share a workspace: preserve changes made by the user and other agents. '
+        'You cannot ask the human or delegate further; report missing capabilities '
+        'in your result. Return findings, evidence, artifact paths and remaining work.'))
+    if checkpoint_messages is not None:
+        if (not isinstance(checkpoint_messages, list) or not checkpoint_messages
+                or any(not isinstance(message, dict) for message in checkpoint_messages)):
+            raise ValueError('Child checkpoint requires nonempty message objects')
+        mailbox = None
+        if swarm_message_binding is not None:
+            from lib.swarm.run_messages import RunMessageRepository
+            mailbox = RunMessageRepository(swarm_message_binding).key
+        dialogue = []
+        for message in copy.deepcopy(checkpoint_messages):
+            # worker_team carriers come from checkpoints written while the
+            # identity rode after the objective; worker_policy now holds it.
+            if message.get('_contextInjectionId') in {'worker_policy', 'worker_team', 'worker_artifacts'}:
+                continue
+            if message.get('_projectMessageIds'):
+                continue  # A child never owns its parent's project mailbox.
+            if message.get('_swarmMessageIds'):
+                if mailbox is None or message.get('_swarmMessageMailbox') != mailbox:
+                    continue  # Old active steering is not a new assignment's context.
+            else:
+                message.pop('_swarmMessageMailbox', None)
+                message.pop('_swarmMessageIds', None)
+            message.pop('_projectMailbox', None)
+            message.pop('_projectMessageIds', None)
+            dialogue.append(message)
+        if dialogue and dialogue[0].get('role') == 'system' and not dialogue[0].get('_contextInjectionId'):
+            dialogue.pop(0)
+        fresh.extend(dialogue)
+    else:
+        fresh.append({'role': 'user', 'content': objective + (
+            '\n\n## Context\n' + context if context else '') + (
+            '\n\n## Result contract\n' + output_contract if output_contract else '')})
+    if artifact_hint:
+        append_injection(fresh, 'worker_artifacts', artifact_hint)
+    return fresh
+
+
+# Derived by the ordinary launch assembly, never by model declarations. Keep
+# tool visibility separate from execution authority when continuing a chat.
+_CONVERSATION_TOOL_POLICY_FIELDS = frozenset({
+    '_executableToolCatalog', '_toolExecutionScope', '_toolDiscoveryPolicyByName',
+    '_toolSearchCatalogSize', '_toolSearchableCount', '_toolSearchMode',
+    '_toolScriptSafeByName', '_executableToolNamespaceByName',
+    '_executableToolSearchTextByName', '_toolContractDocumentsByName',
+    '_toolExposureTelemetry', '_frontendSelectedToolNames', '_toolNamespaceByName',
+    '_toolInitialVisibleNames', '_requiredDirectToolNames',
+})
+
+
+def _conversation_tool_policy(parent: dict, tools: list) -> dict:
+    from lib.swarm.routing import tool_schema_name
+    source = parent.get('config') or {}
+    policy = {key: copy.deepcopy(source[key])
+              for key in _CONVERSATION_TOOL_POLICY_FIELDS if key in source}
+    catalog = policy.get('_executableToolCatalog', tools)
+    # Goal remains unattended: retaining context cannot grant human approval.
+    policy['_executableToolCatalog'] = [copy.deepcopy(tool) for tool in catalog
+                                       if tool_schema_name(tool) != 'ask_human']
+    from lib.tools.contracts import compile_execution_contract_documents
+    policy['_toolContractDocumentsByName'] = compile_execution_contract_documents(
+        policy['_executableToolCatalog'], authoritative_documents_by_name=(
+            policy.get('_toolContractDocumentsByName')
+            or parent.get('_toolContractDocumentsByName')), namespace='invocation')
+    policy['_toolSearchCatalogSize'] = len(policy['_executableToolCatalog'])
+    if isinstance(parent.get('_toolInitialVisibleNames'), list):
+        policy['_toolInitialVisibleNames'] = list(parent['_toolInitialVisibleNames'])
+    elif isinstance(parent.get('_tool_schema'), list):
+        policy['_toolInitialVisibleNames'] = [tool_schema_name(tool) for tool in parent['_tool_schema']]
+    return policy
+
+
+def resolve_child_config(parent: dict, *, model: str, project_path: str = '',
+                         thinking_enabled: bool | None = None) -> dict:
+    """Resolve inherited model/input policy without allocating runtime resources.
+
+    ModelRef is durable selection; native routed slots and execution carriers
+    are deliberately absent. Normal child creation and Goal archives share this
+    exact projection rather than interpreting parent configuration twice.
+    """
+    cfg = inherit_child_config(parent.get('config') or {})
+    if thinking_enabled is not None:
+        cfg['thinkingEnabled'] = thinking_enabled
+    cfg.update(model=model, projectPath=project_path, humanGuidanceEnabled=False)
+    # Native parent slots expire at turn settlement. Carry only the authorized
+    # selection/policy; create_task mints a child-owned group and hard pin.
+    parent_ref = (parent.get('_requestedModelRef') or
+                  (parent.get('config') or {}).get('modelRef'))
+    if parent_ref is None and parent.get('_pinned_provider_id'):
+        # Legacy routes identify a durable provider directly. Native routes
+        # below carry ModelRef instead and must never archive a slot-group pin.
+        cfg.setdefault('_pinned_provider_id', parent['_pinned_provider_id'])
+    if parent_ref is not None:
+        # ``model`` follows the live round, including a fallback swap, while
+        # config keeps the admitted selection; either names the parent route.
+        parent_models = {name for name in (
+            parent.get('model'), (parent.get('config') or {}).get('model')) if name}
+        if model not in parent_models:
+            from lib.tasks_pkg.native_invocation import NativePreparedInvocation
+            from lib.model_routing import ModelRoutingError
+            from lib.tasks_pkg.native_parent import resolve_native_parent
+            native, execution_parent = resolve_native_parent(parent)
+            if not isinstance(native,NativePreparedInvocation):
+                raise ModelRoutingError(
+                    'Child model override is outside the parent route selection',
+                    kind='model_route_unavailable')
+            selected=native.resolve_child_model_selection(execution_parent,model)
+            cfg['modelRef']=selected.model.public_dict()
+        else:
+            cfg['modelRef'] = copy.deepcopy(parent_ref)
+        for key in ('routing', 'preferredProviderId'):
+            if key in (parent.get('config') or {}):
+                cfg[key] = copy.deepcopy(parent['config'][key])
+        cfg.pop('_pinned_provider_id', None)
+        from lib.model_routing.domain import NativeModelSelection
+        selected=parent.get('_model_routing_selection')
+        if isinstance(selected,NativeModelSelection) and selected.preferred_provider_id:
+            cfg.setdefault('routing',{})['preferred_provider_id']=selected.preferred_provider_id
+    # An unresolved preset must never silently select another model at prep.
+    cfg['preset'] = ''
+    cfg['effort'] = ''
+    return cfg
+
+
+def snapshot_conversation_child_policy(parent: dict, *, model: str, tools: list,
+                                       project_path: str = '',
+                                       thinking_enabled: bool | None = None) -> dict:
+    """Detach the ordinary conversation child's declared execution inputs.
+
+    Never serialize principal handles, provider credentials, tool environment,
+    locks or slot groups; recovery must rebind those through their owners.
+    """
+    return {
+        'config': resolve_child_config(parent, model=model, project_path=project_path,
+                                       thinking_enabled=thinking_enabled),
+        'conversation_tool_policy': _conversation_tool_policy(parent, tools),
+        'tool_contracts': copy.deepcopy(parent.get('_toolContractDocumentsByName') or {}),
+        'tool_script_safe': copy.deepcopy(
+            parent.get('_toolScriptSafeByName') or
+            (parent.get('config') or {}).get('_toolScriptSafeByName') or {}),
+    }
+
+
+def create_child_invocation(
+    parent: dict, *, model: str, tools: list, objective: str, context: str = '',
+    system_prompt: str = '', role_policy: str = '', artifact_hint: str = '', project_path: str = '',
+    thinking_enabled: bool | None = None, event_sink: Callable[[dict], None],
+    abort_check: Callable[[], bool],
+    conversation_messages: list[dict] | None = None,
+    checkpoint_messages: list[dict] | None = None,
+    swarm_message_binding: dict | None = None,
+    checkpoint_sink: Callable[[dict, list, int], None] | None = None,
+    checkpoint_result: dict | None = None,
+    timeout_seconds: float = 0,
+    max_429_attempts: int | None = None,
+    progress_beacon=None, progress_key: str = '',
+    execution_limits: dict | None = None,
+    output_schema: dict | None = None,
+    direct_tool_names=(),
+    agent_lineage_id: str = '',
+) -> dict:
+    """Allocate a task-local carrier; borrow authority, never parent lifecycle."""
+    from lib.identity import PrincipalContext
+    from lib.tasks_pkg.manager import create_task, task_user_id
+    task_user_id(parent)  # Validate the structured principal before allocation.
+    if not parent.get('id') or not model:
+        raise ValueError('Child invocation requires parent identity and resolved model')
+    from lib.tasks_pkg.requirement_source import requirement_source
+    requirements = requirement_source(parent)
+    policy = InvocationPolicy.child(
+        parent['id'], timeout_seconds=timeout_seconds, max_429_attempts=max_429_attempts)
+    policy.validate()
+    if not callable(event_sink) or not callable(abort_check) or not isinstance(tools, list):
+        raise ValueError('Child invocation requires tools and callable control/evidence ports')
+    frozen_policy = parent.get('_goalInvocationPolicy')
+    if frozen_policy is not None:
+        cfg = copy.deepcopy(frozen_policy['config'])
+        if cfg.get('model') != model:
+            from lib.model_routing import ModelRoutingError
+            raise ModelRoutingError(
+                'Child model conflicts with the archived Goal input policy',
+                kind='model_route_unavailable')
+        if (cfg.get('projectPath') != project_path
+                or (thinking_enabled is not None
+                    and cfg.get('thinkingEnabled') != thinking_enabled)):
+            raise ValueError('Child launch conflicts with the archived Goal input policy')
+    else:
+        cfg = resolve_child_config(parent, model=model, project_path=project_path,
+                                   thinking_enabled=thinking_enabled)
+
+    if execution_limits is not None:
+        from lib.agent_core.execution_limits import validate_execution_limits
+        validate_execution_limits(execution_limits)
+        cfg['executionLimits'] = copy.deepcopy(execution_limits)
+
+    # Resolve execution locations only after declared/frozen input authority.
+    # Isolation changes paths, never model routing, tools or delivery ownership.
+    from lib.tasks_pkg.workspace_delivery import (
+        execution_repositories, ensure_execution_roots, route_project_tool_args)
+    repositories = execution_repositories(parent)
+    if repositories:
+        selected_path = cfg.get('projectPath') or (parent.get('config') or {}).get('projectPath') or ''
+        cfg['projectPath'] = route_project_tool_args(parent, 'read_files', {
+            'path': selected_path})['path']
+        for field in ('projectPaths', 'readOnlyPaths'):
+            if field in cfg:
+                cfg[field] = [route_project_tool_args(parent, 'read_files', {
+                    'path': path})['path'] for path in cfg[field]]
+    if conversation_messages is not None:
+        if checkpoint_messages is not None:
+            raise ValueError('Child input must have one message source')
+        if not isinstance(conversation_messages, list) or not conversation_messages:
+            raise ValueError('Conversation worker requires nonempty model messages')
+        # Already API-ready, including native policy, media and tool pairs.
+        # Never flatten it or append the same history as a delegated objective.
+        messages = copy.deepcopy(conversation_messages)
+        # Context borrowed from a parent is not proof of this child's mailbox
+        # consumption. Keep native media/tool pairs and text, but revoke receipts.
+        for message in messages:
+            for key in ('_projectMessageIds', '_projectMailbox',
+                        '_swarmMessageIds', '_swarmMessageMailbox'):
+                message.pop(key, None)
+    else:
+        output_contract = ''
+        if output_schema is not None:
+            from lib.swarm.spawn_contracts import output_contract_text
+            output_contract = output_contract_text(output_schema)
+        messages = build_child_messages(
+            objective=objective, context=context, system_prompt=system_prompt,
+            role_policy=role_policy, artifact_hint=artifact_hint, checkpoint_messages=checkpoint_messages,
+            swarm_message_binding=swarm_message_binding, output_contract=output_contract)
+    conversation_tool_policy = None
+    if conversation_messages is not None:
+        conversation_tool_policy = (
+            copy.deepcopy(frozen_policy['conversation_tool_policy'])
+            if frozen_policy is not None else _conversation_tool_policy(parent, tools))
+    from lib.tasks_pkg.native_parent import resolve_native_parent
+    native_parent, execution_parent = resolve_native_parent(parent)
+    native_child_owner=native_parent if native_parent is not None and (native_parent._transient or native_parent.pricing_resolver is not None) else None
+    principal = PrincipalContext.from_payload(parent['_principalContext'])
+    if native_child_owner is not None:
+        routing_repository = native_child_owner.repository
+    else:
+        from lib.model_routing import OwnerBoundary, request_routing_repository
+        routing_repository = request_routing_repository(parent, OwnerBoundary.create(
+            principal.require_owner(context='child invocation'), principal.tenant_id))
+    child = create_task(
+        parent.get('convId') or '', messages, cfg,
+        principal=principal,
+        supersede=False, transient=True,
+        **({'model_routing_repository': routing_repository} if routing_repository is not None else {}))
+    fence = ChildPublicationFence()
+
+    def fenced_sink(event):
+        return fence.deliver(event_sink, event)
+
+    child.update(
+        _parentTaskId=parent['id'],
+        # A swarm worker's durable lineage outlives any physical attempt: the
+        # resume must reach the account that minted its encrypted reasoning.
+        **({AFFINITY_LINEAGE_KEY: f'worker:{child["convId"]}:{agent_lineage_id}'}
+           if agent_lineage_id else {}),
+        _invocationTools=copy.deepcopy(tools),
+        _invocationToolDiscoveryPolicy=delegated_tool_discovery_policy(
+            parent, tools, direct_tool_names),
+        _invocationToolContracts=copy.deepcopy(
+            frozen_policy['tool_contracts'] if frozen_policy is not None
+            else parent.get('_toolContractDocumentsByName') or {}),
+        _invocationToolScriptSafeByName=copy.deepcopy(
+            frozen_policy['tool_script_safe'] if frozen_policy is not None else
+            parent.get('_toolScriptSafeByName') or
+            (parent.get('config') or {}).get('_toolScriptSafeByName') or {}),
+        _invocationEventSink=fenced_sink,
+        _invocationPublicationFence=fence,
+        _invocationAbortCheck=abort_check,
+        _invocationPolicy=policy,
+        _invocationCheckpointSink=checkpoint_sink,
+        _unattended=True,
+        _tenant_id=parent.get('_tenant_id'),
+        _pinned_provider_id=(child.get('_pinned_provider_id') or
+                             (cfg.get('_pinned_provider_id') or ''
+                              if frozen_policy is not None else
+                              parent.get('_pinned_provider_id') or
+                              (parent.get('config') or {}).get('_pinned_provider_id') or '')),
+        _tool_env=parent.get('_tool_env'),
+    )
+    from lib.model_routing import share_request_routing_authority
+    share_request_routing_authority(parent, child)
+    if swarm_message_binding is not None:
+        child['_swarmMessageBinding'] = copy.deepcopy(swarm_message_binding)
+    if output_schema is not None:
+        child['_invocationOutputSchema'] = copy.deepcopy(output_schema)
+    if checkpoint_result:
+        child['_checkpointUsage'] = {key: checkpoint_result.get(key, 0) for key in (
+            'prompt_tokens', 'completion_tokens', 'total_tokens', 'cost_usd')}
+        child['toolCallCount'] = int(checkpoint_result.get('tool_calls_made') or 0)
+
+        child['_executionToolsAdmitted'] = child['toolCallCount']
+
+        child['usage'] = dict(child['_checkpointUsage'])
+        child['_invocationCheckpointUsageMerged'] = True
+        if checkpoint_result.get('actuals_complete') is False:
+            child['_usageActualsIncomplete'] = True
+
+            child['_executionActualsComplete'] = False
+    if repositories:
+        child['_workspaceExecution'] = {'repositories': copy.deepcopy(repositories)}
+    parent_policy = ensure_execution_roots(parent)
+    if parent_policy is not None:
+        child['_workspaceRootPolicy'] = copy.deepcopy(parent_policy)
+    if conversation_tool_policy is not None:
+        child['_invocationConversationToolPolicy'] = conversation_tool_policy
+    from lib.tasks_pkg.invocation_registration import register_child_invocation, storage_free_parent
+    child['_invocationStorageFree'] = storage_free_parent(parent)
+    child['_inspectorTaskId'] = f'{parent["id"]}#agent:{child["id"]}'
+
+    if policy.timeout_seconds:
+        import time
+        child['_invocationDeadline'] = time.monotonic() + policy.timeout_seconds
+    if progress_beacon is not None:
+        child['_invocationProgressBeacon'] = progress_beacon
+        child['_invocationProgressKey'] = progress_key or child['id']
+
+    from lib.agent_core.execution_budget import inherit_execution_budget
+    try:
+        if requirements is not None:
+            child['_turnRequirementSource'] = requirements.validate(child)
+        from lib.tasks_pkg.worker_binding import inherit_conversation_worker
+        inherit_conversation_worker(parent, child)
+        inherit_execution_budget(parent, child)
+        from lib.project_dispatch.admission import share_dispatch_root
+        share_dispatch_root(parent, child)
+        register_child_invocation(child, parent,discard_on_failure=False)
+        if native_child_owner is not None:
+            native_child_owner.bind_transient_child(child, parent_task_id=parent['id'], parent_task=execution_parent)
+    except BaseException as primary:
+        from lib.log import get_logger
+        logger=get_logger(__name__)
+        try:
+            close_unstarted_child_invocation(child, reason='Child budget or registration admission failed',
+                cause='child_admission_failed')
+        except BaseException as cleanup:
+            primary.add_note('Rejected child cleanup failed: '+type(cleanup).__name__)
+            logger.exception('Rejected child cleanup failed')
+        raise
+    return child
+
+
+def close_unstarted_child_invocation(child: dict, *, reason: str,
+                                    cause: str = 'child_preparation_cancelled') -> None:
+    """Release an unused prepared child through the ordinary settlement owner."""
+    from lib.agent_core.execution_budget import close_execution_budget
+    from lib.agent_core.execution_session import execution_session_for_task
+    from lib.tasks_pkg.manager import reject_unstarted_chat_task
+    if execution_session_for_task(child).dispatch_started:
+        raise ValueError('A dispatched child must close through its invocation owner')
+    failures = []
+    for cleanup in (
+            lambda: reject_unstarted_chat_task(child, reason,
+                cause=cause, conv_id=child.get('convId') or ''),
+            lambda: close_child_ingress(child),
+            lambda: close_execution_budget(child)):
+        try:
+            cleanup()
+        except BaseException as error:
+            failures.append(error)
+    if failures:
+        raise BaseExceptionGroup('Unstarted child cleanup failed', failures)
+
+
+def run_child_invocation(child: dict, *, before_dispatch=None) -> dict:
+    """Execute synchronously, retain the result for the caller, release registry."""
+    from lib.tasks_pkg.manager import discard_task
+    from lib.tasks_pkg.invocation_cancellation import ChildCancellationScope
+    control = child['_invocationAbortCheck']
+    scope = control if isinstance(control, ChildCancellationScope) else ChildCancellationScope(control)
+    from lib.swarm.liveness import ProgressBeacon, thread_progress_sink
+    owns_beacon = child.get('_invocationProgressBeacon') is None
+    beacon = child.get('_invocationProgressBeacon') or ProgressBeacon()
+    progress_key = child.get('_invocationProgressKey') or child['id']
+    child['_invocationProgressBeacon'] = beacon
+    child['_invocationProgressKey'] = progress_key
+    beacon.touch(progress_key, 'admitted')
+    # The swarm's view of this agent follows the same judge as its registry
+    # task (lib/tasks_pkg/liveness.py); the reaper delivers a stall verdict.
+    beacon.bind(progress_key, child)
+    watch = None
+    try:
+        watch = scope.watch(child)
+        with thread_progress_sink(beacon, progress_key):
+            # Required durable admission, after preparation and
+            # before the invocation can enter any model/tool work. Failure
+            # follows the same ingress, budget and registry cleanup as execution.
+            from contextlib import nullcontext
+            native = child.get('_nativePreparedInvocation')
+            admission = nullcontext()
+            if before_dispatch is not None:
+                if native is not None:
+                    from lib.tasks_pkg.native_invocation import NativePreparedInvocation
+                    if not isinstance(native, NativePreparedInvocation):
+                        raise ValueError('Child native admission requires an issued invocation')
+                    admission = native.admission_scope(child, before_dispatch)
+                else:
+                    before_dispatch()
+            with admission:
+                execute_invocation(child, policy=child['_invocationPolicy'])
+
+        close_child_ingress(child)
+        # The result is never used before its accepted Inspector evidence is
+        # durable or its refusal is recorded below.
+        settle_invocation_evidence(child)
+        failure = child.get('_invocationDeliveryError')
+        if failure is not None:
+            # A swallowed observer exception cannot become a successful leaf.
+            from lib.agent_core.storage_errors import describe_storage_failure
+            message = 'Child invocation evidence delivery failed'
+            try:
+                message += ': ' + describe_storage_failure(failure)
+            except Exception as diagnostic_error:
+                # Optional diagnostics must never replace the original cause.
+                from lib.log import get_logger
+                get_logger(__name__).debug(
+                    'Child evidence delivery diagnostic unavailable: %s',
+                    type(diagnostic_error).__name__)
+            raise RuntimeError(message) from failure
+        return child
+    finally:
+        if watch is not None:
+            watch.close()
+        beacon.unbind(progress_key, child)
+
+        close_child_ingress(child)
+        settle_invocation_evidence(child)
+        child.pop('_invocationEventSink', None)
+        child.pop('_invocationAbortCheck', None)
+        child.pop('_invocationCheckpointSink', None)
+        from lib.agent_core.execution_budget import close_execution_budget
+        close_execution_budget(child)
+        child.pop('_invocationProgressBeacon', None)
+        child.pop('_invocationProgressKey', None)
+        if owns_beacon:
+            beacon.forget(progress_key)
+        if child.get('_nativePreparedInvocation') is not None:
+            from lib.mcp.tool_search import release_transient_task_selection
+            release_transient_task_selection(child)
+        discard_task(child['id'])
+
+
+__all__ = ['create_child_invocation', 'run_child_invocation',
+           'commit_child_publication', 'close_unstarted_child_invocation']

@@ -1,0 +1,121 @@
+/* A compact status dock; only its card receives pointer events. The shell
+   remains readable and interactive while backend admission is closed. */
+.boot-splash{
+  position:fixed;
+  inset-block-start:calc(var(--space-16) + env(safe-area-inset-top));
+  inset-inline-end:var(--space-4);
+  z-index:var(--z-toast);
+  width:min(24rem,calc(100vw - var(--space-4) * 2));
+  color:var(--text-primary);
+  pointer-events:none;
+}
+.boot-splash__card{
+  display:flex;
+  flex-direction:column;
+  align-items:stretch;
+  gap:var(--space-2);
+  padding:var(--space-4);
+  background:var(--bg-secondary);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  text-align:start;
+  pointer-events:auto;
+  -webkit-user-select:text;
+  user-select:text;
+  max-height:calc(100dvh - var(--space-16) * 2);
+  overflow:auto;
+}
+.boot-splash__spinner{align-self:flex-start;}
+.boot-splash__title{
+  margin:0;
+  font-size:var(--font-size-lg);
+  font-weight:var(--weight-semibold);
+  line-height:var(--leading-title);
+  color:var(--text-primary);
+}
+.boot-splash__subtitle{
+  margin:0;
+  font-size:var(--font-size-md);
+  line-height:var(--leading-body);
+  color:var(--text-secondary);
+}
+.boot-splash__progress{
+  width:100%;
+  height:var(--space-1);
+  border-radius:var(--radius-xs);
+  background:var(--bg-tertiary);
+  overflow:hidden;
+}
+.boot-splash__progress-fill{
+  height:100%;
+  background:var(--accent);
+  border-radius:inherit;
+  transition:width var(--motion-slow) var(--ease-standard);
+}
+.boot-splash__status-line{
+  margin:0;
+  font-size:var(--font-size-sm);
+  color:var(--text-secondary);
+}
+.boot-splash__details{
+  max-height:45dvh;
+  overflow:auto;
+  border-top:1px solid var(--border);
+  padding-block-start:var(--space-3);
+}
+.boot-splash__phases{
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:flex;
+  flex-direction:column;
+  gap:var(--space-2);
+}
+.boot-splash__phase{
+  display:flex;
+  align-items:center;
+  gap:var(--space-2);
+  font-size:var(--font-size-sm);
+  line-height:var(--leading-tight);
+  color:var(--text-secondary);
+}
+.boot-splash__phase--running{color:var(--text-primary);}
+.boot-splash__phase--done .boot-splash__phase-marker{color:var(--success-text);}
+.boot-splash__phase--failed{color:var(--error-text);}
+.boot-splash__phase-marker{
+  width:var(--space-4);
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:none;
+  font-weight:var(--weight-bold);
+}
+.boot-splash__logs{
+  margin:var(--space-3) 0 0;
+  padding:var(--space-3);
+  background:var(--bg-primary);
+  border:1px solid var(--border);
+  border-radius:var(--radius-xs);
+  font-family:var(--font-mono);
+  font-size:var(--font-size-xs);
+  line-height:var(--leading-body);
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  color:var(--text-secondary);
+}
+.boot-splash__error{
+  max-height:8rem;
+  overflow:auto;
+  padding:var(--space-2) var(--space-3);
+  background:var(--error-bg);
+  border:1px solid var(--error-border);
+  border-radius:var(--radius-xs);
+  color:var(--error-text);
+  font-size:var(--font-size-xs);
+  line-height:var(--leading-body);
+  overflow-wrap:anywhere;
+}
+.boot-splash--failed .boot-splash__title{color:var(--error-text);}
+.boot-splash__retry,.boot-splash__toggle{align-self:flex-start;}
+.boot-splash [hidden]{display:none;}

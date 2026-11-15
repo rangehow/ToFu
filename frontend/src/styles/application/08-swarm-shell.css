@@ -1,0 +1,193 @@
+/* ═══════════════════════════════════════════
+   ★ Swarm panel — the parallel-execution card
+   ═══════════════════════════════════════════
+   One quiet sheet where it stands alone (the agent dock, a receipt outside
+   the tool panel). Inside an open tool panel the run is one call of that
+   card, so it sheds the sheet and takes the card's call columns
+   (23-reading-tool-panel.css). The header is the run's
+   only summary line: a glyph tile, the title, live agent counts, ONE
+   verdict chip and ONE clock. A thin completion bar follows, then the
+   agents as a divided list (08-swarm-agent-cards.css). State reads from the
+   glyph, the chip and the bar; the sheet itself never pulses. Every value is
+   a design token, so each theme supplies its own chip and feedback palette
+   without per-theme overrides. Inside the conversation surface the header
+   also joins the shared action-summary grammar (23-reading-tool-summary.css). */
+/* The reading palette, also for an agent body the agent dock shows alone. */
+:is(.sw-panel, .sw-a-body) {
+  --sw-line: var(--turn-process-line, var(--border));
+  --sw-rule: var(--turn-rule, var(--border));
+  --sw-hover: var(--turn-process-hover, var(--bg-hover));
+  --sw-well: var(--turn-process-surface, var(--bg-secondary));
+  --sw-spine: var(--turn-spine, var(--border));
+}
+.sw-panel {
+  margin: var(--space-1) 0;
+  border: var(--control-edge-inset) solid var(--sw-line);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-font-size-meta);
+  line-height: var(--leading-title);
+  overflow: hidden;
+}
+
+/* Collapsed: the header alone summarizes the run. */
+.sw-panel.sw-collapsed :is(.sw-progress, .sw-agent-grid, .sw-footer) { display: none; }
+
+/* ── Header ── */
+.sw-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  min-height: var(--control-h-md);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+.sw-header:hover { background: var(--sw-hover); }
+/* The title block takes the free width; the verdict cluster keeps one line
+   and only wraps under it when even a minimal title block cannot fit. */
+.sw-header-left {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: min(100%, 12em);
+}
+.sw-header-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-xs);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.sw-header-icon svg { display: block; width: 58%; height: 58%; }
+.sw-panel[data-sw-tone="done"] .sw-header-icon { background: var(--chip-ok-bg); color: var(--tool-row-ok-ink); }
+.sw-panel[data-sw-tone="error"] .sw-header-icon { background: var(--chip-err-bg); color: var(--chip-err-color); }
+.sw-panel[data-sw-tone="stale"] .sw-header-icon { background: var(--chip-warn-bg); color: var(--chip-warn-color); }
+.sw-panel[data-sw-tone="queued"] .sw-header-icon { background: var(--chip-neutral-bg); color: var(--tool-row-glyph-ink); }
+.sw-header-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-3);
+  min-width: 0;
+}
+.sw-header-title {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--conversation-process-font-size);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+/* Counts are metadata: quiet tabular text, each count one unbreakable item;
+   only a failure count takes a color. */
+.sw-header-subtitle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-1);
+  min-width: 0;
+  color: var(--tool-row-meta-ink);
+  font-size: var(--conversation-font-size-meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sw-cnt-failed { color: var(--error-text); }
+.sw-header-right {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+.sw-header-timer {
+  min-width: 3ch;
+  color: var(--tool-row-meta-ink);
+  font-size: var(--conversation-font-size-meta);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+.sw-chevron {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+.sw-chevron svg { display: block; }
+.sw-panel.sw-collapsed .sw-chevron { transform: rotate(-90deg); }
+
+/* ── Verdict: the run's single status, in the tool rows' outcome grammar ──
+   A chip means "look here": only failures and runs needing attention (stale,
+   unconfirmed, interrupted, stalled) draw one. Live work is accent text
+   beside its spinner, a routine success a bare check, waiting quiet meta. */
+.sw-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--tool-row-meta-ink);
+  font-size: var(--conversation-font-size-meta);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-title);
+  white-space: nowrap;
+}
+.sw-status-pill svg { display: block; flex: 0 0 auto; width: 10px; height: 10px; }
+.sw-status-pill:is(.sw-pill-running, .sw-pill-planning, .sw-pill-async) { color: var(--tool-row-glyph-ink-live); }
+.sw-status-pill.sw-pill-done { color: var(--tool-row-ok-ink); }
+.sw-status-pill:is(.sw-pill-error, .sw-pill-stale) {
+  padding: 0 var(--space-2);
+  border: var(--control-edge-inset) solid var(--chip-warn-border);
+  border-radius: var(--radius-pill);
+  background: var(--chip-warn-bg);
+  color: var(--chip-warn-color);
+  font-size: var(--conversation-font-size-caption);
+  font-weight: var(--weight-medium);
+  line-height: var(--space-5);
+}
+.sw-status-pill.sw-pill-error {
+  border-color: var(--chip-err-border);
+  background: var(--chip-err-bg);
+  color: var(--chip-err-color);
+}
+
+/* ── Completion bar: a full-bleed line under the header ── */
+.sw-progress-track {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  background: var(--sw-rule);
+}
+.sw-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--motion-slow) var(--ease-standard);
+}
+.sw-complete .sw-progress-fill { background: var(--tool-row-ok-ink); }
+.sw-progress-fill.has-errors {
+  background: linear-gradient(90deg, var(--tool-row-ok-ink) 0 var(--ok-pct), var(--error-text) var(--ok-pct) 100%);
+}
+
+/* ── Usage footer (run totals only) ── */
+.sw-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border-top: var(--control-edge-inset) solid var(--sw-rule);
+  color: var(--tool-row-meta-ink);
+  font-size: var(--conversation-font-size-caption);
+  font-variant-numeric: tabular-nums;
+}
+.sw-footer-sep { opacity: 0.6; }
+
+/* Phones: the run title stacks over its counts beside the verdict. */
+@media (max-width: 600px) {
+  .sw-header-info { flex-direction: column; align-items: flex-start; }
+}

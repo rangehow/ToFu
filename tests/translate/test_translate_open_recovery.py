@@ -1,0 +1,323 @@
+"""Open-path translation recovery: a failed turn heals when it is reopened.
+
+Problem this pins: a whole-turn translation that failed wrote a durable
+``_translateFailed`` verdict and stopped there. The only driver of
+``sweep_conversation_translations`` was the boot sweep, bounded to the 32 most
+recent conversations within 7 days. So the user reopened the very conversation
+that had failed, saw English, and nothing retried it — the failure was durable
+but unrecoverable in practice (conv mvhiznrwv669ue, turn f85740dd, 2026-10-21).
+
+Contract under test: opening a conversation admits ONE debounced, detached,
+fail-soft recovery pass; the pass is idempotent (a turn with a live translation
+or a committed one is never re-spawned), so overlapping triggers cannot pay
+twice for the same text.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
+def _task(conv='conv', turn='turn', user=7):
+    return {
+        'id': 'task-1',
+        'convId': conv,
+        '_turnId': turn,
+        '_userId': user,
+        'config': {'autoTranslate': True, 'uiLang': 'zh'},
+    }
+
+
+@pytest.fixture(autouse=True)
+def _clear_recovery_state():
+    import lib.translate.terminal as terminal
+
+    with terminal._recovery_guard:
+        terminal._recovery_last_attempt.clear()
+    yield
+    with terminal._recovery_guard:
+        terminal._recovery_last_attempt.clear()
+
+
+@pytest.fixture
+def joined_threads(monkeypatch):
+    """Run each admitted recovery sweep inline so assertions are deterministic."""
+    from concurrent.futures import Future
+
+    import lib.translate.terminal as terminal
+
+    submitted = []
+
+    class _InlineExecutor:
+        def submit(self, fn, /, *args, **kwargs):
+            submitted.append(fn)
+            future = Future()
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except BaseException as error:
+                future.set_exception(error)
+            return future
+
+    monkeypatch.setattr(terminal, '_recovery_sweeps', _InlineExecutor)
+    return submitted
+
+
+def test_open_path_admits_one_recovery_pass(monkeypatch, joined_threads):
+    import lib.translate.terminal as terminal
+
+    swept = []
+    monkeypatch.setattr(
+        terminal, 'sweep_conversation_translations',
+        lambda conv, **kwargs: swept.append((conv, kwargs)) or 1)
+
+    assert terminal.schedule_translation_recovery(
+        'conv-open', user_id=7) is True
+
+    assert swept == [('conv-open', {'user_id': 7})]
+    assert len(joined_threads) == 1
+
+
+def test_repeated_opens_are_debounced(monkeypatch, joined_threads):
+    import lib.translate.terminal as terminal
+
+    swept = []
+    monkeypatch.setattr(
+        terminal, 'sweep_conversation_translations',
+        lambda conv, **kwargs: swept.append(conv) or 0)
+
+    assert terminal.schedule_translation_recovery('conv-a', user_id=7) is True
+    # The snapshot endpoint is polled continuously by an open conversation;
+    # a failed turn must not be retried once per poll.
+    for _ in range(5):
+        assert terminal.schedule_translation_recovery(
+            'conv-a', user_id=7) is False
+    assert swept == ['conv-a']
+
+
+def test_debounce_is_per_conversation(monkeypatch, joined_threads):
+    import lib.translate.terminal as terminal
+
+    swept = []
+    monkeypatch.setattr(
+        terminal, 'sweep_conversation_translations',
+        lambda conv, **kwargs: swept.append(conv) or 0)
+
+    assert terminal.schedule_translation_recovery('conv-a', user_id=7) is True
+    assert terminal.schedule_translation_recovery('conv-b', user_id=7) is True
+    assert swept == ['conv-a', 'conv-b']
+
+
+def test_recovery_is_fail_soft(monkeypatch, joined_threads):
+    import lib.translate.terminal as terminal
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError('storage down')
+
+    monkeypatch.setattr(
+        terminal, 'sweep_conversation_translations', _boom)
+
+    # A repair pass must never propagate into the read path it was admitted
+    # from.
+    assert terminal.schedule_translation_recovery(
+        'conv-open', user_id=7) is True
+
+
+def test_admission_from_an_event_loop_starts_no_thread_on_the_loop(monkeypatch):
+    """The snapshot route admits recovery on the serving loop.
+
+    ``Thread.start()`` returns only after the new thread has run, so a loop
+    that starts one waits for whichever thread holds the interpreter. The
+    2026-11-13 lane census found one such start per opened conversation, from
+    this admission, once the executor carriers no longer started there.
+    """
+    import asyncio
+    import threading
+
+    import lib.translate.terminal as terminal
+
+    swept = threading.Event()
+    monkeypatch.setattr(
+        terminal, 'sweep_conversation_translations',
+        lambda conv, **kwargs: swept.set() or 0)
+    loop_thread = []
+    admitting = threading.Event()
+    loop_starts = []
+    original_start = threading.Thread.start
+
+    def recorded_start(thread):
+        if admitting.is_set() and threading.get_ident() in loop_thread:
+            loop_starts.append(thread.name)
+        return original_start(thread)
+
+    monkeypatch.setattr(threading.Thread, 'start', recorded_start)
+
+    async def admit():
+        loop_thread.append(threading.get_ident())
+        admitting.set()
+        try:
+            return terminal.schedule_translation_recovery('conv-loop', user_id=7)
+        finally:
+            admitting.clear()
+
+    assert asyncio.run(admit()) is True
+    assert swept.wait(10), 'the admitted recovery sweep never ran'
+    assert loop_starts == []
+
+
+def test_missing_identity_is_refused():
+    import lib.translate.terminal as terminal
+
+    assert terminal.schedule_translation_recovery('', user_id=7) is False
+    assert terminal.schedule_translation_recovery(
+        'conv', user_id=None) is False
+
+
+def test_tracked_conversations_are_bounded(monkeypatch, joined_threads):
+    import lib.translate.terminal as terminal
+
+    monkeypatch.setattr(
+        terminal, 'sweep_conversation_translations',
+        lambda conv, **kwargs: 0)
+
+    for index in range(terminal._RECOVERY_TRACKED_CONVERSATIONS + 5):
+        terminal.schedule_translation_recovery(
+            f'conv-{index}', user_id=7)
+
+    assert len(terminal._recovery_last_attempt) <= (
+        terminal._RECOVERY_TRACKED_CONVERSATIONS)
+
+
+def test_sweep_never_respawns_a_turn_that_is_already_translating(monkeypatch):
+    """Liveness dedupe: an in-flight task carries no durable marker yet."""
+    import lib.translate.terminal as terminal
+    import lib.turn_lifecycle as lifecycle
+    import lib.translate.skip_policy as skip_policy
+
+    monkeypatch.setattr(
+        skip_policy, 'should_skip_automatic_translation',
+        lambda *a, **k: False)
+    monkeypatch.setattr(
+        lifecycle, 'iter_turn_translation_states_newest_first',
+        lambda conv, user_id=None: iter([
+            {'turnId': 'live', 'status': 'completed',
+             'projection': {'content': 'hello world'}},
+            {'turnId': 'missing', 'status': 'completed',
+             'projection': {'content': 'hello world'}},
+        ]))
+    monkeypatch.setattr(
+        terminal, '_active_whole_turn_keys',
+        lambda: {('conv', 'live')})
+
+    spawned = []
+    monkeypatch.setattr(
+        terminal, '_spawn_whole_turn_translation',
+        lambda **kw: spawned.append(kw['turn_id']) is None)
+
+    count = terminal.sweep_conversation_translations(
+        'conv', user_id=1,
+        config={'autoTranslate': True, 'uiLang': 'zh'})
+
+    assert spawned == ['missing']
+    assert count == 1
+
+
+def test_light_turn_read_keeps_the_translation_verdict(monkeypatch):
+    """A translated turn must stay translated to a light reader.
+
+    The recovery sweep reads turns with ``light=True`` to decide whether a turn
+    still needs translating. A light projection that drops the whole
+    translation verdict makes every sweep treat translated turns as
+    untranslated and re-spawn them, which the reader sees as finished prose
+    swallowed and re-streamed. The shape stays small: the verdict rides along,
+    the translated body does not.
+    """
+    import lib.turn_lifecycle as lifecycle
+    import lib.translate.skip_policy as skip_policy
+    import lib.translate.terminal as terminal
+
+    monkeypatch.setattr(
+        skip_policy, 'should_skip_automatic_translation',
+        lambda *a, **k: False)
+
+    # The real light read runs: monkeypatch only the semantic-storage client,
+    # so the projection trimming under test is the shipped code path.
+    def _done_turn():
+        return {
+            'turnId': 'done', 'conversationId': 'conv',
+            'laneId': 'main', 'ordinal': 0, 'actor': 'assistant',
+            'kind': 'reply', 'status': 'completed',
+            'projection': {
+                'content': 'hello world',
+                'translatedContent': '\u4f60\u597d\u4e16\u754c',
+                'translation': {'status': 'completed'},
+                '_translateDone': True,
+                # Heavy sidecars the light shape must still drop.
+                'toolRounds': [{'huge': True}],
+            },
+            'projectionRevision': 2, 'settlement': {},
+            'createdAt': 1, 'updatedAt': 2,
+        }
+
+    operations = []
+
+    class _Client:
+        def query(self, operation, payload):
+            operations.append(operation)
+            if operation == 'turn.list':
+                return [_done_turn()]
+            if operation == 'turn.sync.page':
+                return {'turns': [_done_turn()], 'attempts': [],
+                        'hasMore': False, 'syncSequence': 3}
+            if operation == 'turn.revision':
+                return 3
+            if operation == 'conversation.get':
+                return {}
+            raise AssertionError(f'unexpected operation {operation}')
+
+    monkeypatch.setattr(
+        lifecycle, '_turn_client', lambda write=False: _Client())
+    monkeypatch.setattr(
+        terminal, '_active_whole_turn_keys', lambda: set())
+    monkeypatch.setattr(
+        terminal, '_spawn_whole_turn_translation',
+        lambda **kw: pytest.fail(
+            f"already translated turn was re-spawned: {kw['turn_id']}"))
+
+    light = lifecycle.list_turns('conv', user_id=1, light=True)['turns'][0]
+    # Normalization folds the legacy ``_translateDone`` alias into the verdict.
+    assert light['projection']['translation'] == {'status': 'completed'}
+    # The body stays out of the light shape; only the verdict rides along.
+    assert 'translatedContent' not in light['projection']
+    assert 'toolRounds' not in light['projection']
+
+    count = terminal.sweep_conversation_translations(
+        'conv', user_id=1,
+        config={'autoTranslate': True, 'uiLang': 'zh'})
+
+    assert count == 0
+    # The sweep reached the turn through its own paged light read.
+    assert 'turn.sync.page' in operations
+
+
+def test_spawn_refuses_a_duplicate_live_translation(monkeypatch):
+    import lib.translate.terminal as terminal
+
+    monkeypatch.setattr(
+        terminal, '_active_whole_turn_keys',
+        lambda: {('conv-x', 'turn-x')})
+    monkeypatch.setattr(
+        'lib.translate.execution.submit_translation_task',
+        lambda *a, **k: pytest.fail('duplicate spawn must not be admitted'))
+
+    admitted = terminal._spawn_whole_turn_translation(
+        conversation_id='conv-x',
+        turn_id='turn-x',
+        content='hello',
+        target='Chinese',
+        user_id=1,
+        message_id='',
+    )
+
+    assert admitted is False

@@ -1,0 +1,217 @@
+"""lib/key_stats/_record.py — Hot-path outcome recording.
+
+``record_outcome`` / ``record_rate_limit`` / ``record_gateway_error`` record
+reconstructible health telemetry: the in-memory view changes at once and the
+coalesced background flush persists it, so a request thread never touches
+disk (``_state._record_telemetry``). ``mark_key_exhausted`` records a billing
+stop — an admission decision — and commits it durably before returning
+(``_state._commit_decision``). All state lives in ``lib.key_stats._state``
+and is imported here BY REFERENCE.
+"""
+
+import time
+
+from lib.log import get_logger
+
+from lib.key_stats._state import (
+    _cache,
+    _commit_decision,
+    _entry_for_update,
+    _lock,
+    _pair_key,
+    _record_telemetry,
+)
+
+logger = get_logger(__name__)
+
+
+def record_outcome(provider_id: str, key_name: str, success: bool,
+                   error: str = '', *, credential_failure: bool = False) -> None:
+    """Record a single request outcome (non-429).
+
+    Called from Slot.record_success / Slot.record_error. Must be cheap:
+    updates the in-memory counter; the coalesced background flush persists
+    it within ``KEY_STATS_FLUSH_INTERVAL_SECONDS``.
+
+    Rate-limit (HTTP 429) errors should call :func:`record_rate_limit`
+    instead — they're tracked separately because they reflect contention
+    or balance exhaustion, not request-level key health.
+
+    ``failure`` retains request telemetry. Only an explicitly attributed
+    credential failure contributes to automatic key disabling; legacy and
+    unclassified failures must never acquire that authority retroactively.
+
+    A success on a key whose 402 stop crossed the day boundary is the
+    provider's answer to the stop's probe: the stop ends, durably.
+    """
+    if not key_name:
+        return
+    # Any non-429 outcome (success OR hard failure) breaks a 429 streak —
+    # the key is clearly capable of returning something else.
+    delta = {'streak_reset': True}
+    if success:
+        delta['success'] = 1
+    else:
+        delta['failure'] = 1
+        if error:
+            delta['last_error'] = str(error)[:200]
+        if credential_failure:
+            delta['credential_failures'] = 1
+            delta['last_credential_error'] = str(error)[:200]
+    pk = _pair_key(provider_id, key_name)
+    _record_telemetry(pk, delta)
+    if success:
+        # After the telemetry rolled the in-memory day.
+        _end_probed_billing_stop(pk)
+
+
+def _end_probed_billing_stop(pk: str) -> None:
+    """Commit the end of a carried 402 stop once its probe was served."""
+    with _lock:
+        entry = _cache['stats'].get(pk) or {}
+        if not (entry.get('exhausted') and entry.get('probe_due')):
+            return
+
+    def _mutate(stats, _overrides):
+        entry = _entry_for_update(stats, pk)
+        if entry.get('probe_due'):
+            entry['exhausted'] = False
+            entry['exhausted_at'] = None
+            entry['probe_due'] = False
+
+    _commit_decision(_mutate, day_scoped=True)
+    logger.info('[KeyStats] %s served after the day boundary: the 402 stop ended',
+                pk)
+
+
+def record_rate_limit(provider_id: str, key_name: str,
+                      reason: str = '') -> None:
+    """Record a 429 for *key_name* — pure telemetry, never a kill signal.
+
+    Tracks the sliding "consecutive 429" counter (any success or non-429
+    error resets it to zero) plus the daily ``rate_limited`` total; both are
+    shown on the Settings card. That is ALL a 429 may do here.
+
+    Owner policy (2026-07-29, after the sankuai-anthropic total-outage): a
+    429 streak NEVER disables a key. 429 is backpressure — the answer is the
+    slot-local steering cooldown and RPM decay, so the key rejoins the
+    moment the upstream recovers, with zero human action. Only an explicit
+    billing-stop (:func:`mark_key_exhausted`, HTTP 402 / quota-exhausted)
+    disables a key for the day.
+
+    Unlike :func:`record_outcome`, 429s are NOT counted as failures in the
+    success-rate calculation, and the ambiguous 429 body NEVER overwrites
+    ``last_error`` (it would hide the last real failure from the UI).
+    """
+    if not key_name:
+        return
+    _record_telemetry(_pair_key(provider_id, key_name),
+                      {'rate_limited': 1, 'streak_add': 1})
+
+
+def record_gateway_error(provider_id: str, key_name: str,
+                         reason: str = '') -> None:
+    """Record a GATEWAY-class failure for *key_name* — own counter only.
+
+    Gateway-class = HTTP 502/503/504 from the gateway's LB layer,
+    upstream-vendor transients wrapped in 4xx, and mid-stream SSE errors.
+    These say "the upstream behind the gateway is sick", never "this key is
+    sick" — and they hit every key on the provider uniformly, so feeding
+    them into the daily success-rate column both wrecks the card's honesty
+    and TRIPS the auto-disable gate (2026-08-03 sankuai 502 storm: 813
+    failures in ~2h auto-disabled 2 of 3 healthy keys for the day; only the
+    third key's success volume plus the last-resort guard kept service up).
+
+    So a gateway error feeds ONLY the ``gateway_errors`` daily counter
+    (pure UI telemetry, like ``rate_limited``):
+      * NOT ``failure`` — the success-rate denominator and the
+        auto-disable gate must never see a gateway storm. The dead-key
+        safety net requires explicit credential rejection; endpoint failures
+        and model-specific permissions never prove a bad key.
+      * NOT ``consecutive_429`` — the 429 streak is per-key contention
+        telemetry.
+      * NOT ``last_error`` — a bare ``<html>`` 502 body is diagnostic
+        garbage that would hide the last real failure from the UI (the
+        :func:`record_rate_limit` precedent).
+    """
+    if not key_name:
+        return
+    _record_telemetry(_pair_key(provider_id, key_name), {'gateway_errors': 1})
+
+
+def mark_key_exhausted(provider_id: str, key_name: str,
+                        reason: str = '', model: str = '') -> None:
+    """Mark a key (or one model on it) as exhausted for the rest of today.
+
+    Called on HTTP 402 / 429-with-insufficient-quota (billing/balance errors).
+    Unlike a transient rate-limit, these indicate the account needs a
+    financial top-up, so retrying before tomorrow is futile.
+
+    Args:
+        model: the wire model the quota error was observed on. When given,
+            the stop is recorded at **(key, model)** granularity
+            (``exhausted_models``) instead of flipping the key-wide
+            ``exhausted`` flag. This matters on AGGREGATING GATEWAYS where
+            one key proxies several upstream vendors (2026-07-28 incident:
+            a qwen→Aliyun ``insufficient_quota`` on ``sankuai_key_1``
+            key-wide-exhausted the key, cross-vendor poisoning kimi→Moonshot
+            capacity routed through the same key). A single-vendor account
+            converges to the same end state — each sibling model trips its
+            own billing-stop on its next call — at the cost of one failed
+            call per model, which is the honest price of not guessing
+            vendor topology from error bodies.
+
+            ``model=''`` is also passed DELIBERATELY for HTTP 402 Payment
+            Required (owner ruling 2026-07-29): a 402 is emitted by the
+            gateway's OWN credit-validation layer about the ACCOUNT's
+            credit pool (sankuai: ext.error.source=AIGC, stage=validation),
+            so every model on the key is dead and the key-wide flag is the
+            honest stop — per-model there would just burn one live 402
+            per remaining model before converging.
+
+    The user can still manually re-enable the key via the Settings UI
+    (set_key_override) — e.g. after adding credit — which clears BOTH the
+    key-wide flag and all per-model stops; everything resets at day rollover.
+
+    A key-wide 402 stop recorded while a manual ON is present therefore
+    postdates that re-enable: it is the provider's NEWER answer, and
+    :func:`lib.key_stats._enable.is_key_enabled` honors it instead of
+    spending another live 402 on the same key (2026-11-09 re-charge incident).
+    The override row is preserved, and re-enabling again recovers the key.
+
+    Note:
+        Stops are recorded even when this key is the last raw-enabled one in
+        its provider.  The "last-resort" guard lives at READ time in
+        :func:`is_key_enabled` — and deliberately does NOT promote a
+        model-specific billing-stop (retrying a quota-dead model is futile;
+        the dispatcher should fall back to another model).
+    """
+    if not key_name:
+        return
+    pk = _pair_key(provider_id, key_name)
+
+    def _mutate(stats, _overrides):
+        entry = _entry_for_update(stats, pk)
+        # Count this as a failure too so the success-rate column reflects it.
+        entry['failure'] = int(entry.get('failure') or 0) + 1
+        if model:
+            exhausted_models = entry.get('exhausted_models')
+            if not isinstance(exhausted_models, dict):
+                exhausted_models = {}
+                entry['exhausted_models'] = exhausted_models
+            exhausted_models[model] = str(reason or '')[:200]
+        else:
+            entry['exhausted'] = True
+            # ``exhausted_at`` belongs to the KEY-WIDE stop only: Settings
+            # shows when the provider refused this key's credit, and
+            # ``set_key_override(True)`` clears it with the flag.
+            entry['exhausted_at'] = time.time()
+            # Refused again (a probe past the day boundary included): the
+            # stop holds until the next day boundary.
+            entry['probe_due'] = False
+        if reason:
+            entry['last_error'] = str(reason)[:200]
+
+    _commit_decision(_mutate, day_scoped=True)
+    logger.warning('[KeyStats] %s exhausted for today (model=%s): %s',
+                   pk, model or '<key-wide>', (reason or '')[:200])

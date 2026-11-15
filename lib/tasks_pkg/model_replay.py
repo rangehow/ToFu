@@ -1,0 +1,692 @@
+"""Recover a validated, previously sent model view across task boundaries.
+
+Turn rows remain the sole transcript authority. Validated completed chat
+continuations are durable derived state, one bounded checkpoint per lane.
+Edits and incompatible permissions/sources force an observable cold rebuild;
+process restarts and disposable cache eviction do not erase compaction work.
+Preparation happens before Turn settlement; Sidecar publishes in its transaction.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+
+from lib.log import get_logger
+from lib.storage.model_continuation import ModelContinuationStore, settled_witness
+from lib.tasks_pkg.inbox_delivery import UNVERIFIED_INBOX_DELIVERY
+
+logger = get_logger(__name__)
+VERSION = 1
+MAX_TURN_WITNESSES = 4096
+_POLICY_FIELDS = (
+    'model', 'provider_id', 'providerId', 'preset', 'thinkingDepth',
+
+    'modelRef', 'preferredProviderId', 'routing', 'autopilot',
+    'systemPrompt', 'systemPromptMode', 'systemPromptBlocks', 'responseFormat',
+    'projectPath', 'projectEnabled', 'memoryEnabled', 'searchEnabled',
+    'grantedToolPermissions', 'tools', 'enabledTools', 'disabledTools',
+    'mcpServers', 'programmaticTools', 'multiAgent', 'contextExperimentFlags',
+    'chatMode', 'interactionMode', 'thinkingEnabled', 'defaultThinkingDepth',
+    'searchMode', 'fetchEnabled', 'codeExecEnabled', 'browserEnabled',
+    'desktopEnabled', 'imageGenEnabled', 'humanGuidanceEnabled', 'schedulerEnabled',
+    '_explicitToolSchemas', '_principalContext',
+)
+
+
+
+def _digest(value):
+    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    digest = hashlib.sha256()
+    for part in encoder.iterencode(value):
+        digest.update(part.encode('utf-8'))
+    return digest.hexdigest()
+
+
+def turn_witness(row):
+    return settled_witness(row)
+
+
+def _interaction_mode(config):
+    """The interaction radio as one witness value; Standard keeps the legacy one.
+
+    Plan and Delegate change tool authority without touching another witnessed
+    field. A Standard request keeps the historical value (absent), so existing
+    checkpoints keep their digests.
+    """
+    if config.get('planMode') is True:
+        return 'plan'
+    if config.get('delegateMode') is True:
+        return 'delegate'
+    return config.get('interactionMode')
+
+
+def _policy_fields(config):
+    from lib.context_experiment_flags import normalize_context_experiment_flags
+    from lib.tool_results.tool_round_replay import TOOL_REPLAY_PROJECTION_VERSION
+    fields = {key: config.get(key) for key in _POLICY_FIELDS}
+    fields['interactionMode'] = _interaction_mode(config)
+    return [VERSION, TOOL_REPLAY_PROJECTION_VERSION, fields,
+            normalize_context_experiment_flags(config)]
+
+
+def policy_witness(config):
+    return _digest(_policy_fields(config))
+
+
+def _effective_policy_fields(fields):
+    """Witnessed values as every runtime consumer resolves them.
+
+    Producers spell one policy differently: the browser composer states an
+    empty prompt, append mode and chat mode; scheduler-built turns and the
+    dispatch grants derived from them omit those keys; a grant frozen before a
+    normalizer change keeps a retired tool spelling. Only a representation that
+    every consumer resolves identically is unified: any value a consumer could
+    treat differently stays verbatim and still drifts.
+    """
+    from lib.context_experiment_flags import normalize_context_experiment_flags
+    from lib.tasks_pkg.chat_mode import chat_mode_defaults, normalize_chat_mode
+    from lib.tasks_pkg.context_composer import disabled_context_blocks
+    effective = dict(fields)
+    # The message builder sends only a nonempty prompt, and context composition
+    # treats every mode except 'replace' as the default 'append'.
+    effective['systemPrompt'] = fields.get('systemPrompt') or ''
+    effective['systemPromptMode'] = fields.get('systemPromptMode') or 'append'
+    effective['systemPromptBlocks'] = sorted(disabled_context_blocks(fields))
+    # Chat mode only overrides the everyday flags (model_config.apply_chat_mode),
+    # so an unlabelled config already at those values runs identically.
+    mode = normalize_chat_mode(fields)
+    if mode is None and all(fields.get(key) == value
+                            for key, value in chat_mode_defaults('chat').items()):
+        mode = 'chat'
+    effective['chatMode'] = mode
+    tools = fields.get('tools')
+    if tools is None or isinstance(tools, dict):
+        # A preference mapping reaches execution only through the normalizer;
+        # a caller's tool-schema list is authority and stays verbatim.
+        effective['tools'] = {**(tools or {}),
+                              **normalize_context_experiment_flags({'tools': tools})['tools']}
+    return effective
+
+
+def policy_witness_drift(cached, config):
+    """Name the policy fields that differ between checkpoint and request.
+
+    A refused restore used to log only ``policy_changed`` — an opaque digest
+    mismatch — so every R1 cold rebuild left no evidence about WHICH setting
+    moved. The witness now also carries its canonical field map; comparing two
+    maps names the exact drifted fields without leaking their content. Values
+    are compared as their consumers resolve them, so a spelling difference is
+    not drift. Legacy checkpoints without the map report only the digest
+    mismatch.
+    """
+    if not isinstance(cached, dict):
+        return []
+    fields = cached.get('policyFields')
+    if not isinstance(fields, list) or len(fields) != 4:
+        return ['policyDigest'] if cached.get('policy') != policy_witness(config) else []
+    current = _policy_fields(config)
+    drift = []
+    if fields[0] != current[0] or fields[1] != current[1]:
+        drift.append('replayVersion')
+    old_map, new_map = fields[2], current[2]
+    if isinstance(old_map, dict) and isinstance(new_map, dict):
+        old_map, new_map = _effective_policy_fields(old_map), _effective_policy_fields(new_map)
+        for key in sorted(set(old_map) | set(new_map)):
+            if old_map.get(key) != new_map.get(key):
+                drift.append(key)
+    elif old_map != new_map:
+        drift.append('policyFields')
+    if fields[3] != current[3]:
+        drift.append('contextExperimentFlags')
+    return drift
+
+
+_ROUTE_FIELDS = frozenset({
+    'model', 'provider_id', 'providerId', 'preset', 'thinkingDepth',
+    'modelRef', 'preferredProviderId', 'routing',
+})
+# Drift classes that keep a checkpoint's portable text: which route serves the
+# request and how hard it thinks. Every other witnessed field (permissions,
+# project scope, tool authority, interaction mode, instructions, replay
+# version) is authority-bearing and refuses: default deny.
+PORTABLE_DRIFT_FIELDS = _ROUTE_FIELDS | {'thinkingEnabled', 'defaultThinkingDepth'}
+
+
+def portable_drift(drift):
+    """True when every named drifted field is a route/effort field."""
+    return bool(drift) and set(drift) <= PORTABLE_DRIFT_FIELDS
+
+
+def portable_policy_witness(config):
+    """Route identity may change; policy, permissions and source scope may not."""
+    return policy_witness({key: value for key, value in config.items()
+                           if key not in _ROUTE_FIELDS})
+
+
+def effort_policy_witness(config):
+    """Same adaptive Opus and requested policy; only enabled effort may differ.
+
+    Effort changes upstream cache rendering, not validity of prior thinking.
+    Keep the full continuation rather than treating this as cross-model
+    migration. Off/mode changes, other families and old checkpoints retain
+    the conservative rebuild path. One fixed-size witness adds no payload copy.
+    """
+    from lib.model_info import is_claude_opus_47
+    if (not is_claude_opus_47(config.get('model') or '')
+            or config.get('thinkingEnabled') is False
+            or (config.get('thinkingDepth') or config.get('defaultThinkingDepth')) == 'off'):
+        return ''
+    return policy_witness({key: value for key, value in config.items()
+                           if key not in ('thinkingDepth', 'defaultThinkingDepth')})
+
+
+# Continuation state bound to the route that produced it: reasoning text and
+# signatures, opaque Responses items and native Anthropic blocks.
+_PROVIDER_CONTINUATION_FIELDS = frozenset({
+    'reasoning_content', 'reasoning', 'thinking', 'thinking_signature',
+    'reasoning_details', '_responses_items', '_responsesOutputItems',
+    '_anthropic_content_blocks', '_reasoning_continuity',
+})
+# Producer-owned provenance of Tofu's own text carriers (history carriers,
+# runtime/inbox injections, mailbox receipts, compaction handoffs).
+_PORTABLE_PRIVATE_FIELDS = frozenset({
+    '_isMeta', '_isCompactionSummary', '_compactionArchiveId',
+    '_estimatedPromptTokens', '_attachmentTextChars',
+    '_retainedUserHistory', '_retainedUserHistoryVersion', '_isObjectiveAnchor',
+    '_isVuDirective', '_isVirtualUser', '_isInboxInject', '_containsHumanSteer',
+    '_authoredUserText', '_compactionHandoff', '_compactionObservation',
+    '_turnId', '_sourceActor', '_initiator',
+    '_contextInjectionId', '_contextInjection', '_isUrlPrefetch', '_isLifecycleCaution',
+    '_isBranchContext', '_isPaperToolGuidance', '_vuPromptVersion', '_replyDropped',
+    '_projectMailbox', '_projectMessageIds', '_swarmMessageMailbox', '_swarmMessageIds',
+})
+
+
+def _portable_messages(messages):
+    """Detach the text-only part of a continuation for another route or effort.
+
+    Provider continuation state is stripped: it is valid only for the route
+    that produced it, and a cold rebuild never replays it across routes
+    either. Text content, tool calls and results keep their exact bytes.
+    Composer carriers are rebuilt for the destination. Media and unknown
+    private state refuse rather than silently lose evidence.
+    """
+    import copy
+    projected = []
+    for message in messages:
+        if message.get('_contextComposer'):
+            continue
+        if not isinstance(message.get('content', ''), (str, type(None))):
+            return None
+        portable = {key: value for key, value in message.items()
+                    if key not in _PROVIDER_CONTINUATION_FIELDS}
+        if any(str(key).startswith('_') and key not in _PORTABLE_PRIVATE_FIELDS
+               for key in portable):
+            return None
+        if (portable.get('role') == 'assistant' and not portable.get('content')
+                and not portable.get('tool_calls')):
+            # Only provider state: strict providers reject an empty assistant
+            # row, and the cold rebuild drops it as well.
+            continue
+        projected.append(copy.deepcopy(portable))
+    return projected if projected and projected[-1].get('role') == 'assistant' else None
+
+
+def _publication_status(task, reason):
+    task['_modelReplayPublishStatus'] = reason
+    logger.info('[ModelReplay] conv=%s checkpoint=%s',
+                str(task.get('convId') or ''), reason)
+
+
+def _has_resume_data(config):
+    return any(config.get(key) for key in (
+        'checkpointToolRounds', 'contentPrefix', 'resumePrefill', '_resumeSource',
+    ))
+
+
+def _supports_completed_publication(config):
+    return not any(config.get(key) for key in (
+        'flowId', 'flowBuiltin', 'flowDefinition', 'toolHistory',
+    ))
+
+
+def publishes_completed_checkpoint(config):
+    """Whether a completed task of this mode can publish its model view.
+
+    Goal mode runs as a visible multi-Turn Flow (``multi_turn_run``), so like
+    Flows it never publishes; work that must reach the next checkpoint (a
+    scheduled working-view compaction) waits for a publishing turn.
+    """
+    return _supports_completed_publication(config) and not config.get('autopilot')
+
+
+def _supports_prefix_restore(config, validated_context=None):
+    # Recovering the current Turn restores only a completed prefix that ends
+    # strictly before it. A storage-validated context proves that (its anchor
+    # walk covers only Turns before the target), so a Continue restores the
+    # same prefix the interrupted request had; an unvalidated legacy witness
+    # list cannot, so it refuses. Publication after recovery completes is a
+    # different admission decision and does not inherit this exclusion.
+    return _supports_completed_publication(config) and (
+        validated_context is not None or not _has_resume_data(config))
+
+
+def _remember_context_activity(rows, config, *, cached=None, conversation_id='', user_id=None):
+    """Keep only activity time from this owner's model-history boundary.
+
+    New human messages/empty reply targets are not prior model activity. Legacy
+    checkpoints read their final witnessed Turn once; new checkpoints need no
+    extra query. Turn enrichment may delay trimming, never trigger it early.
+    """
+    from lib.tasks_pkg.compaction._idle import activity_timestamp_ms
+    activity = activity_timestamp_ms(config.get('_contextLastModelActivityAtMs'))
+    for index, row in enumerate(rows):
+        if row.get('actor') != 'assistant':
+            continue
+        projection = row.get('projection') or {}
+        if index == len(rows) - 1 and not any(
+                projection.get(key) for key in ('content', 'toolRounds', 'apiRounds')):
+            continue
+        activity = max(activity, activity_timestamp_ms(row.get('updatedAt')))
+    if isinstance(cached, dict):
+        stamp = activity_timestamp_ms(cached.get('lastModelActivityAtMs'))
+        # Uncovered model turns are newer than a retained checkpoint. Their
+        # activity already gives a sufficient conservative bound.
+        if not stamp and not activity:
+            witnesses = cached.get('turns') or []
+            last = witnesses[-1] if witnesses else None
+            if isinstance(last, list) and len(last) == 2 and isinstance(last[0], str):
+                try:
+                    from lib.turn_lifecycle import get_turn
+                    row = get_turn(conversation_id, last[0], user_id=user_id)
+                    if isinstance(row, dict) and row.get('actor') == 'assistant':
+                        stamp = activity_timestamp_ms(row.get('updatedAt'))
+                except Exception as exc:
+                    logger.debug('[ModelReplay] legacy activity unavailable: %s', type(exc).__name__)
+        activity = max(activity, stamp)
+    if activity:
+        config['_contextLastModelActivityAtMs'] = activity
+
+
+def restore_prefix(rows, config, *, conversation_id, user_id, validated_context=None):
+    """Return (retained model messages, number of covered Turn rows)."""
+    config.pop('_goalWorkerState', None)
+    config.pop('_modelReplayBase', None)
+    config.pop('_modelReplayHistoryProof', None)
+    config.pop('_modelReplayProofPin', None)
+    config.pop('_modelReplayProofEligible', None)
+    config.pop('_modelReplayToolLatch', None)
+    config.pop('_modelReplayPolicyFields', None)
+    config.pop('_modelReplayPolicyDrift', None)
+    config.pop('_contextLastModelActivityAtMs', None)
+    config['_modelReplayStatus'] = 'cold'
+    if not rows:
+        config['_modelReplayStatus'] = 'empty_history'
+        return [], 0
+    _remember_context_activity(rows, config)
+    if validated_context is None and len(rows) > MAX_TURN_WITNESSES:
+        config['_modelReplayStatus'] = 'over_budget'
+        return [], 0
+    witnesses = ([turn_witness(row) for row in rows[:-1]]
+                 if validated_context is None else [])
+    config['_modelReplayBase'] = witnesses
+    if validated_context is not None:
+        config['_modelReplayHistoryProof'] = validated_context['historyProof']
+        config['_modelReplayProofEligible'] = bool(validated_context.get('proofEligible'))
+        pin = _proof_pin(validated_context)
+        if pin is not None:
+            config['_modelReplayProofPin'] = pin
+    # Pin ingress policy even when this target cannot replay a completed prefix.
+    # A successful resumed turn can publish a continuation after runtime defaults
+    # or task-workspace rebinding have mutated its configuration.
+    config['_modelReplayPolicy'] = policy_witness(config)
+    config['_modelReplayPolicyFields'] = _policy_fields(config)
+    config['_modelReplayPortablePolicy'] = portable_policy_witness(config)
+    config['_modelReplayEffortPolicy'] = effort_policy_witness(config)
+    # Resume never reuses a completed-turn prefix blindly, and it always needs
+    # fresh history witnesses to validate a checkpointed working view.
+    if not _supports_prefix_restore(config, validated_context):
+        config['_modelReplayStatus'] = 'unsupported_mode'
+        return [], 0
+    target = rows[-1]
+    resume = _has_resume_data(config)
+    # A resume target carries its interrupted attempt; the resume path, not
+    # the completed prefix, owns that projection.
+    if not resume and (target.get('projection', {}).get('content')
+                       or target.get('projection', {}).get('toolRounds')):
+        config['_modelReplayStatus'] = 'resume_target'
+        return [], 0
+    try:
+        cached = (validated_context.get('continuation') if validated_context is not None
+                  else ModelContinuationStore().get(user_id=user_id, conversation_id=conversation_id,
+                                                   lane_id=target.get('laneId') or 'main'))
+        if not isinstance(cached, dict):
+            reason = (validated_context or {}).get('continuationStatus')
+            config['_modelReplayStatus'] = (reason if reason in {
+                'history_changed', 'terminal_changed', 'legacy_proof',
+                'checkpoint_not_before_target', 'replay_disabled',
+            } else 'checkpoint_missing')
+            return [], 0
+        terminal = (cached.get('turns') or [None])[-1]
+        if (resume and isinstance(terminal, list) and terminal
+                and terminal[0] == target.get('turnId')):
+            # Never replay the resumed Turn's own completed publication.
+            config['_modelReplayStatus'] = 'checkpoint_not_before_target'
+            return [], 0
+        _remember_context_activity([], config, cached=cached,
+                                   conversation_id=conversation_id, user_id=user_id)
+        if 'historyProof' in cached:
+            proof = cached['historyProof']
+            if (not isinstance(proof, dict) or type(proof.get('version')) is not int
+                    or proof['version'] != 2):
+                config['_modelReplayStatus'] = 'legacy_proof'
+                return [], 0
+            if validated_context is None:
+                # One terminal witness cannot prove all earlier Turns.
+                config['_modelReplayStatus'] = 'proof_requires_authority'
+                return [], 0
+        same_policy = cached.get('policy') == policy_witness(config)
+        effort_policy = config['_modelReplayEffortPolicy']
+        same_effort_policy = bool(effort_policy and cached.get('effortPolicy') == effort_policy)
+        same_prefix_policy = same_policy or same_effort_policy
+        drift = [] if same_prefix_policy else policy_witness_drift(cached, config)
+        if not same_prefix_policy and not drift:
+            # The digests differ, yet the field maps resolve to one effective
+            # policy: only the spelling changed. A legacy checkpoint without a
+            # field map always reports digest drift and never reaches here.
+            same_policy = same_prefix_policy = True
+            logger.info('[ModelReplay] conv=%s policy=equivalent (witness spellings differ)',
+                        str(conversation_id))
+        if drift:
+            config['_modelReplayPolicyDrift'] = drift
+        # Route/effort drift keeps the checkpoint's portable text and rebuilds
+        # only the uncovered suffix. Legacy checkpoints without a field map
+        # compare their route-free digest instead.
+        portable = (not same_prefix_policy and (
+            portable_drift(drift)
+            or cached.get('portablePolicy') == portable_policy_witness(config)))
+        if not same_prefix_policy and not portable:
+            config['_modelReplayStatus'] = 'policy_changed'
+            if drift:
+                logger.warning(
+                    '[ModelReplay] conv=%s restore=policy_changed drift=%s — '
+                    'authority-bearing fields differ between the checkpoint and '
+                    'this request', str(conversation_id), ','.join(drift))
+            return [], 0
+        prior = cached.get('turns') or []
+        legacy_prefix = validated_context is not None and 'historyProof' not in cached
+        if legacy_prefix:
+            witnesses = [turn_witness(row) for row in rows[:len(prior)]]
+        if (validated_context is None or legacy_prefix) and (not prior or witnesses[:len(prior)] != prior):
+            config['_modelReplayStatus'] = 'authority_changed'
+            return [], 0
+        messages = cached.get('messages')
+        if not isinstance(messages, list) or not messages or messages[-1].get('role') != 'assistant':
+            config['_modelReplayStatus'] = 'invalid_checkpoint'
+            return [], 0
+        if portable:
+            messages = _portable_messages(messages)
+            if messages is None:
+                config['_modelReplayStatus'] = 'nonportable_checkpoint'
+                return [], 0
+            logger.info('[ModelReplay] conv=%s restore=portable drift=%s',
+                        str(conversation_id), ','.join(drift) or 'route')
+        from lib.knowledge import read_source_path
+        for message in messages:
+            for source in message.get('_modelImageSources') or []:
+                if source.startswith('tofu-media:') and read_source_path(
+                        source[len('tofu-media:'):], user_id=user_id) is None:
+                    config['_modelReplayStatus'] = 'media_unavailable'
+                    return [], 0
+        # Attachment ownership/readiness is rechecked even though the text
+        # projection remains pinned. A removed source must never be recovered
+        # solely from an old cache file.
+        from lib.media_attachments import resolve_client_refs
+        for row in rows[:len(prior)]:
+            refs = (row.get('projection') or {}).get('attachments') or []
+            if refs and resolve_client_refs(refs, user_id=user_id) != refs:
+                config['_modelReplayStatus'] = 'media_changed'
+                return [], 0
+        # MCP declarations have their own conversation-settings authority.
+        # A replay body (including legacy mcpWire) cannot overwrite or resurrect
+        # them after reset; registry assembly reads them even on cold replay.
+        if same_prefix_policy and isinstance(cached.get('toolLatch'), dict):
+            config['_modelReplayToolLatch'] = cached['toolLatch']
+        if config.get('autopilot') and same_prefix_policy and isinstance(cached.get('goalState'), dict):
+            from copy import deepcopy
+            config['_goalWorkerState'] = deepcopy(cached['goalState'])
+        config['_modelReplayStatus'] = (
+            'restored_portable' if portable else
+            'restored_effort' if not same_policy and same_effort_policy else 'restored')
+        # This is a completed prior execution, not recovery of its mailbox.
+        from lib.tasks_pkg.message_input_receipts import historical_swarm_context
+        messages = historical_swarm_context(messages)
+        # The checkpoint keeps its publishing Turn's rounds exactly as sent
+        # live. Restored, every covered Turn is settled before this new target,
+        # so, as in a cold rebuild, another protocol may omit their signed
+        # reasoning while the producing protocol still replays it.
+        for message in messages:
+            if (message.get('role') == 'assistant'
+                    and (message.get('thinking_signature')
+                         or message.get('_anthropic_content_blocks'))):
+                message['_reasoning_continuity'] = 'completed_turn'
+        return messages, len(prior) if validated_context is None or legacy_prefix else 0
+    except Exception as exc:
+        config['_modelReplayStatus'] = 'unavailable'
+        logger.warning('[ModelReplay] cold rebuild: %s', type(exc).__name__)
+        return [], 0
+
+
+def _model_context_revision(row):
+    if 'modelContextRevision' in row:
+        return row['modelContextRevision']
+    return int(row.get('projectionRevision') or 0) - int(row.get('_modelContextDisplayOffset') or 0)
+
+
+def _history_fingerprint(context, input_turn_id):
+    """Digest what a context proof covers, leaving out one input's revision."""
+    continuation = context.get('continuation')
+    return _digest({
+        'covered': context.get('covered'),
+        'continuation': ([continuation.get('historyProof'), continuation.get('turns')]
+                         if isinstance(continuation, dict) else None),
+        'turns': [[row.get('turnId'), row.get('parentTurnId'), row.get('status'),
+                   row.get('currentAttemptId'),
+                   None if row.get('turnId') == input_turn_id else _model_context_revision(row)]
+                  for row in (context.get('turns') or [])[:-1]],
+    })
+
+
+def _proof_pin(context):
+    rows = context.get('turns') or []
+    if len(rows) < 2:
+        return None
+    target = rows[-1]
+    input_row = next((row for row in rows[:-1]
+                      if row.get('turnId') == target.get('parentTurnId')), None)
+    if input_row is None:
+        return None
+    return {'targetTurnId': target.get('turnId'), 'inputTurnId': input_row['turnId'],
+            'inputRevision': input_row.get('projectionRevision'),
+            'history': _history_fingerprint(context, input_row['turnId'])}
+
+
+def rebind_history_proof(task, settled_input):
+    """Re-pin the replay proof to the input revision this attempt's verdict settled.
+
+    The command pins the proof before the worker records the deferred input
+    translation that its model view then carries, so once the verdict lands
+    that proof names a history that never existed: publication refuses
+    (``authority_changed``) or stores a checkpoint the next restore rejects
+    (``history_changed``). A fresh proof is adopted only when the re-read
+    history equals the pinned one except for that input, which must hold the
+    settled revision and the text the model view carries. Never raises.
+    """
+    config = task.get('config')
+    pin = config.pop('_modelReplayProofPin', None) if isinstance(config, dict) else None
+    if not isinstance(pin, dict) or not config.get('_modelReplayHistoryProof'):
+        return
+    input_turn_id, revision = settled_input
+    try:
+        status = _rebind_proof(task, config, pin, input_turn_id, revision)
+    except Exception as exc:
+        status = 'unavailable'
+        logger.warning('[ModelReplay] proof rebind unavailable: %s', type(exc).__name__)
+    logger.info('[ModelReplay] conv=%s proof=%s input=%s',
+                str(task.get('convId') or ''), status, str(input_turn_id or '')[:8])
+
+
+def _rebind_proof(task, config, pin, input_turn_id, revision):
+    if input_turn_id is None or revision is None:
+        return 'input_unsettled'
+    if input_turn_id != pin['inputTurnId']:
+        return 'input_not_pinned'
+    if revision == pin['inputRevision']:
+        return 'unchanged'
+    context = ModelContinuationStore().read_context(
+        user_id=task.get('_userId'), conversation_id=task.get('convId'),
+        turn_id=pin['targetTurnId'])
+    if not isinstance(context, dict) or not context.get('supported'):
+        return 'unavailable'
+    rows = context.get('turns') or []
+    input_row = next((row for row in rows[:-1] if row.get('turnId') == input_turn_id), None)
+    if (not rows or rows[-1].get('turnId') != pin['targetTurnId'] or input_row is None
+            or _history_fingerprint(context, input_turn_id) != pin['history']):
+        return 'history_changed'
+    if input_row.get('projectionRevision') != revision:
+        return 'input_changed'
+    from lib.tasks_pkg.input_translation import model_view_carries
+    if not model_view_carries(task, (input_row.get('projection') or {}).get('content')):
+        return 'view_mismatch'
+    config['_modelReplayHistoryProof'] = context['historyProof']
+    return 'rebound'
+
+
+def prepare_completed_task(task):
+    """Prepare a bounded candidate; only Sidecar may mint its settled witness."""
+    config = task.get('config') or {}
+    base = config.get('_modelReplayBase')
+    owner = task.get('_userId')
+    conv_id, turn_id = task.get('convId'), task.get('_turnId')
+    checks = (
+        ('missing_base', not isinstance(base, list)),
+        ('missing_identity', not owner or not conv_id or not turn_id),
+        ('unsupported_mode', not _supports_completed_publication(config)),
+        ('unverified_resume_context', _has_resume_data(config)
+         and task.get('_resumeContextHydrated') is not True),
+        ('failed_or_aborted', task.get('error') or task.get('aborted')),
+        # Consumed steers are part of the exact model view and publish with it;
+        # the Turn projection keeps only a display preview, so a cold rebuild
+        # would lose them. A carrier the provider never consumed is salvaged
+        # to the queue or redelivered from its durable row instead, so it
+        # must never become a reusable prefix.
+        ('unverified_inbox_delivery', task.get(UNVERIFIED_INBOX_DELIVERY)),
+        # Flow/Goal phases settle as later visible Turns, while settlement can
+        # witness only the root Turn: a root-frontier checkpoint would replay
+        # every phase again as the uncovered suffix.
+        ('multi_turn_run', task.get('_turnVisibleRunTurnIds')),
+    )
+    for reason, blocked in checks:
+        if blocked:
+            _publication_status(task, reason)
+            return
+    try:
+        messages = task.get('messages') or []
+        if not messages or messages[-1].get('role') != 'assistant':
+            _publication_status(task, 'missing_final_model_message')
+            return
+        if (_has_resume_data(config)
+                and messages[-1].get('content') != task.get('content', '')):
+            # contentPrefix is display bookkeeping, not proof that those
+            # tokens reached the model. Never publish a body omitting it.
+            _publication_status(task, 'resume_content_unrepresented')
+            return
+        # A length/incomplete terminal may retain a complete text boundary,
+        # but an unfinished tool batch must never become a reusable prefix.
+        if messages[-1].get('tool_calls') or messages[-1].get('function_call'):
+            _publication_status(task, 'unfinished_tool_batch')
+            return
+        switched = bool(config.get('model') and task.get('model') != config['model'])
+        if switched:
+            # A mid-run switch (refusal or 429 fallback, key failover) mixes two
+            # routes' continuation state, valid for neither next route. Consumed
+            # steers and tool results exist only in this view (the Turn
+            # projection keeps a display preview), so publish its text-only
+            # portable part rather than force a cold rebuild that loses them.
+            messages = _portable_messages(messages)
+            if messages is None:
+                _publication_status(task, 'model_changed_during_run')
+                return
+        from lib.storage.model_continuation import encode_projection
+        # The field map beside the digest lets a later refused restore name
+        # the drifted policy fields (policy_witness_drift) instead of only
+        # reporting an opaque digest mismatch. Pin it at the same ingress
+        # boundary as the digest: when a resume re-entered with normalized
+        # runtime defaults, both record the PINNED input policy, not the
+        # post-hoc runtime config.
+        ingress_fields = config.get('_modelReplayPolicyFields') or _policy_fields(config)
+        candidate = {'policy': config.get('_modelReplayPolicy') or policy_witness(config),
+                     'policyFields': ingress_fields,
+                     'portablePolicy': (config.get('_modelReplayPortablePolicy')
+                                        or portable_policy_witness(config)),
+                     'effortPolicy': config.get('_modelReplayEffortPolicy',
+                                              effort_policy_witness(config)),
+                     'turns': base + [[turn_id, '0' * 64]], 'messages': messages,
+                     'toolLatch': task.get('_toolOrchestrationPromptLatch')}
+        history_proof = config.get('_modelReplayHistoryProof')
+        if history_proof:
+            from lib.tasks_pkg.message_semantics import has_model_media
+            if config.get('_modelReplayProofEligible') and not any(
+                    has_model_media(message) for message in messages):
+                candidate['historyProof'] = history_proof
+            else:
+                # Media keeps its existing durable replay capability. Obtain
+                # full content witnesses once at publication, not on every
+                # ordinary text read, and fence edits since initial selection.
+                full = ModelContinuationStore().read_context(
+                    user_id=owner, conversation_id=conv_id,
+                    turn_id=turn_id, replay=False)
+                if (not isinstance(full, dict) or not full.get('supported')
+                        or full.get('historyProof') != history_proof):
+                    _publication_status(task, 'authority_changed')
+                    return
+                candidate['turns'] = [turn_witness(row) for row in full['turns'][:-1]] + candidate['turns'][-1:]
+        from lib.tasks_pkg.compaction._idle import record_model_activity
+        record_model_activity(task)
+        candidate['lastModelActivityAtMs'] = task['_lastModelActivityAtMs']
+        encoded = encode_projection(candidate)
+        if encoded is None:
+            _publication_status(task, 'invalid_or_over_budget')
+            return
+        _publication_status(task, 'prepared_portable' if switched else 'prepared')
+        # Detach mutable executor messages before command serialization/retries.
+        return {'projection': json.loads(encoded), 'content': task.get('content', '')}
+    except Exception as exc:
+        logger.warning('[ModelReplay] checkpoint unavailable: %s', type(exc).__name__)
+        _publication_status(task, 'unavailable')
+
+
+def publish_completed_task(task):
+    """Explicit settled import compatibility seam; live lifecycle never calls this."""
+    candidate = prepare_completed_task(task)
+    if candidate is None:
+        return
+    try:
+        from lib.storage import get_storage_client
+        target = get_storage_client().query('turn.get', {
+            'conversation_id': task['convId'], 'turn_id': task['_turnId'],
+            'user_id': task['_userId']}, deadline=2.0)
+        if not target or target.get('status') != 'completed':
+            _publication_status(task, 'turn_not_completed')
+            return
+        if (target.get('projection') or {}).get('content') != candidate['content']:
+            _publication_status(task, 'settled_content_changed')
+            return
+        projection = candidate['projection']
+        projection['turns'][-1] = turn_witness(target)
+        stored = ModelContinuationStore().put(
+            user_id=task['_userId'], conversation_id=task['convId'],
+            lane_id=target.get('laneId') or 'main', projection=projection)
+        _publication_status(task, 'stored' if stored else 'rejected')
+    except Exception:
+        _publication_status(task, 'unavailable')

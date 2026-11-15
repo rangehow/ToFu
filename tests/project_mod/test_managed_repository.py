@@ -1,0 +1,465 @@
+"""Tofu prepares plain project folders for isolated workers; people never run Git."""
+import json
+import os
+import shutil
+import subprocess
+
+import pytest
+
+from lib.project_mod import managed_repository as mr
+from lib.project_mod.managed_repository import (
+    ContentPolicy, ManagedRepositoryUnavailable, link_shared_paths,
+    prepare_managed_repository,
+)
+
+pytestmark = pytest.mark.unit
+
+SMALL = ContentPolicy(large_file_bytes=1024, bulk_directory_files=5)
+
+
+def git(root, *args, check=True):
+    return subprocess.run(['git', '-C', str(root), *args], check=check,
+                          capture_output=True, text=True, timeout=30)
+
+
+def write(path, data=b'x\n'):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+
+
+def tracked(root):
+    return set(git(root, 'ls-files').stdout.split())
+
+
+def manifest(root):
+    return json.loads((root / '.git' / mr.MANIFEST_NAME).read_text())
+
+
+@pytest.fixture
+def folder(tmp_path):
+    """A research folder as a person leaves it: notes, code, data and environments."""
+    root = tmp_path / 'rsi-exam'
+    write(root / 'plan.md', b'# plan\n')
+    write(root / 'tasks' / 'README.md', b'# tasks\n')
+    write(root / 'tasks' / 'grader.py', b'print(1)\n')
+    for index in range(6):  # a bulky data directory: shared, not versioned
+        write(root / 'tasks' / 'raw' / 'bars' / f'{index}.bin', b'\0' * 8)
+    for index in range(6):  # a bulky source directory stays versioned
+        write(root / 'src' / f'm{index}.py', b'pass\n')
+    write(root / 'tasks' / 'panel.parquet', b'p' * 4096)  # large file: shared
+    write(root / '.venv' / 'pyvenv.cfg', b'home = /usr/bin\n')
+    write(root / '.venv' / 'lib' / 'site.py', b'pass\n')
+    write(root / 'tools' / 'env' / 'pyvenv.cfg', b'home = /usr/bin\n')
+    write(root / '.tofu' / 'state.json', b'{}\n')
+    write(root / 'tasks' / '__pycache__' / 'grader.cpython-311.pyc', b'\0')
+    write(root / 'data' / 'cache.json', b'{}\n')
+    return root.resolve()
+
+
+def test_plain_folder_becomes_a_clean_managed_repository(folder):
+    before = {path: path.read_bytes() for path in folder.rglob('*') if path.is_file()}
+    result = prepare_managed_repository(str(folder), policy=SMALL)
+
+    assert result.state == 'created' and result.guidance == 'AGENTS.md'
+    assert git(folder, 'rev-parse', 'HEAD').stdout.strip() == result.baseline
+    assert git(folder, 'symbolic-ref', 'HEAD').stdout.strip() == 'refs/heads/main'
+    assert git(folder, 'status', '--porcelain').stdout == ''
+    assert git(folder, 'config', '--bool', mr.MANAGED_CONFIG_KEY).stdout.strip() == 'true'
+    assert 'Tofu baseline' in git(folder, 'log', '-1', '--format=%B').stdout
+    # User files are never modified, moved or deleted.
+    assert {path: path.read_bytes() for path in before} == before
+    assert not list(folder.glob(mr._STAGING_PREFIX + '*'))
+
+    versioned = tracked(folder)
+    assert {'AGENTS.md', 'plan.md', 'tasks/README.md', 'tasks/grader.py',
+            *(f'src/m{index}.py' for index in range(6))} == versioned
+    assert set(manifest(folder)['shared']) == set(result.shared) == {
+        'tasks/raw/bars', 'tasks/panel.parquet', 'tools/env'}
+
+    guide = (folder / 'AGENTS.md').read_text()
+    assert 'Nobody needs to run Git commands here.' in guide
+    assert '`tasks/raw/bars` — 6 data files' in guide and '`tools/env` — virtual environment' in guide
+    assert 'Start with `tasks/README.md`.' in guide and '`.venv/bin/python`' in guide
+
+
+def test_preparation_is_idempotent_and_refresh_commits_what_the_folder_holds(folder):
+    """Workers start from the branch (owner decision 2026-11-12); nobody commits here."""
+    first = prepare_managed_repository(str(folder), policy=SMALL)
+    assert mr.delivery_commits(folder) is True
+    again = prepare_managed_repository(str(folder), policy=SMALL)
+    assert again.state == 'unchanged' and again.baseline == first.baseline and not again.added_shared
+
+    for index in range(7):
+        write(folder / 'downloads' / 'archive' / f'{index}.zip', b'z')
+    write(folder / 'notes.md', b'new note\n')
+    refreshed = prepare_managed_repository(str(folder), policy=SMALL)
+    assert refreshed.state == 'refreshed' and refreshed.added_shared == ('downloads/archive',)
+    head = git(folder, 'rev-parse', 'HEAD').stdout.strip()
+    assert refreshed.baseline == head != first.baseline
+    assert git(folder, 'rev-parse', 'HEAD^').stdout.strip() == first.baseline
+    # The new note is input Workers start from; newly shared data is never versioned.
+    assert 'notes.md' in tracked(folder)
+    assert not [path for path in tracked(folder) if path.startswith('downloads/')]
+    assert git(folder, 'status', '--porcelain').stdout == ''
+    cached = prepare_managed_repository(str(folder), refresh=False, policy=SMALL)
+    assert cached.state == 'unchanged' and 'downloads/archive' in cached.shared
+    assert cached.baseline == head
+
+
+def test_existing_guidance_is_never_replaced(folder):
+    write(folder / 'CLAUDE.md', b'# mine\n')
+    result = prepare_managed_repository(str(folder), policy=SMALL)
+    assert result.guidance == '' and not (folder / 'AGENTS.md').exists()
+    assert (folder / 'CLAUDE.md').read_bytes() == b'# mine\n' and 'CLAUDE.md' in tracked(folder)
+
+
+def test_paths_hidden_by_the_folders_own_ignore_files_are_shared(folder):
+    write(folder / '.gitignore', b'secret-output/\n*.log\n')
+    write(folder / 'secret-output' / 'run.txt', b'out\n')
+    for index in range(30):  # an unmatched directory of only user-ignored files: one share
+        write(folder / 'runs' / f'{index}.log', b'log\n')
+    write(folder / 'mixed' / 'train.log', b'log\n')  # beside managed content: shared alone
+    write(folder / 'mixed' / '__pycache__' / 'm.cpython-311.pyc', b'\0')
+    write(folder / 'mixed' / 'model.py', b'pass\n')
+    result = prepare_managed_repository(str(folder), policy=SMALL)
+    hidden = {path for path in result.shared if path not in {
+        'tasks/raw/bars', 'tasks/panel.parquet', 'tools/env'}}
+    assert hidden == {'secret-output', 'runs', 'mixed/train.log'}
+    assert {'.gitignore', 'mixed/model.py'} <= tracked(folder)
+    assert git(folder, 'status', '--porcelain', '--ignored=no').stdout == ''
+
+
+def user_repository(tmp_path, branch='trunk'):
+    root = (tmp_path / 'repo').resolve()
+    root.mkdir()
+    git(root, 'init', '-q', '-b', branch)
+    write(root / 'a.txt')
+    git(root, 'add', 'a.txt')
+    git(root, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'mine')
+    return root
+
+
+def test_a_repository_with_its_own_history_adopts_delivery_commits_once(tmp_path):
+    """Owner decision 2026-11-12: its working tree is committed once, then Workers start
+    from its branch; later uncommitted work stays the person's own."""
+    root = user_repository(tmp_path)
+    mine = git(root, 'rev-parse', 'HEAD').stdout.strip()
+    write(root / 'a.txt', b'edited, never committed\n')
+    write(root / 'b.txt', b'a delivery published into the working tree\n')
+    git(root, 'add', 'a.txt')  # staged exactly as it is: staging follows the commit
+
+    result = prepare_managed_repository(str(root), policy=SMALL)
+
+    assert result.state == 'user_repository' and not result.shared
+    head = git(root, 'rev-parse', 'HEAD').stdout.strip()
+    assert result.baseline == head != mine
+    assert git(root, 'rev-parse', 'HEAD^').stdout.strip() == mine
+    assert git(root, 'symbolic-ref', 'HEAD').stdout.strip() == 'refs/heads/trunk'
+    assert git(root, 'show', 'HEAD:b.txt').stdout == 'a delivery published into the working tree\n'
+    assert git(root, 'status', '--porcelain').stdout == ''
+    assert mr.delivery_commits(root) is True
+    write(root / 'c.txt', b'later work of the person\n')
+    config = (root / '.git' / 'config').read_bytes()
+    assert prepare_managed_repository(str(root), policy=SMALL).baseline == head
+    assert git(root, 'rev-parse', 'HEAD').stdout.strip() == head
+    assert (root / '.git' / 'config').read_bytes() == config
+    assert not (root / 'AGENTS.md').exists() and not (root / '.git' / mr.MANIFEST_NAME).exists()
+    assert link_shared_paths(root, tmp_path / 'anywhere') == []
+
+
+def test_an_owners_choice_against_delivery_commits_is_kept(tmp_path):
+    root = user_repository(tmp_path)
+    git(root, 'config', '--local', 'tofu.linearCheckpoint', 'false')
+    mine = git(root, 'rev-parse', 'HEAD').stdout.strip()
+    write(root / 'b.txt', b'uncommitted\n')
+    assert prepare_managed_repository(str(root), policy=SMALL).state == 'user_repository'
+    assert git(root, 'rev-parse', 'HEAD').stdout.strip() == mine
+    assert mr.delivery_commits(root) is False
+
+
+def test_a_repository_that_cannot_record_keeps_capturing_and_retries(tmp_path, monkeypatch):
+    root = user_repository(tmp_path)
+    write(root / 'b.txt', b'uncommitted\n')
+    (root / '.git' / 'index.lock').write_text('another Git is writing the index')
+    mine = git(root, 'rev-parse', 'HEAD').stdout.strip()
+    assert prepare_managed_repository(str(root), policy=SMALL).state == 'user_repository'
+    assert git(root, 'rev-parse', 'HEAD').stdout.strip() == mine
+    assert mr.delivery_commits(root) is None
+    (root / '.git' / 'index.lock').unlink()
+    assert prepare_managed_repository(str(root), policy=SMALL).baseline != mine
+    assert mr.delivery_commits(root) is True
+
+
+def test_a_decided_user_repository_is_recognized_before_mutating_admission(tmp_path,
+                                                                          monkeypatch):
+    root = user_repository(tmp_path, branch='main')
+    git(root, 'config', '--local', 'tofu.linearCheckpoint', 'true')
+
+    def forbidden_admission(*args, **kwargs):
+        raise AssertionError('a decided repository never waits for preparation admission')
+
+    monkeypatch.setattr('lib.integration_control._repo_lock', forbidden_admission)
+    assert prepare_managed_repository(str(root), policy=SMALL).state == 'user_repository'
+    assert prepare_managed_repository(str(root), refresh=False,
+                                      policy=SMALL).state == 'user_repository'
+
+
+def test_an_empty_repository_is_adopted_without_changing_its_branch(tmp_path):
+    root = (tmp_path / 'unborn').resolve()
+    root.mkdir()
+    git(root, 'init', '-q', '-b', 'trunk')
+    write(root / 'notes.md')
+    result = prepare_managed_repository(str(root), policy=SMALL)
+    assert result.state == 'adopted'
+    assert git(root, 'rev-parse', 'refs/heads/trunk').stdout.strip() == result.baseline
+    assert tracked(root) == {'AGENTS.md', 'notes.md'}
+    assert git(root, 'status', '--porcelain').stdout == ''
+    assert not (root / '.git' / 'tofu-baseline.index').exists()
+
+
+def test_staged_files_without_commits_are_refused_not_committed(tmp_path):
+    root = (tmp_path / 'staged').resolve()
+    root.mkdir()
+    git(root, 'init', '-q')
+    write(root / 'draft.md')
+    git(root, 'add', 'draft.md')
+    with pytest.raises(ManagedRepositoryUnavailable, match='staged files but no commits'):
+        prepare_managed_repository(str(root), policy=SMALL)
+    assert git(root, 'rev-parse', '--verify', '-q', 'HEAD', check=False).returncode != 0
+    assert not (root / 'AGENTS.md').exists()
+
+
+@pytest.mark.parametrize('existing', [False, True])
+@pytest.mark.parametrize('spelling', ['symlink', 'ancestor', 'relative'])
+def test_project_alias_prepares_the_real_folder_idempotently(folder, tmp_path, monkeypatch, existing, spelling):
+    if existing:
+        prepare_managed_repository(str(folder), policy=SMALL)
+    alias = tmp_path / 'alias'
+    if spelling == 'symlink':
+        alias.symlink_to(folder, target_is_directory=True)
+        project = str(alias)
+    elif spelling == 'ancestor':
+        alias.symlink_to(folder.parent, target_is_directory=True)
+        project = str(alias / folder.name)
+    else:
+        monkeypatch.chdir(folder.parent)
+        project = './' + folder.name
+
+    prepared = prepare_managed_repository(project, policy=SMALL)
+    assert prepared.root == str(folder)
+    assert prepared.state == ('unchanged' if existing else 'created')
+    assert prepare_managed_repository(str(folder), policy=SMALL).baseline == prepared.baseline
+    assert git(folder, 'status', '--porcelain').stdout == ''
+    assert (folder / 'plan.md').read_bytes() == b'# plan\n'
+    if spelling in ('symlink', 'ancestor'):
+        assert alias.is_symlink()
+
+
+def test_project_alias_and_physical_root_share_repository_admission(tmp_path, monkeypatch):
+    from lib import integration_control as integration
+    root = tmp_path / 'project'
+    root.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(root, target_is_directory=True)
+    monkeypatch.setattr(integration, '_control_root', lambda: tmp_path / 'control')
+    with integration._repo_lock(str(alias)):
+        with pytest.raises(BlockingIOError):
+            with integration._file_lock(str(root), wait=False):
+                pytest.fail('The same repository was admitted through its physical path')
+    with integration._file_lock(str(root), wait=False):
+        pass  # Admission is released on scope exit.
+
+
+@pytest.mark.parametrize('layout', ['subdirectory', 'dangling_alias', 'missing', 'remote'])
+def test_roots_tofu_cannot_prepare_explain_a_remedy_without_git(tmp_path, folder, layout):
+    prepare_managed_repository(str(folder), policy=SMALL)
+    if layout == 'subdirectory':
+        path, reason = str(folder / 'tasks'), 'subdirectory of the Git repository'
+    elif layout == 'dangling_alias':
+        alias = tmp_path / 'alias'
+        alias.symlink_to(tmp_path / 'missing', target_is_directory=True)
+        path, reason = str(alias), 'not an existing local directory'
+    elif layout == 'missing':
+        path, reason = str(tmp_path / 'missing'), 'not an existing local directory'
+    else:
+        path, reason = 'remote:host:/srv/project', 'is not a local folder'
+    with pytest.raises(ManagedRepositoryUnavailable) as caught:
+        prepare_managed_repository(path, policy=SMALL)
+    assert reason in caught.value.reason
+    assert 'git ' not in caught.value.remedy and caught.value.hint().startswith('解决办法')
+
+
+def test_a_failed_preparation_leaves_the_folder_as_it_was(folder, monkeypatch):
+    def broken(*args, **kwargs):
+        raise ManagedRepositoryUnavailable('boom', 'retry', '重试')
+    monkeypatch.setattr(mr, '_record_baseline', broken)
+    with pytest.raises(ManagedRepositoryUnavailable):
+        prepare_managed_repository(str(folder), policy=SMALL)
+    assert not (folder / '.git').exists() and not (folder / 'AGENTS.md').exists()
+    assert not list(folder.glob(mr._STAGING_PREFIX + '*'))
+
+
+def test_preparation_reports_each_walked_path_and_completed_step_as_progress(folder):
+    """A caller judged by its silence publishes these advances as its liveness."""
+    advances = []
+    prepare_managed_repository(str(folder), policy=SMALL, progress=lambda: advances.append(1))
+    assert len(advances) > len(tracked(folder))
+    advances.clear()
+    assert prepare_managed_repository(str(folder), policy=SMALL,
+                                      progress=lambda: advances.append(1)).state == 'unchanged'
+    assert advances, 'a refresh walks the folder again'
+
+
+def _prepare_in_thread(folder, **kwargs):
+    import threading
+    outcome = []
+
+    def prepare():
+        try:
+            outcome.append(prepare_managed_repository(str(folder), policy=SMALL, **kwargs))
+        except BaseException as error:  # the assertion below names it
+            outcome.append(error)
+
+    worker = threading.Thread(target=prepare, daemon=True)
+    worker.start()
+    return worker, outcome
+
+
+def _retire(marker):
+    import signal
+    if marker.exists():
+        try:
+            os.kill(int(marker.read_text()), signal.SIGKILL)
+        except (ProcessLookupError, ValueError):
+            pass
+
+
+def test_metadata_git_uses_activity_instead_of_a_total_deadline(folder, monkeypatch):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stdout=b'', stderr=b'')
+
+    monkeypatch.setattr(mr, 'run_activity_supervised', run)
+    result = mr._run(['rev-parse', 'HEAD'], cwd=folder)
+    assert result.returncode == 0
+    argv, kwargs = calls[0]
+    assert argv[-2:] == ['rev-parse', 'HEAD']
+    assert kwargs['stall_seconds'] == mr.GIT_STALL_SECONDS
+    assert kwargs['binary'] is True
+    assert 'timeout' not in kwargs
+
+
+def test_hung_whole_tree_git_is_retired_after_one_stall_window(folder, tmp_path, monkeypatch):
+    """Whole-tree Git waits as long as the volume does: no wall clock refuses a slow
+    one, and only a tree that stopped executing for the shared window is retired."""
+    from tests.support.volume_git import volume_git
+    window = 1.0
+    monkeypatch.setattr(mr, 'GIT_STALL_SECONDS', window, raising=False)
+    script, marker = volume_git(tmp_path, 'hung', 'ls-files')
+    monkeypatch.setattr(mr, 'git_executable', lambda: str(script))
+    worker, outcome = _prepare_in_thread(folder)
+    worker.join(window + 30)
+    try:
+        assert not worker.is_alive(), 'a hung whole-tree Git must end after one stall window'
+    finally:
+        if worker.is_alive():
+            _retire(marker)
+            worker.join(30)
+    assert isinstance(outcome[0], ManagedRepositoryUnavailable), outcome
+    assert 'executed for 1s' in str(outcome[0])
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)
+    assert not (folder / '.git').exists() and not (folder / 'AGENTS.md').exists()
+    assert not list(folder.glob(mr._STAGING_PREFIX + '*'))
+
+
+def test_stop_ends_a_preparation_and_leaves_the_folder_as_it_was(folder, tmp_path, monkeypatch):
+    import threading
+    import time
+    from lib.project_mod.tool_admission import Cancellation
+    from tests.support.volume_git import volume_git
+    script, marker = volume_git(tmp_path, 'hung', 'add')
+    monkeypatch.setattr(mr, 'git_executable', lambda: str(script))
+    task = {'aborted': False}
+
+    def stop_when_blocked():
+        deadline = time.monotonic() + 30
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        task['aborted'] = True
+
+    stopper = threading.Thread(target=stop_when_blocked)
+    stopper.start()
+    worker, outcome = _prepare_in_thread(folder, cancel=Cancellation(task))
+    stopper.join(35)
+    worker.join(30)
+    try:
+        assert not worker.is_alive(), 'Stop must retire a blocked preparation'
+    finally:
+        if worker.is_alive():
+            _retire(marker)
+            worker.join(30)
+    assert isinstance(outcome[0], mr.PreparationCancelled), outcome
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)
+    assert not (folder / '.git').exists() and not (folder / 'AGENTS.md').exists()
+    assert not list(folder.glob(mr._STAGING_PREFIX + '*'))
+
+
+def test_a_crashed_preparation_is_discarded_and_redone(folder):
+    stale = folder / (mr._STAGING_PREFIX + 'crashed')
+    write(stale / 'objects' / 'junk')
+    assert prepare_managed_repository(str(folder), policy=SMALL).state == 'created'
+    assert not stale.exists()
+
+
+def test_worker_checkout_reads_shared_data_through_excluded_links(folder, tmp_path):
+    prepare_managed_repository(str(folder), policy=SMALL)
+    checkout = tmp_path / 'worker'
+    git(folder, 'worktree', 'add', '-q', '--detach', str(checkout), 'HEAD')
+
+    linked = link_shared_paths(folder, checkout)
+    assert set(linked) == {'tasks/raw/bars', 'tasks/panel.parquet', 'tools/env', 'data'}
+    assert link_shared_paths(folder, checkout) == []  # idempotent
+    assert (checkout / 'tasks' / 'raw' / 'bars' / '0.bin').read_bytes() == b'\0' * 8
+    assert (checkout / 'tasks' / 'panel.parquet').read_bytes() == b'p' * 4096
+    assert all(os.readlink(checkout / path) == str(folder / path) for path in linked)
+    assert not (checkout / 'tasks' / 'grader.py').is_symlink()
+    # Links never enter snapshots: the checkout stays clean and `add -A` stages nothing.
+    assert git(checkout, 'status', '--porcelain').stdout == ''
+    git(checkout, 'add', '-A')
+    assert git(checkout, 'diff', '--cached', '--name-only').stdout == ''
+    ignored = git(checkout, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z').stdout
+    assert {path for path in ignored.split('\0') if path} == set(linked)
+
+    # Retiring the checkout unlinks; canonical data survives both removal paths.
+    git(folder, 'worktree', 'remove', '--force', str(checkout))
+    assert (folder / 'tasks' / 'raw' / 'bars' / '0.bin').exists()
+    second = tmp_path / 'second'
+    git(folder, 'worktree', 'add', '-q', '--detach', str(second), 'HEAD')
+    link_shared_paths(folder, second)
+    shutil.rmtree(second)
+    assert (folder / 'tasks' / 'panel.parquet').exists() and (folder / 'data' / 'cache.json').exists()
+
+
+def test_link_never_escapes_the_checkout_or_replaces_its_content(folder, tmp_path):
+    prepare_managed_repository(str(folder), policy=SMALL)
+    checkout = tmp_path / 'worker'
+    git(folder, 'worktree', 'add', '-q', '--detach', str(checkout), 'HEAD')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (checkout / 'tools').mkdir()
+    (checkout / 'tools' / 'env').symlink_to(outside, target_is_directory=True)
+    write(checkout / 'data', b'worker file\n')
+    linked = link_shared_paths(folder, checkout)
+    assert 'tools/env' not in linked and 'data' not in linked
+    assert (checkout / 'data').read_bytes() == b'worker file\n' and not list(outside.iterdir())
+
+
+def test_plan_shares_bulk_data_but_keeps_source_trees_and_occupied_directories():
+    files = [*(f'src/m{index}.py' for index in range(6)), *(f'raw/{index}.csv' for index in range(6)),
+             'mixed/keep.py', *(f'mixed/blob{index}.bin' for index in range(6))]
+    plan = mr.plan_content(mr.Path('/nonexistent'), files, ['mixed/keep.py'], SMALL)
+    assert plan.shared == {'raw': '6 data files'}

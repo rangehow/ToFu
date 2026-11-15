@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "contracts/hope_queue_policy_v1.schema.json",
+  "title": "Owner off-limits Hope queues (Global Router publication)",
+  "description": "The Global Router publishes this JSON at <Tofu data root>/router/<owner>/HOPE_QUEUE_POLICY.json. No Tofu code writes it. Every submit path reads it again. A missing/unparsable file uses x-fail-safe-default; it never disables m17 or refuses all jobs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "off_limits"],
+  "properties": {
+    "$schema": {"type": "string", "description": "Optional editor hint; not a behavior switch."},
+    "version": {"const": 1},
+    "off_limits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "queue", "since", "reason"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+          "queue": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,256}$"},
+          "projects": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^/[^\u0000]+$"},
+            "description": "Canonical project roots to which this entry applies; omitted = all projects. Unknown callers are treated conservatively."
+          },
+          "since": {"type": "string", "format": "date-time"},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "x-fail-safe-default": {
+    "version": 1,
+    "off_limits": [
+      {
+        "id": "m17",
+        "queue": "root.hldy_training_cluster.your-user.h910c_m17_public",
+        "since": "2026-11-13T11:01+08:00",
+        "reason": "queue admin 杨睿 asked for release; owner decision"
+      }
+    ]
+  }
+}

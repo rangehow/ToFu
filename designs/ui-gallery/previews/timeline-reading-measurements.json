@@ -1,0 +1,371 @@
+[
+  {
+    "theme": "light",
+    "width": 1180,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      }
+    ]
+  },
+  {
+    "theme": "dark",
+    "width": 1180,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      }
+    ]
+  },
+  {
+    "theme": "tofu",
+    "width": 1180,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      }
+    ]
+  },
+  {
+    "theme": "light",
+    "width": 320,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      }
+    ]
+  },
+  {
+    "theme": "dark",
+    "width": 320,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      }
+    ]
+  },
+  {
+    "theme": "tofu",
+    "width": 320,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      }
+    ]
+  },
+  {
+    "theme": "light",
+    "width": 390,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.813693805688362
+      }
+    ]
+  },
+  {
+    "theme": "dark",
+    "width": 390,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 6.735893156707254
+      }
+    ]
+  },
+  {
+    "theme": "tofu",
+    "width": 390,
+    "measurements": [
+      {
+        "selector": ".thinking-label",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-result-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-cmd-desc-inline",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptool-todo-header .ptool-text",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      },
+      {
+        "selector": ".ptc-title",
+        "inset": 33,
+        "size": 14,
+        "visible": true,
+        "contrast": 5.266604860485759
+      }
+    ]
+  }
+]

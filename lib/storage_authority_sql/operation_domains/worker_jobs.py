@@ -1,0 +1,34 @@
+"""Durable cross-replica worker-job operation registry."""
+
+from lib.storage_authority_sql import operations as ops
+
+
+OPERATIONS = {
+    'worker_job.active.list': ops.OperationSpec(
+        'query', False, ops._worker_job_active_list),
+    'worker_job.get': ops.OperationSpec(
+        'query', False, ops._worker_job_get),
+    'worker_job.enqueue': ops.OperationSpec(
+        'command', True, ops._worker_job_enqueue),
+    # A retained claim ACK resolves one acquisition, never grants execution:
+    # the runner revalidates the current token before entering any handler.
+    'worker_job.claim_next': ops.OperationSpec(
+        'command', False, ops._worker_job_claim_next, receipt_when_true='retain_claim'),
+    # Read-only claimability: idle workers learn "nothing now, next in N ms"
+    # without a write transaction; claim_next re-validates what it claims.
+    'worker_job.claim_horizon': ops.OperationSpec(
+        'query', False, ops._worker_job_claim_horizon),
+    'worker_job.defer': ops.OperationSpec(
+        'command', False, ops._worker_job_defer),
+    'worker_job.heartbeat': ops.OperationSpec(
+        'command', False, ops._worker_job_heartbeat),
+    'worker_job.claim_state': ops.OperationSpec(
+        'query', False, ops._worker_job_claim_state),
+    'worker_job.request_cancel': ops.OperationSpec(
+        'command', True, ops._worker_job_request_cancel),
+    'worker_job.complete': ops.OperationSpec(
+        'command', True, ops._worker_job_complete),
+}
+
+
+__all__ = ['OPERATIONS']

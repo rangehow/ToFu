@@ -1,0 +1,717 @@
+"""Pure, fail-closed turn verdict derivation.
+
+Responsibility
+--------------
+Convert explicit terminal evidence into one closed turn status/outcome.  This
+module has no storage or event side effects; ``lib.turn_lifecycle`` owns error
+normalization, resume options, and persistence around the derived verdict.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import Enum
+import logging
+from types import MappingProxyType
+
+from lib.llm.stream_result import ProviderStreamResult, ProviderStreamState
+
+logger = logging.getLogger(__name__)
+
+
+class TurnStatus(str, Enum):
+    COMPLETED = 'completed'
+    INTERRUPTED = 'interrupted'
+    TRUNCATED = 'truncated'
+    FAILED = 'failed'
+
+
+class TurnOutcome(str, Enum):
+    COMPLETED = 'completed'
+    INTERRUPTED = 'interrupted'
+    TRUNCATED = 'truncated'
+    FAILED = 'failed'
+
+
+class TurnTerminationEvidence(str, Enum):
+    PROVIDER_FINISH = 'provider_finish'
+    LEGACY_FINISH = 'legacy_finish'
+    PROVIDER_LIMIT = 'provider_limit'
+    USER_ABORT = 'user_abort'
+    PROVIDER_STREAM_FAILURE = 'provider_stream_failure'
+    GENERATION_ERROR = 'generation_error'
+    MISSING_COMPLETION_EVIDENCE = 'missing_completion_evidence'
+    EXTERNAL_AUTHORITY = 'external_authority'
+    SYSTEM_RECOVERY = 'system_recovery'
+
+
+_SUCCESS_FINISH_REASONS = frozenset({
+    'stop', 'done', 'completed', 'end_turn',
+    'tool_calls', 'tool_use', 'function_call',
+})
+_TRUNCATED_FINISH_REASONS = frozenset({
+    'length', 'max_tokens', 'context_length', 'content_filter',
+    'budget_exceeded', 'incomplete', 'max_turns',
+})
+_INTERRUPTED_FINISH_REASONS = frozenset({'aborted', 'interrupted'})
+_FAILED_FINISH_REASONS = frozenset({
+    'error', 'timeout', 'premature_close', 'abnormal_stop',
+})
+DISPATCH_GRANT_REVOKED = 'dispatch_grant_revoked'
+DISPATCH_AUTHORITY_LOST = 'dispatch_authority_lost'
+RESTART_RECOVERY = 'restart_recovery'
+# A stale-attempt fence whose attempt a person's Stop had already settled:
+# the executor learns of that Stop through the fence and keeps its reading.
+STOPPED_ELSEWHERE = 'attempt_stopped_by_user'
+STUCK_NO_PROGRESS = 'stuck_no_progress'
+AWAITING_USER_ACTION = 'awaiting_user_action'
+
+
+class AbortInitiator(str, Enum):
+    """Who stopped work that carries an ``_abort_reason`` stamp."""
+
+    PERSON = 'person'
+    SERVER_RESTART = 'server_restart'
+    STORAGE_FENCE = 'storage_fence'
+    DISPATCH_AUTHORITY = 'dispatch_authority'
+    STUCK_TASK_REAPER = 'stuck_task_reaper'
+    TOFU_GUARD = 'tofu_guard'
+
+
+@dataclass(frozen=True, slots=True)
+class AbortCause:
+    """How every reader reports work stopped with one ``_abort_reason``.
+
+    ``label`` names a system stop in tool results and logs (``{reason}`` is the
+    stamp); it is empty for a person. ``error_kind`` is the error-envelope kind
+    of a stop that fails the Turn, which its model-request activity row also
+    reports as failed; None when the stop adds no envelope of its own.
+    """
+
+    initiator: AbortInitiator
+    label: str = ''
+    error_kind: str | None = None
+
+
+_PERSON = AbortCause(AbortInitiator.PERSON)
+_SERVER_RESTART = AbortCause(AbortInitiator.SERVER_RESTART, 'server restart')
+_STORAGE_FENCE = AbortCause(
+    AbortInitiator.STORAGE_FENCE, 'storage authority fence ({reason})', 'storage_fence')
+
+# Every ``_abort_reason`` Tofu stamps, and who stopped the work. The Turn
+# verdict, tool-result labels, the post-loop finish reason and the
+# model-request activity row all read this one table
+# (docs/contracts/TURN_SETTLEMENT.md, "Abort causes").
+ABORT_CAUSES: Mapping[str, AbortCause] = MappingProxyType({
+    # A person: their Stop (also one a fence learned of, or one racing the
+    # send), deleting the conversation, disarming Goal mode, or newer input of
+    # theirs superseding the work.
+    'user_abort': _PERSON,
+    STOPPED_ELSEWHERE: _PERSON,
+    'send_abort_race': _PERSON,
+    'conversation_deleted': _PERSON,
+    'human_stop': _PERSON,
+    'superseded_by_human': _PERSON,
+    'superseded_by_new_task': _PERSON,
+    'real_message_preempts_vu': _PERSON,
+    # A server restart paused the work. The stopping process's shutdown quiesce
+    # plants ``server_shutdown``. ``restart_recovery`` is planted when an
+    # executor learns that restart recovery has already settled its attempt
+    # ``interrupted``, and when a serving process's durable worker settles an
+    # Attempt whose process died. The Turn continues from its durable
+    # checkpoint: resumable, and never stopped by a person.
+    'server_shutdown': _SERVER_RESTART,
+    RESTART_RECOVERY: _SERVER_RESTART,
+    # Internal storage/attempt fences. They flip ``task['aborted']`` to halt
+    # expensive work, but the Turn died because the authority rejected its
+    # writes, not because anyone asked.
+    'storage_authority_integrity': _STORAGE_FENCE,
+    'storage_frame_overflow': _STORAGE_FENCE,
+    'turn_attempt_stale_fence': _STORAGE_FENCE,
+    'conversation_attempt_stale_fence': _STORAGE_FENCE,
+    'worker_lease_lost': _STORAGE_FENCE,
+    # Project-dispatch authority ended a dispatch task
+    # (lib.project_dispatch.admission): its grant was revoked (or withdrawn by
+    # a Stop elsewhere), or its admission carrier or authority could no longer
+    # be re-established. The verdict cause and the error kind are the stamp.
+    DISPATCH_GRANT_REVOKED: AbortCause(
+        AbortInitiator.DISPATCH_AUTHORITY, 'project dispatch authority ({reason})',
+        DISPATCH_GRANT_REVOKED),
+    DISPATCH_AUTHORITY_LOST: AbortCause(
+        AbortInitiator.DISPATCH_AUTHORITY, 'project dispatch authority ({reason})',
+        DISPATCH_AUTHORITY_LOST),
+    # The stuck-task reaper (lib.tasks_pkg.manager._maintenance) force-failed a
+    # wedged root; it stamps its own ``worker_lost`` envelope.
+    STUCK_NO_PROGRESS: AbortCause(AbortInitiator.STUCK_TASK_REAPER, 'stuck-task reaper'),
+    # A Tofu guard ended work that could not succeed. The unattended tool-loop
+    # breaker (lib.tasks_pkg.tool_dispatch._parse) stops a run that keeps
+    # calling a tool that does not exist; the user-action guard
+    # (lib.tasks_pkg.user_action_guard) stops a Turn whose next call needs an
+    # action only the user can take, which a tool's typed error declared; the
+    # retired Legacy Autopilot carrier (lib.tasks_pkg.orchestrator._task_open)
+    # is refused before any model call.
+    'hallucination_loop': AbortCause(AbortInitiator.TOFU_GUARD, 'unattended tool-loop breaker', 'tool_loop'),
+    AWAITING_USER_ACTION: AbortCause(AbortInitiator.TOFU_GUARD, 'user-action guard', 'tool_call_rejected'),
+    'legacy_autopilot_retired': AbortCause(
+        AbortInitiator.TOFU_GUARD, 'retired Legacy Autopilot', 'bad_request'),
+})
+_UNREGISTERED_REPORTED: set[str] = set()
+
+
+def abort_cause(abort_reason: object) -> AbortCause:
+    """The registered cause of an ``_abort_reason`` stamp; a person's Stop when none was stamped.
+
+    An unregistered stamp (one an earlier build persisted, or a stop added
+    without its table row) keeps the historic reading of a person's Stop and is
+    logged at ERROR once per process.
+    """
+    reason = str(abort_reason or '')
+    cause = ABORT_CAUSES.get(reason)
+    if cause is not None:
+        return cause
+    if reason and reason not in _UNREGISTERED_REPORTED:
+        _UNREGISTERED_REPORTED.add(reason)
+        logger.error("[TurnVerdict] unregistered abort reason %r reads as a person's Stop; "
+                     'register it in lib.turn_verdict.ABORT_CAUSES', reason)
+    return _PERSON
+
+
+def _stamped_by(initiator: AbortInitiator) -> frozenset[str]:
+    return frozenset(reason for reason, cause in ABORT_CAUSES.items() if cause.initiator is initiator)
+
+
+# Membership views of ABORT_CAUSES for readers that only ask "is it one of these".
+INTERNAL_FENCE_ABORT_REASONS = _stamped_by(AbortInitiator.STORAGE_FENCE)
+DISPATCH_AUTHORITY_ABORT_REASONS = _stamped_by(AbortInitiator.DISPATCH_AUTHORITY)
+RESTART_ABORT_REASONS = _stamped_by(AbortInitiator.SERVER_RESTART)
+
+
+def system_abort_label(abort_reason: object) -> str:
+    """Who stopped the work, worded for results; empty for a person's Stop.
+
+    Tool results and logs say ``aborted by user`` only when this is empty.
+    """
+    reason = str(abort_reason or '')
+    return abort_cause(reason).label.format(reason=reason)
+
+
+# A restart's quiesce pauses work; the resumed model must not read its cut as a
+# Stop. After the 2026-11-13 12:31 restart two resumed attempts ended their Turns
+# on such a reading ("I stopped as you asked", "authority revoked").
+RESTART_CONTINUE_GUIDANCE = ("This was a server restart, not a person's Stop and not a "
+                             'revoked authorization; continue the task when it resumes.')
+
+
+def stopped_tool_result(abort_reason: object) -> str:
+    """The result of a tool call an abort cut off: who stopped it, as in ``system_abort_label``."""
+    cause = system_abort_label(abort_reason)
+    if not cause:
+        return 'Task aborted by user.'
+    if str(abort_reason or '') in RESTART_ABORT_REASONS:
+        return f'Task interrupted by {cause}. {RESTART_CONTINUE_GUIDANCE}'
+    return f'Task interrupted by {cause}.'
+
+
+def aborted_wait_text(abort_reason: object) -> str:
+    """Why a wait ended because its task stopped, worded for the model.
+
+    A restart's quiesce ends the wait without anyone stopping the task or the
+    awaited work: the 2026-11-13 owner chat read "the task was stopped" in its
+    interrupted poll and ended its resumed Turn.
+    """
+    cause = system_abort_label(abort_reason)
+    if str(abort_reason or '') in RESTART_ABORT_REASONS:
+        return ('Wait interrupted by a server restart: this wait did not finish. '
+                f'{RESTART_CONTINUE_GUIDANCE} Then check the awaited work again.')
+    return f'Wait cancelled: the task was stopped by {cause}.' if cause else (
+        'Wait cancelled: the task was stopped.')
+
+
+def dispatch_authority_stop_detail(reason: str, provenance: str = '') -> str:
+    """One explanation of a dispatch authority stop for every terminal surface.
+
+    ``provenance`` (the task's ``_abortReasonDetail``) names who withdrew the
+    authority and through which path, so the stop can be traced to its
+    Coordinator conversation without searching logs.
+    """
+    detail = ('Project dispatch authority stopped this task before its next model '
+              f'or tool call ({reason}); this was not a manual stop.')
+    return f'{detail} {provenance}' if provenance else detail
+
+
+_FAILED_STREAM_STATES = frozenset({
+    ProviderStreamState.PREMATURE_CLOSE,
+    ProviderStreamState.MALFORMED_STREAM,
+    ProviderStreamState.SEMANTIC_PROGRESS_TIMEOUT,
+    ProviderStreamState.NO_ACTIONABLE_OUTPUT,
+    ProviderStreamState.EMPTY_RESPONSE,
+    ProviderStreamState.TOOL_PAYLOAD_MISSING,
+    ProviderStreamState.GATEWAY_LIMIT_RESPONSE,
+})
+_FAILED_SETTLEMENT_CAUSES = frozenset({
+    'provider_stream_error',
+    'generation_error',
+    'completion_evidence_missing',
+})
+_FAILED_SETTLEMENT_EVIDENCE = frozenset({
+    TurnTerminationEvidence.PROVIDER_STREAM_FAILURE.value,
+    TurnTerminationEvidence.GENERATION_ERROR.value,
+    TurnTerminationEvidence.MISSING_COMPLETION_EVIDENCE.value,
+})
+
+# A ``content_filter`` finish settles ``truncated`` with one of these causes.
+# The producer stamps ``{'cause', 'error'}`` under this task key instead of
+# ``task['error']``: an error would make the verdict ``failed`` and turn an
+# adapter's ``200 finish_reason=content_filter`` into a server error.
+CONTENT_FILTER_SETTLEMENT_KEY = '_contentFilterSettlement'
+MODEL_REFUSAL_CAUSE = 'model_refusal'
+GATEWAY_CONTENT_FILTER_CAUSE = 'content_filter'
+CONTENT_FILTER_CAUSES = frozenset({MODEL_REFUSAL_CAUSE, GATEWAY_CONTENT_FILTER_CAUSE})
+
+
+@dataclass(frozen=True, slots=True)
+class TurnTerminalEvidence:
+    event_type: str
+    finish_reason: str
+    stream_state: ProviderStreamState | None
+    has_error: bool
+    aborted: bool
+    task_status: str
+    # The internal ``_abort_reason`` stamp, when one was planted. A system
+    # stop's ABORT_CAUSES initiator decides the verdict; a person's Stop, or
+    # no stamp, reads the abort evidence.
+    abort_reason: str = ''
+
+    invocation_stop_reason: str = ''
+    # Cause stamped under CONTENT_FILTER_SETTLEMENT_KEY; only a
+    # ``content_filter`` finish consults it.
+    content_filter_cause: str = ''
+
+@dataclass(frozen=True, slots=True)
+class TurnVerdict:
+    status: TurnStatus
+    outcome: TurnOutcome
+    cause: str
+    evidence: TurnTerminationEvidence
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, TurnStatus):
+            raise TypeError('status must be a TurnStatus')
+        if not isinstance(self.outcome, TurnOutcome):
+            raise TypeError('outcome must be a TurnOutcome')
+        if not isinstance(self.evidence, TurnTerminationEvidence):
+            raise TypeError('evidence must be a TurnTerminationEvidence')
+        if self.status.value != self.outcome.value:
+            raise ValueError('turn status and outcome must describe one verdict')
+        if self.status is TurnStatus.COMPLETED and self.evidence not in {
+            TurnTerminationEvidence.PROVIDER_FINISH,
+            TurnTerminationEvidence.LEGACY_FINISH,
+        }:
+            raise ValueError('completed turns require positive finish evidence')
+
+
+class TerminalTaskFailure(RuntimeError):
+    """A terminal consumer attempted to publish a failed task as output."""
+
+    def __init__(self, verdict: TurnVerdict):
+        self.verdict = verdict
+        super().__init__(
+            'The model turn ended without a verified completion '
+            f'({verdict.cause}).')
+
+
+def parse_provider_stream_state(value: object) -> ProviderStreamState | None:
+    """Parse an optional wire value; invalid explicit values fail closed."""
+    if value is None or value == '':
+        return None
+    if isinstance(value, ProviderStreamState):
+        return value
+    try:
+        return ProviderStreamState(str(value))
+    except ValueError:
+        return ProviderStreamState.UNKNOWN
+
+
+def terminal_finish_reason(task: Mapping[str, object]) -> str:
+    """Project a terminal task's finish reason without inventing success.
+
+    Task-native surfaces historically used ``or 'stop'`` when the producer
+    omitted its terminal evidence. That turns a contract failure into a
+    successful answer. Explicit provider/internal values pass through; only a
+    missing value is derived from an unambiguous terminal status, otherwise it
+    fails closed as ``error``.
+    """
+    explicit = task.get('finishReason')
+    if explicit is None:
+        explicit = task.get('finish_reason')
+    if explicit is not None and str(explicit):
+        return str(explicit)
+    status = str(task.get('status') or '')
+    if status in {'aborted', 'interrupted', 'superseded'}:
+        return 'aborted'
+    if status == 'truncated':
+        return 'incomplete'
+    return 'error'
+
+
+# The verdict of work a system stopped, by who stopped it: status, cause (empty:
+# the stamp itself names the cause) and evidence. A person's Stop reads its
+# abort evidence instead. A fence or a dispatch authority FAILED the Turn;
+# calling it ``user_abort`` hid the real cause from policy and the UI. The
+# reaper's root verdict is the counterpart of a child's ``invocation_stalled``:
+# read as ``user_abort`` it recorded a phantom Stop beside an ``error`` task
+# result, which durable worker recovery can never reconcile.
+_SYSTEM_STOP_VERDICTS = MappingProxyType({
+    AbortInitiator.STORAGE_FENCE: (
+        TurnStatus.FAILED, 'internal_fence_abort', TurnTerminationEvidence.EXTERNAL_AUTHORITY),
+    AbortInitiator.DISPATCH_AUTHORITY: (
+        TurnStatus.FAILED, '', TurnTerminationEvidence.EXTERNAL_AUTHORITY),
+    AbortInitiator.SERVER_RESTART: (
+        TurnStatus.INTERRUPTED, 'server_restart', TurnTerminationEvidence.SYSTEM_RECOVERY),
+    AbortInitiator.STUCK_TASK_REAPER: (
+        TurnStatus.FAILED, 'worker_lost', TurnTerminationEvidence.GENERATION_ERROR),
+    # The run itself could not succeed; its error envelope names the guard.
+    AbortInitiator.TOFU_GUARD: (
+        TurnStatus.FAILED, 'generation_error', TurnTerminationEvidence.GENERATION_ERROR),
+})
+
+
+def derive_turn_verdict(evidence: TurnTerminalEvidence) -> TurnVerdict:
+    """Derive a verdict without any default-success branch."""
+    finish = evidence.finish_reason
+    stream_state = evidence.stream_state
+
+    system_stop = _SYSTEM_STOP_VERDICTS.get(abort_cause(evidence.abort_reason).initiator)
+    if system_stop is not None:
+        # Decided ahead of every abort flag: a restart carrier sets none.
+        status, cause, termination = system_stop
+        return TurnVerdict(status, TurnOutcome(status.value), cause or evidence.abort_reason, termination)
+    if evidence.invocation_stop_reason in {'stalled', 'deadline'}:
+        return TurnVerdict(
+            TurnStatus.FAILED,
+            TurnOutcome.FAILED,
+            f'invocation_{evidence.invocation_stop_reason}',
+            TurnTerminationEvidence.GENERATION_ERROR,
+        )
+    if (evidence.event_type == 'aborted' or evidence.aborted
+            or evidence.task_status == 'aborted'
+            or stream_state is ProviderStreamState.CLIENT_ABORTED
+            or finish in _INTERRUPTED_FINISH_REASONS):
+        return TurnVerdict(
+            TurnStatus.INTERRUPTED,
+            TurnOutcome.INTERRUPTED,
+            'user_abort',
+            TurnTerminationEvidence.USER_ABORT,
+        )
+    if stream_state in _FAILED_STREAM_STATES or finish in {
+            'premature_close', 'abnormal_stop'}:
+        return TurnVerdict(
+            TurnStatus.FAILED,
+            TurnOutcome.FAILED,
+            'provider_stream_error',
+            TurnTerminationEvidence.PROVIDER_STREAM_FAILURE,
+        )
+    if (evidence.has_error or evidence.event_type == 'error'
+            or evidence.task_status == 'error'
+            or finish in _FAILED_FINISH_REASONS):
+        return TurnVerdict(
+            TurnStatus.FAILED,
+            TurnOutcome.FAILED,
+            'generation_error',
+            TurnTerminationEvidence.GENERATION_ERROR,
+        )
+    if finish in _TRUNCATED_FINISH_REASONS:
+        cause = finish
+        if (finish == 'content_filter'
+                and evidence.content_filter_cause in CONTENT_FILTER_CAUSES):
+            cause = evidence.content_filter_cause
+        return TurnVerdict(
+            TurnStatus.TRUNCATED,
+            TurnOutcome.TRUNCATED,
+            cause,
+            TurnTerminationEvidence.PROVIDER_LIMIT,
+        )
+    if (stream_state is ProviderStreamState.PROVIDER_FINISHED
+            and finish in _SUCCESS_FINISH_REASONS):
+        return TurnVerdict(
+            TurnStatus.COMPLETED,
+            TurnOutcome.COMPLETED,
+            'provider_finished',
+            TurnTerminationEvidence.PROVIDER_FINISH,
+        )
+    if stream_state is None and finish in _SUCCESS_FINISH_REASONS:
+        # Explicit compatibility seam for historical/non-stream producers.
+        # Unlike the old catch-all branch this still requires a terminal
+        # finish reason; a bare ``done`` frame cannot manufacture success.
+        return TurnVerdict(
+            TurnStatus.COMPLETED,
+            TurnOutcome.COMPLETED,
+            'provider_finished',
+            TurnTerminationEvidence.LEGACY_FINISH,
+        )
+    return TurnVerdict(
+        TurnStatus.FAILED,
+        TurnOutcome.FAILED,
+        'completion_evidence_missing',
+        TurnTerminationEvidence.MISSING_COMPLETION_EVIDENCE,
+    )
+
+
+def derive_provider_stream_verdict(
+    result: ProviderStreamResult,
+    *,
+    has_error: bool = False,
+    aborted: bool = False,
+    task_status: str = 'done',
+) -> TurnVerdict:
+    """Project typed provider evidence into the canonical turn verdict."""
+    if not isinstance(result, ProviderStreamResult):
+        raise TypeError('result must be a ProviderStreamResult')
+    return derive_turn_verdict(TurnTerminalEvidence(
+        event_type='done',
+        finish_reason=result.provider_finish_reason or '',
+        stream_state=result.state,
+        has_error=has_error,
+        aborted=aborted,
+        task_status=task_status,
+    ))
+
+
+def task_terminal_evidence(
+    task: Mapping[str, object],
+    terminal_event: Mapping[str, object] | None = None,
+) -> TurnTerminalEvidence:
+    """Extract one authoritative evidence record from task/event wire data.
+
+    UI persistence, in-process callers, and SDK compatibility adapters all
+    observe the same task but historically interpreted it independently.  In
+    particular, several exporters turned a missing finish reason into
+    ``stop``.  Keep wire precedence in this function so all consumers feed the
+    exact same evidence into :func:`derive_turn_verdict`.
+
+    An explicitly present event field is authoritative even when empty; this
+    makes contradictory terminal frames fail closed instead of borrowing a
+    more convenient value from the task snapshot.
+    """
+    event = terminal_event if isinstance(terminal_event, Mapping) else {}
+
+    if 'finishReason' in event:
+        finish_reason = str(event.get('finishReason') or '')
+    elif 'finish_reason' in event:
+        finish_reason = str(event.get('finish_reason') or '')
+    else:
+        task_finish = task.get('finishReason')
+        if task_finish is None:
+            task_finish = task.get('finish_reason')
+        finish_reason = str(task_finish or '')
+
+    if 'streamState' in event:
+        raw_stream_state = event.get('streamState')
+    elif 'stream_state' in event:
+        raw_stream_state = event.get('stream_state')
+    else:
+        raw_stream_state = task.get('streamState')
+        if raw_stream_state is None:
+            raw_stream_state = task.get('stream_state')
+
+    content_filter_settlement = task.get(CONTENT_FILTER_SETTLEMENT_KEY)
+    content_filter_cause = (
+        str(content_filter_settlement.get('cause') or '')
+        if isinstance(content_filter_settlement, Mapping) else '')
+    terminal_error = event.get('error') or task.get('error')
+    durable_invocation_reason = ''
+    if (isinstance(terminal_error, Mapping)
+            and terminal_error.get('context') == 'invocation-guard'
+            and terminal_error.get('source') == 'task-engine'):
+        durable_invocation_reason = str(terminal_error.get('invocationStopReason') or '')
+
+    return TurnTerminalEvidence(
+        event_type=str(event.get('type') or 'done'),
+        finish_reason=finish_reason,
+        stream_state=parse_provider_stream_state(raw_stream_state),
+        has_error=bool(event.get('error') or task.get('error')),
+        aborted=bool(task.get('aborted')),
+        task_status=str(task.get('status') or ''),
+        abort_reason=str(task.get('_abort_reason') or ''),
+
+        invocation_stop_reason=str(task.get('_invocationStopReason') or durable_invocation_reason),
+        content_filter_cause=content_filter_cause,
+    )
+
+
+def derive_task_verdict(
+    task: Mapping[str, object],
+    terminal_event: Mapping[str, object] | None = None,
+) -> TurnVerdict:
+    """Derive the canonical verdict for a task-facing terminal consumer."""
+    return derive_turn_verdict(task_terminal_evidence(task, terminal_event))
+
+
+def require_deliverable_task(
+    task: Mapping[str, object],
+    terminal_event: Mapping[str, object] | None = None,
+) -> TurnVerdict:
+    """Return the canonical terminal verdict or reject false success.
+
+    Truncated and explicitly interrupted outputs remain representable by
+    transport adapters. A failed verdict must use their error channel.
+    """
+    verdict = derive_task_verdict(task, terminal_event)
+    if verdict.status is TurnStatus.FAILED:
+        raise TerminalTaskFailure(verdict)
+    return verdict
+
+
+def normalize_turn_settlement(
+    value: object,
+    *,
+    status: str,
+) -> dict[str, object]:
+    """Backfill the public settlement shape for historical/external rows.
+
+    This is a compatibility projection, not verdict derivation. New live model
+    turns are produced by :func:`derive_turn_verdict`; manually ingested and
+    historical rows retain their cause while gaining the required closed-shape
+    fields used by generated clients.
+    """
+    settlement = dict(value) if isinstance(value, Mapping) else {}
+    default_outcome = (
+        TurnOutcome.INTERRUPTED.value if status == 'superseded'
+        else status or TurnOutcome.FAILED.value
+    )
+    outcome = str(settlement.get('outcome') or default_outcome)
+    if outcome not in {item.value for item in TurnOutcome}:
+        outcome = TurnOutcome.FAILED.value
+    cause = str(settlement.get('cause') or 'ingested')
+    finish_reason = str(settlement.get('providerFinishReason') or '')
+    stream_state = parse_provider_stream_state(settlement.get('streamState'))
+    raw_evidence = str(settlement.get('evidence') or '')
+    historical_stream_failure = (
+        finish_reason in {'premature_close', 'abnormal_stop'}
+        or stream_state in _FAILED_STREAM_STATES
+        or cause == 'provider_stream_error'
+        or raw_evidence == TurnTerminationEvidence.PROVIDER_STREAM_FAILURE.value
+    )
+    historical_completion_missing = (
+        stream_state is ProviderStreamState.UNKNOWN
+        or cause == 'completion_evidence_missing'
+        or raw_evidence == TurnTerminationEvidence.MISSING_COMPLETION_EVIDENCE.value
+    )
+    historical_generation_failure = (
+        bool(settlement.get('error'))
+        or finish_reason in {'error', 'timeout'}
+        or cause == 'generation_error'
+        or raw_evidence == TurnTerminationEvidence.GENERATION_ERROR.value
+    )
+    # Compatibility repair for rows written by the old catch-all success
+    # branch (the mt9lvcgir9n62o incident shape). The durable bytes remain
+    # untouched; the public authority projection stops repeating a verdict
+    # that is self-contradictory on its face.
+    contradictory_completed = (
+        outcome == TurnOutcome.COMPLETED.value
+        and (
+            historical_stream_failure
+            or historical_completion_missing
+            or historical_generation_failure
+            or cause in _FAILED_SETTLEMENT_CAUSES
+            or raw_evidence in _FAILED_SETTLEMENT_EVIDENCE
+        )
+    )
+    if contradictory_completed:
+        outcome = TurnOutcome.FAILED.value
+        if historical_stream_failure:
+            cause = 'provider_stream_error'
+            evidence = TurnTerminationEvidence.PROVIDER_STREAM_FAILURE
+            if stream_state is None:
+                stream_state = ProviderStreamState.PREMATURE_CLOSE
+            settlement['streamState'] = stream_state.value
+            error_kind = (
+                finish_reason
+                if finish_reason in {'premature_close', 'abnormal_stop'}
+                else 'premature_close'
+            )
+        elif historical_completion_missing:
+            cause = 'completion_evidence_missing'
+            evidence = TurnTerminationEvidence.MISSING_COMPLETION_EVIDENCE
+            error_kind = 'internal'
+        else:
+            cause = 'generation_error'
+            evidence = TurnTerminationEvidence.GENERATION_ERROR
+            error_kind = 'generic'
+        settlement['evidence'] = evidence.value
+        if not settlement.get('error'):
+            from lib.error_envelope import make_envelope
+            settlement['error'] = make_envelope(
+                error_kind,
+                detail=(
+                    'A historical turn marked completed carried explicit '
+                    'terminal failure evidence '
+                    f'({finish_reason or raw_evidence or cause}).'
+                ),
+                context='settlement-normalization',
+                source='turn-verdict',
+                raw=(
+                    f'outcome=completed cause={settlement.get("cause") or ""} '
+                    f'finish={finish_reason} '
+                    f'stream_state={stream_state.value if stream_state else ""} '
+                    f'evidence={raw_evidence}'
+                ),
+            )
+    settlement['outcome'] = outcome
+    settlement['cause'] = cause
+    settlement.setdefault('providerFinishReason', None)
+    settlement.setdefault('error', None)
+    settlement.setdefault('resumeOptions', [])
+    settlement.setdefault('streamState', None)
+    if not settlement.get('evidence'):
+        if cause == 'server_restart' or cause == 'conversation_deleted':
+            inferred = TurnTerminationEvidence.SYSTEM_RECOVERY
+        elif outcome == TurnOutcome.TRUNCATED.value:
+            inferred = TurnTerminationEvidence.PROVIDER_LIMIT
+        elif outcome == TurnOutcome.FAILED.value:
+            inferred = TurnTerminationEvidence.GENERATION_ERROR
+        elif (cause == 'provider_finished'
+              and settlement.get('providerFinishReason')):
+            inferred = TurnTerminationEvidence.LEGACY_FINISH
+        else:
+            inferred = TurnTerminationEvidence.EXTERNAL_AUTHORITY
+        settlement['evidence'] = inferred.value
+    return settlement
+
+
+__all__ = [
+    'ABORT_CAUSES',
+    'AWAITING_USER_ACTION',
+    'AbortCause',
+    'AbortInitiator',
+    'CONTENT_FILTER_CAUSES',
+    'CONTENT_FILTER_SETTLEMENT_KEY',
+    'DISPATCH_AUTHORITY_ABORT_REASONS',
+    'DISPATCH_AUTHORITY_LOST',
+    'DISPATCH_GRANT_REVOKED',
+    'GATEWAY_CONTENT_FILTER_CAUSE',
+    'INTERNAL_FENCE_ABORT_REASONS',
+    'MODEL_REFUSAL_CAUSE',
+    'RESTART_ABORT_REASONS',
+    'RESTART_RECOVERY',
+    'STOPPED_ELSEWHERE',
+    'TurnOutcome',
+    'TurnStatus',
+    'TerminalTaskFailure',
+    'TurnTerminalEvidence',
+    'TurnTerminationEvidence',
+    'TurnVerdict',
+    'abort_cause',
+    'derive_task_verdict',
+    'derive_provider_stream_verdict',
+    'derive_turn_verdict',
+    'dispatch_authority_stop_detail',
+    'normalize_turn_settlement',
+    'parse_provider_stream_state',
+    'require_deliverable_task',
+    'stopped_tool_result',
+    'system_abort_label',
+    'task_terminal_evidence',
+    'terminal_finish_reason',
+]

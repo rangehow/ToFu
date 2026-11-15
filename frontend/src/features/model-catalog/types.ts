@@ -1,0 +1,129 @@
+import type {
+  ModelRoutingInferenceProfile,
+  ModelRoutingMediaPricing,
+  ModelRoutingMediaProfile,
+} from '../../api/api-v1-model-routing.generated';
+
+/**
+ * Model-routing v2 presentation types for the Settings model catalog.
+ *
+ * Responsibility: describe the read-only browser projection of canonical
+ * Creator/Model facts. ProviderAccess, Offering, Deployment, aliases, routing,
+ * and credential state are intentionally absent from this model-only surface.
+ */
+
+export interface ModelPricing {
+  input?: number | null;
+  output?: number | null;
+  currency?: string;
+  unit?: string;
+  cache_read?: number | null;
+  cache_write?: number | null;
+}
+
+export interface ModelCreator {
+  creator_id: string;
+  name: string;
+}
+
+export interface OfficialModel {
+  inference_profile?: ModelRoutingInferenceProfile;
+  creator_id: string;
+  model_id: string;
+  display_name: string;
+  capabilities: string[];
+  context_window: number;
+  quality_rank: number;
+  /** Vendor release date (``YYYY-MM[-DD]``), stamped by public_projection when known. */
+  release_date?: string | null;
+  registration_state?: 'pending_metadata' | 'pending_validation' | 'ready' | 'disabled';
+  registration_issues?: string[];
+  list_pricing?: ModelPricing;
+  /** Official-table price stamped by public_projection while list_pricing is absent. */
+  official_pricing?: ModelPricing;
+  /** Registered media-unit prices; ``official_media_*`` are read-only projections. */
+  media_pricing?: ModelRoutingMediaPricing;
+  official_media_pricing?: ModelRoutingMediaPricing;
+  media_profile?: ModelRoutingMediaProfile;
+  official_media_profile?: ModelRoutingMediaProfile;
+  lifecycle?: 'stable' | 'preview' | 'dated_snapshot' | 'retired';
+}
+
+export interface ModelCatalogDocument {
+  contract_version: 'tofu.model-routing/v2' | string;
+  creators: ModelCreator[];
+  models: OfficialModel[];
+}
+
+export interface AaScore {
+  intelligence: number | null;
+  coding: number | null;
+  agentic: number | null;
+  math: number | null;
+  aa_name: string;
+  aa_slug: string;
+}
+
+/** Artificial Analysis Performance v3 means for one exactly matched Model. */
+export interface AaSpeed {
+  output_tokens_per_second: number;
+  time_to_first_token_seconds: number | null;
+  time_to_first_answer_token_seconds: number | null;
+  /** Faster than the median output speed of every model in the snapshot. */
+  fast: boolean;
+  aa_name: string;
+  aa_slug: string;
+}
+
+/** The snapshot statistic the ``fast`` tier is measured against. */
+export interface AaSpeedReference {
+  median_output_tokens_per_second: number;
+  measured_models: number;
+}
+
+export interface AaBlock {
+  status: 'ok' | 'stale' | 'no_key' | 'unavailable' | string;
+  source?: string;
+  source_url?: string;
+  fetched_at?: number | null;
+  /** AA Intelligence Index version (major.minor, e.g. ``5``) of every score. */
+  index_version?: number | null;
+  key_source?: 'settings' | 'legacy_config' | 'env' | null;
+  key_hint?: string;
+  /** Published scores only, keyed by ``creator_id::model_id``. */
+  scores?: Record<string, AaScore>;
+  /** Measured speed, keyed like ``scores`` but independent of them. */
+  speeds?: Record<string, AaSpeed>;
+  speed_reference?: AaSpeedReference | null;
+}
+
+export interface ModelCatalogRow {
+  inferenceProfile?: ModelRoutingInferenceProfile;
+  creatorId: string;
+  creatorLabel: string;
+  modelId: string;
+  displayName: string;
+  brand: string;
+  capabilities: string[];
+  /** Task family from the server-projected taxonomy (``chat`` by default). */
+  kind: string;
+  contextWindow: number;
+  registeredQualityRank: number | null;
+  releaseDate: string | null;
+  registrationState?: OfficialModel['registration_state'];
+  registrationIssues?: string[];
+  aa: AaScore | null;
+  speed: AaSpeed | null;
+  pricing: ModelPricing | null;
+  /** Registered media prices, else the maintained official projection. */
+  mediaPricing: ModelRoutingMediaPricing | null;
+  mediaProfile: ModelRoutingMediaProfile | null;
+  lifecycle: OfficialModel['lifecycle'];
+}
+
+export interface VendorGroup {
+  vendorId: string;
+  label: string;
+  icon: string;
+  models: ModelCatalogRow[];
+}

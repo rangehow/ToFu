@@ -1,0 +1,79 @@
+# Repository script guidance
+
+## Scope
+
+This directory owns committed generators, checks, migrations, packaging, and
+operator utilities. Scripts support an existing authority; they do not become
+an undocumented second source of product policy.
+
+## Editing rules
+
+- Generators are deterministic, write only declared outputs, expose a check
+  mode where practical, and identify generated files. Update source, generator,
+  output, and drift test together.
+- `gen_storage_operation_catalog.py` derives the JSON/Rust operation catalog
+  and `generated_storage_operations.py` client schema from the sidecar registry;
+  never maintain a separate handshake version in the Python wire client.
+- `gen_tofudb_ir_contract.py` also consumes `conversation_search_v2.json` for
+  native projection limits. Search benchmarks measure a complete logical query,
+  including every continuation needed to reach its requested result limit.
+  Its authored owner is `tofudb_contract_codegen/`: per-invocation input capture,
+  ordered domain validation and output projection. Read that directory's guide
+  before changing the generator; the CLI owns only check/write publication.
+- Validation scripts are read-only and return actionable nonzero failures.
+  Avoid network access and machine-specific assumptions in release gates.
+- Migration and maintenance tools require explicit targets, preflight,
+  dry-run/confirmation semantics appropriate to risk, idempotency or a resume
+  boundary, atomic replacement, and postcondition verification.
+- Resolve repository/runtime roots safely; never use broad deletion targets,
+  unresolved globs, or implicit current-directory authority.
+- `engine_certify.py` (owner `engine_certification/gate.py`) runs the storage
+  engine gate for one commit and is the only writer of the write-once records
+  restart preparation deploys; its child helpers import the checkout under
+  test, never this tree. `--fixture` is required and only hard-link-snapshotted.
+  Verify `tests/deploy/test_engine_certify.py`; contract in
+  `docs/NATIVE_STORAGE_LIFECYCLE.md` ("Engine certification gate").
+- `git_land.py` preserves committed and uncommitted source ownership separately
+  and runs no tests (owner decision 2026-11-08); generator families and
+  input/output scopes live in `lib/project_mod/generated_integration.py`. Its
+  private merge checkout lives in `lib/project_mod/landing_verification.py`
+  (also the CI merged-result check) and landing notices in
+  `lib/project_mod/integration_radar.py`. `lane.py` creates one branch plus a
+  recycled local checkout per unit of work (`lib/project_mod/lanes.py`). Verify
+  both `test_git_land_*.py` suites, `test_landing_verification.py`,
+  `test_impact_selection.py`, `test_lanes.py`, `test_integration_radar.py` and
+  the generated task-delta test in `test_integration_delivery.py`.
+  Landing removes the worktree, so first let any swarm worker that still uses
+  it finish (or stop it). In a FUSE worktree, `Entry '<path>' not uptodate.
+  Cannot merge` with no visible diff is stale index stat data (tool-run git
+  uses `--no-optional-locks`): run `git update-index -q --refresh` and retry;
+  never reset.
+- `test_select.py` owns static dependency and guard selection;
+  `test_execution.py` owns pytest execution arguments. Makefile is a dependency
+  of its consumers, not a global input to direct pytest. Verify selection and
+  execution-owner migration in `tests/meta/test_verification_policy.py`.
+  `agent_wheel_manifest.py` reads the tofu-agent wheel's shipped modules from
+  pyproject's package manifest for the agent wheel boundary guard (a shipped
+  module change selects the storage-free probe) and for that probe's child;
+  verify `tests/meta/test_agent_wheel_manifest.py` and the installed-wheel test.
+- `frontend_vendor_assets.mjs` derives standalone KaTeX files, CSS font closure
+  and `lib/http_transport/generated_frontend_vendor.py` from the installed lockfile version.
+  Author the iframe adapter under `frontend/src/artifacts/`; verify generation
+  drift, exported integrity and sandboxed math with the frontend vendor tests.
+- `vite_asset_manifest.mjs` owns candidate admission and complete previous-graph
+  snapshots; `vite_asset_publication.mjs` owns verified assets before the atomic
+  manifest commit. Verify their Node tests and `npm run check:frontend`.
+  Publication policy: `docs/FRONTEND_ARCHITECTURE.md`.
+- Bound concurrency, memory, output, temporary storage, retries, and subprocess
+  lifetimes. Redact credentials and user content.
+- Reuse application contracts and storage maintenance ports; do not copy SQL or
+  lifecycle logic into a convenience script.
+- Native archives use build_native_runtime.py's named compression profiles:
+  distribution for transport, local stored gzip blocks for repeated activation.
+  Verify byte bounds after gzip closes and before exclusive publication.
+
+## Verification
+
+Run the script's focused test and both write/check paths for a generator. For
+cross-cutting changes, run `npm run check:frontend` or the
+specific storage/developer-runtime certification command that owns the output.

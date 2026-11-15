@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tofu automatic local compaction handoff v1",
+  "description": "Request-local continuation state, never a durable human Turn or tool execution. Private producer identity survives local replay; only content is provider-visible. Automatic handoffs do not use the manual assistant _isCompactionSummary flag. Native and manual compaction keep separate contracts.",
+  "type": "object",
+  "required": ["role", "_isMeta", "_compactionHandoff", "content"],
+  "properties": {
+    "role": {"const": "user", "description": "Transport role, not human authorship or authorization."},
+    "_isMeta": {"const": true},
+    "_compactionHandoff": {"$ref": "#/$defs/metadata"},
+    "content": {"type": "string", "minLength": 1, "description": "One visibly attributed, fallible summary. Count the whole envelope under compaction/admission budgets, never duplicate its body in metadata."}
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "required": ["version", "phase"],
+      "additionalProperties": false,
+      "properties": {
+        "version": {"const": "tofu.compaction-handoff/v1"},
+        "phase": {
+          "enum": ["pre_turn", "mid_turn"],
+          "description": "Source chronology before folding: pre_turn has no execution after latest human input; mid_turn has execution or a surviving mid-turn boundary. Not the fold mode, trigger or API round. A later human steer starts a new pre-turn boundary."
+        },
+        "coverage": {"$ref": "#/$defs/coverage"},
+        "continuityDigest": {
+          "type": "string", "pattern": "^[0-9a-f]{64}$",
+          "description": "SHA-256 of the canonical compaction_continuity_v1 JSON in the visible content. Generated from original execution evidence, never inferred from model prose. The next compaction verifies it before carrying state forward; no duplicate state body is stored here."
+        },
+        "scheduledRequestId": {
+          "type": "string", "minLength": 1, "maxLength": 64,
+          "description": "Owner-scheduled working-view compaction this summary served, inherited when a later summary folds it. Settlement retires the durable marker only when a stored checkpoint carries it."
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": ["conversationId", "firstTurnId", "lastTurnId", "throughReply"],
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {"type": "string", "minLength": 1},
+        "firstTurnId": {"type": "string", "minLength": 1},
+        "lastTurnId": {"type": "string", "minLength": 1},
+        "throughReply": {"type": "boolean", "description": "The folded range also holds the reply Turn produced after lastTurnId."},
+        "before": {"type": "integer", "minimum": 2, "description": "get_conversation before= cursor (1-based message number) whose window ends at the last covered Turn; exact or an upper bound after Turn deletion."}
+      },
+      "description": "Folded Turn range named in the visible carrier, before the summary, with its get_conversation recall call. Absent when the folded rows carry no Turn identity."
+    },
+    "automaticContinuation": {
+      "type": "object",
+      "required": ["format", "phase", "placement"],
+      "additionalProperties": false,
+      "properties": {
+        "format": {"const": "context_handoff"},
+        "phase": {"enum": ["pre_turn", "mid_turn"]},
+        "placement": {"enum": ["before_latest_human", "after_retained_execution"]}
+      },
+      "allOf": [{
+        "if": {"properties": {"phase": {"const": "pre_turn"}}},
+        "then": {"properties": {"placement": {"const": "before_latest_human"}}},
+        "else": {"properties": {"placement": {"const": "after_retained_execution"}}}
+      }],
+      "description": "Bounded additive archive receipt metadata only; it does not imply provider delivery. A mid-turn handoff follows restored composer context only until new execution/steering/inbox events consume that boundary. UI event round remains the actual operation position."
+    }
+  }
+}

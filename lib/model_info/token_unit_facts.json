@@ -1,0 +1,98 @@
+{
+  "contract": "tofu.token-unit-facts/v1",
+  "definition": "provider_per_local = provider-reported prompt tokens / Tofu's local count of the same request",
+  "generator": "scripts/measure_token_units.py",
+  "families": {
+    "claude": {
+      "local_encoding": "cl100k_base",
+      "provider_per_local": {
+        "min": 1.0928,
+        "max": 2.2187
+      },
+      "samples": 6478,
+      "members": {
+        "claude-opus-5": 29,
+        "claude-opus-5.5": 6449
+      },
+      "conversations": 37,
+      "measured_from": "2026-10-25",
+      "measured_to": "2026-11-13"
+    },
+    "deepseek": {
+      "local_encoding": "cl100k_base",
+      "provider_per_local": {
+        "min": 1.0009,
+        "max": 1.1678
+      },
+      "samples": 105,
+      "members": {
+        "deepseek-v4-flash": 29,
+        "deepseek-v4-pro": 2,
+        "deepseek-v4.1-flash": 8,
+        "deepseek-v4.1-flash-1017": 66
+      },
+      "conversations": 2,
+      "measured_from": "2026-10-20",
+      "measured_to": "2026-11-05"
+    },
+    "gemini": {
+      "local_encoding": "cl100k_base",
+      "provider_per_local": {
+        "min": 1.0454,
+        "max": 1.0455
+      },
+      "samples": 2,
+      "members": {
+        "gemini-3.6-flash": 2
+      },
+      "conversations": 1,
+      "measured_from": "2026-11-05",
+      "measured_to": "2026-11-05"
+    },
+    "glm": {
+      "local_encoding": "cl100k_base",
+      "provider_per_local": {
+        "min": 0.8822,
+        "max": 1.0675
+      },
+      "samples": 33,
+      "members": {
+        "glm-5.3": 1,
+        "glm-5.3-flash": 32
+      },
+      "conversations": 4,
+      "measured_from": "2026-11-03",
+      "measured_to": "2026-11-12"
+    },
+    "gpt": {
+      "local_encoding": "cl100k_base",
+      "provider_per_local": {
+        "min": 0.8912,
+        "max": 0.993
+      },
+      "samples": 13,
+      "members": {
+        "gpt-6-luna": 4,
+        "gpt-6.1-sol": 9
+      },
+      "conversations": 4,
+      "measured_from": "2026-10-28",
+      "measured_to": "2026-11-09"
+    },
+    "kimi": {
+      "local_encoding": "cl100k_base",
+      "provider_per_local": {
+        "min": 0.8785,
+        "max": 1.2017
+      },
+      "samples": 5421,
+      "members": {
+        "kimi-k3": 27,
+        "kimi-k3.1-pro": 5394
+      },
+      "conversations": 15,
+      "measured_from": "2026-10-16",
+      "measured_to": "2026-11-13"
+    }
+  }
+}

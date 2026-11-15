@@ -1,0 +1,384 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   TOFU DESIGN TOKENS — foundation layer (composed FIRST, see manifest.json)
+
+   Contract (same rule as 11-tofu-theme-foundation.css):
+   - Token NAMES are a stable contract consumed app-wide. Add new names
+     freely; NEVER rename or remove an existing name.
+   - New component/feature CSS consumes ONLY these tokens plus the legacy
+     color contract (--bg-*, --text-*, --border, --accent*, --radius*,
+     --shadow, --error-*) — no raw hex colors, no raw px margins/padding.
+     Enforcement: scripts/check_style_tokens.mjs (phase 3).
+   - Theme-specific values live in the per-theme blocks at the bottom.
+     Spacing/type/motion/z scales are theme-INVARIANT on purpose: geometry
+     must not shift when the user switches theme.
+
+   Ghost tokens discovered during the spike (used but never defined):
+   - --success-color (5 usages, all with #22c55e fallback) — left as-is.
+   - --text-muted, --text-quaternary (with fallbacks) — left as-is.
+   - --success-border (14-bridges .branch-approve-btn, NO fallback) — now
+     DEFINED below; the button finally renders its designed intent, mirroring
+     .branch-reject-btn's --error-border pattern. Deliberate, documented.
+   ══════════════════════════════════════════════════════════════════════════ */
+:root{
+  /* ── Spacing scale (4px base) ──────────────────────────────────────────
+     THE fix for misaligned UI: all margins/padding/gaps in new code come
+     from this scale. Half-steps and magic numbers are gate-rejected. */
+  --space-0:0;
+  --chat-primary-background:var(--bg-primary);
+  --chat-primary-hover:var(--bg-hover);
+  --chat-primary-ink:var(--text-primary);
+  --chat-primary-border:var(--border);
+  --chat-primary-shadow:none;
+  --composer-background:var(--bg-secondary);
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-5:20px;
+  --space-6:24px;
+  --space-8:32px;
+  --space-10:40px;
+  --space-12:48px;
+  --space-16:64px;
+
+  /* ── Font-size scale ───────────────────────────────────────────────────
+     Consolidated from real usage (9–16px with half-steps); migration maps
+     9–10px→xs, 11–11.5→xs/sm, 12–12.5→sm, 13→md, 14→lg, 15–16→xl. */
+  --font-size-xs:11px;
+  --font-size-sm:12px;
+  --font-size-md:13px;
+  --font-size-lg:14px;
+  /* Conversation prose only: one step under xl keeps long answers dense. */
+  --font-size-base:15px;
+  --font-size-xl:16px;
+  --font-size-2xl:18px;
+  --font-size-3xl:22px;
+  --font-size-4xl:28px;
+  --leading-tight:1.3;
+  --leading-title:1.4;
+  --leading-body:1.7;
+  /* Conversation typography API: content roles, independent of component/theme.
+     Prose reads at 15px and tables at 14px; every operational row and evidence
+     body shares the compact 13/12px ramp so one screen holds a run of calls. */
+  --conversation-font-size-body:var(--font-size-base);
+  --conversation-font-size-content:var(--font-size-md);
+  --conversation-font-size-meta:var(--font-size-sm);
+  --conversation-font-size-caption:var(--font-size-xs);
+  --conversation-font-size-table:var(--font-size-lg);
+  --conversation-font-size-heading-1:var(--font-size-3xl);
+  --conversation-font-size-heading-2:var(--font-size-2xl);
+  --conversation-font-size-heading-3:var(--font-size-xl);
+  --conversation-leading-prose:1.65;
+  --conversation-leading-compact:1.5;
+  /* Shared measure for shell, composer, prose and rails; the reading contract
+     keeps it within 700–800px (tests/visual/test_visual_conversation_reading.py). */
+  --conversation-reading-measure:800px;
+  /* Mixed chronology: shared process row, label column and evidence inset.
+     Content order stays in the Surface; these tokens only set reading geometry. */
+  --conversation-process-font-size:var(--font-size-md);
+  --conversation-process-row-height:var(--control-h-sm);
+  --conversation-process-inset:var(--space-0);
+  --conversation-process-marker:var(--space-4);
+  /* One line box for a whole activity row: the leading glyph is centered
+     against this height, so it can never drift off its own label. */
+  --conversation-activity-line-height:calc(var(--conversation-font-size-meta) * 1.45);
+  --conversation-process-gap:var(--space-2);
+  --conversation-process-indent:var(--space-0);
+  --conversation-flow-gap:var(--space-0);
+  --conversation-prose-gap:var(--space-3);
+  --conversation-process-radius:12px;
+  --conversation-process-scroll-max:min(24rem, 50vh);
+  --conversation-process-shell-inset:var(--space-0);
+  --conversation-reading-inset:var(--space-0);
+  --conversation-inspector-width:440px;
+  /* Tool rows: ONE role vocabulary for every tool family's call row.
+     23-reading-tool-summary.css draws each row from these roles and
+     23-reading-tool-panel.css only adds the card, so a retune here reaches
+     every family in every theme. The accent marks liveness only (a running
+     step's glyph); exact identity, telemetry and routine outcomes share one
+     quiet ink at text contrast; chip chrome is reserved for an outcome that
+     needs the reader (--chip-err/--chip-warn). */
+  --tool-row-intent-ink:var(--text-secondary);
+  --tool-row-intent-ink-live:var(--text-primary);
+  --tool-row-meta-ink:var(--text-secondary);
+  --tool-row-ok-ink:var(--chip-ok-color);
+  --tool-row-glyph-ink:var(--text-tertiary);
+  --tool-row-glyph-ink-live:var(--accent);
+  --tool-row-glyph-ink-attention:var(--warning-text);
+  --conversation-answer-gap:var(--space-5);
+  --inspector-reading-measure:860px;
+  --weight-regular:400;
+  --weight-medium:500;
+  --weight-semibold:600;
+  --weight-bold:700;
+
+  /* ── Control geometry ──────────────────────────────────────────────────
+     Every interactive control takes its height from this ramp, so rows of
+     mixed controls align by construction instead of by manual tweaking. */
+  --control-edge-inset:1px;
+  --tool-receipt-label-width:96px;
+  --tool-source-chip-measure:360px;
+
+  --radius-pill:999px;
+  --control-h-sm:28px;
+  --control-h-md:34px;
+  --control-h-lg:42px;
+
+  /* Project workbench chrome: geometry is identical across themes. */
+  --project-dialog-measure:920px;
+  --project-frame-width:3px;
+  --project-panel-width:2px;
+  --project-surface:var(--bg-secondary);
+  --project-panel:var(--bg-primary);
+  --project-band:var(--bg-tertiary);
+  --project-ink:var(--text-primary);
+  --project-muted:var(--text-secondary);
+  --project-line:var(--border);
+  --project-accent:var(--accent);
+  --project-accent-hover:var(--accent-hover);
+  --project-on-accent:var(--text-on-accent);
+
+  /* ── Motion ────────────────────────────────────────────────────────────
+     --ease-standard matches the legacy --transition timing. */
+  --motion-fast:0.12s;
+  --motion-base:0.2s;
+  --motion-slow:0.3s;
+  --ease-standard:cubic-bezier(0.4,0,0.2,1);
+  --ease-spring:cubic-bezier(0.34,1.56,0.64,1);
+
+  /* ── Z-index scale (NEW code only) ─────────────────────────────────────
+     Legacy uses up to 10000; new code stays inside this ramp. Native
+     <dialog> renders in the top layer and needs no z-index at all. */
+  --z-turn-context:1;
+  --z-dropdown:1000;
+  --z-sticky:1100;
+  --z-overlay:9000;
+  --z-modal:9500;
+  --z-toast:9800;
+  --z-tooltip:9900;
+
+  /* ── Unified UI font: dark/light body face; tofu overrides below ── */
+  --font-ui:var(--md-sans);
+  --font-mono:'JetBrains Mono',ui-monospace,monospace;
+
+  /* ── Text painted directly on --accent fills ──
+     Matches every existing ghost fallback (#fff) → zero visual change. */
+  --text-on-accent:#fff;
+
+  /* Scannable QR quiet zones stay white in every theme. */
+  --qr-plate-background:#fff;
+
+  /* ── Feedback colors (dark) ────────────────────────────────────────────
+     Text values target ≥4.5:1 on --bg-primary; verified in the ui-gallery
+     spike report. --error-* already exists per theme and stays untouched. */
+  --success-text:#34D399;
+  --success-bg:rgba(16,185,129,0.12);
+  --success-border:rgba(16,185,129,0.30);
+  --warning-text:#CFB850;
+  --warning-bg:rgba(207,184,80,0.08);
+  --warning-border:rgba(207,184,80,0.28);
+  --info-text:#60A5FA;
+  --info-bg:rgba(59,130,246,0.12);
+  --info-border:rgba(59,130,246,0.30);
+
+  /* ── Shared chrome ── */
+  --backdrop:rgba(0,0,0,0.55);
+  /* Full-screen attachment viewer: an opaque stage so a white page render
+     does not bleed through, plus controls that read against any bitmap in
+     every theme. */
+  --preview-scrim:rgba(0,0,0,0.92);
+  --preview-control-surface:rgba(255,255,255,0.12);
+  --preview-control-surface-hover:rgba(255,255,255,0.25);
+  --preview-control-ink:#fff;
+  --preview-image-shadow:0 8px 32px rgba(0,0,0,0.5);
+  --focus-ring:0 0 0 3px rgba(110,86,207,0.35);
+  --knob-shadow:0 1px 2px rgba(0,0,0,0.30);
+  /* Theme picker swatches depict each theme, so they are fixed in every theme. */
+  --theme-swatch-dark:linear-gradient(135deg,#0a0a0c 0%,#1a1a21 40%,#6e56cf 100%);
+  --theme-swatch-light:linear-gradient(135deg,#ffffff 0%,#f0f2f5 40%,#6366f1 100%);
+  --theme-swatch-tofu:linear-gradient(135deg,#F5F3ED 0%,#E9E5DC 40%,#BB9572 100%);
+
+  /* ── Office game palette ──
+     Theme-invariant art direction for the pixel office (features/office-game):
+     walnut HUD chrome with brass trim over the painted scene, parchment
+     journal windows with ink text. The scene art never changes with the app
+     theme, so neither does the chrome drawn over it. */
+  --studio-walnut:#22170f;
+  --studio-walnut-raised:#33241a;
+  --studio-walnut-glass:rgba(30,20,13,0.86);
+  --studio-brass:#d9b25f;
+  --studio-brass-bright:#f3d488;
+  --studio-cream:#fbf1da;
+  --studio-cream-muted:#d2c09c;
+  --studio-parchment:#f7ecd4;
+  --studio-parchment-deep:#ecdcb9;
+  --studio-ink:#3a2a1c;
+  --studio-ink-muted:#735e47;
+  --studio-good:#86d896;
+  --studio-warn:#f2bf55;
+  --studio-bad:#ef7a68;
+  --studio-info:#8ec2f2;
+  --studio-ask:#f6d36b;
+  --studio-good-ink:#2c7440;
+  --studio-warn-ink:#87590f;
+  --studio-bad-ink:#a63b2b;
+  --studio-info-ink:#2a679c;
+  --studio-shadow:0 12px 32px rgba(10,6,3,0.5);
+  --studio-bevel:inset 0 1px 0 rgba(251,241,218,0.12),inset 0 -1px 0 rgba(0,0,0,0.35);
+
+  /* ── Office world palette ──
+     Theme-invariant art direction for the office world (features/world): it
+     shares the studio's walnut chrome and parchment dossiers; these add the
+     floor backdrop, lit screens, desk documents and focus light. */
+  --world-backdrop:#2a1d13;
+  --world-glass:rgba(28,19,12,0.82);
+  --world-glass-strong:rgba(24,16,10,0.94);
+  --world-hairline:rgba(251,241,218,0.16);
+  --world-screen:#8fdcff;
+  --world-screen-deep:#2b6f9e;
+  --world-screen-glow:rgba(143,220,255,0.6);
+  --world-paper:#fbf6ea;
+  --world-paper-edge:#cfc2a6;
+  --world-folder:#e7b24b;
+  --world-folder-edge:#a8731f;
+  --world-ribbon:#d6503a;
+  --world-ink-shadow:rgba(34,22,12,0.45);
+  --world-person-shadow:drop-shadow(0 1px 0 rgba(30,18,8,0.55));
+  --world-focus-glow:0 0 0 2px #f3d488,0 0 14px rgba(243,212,136,0.75);
+  /* Whiteboard notes by task status (in progress is blue, never the decision amber) and muted trophies. */
+  --world-note:#fbf3d0;
+  --world-note-active:#a9d4f2;
+  --world-note-done:#a6d8a0;
+  --world-note-blocked:#f0a597;
+  --world-trophy:#c9a24a;
+  --world-trophy-edge:#7d5a1c;
+  --world-trophy-shine:rgba(255,246,214,0.8);
+
+  /* ── Conversation signals (08-conversation-signals.css) ──
+     Proactive-agent banner (violet; light/tofu retune below), model-fallback
+     banner (amber) and the topbar network-latency readout. The latency
+     states keep their fixed traffic-light hues in every theme. */
+  --signal-proactive-bg:linear-gradient(135deg,rgba(168,85,247,0.08),rgba(139,92,246,0.04));
+  --signal-proactive-border:rgba(168,85,247,0.2);
+  --signal-proactive-ink:#a855f7;
+  --signal-fallback-bg:linear-gradient(135deg,rgba(245,158,11,0.10),rgba(245,158,11,0.04));
+  --signal-fallback-border:rgba(245,158,11,0.35);
+  --signal-fallback-ink:#f59e0b;
+  --signal-latency-good:#34d399;
+  --signal-latency-ok:#eab308;
+  --signal-latency-poor:#f97316;
+  /* Optical offsets below the 4px scale that align the banner glyph and
+     reason rows, and the latency badge's bar/readout spacing. */
+  --signal-icon-nudge:1px;
+  --signal-reason-gap:3px;
+  --signal-kind-gap:5px;
+  --signal-latency-gap:6px;
+  --signal-latency-inline-pad:10px;
+  --signal-latency-bar-gap:2px;
+}
+
+/* Warm charcoal and tofu cream. Light palettes remain independently selectable. */
+:root:not([data-theme]), :root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-primary:#24221f;
+  --bg-secondary:#1c1b18;
+  --bg-tertiary:#302d28;
+  --bg-hover:#38342e;
+  --bg-active:#403b33;
+  --border:#484239;
+  --border-light:#595146;
+  --text-primary:#f0e7d8;
+  --text-secondary:#b9ae9c;
+  --text-tertiary:#a39887;
+  --accent:#d9c3a1;
+  --accent-hover:#eed7b5;
+  --accent-subtle:color-mix(in srgb, var(--accent) 10%, transparent);
+  --text-on-accent:#24221f;
+  --user-bubble:#302d28;
+  --composer-background:var(--bg-tertiary);
+  --thinking-bg:transparent;
+  --thinking-border:var(--border);
+  --thinking-text:var(--text-secondary);
+  --error-text:#e4a193;
+  --error-bg:color-mix(in srgb, var(--error-text) 8%, transparent);
+  --error-border:color-mix(in srgb, var(--error-text) 30%, transparent);
+  --success-text:var(--text-secondary);
+  --success-bg:transparent;
+  --success-border:var(--border);
+  --warning-text:#e2c18b;
+  --warning-bg:color-mix(in srgb, var(--warning-text) 8%, transparent);
+  --warning-border:color-mix(in srgb, var(--warning-text) 30%, transparent);
+  --info-text:var(--accent);
+  --info-bg:var(--accent-subtle);
+  --info-border:var(--border);
+  --chip-ok-color:var(--text-secondary);
+  --chip-ok-bg:transparent;
+  --chip-ok-border:transparent;
+  --chip-info-color:var(--accent);
+  --chip-info-bg:transparent;
+  --chip-info-border:transparent;
+  --chip-warn-color:var(--warning-text);
+  --chip-warn-bg:var(--warning-bg);
+  --chip-warn-border:var(--warning-border);
+  --focus-ring:0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  --md-sans:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',var(--cjk-fallback),sans-serif;
+}
+
+[data-theme="light"]{
+  --success-text:#19664D;
+  --success-bg:rgba(31,122,92,0.08);
+  --success-border:rgba(31,122,92,0.25);
+  --warning-text:#80520B;
+  --warning-bg:rgba(150,98,14,0.08);
+  --warning-border:rgba(150,98,14,0.25);
+  --info-text:#385B9E;
+  --info-bg:rgba(64,104,184,0.08);
+  --info-border:rgba(64,104,184,0.25);
+  --signal-proactive-bg:rgba(124,58,237,0.07);
+  --signal-proactive-border:rgba(124,58,237,0.28);
+  --signal-proactive-ink:#6d28d9;
+  --backdrop:rgba(30,28,20,0.28);
+  --focus-ring:0 0 0 3px rgba(99,102,241,0.25);
+  --knob-shadow:0 1px 2px rgba(0,0,0,0.18);
+}
+
+[data-theme="tofu"]{
+  --font-ui:var(--sans-body);
+
+  /* CO-PILOT keeps its established paper/ink/gold chrome independently of chat. */
+  --project-surface:#faf8f3;
+  --project-panel:#fff;
+  --project-band:#f2ecda;
+  --project-ink:#1a1814;
+  --project-muted:#716a55;
+  --project-line:#d8d1c0;
+  --project-accent:#c9993f;
+  --project-accent-hover:#b58936;
+  --project-on-accent:#1a1814;
+  /* Darkened derivatives of the tofu palette (fetch-teal / thinking amber /
+     search-blue) so text clears 4.5:1 on the paper canvas. */
+  --success-text:#3D7263;
+  --success-bg:rgba(94,158,140,0.12);
+  --success-border:rgba(94,158,140,0.35);
+  --warning-text:#8B560F;
+  --warning-bg:rgba(139,86,15,0.06);
+  --warning-border:rgba(139,86,15,0.25);
+  --info-text:#3F6E8C;
+  --info-bg:rgba(94,144,174,0.12);
+  --info-border:rgba(94,144,174,0.35);
+  --signal-proactive-bg:rgba(124,92,184,0.10);
+  --signal-proactive-border:rgba(124,92,184,0.32);
+  --signal-proactive-ink:#5b4a8a;
+  --backdrop:rgba(74,63,47,0.35);
+  --focus-ring:0 0 0 3px rgba(201,122,29,0.25);
+  --knob-shadow:0 1px 2px rgba(19,25,31,0.16);
+}
+
+/* ── Reduced motion: the whole library honors it from day one ── */
+@media (prefers-reduced-motion:reduce){
+  :root{
+    --motion-fast:0.01s;
+    --motion-base:0.01s;
+    --motion-slow:0.01s;
+  }
+}

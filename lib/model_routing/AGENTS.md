@@ -1,0 +1,80 @@
+# Model-routing guidance
+
+## Scope
+
+This package owns the `tofu.model-routing/v2` aggregate, owner-aware repository,
+legacy import, runtime candidate compilation, health scopes, and route snapshots.
+`contracts/model_routing_v2.schema.json` is the field-level authority.
+
+Built-in inference defaults are authored in `lib/model_info/model_inference_defaults.json`.
+Run `scripts/gen_api_v1_model_routing_contract.py` to derive the package-local
+`generated_inference_defaults.py`; runtime reads the imported snapshot pinned
+with its schema/compiler. Verify `test_inference_defaults_snapshot.py` and
+`test_inference_defaults_generation.py`, plus the generator's `--check` mode.
+
+## Boundaries
+
+- Persist one revisioned aggregate per explicit owner through semantic Sidecar
+  operations. Never read SQL or server-config files here.
+- Store only encrypted secret references in the aggregate. Plaintext may cross
+  the repository only for one outbound credential resolution.
+- `Route` is computed, never configured. One provider-scoped wire ID maps to
+  exactly one Deployment.
+- Legacy provider/catalog shapes are migration input only; runtime modules may
+  not project v2 state back into them.
+- Every repository CAS uses `registration.prepare_registration_document`; new
+  incomplete Models are drafts, never executable candidates. Research belongs
+  to `lib/model_catalog/registration_research.py`, not request preparation.
+- Provider dependency removal lives in `managed_provider.py`; HTTP, OAuth and
+  local discovery share that graph rule. Its in-place operation edits only a
+  caller-owned candidate; CAS and post-commit secret cleanup stay with the caller.
+- Preserve all admitted owner entities and grants; entity counts and aggregate bytes
+  do not reject authority commits. Reconstructible health/snapshots and cleanup
+  retain their declared lifecycle. Default dispatch retains every eligible
+  candidate; an explicit caller shortlist remains a positive size hint.
+
+## Compilation owners
+
+`routing.py` is the stable public re-export surface. `selection_resolution.py`
+owns normalized authority indexes and logical/provider selector resolution;
+`candidate_compiler.py` owns eligibility, grants, health and stable ranking;
+`route_snapshot.py` owns bounded diagnostic projections. Request groups reuse
+one compiler for primary/fallback selection and release indexes before secret
+materialization. New requests always read/validate their own owner revision.
+Extend these owners, not the facade; never add a global authority/plaintext cache.
+`serving_locality.py` classifies owned route facts for Python/native context
+policy. Model names never imply local serving; explicit cloud brands retain
+their identity through loopback proxies. Verify `test_serving_locality.py` and
+`tests/compaction/test_cloud_idle_l1.py`.
+
+## Verification
+
+Run `pytest -q tests/model_routing/test_model_routing_contract.py` first, then the focused API,
+dispatch, migration, storage, and frontend model-routing tests.
+
+`native_route.py` materializes one canonical primary into a bounded single-use
+owner route for the native host. Verify native-route tests and real archive
+probe; preserve pre-secret owner/protocol refusal, no endpoint/header override,
+trusted inference preparation, output caps and owned credential lifetime.
+RouteCandidateCompiler.resolve_model_id reuses its normalized request indexes;
+only exact unique logical IDs resolve. Display/wire IDs and creator ambiguity
+grant no route. Verify native child-model and canonical routing tests.
+
+`request_authority.py` carries the repository and owner boundary that admitted
+a storage-free run to that run's child invocations as a live reference, never a
+copied table or global default. Verify `test_request_authority.py` and
+`tests/tasks_pkg/test_public_runtime_delegation.py`.
+
+Codex OAuth native routes require an explicit owner/destination credential resolver.
+Verify tenant fencing, private callback disposal, joined model binding, canonical
+cache/replay capabilities and real installed OAuth-route fixtures. Never select
+provider-global credentials or infer missing-login from source-read failure.
+
+Explicit priced native routes bind the model policy resolver to issued metadata
+including the selected offering's actual_pricing, and dispose it with joined execution.
+Verify route pricing ownership, template failures, installed alias/global-price
+isolation and full production restart; never infer prices from task config.
+
+Native counter preparation receives detached metadata/template/profile after
+selected output clamping. Failure refuses before client launch; it may not edit
+caller configuration, messages, catalog, endpoint or credential bindings.

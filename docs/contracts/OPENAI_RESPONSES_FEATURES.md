@@ -1,0 +1,233 @@
+# OpenAI Responses feature policy
+
+This project keeps Chat Completions as its canonical internal request shape and
+translates at the provider boundary. The features below are emitted only for a
+public GPT-5.6 Responses profile; Codex subscription and generic
+Responses-compatible providers stay on their proven dialects.
+
+## Provider capability boundary
+
+`protocol: responses` declares only the core Responses wire. It does not by
+itself enable public OpenAI extensions. Each Responses provider/face has a
+second capability setting:
+
+- `responses_profile: auto` recognizes only `api.openai.com` as `openai`;
+  every other host resolves to `compatible`.
+- `responses_profile: compatible` sends only the core Responses request
+  shape, including `text.format`, normal function tools and streaming.
+- `responses_profile: openai` permits the GPT-5.6 public features below.
+- Codex OAuth slots resolve to their separate `codex` dialect regardless of
+  a stored setting.
+
+The effective profile is copied onto the selected dispatch slot and stamped
+on every tool-loop round. A model name can therefore never promote a generic
+gateway into the public feature set. Settings → Providers exposes the profile
+next to the Responses protocol, and each resolved wire-face tooltip reports
+the effective value.
+
+## Request controls
+
+```json
+{
+  "tools": {
+    "nativeExposure": "full",
+    "programmaticCalling": "on",
+    "toolSearch": "local"
+  },
+  "responses": {
+    "transport": "sse",
+    "reasoningMode": "standard",
+    "verbosity": "medium",
+    "imageDetail": "auto"
+  },
+  "orchestration": {
+    "multiAgent": "full"
+  }
+}
+```
+
+Allowed alternatives are:
+
+- `tools.toolSearch`: `local | off` (default `local`: Tofu's own
+  `search_tools`/`execute_tools` pair on every provider)
+- `tools.programmaticCalling`: `on | off` (default `on`)
+- `responses.transport`: `sse | websocket`
+- `responses.reasoningMode`: `standard | pro`
+- `responses.verbosity`: `low | medium | high`
+- `responses.imageDetail`: `auto | original`
+- `orchestration.multiAgent`: `full | read_only` (default `full`;
+  `read_only` is an API-only lane)
+
+Retired values normalize to the defaults on the request path: Tool Search
+`auto`/`native` to `local`, programmatic `auto` to `on`, and multi-agent
+`auto`/`off` (and the `responses.multiAgent` alias) to `full`. There is no
+concurrency setting: accepted sub-agents start on demand, and
+`maxConcurrentAgents` / `responses.maxConcurrentSubagents` are ignored.
+
+Tool Search, programmatic calling and the `responses.*` controls are
+available in Settings → Advanced and are carried through the same
+server-authoritative conversation-config resolver used by normal,
+regenerate, continue and recovered turns. Multi-agent orchestration has no
+browser control; the browser never sends an `orchestration` block.
+
+`response_format` is translated to Responses `text.format`. Pro mode,
+verbosity, original image detail and the privacy-preserving
+`safety_identifier` are added at the same allowlisted boundary.
+
+## Tool Search: frontend selection is authoritative
+
+Tool Search never removes a tool from the server-owned enabled catalog. It
+changes only which native schemas are presented on the wire:
+
+1. Tools explicitly supplied by an API caller are all pinned/direct, except
+   `mcp__` names, which are MCP-bridge tools.
+2. `ToolSpec.discovery_policy=eager` tools are pinned/direct. `searchable`
+   tools remain executable from the enabled catalog even when their schema is
+   deferred. MCP tools are always searchable and never direct
+   (`lib/tools/mcp_exposure.py`).
+3. In local mode, the stable `search_tools` and `execute_tools` pair is direct.
+   Discovered schemas are returned in the trailing search result without
+   changing the tools array; the model executes the exact returned name through
+   `execute_tools`. The protocol-only outer call is hidden in chat while its
+   real child tools retain their normal result and approval UI.
+4. A forced `tool_choice` function is always hoisted to the direct surface.
+5. Only the residual catalog is marked `defer_loading` and grouped into stable
+   namespaces of at most ten functions. Tool Search activates only with at
+   least 16 functions and at least eight deferrable functions.
+
+The direct/deferred policy is derived from the current request. Toolbar, MCP,
+Project Brain and Swarm changes therefore update the effective Responses tools
+array on the next model turn without an apply step.
+
+Authorization never consults this direct/deferred projection or a search
+receipt. It checks the immutable task-level enabled catalog.
+
+## WebSocket mode
+
+`lib/llm/responses_websocket.py` runs a sync agent tool loop on a task-local
+persistent connection. Public routes opt in with `responses.transport=websocket`;
+the Codex subscription profile always uses it for task rounds, because Codex
+CLI's built-in provider does (`supports_websockets`, handshake
+`OpenAI-Beta: responses_websockets=2026-02-06`). That public flag does not
+govern the Codex contract. Connections are never shared across tasks,
+credentials, accounts, models, or upstream URLs.
+
+Frames are the flat `{"type": "response.create", ...body}` envelope. A round
+continues the chain (`previous_response_id` plus only the delta) when all of
+these hold, mirroring Codex CLI's `prepare_websocket_request`:
+
+- every non-input field is unchanged (`input`, `previous_response_id`,
+  `stream`, `client_metadata` and `generate` may differ);
+- the previous input is an exact prefix of the new input;
+- the next items match the previous response's `output`, compared by
+  model-visible identity (reasoning ciphertext; call id, name and arguments;
+  message role, phase and text);
+- the remainder is non-empty application input (tool outputs, user/developer
+  messages).
+
+Anything else (compaction, L1 pruning, tool or instruction drift) resets the
+chain with the complete input. With `store=false` the server keeps only the
+latest response in connection memory: a refused continuation ("Invalid
+`previous_response_id`", `previous_response_not_found`) or the 60-minute
+`websocket_connection_limit_reached` arrives before any output, so the
+transport reconnects and resends the complete request once.
+
+The sealed request stays the complete HTTP body. If the socket cannot open
+before `response.create` is sent (desktop egress relay, subscription adapter,
+missing `websockets`, refused upgrade), the same request uses SSE and the task
+keeps SSE for its remaining rounds; a socket that fails after a send raises a
+retryable failure (never replayed inside the attempt) and also moves the task
+to SSE. The socket follows the HTTP transport's egress decision (desktop
+relay, healthiest subscription route, configured proxy). A terminal assistant
+response and task-lane teardown close the connection without waiting for the
+peer's closing handshake.
+
+On Codex the socket also carries the turn's `x-codex-turn-state` in
+`client_metadata`, records `codex.rate_limits` frames as subscription quota
+(`source: websocket_event`), and consumes `codex.response.metadata` /
+`responsesapi.websocket_timing` frames as transport metadata.
+
+## Composable Multi-agent routing
+
+`orchestration.multiAgent=full` (the only product mode) keeps the lane and
+its guidance on the wire every round with full worker authority on the local
+`spawn_agents` backend; the API-only `read_only` value forces the
+analysis-only lane. On a verified public GPT-5.6 Responses face, a
+`read_only` decision emits the native beta request/header and an explicit
+analysis-only developer constraint; a `full` decision never does. The native
+request sends `multi_agent: {"enabled": true}` and omits the optional
+`max_concurrent_subagents`; Tofu sets no sub-agent concurrency limit of its own.
+Every other tool-capable model uses Tofu's local `spawn_agents` backend when
+that tool is in the task-owned authority catalog; local waves have no
+agent-count or concurrency ceiling. Read-only native and local workers share
+the same read-only dispatch filter and root-only final answer rule;
+full-authority local workers inherit the parent catalog minus the
+leaf-worker denylist.
+
+Multi-agent and Programmatic Tool Calling are independent. A request may use
+agents to partition independent workstreams while the root or a local worker
+uses bounded PTC inside one workstream. Native control-plane and local
+`spawn_agents` tools are alternatives for the same lane and are never exposed
+together.
+
+Native tool-search, multi-agent, hosted-tool and unknown Responses output items
+are retained when replay-safe. Unknown event/item types are logged instead of
+being silently discarded. Multi-agent mode omits explicit server compaction,
+which the beta API does not support.
+
+## Shared local compaction and provider replay
+
+Application requests use the shared local compactor on public and subscription
+Responses routes. Provider capability does not enable a second automatic L2
+policy or an economic `context_management` threshold. Automatic semantic
+compaction follows route-window safety with output/recovery reserves; retired
+fixed working-set settings cannot move it earlier. The timing authority is
+[context budgets](../CONTEXT_BUDGET_POLICY.md).
+
+Local L1, manual `/compact`, pre-compaction archives and reactive prompt-too-long
+recovery retain their existing owners. Historical provider compaction items
+remain replayable; history before the newest item is omitted while current
+developer instructions remain.
+
+For both public and subscription Responses, provider `reasoning_tokens` are
+carried once into the next local count only when
+the returned encrypted reasoning item is actually replayed; the small displayed
+reasoning summary is not treated as the complete hidden reasoning state.
+
+Legacy callers without a selected inference profile retain encrypted-reasoning
+replay and prompt-cache affinity for the existing GPT-5.6 family and Codex
+adapter. Older Codex models do not receive the GPT-5.6 `context=all_turns`
+extension. Public-only features keep their independent gate; a selected profile
+is always closed-world, including explicit missing/unsupported replay.
+Mandatory encrypted continuity is never silently discarded.
+
+The Responses boundary revalidates native efforts against the selected declared
+ladder, even for direct bodies that skipped intent compilation. Conflicting
+`effort`, `reasoning_effort` and `reasoning.effort` are rejected. Native reasoning
+accepts only the installed `effort`, `summary`, `context`, `mode` fields; explicit
+valid summary preferences override adapter defaults. Unsupported optional
+sampling hints produce bounded `<field>_omitted` conversion counters; stop and
+structured-output constraints remain fail-closed. Reports never enter wire JSON.
+
+
+## Operational prerequisite
+
+Native Programmatic Tool Calling, Pro mode and native Multi-agent require a
+real public Responses provider; WebSocket mode is also the Codex
+subscription's first-party transport. Provider-neutral
+PTC and Multi-agent semantics do not: other tool-capable faces receive the
+local `execute_program`/`execute_tools` and `spawn_agents` backends under the same
+authority and budget contracts. Codex subscription and compatible Responses
+profiles remain deliberately excluded from public-only fields.
+
+Recommended rollout: first select `protocol=responses` with
+`responses_profile=compatible` and run the existing access-matrix probe. After
+the core request returns verified generated text, change the profile to
+`openai` only for an official endpoint or a gateway whose advanced-field
+support has been independently confirmed. Probe each native capability in
+isolation before rollout; after those capability probes pass, PTC and
+Multi-agent may be composed by task shape. Tool Search stays `local` because
+frontend/API-selected tools are pinned direct at the protocol boundary.
+If a request-shape 400/404/422 explicitly names a rejected native PTC or
+Multi-agent field, the transport retry projects only that lane onto its local
+backend. Unrelated request errors are never masked by this fallback.

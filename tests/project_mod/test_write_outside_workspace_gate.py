@@ -1,0 +1,539 @@
+"""tests/project_mod/test_write_outside_workspace_gate.py — the out-of-workspace write gate.
+
+2026-08-31 decision: an absolute-path write OUTSIDE every registered
+workspace root must never silently auto-register a new root. Owner decision
+2026-11-12: there is no confirmation escape either; the former
+``allow_outside_workspace`` flag is gone because no product surface could
+confirm it. The model-facing write tools refuse with
+:class:`OutsideWorkspaceError` (a ValueError) naming where the write can go.
+
+Pins:
+  1. Refusal: ok:False, the error names the ways forward and no flag; no file,
+     no root (global or conv), no root-added signal.
+  2. Forbidden system paths stay refused.
+  3. Temp-dir scratch writes are exempt (they register nothing).
+  4. OutsideWorkspaceError IS a ValueError and carries abs_path/anchor.
+  5. Batch tools (apply_diffs / edit_file) refuse per-edit with the same
+     error, and a stale flag sent through input repair grants nothing.
+  6. No write schema declares the flag or promises a user confirmation, and
+     the strict write_file contract rejects a stale flag.
+  7. Same-repo worktree (2026-10-04): a write into a git worktree of a
+     registered root's repo succeeds with conv-scoped registration; an
+     unrelated repo or a non-git directory refuses. Fixtures use real
+     ``git worktree add`` in the system temp dir so the .git gitfile layout
+     matches production; skipped when git is absent.
+"""
+
+from __future__ import annotations
+
+
+import pytest
+
+pytestmark = pytest.mark.unit
+import os
+import shutil
+import tempfile
+import unittest
+
+from lib.project_mod import config as cfg
+from lib.project_mod import write_tools as wt
+from lib.project_mod.scanner import clear_project, set_project
+from lib.project_mod.write_tools import (
+    OutsideWorkspaceError,
+    _resolve_write_path,
+    drain_root_added_signals,
+    tool_apply_diffs,
+    tool_edit_file,
+    tool_write_file,
+)
+
+
+class _Base(unittest.TestCase):
+    """Hermetic temp-root detection (same pattern as
+    test_temp_write_and_root_signal): one carved-out base dir with a
+    designated ``tmp/`` temp root and a non-temp ``work/`` workspace area."""
+
+    def setUp(self):
+        self._fs = tempfile.mkdtemp(prefix='owg-fs-')
+        self._tmp_root = os.path.join(self._fs, 'tmp')
+        self._work = os.path.join(self._fs, 'work')
+        os.makedirs(self._tmp_root)
+        os.makedirs(self._work)
+        self._saved_cache = getattr(wt._temp_roots, '_cache', None)
+        wt._temp_roots._cache = {os.path.realpath(self._tmp_root)}
+
+        self._proj = os.path.join(self._work, 'proj')
+        self._sibling = os.path.join(self._work, 'sibling')
+        os.makedirs(self._proj)
+        os.makedirs(self._sibling)
+        set_project(self._proj)
+        drain_root_added_signals()
+
+    def tearDown(self):
+        clear_project()
+        cfg._conv_roots.clear()
+        cfg._conv_primary.clear()
+        drain_root_added_signals()
+        wt._temp_roots._cache = self._saved_cache
+        shutil.rmtree(self._fs, ignore_errors=True)
+
+    def _roots_paths(self):
+        with cfg._lock:
+            return {os.path.abspath(rs['path']) for rs in cfg._roots.values()}
+
+    def _conv_root_paths(self, conv_id):
+        return {os.path.abspath(rs['path'])
+                for rs in cfg.get_conv_roots(conv_id).values()}
+
+
+class RefusalTest(_Base):
+    def test_refusal_names_the_ways_forward_and_mutates_nothing(self):
+        target = os.path.join(self._sibling, 'pkg', 'mod.py')
+        roots_before = self._roots_paths()
+
+        res = tool_write_file(self._proj, target, 'x = 1\n',
+                              conv_id='c1', task_id='t1')
+
+        self.assertFalse(res['ok'], res)
+        self.assertIn('outside every registered workspace root', res['error'])
+        self.assertIn('a git worktree of one', res['error'])
+        self.assertIn(f'ask the user to add "{self._sibling}"', res['error'],
+                      'refusal must name the folder the user can add')
+        self.assertNotIn('allow_outside_workspace', res['error'])
+        self.assertNotIn('confirm', res['error'])
+        self.assertFalse(os.path.exists(target),
+                         'refused write must not create the file')
+        self.assertEqual(self._roots_paths(), roots_before,
+                         'refusal must not touch the global registry')
+        self.assertNotIn('c1', cfg._conv_roots,
+                         'refusal must not seed/extend a conv registry')
+        self.assertEqual(drain_root_added_signals(), [],
+                         'refusal must not queue a root-added signal')
+
+    def test_error_is_value_error_with_context_attrs(self):
+        target = os.path.join(self._sibling, 'x.py')
+        with self.assertRaises(OutsideWorkspaceError) as cm:
+            _resolve_write_path(self._proj, target, conv_id='c1')
+        err = cm.exception
+        self.assertIsInstance(err, ValueError,
+                              'existing except-ValueError rejection paths must keep working')
+        self.assertEqual(os.path.abspath(err.abs_path), os.path.abspath(target))
+        self.assertEqual(os.path.abspath(err.anchor), os.path.abspath(self._sibling))
+
+
+class ForbiddenStillRefusedTest(_Base):
+    def test_system_path_refused(self):
+        res = tool_write_file(self._proj, '/etc/tofu-owg-should-not-exist.conf',
+                              'x\n', conv_id='c1', task_id='t1')
+        self.assertFalse(res['ok'], res)
+        self.assertIn('system path', res['error'])
+        self.assertFalse(os.path.exists('/etc/tofu-owg-should-not-exist.conf'))
+
+
+class TempExemptTest(_Base):
+    def test_temp_scratch_needs_no_flag_and_registers_nothing(self):
+        scratch = os.path.join(self._tmp_root, 'scratch.py')
+        roots_before = self._roots_paths()
+        res = tool_write_file(self._proj, scratch, '1\n',
+                              conv_id='c1', task_id='t1')
+        self.assertTrue(res['ok'], res)
+        self.assertEqual(self._roots_paths(), roots_before)
+        self.assertNotIn('c1', cfg._conv_roots)
+        self.assertEqual(drain_root_added_signals(), [])
+
+
+class BatchGateTest(_Base):
+    def test_apply_diffs_refuses_an_outside_path(self):
+        target = os.path.join(self._sibling, 'mod.py')
+        res = tool_apply_diffs(self._proj, [
+            {'description': 'd', 'path': target, 'search': 'a', 'replace': 'b'},
+        ], conv_id='c1', task_id='t1')
+        self.assertIn('outside every registered workspace root', str(res))
+        self.assertNotIn('c1', cfg._conv_roots)
+
+    def test_edit_file_refuses_an_outside_path(self):
+        target = os.path.join(self._sibling, 'mod.py')
+        res = tool_edit_file(self._proj, [
+            {'path': target, 'operation': 'replace', 'anchor': 'a', 'content': 'b'},
+        ], conv_id='c1', task_id='t1')
+        self.assertIn('outside every registered workspace root', str(res))
+        self.assertNotIn('c1', cfg._conv_roots)
+
+    def test_a_stale_outside_workspace_flag_grants_nothing(self):
+        """A model may still send the removed flag out of habit: input repair
+        drops it and the executor refuses the outside path."""
+        from lib.tool_input_repair import validate_then_repair
+        target = os.path.join(self._sibling, 'mod.py')
+        with open(target, 'w') as fh:
+            fh.write('a\n')
+        repaired, _ = validate_then_repair('edit_file', {
+            'description': 'd',
+            'allow_outside_workspace': True,
+            'edits': [{'path': target, 'anchor': 'a', 'content': 'b'}],
+        })
+        self.assertNotIn('allow_outside_workspace', repaired)
+        res = tool_edit_file(self._proj, repaired['edits'],
+                             conv_id='c1', task_id='t1')
+        self.assertIn('outside every registered workspace root', str(res))
+        with open(target) as fh:
+            self.assertEqual(fh.read(), 'a\n')
+        self.assertNotIn('c1', cfg._conv_roots)
+
+class _SameRepoWorktreeBase(_Base):
+    """The 2026-10-04 rule: a git worktree of an already registered repo is
+    part of the project, so a write there registers it and proceeds.
+
+    Uses real ``git worktree add`` in the system temp dir so the .git gitfile
+    layout matches production exactly. Skipped when git is unavailable.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import shutil as _shutil
+        import subprocess
+        git = _shutil.which('git')
+        if not git:
+            self.skipTest('git binary not available')
+        # The carved-out fixture lives under the real /tmp, which
+        # _is_temp_path would short-circuit as 'untracked scratch' — that
+        # would skip the conv-root registration this suite is exercising.
+        # Shrink the temp cache to the base's own (unused) tmp/ so the
+        # fixture paths resolve normally.
+        wt._temp_roots._cache = {os.path.realpath(self._tmp_root)}
+        # Primary root is a real repo with a commit (worktree add needs one).
+        subprocess.run([git, 'init', '-q'], cwd=self._proj, check=True)
+        subprocess.run([git, 'config', 'user.email', 't@t'], cwd=self._proj,
+                       check=True)
+        subprocess.run([git, 'config', 'user.name', 't'], cwd=self._proj,
+                       check=True)
+        with open(os.path.join(self._proj, 'README'), 'w') as fh:
+            fh.write('x\n')
+        subprocess.run([git, 'add', 'README'], cwd=self._proj, check=True)
+        subprocess.run([git, 'commit', '-q', '-m', 'init'], cwd=self._proj,
+                       check=True)
+        # The linked worktree lives OUTSIDE the primary root (sibling dir).
+        self._wt = os.path.join(self._work, 'wt1')
+        # Git 2.11 supports linked worktrees but not worktree add -q.
+        subprocess.run([git, 'worktree', 'add', self._wt],
+                       cwd=self._proj, check=True)
+
+
+class SameRepoWorktreeTest(_SameRepoWorktreeBase):
+    def test_unflagged_write_into_same_repo_worktree_succeeds(self):
+        target = os.path.join(self._wt, 'pkg', 'mod.py')
+        res = tool_write_file(self._proj, target, 'x = 1\n',
+                              conv_id='c1', task_id='t1')
+        self.assertTrue(res['ok'], res)
+        self.assertTrue(os.path.isfile(target))
+        self.assertIn(os.path.abspath(self._wt), self._conv_root_paths('c1'))
+        self.assertNotIn(os.path.abspath(self._wt), self._roots_paths(),
+                         'conv write must stay conv-scoped, never global')
+
+        # Registered like a confirmed expansion: repeat writes need no gate.
+        res2 = tool_write_file(self._proj, os.path.join(self._wt, 'b.py'),
+                               'y = 2\n', conv_id='c1', task_id='t1')
+        self.assertTrue(res2['ok'], res2)
+
+    def test_worktree_registered_root_and_main_checkout_target_match(self):
+        """Symmetric direction: the registered root is the worktree, the
+        target is the main checkout of the same repo.
+
+        The worktree is made the conversation's primary root so attribution
+        has no literal-prefix match against the main checkout and must fall
+        through to the worktree-aware branch.
+        """
+        from lib.project_mod.config import add_conv_root, set_conv_roots
+        set_project(self._wt)
+        set_conv_roots('c2', self._wt)
+        add_conv_root('c2', self._wt, name='wt1')
+        target = os.path.join(self._proj, 'src', 'mod.py')
+        res = tool_write_file(self._wt, target, 'x = 1\n',
+                              conv_id='c2', task_id='t1')
+        self.assertTrue(res['ok'], res)
+        self.assertTrue(os.path.isfile(target))
+
+    def test_non_git_directory_still_refuses(self):
+        target = os.path.join(self._sibling, 'pkg', 'mod.py')
+        res = tool_write_file(self._proj, target, 'x = 1\n',
+                              conv_id='c1', task_id='t1')
+        self.assertFalse(res['ok'], res)
+        self.assertIn('outside every registered workspace root', res['error'])
+        self.assertFalse(os.path.exists(target))
+
+    def test_unrelated_repo_still_refuses(self):
+        """A DIFFERENT git repo (its own .git dir, not a worktree gitfile of
+        the primary) is not part of the project — keep the gate."""
+        other = os.path.join(self._work, 'other-repo')
+        os.makedirs(os.path.join(other, '.git'))
+        res = tool_write_file(self._proj, os.path.join(other, 'mod.py'),
+                              'x = 1\n', conv_id='c1', task_id='t1')
+        self.assertFalse(res['ok'], res)
+        self.assertIn('outside every registered workspace root', res['error'])
+
+    def test_git_common_dir_parses_checkout_and_gitfile(self):
+        self.assertEqual(os.path.normpath(self._proj),
+                         wt._git_common_dir(self._proj))
+        self.assertEqual(os.path.normpath(self._proj),
+                         wt._git_common_dir(self._wt))
+        self.assertIsNone(wt._git_common_dir(self._sibling))
+
+
+class MetaStampTest(_Base):
+    """The card-facing stamp: the model keeps the full refusal sentence
+    (it names where the write can go), while ``build_project_tool_meta``
+    stamps a structured ``outside_workspace`` refusal so the frontend renders
+    one brief notice instead of the verbose dump / a truncated-path chip."""
+
+    def test_batch_failure_stamps_structured_refusal(self):
+        from lib.tools.meta import build_project_tool_meta
+        target = os.path.join(self._sibling, 'mod.py')
+        edits = [{'path': target, 'operation': 'replace',
+                  'anchor': 'a', 'content': 'b'}]
+        content = tool_edit_file(self._proj, edits, conv_id='c1', task_id='t1')
+        meta = build_project_tool_meta('edit_file', {'edits': edits}, content)
+
+        self.assertIn('ask the user to add', content,
+                      'model-facing text must name where the write can go')
+        refusal = meta.get('refusal')
+        self.assertIsNotNone(refusal, meta)
+        self.assertEqual(refusal['kind'], 'outside_workspace')
+        self.assertEqual(refusal['paths'], [target])
+        summary = meta['editSummaries'][0]
+        self.assertEqual(summary['status'], 'fail')
+        self.assertIs(summary.get('outsideWorkspace'), True)
+        self.assertIn('outside every registered workspace root',
+                      summary['detail'])
+
+    def test_ordinary_failure_stamps_no_refusal(self):
+        from lib.tools.meta import build_project_tool_meta
+        args = {'edits': [{'path': 'a.py', 'operation': 'replace',
+                           'anchor': 'x', 'content': 'y'}]}
+        content = ('Applied 0/1 edits (1 failed)\n'
+                   '[1] FAIL a.py: anchor not found')
+        meta = build_project_tool_meta('edit_file', args, content)
+        self.assertNotIn('refusal', meta)
+        self.assertNotIn('outsideWorkspace', meta['editSummaries'][0])
+
+class WireSchemaTest(unittest.TestCase):
+    def test_no_write_schema_offers_an_outside_workspace_escape(self):
+        """Owner decision 2026-11-12: nothing in the product confirms an
+        outside write, so no schema may declare the flag or promise one."""
+        import json
+        from lib.tools import project as P
+        for name in ('PROJECT_TOOL_WRITE_FILE', 'PROJECT_TOOL_APPLY_DIFF',
+                     'PROJECT_TOOL_APPLY_DIFFS', 'PROJECT_TOOL_EDIT_FILE'):
+            function = getattr(P, name)['function']
+            self.assertNotIn('allow_outside_workspace',
+                             function['parameters']['properties'], name)
+            text = json.dumps(function).lower()
+            self.assertNotIn('allow_outside_workspace', text, name)
+            self.assertNotIn('confirm', text, name)
+
+    def test_the_strict_write_contract_rejects_a_stale_flag(self):
+        from lib.tools import project as P
+        from lib.tools.contracts import (
+            ToolContractError,
+            compile_execution_contract_documents,
+            validate_tool_arguments_from_documents,
+        )
+        documents = compile_execution_contract_documents([P.PROJECT_TOOL_WRITE_FILE])
+        with self.assertRaises(ToolContractError) as raised:
+            validate_tool_arguments_from_documents(documents, 'write_file', {
+                'path': 'a.py', 'content': 'x', 'allow_outside_workspace': True})
+        self.assertEqual(raised.exception.code, 'unknown_arguments')
+
+
+if __name__ == '__main__':
+    unittest.main()
+
+
+class TempWorktreeJournalTest(_SameRepoWorktreeBase):
+    """Real linked checkouts under the OS temp root are projects, not scratch."""
+
+    def setUp(self):
+        super().setUp()
+        wt._temp_roots._cache = {os.path.realpath(tempfile.gettempdir())}
+
+    def test_created_modified_and_nested_edits_have_checkout_relative_history(self):
+        from lib.project_mod import modifications as mods
+        from lib.project_mod.config import set_conv_roots
+        set_conv_roots('other-conv', self._proj)
+        roots_before = self._roots_paths()
+        observed = []
+        listener = lambda task_id, entry: observed.append((task_id, entry))
+        mods.register_live_change_listener(listener)
+        self.addCleanup(mods._live_change_listeners.remove, listener)
+
+        # Existing nested directory must not become the registered root.
+        nested = os.path.join(self._wt, 'pkg', 'existing')
+        os.makedirs(nested)
+        existing = os.path.join(nested, 'modified.py')
+        with open(existing, 'w') as fh:
+            fh.write('value = 1\n')
+        result = tool_edit_file(self._proj, [
+            {'path': existing, 'operation': 'replace',
+             'anchor': 'value = 1', 'content': 'value = 2'},
+        ], conv_id='c1', task_id='t1')
+        self.assertIn('1/1', result)
+        for rel in ('created.py', 'pkg/new/deeper/created.py'):
+            result = tool_write_file(self._proj, os.path.join(self._wt, rel),
+                                     'value = 3\n', conv_id='c1', task_id='t1')
+            self.assertTrue(result['ok'], result)
+
+        self.assertEqual(self._roots_paths(), roots_before)
+        self.assertEqual(self._conv_root_paths('c1'), {self._proj, self._wt})
+        self.assertEqual(self._conv_root_paths('other-conv'), {self._proj})
+
+        self.assertFalse(wt._should_record_modification(existing,
+                                                       conv_id='other-conv'))
+        self.assertEqual(drain_root_added_signals(), [
+            {'rootName': os.path.basename(self._wt), 'path': self._wt}])
+        records = mods.get_modifications(self._wt, conv_id='c1')
+        self.assertEqual({m['path'] for m in records}, {
+            'pkg/existing/modified.py', 'created.py',
+            'pkg/new/deeper/created.py'})
+        self.assertEqual(len(records), 3)
+        self.assertEqual(len(observed), 3)
+        self.assertEqual(mods.get_modifications(self._proj, conv_id='c1'), [])
+        self.assertEqual(mods.get_modifications(self._wt, conv_id='other-conv'), [])
+        for record in records:
+            self.assertEqual(record['basePath'], self._wt)
+            self.assertEqual(record['convId'], 'c1')
+            self.assertEqual(record['taskId'], 't1')
+
+            self.assertIs(record['undoAvailable'], False)
+            self.assertEqual(record['root'], os.path.basename(self._wt))
+            self.assertNotIn('..', record['path'].split(os.sep))
+            self.assertFalse(os.path.isabs(record['path']))
+        self.assertTrue(all(task_id == 't1' for task_id, _ in observed))
+
+        self.assertEqual({entry['path'] for _, entry in observed},
+                         {record['path'] for record in records})
+        self.assertTrue(all(entry['rootPath'] == self._wt
+                            for _, entry in observed))
+
+        self.assertTrue(all(entry['undoAvailable'] is False
+                            for _, entry in observed))
+    def test_primary_project_and_primary_temp_worktree_keep_undo_capability(self):
+        from lib.project_mod import modifications as mods
+        from lib.project_mod.config import set_conv_roots
+        observed = []
+        listener = lambda task_id, entry: observed.append(entry)
+        mods.register_live_change_listener(listener)
+        self.addCleanup(mods._live_change_listeners.remove, listener)
+        for primary, conv_id in ((self._proj, 'main-conv'),
+                                 (self._wt, 'managed-conv')):
+            set_conv_roots(conv_id, primary)
+            target = os.path.join(primary, 'primary-created.py')
+            result = tool_write_file(primary, target, 'value = 1\n',
+                                     conv_id=conv_id, task_id=conv_id)
+            self.assertTrue(result['ok'], result)
+            records = mods.get_modifications(primary, conv_id=conv_id)
+            self.assertEqual(len(records), 1)
+            self.assertIsNot(records[0].get('undoAvailable'), False)
+            self.assertEqual(records[0]['basePath'], primary)
+        self.assertEqual(len(observed), 2)
+        self.assertTrue(all(entry.get('undoAvailable') is not False
+                            for entry in observed))
+        self.assertEqual(drain_root_added_signals(), [])
+
+    def test_scratch_and_unrelated_temp_repo_stay_untracked(self):
+        import subprocess
+        from lib.project_mod import modifications as mods
+        other = os.path.join(self._tmp_root, 'other-repo')
+        os.makedirs(other)
+        subprocess.run(['git', 'init', '-q', other], check=True)
+        before = self._roots_paths()
+        for target in (os.path.join(self._tmp_root, 'scratch.py'),
+                       os.path.join(other, 'mod.py')):
+            result = tool_write_file(self._proj, target, 'x = 1\n',
+                                     conv_id='c1', task_id='t1')
+            self.assertTrue(result['ok'], result)
+            self.assertFalse(wt._should_record_modification(target, conv_id='c1'))
+        self.assertNotIn('c1', cfg._conv_roots)
+        self.assertEqual(self._roots_paths(), before)
+        self.assertEqual(drain_root_added_signals(), [])
+        self.assertEqual(mods.get_modifications(self._proj, conv_id='c1'), [])
+
+    def test_restricted_caller_cannot_auto_register_temp_worktree(self):
+        from lib.project_mod.abs_path_guard import set_restricted, reset_restricted
+        token = set_restricted(True)
+        try:
+            result = tool_write_file(self._proj, os.path.join(self._wt, 'denied.py'),
+                                     'x\n', conv_id='c1', task_id='t1')
+        finally:
+            reset_restricted(token)
+        self.assertFalse(result['ok'], result)
+        self.assertFalse(os.path.exists(os.path.join(self._wt, 'denied.py')))
+        self.assertNotIn('c1', cfg._conv_roots)
+        self.assertEqual(drain_root_added_signals(), [])
+
+    def test_registered_readonly_worktree_stays_readonly(self):
+        from lib.project_mod.config import add_conv_root, set_conv_roots
+        set_conv_roots('c1', self._proj)
+        add_conv_root('c1', self._wt, access='ro')
+        result = tool_write_file(self._proj, os.path.join(self._wt, 'denied.py'),
+                                 'x\n', conv_id='c1', task_id='t1')
+        self.assertFalse(result['ok'], result)
+        self.assertIn('READ-ONLY', result['error'])
+        self.assertFalse(os.path.exists(os.path.join(self._wt, 'denied.py')))
+        self.assertEqual(drain_root_added_signals(), [])
+
+    def test_fallback_attribution_uses_actual_checkout_not_main_parent(self):
+        target = os.path.join(self._wt, 'README')
+        self.assertEqual(wt._mod_attribution(target, self._proj, target),
+                         (self._wt, 'README'))
+
+        nested = os.path.join(self._wt, 'pkg', 'existing')
+        os.makedirs(nested)
+        target = os.path.join(nested, 'new.py')
+        self.assertEqual(wt._mod_attribution(target, self._proj, target),
+                         (self._wt, 'pkg/existing/new.py'))
+    def test_gitfile_lookalike_is_not_a_registered_linked_checkout(self):
+        fake = os.path.join(self._tmp_root, 'fake')
+        os.makedirs(fake)
+        with open(os.path.join(fake, '.git'), 'w') as fh:
+            fh.write('gitdir: ' + os.path.join(
+                self._proj, '.git', 'worktrees', 'missing') + '\n')
+        target = os.path.join(fake, 'scratch.py')
+        # Writer leasing independently refuses missing Git metadata; exercise
+        # the resolution boundary directly to pin that it grants no root.
+        self.assertEqual(_resolve_write_path(self._proj, target, conv_id='c1'),
+                         target)
+        self.assertNotIn('c1', cfg._conv_roots)
+        self.assertFalse(wt._should_record_modification(target, conv_id='c1'))
+        self.assertEqual(drain_root_added_signals(), [])
+
+    def test_merge_and_worktree_removal_keep_settled_panel_without_canonical_undo(self):
+        import subprocess
+        from lib.project_mod import modifications as mods
+        from lib.tasks_pkg.commit_round._derive import derive_round_modified_files
+        from lib.turn_lifecycle import _task_projection
+        observed = []
+        listener = lambda task_id, entry: observed.append(entry)
+        mods.register_live_change_listener(listener)
+        self.addCleanup(mods._live_change_listeners.remove, listener)
+        target = os.path.join(self._wt, 'feature.py')
+        result = tool_write_file(self._proj, target, 'value = 1\n',
+                                 conv_id='c1', task_id='t1')
+        self.assertTrue(result['ok'], result)
+        task = {'id': 't1', 'convId': 'c1', 'created_at': 1,
+                'modifiedFileList': observed}
+        subprocess.run(['git', 'add', 'feature.py'], cwd=self._wt, check=True)
+        subprocess.run(['git', 'commit', '-q', '-m', 'feature'], cwd=self._wt, check=True)
+        subprocess.run(['git', 'merge', '--ff-only', 'wt1'], cwd=self._proj, check=True)
+        subprocess.run(['git', 'worktree', 'remove', self._wt], cwd=self._proj, check=True)
+        self.assertFalse(os.path.exists(self._wt))
+        self.assertTrue(os.path.isfile(os.path.join(self._proj, 'feature.py')))
+        files, count, fallback = derive_round_modified_files(
+            task, self._proj, [self._proj])
+        self.assertEqual(count, 1)
+        self.assertFalse(fallback)
+        self.assertEqual(files[0]['path'], 'feature.py')
+        self.assertEqual(files[0]['rootPath'], self._wt)
+        self.assertEqual(files[0]['changeId'], observed[0]['changeId'])
+        self.assertIs(files[0]['undoAvailable'], False)
+        task.update(modifiedFileList=files, modifiedFiles=count)
+        block = _task_projection(task, {})['fileChanges']
+        self.assertEqual(block['files'], files)
+        self.assertIs(block['undoAvailable'], False)

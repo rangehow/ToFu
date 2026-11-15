@@ -1,0 +1,54 @@
+# Storage client guidance
+
+## Scope
+
+This package owns the backend-neutral application client and repository
+boundary. The configured backend selects native `storage.v2` in
+`packages/tofu-db/` or SQL `storage.v1` in `lib/storage_authority_sql/`; that dedicated
+process owns durable state and transactions. Read `docs/STORAGE.md` and
+`docs/modules/data_tier.md`. Backend selection never implies migration.
+
+## Editing rules
+
+- Expose semantic, backend-neutral operations with explicit owner identity,
+  deadlines, idempotency, and typed errors. Do not expose SQL or connection
+  objects to application code.
+- Preserve framing, authentication, capability negotiation, request/receipt
+  correlation, cancellation, supervision, readiness, and write fencing.
+- A selected backend failing is an error; the client never silently switches
+  authority or opens `data/tofu.db` itself.
+- `connection_file.py` supports separate SQL v1 and native v2 handoffs. Native
+  attachment validates scope, project, admitted engine and PID/start identity;
+  client detach never stops the external owner. See
+  `docs/NATIVE_STORAGE_LIFECYCLE.md` and native connection/supervision tests.
+- `lib/agent_core/storage_json.py` owns finite-number admission, mapping
+  materialization and command-value encoding; `protocol.py` re-exports them for
+  framing and native request adaptation, and storage-free runs size values with
+  the same bytes. Exact built-ins may use direct dispatch; subclasses/views
+  retain generic checks. Verify `tests/storage/test_storage_protocol_json.py`
+  and `tests/agent_core/test_storage_json.py`.
+- Keep transport queues, in-flight requests, retries, buffers, and child-process
+  lifecycles bounded and observable.
+- Manifest/catalog changes are declarative and validated against the selected
+  backend semantic registrations; do not hardcode operation-specific transaction behavior here.
+
+`checkpoint_control.py` owns shared one-attempt instance binding for native
+`storage.v2` and SQL `storage.v1` checkpoint ports. Retain the negotiated UUID;
+never replay unknown commands or refresh stale capabilities. The SQL payload
+adds explicit owner scope and bypasses generic command receipts/retries.
+Embedded control retains its existing runtime lifetime. None selects a backend
+or sends semantic writes into reserved checkpoint namespaces.
+
+## Verification
+
+Run `tests/storage_authority_sql/test_storage_process_boundary.py` and focused client/supervision tests,
+then `tests/storage/test_storage_application_contract.py` against both native and SQLite
+processes for changed semantic operations. Native wire changes also exercise
+`tests/tofudb/test_tofudb_differential.py` with the explicitly selected test binary.
+
+Storage latency evidence: native engine records are JSON lines with
+`"source":"tofu-db"` in `logs/server-console.log` (`authority_hold`
+phase/stage splits, `online_gc`, `search_retry`; most carry no timestamp and
+those that do are UTC). Live per-operation latency is the
+`tofu_storage_rpc_seconds` histogram at `GET /metrics`. Never `du`/`find` a
+live store on the FUSE mount; see `docs/STORAGE_OPERATIONS.md`.

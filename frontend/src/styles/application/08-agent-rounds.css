@@ -1,0 +1,30 @@
+/* ── Agent rounds: live result preview and prerequisites ──
+   Shared keyframes (fadeIn, blink) are consumed beyond the swarm panel. */
+@keyframes agentPulse { 0%, 100% { opacity: 0.6; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.1); } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* A result still streaming in: accent hairline and a blinking cursor. */
+.sw-a-preview.sw-a-preview-live { position: relative; border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.sw-typing-cursor { color: var(--accent); font-weight: var(--weight-bold); animation: blink 1s step-end infinite; }
+
+/* Prerequisites, named by the same #N ordinals as the agent rows. */
+.sw-a-deps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-block: var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--conversation-font-size-caption);
+}
+.sw-a-deps-label { margin-inline-end: var(--space-1); }
+.sw-dep-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--tool-row-meta-ink);
+  font-variant-numeric: tabular-nums;
+}
+.sw-dep-tag svg { display: block; width: 10px; height: 10px; }
+.sw-dep-tag.sw-dep-done { color: var(--tool-row-ok-ink); }

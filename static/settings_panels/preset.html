@@ -1,0 +1,48 @@
+        <div class="settings-tab-panel" id="settingsTab_preset">
+          <div class="stg-section-head">
+            <div class="settings-section-title" data-i18n="settings.imageGen">图片生成</div>
+            <div class="stg-section-actions">
+              <button class="stg-btn-secondary btn-xs" data-tofu-action="_toggleAllIgModels(true)" data-i18n="settings.showAll">全部显示</button>
+              <button class="stg-btn-secondary btn-xs" data-tofu-action="_toggleAllIgModels(false)" data-i18n="settings.hideAll">全部隐藏</button>
+            </div>
+          </div>
+          <p class="settings-desc" data-i18n="settings.igDesc">选择在图片生成选择器中显示的模型。</p>
+          <div id="stgIgVisibility" class="stg-dropdown-visibility">
+            <!-- JS renders image gen model toggles -->
+          </div>
+
+          <div class="settings-divider"></div>
+          <div class="stg-section-head">
+            <div class="settings-section-title" data-i18n="settings.modelDropdown">模型下拉列表</div>
+            <div class="stg-section-actions">
+              <button class="stg-btn-secondary btn-xs" data-tofu-action="_toggleAllDropdownModels(true)" data-i18n="settings.showAll">全部显示</button>
+              <button class="stg-btn-secondary btn-xs" data-tofu-action="_toggleAllDropdownModels(false)" data-i18n="settings.hideAll">全部隐藏</button>
+            </div>
+          </div>
+          <p class="settings-desc" data-i18n="settings.modelDropdownDesc">选择在模型下拉列表中显示的模型。</p>
+          <div id="stgDropdownVisibility" class="stg-dropdown-visibility">
+            <!-- JS renders model toggles -->
+          </div>
+
+          <div class="settings-divider"></div>
+          <div class="settings-section-title" data-i18n="settings.modelDefaults">模型默认</div>
+          <div class="settings-group">
+            <div class="settings-row two-col">
+              <div class="settings-field">
+                <label data-i18n-html="settings.fallbackModelFull">回退模型 <span style="color:var(--text-tertiary);font-weight:normal">（主模型失败时自动切换）</span></label>
+                <select id="settingFallbackModel" class="settings-select">
+                  <option value="" data-i18n="settings.disableFallback">（禁用自动回退）</option>
+                  <!-- JS populates from available models -->
+                </select>
+              </div>
+              <div class="settings-field">
+                <label data-i18n-html="settings.defaultModelFull">默认模型</label>
+                <select id="settingDefaultModel" class="settings-select">
+                  <option value="" data-i18n="settings.useEnvVar">（使用环境变量）</option>
+                  <!-- JS populates from available models -->
+                </select>
+              </div>
+            </div>
+
+          </div>
+        </div>

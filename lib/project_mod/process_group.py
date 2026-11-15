@@ -1,0 +1,303 @@
+"""Retire an explicitly owned POSIX group before releasing inherited resources.
+
+No daemon, pool, subprocess or persistent state is added. Callers validate the
+leader/record identity and own direct-child reaping. Linux scans establish owned
+writer settlement or cancellation; only a final zombie thread proves quiescence.
+Groups that the leader's descendants created (``timeout``, ``setsid``) are
+discovered before any signal and retired with the owned group.
+"""
+from __future__ import annotations
+
+import functools
+import io
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Callable, Iterable
+
+
+class ProcessGroupRetirementError(RuntimeError):
+    """The owned group could not be proven quiescent before the cleanup bound."""
+
+
+@functools.cache
+def _kernel_lists_children() -> bool:
+    """Whether this kernel publishes per-thread child lists (CONFIG_PROC_CHILDREN)."""
+    return os.path.exists(f'/proc/self/task/{threading.get_native_id()}/children')
+
+
+def _read_child_list(path: str) -> bytes | None:
+    """One thread's child list through a raw descriptor; None once it is gone.
+
+    Read until EOF: a long list spans several reads. The text and buffer
+    layers would add several syscalls per file, and every syscall releases
+    the GIL ("Command stdin sensor discovery" in docs/RESOURCE_CONTROL.md).
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    try:
+        chunks = []
+        while chunk := os.read(fd, io.DEFAULT_BUFFER_SIZE):
+            chunks.append(chunk)
+    except ProcessLookupError:
+        return None
+    finally:
+        os.close(fd)
+    return b''.join(chunks)
+
+
+def descendant_pids(root_pid: int) -> list[int]:
+    """Discover only an owned Linux subtree, including children of all threads.
+
+    Kernel child lists keep the cost proportional to the subtree, not to the
+    host's process count, for callers that repeat discovery (every stdin probe
+    tick, every timed-out search): one directory listing per member and one
+    raw read per member thread. Only a kernel without those lists falls back
+    to one parent-link pass over /proc. Vanished processes are normal; other
+    observation failures remain visible to the caller. No process is signalled
+    by this read-only helper.
+    """
+    if not _kernel_lists_children():
+        return _descendants_by_parent_links(root_pid)
+    found = []
+    seen = {root_pid}
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop()
+        try:
+            thread_ids = [name for name in os.listdir(f'/proc/{parent}/task')
+                          if name.isdecimal()]
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        for thread_id in thread_ids:
+            children = _read_child_list(f'/proc/{parent}/task/{thread_id}/children')
+            if children is None:
+                continue
+            for value in children.split():
+                pid = int(value)
+                if pid > 1 and pid not in seen:
+                    seen.add(pid)
+                    found.append(pid)
+                    pending.append(pid)
+    return found
+
+
+def _descendants_by_parent_links(root_pid: int) -> list[int]:
+    """Map every visible process to its parent in one /proc pass, then walk the map."""
+    try:
+        entries = os.scandir('/proc')
+    except FileNotFoundError:
+        return []  # No procfs: no descendant is observable.
+    children = {}
+    with entries:
+        for entry in entries:
+            if not entry.name.isdecimal():
+                continue
+            try:
+                # Unbuffered bytes skip the text and buffer layers of a host-wide pass.
+                with open(f'/proc/{entry.name}/stat', 'rb', buffering=0) as handle:
+                    raw = handle.read()
+                # PPID follows the state after comm's final ')'; comm may contain ')'.
+                parent = int(raw[raw.rindex(b')') + 1:].split()[1])
+            except (OSError, ValueError, IndexError):
+                continue  # Exited, or another owner's process this reader cannot observe.
+            children.setdefault(parent, []).append(int(entry.name))
+    found = []
+    seen = {root_pid}
+    pending = [root_pid]
+    while pending:
+        for pid in children.get(pending.pop(), ()):
+            if pid not in seen:
+                seen.add(pid)
+                found.append(pid)
+                pending.append(pid)
+    return found
+
+
+def read_process_fields(pid: int) -> list[bytes]:
+    """Linux stat fields after the final comm delimiter (comm may contain spaces)."""
+    raw = Path(f'/proc/{int(pid)}/stat').read_bytes()
+    if b')' not in raw:
+        raise ProcessGroupRetirementError('Cannot parse process identity')
+    fields = raw.rsplit(b')', 1)[-1].split()
+    if len(fields) <= 19:
+        raise ProcessGroupRetirementError('Incomplete process identity')
+    return fields
+
+
+def escaped_descendant_groups(leader_pid: int, pgid: int, *,
+                              birth: bytes | None = None) -> list[int]:
+    """Groups that descendants of an owned leader created outside its group ``pgid``.
+
+    GNU ``timeout``, ``setsid`` and job-control shells move a child into a
+    group of its own, so signalling the owned group never reaches that subtree.
+    Kernel child lists still link such a child to its parent, so discovery runs
+    before any signal: once an intermediate parent exits, its children are
+    re-parented and no longer observable as this command's. Work that detached
+    completely before that (``setsid -f``, a double fork) is not linked and is
+    never found. A group counts only when one of these descendants leads it, or
+    when it lies in the leader's own session (``start_new_session``), every
+    member of which the leader created.
+
+    ``leader_pid`` is the caller's unreaped child or a record whose start time
+    the caller verified (``birth``, the start-time field). The leader's start
+    time is read before and after discovery, so a reaped and reused PID links
+    no subtree. No process is signalled by this read-only helper.
+    """
+    try:
+        observed = read_process_fields(leader_pid)[19]
+        session = os.getsid(leader_pid)
+    except (FileNotFoundError, ProcessLookupError):
+        return []  # No live leader links a subtree to this caller.
+    expected = observed if birth is None else birth
+    if observed != expected:
+        return []
+    descendants = descendant_pids(leader_pid)
+    led = set(descendants)
+    current = os.getpgrp()
+    groups = []
+    for pid in descendants:
+        try:
+            group = os.getpgid(pid)
+            in_session = session == leader_pid and os.getsid(pid) == session
+        except ProcessLookupError:
+            continue  # Exited during discovery.
+        if (group not in (pgid, current) and group > 1 and group not in groups
+                and (group in led or in_session)):
+            groups.append(group)
+    try:
+        if read_process_fields(leader_pid)[19] != expected:
+            return []
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+    return groups
+
+
+def group_has_live_members(pgid: int) -> bool:
+    """Observe actual group members, not the lifetime of its reaped leader."""
+    if sys.platform.startswith('linux'):
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False  # No process, not even a zombie, holds this group: skip the scan.
+        except PermissionError:
+            pass  # A member exists; the scan below decides whether it is live.
+        for path in Path('/proc').iterdir():
+            if not path.name.isdecimal():
+                continue
+            try:
+                if os.getpgid(int(path.name)) != pgid:
+                    continue
+                fields = read_process_fields(int(path.name))
+                # Linux can retain a zombie group leader while other threads
+                # still execute and hold descriptors. State alone is not exit.
+                if int(fields[2]) == pgid and (
+                        fields[0] not in (b'Z', b'X') or int(fields[17]) > 1):
+                    return True
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # A member disappeared between discovery and observation.
+            except PermissionError as error:
+                # A permission-limited /proc cannot establish group quiescence.
+                raise ProcessGroupRetirementError('Cannot observe process-group quiescence') from error
+        return False
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _signal_group(pgid: int, sig: int) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        pass  # No member is left to signal.
+
+
+def retire_process_group(pgid: int, *, wait_leader: Callable[[float], None] | None = None,
+                         leader_alive: Callable[[], bool] | None = None,
+                         escaped_groups: Iterable[int] = (),
+                         grace_seconds: float = 3.0, kill_seconds: float = 2.0) -> None:
+    """TERM, reap/wait leader, KILL remaining members, await descriptor closure.
+
+    ``pgid`` must identify a caller-owned session/group, never a model-supplied
+    arbitrary PID. A reattached caller verifies its recorded leader starttime
+    before entering. A short-lived leader is not evidence its group has exited.
+    ``escaped_groups`` come from :func:`escaped_descendant_groups`, discovered
+    before any signal. They receive TERM together with the owned group, share
+    its grace period, and are KILLed and awaited the same way.
+    """
+    escaped = [group for group in dict.fromkeys(escaped_groups) if group != pgid]
+    for group in (pgid, *escaped):
+        if (not isinstance(group, int) or isinstance(group, bool) or group <= 1
+                or group == os.getpgrp()):
+            raise ValueError('Refusing to retire an unowned/current process group')
+    grace_deadline = time.monotonic() + grace_seconds
+    for group in escaped:
+        _signal_group(group, signal.SIGTERM)
+    try:
+        _retire_owned_group(pgid, wait_leader, leader_alive, grace_seconds, kill_seconds)
+    finally:
+        if escaped:
+            _retire_escaped_groups(escaped, grace_deadline, kill_seconds)
+
+
+def _retire_escaped_groups(groups: list[int], grace_deadline: float, kill_seconds: float) -> None:
+    """Finish the shared TERM grace, KILL what remains, await every group."""
+    while any(group_has_live_members(group) for group in groups):
+        remaining = grace_deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.02, remaining))
+    for group in groups:
+        if group_has_live_members(group):
+            _signal_group(group, signal.SIGKILL)
+    deadline = time.monotonic() + kill_seconds
+    for group in groups:
+        while group_has_live_members(group):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProcessGroupRetirementError(f'Process group {group} did not retire')
+            time.sleep(min(0.01, remaining))
+
+
+def _retire_owned_group(pgid: int, wait_leader: Callable[[float], None] | None,
+                        leader_alive: Callable[[], bool] | None,
+                        grace_seconds: float, kill_seconds: float) -> None:
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        if wait_leader is not None:
+            wait_leader(kill_seconds)
+        return
+    if wait_leader is not None:
+        try:
+            wait_leader(grace_seconds)
+        except subprocess.TimeoutExpired:
+            pass  # The finite grace period expired; escalation is mandatory.
+    else:
+        deadline = time.monotonic() + grace_seconds
+        while group_has_live_members(pgid) and (leader_alive is None or leader_alive()):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.02, remaining))
+    if group_has_live_members(pgid):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # The last observed member exited before escalation.
+    if wait_leader is not None:
+        wait_leader(kill_seconds)
+    deadline = time.monotonic() + kill_seconds
+    while group_has_live_members(pgid):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProcessGroupRetirementError(f'Process group {pgid} did not retire')
+        time.sleep(min(0.01, remaining))

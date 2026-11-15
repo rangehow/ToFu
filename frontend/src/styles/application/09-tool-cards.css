@@ -1,0 +1,116 @@
+/* Registered tool cards (frontend/src/conversation/ui/tool-cards/): localized
+   title + one-line summary in the header, structured body, technical details
+   last. Checklist rows reuse 09-tool-progress.css item styles. */
+.ptool-coord-header {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+.ptool-coord-title { font-weight: var(--weight-medium); color: var(--text-primary); }
+.ptool-coord-summary {
+  min-width: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.ptool-coord-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-light);
+  font-size: var(--conversation-font-size-caption);
+  line-height: 1.6;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.ptool-coord-chip--ok { color: var(--success-text); background: var(--success-bg); border-color: transparent; }
+.ptool-coord-chip--warn { color: var(--warning-text); background: var(--warning-bg); border-color: transparent; }
+.ptool-coord-chip--err { color: var(--error-text); background: var(--error-bg); border-color: transparent; }
+.ptool-coord-chip--info { color: var(--info-text); background: var(--info-bg); border-color: transparent; }
+.ptool-coord-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-ui);
+  font-size: var(--conversation-font-size-meta);
+  color: var(--text-primary);
+}
+.ptool-coord-lead { margin: 0; color: var(--text-primary); }
+.ptool-coord-field { display: flex; gap: var(--space-2); align-items: baseline; min-width: 0; }
+.ptool-coord-label { flex: 0 0 auto; min-width: 6em; color: var(--text-tertiary); }
+.ptool-coord-value { min-width: 0; overflow-wrap: anywhere; display: inline-flex; flex-wrap: wrap; gap: var(--space-1); align-items: center; }
+.ptool-coord-nested { display: flex; flex-direction: column; gap: var(--space-1); padding-left: var(--space-3); border-left: 1px solid var(--border-light); }
+.ptool-coord-list { margin: 0; padding-left: var(--space-4); }
+.ptool-coord-section { display: flex; flex-direction: column; gap: var(--space-1); }
+.ptool-coord-heading {
+  margin: 0;
+  font-size: var(--conversation-font-size-caption);
+  font-weight: var(--weight-semibold);
+  color: var(--text-tertiary);
+}
+.ptool-coord-checks, .ptool-coord-workers, .ptool-coord-messages, .ptool-coord-quotes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ptool-coord-check { display: flex; gap: var(--space-2); align-items: flex-start; }
+.ptool-coord-mark { flex: 0 0 auto; display: inline-flex; width: var(--space-4); height: var(--space-4); margin-top: var(--space-0); }
+.ptool-coord-mark svg { width: 100%; height: 100%; }
+.ptool-coord-check--met .ptool-coord-mark { color: var(--success-text); }
+.ptool-coord-check--unmet .ptool-coord-mark { color: var(--error-text); }
+.ptool-coord-check--unknown .ptool-coord-mark { color: var(--text-tertiary); }
+.ptool-coord-check-text { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.ptool-coord-check-detail, .ptool-coord-progress { color: var(--text-secondary); font-weight: var(--weight-regular); }
+.ptool-coord-task-title { display: inline; }
+.ptool-coord-progress { display: block; }
+.ptool-coord-due { margin-left: var(--space-2); color: var(--warning-text); font-weight: var(--weight-regular); }
+.ptool-coord-task-cancelled .ptool-todo-text { text-decoration: line-through; }
+.ptool-coord-worker { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
+.ptool-coord-worker > .ptool-coord-more { flex-basis: 100%; }
+.ptool-coord-worker-title { font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.ptool-coord-quotes li { padding-left: var(--space-2); border-left: 2px solid var(--border); color: var(--text-secondary); }
+.ptool-coord-steps { display: inline-flex; gap: var(--space-1); align-items: center; color: var(--text-tertiary); }
+.ptool-coord-more > summary, .ptool-coord-debug > summary, .ptool-coord-raw > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.ptool-coord-prose { min-width: 0; overflow-wrap: anywhere; }
+.ptool-coord-more > .ptool-coord-prose { padding: var(--space-1) 0 0 var(--space-3); }
+.ptool-coord-open {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: none;
+  font: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.ptool-coord-open:hover { background: var(--bg-hover); }
+.ptool-coord-open svg { width: var(--space-4); height: var(--space-4); }
+.ptool-coord-debug { color: var(--text-tertiary); }
+.ptool-coord-debug-row { display: flex; gap: var(--space-2); min-width: 0; padding-left: var(--space-3); }
+.ptool-coord-debug-row code { overflow-wrap: anywhere; font-family: var(--font-mono); }
+.ptool-coord-raw pre {
+  margin: var(--space-1) 0 0;
+  max-height: 24em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--conversation-font-size-caption);
+}
+/* Beats [data-theme] .md-content reading sizes: card prose matches card text. */
+.ptool-coord-body .ptool-coord-prose.md-content { font-size: inherit; line-height: 1.5; }
+.ptool-coord-body .ptool-coord-prose.md-content > :first-child { margin-top: 0; }
+.ptool-coord-body .ptool-coord-prose.md-content > :last-child { margin-bottom: 0; }
+.ptool-coord-body .ptool-coord-prose.md-content :is(p, li, blockquote, td, th) { font-size: inherit; line-height: inherit; }

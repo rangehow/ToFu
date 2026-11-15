@@ -1,0 +1,895 @@
+"""Single-source tool contracts and deterministic provider compilation.
+
+``ToolContractV2`` owns model text, detailed discovery help, parameters,
+execution validation, permission, idempotency, result recovery, errors, PTC
+eligibility, and optional producer-declared decoded-result documentation.
+Legacy schemas can be adapted read-only while tool families migrate.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Literal, Mapping
+
+
+ToolPermission = Literal["read", "write", "approval", "external"]
+ToolIdempotency = Literal["read_only", "idempotent", "non_idempotent"]
+ToolResultRecovery = Literal["artifact", "source", "none"]
+ToolEffectRecovery = Literal["read_only", "idempotent", "reconcile"]
+MAX_DECODED_RESULT_SCHEMA_BYTES = 32768
+
+
+def clone_decoded_result_schema(value: Any) -> dict[str, Any]:
+    """Freeze producer-declared decoded JSON metadata; never infer from output.
+
+    This describes successful local tools.invoke values, not transport/MCP
+    envelopes. It is documentation, not result validation or evidence coverage.
+    """
+    try:
+        return json.loads(_encode_decoded_result_schema(value))
+    except (TypeError, RecursionError) as error:
+        raise ValueError("decoded_result_schema must be finite JSON") from error
+
+
+def _encode_decoded_result_schema(value: Any) -> str:
+    """Apply the shared finite-JSON and byte admission before materialization."""
+    if not isinstance(value, Mapping):
+        raise ValueError("decoded_result_schema must be an object")
+    try:
+        encoded = json.dumps(dict(value), ensure_ascii=True, sort_keys=True,
+                             separators=(',', ':'), allow_nan=False)
+        if len(encoded.encode('utf-8')) > MAX_DECODED_RESULT_SCHEMA_BYTES:
+            raise ValueError("decoded_result_schema exceeds 32 KiB")
+        return encoded
+    except (TypeError, RecursionError) as error:
+        raise ValueError("decoded_result_schema must be finite JSON") from error
+
+
+def serialize_decoded_result_schema(value: Any) -> str:
+    """Render the canonical declaration without constructing discarded JSON data.
+
+    Ordinary string-keyed JSON already has canonical key order after encoding.
+    Non-string keys and extension containers retain normalization through the
+    decoder, including the historical order after JSON stringifies numeric keys.
+    """
+    encoded = _encode_decoded_result_schema(value)
+    pending = [value]
+    # Encoding owns the result. If a producer changes the borrowed input while
+    # we inspect its key types, traversal must still terminate on that snapshot's
+    # byte budget and normalize the already frozen bytes.
+    remaining = len(encoded)
+    while pending and remaining:
+        remaining -= 1
+        node = pending.pop()
+        if type(node) is dict and all(type(key) is str for key in node):
+            pending.extend(node.values())
+        elif type(node) in (list, tuple):
+            pending.extend(node)
+        elif type(node) not in (str, int, float, bool, type(None)):
+            break
+    else:
+        if not pending:
+            return encoded
+    try:
+        return json.dumps(json.loads(encoded), ensure_ascii=True,
+                          sort_keys=True, separators=(',', ':'), allow_nan=False)
+    except (TypeError, RecursionError) as error:
+        raise ValueError("decoded_result_schema must be finite JSON") from error
+
+_PROVIDER_SAFE_TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")
+_JSON_ATOMIC_TYPES = (str, int, float, bool, type(None))
+
+
+def _clone_contract_value(value: Any, memo: dict[int, Any] | None = None) -> Any:
+    """Clone ordinary JSON contract data without ``deepcopy`` dispatch cost.
+
+    Provider schemas are JSON values, so exact built-in dictionaries/lists can
+    take a small recursive path. A memo preserves shared references and cycles;
+    extension types retain their historical ``deepcopy`` behavior.
+    """
+    if type(value) in _JSON_ATOMIC_TYPES:
+        return value
+    if memo is None:
+        memo = {}
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
+    if type(value) is dict:
+        cloned: dict[Any, Any] = {}
+        memo[identity] = cloned
+        cloned.update(
+            (_clone_contract_value(key, memo),
+             _clone_contract_value(item, memo))
+            for key, item in value.items()
+        )
+        return cloned
+    if type(value) is list:
+        cloned_list: list[Any] = []
+        memo[identity] = cloned_list
+        cloned_list.extend(
+            _clone_contract_value(item, memo) for item in value)
+        return cloned_list
+    return copy.deepcopy(value, memo)
+
+
+class ToolContractError(ValueError):
+    """Stable validation error suitable for a short model retry hint."""
+
+    def __init__(self, code: str, message: str, *, path: str = "$",
+                 retryable: bool = True,
+                 next_action: str = "Match arguments_schema and retry."):
+        super().__init__(message)
+        self.code = code
+        self.path = path
+        self.retryable = retryable
+        self.next_action = next_action
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "message": str(self),
+            "path": self.path,
+            "retryable": self.retryable,
+            "nextAction": self.next_action,
+        }
+
+
+@dataclass(frozen=True)
+class ToolErrorContract:
+    code: str
+    retryable: bool
+    next_action: str
+
+
+@dataclass(frozen=True)
+class ToolContractV2:
+    """Provider-neutral authority compiled into every tool representation."""
+
+    name: str
+    parameters: Mapping[str, Any]
+    model_description: str
+    search_metadata: tuple[str, ...] = ()
+    detailed_help: str = ""
+    permission: ToolPermission = "read"
+    idempotency: ToolIdempotency = "read_only"
+    errors: tuple[ToolErrorContract, ...] = ()
+    ptc_eligible: bool = False
+    namespace: str = "general"
+    result_recovery: ToolResultRecovery = "artifact"
+    decoded_result_schema: Mapping[str, Any] | None = None
+    shell_command_argument: str | None = None
+    effect_recovery: ToolEffectRecovery | None = None
+    contract_version: str = field(default="tofu.tool-contract/v2", init=False)
+
+    def __post_init__(self) -> None:
+        # Provider function names permit ASCII letters, digits, underscores,
+        # and hyphens. MCP adapters preserve the server/tool spelling inside
+        # names such as ``mcp__12306-train__get-current-date``; rejecting the
+        # hyphens here silently removed otherwise executable MCP tools from
+        # the request-owned contract map.
+        if (
+            not isinstance(self.name, str)
+            or _PROVIDER_SAFE_TOOL_NAME.fullmatch(self.name) is None
+        ):
+            raise ValueError(
+                "tool contract name must use only ASCII letters, digits, "
+                "underscores, or hyphens"
+            )
+        if not isinstance(self.parameters, Mapping):
+            raise ValueError("tool contract parameters must be an object")
+        if self.decoded_result_schema is not None:
+            object.__setattr__(self, 'decoded_result_schema',
+                               clone_decoded_result_schema(self.decoded_result_schema))
+        if self.permission in {"write", "approval"} and self.ptc_eligible:
+            raise ValueError("write/approval tools cannot be PTC eligible")
+        if self.ptc_eligible and self.idempotency == "non_idempotent":
+            raise ValueError("non-idempotent tools cannot be PTC eligible")
+        if self.result_recovery not in {"artifact", "source", "none"}:
+            raise ValueError(
+                "result_recovery must be artifact, source, or none")
+
+        policy = (self.effect_recovery if self.effect_recovery is not None else (
+            'read_only' if self.permission == 'read' and self.idempotency == 'read_only'
+            else 'idempotent' if self.idempotency == 'idempotent' else 'reconcile'))
+        if policy not in {'read_only', 'idempotent', 'reconcile'}:
+            raise ValueError('invalid effect recovery policy')
+        if policy == 'read_only' and (self.permission != 'read' or self.idempotency != 'read_only'):
+            raise ValueError('read-only effect recovery requires a read-only contract')
+        if policy == 'idempotent' and self.idempotency != 'idempotent':
+            raise ValueError('idempotent effect recovery requires declared idempotency')
+        object.__setattr__(self, 'effect_recovery', policy)
+
+        if self.shell_command_argument is not None:
+            properties = self.parameters.get("properties", {})
+            if (not isinstance(self.shell_command_argument, str)
+                    or not self.shell_command_argument
+                    or not isinstance(properties, Mapping)
+                    or not isinstance(properties.get(self.shell_command_argument), Mapping)
+                    or properties[self.shell_command_argument].get("type") != "string"):
+                raise ValueError("shell_command_argument must name a string parameter")
+
+    def provider_schema(self) -> dict[str, Any]:
+        """Compile the short, cache-stable provider function schema."""
+        result = {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.model_description.strip(),
+                "parameters": _clone_contract_value(dict(self.parameters)),
+            },
+        }
+        if self.decoded_result_schema is not None:
+            # Private catalog metadata; the common wire boundary projects it
+            # into description text and removes this non-provider field.
+            result['decoded_result_schema'] = _clone_contract_value(
+                self.decoded_result_schema)
+        return result
+
+    def search_document(self) -> dict[str, Any]:
+        """Compile private rich metadata returned only after discovery."""
+        result = {
+            "contractVersion": self.contract_version,
+            "name": self.name,
+            "namespace": self.namespace,
+            "summary": self.model_description.strip(),
+            "help": (self.detailed_help or self.model_description).strip(),
+            "aliases": list(self.search_metadata),
+            "arguments_schema": _clone_contract_value(dict(self.parameters)),
+            "permission": self.permission,
+            "idempotency": self.idempotency,
+            "ptcEligible": self.ptc_eligible,
+            "resultRecovery": self.result_recovery,
+            "effectRecovery": self.effect_recovery,
+            "shellCommandArgument": self.shell_command_argument,
+            "errors": [
+                {"code": error.code, "retryable": error.retryable,
+                 "nextAction": error.next_action}
+                for error in self.errors
+            ],
+        }
+        if self.decoded_result_schema is not None:
+            result['decoded_result_schema'] = _clone_contract_value(
+                self.decoded_result_schema)
+        return result
+
+    def validate_arguments(self, value: Any) -> dict[str, Any]:
+        validated = _validate(value, dict(self.parameters), path="$",
+                              content_paths=_long_content_paths(self.name))
+        if not isinstance(validated, dict):
+            raise ToolContractError(
+                "invalid_argument_type", "Tool arguments must be an object.")
+        check_argument_alternatives(self.name, value)
+        return validated
+
+
+def json_type_name(value: Any) -> str:
+    """JSON Schema type name of a decoded argument, for type refusals."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    return {float: "number", str: "string", list: "array", dict: "object",
+            type(None): "null"}.get(type(value), type(value).__name__)
+
+
+def _matches_type(value: Any, expected: str) -> bool:
+    return {
+        "object": isinstance(value, dict),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }.get(expected, True)
+
+
+def _validate(value: Any, schema: Mapping[str, Any], *, path: str,
+              content_paths: frozenset[str] = frozenset()) -> Any:
+    expected = schema.get("type")
+    expected_types = expected if isinstance(expected, list) else [expected]
+    expected_types = [str(item) for item in expected_types if item]
+    if expected_types and not any(_matches_type(value, item)
+                                  for item in expected_types):
+        raise ToolContractError(
+            "invalid_argument_type",
+            f"Invalid type at {path}; expected {' | '.join(expected_types)}, "
+            f"got {json_type_name(value)}.",
+            path=path,
+        )
+    if "enum" in schema and value not in schema.get("enum", ()):
+        raise ToolContractError(
+            "invalid_argument_value", f"Invalid value at {path}.", path=path)
+    if isinstance(value, str):
+        minimum = int(schema.get("minLength") or 0)
+        maximum = schema.get("maxLength")
+        allowed = (f"{minimum}–{int(maximum)}" if maximum is not None
+                   else f">= {minimum}")
+        if len(value) < minimum:
+            raise ToolContractError(
+                "invalid_argument_length",
+                f"Invalid length at {path} "
+                f"(got {len(value)} chars; allowed {allowed}).",
+                path=path,
+                next_action=f"Send at least {minimum} characters in {path}.")
+        if maximum is not None and len(value) > int(maximum):
+            limit = int(maximum)
+            over = len(value) - limit
+            raise ToolContractError(
+                "invalid_argument_length",
+                f"Invalid length at {path} "
+                f"(got {len(value)} chars; allowed {allowed}).",
+                path=path,
+                next_action=(
+                    f"{path} is {over} characters over its {limit}-character "
+                    "limit. Split the text into several calls of at most "
+                    f"{limit} characters, or write the details to a file and "
+                    "send its path instead."
+                    if path in content_paths else
+                    f"Shorten {path} by at least {over} characters and resend."))
+        pattern = schema.get('pattern')
+        if isinstance(pattern, str) and re.search(pattern, value) is None:
+            raise ToolContractError(
+                'invalid_argument_value', f'Value does not match the declared pattern at {path}.', path=path)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            raise ToolContractError(
+                "invalid_argument_value",
+                f"Value below minimum at {path} "
+                f"(got {value}; allowed >= {schema['minimum']}).",
+                path=path)
+        if "maximum" in schema and value > schema["maximum"]:
+            raise ToolContractError(
+                "invalid_argument_value",
+                f"Value above maximum at {path} "
+                f"(got {value}; allowed <= {schema['maximum']}).",
+                path=path)
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            least = int(schema["minItems"])
+            raise ToolContractError(
+                "too_few_items",
+                f"Too few items at {path} "
+                f"(got {len(value)} items; allowed >= {least}).",
+                path=path,
+                next_action=f"Send at least {least} items in {path}.")
+        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+            most = int(schema["maxItems"])
+            raise ToolContractError(
+                "too_many_items",
+                f"Too many items at {path} "
+                f"(got {len(value)} items; allowed <= {most}).",
+                path=path,
+                next_action=(
+                    f"Send at most {most} items in {path}: remove or merge at "
+                    f"least {len(value) - most}."))
+        child = schema.get("items")
+        if isinstance(child, Mapping):
+            return [_validate(item, child, path=f"{path}[{index}]",
+                              content_paths=content_paths)
+                    for index, item in enumerate(value)]
+    one_of = schema.get("oneOf")
+    if isinstance(value, dict) and isinstance(one_of, list) and one_of:
+        matched: list[int] = []
+        failures: list[str] = []
+        for index, branch in enumerate(one_of):
+            if not isinstance(branch, Mapping):
+                continue
+            try:
+                _validate(value, branch, path=path, content_paths=content_paths)
+            except ToolContractError as error:
+                failures.append(str(error))
+            else:
+                matched.append(index)
+        if not matched:
+            raise ToolContractError(
+                "invalid_argument_value",
+                f"No allowed target form matches at {path}. "
+                + " ".join(failures),
+                path=path,
+                next_action=(
+                    "Choose exactly one target form and remove the other "
+                    "form's fields."),
+            )
+        if len(matched) > 1:
+            raise ToolContractError(
+                "invalid_argument_value",
+                f"Arguments match more than one target form at {path}; "
+                "choose exactly one.",
+                path=path,
+                next_action=(
+                    "Choose exactly one target form and remove the other "
+                    "form's fields."),
+            )
+    if isinstance(value, dict):
+        properties = schema.get("properties") or {}
+        required = schema.get("required") or ()
+        missing = [name for name in required
+                   if name not in value or value.get(name) is None]
+        if missing:
+            raise ToolContractError(
+                "missing_required_arguments",
+                "Missing required arguments: " + ", ".join(map(str, missing)),
+                path=path,
+            )
+        if schema.get("additionalProperties") is False:
+            extras = sorted(set(value) - set(properties))
+            if extras:
+                raise ToolContractError(
+                    "unknown_arguments",
+                    "Unknown arguments: " + ", ".join(extras), path=path)
+        out = dict(value)
+        for key, child_schema in properties.items():
+            if key not in out and isinstance(child_schema, Mapping) \
+                    and "default" in child_schema:
+                out[key] = _clone_contract_value(child_schema["default"])
+            if key in out and isinstance(child_schema, Mapping):
+                out[key] = _validate(out[key], child_schema,
+                                     path=f"{path}.{key}",
+                                     content_paths=content_paths)
+        return out
+    return value
+
+
+def adapt_legacy_tool_contract(
+    schema: Mapping[str, Any], *, namespace: str = "general",
+    search_metadata: tuple[str, ...] = (), permission: ToolPermission = "read",
+    idempotency: ToolIdempotency = "read_only", ptc_eligible: bool = False,
+    result_recovery: ToolResultRecovery = "artifact",
+    shell_command_argument: str | None = None,
+    effect_recovery: ToolEffectRecovery | None = None,
+) -> ToolContractV2:
+    """Read-only compatibility adapter for existing provider schemas."""
+    function = schema.get("function") if isinstance(schema, Mapping) else None
+    function = function if isinstance(function, Mapping) else schema
+    name = str((function or {}).get("name") or "")
+    description = str((function or {}).get("description") or "")
+    parameters = (function or {}).get("parameters")
+    if not isinstance(parameters, Mapping):
+        parameters = {
+            "type": "object", "properties": {},
+            "additionalProperties": False,
+        }
+    return ToolContractV2(
+        name=name,
+        parameters=parameters,
+        model_description=description,
+        search_metadata=search_metadata,
+        detailed_help=description,
+        permission=permission,
+        idempotency=idempotency,
+        ptc_eligible=ptc_eligible,
+        namespace=namespace,
+        result_recovery=result_recovery,
+        decoded_result_schema=schema.get('decoded_result_schema'),
+        shell_command_argument=shell_command_argument,
+        effect_recovery=effect_recovery,
+    )
+
+
+def compile_execution_contract_documents(
+    schemas: Iterable[Mapping[str, Any]], *,
+    authoritative_documents_by_name: Mapping[str, Any] | None = None,
+    namespace: str = "general",
+) -> dict[str, dict[str, Any]]:
+    """Compile the exact execution surface into v2 contract documents.
+
+    Request assembly already owns rich documents for registry-backed tools.
+    Direct workers may add role-local or gateway schemas after that assembly;
+    those schemas cross the same legacy adapter here instead of inventing a
+    second validator. Duplicate executable names are rejected because an
+    ambiguous authority map must never be resolved by list order.
+    """
+    authoritative = authoritative_documents_by_name or {}
+    documents: dict[str, dict[str, Any]] = {}
+    for schema in schemas:
+        if not isinstance(schema, Mapping):
+            continue
+        function = schema.get("function")
+        function = function if isinstance(function, Mapping) else schema
+        name = str(function.get("name") or "")
+        if not name:
+            continue
+        if name in documents:
+            raise ValueError(f"duplicate executable tool contract: {name}")
+        existing = authoritative.get(name)
+        if isinstance(existing, Mapping):
+            document = _clone_contract_value(dict(existing))
+            if str(document.get("name") or "") != name:
+                raise ValueError(
+                    f"tool contract name mismatch for executable tool {name}")
+        else:
+            document = adapt_legacy_tool_contract(
+                schema, namespace=namespace, effect_recovery='reconcile').search_document()
+        documents[name] = document
+    return documents
+
+
+def validate_tool_arguments_from_documents(
+    documents_by_name: Mapping[str, Any] | None,
+    tool_name: str,
+    value: Any,
+) -> dict[str, Any]:
+    """Validate one call against its request-owned ToolContractV2 document.
+
+    ``None`` is the explicit read-compatible legacy mode. Once a request owns
+    a document map (including an empty map), a missing or malformed contract
+    fails closed so discovery, provider schema, and execution cannot drift.
+    """
+    if documents_by_name is None:
+        if not isinstance(value, dict):
+            raise ToolContractError(
+                "invalid_argument_type", "Tool arguments must be an object.")
+        return dict(value)
+
+    document = documents_by_name.get(tool_name)
+    if not isinstance(document, Mapping):
+        raise ToolContractError(
+            "tool_contract_unavailable",
+            f"No executable ToolContractV2 is available for {tool_name!r}.",
+            retryable=True,
+            next_action=(
+                "Search tools again and use a tool from the current tool epoch."),
+        )
+    if document.get("contractVersion") != "tofu.tool-contract/v2":
+        raise ToolContractError(
+            "invalid_tool_contract",
+            f"Unsupported execution contract for {tool_name!r}.",
+            retryable=False,
+            next_action="Do not execute this tool; report the contract error.",
+        )
+    schema = document.get("arguments_schema")
+    if not isinstance(schema, Mapping):
+        raise ToolContractError(
+            "invalid_tool_contract",
+            f"Execution contract for {tool_name!r} has no arguments schema.",
+            retryable=False,
+            next_action="Do not execute this tool; report the contract error.",
+        )
+    validated = _validate(value, schema, path="$",
+                          content_paths=_long_content_paths(tool_name))
+    if not isinstance(validated, dict):
+        raise ToolContractError(
+            "invalid_argument_type", "Tool arguments must be an object.")
+    check_argument_alternatives(tool_name, value)
+    return validated
+
+
+@dataclass(frozen=True)
+class ArgumentAlternatives:
+    """A choice between optional arguments, enforced at admission.
+
+    Provider tool-parameter validators reject a root ``oneOf``/``anyOf``/
+    ``allOf`` (OpenAI, Anthropic, Moonshot), so a built-in schema declares
+    every alternative as an optional property, states the choice in its
+    description, and registers the rule in :data:`ARGUMENT_ALTERNATIVES`.
+    ``exactly_one`` selects oneOf semantics; otherwise at least one is needed.
+    A ``None`` value counts as absent, exactly like ``required``.
+    """
+
+    names: tuple[str, ...]
+    exactly_one: bool
+    next_action: str
+
+
+ARGUMENT_ALTERNATIVES: dict[str, ArgumentAlternatives] = {
+    "browser_preview_page": ArgumentAlternatives(
+        ("path", "url"), exactly_one=True,
+        next_action=(
+            "Pass path for a project .html file, or url for an HTTP(S) page.")),
+    "timer_create": ArgumentAlternatives(
+        ("check_instruction", "condition_command"), exactly_one=False,
+        next_action=(
+            "Add check_instruction (model-judged readiness), "
+            "condition_command (shell predicate), or both.")),
+    "browser_download_url_to_server": ArgumentAlternatives(
+        ("url", "text", "selector"), exactly_one=False,
+        next_action=(
+            "Pass the exact HTTP(S) file url, or text/selector naming a "
+            "download link on the open page.")),
+    # Canonical read_files documents path as ignored beside reads, so the
+    # shared rule is at-least-one. A files-mode dispatch copy also refuses
+    # both; lib.project_dispatch.scope enforces that before any I/O.
+    "read_files": ArgumentAlternatives(
+        ("path", "reads"), exactly_one=False,
+        next_action=(
+            "Pass path for one file, or reads with one "
+            "{path, start_line?, end_line?} entry per file.")),
+    "channel_read": ArgumentAlternatives(
+        ("thread", "event_id"), exactly_one=True,
+        next_action=(
+            "Pass thread (for example dx:gid:123) for a page of its events, "
+            "or event_id for one event with its full text.")),
+    "search_memories": ArgumentAlternatives(
+        ("query", "memory_id"), exactly_one=True,
+        next_action=(
+            "Pass query to search (mode=owner for what Tofu knows about the "
+            "owner), or memory_id to open one item and why it is believed.")),
+}
+
+
+def check_argument_alternatives(tool_name: str, value: Any) -> None:
+    """Reject a call that names no alternative, or several for exactly-one."""
+    rule = ARGUMENT_ALTERNATIVES.get(tool_name)
+    if rule is None or not isinstance(value, Mapping):
+        return
+    given = [name for name in rule.names if value.get(name) is not None]
+    choices = ", ".join(rule.names)
+    if not given:
+        quantity = "exactly one" if rule.exactly_one else "at least one"
+        raise ToolContractError(
+            "missing_required_arguments",
+            f"Missing required arguments: {quantity} of {choices}.",
+            next_action=rule.next_action)
+    if rule.exactly_one and len(given) > 1:
+        raise ToolContractError(
+            "invalid_argument_value",
+            f"Pass only one of {choices}; got {', '.join(given)}.",
+            next_action=rule.next_action)
+
+
+def _clamp_walk(value: Any, schema: Any, path: str,
+                log: list[tuple[str, str]], truncatable: frozenset[str],
+                top_key: str) -> Any:
+    if isinstance(value, bool) or not isinstance(schema, Mapping):
+        return value
+    if isinstance(value, (int, float)):
+        lo, hi = schema.get("minimum"), schema.get("maximum")
+        if isinstance(lo, (int, float)) and not isinstance(lo, bool) \
+                and value < lo:
+            log.append((path, "clamp_minimum"))
+            return lo
+        if isinstance(hi, (int, float)) and not isinstance(hi, bool) \
+                and value > hi:
+            log.append((path, "clamp_maximum"))
+            return hi
+        return value
+    if isinstance(value, str):
+        hi = schema.get("maxLength")
+        if top_key in truncatable and isinstance(hi, int) \
+                and not isinstance(hi, bool) and len(value) > hi >= 1:
+            log.append((path, "truncate_max_length"))
+            return shorten_display_text(value, hi)
+        return value
+    if isinstance(value, list):
+        items = schema.get("items")
+        if isinstance(items, Mapping):
+            walked = [_clamp_walk(item, items, f"{path}[{index}]", log,
+                                  truncatable, top_key)
+                      for index, item in enumerate(value)]
+            if any(new is not old for new, old in zip(walked, value)):
+                return walked
+        return value
+    if isinstance(value, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, Mapping):
+            changed = False
+            out = dict(value)
+            for key, child in properties.items():
+                if key in out and isinstance(child, Mapping):
+                    new = _clamp_walk(out[key], child, f"{path}.{key}",
+                                      log, truncatable, top_key)
+                    if new is not out[key]:
+                        changed = True
+                        out[key] = new
+            return out if changed else value
+        return value
+    return value
+
+
+def clamp_arguments_to_schema(
+    value: Any,
+    schema: Mapping[str, Any],
+    *,
+    truncatable: frozenset[str] = frozenset(),
+    clamp_exempt: frozenset[str] = frozenset(),
+) -> tuple[Any, list[tuple[str, str]]]:
+    """Clamp numeric arguments to their declared bounds, returning repairs.
+
+    Sizing fields such as ``limit``/``max_chars`` can use declared bounds
+    without a rejection round-trip. Navigation, revision and authorization
+    values must instead be excluded through ``clamp_exempt``: a schema bound
+    cannot choose an evidence version or delegated allowance for the caller.
+    Strings over ``maxLength`` are shortened (``shorten_display_text``) ONLY
+    for top-level keys in ``truncatable`` (see DISPLAY_TEXT_PARAMS);
+    identity/content strings (todo ids, edit anchors, file content) must never
+    be shortened. Top-level keys in ``clamp_exempt`` are skipped entirely (see
+    NEVER_CLAMP_PARAMS).
+    Returns ``(clamped, [(json_path, pattern), ...])``; the ORIGINAL object
+    is returned unchanged when nothing was repaired, so no-op callers keep
+    object identity. Never raises — any internal error returns the input
+    untouched so fail-closed validation behaves exactly as before this pass
+    existed.
+    """
+    log: list[tuple[str, str]] = []
+    try:
+        if not isinstance(value, dict) or not isinstance(schema, Mapping):
+            return value, log
+        # A oneOf schema shares one properties bag across mutually exclusive
+        # branches; field-level clamps stay sound because they only touch
+        # declared numeric/string bounds, but skipping keeps reasoning simple
+        # when a branch identity would change which bound applies. Clamping is
+        # a sizing convenience, never part of target-form authority.
+        if isinstance(schema.get("oneOf"), list) and schema["oneOf"]:
+            return value, log
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            return value, log
+        changed = False
+        out = dict(value)
+        for key, child in properties.items():
+            if key not in out or key in clamp_exempt \
+                    or not isinstance(child, Mapping):
+                continue
+            new = _clamp_walk(out[key], child, f"$.{key}", log,
+                              truncatable, key)
+            if new is not out[key]:
+                changed = True
+                out[key] = new
+        return (out if changed else value), log
+    except Exception:
+        return value, []
+
+
+# Shared by static repair and request-document repair. These are exact
+# navigation/authority values, not output sizing wishes. Exempting a container
+# also preserves nested dependency/rework revision pins. Invalid values reach
+# final contract validation unchanged so the caller can obtain correct evidence
+# or choose an allowance, instead of silently changing an authorized action.
+# get_conversation.before=0 has its separate, non-destructive omission repair.
+NEVER_CLAMP_PARAMS: dict[str, frozenset[str]] = {
+    "get_conversation": frozenset({"before"}),
+    "dispatch_project_assignment": frozenset({"expected_revision"}),
+    "review_project_work": frozenset({"result_revision", "acceptance_results"}),
+    "delegate_project_work": frozenset({
+        "max_tokens", "max_model_requests", "max_tool_calls",
+        "dependencies", "rework_of",
+    }),
+}
+
+
+# Display-only text: shown to people and keyed by nothing, so an over-long
+# value is shortened at the input boundary instead of refusing the whole call
+# (docs/modules/tools_execution.md, "Display-only argument overflow").
+# Shortening is deterministic, so an idempotent retry sends the same value.
+# Never list identity keys (task-board task titles: due commitments are keyed
+# by title and due), content (message bodies), ids, enums or authority values.
+DISPLAY_TEXT_PARAMS: dict[str, frozenset[str]] = {
+    "create_conversation": frozenset({"title"}),
+    "delegate_project_work": frozenset({"title"}),
+    "edit_file": frozenset({"description"}),
+    "report_to_user": frozenset({"title"}),
+    "update_task_progress": frozenset({"summary"}),
+}
+
+# Content whose limit comes from storage or delivery (the project-message
+# segment layout, the report body): an overflow is still refused, and the
+# refusal says how to send the text instead of only its length.
+LONG_CONTENT_PARAMS: dict[str, frozenset[str]] = {
+    "report_to_user": frozenset({"message"}),
+    "send_project_message": frozenset({"content"}),
+}
+
+DISPLAY_TEXT_ELLIPSIS = "…"
+
+
+def _long_content_paths(tool_name: str) -> frozenset[str]:
+    return frozenset(
+        f"$.{key}" for key in LONG_CONTENT_PARAMS.get(tool_name, ()))
+
+
+def _joins_preceding(text: str, index: int) -> bool:
+    """Whether ``text[index]`` continues the character sequence before it."""
+    char = text[index]
+    return (unicodedata.category(char).startswith("M")
+            or char == "\u200d" or text[index - 1] == "\u200d"
+            or "\U0001f3fb" <= char <= "\U0001f3ff")
+
+
+def _is_word_char(char: str) -> bool:
+    # A wide (CJK) character is a word of its own: cutting after it is a
+    # word boundary, as it is between space-separated words.
+    return ((char.isalnum() or unicodedata.category(char).startswith("M"))
+            and unicodedata.east_asian_width(char) not in ("W", "F"))
+
+
+def shorten_display_text(value: str, limit: int) -> str:
+    """Fit display text into ``limit`` characters, ending in an ellipsis.
+
+    ``maxLength`` counts code points, so the result is exact for CJK and mixed
+    text. The cut never separates a character from its combining marks or a
+    joined emoji sequence, and it does not end inside a run of letters or
+    digits when an earlier word boundary exists.
+    """
+    if len(value) <= limit or limit < 1:
+        return value
+    cut = limit - len(DISPLAY_TEXT_ELLIPSIS)
+    while cut > 0 and _joins_preceding(value, cut):
+        cut -= 1
+    if cut > 0 and _is_word_char(value[cut - 1]) and _is_word_char(value[cut]):
+        start = cut
+        while start > 0 and _is_word_char(value[start - 1]):
+            start -= 1
+        if start > 0:
+            cut = start
+    return value[:cut].rstrip() + DISPLAY_TEXT_ELLIPSIS
+
+
+def display_text_warning(path: str, before: Any, after: Any) -> str:
+    """Model-facing note for one display argument shortened at the boundary."""
+    if isinstance(before, str) and isinstance(after, str):
+        return (f"{path} had {len(before)} characters, more than this display "
+                f"field allows; it was shortened to {len(after)} characters "
+                f"ending in \"{DISPLAY_TEXT_ELLIPSIS}\" instead of rejecting "
+                "the call.")
+    return (f"{path} was longer than this display field allows; it was "
+            f"shortened, ending in \"{DISPLAY_TEXT_ELLIPSIS}\", instead of "
+            "rejecting the call.")
+
+
+def display_text_warnings(original: Any, repaired: Any,
+                          repairs: Iterable[tuple[str, str]]) -> list[str]:
+    """Notes for every display argument a repair pass shortened."""
+    notes: list[str] = []
+    for path, pattern in repairs:
+        if pattern != "truncate_max_length":
+            continue
+        key = path[2:] if path.startswith("$.") else ""
+        notes.append(display_text_warning(
+            path,
+            original.get(key) if isinstance(original, Mapping) else None,
+            repaired.get(key) if isinstance(repaired, Mapping) else None))
+    return notes
+
+
+def clamp_tool_arguments_from_documents(
+    documents_by_name: Mapping[str, Any] | None,
+    tool_name: str,
+    value: Any,
+) -> tuple[Any, list[tuple[str, str]]]:
+    """Bounds-clamp one call against its request-owned contract document.
+
+    The static repair index exempts server-dynamic (MCP) schemas; the
+    request-owned ToolContractV2 document still knows their bounds, so the
+    execution pipeline can clamp them before validation rejects the call.
+    Unknown/missing/malformed documents pass through untouched — validation
+    downstream remains the fail-closed authority for those cases.
+    """
+    if documents_by_name is None:
+        return value, []
+    document = documents_by_name.get(tool_name)
+    if not isinstance(document, Mapping):
+        return value, []
+    if document.get("contractVersion") != "tofu.tool-contract/v2":
+        return value, []
+    schema = document.get("arguments_schema")
+    if not isinstance(schema, Mapping):
+        return value, []
+    return clamp_arguments_to_schema(
+        value, schema,
+        truncatable=DISPLAY_TEXT_PARAMS.get(tool_name, frozenset()),
+        clamp_exempt=NEVER_CLAMP_PARAMS.get(tool_name, frozenset()))
+
+
+def contract_json(contract: ToolContractV2) -> str:
+    """Canonical contract document used for hashing and generated docs."""
+    return json.dumps(contract.search_document(), ensure_ascii=False,
+                      sort_keys=True, separators=(",", ":"))
+
+
+__all__ = [
+    "ARGUMENT_ALTERNATIVES", "ArgumentAlternatives",
+    "ToolContractError", "ToolContractV2", "ToolErrorContract",
+    "adapt_legacy_tool_contract", "check_argument_alternatives",
+    "clamp_arguments_to_schema",
+    "clamp_tool_arguments_from_documents", "NEVER_CLAMP_PARAMS",
+    "DISPLAY_TEXT_PARAMS", "LONG_CONTENT_PARAMS",
+    "compile_execution_contract_documents",
+    "contract_json", "display_text_warning", "display_text_warnings",
+    "json_type_name", "shorten_display_text",
+    "validate_tool_arguments_from_documents",
+]

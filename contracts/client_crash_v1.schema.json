@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "tofu.client-crash/v1",
+  "title": "Browser crash capture",
+  "description": "Wire and record authority for browser page crashes (docs/LOGGING.md, 'Browser crash capture'). Two channels feed one typed record kind in the client-report store (lib/client_report_store.py): the unclean-exit report a reloaded tab sends for its previous page instance (frontend/src/core/page-crash-journal.ts), and Chrome's Reporting API crash report (WICG crash-reporting). Classification separates browser-confirmed and suspected renderer crashes from tab discards and session restores; application errors are breadcrumbs, never a classification.",
+  "maxBodyBytes": 1048576,
+  "maxBodyBytesSource": "The client-report intake bound shared by every record kind in the store (routes/api_v1/client_support.py). The browser journal keeps no more than one deliverable report per page instance.",
+  "reportingEndpointName": "crash-reporting",
+  "crashContextKeys": {
+    "pageInstanceId": 64,
+    "view": 64,
+    "conversationId": 64,
+    "streamActive": 1,
+    "freezeMs": 16,
+    "usedJSHeapSize": 16,
+    "jsHeapSizeLimit": 16,
+    "domElements": 16
+  },
+  "crashContextKeysSource": "window.crashReport key -> maximum value length. Identifiers reuse the 64-character label bound of browser diagnostics; numbers are decimal safe integers (at most 16 digits). The browser sizes its crash report buffer from this table.",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "epochMs": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "label": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "classification": {
+      "enum": [
+        "renderer_crash",
+        "renderer_crash_suspected",
+        "tab_discarded",
+        "session_restored"
+      ],
+      "description": "renderer_crash: Chrome reported it (Reporting API). renderer_crash_suspected: a page instance ended without a clean pagehide and was neither discarded nor restored from history: the tab's previous instance, or an instance visible in another tab of the same owner and browser session. tab_discarded: document.wasDiscarded. session_restored: the tab was restored or duplicated from history (navigation type back_forward), so the previous instance's fate is unknown; such a tab also reports other tabs' unclean exits this way, because its browser session may itself have been restored after an abrupt end."
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["userAgent", "extensions"],
+      "properties": {
+        "userAgent": {"type": "string"},
+        "brands": {"type": "array", "items": {"type": "string"}},
+        "platform": {"type": "string"},
+        "mobile": {"type": "boolean"},
+        "deviceMemoryGiB": {"type": "number", "minimum": 0},
+        "hardwareConcurrency": {"type": "integer", "minimum": 0},
+        "extensions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["grammarly", "immersive-translate"]},
+          "description": "Extensions recognised by their DOM markers in this document. Markers only; no page content is read."
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "view", "conversationId", "streamActive"],
+      "properties": {
+        "at": {"$ref": "#/$defs/epochMs"},
+        "view": {"$ref": "#/$defs/label"},
+        "conversationId": {"$ref": "#/$defs/label"},
+        "streamActive": {"type": "boolean"}
+      }
+    },
+    "freeze": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "evidence"],
+      "properties": {
+        "at": {"$ref": "#/$defs/epochMs"},
+        "evidence": {
+          "type": "object",
+          "description": "The latest browser.main_thread_stall record of the page instance, as the responsiveness monitor serialized it (docs/LOGGING.md)."
+        }
+      }
+    },
+    "errorBreadcrumb": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "kind", "message"],
+      "properties": {
+        "at": {"$ref": "#/$defs/epochMs"},
+        "lastAt": {"$ref": "#/$defs/epochMs"},
+        "kind": {"enum": ["error", "unhandledrejection", "console"]},
+        "message": {"type": "string", "maxLength": 4000},
+        "source": {"type": "string", "maxLength": 2000},
+        "stack": {"type": "string", "maxLength": 1000},
+        "count": {"type": "integer", "minimum": 1}
+      },
+      "description": "Lengths mirror the client diagnostics bounds (frontend/src/core/debug-runtime-owner.ts DEBUG_RUNTIME_LIMITS). Consecutive identical errors fold into one entry with a count."
+    },
+    "clientCrashReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "pageInstanceId", "classification", "startedAt", "lastSeenAt", "detectedAt",
+        "navigationType", "environment", "context", "freeze", "errors", "droppedErrors"
+      ],
+      "properties": {
+        "schema": {"const": "tofu.client-crash/v1"},
+        "pageInstanceId": {"$ref": "#/$defs/id"},
+        "classification": {"enum": ["renderer_crash_suspected", "tab_discarded", "session_restored"]},
+        "startedAt": {"$ref": "#/$defs/epochMs"},
+        "lastSeenAt": {"$ref": "#/$defs/epochMs"},
+        "detectedAt": {"$ref": "#/$defs/epochMs"},
+        "navigationType": {"enum": ["navigate", "reload", "back_forward", "prerender", ""]},
+        "environment": {"anyOf": [{"$ref": "#/$defs/environment"}, {"type": "null"}]},
+        "context": {"anyOf": [{"$ref": "#/$defs/context"}, {"type": "null"}]},
+        "freeze": {"anyOf": [{"$ref": "#/$defs/freeze"}, {"type": "null"}]},
+        "errors": {"type": "array", "items": {"$ref": "#/$defs/errorBreadcrumb"}},
+        "droppedErrors": {"type": "integer", "minimum": 0}
+      },
+      "description": "POST body of the unclean-exit report: a dead page instance's breadcrumbs, oldest error first. A report from another tab carries the origin copy of the environment, context and freeze evidence and no errors. droppedErrors counts errors the journal removed to stay within maxBodyBytes or sessionStorage's quota."
+    },
+    "browserCrashBody": {
+      "type": "object",
+      "properties": {
+        "reason": {"enum": ["oom", "unresponsive"]},
+        "stack": {"type": "string"},
+        "is_top_level": {"type": "boolean"},
+        "visibility_state": {"enum": ["visible", "hidden"]},
+        "crash_report_api": {"type": "object", "additionalProperties": {"type": "string"}}
+      },
+      "description": "Body of a Reporting API report of type crash (https://wicg.github.io/crash-reporting/). Unknown members are ignored and never stored."
+    },
+    "browserReport": {
+      "type": "object",
+      "required": ["type", "url", "body"],
+      "properties": {
+        "type": {"type": "string"},
+        "age": {"type": "integer", "minimum": 0},
+        "url": {"type": "string"},
+        "user_agent": {"type": "string"},
+        "body": {"type": ["object", "null"]}
+      },
+      "description": "One entry of an application/reports+json upload (https://w3c.github.io/reporting/#serialize-reports). Only type crash is accepted."
+    },
+    "browserReportUpload": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/browserReport"}
+    }
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "compute_patrol_v1",
+  "title": "Compute liveness patrol: cadence, rules and the files each side publishes",
+  "description": "Authority: docs/COMPUTE_PATROL.md. The off-host patrol (scripts/hope_patrol/patrol.py) publishes publication.json each cycle; the host probe (scripts/hope_patrol/probe.py) publishes observations.json; the Watchdog review intake (lib/router/watchdog/compute_patrol.py) turns publication flags into Watchdog fault signals. Both sides read this file: the patrol from its own package directory, Tofu from contracts/.",
+  "x-cadenceSeconds": 1800,
+  "x-cadenceSource": "Router spec 2026-11-13: one liveness patrol cycle about every 30 minutes.",
+  "x-hangRule": {
+    "windowSeconds": 3600,
+    "npuUtilMeanMax": 1.0,
+    "npuMemoryRangeMax": 1.0,
+    "cpuDecileRangeMax": 0.5,
+    "observationMaxAgeSeconds": 3600,
+    "justification": "910C NPU utilization reads low even on active training (2026-11-13 calibration job psxls68xru4vuomj: mean 2.14 %; live working jobs read 0.18-0.96 %), so utilization only vetoes; a job is likely hung only when NPU utilization is low AND NPU memory is flat AND worker CPU is flat over a full window. NPU memory flatness is its range (max - min): any change is NPU work, and a short burst is progress (live psxn96pxru396rfe: one burst of +69.6 pp in an otherwise idle hour). Worker CPU flatness is its decile range (p90 - p10): a heartbeat thread makes isolated blips that are not progress (live psxmwu2xru396rfe [ki-E/smoke8]: mean 0.01 with one 0.50 blip in 241 samples, decile range 0.005). Lifetime aggregates carry only mean and max; their range is then max - mean. Calibration: 2026-11-13 audit aggregates (idle: CPU <= 0.066, memory <= 0.38 pp; active: CPU 1.34, memory 2.59 pp) and the 15:28 CST live pass over the account's 60-minute series (idle at the 4.6 % NPU memory baseline: memory range <= 0.024 pp, CPU decile range <= 0.033; working jobs: memory range >= 11.8 pp). The window is two cycles because one flat cycle can be a checkpoint save or an evaluation pause. An observation older than two cycles (one missed probe run) is not judged."
+  },
+  "x-metrics": {
+    "resolutionSeconds": 60,
+    "source": "MLP /mlapi/kub/job/{id}/metric/{metric}/allRoles holds one value per minute, reported as four 15 s samples; a series starting within one resolution of the requested start covers the whole window.",
+    "signals": {"npu_util": "gpu_util", "npu_memory": "gpu_memory", "cpu": "cpu"}
+  },
+  "x-queuedRule": {
+    "olderThanSeconds": 86400,
+    "source": "Router spec 2026-11-13: queued jobs older than about 24 h that nobody claims are flagged."
+  },
+  "x-states": {
+    "running": ["RUNNING"],
+    "preRunning": ["CREATED", "ASSIGNED", "INITIALIZED", "PENDING", "NEW", "NEW_SAVING", "SUBMITTED", "ACCEPTED"],
+    "terminal": ["FINISHED", "FAILED", "KILLED", "SUCCEEDED", "SUCCESS", "STOPPED", "CANCELLED", "CANCELED"]
+  },
+  "x-retentionDays": 7,
+  "x-retentionSource": "Evict-only retention of the per-day cycle log (cycles/<date>.jsonl); verdicts never depend on it.",
+  "$defs": {
+    "ms": {"type": "integer", "minimum": 0, "description": "Unix epoch milliseconds."},
+    "signal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mean", "max"],
+      "properties": {
+        "mean": {"type": "number"},
+        "max": {"type": "number"},
+        "min": {"type": ["number", "null"], "description": "Absent for lifetime aggregates; the range is then max - mean."},
+        "p10": {"type": ["number", "null"], "description": "10th percentile of the window's samples (series only)."},
+        "p90": {"type": ["number", "null"], "description": "90th percentile of the window's samples (series only)."}
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["windowStart", "windowEnd", "signals"],
+      "properties": {
+        "windowStart": {"$ref": "#/$defs/ms"},
+        "windowEnd": {"$ref": "#/$defs/ms"},
+        "samples": {"type": "integer", "minimum": 0},
+        "newestSampleAt": {"anyOf": [{"$ref": "#/$defs/ms"}, {"type": "null"}]},
+        "signals": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": {"$ref": "#/$defs/signal"},
+            "npu_util": {"$ref": "#/$defs/signal"},
+            "npu_memory": {"$ref": "#/$defs/signal"}
+          }
+        }
+      }
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "at", "authState", "jobs"],
+      "properties": {
+        "version": {"const": 1},
+        "at": {"$ref": "#/$defs/ms"},
+        "host": {"type": "string"},
+        "authState": {"type": "string", "description": "The SSO adapter's state for the MLP ticket (ready, login_required, pending, blocked, unknown) or 'error'. Only ready reads anything."},
+        "windowSeconds": {"type": "integer", "minimum": 1},
+        "jobs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/observation"}},
+        "errors": {"type": "array", "items": {"type": "string", "maxLength": 500}}
+      }
+    },
+    "flag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "since", "evidence"],
+      "properties": {
+        "kind": {"enum": ["job_hung", "job_queued_stale", "patrol_degraded"]},
+        "jobId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "condition": {"enum": ["hope_token", "hope_token_expiring", "queue_read", "activity_probe"], "description": "patrol_degraded only: which part of the patrol is degraded."},
+        "queue": {"type": "string", "maxLength": 512},
+        "name": {"type": "string", "maxLength": 512},
+        "creator": {"type": "string", "maxLength": 128},
+        "project": {"type": ["string", "null"], "maxLength": 256},
+        "projectPath": {"type": ["string", "null"], "maxLength": 4096},
+        "cards": {"type": ["integer", "null"]},
+        "state": {"type": "string", "maxLength": 64},
+        "since": {"$ref": "#/$defs/ms"},
+        "evidence": {"type": "string", "maxLength": 2000}
+      }
+    },
+    "publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "patrol", "owner", "cycle", "at", "staleAfter", "stopped", "host", "inventory", "candidates", "flags"],
+      "properties": {
+        "version": {"const": 1},
+        "patrol": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "owner": {"type": "integer", "minimum": 1},
+        "cycle": {"type": "integer", "minimum": 1},
+        "at": {"$ref": "#/$defs/ms"},
+        "staleAfter": {"$ref": "#/$defs/ms"},
+        "stopped": {"type": "boolean"},
+        "host": {"type": "string", "maxLength": 256},
+        "instance": {"type": "string", "maxLength": 512, "description": "host:pid:start of the patrol process; one live instance publishes at a time."},
+        "inventory": {"type": "object"},
+        "candidates": {"type": "array", "items": {"type": "object"}, "description": "Running card jobs the host probe reads activity for."},
+        "flags": {"type": "array", "items": {"$ref": "#/$defs/flag"}},
+        "claimed": {"type": "array", "items": {"type": "object"}, "description": "Jobs a lead claimed in claims.json; never flagged while the claim lasts."},
+        "health": {"type": "object"}
+      }
+    }
+  }
+}

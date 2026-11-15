@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "native_workspace_v1.schema.json",
+  "title": "Native workspace revisions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "engine", "branches", "currentBranch"],
+  "properties": {
+    "format": {"const": 1},
+    "engine": {"const": "tofu-workspace"},
+    "currentBranch": {"$ref": "#/$defs/branch"},
+    "head": {"anyOf": [{"$ref": "#/$defs/revisionId"}, {"type": "null"}]},
+    "branches": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/branch"},
+      "additionalProperties": {"$ref": "#/$defs/revisionId"}
+    },
+    "wip": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/branch"},
+      "additionalProperties": {"$ref": "#/$defs/revisionId"}
+    }
+  },
+  "$defs": {
+    "branch": {
+      "type": "string",
+      "pattern": "^(?!.*(?:^|/)\\.tofu-workspace(?:/|$))(?!.*//)(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))(?!.*\\0)(?!.*/$)(?!^/).+$"
+    },
+    "revisionId": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "description": "Versioned native workspace state. Revision IDs are opaque identifiers whose current encoding is SHA-256. This is a standalone prototype contract, not the integration/delivery authority or a Git SHA field. Capture accepts caller-declared changed paths or Capture::Complete; a missing declared path is a deletion, and escapes or unsupported file kinds fail. Complete capture is explicit reconciliation, not an assumed durable filesystem journal. Open loads saved WIP without silently replacing its recovery pointer. WIP survives commits until checkout. Capture is atomic against other engine handles, not arbitrary external writers or active filesystem snapshots."
+}

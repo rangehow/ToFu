@@ -1,0 +1,9 @@
+/* A pending review is always visible, above preview/action/process content.
+ * Its keyed DOM preserves draft text and focus across authoritative snapshots. */
+.ptool-work-card .ptool-wu-gate { padding: var(--space-4); margin-block: var(--space-3); border: 1px solid var(--warning-border); border-radius: var(--radius-sm); background: var(--bg-primary); }
+.ptool-work-card .ptool-wu-gate-title { font: var(--weight-semibold) var(--font-size-xl)/var(--leading-title) var(--font-ui); color: var(--text-primary); margin: 0 0 var(--space-3); }
+.ptool-work-card .ptool-wu-gate-deck { color: var(--text-secondary); font-size: var(--font-size-md); }
+.ptool-work-card .ptool-wu-gate-pages { max-height: 280px; overflow-y: auto; list-style: none; padding: 0; margin: var(--space-3) 0; }
+.ptool-work-card .ptool-wu-gate-page { display: flex; gap: var(--space-3); padding-block: var(--space-2); font-size: var(--font-size-lg); line-height: var(--leading-body); }
+.ptool-wu-gate-page-n { flex: none; min-width: var(--space-4); font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.ptool-work-card .ptool-wu-gate textarea { width: 100%; resize: vertical; min-height: 90px; box-sizing: border-box; font-size: var(--font-size-lg); }

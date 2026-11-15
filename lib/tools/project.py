@@ -1,0 +1,656 @@
+"""lib/tools/project.py — Project co-pilot tool definitions."""
+
+import copy
+import os
+
+from lib.tools.background_guidance import RUN_COMMAND_HANDOFF, RUN_COMMAND_STOP
+
+PROJECT_TOOL_SEARCH_FILES = {
+    "type": "function",
+    "function": {
+        "name": "search_files",
+        "description": (
+            "Search project file content and return paths, line numbers, and matches. "
+            "Prefer this over shell grep/rg: a persistent file index plus ripgrep over "
+            "exact candidates avoids recursive walks on huge/network (FUSE) trees, "
+            "includes hidden files, skips ignored paths unless `path` is inside one, "
+            "and is case-insensitive by default. Prefer "
+            "short literal keywords; regex uses Rust/ripgrep syntax (`A|B`, `\\.` for "
+            "a literal dot, per-line `^`/`$`), not GNU BRE. `path` is one relative "
+            "path or project root. For independent roots/patterns use one `searches` "
+            "batch; every operation runs and avoids sequential model "
+            "rounds."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Short literal substring preferred; Rust/ripgrep regex is supported."},
+                "path": {"type": "string", "description": "One relative path; omit for project root."},
+                "include": {"type": "string", "description": "Optional file glob such as `*.py`."},
+                "context_lines": {"type": "integer", "description": "Lines before/after each match. Default 0, max 10; use 3-5 to avoid a follow-up read."},
+                "max_results": {"type": "integer", "description": "Matching-line cap, default 50; use 5-20 for samples/existence checks."},
+                "from_line": {"type": "integer", "minimum": 1, "description": "Only report matches on lines ≥ N (per-file floor for paging)."},
+                "count_only": {"type": "boolean", "description": "Return the full matching-line count only; `max_results` is ignored in count_only mode."},
+                "searches": {
+                    "type": "array",
+                    "description": "Batch operations; all entries execute. Faster than separate calls.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {"type": "string", "description": "Search pattern"},
+                            "path": {"type": "string", "description": "Relative path to search in (optional)"},
+                            "include": {"type": "string", "description": "File glob filter (optional)"},
+                            "context_lines": {"type": "integer", "description": "Context lines (optional)"},
+                            "max_results": {"type": "integer", "description": "Max results per search (optional)"},
+                            "from_line": {"type": "integer", "minimum": 1, "description": "Per-file line floor (optional)"},
+                            "count_only": {"type": "boolean", "description": "Count only mode (optional)"}
+                        },
+                        "required": ["pattern"]
+                    }
+                }
+            }
+        }
+    }
+}
+
+# Retired name of ``search_files``, absent from the model-visible surface. The
+# schema stays defined so a direct ``grep_search`` dispatch keeps argument
+# repair; name repair maps fresh calls to ``search_files``.
+PROJECT_TOOL_GREP_SEARCH = copy.deepcopy(PROJECT_TOOL_SEARCH_FILES)
+PROJECT_TOOL_GREP_SEARCH['function']['name'] = 'grep_search'
+
+PROJECT_TOOL_FIND = {
+    "type": "function",
+    "function": {
+        "name": "find_files",
+        "description": (
+            "Find files by name pattern (glob) in the project. Useful for discovering "
+            "test files, configs, etc.\n\n"
+            "**Prefer this over ``run_command find``** — find_files is served from a "
+            "persistent project file index (near-instant even on huge or network-mounted "
+            "trees), supports ``max_results``, includes hidden files, and auto-filters "
+            "ignored paths (node_modules, .venv, .gitignore matches, etc.) unless "
+            "``path`` points inside one.\n\n"
+            "For MULTIPLE searches, provide a 'searches' array — each entry has the same "
+            "fields as the top-level parameters. Batch mode cuts round trips."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "File name glob pattern, e.g. '*.test.py', 'Dockerfile', '*.config.*'"},
+                "path": {"type": "string", "description": "Relative path to search in (optional)"},
+                "max_results": {"type": "integer", "description": "Maximum number of files to return. Default 100. Use a small value (5-20) when you only need a quick sample."},
+                "searches": {
+                    "type": "array",
+                    "description": "Array of find operations. All entries execute with the same fields as the top-level parameters. Faster than separate find_files calls.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "pattern": {"type": "string", "description": "File name glob pattern"},
+                            "path": {"type": "string", "description": "Relative path to search in (optional)"},
+                            "max_results": {"type": "integer", "description": "Max results per search (optional)"}
+                        },
+                        "required": ["pattern"]
+                    }
+                }
+            }
+        }
+    }
+}
+
+PROJECT_TOOL_REPO_MAP = {
+    "type": "function",
+    "function": {
+        "name": "repo_map",
+        "description": (
+            "Return a compact structural outline of the project: which source "
+            "files define which functions/classes/methods, ranked by how often "
+            "other files reference them. Use this FIRST when you need to orient "
+            "in an unfamiliar area — it is much cheaper than repeated ls/grep "
+            "rounds. The map contains ONLY definition lines (signature + 1-based "
+            "line number), never bodies; hand its paths and line numbers to "
+            "read_files to see the actual code. Read-only, makes no changes.\n\n"
+            "Filters: `path` scopes the map to one subdirectory (e.g. "
+            "\"lib/storage\"); `focus` keeps only files whose path contains "
+            "the given text. Returns all definitions in the selected scope; "
+            "shared L0 handles long results without producer truncation.\n\n"
+            "Both filters are optional: call with `{}` to map the whole project."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Project-relative subdirectory to map (default: whole "
+                        "project). Use this on huge repos to zoom in."
+                    )
+                },
+                "focus": {
+                    "type": "string",
+                    "description": (
+                        "Case-insensitive substring filter on file paths (e.g. "
+                        "\"storage\" or \"_test.py\"). Optional."
+                    )
+                }
+            },
+            "required": [],
+        }
+    }
+}
+
+PROJECT_TOOL_WRITE_FILE = {
+    "type": "function",
+    "function": {
+        "name": "write_file",
+        "description": (
+            "Create or replace one whole file, or append to its end. For new "
+            "files/major rewrites; use edit_file for mid-file changes. Set "
+            "append=true to append to the end (a missing file is created): send "
+            "only the new bytes, no read or anchor needed. Read an existing file "
+            "first and supply its complete replacement—omitted lines are deleted. "
+            "Relative paths use the current project. An absolute path must lie "
+            "inside a registered root, a git worktree of one, or the temp dir; "
+            "others are refused. content is required; an empty string creates "
+            "an empty file."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "Optional pre-write caption shown before execution. "
+                        "Omit it to use the file-path label."
+                    )
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Project-relative or allowed absolute file path."
+                },
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "Complete file text, or the bytes to append; may be "
+                        "empty.")
+                },
+                "append": {
+                    "type": "boolean",
+                    "description": (
+                        "Append content to the end of the file instead of "
+                        "replacing it. Default false."
+                    )
+                }
+            },
+            "required": ["path", "content"],
+            "additionalProperties": False
+        }
+    }
+}
+
+PROJECT_TOOL_APPLY_DIFF = {
+    "type": "function",
+    "function": {
+        "name": "apply_diff",
+        "description": (
+            "Apply a single search-and-replace edit to a file. The 'search' string "
+            "should match exactly — use read_files first to get the precise "
+            "content. Matching is exact-first, then tolerant of line-ending, "
+            "trailing-whitespace, uniform-indentation and unicode-escape drift; "
+            "on a miss you get the closest-matching block to re-anchor from. "
+            "Always include enough context lines to match EXACTLY ONCE.\n\n"
+            "**Read-before-edit gate**: REJECTED unless the target file was read or "
+            "written in an earlier turn; a read_files call in the SAME batch does "
+            "not count. To edit an unread file: read_files this turn, apply_diff "
+            "the NEXT.\n\n"
+            "**Use for small, targeted edits.** New files or whole-file rewrites: "
+            "write_file. MULTIPLE edits in one call: **apply_diffs**."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "Optional caption for the change."},
+                "path": {"type": "string", "description": "Relative file path from project root"},
+                "search": {"type": "string", "description": "Exact text to find in the file (must match precisely)"},
+                "replace": {"type": "string", "description": "Replacement text"},
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "If true, replace ALL occurrences of 'search' in the file (not just the first). Default false — errors when multiple matches exist to prevent accidental mass edits."
+                }
+            },
+            "required": ["path", "search", "replace"]
+        }
+    }
+}
+
+PROJECT_TOOL_APPLY_DIFFS = {
+    "type": "function",
+    "function": {
+        "name": "apply_diffs",
+        "description": (
+            "apply_diffs: Apply multiple search-and-replace edits in one call, "
+            "sequentially — later edits see earlier changes. Matching follows "
+            "the same exact-first, then drift-tolerant ladder as apply_diff.\n\n"
+            "**Read-before-edit gate**: every target file must have been read or "
+            "written in an earlier turn; a read_files call in the SAME batch does "
+            "not count.\n\n"
+            "**Failure semantics**: by default a failed edit (search not found, "
+            "ambiguous) does NOT halt the batch and applied edits are NOT rolled "
+            "back — the summary reads ``Applied X/(X+Y) edits`` with per-edit "
+            "OK/FAIL lines; re-read affected files before retrying. Set "
+            "atomic=true to preflight every edit before writing: a validation "
+            "failure writes nothing and the report shows what would have applied. "
+            "This does not roll back earlier files after a later I/O failure."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "description": "Array of edit operations; every entry is processed. Each entry has description, path, search, replace.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": {"type": "string", "description": "Optional caption for this edit."},
+                            "path": {"type": "string", "description": "Relative file path"},
+                            "search": {"type": "string", "description": "Exact text to find"},
+                            "replace": {"type": "string", "description": "Replacement text"},
+                            "replace_all": {"type": "boolean", "description": "Replace ALL occurrences (default false)"}
+                        },
+                        "required": ["path", "search", "replace"]
+                    }
+                },
+                "description": {"type": "string", "description": "Optional caption for the overall change."},
+                "atomic": {
+                    "type": "boolean",
+                    "description": "Preflight atomicity (default false). When true, validate every edit before writing; a validation failure writes nothing and marks edits as would-apply or FAIL. Later I/O failures can still leave partial writes; this is not cross-file rollback."
+                }
+            },
+            "required": ["edits"]
+        }
+    }
+}
+
+def retired_edit_operation_error(operation):
+    """Model-facing refusal for a legacy ``edit_file`` item ``operation``.
+
+    ``edit_file`` only replaces, so the field is gone; ``None`` (absent) and
+    ``'replace'`` need no refusal and are dropped by input repair. Every other
+    value is refused with the replace that expresses it: guessing the line
+    break between an anchor and inserted text is what made inserts fail.
+    """
+    if operation is None or operation == 'replace':
+        return None
+    retired = '`operation` is retired: edit_file only replaces. Omit it.'
+    if operation == 'insert_after':
+        return (f'{retired} To insert after anchor A, put A in `anchor` and A '
+                'followed by the new text in `content`: '
+                '{"anchor":"A","content":"A\\nNEW"}.')
+    if operation == 'insert_before':
+        return (f'{retired} To insert before anchor A, put A in `anchor` and '
+                'the new text followed by A in `content`: '
+                '{"anchor":"A","content":"NEW\\nA"}.')
+    if operation == 'replace_all':
+        return (f'{retired} To replace every match, set "replace_all": true '
+                'on the edit.')
+    return (f'{retired} Each edit is {{anchor, content}}, plus optional path '
+            'and replace_all.')
+
+
+# ``edit_file`` is the only edit surface shown to new model turns.  The two
+# older schemas above remain module-level constants: persisted conversations,
+# input repair and the rollback switch still need their exact wire shapes, but
+# making all three visible recreates the tool-choice competition this unified
+# entry point exists to remove.
+PROJECT_TOOL_EDIT_FILE = {
+    "type": "function",
+    "function": {
+        "name": "edit_file",
+        "description": (
+            "Replace text in files read/written in an earlier round. Each edit "
+            "finds `anchor`, copied exactly from the file, and replaces it with "
+            "`content`; empty content deletes. The anchor must match once; "
+            "replace_all replaces every match. To add text, keep neighbouring "
+            "text in both: after A: `{\"anchor\":\"A\",\"content\":\"A\\nB\"}`; "
+            "before A: `{\"anchor\":\"A\",\"content\":\"B\\nA\"}`. Append at "
+            "end-of-file with write_file(append=true). Name the file once in "
+            "`path`; set an edit's `path` only for another file. Later edits see "
+            "earlier changes. Atomic preflight defaults true: any failure writes "
+            "nothing. With atomic=false, one failure neither rolls back nor stops "
+            "the others. I/O failures may leave partial writes."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "description": (
+                        "Optional pre-edit caption (max 120 chars). "
+                        "Omit it to use the file-path label."),
+                },
+                "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": (
+                        "File this batch edits. Write it once here for a "
+                        "single-file batch instead of repeating it on every "
+                        "edit; an edit's own `path` overrides it."),
+                },
+                "edits": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Replacements, applied in order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string", "minLength": 1,
+                                "description": (
+                                    "File for this edit, when it differs from "
+                                    "the batch `path`. Never inherited from "
+                                    "the previous edit; omit it rather than "
+                                    "sending an empty string."),
+                            },
+                            "anchor": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Existing text to replace.",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": (
+                                    "Complete new text, including kept anchor "
+                                    "text and line breaks; empty deletes."),
+                            },
+                            "replace_all": {
+                                "type": "boolean",
+                                "description": "Replace every match.",
+                            },
+                        },
+                        "required": ["anchor", "content"],
+                    },
+                },
+                "atomic": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Preflight all edits before writing. False permits partial application.",
+                },
+            },
+            "required": ["edits"],
+            # `path` is deliberately NOT required at either level: the two
+            # accepted forms are "batch path, no item paths" and "item paths",
+            # and a root combinator cannot express that choice without
+            # hard-400ing providers that reject root schemas. Coverage is
+            # enforced instead by lib/tool_input_repair/_ingest.py, which
+            # rejects a batch that names no file anywhere (filling it would
+            # mean guessing which file to write) with the same retry hint.
+            "additionalProperties": False,
+        },
+    },
+}
+
+# Where every command's shell starts. The standalone tool (no project attached)
+# swaps in its own start directory (lib/tools/code_exec.py).
+RUN_COMMAND_START = 'Fresh subprocess starting in the project root'
+
+RUN_COMMAND_DIRECTORY_KEYS = ('working_dir', 'workdir', 'cwd')
+
+
+def run_command_directory_error(arguments):
+    """``(key, refusal)`` for a start-directory argument, else ``None``.
+
+    ``run_command`` takes no directory argument: every command starts in one
+    fixed directory and a leading ``cd`` moves it. A ``working_dir`` (or
+    another harness's ``workdir``/``cwd``) is refused, never ignored: ignoring
+    it would run the command, a delete included, in a directory the model did
+    not name.
+    """
+    for key in RUN_COMMAND_DIRECTORY_KEYS:
+        if key in arguments:
+            return key, (f'run_command takes no `{key}`: begin `command` with '
+                         '`cd <dir> && ` to run it in another directory.')
+    return None
+
+
+PROJECT_TOOL_RUN_COMMAND = {
+    "type": "function",
+    "function": {
+        "name": "run_command",
+        "description": (
+            "Run builds, tests, lint, installs, Git or pipelines; returns stdout/stderr. "
+            f"NO timeout: {RUN_COMMAND_STOP} "
+            f"{RUN_COMMAND_HANDOFF}"
+            "Avoid waiting for stdin.\n\n"
+            f"{RUN_COMMAND_START}; no persistent shell or environment changes. "
+            "Start with `cd <dir> && ` to run elsewhere.\n\n"
+            "Use `read_files`, `search_files`, `find_files`, `edit_file`, `write_file` for repository data. "
+            "Filesystem grep uses a bounded FUSE-safe engine or returns a `search_files` translation; "
+            "filtering command output is allowed. `browser_download_url_to_server` handles authenticated "
+            "browser downloads. Text helpers: `sd`, `mlr`, `goawk`.\n\n"
+            "Never use a shell no-op as a placeholder (`true`, `:`, `exit 0`); repetition is a tool loop."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Shell command, for example `pytest` or `git status`."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short user-language caption: what runs and why."
+                },
+                "credentials": {
+                    "type": "array",
+                    "description": "Vault entry names for THIS child process only; use names from <credential_vault>. Values never enter the command/chat.",
+                    "items": {"type": "string"},
+                    "maxItems": 16
+                }
+,
+                "background": {
+                    "type": "boolean",
+                    "description": (
+                        "Start in background and return a command_id handle. "
+                        "Completion is delivered automatically — end the turn "
+                        "or do other work. `poll` reads its status or waits "
+                        "for it; `kill` stops it."
+                    )
+                }
+            },
+            "required": ["command"]
+        }
+    }
+}
+
+PROJECT_TOOL_CHECK_BACKGROUND = {
+    "type": "function",
+    "function": {
+        "name": "check_background_command",
+        "description": (
+            "Read a background command's status, result, and elapsed time. "
+            "Set wait_s to block until it completes; omit for an instant snapshot."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command_id": {
+                    "type": "string",
+                    "description": "The command_id returned by run_command(background=true)."
+                },
+                "wait_s": {
+                    "type": "integer", "minimum": 0, "maximum": 60, "default": 0,
+                    "description": (
+                        "Seconds to block waiting for completion (clamped to 60). "
+                        "On cap, returns the running snapshot; call again to keep waiting."
+                    )
+                }
+            },
+            "required": ["command_id"]
+        }
+    }
+}
+
+PROJECT_TOOL_KILL_BACKGROUND = {
+    "type": "function",
+    "function": {
+        "name": "kill_background_command",
+        "description": (
+            "Kill a running background command by its command_id. "
+            "The process tree receives SIGTERM then SIGKILL."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command_id": {
+                    "type": "string",
+                    "description": "The command_id to kill."
+                }
+            },
+            "required": ["command_id"]
+        }
+    }
+}
+
+# NOTE: read_files is NOT a project-scoped tool
+# NOTE: read_files is NOT a project-scoped tool — it's registered globally
+#   in lib/tasks_pkg/model_config.py (and timer.py) so the model can read
+#   absolute local paths (images, PDFs, Office docs, text files) even when no
+#   project is attached. Its handler is registered independently via
+#   @tool_registry.tool('read_files', ...) in lib/tasks_pkg/handlers/project.py,
+#   and its display entry is set explicitly in tool_display.py. It is NOT in
+#   PROJECT_TOOLS or PROJECT_TOOL_NAMES.
+READ_FILES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "read_files",
+        "description": (
+            "Read one or more files with line numbers and optional ranges. Read WIDE "
+            "within the round budget: for 1-2 relevant files request 200+ lines or a "
+            "whole small file instead of repeated 50-line fragments; for 3+ files use "
+            "focused ranges or `search_files`. An explicit start/end range is "
+            "authoritative and never widened. Whole-file text reads retain complete "
+            "sources; model previews are budgeted separately. Batch independent "
+            "ranges while keeping expected model content near 24k tokens; every "
+            "requested read executes. Use top-level `path` for one file. Prefer this over shell "
+            "cat/head/tail/sed. Relative paths use the project; absolute, `~`, and "
+            "`file://` paths are supported. Images are shown natively; PDFs extract "
+            "layout text; Office files extract Markdown text/tables; text uses "
+            "encoding detection."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "bind_sources": {"type": "boolean", "description": "Opt in to exact UTF-8 project file sources for working facts. Returns id/version/path; add a quote when recording a fact. Unsupported sources are explicit. Hashes the whole file even for ranged reads; default false."},
+                "reads": {
+                    "type": "array",
+                    "description": "Batch file/range specs: `{path, start_line?, end_line?}`. Every requested read executes.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Relative or absolute file path; supports `~`."
+                            },
+                            "start_line": {"type": "integer", "minimum": 1, "description": "Start line (1-based, optional)"},
+                            "end_line": {"type": "integer", "minimum": 1, "description": "End line (inclusive, optional)"}
+                        },
+                        "required": ["path"]
+                    }
+                },
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Single-file path; ignored when `reads` is present. "
+                        "Relative, absolute, and `~` supported."
+                    )
+                },
+                "start_line": {"type": "integer", "minimum": 1, "description": "Start line (1-based, optional) — only with top-level 'path'."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "End line (inclusive, optional) — only with top-level 'path'."}
+            }
+        }
+    }
+}
+
+# read_files is intentionally NOT in PROJECT_TOOLS / PROJECT_TOOL_NAMES
+#   — it's a global tool registered unconditionally by the orchestrator
+#   so absolute-path file reads work regardless of project mode.
+#   See READ_FILES_TOOL above.
+#
+# Note: project_history / project_diff / project_blame were retired in the
+# Tier-3 redesign (2026-05-08).  Their shadow-git backend was replaced by
+# the file-history copy-backup store (lib/file_history/), and the LLM-facing
+# tools were dropped because the model rarely invoked them and the same
+# information is available via reading conversation history (which the
+# model already does).  Per-round undo/redo of file changes still works
+# end-to-end through the file-history store.
+def with_multiroot_hint(tools):
+    """Compatibility copy; multi-root guidance now rides tail user context."""
+    return copy.deepcopy(list(tools or ()))
+
+
+def with_remote_hint(tools):
+    """Compatibility copy; remote guidance now rides tail user context."""
+    return copy.deepcopy(list(tools or ()))
+
+
+# PROJECT_TOOL_CHECK_BACKGROUND / PROJECT_TOOL_KILL_BACKGROUND are retired
+# from the model-visible surface: the unified ``poll`` / ``kill`` tools
+# (lib/tools/poll.py) absorb them. The schema dicts stay defined below for
+# conversation-latched history, and their handlers stay registered.
+PROJECT_TOOLS_UNIFIED = [
+    PROJECT_TOOL_SEARCH_FILES, PROJECT_TOOL_FIND, PROJECT_TOOL_REPO_MAP,
+    PROJECT_TOOL_WRITE_FILE, PROJECT_TOOL_EDIT_FILE,
+    PROJECT_TOOL_RUN_COMMAND,
+]
+
+PROJECT_TOOLS_LEGACY = [
+    PROJECT_TOOL_SEARCH_FILES, PROJECT_TOOL_FIND, PROJECT_TOOL_REPO_MAP,
+    PROJECT_TOOL_WRITE_FILE, PROJECT_TOOL_APPLY_DIFF, PROJECT_TOOL_APPLY_DIFFS,
+    PROJECT_TOOL_RUN_COMMAND,
+]
+
+
+def project_tools_for_runtime():
+    """Return the model-visible project surface.
+
+    The environment switch is an emergency rollback for new turns. Existing
+    conversations already latch their tool schema in the task runtime, so the
+    switch never rewrites persisted tool history.
+    """
+    enabled = os.environ.get('TOFU_UNIFIED_EDIT_TOOL', '1').strip().lower()
+    return (PROJECT_TOOLS_LEGACY if enabled in ('0', 'false', 'no', 'off')
+            else PROJECT_TOOLS_UNIFIED)
+
+
+# Default/static export used by schema introspection. Runtime assembly calls
+# ``project_tools_for_runtime`` so operators retain the rollback switch.
+PROJECT_TOOLS = PROJECT_TOOLS_UNIFIED
+# Handler-registration names for the LIVE project tool surface. Historical
+# create_project and insert_content(s) rounds still render in the UI, but the
+# names are deliberately absent here so a new/latched call is refused instead
+# of executing a retired action (input repair explains the replace for inserts).
+PROJECT_TOOL_NAMES = {
+    # ``list_dir`` remains dispatchable only for conversation-latched legacy
+    # schemas. New tool epochs omit it and route simple ``run_command`` ls
+    # requests through the same bounded directory reader instead.
+    # ``grep_search`` is the retired name of ``search_files``: latched schemas
+    # and frozen catalogs still dispatch it; name repair maps fresh calls.
+    'list_dir', 'search_files', 'grep_search', 'find_files', 'repo_map',
+    'write_file', 'edit_file', 'apply_diff', 'apply_diffs',
+    'run_command', 'check_background_command', 'kill_background_command',
+}
+
+__all__ = [
+    'READ_FILES_TOOL',
+    'PROJECT_TOOL_SEARCH_FILES', 'PROJECT_TOOL_FIND', 'PROJECT_TOOL_REPO_MAP',
+    'PROJECT_TOOL_WRITE_FILE', 'PROJECT_TOOL_EDIT_FILE',
+    'PROJECT_TOOL_APPLY_DIFF', 'PROJECT_TOOL_APPLY_DIFFS',
+    'PROJECT_TOOL_RUN_COMMAND',
+    'PROJECT_TOOLS', 'PROJECT_TOOLS_UNIFIED', 'PROJECT_TOOLS_LEGACY',
+    'PROJECT_TOOL_NAMES', 'project_tools_for_runtime',
+    'retired_edit_operation_error',
+    'RUN_COMMAND_START', 'RUN_COMMAND_DIRECTORY_KEYS', 'run_command_directory_error',
+    'with_multiroot_hint',
+    'with_remote_hint',
+]

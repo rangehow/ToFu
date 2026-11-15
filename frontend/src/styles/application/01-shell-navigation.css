@@ -1,0 +1,709 @@
+/* v20260408b — attach button: borderless ghost icon, absolutely positioned inside textarea area */
+:root{--bg-primary:#0a0a0c;--bg-secondary:#111115;--bg-tertiary:#1a1a21;--bg-hover:#22222b;--bg-active:#2a2a35;--border:#2a2a35;--border-light:#33333f;--text-primary:#e8e8ed;--text-secondary:#9898a8;--text-tertiary:#6a6a7a;--accent:#6e56cf;--accent-hover:#7c66d4;--accent-subtle:rgba(110,86,207,0.12);--thinking-bg:rgba(207,167,56,0.06);--thinking-border:rgba(207,167,56,0.25);--thinking-text:#cfb850;--error-bg:rgba(207,56,56,0.08);--error-border:rgba(207,56,56,0.3);--error-text:#cf5050;--user-bubble:#1e1b4b;--shadow:0 2px 12px rgba(0,0,0,0.4);--radius:12px;--radius-sm:8px;--radius-xs:6px;--transition:0.2s cubic-bezier(0.4,0,0.2,1);--search-blue:#3b82f6;--search-cyan:#06b6d4;--search-purple:#8b5cf6;--fetch-green:#10b981;--fetch-teal:#14b8a6;
+/* ── CJK-aware body font stack (base; applies to dark + light themes) ──
+ * font-family resolves PER GLYPH: 'Plus Jakarta Sans' carries no Han glyphs,
+ * so without an explicit CJK tail Chinese falls through to the browser's
+ * default serif (usually SimSun/宋体) — inconsistent and hard to read. The
+ * shared --cjk-fallback ends EVERY body stack in ONE Han face so Chinese is
+ * uniform. Identical face list to the tofu-theme token (which redefines it
+ * locally); keeping them byte-identical means no 黑体/宋体 fork across themes. */
+--cjk-fallback:'PingFang SC','Microsoft YaHei','Hiragino Sans GB','Noto Sans SC','Noto Sans CJK SC';
+/* ── Status chips (dark) — the ONE vocabulary every status pill (tool badge,
+   card role, system-note reason) paints from. A theme re-skins all pills by
+   re-defining these; the families below never hardcode a hex again. 'info'
+   rides the accent (informational, never the blue hyperlink tint); 'neutral'
+   is the muted metadata/label tone. Values below preserve the pre-existing
+   per-pill colors verbatim (zero visual change). */
+--chip-ok-color:#34d399;--chip-ok-bg:rgba(52,211,153,0.12);--chip-ok-border:rgba(52,211,153,0.30);
+--chip-warn-color:#f59e0b;--chip-warn-bg:rgba(245,158,11,0.15);--chip-warn-border:rgba(245,158,11,0.25);
+--chip-err-color:var(--error-text);--chip-err-bg:var(--error-bg);--chip-err-border:var(--error-border);
+--chip-info-color:rgba(234,179,8,0.7);--chip-info-bg:rgba(234,179,8,0.1);--chip-info-border:rgba(234,179,8,0.2);
+--chip-neutral-color:var(--text-tertiary);--chip-neutral-bg:var(--bg-tertiary);--chip-neutral-border:var(--border);
+--md-sans:'Plus Jakarta Sans','Jakarta Fallback','Inter',var(--cjk-fallback),-apple-system,sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}html{overflow:hidden;height:100%;width:100%}body{font-family:var(--md-sans);background:var(--bg-primary);color:var(--text-primary);height:100vh;height:100dvh;overflow:hidden;display:flex;width:100%;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:transparent;border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--border-light)}.conversations-list:hover::-webkit-scrollbar-thumb,.chat-container:hover::-webkit-scrollbar-thumb,.modal:hover::-webkit-scrollbar-thumb{background:var(--border)}.conversations-list,.chat-container,.modal{scrollbar-color:transparent transparent}.conversations-list:hover,.chat-container:hover,.modal:hover{scrollbar-color:var(--border) transparent}
+.sidebar{--project-rail-w:150px;--project-rail-w-collapsed:52px;--sidebar-list-min:280px;width:280px;min-width:280px;background:var(--bg-secondary);border-right:1px solid var(--border);display:flex;flex-direction:column;transition:margin-left var(--transition),width var(--transition),min-width var(--transition);z-index:20}
+/* When ≥1 project exists the sidebar hosts the vertical rail + list side by
+ * side, so its total width is derived (rail + list-min), never a magic number.
+ * With 0 projects the rail is absent and the sidebar keeps its single-column
+ * width (zero-folder degradation). */
+.sidebar.has-rail{width:calc(var(--project-rail-w) + var(--sidebar-list-min));min-width:calc(var(--project-rail-w) + var(--sidebar-list-min))}
+.sidebar.has-rail.rail-collapsed{width:calc(var(--project-rail-w-collapsed) + var(--sidebar-list-min));min-width:calc(var(--project-rail-w-collapsed) + var(--sidebar-list-min))}
+/* ── Zero-CLS first paint ── The html[data-rail] hint is stamped by the inline
+ * script in index.html BEFORE any JS/folders round-trip, from a persisted
+ * `tofu_has_folders` cache. These give the sidebar its correct steady-state
+ * width on the very first paint; because the width is byte-identical to the
+ * .has-rail rules above, when the async render later adds .has-rail the
+ * computed width doesn't change → the `transition:width` never fires → no
+ * layout shift. The rail CONTENT still renders async (reconcile), only the
+ * GEOMETRY is settled up front. */
+html[data-rail="full"] .sidebar{width:calc(var(--project-rail-w) + var(--sidebar-list-min));min-width:calc(var(--project-rail-w) + var(--sidebar-list-min))}
+html[data-rail="collapsed"] .sidebar{width:calc(var(--project-rail-w-collapsed) + var(--sidebar-list-min));min-width:calc(var(--project-rail-w-collapsed) + var(--sidebar-list-min))}
+/* Hide the zero-folder quick-add pre-paint when the hint says folders exist
+ * (mirrors .sidebar.has-rail .folder-quickadd) so it never flashes. */
+html[data-rail] .folder-quickadd{display:none}
+.sidebar.collapsed{margin-left:-280px}
+.sidebar.has-rail.collapsed{margin-left:calc(-1 * (var(--project-rail-w) + var(--sidebar-list-min)))}
+.sidebar.has-rail.rail-collapsed.collapsed{margin-left:calc(-1 * (var(--project-rail-w-collapsed) + var(--sidebar-list-min)))}.sidebar-header{padding:var(--space-4);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:var(--space-3)}.sidebar-header h1{font-size:15px;font-weight:700;letter-spacing:0.06em;flex:1;display:flex;align-items:center;gap:5px;font-family:'Pixelify Sans','Press Start 2P',cursive}.sidebar-brand{display:inline-flex}.sidebar-brand-t,.sidebar-brand-o,.sidebar-brand-f,.sidebar-brand-u{-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}.sidebar-tofu-icon{flex-shrink:0}
+.sidebar-header-actions{display:flex;gap:2px;align-items:center}
+.sidebar-header-actions .action-btn{width:30px;height:30px}
+.sidebar-action-row{display:flex;gap:6px;padding:var(--space-3) var(--space-4);align-items:stretch}
+/* A navigation entry with a quiet surface and a consistently aligned label. */
+.new-chat-btn{
+  flex:1;min-width:0;min-height:var(--control-h-lg);
+  padding:var(--space-2) var(--space-3);margin:0;
+  background:var(--chat-primary-background);color:var(--chat-primary-ink);
+  border:var(--control-edge-inset) solid var(--chat-primary-border);
+  border-radius:var(--radius-sm);box-shadow:var(--chat-primary-shadow);
+  font-family:var(--font-ui);font-size:var(--font-size-md);font-weight:var(--weight-medium);
+  cursor:pointer;display:flex;align-items:center;gap:var(--space-2);justify-content:flex-start;
+  transition:background var(--motion-fast) var(--ease-standard),border-color var(--motion-fast) var(--ease-standard)
+}
+.new-chat-btn>svg{width:var(--space-4);height:var(--space-4);flex-shrink:0;color:var(--accent)}
+.new-chat-btn:hover{background:var(--chat-primary-hover);border-color:var(--accent)}
+.new-chat-btn:focus-visible{outline:calc(2 * var(--control-edge-inset)) solid var(--accent);outline-offset:calc(2 * var(--control-edge-inset))}
+.new-chat-btn:active{background:var(--bg-active)}
+/* new-folder-btn removed — folders use tab bar with "+" button */
+/* ── Folder create/rename dialog ── */
+.folder-dialog-overlay{position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.15s ease}
+.folder-dialog{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:var(--radius);padding:var(--space-5) var(--space-6);width:340px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+.folder-dialog-title{font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:14px}
+.folder-dialog-input{width:100%;padding:9px var(--space-3);background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-lg);font-family:inherit;outline:none;transition:border-color var(--transition)}
+.folder-dialog-input:focus{border-color:var(--accent)}
+.folder-dialog-path{margin-top:var(--space-2)}
+.folder-dialog-label{font-size:var(--font-size-md);font-weight:600;color:var(--text-secondary);margin:12px 1px 6px}
+.folder-dialog-hint{font-size:var(--font-size-sm);color:var(--text-tertiary);margin:6px 1px 0}
+/* ── Multi-path default-root picker ── */
+.fpp{margin-top:2px}
+.fpp-chips{display:flex;flex-wrap:wrap;gap:var(--space-1);min-height:26px;padding:var(--space-1);background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-xs)}
+.fpp-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 9px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:999px;font-size:var(--font-size-sm);color:var(--text-primary);max-width:100%}
+.fpp-chip-primary{border-color:var(--accent)}
+.fpp-chip-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.fpp-chip-badge{font-size:10px;line-height:14px;padding:0 5px;border-radius:6px;background:var(--accent-subtle);color:var(--accent);font-weight:600}
+.fpp-chip-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:50%;font-size:14px;line-height:1}
+.fpp-chip-x:hover{color:var(--text-primary);background:var(--bg-hover)}
+.fpp-empty{font-size:var(--font-size-sm);color:var(--text-tertiary);padding:2px 4px}
+.fpp-toolbar{display:flex;gap:var(--space-2);margin-top:var(--space-2)}
+.fpp-path-input{flex:1;min-width:0;padding:6px var(--space-2);background:var(--bg-primary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-md);font-family:inherit;outline:none}
+.fpp-path-input:focus{border-color:var(--accent)}
+.fpp-add-btn{flex:none;padding:6px var(--space-3);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-md);cursor:pointer}
+.fpp-add-btn:hover{background:var(--bg-hover)}
+.fpp-browse-btn{flex:none;padding:6px var(--space-3);background:var(--bg-tertiary);border:1px solid var(--border);border-radius:var(--radius-xs);color:var(--text-primary);font-size:var(--font-size-md);cursor:pointer}
+.fpp-recent-label{font-size:var(--font-size-sm);font-weight:600;color:var(--text-tertiary);margin:10px 1px 4px}
+.fpp-recent{display:flex;flex-direction:column;gap:var(--space-1);max-height:150px;overflow-y:auto;scrollbar-width:thin}
+.fpp-recent-item{display:flex;align-items:center;gap:var(--space-2);padding:6px 8px;background:transparent;border:1px solid transparent;border-radius:var(--radius-xs);cursor:pointer;text-align:left;font-family:inherit;min-width:0}
+.fpp-recent-item:hover{background:var(--bg-hover);border-color:var(--border)}
+.fpp-recent-plus{flex:none;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--accent-subtle);color:var(--accent);font-size:14px;font-weight:600}
+.fpp-recent-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.fpp-recent-name{font-size:var(--font-size-md);font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fpp-recent-full{font-size:10.5px;color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+.folder-dialog-colors{display:flex;gap:var(--space-2);margin:14px 0 18px;flex-wrap:wrap}
+.folder-color-dot{width:22px;height:22px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:border-color 0.15s,transform 0.15s;flex-shrink:0}
+.folder-color-dot:hover{transform:scale(1.15)}
+.folder-color-dot.selected{border-color:var(--text-primary);transform:scale(1.15)}
+.folder-dialog-actions{display:flex;gap:var(--space-2);justify-content:flex-end}
+.folder-dialog-cancel{padding:7px var(--space-4);background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border);border-radius:var(--radius-xs);font-size:var(--font-size-md);font-family:inherit;cursor:pointer;transition:background var(--transition)}.folder-dialog-cancel:hover{background:var(--bg-hover)}
+.folder-dialog-ok{padding:7px var(--space-4);background:var(--accent);color:white;border:none;border-radius:var(--radius-xs);font-size:var(--font-size-md);font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition)}.folder-dialog-ok:hover{background:var(--accent-hover)}.folder-dialog-ok:disabled{opacity:0.6;cursor:not-allowed}
+
+/* ── Conversation rename dialog (dedicated, redesigned) ── */
+.conv-rename-overlay{position:fixed;inset:0;height:var(--vh100,100vh);background:rgba(0,0,0,0.55);backdrop-filter:blur(2px);z-index:9999;display:flex;align-items:center;justify-content:center;animation:fadeIn 0.15s ease}
+.conv-rename-card{background:var(--bg-secondary);border:1px solid var(--border-light);border-radius:16px;padding:22px var(--space-6) var(--space-5);width:380px;max-width:90vw;box-shadow:0 16px 48px rgba(0,0,0,0.45);animation:convRenamePop 0.18s cubic-bezier(0.16,1,0.3,1)}
+@keyframes convRenamePop{from{opacity:0;transform:translateY(8px) scale(0.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.conv-rename-head{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600;color:var(--text-primary);margin-bottom:var(--space-4)}
+.conv-rename-icon{color:var(--accent);flex-shrink:0}
+.conv-rename-input{width:100%;box-sizing:border-box;padding:11px 14px;background:var(--bg-primary);border:1px solid var(--border);border-radius:10px;color:var(--text-primary);font-size:var(--font-size-lg);font-family:inherit;outline:none;transition:border-color var(--transition),box-shadow var(--transition)}
+.conv-rename-input::placeholder{color:var(--text-tertiary)}
+.conv-rename-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.conv-rename-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:var(--space-5)}
+.conv-rename-btn{padding:var(--space-2) 18px;border-radius:9px;font-size:var(--font-size-md);font-weight:600;font-family:inherit;cursor:pointer;transition:background var(--transition),border-color var(--transition),transform 0.08s}
+.conv-rename-btn:active{transform:scale(0.97)}
+.conv-rename-btn.cancel{background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border)}.conv-rename-btn.cancel:hover{background:var(--bg-hover);color:var(--text-primary)}
+.conv-rename-btn.ok{background:var(--accent);color:#fff;border:1px solid transparent}.conv-rename-btn.ok:hover{background:var(--accent-hover)}
+/* ═══ Vertical project rail ═══
+ * Sidebar body = rail (left column) + conversation list (flex). The rail
+ * stacks projects as full-width rows so names of any length align cleanly —
+ * replaces the old ragged wrapping pill bar. Width driven by --project-rail-w
+ * on .sidebar; collapses to an icon-only strip via .sidebar.rail-collapsed. */
+.sidebar-body{display:flex;flex:1;min-height:0;overflow:hidden}
+.project-rail{display:flex;flex-direction:column;flex-shrink:0;width:var(--project-rail-w);border-right:1px solid var(--border);background:var(--bg-tertiary);overflow:hidden;transition:width var(--transition)}
+.project-rail:empty{display:none}
+.sidebar.rail-collapsed .project-rail{width:var(--project-rail-w-collapsed)}
+.project-rail-head{display:flex;align-items:center;justify-content:space-between;padding:10px 10px 6px var(--space-3);flex-shrink:0}
+.project-rail-title{font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-rail-collapse{display:flex;align-items:center;justify-content:center;width:20px;height:20px;flex-shrink:0;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;border-radius:var(--radius-xs);transition:color 0.15s,background 0.15s,transform 0.25s}
+.project-rail-collapse:hover{color:var(--accent);background:var(--bg-hover)}
+.sidebar.rail-collapsed .project-rail-collapse svg{transform:rotate(180deg)}
+.sidebar.rail-collapsed .project-rail-title{display:none}
+.sidebar.rail-collapsed .project-rail-head{justify-content:center;padding:10px 0 6px}
+.project-rail-list{display:flex;flex-direction:column;gap:2px;flex:1;overflow-y:auto;overflow-x:hidden;padding:2px var(--space-2) var(--space-1);min-height:0}
+
+.folder-tab-row{display:flex;align-items:center;min-width:0;position:relative}
+.folder-tab-row>.folder-tab{flex:1;min-width:0}
+/* Project ROW (reuses .folder-tab so all JS handlers still match) */
+.folder-tab{display:flex;align-items:center;gap:var(--space-2);width:100%;min-height:var(--control-h-lg);box-sizing:border-box;padding:var(--space-2);border:1px solid transparent;border-radius:var(--radius-xs);background:transparent;color:var(--text-secondary);font-size:12.5px;font-weight:600;font-family:inherit;cursor:pointer;white-space:nowrap;transition:background 0.15s,color 0.15s;user-select:none;line-height:1.3;position:relative;text-align:left}
+.folder-tab:hover{background:var(--bg-hover);color:var(--text-primary)}
+.folder-tab.active{background:var(--accent-subtle);color:var(--accent);font-weight:700}
+/* Left accent bar for the active project — reads as "you are here" */
+.folder-tab.active::before{content:'';position:absolute;left:0;top:6px;bottom:6px;width:3px;border-radius:0 3px 3px 0;background:var(--accent)}
+/* Project tile — a colored rounded-square "app icon" carrying a 1–2 char
+ * monogram (data-initial), used in BOTH the labeled rail and the collapsed
+ * strip so a project is recognizable at a glance, not just a lone letter. */
+.folder-tab-dot{width:20px;height:20px;border-radius:6px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:9.5px;font-weight:700;line-height:1;letter-spacing:-0.03em;overflow:hidden}
+.folder-tab-dot[data-initial]::after{content:attr(data-initial)}
+.folder-tab-dot[data-mono-len="1"]{font-size:var(--font-size-sm);letter-spacing:0}
+.folder-tab-dot.streaming{animation:folderDotPulse 1.6s ease-in-out infinite}
+@keyframes folderDotPulse{0%,100%{opacity:1}50%{opacity:0.45}}
+/* Inbox (未分类) + add tiles share the tile footprint but read as "system"
+ * chips: a neutral surface square with a centered glyph, not a colored brand
+ * tile — so they group with, yet stay distinct from, the projects. */
+.folder-tab-inbox-dot,.folder-tab-add-dot{width:20px;height:20px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:var(--text-tertiary);background:var(--bg-hover);box-shadow:inset 0 0 0 1px var(--border)}
+.folder-tab-inbox-dot svg,.folder-tab-add-dot svg{width:12px;height:12px}
+.folder-tab-inbox-dot svg{width:15px;height:15px}
+.folder-tab.active .folder-tab-inbox-dot{color:var(--accent);background:var(--accent-subtle);box-shadow:inset 0 0 0 1px var(--accent)}
+.folder-tab-add:hover .folder-tab-add-dot{color:var(--accent);background:var(--accent-subtle);box-shadow:inset 0 0 0 1px var(--accent)}
+.folder-tab-name{flex:1;overflow:hidden;text-overflow:ellipsis}
+.folder-tab-count{font-size:10px;min-width:18px;height:16px;line-height:16px;text-align:center;border-radius:8px;background:var(--bg-hover);color:var(--text-secondary);padding:0 5px;flex-shrink:0;font-weight:600}
+.folder-tab.active .folder-tab-count{background:var(--accent);color:#fff}
+/* Footer "+ New project" row (kept separate from the scroll list) */
+.folder-tab-add{flex-shrink:0;margin:2px var(--space-2) var(--space-2);width:auto;color:var(--text-tertiary)}
+.folder-tab-add:hover{color:var(--accent);background:var(--accent-subtle)}
+.folder-tab-add-dot{color:inherit}
+/* Drag-a-conversation drop target */
+.folder-tab.folder-tab-drop{background:var(--accent-subtle);box-shadow:inset 0 0 0 1.5px var(--accent)}
+
+/* ── Collapsed (icon-only) rail: show dot/glyph, hide name + count ── */
+.sidebar.rail-collapsed .folder-tab{justify-content:center;padding:var(--space-2) 0;gap:0}
+.sidebar.rail-collapsed .folder-tab-name,
+.sidebar.rail-collapsed .folder-tab-count{display:none}
+.sidebar.rail-collapsed .project-rail-list{padding:2px 6px var(--space-1)}
+.sidebar.rail-collapsed .folder-tab-add{margin:2px 6px var(--space-2)}
+/* Colored initial inside the collapsed dot so projects stay distinguishable */
+.sidebar.rail-collapsed .folder-tab-dot{width:30px;height:30px;border-radius:9px;font-size:var(--font-size-sm)}
+.sidebar.rail-collapsed .folder-tab-dot[data-mono-len="1"]{font-size:var(--font-size-xl)}
+.sidebar.rail-collapsed .folder-tab-inbox-dot svg,.sidebar.rail-collapsed .folder-tab-add-dot svg{width:15px;height:15px}
+.sidebar.rail-collapsed .folder-tab-inbox-dot svg{width:18px;height:18px}
+/* Centered tiles read "selected" via a ring, not the far-left accent bar. */
+.sidebar.rail-collapsed .folder-tab.active{background:transparent}
+.sidebar.rail-collapsed .folder-tab.active::before{display:none}
+.sidebar.rail-collapsed .folder-tab.active .folder-tab-dot{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Folder quick-add (zero-folder state entry point) — hidden once the rail exists */
+.folder-quickadd{display:flex;align-items:center;gap:7px;margin:0 var(--space-3) var(--space-2);padding:7px var(--space-3);border:1px dashed var(--border);border-radius:var(--radius-sm);background:transparent;color:var(--text-tertiary);font-family:inherit;font-size:var(--font-size-sm);font-weight:600;cursor:pointer;transition:color 0.15s,border-color 0.15s,background 0.15s}
+.folder-quickadd:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-subtle)}
+.folder-quickadd svg{flex-shrink:0}
+.sidebar.has-rail .folder-quickadd{display:none}
+
+/* ═══ Rail on drawer viewports (phone ≤768 ∪ portrait touch-tablet) ═══
+ * The rail respects the SAME .rail-collapsed toggle as desktop here (default
+ * labeled/expandable, tap the chevron to collapse to an icon strip) — one
+ * consistent mental model across form factors. These rules only apply the
+ * icon-only compaction to the COLLAPSED state, tuned for touch (slightly taller
+ * rows, 30px tiles) and beating the desktop collapsed rules at matching
+ * specificity. Rule of thumb matches core.js isDrawerViewport() / TOFU_BP + the
+ * paper-mode predicate. The per-block drawer WIDTH override lives in the two
+ * drawer blocks below (their drawer widths differ). NO horizontal chip
+ * fallback. */
+@media(max-width:768px),(max-width:1024px) and (pointer:coarse){
+  .sidebar.has-rail.rail-collapsed .project-rail{width:var(--project-rail-w-collapsed)!important}
+  .sidebar.has-rail.rail-collapsed .project-rail-title{display:none}
+  .sidebar.has-rail.rail-collapsed .project-rail-head{justify-content:center;padding:10px 0 6px}
+  .sidebar.has-rail.rail-collapsed .folder-tab{justify-content:center;padding:9px 0;gap:0}
+  .sidebar.has-rail.rail-collapsed .folder-tab-name,
+  .sidebar.has-rail.rail-collapsed .folder-tab-count{display:none}
+  .sidebar.has-rail.rail-collapsed .project-rail-list{padding:2px 5px var(--space-1)}
+  .sidebar.has-rail.rail-collapsed .folder-tab-add{margin:2px 5px var(--space-2)}
+  .sidebar.has-rail.rail-collapsed .folder-tab-dot{width:30px;height:30px;border-radius:9px;font-size:var(--font-size-sm)}
+  .sidebar.has-rail.rail-collapsed .folder-tab-dot[data-mono-len="1"]{font-size:var(--font-size-xl)}
+  .sidebar.has-rail.rail-collapsed .folder-tab-inbox-dot svg,.sidebar.has-rail.rail-collapsed .folder-tab-add-dot svg{width:15px;height:15px}
+  .sidebar.has-rail.rail-collapsed .folder-tab.active::before{display:none}
+  .sidebar.has-rail.rail-collapsed .folder-tab.active .folder-tab-dot{outline:2px solid var(--accent);outline-offset:2px}
+}
+/* Folder tab context menu */
+.folder-tab-menu{position:fixed;z-index:9999;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow);min-width:140px;padding:var(--space-1) 0;animation:folderPickerIn 0.1s ease}
+.folder-tab-menu-item{display:flex;align-items:center;gap:var(--space-2);padding:7px var(--space-3);font-size:12.5px;color:var(--text-primary);cursor:pointer;transition:background var(--transition)}
+.folder-tab-menu-item:hover{background:var(--bg-hover)}
+.folder-tab-menu-delete{color:var(--text-secondary)}
+.folder-tab-menu-delete:hover{color:var(--error-text);background:var(--error-bg)}
+/* Folder empty state */
+.folder-view-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-12) var(--space-4);text-align:center}
+/* Folder members still loading (C4 — distinct from "genuinely empty") */
+.folder-view-spinner{width:20px;height:20px;margin-bottom:10px;border:2px solid var(--border);border-top-color:var(--text-secondary);border-radius:50%;animation:folderSpin .7s linear infinite}
+@keyframes folderSpin{to{transform:rotate(360deg)}}
+/* Sidebar "N earlier not loaded · Load more" affordance (C4) */
+.conv-load-more{display:block;width:calc(100% - 16px);margin:var(--space-2) auto;padding:var(--space-2) 10px;font-size:var(--font-size-xs);color:var(--text-tertiary);background:var(--bg-secondary);border:1px dashed var(--border);border-radius:var(--radius-sm);cursor:pointer;text-align:center}
+.conv-load-more:hover{color:var(--text-secondary);background:var(--bg-hover)}
+/* ── Folder picker dropdown ── */
+.folder-picker{position:fixed;z-index:9999;background:var(--bg-secondary);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow);min-width:180px;max-width:260px;padding:var(--space-1) 0;animation:folderPickerIn 0.15s ease}
+@keyframes folderPickerIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.folder-picker-title{padding:6px var(--space-3) var(--space-1);font-size:10px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em}
+.folder-picker-item{display:flex;align-items:center;gap:var(--space-2);padding:7px var(--space-3);font-size:12.5px;color:var(--text-primary);cursor:pointer;transition:background var(--transition)}
+.folder-picker-item:hover{background:var(--bg-hover)}
+.folder-picker-item.active{color:var(--accent);font-weight:600}
+.folder-picker-item.folder-picker-remove{color:var(--text-tertiary)}
+.folder-picker-item.folder-picker-remove:hover{color:var(--error-text)}
+.folder-picker-item.folder-picker-new{color:var(--accent)}
+.folder-picker-divider{height:1px;background:var(--border);margin:var(--space-1) var(--space-2)}
+.conv-item.in-folder .conv-action-btn.conv-folder-assign{color:var(--accent);opacity:0.7}
+
+/* ── Drag-and-drop folder assignment ── */
+.conv-item.conv-dragging{opacity:0.4}
+.folder-tabs-drop-active .folder-tab:not(.folder-tab-add){box-shadow:inset 0 0 0 1px var(--border-light)}
+.folder-tabs-drop-active .folder-tab.folder-tab-drop{background:var(--accent-subtle)!important;box-shadow:inset 0 0 0 1.5px var(--accent)!important}
+/* ── Sidebar search (expandable panel) ── */
+.sidebar-search-wrapper{padding:var(--space-1) var(--space-3) var(--space-2);position:relative;flex-shrink:0;animation:searchSlideDown 0.15s ease}
+@keyframes searchSlideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.sidebar-search-box{display:flex;align-items:center;background:var(--bg-tertiary);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:0 10px;box-shadow:0 0 0 3px rgba(110,86,207,0.10)}
+.sidebar-search-icon{color:var(--accent);display:flex;align-items:center;flex-shrink:0}
+.sidebar-search-input{flex:1;background:transparent;border:none;outline:none;color:var(--text-primary);font-family:inherit;font-size:12.5px;padding:var(--space-2);min-width:0}
+.sidebar-search-input::placeholder{color:var(--text-tertiary)}
+.sidebar-search-clear{background:none;border:none;color:var(--text-tertiary);cursor:pointer;padding:var(--space-1);border-radius:4px;display:flex;align-items:center;justify-content:center;transition:color var(--transition),background-color var(--transition);flex-shrink:0}
+.sidebar-search-clear:hover{color:var(--text-primary);background:var(--bg-hover)}
+.sidebar-search-stats{font-size:10px;color:var(--text-tertiary);padding:var(--space-1) var(--space-1) 0;font-family:'JetBrains Mono',monospace;display:none}
+.sidebar-search-stats.visible{display:block}
+.sidebar-search-highlight{background:rgba(110,86,207,0.35);color:var(--text-primary);border-radius:2px;padding:0 1px}
+.conv-item-snippet{font-size:var(--font-size-xs);color:var(--text-tertiary);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.3}
+.sidebar-search-empty{padding:var(--space-6) var(--space-4);text-align:center;color:var(--text-tertiary);font-size:var(--font-size-sm);line-height:1.5}
+.sidebar-search-empty-icon{font-size:var(--font-size-4xl);margin-bottom:var(--space-2);opacity:.5}
+.search-loading{opacity:.6;font-style:italic}
+@keyframes search-pulse{0%,100%{opacity:.6}50%{opacity:1}}.search-loading{animation:search-pulse 1.2s ease-in-out infinite}
+/* Search toggle button active state */
+#sidebarSearchToggle.active{color:var(--accent);background:var(--accent-subtle)}
+/* ── Pinned zone + freeze border removed — pinning replaced by folders ── */
+/* ── Scrollable list ── */
+.conversations-list{flex:1;overflow-y:auto;padding:var(--space-1) var(--space-2) var(--space-2)}
+/* ── Collapsible date-group headers in the conversation list ── */
+.conv-date-group{display:flex;align-items:center;gap:5px;width:100%;box-sizing:border-box;margin:0;padding:7px var(--space-2) 3px;background:var(--bg-secondary);border:none;cursor:pointer;user-select:none;font-family:inherit;font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-tertiary);position:sticky;top:0;z-index:1;transition:color .12s ease}
+.conv-date-group:first-child{padding-top:2px}
+.conv-date-group:hover{color:var(--text-secondary)}
+.conv-date-chevron{flex-shrink:0;opacity:0.7;transition:transform .18s ease}
+.conv-date-group.collapsed .conv-date-chevron{transform:rotate(-90deg)}
+.conv-date-label{flex:1;text-align:left}
+.conv-date-count{font-weight:600;font-size:10px;opacity:0.55;font-variant-numeric:tabular-nums}
+/* ── Conversation item ── */
+.conv-item{padding:10px var(--space-3);border-radius:var(--radius-sm);cursor:pointer;transition:background var(--transition);margin-bottom:2px;display:flex;align-items:center;gap:10px;position:relative;overflow:hidden;contain:layout style;content-visibility:auto;contain-intrinsic-size:auto 56px}
+.conv-item:hover{background:var(--bg-hover)}
+.conv-item.active{background:var(--bg-active)}
+.conv-item .conv-text{flex:1;min-width:0}
+/* Block, not flex: the title text is an anonymous flex item that cannot take
+ * text-overflow, so long titles were clipped mid-glyph instead of ellipsized. */
+.conv-item .conv-title{font-size:var(--font-size-md);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;padding-right:var(--space-1)}
+.conv-feishu-badge{font-size:var(--font-size-sm);flex-shrink:0;filter:grayscale(0.2);opacity:0.85}
+.conv-item .conv-title>.conv-feishu-badge{margin-right:5px}
+/* Summarized-conversation glyph in the sidebar title. Quiet by default,
+ * brightens on hover; click reveals the cached AI summary via a toast. */
+.conv-summary-badge{display:inline-flex;align-items:center;flex-shrink:0;color:var(--text-tertiary);opacity:0.7;cursor:pointer;line-height:0;transition:opacity .12s,color .12s}
+.conv-summary-badge:hover{opacity:1;color:var(--accent,#6ea8fe)}
+/* Embedded memory list inside the Memory & Preferences settings tab — slightly
+ * tighter than the modal, with a soft cap + scroll so it never dominates. */
+.memory-list-embedded{margin-top:var(--space-2);max-height:340px;overflow-y:auto}
+.settings-section-divider{height:1px;background:var(--border,rgba(255,255,255,.08));margin:18px 0 14px}
+/* A foreground tag and the background tag can share the date line: wrap, never overflow a narrow sidebar. */
+.conv-item .conv-date{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-1);margin-top:3px}
+.conv-date-text{font-size:var(--font-size-xs);color:var(--text-tertiary)}
+.conv-date-sep{font-size:9px;color:var(--text-tertiary);opacity:0.35}
+.conv-date-time{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-tertiary);opacity:0.65;letter-spacing:-0.02em}
+/* Clone provenance chip — sits in the date line, same scale as status tags. */
+.conv-copy-badge{font-size:9px;font-weight:600;padding:1px 5px;border-radius:6px;line-height:14px;white-space:nowrap;flex-shrink:0;color:var(--text-tertiary);border:1px solid var(--border,rgba(255,255,255,.15))}
+/* ── Status tags in sidebar date line ── */
+.conv-status-tag{font-size:9px;font-weight:600;padding:1px 5px;border-radius:6px;line-height:14px;margin-left:var(--space-1);white-space:nowrap;animation:statusTagFadeIn .3s ease}
+.conv-status-translating{color:#14b8a6;background:rgba(20,184,166,0.12)}
+.conv-status-memprefetch{color:#eab308;background:rgba(234,179,8,0.12)}
+/* Rate-limit — the SAME amber the in-bubble "限流中" chip / memprefetch uses;
+ * a live retry-state the user should notice, not an error. */
+.conv-status-ratelimit{color:#eab308;background:rgba(234,179,8,0.12)}
+.conv-status-streaming{color:var(--accent);background:var(--accent-subtle)}
+.conv-status-error{color:#ef4444;background:rgba(239,68,68,0.12)}
+.conv-status-incomplete{color:#f59e0b;background:rgba(245,158,11,0.12)}
+.conv-status-waiting{color:#f59e0b;background:rgba(245,158,11,0.12)}
+@keyframes statusTagFadeIn{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:translateX(0)}}
+/* ── Overlay action buttons (gradient fade) ── */
+.conv-actions{position:absolute;right:0;top:0;bottom:0;display:flex;align-items:center;gap:1px;padding:0 6px 0 var(--space-6);opacity:0;pointer-events:none;transition:opacity 0.15s ease;background:linear-gradient(90deg,transparent 0%,var(--bg-secondary) 40%)}
+.conv-item:hover>.conv-actions{opacity:1;pointer-events:auto;background:linear-gradient(90deg,transparent 0%,var(--bg-hover) 40%)}
+.conv-item.active>.conv-actions{background:linear-gradient(90deg,transparent 0%,var(--bg-active) 40%)}
+.conv-item.active:hover>.conv-actions{opacity:1;pointer-events:auto;background:linear-gradient(90deg,transparent 0%,var(--bg-active) 40%)}
+.conv-action-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;background:none;color:var(--text-tertiary);cursor:pointer;border-radius:var(--radius-xs);transition:color 0.15s ease,background-color 0.15s ease}
+.conv-action-btn:hover{background:rgba(255,255,255,0.08);color:var(--text-primary)}
+/* conv-pin hover removed — replaced by folders */
+.conv-action-btn.conv-delete:hover{color:var(--error-text);background:var(--error-bg)}
+
+.conv-action-btn.conv-dup:hover{color:var(--accent)}
+.conv-action-btn.conv-export:hover{color:var(--accent)}
+/* pinned hint removed — replaced by folders */
+/* ── Streaming dot ── */
+.conv-streaming-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;animation:pulse 1.5s infinite}
+/* ── Translating dot — teal pulsing, visually distinct from streaming blue ── */
+.conv-translating-dot{width:8px;height:8px;border-radius:50%;background:#14b8a6;flex-shrink:0;animation:translateDotPulse 1.2s ease-in-out infinite;box-shadow:0 0 5px rgba(20,184,166,0.4)}
+@keyframes translateDotPulse{0%,100%{opacity:1;transform:scale(1);box-shadow:0 0 5px rgba(20,184,166,0.4)}50%{opacity:0.5;transform:scale(0.8);box-shadow:0 0 2px rgba(20,184,166,0.2)}}
+/* ── Memory-prefetch dot — amber pulsing; matches the in-bubble chip color ── */
+.conv-memprefetch-dot{width:8px;height:8px;border-radius:50%;background:#eab308;flex-shrink:0;animation:memPrefetchDotPulse 1.2s ease-in-out infinite;box-shadow:0 0 5px rgba(234,179,8,0.4)}
+@keyframes memPrefetchDotPulse{0%,100%{opacity:1;transform:scale(1);box-shadow:0 0 5px rgba(234,179,8,0.4)}50%{opacity:0.5;transform:scale(0.8);box-shadow:0 0 2px rgba(234,179,8,0.2)}}
+/* ── Rate-limit dot — recolors the base streaming dot amber while the turn is
+ *   queued on a 429 (mirrors the in-bubble 限流中 chip). Kept as a modifier on
+ *   .conv-streaming-dot so it stays inside the existing DOM-reconcile selector. ── */
+.conv-streaming-dot.conv-ratelimit-dot{background:#eab308;box-shadow:0 0 5px rgba(234,179,8,0.4)}
+/* ── Awaiting-human dot — amber blinking, more prominent than streaming ── */
+.conv-awaiting-human-dot{width:9px;height:9px;border-radius:50%;background:#f59e0b;flex-shrink:0;animation:hgDotBlink 1s ease-in-out infinite;box-shadow:0 0 6px rgba(245,158,11,0.5)}
+@keyframes hgDotBlink{0%,100%{opacity:1;box-shadow:0 0 6px rgba(245,158,11,0.5)}50%{opacity:0.3;box-shadow:0 0 2px rgba(245,158,11,0.2)}}
+/* ── Error dot — settled failure state, static red with a soft glow (no pulse: the turn is over) ── */
+.conv-error-dot{width:8px;height:8px;border-radius:50%;background:#ef4444;flex-shrink:0;box-shadow:0 0 5px rgba(239,68,68,0.5);animation:errDotFadeIn .3s ease}
+@keyframes errDotFadeIn{from{opacity:0;transform:scale(0.6)}to{opacity:1;transform:scale(1)}}
+/* ── Incomplete dot — settled interrupted/unfinished turn, static amber with a soft glow (no pulse: the turn is over, just needs attention) ── */
+.conv-incomplete-dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;box-shadow:0 0 5px rgba(245,158,11,0.5);animation:errDotFadeIn .3s ease}
+.conv-waiting-dot{width:8px;height:8px;border-radius:50%;background:#f59e0b;flex-shrink:0;box-shadow:0 0 6px rgba(245,158,11,0.6);animation:hgDotBlink 1s ease-in-out infinite}
+/* ── Freshness degrade (pt_cadaa70ffa6b468d) ──
+   The authoritative channel is not delivering, so a busy indicator may be
+   showing a state that has since changed. Deliberately a SOFTENING (hollow +
+   dimmed + slow pulse), never a different colour: the conversation really may
+   still be busy, so this must read as "uncertain", not as a new status.
+   Applied ON TOP of the existing dot class, so both the layout and the
+   DOM-reconcile selector in conversation_list.js stay unchanged. */
+.conv-streaming-dot.conv-state-unconfirmed{background:transparent;box-shadow:none;border:1.5px solid var(--text-tertiary);animation:none}
+.conv-status-tag.conv-state-unconfirmed{color:var(--text-secondary)}
+.main{flex:1;display:flex;flex-direction:column;min-width:0;overflow:hidden;max-width:100%}.topbar{height:52px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 var(--space-4);gap:var(--space-3);background:var(--bg-secondary);flex-shrink:0}.toggle-sidebar-btn{background:none;border:none;color:var(--text-secondary);cursor:pointer;padding:6px;border-radius:var(--radius-xs);transition:color var(--transition),background-color var(--transition);display:flex;align-items:center}.toggle-sidebar-btn:hover{color:var(--text-primary);background:var(--bg-hover)}.topbar-title{flex:1;font-size:var(--font-size-lg);font-weight:500;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.model-badge{font-size:var(--font-size-xs);font-weight:600;font-family:'JetBrains Mono',monospace;padding:var(--space-1) 10px;background:var(--accent-subtle);color:var(--accent);border-radius:20px;white-space:nowrap}
+
+.topbar-folder-badge{font-size:var(--font-size-xs);font-weight:500;margin-left:6px;opacity:0.7}.welcome-folder-badge{display:inline-flex;align-items:center;gap:5px;font-size:var(--font-size-sm);color:var(--text-secondary);margin-bottom:var(--space-2);padding:var(--space-1) var(--space-3);border-radius:16px;background:var(--bg-tertiary);border:1px solid var(--border)}.welcome-folder-dot{font-size:10px}
+.chat-wrapper{flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+/* ── Project Collaboration Bar — a slim single line under the top bar ──
+ *   Replaces the old multi-row "who's working" strip that crowded the top of
+ *   the conversation. Docked as a sibling AFTER .topbar and BEFORE
+ *   .chat-wrapper, so it never pushes the message list around. Shown only in
+ *   project mode with collaborative state to surface. */
+.presence-strip{flex:0 0 auto;width:100%;font-size:var(--font-size-sm);animation:fadeIn .2s ease}
+.presence-strip[hidden]{display:none}
+.collab-bar-inner{display:flex;align-items:center;gap:var(--space-2);width:100%;height:28px;padding:0 var(--space-4);background:var(--bg-secondary);border:none;border-bottom:1px solid var(--border);color:var(--text-secondary);font-size:var(--font-size-sm);font-family:inherit;cursor:pointer;text-align:left;overflow:hidden;white-space:nowrap;transition:background var(--transition)}
+.collab-bar-inner:hover{background:var(--bg-hover)}
+.collab-brain{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:var(--accent-subtle);color:var(--accent);flex:0 0 auto}
+.collab-brain-ico{display:block}
+.collab-label{font-weight:600;color:var(--text-secondary);flex:0 0 auto;letter-spacing:.02em}
+/* Pillar #7 ambient status headline — the leading, flexible, truncating slot.
+   Unlike the fixed-width count segments it takes the remaining space and
+   ellipsizes so a long narrative never pushes the counts off the bar. */
+.collab-sep{color:var(--text-tertiary);opacity:.5;flex:0 0 auto}
+.collab-seg{flex:0 0 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.collab-seg-decisions{color:#e0a13a;font-weight:600}
+.collab-seg-progress{color:var(--accent)}
+.collab-seg-open{color:var(--text-secondary)}
+.collab-seg-peers{color:var(--text-tertiary)}
+.collab-has-decisions{box-shadow:inset 3px 0 0 #e0a13a}
+.collab-peer-epics{display:inline-flex;align-items:center;gap:10px;min-width:0;overflow:hidden;margin-left:var(--space-1)}
+.collab-peer-epic{display:inline-flex;align-items:center;gap:5px;min-width:0;overflow:hidden;color:var(--text-tertiary)}
+.collab-peer-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:presencePulse 2s infinite;flex:0 0 auto}
+.collab-epic-title{color:var(--text-primary);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+@keyframes presencePulse{0%{box-shadow:0 0 0 0 rgba(110,86,207,.5)}70%{box-shadow:0 0 0 5px rgba(110,86,207,0)}100%{box-shadow:0 0 0 0 rgba(110,86,207,0)}}
+/* ★ Perf: will-change:scroll-position promotes chat-container to its own compositor layer,
+ * preventing scroll from triggering layout/paint of the parent .main container. */
+/* ── Icon alignment utility (base layer; theme-agnostic) ──
+   Centers an SVG/img glyph inside any box with NO baseline drift. Use on the
+   PARENT of a standalone icon (button, tile, logo+label row, toolbar control).
+   The child `display:block` removes the inline SVG descender gap that makes a
+   glyph sit low even inside a centered box. Decision rule + traps: CLAUDE.md §3.4. */
+.icon-box{display:inline-flex;align-items:center;justify-content:center}
+.icon-box>svg,.icon-box>img{display:block}
+/* ── Chat pane = the SIZING CONTAINER for the right rail ──────────
+ * `container-type:inline-size` MUST be declared HERE, not on
+ * `.chat-wrapper`. The space the rail can occupy is
+ *   viewport − sidebar − request-inspector-drawer
+ * and the drawer (`.ri-drawer`, position:fixed) shrinks THIS element via
+ * `body.ri-open .chat-container{margin-right:min(860px,95vw)}` — it never
+ * touches the wrapper's used width. Measured across 64 states
+ * (8 widths × 4 sidebar states × drawer open/closed): wrapper and container
+ * disagree in 32 of them, by exactly the drawer width. A container query on
+ * the wrapper is therefore blind in half the matrix — the same class of bug
+ * as the `@media (max-width:1280px)` rule it replaces, one level down.
+ * Guarded by tests/turn_lifecycle/test_turn_ctx_rail_geometry.py. */
+.chat-container{flex:1;overflow-y:auto;overflow-x:hidden;min-height:0;will-change:scroll-position;container-type:inline-size;container-name:chatpane}
+/* Tracks: [reading column] [right rail]. The rail OWNS its width instead of
+ * being floated into hoped-for margin, so it cannot be clipped by
+ * construction.
+ *
+ * ⚠️ THE MEASURE IS CAPPED ON THE MESSAGE BODY, NOT HERE. Two earlier attempts
+ * were wrong in instructive ways — don't redo either:
+ *   1. Clamping `.chat-inner` and leaving the text as a bare `1fr` poured every
+ *      spare pixel into line length (~130 chars at 2560, vs ~90 comfortable).
+ *   2. Capping via a `--measure-max` var on THIS element was INERT: the real
+ *      bound came from `[data-theme="tofu"] .md-content{max-width:72ch}`, so
+ *      deleting the var changed nothing and the guard asserting it was vacuous.
+ *      That theme-scoped rule also meant dark/light had NO cap at all.
+ * The single source of truth is now `--msg-measure` on `.message-content`
+ * (below), which is theme-agnostic. This element is a plain track container:
+ * surplus width becomes symmetric outer margin via `margin:0 auto`, which is
+ * what "the pane breathes" should mean.
+ *
+ * ── Where the surplus goes (2026-09-24 adaptive rail) ──
+ * With the rail granted, the surplus FIRST fattens the rail track, not the
+ * outer margin: the rail grows past its 232px floor to absorb every pane
+ * pixel beyond measure+avatar+gap, up to a 480px cap (owner report: at a
+ * ~1500px pane the fixed 232px rail truncated its checklist while ~300px of
+ * dead margin framed the grid). The adaptive width is computed in
+ * `_mirrorRailGeometry` (main.js) from the chat container's inline size —
+ * the exact pane (viewport − sidebar − drawer) — and written here as a
+ * resolved pixel --rail-w. It cannot be a container-fed CSS clamp(): a
+ * percentage inside a grid-track clamp resolves against .chat-inner's OWN
+ * width (a grid-cycle fallback), which ballooned the rail to ~1000px at a
+ * 1900px pane instead of the container's surplus; container query units
+ * (cqw) hit the same grid-track cycle. The granted-rail max-width
+ * `min(100% - 48px, …)` bounds the grid to the container; no-rail panes
+ * keep the raw calc, preserving the narrow compact fold's usable width.
+ * The 232px here is only the no-JS / pre-mirror fallback. */
+.chat-inner{
+  --rail-w:0px;
+  --rail-gap:0px;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) var(--rail-w);
+  column-gap:var(--rail-gap);
+  max-width:calc(var(--msg-measure) + 52px + var(--rail-gap) + var(--rail-w) + 48px);
+  margin:0 auto;
+  padding:var(--space-6) var(--space-6) 120px;
+}
+/* The rail column exists only when it fits — and the grant threshold is
+ * DERIVED, not tuned: 700 text + 52 row furniture + 24 text→rail gap + 232
+ * rail + 48 padding = 1052, granted at 1056px (floor + rounding slack) —
+ * matching the geometry guard's _MIN_MEASURE_PX
+ * (tests/turn_lifecycle/test_turn_ctx_rail_geometry.py).
+ *
+ * The adaptive WIDTH (2026-09-24 owner report: a fixed 232px rail truncated
+ * its checklist while ~300px of dead margin framed the grid at a ~1500px
+ * pane) is owned by main.js `_mirrorRailGeometry`, which reads the chat
+ * container's inline size — the exact pane (viewport − sidebar − drawer) —
+ * and writes a resolved pixel --rail-w onto BOTH .chat-inner and the
+ * composer. The rule is a clamp resolved against the pane:
+ *   floor   = pane − 48 − 52 − 24 − 700   (panes 1056–1175 squeeze the RAIL
+ *   surplus = pane − 820 − 52 − 24 − 48    below 232 before the text may
+ *   granted = clamp(floor, surplus, 480)   drop under its 700px floor)
+ * so the rail absorbs every pane pixel beyond measure+avatar+gap up to a
+ * 480px cap, and past ~1424px the surplus returns to the outer margin so
+ * the chat column stays centered on ultrawide panes. It cannot be a pure
+ * CSS clamp(): a percentage or cqw inside a grid-track clamp resolves
+ * against .chat-inner's OWN width (a grid-cycle fallback), which ballooned
+ * the rail to ~1000px at a 1900px pane instead of the container's surplus.
+ * The 232px here is only the no-JS / pre-mirror fallback; below 1056px the
+ * rail folds inline under each message (see .turn-ctx rules). The previous
+ * 1368px threshold was full-comfort PLUS a 192px luxury buffer, which
+ * disenfranchised every pane in 1056–1367 — e.g. a ~1365px pane at 100%
+ * zoom lost the rail entirely and only re-gained it at 80% zoom (the
+ * 2026-08-03 report). */
+@container chatpane (min-width: 1056px){
+  .chat-inner{
+    max-width:min(calc(100% - 48px), calc(var(--msg-measure) + 52px + var(--rail-gap) + var(--rail-w) + 48px));
+    --rail-gap:24px;
+    /* Fallback grant only — the adaptive width is owned by main.js
+     * (_mirrorRailGeometry), which resolves the clamp against the real
+     * container width and writes a pixel value. See the comment above. */
+    --rail-w:232px;
+  }
+}
+
+/* A container-query grant flips synchronously with pane layout, but the JS
+ * ResizeObserver mirror may still carry the previous wide-pane inline grant
+ * for one frame. The hidden rail must not keep a 232–480px grid track in a
+ * 200px pane: that track squeezes the fallback fold to zero width. Important
+ * only here so the narrow state wins over the stale inline custom property;
+ * the observer still owns the adaptive pixel width in granted panes. */
+@container chatpane (width < 1056px){
+  .chat-inner{ --rail-w:0px!important; --rail-gap:0px!important; }
+}
+/* Conversation controls share this composer's width; 25-conversation-bar.css owns their layout. */
+
+/* Scroll-to-bottom affordance — a floating pill anchored just above the
+ * composer inside the position:relative .chat-wrapper. Hidden by default;
+ * JS toggles .visible via the #chatContainer scroll listener when the reader
+ * is scrolled up away from the latest message. */
+.scroll-to-bottom-btn{position:absolute;left:50%;bottom:calc(var(--input-area-h, 120px) + 12px);transform:translateX(-50%) translateY(6px);z-index:9;display:flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0;border-radius:50%;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-secondary);box-shadow:0 2px 10px rgba(0,0,0,0.28);cursor:pointer;opacity:0;pointer-events:none;visibility:hidden;transition:opacity .18s ease,transform .18s ease}
+.scroll-to-bottom-btn:hover{color:var(--text-primary);border-color:var(--accent)}
+.scroll-to-bottom-btn>svg{display:block}
+.scroll-to-bottom-btn.visible{opacity:1;pointer-events:auto;visibility:visible;transform:translateX(-50%) translateY(0)}
+.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:50vh;text-align:center;animation:fadeIn .5s ease;gap:2px}.welcome-icon{width:64px;height:64px;border-radius:0;background:transparent;display:flex;align-items:center;justify-content:center;font-size:var(--font-size-4xl);margin-bottom:6px;box-shadow:none;border:none;outline:none}.welcome-icon img{width:100%;height:100%;object-fit:contain;border-radius:0;border:none;outline:none;transition:transform 0.3s cubic-bezier(0.34,1.56,0.64,1)}.welcome-icon:hover img{transform:rotate(-5deg) scale(1.08)}.welcome-icon svg{filter:drop-shadow(0 2px 8px rgba(168,85,247,0.3))}.welcome h2 small{display:inline;font-family:'Jakarta Toolbar','Plus Jakarta Sans','Jakarta Fallback',sans-serif;font-size:var(--font-size-xs);font-weight:400;color:var(--text-tertiary);letter-spacing:0.12em;margin-left:6px;vertical-align:middle;opacity:0.7}.welcome h2{font-size:24px;font-weight:600;margin-bottom:var(--space-1);letter-spacing:-0.03em}
+/* ══ TOFU wordmark — THEME-AGNOSTIC LETTERFORM SOURCE ══════════════════════
+   侧栏(15/18px)与欢迎屏(24/42px)是同一个字标的两个字号,在**每个主题下**都必须同源。
+   字族/字重/字距/结构在此一次性供给,两处共同消费;各主题只允许再覆盖颜色,各面
+   只允许再覆盖自己的字号与悬停编排。
+
+   为什么必须在基础层而不是 [data-theme] 层(2026-07-29 owner 实测退回):上一版共享
+   规则挂在 `[data-theme="tofu"]` 前缀上,于是 dark/light 下两处依旧各写一套——实测
+   侧栏 700 / +0.6px / 紫渐变,欢迎屏 600 / -0.72px / 金渐变,字距方向都相反。
+
+   而真因不止配色。`.tofu-brand`(0,1,0) 自己写的 font-weight:700 与
+   letter-spacing:0.08em 是**死代码**:通用 `.welcome h2`(0,1,1) 特异性更高,把它们压成
+   600 / -0.03em;而侧栏那份同样的意图却生效了。同一份声明在两处得出相反结果,源码
+   看上去两边却都写了 700/0.08em——这正是漂移能长期隐形的机制。故本规则刻意带上下文
+   (`.sidebar-header h1 .sidebar-brand` = 0,2,2 / `.welcome h2.tofu-brand` = 0,2,1),
+   两者都严格压过 `.welcome h2`(0,1,1),让「写下的就是生效的」。
+   守卫 tests/frontend/test_brand_wordmark_parity.py 按 tofu/dark/light 三主题参数化钉死。
+
+   字重 700 不是随手取的:Pixelify Sans 只随包提供 Bold 一个字面(见
+   static/vendor/google-fonts-local.css 仅 PixelifySans-Bold.woff2),700 是它唯一真实
+   可渲染的字重;写 600 只会让浏览器合成假粗体,不同字号下粗细还不一致。 */
+.sidebar-header h1 .sidebar-brand,
+.welcome h2.tofu-brand{
+  font-family:'Pixelify Sans','Press Start 2P',cursive;
+  font-weight:700;
+  letter-spacing:0.06em;
+  text-transform:none
+}
+.sidebar-header h1 .sidebar-brand>span,
+.welcome h2.tofu-brand>span{display:inline-block}
+
+
+/* ══ TOFU BRAND LOCKUP — 吉祥物与字标同源(THEME-AGNOSTIC MASCOT FORM)══════════
+   吉祥物和上面那串字标是**同一个锁定组合**(lockup),不是恰好相邻的两个元素,所以
+   它的形态声明就放在字标源旁边、同一个基础层里。两处消费同一份资产:
+   侧栏 22px 与欢迎屏 100px,都是 static/icons/tofu-welcome.svg。
+
+   为什么存在(实测 shipped CSS,owner 第五轮退回)——字标已在前四轮做到三主题同源,
+   但吉祥物从未被审计,仍带着这四轮要杀的同一个病根「形态钉在 [data-theme=tofu]」:
+     1. opacity 按主题分叉:基础层 .sidebar-tofu-icon{opacity:0.85} vs
+        tofu 层 {opacity:.92},而欢迎屏同一只是 1 —— 同一个品牌物三种重量。
+     2. hover 编排 tofu-only:`[data-theme="tofu"] ...h1:hover` 无基础层对应,
+        dark/light 的侧栏吉祥物 hover 完全僵死,欢迎屏却三主题都会浮动+抬升。
+     3. 渲染保真度分叉:侧栏 image-rendering:pixelated vs 欢迎屏不设 ——
+        同一份矢量在一处被硬边栅格化。已删除而非搬移,理由见原处注释。
+     4. (连带)transition 当时被塞在 tofu-only 的 opacity 规则里,所以基础层若只
+        搬 transform 不搬 transition,hover 会变成瞬跳而不是弹性过渡。
+
+   opacity 统一取 1 而不是 .85/.92 的任一个:那两个值是在补偿早期深色背景下的
+   刺眼白边,而 tofu 调色板已无该背景;更要紧的是,品牌标记把自己调暗读起来像
+   disabled chrome,不像产品身份。欢迎屏本来就是 1,取 1 同时消掉第三个值。
+
+   hover 手势按尺度分工但三主题都存在(与 float 同一条规矩):侧栏 22px 用
+   rotate(-8deg) scale(1.1),欢迎屏 100px 用 rotate(-5deg) scale(1.08) ——
+   同样的角位移在大尺寸上看着过火,故幅度随尺寸收敛,而**是否有反馈**不随主题变。
+
+   ★ 欢迎屏那只的 transition 仍写在它自己的 `.welcome-icon img` 规则里(与
+   width/height/object-fit 同处),此处再供一份是有意的:两处同一时长同一缓动,
+   让「同一个吉祥物」在两个尺寸下手感一致,且侧栏那只在本轮之前根本没有基础层
+   transition(它借的是 tofu 层那份)。
+
+   主题只准覆盖颜色/滤镜,不准覆盖上面任何一项形态。
+   守卫 tests/frontend/test_brand_wordmark_parity.py 第 7 节按三主题参数化钉死。 ── */
+.sidebar-tofu-icon,
+.welcome-icon img{
+  opacity:1;
+  image-rendering:auto;
+  transition:transform .3s cubic-bezier(.34,1.56,.64,1)
+}
+.sidebar-header h1:hover .sidebar-tofu-icon{transform:rotate(-8deg) scale(1.1)}
+
+/* ══ BRAND SEAL + GROUND SHADOW — THEME-AGNOSTIC FORM ══════════════════════
+   品牌区的两个形态特征。与字形真源同一道理(2026-07-29 owner 实测二次退回):上一版
+   它们只挂在 `[data-theme="tofu"]` 上,于是切到 dark/light 品牌区就退回改造前的样子
+   ——实测「豆腐」在 dark 为 11px/400/灰 #6a6a7a、light 为 11px/400/灰 #868490 的裸字,
+   正是「在 42px 主标旁读作漏排说明文字」那个原始缺陷在另两个主题原样存活;吉祥物
+   落影同样缺席,两个主题下它仍悬空。
+
+   故形态(印章几何 / clamp 字号下限 / 字距补偿 / 倾角 / 落影椭圆)在此一次性供给三个
+   主题,主题层只允许覆盖「印底色」与「落影浓度」。选择器带上下文到 (0,3,2),严格压过
+   低优先级的 `.welcome h2 small`(0,2,2)——后者把 `-webkit-text-fill-color` 设成灰色
+   且该属性可继承,不显式声明会被它穿透。
+
+   三个数字是实拍定的,不是估的(static/icons/_gen/wordmark-preview/a3.png):
+   ① font-size 用 clamp 而非纯 em —— 纯 .30em 在移动 20px 主标下只有 6px,中文两字
+      糊成一团;纯 px(12.5)反过来在 20px 主标旁几乎与主标同高。两端都实拍过。
+   ② padding 左右不等(.64em 左 / .50em 右)—— letter-spacing 会在末字「腐」后多留一份
+      字距,左右等距会看起来右边更空。
+   ③ margin-left .52em —— .36em 实拍贴住了 u 的右侧。
+   几何全部用 em,随 clamp 后的字号一起缩放,只有字号本身有下限。 */
+.welcome h2.tofu-brand small{
+  font-family:var(--sans-body);
+  font-size:clamp(10.5px,.30em,13px);
+  font-weight:700;
+  letter-spacing:.14em;line-height:1;
+  color:#FCF8EE;-webkit-text-fill-color:#FCF8EE;
+  background:linear-gradient(150deg,#A05E17 0%,#84470F 100%);
+  padding:.42em .50em .42em .64em;
+  border-radius:.52em;
+  margin-left:.52em;
+  vertical-align:middle;opacity:1;
+  /* 上抬用独立 translate 属性、倾角走 --brand-tilt:悬停 wobble 的 keyframes 整体占用
+     transform,静置偏移若也写在 transform 里,动画起止帧会把它冲掉(印章先掉 .62em
+     再回正跳一下)。独立属性与 keyframes 复合,上抬全程保持;--brand-tilt 让摆动围绕
+     静置的 -3.2° 进行(与吉祥物 img 的 translate/transform 拆分同一机制)。 */
+  --brand-tilt:-3.2deg;
+  translate:0 -.62em;
+  transform:rotate(var(--brand-tilt));
+  transform-origin:50% 100%;
+  box-shadow:0 .06em .16em rgba(92,72,44,.30),
+             inset 0 .06em 0 rgba(255,247,232,.30)
+}
+/* 吉祥物接地投影 —— 没有它时吉祥物悬在纸面上方(只有 drop-shadow、没有落影),读作
+   贴图而非放在纸上的物件。纯装饰,不参与布局。
+   position:relative 必须在此一并声明 —— 基础层 .welcome-icon 本来没有定位,之前只是
+   tofu 层顺手给了一个;不补的话落影会逃到最近的定位祖先上去。 */
+.welcome-icon{position:relative}
+
+/* ══ BRAND-AREA SCALE — THEME-AGNOSTIC ═══════════════════════════════════════
+   品牌区的**尺度**(吉祥物大小、主标字号、图标与字标的间距)与形态/配色/动效同属
+   品牌形态,必须三主题同源。
+
+   2026-07-29 owner 实测退回(本家族第四次,前三次分别是字标/印章+落影/动效):基础层
+   `.welcome-icon{64px}` 与 `.welcome h2{24px}` 是早年的**通用**小尺寸,而放大值只写在
+   `[data-theme="tofu"]` 里 ⇒ 实测吉祥物 100px vs 64px、主标 42px vs 24px、图标下间距
+   24px vs 6px。也就是说 dark/light 下这块区域退化成「一个小图标配一行普通 h2」,
+   而不是品牌时刻。移动端阶梯(84/68px)同样只有 tofu 有,那两个主题在手机上连缩放
+   曲线都没有。
+
+   ★ 放大值锚在 `.welcome-icon` 与 `.welcome h2.tofu-brand`,**不动通用 `.welcome h2`**
+   —— 后者仍要服务非品牌的欢迎标题(空文件夹提示等),把它一起放大会波及无关表面。
+   `.welcome h2.tofu-brand` 是 (0,2,1),严格压过基础层 `.welcome h2`(0,1,1)。
+
+   ★ 尺度取 tofu 现值而非把 tofu 拉小:那是 owner 在岗看得最久、且本轮设计(落款印
+   几何、落影椭圆比例、字距补偿)全部围绕它求解的比例;反过来迁就旧通用值会让前三轮
+   的实测结论全部失效。
+
+   守卫 tests/frontend/test_brand_wordmark_parity.py 按 _THEMES 参数化钉死三主题尺度相等,
+   桌面与移动断点各测一次。 */
+.welcome-icon{
+  width:100px;height:100px;
+  border-radius:var(--radius-sm);
+  overflow:visible;
+  margin-bottom:var(--space-6)
+}
+.welcome h2.tofu-brand{font-size:42px}
+/* 移动端阶梯不写在这里 —— 全局 `@media(max-width:768px){.welcome-icon{52px}}`(约 17031 行)
+   与横屏那条(约 18456 行)同为 (0,1,0) 且位置更靠后,写在此处会被它们压成死代码
+   (实测:此处写 84px,浏览器解析出 52px)。故品牌区的移动阶梯放在那两条之后,
+   见文件尾部 BRAND-AREA SCALE · MOBILE。 */
+.welcome-icon::before{
+  /* bottom 取负值：图片盒与图标盒完全重合(实测两者同为 84×84、imgTop=0),
+     落影若留在盒内就贴在贴图下沿、读不出「托住」的感觉;探出盒外才像地面。
+     这要求祖先不能裁切 —— .welcome-icon 本身无 overflow 设置(默认 visible),
+     守卫会按三主题钉住「差分像素必须出现在图标下缘」。
+     ★ 水平居中用 left:11%(=(100-78)/2) 而不用 translateX(-50%) —— transform 必须
+     整个留给呼吸动画的 scale,两者写在同一属性上会互相覆盖。 */
+  content:"";position:absolute;left:11%;bottom:-5px;
+  width:78%;height:13px;border-radius:50%;display:block;
+  background:radial-gradient(ellipse at 50% 50%,rgba(140,100,52,.34),rgba(140,100,52,0) 72%);
+  animation:tofuShadowBreathe 4s ease-in-out infinite
+}
+
+/* ══ 品牌动效 — 会呼吸的吉祥物 + 跟着呼吸的影子 ══════════════════════════
+   2026-07-29 owner 实测退回:此前 `animation:tofuFloat` 挂在 .welcome-icon 上,而落影是
+   同一元素的 ::before ⇒ 父元素 translateY 时影子**锁死同步移动**(9 帧采样 icon bottom
+   160.03→156.55,摆幅 3.48px)。地面线跟着飘,恰好复活了引入落影本要解决的「贴纸感」。
+   真实接触影的行为是:地面线**不动**,物体升高时影子**变小变淡**。
+
+   落点:浮动改挂在 img 上,宿主 .welcome-icon 保持静止,落影的地面线因此钉死;落影配一条
+   同周期同缓动的反相动画,相位天然对齐(两者都 4s ease-in-out、同时起播)。
+
+   ★ img 的浮动用独立变换属性 `translate` 而不是 `transform` —— hover 态
+   (`transform:scale(1.06) rotate(-3deg)`)已经占用了 transform,写在同一属性上会互相
+   覆盖:悬停会掐掉浮动,或浮动会掐掉悬停。独立属性与 transform 各自成分复合,两者共存。
+   同理落影的呼吸占用 transform,故它的水平居中改用 left:11% 几何量而非 translateX。
+
+   ★ 挂在基础层而非 [data-theme="tofu"] —— 动效同属品牌形态,此前只有 tofu 用户看得到,
+   dark/light 下吉祥物完全静止,与前两轮「形态挂在 tofu 上」是同一类缺陷。 */
+@keyframes tofuMascotFloat{
+  0%,100%{translate:0 0}
+  50%{translate:0 -4px}
+}
+@keyframes tofuShadowBreathe{
+  /* 反相:吉祥物升到最高点(50%)时影子最小最淡 —— 物体离地面越远,接触影越散越弱 */
+  0%,100%{transform:scale(1);opacity:1}
+  50%{transform:scale(.82);opacity:.62}
+}
+.welcome-icon img{animation:tofuMascotFloat 4s ease-in-out infinite}
+/* 无障碍兜底:关掉动效后,影子必须停在「贴地」的静止态(scale 1 / opacity 1),
+   而不是停在动画中途某个收缩帧。 */
+@media (prefers-reduced-motion:reduce){
+  .welcome-icon img{animation:none;translate:0 0}
+  .welcome-icon::before{animation:none;transform:scale(1);opacity:1}
+}

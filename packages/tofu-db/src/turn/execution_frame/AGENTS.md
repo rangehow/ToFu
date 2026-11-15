@@ -21,9 +21,10 @@ producer batch, process cache or passive replay protocol.
 - Missing/future evidence and unsupported transitions use materialization;
   known malformed evidence retains integrity errors. Text-tail and lifecycle
   writers must drop or replace facts when their state changes.
-- Version 3 measures the current restart-settlement encoding. Version 2 was
-  published with two evidence labels; materialization verifies either exact
-  historical encoding, then a write mints v3 before size-proof reuse. Keep the
+- Version 4 measures the current restart-settlement encoding. Version 3
+  measured it before unproduced restart resume; version 2 was published with
+  two evidence labels. Materialization verifies the exact historical encoding,
+  then a write mints v4 before size-proof reuse. Keep the
   golden-length/reopen tests when changing recovery serialization. Its
   content/thinking/toolRounds inputs invalidate reuse. Version 1 retains
   conservative size admission.

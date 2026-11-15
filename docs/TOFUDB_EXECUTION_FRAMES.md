@@ -194,6 +194,22 @@ lane-index parity, reopen and lazy upgrade are executable specifications in
 `turn_execution_frame_runtime_tests.rs`. Changing recovery serialization must
 preserve those historical fixtures and explicitly version new size evidence.
 
+### Unproduced restart resume (2026-11-16)
+
+Problem: RESTART-DRILL-1 made a restart interruption that produced nothing
+(and holds no cut call) offer `continue` (`docs/contracts/TURN_SETTLEMENT.md`,
+"Resume options"). Native `turn.recover` kept the earlier rule because v3
+evidence measures that earlier, shorter envelope, so the semantic
+differential gate diverged from the SQL authority.
+
+Decision: `restart_settlement` follows the shared rule and new witnesses use
+v4. A v3 (or v2) reader verifies the exact envelope it measured
+(`restart_settlement_before_unproduced_resume`, plus v2's evidence label);
+neither supplies fast write admission, so a materialized write mints v4
+before a size proof is reused. Alternatives rejected: changing the size
+without a version makes upgraded readers reject valid Turns; keeping the old
+native rule strands unproduced restarts on the TofuDB backend only.
+
 ### Adjacent ordinary events in one transaction (2026-11-05)
 
 Problem: the production delivery FIFO can already compose several ordinary

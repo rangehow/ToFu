@@ -59,8 +59,13 @@ def runtime(base_runtime, monkeypatch):
         def create_turn(self, conv, owner, request, **kwargs):
             trusted = kwargs['trusted_dispatch']; trusted.checked()
             assert kwargs['principal'].kind == 'system' and request['inputActor'] == 'virtual_user'
-            assert r.c.turn['projection']['content'] in request['inputTurn']['content']
-            assert 'Assigned objective:' in request['inputTurn']['content']
+            # The brief leads; a Worker's input links the owner's request, never repeats it.
+            content = request['inputTurn']['content']
+            row = r.c.repo.read(trusted.binding['assignmentId'])
+            assert content.startswith(row['request']['brief'])
+            if row['request']['profile']['mode'] != 'coordinator':
+                assert r.c.turn['projection']['content'] not in content
+            assert 'Delegated for the owner\'s request in conversation coordinator; Turn ' in content
             turn, attempt, task = (prefix + conv for prefix in ('turn-', 'attempt-', 'task-'))
             if attempt in r.attempts:
                 return SimpleNamespace(value={})
@@ -261,7 +266,7 @@ def test_an_owner_message_steered_into_a_nonhuman_wake_is_its_request(runtime, d
     assert row['request']['authorizationSource'] == source
     from lib.project_dispatch.delegation import worker_input
     objective = worker_input(r.c.repo, row['request'])
-    assert text in objective and f'message {OWNER_STEER} the owner sent while that reply ran' in objective
+    assert text not in objective and f'message {OWNER_STEER} the owner sent while that reply ran' in objective
     listed = r.call('get_project_workers')
     assert listed['scope'] == 'request' and listed['source_attempt_id'] == 'coordinator-attempt', listed
     assert [worker['current_request'] for worker in listed['workers']] == [True]

@@ -7,8 +7,10 @@ use super::super::*;
 use serde::{Deserialize, Serialize};
 
 // Version 2 was published with both user_abort and system_recovery restart
-// envelopes. Version 3 binds its size proof to the current recovery owner.
-const CURRENT_WITNESS_VERSION: u64 = 3;
+// envelopes. Version 3 binds its size proof to the recovery owner before a
+// restart interruption that produced nothing offered `continue`; version 4
+// measures the current settlement.
+const CURRENT_WITNESS_VERSION: u64 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -244,7 +246,7 @@ impl ProjectionWitness {
         // Unknown evidence versions remain a reconstructible optimization miss.
         if !matches!(
             raw.get("version").and_then(Value::as_u64),
-            Some(1 | 2 | CURRENT_WITNESS_VERSION)
+            Some(1 | 2 | 3 | CURRENT_WITNESS_VERSION)
         ) {
             return Ok(None);
         }
@@ -276,12 +278,17 @@ impl ProjectionWitness {
             return Err(invalid_data("Turn frame fields differ"));
         }
         if let Some(expected) = self.recovery_bytes {
-            let mut recovery = restart_settlement(projection);
+            // Verify the exact historical envelope, not an arbitrary size
+            // tolerance. All options still come from the shared owner; v2 and
+            // v3 measured the settlement before unproduced restart resume and
+            // v2 also published a user_abort label. This adapter never
+            // changes the actual settlement or supplies fast admission.
+            let mut recovery = if self.version == CURRENT_WITNESS_VERSION {
+                restart_settlement(projection)
+            } else {
+                restart_settlement_before_unproduced_resume(projection)
+            };
             if size(&recovery)? != expected {
-                // Verify the exact historical envelope, not an arbitrary size
-                // tolerance. All options still come from the shared owner;
-                // only this published v2 label differed. This adapter never
-                // changes the actual settlement or supplies fast admission.
                 if self.version != 2 {
                     return Err(invalid_data("Turn frame recovery bytes differ"));
                 }
@@ -367,10 +374,11 @@ pub(in crate::turn) fn append_from_witness(
     let Some(mut witness) = head.frame_witness.clone() else {
         return Ok(None);
     };
-    // A v2 count may describe either published recovery envelope. Verify the
-    // materialized projection and mint current evidence before reusing a size
-    // proof; the historical count must never under-reserve a new settlement.
-    if witness.version == 2 && witness.recovery_bytes.is_some() {
+    // A v2/v3 count describes a historical recovery envelope, which may be
+    // smaller than the current one. Verify the materialized projection and
+    // mint current evidence before reusing a size proof; the historical count
+    // must never under-reserve a new settlement.
+    if witness.version < CURRENT_WITNESS_VERSION && witness.recovery_bytes.is_some() {
         return Ok(None);
     }
     if head.text_tail.is_some()

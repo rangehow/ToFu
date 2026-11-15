@@ -624,6 +624,43 @@ fn execution_frame_runtime_legacy_restart_size_keeps_historical_turns_readable()
 }
 
 #[test]
+fn execution_frame_runtime_v3_restart_size_before_unproduced_resume_stays_readable() {
+    // A Turn interrupted before its first output now also offers `continue`
+    // (RESTART-DRILL-1); v3 evidence measured the shorter earlier envelope.
+    let projection = json!({"content": "", "thinking": "", "toolRounds": []});
+    let projection = projection.as_object().unwrap();
+    let current = serde_json::to_vec(&restart_settlement(projection))
+        .unwrap()
+        .len();
+    let historical = serde_json::to_vec(&restart_settlement_before_unproduced_resume(projection))
+        .unwrap()
+        .len();
+    assert!(current > historical);
+    let mut encoded = serde_json::to_value(
+        ProjectionWitness::mint(projection, 7, "assistant", "running")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(encoded["version"], 4);
+    assert_eq!(encoded["recoveryBytes"], current);
+    let verifies = |encoded: &Value| {
+        ProjectionWitness::decode(encoded, 7)
+            .unwrap()
+            .unwrap()
+            .verify(projection, "assistant", "running")
+            .is_ok()
+    };
+    assert!(verifies(&encoded));
+    encoded["version"] = json!(3);
+    assert!(!verifies(&encoded));
+    encoded["recoveryBytes"] = json!(historical);
+    assert!(verifies(&encoded));
+    encoded["version"] = json!(4);
+    assert!(!verifies(&encoded));
+}
+
+#[test]
 fn execution_frame_runtime_legacy_restart_size_reopens_and_upgrades_before_reuse() {
     for recovery_bytes in [406, 411] {
         let directory = tempfile::tempdir().unwrap();
@@ -713,7 +750,7 @@ fn execution_frame_runtime_legacy_restart_size_reopens_and_upgrades_before_reuse
         drop(tx);
         commit_step(&mut database, &next, true).unwrap();
         let current = serde_json::to_value(head(&database).frame_witness.unwrap()).unwrap();
-        assert_eq!(current["version"], 3);
+        assert_eq!(current["version"], 4);
         assert_eq!(current["recoveryBytes"], 411);
         let upgraded = state(&database);
         assert!(
@@ -733,7 +770,7 @@ fn execution_frame_runtime_witness_depth_corruption_and_legacy_version_fallback(
             .unwrap()
             .unwrap();
     let encoded = serde_json::to_value(&witness).unwrap();
-    assert_eq!(encoded["version"], 3);
+    assert_eq!(encoded["version"], 4);
     assert_eq!(
         encoded["recoveryBytes"],
         serde_json::to_vec(&restart_settlement(projection.as_object().unwrap()))

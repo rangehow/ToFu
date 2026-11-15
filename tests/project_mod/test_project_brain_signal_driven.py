@@ -1096,11 +1096,39 @@ def test_coordinator_active_work_excludes_own_conversation(coordinator_binding):
         task = _task('active-' + uuid.uuid4().hex, cid, query=title)
         brain.note_todo_signal(task, project, [], accepted=True)
     brain.add_narrative(project, kind='note', text='new note', user_id=1)
+    live = {'coordinator': {}, 'worker': {}}
     context = brain.prepare_project_context(
-        project, 'coordinator', user_id=1, task=viewer)
+        project, 'coordinator', user_id=1, task=viewer, live_conversations=live)
     assert 'Active work:' in context
     assert 'peer work' in context
     assert 'own active work' not in context
+
+
+def test_active_work_lists_each_live_conversation_once(coordinator_binding):
+    """An ``active`` work item whose task is no longer running is not active work.
+
+    A lost finish signal leaves its item ``active`` (project_settlement); a
+    conversation with several Turns holds one item per task.
+    """
+    import lib.conversations.project_brain as brain
+
+    project = _project('active-live')
+    coordinator_binding(project, 'coordinator')
+    viewer = _task('viewer', 'coordinator')
+    assert brain.prepare_project_context(project, 'coordinator', user_id=1, task=viewer) == ''
+    for cid, title in [('worker-live', 'first turn'), ('worker-live', 'follow-up turn'),
+                       ('worker-finished', 'finished long ago')]:
+        brain.note_todo_signal(_task('active-' + uuid.uuid4().hex, cid, query=title), project, [],
+                               accepted=True)
+    brain.add_narrative(project, kind='note', text='live note ' + project, user_id=1)
+    context = brain.prepare_project_context(project, 'coordinator', user_id=1, task=viewer,
+                                            live_conversations={'worker-live': {}})
+    active = context[context.index('Active work:'):].splitlines()[1:]
+    assert len(active) == 1 and 'worker-live' in active[0], context
+    assert 'finished long ago' not in context
+    brain.add_narrative(project, kind='note', text='another note ' + project, user_id=1)
+    # Without the live read, nothing claims to be active.
+    assert 'Active work:' not in brain.prepare_project_context(project, 'coordinator', user_id=1, task=viewer)
 
 
 def test_project_brain_demand_keeps_complete_live_and_terminal_work_and_large_collections():

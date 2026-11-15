@@ -246,6 +246,7 @@ class ServingLoopRuntime:
         return task
 
     async def _task_reaper(self, interval: int) -> None:
+        from lib.agent_core.task_runtime import cleanup_stale_task_runtimes
         from lib.tasks_pkg.manager import cleanup_old_tasks
         while not self.shutdown_requested.is_set():
             await asyncio.sleep(interval)
@@ -253,6 +254,7 @@ class ServingLoopRuntime:
                 break
             try:
                 await asyncio.to_thread(cleanup_old_tasks)
+                await asyncio.to_thread(cleanup_stale_task_runtimes)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

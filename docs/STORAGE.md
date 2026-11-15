@@ -1078,6 +1078,12 @@ reimplement the fence, restart and validation rules.
   Failed flushes back off exponentially to five minutes; TTL deletion runs in
   the maintenance lane and removes at most 500 indexed rows per transaction,
   so observability cannot form a retry storm behind user writes.
+- `log_aggregate.query` matches `q` as a literal substring of the template
+  under ICU default simple case folding (per code point, so `Α` matches `α`
+  but `ß` never matches `ss`). SQLite folds through the registered
+  `tofu_simple_fold` function rather than relying on an ICU-built
+  libsqlite3 (conda-forge libsqlite 3.53 dropped ICU); the table is generated
+  for both authorities by `scripts/gen_tofudb_unicode_simple_fold.py`.
 
 ### PostgreSQL
 

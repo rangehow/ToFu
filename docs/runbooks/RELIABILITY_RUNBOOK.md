@@ -504,7 +504,15 @@ DolphinFS 上，新机的 `--start` 在旧机还在服务时直接拒绝。所�
    期望除"serving host: <旧主机> still serves"这一条 INFO 外全部 PASS（DolphinFS
    读写、Python 依赖、Node 版本、两个 GitHub 代理、模型服务商、端口 15000 空闲、
    存储 authority 不在本地 front、引擎能在新机执行且可准入）。有 FAIL 就先修，旧机
-   不要停。
+   不要停。每一步都先 `cd` 到上面的 checkout：`.venv/bin/python` 是相对路径，在别的
+   目录会报 No such file。
+
+   `storage engine build` 报 source identity unreadable on this host … disappeared
+   while fingerprinting <文件>：引擎指纹遍历工作区（`packages/tofu-db/src/**.rs`
+   等），目录列表里有该文件、打开却 ENOENT。若 `git -C <checkout> status --short
+   packages/tofu-db` 干净且 `ls -l <文件>` 能看到它，就是本机 DolphinFS 元数据缓存
+   还停留在另一台机器替换文件之前，文件并未被删除；`ls -l` 后重跑 `--check`。若 status 不干净，是有
+   landing 正在写 checkout，等它结束再重跑。
 2. 旧机终端（确认新机 `--check` 通过后才执行）：
 
    ```bash
@@ -519,6 +527,7 @@ DolphinFS 上，新机的 `--start` 在旧机还在服务时直接拒绝。所�
 3. 新 CodeLab 终端：
 
    ```bash
+   cd /mnt/your-fs
    .venv/bin/python scripts/migrate_host.py --start
    ```
 

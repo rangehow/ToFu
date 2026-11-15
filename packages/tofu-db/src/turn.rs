@@ -15438,6 +15438,17 @@ fn recovery_replay_prefix(rounds: &[Value]) -> RecoveryReplayPrefix {
 /// (Claude 4.6+ and Gemini 3.6+ reject it; OpenAI-style APIs answer it as a
 /// new message). Mirrors `lib/turn_lifecycle.py::_settlement`.
 fn restart_settlement(projection: &Map<String, Value>) -> Value {
+    restart_settlement_with(projection, true)
+}
+
+/// The settlement before RESTART-DRILL-1, when a restart interruption that
+/// produced nothing offered `regenerate` alone. Frame witnesses before
+/// version 4 measured this encoding; only their verification uses it.
+fn restart_settlement_before_unproduced_resume(projection: &Map<String, Value>) -> Value {
+    restart_settlement_with(projection, false)
+}
+
+fn restart_settlement_with(projection: &Map<String, Value>, resume_unproduced: bool) -> Value {
     let content = projection
         .get("content")
         .and_then(Value::as_str)
@@ -15450,7 +15461,13 @@ fn restart_settlement(projection: &Map<String, Value>) -> Value {
         .unwrap_or(&[]);
     let prefix = recovery_replay_prefix(rounds);
     let mut options = Vec::new();
-    if content.is_empty() && (prefix.replayable_rows > 0 || thinking_is_present) {
+    // No one stopped a restart's work, so it resumes even before it produced
+    // anything; a cut call (the blocked round) keeps its held options because
+    // continuing from the input would repeat its unconfirmed side effect.
+    let restart_resumable = resume_unproduced && prefix.blocked_position.is_none();
+    if content.is_empty()
+        && (prefix.replayable_rows > 0 || thinking_is_present || restart_resumable)
+    {
         options.push(json!({
             "operation": "continue",
             "anchor": {"type": "replay_only", "contentChars": 0}

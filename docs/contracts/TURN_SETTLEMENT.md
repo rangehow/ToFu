@@ -984,10 +984,11 @@ Recovery is explicit. Each entry has an `operation` and a durable `anchor`.
   `checkpoint_resume` with nothing retained would rewrite the projection for
   the same request; `continue` with the cut call amputated from the replay
   repeats its effect, since the model never learns the call was issued.
-  Native `turn.recover` (`restart_settlement` in `turn.rs`) keeps the
-  earlier rule: it never settles a `conversation-attempt:` binding, and its
-  settlement size is pinned in each persisted execution-frame witness
-  (`recovery_bytes`), so changing it needs a witness version. Specs:
+  Native `turn.recover` (`restart_settlement` in `turn.rs`) applies the same
+  rule (it never settles a `conversation-attempt:` binding); its settlement
+  size is pinned in each persisted execution-frame witness
+  (`recovery_bytes`), so the rule change advanced the witness to v4
+  (`docs/TOFUDB_EXECUTION_FRAMES.md`, "Unproduced restart resume"). Specs:
   `tests/turn_lifecycle/test_turn_lifecycle.py::test_a_restart_interruption_that_produced_nothing_offers_continue`,
   `tests/conversation/test_restart_resume.py::test_a_restart_interruption_that_produced_nothing_resumes_from_its_input`,
   `tests/turn_lifecycle/test_turn_lifecycle.py::test_a_restart_interruption_holding_a_cut_call_keeps_its_held_options`,

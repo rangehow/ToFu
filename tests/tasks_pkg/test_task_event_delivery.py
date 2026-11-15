@@ -505,6 +505,63 @@ def test_revoke_during_an_entered_run_completes_when_the_run_returns(coordinator
     assert coordinator.snapshot()['pending_events'] == 0
 
 
+def _authority_loss(kind):
+    if kind == 'stale-attempt':
+        from lib.tasks_pkg.event_log import EventAttemptStaleError
+        return EventAttemptStaleError('publication refused: attempt_not_live')
+    from lib.durable_worker import WorkerLeaseLost
+    return WorkerLeaseLost('worker fence lost')
+
+
+@pytest.mark.parametrize('kind', ['stale-attempt', 'lease-lost'])
+def test_definitive_authority_loss_releases_the_lane_and_its_task(coordinator, kind):
+    """A head the authority can never accept ends the lane instead of pinning its task.
+
+    Measured 2026-11-15 on the execution host: 121 lanes kept a stale-attempt
+    head for hours, each holding its finished task's whole graph.
+    """
+    import gc
+
+    graph_alive = _settle_lane_rejected_by_authority(coordinator, kind)
+    # The pump drops its locals just after revoking under the lock.
+    assert _eventually(lambda: gc.collect() >= 0 and graph_alive() is None), \
+        'the coordinator still retains the settled task graph'
+
+
+def _settle_lane_rejected_by_authority(coordinator, kind):
+    """Run one lane into a definitive rejection; return a probe of its task graph."""
+    import weakref
+    from lib.tasks_pkg.event_delivery import EventDeliveryRevoked
+
+    class Graph:
+        pass
+
+    graph = Graph()
+    lane = DeliveryLane({'id': f'settled-{kind}', 'graph': graph})
+    failure = _authority_loss(kind)
+
+    def persist():
+        raise failure
+
+    coordinator.submit(lane, 1, 128, persist, lambda: None)
+    coordinator.submit(lane, 2, 128, lambda: None, lambda: None)
+    with coordinator.condition:
+        assert coordinator.condition.wait_for(lambda: lane.revoked, timeout=2)
+    assert lane.error is None and not lane.pending
+    assert lane not in coordinator.lanes
+    assert lane.task['_eventDeliveryRevoked'] is True
+    assert coordinator.snapshot()['pending_events'] == 0
+    assert coordinator.snapshot()['pending_bytes'] == 0
+    try:
+        coordinator.submit(lane, 3, 128, lambda: None, lambda: None)
+    except EventDeliveryRevoked:
+        refused = True
+    else:
+        refused = False
+    assert refused, 'a released lane must refuse later submissions'
+    return weakref.ref(graph)
+
+
 def test_progress_after_lost_ack_preserves_the_original_receipt_shape(coordinator):
     from lib.tasks_pkg.event_delivery import ProgressFrame
     lane = DeliveryLane({'id': 'lost-ack-memory'})

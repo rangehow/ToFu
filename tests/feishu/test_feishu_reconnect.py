@@ -57,10 +57,10 @@ def harness(monkeypatch):
     waits = []
     kinds = []
 
-    def sleep(seconds, limit=[12]):
+    def sleep(seconds):
         waits.append(round(seconds, 3))
         kinds.append(_route_state(routes)['failure_kind'])
-        if len(waits) >= limit[0]:
+        if len(waits) >= 12:
             raise _Stop
         now[0] += seconds
 

@@ -14,6 +14,7 @@ import json
 import threading
 import time
 from copy import deepcopy
+from threading import RLock
 
 from lib.project_dispatch.acceptance import own_checks
 from lib.project_dispatch.admission import require_isolated_worker_root, reread_on_contention
@@ -85,11 +86,27 @@ def _settlement(row) -> tuple:
     Not the result revision: a settled Turn's projection still changes (title,
     translation), which is no new settlement.
     """
-    return (_phase(row), row['task_id'], (row['delivery'] or {}).get('status'))
+    return (_phase(row), row['task_id'], row.get('attempt_id'), (row['delivery'] or {}).get('status'))
 
 
 def _reports(task) -> dict:
-    return task.setdefault(_REPORTS_KEY, {'reported': {}, 'pending': set(), 'seeded': False})
+    # dict.setdefault is atomic, so parallel polls of one batch share one record and lock.
+    return task.setdefault(_REPORTS_KEY, {'reported': {}, 'pending': set(), 'seeded': False,
+                                          'lock': RLock()})
+
+
+def _interrupted_phase(repository, assignment_id, error) -> str:
+    """How an interrupted Worker stands: ``needs_decision``, ``resuming`` or ``ended``.
+
+    A restart cut off a call of ``unknown`` effect class: its Coordinator decides
+    (docs/RUN_CONTINUITY.md, "A restart-cut call is classified by its declared
+    effect"). A restart interruption project dispatch recovery continues in place
+    is ``resuming``: the Coordinator has nothing to do.
+    """
+    if isinstance(error, dict) and error.get('unknownEffects'):
+        return 'needs_decision'
+    resume = repository.restart_resume(repository.read_point(assignment_id))
+    return 'resuming' if resume is not None and resume['option'] is not None else 'ended'
 
 
 def get_workers(task, scope, arguments, *, repository=None):
@@ -510,6 +527,7 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                 recipient = view['request']['recipientId']
                 row = {'assignment_id': identity, 'conversation_id': recipient,
                        'task_id': execution.get('taskId'), 'turn_id': execution.get('turnId'),
+                       'attempt_id': execution.get('attemptId'),
                        'result_revision': execution.get('resultRevision'), 'delivery': view.get('delivery'),
                        'canonical_delivery': view.get('canonicalDelivery', False),
                        'publication_requested': bool(view.get('publication')), 'review': view.get('review'),
@@ -521,6 +539,8 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                     failure = _settled_failure(service, recipient, repository.owner, row['turn_id'])
                     if failure:
                         row['error'] = failure
+                if row['status'] == 'interrupted' and row['turn_id']:
+                    row['phase'] = _interrupted_phase(repository, identity, row.get('error'))
                 rows.append(row)
         return rows
     def snapshots(identities):
@@ -535,6 +555,7 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
                 view = service.view_for_coordinator(identity, scope=scope, settlement_only=True)
                 execution = view.get('execution') or {}
                 rows.append({'assignment_id': identity, 'task_id': execution.get('taskId'),
+                             'attempt_id': execution.get('attemptId'),
                              'status': 'cancelled' if view['revoked'] else execution.get('status', 'queued'),
                              'review': view.get('review'), 'delivery': view.get('delivery'),
                              'canonical_delivery': view.get('canonicalDelivery', False),
@@ -614,21 +635,36 @@ def _await_born(task, scope, ids, *, deadline, mode, interruption, repository, s
         finally:
             for unsubscribe in subscriptions.values():
                 unsubscribe()
-    fresh = news(rows)
-    # Excerpts and causes are read once, for the news only.
-    settled = snapshots([row['assignment_id'] for row in fresh]) if fresh else []
-    for row in rows:
-        if _phase(row) in _PENDING:
-            reports['pending'].add(row['assignment_id'])
-        else:
-            reports['pending'].discard(row['assignment_id'])
+    # Parallel polls of one batch share this record: each settlement is claimed by
+    # exactly one of them, under the record's lock, before its evidence is read.
+    with reports['lock']:
+        for row in rows:
+            if _phase(row) in _PENDING:
+                reports['pending'].add(row['assignment_id'])
+            else:
+                reports['pending'].discard(row['assignment_id'])
+        fresh = news(rows)
+        claimed = {} if outcome == 'cancelled' else {
+            row['assignment_id']: reports['reported'].get(row['assignment_id']) for row in fresh}
+        for row in fresh if claimed else ():
+            reports['reported'][row['assignment_id']] = _settlement(row)
+    try:
+        # Excerpts and causes are read once, for the news only.
+        settled = snapshots([row['assignment_id'] for row in fresh]) if fresh else []
+    except BaseException:
+        with reports['lock']:
+            for identity, previous in claimed.items():
+                # Unreported after all: the next poll reports it.
+                if previous is None:
+                    reports['reported'].pop(identity, None)
+                else:
+                    reports['reported'][identity] = previous
+        raise
     if outcome == 'cancelled':
         # Stop: nothing counts as reported, so the next attempt reports it.
         from lib.turn_verdict import aborted_wait_text
         return {'workers': settled, 'wait': 'cancelled',
                 'instruction': aborted_wait_text(task.get('_abort_reason'))}
-    for row in fresh:
-        reports['reported'][row['assignment_id']] = _settlement(row)
     running = [row['assignment_id'] for row in rows if _phase(row) == 'running']
     delivering = [row['assignment_id'] for row in rows if _phase(row) == 'delivering']
     reported = {row['assignment_id'] for row in fresh}
@@ -674,6 +710,15 @@ def _wait_instruction(status, settled, running, delivering, unchanged, named):
         parts.append('Nothing new settled; a timeout is not failure.')
     elif not settled:
         parts.append('Nothing new: every Worker you named was already reported.')
+    decide = [row['assignment_id'] for row in settled if row.get('phase') == 'needs_decision']
+    if decide:
+        parts.append('A restart cut off a call of unknown effect in ' + ', '.join(decide) + ' (error.unknownEffects; '
+                     'phase needs_decision): check what each named call changed, then control_conversation '
+                     'checkpoint_resume, stop or follow_up that Worker. Nothing resumes it until you decide.')
+    resuming = [row['assignment_id'] for row in settled if row.get('phase') == 'resuming']
+    if resuming:
+        parts.append('Interrupted by a restart and resuming from its checkpoint by itself: ' + ', '.join(resuming)
+                     + '. Do not resume it; its next settlement is reported here.')
     if running:
         parts.append('Still running: ' + ', '.join(running) + '.')
     if delivering:
@@ -693,17 +738,21 @@ def _unnamed_pending(task, scope, reports):
     The Workers this attempt saw pending or started, plus, once per attempt,
     those of the request running when it first waited.
     """
-    if not reports['seeded']:
-        reports['seeded'] = True
-        try:
-            page = reread_on_contention(task, lambda: get_workers(task, scope, {}),
-                                        label='coordinator worker page', effect_free=True)
-        except (PermissionError, ProjectDispatchError) as error:
-            # An attempt that no longer owns the request (it settled) still polls
-            # the IDs it names; it only loses the request-wide watch.
-            logger.info('[Coordinator] task=%s poll watches only named Workers: %s', task.get('id'), error)
-            page = {'workers': []}
-        reports['pending'].update(row['assignment_id'] for row in page['workers'] if row['status'] not in _TERMINAL)
+    with reports['lock']:
+        # A parallel poll waits for the one seeding read instead of repeating it.
+        if not reports['seeded']:
+            try:
+                page = reread_on_contention(task, lambda: get_workers(task, scope, {}),
+                                            label='coordinator worker page', effect_free=True)
+            except (PermissionError, ProjectDispatchError) as error:
+                # An attempt that no longer owns the request (it settled) still polls
+                # the IDs it names; it only loses the request-wide watch.
+                logger.info('[Coordinator] task=%s poll watches only named Workers: %s', task.get('id'), error)
+                page = {'workers': []}
+            reports['pending'].update(row['assignment_id'] for row in page['workers']
+                                      if row['status'] not in _TERMINAL)
+            reports['seeded'] = True
+        pending = set(reports['pending'])
     born = [birth.assignment_id for birth in births.recorded(task)
             if birth.done.is_set() and birth.failure is None and not birth.withdrawn]
-    return list(dict.fromkeys(born + sorted(reports['pending'] - set(born))))
+    return list(dict.fromkeys(born + sorted(pending - set(born))))

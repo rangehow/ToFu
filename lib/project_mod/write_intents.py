@@ -20,7 +20,7 @@ import stat
 import sys
 import uuid
 
-from lib.project_mod.snapshot_content import anchored_parent, file_fingerprint
+from lib.project_mod.snapshot_content import anchored_parent
 
 
 class IntentError(OSError):

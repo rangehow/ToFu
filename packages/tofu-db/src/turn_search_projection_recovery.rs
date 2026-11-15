@@ -11,8 +11,15 @@ use crate::authority::AuthorityDatabase;
 use crate::engine::acquire_lease;
 use crate::vfs::{sync_directory_barrier, RealVfs};
 
-pub(super) fn open_until(data_dir: &Path, should_stop: &dyn Fn() -> bool) -> io::Result<AuthorityDatabase> {
-    match AuthorityDatabase::open_with_vfs_until(data_dir, std::sync::Arc::new(RealVfs), should_stop) {
+pub(super) fn open_until(
+    data_dir: &Path,
+    should_stop: &dyn Fn() -> bool,
+) -> io::Result<AuthorityDatabase> {
+    match AuthorityDatabase::open_with_vfs_until(
+        data_dir,
+        std::sync::Arc::new(RealVfs),
+        should_stop,
+    ) {
         Ok(database) => Ok(database),
         Err(error) if error.kind() == io::ErrorKind::InvalidData => rebuild(data_dir, error),
         Err(error) => Err(error),
@@ -124,7 +131,12 @@ mod tests {
         rebuilt
             .begin_conversation_rebuild(7, 11, "conversation", "generation", 1)
             .unwrap();
-        assert_eq!(crate::authority_gc_online::OnlineGcDatabase::gc_database(&rebuilt).unwrap().entity_overlay_entries_for_test(), 0);
+        assert_eq!(
+            crate::authority_gc_online::OnlineGcDatabase::gc_database(&rebuilt)
+                .unwrap()
+                .entity_overlay_entries_for_test(),
+            0
+        );
         // A fresh index cannot claim complete source coverage.
         rebuilt.require_source_admission(source_uuid);
         assert!(rebuilt.owner_indexing(7, 11).unwrap());
@@ -143,14 +155,26 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("projection");
         let fresh = TurnSearchProjection::initialize(&path, 1 << 20).unwrap();
-        let uuid = crate::authority_gc_online::OnlineGcDatabase::gc_database(&fresh).unwrap().authority_uuid();
+        let uuid = crate::authority_gc_online::OnlineGcDatabase::gc_database(&fresh)
+            .unwrap()
+            .authority_uuid();
         drop(fresh);
         let mut reopened = TurnSearchProjection::open(&path, 1 << 20).unwrap();
-        assert_eq!(crate::authority_gc_online::OnlineGcDatabase::gc_database(&reopened).unwrap().authority_uuid(), uuid);
+        assert_eq!(
+            crate::authority_gc_online::OnlineGcDatabase::gc_database(&reopened)
+                .unwrap()
+                .authority_uuid(),
+            uuid
+        );
         reopened
             .begin_conversation_rebuild(7, 11, "conversation", "generation", 1)
             .unwrap();
-        assert_eq!(crate::authority_gc_online::OnlineGcDatabase::gc_database(&reopened).unwrap().entity_overlay_entries_for_test(), 0);
+        assert_eq!(
+            crate::authority_gc_online::OnlineGcDatabase::gc_database(&reopened)
+                .unwrap()
+                .entity_overlay_entries_for_test(),
+            0
+        );
     }
 
     #[test]

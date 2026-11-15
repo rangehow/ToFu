@@ -151,8 +151,10 @@ def _ingest_locked(store: ChannelStore, events: list[ChannelEvent], media: Media
         if disposition == 'command' and robot_chat:
             # The owner's own message, seen by this server's session, binds the robot's
             # chat to this account before its receipt goes out (C6).
-            from lib.channels.dx.robot import bind_owner_message
-            account = accounts[event.channel] = bind_owner_message(store, account, event)
+            from lib.channels.adapters import channel_adapter
+            adapter = channel_adapter(event.channel)
+            if adapter is not None:
+                account = accounts[event.channel] = adapter.bind_owner_message(store, account, event)
         advance.setdefault(key, []).append(event)
         if disposition == 'drop':
             results.append(IngestResult(event.event_id, 'dropped'))

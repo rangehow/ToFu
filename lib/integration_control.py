@@ -1584,6 +1584,7 @@ def _retire_discarded_checkout(root: Path, task_id: str, owner: int, *,
         from lib.project_mod import task_spares
         if not task_spares.recycle(root, workspace, lifecycle_owned=admitted is not None):
             _remove_controlled_worktree(root, workspace, lifecycle_owned=admitted is not None)
+        task_spares.retire_scratch(workspace)
     except Exception as error:
         logger.warning('[Integration] discarded checkout retained %s: %s', workspace, error)
         return 'kept'

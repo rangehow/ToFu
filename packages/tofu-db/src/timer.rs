@@ -13,10 +13,10 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MAX_ENTITY_RANGE_ROWS, MAX_TIMER_DOCUMENT_BYTES,
+    MAX_ENTITY_RANGE_ROWS, MAX_LEGACY_DOCUMENT_BYTES, MAX_TIMER_DOCUMENT_BYTES,
     MAX_TIMER_GLOBAL_ACTIVE_ROWS, MAX_TIMER_ID_CHARACTERS, MAX_TIMER_LIST_ROWS,
-    MAX_TIMER_POLL_DOCUMENT_BYTES, MAX_TIMER_POLL_ROWS, MAX_LEGACY_DOCUMENT_BYTES,
-    TIMER_ACTIVE_COUNT_NAMESPACE, TIMER_CONVERSATION_INDEX_NAMESPACE, TIMER_DOCUMENT_NAMESPACE,
+    MAX_TIMER_POLL_DOCUMENT_BYTES, MAX_TIMER_POLL_ROWS, TIMER_ACTIVE_COUNT_NAMESPACE,
+    TIMER_CONVERSATION_INDEX_NAMESPACE, TIMER_DOCUMENT_NAMESPACE,
     TIMER_GLOBAL_ACTIVE_CREATED_INDEX_NAMESPACE, TIMER_ID_CLAIM_NAMESPACE,
     TIMER_POLL_DOCUMENT_NAMESPACE, TIMER_POLL_ID_CLAIM_NAMESPACE, TIMER_POLL_SEQUENCE_NAMESPACE,
     TIMER_POLL_TIME_INDEX_NAMESPACE, TIMER_STATUS_CREATED_INDEX_NAMESPACE,
@@ -188,7 +188,9 @@ fn validate_document(
     let encoded = serde_json::to_vec(document)
         .map_err(|_| invalid_data("timer document cannot be encoded"))?;
     if encoded.len() > MAX_TIMER_DOCUMENT_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("timer document exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "timer document exceeds its bound",
+        ));
     }
     Ok(())
 }
@@ -339,23 +341,14 @@ fn adjust_active_count(
     if was_active == is_active {
         return Ok(());
     }
-    let current = read_count(
-        database,
-        tx,
-        TIMER_ACTIVE_COUNT_NAMESPACE,
-    )?;
+    let current = read_count(database, tx, TIMER_ACTIVE_COUNT_NAMESPACE)?;
     let next = if is_active {
         current.checked_add(1)
     } else {
         current.checked_sub(1)
     }
     .ok_or_else(|| invalid_data("timer active count underflow or overflow"))?;
-    write_count(
-        database,
-        tx,
-        TIMER_ACTIVE_COUNT_NAMESPACE,
-        next,
-    )
+    write_count(database, tx, TIMER_ACTIVE_COUNT_NAMESPACE, next)
 }
 
 fn poll_prefix(conv_id: &str, timer_id: &str) -> io::Result<Vec<u8>> {
@@ -483,7 +476,9 @@ fn append_poll(
     let encoded =
         serde_json::to_vec(&document).map_err(|_| invalid_input("timer poll cannot be encoded"))?;
     if encoded.len() > MAX_TIMER_POLL_DOCUMENT_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("timer poll document exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "timer poll document exceeds its bound",
+        ));
     }
     database.entity_put(
         tx,
@@ -681,8 +676,7 @@ impl Request {
             }
             _ => return Err(invalid_input("invalid timer request")),
         };
-        if size > MAX_LEGACY_DOCUMENT_BYTES
-            || self.timer_id().is_some_and(|id| !valid_timer_id(id))
+        if size > MAX_LEGACY_DOCUMENT_BYTES || self.timer_id().is_some_and(|id| !valid_timer_id(id))
         {
             return Err(invalid_input("timer request exceeds its bound"));
         }
@@ -732,35 +726,19 @@ pub(crate) fn execute(
             {
                 return Err(conflict("timer already exists"));
             }
-            let total = read_count(
-                database,
-                tx,
-                TIMER_TOTAL_COUNT_NAMESPACE,
-            )?;
-            let active = read_count(
-                database,
-                tx,
-                TIMER_ACTIVE_COUNT_NAMESPACE,
-            )?;
-            let next_total = total.checked_add(1)
+            let total = read_count(database, tx, TIMER_TOTAL_COUNT_NAMESPACE)?;
+            let active = read_count(database, tx, TIMER_ACTIVE_COUNT_NAMESPACE)?;
+            let next_total = total
+                .checked_add(1)
                 .ok_or_else(|| invalid_data("timer total count overflow"))?;
-            let next_active = active.checked_add(1)
+            let next_active = active
+                .checked_add(1)
                 .ok_or_else(|| invalid_data("timer active count overflow"))?;
             put_document(database, tx, timer_id, document, *updated_at_ms, Some(0))?;
             write_indexes(database, tx, document)?;
             database.entity_put(tx, id_claim_key(tx, timer_id)?, identity_value(document)?)?;
-            write_count(
-                database,
-                tx,
-                TIMER_TOTAL_COUNT_NAMESPACE,
-                next_total,
-            )?;
-            write_count(
-                database,
-                tx,
-                TIMER_ACTIVE_COUNT_NAMESPACE,
-                next_active,
-            )?;
+            write_count(database, tx, TIMER_TOTAL_COUNT_NAMESPACE, next_total)?;
+            write_count(database, tx, TIMER_ACTIVE_COUNT_NAMESPACE, next_active)?;
             Ok(Some(
                 serde_json::to_vec(&json!({"applied":true,"timer":document}))
                     .map_err(|_| invalid_data("timer create response cannot be encoded"))?,
@@ -778,22 +756,11 @@ pub(crate) fn execute(
             encode_documents(database, tx, rows.into_iter(), None, false)
         }
         Request::History => Ok(Some(
-            serde_json::to_vec(
-                &(read_count(
-                    database,
-                    tx,
-                    TIMER_TOTAL_COUNT_NAMESPACE,
-                )? > 0),
-            )
-            .unwrap(),
+            serde_json::to_vec(&(read_count(database, tx, TIMER_TOTAL_COUNT_NAMESPACE)? > 0))
+                .unwrap(),
         )),
         Request::ActiveCount => Ok(Some(
-            serde_json::to_vec(&read_count(
-                database,
-                tx,
-                TIMER_ACTIVE_COUNT_NAMESPACE,
-            )?)
-            .unwrap(),
+            serde_json::to_vec(&read_count(database, tx, TIMER_ACTIVE_COUNT_NAMESPACE)?).unwrap(),
         )),
         Request::ActiveListAll { limit } => {
             let (start, end) =
@@ -852,7 +819,9 @@ pub(crate) fn execute(
                 PollAppend::Inserted(id) => json!({"inserted":true,"id":id}),
                 PollAppend::Duplicate(id) => json!({"inserted":false,"id":id}),
                 PollAppend::Settled(_) => {
-                    return Err(invalid_data("unguarded timer poll append reported a status"))
+                    return Err(invalid_data(
+                        "unguarded timer poll append reported a status",
+                    ))
                 }
             };
             Ok(Some(serde_json::to_vec(&response).unwrap()))
@@ -938,7 +907,11 @@ fn scan_rows_paged(
 ) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
     let mut rows = Vec::new();
     while limit == 0 || rows.len() < limit {
-        let page_limit = if limit == 0 { MAX_ENTITY_RANGE_ROWS } else { (limit - rows.len()).min(MAX_ENTITY_RANGE_ROWS) };
+        let page_limit = if limit == 0 {
+            MAX_ENTITY_RANGE_ROWS
+        } else {
+            (limit - rows.len()).min(MAX_ENTITY_RANGE_ROWS)
+        };
         let page = database.entity_scan(tx, &start, end, page_limit)?;
         let page_is_full = page.len() == page_limit;
         let next_start = page
@@ -1053,16 +1026,8 @@ pub(crate) fn delete_conversation(
     if deleted == 0 {
         return Ok(0);
     }
-    let total = read_count(
-        database,
-        tx,
-        TIMER_TOTAL_COUNT_NAMESPACE,
-    )?;
-    let active = read_count(
-        database,
-        tx,
-        TIMER_ACTIVE_COUNT_NAMESPACE,
-    )?;
+    let total = read_count(database, tx, TIMER_TOTAL_COUNT_NAMESPACE)?;
+    let active = read_count(database, tx, TIMER_ACTIVE_COUNT_NAMESPACE)?;
     write_count(
         database,
         tx,

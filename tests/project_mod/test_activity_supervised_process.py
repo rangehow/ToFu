@@ -12,7 +12,7 @@ from lib.project_mod.activity_supervised_process import (
     ProcessCancelled, ProcessRetirementUnproven, ProcessStalled, run_activity_supervised)
 from lib.project_mod.tool_admission import Cancellation
 from tests.support.descriptor_ceiling import (  # noqa: F401 - fixture
-    SELECT_CEILING, descriptors_past_select_ceiling, next_descriptor)
+    SELECT_CEILING, descriptors_past_select_ceiling as descriptors_past_select_ceiling, next_descriptor)
 
 pytestmark = pytest.mark.unit
 

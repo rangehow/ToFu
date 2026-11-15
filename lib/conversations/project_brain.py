@@ -9,6 +9,7 @@ Sidecar ``project_brain.*`` semantic operations.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 from contextvars import copy_context
 from fnmatch import fnmatch
 import hashlib
@@ -780,7 +781,15 @@ def prepare_project_context(
     *,
     user_id: int,
     task: dict | None = None,
+    live_conversations: Mapping[str, object] | None = None,
 ) -> str:
+    """The next unseen narrative page with the project's state, for the bound Coordinator only.
+
+    ``live_conversations`` names the conversations running now (the composer's
+    presence read). Active work lists only work items of those, one per
+    conversation: a work item's ``active`` status alone can outlive its task
+    when its finish signal was lost. Without that read, Active work is omitted.
+    """
     project_key = normalize_project_path(project_path)
     # Discard any uncommitted prior page, including when this conversation
     # has become a worker. It must not be ACKed by a later successful call.
@@ -800,9 +809,16 @@ def prepare_project_context(
         }, None,
     )
     projection = read_projection(project_key, user_id=user_id)
-    active = [item for item in projection.get('workItems') or ()
-              if item.get('status') == 'active'
-              and item.get('conversationId') != conversation_id]
+    latest_active: dict[str, dict] = {}
+    for item in projection.get('workItems') or ():
+        owner_id = item.get('conversationId')
+        if (item.get('status') != 'active' or owner_id == conversation_id
+                or live_conversations is None or owner_id not in live_conversations):
+            continue
+        current = latest_active.get(owner_id)
+        if current is None or int(item.get('startedAt') or 0) >= int(current.get('startedAt') or 0):
+            latest_active[owner_id] = item
+    active = list(latest_active.values())
     decisions = list((projection.get('charter') or {}).get('decisions') or ())
     watch = [item for item in projection.get('watch') or ()
              if item.get('status', 'active') == 'active']
@@ -856,10 +872,8 @@ def prepare_project_context(
             f"- {str(item.get('title') or '')[:220]} "
             f"({item.get('conversationId')}, paths: "
             f"{', '.join((item.get('changedPaths') or ())[-10:]) or 'none yet'})"
-            for item in active[-20:]
+            for item in active
         )
-        if len(active) > 20:
-            lines.append(f'- … {len(active) - 20} older active items omitted')
     if task is not None:
         task['_projectNarrativeDelivery'] = {
             'projectPath': project_key,

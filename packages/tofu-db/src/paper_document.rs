@@ -576,10 +576,7 @@ pub fn execute(
             }
         }
     };
-    Ok(Some(encode_bounded(
-        &value,
-        MAX_LEGACY_DOCUMENT_BYTES,
-    )?))
+    Ok(Some(encode_bounded(&value, MAX_LEGACY_DOCUMENT_BYTES)?))
 }
 fn research_source(
     db: &AuthorityDatabase,

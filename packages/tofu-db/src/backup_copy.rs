@@ -103,7 +103,9 @@ impl ForegroundShare {
     }
 
     fn lock(&self) -> MutexGuard<'_, ShareState> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Waits for an admitted operation; `stop` ends the wait with `stopping`.
@@ -111,7 +113,9 @@ impl ForegroundShare {
         let mut state = self.lock();
         loop {
             if state.sampling {
-                if let Some(pressure) = crate::fsync_stats::sample_admission_pressure(&mut state.sampler) {
+                if let Some(pressure) =
+                    crate::fsync_stats::sample_admission_pressure(&mut state.sampler)
+                {
                     state.sampled(pressure);
                 }
             }
@@ -273,7 +277,10 @@ enum State {
     Expanding,
     /// Waits for its interior children; `payload` is the copy to publish
     /// then (`None`: the destination already holds the block).
-    Waiting { payload: Option<Vec<u8>>, waiting: usize },
+    Waiting {
+        payload: Option<Vec<u8>>,
+        waiting: usize,
+    },
     /// Its children finished; a worker publishes it.
     Publishing,
 }
@@ -334,7 +341,10 @@ enum Task<N> {
 enum Expanded<N> {
     /// A trusted present copy: the whole subgraph is there.
     Present,
-    Opened { payload: Option<Vec<u8>>, interiors: Vec<N> },
+    Opened {
+        payload: Option<Vec<u8>>,
+        interiors: Vec<N>,
+    },
 }
 
 /// Per-shard group commit of directory barriers. A request covers every
@@ -360,14 +370,19 @@ struct BarrierState {
 impl ShardBarriers {
     fn new(threaded: bool) -> Self {
         Self {
-            shards: (0..SHARDS).map(|_| (Mutex::new(BarrierState::default()), Condvar::new())).collect(),
+            shards: (0..SHARDS)
+                .map(|_| (Mutex::new(BarrierState::default()), Condvar::new()))
+                .collect(),
             threaded,
             syncs: AtomicU64::new(0),
         }
     }
 
     fn state(&self, shard: usize) -> MutexGuard<'_, BarrierState> {
-        self.shards[shard].0.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.shards[shard]
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn request(&self, shard: usize) -> u64 {
@@ -405,7 +420,10 @@ impl ShardBarriers {
                 }
                 continue;
             }
-            state = self.shards[shard].1.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = self.shards[shard]
+                .1
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
     }
 
@@ -419,7 +437,9 @@ impl ShardBarriers {
                 return;
             }
             if state.requested == state.durable {
-                state = signal.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+                state = signal
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 continue;
             }
             let target = state.requested;
@@ -436,7 +456,9 @@ impl ShardBarriers {
 
     fn close(&self) {
         for (lock, signal) in &self.shards {
-            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).closed = true;
+            lock.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .closed = true;
             signal.notify_all();
         }
     }
@@ -457,24 +479,34 @@ struct Shared<'a, 'c, G: CopyGraph> {
 
 impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
     fn lock(&self) -> MutexGuard<'_, Schedule<G::Node>> {
-        self.schedule.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.schedule
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn key(&self, node: &G::Node) -> VisitKey {
-        (self.copy.graph.block_id(node), self.copy.graph.variant(node))
+        (
+            self.copy.graph.block_id(node),
+            self.copy.graph.variant(node),
+        )
     }
 
     fn trusted(&self, node: &G::Node) -> bool {
         self.copy.graph.presence_proves_subgraph(node)
             && match self.copy.present {
-                PresentBlocks::Closed { untyped } => !untyped.contains(&self.copy.graph.block_id(node)),
+                PresentBlocks::Closed { untyped } => {
+                    !untyped.contains(&self.copy.graph.block_id(node))
+                }
                 PresentBlocks::Unverified => false,
             }
     }
 
     fn stopping(&self) -> io::Result<()> {
         if self.copy.stop.load(Ordering::Acquire) {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "backup copy stopping"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "backup copy stopping",
+            ));
         }
         Ok(())
     }
@@ -548,7 +580,11 @@ impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(id);
-        if self.copy.destination.publish_copied_block_unbarriered(id, payload)? {
+        if self
+            .copy
+            .destination
+            .publish_copied_block_unbarriered(id, payload)?
+        {
             self.note(|progress| &progress.copied_blocks, 1);
             self.note(|progress| &progress.copied_bytes, payload.len() as u64);
         }
@@ -635,7 +671,10 @@ impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
             .into_iter()
             .partition::<Vec<_>, _>(|reference| self.copy.graph.is_leaf(reference));
         self.copy_leaves(leaves)?;
-        Ok(Expanded::Opened { payload: (!present).then_some(payload), interiors })
+        Ok(Expanded::Opened {
+            payload: (!present).then_some(payload),
+            interiors,
+        })
     }
 
     fn publish(&self, key: VisitKey, payload: Option<Vec<u8>>) -> io::Result<()> {
@@ -652,7 +691,13 @@ impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
     }
 
     /// Admits `node` below `parent`; whether the parent must wait for it.
-    fn discover(&self, schedule: &mut Schedule<G::Node>, node: G::Node, parent: Parent, depth: u32) -> bool {
+    fn discover(
+        &self,
+        schedule: &mut Schedule<G::Node>,
+        node: G::Node,
+        parent: Parent,
+        depth: u32,
+    ) -> bool {
         let key = self.key(&node);
         if schedule.walked.contains(&key) {
             return false;
@@ -668,7 +713,15 @@ impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
             }
             return true;
         }
-        schedule.active.insert(key, Active { node, depth, parents: vec![parent], state: State::Queued });
+        schedule.active.insert(
+            key,
+            Active {
+                node,
+                depth,
+                parents: vec![parent],
+                state: State::Queued,
+            },
+        );
         schedule.push(depth, key);
         true
     }
@@ -677,25 +730,37 @@ impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
     /// than workers, or deeper than every open node. With `stuck` (nothing
     /// runs and nothing is admissible: every slot waits on a child that is
     /// shared with a shallower open node) the deepest visit opens anyway.
-    fn take_visit(&self, schedule: &mut Schedule<G::Node>, stuck: bool) -> Option<(VisitKey, G::Node)> {
+    fn take_visit(
+        &self,
+        schedule: &mut Schedule<G::Node>,
+        stuck: bool,
+    ) -> Option<(VisitKey, G::Node)> {
         while let Some(&(depth, _, key)) = schedule.heap.peek() {
-            let current = schedule
-                .active
-                .get(&key)
-                .is_some_and(|active| matches!(active.state, State::Queued) && active.depth == depth);
+            let current = schedule.active.get(&key).is_some_and(|active| {
+                matches!(active.state, State::Queued) && active.depth == depth
+            });
             if !current {
                 schedule.heap.pop();
                 continue;
             }
             let deepest_open = schedule.open.keys().next_back().copied();
-            if !stuck && schedule.open_count >= SHARDS && deepest_open.is_some_and(|open| depth <= open) {
+            if !stuck
+                && schedule.open_count >= SHARDS
+                && deepest_open.is_some_and(|open| depth <= open)
+            {
                 return None;
             }
             schedule.heap.pop();
             schedule.open_count += 1;
             *schedule.open.entry(depth).or_default() += 1;
-            schedule.metrics.peak_open_nodes = schedule.metrics.peak_open_nodes.max(schedule.open_count as u64);
-            let active = schedule.active.get_mut(&key).expect("a current entry is active");
+            schedule.metrics.peak_open_nodes = schedule
+                .metrics
+                .peak_open_nodes
+                .max(schedule.open_count as u64);
+            let active = schedule
+                .active
+                .get_mut(&key)
+                .expect("a current entry is active");
             active.state = State::Expanding;
             return Some((key, active.node.clone()));
         }
@@ -767,7 +832,10 @@ impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
             Ok(None) => woken += self.finish(&mut schedule, task_key),
             Ok(Some(Expanded::Present)) => woken += self.finish(&mut schedule, task_key),
             Ok(Some(Expanded::Opened { payload, interiors })) => {
-                let depth = schedule.active.get(&task_key).map_or(0, |active| active.depth);
+                let depth = schedule
+                    .active
+                    .get(&task_key)
+                    .map_or(0, |active| active.depth);
                 let mut waiting = 0;
                 for child in interiors {
                     if self.discover(&mut schedule, child, Parent::Block(task_key), depth + 1) {
@@ -805,51 +873,60 @@ impl<'a, 'c, G: CopyGraph> Shared<'a, 'c, G> {
     /// watches the stop flag while it waits.
     fn work(&self, watches_stop: bool) {
         loop {
-            let task = {
-                let mut schedule = self.lock();
-                loop {
-                    if schedule.finished() {
-                        break None;
-                    }
-                    if let Some(key) = schedule.publish.pop() {
-                        let payload = schedule.active.get_mut(&key).and_then(|active| {
-                            match std::mem::replace(&mut active.state, State::Publishing) {
-                                State::Waiting { payload, .. } => payload,
-                                _ => None,
-                            }
-                        });
-                        schedule.busy += 1;
-                        break Some(Task::Publish(key, payload));
-                    }
-                    if let Some((key, node)) = self.take_visit(&mut schedule, false) {
-                        schedule.busy += 1;
-                        break Some(Task::Expand(key, node));
-                    }
-                    if schedule.busy == 0 {
-                        if let Some((key, node)) = self.take_visit(&mut schedule, true) {
+            let task =
+                {
+                    let mut schedule = self.lock();
+                    loop {
+                        if schedule.finished() {
+                            break None;
+                        }
+                        if let Some(key) = schedule.publish.pop() {
+                            let payload = schedule.active.get_mut(&key).and_then(|active| {
+                                match std::mem::replace(&mut active.state, State::Publishing) {
+                                    State::Waiting { payload, .. } => payload,
+                                    _ => None,
+                                }
+                            });
+                            schedule.busy += 1;
+                            break Some(Task::Publish(key, payload));
+                        }
+                        if let Some((key, node)) = self.take_visit(&mut schedule, false) {
                             schedule.busy += 1;
                             break Some(Task::Expand(key, node));
                         }
-                        let error = io::Error::other("backup copy schedule stalled before its roots finished");
-                        self.fail(&mut schedule, error);
-                        break None;
-                    }
-                    if watches_stop {
-                        if self.copy.stop.load(Ordering::Acquire) {
-                            let error = io::Error::new(io::ErrorKind::WouldBlock, "backup copy stopping");
+                        if schedule.busy == 0 {
+                            if let Some((key, node)) = self.take_visit(&mut schedule, true) {
+                                schedule.busy += 1;
+                                break Some(Task::Expand(key, node));
+                            }
+                            let error = io::Error::other(
+                                "backup copy schedule stalled before its roots finished",
+                            );
                             self.fail(&mut schedule, error);
                             break None;
                         }
-                        schedule = self
-                            .wake
-                            .wait_timeout(schedule, STOP_POLL)
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .0;
-                    } else {
-                        schedule = self.wake.wait(schedule).unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if watches_stop {
+                            if self.copy.stop.load(Ordering::Acquire) {
+                                let error = io::Error::new(
+                                    io::ErrorKind::WouldBlock,
+                                    "backup copy stopping",
+                                );
+                                self.fail(&mut schedule, error);
+                                break None;
+                            }
+                            schedule = self
+                                .wake
+                                .wait_timeout(schedule, STOP_POLL)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .0;
+                        } else {
+                            schedule = self
+                                .wake
+                                .wait(schedule)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        }
                     }
-                }
-            };
+                };
             match task {
                 None => {
                     self.wake.notify_all();
@@ -918,7 +995,9 @@ pub(crate) fn copy_graph<G: CopyGraph>(
                 // refused syncing thread refuses the copy.
                 let spawned = std::thread::Builder::new()
                     .name("tofu-db-backup-sync".to_owned())
-                    .spawn_scoped(scope, move || shared.barriers.serve(shared.copy.destination, shard));
+                    .spawn_scoped(scope, move || {
+                        shared.barriers.serve(shared.copy.destination, shard)
+                    });
                 if let Err(error) = spawned {
                     shared.barriers.close();
                     return Err(error);
@@ -943,7 +1022,10 @@ pub(crate) fn copy_graph<G: CopyGraph>(
                 // stop only once none runs.
                 let mut schedule = shared.lock();
                 while schedule.busy > 0 {
-                    schedule = shared.wake.wait(schedule).unwrap_or_else(|poisoned| poisoned.into_inner());
+                    schedule = shared
+                        .wake
+                        .wait(schedule)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                 }
             });
             shared.barriers.close();
@@ -966,7 +1048,10 @@ pub(crate) fn copy_graph<G: CopyGraph>(
     if let Some(error) = schedule.failure {
         return Err(error);
     }
-    Ok(GraphCopyOutcome { metrics, closed_untyped: schedule.closed_untyped })
+    Ok(GraphCopyOutcome {
+        metrics,
+        closed_untyped: schedule.closed_untyped,
+    })
 }
 
 struct VisitSchedule<N> {
@@ -1006,9 +1091,16 @@ pub(crate) fn visit_graph<G: CopyGraph>(
         visited: 0,
     });
     let wake = Condvar::new();
-    let lock = || schedule.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let lock = || {
+        schedule
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
     let admit = |state: &mut VisitSchedule<G::Node>, node: G::Node, depth: u32| {
-        if state.seen.insert((graph.block_id(&node), graph.variant(&node))) {
+        if state
+            .seen
+            .insert((graph.block_id(&node), graph.variant(&node)))
+        {
             state.sequence += 1;
             let slot = state.sequence as usize;
             state.nodes.insert(slot, node);
@@ -1018,8 +1110,14 @@ pub(crate) fn visit_graph<G: CopyGraph>(
             false
         }
     };
-    let (leaf_roots, interior_roots): (Vec<_>, Vec<_>) = roots.into_iter().partition(|root| graph.is_leaf(root));
-    mark(&leaf_roots.iter().map(|root| graph.block_id(root)).collect::<Vec<_>>())?;
+    let (leaf_roots, interior_roots): (Vec<_>, Vec<_>) =
+        roots.into_iter().partition(|root| graph.is_leaf(root));
+    mark(
+        &leaf_roots
+            .iter()
+            .map(|root| graph.block_id(root))
+            .collect::<Vec<_>>(),
+    )?;
     {
         let mut state = lock();
         state.visited += leaf_roots.len() as u64;
@@ -1029,14 +1127,19 @@ pub(crate) fn visit_graph<G: CopyGraph>(
     }
     let process = |node: G::Node| -> io::Result<(Vec<G::Node>, u64)> {
         if stop.load(Ordering::Acquire) {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "backup mark stopping"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "backup mark stopping",
+            ));
         }
         let payload = {
             let _slot = enter_share(share, stop, "backup mark stopping")?;
             graph.read(&node)?
         };
-        let (leaves, interiors): (Vec<_>, Vec<_>) =
-            graph.references(&node, &payload)?.into_iter().partition(|reference| graph.is_leaf(reference));
+        let (leaves, interiors): (Vec<_>, Vec<_>) = graph
+            .references(&node, &payload)?
+            .into_iter()
+            .partition(|reference| graph.is_leaf(reference));
         let mut ids = Vec::with_capacity(leaves.len() + 1);
         ids.push(graph.block_id(&node));
         ids.extend(leaves.iter().map(|leaf| graph.block_id(leaf)));
@@ -1058,7 +1161,9 @@ pub(crate) fn visit_graph<G: CopyGraph>(
                 if state.busy == 0 {
                     break None;
                 }
-                state = wake.wait(state).unwrap_or_else(|poisoned| poisoned.into_inner());
+                state = wake
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
             }
         };
         let Some((depth, node)) = next else {
@@ -1111,7 +1216,9 @@ pub(crate) fn visit_graph<G: CopyGraph>(
     } else {
         work();
     }
-    let state = schedule.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let state = schedule
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match state.failure {
         Some(error) => Err(error),
         None => Ok(state.visited),

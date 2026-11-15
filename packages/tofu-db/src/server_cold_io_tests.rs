@@ -207,7 +207,7 @@ fn cold_authority(label: &str, seed: impl FnOnce(&mut AuthorityDatabase, &Storag
         for &index in chunk {
             crate::versioned_document::put(&authority, &mut transaction, crate::versioned_document::PutRequest {
                 key: crate::versioned_document::record_key(7, 11, "cold", &cold_row(index)).unwrap(),
-                namespace: "cold".into(), logical_key: cold_row(index).into(),
+                namespace: "cold".into(), logical_key: cold_row(index),
                 value_json: serde_json::to_vec(&json!({"row": index, "pad": "x".repeat(96)})).unwrap(),
                 expected_version: None, updated_at_ms: 1_000,
             }).unwrap();

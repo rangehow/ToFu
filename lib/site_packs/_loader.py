@@ -26,9 +26,7 @@ from ._manifest import ManifestError, PackManifest, parse_manifest
 
 logger = get_logger(__name__)
 
-_REPO_ROOT = Path(__file__).parents[2]
 _CORE_DIR = Path(__file__).parent / 'data'
-_BUNDLES_DIR = _REPO_ROOT / 'bundles'
 
 #: Registry bounds. Packs are onboarding/discovery surface; unbounded growth
 #: would leak straight into generated tool descriptions.
@@ -42,16 +40,8 @@ _cache_signature: tuple | None = None
 
 def _layer_directories() -> tuple[Path, ...]:
     """Pack directories in override order (later wins by pack id)."""
-    layers = [_CORE_DIR]
-    if _BUNDLES_DIR.is_dir():
-        try:
-            layers.extend(
-                child / 'site_packs'
-                for child in sorted(_BUNDLES_DIR.iterdir())
-                if child.is_dir() and (child / 'site_packs').is_dir()
-            )
-        except OSError as exc:
-            logger.warning('[SitePacks] bundles scan degraded: %s', exc)
+    from tofu_extensions import bundle_directories
+    layers = [_CORE_DIR, *bundle_directories('site_packs')]
     layers.append(Path(config_path('site_packs')))
     return tuple(layers)
 

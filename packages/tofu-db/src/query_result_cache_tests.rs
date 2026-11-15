@@ -19,9 +19,18 @@ fn snapshot(sequence: u64) -> EntitySnapshot {
 }
 fn put(cache: &QueryResultCache, request: &Request, sequence: u64) {
     for _ in 0..2 {
-        cache.insert(request.into(), snapshot(sequence), 4, Admission::RepeatedKey, || {
-            Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedKey))
-        });
+        cache.insert(
+            request.into(),
+            snapshot(sequence),
+            4,
+            Admission::RepeatedKey,
+            || {
+                Some(IrResponse::from_snapshot_cache(
+                    b"null".to_vec(),
+                    Admission::RepeatedKey,
+                ))
+            },
+        );
     }
 }
 #[test]
@@ -69,19 +78,33 @@ fn query_result_cache_is_bounded_lazy_and_held_bytes_survive_eviction() {
     assert_eq!(cache.metrics()["accountedBytes"], 0);
     assert_eq!(cache.metrics()["entries"], 0);
     assert_eq!(owned.as_slice(), b"null");
-    cache.insert((&request).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-        panic!("disabled cache must not copy bytes")
-    });
+    cache.insert(
+        (&request).into(),
+        snapshot(1),
+        4,
+        Admission::RepeatedKey,
+        || panic!("disabled cache must not copy bytes"),
+    );
     cache.configure(16384);
-    cache.insert((&request).into(), snapshot(1), 2000, Admission::RepeatedKey, || {
-        panic!("oversize cache entry must fall back before copying")
-    });
+    cache.insert(
+        (&request).into(),
+        snapshot(1),
+        2000,
+        Admission::RepeatedKey,
+        || panic!("oversize cache entry must fall back before copying"),
+    );
     let mut unverified_copies = 0;
     for _ in 0..2 {
-        cache.insert((&request).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-            unverified_copies += 1;
-            Some(IrResponse::unverified(b"null".to_vec()))
-        });
+        cache.insert(
+            (&request).into(),
+            snapshot(1),
+            4,
+            Admission::RepeatedKey,
+            || {
+                unverified_copies += 1;
+                Some(IrResponse::unverified(b"null".to_vec()))
+            },
+        );
     }
     assert_eq!(
         unverified_copies, 1,
@@ -99,15 +122,19 @@ fn query_result_cache_contention_and_poison_are_optional_misses() {
     let (done, result) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let missed = worker_cache.get((&request).into(), snapshot(1)).is_none();
-        worker_cache.insert((&request).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-            panic!("contended copy")
-        });
+        worker_cache.insert(
+            (&request).into(),
+            snapshot(1),
+            4,
+            Admission::RepeatedKey,
+            || panic!("contended copy"),
+        );
         done.send(missed).unwrap();
     });
     let answer = result.recv_timeout(std::time::Duration::from_secs(2));
     drop(lock);
     worker.join().unwrap();
-    assert_eq!(answer.unwrap(), true);
+    assert!(answer.unwrap());
     let poisoned = cache.clone();
     assert!(std::thread::spawn(move || {
         let _guard = poisoned.state.lock().unwrap();
@@ -128,10 +155,19 @@ fn query_result_cache_first_use_scans_defer_copy_and_preserve_repeated_hot_keys(
     let mut scan_copies = 0;
     for index in 0..4096 {
         let cold = request(&format!("cold-{index}"));
-        cache.insert((&cold).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-            scan_copies += 1;
-            Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedKey))
-        });
+        cache.insert(
+            (&cold).into(),
+            snapshot(1),
+            4,
+            Admission::RepeatedKey,
+            || {
+                scan_copies += 1;
+                Some(IrResponse::from_snapshot_cache(
+                    b"null".to_vec(),
+                    Admission::RepeatedKey,
+                ))
+            },
+        );
         let metrics = cache.metrics();
         assert!(metrics["accountedBytes"].as_u64().unwrap() <= 65536);
         assert!(metrics["probationAccountedBytes"].as_u64().unwrap() <= 65536 / 64);
@@ -142,18 +178,40 @@ fn query_result_cache_first_use_scans_defer_copy_and_preserve_repeated_hot_keys(
     );
     assert!(cache.get((&hot).into(), snapshot(1)).is_some());
     let repeated = request("new-repeated");
-    cache.insert((&repeated).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-        panic!("first observation copied")
-    });
+    cache.insert(
+        (&repeated).into(),
+        snapshot(1),
+        4,
+        Admission::RepeatedKey,
+        || panic!("first observation copied"),
+    );
     assert!(cache.get((&repeated).into(), snapshot(1)).is_none());
-    cache.insert((&repeated).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-        Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedKey))
-    });
+    cache.insert(
+        (&repeated).into(),
+        snapshot(1),
+        4,
+        Admission::RepeatedKey,
+        || {
+            Some(IrResponse::from_snapshot_cache(
+                b"null".to_vec(),
+                Admission::RepeatedKey,
+            ))
+        },
+    );
     assert!(cache.get((&repeated).into(), snapshot(1)).is_some());
     // Known-hot entries refresh after a write without restarting probation.
-    cache.insert((&hot).into(), snapshot(2), 4, Admission::RepeatedKey, || {
-        Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedKey))
-    });
+    cache.insert(
+        (&hot).into(),
+        snapshot(2),
+        4,
+        Admission::RepeatedKey,
+        || {
+            Some(IrResponse::from_snapshot_cache(
+                b"null".to_vec(),
+                Admission::RepeatedKey,
+            ))
+        },
+    );
     assert!(cache.get((&hot).into(), snapshot(1)).is_none());
     assert!(cache.get((&hot).into(), snapshot(2)).is_some());
     for capacity in [8192, 16384, 1024, 65536, 0] {
@@ -172,9 +230,18 @@ fn query_result_cache_probation_covers_a_working_set_that_fits_the_result_budget
         .collect();
     for _ in 0..2 {
         for request in &requests {
-            cache.insert(request.into(), snapshot(1), 4, Admission::RepeatedKey, || {
-                Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedKey))
-            });
+            cache.insert(
+                request.into(),
+                snapshot(1),
+                4,
+                Admission::RepeatedKey,
+                || {
+                    Some(IrResponse::from_snapshot_cache(
+                        b"null".to_vec(),
+                        Admission::RepeatedKey,
+                    ))
+                },
+            );
         }
     }
     for request in &requests {
@@ -192,9 +259,18 @@ fn query_result_cache_probation_has_exact_capacity_and_false_positives_never_ans
         let cache = QueryResultCache::new(capacity);
         for index in 0..4096 {
             let request = request(&format!("capacity-{index}"));
-            cache.insert((&request).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-                Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedKey))
-            });
+            cache.insert(
+                (&request).into(),
+                snapshot(1),
+                4,
+                Admission::RepeatedKey,
+                || {
+                    Some(IrResponse::from_snapshot_cache(
+                        b"null".to_vec(),
+                        Admission::RepeatedKey,
+                    ))
+                },
+            );
             let metrics = cache.metrics();
             assert!(metrics["probationAccountedBytes"].as_u64().unwrap() <= (capacity / 64) as u64);
             assert!(metrics["accountedBytes"].as_u64().unwrap() <= capacity as u64);
@@ -208,16 +284,29 @@ fn query_result_cache_probation_has_exact_capacity_and_false_positives_never_ans
     cache.state.lock().unwrap().probation.fill(u64::MAX);
     let other = request("false-positive");
     assert!(cache.get((&other).into(), snapshot(1)).is_none());
-    cache.insert((&other).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-        Some(IrResponse::unverified(b"null".to_vec()))
-    });
+    cache.insert(
+        (&other).into(),
+        snapshot(1),
+        4,
+        Admission::RepeatedKey,
+        || Some(IrResponse::unverified(b"null".to_vec())),
+    );
     assert!(
         cache.get((&other).into(), snapshot(1)).is_none(),
         "probation cannot mint a payload proof"
     );
-    cache.insert((&other).into(), snapshot(1), 4, Admission::RepeatedKey, || {
-        Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedKey))
-    });
+    cache.insert(
+        (&other).into(),
+        snapshot(1),
+        4,
+        Admission::RepeatedKey,
+        || {
+            Some(IrResponse::from_snapshot_cache(
+                b"null".to_vec(),
+                Admission::RepeatedKey,
+            ))
+        },
+    );
     assert!(cache.get((&other).into(), snapshot(1)).is_some());
     assert!(cache.get((&other).into(), snapshot(2)).is_none());
     assert!(cache
@@ -237,9 +326,13 @@ fn query_result_cache_frame_bounds_apply_before_probation_copy_or_inline_hashing
     for request in [&large_operation, &large_payload] {
         assert!(!Lookup::from(request).within_frame_bounds());
         for _ in 0..2 {
-            cache.insert(request.into(), snapshot(1), 4, Admission::RepeatedKey, || {
-                panic!("oversize key copied")
-            });
+            cache.insert(
+                request.into(),
+                snapshot(1),
+                4,
+                Admission::RepeatedKey,
+                || panic!("oversize key copied"),
+            );
         }
         assert!(cache.candidate(request.into()).is_none());
     }
@@ -261,15 +354,30 @@ fn query_result_cache_snapshot_admission_needs_repetition_after_each_publication
     let cache = QueryResultCache::new(65536);
     let request = request("snapshot");
     for sequence in 1..5 {
-        cache.insert((&request).into(), snapshot(sequence), 4, Admission::RepeatedSnapshot, || {
-            panic!("an older warm result must not trigger a copy in the new snapshot")
-        });
+        cache.insert(
+            (&request).into(),
+            snapshot(sequence),
+            4,
+            Admission::RepeatedSnapshot,
+            || panic!("an older warm result must not trigger a copy in the new snapshot"),
+        );
         assert!(cache.get((&request).into(), snapshot(sequence)).is_none());
-        cache.insert((&request).into(), snapshot(sequence), 4, Admission::RepeatedSnapshot, || {
-            Some(IrResponse::from_snapshot_cache(b"null".to_vec(), Admission::RepeatedSnapshot))
-        });
+        cache.insert(
+            (&request).into(),
+            snapshot(sequence),
+            4,
+            Admission::RepeatedSnapshot,
+            || {
+                Some(IrResponse::from_snapshot_cache(
+                    b"null".to_vec(),
+                    Admission::RepeatedSnapshot,
+                ))
+            },
+        );
         assert!(cache.get((&request).into(), snapshot(sequence)).is_some());
-        assert!(cache.get((&request).into(), snapshot(sequence + 1)).is_none());
+        assert!(cache
+            .get((&request).into(), snapshot(sequence + 1))
+            .is_none());
     }
     assert_eq!(cache.metrics()["admissionDeferrals"], 4);
     assert_eq!(cache.metrics()["entries"], 1);

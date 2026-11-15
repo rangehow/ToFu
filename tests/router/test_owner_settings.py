@@ -18,7 +18,8 @@ from copy import deepcopy
 
 import pytest
 
-from lib.channels.dx.login import LoginSession
+from tests.support.dx_overlay import requires_dx
+
 from lib.lifecycle_approval import DelegationRefused
 from lib.router import owner_settings
 from tests.router.test_delegated_action import ROUTER, approvals, delegation, standing
@@ -348,14 +349,20 @@ def test_disabling_is_the_settings_channel_update_and_is_audited(channel):
     assert record['target'] == {'kind': 'owner_settings', 'channel': 'dx', 'action': 'disable'}
 
 
+def _login_session(mis):
+    from tofu_yourprovider.dx.login import LoginSession
+    return LoginSession(mis, {})
+
+
+@requires_dx
 def test_dx_preconditions_ask_the_supervisors_own_login_question(s, monkeypatch):
     asked = []
     monkeypatch.setattr(owner_settings, '_channel_view', lambda owner, name: {
         'enabled': False, 'loginMis': 'owner01', 'status': {'state': 'needs_login', 'detail': 'expired'}})
-    monkeypatch.setattr('lib.channels.dx.adapter.launcher_session',
-                        lambda owner, mis: asked.append((owner, mis)) or LoginSession('owner01', {}))
-    monkeypatch.setattr('lib.channels.dx.login.approval_required', lambda owner, session: True)
-    monkeypatch.setattr('lib.channels.dx.supervisor.running_adapter', lambda owner: None)
+    monkeypatch.setattr('tofu_yourprovider.dx.adapter.launcher_session',
+                        lambda owner, mis: asked.append((owner, mis)) or _login_session('owner01'))
+    monkeypatch.setattr('tofu_yourprovider.dx.login.approval_required', lambda owner, session: True)
+    monkeypatch.setattr('tofu_yourprovider.dx.supervisor.running_adapter', lambda owner: None)
     result = owner_settings.channel_preconditions(OWNER, 'dx')
     assert asked == [(OWNER, 'owner01')]
     assert result['sso_login_state'] == 'approval_required'

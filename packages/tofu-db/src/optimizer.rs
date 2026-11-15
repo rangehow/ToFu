@@ -27,8 +27,10 @@ const ACTION_LOGICAL_NAMESPACE: &str = "optimizer_action_log";
 const COUNT_KEY: &[u8] = b"count";
 
 fn checked_byte_sum(lengths: &[usize]) -> io::Result<usize> {
-    lengths.iter().try_fold(0_usize, |sum, length| sum.checked_add(*length)
-        .ok_or_else(|| invalid_data("optimizer byte count overflow")))
+    lengths.iter().try_fold(0_usize, |sum, length| {
+        sum.checked_add(*length)
+            .ok_or_else(|| invalid_data("optimizer byte count overflow"))
+    })
 }
 
 fn encoded_json_bytes(value: &impl Serialize) -> io::Result<usize> {
@@ -38,7 +40,9 @@ fn encoded_json_bytes(value: &impl Serialize) -> io::Result<usize> {
             self.0 = checked_byte_sum(&[self.0, bytes.len()])?;
             Ok(bytes.len())
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
     let mut counter = ByteCounter(0);
     serde_json::to_writer(&mut counter, value)
@@ -180,7 +184,8 @@ fn increment_count(
     transaction: &mut AuthorityTransaction,
     namespace: &str,
 ) -> io::Result<()> {
-    let count = read_count(database, transaction, namespace)?.checked_add(1)
+    let count = read_count(database, transaction, namespace)?
+        .checked_add(1)
         .ok_or_else(|| invalid_data("optimizer owner count overflow"))?;
     database.entity_put(
         transaction,
@@ -349,8 +354,7 @@ impl Request {
                 id.len()
             }
             Self::ProposalList { status, limit } => {
-                if !valid_text(status, 64, false) || *limit == 0
-                {
+                if !valid_text(status, 64, false) || *limit == 0 {
                     return Err(invalid_input("invalid optimizer proposal list"));
                 }
                 status.len()
@@ -558,7 +562,11 @@ fn push_requested_row(
     *retained_bytes = retained_bytes
         .checked_add(row_bytes)
         .and_then(|bytes| bytes.checked_add(usize::from(!rows.is_empty())))
-        .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("optimizer response byte count overflow"))?;
+        .ok_or_else(|| {
+            crate::resource_exhaustion::accounting_overflow(
+                "optimizer response byte count overflow",
+            )
+        })?;
     rows.push(row);
     Ok(())
 }
@@ -574,10 +582,14 @@ fn scan_index(
     let mut rows = Vec::new();
     loop {
         let remaining = requested_rows.map_or(usize::MAX, |limit| limit.saturating_sub(rows.len()));
-        if remaining == 0 { break; }
+        if remaining == 0 {
+            break;
+        }
         let page_limit = remaining.min(crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS);
         let page = database.entity_scan(transaction, &cursor, &end, page_limit)?;
-        if page.is_empty() { break; }
+        if page.is_empty() {
+            break;
+        }
         let mut successor = page.last().expect("nonempty page").0.key_bytes().to_vec();
         successor.push(0);
         cursor = owner_key(transaction, namespace, &successor)?;
@@ -628,11 +640,7 @@ pub(crate) fn execute(
             if get_proposal(database, transaction, &proposal.id)?.is_some() {
                 return Err(conflict("optimizer proposal already exists"));
             }
-            increment_count(
-                database,
-                transaction,
-                OPTIMIZER_PROPOSAL_COUNT_NAMESPACE,
-            )?;
+            increment_count(database, transaction, OPTIMIZER_PROPOSAL_COUNT_NAMESPACE)?;
             put_proposal(database, transaction, proposal, *updated_at_ms)?;
             for key in [
                 ordered_key(
@@ -695,13 +703,8 @@ pub(crate) fn execute(
                     proposal_status_prefix(status),
                 )
             };
-            for (_, raw_id) in scan_index(
-                database,
-                transaction,
-                namespace,
-                &prefix,
-                Some(*limit),
-            )? {
+            for (_, raw_id) in scan_index(database, transaction, namespace, &prefix, Some(*limit))?
+            {
                 let id = id_from_index(&raw_id)?;
                 let proposal = get_proposal(database, transaction, id)?
                     .ok_or_else(|| invalid_data("optimizer proposal index is inconsistent"))?;
@@ -731,11 +734,7 @@ pub(crate) fn execute(
             if get_action(database, transaction, &action.id)?.is_some() {
                 return Err(conflict("optimizer action already exists"));
             }
-            increment_count(
-                database,
-                transaction,
-                OPTIMIZER_ACTION_COUNT_NAMESPACE,
-            )?;
+            increment_count(database, transaction, OPTIMIZER_ACTION_COUNT_NAMESPACE)?;
             put_action(database, transaction, action, *updated_at_ms)?;
             for key in [
                 ordered_key(
@@ -840,13 +839,7 @@ pub(crate) fn execute(
             } else {
                 OPTIMIZER_ACTION_ACTIVE_APPLIED_INDEX_NAMESPACE
             };
-            for (_, raw_id) in scan_index(
-                database,
-                transaction,
-                namespace,
-                b"",
-                Some(*limit),
-            )? {
+            for (_, raw_id) in scan_index(database, transaction, namespace, b"", Some(*limit))? {
                 let id = id_from_index(&raw_id)?;
                 let action = get_action(database, transaction, id)?
                     .ok_or_else(|| invalid_data("optimizer action index is inconsistent"))?;
@@ -981,73 +974,229 @@ mod demand_tests {
     use super::*;
     use serde_json::json;
 
-    fn proposal(ordinal:u64) -> Proposal {
-        Proposal {user_id:11,id:format!("proposal-{ordinal:05}"),
-            created_at:format!("2026-10-12T{:02}:{:02}:{:02}Z",ordinal/3600,(ordinal%3600)/60,ordinal%60),
-            title:"Demand fixture".to_owned(),rationale:"retained history".to_owned(),
-            action_type:"observe".to_owned(),action_args:"{}".to_owned(),severity:"low".to_owned(),
-            confidence:0.5,evidence:"[]".to_owned(),status:"applied".to_owned(),status_reason:String::new()}
+    fn proposal(ordinal: u64) -> Proposal {
+        Proposal {
+            user_id: 11,
+            id: format!("proposal-{ordinal:05}"),
+            created_at: format!(
+                "2026-10-12T{:02}:{:02}:{:02}Z",
+                ordinal / 3600,
+                (ordinal % 3600) / 60,
+                ordinal % 60
+            ),
+            title: "Demand fixture".to_owned(),
+            rationale: "retained history".to_owned(),
+            action_type: "observe".to_owned(),
+            action_args: "{}".to_owned(),
+            severity: "low".to_owned(),
+            confidence: 0.5,
+            evidence: "[]".to_owned(),
+            status: "applied".to_owned(),
+            status_reason: String::new(),
+        }
     }
-    fn action(ordinal:u64) -> Action {
-        Action {user_id:11,id:format!("action-{ordinal:05}"),proposal_id:"proposal-00000".to_owned(),
-            applied_at:format!("2026-10-12T{:02}:{:02}:{:02}Z",3+ordinal/3600,(ordinal%3600)/60,ordinal%60),
-            expires_at:"2026-10-13T00:00:00Z".to_owned(),pre_metric:"{}".to_owned(),
-            outcome_metric:String::new(),outcome_recorded_at:String::new(),reverted_at:String::new(),revert_reason:String::new()}
+    fn action(ordinal: u64) -> Action {
+        Action {
+            user_id: 11,
+            id: format!("action-{ordinal:05}"),
+            proposal_id: "proposal-00000".to_owned(),
+            applied_at: format!(
+                "2026-10-12T{:02}:{:02}:{:02}Z",
+                3 + ordinal / 3600,
+                (ordinal % 3600) / 60,
+                ordinal % 60
+            ),
+            expires_at: "2026-10-13T00:00:00Z".to_owned(),
+            pre_metric: "{}".to_owned(),
+            outcome_metric: String::new(),
+            outcome_recorded_at: String::new(),
+            reverted_at: String::new(),
+            revert_reason: String::new(),
+        }
     }
     #[test]
-    fn optimizer_history_demand_exceeds_former_quotas_reopens_and_restores_without_losing_audit_rows() {
+    fn optimizer_history_demand_exceeds_former_quotas_reopens_and_restores_without_losing_audit_rows(
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let started = std::time::Instant::now();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         for start in (0..4201_u64).step_by(64) {
-            let mut tx = database.begin(7,11).unwrap();
-            for ordinal in start..(start+64).min(4201) {
-                execute(&database,&mut tx,&Request::ProposalCreate{proposal:proposal(ordinal),updated_at_ms:1000}).unwrap();
+            let mut tx = database.begin(7, 11).unwrap();
+            for ordinal in start..(start + 64).min(4201) {
+                execute(
+                    &database,
+                    &mut tx,
+                    &Request::ProposalCreate {
+                        proposal: proposal(ordinal),
+                        updated_at_ms: 1000,
+                    },
+                )
+                .unwrap();
             }
             database.commit(tx).unwrap();
         }
         for start in (0..2201_u64).step_by(64) {
-            let mut tx = database.begin(7,11).unwrap();
-            for ordinal in start..(start+64).min(2201) {
-                execute(&database,&mut tx,&Request::ActionRecord{action:action(ordinal),updated_at_ms:1001}).unwrap();
+            let mut tx = database.begin(7, 11).unwrap();
+            for ordinal in start..(start + 64).min(2201) {
+                execute(
+                    &database,
+                    &mut tx,
+                    &Request::ActionRecord {
+                        action: action(ordinal),
+                        updated_at_ms: 1001,
+                    },
+                )
+                .unwrap();
             }
             database.commit(tx).unwrap();
         }
         let mut imported_proposal = serde_json::to_value(proposal(4201)).unwrap();
         imported_proposal.as_object_mut().unwrap().remove("user_id");
-        let restore_proposal = json!({"table":"proposals","document":imported_proposal,"updated_at_ms":1002});
-        assert_eq!(crate::optimizer_migration::execute(&mut database,7,11,"migration.optimizer.restore",restore_proposal.clone()).unwrap()["inserted"],true);
-        assert_eq!(crate::optimizer_migration::execute(&mut database,7,11,"migration.optimizer.restore",restore_proposal).unwrap()["inserted"],false);
+        let restore_proposal =
+            json!({"table":"proposals","document":imported_proposal,"updated_at_ms":1002});
+        assert_eq!(
+            crate::optimizer_migration::execute(
+                &mut database,
+                7,
+                11,
+                "migration.optimizer.restore",
+                restore_proposal.clone()
+            )
+            .unwrap()["inserted"],
+            true
+        );
+        assert_eq!(
+            crate::optimizer_migration::execute(
+                &mut database,
+                7,
+                11,
+                "migration.optimizer.restore",
+                restore_proposal
+            )
+            .unwrap()["inserted"],
+            false
+        );
         let mut imported_action = serde_json::to_value(action(2201)).unwrap();
         imported_action.as_object_mut().unwrap().remove("user_id");
-        assert_eq!(crate::optimizer_migration::execute(&mut database,7,11,"migration.optimizer.restore",
-            json!({"table":"actions","document":imported_action,"updated_at_ms":1003})).unwrap()["inserted"],true);
+        assert_eq!(
+            crate::optimizer_migration::execute(
+                &mut database,
+                7,
+                11,
+                "migration.optimizer.restore",
+                json!({"table":"actions","document":imported_action,"updated_at_ms":1003})
+            )
+            .unwrap()["inserted"],
+            true
+        );
         drop(database);
         let database = AuthorityDatabase::open(directory.path()).unwrap();
-        let mut tx = database.begin(7,11).unwrap();
-        assert_eq!(read_count(&database,&mut tx,OPTIMIZER_PROPOSAL_COUNT_NAMESPACE).unwrap(),4202);
-        assert_eq!(read_count(&database,&mut tx,OPTIMIZER_ACTION_COUNT_NAMESPACE).unwrap(),2202);
-        for ordinal in [0,4095,4096,4201] { assert!(get_proposal(&database,&mut tx,&proposal(ordinal).id).unwrap().is_some()); }
-        for ordinal in [0,2047,2048,2201] { assert!(get_action(&database,&mut tx,&action(ordinal).id).unwrap().is_some()); }
-        let proposals:Value = serde_json::from_slice(&execute(&database,&mut tx,&Request::ProposalList{status:String::new(),limit:1001}).unwrap().unwrap()).unwrap();
-        assert_eq!(proposals.as_array().unwrap().len(),1001);
-        assert_eq!(proposals[0]["id"],"proposal-04201");
-        let actions:Value = serde_json::from_slice(&execute(&database,&mut tx,&Request::ActionList{include_reverted:true,limit:1001}).unwrap().unwrap()).unwrap();
-        assert_eq!(actions.as_array().unwrap().len(),1001);
-        assert_eq!(actions[0]["id"],"action-02201");
-        let latest:Value = serde_json::from_slice(&execute(&database,&mut tx,&Request::ActionForProposal{proposal_id:"proposal-00000".to_owned()}).unwrap().unwrap()).unwrap();
-        assert_eq!(latest["id"],"action-02201");
-        let expired:Value = serde_json::from_slice(&execute(&database,&mut tx,&Request::ActionExpired{now_iso:"2026-10-14T00:00:00Z".to_owned()}).unwrap().unwrap()).unwrap();
-        assert_eq!(expired.as_array().unwrap().len(),2202);
+        let mut tx = database.begin(7, 11).unwrap();
+        assert_eq!(
+            read_count(&database, &mut tx, OPTIMIZER_PROPOSAL_COUNT_NAMESPACE).unwrap(),
+            4202
+        );
+        assert_eq!(
+            read_count(&database, &mut tx, OPTIMIZER_ACTION_COUNT_NAMESPACE).unwrap(),
+            2202
+        );
+        for ordinal in [0, 4095, 4096, 4201] {
+            assert!(get_proposal(&database, &mut tx, &proposal(ordinal).id)
+                .unwrap()
+                .is_some());
+        }
+        for ordinal in [0, 2047, 2048, 2201] {
+            assert!(get_action(&database, &mut tx, &action(ordinal).id)
+                .unwrap()
+                .is_some());
+        }
+        let proposals: Value = serde_json::from_slice(
+            &execute(
+                &database,
+                &mut tx,
+                &Request::ProposalList {
+                    status: String::new(),
+                    limit: 1001,
+                },
+            )
+            .unwrap()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(proposals.as_array().unwrap().len(), 1001);
+        assert_eq!(proposals[0]["id"], "proposal-04201");
+        let actions: Value = serde_json::from_slice(
+            &execute(
+                &database,
+                &mut tx,
+                &Request::ActionList {
+                    include_reverted: true,
+                    limit: 1001,
+                },
+            )
+            .unwrap()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(actions.as_array().unwrap().len(), 1001);
+        assert_eq!(actions[0]["id"], "action-02201");
+        let latest: Value = serde_json::from_slice(
+            &execute(
+                &database,
+                &mut tx,
+                &Request::ActionForProposal {
+                    proposal_id: "proposal-00000".to_owned(),
+                },
+            )
+            .unwrap()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(latest["id"], "action-02201");
+        let expired: Value = serde_json::from_slice(
+            &execute(
+                &database,
+                &mut tx,
+                &Request::ActionExpired {
+                    now_iso: "2026-10-14T00:00:00Z".to_owned(),
+                },
+            )
+            .unwrap()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(expired.as_array().unwrap().len(), 2202);
         drop(tx);
-        let mut foreign = database.begin(7,12).unwrap();
-        assert!(get_proposal(&database,&mut foreign,"proposal-00000").unwrap().is_none());
-        assert!(get_action(&database,&mut foreign,"action-00000").unwrap().is_none());
+        let mut foreign = database.begin(7, 12).unwrap();
+        assert!(get_proposal(&database, &mut foreign, "proposal-00000")
+            .unwrap()
+            .is_none());
+        assert!(get_action(&database, &mut foreign, "action-00000")
+            .unwrap()
+            .is_none());
         drop(foreign);
-        let mut overflow = database.begin(7,11).unwrap();
-        let counter_key = owner_key(&overflow,OPTIMIZER_PROPOSAL_COUNT_NAMESPACE,COUNT_KEY).unwrap();
-        database.entity_put(&mut overflow,counter_key,u64::MAX.to_le_bytes().to_vec()).unwrap();
-        assert_eq!(execute(&database,&mut overflow,&Request::ProposalCreate{proposal:proposal(9999),updated_at_ms:1004}).unwrap_err().kind(),io::ErrorKind::InvalidData);
-        eprintln!("optimizer_demand: 4202 proposals,2202 actions,complete expired audit, {:?}",started.elapsed());
+        let mut overflow = database.begin(7, 11).unwrap();
+        let counter_key =
+            owner_key(&overflow, OPTIMIZER_PROPOSAL_COUNT_NAMESPACE, COUNT_KEY).unwrap();
+        database
+            .entity_put(&mut overflow, counter_key, u64::MAX.to_le_bytes().to_vec())
+            .unwrap();
+        assert_eq!(
+            execute(
+                &database,
+                &mut overflow,
+                &Request::ProposalCreate {
+                    proposal: proposal(9999),
+                    updated_at_ms: 1004
+                }
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidData
+        );
+        eprintln!(
+            "optimizer_demand: 4202 proposals,2202 actions,complete expired audit, {:?}",
+            started.elapsed()
+        );
     }
 }

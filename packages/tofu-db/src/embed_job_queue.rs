@@ -5,8 +5,9 @@
 //! Dispatch, watchdog, response ownership and byte budgets remain in embed_ffi.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::sync::mpsc::TrySendError;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, Thread};
 
 struct State<T> {
@@ -21,37 +22,69 @@ struct Shared<T> {
     idle_reuse_target: usize,
 }
 
-pub(crate) struct JobSender<T> { shared: Arc<Shared<T>> }
-pub(crate) struct JobReceiver<T> { shared: Arc<Shared<T>> }
+pub(crate) struct JobSender<T> {
+    shared: Arc<Shared<T>>,
+}
+pub(crate) struct JobReceiver<T> {
+    shared: Arc<Shared<T>>,
+}
 
 #[derive(Debug)]
-pub(crate) enum ReceiveError { Closed, Poisoned }
+pub(crate) enum ReceiveError {
+    Closed,
+    Poisoned,
+}
 
 pub(crate) fn delivery<T>(idle_reuse_target: usize) -> (JobSender<T>, JobReceiver<T>) {
-    assert!(idle_reuse_target > 0, "embedded idle reuse target must be positive");
+    assert!(
+        idle_reuse_target > 0,
+        "embedded idle reuse target must be positive"
+    );
     let shared = Arc::new(Shared {
-        state: Mutex::new(State { jobs: VecDeque::new(), idle: Vec::new(), closed: false, receivers: 1 }),
+        state: Mutex::new(State {
+            jobs: VecDeque::new(),
+            idle: Vec::new(),
+            closed: false,
+            receivers: 1,
+        }),
         idle_reuse_target,
     });
-    (JobSender { shared: Arc::clone(&shared) }, JobReceiver { shared })
+    (
+        JobSender {
+            shared: Arc::clone(&shared),
+        },
+        JobReceiver { shared },
+    )
 }
 
 impl<T> Clone for JobReceiver<T> {
     fn clone(&self) -> Self {
-        self.shared.state.lock().unwrap_or_else(|error| error.into_inner()).receivers += 1;
-        Self { shared: Arc::clone(&self.shared) }
+        self.shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .receivers += 1;
+        Self {
+            shared: Arc::clone(&self.shared),
+        }
     }
 }
 
 impl<T> Drop for JobReceiver<T> {
     fn drop(&mut self) {
         let abandoned = {
-            let mut state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             state.receivers -= 1;
             if state.receivers == 0 {
                 state.closed = true;
                 Some(std::mem::take(&mut state.jobs))
-            } else { None }
+            } else {
+                None
+            }
         };
         // Release queued jobs and their byte reservations outside the lock,
         // matching a disconnected standard channel's last-receiver cleanup.
@@ -59,62 +92,101 @@ impl<T> Drop for JobReceiver<T> {
     }
 }
 
-pub(crate) struct WeakDelivery<T> { shared: std::sync::Weak<Shared<T>> }
+pub(crate) struct WeakDelivery<T> {
+    shared: std::sync::Weak<Shared<T>>,
+}
 impl<T> WeakDelivery<T> {
-    pub(crate) fn try_handoff(&self,job:T)->Result<Option<T>,T> {
-        match self.shared.upgrade() {Some(shared)=>handoff(&shared,job),None=>Err(job)}
+    pub(crate) fn try_handoff(&self, job: T) -> Result<Option<T>, T> {
+        match self.shared.upgrade() {
+            Some(shared) => handoff(&shared, job),
+            None => Err(job),
+        }
     }
-    pub(crate) fn receiver(&self)->Option<JobReceiver<T>> {
-        let shared=self.shared.upgrade()?;
-        {let mut state=shared.state.lock().ok()?;if state.closed{return None;}state.receivers+=1;}
-        Some(JobReceiver{shared})
+    pub(crate) fn receiver(&self) -> Option<JobReceiver<T>> {
+        let shared = self.shared.upgrade()?;
+        {
+            let mut state = shared.state.lock().ok()?;
+            if state.closed {
+                return None;
+            }
+            state.receivers += 1;
+        }
+        Some(JobReceiver { shared })
     }
 }
 impl<T> JobReceiver<T> {
-    pub(crate) fn weak_delivery(&self)->WeakDelivery<T> {WeakDelivery{shared:Arc::downgrade(&self.shared)}}
-}
-fn handoff<T>(shared:&Arc<Shared<T>>,job:T)->Result<Option<T>,T> {
-        let wake = {
-            let lock = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_LOCK);
-            let Ok(mut state) = shared.state.lock() else { return Err(job); };
-            drop(lock);
-            let _admit = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_ADMIT);
-            if state.closed { return Err(job); }
-            let Some(worker) = state.idle.pop() else { return Ok(Some(job)); };
-            state.jobs.push_back(job);
-            worker
-        };
-        let _notify = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_NOTIFY);
-        wake.unpark();
-        Ok(None)
+    pub(crate) fn weak_delivery(&self) -> WeakDelivery<T> {
+        WeakDelivery {
+            shared: Arc::downgrade(&self.shared),
+        }
     }
+}
+fn handoff<T>(shared: &Arc<Shared<T>>, job: T) -> Result<Option<T>, T> {
+    let wake = {
+        let lock = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_QUEUE_LOCK,
+        );
+        let Ok(mut state) = shared.state.lock() else {
+            return Err(job);
+        };
+        drop(lock);
+        let _admit = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_QUEUE_ADMIT,
+        );
+        if state.closed {
+            return Err(job);
+        }
+        let Some(worker) = state.idle.pop() else {
+            return Ok(Some(job));
+        };
+        state.jobs.push_back(job);
+        worker
+    };
+    let _notify =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_NOTIFY);
+    wake.unpark();
+    Ok(None)
+}
 
 impl<T> JobSender<T> {
     pub(crate) fn try_healthy(&self) -> bool {
-        self.shared.state.try_lock().is_ok_and(|state| !state.closed && state.receivers != 0)
+        self.shared
+            .state
+            .try_lock()
+            .is_ok_and(|state| !state.closed && state.receivers != 0)
     }
     /// Claim a ready worker or return the owned job for a new worker.
     /// No job is published when no worker is ready, so thread-creation failure
     /// can drop that owned job without ambiguous dispatch or duplicate work.
-    pub(crate) fn try_handoff(&self, job:T)->Result<Option<T>,T> {handoff(&self.shared,job)}
+    pub(crate) fn try_handoff(&self, job: T) -> Result<Option<T>, T> {
+        handoff(&self.shared, job)
+    }
 
     #[cfg(test)]
     pub(crate) fn try_send(&self, job: T) -> Result<(), TrySendError<T>> {
         let wake = {
-            let lock = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_LOCK);
+            let lock = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_EMBEDDED_QUEUE_LOCK,
+            );
             let Ok(mut state) = self.shared.state.lock() else {
                 return Err(TrySendError::Disconnected(job));
             };
             drop(lock);
-            let _admit = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_ADMIT);
-            if state.closed { return Err(TrySendError::Disconnected(job)); }
+            let _admit = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_EMBEDDED_QUEUE_ADMIT,
+            );
+            if state.closed {
+                return Err(TrySendError::Disconnected(job));
+            }
             state.jobs.push_back(job);
             // Job order stays FIFO. Choose the last idle worker to reuse its
             // hot dispatch state instead of migrating a sequential caller.
             state.idle.pop()
         };
         if let Some(worker) = wake {
-            let _notify = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_NOTIFY);
+            let _notify = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_EMBEDDED_QUEUE_NOTIFY,
+            );
             worker.unpark();
         }
         Ok(())
@@ -126,11 +198,17 @@ impl<T> Drop for JobSender<T> {
         // No user callback or job destructor runs inside this critical section.
         // Recover poison only to close and wake: receivers still fail closed.
         let idle = {
-            let mut state = self.shared.state.lock().unwrap_or_else(|error| error.into_inner());
+            let mut state = self
+                .shared
+                .state
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             state.closed = true;
             std::mem::take(&mut state.idle)
         };
-        for worker in idle { worker.unpark(); }
+        for worker in idle {
+            worker.unpark();
+        }
     }
 }
 
@@ -140,17 +218,24 @@ impl<T> JobReceiver<T> {
     /// recv claims the next job or registers/parks; no callback runs here.
     pub(crate) fn prepare_for_next_job(&self) -> Result<(), ReceiveError> {
         let current = thread::current();
-        let lock = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_WORKER_QUEUE_LOCK);
+        let lock = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_WORKER_QUEUE_LOCK,
+        );
         let mut state = match self.shared.state.try_lock() {
             Ok(state) => state,
             Err(std::sync::TryLockError::Poisoned(_)) => return Err(ReceiveError::Poisoned),
             Err(std::sync::TryLockError::WouldBlock) => return Ok(()),
         };
         drop(lock);
-        if state.closed { return Ok(()); }
-        let _register = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_WORKER_REGISTER);
+        if state.closed {
+            return Ok(());
+        }
+        let _register = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_WORKER_REGISTER,
+        );
         if state.idle.len() < self.shared.idle_reuse_target
-                && !state.idle.iter().any(|worker| worker.id() == current.id()) {
+            && !state.idle.iter().any(|worker| worker.id() == current.id())
+        {
             state.idle.push(current);
         }
         Ok(())
@@ -160,26 +245,43 @@ impl<T> JobReceiver<T> {
         let current = thread::current();
         loop {
             {
-                let lock = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_WORKER_QUEUE_LOCK);
-                let mut state = self.shared.state.lock().map_err(|_| ReceiveError::Poisoned)?;
+                let lock = crate::fsync_stats::StageTimer::diagnostic(
+                    crate::fsync_stats::STAGE_EMBEDDED_WORKER_QUEUE_LOCK,
+                );
+                let mut state = self
+                    .shared
+                    .state
+                    .lock()
+                    .map_err(|_| ReceiveError::Poisoned)?;
                 drop(lock);
-                let claim = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_WORKER_QUEUE_CLAIM);
+                let claim = crate::fsync_stats::StageTimer::diagnostic(
+                    crate::fsync_stats::STAGE_EMBEDDED_WORKER_QUEUE_CLAIM,
+                );
                 if let Some(job) = state.jobs.pop_front() {
                     // park permits spurious wakeups. A receiver can therefore
                     // claim a job before a selected waiter; remove its previous
                     // registration so it cannot be selected twice.
-                    if let Some(index) = state.idle.iter().position(|worker| worker.id() == current.id()) {
+                    if let Some(index) = state
+                        .idle
+                        .iter()
+                        .position(|worker| worker.id() == current.id())
+                    {
                         state.idle.swap_remove(index);
                     }
                     return Ok(job);
                 }
                 drop(claim);
-                if state.closed { return Err(ReceiveError::Closed); }
+                if state.closed {
+                    return Err(ReceiveError::Closed);
+                }
                 if !state.idle.iter().any(|worker| worker.id() == current.id())
-                        && state.idle.len() >= self.shared.idle_reuse_target {
+                    && state.idle.len() >= self.shared.idle_reuse_target
+                {
                     return Err(ReceiveError::Closed); // Retire only this excess carrier.
                 }
-                let _register = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_WORKER_REGISTER);
+                let _register = crate::fsync_stats::StageTimer::diagnostic(
+                    crate::fsync_stats::STAGE_EMBEDDED_WORKER_REGISTER,
+                );
                 if !state.idle.iter().any(|worker| worker.id() == current.id()) {
                     state.idle.push(current.clone());
                 }
@@ -276,8 +378,16 @@ mod tests {
         assert!(receiver.shared.state.lock().unwrap().idle.is_empty());
         let (sender, receiver) = delivery::<u8>(1);
         let shared = Arc::clone(&receiver.shared);
-        assert!(thread::spawn(move || { let _lock=shared.state.lock().unwrap(); panic!("completion registration fault"); }).join().is_err());
-        assert!(matches!(receiver.prepare_for_next_job(), Err(ReceiveError::Poisoned)));
+        assert!(thread::spawn(move || {
+            let _lock = shared.state.lock().unwrap();
+            panic!("completion registration fault");
+        })
+        .join()
+        .is_err());
+        assert!(matches!(
+            receiver.prepare_for_next_job(),
+            Err(ReceiveError::Poisoned)
+        ));
         drop(sender);
     }
 
@@ -298,7 +408,9 @@ mod tests {
     fn last_receiver_disconnects_and_releases_queued_ownership() {
         struct Owned(Arc<std::sync::atomic::AtomicUsize>);
         impl Drop for Owned {
-            fn drop(&mut self) { self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }
+            fn drop(&mut self) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
         }
         let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (sender, receiver) = delivery(2);
@@ -308,7 +420,10 @@ mod tests {
         assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 0);
         drop(second);
         assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert!(matches!(sender.try_send(Owned(Arc::clone(&dropped))), Err(TrySendError::Disconnected(_))));
+        assert!(matches!(
+            sender.try_send(Owned(Arc::clone(&dropped))),
+            Err(TrySendError::Disconnected(_))
+        ));
         assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
@@ -319,8 +434,13 @@ mod tests {
         assert!(thread::spawn(move || {
             let _guard = state.state.lock().unwrap();
             panic!("queue lock fault");
-        }).join().is_err());
-        assert!(matches!(sender.try_send(1), Err(TrySendError::Disconnected(1))));
+        })
+        .join()
+        .is_err());
+        assert!(matches!(
+            sender.try_send(1),
+            Err(TrySendError::Disconnected(1))
+        ));
         assert!(matches!(receiver.recv(), Err(ReceiveError::Poisoned)));
         drop(sender);
     }
@@ -331,8 +451,11 @@ mod tests {
         let (done, results) = mpsc::channel();
         let mut workers = Vec::new();
         for index in 0..2 {
-            let worker_receiver = receiver.clone(); let done = done.clone();
-            workers.push(thread::spawn(move || { done.send((index, worker_receiver.recv().ok())).unwrap(); }));
+            let worker_receiver = receiver.clone();
+            let done = done.clone();
+            workers.push(thread::spawn(move || {
+                done.send((index, worker_receiver.recv().ok())).unwrap();
+            }));
             let deadline = std::time::Instant::now() + Duration::from_secs(5);
             while receiver.shared.state.lock().unwrap().idle.len() != index + 1 {
                 assert!(std::time::Instant::now() < deadline);
@@ -340,29 +463,45 @@ mod tests {
             }
         }
         sender.try_send(42).unwrap();
-        assert_eq!(results.recv_timeout(Duration::from_secs(5)).unwrap(), (1, Some(42)));
+        assert_eq!(
+            results.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (1, Some(42))
+        );
         drop(sender);
-        assert_eq!(results.recv_timeout(Duration::from_secs(5)).unwrap(), (0, None));
-        for worker in workers { worker.join().unwrap(); }
+        assert_eq!(
+            results.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (0, None)
+        );
+        for worker in workers {
+            worker.join().unwrap();
+        }
     }
 
     #[test]
     fn closing_wakes_every_registered_worker() {
         let (sender, receiver) = delivery::<usize>(8);
         let (done, results) = mpsc::channel();
-        let workers: Vec<_> = (0..8).map(|_| {
-            let receiver = receiver.clone();
-            let done = done.clone();
-            thread::spawn(move || { done.send(receiver.recv().is_err()).unwrap(); })
-        }).collect();
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let receiver = receiver.clone();
+                let done = done.clone();
+                thread::spawn(move || {
+                    done.send(receiver.recv().is_err()).unwrap();
+                })
+            })
+            .collect();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while receiver.shared.state.lock().unwrap().idle.len() != workers.len() {
             assert!(std::time::Instant::now() < deadline);
             thread::yield_now();
         }
         drop(sender);
-        for _ in &workers { assert!(results.recv_timeout(Duration::from_secs(5)).unwrap()); }
-        for worker in workers { worker.join().unwrap(); }
+        for _ in &workers {
+            assert!(results.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
     }
 
     #[test]
@@ -370,14 +509,21 @@ mod tests {
         let (sender, receiver) = delivery(1);
         let observer = receiver.clone();
         let (done, result) = mpsc::channel();
-        let worker = thread::spawn(move || { done.send(receiver.recv().unwrap()).unwrap(); });
+        let worker = thread::spawn(move || {
+            done.send(receiver.recv().unwrap()).unwrap();
+        });
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
-            if observer.shared.state.lock().unwrap().idle.len() == 1 { break; }
+            if observer.shared.state.lock().unwrap().idle.len() == 1 {
+                break;
+            }
             assert!(std::time::Instant::now() < deadline);
             thread::yield_now();
         }
-        for _ in 0..100 { worker.thread().unpark(); thread::yield_now(); }
+        for _ in 0..100 {
+            worker.thread().unpark();
+            thread::yield_now();
+        }
         assert_eq!(observer.shared.state.lock().unwrap().idle.len(), 1);
         sender.try_send(42).unwrap();
         assert_eq!(result.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
@@ -390,30 +536,50 @@ mod tests {
         let (sender, receiver) = delivery(32);
         let sender = Arc::new(sender);
         let (done, results) = mpsc::channel();
-        let workers: Vec<_> = (0..8).map(|_| {
-            let receiver = receiver.clone(); let done = done.clone();
-            thread::spawn(move || { while let Ok(job) = receiver.recv() { done.send(job).unwrap(); } })
-        }).collect();
-        let producers: Vec<_> = (0..8).map(|producer| {
-            let sender = Arc::clone(&sender);
-            thread::spawn(move || {
-                for ordinal in 0..1000 {
-                    let mut job = producer * 1000 + ordinal;
-                    loop {
-                        match sender.try_send(job) {
-                            Ok(()) => break,
-                            Err(TrySendError::Full(returned)) => { job = returned; thread::yield_now(); }
-                            Err(TrySendError::Disconnected(_)) => panic!("unexpected closed queue"),
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let receiver = receiver.clone();
+                let done = done.clone();
+                thread::spawn(move || {
+                    while let Ok(job) = receiver.recv() {
+                        done.send(job).unwrap();
+                    }
+                })
+            })
+            .collect();
+        let producers: Vec<_> = (0..8)
+            .map(|producer| {
+                let sender = Arc::clone(&sender);
+                thread::spawn(move || {
+                    for ordinal in 0..1000 {
+                        let mut job = producer * 1000 + ordinal;
+                        loop {
+                            match sender.try_send(job) {
+                                Ok(()) => break,
+                                Err(TrySendError::Full(returned)) => {
+                                    job = returned;
+                                    thread::yield_now();
+                                }
+                                Err(TrySendError::Disconnected(_)) => {
+                                    panic!("unexpected closed queue")
+                                }
+                            }
                         }
                     }
-                }
+                })
             })
-        }).collect();
-        for producer in producers { producer.join().unwrap(); }
+            .collect();
+        for producer in producers {
+            producer.join().unwrap();
+        }
         drop(sender);
         let mut received = Vec::new();
-        for _ in 0..8000 { received.push(results.recv_timeout(Duration::from_secs(5)).unwrap()); }
-        for worker in workers { worker.join().unwrap(); }
+        for _ in 0..8000 {
+            received.push(results.recv_timeout(Duration::from_secs(5)).unwrap());
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
         received.sort_unstable();
         assert_eq!(received, (0..8000).collect::<Vec<_>>());
     }

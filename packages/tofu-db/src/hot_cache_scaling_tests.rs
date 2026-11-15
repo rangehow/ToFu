@@ -23,20 +23,30 @@ fn hot_cache_scaling_measurement() {
     });
     let old_capacity = budget.block_cache_bytes.min(2048 * MIB)
         / crate::blob::decode_cache::HOT_CACHE_BUDGET_DIVISOR;
-    let scaled_capacity = budget.block_cache_bytes
-        / crate::blob::decode_cache::HOT_CACHE_BUDGET_DIVISOR;
+    let scaled_capacity =
+        budget.block_cache_bytes / crate::blob::decode_cache::HOT_CACHE_BUDGET_DIVISOR;
     assert!(scaled_capacity > CHUNKS * MIB);
     let mut raw = vec![b'x'; MIB];
-    let chunks: Vec<_> = (0..CHUNKS).map(|index| {
-        raw[..8].copy_from_slice(&(index as u64).to_le_bytes());
-        let encoded = Arc::new(encode_chunk(&raw).unwrap());
-        (BlockId::for_payload(&encoded), encoded)
-    }).collect();
+    let chunks: Vec<_> = (0..CHUNKS)
+        .map(|index| {
+            raw[..8].copy_from_slice(&(index as u64).to_le_bytes());
+            let encoded = Arc::new(encode_chunk(&raw).unwrap());
+            (BlockId::for_payload(&encoded), encoded)
+        })
+        .collect();
     let mut measurements = Vec::new();
     for sample in 0..3 {
-        for scaled in if sample % 2 == 0 { [false, true] } else { [true, false] } {
+        for scaled in if sample % 2 == 0 {
+            [false, true]
+        } else {
+            [true, false]
+        } {
             let cache = Arc::new(DecodedChunkCache::default());
-            let capacity = if scaled { scaled_capacity } else { old_capacity };
+            let capacity = if scaled {
+                scaled_capacity
+            } else {
+                old_capacity
+            };
             cache.configure_capacity(capacity);
             let observer = cache.observer();
             // Warm the same full corpus before timing, including its evictions.
@@ -81,11 +91,16 @@ fn hot_cache_scaling_measurement() {
             assert_eq!(observer.metrics().accounted_bytes, 0);
         }
     }
-    assert!(measurements.iter().all(|row| row["outputDigest"] == measurements[0]["outputDigest"]));
-    println!("HOT_CACHE_SCALING {}", serde_json::json!({
-        "contract": "tofu.hot-cache-scaling-measure/v1", "chunks": CHUNKS,
-        "chunkBytes": MIB, "passes": PASSES, "samples": measurements,
-        "scope": "verified decode reuse over identical current encoded allocations",
-        "excludes": ["source I/O", "JSON", "RPC", "whole task latency"],
-    }));
+    assert!(measurements
+        .iter()
+        .all(|row| row["outputDigest"] == measurements[0]["outputDigest"]));
+    println!(
+        "HOT_CACHE_SCALING {}",
+        serde_json::json!({
+            "contract": "tofu.hot-cache-scaling-measure/v1", "chunks": CHUNKS,
+            "chunkBytes": MIB, "passes": PASSES, "samples": measurements,
+            "scope": "verified decode reuse over identical current encoded allocations",
+            "excludes": ["source I/O", "JSON", "RPC", "whole task latency"],
+        })
+    );
 }

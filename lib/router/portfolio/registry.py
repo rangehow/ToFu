@@ -325,7 +325,6 @@ class RouterPortfolio:
         def change(value):
             if value['state'] != 'started' or value['initiative'] is None:
                 raise ValueError('Only a started initiative can settle; record a proposal with propose, or drop it')
-            promise = value['initiative']['promise']
             killed = kill_triggered(value['killCondition'], outcome.get('metric_value'))
             measured = {'verdict': 'negative' if killed else 'delivered',
                         'reason': 'kill_condition' if killed else 'measured',

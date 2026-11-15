@@ -337,8 +337,8 @@ def start_registered_background_services(app, *, process_role='all'):
     # ── Start the sole durable scheduler (including daily-report backfill) ──
     if process_role_has(process_role, CAPABILITY_SCHEDULED_JOBS):
         try:
+            from lib.channels.adapters import installed_channel_adapters
             from lib.channels.bots.supervisor import start_bot_sessions
-            from lib.channels.dx.supervisor import start_channel_bridges
             from lib.channels.github.supervisor import start_github_sessions
             from lib.scheduler.manager import start_scheduler_worker
             from lib.identity import PERSONAL_USER_ID, PrincipalContext
@@ -356,7 +356,8 @@ def start_registered_background_services(app, *, process_role='all'):
             )
             # Each channel supervisor opens its hosting lifecycle before the
             # scheduler, whose tick starts sessions.
-            start_channel_bridges()
+            for adapter in installed_channel_adapters().values():
+                adapter.supervisor.start_channel_bridges()
             start_github_sessions()
             start_bot_sessions()
             start_scheduler_worker(principal=scheduler_principal)
@@ -598,12 +599,19 @@ def _process_background_owners() -> tuple:
     (``begin_stopping_registered_background_services``); ``stop`` still joins
     it at its place with the same timeout.
     """
+    from lib.channels.adapters import installed_channel_adapters
     from lib.process_roles import (
         CAPABILITY_REQUEST_SERVICES,
         CAPABILITY_SCHEDULED_JOBS,
         CAPABILITY_TASK_WORKERS,
     )
 
+    # Channels an overlay installs (lib.channels.adapters), e.g. 大象.
+    channel_bridges = tuple(
+        ('channel bridges' if adapter.channel == 'dx' else f'{adapter.channel} channel bridges',
+         adapter.supervisor_module, 'stop_channel_bridges',
+         CAPABILITY_SCHEDULED_JOBS, True, 'begin_stopping_channel_bridges')
+        for adapter in installed_channel_adapters().values())
     return (
         ('knowledge visual enrichment',
          'lib.knowledge.enrichment', 'stop_visual_enrichment',
@@ -618,9 +626,7 @@ def _process_background_owners() -> tuple:
          'lib.scheduler.manager', 'stop_scheduler_worker',
          CAPABILITY_SCHEDULED_JOBS, True, None),
         # After the scheduler: its tick is what restarts bridges.
-        ('channel bridges',
-         'lib.channels.dx.supervisor', 'stop_channel_bridges',
-         CAPABILITY_SCHEDULED_JOBS, True, 'begin_stopping_channel_bridges'),
+        *channel_bridges,
         ('GitHub channel sessions',
          'lib.channels.github.supervisor', 'stop_github_sessions',
          CAPABILITY_SCHEDULED_JOBS, True, 'begin_stopping_github_sessions'),

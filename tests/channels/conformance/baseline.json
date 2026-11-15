@@ -202,98 +202,6 @@
     "status": "pass"
    }
   },
-  "dx": {
-   "duplicate_delivery": {
-    "status": "pass"
-   },
-   "out_of_order": {
-    "status": "pass"
-   },
-   "edit": {
-    "status": "n/a",
-    "reason": "大象 has no message edits (no edit API or event in dx-engine)"
-   },
-   "recall": {
-    "status": "xfail",
-    "owner": "adapter",
-    "cause": "the adapter drops a recalled message (`lib/channels/dx/adapter.py:473` live, `lib/channels/dx/adapter.py:502` history: isCancel returns None) instead of reporting a recall event, so the recorded text stays; the core records recalls (`lib/channels/store.py:288`)"
-   },
-   "auth_expiry": {
-    "status": "pass"
-   },
-   "displaced_stays_down": {
-    "status": "pass"
-   },
-   "rate_limited": {
-    "status": "n/a",
-    "reason": "大象 documents no rate limit for the owner's own session; the robot's shared 5/s limit falls back to the owner at once (C6, test_dx_robot_shared.py)"
-   },
-   "partial_history_failure": {
-    "status": "pass"
-   },
-   "degraded_is_typed": {
-    "status": "xfail",
-    "owner": "adapter",
-    "cause": "a failed catch-up is reported as connected with free-text detail (`lib/channels/dx/adapter.py:1004`), invisible to the Watchdog"
-   },
-   "runtime_fault_is_typed": {
-    "status": "pass"
-   },
-   "network_fault_is_typed": {
-    "status": "pass"
-   },
-   "restart_mid_send": {
-    "status": "pass"
-   },
-   "reconciliation_read_failure": {
-    "status": "pass"
-   },
-   "stalled_thread_isolation": {
-    "status": "pass"
-   },
-   "accepted_confirmation": {
-    "status": "pass"
-   },
-   "unknown_keeps_its_identity": {
-    "status": "pass"
-   },
-   "unknown_reconciliation": {
-    "status": "pass"
-   },
-   "attachment_degradation": {
-    "status": "n/a",
-    "reason": "大象 carries the files natively (x-dxAttachments)"
-   },
-   "echo_loop": {
-    "status": "pass"
-   },
-   "other_bots": {
-    "status": "pass"
-   },
-   "self_send_outside_outbox": {
-    "status": "pass"
-   },
-   "quote_own_send": {
-    "status": "pass"
-   },
-   "quote_owner_message": {
-    "status": "pass"
-   },
-   "quote_beyond_records": {
-    "status": "pass"
-   },
-   "quote_from_another_person": {
-    "status": "pass"
-   },
-   "quote_recalled": {
-    "status": "xfail",
-    "owner": "adapter",
-    "cause": "the adapter drops a recalled message (`lib/channels/dx/adapter.py:473` live, `lib/channels/dx/adapter.py:502` history: isCancel returns None) instead of reporting a recall event, so the core's record keeps the text and a quote embedded before the recall shows it; the core hides a recalled record (`lib/channels/quotes.py:173`) and a copy the platform marks recalled"
-   },
-   "quote_lookup_failure": {
-    "status": "pass"
-   }
-  },
   "github": {
    "duplicate_delivery": {
     "status": "pass"
@@ -306,7 +214,7 @@
    "edit": {
     "status": "xfail",
     "owner": "adapter",
-    "cause": "an edited comment keeps its event ID (`lib/channels/github/normalize.py:126`, from created_at) and reaches the core as a new message, which ingress drops as a duplicate (`lib/channels/ingress.py:163`); the core records edit events as revisions (`lib/channels/store.py:288`), so the adapter must report one"
+    "cause": "an edited comment keeps its event ID (`lib/channels/github/normalize.py:126`, from created_at) and reaches the core as a new message, which ingress drops as a duplicate (`lib/channels/ingress.py:165`); the core records edit events as revisions (`lib/channels/store.py:288`), so the adapter must report one"
    },
    "recall": {
     "status": "n/a",
@@ -368,12 +276,12 @@
    "other_bots": {
     "status": "xfail",
     "owner": "adapter",
-    "cause": "the adapter drops GitHub's user type Bot (`lib/channels/github/normalize.py:84`), so the comment reaches the core with sender kind user and is a candidate in watch threads; the core keeps a bot's message to context (`lib/channels/policy.py:87`)"
+    "cause": "the adapter drops GitHub's user type Bot (`lib/channels/github/normalize.py:84`), so the comment reaches the core with sender kind user and is a candidate in watch threads; the core keeps a bot's message to context (`lib/channels/policy.py:88`)"
    },
    "self_send_outside_outbox": {
     "status": "xfail",
     "owner": "adapter",
-    "cause": "the marker pattern accepts only outbox item IDs (`lib/channels/github/normalize.py:29`), so a comment carrying another Tofu marker reaches the core without it and the owner's comment in a watched thread becomes a candidate (`lib/channels/policy.py:100`); the core treats any other marker value as an echo (x-selfEcho origin_marker)"
+    "cause": "the marker pattern accepts only outbox item IDs (`lib/channels/github/normalize.py:29`), so a comment carrying another Tofu marker reaches the core without it and the owner's comment in a watched thread becomes a candidate (`lib/channels/policy.py:101`); the core treats any other marker value as an echo (x-selfEcho origin_marker)"
    },
    "quote_own_send": {
     "status": "n/a",

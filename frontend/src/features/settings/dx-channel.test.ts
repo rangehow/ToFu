@@ -24,6 +24,8 @@ function account(overrides: Partial<ChannelAccountView> = {}): ChannelAccountVie
     channel: 'dx', enabled: true, loginMis: 'owner', identity: { uid: '1001', mis: 'owner', name: 'Owner' },
     commandChat: 'dx:gid:900', commandChatCandidate: null, skillInstalled: true, routerConversationId: 'router-conv',
     robot: null,
+    robotSetupConsoles: [{ host: 'apps.example.test', url: 'https://apps.example.test/apply' },
+                         { host: 'office.example.test', url: 'https://office.example.test/home' }],
     assistantNote: '', status: CONNECTED, ...overrides,
   };
 }
@@ -739,8 +741,8 @@ describe('大象 notification robot card', () => {
     expect(steps.open).toBe(true);
     expect(steps.querySelectorAll('.dx-robot-steps li')).toHaveLength(4);
     expect([...steps.querySelectorAll<HTMLAnchorElement>('a')].map((link) => [link.href, link.target, link.rel]))
-      .toEqual([['https://open.internal.example.com/developer/app/apply', '_blank', 'noopener noreferrer'],
-                ['https://xopen.internal.example.com/home', '_blank', 'noopener noreferrer']]);
+      .toEqual([['https://apps.example.test/apply', '_blank', 'noopener noreferrer'],
+                ['https://office.example.test/home', '_blank', 'noopener noreferrer']]);
     expect(steps.textContent).toContain('settings.dx.robot.stepsSource');
   });
 

@@ -640,7 +640,7 @@ class _ChatuiAuthSourceProvider(tofu_search.AuthSourceProvider):
 
 
 # ═══════════════════════════════════════════════════════
-#  Reader tier — km.internal.example.com doc URLs reroute to xuecheng-mcp
+#  Reader tier — connector-owned document URLs read under the user's identity
 # ═══════════════════════════════════════════════════════
 
 # Soft floor: on tofu-search versions without the reader tier the base class
@@ -649,58 +649,73 @@ class _ChatuiAuthSourceProvider(tofu_search.AuthSourceProvider):
 _SiteReaderBase = getattr(tofu_search, 'SiteReader', object)
 
 
-class _ChatuiKmDocReader(_SiteReaderBase):
-    """Reroute 学城 (km.internal.example.com) doc URLs through the xuecheng MCP server.
+def _document_reader_for(url):
+    """``(catalog entry, its document_reader)`` whose hosts/path own ``url``, else None."""
+    try:
+        parts = urlparse(str(url))
+    except Exception as exc:
+        logger.debug('mcp-doc url parse failed: %s', type(exc).__name__)
+        return None
+    host = parts.netloc.lower().split('@')[-1].split(':')[0]
+    from lib.mcp.registry import get_catalog
+    for entry in get_catalog():
+        reader = entry.get('document_reader')
+        if (isinstance(reader, dict) and host in (reader.get('hosts') or ())
+                and re.match(reader.get('path_pattern') or r'(?!)', parts.path)):
+            return entry, reader
+    return None
 
-    An anonymous fetch of a KM doc URL only ever returns the SSO login wall
-    (~80K chars of JS/config noise) — which poisoned fetch_url results. The
-    xuecheng-mcp server reads the same URL under the user's identity. As a
-    tofu-search READER this runs before the anonymous pipeline, so BOTH
-    direct fetch_url and web_search result-fetching transparently return
+
+class _ChatuiMcpDocumentReader(_SiteReaderBase):
+    """Read connector-owned document URLs through that connector's MCP tool.
+
+    A catalog entry's ``document_reader`` names the hosts and path shape of
+    documents an anonymous fetch can only see as an SSO login wall (for
+    example 学城 in the YourProvider overlay, ~80K chars of JS/config noise that
+    poisoned fetch_url results). The connector reads the same URL under the
+    user's identity. As a tofu-search READER this runs before the anonymous
+    pipeline, so both direct fetch_url and web_search result-fetching return
     the real document instead of the wall.
     """
 
-    name = 'km-doc'
-    _TOOL = 'mcp__xuecheng__read_doc'
-    _PATH_RE = re.compile(r'^/(?:collabpage|collaborate|page|docs?|xtable)/\d+')
+    name = 'mcp-doc'
 
     def matches(self, url):
-        try:
-            parts = urlparse(str(url))
-        except Exception as exc:
-            logger.debug('km-doc url parse failed: %s', type(exc).__name__)
-            return False
-        host = parts.netloc.lower().split('@')[-1].split(':')[0]
-        return host == 'km.internal.example.com' and bool(self._PATH_RE.match(parts.path))
+        return _document_reader_for(url) is not None
 
     def read(self, url, *, max_chars=None, timeout=15):
+        found = _document_reader_for(url)
+        if found is None:
+            return None
+        entry, reader = found
+        server_id, tool, label = entry['id'], reader['tool'], reader.get('label') or entry['name']
         try:
             from lib.mcp import get_bridge
             owner_user_id = _bind_browser_identity()[0]
             bridge = get_bridge(owner_user_id)
         except Exception as e:
-            logger.debug('[KMReader] MCP bridge unavailable: %s', e)
+            logger.debug('[McpDocReader] MCP bridge unavailable: %s', e)
             return None
-        args = {'doc': url}
-        if max_chars:
-            args['max_chars'] = int(max_chars)
+        args = {reader['url_argument']: url}
+        if max_chars and reader.get('max_chars_argument'):
+            args[reader['max_chars_argument']] = int(max_chars)
         try:
             text = bridge.call_tool(
-                self._TOOL, args,
-                timeout_override=max(int(timeout or 15), 30))
+                f'mcp__{server_id}__{tool}', args,
+                timeout_override=max(int(timeout or 15), int(reader.get('min_timeout_s') or 0)))
         except ValueError as e:
             # Server unconfigured / tool disabled — legacy anonymous path.
-            logger.debug('[KMReader] %s', e)
+            logger.debug('[McpDocReader] %s', e)
             return None
         except Exception as e:
             # Matched but the reroute failed: an anonymous retry only yields
             # the login wall, so surface the failure instead of falling through.
-            logger.info('[KMReader] read_doc reroute failed for %s: %s',
-                        url_for_log(url), text_for_log(e))
-            return (f'[学城文档自动读取失败] {e} '
-                    f'可改用 xuecheng 的 read_doc 工具重试。原始链接: {url}')
+            logger.info('[McpDocReader] %s reroute failed for %s: %s',
+                        tool, url_for_log(url), text_for_log(e))
+            return (f'[{label}文档自动读取失败] {e} '
+                    f'可改用 {server_id} 的 {tool} 工具重试。原始链接: {url}')
         if not text:
-            return (f'[学城文档] xuecheng read_doc 未返回内容'
+            return (f'[{label}文档] {server_id} {tool} 未返回内容'
                     f'（文档可能为空）。原始链接: {url}')
         return text
 
@@ -974,10 +989,11 @@ def install_search_bridge():
         if hasattr(tofu_search, 'register_site_search_provider'):
             tofu_search.register_site_search_provider(_ChatuiSiteSearchProvider())
         tofu_search.register_auth_source_provider(_ChatuiAuthSourceProvider())
-        # Reader tier: km.internal.example.com doc URLs reroute to the xuecheng MCP
-        # server (user-identity read) instead of the anonymous login wall.
+        # Reader tier: connector-owned document URLs (catalog document_reader)
+        # are read through that MCP server under the user's identity instead
+        # of the anonymous login wall.
         if hasattr(tofu_search, 'register_reader'):
-            tofu_search.register_reader(_ChatuiKmDocReader())
+            tofu_search.register_reader(_ChatuiMcpDocumentReader())
             tofu_search.register_reader(_ChatuiConnectorDocReader())
         # tofu-search >=0.7.1: doctor-pinned selector knowledge + the drift
         # signal that feeds the autofix loop (lib/site_doctor/). Older

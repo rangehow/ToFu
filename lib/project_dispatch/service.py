@@ -336,6 +336,9 @@ class ProjectDispatchService:
         if request.get('delegation'):
             from .delegation import worker_input
             content = worker_input(self.repository, request)
+        if request.get('profile', {}).get('mode') == 'coordinator':
+            from lib.conversations.coordinator_continuation import continuation_context
+            content += continuation_context(self.repository, assignment)
         from .acceptance import worker_section
         content += worker_section(request.get('acceptance'))
         projection = stamp_initiator({

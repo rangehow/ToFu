@@ -180,6 +180,17 @@ _RUNTIME_OWNED_TASK_FIELDS = frozenset({
 from lib.agent_core import task_abort_signal
 
 
+def cleanup_stale_task_runtimes() -> int:
+    """Expire terminal records of every runtime past that runtime's own TTL.
+
+    Each runtime declares its retention TTL, but only the chat runtime had a
+    periodic sweep; the others released finished tasks (results included)
+    only by capacity eviction on a later ``create``.
+    """
+    return sum(runtime.cleanup_stale()
+               for runtime in task_abort_signal.registered_runtimes())
+
+
 def _terminal_reclaimable(task: dict) -> bool:
     """Only settled carriers with no entered callback or durability debt expire.
 

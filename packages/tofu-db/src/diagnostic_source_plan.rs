@@ -91,6 +91,7 @@ pub(super) fn token(
     hasher.finalize().to_hex().to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn remember(
     tx: &AuthorityTransaction,
     conversation_id: &str,
@@ -123,6 +124,7 @@ pub(super) fn remember(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn chunk(
     database: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,
@@ -151,7 +153,12 @@ pub(super) fn chunk(
                 return Ok(None);
             };
             let current = super::structural_source(
-                database, tx, &request.conversation_id, stored_turn, deadline_elapsed)?;
+                database,
+                tx,
+                &request.conversation_id,
+                stored_turn,
+                deadline_elapsed,
+            )?;
             if current.as_ref() != Some(expected) {
                 return Ok(None);
             }

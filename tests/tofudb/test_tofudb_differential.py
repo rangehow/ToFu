@@ -4149,8 +4149,9 @@ def _log_aggregate_scripts() -> dict[str, list[Step]]:
             # LIKE metacharacters must match literally on both sides.
             Step('log_aggregate.query', {'q': '100%_\\'}),
             Step('log_aggregate.query', {'q': 'α'}),
-            # The legacy SQLite build links ICU: LIKE folds per code point
-            # with Unicode simple case folding, so 'Α' matches 'α' here.
+            # Both authorities fold per code point with ICU simple case
+            # folding (SQLite through tofu_simple_fold, independent of an
+            # ICU-built libsqlite3), so 'Α' matches 'α' here.
             Step('log_aggregate.query', {'q': 'Α'}),
             Step('log_aggregate.flush', {
                 'rows': [

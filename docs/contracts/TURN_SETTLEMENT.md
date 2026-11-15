@@ -720,13 +720,15 @@ the lease), is settled by durable worker recovery
 `server_restart`, abort reason `restart_recovery` when a serving process
 records it (`server_shutdown` only while the recovering process stops). A
 storage outage alone never settles a Turn failed. Its
-error names only the calls whose side effect is unknown: a `reconcile` call
-whose committed `entered`/`unknown` intent has no recorded result
-(`code: worker_effect_outcome_unknown`, `unknownEffects: [{toolName,
-toolCallId, operationId}]`, manual retry policy). A Turn without such a call
-carries no error and settles like the graceful quiesce: read-only and
-idempotent calls are safe to repeat, and a call without a committed intent
-never entered its handler. No automated owner continues a Turn that names
+error names only the calls whose side effect is unknown: a call whose
+committed `entered`/`unknown` intent has no recorded result and whose effect
+class is `unknown` (`code: worker_effect_outcome_unknown`, `unknownEffects:
+[{toolName, toolCallId, operationId}]`, `cutCalls` with every cut call's
+`effectClass` and `decision`, manual retry policy). A Turn without such a call
+carries no error and settles like the graceful quiesce: read-only, idempotent
+and verifiable calls resume ([Run continuity](../RUN_CONTINUITY.md), "A
+restart-cut call is classified by its declared effect"), and a call without a
+committed intent never entered its handler. No automated owner continues a Turn that names
 unknown effects (`restart_resume.unknown_effects_to_review`): the restart
 resume pass leaves it for the owner, Worker recovery logs
 `restart_paused_turn_effect_unknown` and leaves it for its Coordinator's
@@ -982,10 +984,11 @@ Recovery is explicit. Each entry has an `operation` and a durable `anchor`.
   `checkpoint_resume` with nothing retained would rewrite the projection for
   the same request; `continue` with the cut call amputated from the replay
   repeats its effect, since the model never learns the call was issued.
-  Native `turn.recover` (`restart_settlement` in `turn.rs`) keeps the
-  earlier rule: it never settles a `conversation-attempt:` binding, and its
-  settlement size is pinned in each persisted execution-frame witness
-  (`recovery_bytes`), so changing it needs a witness version. Specs:
+  Native `turn.recover` (`restart_settlement` in `turn.rs`) applies the same
+  rule (it never settles a `conversation-attempt:` binding); its settlement
+  size is pinned in each persisted execution-frame witness
+  (`recovery_bytes`), so the rule change advanced the witness to v4
+  (`docs/TOFUDB_EXECUTION_FRAMES.md`, "Unproduced restart resume"). Specs:
   `tests/turn_lifecycle/test_turn_lifecycle.py::test_a_restart_interruption_that_produced_nothing_offers_continue`,
   `tests/conversation/test_restart_resume.py::test_a_restart_interruption_that_produced_nothing_resumes_from_its_input`,
   `tests/turn_lifecycle/test_turn_lifecycle.py::test_a_restart_interruption_holding_a_cut_call_keeps_its_held_options`,

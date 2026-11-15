@@ -316,7 +316,7 @@ independent async queue (reorders replies and can retry different bytes).
   `scripts/tofu/dx-tofu.sh` with `DX_TOFU_OWNER=tofu:<owner>`. SSO tickets
   exist only in the launcher child's environment; the parent passes no ambient
   secrets and nothing enters model context, Tofu storage or argv.
-- **Launcher Node** (`lib/channels/dx/runtime.py`): the bridge and its SSO
+- **Launcher Node** (`bundles/yourprovider/tofu_yourprovider/dx/runtime.py`): the bridge and its SSO
   step run exactly one Node, named by one durable setting: `TOFU_NODE` in the
   project `.env`, which every server start loads into its environment (else an
   explicit server-environment `MTSSO_NODE_EXECUTABLE`, else the SSO adapter's
@@ -348,7 +348,7 @@ independent async queue (reorders replies and can retry different bytes).
   state with its own ownership rules, while the verifying parent already
   launches every child); editing the owner's skill launcher (overwritten by
   skill updates).
-- **Login MIS** (`lib/channels/dx/login.py`): the account logs in as the MIS
+- **Login MIS** (`bundles/yourprovider/tofu_yourprovider/dx/login.py`): the account logs in as the MIS
   the owner entered in Settings, else its bound identity's, else the host's
   shared SSO session account. That MIS selects the launcher child's SSO
   session: the host's shared DataFE session when it belongs to that MIS,
@@ -385,7 +385,7 @@ independent async queue (reorders replies and can retry different bytes).
   processes and restarts would not see it); a flag consumed by the next launch
   (lost with the process that holds it; the stored request time needs no
   consumption and survives a restart).
-- **Bridge** (`lib/channels/dx/bridge.mjs`, spawned from `PinnedHelperSource`):
+- **Bridge** (`bundles/yourprovider/tofu_yourprovider/dx/bridge.mjs`, spawned from `PinnedHelperSource`):
   one Node process per account. It logs in with the engine's own
   `DxWebSdkRuntime`, attaches persistent handlers for `IM_message`,
   `PUB_MESSAGE`, `KickOff`, `KickOffWithSameDeviceId` and `ConnStatusChange`,
@@ -484,7 +484,7 @@ independent async queue (reorders replies and can retry different bytes).
   browser, another server) still displaces the session, which then stays
   `kicked`, also across a restart, until the owner reconnects once (Settings →
   重新连接, `PUT /api/v4/channels/dx {"enabled": true}`).
-- **Adapter** (`lib/channels/dx/adapter.py`): normalization of live pushes and
+- **Adapter** (`bundles/yourprovider/tofu_yourprovider/dx/adapter.py`): normalization of live pushes and
   history rows (server time from the snowflake ID), reconnect catch-up,
   sequential ingest, and the outbox sender port. Provider limits are named in
   the contract (`dxHistoryPageLimit` 100, `dxSessionListLimit` 500; a full
@@ -503,7 +503,7 @@ independent async queue (reorders replies and can retry different bytes).
   following it re-reads the same page). The next cursor is the page's smallest
   message ID, as in the skill's own exporter; `-1` or a page without unseen IDs
   ends the walk.
-- **Supervisor** (`lib/channels/dx/supervisor.py`): runs where the
+- **Supervisor** (`bundles/yourprovider/tofu_yourprovider/dx/supervisor.py`): runs where the
   scheduled-jobs capability runs, from the scheduler's existing 30 s tick
   (`lib/scheduler/manager.py`) and immediately after a configuration change in
   a hosting process. It starts a session for an enabled account (after
@@ -562,7 +562,7 @@ independent async queue (reorders replies and can retry different bytes).
   in the outbox, and nothing in the state said how to leave it. *Decision:*
   each tick, an enabled account in `needs_login` asks the SSO adapter's
   `session_status` for its login MIS (`login_ready`,
-  `lib/channels/dx/login.py`) on its own thread, one recheck per owner at a
+  `bundles/yourprovider/tofu_yourprovider/dx/login.py`) on its own thread, one recheck per owner at a
   time. Only `ready` counts: it comes from the acquisition path the launcher
   runs, without its approval step, so the relaunch reuses that session and
   requests nothing. The account then moves to `starting` under an atomic
@@ -674,8 +674,8 @@ independent async queue (reorders replies and can retry different bytes).
   other server's past); copying state between servers (no shared store; a
   second authority); a server registry (the servers never talk to each
   other).
-- **Notification robot** (`lib/channels/dx/robot.py`, facts in the contract's
-  `x-dxRobot` and `x-providerLimits`). **Problem:** the outbox posted as the
+- **Notification robot** (`bundles/yourprovider/tofu_yourprovider/dx/robot.py`, facts in the overlay's `tofu_yourprovider/dx/facts.json`
+  `x-dxRobot` and the contract's `x-providerLimits`). **Problem:** the outbox posted as the
   owner, and 大象 never notifies anyone of their own messages, so receipts
   and answers in the command chat arrived silently. **Decision:** an optional
   open-platform robot posts the outbox items of a *group* command chat; inbound
@@ -736,8 +736,8 @@ independent async queue (reorders replies and can retry different bytes).
   **Built-in robot (Internal edition).** Owner decision 2026-11-08: the
   team's robot application travels with the Internal edition, so an Internal
   install posts through it with nothing configured. An Internal export writes
-  `{clientId, secret}` to the contract's `x-dxRobot.builtinCredentialFile`
-  (`lib/channels/dx/robot_builtin.json`) from the export host's owner-only
+  `{clientId, secret}` to the overlay facts' `x-dxRobot.builtinCredentialFile`
+  (`bundles/yourprovider/tofu_yourprovider/dx/robot_builtin.json`) from the export host's owner-only
   (0600) `data/config/dx_robot_builtin.json` and commits it to every Internal
   target alike (the company Dev platform and the private GitHub copy, which
   is admitted only while private). This repository ignores that path and
@@ -1850,7 +1850,7 @@ it (C13).
 - `lib/channels/autoreply.py` — router answer → command-chat thread.
 - `lib/channels/assistant.py` — Turn authority, the review ceiling and scope, approval codes,
   draft notices and owner notes (C11); `lib.router.policy.router_tool_ceiling` asks it.
-- `lib/channels/dx/` — `bridge.mjs`, `adapter.py` (normalization, catch-up, sender port,
+- `bundles/yourprovider/tofu_yourprovider/dx/` — `bridge.mjs`, `adapter.py` (normalization, catch-up, sender port,
   media port `download_media`), `login.py`, `supervisor.py`, `probe.py`,
   `robot.py` (notification robot: token, posts, configuration).
 - `lib/channels/github/` — `client.py` (REST transport, conditional requests,
@@ -1971,7 +1971,7 @@ decks of this and other conversations, and final-answer
 scope. The
 live probe is read-only (`whoami`, `sessions`,
 `history`, a persistent listen; counts only):
-`TOFU_DATA_DIR=<data> python -m lib.channels.dx.probe --owner 1 --listen-seconds 45`.
+`TOFU_DATA_DIR=<data> python -m tofu_yourprovider.dx.probe --owner 1 --listen-seconds 45`.
 Media (C9): `tests/channels/test_dx_media.py` covers every type's text, media
 facts and name sanitizing from SDK packets and compacted history rows, ingress
 with a fake media port (image, file, voice with and without speech

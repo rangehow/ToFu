@@ -48,6 +48,9 @@ an undocumented second source of product policy.
   Cannot merge` with no visible diff is stale index stat data (tool-run git
   uses `--no-optional-locks`): run `git update-index -q --refresh` and retry;
   never reset.
+- `check_static_gates.py` lints changed files (pinned ruff; Tofu-DB rustfmt and
+  clippy) and `test_select.py --run` applies it first; verify
+  `tests/meta/test_check_static_gates.py` ("Lint gates" in TESTING_STRATEGY).
 - `test_select.py` owns static dependency and guard selection;
   `test_execution.py` owns pytest execution arguments. Makefile is a dependency
   of its consumers, not a global input to direct pytest. Verify selection and

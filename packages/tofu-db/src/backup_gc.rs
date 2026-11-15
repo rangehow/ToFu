@@ -609,7 +609,7 @@ mod tests {
             let mut state = seed;
             let mut inserted = Vec::with_capacity(inserts);
             for _ in 0..inserts {
-                let block_id = if !inserted.is_empty() && splitmix64(&mut state) % 4 == 0 {
+                let block_id = if !inserted.is_empty() && splitmix64(&mut state).is_multiple_of(4) {
                     inserted[(splitmix64(&mut state) % inserted.len() as u64) as usize]
                 } else {
                     let mut id = [0_u8; 32];
@@ -865,9 +865,8 @@ mod tests {
             for live in &mut expected {
                 live.sort_unstable();
             }
-            (0..=u8::MAX).all(|shard| {
-                marks.live_for_shard(shard).unwrap() == expected[usize::from(shard)]
-            })
+            (0..=u8::MAX)
+                .all(|shard| marks.live_for_shard(shard).unwrap() == expected[usize::from(shard)])
         };
         // `recorded` marks fill the runs before the faulted one, which holds
         // the 1,000 marks `finish` flushes.
@@ -1270,7 +1269,7 @@ mod tests {
             let mut state = seed;
             let mut inserted = Vec::with_capacity(inserts);
             for _ in 0..inserts {
-                let block_id = if !inserted.is_empty() && splitmix64(&mut state) % 4 == 0 {
+                let block_id = if !inserted.is_empty() && splitmix64(&mut state).is_multiple_of(4) {
                     inserted[(splitmix64(&mut state) % inserted.len() as u64) as usize]
                 } else {
                     random_id(&mut state)

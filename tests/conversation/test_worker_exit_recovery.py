@@ -193,7 +193,24 @@ _INTERRUPTED_CALLS = {
     # Its intent committed before the handler ran and no result followed.
     'cut_off': ({'toolName': 'run_command', 'toolCallId': 'call-write', 'status': 'running',
                  'executionEffect': {'state': 'entered', 'recovery': 'reconcile'}}, True),
+    # 2026-11-15: a git ls-remote a restart cut off only read; it resumes by itself.
+    'read_only_command': ({'toolName': 'run_command', 'toolCallId': 'call-remote', 'status': 'running',
+                           'toolArgs': '{"command": "git ls-remote origin"}',
+                           'executionEffect': {'state': 'entered', 'recovery': 'reconcile'}}, False),
+    # A test run inside the Worker's own worktree: the resumed Worker re-checks its state.
+    'verifiable_command': ({'toolName': 'run_command', 'toolCallId': 'call-test', 'status': 'running',
+                            'toolArgs': '{"command": "python3 -m pytest -q tests/a.py"}',
+                            'executionEffect': {'state': 'entered', 'recovery': 'reconcile'}}, False),
+    # The same Worker pushing: a remote write of unknown outcome waits for its Coordinator.
+    'remote_write': ({'toolName': 'run_command', 'toolCallId': 'call-write', 'status': 'running',
+                      'toolArgs': '{"command": "git push origin HEAD"}',
+                      'executionEffect': {'state': 'entered', 'recovery': 'reconcile'}}, True),
 }
+
+
+def _in_worker_worktree(monkeypatch):
+    from lib.conversation_sync import worker_recovery
+    monkeypatch.setattr(worker_recovery, '_isolated_worktree', lambda attempt: '/worktrees/worker')
 
 
 @pytest.mark.parametrize('shape', sorted(_INTERRUPTED_CALLS))
@@ -211,8 +228,9 @@ def test_a_dead_worker_needs_review_only_for_a_call_cut_off_mid_effect(
     context, pair, factory, owner = claimed
     process, witness = process_witness
     enter(claimed, witness)
+    _in_worker_worktree(monkeypatch)
     row, review = deepcopy(_INTERRUPTED_CALLS[shape])
-    row.update(roundNum=2, llmRound=1, toolArgs='{}')
+    row.update(roundNum=2, llmRound=1, toolArgs=row.get('toolArgs', '{}'))
     if 'executionEffect' in row:
         row['executionEffect'].update(operationId=uuid.uuid4().hex, scope='attempt')
     # The Worker's earlier answered round, so its checkpoint has work to resume from.
@@ -244,11 +262,22 @@ def test_a_dead_worker_needs_review_only_for_a_call_cut_off_mid_effect(
             'worker_effect_outcome_unknown', {'mode': 'manual', 'automatic': False})
         assert error['unknownEffects'] == [{'toolName': 'run_command', 'toolCallId': 'call-write',
                                             'operationId': row['executionEffect']['operationId']}]
+        assert [(item['effectClass'], item['decision']) for item in error['cutCalls']] == [
+            ('unknown', 'needs_decision')]
         assert 'run_command call-write' in error['message']
         assert unknown_effects_to_review(turn) == error['unknownEffects']
     else:
         assert error is None, error
         assert unknown_effects_to_review(turn) == []
+    # The boot decision is recorded with the exit receipt, one entry per cut call.
+    result = factory().query('task_results.replay_get', {
+        'key': context.claim.task_id, 'user_id': owner, 'include_metadata': True})
+    expected = {'read_only': 'read_only', 'idempotent': 'idempotent', 'read_only_command': 'read_only',
+                'verifiable_command': 'verifiable', 'cut_off': 'unknown', 'remote_write': 'unknown'}
+    assert [(item['toolCallId'], item['effectClass'], item['decision'])
+            for item in result['metadata'].get('restartCutCalls') or ()] == (
+        [(row['toolCallId'], expected[shape], 'needs_decision' if review else 'resume')]
+        if shape in expected else [])
     assert drained == ['restart_recovery']
 
 
@@ -267,8 +296,9 @@ def test_a_dead_worker_whose_first_call_was_cut_keeps_it_held(
     context, pair, factory, owner = claimed
     process, witness = process_witness
     enter(claimed, witness)
+    _in_worker_worktree(monkeypatch)
     row, review = deepcopy(_INTERRUPTED_CALLS[shape])
-    row.update(roundNum=1, llmRound=0, toolArgs='{}')
+    row.update(roundNum=1, llmRound=0, toolArgs=row.get('toolArgs', '{}'))
     if 'executionEffect' in row:
         row['executionEffect'].update(operationId=uuid.uuid4().hex, scope='attempt')
     carrier = {'id': context.claim.task_id, 'convId': pair['turn']['conversationId'],
@@ -523,6 +553,25 @@ def _renewing(store, context):
         raise failures[0]
 
 
+def _join_event_delivery(task_id):
+    """Wait out the stopped claim's in-flight event publication, never re-running it.
+
+    A publication locks its job row under the claim fence and ``claim_next``
+    skips locked rows, so a takeover claimed while that commit runs finds no
+    job. The runner's claim loop just claims on its next pass; a single test
+    claim must first join the run. A failed run ends the wait too.
+    """
+    from lib.tasks_pkg.event_delivery import EventDeliveryError, coordinator
+    from lib.tasks_pkg.manager.runtime import chat_task_runtime
+    lane = chat_task_runtime.get(task_id).get('_eventDeliveryLane')
+    if lane is None:
+        return
+    try:
+        coordinator().flush(lane, timeout=None, recover=False)
+    except EventDeliveryError:
+        pass
+
+
 def _superseded_carrier_retired(original):
     """The takeover fences the replaced claim and retires its carrier."""
     from lib.tasks_pkg.manager.runtime import chat_task_runtime
@@ -634,6 +683,7 @@ def test_takeover_names_the_lost_lease_of_a_joined_worker(claimed, monkeypatch, 
     else:
         # The runner marks the stopped claim and releases its job for takeover.
         context.mark_authority_lost()
+        _join_event_delivery(context.claim.task_id)
         assert store.defer(context.claim, now_ms=wall_ms(),
             outcome=WorkerJobSuspension(available_at_ms=wall_ms()),
             observed_cancel_sequence=context.claim.cancel_sequence)['ok'] is True

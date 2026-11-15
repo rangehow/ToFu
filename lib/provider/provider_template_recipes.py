@@ -242,13 +242,8 @@ def load_provider_templates() -> list[dict]:
         Path(__file__).parents[1] / 'model_info' / 'data',
         Path(__file__).parents[2] / 'static' / 'provider_templates',
     ]
-    bundles_root = Path(__file__).parents[2] / 'bundles'
-    if bundles_root.is_dir():
-        template_directories.extend(
-            bundle / 'provider_templates'
-            for bundle in sorted(bundles_root.iterdir())
-            if bundle.is_dir() and (bundle / 'provider_templates').is_dir()
-        )
+    from tofu_extensions import bundle_directories
+    template_directories.extend(bundle_directories('provider_templates'))
     from lib.config_dir import config_path
     template_directories.append(Path(config_path('provider_templates')))
     for layer_index, template_directory in enumerate(template_directories):

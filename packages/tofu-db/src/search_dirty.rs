@@ -232,18 +232,37 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let rings = Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = Arc::clone(&rings);
-        let invalidations = Arc::new(SearchInvalidations::new([(7, 12), (7, 11), (7, 11)],
-            move |index| recorded.lock().unwrap().push(index)));
+        let invalidations = Arc::new(SearchInvalidations::new(
+            [(7, 12), (7, 11), (7, 11)],
+            move |index| recorded.lock().unwrap().push(index),
+        ));
         database.attach_search_invalidations(&invalidations);
         let mut abandoned = database.begin(7, 11).unwrap();
-        mark(&database, &mut abandoned, TURN_SEARCH_DIRTY_NAMESPACE, "abandoned").unwrap();
+        mark(
+            &database,
+            &mut abandoned,
+            TURN_SEARCH_DIRTY_NAMESPACE,
+            "abandoned",
+        )
+        .unwrap();
         drop(abandoned);
         let mut plain = database.begin(7, 11).unwrap();
-        database.entity_put(&mut plain, EntityKey::new(7, 11, "record", b"plain").unwrap(),
-            b"value".to_vec()).unwrap();
+        database
+            .entity_put(
+                &mut plain,
+                EntityKey::new(7, 11, "record", b"plain").unwrap(),
+                b"value".to_vec(),
+            )
+            .unwrap();
         database.commit(plain).unwrap();
         let mut untracked = database.begin(7, 13).unwrap();
-        mark(&database, &mut untracked, TURN_SEARCH_DIRTY_NAMESPACE, "other").unwrap();
+        mark(
+            &database,
+            &mut untracked,
+            TURN_SEARCH_DIRTY_NAMESPACE,
+            "other",
+        )
+        .unwrap();
         database.commit(untracked).unwrap();
         assert!(rings.lock().unwrap().is_empty());
         assert_eq!(invalidations.committed(7, 13), None);
@@ -251,11 +270,32 @@ mod tests {
 
         let mut first = database.begin(7, 11).unwrap();
         let mut conflicting = database.begin(7, 11).unwrap();
-        mark(&database, &mut first, TURN_SEARCH_DIRTY_NAMESPACE, "conversation").unwrap();
-        mark(&database, &mut first, CONVERSATION_SEARCH_DIRTY_NAMESPACE, "conversation").unwrap();
-        mark(&database, &mut conflicting, TURN_SEARCH_DIRTY_NAMESPACE, "conversation").unwrap();
+        mark(
+            &database,
+            &mut first,
+            TURN_SEARCH_DIRTY_NAMESPACE,
+            "conversation",
+        )
+        .unwrap();
+        mark(
+            &database,
+            &mut first,
+            CONVERSATION_SEARCH_DIRTY_NAMESPACE,
+            "conversation",
+        )
+        .unwrap();
+        mark(
+            &database,
+            &mut conflicting,
+            TURN_SEARCH_DIRTY_NAMESPACE,
+            "conversation",
+        )
+        .unwrap();
         database.commit(first).unwrap();
-        assert!(database.commit(conflicting).is_err(), "stale marker read must not commit");
+        assert!(
+            database.commit(conflicting).is_err(),
+            "stale marker read must not commit"
+        );
         // (7, 11) sorts first; one ring per committed transaction.
         assert_eq!(*rings.lock().unwrap(), [0]);
         assert_eq!(invalidations.committed(7, 11), Some(1));
@@ -264,7 +304,10 @@ mod tests {
         invalidations.mark_consumed(7, 11, 1);
         assert!(!invalidations.pending(7, 11));
         invalidations.mark_consumed(7, 11, 0);
-        assert!(!invalidations.pending(7, 11), "a stale observation cannot reopen coverage");
+        assert!(
+            !invalidations.pending(7, 11),
+            "a stale observation cannot reopen coverage"
+        );
     }
 
     #[test]

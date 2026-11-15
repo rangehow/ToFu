@@ -18,11 +18,15 @@ import time
 import uuid
 
 from lib.durable_worker import WorkerDomainSettlementUnknown, WorkerProtocolError
+from lib.log import get_logger
 from lib.storage.generated_worker_job_contract import (
     WORKER_EXECUTION_CONFIG_KEY, WORKER_EXECUTION_EXIT_FORMAT,
     WORKER_EXECUTION_EXIT_KEY, WORKER_EXECUTION_EXIT_PROOFS,
     WORKER_EXECUTION_EXIT_SETTLEMENTS,
 )
+
+
+logger = get_logger(__name__)
 
 
 class WorkerExitReceiptRefused(RuntimeError):
@@ -56,29 +60,58 @@ def _receipt(attempt, proof, *, unknown=False):
 _UNCONFIRMED_EFFECT_STATES = frozenset({'entered', 'unknown'})
 
 
-def unknown_side_effects(turn, attempt):
-    """The interrupted Attempt's calls whose side effect may have happened unanswered.
+def _isolated_worktree(attempt):
+    """The Worker's own isolated worktree, or None for a task that has none.
+
+    A dispatched Worker's accepted config names its checkout (``projectPath``)
+    apart from the project root its grant binds; tool admission verified that
+    checkout against its registration whenever a call ran.
+    """
+    import os
+    from lib.project_dispatch.admission import KEY
+    config = attempt.get('config') if isinstance(attempt, Mapping) else None
+    binding = config.get(KEY) if isinstance(config, Mapping) else None
+    workspace = config.get('projectPath') if isinstance(config, Mapping) else None
+    root = binding.get('projectPath') if isinstance(binding, Mapping) else None
+    if not (isinstance(workspace, str) and workspace and isinstance(root, str) and root):
+        return None
+    workspace = os.path.realpath(os.path.expanduser(workspace))
+    return workspace if workspace != os.path.realpath(os.path.expanduser(root)) else None
+
+
+def classify_cut_calls(turn, attempt):
+    """The interrupted Attempt's calls a restart cut off, each with its effect class.
 
     A call that is not read-only commits its ``entered`` intent before its
     handler runs (docs/contracts/TOOL_EFFECT_RECOVERY.md), so a call without
     one never entered, and a recorded result is an outcome the model saw.
-    Read-only and idempotent calls are safe to repeat. Only a ``reconcile``
-    call still entered/unknown with no result needs review.
+    Every call still entered/unknown with no result is classified by its
+    declared effect (``lib.tools.restart_effect_class``): ``read_only``,
+    ``idempotent`` and ``verifiable`` calls resume from the checkpoint by
+    themselves (``decision: resume``); an ``unknown`` one waits for its owner
+    (``decision: needs_decision``).
     """
     from lib.tool_results.tool_round_replay import model_tool_content
+    from lib.tools.restart_effect_class import SAFE_CLASSES, cut_call_effect_class
     projection = turn.get('projection') if isinstance(turn, Mapping) else None
     rounds = projection.get('toolRounds') if isinstance(projection, Mapping) else None
-    found = []
+    worktree, found = None, []
     for row in rounds if isinstance(rounds, list) else ():
         effect = row.get('executionEffect') if isinstance(row, Mapping) else None
-        if (not isinstance(effect, Mapping) or effect.get('recovery') != 'reconcile'
-                or effect.get('state') not in _UNCONFIRMED_EFFECT_STATES
+        if (not isinstance(effect, Mapping) or effect.get('state') not in _UNCONFIRMED_EFFECT_STATES
                 or model_tool_content(row)
                 or (row.get('attemptId') or attempt['attemptId']) != attempt['attemptId']):
             continue
+        if worktree is None and effect.get('recovery') == 'reconcile':
+            worktree = _isolated_worktree(attempt) or ''
+        effect_class = cut_call_effect_class(
+            str(row.get('toolName') or ''), row.get('toolArgs'),
+            declared=str(effect.get('recovery') or 'reconcile'), worktree=worktree or None)
         found.append({'toolName': str(row.get('toolName') or ''),
                       'toolCallId': str(row.get('toolCallId') or ''),
-                      'operationId': str(effect.get('operationId') or '')})
+                      'operationId': str(effect.get('operationId') or ''),
+                      'effectClass': effect_class,
+                      'decision': 'resume' if effect_class in SAFE_CLASSES else 'needs_decision'})
     return found
 
 
@@ -114,7 +147,7 @@ def _result_record(context, attempt):
     return dict(value), dict(metadata), record['version']
 
 
-def _save_exit(context, attempt, turn, *, proof, unknown, known_terminal=False):
+def _save_exit(context, attempt, turn, *, proof, unknown, known_terminal=False, cut_calls=None):
     from lib.storage import get_storage_client
     from lib.storage.errors import StorageError, describe_storage_failure, is_transient_storage_error
     from lib.task_replay.task_result_checkpoint_contract import (
@@ -142,6 +175,8 @@ def _save_exit(context, attempt, turn, *, proof, unknown, known_terminal=False):
         if error is not None:
             value['error'] = json.dumps(error, ensure_ascii=False)
     metadata.update(attemptId=attempt['attemptId'], turnId=attempt['turnId'])
+    if cut_calls:
+        metadata['restartCutCalls'] = cut_calls
     metadata[WORKER_EXECUTION_EXIT_KEY] = _receipt(attempt, proof, unknown=unknown)
     value['metadata'] = json.dumps(metadata, ensure_ascii=False)
     # These fields requested cache-settings publication on the original
@@ -283,6 +318,7 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
                       and _value.get('status') in ('done', 'error', 'aborted', 'interrupted')
                       and metadata.get('attemptId') == attempt['attemptId']
                       and metadata.get('turnId') == attempt['turnId'])
+    cut_calls = None
     if attempt['status'] in ('pending', 'running'):
         from lib.error_envelope import make_envelope
         # Stopping the service ends every claim it ran: that is a restart, not
@@ -300,8 +336,16 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
         # Attempt; this receipt never authorizes replay.
         restarted = ((proof == 'process_dead' or stopped_by_shutdown or lease_lost)
                      and not context.cancellation_requested)
-        unknown_effects = (unknown_side_effects(turn, attempt)
-                           if restarted and not preparation_exited else None)
+        cut_calls = (classify_cut_calls(turn, attempt)
+                     if restarted and not preparation_exited else None)
+        unknown_effects = None if cut_calls is None else [
+            {key: item[key] for key in ('toolName', 'toolCallId', 'operationId')}
+            for item in cut_calls if item['decision'] == 'needs_decision']
+        if cut_calls:
+            # The decision record: which cut calls resume by themselves, which wait.
+            logger.info('[WorkerRecovery] attempt=%s restart cut calls: %s', attempt['attemptId'],
+                        ', '.join(f"{item['toolName']} {item['toolCallId']} {item['effectClass']}"
+                                  f"->{item['decision']}" for item in cut_calls))
         error = make_envelope('storage_fence' if lease_lost else 'internal',
             context='conversation-worker-recovery',
             source='conversation-worker', retryable=False,
@@ -333,10 +377,12 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
                       'writes) before continuing; Continue does not repeat it automatically / '
                       '继续前请先核对这些调用的实际效果；继续不会自动重做它们'),
                 extensions={'code': 'worker_effect_outcome_unknown', 'unknownEffects': unknown_effects,
+                            'cutCalls': cut_calls,
                             'retryPolicy': {'mode': 'manual', 'automatic': False}})
         elif unknown_effects is not None:
-            # Every call was answered, read-only/idempotent or never entered: the
-            # graceful shutdown quiesce settles exactly this, and it resumes by itself.
+            # Every call was answered, never entered, or cut off with a read-only,
+            # idempotent or verifiable effect: the graceful shutdown quiesce settles
+            # exactly this, and it resumes from its checkpoint by itself.
             error = None
         carrier = dict(turn.get('projection') or {})
         carrier.update(id=context.claim.task_id, convId=attempt['conversationId'],
@@ -369,7 +415,7 @@ def recover_exited_attempt(context, attempt, turn, *, task=None):
     # Fenced debt means a required terminal write never acknowledged.
     unknown = not known_terminal or proof == 'process_dead' or fenced_debt
     _save_exit(context, attempt, turn, proof=proof, unknown=unknown,
-               known_terminal=known_terminal)
+               known_terminal=known_terminal, cut_calls=cut_calls)
     if joined:
         task['_conversationWorkerExit'] = _receipt(attempt, proof, unknown=unknown)
     if claim_replaced:

@@ -5,6 +5,11 @@ Model- and harness-run Git never starts automatic maintenance
 (``lib/git_runtime.py``); this command replaces it. Entry point:
 ``python3 scripts/git_maintenance.py --repo CHECKOUT [--expire-days N] [--apply]``.
 
+The steps and the due rule live in ``lib/project_mod/git_object_maintenance.py``;
+the delivery receiver starts the same pass after a delivery commit when Git's
+own thresholds say it is due. ``--apply`` records each pass in
+``<git-common-dir>/tofu-maintenance.json`` for that rule.
+
 The default run only reports: object and pack counts, how many unreachable
 loose objects pruning would remove, and whether the commit-graph verifies.
 ``--apply`` waits for the repository's workspace Git metadata lease
@@ -32,117 +37,15 @@ at least one day. Decision record: docs/runbooks/GIT_WORKSPACE_GUARD.md
 from __future__ import annotations
 
 import argparse
-import re
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from lib.git_checkpoint_policy import git_policy_environment  # noqa: E402
-from lib.git_runtime import git_executable  # noqa: E402
-from lib.project_mod.workspace_lease import (  # noqa: E402
-    WorkspaceBusyError, workspace_git_metadata_lease, workspace_lease_fds,
+from lib.project_mod.git_object_maintenance import (  # noqa: E402
+    LEASE_BUSY_EXIT, MINIMUM_EXPIRE_DAYS, MaintenanceError, WorkspaceBusyError, _apply, _git,
+    _report, record_pass, workspace_git_metadata_lease,
 )
-
-MINIMUM_EXPIRE_DAYS = 1
-LEASE_BUSY_EXIT = 3
-_SPLIT_GRAPH_FILE = re.compile(r'commit-graph-chain|graph-[0-9a-f]{40,64}\.graph')
-
-
-class MaintenanceError(RuntimeError):
-    """A Git step failed; later steps did not run."""
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    process = subprocess.run(
-        [git_executable(), '-C', str(repo), *args], env=git_policy_environment(),
-        text=True, capture_output=True, check=False, pass_fds=workspace_lease_fds())
-    if process.returncode:
-        detail = (process.stderr or process.stdout).strip()[-2000:]
-        raise MaintenanceError(f'git {" ".join(args)} exited {process.returncode}: {detail}')
-    return process
-
-
-def _object_counts(repo: Path) -> dict[str, int]:
-    counts = {}
-    for line in _git(repo, 'count-objects', '-v').stdout.splitlines():
-        key, _, value = line.partition(':')
-        if value.strip().isdigit():
-            counts[key] = int(value)
-    return counts
-
-
-def _report_counts(label: str, counts: dict[str, int]) -> None:
-    print(f'{label}: loose={counts.get("count", 0)} '
-          f'loose_kib={counts.get("size", 0)} packs={counts.get("packs", 0)} '
-          f'pack_kib={counts.get("size-pack", 0)} garbage={counts.get("garbage", 0)}')
-
-
-def _shallow(repo: Path) -> bool:
-    return _git(repo, 'rev-parse', '--is-shallow-repository').stdout.strip() == 'true'
-
-
-def _remove_unused_commit_graph(common: Path) -> list[str]:
-    info = common / 'objects' / 'info'
-    split = info / 'commit-graphs'
-    files = [info / 'commit-graph']
-    if split.is_dir():
-        files += [path for path in split.iterdir() if _SPLIT_GRAPH_FILE.fullmatch(path.name)]
-    removed = []
-    for path in files:
-        if path.is_file():
-            path.unlink()
-            removed.append(str(path.relative_to(common)))
-    if split.is_dir() and not any(split.iterdir()):
-        split.rmdir()
-    return removed
-
-
-def _commit_graph_status(repo: Path) -> str:
-    try:
-        _git(repo, 'commit-graph', 'verify')
-    except MaintenanceError as error:
-        return 'invalid: ' + str(error).splitlines()[0][:300]
-    return 'valid'
-
-
-def _report(repo: Path, expiry: str) -> None:
-    _report_counts('objects', _object_counts(repo))
-    worktrees = _git(repo, 'worktree', 'list', '--porcelain').stdout.split('\n\n')
-    worktrees = [entry for entry in worktrees if entry.startswith('worktree ')]
-    missing = sum('\nprunable ' in entry for entry in worktrees)
-    print(f'worktrees: {len(worktrees)} (directory missing, still kept as roots: {missing})')
-    candidates = _git(repo, 'prune', '--dry-run', f'--expire={expiry}').stdout.split()
-    kinds = {}
-    for kind in candidates[1::2]:
-        kinds[kind] = kinds.get(kind, 0) + 1
-    print(f'prune --expire={expiry} would remove {len(candidates) // 2} loose objects {kinds}')
-    shallow = ' (shallow repository: --apply removes it, Git cannot use it)' if _shallow(repo) else ''
-    print(f'commit-graph: {_commit_graph_status(repo)}{shallow}')
-
-
-def _apply(repo: Path, common: Path, expiry: str, *, fsck: bool) -> None:
-    _report_counts('before', _object_counts(repo))
-    steps = [
-        ('pack-refs', ['pack-refs', '--all', '--prune']),
-        ('repack', ['repack', '-d', '-l', '-A', f'--unpack-unreachable={expiry}']),
-        ('prune', ['prune', f'--expire={expiry}']),
-        ('commit-graph', None if _shallow(repo) else ['commit-graph', 'write', '--reachable']),
-        ('verify', ['commit-graph', 'verify']),
-    ]
-    if fsck:
-        steps.append(('fsck', ['fsck', '--connectivity-only', '--no-dangling', '--no-progress']))
-    for name, arguments in steps:
-        started = time.monotonic()
-        if arguments is None:
-            removed = _remove_unused_commit_graph(common)
-            print(f'{name}: shallow repository, removed unused {removed or "nothing"}')
-            continue
-        _git(repo, *arguments)
-        print(f'{name}: ok in {time.monotonic() - started:.1f}s', flush=True)
-    _report_counts('after', _object_counts(repo))
 
 
 def _arguments(argv: list[str] | None) -> argparse.Namespace:
@@ -181,7 +84,9 @@ def main(argv: list[str] | None = None) -> int:
                                    'running; nothing changed')
         print(f'waiting for the Git metadata lease of {repo}', flush=True)
         with workspace_git_metadata_lease(str(repo), timeout=arguments.lease_timeout):
-            _apply(repo, common, expiry, fsck=arguments.fsck)
+            after = _apply(repo, common, expiry, fsck=arguments.fsck,
+                           emit=lambda line: print(line, flush=True))
+        record_pass(common.resolve(), after, arguments.expire_days)
     except WorkspaceBusyError as error:
         print(f'error: Git metadata of {arguments.repo} is busy; nothing changed: {error}',
               file=sys.stderr)

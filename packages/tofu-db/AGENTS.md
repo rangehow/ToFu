@@ -924,13 +924,18 @@ and `tests/startup_integrity.rs` in both default and diagnostic feature builds.
 and replays must use the same segment IDs, compare full traces, and assert every
 armed fault fires. Production still generates UUIDs; never skip unexercised cells.
 
-Run `cargo test --manifest-path packages/tofu-db/Cargo.toml`.  Filesystem or
+Run `cargo test --manifest-path packages/tofu-db/Cargo.toml`; `make
+static-check BASE=<ref>` applies the rustfmt and clippy `-D warnings` gates the
+integration gate enforces. Filesystem or
 commit changes must add a deterministic crash/torn-write test before broader
 application integration tests.
 
 On the dolphinfs FUSE checkout an in-tree `cargo build` can fail repeatedly
 with `Device or resource busy` while renaming `target/release/deps` files.
-Build with `CARGO_TARGET_DIR` on local disk and the flags `native_engine.py`
+Build with `CARGO_TARGET_DIR` on local disk (the checkout's own
+`packages/tofu-db/target-*`, seeded copy-on-write from a sibling checkout, or
+`$TMPDIR/target`, which goes with the assignment; never a fixed directory under
+`$HOME` or `/tmp`, which nothing removes) and the flags `native_engine.py`
 uses (`cargo build --release --locked`, plus `--features embedded-mimalloc` on
 Linux; without it certification refuses the embedded library allocator),
 certify the binary with

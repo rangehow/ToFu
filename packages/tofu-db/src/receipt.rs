@@ -24,9 +24,7 @@ const BLOB_REFERENCE_BYTES: usize = 32 + 32 + 8;
 const COMMAND_KEY_DOMAIN: &[u8] = b"tofu.command-receipt.command.v2\0";
 const RECEIPT_CODEC_PREFIX: &[u8] = b"tofu.receipt.";
 pub const COMPRESSED_RECEIPT_MAGIC: &[u8] = b"tofu.receipt.zlib.v1\0";
-pub use crate::generated_tofudb_ir::{
-    MAX_INLINE_RECEIPT_BYTES,
-};
+pub use crate::generated_tofudb_ir::MAX_INLINE_RECEIPT_BYTES;
 use crate::generated_tofudb_ir::RECEIPT_COMPRESSION_THRESHOLD_BYTES;
 pub const MAX_RECEIPT_COMMAND_ID_BYTES: usize = 200;
 
@@ -114,16 +112,20 @@ pub fn validate_receipt_identity(operation: &str, committed_at_ms: u64) -> io::R
 }
 
 pub fn encode_receipt_response(raw: &[u8]) -> io::Result<Vec<u8>> {
-    let _encode = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_RECEIPT_ENCODE);
+    let _encode =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_RECEIPT_ENCODE);
     if raw.is_empty() {
         return Err(invalid_input("command receipt response is empty"));
     }
     if raw.len() <= RECEIPT_COMPRESSION_THRESHOLD_BYTES {
         return Ok(raw.to_vec());
     }
-    if u32::try_from(raw.len()).is_err() { return Ok(raw.to_vec()); }
+    if u32::try_from(raw.len()).is_err() {
+        return Ok(raw.to_vec());
+    }
     let compressed = {
-        let _compress = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_RECEIPT_COMPRESS);
+        let _compress =
+            crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_RECEIPT_COMPRESS);
         let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(1));
         encoder.write_all(raw)?;
         encoder.finish()?
@@ -132,7 +134,11 @@ pub fn encode_receipt_response(raw: &[u8]) -> io::Result<Vec<u8>> {
     encoded.extend_from_slice(COMPRESSED_RECEIPT_MAGIC);
     encoded.extend_from_slice(&(raw.len() as u32).to_be_bytes());
     encoded.extend_from_slice(&compressed);
-    if encoded.len() < raw.len() { Ok(encoded) } else { Ok(raw.to_vec()) }
+    if encoded.len() < raw.len() {
+        Ok(encoded)
+    } else {
+        Ok(raw.to_vec())
+    }
 }
 
 pub fn decode_receipt_response(encoded: &[u8]) -> io::Result<Vec<u8>> {
@@ -183,8 +189,7 @@ impl CommandReceipt {
                 (RESPONSE_INLINE, response.clone())
             }
             StoredReceiptResponse::Blob(reference) => {
-                if reference.logical_bytes == 0
-                {
+                if reference.logical_bytes == 0 {
                     return Err(invalid_input("receipt blob reference is invalid"));
                 }
                 let mut encoded = Vec::with_capacity(BLOB_REFERENCE_BYTES);
@@ -348,23 +353,33 @@ mod tests {
         let encoded = encode_receipt_response(&large).unwrap();
         assert!(encoded.starts_with(COMPRESSED_RECEIPT_MAGIC));
         assert_eq!(decode_receipt_response(&encoded).unwrap(), large);
-        let demand = vec![b'x';9*1024*1024];
-        assert_eq!(decode_receipt_response(&encode_receipt_response(&demand).unwrap()).unwrap(),demand);
+        let demand = vec![b'x'; 9 * 1024 * 1024];
+        assert_eq!(
+            decode_receipt_response(&encode_receipt_response(&demand).unwrap()).unwrap(),
+            demand
+        );
     }
 
     #[test]
     fn incompressible_receipts_round_trip_beyond_former_storage_quota() {
         let mut seed = 0x12345678_u32;
-        let raw: Vec<u8> = (0..262144).map(|_| {
-            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
-            seed as u8
-        }).collect();
+        let raw: Vec<u8> = (0..262144)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                seed as u8
+            })
+            .collect();
         let encoded = encode_receipt_response(&raw).unwrap();
         assert_eq!(encoded, raw);
         assert!(encoded.len() > RECEIPT_COMPRESSION_THRESHOLD_BYTES);
         assert_eq!(decode_receipt_response(&encoded).unwrap(), raw);
         let demand = raw.repeat(20);
-        assert_eq!(decode_receipt_response(&encode_receipt_response(&demand).unwrap()).unwrap(),demand);
+        assert_eq!(
+            decode_receipt_response(&encode_receipt_response(&demand).unwrap()).unwrap(),
+            demand
+        );
     }
 
     #[test]

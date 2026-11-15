@@ -41,21 +41,20 @@ Two public entry points
 Gateway-sanitization parity
 ===========================
 ``_sanitize_messages`` (the gateway-blocked-term replacement) is PROVIDER
-GATED inside ``build_body`` exactly as::
-
-    _pid.startswith('sankuai') or (not _pid and 'sankuai' in lib.LLM_BASE_URL)
+GATED inside ``build_body`` by ``lib.llm_sanitize.gateway_blocked_term_sanitize``:
+the provider id's declared gateway profile, or with no provider id the legacy
+``lib.LLM_BASE_URL`` host.
 
 The chat main loop builds its body with ``provider_id=''`` (orchestrator.py
 :1533) and the pre-built-body dispatch branch never re-runs sanitization, so
 the real outbound array's gateway step is decided by that auto-detect on
-``LLM_BASE_URL``. We REPLICATE that gate verbatim here so the wire preview is
+``LLM_BASE_URL``. We call that same gate here so the wire preview is
 never MORE aggressive than the real request (an unconditional sanitize would
 over-clean and lie in the other direction).
 """
 
 from __future__ import annotations
 
-import lib as _lib
 from lib.llm_sanitize import (
     _drop_empty_assistant_messages,
     _fix_empty_user_messages,
@@ -65,22 +64,11 @@ from lib.llm_sanitize import (
     _sanitize_messages,
     _strip_empty_text_blocks,
     _strip_non_api_fields,
+    gateway_blocked_term_sanitize as _gateway_sanitize_enabled,
 )
 from lib.log import get_logger
 
 logger = get_logger(__name__)
-
-
-def _gateway_sanitize_enabled(provider_id: str) -> bool:
-    """Replicate the ``build_body`` gateway-family gate verbatim.
-
-    Returns True when the real outbound request WOULD run gateway-blocked-term
-    sanitization for this provider context, so the wire preview matches and is
-    never more aggressive than reality.
-    """
-    _pid = provider_id.lower() if provider_id else ''
-    return (_pid.startswith('sankuai')
-            or (not _pid and 'sankuai' in getattr(_lib, 'LLM_BASE_URL', '')))
 
 
 def apply_wire_sanitize(messages: list, *, conv_id: str = '',

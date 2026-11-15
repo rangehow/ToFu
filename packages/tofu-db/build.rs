@@ -23,30 +23,37 @@ fn collect(directory: &Path, rust_only: bool, paths: &mut Vec<PathBuf>) {
 }
 
 struct Manifest {
-    path_deps: Vec<PathBuf>,
     include: Option<Vec<String>>,
     publish_all: bool,
-    has_workspace: bool,
-    package_workspace: bool,
 }
 
 fn parse_manifest(manifest_path: &Path) -> Manifest {
-    let document: toml::Table = fs::read_to_string(manifest_path).expect("read source manifest")
-        .parse().expect("parse source manifest");
-    let package = document.get("package").and_then(toml::Value::as_table).expect("source package");
-    assert!(package.get("name").and_then(toml::Value::as_str).is_some_and(|n| !n.is_empty()), "source manifest names no package");
-    let mut paths = Vec::new();
-    dependencies(&document, &mut paths);
-    if let Some(targets) = document.get("target").and_then(toml::Value::as_table) {
-        for target in targets.values().filter_map(toml::Value::as_table) { dependencies(target, &mut paths); }
-    }
+    let document: toml::Table = fs::read_to_string(manifest_path)
+        .expect("read source manifest")
+        .parse()
+        .expect("parse source manifest");
+    let package = document
+        .get("package")
+        .and_then(toml::Value::as_table)
+        .expect("source package");
+    assert!(
+        package
+            .get("name")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|n| !n.is_empty()),
+        "source manifest names no package"
+    );
     Manifest {
-        path_deps: paths.into_iter().map(|p| manifest_path.parent().unwrap().join(p)).collect(),
-        include: package.get("include").and_then(toml::Value::as_array).filter(|a| !a.is_empty())
-            .map(|a| a.iter().map(|v| v.as_str().expect("include string").to_owned()).collect()),
+        include: package
+            .get("include")
+            .and_then(toml::Value::as_array)
+            .filter(|a| !a.is_empty())
+            .map(|a| {
+                a.iter()
+                    .map(|v| v.as_str().expect("include string").to_owned())
+                    .collect()
+            }),
         publish_all: package.get("publish").and_then(toml::Value::as_bool) != Some(false),
-        has_workspace: document.contains_key("workspace"),
-        package_workspace: package.get("workspace").and_then(toml::Value::as_str).is_some(),
     }
 }
 fn crate_source_paths(crate_root: &Path, manifest: &Manifest) -> Vec<PathBuf> {
@@ -102,7 +109,9 @@ fn collect_all(directory: &Path, paths: &mut Vec<PathBuf>) {
     }
 }
 
-fn collect_rs(directory: &Path, paths: &mut Vec<PathBuf>) { collect(directory, true, paths); }
+fn collect_rs(directory: &Path, paths: &mut Vec<PathBuf>) {
+    collect(directory, true, paths);
+}
 
 fn normalized(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
@@ -189,7 +198,10 @@ fn main() {
         let manifest = parse_manifest(&location.join("Cargo.toml"));
         let paths = crate_source_paths(&location, &manifest);
         println!("cargo:rerun-if-changed={}", location.join("src").display());
-        println!("cargo:rerun-if-changed={}", location.join(".cargo").display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            location.join(".cargo").display()
+        );
         let prefix = if relative.as_os_str().is_empty() {
             PathBuf::from("tofu-db")
         } else {
@@ -208,21 +220,40 @@ fn main() {
         }
     }
     let manifest: toml::Table = fs::read_to_string(root.join("Cargo.toml"))
-        .expect("read source manifest").parse().expect("parse source manifest");
-    if let Some(values) = manifest.get("package").and_then(|v| v.get("metadata"))
-        .and_then(|v| v.get("tofu")).and_then(|v| v.get("external-inputs")) {
-        let project = root.parent().unwrap().parent().unwrap().canonicalize().unwrap();
+        .expect("read source manifest")
+        .parse()
+        .expect("parse source manifest");
+    if let Some(values) = manifest
+        .get("package")
+        .and_then(|v| v.get("metadata"))
+        .and_then(|v| v.get("tofu"))
+        .and_then(|v| v.get("external-inputs"))
+    {
+        let project = root
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap();
         for value in values.as_array().expect("external input path list") {
             let name = value.as_str().expect("external input relative path");
             let path = Path::new(name);
-            assert!(path.components().all(|c| matches!(c, Component::Normal(_)))
-                && (name.starts_with("contracts/") || name == "VERSION"),
-                "external input escapes declared source namespace");
+            assert!(
+                path.components().all(|c| matches!(c, Component::Normal(_)))
+                    && (name.starts_with("contracts/") || name == "VERSION"),
+                "external input escapes declared source namespace"
+            );
             let file = project.join(path);
-            assert_eq!(file.canonicalize().expect("resolve external input"), file,
-                "external input uses a symlink");
-            assert!(entries.insert(format!("@external/{name}"), file).is_none(),
-                "external input paths collide");
+            assert_eq!(
+                file.canonicalize().expect("resolve external input"),
+                file,
+                "external input uses a symlink"
+            );
+            assert!(
+                entries.insert(format!("@external/{name}"), file).is_none(),
+                "external input paths collide"
+            );
         }
     }
     let mut digest = Sha256::new();

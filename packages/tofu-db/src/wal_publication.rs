@@ -15,11 +15,18 @@ pub(crate) struct PublicationWalCover {
 }
 
 impl ActiveLog {
-    pub(crate) fn publication_cover(&self, vfs: Arc<dyn Vfs>) -> io::Result<Option<PublicationWalCover>> {
-        if self.unsynced_bytes() == 0 { return Ok(None); }
-        let worker_witness = self.barrier.as_ref().map(|barrier| {
-            Ok::<_, io::Error>((barrier.clone(), barrier.witness(self.len)?))
-        }).transpose()?;
+    pub(crate) fn publication_cover(
+        &self,
+        vfs: Arc<dyn Vfs>,
+    ) -> io::Result<Option<PublicationWalCover>> {
+        if self.unsynced_bytes() == 0 {
+            return Ok(None);
+        }
+        let worker_witness = self
+            .barrier
+            .as_ref()
+            .map(|barrier| Ok::<_, io::Error>((barrier.clone(), barrier.witness(self.len)?)))
+            .transpose()?;
         Ok(Some(PublicationWalCover {
             path: self.path.clone(),
             vfs,
@@ -33,13 +40,25 @@ impl ActiveLog {
 impl PublicationWalCover {
     pub(crate) fn sync(&self) -> io::Result<()> {
         if let Some((barrier, witness)) = &self.worker_witness {
-            let _wait = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_WAL_BARRIER_WAIT);
+            let _wait = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_WAL_BARRIER_WAIT,
+            );
             let deadline = std::time::Instant::now() + MAX_BARRIER_WAIT;
             #[cfg(test)]
-            let deadline = if self.barrier_wait_expired { std::time::Instant::now() } else { deadline };
+            let deadline = if self.barrier_wait_expired {
+                std::time::Instant::now()
+            } else {
+                deadline
+            };
             barrier.wait_witness(witness, deadline)?;
         }
-        let mut file = self.vfs.open(&self.path, OpenRequest { write: true, ..Default::default() })?;
+        let mut file = self.vfs.open(
+            &self.path,
+            OpenRequest {
+                write: true,
+                ..Default::default()
+            },
+        )?;
         crate::vfs::sync_data_barrier(file.as_mut())
     }
 

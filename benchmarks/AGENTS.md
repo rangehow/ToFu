@@ -409,6 +409,15 @@ real Slot fixtures, ordered publication and shuffled retirement. Fresh alternati
 separate index-only memory observations. Verify `test_route_group_retirement_measure`;
 it excludes storage, provider IO, route compilation and application capacity.
 
+`settled_turn_retention.py` replays the 2026-11-15 execution-host retention mix
+(definitively rejected late frames, refused terminal frames holding terminal
+subscribers, TTL expiry) through TaskRuntime, the delivery coordinator,
+`append_event` and `admission.on_terminal`, in `--waves`. It reports reachable
+settled graphs (weakref probes), retained tracemalloc heap, RSS growth after
+each wave and settle latency. Run the pre-change tree via `PYTHONPATH` in
+alternating fresh processes; synthetic data, no storage, provider or push.
+Measurements: `docs/RESOURCE_CONTROL.md`, "Settled task retention".
+
 `token_cold_start.py` measures one encoding's first operation in each fresh
 process using token_ingress_measure --cold-only. Verify distinct PIDs, zero warm
 calls, both clocks, identical fixtures/instrumentation and unchanged sources.

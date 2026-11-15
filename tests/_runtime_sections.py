@@ -9,7 +9,6 @@ Vite receives.
 
 from __future__ import annotations
 
-import atexit
 from contextlib import contextmanager
 from functools import lru_cache
 import hashlib
@@ -26,6 +25,8 @@ try:
     import fcntl
 except ImportError:
     fcntl = None
+
+from tests.support.process_scratch import process_scratch_directory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -253,15 +254,9 @@ def _compose_import_ports(name: str, body: str) -> str:
     return ''.join(prefix) + body
 
 
-_DIRECTORY = Path(tempfile.mkdtemp(prefix='tofu-runtime-sections-'))
-_LEGACY_ROOT = Path(tempfile.mkdtemp(prefix='tofu-frontend-test-root-'))
+_DIRECTORY = process_scratch_directory('tofu-runtime-sections-')
+_LEGACY_ROOT = process_scratch_directory('tofu-frontend-test-root-')
 _CACHE: dict[str, Path] = {}
-
-
-@atexit.register
-def _cleanup() -> None:
-    shutil.rmtree(_DIRECTORY, ignore_errors=True)
-    shutil.rmtree(_LEGACY_ROOT, ignore_errors=True)
 
 
 # Cross-process test-bundle cache.

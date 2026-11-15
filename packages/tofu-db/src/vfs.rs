@@ -101,12 +101,17 @@ fn nothing_written(error: io::Error) -> io::Error {
 
 /// Whether `error` proves that its write left the file untouched.
 pub fn wrote_nothing(error: &io::Error) -> bool {
-    error.get_ref().is_some_and(|inner| inner.is::<NothingWritten>())
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<NothingWritten>())
 }
 
 /// A volume refusing space (ENOSPC) or quota (EDQUOT).
 pub fn is_storage_full(error: &io::Error) -> bool {
-    matches!(error.kind(), io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded)
+    matches!(
+        error.kind(),
+        io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
+    )
 }
 
 /// An OS error of a real filesystem call with the call and the path it named,
@@ -123,7 +128,13 @@ pub struct PathIoError {
 
 impl std::fmt::Display for PathIoError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{} op={} path={}", self.source, self.operation, self.path.display())?;
+        write!(
+            formatter,
+            "{} op={} path={}",
+            self.source,
+            self.operation,
+            self.path.display()
+        )?;
         if let Some(destination) = &self.destination {
             write!(formatter, " destination={}", destination.display())?;
         }
@@ -140,7 +151,11 @@ impl std::error::Error for PathIoError {
 /// The OS error code of `error`, also through a `PathIoError` annotation.
 pub(crate) fn os_error_code(error: &io::Error) -> Option<i32> {
     error.raw_os_error().or_else(|| {
-        error.get_ref()?.downcast_ref::<PathIoError>()?.source.raw_os_error()
+        error
+            .get_ref()?
+            .downcast_ref::<PathIoError>()?
+            .source
+            .raw_os_error()
     })
 }
 
@@ -156,16 +171,27 @@ pub(crate) fn is_name_refusal(error: &io::Error) -> bool {
     entry_cap || is_storage_full(error)
 }
 
-fn on_path<'a>(operation: &'static str, path: &'a Path) -> impl FnOnce(io::Error) -> io::Error + 'a {
+fn on_path<'a>(
+    operation: &'static str,
+    path: &'a Path,
+) -> impl FnOnce(io::Error) -> io::Error + 'a {
     move |error| annotate(operation, path, None, error)
 }
 
 /// Only OS errors are annotated: errors the engine builds already say what
 /// failed. Retry and lock-contention kinds pass through bare, and so does
 /// ENOMEM, which `resource_exhaustion` classifies by its errno.
-fn annotate(operation: &'static str, path: &Path, destination: Option<&Path>, error: io::Error) -> io::Error {
+fn annotate(
+    operation: &'static str,
+    path: &Path,
+    destination: Option<&Path>,
+    error: io::Error,
+) -> io::Error {
     if error.raw_os_error().is_none()
-        || matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock)
+        || matches!(
+            error.kind(),
+            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+        )
         || crate::resource_exhaustion::is_refusal(&error)
     {
         return error;
@@ -201,10 +227,16 @@ pub trait VfsFile: Send {
     fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()>;
     /// Wrappers retain one existing write/fault boundary. Real files override
     /// this to submit borrowed frame segments without a temporary byte copy.
-    fn write_all_vectored_at(&mut self, offset: u64, buffers: &mut [IoSlice<'_>]) -> io::Result<()> {
+    fn write_all_vectored_at(
+        &mut self,
+        offset: u64,
+        buffers: &mut [IoSlice<'_>],
+    ) -> io::Result<()> {
         let length = vectored_length(buffers)?;
         let mut bytes = Vec::with_capacity(length);
-        for buffer in buffers { bytes.extend_from_slice(buffer); }
+        for buffer in buffers {
+            bytes.extend_from_slice(buffer);
+        }
         self.write_all_at(offset, &bytes)
     }
     /// `write_all_vectored_at`, whose error also carries [`NothingWritten`]
@@ -228,6 +260,9 @@ pub trait VfsFile: Send {
 /// with mutable decrypt/read state may keep the ordinary VfsFile fallback.
 pub trait VfsPositionedReader: Send + Sync {
     fn len(&self) -> io::Result<u64>;
+    fn is_empty(&self) -> io::Result<bool> {
+        Ok(self.len()? == 0)
+    }
     fn read_exact_at(&self, offset: u64, bytes: &mut [u8]) -> io::Result<()>;
 }
 
@@ -245,7 +280,13 @@ impl SharedReadFile {
     pub(crate) fn open(vfs: &dyn Vfs, path: &Path) -> io::Result<Self> {
         Ok(match vfs.open_positioned_reader(path)? {
             Some(file) => Self::Positioned(file),
-            None => Self::Cursor(Mutex::new(vfs.open(path, OpenRequest { read: true, ..OpenRequest::default() })?)),
+            None => Self::Cursor(Mutex::new(vfs.open(
+                path,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )?)),
         })
     }
 
@@ -288,7 +329,8 @@ impl SharedReadFile {
     }
 
     fn cursor(file: &Mutex<Box<dyn VfsFile>>) -> io::Result<MutexGuard<'_, Box<dyn VfsFile>>> {
-        file.lock().map_err(|_| io::Error::other("shared read file lock poisoned"))
+        file.lock()
+            .map_err(|_| io::Error::other("shared read file lock poisoned"))
     }
 }
 
@@ -341,20 +383,27 @@ pub struct FilesystemCapacity {
 pub trait Vfs: Send + Sync {
     /// Independent ordinary file handles share current lengths and may append
     /// disjoint WAL regions. Stateful/encrypting wrappers default to fallback.
-    fn supports_buffered_wal_writes(&self) -> bool { false }
+    fn supports_buffered_wal_writes(&self) -> bool {
+        false
+    }
 
     /// Independent files may be created, written, synced and renamed from
     /// concurrent threads, each sequence keeping its own order. Wrappers that
     /// impose one global operation order (deterministic simulation, gated
     /// race specifications) or keep per-store mutable state default to one
     /// caller at a time.
-    fn supports_concurrent_file_publication(&self) -> bool { false }
+    fn supports_concurrent_file_publication(&self) -> bool {
+        false
+    }
 
     fn filesystem_capacity(&self, _path: &Path) -> io::Result<FilesystemCapacity> {
         Ok(FilesystemCapacity::default())
     }
     fn open(&self, path: &Path, request: OpenRequest) -> io::Result<Box<dyn VfsFile>>;
-    fn open_positioned_reader(&self, _path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+    fn open_positioned_reader(
+        &self,
+        _path: &Path,
+    ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
         Ok(None)
     }
     fn create_dir(&self, path: &Path) -> io::Result<()>;
@@ -407,8 +456,14 @@ impl Drop for RealFile {
 }
 
 fn vectored_length(buffers: &[IoSlice<'_>]) -> io::Result<usize> {
-    buffers.iter().try_fold(0_usize, |length, buffer| length.checked_add(buffer.len())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "vectored write length overflow")))
+    buffers.iter().try_fold(0_usize, |length, buffer| {
+        length.checked_add(buffer.len()).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "vectored write length overflow",
+            )
+        })
+    })
 }
 
 fn write_all_vectored(writer: &mut impl Write, buffers: &mut [IoSlice<'_>]) -> io::Result<()> {
@@ -422,9 +477,17 @@ fn write_all_vectored_reporting(
 ) -> Result<(), (io::Error, bool)> {
     let mut wrote = false;
     while !buffers.is_empty() {
-        if buffers[0].is_empty() { buffers = &mut buffers[1..]; continue; }
+        if buffers[0].is_empty() {
+            buffers = &mut buffers[1..];
+            continue;
+        }
         match writer.write_vectored(buffers) {
-            Ok(0) => return Err((io::Error::new(io::ErrorKind::WriteZero, "vectored write made no progress"), wrote)),
+            Ok(0) => {
+                return Err((
+                    io::Error::new(io::ErrorKind::WriteZero, "vectored write made no progress"),
+                    wrote,
+                ))
+            }
             Ok(written) => {
                 wrote = true;
                 IoSlice::advance_slices(&mut buffers, written);
@@ -439,7 +502,11 @@ fn write_all_vectored_reporting(
 impl VfsFile for RealFile {
     fn len(&self) -> io::Result<u64> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_METADATA);
-        Ok(self.file.metadata().map_err(on_path("len", &self.path))?.len())
+        Ok(self
+            .file
+            .metadata()
+            .map_err(on_path("len", &self.path))?
+            .len())
     }
 
     fn read_all(&mut self, maximum_bytes: usize) -> io::Result<Vec<u8>> {
@@ -460,10 +527,14 @@ impl VfsFile for RealFile {
                 "file exceeds its read admission bound",
             ));
         }
-        self.file.seek(SeekFrom::Start(0)).map_err(on_path("read", &self.path))?;
+        self.file
+            .seek(SeekFrom::Start(0))
+            .map_err(on_path("read", &self.path))?;
         let mut bytes = Vec::with_capacity(length as usize);
-        Read::by_ref(&mut self.file).take(maximum_bytes.saturating_add(1) as u64)
-            .read_to_end(&mut bytes).map_err(on_path("read", &self.path))?;
+        Read::by_ref(&mut self.file)
+            .take(maximum_bytes.saturating_add(1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(on_path("read", &self.path))?;
         if bytes.len() > maximum_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -475,22 +546,36 @@ impl VfsFile for RealFile {
 
     fn read_exact_at(&mut self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_READ);
-        self.file.seek(SeekFrom::Start(offset)).map_err(on_path("read", &self.path))?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(on_path("read", &self.path))?;
         crate::request_profile::work(crate::request_profile::Work::ReadBytes, bytes.len() as u64);
-        self.file.read_exact(bytes).map_err(on_path("read", &self.path))
+        self.file
+            .read_exact(bytes)
+            .map_err(on_path("read", &self.path))
     }
 
     fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_WRITE);
-        self.file.seek(SeekFrom::Start(offset)).map_err(on_path("write", &self.path))?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(on_path("write", &self.path))?;
         crate::request_profile::work(crate::request_profile::Work::WriteBytes, bytes.len() as u64);
-        self.file.write_all(bytes).map_err(on_path("write", &self.path))
+        self.file
+            .write_all(bytes)
+            .map_err(on_path("write", &self.path))
     }
 
-    fn write_all_vectored_at(&mut self, offset: u64, buffers: &mut [IoSlice<'_>]) -> io::Result<()> {
+    fn write_all_vectored_at(
+        &mut self,
+        offset: u64,
+        buffers: &mut [IoSlice<'_>],
+    ) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_WRITE);
         let length = vectored_length(buffers)?;
-        self.file.seek(SeekFrom::Start(offset)).map_err(on_path("write", &self.path))?;
+        self.file
+            .seek(SeekFrom::Start(offset))
+            .map_err(on_path("write", &self.path))?;
         crate::request_profile::work(crate::request_profile::Work::WriteBytes, length as u64);
         write_all_vectored(&mut self.file, buffers).map_err(on_path("write", &self.path))
     }
@@ -510,36 +595,52 @@ impl VfsFile for RealFile {
         crate::request_profile::work(crate::request_profile::Work::WriteBytes, length as u64);
         write_all_vectored_reporting(&mut self.file, buffers).map_err(|(error, wrote)| {
             let error = annotate("write", &self.path, None, error);
-            if wrote { error } else { nothing_written(error) }
+            if wrote {
+                error
+            } else {
+                nothing_written(error)
+            }
         })
     }
 
     fn set_len(&mut self, length: u64) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_MUTATE);
-        self.file.set_len(length).map_err(on_path("set_len", &self.path))
+        self.file
+            .set_len(length)
+            .map_err(on_path("set_len", &self.path))
     }
 
     fn sync_data(&mut self) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_SYNC);
-        self.file.sync_data().map_err(on_path("sync_data", &self.path))
+        self.file
+            .sync_data()
+            .map_err(on_path("sync_data", &self.path))
     }
 
     fn sync_all(&mut self) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_SYNC);
-        self.file.sync_all().map_err(on_path("sync_all", &self.path))
+        self.file
+            .sync_all()
+            .map_err(on_path("sync_all", &self.path))
     }
 
     fn try_lock_exclusive(&mut self) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_MUTATE);
-        self.file.try_lock_exclusive().map_err(on_path("lock", &self.path))?;
+        self.file
+            .try_lock_exclusive()
+            .map_err(on_path("lock", &self.path))?;
         self.owns_exclusive_lock = true;
         Ok(())
     }
 }
 
 impl Vfs for RealVfs {
-    fn supports_buffered_wal_writes(&self) -> bool { true }
-    fn supports_concurrent_file_publication(&self) -> bool { true }
+    fn supports_buffered_wal_writes(&self) -> bool {
+        true
+    }
+    fn supports_concurrent_file_publication(&self) -> bool {
+        true
+    }
     fn filesystem_capacity(&self, path: &Path) -> io::Result<FilesystemCapacity> {
         let mut probe = path;
         loop {
@@ -554,8 +655,9 @@ impl Vfs for RealVfs {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt;
-            let path = std::ffi::CString::new(probe.as_os_str().as_bytes())
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "filesystem path contains NUL"))?;
+            let path = std::ffi::CString::new(probe.as_os_str().as_bytes()).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "filesystem path contains NUL")
+            })?;
             let mut info = std::mem::MaybeUninit::<libc::statvfs>::uninit();
             // SAFETY: path is NUL terminated and info points to writable statvfs storage.
             if unsafe { libc::statvfs(path.as_ptr(), info.as_mut_ptr()) } != 0 {
@@ -566,27 +668,44 @@ impl Vfs for RealVfs {
             let bytes_known = info.f_blocks > 0 && info.f_frsize > 0;
             let inodes_known = info.f_files > 0;
             Ok(FilesystemCapacity {
-                total_bytes: bytes_known.then(|| (info.f_blocks as u64).saturating_mul(info.f_frsize as u64)),
-                available_bytes: bytes_known.then(|| (info.f_bavail as u64).saturating_mul(info.f_frsize as u64)),
-                total_inodes: inodes_known.then_some(info.f_files as u64),
-                available_inodes: inodes_known.then_some(info.f_favail as u64),
+                total_bytes: bytes_known.then(|| info.f_blocks.saturating_mul(info.f_frsize)),
+                available_bytes: bytes_known.then(|| info.f_bavail.saturating_mul(info.f_frsize)),
+                total_inodes: inodes_known.then_some(info.f_files),
+                available_inodes: inodes_known.then_some(info.f_favail),
             })
         }
         #[cfg(not(unix))]
         {
-            Ok(FilesystemCapacity { total_bytes: fs2::total_space(probe).ok(), available_bytes: fs2::available_space(probe).ok(), ..FilesystemCapacity::default() })
+            Ok(FilesystemCapacity {
+                total_bytes: fs2::total_space(probe).ok(),
+                available_bytes: fs2::available_space(probe).ok(),
+                ..FilesystemCapacity::default()
+            })
         }
     }
 
-    fn open_positioned_reader(&self, path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+    fn open_positioned_reader(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
         #[cfg(unix)]
         {
             let _open = crate::request_profile::Probe::new(crate::request_profile::VFS_OPEN);
-            let file = OpenOptions::new().read(true).open(path).map_err(on_path("open", path))?;
-            Ok(Some(Arc::new(RealFile { file, path: path.to_path_buf(), owns_exclusive_lock: false })))
+            let file = OpenOptions::new()
+                .read(true)
+                .open(path)
+                .map_err(on_path("open", path))?;
+            Ok(Some(Arc::new(RealFile {
+                file,
+                path: path.to_path_buf(),
+                owns_exclusive_lock: false,
+            })))
         }
         #[cfg(not(unix))]
-        { let _ = path; Ok(None) }
+        {
+            let _ = path;
+            Ok(None)
+        }
     }
     fn open(&self, path: &Path, request: OpenRequest) -> io::Result<Box<dyn VfsFile>> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_OPEN);
@@ -621,7 +740,8 @@ impl Vfs for RealVfs {
 
     fn rename(&self, source: &Path, destination: &Path) -> io::Result<()> {
         let _profile = crate::request_profile::Probe::new(crate::request_profile::VFS_MUTATE);
-        fs::rename(source, destination).map_err(|error| annotate("rename", source, Some(destination), error))
+        fs::rename(source, destination)
+            .map_err(|error| annotate("rename", source, Some(destination), error))
     }
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
@@ -798,8 +918,12 @@ struct SimulatedState {
 /// source was not.
 #[cfg(test)]
 fn refuse_name_past_cap(state: &SimulatedState, path: &Path) -> io::Result<()> {
-    let Some(directory) = path.parent() else { return Ok(()) };
-    let Some(&cap) = state.directory_entry_caps.get(directory) else { return Ok(()) };
+    let Some(directory) = path.parent() else {
+        return Ok(());
+    };
+    let Some(&cap) = state.directory_entry_caps.get(directory) else {
+        return Ok(());
+    };
     let names = state
         .working_files
         .keys()
@@ -908,7 +1032,9 @@ impl DeterministicVfs {
     /// nothing, like a DolphinFS directory past its entry cap.
     #[cfg(test)]
     pub(crate) fn cap_directory_entries(&self, directory: &Path, names: usize) -> io::Result<()> {
-        state(&self.shared)?.directory_entry_caps.insert(directory.to_path_buf(), names);
+        state(&self.shared)?
+            .directory_entry_caps
+            .insert(directory.to_path_buf(), names);
         Ok(())
     }
 
@@ -1031,27 +1157,49 @@ impl DeterministicVfs {
 }
 
 impl Vfs for DeterministicVfs {
-    fn supports_buffered_wal_writes(&self) -> bool { true }
+    fn supports_buffered_wal_writes(&self) -> bool {
+        true
+    }
     fn supports_concurrent_file_publication(&self) -> bool {
         #[cfg(test)]
-        { state(&self.shared).is_ok_and(|state| state.concurrent_file_publication) }
+        {
+            state(&self.shared).is_ok_and(|state| state.concurrent_file_publication)
+        }
         #[cfg(not(test))]
-        { false }
+        {
+            false
+        }
     }
     fn filesystem_capacity(&self, _path: &Path) -> io::Result<FilesystemCapacity> {
         #[cfg(test)]
-        { Ok(state(&self.shared)?.capacity) }
+        {
+            Ok(state(&self.shared)?.capacity)
+        }
         #[cfg(not(test))]
-        { Ok(FilesystemCapacity::default()) }
+        {
+            Ok(FilesystemCapacity::default())
+        }
     }
 
-    fn open_positioned_reader(&self, path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+    fn open_positioned_reader(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
         // Use ordinary admission and the same Open fault before sharing a
         // cursor-free simulated handle; every read still records its fault.
-        self.open(path, OpenRequest { read: true, ..OpenRequest::default() })?;
+        self.open(
+            path,
+            OpenRequest {
+                read: true,
+                ..OpenRequest::default()
+            },
+        )?;
         Ok(Some(Arc::new(SimulatedFile {
-            shared: Arc::clone(&self.shared), path: path.to_owned(),
-            readable: true, writable: false, owns_exclusive_lock: false,
+            shared: Arc::clone(&self.shared),
+            path: path.to_owned(),
+            readable: true,
+            writable: false,
+            owns_exclusive_lock: false,
         })))
     }
     fn open(&self, path: &Path, request: OpenRequest) -> io::Result<Box<dyn VfsFile>> {
@@ -1403,7 +1551,9 @@ impl VfsFile for SimulatedFile {
     ) -> io::Result<()> {
         let length = vectored_length(buffers).map_err(nothing_written)?;
         let mut bytes = Vec::with_capacity(length);
-        for buffer in buffers.iter() { bytes.extend_from_slice(buffer); }
+        for buffer in buffers.iter() {
+            bytes.extend_from_slice(buffer);
+        }
         if self.copy_at(offset, &bytes).map_err(nothing_written)? != bytes.len() {
             return Err(injected_short_write());
         }
@@ -1462,7 +1612,10 @@ impl Drop for SimulatedFile {
 }
 
 fn injected_short_write() -> io::Error {
-    io::Error::new(io::ErrorKind::WriteZero, "deterministic VFS injected short write")
+    io::Error::new(
+        io::ErrorKind::WriteZero,
+        "deterministic VFS injected short write",
+    )
 }
 
 impl SimulatedFile {
@@ -1521,6 +1674,55 @@ impl SimulatedFile {
     }
 }
 
+#[cfg(unix)]
+impl VfsPositionedReader for RealFile {
+    fn len(&self) -> io::Result<u64> {
+        VfsFile::len(self)
+    }
+    fn read_exact_at(&self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
+        let _read = crate::request_profile::Probe::new(crate::request_profile::VFS_READ);
+        crate::request_profile::work(crate::request_profile::Work::ReadBytes, bytes.len() as u64);
+        std::os::unix::fs::FileExt::read_exact_at(&self.file, bytes, offset)
+            .map_err(on_path("read", &self.path))
+    }
+}
+
+impl VfsPositionedReader for SimulatedFile {
+    fn len(&self) -> io::Result<u64> {
+        VfsFile::len(self)
+    }
+    fn read_exact_at(&self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
+        self.read_exact_at_shared(offset, bytes)
+    }
+}
+
+impl SimulatedFile {
+    fn read_exact_at_shared(&self, offset: u64, output: &mut [u8]) -> io::Result<()> {
+        if !self.readable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "VFS file is not readable",
+            ));
+        }
+        let mut state = state(&self.shared)?;
+        before(&mut state, Operation::Read)?;
+        let offset = usize::try_from(offset)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "VFS offset overflow"))?;
+        let end = offset
+            .checked_add(output.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "VFS read overflow"))?;
+        let file = state
+            .working_files
+            .get(&self.path)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "VFS file is missing"))?;
+        let source = file.get(offset..end).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::UnexpectedEof, "VFS range is truncated")
+        })?;
+        output.copy_from_slice(source);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1528,15 +1730,37 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("bounded-read");
         fs::write(&path, b"seed").unwrap();
-        let mut file = RealVfs.open(&path, OpenRequest { read: true, ..OpenRequest::default() }).unwrap();
+        let mut file = RealVfs
+            .open(
+                &path,
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )
+            .unwrap();
         let observed = file.len().unwrap();
         fs::write(&path, b"seed-grown").unwrap();
-        assert_eq!(file.read_all_with_observed_length(16, observed).unwrap(), b"seed-grown");
+        assert_eq!(
+            file.read_all_with_observed_length(16, observed).unwrap(),
+            b"seed-grown"
+        );
         fs::write(&path, b"x").unwrap();
-        assert_eq!(file.read_all_with_observed_length(16, observed).unwrap(), b"x");
+        assert_eq!(
+            file.read_all_with_observed_length(16, observed).unwrap(),
+            b"x"
+        );
         fs::write(&path, vec![b'x'; 256 * 1024]).unwrap();
-        assert_eq!(file.read_all_with_observed_length(16, observed).unwrap_err().kind(), io::ErrorKind::InvalidData);
-        assert_eq!(file.read_all(16).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            file.read_all_with_observed_length(16, observed)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            file.read_all(16).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     /// Every OS error of a real filesystem call names the call and its path
@@ -1552,26 +1776,91 @@ mod tests {
         let expect = |error: io::Error, operation: &str, path: &Path, kind: io::ErrorKind| {
             assert_eq!(error.kind(), kind, "{error}");
             let message = error.to_string();
-            assert!(message.contains(&format!(" op={operation} path={}", path.display())), "{message}");
+            assert!(
+                message.contains(&format!(" op={operation} path={}", path.display())),
+                "{message}"
+            );
         };
         let not_a_directory = fs::metadata(&below).unwrap_err().kind();
-        let read = OpenRequest { read: true, ..OpenRequest::default() };
-        let create_new = OpenRequest { write: true, create_new: true, ..OpenRequest::default() };
-        expect(RealVfs.metadata(&below).unwrap_err(), "metadata", &below, not_a_directory);
-        expect(RealVfs.open(&below, read).err().unwrap(), "open", &below, not_a_directory);
-        expect(RealVfs.open(&below, create_new).err().unwrap(), "create_new", &below, not_a_directory);
-        expect(RealVfs.open_positioned_reader(&below).err().unwrap(), "open", &below, not_a_directory);
-        expect(RealVfs.create_dir(&below).unwrap_err(), "create_dir", &below, not_a_directory);
-        expect(RealVfs.remove_file(&below).unwrap_err(), "remove_file", &below, not_a_directory);
-        expect(RealVfs.read_directory(&plain).unwrap_err(), "read_directory", &plain, not_a_directory);
-        expect(RealVfs.read_directory_entries(&plain).unwrap_err(), "read_directory", &plain, not_a_directory);
-        expect(RealVfs.sync_directory(&below).unwrap_err(), "sync_directory", &below, not_a_directory);
+        let read = OpenRequest {
+            read: true,
+            ..OpenRequest::default()
+        };
+        let create_new = OpenRequest {
+            write: true,
+            create_new: true,
+            ..OpenRequest::default()
+        };
+        expect(
+            RealVfs.metadata(&below).unwrap_err(),
+            "metadata",
+            &below,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.open(&below, read).err().unwrap(),
+            "open",
+            &below,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.open(&below, create_new).err().unwrap(),
+            "create_new",
+            &below,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.open_positioned_reader(&below).err().unwrap(),
+            "open",
+            &below,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.create_dir(&below).unwrap_err(),
+            "create_dir",
+            &below,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.remove_file(&below).unwrap_err(),
+            "remove_file",
+            &below,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.read_directory(&plain).unwrap_err(),
+            "read_directory",
+            &plain,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.read_directory_entries(&plain).unwrap_err(),
+            "read_directory",
+            &plain,
+            not_a_directory,
+        );
+        expect(
+            RealVfs.sync_directory(&below).unwrap_err(),
+            "sync_directory",
+            &below,
+            not_a_directory,
+        );
         let target = directory.path().join("target.blk");
         let renamed = RealVfs.rename(&below, &target).unwrap_err();
-        assert!(renamed.to_string().ends_with(&format!(" destination={}", target.display())), "{renamed}");
+        assert!(
+            renamed
+                .to_string()
+                .ends_with(&format!(" destination={}", target.display())),
+            "{renamed}"
+        );
         expect(renamed, "rename", &below, not_a_directory);
         let missing = directory.path().join("missing.blk");
-        expect(RealVfs.open(&missing, read).err().unwrap(), "open", &missing, io::ErrorKind::NotFound);
+        expect(
+            RealVfs.open(&missing, read).err().unwrap(),
+            "open",
+            &missing,
+            io::ErrorKind::NotFound,
+        );
 
         // A read-only handle refuses writes with EBADF.
         let mut handle = RealVfs.open(&plain, read).unwrap();
@@ -1585,7 +1874,10 @@ mod tests {
         expect(refused, "write", &plain, bad_descriptor);
 
         // Errors the engine builds itself already say what failed.
-        assert_eq!(handle.read_all(0).unwrap_err().to_string(), "file exceeds its read admission bound");
+        assert_eq!(
+            handle.read_all(0).unwrap_err().to_string(),
+            "file exceeds its read admission bound"
+        );
     }
 
     /// The simulated per-directory entry cap refuses every new name the way a
@@ -1596,24 +1888,51 @@ mod tests {
         let shard = Path::new("/c6");
         vfs.create_dir(shard).unwrap();
         vfs.cap_directory_entries(shard, 2).unwrap();
-        let create = OpenRequest { write: true, create_new: true, ..OpenRequest::default() };
+        let create = OpenRequest {
+            write: true,
+            create_new: true,
+            ..OpenRequest::default()
+        };
         vfs.open(&shard.join("a.blk"), create).unwrap();
         vfs.open(&shard.join(".new-x.blk"), create).unwrap();
         let refused = vfs.open(&shard.join("b.blk"), create).err().unwrap();
         assert!(is_name_refusal(&refused), "{refused}");
-        assert_eq!(vfs.metadata(&shard.join("b.blk")).unwrap_err().kind(), io::ErrorKind::NotFound);
-        assert!(is_name_refusal(&vfs.create_dir(&shard.join("leaf")).unwrap_err()));
+        assert_eq!(
+            vfs.metadata(&shard.join("b.blk")).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(is_name_refusal(
+            &vfs.create_dir(&shard.join("leaf")).unwrap_err()
+        ));
         // A rename's source still counts while it moves.
-        let renamed = vfs.rename(&shard.join(".new-x.blk"), &shard.join("x.blk")).unwrap_err();
+        let renamed = vfs
+            .rename(&shard.join(".new-x.blk"), &shard.join("x.blk"))
+            .unwrap_err();
         assert!(is_name_refusal(&renamed), "{renamed}");
-        assert_eq!(vfs.metadata(&shard.join(".new-x.blk")).unwrap(), FileKind::File);
+        assert_eq!(
+            vfs.metadata(&shard.join(".new-x.blk")).unwrap(),
+            FileKind::File
+        );
         vfs.open(Path::new("/elsewhere.blk"), create).unwrap();
-        assert!(is_name_refusal(&vfs.rename(Path::new("/elsewhere.blk"), &shard.join("e.blk")).unwrap_err()));
-        assert_eq!(vfs.metadata(Path::new("/elsewhere.blk")).unwrap(), FileKind::File);
+        assert!(is_name_refusal(
+            &vfs.rename(Path::new("/elsewhere.blk"), &shard.join("e.blk"))
+                .unwrap_err()
+        ));
+        assert_eq!(
+            vfs.metadata(Path::new("/elsewhere.blk")).unwrap(),
+            FileKind::File
+        );
         // Existing names stay writable, a removal frees room, and other
         // directories are unaffected.
-        vfs.open(&shard.join("a.blk"), OpenRequest { write: true, create: true, ..OpenRequest::default() })
-            .unwrap();
+        vfs.open(
+            &shard.join("a.blk"),
+            OpenRequest {
+                write: true,
+                create: true,
+                ..OpenRequest::default()
+            },
+        )
+        .unwrap();
         vfs.remove_file(&shard.join(".new-x.blk")).unwrap();
         vfs.open(&shard.join("b.blk"), create).unwrap();
         vfs.open(Path::new("/free.blk"), create).unwrap();
@@ -1628,37 +1947,81 @@ mod tests {
         vfs.create_dir(Path::new("/data")).unwrap();
         let mut file = vfs.open(Path::new("/data/value"), writable(true)).unwrap();
         file.write_all_at(0, b"seed").unwrap();
-        assert_eq!(file.read_all_with_observed_length(16, 4).unwrap_err().kind(), io::ErrorKind::Other);
+        assert_eq!(
+            file.read_all_with_observed_length(16, 4)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Other
+        );
         assert_eq!(vfs.trace().unwrap().last(), Some(&Operation::Read));
     }
 
     #[test]
     fn vectored_write_preserves_segment_boundaries_across_short_writes_and_interrupts() {
-        struct ShortWriter { bytes: Vec<u8>, calls: usize, fail: Option<io::ErrorKind> }
+        struct ShortWriter {
+            bytes: Vec<u8>,
+            calls: usize,
+            fail: Option<io::ErrorKind>,
+        }
         impl Write for ShortWriter {
-            fn write(&mut self, _: &[u8]) -> io::Result<usize> { panic!("must submit vectored writes") }
-            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                panic!("must submit vectored writes")
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
             fn write_vectored(&mut self, buffers: &[IoSlice<'_>]) -> io::Result<usize> {
                 self.calls += 1;
-                if self.calls == 1 { return Err(io::ErrorKind::Interrupted.into()); }
-                if let Some(kind) = self.fail { return if kind == io::ErrorKind::WriteZero { Ok(0) } else { Err(kind.into()) }; }
+                if self.calls == 1 {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                if let Some(kind) = self.fail {
+                    return if kind == io::ErrorKind::WriteZero {
+                        Ok(0)
+                    } else {
+                        Err(kind.into())
+                    };
+                }
                 let mut written = 0;
                 for buffer in buffers {
                     let take = buffer.len().min(3 - written);
-                    self.bytes.extend_from_slice(&buffer[..take]); written += take;
-                    if written == 3 { break; }
+                    self.bytes.extend_from_slice(&buffer[..take]);
+                    written += take;
+                    if written == 3 {
+                        break;
+                    }
                 }
                 Ok(written)
             }
         }
-        let mut writer = ShortWriter { bytes: Vec::new(), calls: 0, fail: None };
-        let mut buffers = [IoSlice::new(b""), IoSlice::new(b"head"), IoSlice::new(b""), IoSlice::new(b"payload"), IoSlice::new(b"tail"), IoSlice::new(b"")];
+        let mut writer = ShortWriter {
+            bytes: Vec::new(),
+            calls: 0,
+            fail: None,
+        };
+        let mut buffers = [
+            IoSlice::new(b""),
+            IoSlice::new(b"head"),
+            IoSlice::new(b""),
+            IoSlice::new(b"payload"),
+            IoSlice::new(b"tail"),
+            IoSlice::new(b""),
+        ];
         write_all_vectored(&mut writer, &mut buffers).unwrap();
         assert_eq!(writer.bytes, b"headpayloadtail");
         assert_eq!(writer.calls, 6);
         for kind in [io::ErrorKind::WriteZero, io::ErrorKind::PermissionDenied] {
-            let mut writer = ShortWriter { bytes: Vec::new(), calls: 0, fail: Some(kind) };
-            assert_eq!(write_all_vectored(&mut writer, &mut [IoSlice::new(b"x")]).unwrap_err().kind(), kind);
+            let mut writer = ShortWriter {
+                bytes: Vec::new(),
+                calls: 0,
+                fail: Some(kind),
+            };
+            assert_eq!(
+                write_all_vectored(&mut writer, &mut [IoSlice::new(b"x")])
+                    .unwrap_err()
+                    .kind(),
+                kind
+            );
             assert!(writer.bytes.is_empty());
         }
     }
@@ -1891,13 +2254,18 @@ mod tests {
             (FaultAction::ErrorBefore(io::ErrorKind::QuotaExceeded), true),
             (FaultAction::ShortWrite(2), false),
         ] {
-            let vfs = DeterministicVfs::new(Some(FaultRule { operation_number: 4, action }));
+            let vfs = DeterministicVfs::new(Some(FaultRule {
+                operation_number: 4,
+                action,
+            }));
             vfs.create_dir(Path::new("/data")).unwrap();
             vfs.sync_directory(Path::new("/")).unwrap();
             let mut file = vfs.open(Path::new("/data/value"), writable(true)).unwrap();
             let error = file
                 .write_all_vectored_at_proving_nothing_written(
-                    0, &mut [IoSlice::new(b"by"), IoSlice::new(b"tes")])
+                    0,
+                    &mut [IoSlice::new(b"by"), IoSlice::new(b"tes")],
+                )
                 .unwrap_err();
             assert_eq!(wrote_nothing(&error), untouched, "{action:?}");
             assert_eq!(is_storage_full(&error), untouched, "{action:?}");
@@ -1917,29 +2285,51 @@ mod tests {
     #[test]
     fn a_failed_vectored_write_reports_whether_it_wrote_first() {
         // Accepts `accept` bytes, then refuses every later call with `kind`.
-        struct FullAfter { accept: usize, written: Vec<u8>, kind: io::ErrorKind }
+        struct FullAfter {
+            accept: usize,
+            written: Vec<u8>,
+            kind: io::ErrorKind,
+        }
         impl Write for FullAfter {
-            fn write(&mut self, _: &[u8]) -> io::Result<usize> { panic!("must submit vectored writes") }
-            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                panic!("must submit vectored writes")
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
             fn write_vectored(&mut self, buffers: &[IoSlice<'_>]) -> io::Result<usize> {
                 let room = self.accept - self.written.len();
-                if room == 0 { return Err(self.kind.into()); }
+                if room == 0 {
+                    return Err(self.kind.into());
+                }
                 let mut taken = 0;
                 for buffer in buffers {
                     let take = buffer.len().min(room - taken);
                     self.written.extend_from_slice(&buffer[..take]);
                     taken += take;
-                    if taken == room { break; }
+                    if taken == room {
+                        break;
+                    }
                 }
                 Ok(taken)
             }
         }
         for kind in [io::ErrorKind::StorageFull, io::ErrorKind::QuotaExceeded] {
             for (accept, wrote) in [(0, false), (3, true)] {
-                let mut writer = FullAfter { accept, written: Vec::new(), kind };
+                let mut writer = FullAfter {
+                    accept,
+                    written: Vec::new(),
+                    kind,
+                };
                 let (error, reported) = write_all_vectored_reporting(
-                    &mut writer, &mut [IoSlice::new(b"head"), IoSlice::new(b"tail")]).unwrap_err();
-                assert_eq!((error.kind(), reported, writer.written.len()), (kind, wrote, accept));
+                    &mut writer,
+                    &mut [IoSlice::new(b"head"), IoSlice::new(b"tail")],
+                )
+                .unwrap_err();
+                assert_eq!(
+                    (error.kind(), reported, writer.written.len()),
+                    (kind, wrote, accept)
+                );
             }
         }
     }
@@ -1964,49 +2354,4 @@ mod tests {
             b"old"
         );
     }
-}
-
-#[cfg(unix)]
-impl VfsPositionedReader for RealFile {
-    fn len(&self) -> io::Result<u64> { VfsFile::len(self) }
-    fn read_exact_at(&self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
-        let _read = crate::request_profile::Probe::new(crate::request_profile::VFS_READ);
-        crate::request_profile::work(crate::request_profile::Work::ReadBytes, bytes.len() as u64);
-        std::os::unix::fs::FileExt::read_exact_at(&self.file, bytes, offset).map_err(on_path("read", &self.path))
-    }
-}
-
-impl VfsPositionedReader for SimulatedFile {
-    fn len(&self) -> io::Result<u64> { VfsFile::len(self) }
-    fn read_exact_at(&self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
-        self.read_exact_at_shared(offset, bytes)
-    }
-}
-
-impl SimulatedFile {
-    fn read_exact_at_shared(&self, offset: u64, output: &mut [u8]) -> io::Result<()> {
-        if !self.readable {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "VFS file is not readable",
-            ));
-        }
-        let mut state = state(&self.shared)?;
-        before(&mut state, Operation::Read)?;
-        let offset = usize::try_from(offset)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "VFS offset overflow"))?;
-        let end = offset
-            .checked_add(output.len())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "VFS read overflow"))?;
-        let file = state
-            .working_files
-            .get(&self.path)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "VFS file is missing"))?;
-        let source = file.get(offset..end).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::UnexpectedEof, "VFS range is truncated")
-        })?;
-        output.copy_from_slice(source);
-        Ok(())
-    }
-
 }

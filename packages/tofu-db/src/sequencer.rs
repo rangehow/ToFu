@@ -631,11 +631,9 @@ mod tests {
         let invalid = [
             SequencerConfig {
                 batch_delay: Duration::ZERO,
-                ..SequencerConfig::default()
             },
             SequencerConfig {
                 batch_delay: MAX_BATCH_DELAY + Duration::from_nanos(1),
-                ..SequencerConfig::default()
             },
         ];
         for config in invalid {
@@ -653,7 +651,6 @@ mod tests {
                 &data_dir,
                 SequencerConfig {
                     batch_delay: Duration::ZERO,
-                    ..SequencerConfig::default()
                 },
             )
             .err()

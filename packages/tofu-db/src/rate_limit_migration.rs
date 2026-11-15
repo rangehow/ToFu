@@ -87,11 +87,14 @@ fn parse_restore(payload: Value) -> io::Result<RestoreRequest> {
     Ok(request)
 }
 
+/// A stored event's raw bytes, digest and its two recorded counters.
+type StoredEvent = (Vec<u8>, [u8; 32], u64, u64);
+
 fn read_event(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     event_id: &str,
-) -> io::Result<Option<(Vec<u8>, [u8; 32], u64, u64)>> {
+) -> io::Result<Option<StoredEvent>> {
     let key = event_key(transaction, event_id)?;
     let Some(raw) = database.entity_get(transaction, &key)? else {
         return Ok(None);

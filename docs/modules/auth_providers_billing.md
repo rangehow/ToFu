@@ -335,12 +335,14 @@ Sonnet 5.5 cache reads (Anthropic: 0.05x) were displayed and debited at half
 of FRIDAY's documented read charge. Evidence: 学城 2762588777 《Friday 大模型平台
 Claude 模型接入推荐实践》 §1.3 (modified 2026-05-15, read 2026-11-08), verbatim
 `| 5m（默认） | × 1.25 base | $3.75 |`, `| 1h | × 2.0 base | $6.00 |`,
-`| 命中读取（任意 TTL） | × 0.1 base | $0.30 |`. Decision: `lib/pricing`
-declares those multipliers once (`FRIDAY_CLAUDE_CACHE_MULTIPLIERS`) and
-installs, at import, one provider row per Claude-family `MODEL_PRICING` row
-for each FRIDAY provider (`FRIDAY_PROVIDER_IDS`: `yourprovider`, which a fresh
-install of the YourProvider template creates, and `example-corp`, the deployment's
-provider imported by the v1→v2 cutover). The row keeps the creator's base
+`| 命中读取（任意 TTL） | × 0.1 base | $0.30 |`. Decision: the FRIDAY gateway
+profile (`bundles/yourprovider/gateway_profiles/friday.json`, `docs/PUBLIC_CORE.md`
+D3) declares those multipliers once (`claude_cache_multipliers`) and its exact
+provider ids (`yourprovider`, which a fresh install of the YourProvider template
+creates, and `example-corp`, the deployment's provider imported by the v1→v2
+cutover); `lib/pricing/_provider.py` installs, at import, one provider row per
+Claude-family `MODEL_PRICING` row for each of them. A core with no overlay
+installs none. The row keeps the creator's base
 input/output, currency, tiers and their evidence and replaces only the cache
 multipliers, so `lookup_pricing(model, provider_id)` returns it to every
 consumer: the per-round and Turn cost stamps the conversation shows, the My

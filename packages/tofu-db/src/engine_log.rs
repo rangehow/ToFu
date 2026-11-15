@@ -39,7 +39,13 @@ pub(crate) fn lifecycle_step<T>(
     info(target, &format!("step={step} state=start"));
     let result = operation();
     let state = if result.is_ok() { "done" } else { "failed" };
-    info(target, &format!("step={step} state={state} elapsed_ms={}", started.elapsed().as_millis()));
+    info(
+        target,
+        &format!(
+            "step={step} state={state} elapsed_ms={}",
+            started.elapsed().as_millis()
+        ),
+    );
     result
 }
 
@@ -87,7 +93,11 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_index = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
     (year_of_era + era * 400 + i64::from(month <= 2), month, day)
 }
 
@@ -98,7 +108,11 @@ mod tests {
 
     fn at_millis(millis: i64) -> SystemTime {
         let offset = Duration::from_millis(millis.unsigned_abs());
-        if millis >= 0 { UNIX_EPOCH + offset } else { UNIX_EPOCH - offset }
+        if millis >= 0 {
+            UNIX_EPOCH + offset
+        } else {
+            UNIX_EPOCH - offset
+        }
     }
 
     #[test]
@@ -107,12 +121,17 @@ mod tests {
         let value = lifecycle_step("test", "success", || {
             calls += 1;
             Ok(17)
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(value, 17);
         assert_eq!(calls, 1);
         let error = lifecycle_step::<()>("test", "failure", || {
-            Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "sentinel"))
-        }).unwrap_err();
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "sentinel",
+            ))
+        })
+        .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
         assert_eq!(error.to_string(), "sentinel");
     }
@@ -129,17 +148,19 @@ mod tests {
         );
         assert!(!line.contains('\n'));
         let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
-        let mut keys: Vec<_> = parsed.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut keys: Vec<_> = parsed
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["level", "message", "source", "target", "timestamp"]);
         assert_eq!(parsed["source"], "tofu-db");
         assert_eq!(parsed["timestamp"], "2026-11-01T09:27:30.172+00:00");
         assert_eq!(parsed["level"], "error");
         assert_eq!(parsed["target"], "background_pack");
-        assert_eq!(
-            parsed["message"],
-            "line one\nline two \"quoted\""
-        );
+        assert_eq!(parsed["message"], "line one\nline two \"quoted\"");
         // Exercise the emitters so a signature drift fails to compile.
         error("test", "m");
         warn("test", "m");
@@ -162,7 +183,8 @@ mod tests {
             assert_eq!(rfc3339_utc_millis(at_millis(millis)), expected, "{millis}");
         }
         let now = rfc3339_utc_millis(SystemTime::now());
-        let shape = regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$").unwrap();
+        let shape =
+            regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$").unwrap();
         assert!(shape.is_match(&now), "{now}");
     }
 

@@ -579,9 +579,16 @@ fn prepare(
     if db.entity_get(tx, &reservation_key(tx, &key)?)?.is_some() {
         return Err(corrupt("artifact reservation lacks metadata"));
     }
-    set_usage(db, tx,
-        count.checked_add(1).ok_or_else(|| corrupt("artifact count overflow"))?,
-        bytes.checked_add(reserved).ok_or_else(|| corrupt("artifact bytes overflow"))?)?;
+    set_usage(
+        db,
+        tx,
+        count
+            .checked_add(1)
+            .ok_or_else(|| corrupt("artifact count overflow"))?,
+        bytes
+            .checked_add(reserved)
+            .ok_or_else(|| corrupt("artifact bytes overflow"))?,
+    )?;
     db.entity_put(
         tx,
         reservation_key(tx, &key)?,

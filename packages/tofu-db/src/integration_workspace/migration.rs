@@ -243,7 +243,8 @@ fn restore_workspace(
     }
     let count_key = owner_count_key(tx, owner)?;
     let count = read_u64(database, tx, &count_key, "integration owner count")?;
-    let next_count = count.checked_add(1)
+    let next_count = count
+        .checked_add(1)
         .ok_or_else(|| invalid_data("integration owner count overflow"))?;
     write_workspace(database, tx, None, &workspace)?;
     database.entity_put(
@@ -467,8 +468,14 @@ fn restore_event(
     database.entity_put(tx, key, encode(&event, "integration event")?)?;
     let count_key = event_count_key(tx, owner, &request.project_root)?;
     let count = read_u64(database, tx, &count_key, "integration event count")?;
-    write_u64(database, tx, count_key, count.checked_add(1)
-        .ok_or_else(|| invalid_data("integration owner count overflow"))?)?;
+    write_u64(
+        database,
+        tx,
+        count_key,
+        count
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("integration owner count overflow"))?,
+    )?;
     advance_sequence_past(
         database,
         tx,
@@ -617,19 +624,17 @@ fn scan_workspaces(
     };
     // Count self-proof is only sound for a complete single-page catalog;
     // multi-page completeness is checked by the importer's row accounting.
-    if request.cursor.is_none() {
-        if cursor.is_none() {
-            let count = read_u64(
-                database,
-                tx,
-                &owner_count_key(tx, owner)?,
-                "integration owner count",
-            )?;
-            if rows.len() as u64 != count {
-                return Err(invalid_data(
-                    "integration workspace count and catalog differ",
-                ));
-            }
+    if request.cursor.is_none() && cursor.is_none() {
+        let count = read_u64(
+            database,
+            tx,
+            &owner_count_key(tx, owner)?,
+            "integration owner count",
+        )?;
+        if rows.len() as u64 != count {
+            return Err(invalid_data(
+                "integration workspace count and catalog differ",
+            ));
         }
     }
     Ok(json!({"rows": rows, "cursor": cursor}))

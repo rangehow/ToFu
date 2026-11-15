@@ -249,8 +249,15 @@ fn load_value(
     archive_id: &str,
 ) -> io::Result<Option<(Value, u64)>> {
     let key = document_key(transaction, namespace, archive_id)?;
-    let Some(encoded) =
-        crate::versioned_document::get_with_blob_owner_bounded(database, transaction, &key, namespace, archive_id, transaction.owner_user_id(), MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES.saturating_add(512))?
+    let Some(encoded) = crate::versioned_document::get_with_blob_owner_bounded(
+        database,
+        transaction,
+        &key,
+        namespace,
+        archive_id,
+        transaction.owner_user_id(),
+        MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES.saturating_add(512),
+    )?
     else {
         return Ok(None);
     };
@@ -463,9 +470,10 @@ fn scan_index(
             "compaction archive index exceeds its conversation bound",
         ));
     }
-    let exact_count = decode_count(
-        database.entity_get(transaction, &count_key(transaction, conversation_id, archive_scope)?)?,
-    )?;
+    let exact_count = decode_count(database.entity_get(
+        transaction,
+        &count_key(transaction, conversation_id, archive_scope)?,
+    )?)?;
     if exact_count > MAX_COMPACTION_ARCHIVES_PER_CONVERSATION as u64
         || exact_count != rows.len() as u64
     {
@@ -593,7 +601,12 @@ fn delete_one(
     let claim = database
         .entity_get(transaction, &claim_key)?
         .ok_or_else(|| invalid_data("compaction archive claim is missing"))?;
-    if !claim_matches(&claim, transaction.owner_user_id(), archive_scope, conversation_id) {
+    if !claim_matches(
+        &claim,
+        transaction.owner_user_id(),
+        archive_scope,
+        conversation_id,
+    ) {
         return Err(invalid_data("compaction archive claim is inconsistent"));
     }
     database.entity_delete(transaction, claim_key)?;
@@ -607,7 +620,12 @@ pub(crate) fn create(
     request: &CreateRequest,
 ) -> io::Result<Vec<u8>> {
     crate::conversation_header::require_active(database, transaction, &request.conversation_id)?;
-    require_archive_scope(database, transaction, &request.archive_scope, &request.conversation_id)?;
+    require_archive_scope(
+        database,
+        transaction,
+        &request.archive_scope,
+        &request.conversation_id,
+    )?;
     create_contents(database, transaction, request)
 }
 
@@ -681,7 +699,11 @@ fn create_contents(
         return serde_json::to_vec(&json!({"created": false, "archiveId": request.archive_id}))
             .map_err(|_| invalid_data("archive create response cannot be encoded"));
     }
-    let count_key = count_key(transaction, &request.conversation_id, &request.archive_scope)?;
+    let count_key = count_key(
+        transaction,
+        &request.conversation_id,
+        &request.archive_scope,
+    )?;
     let count = decode_count(database.entity_get(transaction, &count_key)?)?;
     if count >= MAX_COMPACTION_ARCHIVES_PER_CONVERSATION as u64 {
         return Err(crate::resource_exhaustion::capacity_quota(
@@ -777,8 +799,18 @@ pub(crate) fn list(
     request: &ListRequest,
 ) -> io::Result<Vec<u8>> {
     crate::conversation_header::require_active(database, transaction, &request.conversation_id)?;
-    require_archive_scope(database, transaction, &request.archive_scope, &request.conversation_id)?;
-    let rows = scan_index(database, transaction, &request.conversation_id, &request.archive_scope)?;
+    require_archive_scope(
+        database,
+        transaction,
+        &request.archive_scope,
+        &request.conversation_id,
+    )?;
+    let rows = scan_index(
+        database,
+        transaction,
+        &request.conversation_id,
+        &request.archive_scope,
+    )?;
     let mut archives = Vec::with_capacity(rows.len().min(request.limit));
     let mut identities = BTreeSet::new();
     for (_, value) in rows.into_iter().take(request.limit) {
@@ -809,7 +841,12 @@ pub(crate) fn get(
     request: &GetRequest,
 ) -> io::Result<Option<Vec<u8>>> {
     crate::conversation_header::require_active(database, transaction, &request.conversation_id)?;
-    require_archive_scope(database, transaction, &request.archive_scope, &request.conversation_id)?;
+    require_archive_scope(
+        database,
+        transaction,
+        &request.archive_scope,
+        &request.conversation_id,
+    )?;
     let Some((core, _)) = load_value(
         database,
         transaction,
@@ -912,7 +949,12 @@ pub(crate) fn update_summary(
     }
     // The legacy authority revalidates the child's exact birth evidence here
     // (and only here, after proving the archive exists in this scope).
-    require_archive_scope(database, transaction, &request.archive_scope, &conversation_id)?;
+    require_archive_scope(
+        database,
+        transaction,
+        &request.archive_scope,
+        &conversation_id,
+    )?;
     let (core, core_version) = load_value(
         database,
         transaction,
@@ -1039,7 +1081,10 @@ pub(crate) fn delete_conversation(
             conversation_id,
         )?;
     }
-    database.entity_delete(transaction, count_key(transaction, conversation_id, archive_scope)?)?;
+    database.entity_delete(
+        transaction,
+        count_key(transaction, conversation_id, archive_scope)?,
+    )?;
     serde_json::to_vec(&json!({"deleted": deleted}))
         .map_err(|_| invalid_data("archive deletion response cannot be encoded"))
 }
@@ -1084,7 +1129,10 @@ pub(crate) fn delete_conversation_all_scopes(
         )?;
     }
     for scope in scopes {
-        database.entity_delete(transaction, count_key(transaction, conversation_id, &scope)?)?;
+        database.entity_delete(
+            transaction,
+            count_key(transaction, conversation_id, &scope)?,
+        )?;
     }
     serde_json::to_vec(&json!({"deleted": deleted}))
         .map_err(|_| invalid_data("archive deletion response cannot be encoded"))

@@ -27,11 +27,6 @@ pub(crate) const ROUND_DISPLAY_ONLY_FIELDS: &[&str] = &[
     "usage",
 ];
 
-pub(crate) const SEGMENT_DISPLAY_ONLY_FIELDS: &[&str] = &[
-    "translatedText",
-];
+pub(crate) const SEGMENT_DISPLAY_ONLY_FIELDS: &[&str] = &["translatedText"];
 
-pub(crate) const TRANSLATED_SEGMENT_TYPES: &[&str] = &[
-    "text",
-    "thinking",
-];
+pub(crate) const TRANSLATED_SEGMENT_TYPES: &[&str] = &["text", "thinking"];

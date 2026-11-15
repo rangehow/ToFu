@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::process::{Command, Stdio};
 
 use tofu_db::authority::AuthorityDatabase;
@@ -64,8 +64,7 @@ fn verify_reports_ok_and_degraded_exactly() {
     assert!(
         stdout
             .split_whitespace()
-            .any(|field| field.starts_with("wal_tail_truncated_bytes=")
-                && !field.ends_with("=0")),
+            .any(|field| field.starts_with("wal_tail_truncated_bytes=") && !field.ends_with("=0")),
         "{stdout}"
     );
 }

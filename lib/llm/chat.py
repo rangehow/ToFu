@@ -44,12 +44,12 @@ def _attempt_headers(*, api_protocol, api_key, extra_headers, oauth, base_url,
     from lib.llm.cache_affinity import merge_cache_affinity_headers
     if api_protocol == 'anthropic':
         from lib.llm.anthropic_outbound import anthropic_headers
-        from lib.llm.catpaw_gateway import catpaw_headers, is_catpaw_base_url
+        from lib.llm.gateway_shape import gateway_anthropic_headers
         hdrs = anthropic_headers(api_key, extra_headers)
         if oauth == 'claude':
             hdrs.pop('Authorization', None)
-        elif is_catpaw_base_url(base_url):
-            hdrs.update(catpaw_headers())
+        else:
+            hdrs.update(gateway_anthropic_headers(base_url))
     else:
         hdrs = headers()
         if api_key:
@@ -292,13 +292,13 @@ def chat(messages, model=None, *, max_tokens=4096, temperature=0,
             body, _resp_reverse = openai_body_to_responses(body, profile=_resp_profile, stream=False)
         elif _anthropic:
             from lib.llm.anthropic_outbound import openai_body_to_anthropic
-            from lib.llm.catpaw_gateway import apply_catpaw_shape, is_catpaw_base_url
+            from lib.llm.gateway_shape import apply_gateway_anthropic_shape
             body = openai_body_to_anthropic(body)
             if oauth == 'claude':
                 from lib.oauth.outbound import apply_claude_cloak
                 body, _cloak_reverse = apply_claude_cloak(body)
-            elif is_catpaw_base_url(base_url):
-                body = apply_catpaw_shape(body)
+            else:
+                body = apply_gateway_anthropic_shape(body, base_url)
 
         else:
             from lib.llm.openai_outbound import openai_body_to_chat

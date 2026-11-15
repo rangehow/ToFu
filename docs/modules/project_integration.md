@@ -929,8 +929,8 @@ test command mutate a shared environment. Specification:
 **Test roots (2026-11-13).** Problem: the inventory (`verification_index.py`)
 read only `tests/`, so 179 test files with 2,610 cases in package suites were
 outside `make test`, `record` and the CI candidate check: `packages/*/tests`,
-`plugins/tofu-trading/tests`, `bundles/meituan/tests`,
-`bundles/meituan/environment-provider/tests`, `android/tests`,
+`plugins/tofu-trading/tests`, `bundles/yourprovider/tests`,
+`bundles/yourprovider/environment-provider/tests`, `android/tests`,
 `android/runtime/tests` and `benchmarks/*/tests`. CI ran only tofu-search and
 tofu-trading, separately; the other 54 files ran only by hand, and 20 of them
 could not even import from a source checkout. Decision: every `test_*.py`
@@ -2143,8 +2143,44 @@ checkout> [--expire-days N] [--apply]`, report-only by default. Model and
 harness Git never start automatic maintenance; the decision, the lease, what
 the script keeps and its measured cost are in "Automatic Git maintenance never
 runs inside commands" in
-[`GIT_WORKSPACE_GUARD.md`](../runbooks/GIT_WORKSPACE_GUARD.md). Verify
-`tests/project_mod/test_git_maintenance_script.py`.
+[`GIT_WORKSPACE_GUARD.md`](../runbooks/GIT_WORKSPACE_GUARD.md). The same pass
+(`lib/project_mod/git_object_maintenance.py`) also starts in the background
+after a delivery commit, next to the spare refresh, when the repository's own
+`gc.auto`/`gc.autoPackLimit` is exceeded beyond the residue the last pass
+recorded in `<git-common-dir>/tofu-maintenance.json`, or when that residue's
+expiry has passed; a busy metadata lease or a running `git gc` skips it until
+the next delivery. Verify `tests/project_mod/test_git_maintenance_script.py`
+and `tests/project_mod/test_git_object_maintenance.py`. To confirm a pending
+prune ran: read the record (`cat .git/tofu-maintenance.json`; `looseAfter` is
+the residue, due once `finishedAt` plus `expireDays` has passed), then after
+the next delivery commit look for `[GitMaintenance] ... pass due (the last pass
+left N loose objects and their expiry has passed)` in `logs/app.log` of the
+execution host, a newer `finishedAt`, and `git count-objects -v` showing the
+loose count fall. The pass starts only in a process that loaded this code.
+
+Task refs of finished assignments: `python3 scripts/git_task_ref_archive.py
+--repo <main checkout> --live-status <status.json> [--apply]`, report-only by
+default. `<status.json>` is the body of `GET
+/api/v4/project/integration/status?path=<main checkout>` (the live and problem
+rows). A task is live while a registered worktree carries its checkout name or
+that status lists its workspace; nothing of a live task is touched. Other task
+refs (`inputs`, `checkpoints`, `delivery-inputs`, `delivery-checkpoints`,
+`workspace-wip`) are deleted when the branch contains them, otherwise archived
+first into one bundle verified before any deletion,
+`data/git-hygiene/task-refs-<UTC>.bundle`, with a manifest beside it; the
+archived commit is the original unless its tree holds `CACHEDIR.TAG`-tagged
+build directories, which are reset to the merge base and the original named
+in a `Tofu-Original-Commit:` trailer. The deletion is one `update-ref`
+transaction verifying every value read. It complements `retire_task_refs`,
+which covers only delivered rows with commit evidence: discarded, failed and
+pre-2026-11-13 rows kept their refs (2026-11-15: 4,335 task refs, 141 live,
+pinning 7.1 GiB no branch references; after the pass 43 MiB). Restore with
+`git fetch <bundle> 'refs/tofu/archived/<UTC>/*:refs/tofu/archived/<UTC>/*'`.
+**Alternatives rejected:** deleting unmerged refs outright (loses work);
+keeping build directories in the archive (6.5 GiB of reconstructible
+output); deciding liveness from worktrees alone (a lost checkout awaiting
+restoration has a row but no worktree, and restoration reads its refs). Verify
+`tests/project_mod/test_git_task_ref_archive.py`.
 
 ## Invariants
 

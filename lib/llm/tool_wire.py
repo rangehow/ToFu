@@ -5,19 +5,11 @@ selected route capabilities and orchestration decisions. It grants no execution
 rights, performs no HTTP/storage work, and preserves transport diagnostics.
 """
 from dataclasses import dataclass
-from urllib.parse import urlparse
 
 from lib.log import get_logger
+from lib.provider.gateway_profiles import gateway_trait
 
 logger = get_logger(__name__)
-
-# Claude behind your-llm-gateway.example.com's Anthropic face stops reading its own
-# prompt-cache writes once the request's tool names exceed ~492 bytes counted
-# as sum(len(name) + 1): byte-identical requests then re-write the whole
-# prefix every round. Kimi on the same face is unaffected. Live A/B 2026-10-28
-# (docs/LLM_COST_OPTIMIZATION.md, "Gateway tool-name budget"); the margin
-# absorbs gateway-side key material we cannot observe.
-SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES = 448
 
 _DISCOVERY_PAIR = frozenset({'search_tools', 'execute_tools'})
 
@@ -35,15 +27,21 @@ _provider_tool_name = provider_tool_name
 
 
 def provider_tool_name_budget_bytes(*, api_protocol, base_url, model):
-    """Return the selected route's tool-name byte budget; 0 means none."""
-    try:
-        host = (urlparse(str(base_url or '')).hostname or '').lower()
-    except ValueError:
+    """Return the selected route's tool-name byte budget; 0 means none.
+
+    Some gateways stop reusing Claude prompt-cache writes on their Anthropic
+    face once joined tool names exceed a byte budget, counted as
+    sum(len(name) + 1). The gateway's profile declares that budget
+    (``anthropic_claude_tool_name_budget_bytes``,
+    docs/LLM_COST_OPTIMIZATION.md "Gateway tool-name budget").
+    """
+    if api_protocol != 'anthropic':
         return 0
-    if api_protocol != 'anthropic' or host != 'your-llm-gateway.example.com':
+    budget = gateway_trait('anthropic_claude_tool_name_budget_bytes', base_url=base_url)
+    if not budget:
         return 0
     from lib.model_info import is_claude
-    return SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES if is_claude(model) else 0
+    return budget if is_claude(model) else 0
 
 
 def _name_bytes(name):

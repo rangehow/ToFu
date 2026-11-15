@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::io;
 
 use super::{
-    conversation_prefix, conversation_sync_event_key, entity_key, invalid_data, invalid_input,
+    conversation_sync_event_key, entity_key, invalid_data, invalid_input,
     store_sync_retention_indexes, SYNC_DOCUMENT_IDENTITY,
 };
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
@@ -38,7 +38,9 @@ fn unhex(value: &str, maximum: usize) -> io::Result<Vec<u8>> {
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
                 .map_err(|_| invalid_input("invalid conversation sync event hex"))
@@ -53,12 +55,18 @@ struct Restore {
     owner_user_id: u64,
     conversation_id: String,
     sync_sequence: u64,
-    change_type: String,
-    turn_id: Option<String>,
-    attempt_id: Option<String>,
+    // The four row columns below are admitted and type-checked as part of the
+    // request shape; the stored event JSON is the only source the import reads.
+    #[serde(rename = "change_type")]
+    _change_type: String,
+    #[serde(rename = "turn_id")]
+    _turn_id: Option<String>,
+    #[serde(rename = "attempt_id")]
+    _attempt_id: Option<String>,
     event_json_hex: String,
     created_at_ms: i64,
-    attempt_sequence: Option<u64>,
+    #[serde(rename = "attempt_sequence")]
+    _attempt_sequence: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -109,9 +117,17 @@ fn read(
     sync_sequence: u64,
 ) -> io::Result<Option<Vec<u8>>> {
     let key = conversation_sync_event_key(tx, conversation_id, sync_sequence)?;
-    let Some(stored) = database.entity_get(tx, &key)? else { return Ok(None); };
+    let Some(stored) = database.entity_get(tx, &key)? else {
+        return Ok(None);
+    };
     let (stored_key, raw) = super::sync_attempt_reference::materialize(
-        database, tx, &key, &stored, MAX_MIGRATION_DOCUMENT_BYTES, true)?;
+        database,
+        tx,
+        &key,
+        &stored,
+        MAX_MIGRATION_DOCUMENT_BYTES,
+        true,
+    )?;
     if stored_key != logical_key(conversation_id, sync_sequence) {
         return Err(invalid_data("conversation sync document key differs"));
     }
@@ -132,13 +148,12 @@ fn restore(
     // envelope fields, but the exact byte spelling is preserved verbatim.
     let event: Value = serde_json::from_slice(&event_json)
         .map_err(|_| invalid_input("conversation sync event JSON is invalid"))?;
-    if event
-        .get("conversationId")
-        .and_then(Value::as_str)
-        != Some(row.conversation_id.as_str())
+    if event.get("conversationId").and_then(Value::as_str) != Some(row.conversation_id.as_str())
         || event.get("syncSeq").and_then(Value::as_u64) != Some(row.sync_sequence)
     {
-        return Err(invalid_input("conversation sync event envelope identity differs"));
+        return Err(invalid_input(
+            "conversation sync event envelope identity differs",
+        ));
     }
     let key = conversation_sync_event_key(tx, &row.conversation_id, row.sync_sequence)?;
     if let Some(existing) = read(database, tx, &row.conversation_id, row.sync_sequence)? {
@@ -167,7 +182,12 @@ fn restore(
     Ok(true)
 }
 
-fn document(tx: &AuthorityTransaction, conversation_id: &str, sync_sequence: u64, event_json: &[u8]) -> Value {
+fn document(
+    tx: &AuthorityTransaction,
+    conversation_id: &str,
+    sync_sequence: u64,
+    event_json: &[u8],
+) -> Value {
     let hex: String = event_json.iter().map(|b| format!("{b:02x}")).collect();
     json!({
         "tenant_id": tx.tenant_id(),
@@ -212,7 +232,13 @@ fn scan(
     let mut rows = Vec::with_capacity(page.len());
     for (key, stored) in &page {
         let (_, raw) = super::sync_attempt_reference::materialize(
-            database, tx, key, stored, MAX_MIGRATION_DOCUMENT_BYTES, true)?;
+            database,
+            tx,
+            key,
+            stored,
+            MAX_MIGRATION_DOCUMENT_BYTES,
+            true,
+        )?;
         let event: Value = serde_json::from_slice(&raw)
             .map_err(|_| invalid_data("conversation sync event catalog is malformed"))?;
         let conversation_id = event
@@ -224,7 +250,9 @@ fn scan(
             .and_then(Value::as_u64)
             .ok_or_else(|| invalid_data("conversation sync event sequence missing"))?;
         if key != &conversation_sync_event_key(tx, conversation_id, sync_sequence)? {
-            return Err(invalid_data("conversation sync event catalog identity differs"));
+            return Err(invalid_data(
+                "conversation sync event catalog identity differs",
+            ));
         }
         rows.push(json!({
             "tenant_id": tx.tenant_id(),

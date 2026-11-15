@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-from evaluations.terminal_bench.gateway import INGRESS_BRANCH
 from evaluations.terminal_bench.harness import PROTOCOLS, list_tasks
 
+# Ingress branch carrying the native exec channel (nlp/harbor b35af6f). A
+# deployment declares it; with none declared, ``run --branch`` is required.
+INGRESS_BRANCH = os.environ.get("TOFU_TB_INGRESS_BRANCH", "").strip()
 # Context window both arms are told: the value the 2026-11-01/02 Tofu runs routed
 # with (Harbor TofuKernel envelope), so both harnesses share one model fact.
 GLM53_CONTEXT_TOKENS = 262_144

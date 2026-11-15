@@ -81,8 +81,19 @@ pub const WAL_WRITE_BUFFER_METRICS_FIELD: &str = "walWriteBuffer";
 pub const WAL_WRITE_BUFFER_HEADROOM_DIVISOR: u64 = 256;
 pub const WAL_WRITE_BUFFER_FALLBACK_BYTES: u64 = 262144;
 pub const NATIVE_RESOURCE_EXHAUSTION_CONTRACT: &str = "tofudb.resource-exhaustion-reasons/v2";
-pub const NATIVE_RESOURCE_EXHAUSTION_REASON_NAMES: [&str; 9] = ["raw_archive_owner_capacity", "raw_archive_conversation_capacity", "raw_archive_restore_byte_budget", "domain_resource_bound", "capacity_quota", "request_accounting_overflow", "allocation_reservation_failure", "os_memory_failure", "other"];
-pub const NATIVE_RESOURCE_EXHAUSTION_REASON_RETRYABLE: [bool; 9] = [true, true, true, false, true, true, true, true, true];
+pub const NATIVE_RESOURCE_EXHAUSTION_REASON_NAMES: [&str; 9] = [
+    "raw_archive_owner_capacity",
+    "raw_archive_conversation_capacity",
+    "raw_archive_restore_byte_budget",
+    "domain_resource_bound",
+    "capacity_quota",
+    "request_accounting_overflow",
+    "allocation_reservation_failure",
+    "os_memory_failure",
+    "other",
+];
+pub const NATIVE_RESOURCE_EXHAUSTION_REASON_RETRYABLE: [bool; 9] =
+    [true, true, true, false, true, true, true, true, true];
 pub(crate) const REQUIRED_HELLO_FIELDS: &[u8] = &[0, 2, 17, 18, 19, 20];
 pub(crate) const REQUIRED_REQUEST_FIELDS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 pub(crate) const REQUIRED_RESPONSE_FIELDS: &[u8] = &[0, 1, 2, 7, 9, 10, 11, 12, 13];

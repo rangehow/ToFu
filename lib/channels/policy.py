@@ -38,17 +38,18 @@ def robot_thread(account: dict[str, Any] | None) -> str:
 
     Only a group command chat: the robot posts into groups it is a member of,
     while a private chat with the robot would be a different conversation.
-    The robot is the Settings one or the Internal package's built-in one
-    (``lib.channels.dx.robot.effective_robot``, an immutable package file).
-    Whether it may post there for this server is the binding's decision
-    (``lib.channels.dx.robot.binding_refusal``).
+    The robot is the one an installed channel adapter configures for the
+    account (``command_chat_robot``; for 大象 the Settings robot or the
+    Internal package's built-in one). Whether it may post there for this
+    server is that adapter's binding decision.
     """
-    from lib.channels.dx.robot import effective_robot
+    from lib.channels.adapters import installed_channel_adapters
     account = account or {}
     chat = str(account.get('commandChat') or '')
     if not chat or ThreadKey.parse(chat).kind != 'gid':
         return ''
-    return chat if effective_robot(account) is not None else ''
+    robots = (adapter.command_chat_robot(account) for adapter in installed_channel_adapters().values())
+    return chat if any(robot is not None for robot in robots) else ''
 
 
 def owner_uid(account: dict[str, Any] | None) -> str:

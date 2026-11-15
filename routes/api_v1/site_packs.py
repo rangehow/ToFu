@@ -52,8 +52,8 @@ def _layer_of(source_path: str) -> str:
         return 'user'
     except ValueError:
         pass
-    parts = path.parts
-    if 'bundles' in parts:
+    from tofu_extensions import is_bundle_path
+    if is_bundle_path(path):
         return 'bundle'
     return 'core'
 

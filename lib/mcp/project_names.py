@@ -69,7 +69,6 @@ _MAX_INGEST_DEPTH = 8
 _cache = OrderedDict()
 _lock = threading.Lock()
 _DEFAULT_OVERLEAF_BASE = 'https://www.overleaf.com'
-_DEFAULT_XUECHENG_BASE = 'https://km.internal.example.com'
 _OVERLEAF_URL_RE = re.compile(r'(https?://[^\s/]+)/project/([0-9a-f]{24})')
 _KM_FULL_URL_RE = re.compile(r'(https?://[^\s/]+)/(?:collabpage|page)/(\d{6,15})')
 _PID_RE = re.compile(r'[0-9a-f]{24}')
@@ -159,8 +158,21 @@ def get_doc_url(content_id, *, user_id=None) -> str:
     if not cid:
         return ''
     cached = _read('doc_url', cid, user_id)
-    base = _read('xuecheng_base', '', user_id) or _DEFAULT_XUECHENG_BASE
-    return cached or f"{base.rstrip('/')}/collabpage/{cid}"
+    base = _read('xuecheng_base', '', user_id) or _default_xuecheng_base()
+    if cached or not base:
+        return cached
+    return f"{base.rstrip('/')}/collabpage/{cid}"
+
+
+def _default_xuecheng_base() -> str:
+    """The xuecheng connector's declared document base (its catalog ``document_reader``).
+
+    The installing overlay declares it; without that connector no link is
+    built for a bare document id until a tool result teaches one.
+    """
+    from lib.mcp.registry import get_catalog_entry
+    reader = (get_catalog_entry('xuecheng') or {}).get('document_reader') or {}
+    return str(reader.get('base_url') or '')
 
 
 def clear_cache(*, user_id=None) -> None:

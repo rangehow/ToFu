@@ -23,18 +23,16 @@ use crate::generated_storage_operations::{STORAGE_REGISTRY_VERSION, STORAGE_SCHE
 use crate::generated_tofudb_ir::{
     DESKTOP_PREFERENCE_NAMESPACE, EVENT_FORMAT_VERSION, EXECUTABLE_STORAGE_OPERATIONS,
     MAX_DESKTOP_AGENT_ID_CHARACTERS, MAX_MODEL_ROUTING_CIPHERTEXT_CHARACTERS,
-    MAX_MODEL_ROUTING_KEY_HINT_CHARACTERS,
-    MAX_MODEL_ROUTING_SECRET_REFERENCE_CHARACTERS,
+    MAX_MODEL_ROUTING_KEY_HINT_CHARACTERS, MAX_MODEL_ROUTING_SECRET_REFERENCE_CHARACTERS,
     MAX_MODEL_ROUTING_TIMESTAMP_SECONDS, MAX_RECENT_PROJECT_PATH_CHARACTERS,
-    MAX_TASK_RESULT_CACHE_FACT,
-    MAX_TASK_RESULT_COST_EXPERIMENT_ROWS, MAX_TASK_RESULT_COST_EXPERIMENT_SCAN_ROWS,
-    MAX_TASK_RESULT_DOCUMENT_BYTES, MAX_TASK_RESULT_RECOVERY_ROWS,
-    MAX_TASK_RESULT_RECOVERY_SCAN_ROWS, MAX_TASK_RESULT_SUMMARY_ROWS,
-    MAX_TASK_RESULT_SUMMARY_SCAN_ROWS, MAX_TENANT_USER_LIST_ROWS, MAX_TENANT_USER_LIST_SCAN_ROWS,
-    MAX_WORKER_JOB_CLAIM_KINDS, MAX_WORKER_JOB_CLOCK_MILLISECONDS, MAX_WORKER_JOB_ERROR_BYTES,
-    MAX_WORKER_JOB_FUTURE_CLOCK_SKEW_MILLISECONDS, MAX_WORKER_JOB_PAYLOAD_BYTES,
-    MAX_WORKER_JOB_PRIORITY, RECORD_DOCUMENT_NAMESPACE, TASK_RESULT_CACHE_SETTINGS_CONTRACT,
-    TASK_RESULT_CHECKPOINT_GUARD_CONTRACT,
+    MAX_TASK_RESULT_CACHE_FACT, MAX_TASK_RESULT_COST_EXPERIMENT_ROWS,
+    MAX_TASK_RESULT_COST_EXPERIMENT_SCAN_ROWS, MAX_TASK_RESULT_DOCUMENT_BYTES,
+    MAX_TASK_RESULT_RECOVERY_ROWS, MAX_TASK_RESULT_RECOVERY_SCAN_ROWS,
+    MAX_TASK_RESULT_SUMMARY_ROWS, MAX_TASK_RESULT_SUMMARY_SCAN_ROWS, MAX_TENANT_USER_LIST_ROWS,
+    MAX_TENANT_USER_LIST_SCAN_ROWS, MAX_WORKER_JOB_CLAIM_KINDS, MAX_WORKER_JOB_CLOCK_MILLISECONDS,
+    MAX_WORKER_JOB_ERROR_BYTES, MAX_WORKER_JOB_FUTURE_CLOCK_SKEW_MILLISECONDS,
+    MAX_WORKER_JOB_PAYLOAD_BYTES, MAX_WORKER_JOB_PRIORITY, RECORD_DOCUMENT_NAMESPACE,
+    TASK_RESULT_CACHE_SETTINGS_CONTRACT, TASK_RESULT_CHECKPOINT_GUARD_CONTRACT,
 };
 use crate::semantic::AdmittedRequest;
 use crate::transaction_ir::{
@@ -116,7 +114,9 @@ impl SemanticExecutionError {
         match self {
             Self::InvalidPayload | Self::InvalidPayloadFence(_) => "database_protocol_error",
             Self::ToolResultQuery(code, _) => code,
-            Self::DiagnosticInvalidPayload | Self::SearchCursorInvalidPayload => "database_invalid_payload",
+            Self::DiagnosticInvalidPayload | Self::SearchCursorInvalidPayload => {
+                "database_invalid_payload"
+            }
             Self::DiagnosticUnsupported => "database_unsupported",
             Self::NotFound => "database_not_found",
             Self::AuthorityScopeMismatch => "authority_scope_mismatch",
@@ -142,7 +142,10 @@ impl SemanticExecutionError {
     pub fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::StorageUnavailable | Self::StorageFull | Self::ResourceExhausted(_) | Self::CapacityBusy
+            Self::StorageUnavailable
+                | Self::StorageFull
+                | Self::ResourceExhausted(_)
+                | Self::CapacityBusy
                 | Self::ToolResultQuery(_, true)
         )
     }
@@ -291,10 +294,14 @@ fn canonical_json(value: &Value) -> Result<Vec<u8>, SemanticExecutionError> {
 /// transferring the root avoids cloning every nested field before compilation.
 fn payload_object(payload: &[u8]) -> Result<Map<String, Value>, SemanticExecutionError> {
     let _decode = crate::fsync_stats::StageTimer::diagnostic(
-        crate::fsync_stats::STAGE_SEMANTIC_PAYLOAD_DECODE);
+        crate::fsync_stats::STAGE_SEMANTIC_PAYLOAD_DECODE,
+    );
     let value: Value =
         serde_json::from_slice(payload).map_err(|_| SemanticExecutionError::InvalidPayload)?;
-    crate::request_profile::work(crate::request_profile::Work::SemanticPayloadDecodedBytes, payload.len() as u64);
+    crate::request_profile::work(
+        crate::request_profile::Work::SemanticPayloadDecodedBytes,
+        payload.len() as u64,
+    );
     match value {
         Value::Object(payload) => Ok(payload),
         _ => Err(SemanticExecutionError::InvalidPayload),
@@ -525,8 +532,10 @@ fn command_effects_from_canonical(
         committed_at_ms: now_unix_ms,
         outbox_payload: outbox_override.unwrap_or(canonical.bytes),
         store_receipt: admitted.operation.receipt_required
-            || admitted.operation.receipt_when_true.is_some_and(|field|
-                payload.get(field) == Some(&Value::Bool(true))),
+            || admitted
+                .operation
+                .receipt_when_true
+                .is_some_and(|field| payload.get(field) == Some(&Value::Bool(true))),
     })
 }
 
@@ -894,11 +903,7 @@ fn compile_artifact(
             if !source_ref.is_object() || !meta.is_object() {
                 return Err(SemanticExecutionError::InvalidPayload);
             }
-            let content = artifact_optional_text(
-                &payload,
-                "content",
-                usize::MAX,
-            )?;
+            let content = artifact_optional_text(&payload, "content", usize::MAX)?;
             (
                 vec![TransactionIrStep::ArtifactCreate {
                     request: crate::artifact::CreateRequest {
@@ -1058,7 +1063,11 @@ fn compile_artifact(
                 _ => return Err(SemanticExecutionError::InvalidPayload),
             };
             if admitted.operation.name.ends_with(".read") {
-                let offset = payload.get("cursor").or_else(|| payload.get("offset")).cloned().unwrap_or(json!(0));
+                let offset = payload
+                    .get("cursor")
+                    .or_else(|| payload.get("offset"))
+                    .cloned()
+                    .unwrap_or(json!(0));
                 let limit = usize::try_from(optional_nonnegative_integer(&payload, "limit", 8192)?)
                     .ok()
                     .filter(|limit| (1..=64 * 1024).contains(limit))
@@ -1226,13 +1235,25 @@ fn compile_turn_event_record_request(
                 .and_then(|event| compile_event_item(event, logical_now))
         })
         .transpose()?;
-    let preceding_task_events = match payload.get("task_event").and_then(Value::as_object)
-        .and_then(|event| event.get("preceding_events")) {
+    let preceding_task_events = match payload
+        .get("task_event")
+        .and_then(Value::as_object)
+        .and_then(|event| event.get("preceding_events"))
+    {
         None => Vec::new(),
-        Some(Value::Array(events)) if events.len() < crate::generated_task_event_delivery::PROGRESS_BATCH_MAX_FRAMES => events.iter().map(|event| {
-            event.as_object().ok_or(SemanticExecutionError::InvalidPayload)
-                .and_then(|event| compile_event_item(event, logical_now))
-        }).collect::<Result<Vec<_>, _>>()?,
+        Some(Value::Array(events))
+            if events.len() < crate::generated_task_event_delivery::PROGRESS_BATCH_MAX_FRAMES =>
+        {
+            events
+                .iter()
+                .map(|event| {
+                    event
+                        .as_object()
+                        .ok_or(SemanticExecutionError::InvalidPayload)
+                        .and_then(|event| compile_event_item(event, logical_now))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
         _ => return Err(SemanticExecutionError::InvalidPayload),
     };
     // Flow phase attempts declare their root here; the engine must prove
@@ -1302,25 +1323,50 @@ fn compile_turn_event_record_batch(
             return Err(Fence("turn event batch entries must name the batch owner"));
         }
         let request = compile_turn_event_record_request(entry, now_unix_ms)?;
-        let carried_structural = request.task_event.as_ref().is_some_and(|item| item.event_type != "tool_effect")
+        let carried_structural = request
+            .task_event
+            .as_ref()
+            .is_some_and(|item| item.event_type != "tool_effect")
             && !request.terminal
-            && request.background_command_ack.as_ref().map_or(true, Value::is_null)
+            && request
+                .background_command_ack
+                .as_ref()
+                .is_none_or(Value::is_null)
             && request.event_type == "projection_updated"
-            && request.event_payload.get("updateKind").and_then(Value::as_str) != Some("tool_effect");
+            && request
+                .event_payload
+                .get("updateKind")
+                .and_then(Value::as_str)
+                != Some("tool_effect");
         if !carried_structural {
-            return Err(Fence("turn event batch entries must be carried structural events"));
+            return Err(Fence(
+                "turn event batch entries must be carried structural events",
+            ));
         }
         if requests.first().is_some_and(|first| {
-            (&first.attempt_id, &first.task_id, &first.flow_root_attempt_id)
-                != (&request.attempt_id, &request.task_id, &request.flow_root_attempt_id)
+            (
+                &first.attempt_id,
+                &first.task_id,
+                &first.flow_root_attempt_id,
+            ) != (
+                &request.attempt_id,
+                &request.task_id,
+                &request.flow_root_attempt_id,
+            )
         }) {
             return Err(Fence("turn event batch spans tasks or attempts"));
         }
-        for item in request.preceding_task_events.iter().chain(request.task_event.as_ref()) {
+        for item in request
+            .preceding_task_events
+            .iter()
+            .chain(request.task_event.as_ref())
+        {
             if item.task_id != request.task_id
                 || previous_sequence.is_some_and(|previous| item.application_sequence <= previous)
             {
-                return Err(Fence("turn event batch rows must form one ascending task stream"));
+                return Err(Fence(
+                    "turn event batch rows must form one ascending task stream",
+                ));
             }
             previous_sequence = Some(item.application_sequence);
             rows += 1;
@@ -1329,7 +1375,9 @@ fn compile_turn_event_record_batch(
         requests.push(request);
     }
     if rows > STRUCTURAL_BATCH_MAX_EVENTS || wire_bytes > STRUCTURAL_BATCH_MAX_WIRE_BYTES {
-        return Err(Fence("turn event batch exceeds the storage event RPC bound"));
+        return Err(Fence(
+            "turn event batch exceeds the storage event RPC bound",
+        ));
     }
     Ok(requests)
 }
@@ -1893,7 +1941,9 @@ fn compile_turn(
             owner_user_id: user_id,
             operation: admitted.operation.name.to_owned(),
             operation_kind: admitted.operation.kind,
-            steps: requests.into_iter().enumerate()
+            steps: requests
+                .into_iter()
+                .enumerate()
                 .map(|(slot, request)| TransactionIrStep::TurnEventRecord { request, slot })
                 .collect(),
             result: TransactionIrResult::SlotArray { slots },
@@ -2181,11 +2231,19 @@ fn compile_turn(
     if admitted.operation.name == "turn.attempt.start" {
         let attempt_id = required_text(&payload, "attempt_id", 128)?.to_owned();
         let task_id = required_text(&payload, "task_id", 256)?.to_owned();
-        let automation_context: Option<crate::automation_events::TaskStartedContext> = match payload.get("automation_context") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(serde_json::from_value(value.clone()).map_err(|_| SemanticExecutionError::InvalidPayload)?),
-        };
-        if let Some(context) = &automation_context { context.validate().map_err(|_| SemanticExecutionError::InvalidPayload)?; }
+        let automation_context: Option<crate::automation_events::TaskStartedContext> =
+            match payload.get("automation_context") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    serde_json::from_value(value.clone())
+                        .map_err(|_| SemanticExecutionError::InvalidPayload)?,
+                ),
+            };
+        if let Some(context) = &automation_context {
+            context
+                .validate()
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+        }
         return Ok(TransactionIr {
             tenant_id,
             owner_user_id: user_id,
@@ -2195,8 +2253,10 @@ fn compile_turn(
                 attempt_id,
                 task_id,
                 automation_context,
-                worker_claim: crate::worker_job::PublicationClaim::parse(payload.get("worker_claim"))
-                    .map_err(|_| SemanticExecutionError::InvalidPayload)?,
+                worker_claim: crate::worker_job::PublicationClaim::parse(
+                    payload.get("worker_claim"),
+                )
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?,
                 worker_process: payload.get("worker_process").cloned(),
                 committed_at_ms: now_unix_ms,
                 slot: 0,
@@ -2244,7 +2304,8 @@ fn compile_turn(
             steps: vec![TransactionIrStep::TurnAttemptGet {
                 attempt_id,
                 include_execution_config: match payload.get("include_execution_config") {
-                    None => false, Some(Value::Bool(value)) => *value,
+                    None => false,
+                    Some(Value::Bool(value)) => *value,
                     _ => return Err(SemanticExecutionError::InvalidPayload),
                 },
                 slot: 0,
@@ -2469,8 +2530,9 @@ fn compile_turn(
                         expected_parent_projection_revision: payload
                             .get("expected_parent_projection_revision")
                             .filter(|value| !value.is_null())
-                            .map(|value| value.as_u64().ok_or_else(||
-                                SemanticExecutionError::InvalidPayload))
+                            .map(|value| {
+                                value.as_u64().ok_or(SemanticExecutionError::InvalidPayload)
+                            })
                             .transpose()?,
                         require_parent_not_stopped: payload
                             .get("require_parent_not_stopped")
@@ -2662,8 +2724,10 @@ fn compile_turn(
             (
                 vec![TransactionIrStep::TurnVisibleSync {
                     request: Box::new(crate::turn::VisibleSyncRequest {
-                        worker_claim: crate::worker_job::PublicationClaim::parse(payload.get("worker_claim"))
-                            .map_err(|_| SemanticExecutionError::InvalidPayload)?,
+                        worker_claim: crate::worker_job::PublicationClaim::parse(
+                            payload.get("worker_claim"),
+                        )
+                        .map_err(|_| SemanticExecutionError::InvalidPayload)?,
                         conversation_id,
                         attempt_id,
                         root_turn_id,
@@ -2833,7 +2897,11 @@ fn compile_turn(
             };
             (
                 vec![TransactionIrStep::TurnContextRead {
-                    conversation_id, turn_id, replay, after_turn_id, slot: 0,
+                    conversation_id,
+                    turn_id,
+                    replay,
+                    after_turn_id,
+                    slot: 0,
                 }],
                 TransactionIrResult::SlotOrLiteral {
                     slot: 0,
@@ -2892,7 +2960,8 @@ fn compile_turn(
             )
         }
         "turn.sync.snapshot" => {
-            let max_projection_bytes = optional_nonnegative_integer(&payload, "max_projection_bytes", 0)?;
+            let max_projection_bytes =
+                optional_nonnegative_integer(&payload, "max_projection_bytes", 0)?;
             if max_projection_bytes != 0 && !(65536..=16777216).contains(&max_projection_bytes) {
                 return Err(SemanticExecutionError::InvalidPayload);
             }
@@ -2924,20 +2993,38 @@ fn compile_turn(
             let lane_id = required_text(&payload, "lane_id", 128)?.to_owned();
             let offset = optional_nonnegative_integer(&payload, "offset", 0)?;
             let limit = optional_nonnegative_integer(&payload, "limit", 50)?;
-            let sync_sequence = payload.get("sync_sequence").and_then(Value::as_u64)
+            let sync_sequence = payload
+                .get("sync_sequence")
+                .and_then(Value::as_u64)
                 .ok_or(SemanticExecutionError::InvalidPayload)?;
             let anchor_turn_id = match payload.get("anchor_turn_id") {
                 None => String::new(),
                 Some(Value::String(s)) if s.chars().count() <= 128 => s.clone(),
                 _ => return Err(SemanticExecutionError::InvalidPayload),
             };
-            if !(1..=100).contains(&limit) { return Err(SemanticExecutionError::InvalidPayload); }
-            (vec![TransactionIrStep::TurnSyncRoundDirectory { conversation_id, lane_id, offset,
-                limit: limit as usize, sync_sequence, anchor_turn_id, slot: 0 }],
-                TransactionIrResult::SlotOrLiteral { slot: 0, missing: b"null".to_vec() }, None)
+            if !(1..=100).contains(&limit) {
+                return Err(SemanticExecutionError::InvalidPayload);
+            }
+            (
+                vec![TransactionIrStep::TurnSyncRoundDirectory {
+                    conversation_id,
+                    lane_id,
+                    offset,
+                    limit: limit as usize,
+                    sync_sequence,
+                    anchor_turn_id,
+                    slot: 0,
+                }],
+                TransactionIrResult::SlotOrLiteral {
+                    slot: 0,
+                    missing: b"null".to_vec(),
+                },
+                None,
+            )
         }
         "turn.sync.page" => {
-            let max_projection_bytes = optional_nonnegative_integer(&payload, "max_projection_bytes", 0)?;
+            let max_projection_bytes =
+                optional_nonnegative_integer(&payload, "max_projection_bytes", 0)?;
             if max_projection_bytes != 0 && !(65536..=16777216).contains(&max_projection_bytes) {
                 return Err(SemanticExecutionError::InvalidPayload);
             }
@@ -3103,10 +3190,11 @@ fn compile_turn(
             };
             (
                 vec![TransactionIrStep::TurnProjectionUpdate {
-
                     human_guidance_answer_json: match payload.get("human_guidance_answer") {
                         None => None,
-                        Some(Value::Object(answer)) => Some(canonical_json(&Value::Object(answer.clone()))?),
+                        Some(Value::Object(answer)) => {
+                            Some(canonical_json(&Value::Object(answer.clone()))?)
+                        }
                         _ => return Err(SemanticExecutionError::InvalidPayload),
                     },
                     preserve_activity: match payload.get("preserve_activity") {
@@ -3347,17 +3435,36 @@ fn compile_record(
     let payload = payload_object(&admitted.request.payload)?;
     let namespace = required_text(&payload, "namespace", 128)?.to_owned();
     let namespace_for_guard = namespace.clone();
-    if matches!(namespace.as_str(), crate::generated_project_dispatch_storage::HEADS | crate::generated_project_dispatch_storage::DOCUMENTS) {
+    if matches!(
+        namespace.as_str(),
+        crate::generated_project_dispatch_storage::HEADS
+            | crate::generated_project_dispatch_storage::DOCUMENTS
+    ) {
         return Err(SemanticExecutionError::InvalidPayload);
     }
     if namespace == "tool_result_private" {
         return Err(SemanticExecutionError::InvalidPayload);
     }
-    if matches!(namespace.as_str(), crate::native_checkpoint_store::HEADERS | crate::native_checkpoint_store::SNAPSHOTS | crate::native_checkpoint_store::REPLAY) {
+    if matches!(
+        namespace.as_str(),
+        crate::native_checkpoint_store::HEADERS
+            | crate::native_checkpoint_store::SNAPSHOTS
+            | crate::native_checkpoint_store::REPLAY
+    ) {
         return Err(SemanticExecutionError::InvalidPayload);
     }
-    if matches!(namespace.as_str(), "automation.runs.v1" | "automation.active.v1" | "automation.history.v1" | "automation.subscriptions.v1" | "automation.event-failures.v1" | "automation.presentations.v1" | "automation.targets.v1" | "automation.skillSources.v1")
-        && matches!(admitted.operation.name, "record.put" | "record.delete") {
+    if matches!(
+        namespace.as_str(),
+        "automation.runs.v1"
+            | "automation.active.v1"
+            | "automation.history.v1"
+            | "automation.subscriptions.v1"
+            | "automation.event-failures.v1"
+            | "automation.presentations.v1"
+            | "automation.targets.v1"
+            | "automation.skillSources.v1"
+    ) && matches!(admitted.operation.name, "record.put" | "record.delete")
+    {
         return Err(SemanticExecutionError::InvalidPayload);
     }
     // Task-result reads must pass through their tenant-global owner header
@@ -3392,7 +3499,6 @@ fn compile_record(
             )
         }
         "record.list" => {
-
             let include_value = match payload.get("include_value") {
                 None => true,
                 Some(Value::Bool(value)) => *value,
@@ -3414,7 +3520,11 @@ fn compile_record(
             };
             let cursor = |name| match payload.get(name) {
                 None => Ok(""),
-                Some(Value::String(value)) if value.chars().count() <= 512 && value.starts_with(prefix) => Ok(value.as_str()),
+                Some(Value::String(value))
+                    if value.chars().count() <= 512 && value.starts_with(prefix) =>
+                {
+                    Ok(value.as_str())
+                }
                 Some(Value::String(value)) if value.is_empty() => Ok(""),
                 _ => Err(SemanticExecutionError::InvalidPayload),
             };
@@ -3433,14 +3543,15 @@ fn compile_record(
             .map_err(map_storage_error)?;
             if !after.is_empty() {
                 start = record_key(tenant_id, owner_user_id, &namespace, after)?
-                    .exact_range().map_err(map_storage_error)?.1;
+                    .exact_range()
+                    .map_err(map_storage_error)?
+                    .1;
             }
             if !before.is_empty() {
                 end = record_key(tenant_id, owner_user_id, &namespace, before)?;
             }
             (
                 vec![TransactionIrStep::VersionedDocumentList {
-
                     include_value,
                     start,
                     end,
@@ -3494,12 +3605,27 @@ fn compile_record(
         }
         _ => return Err(SemanticExecutionError::UnsupportedOperation),
     };
-    if namespace_for_guard == "automation.definitions.v1" && matches!(admitted.operation.name,"record.put"|"record.delete") {
-        if admitted.operation.name=="record.put" && ["grant","triggerState","publicationCommand"].iter()
-            .any(|field|payload.get("value").and_then(|v|v.get(*field)).is_some_and(|v|!v.is_null())) {
+    if namespace_for_guard == "automation.definitions.v1"
+        && matches!(admitted.operation.name, "record.put" | "record.delete")
+    {
+        if admitted.operation.name == "record.put"
+            && ["grant", "triggerState", "publicationCommand"]
+                .iter()
+                .any(|field| {
+                    payload
+                        .get("value")
+                        .and_then(|v| v.get(*field))
+                        .is_some_and(|v| !v.is_null())
+                })
+        {
             return Err(SemanticExecutionError::InvalidPayload);
         }
-        steps.insert(0,TransactionIrStep::AutomationDefinitionDraftGuard {key:required_text(&payload,"key",512)?.to_owned()});
+        steps.insert(
+            0,
+            TransactionIrStep::AutomationDefinitionDraftGuard {
+                key: required_text(&payload, "key", 512)?.to_owned(),
+            },
+        );
     }
     let command_effects = admitted
         .operation
@@ -4003,7 +4129,11 @@ fn compile_optimizer(
         },
         "optimizer.proposal.list" => crate::optimizer::Request::ProposalList {
             status: optional("status", 64)?,
-            limit: limit("limit", crate::generated_tofudb_ir::DEFAULT_OPTIMIZER_LIST_ROWS, usize::MAX)?,
+            limit: limit(
+                "limit",
+                crate::generated_tofudb_ir::DEFAULT_OPTIMIZER_LIST_ROWS,
+                usize::MAX,
+            )?,
         },
         "optimizer.action.record" => crate::optimizer::Request::ActionRecord {
             action: crate::optimizer::Action {
@@ -4034,7 +4164,11 @@ fn compile_optimizer(
         },
         "optimizer.action.list" => crate::optimizer::Request::ActionList {
             include_reverted: boolean("include_reverted", false)?,
-            limit: limit("limit", crate::generated_tofudb_ir::DEFAULT_OPTIMIZER_LIST_ROWS, usize::MAX)?,
+            limit: limit(
+                "limit",
+                crate::generated_tofudb_ir::DEFAULT_OPTIMIZER_LIST_ROWS,
+                usize::MAX,
+            )?,
         },
         "optimizer.action.expired" => crate::optimizer::Request::ActionExpired {
             now_iso: required_text(&payload, "now_iso", 64)?.to_owned(),
@@ -4123,11 +4257,9 @@ fn compile_paper_build_artifact(
             .collect();
         for field in ["data", "receipt"] {
             if let Some(value) = payload.get(field) {
-                let (digest, bytes) = crate::paper_build_receipt::digest_bounded(
-                    value,
-                    MAX_LEGACY_DOCUMENT_BYTES,
-                )
-                .map_err(map_storage_error)?;
+                let (digest, bytes) =
+                    crate::paper_build_receipt::digest_bounded(value, MAX_LEGACY_DOCUMENT_BYTES)
+                        .map_err(map_storage_error)?;
                 replay_payload.insert(
                     format!("{field}_sha256"),
                     Value::String(digest.iter().map(|byte| format!("{byte:02x}")).collect()),
@@ -5963,7 +6095,9 @@ fn timer_create_document(
     required_text(payload, "conv_id", 256)?;
     let instruction = scheduler_optional_text(payload, "check_instruction", 20_000)?;
     if instruction.trim().is_empty()
-        && required_text(payload, "condition_command", 20_000)?.trim().is_empty()
+        && required_text(payload, "condition_command", 20_000)?
+            .trim()
+            .is_empty()
     {
         return Err(SemanticExecutionError::InvalidPayload);
     }
@@ -5999,9 +6133,9 @@ fn timer_create_document(
         ("fallback_streak", 0, i64::MIN),
     ] {
         let value = match payload.get(field) {
-            Some(value) if field == "poll_interval" || field == "max_polls" => {
-                value.as_i64().ok_or(SemanticExecutionError::InvalidPayload)?
-            }
+            Some(value) if field == "poll_interval" || field == "max_polls" => value
+                .as_i64()
+                .ok_or(SemanticExecutionError::InvalidPayload)?,
             None | Some(Value::Null) => default,
             Some(value) if is_python_falsy_json(value) => 0,
             Some(value) => scheduler_integer(value)?,
@@ -6164,15 +6298,30 @@ fn compile_swarm(
         .kind
         .mutates_state()
         .then(|| {
-            if matches!(admitted.operation.name, "swarm.agent.save" | "swarm.session.save") {
+            if matches!(
+                admitted.operation.name,
+                "swarm.agent.save" | "swarm.session.save"
+            ) {
                 // Full content remains in its blob document and request digest.
                 // The outbox carries a compact invalidation, never another copy
                 // of the resumable history inside the inline literal budget.
                 let mut summary = Map::new();
-                for field in ["user_id", "swarm_key", "agent_id", "status", "rounds_used", "delivered", "now_ms"] {
-                    if let Some(value) = payload.get(field) { summary.insert(field.to_owned(), value.clone()); }
+                for field in [
+                    "user_id",
+                    "swarm_key",
+                    "agent_id",
+                    "status",
+                    "rounds_used",
+                    "delivered",
+                    "now_ms",
+                ] {
+                    if let Some(value) = payload.get(field) {
+                        summary.insert(field.to_owned(), value.clone());
+                    }
                 }
-                let outbox = canonical_json(&json!({"operation":admitted.operation.name,"payload":summary}))?;
+                let outbox = canonical_json(
+                    &json!({"operation":admitted.operation.name,"payload":summary}),
+                )?;
                 command_effects_with_outbox(admitted, &payload, now_unix_ms, outbox)
             } else {
                 command_effects(admitted, &payload, now_unix_ms)
@@ -6299,27 +6448,54 @@ fn compile_queue(
             conversation_id: conversation_id()?,
             mode: match payload.get("mode") {
                 None => "full".to_owned(),
-                Some(Value::String(value)) if matches!(value.as_str(),
-                    "full" | "preview" | "dispatchable" | "background_pending" | "background_page") => value.clone(),
+                Some(Value::String(value))
+                    if matches!(
+                        value.as_str(),
+                        "full"
+                            | "preview"
+                            | "dispatchable"
+                            | "background_pending"
+                            | "background_page"
+                    ) =>
+                {
+                    value.clone()
+                }
                 _ => return Err(SemanticExecutionError::InvalidPayload),
             },
             page_size: match payload.get("page_size") {
                 None => 32,
-                Some(value) => value.as_u64().filter(|value| *value > 0)
+                Some(value) => value
+                    .as_u64()
+                    .filter(|value| *value > 0)
                     .and_then(|value| usize::try_from(value).ok())
                     .ok_or(SemanticExecutionError::InvalidPayload)?,
             },
             max_bytes: match payload.get("max_bytes") {
                 None => crate::generated_tofudb_ir::DEFAULT_QUEUE_PAGE_BYTES,
-                Some(value) => value.as_u64().filter(|value| *value > 0)
+                Some(value) => value
+                    .as_u64()
+                    .filter(|value| *value > 0)
                     .and_then(|value| usize::try_from(value).ok())
                     .ok_or(SemanticExecutionError::InvalidPayload)?,
             },
             cursor: match payload.get("cursor") {
                 None | Some(Value::Null) => None,
-                Some(value) => Some((value.get("priority").and_then(Value::as_u64).ok_or(SemanticExecutionError::InvalidPayload)?,
-                    value.get("createdAt").and_then(Value::as_u64).ok_or(SemanticExecutionError::InvalidPayload)?,
-                    value.get("queueId").and_then(Value::as_str).filter(|id| !id.is_empty() && id.len() <= 256).ok_or(SemanticExecutionError::InvalidPayload)?.to_owned())),
+                Some(value) => Some((
+                    value
+                        .get("priority")
+                        .and_then(Value::as_u64)
+                        .ok_or(SemanticExecutionError::InvalidPayload)?,
+                    value
+                        .get("createdAt")
+                        .and_then(Value::as_u64)
+                        .ok_or(SemanticExecutionError::InvalidPayload)?,
+                    value
+                        .get("queueId")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty() && id.len() <= 256)
+                        .ok_or(SemanticExecutionError::InvalidPayload)?
+                        .to_owned(),
+                )),
             },
         },
         "queue.remove" => crate::queue::Request::Remove {
@@ -6962,7 +7138,10 @@ fn compile_event_item(
     let event = stamp_event_format_envelope(event)?;
     let event_timestamp = match event.get("executionAtMs") {
         None if event.get("executionOriginAtMs").is_none()
-            && event.get("executionClockId").is_none() => now_unix_ms,
+            && event.get("executionClockId").is_none() =>
+        {
+            now_unix_ms
+        }
         None => return Err(SemanticExecutionError::InvalidPayload),
         Some(value) => {
             let timestamp = value
@@ -6974,9 +7153,11 @@ fn compile_event_item(
             let delta_spine = event.get("type").and_then(Value::as_str) == Some("delta")
                 && event.get("executionOriginAtMs").is_none()
                 && event.get("executionClockId").is_none();
-            if !delta_spine && (!origin.is_some_and(|value| value > 0 && value <= timestamp)
-                || !clock_id.is_some_and(|value| !value.is_empty() && value.chars().count() <= 128)
-            ) {
+            if !delta_spine
+                && (!origin.is_some_and(|value| value > 0 && value <= timestamp)
+                    || !clock_id
+                        .is_some_and(|value| !value.is_empty() && value.chars().count() <= 128))
+            {
                 return Err(SemanticExecutionError::InvalidPayload);
             }
             timestamp
@@ -7979,14 +8160,21 @@ fn compile_compaction_archive(
                     for field in ["messages", "post_messages"] {
                         if let Some(value) = outbox_payload.remove(field) {
                             let encoded = canonical_json(&value)?;
-                            outbox_payload.insert(format!("{field}_sha256"),
-                                Value::String(format!("{:x}", Sha256::digest(&encoded))));
-                            outbox_payload.insert(format!("{field}_bytes"), Value::from(encoded.len()));
+                            outbox_payload.insert(
+                                format!("{field}_sha256"),
+                                Value::String(format!("{:x}", Sha256::digest(&encoded))),
+                            );
+                            outbox_payload
+                                .insert(format!("{field}_bytes"), Value::from(encoded.len()));
                         }
                     }
-                    command_effects_with_outbox(admitted, &payload, now_unix_ms,
+                    command_effects_with_outbox(
+                        admitted,
+                        &payload,
+                        now_unix_ms,
                         canonical_json(&json!({"operation":admitted.operation.name,
-                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?)?
+                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?,
+                    )?
                 }),
             )
         }
@@ -8072,14 +8260,21 @@ fn compile_compaction_archive(
                     for field in ["messages", "post_messages"] {
                         if let Some(value) = outbox_payload.remove(field) {
                             let encoded = canonical_json(&value)?;
-                            outbox_payload.insert(format!("{field}_sha256"),
-                                Value::String(format!("{:x}", Sha256::digest(&encoded))));
-                            outbox_payload.insert(format!("{field}_bytes"), Value::from(encoded.len()));
+                            outbox_payload.insert(
+                                format!("{field}_sha256"),
+                                Value::String(format!("{:x}", Sha256::digest(&encoded))),
+                            );
+                            outbox_payload
+                                .insert(format!("{field}_bytes"), Value::from(encoded.len()));
                         }
                     }
-                    command_effects_with_outbox(admitted, &payload, now_unix_ms,
+                    command_effects_with_outbox(
+                        admitted,
+                        &payload,
+                        now_unix_ms,
                         canonical_json(&json!({"operation":admitted.operation.name,
-                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?)?
+                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?,
+                    )?
                 }),
             )
         }
@@ -8094,19 +8289,25 @@ fn compile_compaction_archive(
                 missing: Vec::new(),
             },
             Some({
-                    let mut outbox_payload = payload.clone();
-                    for field in ["messages", "post_messages"] {
-                        if let Some(value) = outbox_payload.remove(field) {
-                            let encoded = canonical_json(&value)?;
-                            outbox_payload.insert(format!("{field}_sha256"),
-                                Value::String(format!("{:x}", Sha256::digest(&encoded))));
-                            outbox_payload.insert(format!("{field}_bytes"), Value::from(encoded.len()));
-                        }
+                let mut outbox_payload = payload.clone();
+                for field in ["messages", "post_messages"] {
+                    if let Some(value) = outbox_payload.remove(field) {
+                        let encoded = canonical_json(&value)?;
+                        outbox_payload.insert(
+                            format!("{field}_sha256"),
+                            Value::String(format!("{:x}", Sha256::digest(&encoded))),
+                        );
+                        outbox_payload.insert(format!("{field}_bytes"), Value::from(encoded.len()));
                     }
-                    command_effects_with_outbox(admitted, &payload, now_unix_ms,
-                        canonical_json(&json!({"operation":admitted.operation.name,
-                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?)?
-                }),
+                }
+                command_effects_with_outbox(
+                    admitted,
+                    &payload,
+                    now_unix_ms,
+                    canonical_json(&json!({"operation":admitted.operation.name,
+                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?,
+                )?
+            }),
         ),
         "compaction_archive.prune" => (
             vec![TransactionIrStep::CompactionArchivePrune {
@@ -8123,19 +8324,25 @@ fn compile_compaction_archive(
                 missing: Vec::new(),
             },
             Some({
-                    let mut outbox_payload = payload.clone();
-                    for field in ["messages", "post_messages"] {
-                        if let Some(value) = outbox_payload.remove(field) {
-                            let encoded = canonical_json(&value)?;
-                            outbox_payload.insert(format!("{field}_sha256"),
-                                Value::String(format!("{:x}", Sha256::digest(&encoded))));
-                            outbox_payload.insert(format!("{field}_bytes"), Value::from(encoded.len()));
-                        }
+                let mut outbox_payload = payload.clone();
+                for field in ["messages", "post_messages"] {
+                    if let Some(value) = outbox_payload.remove(field) {
+                        let encoded = canonical_json(&value)?;
+                        outbox_payload.insert(
+                            format!("{field}_sha256"),
+                            Value::String(format!("{:x}", Sha256::digest(&encoded))),
+                        );
+                        outbox_payload.insert(format!("{field}_bytes"), Value::from(encoded.len()));
                     }
-                    command_effects_with_outbox(admitted, &payload, now_unix_ms,
-                        canonical_json(&json!({"operation":admitted.operation.name,
-                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?)?
-                }),
+                }
+                command_effects_with_outbox(
+                    admitted,
+                    &payload,
+                    now_unix_ms,
+                    canonical_json(&json!({"operation":admitted.operation.name,
+                            "payload":outbox_payload, "contentAuthority":"owner-bound-compaction-archive-documents"}))?,
+                )?
+            }),
         ),
         _ => return Err(SemanticExecutionError::UnsupportedOperation),
     };
@@ -8559,97 +8766,183 @@ fn worker_job_request_digest(
 }
 
 fn compile_automation_run(
-    admitted: AdmittedRequest<'_>, authority_now_ms: u64,
+    admitted: AdmittedRequest<'_>,
+    authority_now_ms: u64,
 ) -> Result<TransactionIr, SemanticExecutionError> {
     let payload = payload_object(&admitted.request.payload)?;
-    if admitted.operation.name=="automation.skills.source.update" {
+    if admitted.operation.name == "automation.skills.source.update" {
         // Nullable fields remain required by the closed wire contract.
         if !payload.contains_key("credential_ref") || !payload.contains_key("credential_seal") {
             return Err(SemanticExecutionError::InvalidPayload);
         }
-        let request:crate::automation_skill_source::Request=serde_json::from_slice(&admitted.request.payload)
-            .map_err(|_|SemanticExecutionError::InvalidPayload)?;
-        request.validate(admitted.request.owner_id,authority_now_ms).map_err(map_storage_error)?;
+        let request: crate::automation_skill_source::Request =
+            serde_json::from_slice(&admitted.request.payload)
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+        request
+            .validate(admitted.request.owner_id, authority_now_ms)
+            .map_err(map_storage_error)?;
         return Ok(TransactionIr {
-            tenant_id:admitted.request.tenant_id.ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
-            owner_user_id:admitted.request.owner_id,operation:admitted.operation.name.to_owned(),operation_kind:admitted.operation.kind,
-            steps:vec![TransactionIrStep::AutomationSkillSourceUpdate {request,slot:0}],
-            result:TransactionIrResult::SlotOrLiteral {slot:0,missing:Vec::new()},
-            command_effects:Some(command_effects(admitted,&payload,authority_now_ms)?),
+            tenant_id: admitted
+                .request
+                .tenant_id
+                .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
+            owner_user_id: admitted.request.owner_id,
+            operation: admitted.operation.name.to_owned(),
+            operation_kind: admitted.operation.kind,
+            steps: vec![TransactionIrStep::AutomationSkillSourceUpdate { request, slot: 0 }],
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: Vec::new(),
+            },
+            command_effects: Some(command_effects(admitted, &payload, authority_now_ms)?),
         });
     }
-    if admitted.operation.name=="automation.project.update" {
-        let request:crate::automation_project::Request=serde_json::from_slice(&admitted.request.payload)
-            .map_err(|_|SemanticExecutionError::InvalidPayload)?;
-        request.validate(admitted.request.owner_id,authority_now_ms).map_err(map_storage_error)?;
+    if admitted.operation.name == "automation.project.update" {
+        let request: crate::automation_project::Request =
+            serde_json::from_slice(&admitted.request.payload)
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+        request
+            .validate(admitted.request.owner_id, authority_now_ms)
+            .map_err(map_storage_error)?;
         return Ok(TransactionIr {
-            tenant_id:admitted.request.tenant_id.ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
-            owner_user_id:admitted.request.owner_id,operation:admitted.operation.name.to_owned(),operation_kind:admitted.operation.kind,
-            steps:vec![TransactionIrStep::AutomationProjectUpdate {request,slot:0}],
-            result:TransactionIrResult::SlotOrLiteral {slot:0,missing:Vec::new()},
-            command_effects:Some(command_effects(admitted,&payload,authority_now_ms)?),
+            tenant_id: admitted
+                .request
+                .tenant_id
+                .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
+            owner_user_id: admitted.request.owner_id,
+            operation: admitted.operation.name.to_owned(),
+            operation_kind: admitted.operation.kind,
+            steps: vec![TransactionIrStep::AutomationProjectUpdate { request, slot: 0 }],
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: Vec::new(),
+            },
+            command_effects: Some(command_effects(admitted, &payload, authority_now_ms)?),
         });
     }
-    if admitted.operation.name=="automation.definition.update" {
-        let fields=["user_id","tenant_id","definition_key","expected_version","request_id","actor_subject_id",
-            "mode","record","definition_json","actions_json","first_due_ms","now_ms"];
-        if payload.len()!=fields.len() || fields.iter().any(|f|!payload.contains_key(*f)) {
+    if admitted.operation.name == "automation.definition.update" {
+        let fields = [
+            "user_id",
+            "tenant_id",
+            "definition_key",
+            "expected_version",
+            "request_id",
+            "actor_subject_id",
+            "mode",
+            "record",
+            "definition_json",
+            "actions_json",
+            "first_due_ms",
+            "now_ms",
+        ];
+        if payload.len() != fields.len() || fields.iter().any(|f| !payload.contains_key(*f)) {
             return Err(SemanticExecutionError::InvalidPayload);
         }
-        let request:crate::automation_definition::Request=serde_json::from_slice(&admitted.request.payload)
-            .map_err(|_|SemanticExecutionError::InvalidPayload)?;
-        request.validate(admitted.request.owner_id,authority_now_ms).map_err(map_storage_error)?;
+        let request: crate::automation_definition::Request =
+            serde_json::from_slice(&admitted.request.payload)
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+        request
+            .validate(admitted.request.owner_id, authority_now_ms)
+            .map_err(map_storage_error)?;
         return Ok(TransactionIr {
-            tenant_id:admitted.request.tenant_id.ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
-            owner_user_id:admitted.request.owner_id,operation:admitted.operation.name.to_owned(),operation_kind:admitted.operation.kind,
-            steps:vec![TransactionIrStep::AutomationDefinitionUpdate {request,slot:0}],
-            result:TransactionIrResult::SlotOrLiteral {slot:0,missing:Vec::new()},
-            command_effects:Some(command_effects(admitted,&payload,authority_now_ms)?),
+            tenant_id: admitted
+                .request
+                .tenant_id
+                .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
+            owner_user_id: admitted.request.owner_id,
+            operation: admitted.operation.name.to_owned(),
+            operation_kind: admitted.operation.kind,
+            steps: vec![TransactionIrStep::AutomationDefinitionUpdate { request, slot: 0 }],
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: Vec::new(),
+            },
+            command_effects: Some(command_effects(admitted, &payload, authority_now_ms)?),
         });
     }
     if admitted.operation.name == "automation.event.settle" {
-        let fields = ["user_id", "tenant_id", "job_id", "worker_id", "fencing_token",
-            "expected_payload", "next_delivery", "mode", "error_kind", "now_ms"];
-        if payload.len() != fields.len() || fields.iter().any(|field| !payload.contains_key(*field)) {
+        let fields = [
+            "user_id",
+            "tenant_id",
+            "job_id",
+            "worker_id",
+            "fencing_token",
+            "expected_payload",
+            "next_delivery",
+            "mode",
+            "error_kind",
+            "now_ms",
+        ];
+        if payload.len() != fields.len() || fields.iter().any(|field| !payload.contains_key(*field))
+        {
             return Err(SemanticExecutionError::InvalidPayload);
         }
-        let request: crate::automation_events::Request = serde_json::from_slice(&admitted.request.payload)
-            .map_err(|_| SemanticExecutionError::InvalidPayload)?;
-        request.validate(admitted.request.owner_id, authority_now_ms).map_err(map_storage_error)?;
+        let request: crate::automation_events::Request =
+            serde_json::from_slice(&admitted.request.payload)
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+        request
+            .validate(admitted.request.owner_id, authority_now_ms)
+            .map_err(map_storage_error)?;
         return Ok(TransactionIr {
-            tenant_id: admitted.request.tenant_id.ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
-            owner_user_id: admitted.request.owner_id, operation: admitted.operation.name.to_owned(),
+            tenant_id: admitted
+                .request
+                .tenant_id
+                .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
+            owner_user_id: admitted.request.owner_id,
+            operation: admitted.operation.name.to_owned(),
             operation_kind: admitted.operation.kind,
             steps: vec![TransactionIrStep::AutomationEventSettle { request, slot: 0 }],
-            result: TransactionIrResult::SlotOrLiteral { slot: 0, missing: Vec::new() },
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: Vec::new(),
+            },
             command_effects: Some(command_effects(admitted, &payload, authority_now_ms)?),
         });
     }
     let advance = admitted.operation.name == "automation.run.advance";
     if admitted.operation.name == "automation.run.approve" {
-        let request: crate::automation_approval::ApproveRequest = serde_json::from_value(Value::Object(payload.clone()))
-            .map_err(|_| SemanticExecutionError::InvalidPayload)?;
-        request.validate(admitted.request.owner_id, authority_now_ms)
+        let request: crate::automation_approval::ApproveRequest =
+            serde_json::from_value(Value::Object(payload.clone()))
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+        request
+            .validate(admitted.request.owner_id, authority_now_ms)
             .map_err(|_| SemanticExecutionError::InvalidPayload)?;
         return Ok(TransactionIr {
-            tenant_id: admitted.request.tenant_id.ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
+            tenant_id: admitted
+                .request
+                .tenant_id
+                .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
             owner_user_id: admitted.request.owner_id,
-            operation: admitted.operation.name.to_owned(), operation_kind: admitted.operation.kind,
-            steps: vec![TransactionIrStep::AutomationRunApprove {request, slot: 0}],
-            result: TransactionIrResult::SlotOrLiteral {slot: 0, missing: Vec::new()},
+            operation: admitted.operation.name.to_owned(),
+            operation_kind: admitted.operation.kind,
+            steps: vec![TransactionIrStep::AutomationRunApprove { request, slot: 0 }],
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: Vec::new(),
+            },
             command_effects: Some(command_effects(admitted, &payload, authority_now_ms)?),
         });
     }
     if admitted.operation.name == "automation.run.cancel" {
-        let request: crate::automation_run::CancelRequest = serde_json::from_slice(&admitted.request.payload)
-            .map_err(|_| SemanticExecutionError::InvalidPayload)?;
-        request.validate(admitted.request.owner_id, authority_now_ms).map_err(map_storage_error)?;
+        let request: crate::automation_run::CancelRequest =
+            serde_json::from_slice(&admitted.request.payload)
+                .map_err(|_| SemanticExecutionError::InvalidPayload)?;
+        request
+            .validate(admitted.request.owner_id, authority_now_ms)
+            .map_err(map_storage_error)?;
         return Ok(TransactionIr {
-            tenant_id: admitted.request.tenant_id.ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
+            tenant_id: admitted
+                .request
+                .tenant_id
+                .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
             owner_user_id: admitted.request.owner_id,
-            operation: admitted.operation.name.to_owned(), operation_kind: admitted.operation.kind,
-            steps: vec![TransactionIrStep::AutomationRunCancel {request, slot: 0}],
-            result: TransactionIrResult::SlotOrLiteral {slot: 0, missing: Vec::new()},
+            operation: admitted.operation.name.to_owned(),
+            operation_kind: admitted.operation.kind,
+            steps: vec![TransactionIrStep::AutomationRunCancel { request, slot: 0 }],
+            result: TransactionIrResult::SlotOrLiteral {
+                slot: 0,
+                missing: Vec::new(),
+            },
             command_effects: Some(command_effects(admitted, &payload, authority_now_ms)?),
         });
     }
@@ -8657,23 +8950,57 @@ fn compile_automation_run(
         return Err(SemanticExecutionError::UnsupportedOperation);
     }
     let expected_fields = if advance {
-        vec!["user_id","tenant_id","run_key","run","now_ms","expected_version","worker_id","fencing_token"]
+        vec![
+            "user_id",
+            "tenant_id",
+            "run_key",
+            "run",
+            "now_ms",
+            "expected_version",
+            "worker_id",
+            "fencing_token",
+        ]
     } else {
-        vec!["user_id","tenant_id","run_key","run","now_ms","definition_key","definition_revision","definition_digest"]
+        vec![
+            "user_id",
+            "tenant_id",
+            "run_key",
+            "run",
+            "now_ms",
+            "definition_key",
+            "definition_revision",
+            "definition_digest",
+        ]
     };
-    if expected_fields.iter().any(|f|!payload.contains_key(*f))
-        || payload.keys().any(|f| !expected_fields.contains(&f.as_str()) && (advance || f != "producer_fence")) {
+    if expected_fields.iter().any(|f| !payload.contains_key(*f))
+        || payload
+            .keys()
+            .any(|f| !expected_fields.contains(&f.as_str()) && (advance || f != "producer_fence"))
+    {
         return Err(SemanticExecutionError::InvalidPayload);
     }
     let request: crate::automation_run::Request = serde_json::from_slice(&admitted.request.payload)
         .map_err(|_| SemanticExecutionError::InvalidPayload)?;
-    request.validate(advance, admitted.request.owner_id, authority_now_ms).map_err(map_storage_error)?;
+    request
+        .validate(advance, admitted.request.owner_id, authority_now_ms)
+        .map_err(map_storage_error)?;
     Ok(TransactionIr {
-        tenant_id: admitted.request.tenant_id.ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
+        tenant_id: admitted
+            .request
+            .tenant_id
+            .ok_or(SemanticExecutionError::AuthorityScopeMismatch)?,
         owner_user_id: admitted.request.owner_id,
-        operation: admitted.operation.name.to_owned(), operation_kind: admitted.operation.kind,
-        steps: vec![TransactionIrStep::AutomationRunMutation {request, advance, slot: 0}],
-        result: TransactionIrResult::SlotOrLiteral {slot: 0, missing: Vec::new()},
+        operation: admitted.operation.name.to_owned(),
+        operation_kind: admitted.operation.kind,
+        steps: vec![TransactionIrStep::AutomationRunMutation {
+            request,
+            advance,
+            slot: 0,
+        }],
+        result: TransactionIrResult::SlotOrLiteral {
+            slot: 0,
+            missing: Vec::new(),
+        },
         command_effects: Some(command_effects(admitted, &payload, authority_now_ms)?),
     })
 }
@@ -8728,9 +9055,14 @@ fn compile_worker_job(
             };
             (
                 vec![TransactionIrStep::WorkerJobActiveList {
-                    task_kinds: worker_job_claim_kinds(&payload)?, user_id: owner, slot: 0,
+                    task_kinds: worker_job_claim_kinds(&payload)?,
+                    user_id: owner,
+                    slot: 0,
                 }],
-                TransactionIrResult::SlotOrLiteral { slot: 0, missing: b"[]".to_vec() },
+                TransactionIrResult::SlotOrLiteral {
+                    slot: 0,
+                    missing: b"[]".to_vec(),
+                },
             )
         }
         "worker_job.get" => (
@@ -8749,7 +9081,9 @@ fn compile_worker_job(
             let user_id = user_id()?;
             let tenant_label = worker_job_optional_text(&payload, "tenant_id", 256)?;
             let task_kind = required_text(&payload, "task_kind", 128)?.to_owned();
-            if crate::generated_tofudb_ir::AUTOMATION_RESERVED_WORKER_TASK_KINDS.contains(&task_kind.as_str()) {
+            if crate::generated_tofudb_ir::AUTOMATION_RESERVED_WORKER_TASK_KINDS
+                .contains(&task_kind.as_str())
+            {
                 return Err(SemanticExecutionError::InvalidPayload);
             }
             let idempotency_key = required_text(&payload, "idempotency_key", 256)?.to_owned();
@@ -8834,8 +9168,10 @@ fn compile_worker_job(
                 "replay_cursor",
                 "observed_cancel_sequence",
             ];
-            if payload.len() != fields.len() + usize::from(payload.contains_key("observed_wake_sequence"))
-                || fields.iter().any(|f| !payload.contains_key(*f)) {
+            if payload.len()
+                != fields.len() + usize::from(payload.contains_key("observed_wake_sequence"))
+                || fields.iter().any(|f| !payload.contains_key(*f))
+            {
                 return Err(SemanticExecutionError::InvalidPayload);
             }
             let now = now_ms()?;
@@ -8863,7 +9199,11 @@ fn compile_worker_job(
                         .get("observed_cancel_sequence")
                         .and_then(Value::as_u64)
                         .ok_or(SemanticExecutionError::InvalidPayload)?,
-                    observed_wake_sequence: optional_nonnegative_integer(&payload, "observed_wake_sequence", 0)?,
+                    observed_wake_sequence: optional_nonnegative_integer(
+                        &payload,
+                        "observed_wake_sequence",
+                        0,
+                    )?,
                     slot: 0,
                 }],
                 TransactionIrResult::SlotOrLiteral {
@@ -9082,11 +9422,17 @@ fn compile_task_result(
                 vec![TransactionIrStep::TaskResultCheckpoint {
                     tool_effect_intent: match payload.get("tool_effect_intent") {
                         None => None,
-                        Some(Value::String(intent)) if !intent.is_empty() && guarded && require_parent => Some(intent.clone()),
+                        Some(Value::String(intent))
+                            if !intent.is_empty() && guarded && require_parent =>
+                        {
+                            Some(intent.clone())
+                        }
                         _ => return Err(SemanticExecutionError::InvalidPayload),
                     },
-                    worker_claim: crate::worker_job::PublicationClaim::parse(payload.get("worker_claim"))
-                        .map_err(|_| SemanticExecutionError::InvalidPayload)?,
+                    worker_claim: crate::worker_job::PublicationClaim::parse(
+                        payload.get("worker_claim"),
+                    )
+                    .map_err(|_| SemanticExecutionError::InvalidPayload)?,
                     task_id,
                     value_json,
                     expected_version,
@@ -10496,7 +10842,8 @@ pub fn execute_admitted_request_with_gc_budget(
         now_unix_ms,
         authority_gc_budget,
         &mut Vec::new(),
-    ).map(crate::transaction_ir::IrResponse::into_bytes)
+    )
+    .map(crate::transaction_ir::IrResponse::into_bytes)
 }
 
 pub(crate) fn execute_admitted_request_with_notices(
@@ -10517,7 +10864,8 @@ pub(crate) fn execute_admitted_request_with_notices(
         return Err(SemanticExecutionError::UnsupportedOperation);
     }
     if admitted.operation.name == "system.reclaim" {
-        return execute_system_reclaim(database, admitted, authority_gc_budget).map(crate::transaction_ir::IrResponse::unverified);
+        return execute_system_reclaim(database, admitted, authority_gc_budget)
+            .map(crate::transaction_ir::IrResponse::unverified);
     }
     execute_admitted_request_inner(database, admitted, now_unix_ms, notices)
 }
@@ -10580,7 +10928,8 @@ fn execute_admitted_request_inner(
             notices,
             deadline_budget,
         )
-        .map_err(crate::turn::diagnostic::map_error).map(crate::transaction_ir::IrResponse::unverified);
+        .map_err(crate::turn::diagnostic::map_error)
+        .map(crate::transaction_ir::IrResponse::unverified);
     }
     let ir = compile_admitted_transaction(admitted, now_unix_ms)?;
     let mut response = crate::transaction_ir::execute_transaction_ir_with_json_proof(
@@ -10594,10 +10943,14 @@ fn execute_admitted_request_inner(
         validate_desktop_response(&response)?;
     } else if response.json_proven() {
         crate::request_profile::work(crate::request_profile::Work::JsonResponseProofReuse, 1);
-        crate::request_profile::work(crate::request_profile::Work::JsonResponseProofBytes, response.len() as u64);
+        crate::request_profile::work(
+            crate::request_profile::Work::JsonResponseProofBytes,
+            response.len() as u64,
+        );
     } else {
         let _validate = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_SEMANTIC_RESPONSE_VALIDATE);
+            crate::fsync_stats::STAGE_SEMANTIC_RESPONSE_VALIDATE,
+        );
         crate::response_json::validate(&response)
             .map_err(|_| integrity_failure("transaction response is not valid JSON"))?;
     }
@@ -10610,7 +10963,8 @@ fn compile_admitted_transaction(
     now_unix_ms: u64,
 ) -> Result<TransactionIr, SemanticExecutionError> {
     let _compile = crate::fsync_stats::StageTimer::diagnostic(
-        crate::fsync_stats::STAGE_SEMANTIC_TRANSACTION_COMPILE);
+        crate::fsync_stats::STAGE_SEMANTIC_TRANSACTION_COMPILE,
+    );
     let ir = if admitted.operation.name == "rate_limit.record_and_check" {
         compile_rate_limit(admitted, now_unix_ms)?
     } else if admitted.operation.name.starts_with("integration.") {
@@ -10734,7 +11088,9 @@ pub(crate) fn compile_parallel_transaction(
     {
         return Ok(None);
     }
-    if EXECUTABLE_STORAGE_OPERATIONS.binary_search(&admitted.operation.name).is_err()
+    if EXECUTABLE_STORAGE_OPERATIONS
+        .binary_search(&admitted.operation.name)
+        .is_err()
         && !crate::semantic::is_plugin_row_operation(admitted.operation.name)
     {
         return Ok(None);
@@ -10794,7 +11150,9 @@ pub(crate) fn compile_exclusive_rehearsal(
         || admitted.operation.name == "system.reclaim"
         || admitted.operation.kind
             == crate::generated_storage_operations::StorageOperationKind::Query
-        || (EXECUTABLE_STORAGE_OPERATIONS.binary_search(&admitted.operation.name).is_err()
+        || (EXECUTABLE_STORAGE_OPERATIONS
+            .binary_search(&admitted.operation.name)
+            .is_err()
             && !crate::semantic::is_plugin_row_operation(admitted.operation.name))
     {
         return None;
@@ -10912,30 +11270,61 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let key = crate::versioned_document::record_key(7, 11, "proof", "row").unwrap();
         let bodies = [
-            (format!("{}null{}", "[".repeat(125), "]".repeat(125)), true, true),
-            (format!("{}null{}", "[".repeat(126), "]".repeat(126)), true, false),
-            (format!("{}null{}", "[".repeat(127), "]".repeat(127)), false, false),
+            (
+                format!("{}null{}", "[".repeat(125), "]".repeat(125)),
+                true,
+                true,
+            ),
+            (
+                format!("{}null{}", "[".repeat(126), "]".repeat(126)),
+                true,
+                false,
+            ),
+            (
+                format!("{}null{}", "[".repeat(127), "]".repeat(127)),
+                false,
+                false,
+            ),
             ("-0".to_owned(), true, true),
-            (r#"{"first":0,"$serde_json::private::RawValue":"not json"}"#.to_owned(), false, false),
+            (
+                r#"{"first":0,"$serde_json::private::RawValue":"not json"}"#.to_owned(),
+                false,
+                false,
+            ),
         ];
         for (body, get_valid, list_valid) in bodies {
             // Raw-body seeding exercises historical/imported representations
             // that a normal record.put canonicalizes before storing.
             let mut transaction = database.begin(7, 11).unwrap();
-            crate::versioned_document::put(&database, &mut transaction,
+            crate::versioned_document::put(
+                &database,
+                &mut transaction,
                 crate::versioned_document::PutRequest {
-                    key: key.clone(), namespace: "proof".into(), logical_key: "row".into(),
-                    value_json: body.into_bytes(), expected_version: None, updated_at_ms: 1,
-                }).unwrap();
+                    key: key.clone(),
+                    namespace: "proof".into(),
+                    logical_key: "row".into(),
+                    value_json: body.into_bytes(),
+                    expected_version: None,
+                    updated_at_ms: 1,
+                },
+            )
+            .unwrap();
             database.commit(transaction).unwrap();
             for (operation, valid) in [("record.get", get_valid), ("record.list", list_valid)] {
-                let query = request(operation, 11,
-                    json!({"namespace":"proof", "key":"row", "prefix":"row", "limit":1}), None);
+                let query = request(
+                    operation,
+                    11,
+                    json!({"namespace":"proof", "key":"row", "prefix":"row", "limit":1}),
+                    None,
+                );
                 let result = execute(&mut database, &query, 2_000);
                 if valid {
                     assert!(result.is_ok(), "{operation}: {result:?}");
                 } else {
-                    assert_eq!(result.unwrap_err(), integrity_failure("transaction response is not valid JSON"));
+                    assert_eq!(
+                        result.unwrap_err(),
+                        integrity_failure("transaction response is not valid JSON")
+                    );
                 }
             }
         }

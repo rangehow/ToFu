@@ -31,8 +31,7 @@ impl WorkerClaimReadProbe {
         let gate = *self.gate();
         match gate {
             WorkerClaimReadGate::Open => Ok(()),
-            WorkerClaimReadGate::Fault => Err(io::Error::new(
-                io::ErrorKind::Other,
+            WorkerClaimReadGate::Fault => Err(io::Error::other(
                 "worker claim cold read fault",
             )),
             WorkerClaimReadGate::Block => {

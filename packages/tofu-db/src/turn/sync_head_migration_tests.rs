@@ -152,7 +152,10 @@ fn sync_head_scan_pages_with_cursor() {
         json!({"tenant_id":7,"owner_user_id":11}),
     )
     .unwrap();
-    assert_eq!(first["rows"].as_array().unwrap().len(), MIGRATION_SESSION_MAX_PAGE_ROWS);
+    assert_eq!(
+        first["rows"].as_array().unwrap().len(),
+        MIGRATION_SESSION_MAX_PAGE_ROWS
+    );
     let cursor = first["cursor"].as_str().unwrap().to_owned();
     assert!(cursor.starts_with("sync-heads:"));
     let second = execute(

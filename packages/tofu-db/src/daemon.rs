@@ -25,8 +25,7 @@ use crate::authority_gc::{
 use crate::background_pack::BackgroundPacker;
 use crate::generated_storage_operations::STORAGE_SCHEMA_VERSION;
 use crate::generated_storage_v2::{
-    MAX_CONNECTION_REUSE_TARGET, MAX_DAEMON_AUTH_SECRET_BYTES,
-    MIN_DAEMON_AUTH_SECRET_BYTES, PROTOCOL_VERSION,
+    MAX_DAEMON_AUTH_SECRET_BYTES, MIN_DAEMON_AUTH_SECRET_BYTES, PROTOCOL_VERSION,
 };
 use crate::listener::{LoopbackListenerConfig, LoopbackListenerMetrics, LoopbackServer};
 use crate::maintenance::{MaintenanceScheduler, MaintenanceSchedulerConfig, MaintenanceScope};
@@ -95,7 +94,7 @@ impl DaemonConfig {
         let auth_token_result = derive_auth_token(auth_secret);
         auth_secret.zeroize();
         let auth_token = auth_token_result?;
-        let mut resource_budget = DaemonResourceBudget::from_snapshot_with_volume_class(
+        let resource_budget = DaemonResourceBudget::from_snapshot_with_volume_class(
             probe_launch_resources(data_dir),
             Some(crate::resource_probe::volume_class(data_dir)),
         );
@@ -135,7 +134,10 @@ impl DaemonConfig {
 
     /// `Auto` serves the classic authority when first activation is refused
     /// before any relocation state exists (see `fastpath::AdmissionRefusal`).
-    pub fn with_fastpath_admission(mut self, admission: crate::fastpath::FastpathAdmission) -> Self {
+    pub fn with_fastpath_admission(
+        mut self,
+        admission: crate::fastpath::FastpathAdmission,
+    ) -> Self {
         self.fastpath_admission = admission;
         self
     }
@@ -166,9 +168,15 @@ impl DaemonConfig {
     /// open path. `None` keeps the plaintext real VFS.
     pub fn with_fastpath(mut self, base: &Path, interval_ms: Option<u64>) -> io::Result<Self> {
         if self.backup_dir.is_some() {
-            return Err(invalid_input("native fastpath owns its recovery shadow; --backup-dir must be omitted"));
+            return Err(invalid_input(
+                "native fastpath owns its recovery shadow; --backup-dir must be omitted",
+            ));
         }
-        self.fastpath = Some(crate::fastpath::FastpathConfig::new(&self.data_dir, base, interval_ms)?);
+        self.fastpath = Some(crate::fastpath::FastpathConfig::new(
+            &self.data_dir,
+            base,
+            interval_ms,
+        )?);
         Ok(self)
     }
 
@@ -200,8 +208,7 @@ impl Drop for DaemonConfig {
     }
 }
 
-pub const DEFAULT_WAL_FLUSH_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(10);
+pub const DEFAULT_WAL_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Dedicated pack-adoption driver. Under multi-writer pressure the
 /// maintenance scheduler defers its rounds almost every tick (35/37
@@ -228,10 +235,12 @@ pub(crate) fn run_pack_adoption_driver(
                 .lock()
                 .ok()
                 .and_then(|guard| {
-                    guard
-                        .writer_engine()
-                        .ok()
-                        .and_then(|engine| engine.block_store().unpublished_background_segment_ids().ok())
+                    guard.writer_engine().ok().and_then(|engine| {
+                        engine
+                            .block_store()
+                            .unpublished_background_segment_ids()
+                            .ok()
+                    })
                 })
                 .map_or(0, |ids| ids.len());
             if backlog < 2 {
@@ -275,7 +284,9 @@ pub(crate) fn run_pack_adoption_driver(
             guard.finish_pack_adoption(prepared, outcome)
         };
         match result {
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock && stopping.load(Ordering::Acquire) => {}
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    && stopping.load(Ordering::Acquire) => {}
             Err(error) => {
                 crate::engine_log::error(
                     "pack_adoption",
@@ -311,7 +322,9 @@ pub(crate) fn run_rotation_driver(
             // driver), allowing the durable backlog to grow without catchup.
             // The driver owns generation preparation as well as encoding;
             // no foreground append waits for its maintenance completion.
-            let waiting = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_PREPARE_WAIT);
+            let waiting = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ROTATION_PREPARE_WAIT,
+            );
             let mut guard = match database.lock() {
                 Ok(guard) => guard,
                 Err(_) => return,
@@ -330,7 +343,9 @@ pub(crate) fn run_rotation_driver(
         };
         let (prepared, outcome) = match work {
             crate::engine::RotationWork::Fresh(prepared) => {
-                let _encode = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_PREFIX_ENCODE);
+                let _encode = crate::fsync_stats::StageTimer::diagnostic(
+                    crate::fsync_stats::STAGE_ROTATION_PREFIX_ENCODE,
+                );
                 // Encode outside the authority mutex (the take-scope guard
                 // is already dropped): a parked `Deferred` pair skips this
                 // step entirely, which is the whole point of the slot. The
@@ -359,7 +374,9 @@ pub(crate) fn run_rotation_driver(
                 (prepared, Ok(outcome))
             }
         };
-        let waiting = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_WAIT);
+        let waiting = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ROTATION_INSTALL_WAIT,
+        );
         let mut guard = match database.lock() {
             Ok(guard) => guard,
             Err(_) => return,
@@ -530,13 +547,19 @@ pub(crate) fn checkpoint_wal_windows_for_fast_reopen(
             return;
         }
     };
-    if let Err(error) = crate::engine_log::lifecycle_step("shutdown_timing", "authority_overlay_merge", || guard.merge_entity_overlay_fully()) {
+    if let Err(error) =
+        crate::engine_log::lifecycle_step("shutdown_timing", "authority_overlay_merge", || {
+            guard.merge_entity_overlay_fully()
+        })
+    {
         crate::engine_log::warn(
             "shutdown_checkpoint",
             &format!("overlay merge before shutdown checkpoint failed: {error}"),
         );
     }
-    match crate::engine_log::lifecycle_step("shutdown_timing", "authority_checkpoint", || guard.retire_wal_window_for_stop()) {
+    match crate::engine_log::lifecycle_step("shutdown_timing", "authority_checkpoint", || {
+        guard.retire_wal_window_for_stop()
+    }) {
         Ok(()) => {}
         Err(error) => {
             crate::engine_log::warn(
@@ -558,7 +581,9 @@ pub(crate) fn checkpoint_wal_windows_for_fast_reopen(
                 return;
             }
         };
-        match crate::engine_log::lifecycle_step("shutdown_timing", "search_checkpoint", || guard.checkpoint_wal_window_for_shutdown()) {
+        match crate::engine_log::lifecycle_step("shutdown_timing", "search_checkpoint", || {
+            guard.checkpoint_wal_window_for_shutdown()
+        }) {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
             Err(error) => {
@@ -588,10 +613,12 @@ pub(crate) fn default_backup_dir(data_dir: &std::path::Path) -> io::Result<std::
 pub(crate) fn automatic_epoch_owner(
     scope: &AuthenticatedScope,
 ) -> Option<crate::online_backup::AutomaticEpochOwner> {
-    scope.tenant_id.map(|tenant_id| crate::online_backup::AutomaticEpochOwner {
-        tenant_id,
-        owner_user_id: scope.owner_id,
-    })
+    scope
+        .tenant_id
+        .map(|tenant_id| crate::online_backup::AutomaticEpochOwner {
+            tenant_id,
+            owner_user_id: scope.owner_id,
+        })
 }
 
 /// A watch of the owner's storage-reclaim task, which gates the online
@@ -622,13 +649,18 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
     parent_lease_reader: R,
     readiness_writer: &mut W,
 ) -> io::Result<LoopbackListenerMetrics> {
-    if config.fastpath.is_some() && std::env::var_os("TOFU_DB_DISABLE_ONLINE_BACKGROUND").is_some() {
+    if config.fastpath.is_some() && std::env::var_os("TOFU_DB_DISABLE_ONLINE_BACKGROUND").is_some()
+    {
         return Err(invalid_input("native fastpath requires online replication"));
     }
     if let Some(fastpath) = config.fastpath.as_ref() {
-        if config.backup_dir.is_some() { return Err(invalid_input("native fastpath owns its recovery shadow")); }
+        if config.backup_dir.is_some() {
+            return Err(invalid_input("native fastpath owns its recovery shadow"));
+        }
         if config.wal_durability != crate::wal::WalDurability::Strict {
-            return Err(invalid_input("native fastpath requires strict local durability"));
+            return Err(invalid_input(
+                "native fastpath requires strict local durability",
+            ));
         }
         if let Some(projection) = config.search_projection_dir.as_ref() {
             validate_projection_path(&fastpath.local_authority, projection)?;
@@ -639,7 +671,8 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
         Some(fastpath) => match fastpath.prepare(config.at_rest_key.clone()) {
             Ok(lease) => Some(lease),
             Err(error) => {
-                let declined = config.fastpath_admission == crate::fastpath::FastpathAdmission::Auto
+                let declined = config.fastpath_admission
+                    == crate::fastpath::FastpathAdmission::Auto
                     && !crate::fastpath::relocation_is_fenced(&config.data_dir)
                     && crate::fastpath::admission_refusal(&error).is_some();
                 if !declined {
@@ -651,10 +684,13 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
                     "reason": refusal.reason,
                     "detail": refusal.detail.chars().take(480).collect::<String>(),
                 });
-                eprintln!("{}", serde_json::json!({
-                    "event": "native_fastpath_auto_declined",
-                    "declined": declined,
-                }));
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "native_fastpath_auto_declined",
+                        "declined": declined,
+                    })
+                );
                 config.fastpath_declined = Some(declined);
                 config.fastpath = None;
                 if !config.wal_durability_explicit {
@@ -679,12 +715,17 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
         // capacity admission separately observes the actual local disk.
         snapshot.volume_free_bytes = Some(fs2::available_space(&config.data_dir)?);
         config.resource_budget = DaemonResourceBudget::from_snapshot_with_volume_class(
-            snapshot, Some(crate::resource_probe::volume_class(&config.data_dir)));
-        config.maintenance = MaintenanceSchedulerConfig::from_resource_budget(config.resource_budget);
+            snapshot,
+            Some(crate::resource_probe::volume_class(&config.data_dir)),
+        );
+        config.maintenance =
+            MaintenanceSchedulerConfig::from_resource_budget(config.resource_budget);
     }
     let at_rest_key = config.at_rest_key.clone();
-    let mut authority = crate::engine_log::lifecycle_step("startup_timing", "authority_open",
-        || AuthorityDatabase::open_with_key(&config.data_dir, at_rest_key))?;
+    let mut authority =
+        crate::engine_log::lifecycle_step("startup_timing", "authority_open", || {
+            AuthorityDatabase::open_with_key(&config.data_dir, at_rest_key)
+        })?;
     // Probe-sized hot-data residency before any read traffic: the legacy
     // fixed defaults (32/16 MiB) thrash on large hosts, and every miss on a
     // network volume is a round trip (2026-09-22 incident).
@@ -719,7 +760,9 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
             crate::wal::WalDurability::Strict => std::time::Duration::from_millis(1),
             crate::wal::WalDurability::Normal => config.wal_flush_interval,
         },
-        crate::wal::WalBarrierDriver::capacity_for_headroom(config.resource_budget.snapshot.memory_headroom_bytes),
+        crate::wal::WalBarrierDriver::capacity_for_headroom(
+            config.resource_budget.snapshot.memory_headroom_bytes,
+        ),
     )?;
     authority.attach_wal_barrier(&wal_barrier)?;
     if let Some(tenant) = config.scope.tenant_id {
@@ -734,19 +777,28 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
 
     let foreground_admissions = authority.foreground_admissions();
     let canonical_json_cache = Some(authority.canonical_json_cache_observer());
-        let decoded_chunk_cache = Some(authority.decoded_chunk_cache_observer());
+    let decoded_chunk_cache = Some(authority.decoded_chunk_cache_observer());
     authority.configure_blob_codecs(config.resource_budget.snapshot)?;
     let blob_codec_pool = Some(authority.blob_codec_pool_observer()?);
     let published_queries = authority.enable_published_queries()?;
     let database = Arc::new(Mutex::new(authority));
-    let search_projection = crate::engine_log::lifecycle_step("startup_timing", "search_projection_prepare", || {
-        config.search_projection_dir.as_ref().map(|path| {
-        let projection = TurnSearchProjection::open_or_defer(
-            path, config.resource_budget.search_projection_maximum_bytes_per_owner, authority_uuid,
-        )?;
-        Ok::<_, io::Error>(Arc::new(Mutex::new(projection)))
-    }).transpose()
-    })?;
+    let search_projection =
+        crate::engine_log::lifecycle_step("startup_timing", "search_projection_prepare", || {
+            config
+                .search_projection_dir
+                .as_ref()
+                .map(|path| {
+                    let projection = TurnSearchProjection::open_or_defer(
+                        path,
+                        config
+                            .resource_budget
+                            .search_projection_maximum_bytes_per_owner,
+                        authority_uuid,
+                    )?;
+                    Ok::<_, io::Error>(Arc::new(Mutex::new(projection)))
+                })
+                .transpose()
+        })?;
     let authenticator = Arc::new(StorageV2Authenticator::new(
         &config.auth_token,
         config.scope,
@@ -762,7 +814,9 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
         address.port(),
         authority_uuid,
         &config,
-        search_projection.as_ref().is_some_and(|index| index.try_lock().is_ok_and(|index| index.available())),
+        search_projection
+            .as_ref()
+            .is_some_and(|index| index.try_lock().is_ok_and(|index| index.available())),
     )?;
     // Bounded page-cache warm-up off the readiness path: sequential payload
     // reads convert cold network-volume fault-in into mount readahead so the
@@ -816,39 +870,43 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
     let online_gc_driver = if std::env::var_os("TOFU_DB_DISABLE_ONLINE_BACKGROUND").is_some() {
         None
     } else {
-        Some(crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
-            &database,
-            AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
-            config.resource_budget.has_volume_pressure(),
-            reclaim_watch(&database, &config.scope)?,
-        )?)
+        Some(
+            crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
+                &database,
+                AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
+                config.resource_budget.has_volume_pressure(),
+                reclaim_watch(&database, &config.scope)?,
+            )?,
+        )
     };
     let online_gc_observer = online_gc_driver.as_ref().map(|driver| driver.observer());
     let search_gc_driver = if std::env::var_os("TOFU_DB_DISABLE_ONLINE_BACKGROUND").is_some() {
         None
     } else {
-        search_projection.as_ref().map(|projection| {
-            crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
-                projection,
-                AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
-                config.resource_budget.has_volume_pressure(),
-                reclaim_watch(&database, &config.scope)?,
-            )
-        }).transpose()?
+        search_projection
+            .as_ref()
+            .map(|projection| {
+                crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
+                    projection,
+                    AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
+                    config.resource_budget.has_volume_pressure(),
+                    reclaim_watch(&database, &config.scope)?,
+                )
+            })
+            .transpose()?
     };
 
     // Seals pending transcript windows into immutable pages off the
     // foreground path; hydration reads pages instead of per-turn documents.
-    let archive_seal_driver =
-        if std::env::var_os("TOFU_DB_DISABLE_ONLINE_BACKGROUND").is_some() {
-            None
-        } else {
-            Some(crate::transcript_archive::ArchiveSealDriver::start(
-                &database,
-                config.scope.tenant_id.unwrap_or(0),
-                config.scope.owner_id,
-            )?)
-        };
+    let archive_seal_driver = if std::env::var_os("TOFU_DB_DISABLE_ONLINE_BACKGROUND").is_some() {
+        None
+    } else {
+        Some(crate::transcript_archive::ArchiveSealDriver::start(
+            &database,
+            config.scope.tenant_id.unwrap_or(0),
+            config.scope.owner_id,
+        )?)
+    };
     // The online backup driver anchors a checkpoint under a short hold and
     // copies incrementally off-mutex; `system.backup` rings its doorbell.
     let backup_dir = match config.backup_dir.clone() {
@@ -860,20 +918,30 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
     } else {
         Some(match fastpath_lease.as_ref() {
             Some(lease) => crate::online_backup::OnlineBackupDriver::start_fastpath(
-                &database, backup_dir, config.at_rest_key.clone(), Arc::clone(lease))?,
+                &database,
+                backup_dir,
+                config.at_rest_key.clone(),
+                Arc::clone(lease),
+            )?,
             None => crate::online_backup::OnlineBackupDriver::start(
-                &database, backup_dir, config.at_rest_key.clone(),
-                automatic_epoch_owner(&config.scope))?,
+                &database,
+                backup_dir,
+                config.at_rest_key.clone(),
+                automatic_epoch_owner(&config.scope),
+            )?,
         })
     };
-    let online_backup_observer = online_backup_driver.as_ref().map(|driver| driver.observer());
+    let online_backup_observer = online_backup_driver
+        .as_ref()
+        .map(|driver| driver.observer());
     // The authority-contention watch is the wedge detector: every other
     // health signal answers from observer handles and stays green while a
     // holder wedges the authority mutex; this one reports exactly the
     // continuous-contention window foreground requests experience. It is
     // not background work, so the online-background kill switch does not
     // apply.
-    let authority_watch = crate::authority_watch::AuthorityContentionWatch::start(&database, foreground_admissions)?;
+    let authority_watch =
+        crate::authority_watch::AuthorityContentionWatch::start(&database, foreground_admissions)?;
     let authority_watch_observer = Some(authority_watch.observer());
     // Register every index/GC owner before maintenance may start cold I/O.
     let maintenance = config
@@ -911,7 +979,9 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
         wal_flush_interval_milliseconds: Some(config.wal_flush_interval.as_millis() as u64),
         resource_budget: Some(resource_budget_json(
             &config,
-            search_projection.as_ref().is_some_and(|index| index.try_lock().is_ok_and(|index| index.available())),
+            search_projection
+                .as_ref()
+                .is_some_and(|index| index.try_lock().is_ok_and(|index| index.available())),
         )),
     };
     // The run consumes both Arcs; the shutdown tail retires their WAL
@@ -922,9 +992,7 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
         database,
         search_projection,
         authenticator,
-        FrameAdmissionBudget::new(
-            config.resource_budget.maximum_frame_bytes,
-        )?,
+        FrameAdmissionBudget::new(config.resource_budget.maximum_frame_bytes)?,
         AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
         Some(wal_barrier.clone()),
         control_observers,
@@ -942,31 +1010,62 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
     );
     let maintenance_result = maintenance
         .as_ref()
-        .map(|driver| crate::engine_log::lifecycle_step("shutdown_timing", "maintenance", || driver.stop_and_join()))
+        .map(|driver| {
+            crate::engine_log::lifecycle_step("shutdown_timing", "maintenance", || {
+                driver.stop_and_join()
+            })
+        })
         .transpose();
     // Stop the collector before the shutdown merge/checkpoint tail so its
     // try_lock holds never contend with the final checkpoint commit.
     let online_gc_result = online_gc_driver
-        .map(|driver| crate::engine_log::lifecycle_step("shutdown_timing", "online_gc", || driver.stop_and_join()))
+        .map(|driver| {
+            crate::engine_log::lifecycle_step("shutdown_timing", "online_gc", || {
+                driver.stop_and_join()
+            })
+        })
         .transpose();
     let search_gc_result = search_gc_driver
-        .map(|driver| crate::engine_log::lifecycle_step("shutdown_timing", "search_gc", || driver.stop_and_join()))
+        .map(|driver| {
+            crate::engine_log::lifecycle_step("shutdown_timing", "search_gc", || {
+                driver.stop_and_join()
+            })
+        })
         .transpose();
     let archive_seal_result = archive_seal_driver
-        .map(|driver| crate::engine_log::lifecycle_step("shutdown_timing", "archive_seal", || driver.stop_and_join()))
+        .map(|driver| {
+            crate::engine_log::lifecycle_step("shutdown_timing", "archive_seal", || {
+                driver.stop_and_join()
+            })
+        })
         .transpose();
     let online_backup_result = online_backup_driver
-        .map(|driver| crate::engine_log::lifecycle_step("shutdown_timing", "online_backup", || driver.stop_and_join()))
+        .map(|driver| {
+            crate::engine_log::lifecycle_step("shutdown_timing", "online_backup", || {
+                driver.stop_and_join()
+            })
+        })
         .transpose();
     // Stop the watch with the other drivers; it holds nothing, so its
     // bounded join never stalls the shutdown tail.
-    let authority_watch_result = crate::engine_log::lifecycle_step("shutdown_timing", "authority_watch", || authority_watch.stop_and_join());
+    let authority_watch_result =
+        crate::engine_log::lifecycle_step("shutdown_timing", "authority_watch", || {
+            authority_watch.stop_and_join()
+        });
     let packer_result = background_packer
         .as_ref()
-        .map(|driver| crate::engine_log::lifecycle_step("shutdown_timing", "background_packer", || driver.stop_and_join()))
+        .map(|driver| {
+            crate::engine_log::lifecycle_step("shutdown_timing", "background_packer", || {
+                driver.stop_and_join()
+            })
+        })
         .transpose();
-    let adoption_result = crate::engine_log::lifecycle_step("shutdown_timing", "adoption", || adoption_driver.stop_and_join());
-    let rotation_result = crate::engine_log::lifecycle_step("shutdown_timing", "rotation", || rotation_driver.stop_and_join());
+    let adoption_result = crate::engine_log::lifecycle_step("shutdown_timing", "adoption", || {
+        adoption_driver.stop_and_join()
+    });
+    let rotation_result = crate::engine_log::lifecycle_step("shutdown_timing", "rotation", || {
+        rotation_driver.stop_and_join()
+    });
     let parent_result = parent_lease.join_if_finished();
     // Every writer lane except the group barrier is now quiescent. Retire
     // both engines' active WAL windows BEFORE joining the barrier driver:
@@ -984,7 +1083,10 @@ pub fn serve_supervised<R: Read + Send + 'static, W: Write>(
     let _barrier_result = wal_barrier_driver.stop_and_join();
     if std::env::var_os("TOFU_DB_FSYNC_STATS").is_some() {
         eprintln!("fsync_stats: {}", crate::fsync_stats::report());
-        eprintln!("resource_exhaustion_reasons: {:?}", crate::resource_exhaustion::resource_exhaustion_snapshot());
+        eprintln!(
+            "resource_exhaustion_reasons: {:?}",
+            crate::resource_exhaustion::resource_exhaustion_snapshot()
+        );
         eprintln!("stage_stats:\n{}", crate::fsync_stats::stage_report());
         eprintln!(
             "component_stage_stats:\n{}",
@@ -1126,20 +1228,28 @@ fn validate_projection_path(authority_dir: &Path, projection_dir: &Path) -> io::
     let projection = loop {
         match std::fs::canonicalize(ancestor) {
             Ok(mut resolved) => {
-                for name in missing_components.iter().rev() { resolved.push(name); }
+                for name in missing_components.iter().rev() {
+                    resolved.push(name);
+                }
                 break resolved;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 match std::fs::symlink_metadata(ancestor) {
                     Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(invalid_input("turn-search projection has an unresolved symlink"));
+                        return Err(invalid_input(
+                            "turn-search projection has an unresolved symlink",
+                        ));
                     }
                     Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-                    _ => {},
+                    _ => {}
                 }
-                let name = ancestor.file_name().ok_or_else(|| invalid_input("turn-search projection path must name a directory"))?;
+                let name = ancestor.file_name().ok_or_else(|| {
+                    invalid_input("turn-search projection path must name a directory")
+                })?;
                 missing_components.push(name.to_os_string());
-                ancestor = ancestor.parent().ok_or_else(|| invalid_input("turn-search projection path must have a persistent parent"))?;
+                ancestor = ancestor.parent().ok_or_else(|| {
+                    invalid_input("turn-search projection path must have a persistent parent")
+                })?;
             }
             Err(error) => return Err(error),
         }
@@ -1170,8 +1280,10 @@ fn enforce_writable_volume(resource_budget: DaemonResourceBudget) -> io::Result<
 /// lease race, and `storage_full` (a full volume or exhausted quota) is a
 /// start refusal the supervisor rechecks instead of counting as a crash.
 pub fn serve_failure_envelope(error: &io::Error) -> serde_json::Value {
-    let retryable = matches!(error.kind(), io::ErrorKind::WouldBlock
-        | io::ErrorKind::Interrupted | io::ErrorKind::TimedOut);
+    let retryable = matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted | io::ErrorKind::TimedOut
+    );
     let code = if error.kind() == io::ErrorKind::InvalidData {
         "database_integrity"
     } else if crate::vfs::is_storage_full(error) {
@@ -1286,11 +1398,7 @@ fn invalid_input(message: &str) -> io::Error {
 /// (`KiB`/`MiB`/`GiB`, case-insensitive). `0` means unpaced. Returns `None`
 /// when the value is not a non-negative integer rate.
 fn parse_pack_pace_bytes_per_second(raw: &str) -> Option<u64> {
-    const UNITS: [(&str, u64); 3] = [
-        ("kib", 1 << 10),
-        ("mib", 1 << 20),
-        ("gib", 1 << 30),
-    ];
+    const UNITS: [(&str, u64); 3] = [("kib", 1 << 10), ("mib", 1 << 20), ("gib", 1 << 30)];
     let trimmed = raw.trim();
     let lower = trimmed.to_ascii_lowercase();
     let (digits, multiplier) = UNITS
@@ -1346,10 +1454,12 @@ pub(crate) fn pack_pace_bytes_per_second_from_env() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generated_storage_v2::MAX_CONNECTION_REUSE_TARGET;
     use crate::resource_probe::LaunchResourceSnapshot;
 
     #[test]
-    fn a_graceful_stop_retires_the_wal_window_into_indexed_history_without_materializing_staged_blocks() {
+    fn a_graceful_stop_retires_the_wal_window_into_indexed_history_without_materializing_staged_blocks(
+    ) {
         // 2026-11-12 (GATE-PUBLISH-CARRY drill): the stop checkpoint materialized
         // every staged block of a 681 MB window under the authority mutex (at
         // the full catalog a segment rewrite or a loose file and fsync per
@@ -1360,7 +1470,8 @@ mod tests {
         vfs.create_dir(Path::new("/data")).unwrap();
         vfs.sync_directory(Path::new("/")).unwrap();
         let dyn_vfs: Arc<dyn Vfs> = vfs.clone();
-        let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
         // As the stopped daemon's rotation driver left it.
         database.engine_mut_for_test().attach_rotation_driver();
         let payloads: Vec<Vec<u8>> = (0..64_u32)
@@ -1372,18 +1483,29 @@ mod tests {
             .collect();
         let database = Arc::new(Mutex::new(database));
         checkpoint_wal_windows_for_fast_reopen(&database, None);
-        let mut database = Arc::try_unwrap(database).ok().unwrap().into_inner().unwrap();
+        let mut database = Arc::try_unwrap(database)
+            .ok()
+            .unwrap()
+            .into_inner()
+            .unwrap();
         let state = database.engine_mut_for_test().state().clone();
-        assert_eq!(state.checkpoint_sequence, state.durable_sequence, "the stop left WAL to replay");
         assert_eq!(
-            vfs.read_directory(Path::new("/data/payload-segments")).map_or(0, |entries| entries.len()),
+            state.checkpoint_sequence, state.durable_sequence,
+            "the stop left WAL to replay"
+        );
+        assert_eq!(
+            vfs.read_directory(Path::new("/data/payload-segments"))
+                .map_or(0, |entries| entries.len()),
             0,
             "the stop materialized staged blocks into a payload segment"
         );
         for id in &ids {
             let hex = id.to_hex();
             let loose = format!("/data/blocks/{}/{hex}.blk", &hex[..2]);
-            assert!(vfs.metadata(Path::new(&loose)).is_err(), "the stop spilled {hex} loose");
+            assert!(
+                vfs.metadata(Path::new(&loose)).is_err(),
+                "the stop spilled {hex} loose"
+            );
         }
         // Every acknowledged block reads after a crash and reopen.
         drop(database);
@@ -1401,14 +1523,20 @@ mod tests {
         assert_eq!(parse_pack_pace_bytes_per_second("1024"), Some(1024));
         assert_eq!(parse_pack_pace_bytes_per_second("64MiB"), Some(64 << 20));
         assert_eq!(parse_pack_pace_bytes_per_second("64mib"), Some(64 << 20));
-        assert_eq!(parse_pack_pace_bytes_per_second(" 128 KiB "), Some(128 << 10));
+        assert_eq!(
+            parse_pack_pace_bytes_per_second(" 128 KiB "),
+            Some(128 << 10)
+        );
         assert_eq!(parse_pack_pace_bytes_per_second("1GiB"), Some(1 << 30));
         assert_eq!(parse_pack_pace_bytes_per_second(""), None);
         assert_eq!(parse_pack_pace_bytes_per_second("fast"), None);
         assert_eq!(parse_pack_pace_bytes_per_second("64MB"), None);
         assert_eq!(parse_pack_pace_bytes_per_second("-1"), None);
         assert_eq!(parse_pack_pace_bytes_per_second("1.5GiB"), None);
-        assert_eq!(parse_pack_pace_bytes_per_second("18446744073709551615GiB"), None);
+        assert_eq!(
+            parse_pack_pace_bytes_per_second("18446744073709551615GiB"),
+            None
+        );
     }
 
     #[test]
@@ -1451,10 +1579,14 @@ mod tests {
         assert_eq!(document["protocol"], PROTOCOL_VERSION);
         assert_eq!(document["backend"], "tofudb");
         assert_eq!(document["preAuthority"], true);
-        assert_eq!(document["resourceBudget"]["eventBatchComposition"]["contract"],
-            crate::generated_storage_v2::NATIVE_EVENT_BATCH_COMPOSITION_CONTRACT);
-        assert_eq!(document["resourceBudget"]["eventBatchComposition"]["maximumCarriedPayloadBytes"],
-            crate::transaction::MAX_CARRIED_PAYLOAD_BYTES);
+        assert_eq!(
+            document["resourceBudget"]["eventBatchComposition"]["contract"],
+            crate::generated_storage_v2::NATIVE_EVENT_BATCH_COMPOSITION_CONTRACT
+        );
+        assert_eq!(
+            document["resourceBudget"]["eventBatchComposition"]["maximumCarriedPayloadBytes"],
+            crate::transaction::MAX_CARRIED_PAYLOAD_BYTES
+        );
         assert!(document["port"].as_u64().unwrap() > 0);
         assert!(document["resourceBudget"]["maximumConnections"]
             .as_u64()
@@ -1501,21 +1633,43 @@ mod tests {
 
     #[test]
     fn a_failed_serve_names_its_verdict_for_the_supervisor() {
-        let pressure = enforce_writable_volume(DaemonResourceBudget::from_snapshot(LaunchResourceSnapshot {
-            logical_cpus: Some(1),
-            memory_capacity_bytes: Some(1024 * 1024 * 1024),
-            memory_headroom_bytes: Some(512 * 1024 * 1024),
-            volume_free_bytes: Some(MIN_WRITABLE_VOLUME_FREE_BYTES - 1),
-        })).unwrap_err();
+        let pressure = enforce_writable_volume(DaemonResourceBudget::from_snapshot(
+            LaunchResourceSnapshot {
+                logical_cpus: Some(1),
+                memory_capacity_bytes: Some(1024 * 1024 * 1024),
+                memory_headroom_bytes: Some(512 * 1024 * 1024),
+                volume_free_bytes: Some(MIN_WRITABLE_VOLUME_FREE_BYTES - 1),
+            },
+        ))
+        .unwrap_err();
         for (error, code, retryable) in [
             (pressure, "storage_full", false),
-            (io::Error::new(io::ErrorKind::QuotaExceeded, "Disk quota exceeded"), "storage_full", false),
-            (io::Error::new(io::ErrorKind::InvalidData, "CONTROL checksum"), "database_integrity", false),
-            (io::Error::new(io::ErrorKind::WouldBlock, "lease held"), "database_unavailable", true),
+            (
+                io::Error::new(io::ErrorKind::QuotaExceeded, "Disk quota exceeded"),
+                "storage_full",
+                false,
+            ),
+            (
+                io::Error::new(io::ErrorKind::InvalidData, "CONTROL checksum"),
+                "database_integrity",
+                false,
+            ),
+            (
+                io::Error::new(io::ErrorKind::WouldBlock, "lease held"),
+                "database_unavailable",
+                true,
+            ),
         ] {
             let envelope = serve_failure_envelope(&error);
-            assert_eq!((envelope["type"].as_str(), envelope["code"].as_str(), envelope["retryable"].as_bool()),
-                (Some("storage.error"), Some(code), Some(retryable)), "{error}");
+            assert_eq!(
+                (
+                    envelope["type"].as_str(),
+                    envelope["code"].as_str(),
+                    envelope["retryable"].as_bool()
+                ),
+                (Some("storage.error"), Some(code), Some(retryable)),
+                "{error}"
+            );
             assert_eq!(envelope["diagnostic"], error.to_string());
         }
     }
@@ -1598,11 +1752,20 @@ mod tests {
         std::fs::create_dir(&authority).unwrap();
         let alias = directory.path().join("alias");
         symlink(&authority, &alias).unwrap();
-        assert_eq!(validate_projection_path(&authority, &alias.join("missing/nested/index")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            validate_projection_path(&authority, &alias.join("missing/nested/index"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
         assert!(!authority.join("missing").exists());
         let dangling = directory.path().join("dangling");
         symlink(directory.path().join("absent-target"), &dangling).unwrap();
-        assert_eq!(validate_projection_path(&authority, &dangling.join("nested/index")).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            validate_projection_path(&authority, &dangling.join("nested/index"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
-
 }

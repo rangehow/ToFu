@@ -11,7 +11,7 @@ Repository-owned entries declare ``first_party`` and resolve only their
 ``packages/`` source. They share the isolated runner; external vendoring
 validates their presence without copying or replacing them.
 
-Internal MCP servers (hope-mcp, …) are private and not on PyPI, so a fresh
+Internal MCP servers (declared by an overlay bundle) are private and not on PyPI, so a fresh
 Tofu checkout cannot obtain them — the user just sees "launcher X is not on
 PATH". We ship the source next to the repo and launch it ISOLATED via
 ``uv run --no-project --with-editable <source>``: each server resolves its own
@@ -36,6 +36,8 @@ vendored snapshot (``tools/<name>``, hermetic fallback). The first dir with a
 
 To add a server: add one row here (and make sure either a sibling checkout or
 a ``tools/<name>`` snapshot exists; ``make vendor-mcp`` populates the latter).
+Company-internal servers are declared by their overlay bundle's
+``mcp_launchers/*.json`` instead and merged below (``tofu_extensions``).
 """
 from __future__ import annotations
 
@@ -60,20 +62,47 @@ VENDORED_LAUNCHERS: dict[str, SourceLauncher] = {
         'sources': ['packages/tofu-overleaf-mcp'],
         'first_party': True,
     },
-    'hope-mcp': {
-        'extra_sources': ['packages/tofu-mtsso-auth'],
-        'sources': ['../hope-mcp', 'vendor/hope-mcp', 'tools/hope-mcp'],
-    },
-    'llm-mcp': {
-        'extra_sources': ['packages/tofu-mtsso-auth'],
-        'sources': ['../llm-mcp', 'vendor/llm-mcp', 'tools/llm-mcp'],
-    },
-    'xuecheng-mcp': {
-        'extra_sources': ['packages/tofu-mtsso-auth'],
-        'sources': ['../xuecheng-mcp', 'vendor/xuecheng-mcp', 'tools/xuecheng-mcp'],
-    },
     # Operator checkout (tools/) on the dev box; vendor/ on internal exports.
     'github-batch-mcp': {
         'sources': ['tools/github-batch-mcp', 'vendor/github-batch-mcp'],
     },
 }
+
+MCP_LAUNCHERS_CONTRACT = 'tofu.mcp-launchers/v1'
+
+
+def _bundle_launchers() -> dict[str, SourceLauncher]:
+    """Rows installed bundles declare in ``mcp_launchers/*.json`` (docs/PUBLIC_CORE.md).
+
+    Company-internal servers live in their overlay's bundle, never in this
+    table. A malformed file is skipped; core rows always win by name.
+    """
+    import json
+
+    from tofu_extensions import bundle_directories
+    rows: dict[str, SourceLauncher] = {}
+    for directory in bundle_directories('mcp_launchers'):
+        for path in sorted(directory.glob('*.json')):
+            try:
+                document = json.loads(path.read_text(encoding='utf-8'))
+                if document.get('contract') != MCP_LAUNCHERS_CONTRACT:
+                    raise ValueError('not a ' + MCP_LAUNCHERS_CONTRACT + ' document')
+                for name, row in document['launchers'].items():
+                    sources = row.get('sources')
+                    if (not isinstance(sources, list) or not sources
+                            or not all(isinstance(s, str) and s for s in sources)):
+                        raise ValueError(f'{name}: sources must be non-empty strings')
+                    extra = row.get('extra_sources', [])
+                    if not isinstance(extra, list) or not all(isinstance(s, str) and s for s in extra):
+                        raise ValueError(f'{name}: extra_sources must be strings')
+                    rows[name] = {'sources': list(sources),
+                                  **({'extra_sources': list(extra)} if extra else {})}
+            except (OSError, ValueError, KeyError, AttributeError, TypeError) as exc:
+                import logging
+                logging.getLogger(__name__).warning(
+                    '[MCP:Vendored] skipping launcher file %s: %s', path, exc)
+    return rows
+
+
+VENDORED_LAUNCHERS.update({name: row for name, row in _bundle_launchers().items()
+                           if name not in VENDORED_LAUNCHERS})

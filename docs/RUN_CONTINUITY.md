@@ -93,7 +93,8 @@ checkpoint, exactly as the owner's Continue would, once.
   (`autopilot`) and Flow (a selected flow) runs (D1/D2 above), a Turn waiting for
   the owner's answer (`answer_guidance`), a Turn whose settlement names calls
   the restart cut off with an unknown side effect (`error.unknownEffects`,
-  [Turn settlement](contracts/TURN_SETTLEMENT.md): the owner checks them first),
+  [Turn settlement](contracts/TURN_SETTLEMENT.md): the owner checks them first;
+  only calls of effect class `unknown` are named, see below),
   a Turn that offers only Regenerate (the application's settlement of a
   restart interruption offers Continue or a checkpoint unless the restart
   cut a call in its first round, which stays held for its owner, or its
@@ -105,6 +106,44 @@ checkpoint, exactly as the owner's Continue would, once.
   itself. The restart notice describes the selected Turn, never a report after
   it, and says "not interrupted by this restart" for a listed conversation
   whose latest work ended before it.
+- *A restart-cut call is classified by its declared effect (owner follow-up
+  2026-11-15).* Problem: every restart cut off a few Workers' `run_command`
+  calls (a test run, a `git ls-remote`); each such call counted as an unknown
+  side effect, so the Worker settled `worker_effect_outcome_unknown` with a
+  manual retry policy and waited for its Coordinator's `checkpoint_resume`.
+  Decision: durable worker recovery
+  (`worker_recovery.classify_cut_calls`) classifies every call still
+  `entered`/`unknown` with no result through `lib/tools/restart_effect_class.py`:
+  `read_only` and `idempotent` by the tool's own declaration; for
+  `run_command`, `read_only` when every segment provably only reads (the Git
+  guard's read-only verdict, the read-only utility set), and `verifiable` when
+  the call ran in the Worker's own isolated worktree and is a test/check run, a
+  local Git write of that checkout (add, commit, merge, reset, ...), or a
+  literal file utility whose every write target is inside it: no network side
+  effect, and the resumed Worker re-checks that state itself. Everything else is
+  `unknown`: an unparsed segment, a computed program or operand, an arbitrary
+  interpreter, a package install, any remote or shared-ref Git command (push,
+  fetch, branch, tag, worktree), and every write of a task without an isolated
+  worktree. Read-only, idempotent and verifiable calls settle the interruption
+  like the graceful quiesce and it resumes from its checkpoint by itself (project
+  dispatch recovery for a Worker, this pass for a Turn no grant runs); only
+  `unknown` calls are named in `error.unknownEffects`, which the Worker's
+  Coordinator receives once as a `needs_decision` settlement through `poll`
+  ([Project coordination](PROJECT_COORDINATION.md), "Settlement is news, reported
+  once"). The decision for every cut call (`toolName`, `toolCallId`,
+  `operationId`, `effectClass`, `decision`: `resume` or `needs_decision`) is
+  recorded with the exit receipt (task result metadata `restartCutCalls`), in
+  `error.cutCalls` when one needs a decision, and logged by
+  `[WorkerRecovery]`. The classifier is pure and conservative: what it cannot
+  prove is `unknown`, so it adds no knob, timer or retry. A call cut in the
+  Turn's first round keeps the existing hold (only Regenerate) whatever its
+  class. Alternatives rejected: re-running every cut `run_command`
+  (a push or deploy would run twice); a per-tool allow-list setting (a tuning
+  knob, principle 5); probing the target after boot to prove the effect (a new
+  recovery-time process and network path; the Worker already re-checks its
+  own state when it resumes). Specifications:
+  `tests/tools/test_restart_effect_class.py` and the effect-class cases of
+  `tests/conversation/test_worker_exit_recovery.py`.
 - *Coordinators in place.* A restart-paused Coordinator wake continues in its
   own Turn through the restart continuation of project dispatch
   (`project-dispatch-resume:`), like a Worker. A restart-paused human request

@@ -9,10 +9,7 @@ fn streaming_append(task_id: &str, sequence: u64, created_at_ms: i64) -> AppendR
         // Not one of STRUCTURAL_EVENT_TYPES: the streaming retention class.
         event_type: "assistant_delta".to_owned(),
         created_at_ms,
-        payload_json: serde_json::to_vec(
-            &json!({"type":"assistant_delta", "text":"x"}),
-        )
-        .unwrap(),
+        payload_json: serde_json::to_vec(&json!({"type":"assistant_delta", "text":"x"})).unwrap(),
     }
 }
 
@@ -25,11 +22,7 @@ fn write(db: &mut AuthorityDatabase, item: &AppendRequest) -> io::Result<()> {
     Ok(())
 }
 
-fn prune_once(
-    db: &mut AuthorityDatabase,
-    cutoff: i64,
-    limit: usize,
-) -> io::Result<Value> {
+fn prune_once(db: &mut AuthorityDatabase, cutoff: i64, limit: usize) -> io::Result<Value> {
     let mut tx = db.begin_with_identity_claim_scopes(7, 11)?;
     let result: Value = serde_json::from_slice(&prune(
         db,

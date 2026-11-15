@@ -99,7 +99,11 @@ impl Vfs for UnfinishableMarkVfs {
         self.listing_hook(path);
         self.inner.read_directory(path)
     }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<BoundedDirectoryEntries> {
         self.listing_hook(path);
         self.inner.read_directory_bounded(path, maximum)
     }
@@ -110,7 +114,8 @@ impl Vfs for UnfinishableMarkVfs {
         maximum: usize,
         matches: usize,
     ) -> io::Result<BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         if path.ends_with("payload-segments") {
@@ -212,7 +217,8 @@ pub(super) fn live_key() -> EntityKey {
 /// hot caches disabled so marking always reaches the (aborting) source.
 pub(super) fn fixture() -> (Arc<UnfinishableMarkVfs>, Arc<Mutex<AuthorityDatabase>>) {
     let vfs = UnfinishableMarkVfs::new();
-    let mut authority = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+    let mut authority =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     let mut transaction = authority.begin(7, 11).unwrap();
     for index in 0..256_u32 {
         authority
@@ -223,7 +229,9 @@ pub(super) fn fixture() -> (Arc<UnfinishableMarkVfs>, Arc<Mutex<AuthorityDatabas
             )
             .unwrap();
     }
-    authority.entity_put(&mut transaction, live_key(), b"live-value".to_vec()).unwrap();
+    authority
+        .entity_put(&mut transaction, live_key(), b"live-value".to_vec())
+        .unwrap();
     authority.commit(transaction).unwrap();
     authority.merge_entity_overlay_fully().unwrap();
     authority.checkpoint_wal_window().unwrap();
@@ -232,7 +240,10 @@ pub(super) fn fixture() -> (Arc<UnfinishableMarkVfs>, Arc<Mutex<AuthorityDatabas
 }
 
 pub(super) fn segment_files(vfs: &UnfinishableMarkVfs) -> usize {
-    vfs.inner.read_directory(Path::new("/data/payload-segments")).unwrap().len()
+    vfs.inner
+        .read_directory(Path::new("/data/payload-segments"))
+        .unwrap()
+        .len()
 }
 
 /// One epoch whose block mark build aborts, as every live epoch did at the
@@ -243,7 +254,9 @@ pub(super) fn run_epoch_with_aborted_mark(
     vfs: &UnfinishableMarkVfs,
 ) {
     vfs.abort_marks.store(true, Ordering::Release);
-    let error = collector.run_epoch(database, &AtomicBool::new(false)).unwrap_err();
+    let error = collector
+        .run_epoch(database, &AtomicBool::new(false))
+        .unwrap_err();
     vfs.abort_marks.store(false, Ordering::Release);
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "{error}");
     assert!(error.to_string().contains(UNFINISHED_MARK_ERROR), "{error}");
@@ -252,12 +265,20 @@ pub(super) fn run_epoch_with_aborted_mark(
 /// Superseded files that no catalog, pack or retirement set references, as
 /// left behind by full-catalog history promotion, an abandoned background
 /// pack or a restart that dropped the in-memory retirement set.
-pub(super) fn leave_superseded_segments(database: &Arc<Mutex<AuthorityDatabase>>, round: usize, count: usize) {
+pub(super) fn leave_superseded_segments(
+    database: &Arc<Mutex<AuthorityDatabase>>,
+    round: usize,
+    count: usize,
+) {
     let guard = database.lock().unwrap();
     for index in 0..count {
         let payload = format!("superseded-segment-{round}-{index}");
-        let block_id = guard.write_orphan_block_for_test(payload.as_bytes()).unwrap();
-        guard.create_orphan_payload_segment_for_test(block_id).unwrap();
+        let block_id = guard
+            .write_orphan_block_for_test(payload.as_bytes())
+            .unwrap();
+        guard
+            .create_orphan_payload_segment_for_test(block_id)
+            .unwrap();
     }
 }
 
@@ -301,7 +322,9 @@ fn restart_dropped_retirements_are_reclaimed_although_marks_abort() {
         let mut retired = Vec::new();
         for index in 0..8 {
             let payload = format!("retired-segment-{index}");
-            let block_id = guard.write_orphan_block_for_test(payload.as_bytes()).unwrap();
+            let block_id = guard
+                .write_orphan_block_for_test(payload.as_bytes())
+                .unwrap();
             guard.compact_payload_blocks_for_test(&[block_id]).unwrap();
             let segment_id = guard
                 .engine_mut_for_test()
@@ -315,7 +338,10 @@ fn restart_dropped_retirements_are_reclaimed_although_marks_abort() {
             retired.push(segment_id);
         }
         for segment_id in &retired {
-            guard.engine_mut_for_test().collect_payload_segment(*segment_id, &[]).unwrap();
+            guard
+                .engine_mut_for_test()
+                .collect_payload_segment(*segment_id, &[])
+                .unwrap();
         }
         retired
     };
@@ -324,22 +350,40 @@ fn restart_dropped_retirements_are_reclaimed_although_marks_abort() {
     for _ in 0..3 {
         run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
     }
-    assert_eq!(segment_files(&vfs), parked_files, "parked retirements keep their reader floor");
+    assert_eq!(
+        segment_files(&vfs),
+        parked_files,
+        "parked retirements keep their reader floor"
+    );
 
     drop(database);
     vfs.inner.crash().unwrap();
     let reopened = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     reopened.configure_hot_data_caches(0, 0).unwrap();
     let database = Arc::new(Mutex::new(reopened));
-    assert!(database.lock().unwrap().block_store_shared().protected_segment_ids().unwrap().is_empty());
+    assert!(database
+        .lock()
+        .unwrap()
+        .block_store_shared()
+        .protected_segment_ids()
+        .unwrap()
+        .is_empty());
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
-    assert_eq!(segment_files(&vfs), parked_files, "the first observation confirms nothing");
+    assert_eq!(
+        segment_files(&vfs),
+        parked_files,
+        "the first observation confirms nothing"
+    );
     run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
     assert_eq!(segment_files(&vfs), parked_files - retired.len());
     for segment_id in retired {
-        let path = Path::new("/data/payload-segments").join(format!("{}.pseg", segment_id.simple()));
-        assert_eq!(vfs.inner.metadata(&path).unwrap_err().kind(), io::ErrorKind::NotFound);
+        let path =
+            Path::new("/data/payload-segments").join(format!("{}.pseg", segment_id.simple()));
+        assert_eq!(
+            vfs.inner.metadata(&path).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
     assert_eq!(metrics(&collector).total_orphan_segments_removed, 8);
     assert_live_value(&database, &live_key(), b"live-value");
@@ -347,7 +391,14 @@ fn restart_dropped_retirements_are_reclaimed_although_marks_abort() {
 
 fn write_scratch_file(vfs: &DeterministicVfs, path: &Path, bytes: &[u8]) {
     let mut file = vfs
-        .open(path, OpenRequest { write: true, create_new: true, ..OpenRequest::default() })
+        .open(
+            path,
+            OpenRequest {
+                write: true,
+                create_new: true,
+                ..OpenRequest::default()
+            },
+        )
         .unwrap();
     file.write_all_at(0, bytes).unwrap();
     sync_all_barrier(file.as_mut()).unwrap();
@@ -363,9 +414,15 @@ fn write_scratch_file(vfs: &DeterministicVfs, path: &Path, bytes: &[u8]) {
 fn racing_background_pack_files_survive_the_orphan_lane() {
     let (vfs, database) = fixture();
     let store = database.lock().unwrap().block_store_shared();
-    let temporary = Path::new("/data/payload-segments")
-        .join(format!(".new-{}", uuid::Uuid::from_bytes([0x5a; 16]).simple()));
-    write_scratch_file(&vfs.inner, &temporary, b"abandoned temporary segment prefix");
+    let temporary = Path::new("/data/payload-segments").join(format!(
+        ".new-{}",
+        uuid::Uuid::from_bytes([0x5a; 16]).simple()
+    ));
+    write_scratch_file(
+        &vfs.inner,
+        &temporary,
+        b"abandoned temporary segment prefix",
+    );
     let staged = database
         .lock()
         .unwrap()
@@ -394,29 +451,63 @@ fn racing_background_pack_files_survive_the_orphan_lane() {
         }));
     }
     run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
-    let segment = racing.lock().unwrap().take().expect("the racing pack ran inside the listing");
+    let segment = racing
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the racing pack ran inside the listing");
     let segment_id = segment.metadata().segment_id;
-    let segment_path = Path::new("/data/payload-segments").join(format!("{}.pseg", segment_id.simple()));
-    assert!(vfs.inner.metadata(&temporary).is_ok(), "an active pack owns temporary files");
+    let segment_path =
+        Path::new("/data/payload-segments").join(format!("{}.pseg", segment_id.simple()));
+    assert!(
+        vfs.inner.metadata(&temporary).is_ok(),
+        "an active pack owns temporary files"
+    );
     assert!(vfs.inner.metadata(&segment_path).is_ok());
     for _ in 0..2 {
         run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
-        assert!(vfs.inner.metadata(&segment_path).is_ok(), "an unpublished pack segment is protected");
+        assert!(
+            vfs.inner.metadata(&segment_path).is_ok(),
+            "an unpublished pack segment is protected"
+        );
         assert!(vfs.inner.metadata(&temporary).is_ok());
     }
 
-    let reference = PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id()).unwrap();
+    let reference = PayloadSegmentReference::new(
+        segment.metadata(),
+        segment.first_block_id(),
+        segment.last_block_id(),
+    )
+    .unwrap();
     store.verify_payload_segment(&reference).unwrap();
-    store.note_packed(&segment.block_ids().collect::<Vec<_>>()).unwrap();
-    store.complete_background_pack(segment_id, reference).unwrap();
-    assert!(database.lock().unwrap().publish_completed_pack_if_capacity().unwrap());
+    store
+        .note_packed(&segment.block_ids().collect::<Vec<_>>())
+        .unwrap();
+    store
+        .complete_background_pack(segment_id, reference)
+        .unwrap();
+    assert!(database
+        .lock()
+        .unwrap()
+        .publish_completed_pack_if_capacity()
+        .unwrap());
     for _ in 0..2 {
         run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
     }
-    assert!(vfs.inner.metadata(&segment_path).is_ok(), "the published segment is catalog-referenced");
-    assert_eq!(vfs.inner.metadata(&temporary).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert!(
+        vfs.inner.metadata(&segment_path).is_ok(),
+        "the published segment is catalog-referenced"
+    );
     assert_eq!(
-        database.lock().unwrap().read_block_for_test(staged).unwrap(),
+        vfs.inner.metadata(&temporary).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(staged)
+            .unwrap(),
         b"racing background pack payload"
     );
     assert_live_value(&database, &live_key(), b"live-value");
@@ -424,21 +515,27 @@ fn racing_background_pack_files_survive_the_orphan_lane() {
 
 /// Segments named by any selectable CONTROL slot, read from a fresh handle on
 /// the durable image the next open would see.
-fn durable_slot_segments(vfs: &UnfinishableMarkVfs, blocks: &BlockStore) -> Vec<(u64, BTreeSet<Uuid>)> {
+fn durable_slot_segments(
+    vfs: &UnfinishableMarkVfs,
+    blocks: &BlockStore,
+) -> Vec<(u64, BTreeSet<Uuid>)> {
     let mut control = ControlFile::open_with_vfs(Path::new("/data"), vfs.inner.clone()).unwrap();
     control.read_current().unwrap();
     control
         .selectable_states_for_test()
         .into_iter()
         .map(|state| {
-            let segments = state.payload_manifest_block_id.map_or_else(BTreeSet::new, |manifest_id| {
-                PayloadManifest::decode(&blocks.get(manifest_id).unwrap())
-                    .unwrap()
-                    .segments
-                    .iter()
-                    .map(|reference| reference.segment_id)
-                    .collect()
-            });
+            let segments =
+                state
+                    .payload_manifest_block_id
+                    .map_or_else(BTreeSet::new, |manifest_id| {
+                        PayloadManifest::decode(&blocks.get(manifest_id).unwrap())
+                            .unwrap()
+                            .segments
+                            .iter()
+                            .map(|reference| reference.segment_id)
+                            .collect()
+                    });
             (state.generation, segments)
         })
         .collect()
@@ -446,7 +543,8 @@ fn durable_slot_segments(vfs: &UnfinishableMarkVfs, blocks: &BlockStore) -> Vec<
 
 fn reopen(vfs: &Arc<UnfinishableMarkVfs>) -> Arc<Mutex<AuthorityDatabase>> {
     vfs.inner.crash().unwrap();
-    vfs.fail_control_writes_from.store(usize::MAX, Ordering::SeqCst);
+    vfs.fail_control_writes_from
+        .store(usize::MAX, Ordering::SeqCst);
     let authority = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
     authority.configure_hot_data_caches(0, 0).unwrap();
     Arc::new(Mutex::new(authority))
@@ -464,7 +562,9 @@ fn orphan_named_by_the_fallback_control_slot_is_unlinked_only_after_both_slots_m
         let (vfs, database) = fixture();
         let victim = {
             let mut guard = database.lock().unwrap();
-            let block_id = guard.write_orphan_block_for_test(b"named by the fallback slot").unwrap();
+            let block_id = guard
+                .write_orphan_block_for_test(b"named by the fallback slot")
+                .unwrap();
             guard.compact_payload_blocks_for_test(&[block_id]).unwrap();
             guard
                 .engine_mut_for_test()
@@ -484,51 +584,102 @@ fn orphan_named_by_the_fallback_control_slot_is_unlinked_only_after_both_slots_m
         let vfs = UnfinishableMarkVfs::over(Arc::new(seed.fork_durable().unwrap()));
         let database = reopen(&vfs);
         vfs.control_writes.store(0, Ordering::SeqCst);
-        database.lock().unwrap().engine_mut_for_test().collect_payload_segment(victim, &[]).unwrap();
+        database
+            .lock()
+            .unwrap()
+            .engine_mut_for_test()
+            .collect_payload_segment(victim, &[])
+            .unwrap();
         vfs.control_writes.load(Ordering::SeqCst)
     };
     let vfs = UnfinishableMarkVfs::over(Arc::new(seed.fork_durable().unwrap()));
     let database = reopen(&vfs);
     vfs.control_writes.store(0, Ordering::SeqCst);
-    vfs.fail_control_writes_from.store(control_writes, Ordering::SeqCst);
-    assert!(database.lock().unwrap().engine_mut_for_test().collect_payload_segment(victim, &[]).is_err());
+    vfs.fail_control_writes_from
+        .store(control_writes, Ordering::SeqCst);
+    assert!(database
+        .lock()
+        .unwrap()
+        .engine_mut_for_test()
+        .collect_payload_segment(victim, &[])
+        .is_err());
     drop(database);
     let database = reopen(&vfs);
     let blocks = database.lock().unwrap().block_store_shared();
     let victim_path = Path::new("/data/payload-segments").join(format!("{}.pseg", victim.simple()));
     assert!(vfs.inner.metadata(&victim_path).is_ok());
-    assert!(!blocks.installed_payload_manifest().unwrap().unwrap().segments.iter()
+    assert!(!blocks
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap()
+        .segments
+        .iter()
         .any(|reference| reference.segment_id == victim));
     let slots = durable_slot_segments(&vfs, &blocks);
-    assert!(slots.iter().any(|(_, segments)| segments.contains(&victim)),
-        "fixture: the fallback slot still names the dropped segment: {slots:?}");
+    assert!(
+        slots.iter().any(|(_, segments)| segments.contains(&victim)),
+        "fixture: the fallback slot still names the dropped segment: {slots:?}"
+    );
 
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
-    assert!(vfs.inner.metadata(&victim_path).is_ok(), "the first observation confirms nothing");
+    assert!(
+        vfs.inner.metadata(&victim_path).is_ok(),
+        "the first observation confirms nothing"
+    );
     run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
-    assert_eq!(vfs.inner.metadata(&victim_path).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        vfs.inner.metadata(&victim_path).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
     let slots = durable_slot_segments(&vfs, &blocks);
     assert_eq!(slots.len(), 2);
-    assert!(slots.iter().all(|(_, segments)| !segments.contains(&victim)),
-        "both durable slots must stop naming the segment before it is unlinked: {slots:?}");
+    assert!(
+        slots
+            .iter()
+            .all(|(_, segments)| !segments.contains(&victim)),
+        "both durable slots must stop naming the segment before it is unlinked: {slots:?}"
+    );
 
     // Media loss of the newest slot: recovery selects the other one, whose
     // catalog must resolve completely.
-    let newest = slots.iter().map(|(generation, _)| *generation).max().unwrap();
+    let newest = slots
+        .iter()
+        .map(|(generation, _)| *generation)
+        .max()
+        .unwrap();
     drop(database);
     let mut control = vfs
         .inner
-        .open(Path::new("/data/CONTROL"), OpenRequest { write: true, ..OpenRequest::default() })
+        .open(
+            Path::new("/data/CONTROL"),
+            OpenRequest {
+                write: true,
+                ..OpenRequest::default()
+            },
+        )
         .unwrap();
-    control.write_all_at(((newest - 1) % 2) * 4096, &[0xa5; 64]).unwrap();
+    control
+        .write_all_at(((newest - 1) % 2) * 4096, &[0xa5; 64])
+        .unwrap();
     sync_all_barrier(control.as_mut()).unwrap();
     drop(control);
     let database = reopen(&vfs);
-    let installed = database.lock().unwrap().block_store_shared().installed_payload_manifest().unwrap().unwrap();
+    let installed = database
+        .lock()
+        .unwrap()
+        .block_store_shared()
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap();
     for reference in installed.segments {
-        let path = Path::new("/data/payload-segments").join(format!("{}.pseg", reference.segment_id.simple()));
-        assert!(vfs.inner.metadata(&path).is_ok(), "fallback catalog names missing segment {}", reference.segment_id);
+        let path = Path::new("/data/payload-segments")
+            .join(format!("{}.pseg", reference.segment_id.simple()));
+        assert!(
+            vfs.inner.metadata(&path).is_ok(),
+            "fallback catalog names missing segment {}",
+            reference.segment_id
+        );
     }
     assert_live_value(&database, &live_key(), b"live-value");
 }
@@ -552,14 +703,24 @@ fn stop_during_orphan_observation_removes_nothing_and_restarts_confirmation() {
     }
     let error = collector.run_epoch(&database, &stop).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
-    assert!(error.to_string().contains("online GC epoch stopped"), "{error}");
+    assert!(
+        error.to_string().contains("online GC epoch stopped"),
+        "{error}"
+    );
     assert_eq!(segment_files(&vfs), live_files + 3);
     let stopped = metrics(&collector);
-    assert_eq!((stopped.marks_built, stopped.segment_lane_failures), (0, 0),
-        "a stop abandons the epoch before marking and is not a lane failure");
+    assert_eq!(
+        (stopped.marks_built, stopped.segment_lane_failures),
+        (0, 0),
+        "a stop abandons the epoch before marking and is not a lane failure"
+    );
     stop.store(false, Ordering::Release);
     run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
-    assert_eq!(segment_files(&vfs), live_files + 3, "an interrupted observation confirms nothing");
+    assert_eq!(
+        segment_files(&vfs),
+        live_files + 3,
+        "an interrupted observation confirms nothing"
+    );
     run_epoch_with_aborted_mark(&mut collector, &database, &vfs);
     assert_eq!(segment_files(&vfs), live_files);
 }
@@ -567,9 +728,17 @@ fn stop_during_orphan_observation_removes_nothing_and_restarts_confirmation() {
 /// The superseded files `leave_superseded_segments` adds, and how many of
 /// them still exist. Full epochs may also rewrite live segments, so these
 /// tests count exactly the files they created.
-fn superseded_files(vfs: &UnfinishableMarkVfs, database: &Arc<Mutex<AuthorityDatabase>>, count: usize) -> Vec<PathBuf> {
+fn superseded_files(
+    vfs: &UnfinishableMarkVfs,
+    database: &Arc<Mutex<AuthorityDatabase>>,
+    count: usize,
+) -> Vec<PathBuf> {
     let listing = || {
-        vfs.inner.read_directory(Path::new("/data/payload-segments")).unwrap().into_iter().collect::<BTreeSet<_>>()
+        vfs.inner
+            .read_directory(Path::new("/data/payload-segments"))
+            .unwrap()
+            .into_iter()
+            .collect::<BTreeSet<_>>()
     };
     let before = listing();
     leave_superseded_segments(database, 0, count);
@@ -579,7 +748,10 @@ fn superseded_files(vfs: &UnfinishableMarkVfs, database: &Arc<Mutex<AuthorityDat
 }
 
 fn remaining(vfs: &UnfinishableMarkVfs, files: &[PathBuf]) -> usize {
-    files.iter().filter(|path| vfs.inner.metadata(path).is_ok()).count()
+    files
+        .iter()
+        .filter(|path| vfs.inner.metadata(path).is_ok())
+        .count()
 }
 
 /// An integrity error of the segment lane (an entry the directory contract
@@ -602,24 +774,42 @@ fn segment_lane_integrity_failure_stays_visible_while_block_marks_continue() {
     for epoch in 1..=2 {
         run_epoch(&mut collector, &database);
         let metrics = metrics(&collector);
-        assert_eq!((metrics.epochs_completed, metrics.segment_lane_failures), (epoch, epoch));
+        assert_eq!(
+            (metrics.epochs_completed, metrics.segment_lane_failures),
+            (epoch, epoch)
+        );
         assert!(
-            metrics.segment_lane_error.as_deref().is_some_and(|error| error.contains("unknown entry")),
+            metrics
+                .segment_lane_error
+                .as_deref()
+                .is_some_and(|error| error.contains("unknown entry")),
             "{metrics:?}"
         );
     }
     assert_eq!(
-        database.lock().unwrap().read_block_for_test(orphan).unwrap_err().kind(),
+        database
+            .lock()
+            .unwrap()
+            .read_block_for_test(orphan)
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::NotFound,
         "the block-mark lane confirmed and removed the loose orphan"
     );
     assert!(vfs.inner.metadata(unknown).is_ok());
-    assert_eq!(remaining(&vfs, &superseded), 2, "the failing lane removed nothing");
+    assert_eq!(
+        remaining(&vfs, &superseded),
+        2,
+        "the failing lane removed nothing"
+    );
 
     vfs.inner.remove_file(unknown).unwrap();
     run_epoch(&mut collector, &database);
     let repaired = metrics(&collector);
-    assert_eq!((repaired.segment_lane_failures, repaired.segment_lane_error), (2, None));
+    assert_eq!(
+        (repaired.segment_lane_failures, repaired.segment_lane_error),
+        (2, None)
+    );
     run_epoch(&mut collector, &database);
     assert_eq!(remaining(&vfs, &superseded), 0);
     assert_eq!(metrics(&collector).total_orphan_segments_removed, 2);
@@ -636,19 +826,33 @@ fn segment_unlink_failure_is_recorded_and_retried_from_fresh_observations() {
     let mut collector = OnlineGarbageCollector::new(test_budget());
     run_epoch(&mut collector, &database);
     vfs.inner
-        .arm_operation_fault(Operation::RemoveFile, 2, FaultAction::ErrorBefore(io::ErrorKind::PermissionDenied))
+        .arm_operation_fault(
+            Operation::RemoveFile,
+            2,
+            FaultAction::ErrorBefore(io::ErrorKind::PermissionDenied),
+        )
         .unwrap();
     run_epoch(&mut collector, &database);
     assert!(vfs.inner.operation_fault_fired().unwrap());
     vfs.inner.arm_fault(None).unwrap();
     let failed = metrics(&collector);
     assert_eq!((failed.epochs_completed, failed.marks_built), (2, 2));
-    assert_eq!((failed.segment_lane_failures, failed.total_orphan_segments_removed), (1, 1));
+    assert_eq!(
+        (
+            failed.segment_lane_failures,
+            failed.total_orphan_segments_removed
+        ),
+        (1, 1)
+    );
     assert!(failed.segment_lane_error.is_some());
     assert_eq!(remaining(&vfs, &superseded), 2);
 
     run_epoch(&mut collector, &database);
-    assert_eq!(remaining(&vfs, &superseded), 2, "a failed pass confirms nothing");
+    assert_eq!(
+        remaining(&vfs, &superseded),
+        2,
+        "a failed pass confirms nothing"
+    );
     assert_eq!(metrics(&collector).segment_lane_error, None);
     run_epoch(&mut collector, &database);
     assert_eq!(remaining(&vfs, &superseded), 0);
@@ -662,7 +866,9 @@ pub(super) fn segment_path(segment_id: Uuid) -> PathBuf {
 
 /// Three two-block segments whose blocks all stay live, the shape catalog
 /// pressure consolidates. Returns every packed block with its payload.
-pub(super) fn small_live_segments(database: &Arc<Mutex<AuthorityDatabase>>) -> Vec<(BlockId, Vec<u8>)> {
+pub(super) fn small_live_segments(
+    database: &Arc<Mutex<AuthorityDatabase>>,
+) -> Vec<(BlockId, Vec<u8>)> {
     let mut guard = database.lock().unwrap();
     let mut packed = Vec::new();
     for batch in 0..3_u32 {
@@ -677,7 +883,10 @@ pub(super) fn small_live_segments(database: &Arc<Mutex<AuthorityDatabase>>) -> V
     packed
 }
 
-pub(super) fn segments_holding(blocks: &BlockStore, packed: &[(BlockId, Vec<u8>)]) -> Vec<PayloadSegmentReference> {
+pub(super) fn segments_holding(
+    blocks: &BlockStore,
+    packed: &[(BlockId, Vec<u8>)],
+) -> Vec<PayloadSegmentReference> {
     let ids: BTreeSet<BlockId> = packed.iter().map(|(block_id, _)| *block_id).collect();
     blocks
         .installed_payload_manifest()
@@ -692,12 +901,24 @@ pub(super) fn segments_holding(blocks: &BlockStore, packed: &[(BlockId, Vec<u8>)
 /// Media loss of the newest durable CONTROL slot; the next open selects the
 /// other one.
 fn lose_newest_slot(vfs: &UnfinishableMarkVfs, slots: &[(u64, BTreeSet<Uuid>)]) {
-    let newest = slots.iter().map(|(generation, _)| *generation).max().unwrap();
+    let newest = slots
+        .iter()
+        .map(|(generation, _)| *generation)
+        .max()
+        .unwrap();
     let mut control = vfs
         .inner
-        .open(Path::new("/data/CONTROL"), OpenRequest { write: true, ..OpenRequest::default() })
+        .open(
+            Path::new("/data/CONTROL"),
+            OpenRequest {
+                write: true,
+                ..OpenRequest::default()
+            },
+        )
         .unwrap();
-    control.write_all_at(((newest - 1) % 2) * 4096, &[0xa5; 64]).unwrap();
+    control
+        .write_all_at(((newest - 1) % 2) * 4096, &[0xa5; 64])
+        .unwrap();
     sync_all_barrier(control.as_mut()).unwrap();
 }
 
@@ -707,10 +928,16 @@ fn assert_catalog_resolves(
     packed: &[(BlockId, Vec<u8>)],
 ) {
     let guard = database.lock().unwrap();
-    let installed = guard.block_store_shared().installed_payload_manifest().unwrap().unwrap();
+    let installed = guard
+        .block_store_shared()
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap();
     for reference in installed.segments {
         assert!(
-            vfs.inner.metadata(&segment_path(reference.segment_id)).is_ok(),
+            vfs.inner
+                .metadata(&segment_path(reference.segment_id))
+                .is_ok(),
             "the selected catalog names missing segment {}",
             reference.segment_id
         );
@@ -751,16 +978,26 @@ fn consolidation_failing_between_its_control_publications_keeps_every_victim() {
                     .collect()
             })
             .collect();
-        let plan = ConsolidationPlan { victims, retained_per_victim };
+        let plan = ConsolidationPlan {
+            victims,
+            retained_per_victim,
+        };
         let (_replacement, reference) = OnlineGarbageCollector::new(test_budget())
             .build_consolidation_segment(&blocks, &plan)
             .unwrap()
             .unwrap();
         blocks.begin_relink_observation();
-        let published =
-            guard.online_gc_finish_consolidation(&plan.victims, &plan.retained_per_victim, Some(reference));
+        let published = guard.online_gc_finish_consolidation(
+            &plan.victims,
+            &plan.retained_per_victim,
+            Some(reference),
+        );
         blocks.end_relink_observation();
-        let victim_ids: Vec<Uuid> = plan.victims.iter().map(|victim| victim.segment_id).collect();
+        let victim_ids: Vec<Uuid> = plan
+            .victims
+            .iter()
+            .map(|victim| victim.segment_id)
+            .collect();
         (victim_ids, published)
     };
     // Dry run on an identical fork: the publication's last CONTROL write is
@@ -773,37 +1010,60 @@ fn consolidation_failing_between_its_control_publications_keeps_every_victim() {
         assert_eq!(published.unwrap().victims as usize, victims.len());
         vfs.control_writes.load(Ordering::SeqCst)
     };
-    assert!(control_writes >= 2, "publish plus stabilize: {control_writes}");
+    assert!(
+        control_writes >= 2,
+        "publish plus stabilize: {control_writes}"
+    );
     let vfs = UnfinishableMarkVfs::over(Arc::new(seed.fork_durable().unwrap()));
     let database = reopen(&vfs);
     vfs.control_writes.store(0, Ordering::SeqCst);
-    vfs.fail_control_writes_from.store(control_writes, Ordering::SeqCst);
+    vfs.fail_control_writes_from
+        .store(control_writes, Ordering::SeqCst);
     let (victims, published) = consolidate(&database);
     assert_eq!(victims.len(), 3);
-    assert!(published.is_err(), "the stabilizing CONTROL write was injected to fail");
+    assert!(
+        published.is_err(),
+        "the stabilizing CONTROL write was injected to fail"
+    );
     drop(database);
 
     let database = reopen(&vfs);
     let blocks = database.lock().unwrap().block_store_shared();
     let slots = durable_slot_segments(&vfs, &blocks);
     assert!(
-        slots.iter().any(|(_, segments)| victims.iter().all(|victim| segments.contains(victim))),
+        slots
+            .iter()
+            .any(|(_, segments)| victims.iter().all(|victim| segments.contains(victim))),
         "fixture: the fallback slot still names every victim: {slots:?}"
     );
     assert!(
-        slots.iter().any(|(_, segments)| victims.iter().all(|victim| !segments.contains(victim))),
+        slots
+            .iter()
+            .any(|(_, segments)| victims.iter().all(|victim| !segments.contains(victim))),
         "fixture: the newest slot names the consolidated catalog: {slots:?}"
     );
     for victim in &victims {
-        assert!(vfs.inner.metadata(&segment_path(*victim)).is_ok(), "victim {victim} is gone");
+        assert!(
+            vfs.inner.metadata(&segment_path(*victim)).is_ok(),
+            "victim {victim} is gone"
+        );
     }
     assert_catalog_resolves(&vfs, &database, &packed);
     drop(database);
     lose_newest_slot(&vfs, &slots);
     let database = reopen(&vfs);
-    let installed = database.lock().unwrap().block_store_shared().installed_payload_manifest().unwrap().unwrap();
+    let installed = database
+        .lock()
+        .unwrap()
+        .block_store_shared()
+        .installed_payload_manifest()
+        .unwrap()
+        .unwrap();
     assert!(
-        victims.iter().all(|victim| installed.segments.iter().any(|reference| reference.segment_id == *victim)),
+        victims.iter().all(|victim| installed
+            .segments
+            .iter()
+            .any(|reference| reference.segment_id == *victim)),
         "recovery selected the fallback catalog that names the victims"
     );
     assert_catalog_resolves(&vfs, &database, &packed);
@@ -837,7 +1097,11 @@ fn consolidation_victims_stay_readable_through_handles_held_across_the_publicati
             break;
         }
     }
-    assert!(metrics(&collector).total_consolidations > 0, "{:?}", metrics(&collector));
+    assert!(
+        metrics(&collector).total_consolidations > 0,
+        "{:?}",
+        metrics(&collector)
+    );
     let installed: BTreeSet<Uuid> = blocks
         .installed_payload_manifest()
         .unwrap()
@@ -851,15 +1115,23 @@ fn consolidation_victims_stay_readable_through_handles_held_across_the_publicati
         .map(|victim| victim.segment_id)
         .filter(|segment_id| !installed.contains(segment_id))
         .collect();
-    assert!(retired.len() >= 2, "consolidation retired the small segments: {retired:?}");
+    assert!(
+        retired.len() >= 2,
+        "consolidation retired the small segments: {retired:?}"
+    );
     let slots = durable_slot_segments(&vfs, &blocks);
     assert_eq!(slots.len(), 2);
     assert!(
-        slots.iter().all(|(_, segments)| retired.iter().all(|segment_id| !segments.contains(segment_id))),
+        slots.iter().all(|(_, segments)| retired
+            .iter()
+            .all(|segment_id| !segments.contains(segment_id))),
         "both durable slots name the consolidated catalog: {slots:?}"
     );
     for (block_id, payload) in &packed {
-        let handle = handles.iter().find(|handle| handle.contains(*block_id)).unwrap();
+        let handle = handles
+            .iter()
+            .find(|handle| handle.contains(*block_id))
+            .unwrap();
         let read = store.get_with_handle(handle, *block_id);
         assert!(
             matches!(&read, Ok(Some(bytes)) if bytes == payload),
@@ -868,17 +1140,25 @@ fn consolidation_victims_stay_readable_through_handles_held_across_the_publicati
     }
     let parked = store.deferred_retirement_ids().unwrap();
     for segment_id in &retired {
-        assert!(parked.contains(segment_id), "victim {segment_id} must be parked, not unlinked");
+        assert!(
+            parked.contains(segment_id),
+            "victim {segment_id} must be parked, not unlinked"
+        );
         assert!(vfs.inner.metadata(&segment_path(*segment_id)).is_ok());
     }
 
-    store.age_deferred_retirements_for_test(Duration::from_secs(3600)).unwrap();
+    store
+        .age_deferred_retirements_for_test(Duration::from_secs(3600))
+        .unwrap();
     store
         .sweep_deferred_retirement_with(crate::payload_segment::segment_retirement_delay())
         .unwrap();
     for segment_id in &retired {
         assert_eq!(
-            vfs.inner.metadata(&segment_path(*segment_id)).unwrap_err().kind(),
+            vfs.inner
+                .metadata(&segment_path(*segment_id))
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::NotFound,
             "the expired floor reclaims the parked victim"
         );

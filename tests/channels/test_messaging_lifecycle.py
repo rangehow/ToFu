@@ -1,6 +1,7 @@
 """The messaging platform lifecycle contract (docs/CHANNELS.md, "Messaging platform lifecycle").
 
-One contract for every platform (大象, 企业微信, QQ, 微信, 飞书): a connection another
+One contract for every platform (企业微信, QQ, 微信, 飞书 here; 大象's half lives with its
+adapter in bundles/yourprovider/tests/channels/test_dx_messaging_lifecycle.py): a connection another
 server or client took over is reported as such and taken back with one owner
 action; a refused credential and a missing vault entry report their real reason;
 a save that fails partway never leaves the account naming a deleted secret; and a
@@ -18,169 +19,15 @@ import pytest
 from lib.channels.model import ChannelError, ThreadKey
 from lib.storage.errors import StorageError
 from tests.channels.conftest import OWNER
-from tests.channels.test_dx_adapter import FakeBridge, FlakyBridge, SESSIONS_ABORTED
 
 pytestmark = pytest.mark.unit
 
 BOTS = ('wecom', 'qq', 'wechat')
-OLD_GROUP = ThreadKey.parse('dx:gid:71158539432')
-FRONTIER = 1_794_730_026_044
-
-
-class ListingBridge(FakeBridge):
-    """Sessions by listing window: the recent ones, and older groups only for a window before the frontier."""
-
-    def __init__(self, recent, older):
-        super().__init__(recent, {})
-        self.older = older
-
-    def request(self, op, **args):
-        if op == 'sessions' and args['endMs'] <= FRONTIER:
-            self.requests.append((op, args))
-            return {'ok': True, 'result': {'sessions': self.older}}
-        return super().request(op, **args)
 
 
 @pytest.fixture
 def quiet(monkeypatch):
-    monkeypatch.setattr('lib.channels.dx.supervisor.notify_account_changed', lambda owner: None)
     monkeypatch.setattr('lib.channels.bots.supervisor.notify_account_changed', lambda owner, channel: None)
-
-
-def _taken_over(store, enabled):
-    """This server enabled the account (frontier = enable time); the other server keeps its command chat."""
-    enabled()
-    store.update_account('dx', lambda account: {**account, 'frontierAtMs': FRONTIER})
-
-
-def _catch_up(store, bridge):
-    from lib.channels.dx.adapter import DxAdapter
-    adapter = DxAdapter(OWNER, store=store, bridge_factory=lambda owner: bridge)
-    adapter._bridge = bridge
-    adapter.catch_up()
-    return adapter
-
-
-# ── 大象: handover of the command chat another server created ──────────────
-
-def test_a_taken_over_account_finds_the_other_servers_tofu_router_group(store, enabled, router, quiet):
-    from lib.channels import service
-    _taken_over(store, enabled)
-    older = [{'type': 'group', 'id': '71158539432', 'name': 'Tofu Router', 'lastMessageServerTime': FRONTIER - 9},
-             {'type': 'group', 'id': '600', 'name': 'Tofu Router', 'lastMessageServerTime': FRONTIER - 99},
-             {'type': 'group', 'id': '700', 'name': 'Team', 'lastMessageServerTime': FRONTIER - 5}]
-    bridge = ListingBridge([], older)
-    _catch_up(store, bridge)
-    # Only group sessions before the frontier are listed, for their names: nothing is replayed.
-    listing = [args for op, args in bridge.requests if op == 'sessions' and args['endMs'] <= FRONTIER]
-    assert listing == [{'startMs': 0, 'endMs': FRONTIER, 'limit': listing[0]['limit'], 'types': ['group']}]
-    assert not any(op == 'history' for op, _ in bridge.requests)
-    view = service.account_view(OWNER, store=store)
-    assert view['commandChat'] is None and view['commandChatCandidate'] == str(OLD_GROUP)
-    assert store.thread(OLD_GROUP)['title'] == 'Tofu Router'
-    assert store.thread(ThreadKey.parse('dx:gid:700')) is None
-
-    # One owner action adopts it; no second group is created.
-    view = service.update_account(OWNER, {'commandChat': str(OLD_GROUP)}, store=store)
-    assert view['commandChat'] == str(OLD_GROUP) and view['commandChatCandidate'] is None
-    assert store.account('dx').get('commandChatCreation') is None
-
-
-def test_the_handover_listing_runs_once_per_session_and_never_fails_the_catch_up(store, enabled, router):
-    _taken_over(store, enabled)
-    bridge = FlakyBridge([], {}, {})
-    calls = []
-
-    def request(op, **args):
-        calls.append(args)
-        if args.get('types') == ['group']:
-            return dict(SESSIONS_ABORTED)
-        return {'ok': True, 'result': {'sessions': []}}
-    bridge.request = request
-    adapter = _catch_up(store, bridge)
-    assert not adapter._catch_up_owed and store.account('dx')['frontierAtMs'] > FRONTIER
-    adapter.catch_up()
-    assert len([args for args in calls if args.get('types') == ['group']]) == 1
-    assert store.account('dx').get('commandChatCandidate') is None
-
-
-def test_an_account_with_a_command_chat_lists_nothing_before_its_frontier(store, enabled, router):
-    enabled(command_chat='dx:gid:900')
-    store.update_account('dx', lambda account: {**account, 'frontierAtMs': FRONTIER})
-    bridge = ListingBridge([], [{'type': 'group', 'id': '1', 'name': 'Tofu Router'}])
-    _catch_up(store, bridge)
-    assert not any(args['endMs'] <= FRONTIER for op, args in bridge.requests if op == 'sessions')
-
-
-def test_a_recent_group_named_tofu_router_is_offered_too_and_a_switched_account_drops_it(
-        store, enabled, router, quiet):
-    from lib.channels import service
-    _taken_over(store, enabled)
-    recent = [{'type': 'group', 'id': '71158539432', 'name': 'Tofu Router', 'lastMessageServerTime': FRONTIER + 5}]
-    _catch_up(store, ListingBridge(recent, []))
-    assert service.account_view(OWNER, store=store)['commandChatCandidate'] == str(OLD_GROUP)
-    view = service.update_account(OWNER, {'mis': 'someone-else'}, store=store)
-    assert view['commandChatCandidate'] is None
-
-
-def test_the_account_view_with_a_candidate_matches_the_contract(store, enabled, router):
-    jsonschema = pytest.importorskip('jsonschema')
-    from lib.channels import service
-    from lib.channels.model import CONTRACT
-    _taken_over(store, enabled)
-    store.update_account('dx', lambda account: {**account, 'commandChatCandidate': str(OLD_GROUP)})
-    schema = {**CONTRACT['$defs']['ChannelAccountView'], '$defs': CONTRACT['$defs']}
-    jsonschema.validate(service.account_view(OWNER, store=store), schema)
-
-
-# ── 大象 notification robot: stale credentials, missing entry, partial save ──
-
-def test_a_robot_whose_vault_entry_is_gone_reports_it_instead_of_configured(store, enabled, router, vault, quiet):
-    from lib.channels import service
-    enabled(command_chat='dx:gid:900')
-    service.update_account(OWNER, {'robot': {'clientId': 'client-1', 'secret': 'fake-secret-1'}}, store=store,
-                           robot_probe=lambda client_id, secret: None)
-    assert service.account_view(OWNER, store=store)['robot']['error'] is None
-    vault.delete_entry(f'channel.u{OWNER}.dx.robot')
-    error = service.account_view(OWNER, store=store)['robot']['error']
-    assert error['code'] == 'robot_credential_missing' and f'channel.u{OWNER}.dx.robot' in error['detail']
-
-
-def test_a_refused_robot_secret_settles_as_a_typed_error_and_stores_nothing(store, enabled, router, vault, quiet):
-    from lib.channels import service
-    enabled(command_chat='dx:gid:900')
-
-    def stale(client_id, secret):
-        raise ChannelError('token_rejected', 'The token endpoint refused the client credentials')
-    with pytest.raises(ChannelError) as refused:
-        service.update_account(OWNER, {'robot': {'clientId': 'client-1', 'secret': 'old'}}, store=store,
-                               robot_probe=stale)
-    assert refused.value.code == 'token_rejected'
-    assert not store.account('dx').get('robot') and vault.get_entry(f'channel.u{OWNER}.dx.robot') is None
-
-
-def test_a_robot_save_that_fails_partway_keeps_the_secret_the_account_names(
-        store, enabled, router, vault, quiet, monkeypatch):
-    from lib.channels import service
-    enabled(command_chat='dx:gid:900')
-    own = f'channel.u{OWNER}.dx.robot'
-    service.update_account(OWNER, {'robot': {'clientId': 'client-1', 'secret': 'pasted'}}, store=store,
-                           robot_probe=lambda client_id, secret: None)
-    vault.set_entry('team-robot', 'shared')
-    commit = store.update_account
-
-    def outage(channel, change):
-        raise StorageError('database_timeout', 'storage did not answer')
-    monkeypatch.setattr(store, 'update_account', outage)
-    with pytest.raises(StorageError):
-        service.update_account(OWNER, {'robot': {'clientId': 'client-1', 'credentialName': 'team-robot'}},
-                               store=store, robot_probe=lambda client_id, secret: None)
-    # The account still names the pasted entry, which still exists; a retry then succeeds.
-    assert store.account('dx')['robot']['credential']['name'] == own and vault.get_entry(own) == 'pasted'
-    monkeypatch.setattr(store, 'update_account', commit)
-    view = service.update_account(OWNER, {'robot': {'clientId': 'client-1', 'credentialName': 'team-robot'}},
-                                  store=store, robot_probe=lambda client_id, secret: None)
-    assert view['robot']['credentialName'] == 'team-robot' and vault.get_entry(own) is None
 
 
 # ── bot platforms: the same contract per channel ──────────────────────────

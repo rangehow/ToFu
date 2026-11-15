@@ -693,7 +693,7 @@ def _stream_chat_once_impl(body, *, on_thinking=None, on_content=None,
 
         byte_stream = SSEByteStream(acc)
         _dbg_sse_fp = None
-        if os.environ.get('TOFU_DEBUG_RAW_SSE') == '1' and 'mcli.internal.example.com' in str(plan.url):
+        if os.environ.get('TOFU_DEBUG_RAW_SSE') == '1':
             try:
                 _dbg_dir = os.path.join('logs', 'debug_sse')
                 os.makedirs(_dbg_dir, exist_ok=True)

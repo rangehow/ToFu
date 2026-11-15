@@ -477,7 +477,7 @@ fn get(
     if job.user_id != tx.owner_user_id() {
         return Ok(Value::Null);
     }
-    Ok(serde_json::to_value(&job).map_err(|_| invalid_data("worker job get cannot be encoded"))?)
+    serde_json::to_value(&job).map_err(|_| invalid_data("worker job get cannot be encoded"))
 }
 
 fn scan(

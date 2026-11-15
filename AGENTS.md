@@ -66,7 +66,10 @@ verification.
   command environment exports `PYTHONPATH=<shared checkout>`, so in a worktree
   a `/tmp` probe (or any script that does not put the worktree first on
   `sys.path`) imports the shared `lib`: prefix `PYTHONPATH=$PWD` and print
-  `lib.__file__` before trusting the result. Under
+  `lib.__file__` before trusting the result. Put command scratch under
+  `$TMPDIR` (`mktemp -d`), never at a fixed `/tmp/<name>` or beside the
+  checkout: in a task checkout `$TMPDIR` is that checkout's own scratch,
+  removed when its assignment is delivered or discarded. Under
   heavy host load, fixed test deadlines (test bundling, bundle canary) can
   expire: rerun those failures serially before attributing them to a change.
 - Use `docs/README.md` as the first-hop map to the owning module and contract;

@@ -73,6 +73,23 @@ def test_root_inside_a_live_checkout_is_refused(harness, tmp_path):
     harness._refuse_live_root(tmp_path / 'private')
 
 
+def test_root_on_a_memory_filesystem_is_refused(harness, tmp_path, monkeypatch):
+    """The root persists by design (--reuse-seed), so on tmpfs it is unreclaimable RAM.
+
+    2026-11-15: 31 load-test roots left on /dev/shm held 15 GiB of the 35 GiB
+    container memory cgroup until they were removed by hand.
+    """
+    from serverctl_pkg import local_placement
+    mountinfo = ('22 1 0:20 / / rw - xfs /dev/md0 rw\n'
+                 f'40 22 0:41 / {tmp_path}/shm rw - tmpfs shm rw\n')
+    real_describe = local_placement.describe_volume
+    monkeypatch.setattr(local_placement, 'describe_volume',
+                        lambda path, **kw: real_describe(path, mountinfo_text=mountinfo))
+    with pytest.raises(SystemExit, match='memory filesystem'):
+        harness._refuse_memory_root(tmp_path / 'shm' / 'load')
+    harness._refuse_memory_root(tmp_path / 'disk' / 'load')
+
+
 def test_final_storage_stop_lets_the_engine_finish_its_ordered_shutdown(harness, monkeypatch):
     """The run's authority is a rollback source, so it must end as a clean stop.
 

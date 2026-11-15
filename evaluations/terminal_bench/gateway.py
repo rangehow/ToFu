@@ -2,7 +2,7 @@
 
 Responsibility: start and stop one sandbox VM session through pssdk and use
 the VM ingress native exec channel (``/native/exec|status|read|kill``, added on
-the sandbox ingress branch named by ``INGRESS_BRANCH``). Returns plain dicts;
+the sandbox ingress branch the ``run --branch`` CLI argument names). Returns plain dicts;
 the secret token comes from the caller and never reaches logs or files.
 
 Entry points: ``SandboxSession``, ``start_body``, ``remote_error_text``.
@@ -12,12 +12,8 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 import uuid
 
-# Ingress branch carrying the native exec channel (nlp/harbor b35af6f). A
-# deployment declares it; with none declared, ``run --branch`` is required.
-INGRESS_BRANCH = os.environ.get("TOFU_TB_INGRESS_BRANCH", "").strip()
 SESSION_ABSENT = "Session不存在或者已关闭"
 SESSION_DONE = "当前状态为[DONE]，无法关闭"
 # Canvas consumer / sandbox-direct-access defaults.

@@ -5,10 +5,10 @@
 //! recovery; every public projection verifies the embedded owner and tenant
 //! label before returning data.
 
-pub(crate) mod migration;
 #[cfg(feature = "native-runtime-checkpoints")]
 #[path = "orchestration_goal_claim.rs"]
 pub(crate) mod goal_claim;
+pub(crate) mod migration;
 
 use std::io;
 
@@ -33,8 +33,8 @@ use crate::generated_tofudb_ir::{
     ORCHESTRATION_RUN_COUNT_NAMESPACE, ORCHESTRATION_RUN_CREATED_INDEX_NAMESPACE,
     ORCHESTRATION_RUN_EVENT_DOCUMENT_NAMESPACE, ORCHESTRATION_RUN_GLOBAL_ACTIVE_INDEX_NAMESPACE,
     ORCHESTRATION_RUN_ID_CLAIM_NAMESPACE, ORCHESTRATION_RUN_ORCHESTRATION_CREATED_INDEX_NAMESPACE,
-    ORCHESTRATION_RUN_STATE_NAMESPACE, ORCHESTRATION_RUN_STATUS_CREATED_INDEX_NAMESPACE,
-    ORCHESTRATION_RUN_PENDING_CONTINUITY_INDEX_NAMESPACE,
+    ORCHESTRATION_RUN_PENDING_CONTINUITY_INDEX_NAMESPACE, ORCHESTRATION_RUN_STATE_NAMESPACE,
+    ORCHESTRATION_RUN_STATUS_CREATED_INDEX_NAMESPACE,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -102,7 +102,9 @@ fn decode<T: for<'de> Deserialize<'de>>(raw: &[u8], name: &str) -> io::Result<T>
 fn bounded_response(value: &Value) -> io::Result<Option<Vec<u8>>> {
     let bytes = encode(value, "orchestration response")?;
     if bytes.len() > MAX_ORCHESTRATION_RESPONSE_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("orchestration response exceeds 8 MiB"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "orchestration response exceeds 8 MiB",
+        ));
     }
     Ok(Some(bytes))
 }
@@ -384,24 +386,42 @@ fn pending_continuity_key(tx: &AuthorityTransaction, identity: &RunIndex) -> io:
     let mut raw = identity.owner.to_be_bytes().to_vec();
     push_text(&mut raw, &identity.tenant_label)?;
     push_text(&mut raw, &identity.id)?;
-    global_key(tx, ORCHESTRATION_RUN_PENDING_CONTINUITY_INDEX_NAMESPACE, &raw)
+    global_key(
+        tx,
+        ORCHESTRATION_RUN_PENDING_CONTINUITY_INDEX_NAMESPACE,
+        &raw,
+    )
 }
 fn is_restart_interrupted_goal(core: &RunCore, state: &RunState) -> bool {
-    core.created_by == GOAL_CREATED_BY && state.status == "error"
+    core.created_by == GOAL_CREATED_BY
+        && state.status == "error"
         && state.error.get("kind").and_then(Value::as_str) == Some("worker_lost")
-        && state.error.get("source").and_then(Value::as_str) == Some("orchestration.startup_recovery")
+        && state.error.get("source").and_then(Value::as_str)
+            == Some("orchestration.startup_recovery")
 }
 fn closes_continuity_election(event: &Value) -> bool {
-    matches!(event.get("type").and_then(Value::as_str),
-        Some("execution_recovery_claim" | "continuity_resumed" | "continuity_refused" | "continuity_exhausted"))
+    matches!(
+        event.get("type").and_then(Value::as_str),
+        Some(
+            "execution_recovery_claim"
+                | "continuity_resumed"
+                | "continuity_refused"
+                | "continuity_exhausted"
+        )
+    )
 }
 fn release_goal_active_claim(
-    database: &AuthorityDatabase, tx: &mut AuthorityTransaction, core: &RunCore,
+    database: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    core: &RunCore,
 ) -> io::Result<()> {
     let key = goal_active_key(tx, core.owner, &core.tenant_label, &core.orch_id)?;
     if let Some(raw) = database.entity_get(tx, &key)? {
         let claim: RunIndex = decode(&raw, "Goal active claim")?;
-        if claim.owner != core.owner || claim.tenant_label != core.tenant_label || claim.orch_id != core.orch_id {
+        if claim.owner != core.owner
+            || claim.tenant_label != core.tenant_label
+            || claim.orch_id != core.orch_id
+        {
             return Err(invalid_data("Goal active claim boundary differs"));
         }
         if claim.id == core.id {
@@ -735,7 +755,9 @@ fn append_event(
     now_ms: u64,
 ) -> io::Result<bool> {
     if sequence >= MAX_ORCHESTRATION_EVENTS_PER_RUN as u64 {
-        return Err(crate::resource_exhaustion::domain_bound("orchestration event history exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "orchestration event history exceeds its bound",
+        ));
     }
     let key = event_key(tx, &core.id, sequence)?;
     if let Some(existing) = get_global_document::<EventDocument>(
@@ -859,7 +881,9 @@ pub(crate) fn execute(
             let count_key = definition_count_key(tx)?;
             let count = read_count(database, tx, count_key.clone())?;
             if count >= MAX_ORCHESTRATION_DEFINITIONS_PER_OWNER as u64 {
-                return Err(crate::resource_exhaustion::capacity_quota("orchestration definition capacity reached"));
+                return Err(crate::resource_exhaustion::capacity_quota(
+                    "orchestration definition capacity reached",
+                ));
             }
             let document = Definition {
                 id: id.to_owned(),
@@ -1149,7 +1173,9 @@ fn create_run(
     let count_key = run_count_key(tx)?;
     let count = read_count(database, tx, count_key.clone())?;
     if count >= MAX_ORCHESTRATION_RUNS_PER_OWNER as u64 {
-        return Err(crate::resource_exhaustion::capacity_quota("orchestration run capacity reached"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "orchestration run capacity reached",
+        ));
     }
     put_global_document(
         database,
@@ -1396,8 +1422,11 @@ fn retire_one(
     state.continuity_pending = elect_continuity && is_restart_interrupted_goal(core, &state);
     write_run_state(database, tx, core, &old, &state, now)?;
     if state.continuity_pending {
-        database.entity_put(tx, pending_continuity_key(tx, &run_index(core))?,
-            encode(&run_index(core), "pending continuity index")?)?;
+        database.entity_put(
+            tx,
+            pending_continuity_key(tx, &run_index(core))?,
+            encode(&run_index(core), "pending continuity index")?,
+        )?;
     }
     Ok(())
 }
@@ -1423,7 +1452,9 @@ fn retire_owner(
         MAX_ORCHESTRATION_MAINTENANCE_ROWS + 1,
     )?;
     if rows.len() > MAX_ORCHESTRATION_MAINTENANCE_ROWS {
-        return Err(crate::resource_exhaustion::domain_bound("owner run retirement exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "owner run retirement exceeds its bound",
+        ));
     }
     let mut targets = Vec::new();
     for (_, raw) in rows {
@@ -1437,7 +1468,9 @@ fn retire_owner(
         if !is_terminal(&s.status) && !durable_human_wait(database, tx, &c, &s)? {
             targets.push((c, s));
             if targets.len() > MAX_ORCHESTRATION_MAINTENANCE_ROWS {
-                return Err(crate::resource_exhaustion::domain_bound("owner run retirement exceeds its bound"));
+                return Err(crate::resource_exhaustion::domain_bound(
+                    "owner run retirement exceeds its bound",
+                ));
             }
         }
     }
@@ -1474,7 +1507,9 @@ fn retire_all(
         MAX_ORCHESTRATION_MAINTENANCE_ROWS + 1,
     )?;
     if rows.len() > MAX_ORCHESTRATION_MAINTENANCE_ROWS {
-        return Err(crate::resource_exhaustion::domain_bound("global run retirement exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "global run retirement exceeds its bound",
+        ));
     }
     let error = error_value(&request.payload);
     let mut retired = 0;
@@ -1500,9 +1535,19 @@ fn retire_all(
             "created_by": c.created_by,
         }));
     }
-    let (start, end) = namespace_range(tx, TENANT_GLOBAL_OWNER_ID,
-        ORCHESTRATION_RUN_PENDING_CONTINUITY_INDEX_NAMESPACE, b"")?;
-    let pending = scan_paged(database, tx, start, &end, MAX_ORCHESTRATION_MAINTENANCE_ROWS)?;
+    let (start, end) = namespace_range(
+        tx,
+        TENANT_GLOBAL_OWNER_ID,
+        ORCHESTRATION_RUN_PENDING_CONTINUITY_INDEX_NAMESPACE,
+        b"",
+    )?;
+    let pending = scan_paged(
+        database,
+        tx,
+        start,
+        &end,
+        MAX_ORCHESTRATION_MAINTENANCE_ROWS,
+    )?;
     let mut elected = Vec::new();
     for (_, raw) in pending {
         let index: RunIndex = decode(&raw, "pending continuity index")?;
@@ -1515,8 +1560,13 @@ fn retire_all(
             "tenant_id":c.tenant_label,"created_by":c.created_by}));
     }
     for candidate in candidates {
-        if elected.len() >= MAX_ORCHESTRATION_MAINTENANCE_ROWS { break; }
-        if !elected.iter().any(|row| row["run_id"] == candidate["run_id"]) {
+        if elected.len() >= MAX_ORCHESTRATION_MAINTENANCE_ROWS {
+            break;
+        }
+        if !elected
+            .iter()
+            .any(|row| row["run_id"] == candidate["run_id"])
+        {
             elected.push(candidate);
         }
     }
@@ -1665,24 +1715,35 @@ fn event_page(
         let limit = (MAX_ORCHESTRATION_EVENT_PAGE_ROWS - events.len()).min(MAX_ENTITY_RANGE_ROWS);
         let rows = database.entity_scan(tx, &start, &end, limit)?;
         let full = rows.len() == limit;
-        let next = rows.last().map(|(key, _)| key.clone().exact_range()).transpose()?;
+        let next = rows
+            .last()
+            .map(|(key, _)| key.clone().exact_range())
+            .transpose()?;
         for (_, raw) in rows {
-            let logical_bytes = versioned_document::stored_document_logical_bytes(&raw, EVENT_LOGICAL_NAMESPACE)? as usize;
+            let logical_bytes =
+                versioned_document::stored_document_logical_bytes(&raw, EVENT_LOGICAL_NAMESPACE)?
+                    as usize;
             if page_bytes.saturating_add(logical_bytes) > MAX_ORCHESTRATION_RESPONSE_BYTES {
                 if events.is_empty() {
                     return Err(invalid_data("event exceeds replay page byte boundary"));
                 }
                 break 'page;
             }
-            let (_, value, source_bytes) = versioned_document::materialize_stored_document_value_bounded(
-                database, tx.tenant_id(), TENANT_GLOBAL_OWNER_ID, &raw,
-                EVENT_LOGICAL_NAMESPACE, MAX_ORCHESTRATION_EVENT_DOCUMENT_BYTES,
-            )?;
+            let (_, value, source_bytes) =
+                versioned_document::materialize_stored_document_value_bounded(
+                    database,
+                    tx.tenant_id(),
+                    TENANT_GLOBAL_OWNER_ID,
+                    &raw,
+                    EVENT_LOGICAL_NAMESPACE,
+                    MAX_ORCHESTRATION_EVENT_DOCUMENT_BYTES,
+                )?;
             let document: EventDocument = serde_json::from_value(value)
                 .map_err(|_| invalid_data("event page value is malformed"))?;
             if document.owner != tx.owner_user_id()
                 || document.tenant_label != label
-                || document.run_id != run_id {
+                || document.run_id != run_id
+            {
                 return Err(invalid_data("event page identity differs"));
             }
             let mut event = document.payload;
@@ -1693,14 +1754,18 @@ fn event_page(
             last_sequence = Some(document.sequence);
             events.push(event);
         }
-        if !full { break; }
+        if !full {
+            break;
+        }
         if let Some((_, following)) = next {
             start = following;
         } else {
             break;
         }
     }
-    let next_cursor = last_sequence.map(|sequence| sequence.saturating_add(1).min(boundary)).unwrap_or(boundary);
+    let next_cursor = last_sequence
+        .map(|sequence| sequence.saturating_add(1).min(boundary))
+        .unwrap_or(boundary);
     bounded_response(
         &json!({"events":events,"next_cursor":next_cursor,"cursor_reset":false,"caught_up":next_cursor>=boundary}),
     )
@@ -2079,10 +2144,20 @@ mod tests {
         database.commit(seed).unwrap();
         for sequence in 0..20 {
             let mut append = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-            let (core, mut state) = read_run(&database, &mut append, "byte-paged", 11, "label").unwrap().unwrap();
+            let (core, mut state) = read_run(&database, &mut append, "byte-paged", 11, "label")
+                .unwrap()
+                .unwrap();
             let old_status = state.status.clone();
-            append_event(&database, &mut append, &core, &mut state, sequence,
-                         json!({"type":"snapshot","data":"x".repeat(700_000)}), 200).unwrap();
+            append_event(
+                &database,
+                &mut append,
+                &core,
+                &mut state,
+                sequence,
+                json!({"type":"snapshot","data":"x".repeat(700_000)}),
+                200,
+            )
+            .unwrap();
             write_run_state(&database, &mut append, &core, &old_status, &state, 200).unwrap();
             database.commit(append).unwrap();
         }
@@ -2092,16 +2167,28 @@ mod tests {
         loop {
             let request = Request {
                 operation: "orchestration.event.page".to_owned(),
-                payload: json!({"run_id":"byte-paged","user_id":11,"tenant_id":"label","cursor":cursor})
-                    .as_object().unwrap().clone(), now_ms: 300,
+                payload:
+                    json!({"run_id":"byte-paged","user_id":11,"tenant_id":"label","cursor":cursor})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                now_ms: 300,
             };
             let mut read = database.begin_with_identity_claim_scopes(7, 11).unwrap();
             let bytes = execute(&database, &mut read, &request).unwrap().unwrap();
             assert!(bytes.len() <= MAX_ORCHESTRATION_RESPONSE_BYTES);
             let response: Value = serde_json::from_slice(&bytes).unwrap();
             page_count += 1;
-            sequences.extend(response["events"].as_array().unwrap().iter().map(|event|event["seq"].as_u64().unwrap()));
-            if response["caught_up"] == true { break; }
+            sequences.extend(
+                response["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|event| event["seq"].as_u64().unwrap()),
+            );
+            if response["caught_up"] == true {
+                break;
+            }
             let next = response["next_cursor"].as_u64().unwrap();
             assert!(next > cursor);
             cursor = next;

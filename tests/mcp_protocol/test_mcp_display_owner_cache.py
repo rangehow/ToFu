@@ -2,6 +2,8 @@
 import json
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 from lib.mcp import project_names as names
 from lib.tasks_pkg.tool_display import _build_tool_round_entry
 
@@ -29,6 +31,7 @@ def test_other_owner_does_not_receive_cached_project_name():
     assert 'Private owner A project' in _round(1)['query']
 
 
+@requires_yourprovider_overlay
 def test_private_urls_and_doc_titles_stay_with_owner():
     names.ingest_tool_result('mcp__xuecheng__read_doc', {'doc': '1234567'},
         '{"title":"Private document","url":"https://private.example/page/1234567"}', user_id=1)

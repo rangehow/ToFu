@@ -15,15 +15,12 @@ use crate::block::BlockId;
 use crate::engine::Engine;
 use crate::entity_overlay::{EntityOverlayView, OverlayPosition};
 use crate::generated_tofudb_ir::{
-    MAX_ENTITY_INLINE_VALUE_BYTES, MAX_ENTITY_KEY_BYTES,
-    MAX_ENTITY_MOUNT_CONSOLIDATION_BYTES, MAX_ENTITY_MOUNT_CONSOLIDATION_ROWS,
-    MAX_ENTITY_RANGE_ROWS,
-    MAX_ENTITY_REACHABILITY_FRONTIER, MAX_ENTITY_REACHABILITY_PAGES, MAX_ENTITY_RETIRED_RANGES,
-    MAX_ENTITY_ROOT_RANGE_MOUNTS,
+    MAX_ENTITY_INLINE_VALUE_BYTES, MAX_ENTITY_KEY_BYTES, MAX_ENTITY_MOUNT_CONSOLIDATION_BYTES,
+    MAX_ENTITY_MOUNT_CONSOLIDATION_ROWS, MAX_ENTITY_RANGE_ROWS, MAX_ENTITY_REACHABILITY_FRONTIER,
+    MAX_ENTITY_REACHABILITY_PAGES, MAX_ENTITY_RETIRED_RANGES, MAX_ENTITY_ROOT_RANGE_MOUNTS,
     MAX_LEGACY_PERSISTENT_ENTITY_ROOT_PINS, MAX_PERSISTENT_ENTITY_CAPSULE_RANGES,
     MAX_PERSISTENT_ENTITY_ROOT_PINS, MAX_PERSISTENT_ENTITY_ROOT_PIN_ID_BYTES,
-    PERSISTENT_ENTITY_ROOT_PIN_CATALOG_NAMESPACE,
-    PERSISTENT_ENTITY_ROOT_PIN_NAMESPACE,
+    PERSISTENT_ENTITY_ROOT_PIN_CATALOG_NAMESPACE, PERSISTENT_ENTITY_ROOT_PIN_NAMESPACE,
 };
 use crate::vfs::Vfs;
 use uuid::Uuid;
@@ -89,9 +86,7 @@ fn overlay_budget_bytes() -> usize {
 }
 
 fn overlay_wal_watermark_bytes() -> u64 {
-    parse_overlay_wal_watermark_bytes(
-        std::env::var("TOFU_DB_OVERLAY_WAL_WATERMARK_BYTES").ok(),
-    )
+    parse_overlay_wal_watermark_bytes(std::env::var("TOFU_DB_OVERLAY_WAL_WATERMARK_BYTES").ok())
 }
 
 /// Deferred-application write overlay selection (the W1 write-amplification
@@ -238,7 +233,10 @@ pub(crate) struct ReplicaBlockIo {
 
 impl ReplicaBlockIo {
     fn check_live(&self) -> io::Result<()> {
-        if self.restart_required.load(std::sync::atomic::Ordering::Relaxed) {
+        if self
+            .restart_required
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Err(io::Error::other(
                 "tofu-db authority outcome is uncertain; close and reopen the engine",
             ));
@@ -299,7 +297,13 @@ impl PrivateOverlayPageState {
 impl EntityBlockIo for PrivateOverlayPages {
     fn read_verified(&self, id: BlockId) -> io::Result<Arc<Vec<u8>>> {
         self.source.check_live()?;
-        if let Some(payload) = self.state.lock().map_err(|_| io::Error::other("private merge pages poisoned"))?.pages.get(&id) {
+        if let Some(payload) = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("private merge pages poisoned"))?
+            .pages
+            .get(&id)
+        {
             return Ok(payload.shared());
         }
         self.source.read_verified(id)
@@ -313,7 +317,10 @@ impl EntityBlockIo for PrivateOverlayPages {
         // The page's one hash both names it and mints its publication proof.
         let payload = crate::block::PreparedBlockSource::capture_shared(Arc::new(bytes))?;
         let id = payload.id();
-        let mut state = self.state.lock().map_err(|_| io::Error::other("private merge pages poisoned"))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("private merge pages poisoned"))?;
         if !state.pages.contains_key(&id) {
             state.reserve_memory(capacity.saturating_add(128))?;
             state.pages.insert(id, payload);
@@ -342,25 +349,55 @@ impl OverlayMergePreparation {
     /// Authenticated old-page reads and new-page encoding happen only here,
     /// with no authority mutex or physical publication lane held.
     pub(crate) fn encode(self) -> io::Result<PreparedOverlayMerge> {
-        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PREPARE_ENCODE);
+        let _timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PREPARE_ENCODE);
         let mut limit = self.limit;
         loop {
             let pages = PrivateOverlayPages {
-                source: ReplicaBlockIo { blocks: Arc::clone(&self.source.blocks), restart_required: Arc::clone(&self.source.restart_required) },
-                state: Mutex::new(PrivateOverlayPageState { pages: BTreeMap::new(), memory: self.pin.lease() }),
+                source: ReplicaBlockIo {
+                    blocks: Arc::clone(&self.source.blocks),
+                    restart_required: Arc::clone(&self.source.restart_required),
+                },
+                state: Mutex::new(PrivateOverlayPageState {
+                    pages: BTreeMap::new(),
+                    memory: self.pin.lease(),
+                }),
             };
-            let chunk = self.overlay.merge_chunk(limit, EntityDatabase::MERGE_CHUNK_ENTRIES)
+            let chunk = self
+                .overlay
+                .merge_chunk(limit, EntityDatabase::MERGE_CHUNK_ENTRIES)
                 .ok_or_else(|| invalid_data("captured overlay prefix is empty"))?;
             let actual_entries = chunk.entries.len();
-            let batch_bytes = chunk.entries.iter().fold(0_usize, |bytes, (key, value, _)|
-                bytes.saturating_add(key.capacity()).saturating_add(value.as_ref().map_or(0, Vec::capacity)).saturating_add(64));
-            pages.state.lock().map_err(|_| io::Error::other("private merge pages poisoned"))?.reserve_memory(batch_bytes)?;
-            let tree = Tree { backend: &pages, page_cache: Some(self.page_cache.as_ref()) };
+            let batch_bytes = chunk
+                .entries
+                .iter()
+                .fold(0_usize, |bytes, (key, value, _)| {
+                    bytes
+                        .saturating_add(key.capacity())
+                        .saturating_add(value.as_ref().map_or(0, Vec::capacity))
+                        .saturating_add(64)
+                });
+            pages
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("private merge pages poisoned"))?
+                .reserve_memory(batch_bytes)?;
+            let tree = Tree {
+                backend: &pages,
+                page_cache: Some(self.page_cache.as_ref()),
+            };
             let mut directory = tree.split_root(self.root)?;
             let (base, mut written_ids) = {
-                let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_APPLY_BATCH);
-                tree.apply_batch(directory.base_root, chunk.entries,
-                    TombstoneReclaim { below: self.reclaim_below, mounts: &directory.mounts })?
+                let _timer =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_APPLY_BATCH);
+                tree.apply_batch(
+                    directory.base_root,
+                    chunk.entries,
+                    TombstoneReclaim {
+                        below: self.reclaim_below,
+                        mounts: &directory.mounts,
+                    },
+                )?
             };
             directory.base_root = base;
             // Prepare both outcomes: new foreground suffixes may arrive after
@@ -370,24 +407,48 @@ impl OverlayMergePreparation {
             directory.validate()?;
             let root_with_tail = Some(tree.store_directory(&directory, &mut written_ids)?);
             directory.materialized = None;
-            let root_without_tail = if directory.mounts.is_empty() { base }
-                else { Some(tree.store_directory(&directory, &mut written_ids)?) };
+            let root_without_tail = if directory.mounts.is_empty() {
+                base
+            } else {
+                Some(tree.store_directory(&directory, &mut written_ids)?)
+            };
             written_ids.extend(root_with_tail);
             written_ids.extend(root_without_tail);
             written_ids.sort_unstable();
             written_ids.dedup();
             let carried_bytes = {
-                let state = pages.state.lock().map_err(|_| io::Error::other("private merge pages poisoned"))?;
-                written_ids.iter().filter_map(|id| state.pages.get(id)).try_fold(0_usize, |total, payload|
-                    total.checked_add(payload.byte_len()).ok_or_else(|| invalid_data("private merge byte count overflow")))?
+                let state = pages
+                    .state
+                    .lock()
+                    .map_err(|_| io::Error::other("private merge pages poisoned"))?;
+                written_ids
+                    .iter()
+                    .filter_map(|id| state.pages.get(id))
+                    .try_fold(0_usize, |total, payload| {
+                        total
+                            .checked_add(payload.byte_len())
+                            .ok_or_else(|| invalid_data("private merge byte count overflow"))
+                    })?
             };
             if u32::try_from(written_ids.len()).is_ok()
-                && carried_bytes <= crate::transaction::MAX_CARRIED_PAYLOAD_BYTES {
+                && carried_bytes <= crate::transaction::MAX_CARRIED_PAYLOAD_BYTES
+            {
                 let payloads = {
-                    let mut state = pages.state.lock().map_err(|_| io::Error::other("private merge pages poisoned"))?;
-                    state.reserve_memory(written_ids.len().checked_mul(
-                        std::mem::size_of::<(BlockId, crate::block::PreparedBlockPayload)>())
-                        .ok_or_else(|| invalid_data("private merge payload metadata overflow"))?)?;
+                    let mut state = pages
+                        .state
+                        .lock()
+                        .map_err(|_| io::Error::other("private merge pages poisoned"))?;
+                    state.reserve_memory(
+                        written_ids
+                            .len()
+                            .checked_mul(std::mem::size_of::<(
+                                BlockId,
+                                crate::block::PreparedBlockPayload,
+                            )>())
+                            .ok_or_else(|| {
+                                invalid_data("private merge payload metadata overflow")
+                            })?,
+                    )?;
                     let mut payloads = Vec::with_capacity(written_ids.len());
                     for id in &written_ids {
                         if let Some(payload) = state.pages.remove(id) {
@@ -396,12 +457,26 @@ impl OverlayMergePreparation {
                     }
                     payloads
                 };
-                return Ok(PreparedOverlayMerge { capture: self, _pages: pages, payloads, boundary: chunk.position,
-                    root_with_tail, root_without_tail, written_ids, carried_bytes, actual_entries,
-                    consumed_positions: chunk.consumed_positions, superseded_positions: chunk.superseded_positions, limit });
+                return Ok(PreparedOverlayMerge {
+                    capture: self,
+                    _pages: pages,
+                    payloads,
+                    boundary: chunk.position,
+                    root_with_tail,
+                    root_without_tail,
+                    written_ids,
+                    carried_bytes,
+                    actual_entries,
+                    consumed_positions: chunk.consumed_positions,
+                    superseded_positions: chunk.superseded_positions,
+                    limit,
+                });
             }
             if limit == 1 {
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, "private merge needs the bounded foreground spill path"));
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "private merge needs the bounded foreground spill path",
+                ));
             }
             limit = (limit / 2).max(1);
             // Dropping pages returns the attempt's aggregate memory reservations.
@@ -544,21 +619,36 @@ enum RootNode {
 impl RootNode {
     fn owned_allocation_bytes(&self) -> usize {
         std::mem::size_of::<Self>().saturating_add(match self {
-            Self::Page(Page::Leaf(entries)) => entries.capacity()
+            Self::Page(Page::Leaf(entries)) => entries
+                .capacity()
                 .saturating_mul(std::mem::size_of::<(Vec<u8>, EntityValue)>())
-                .saturating_add(entries.iter().fold(0usize, |total, (key, value)|
-                    total.saturating_add(key.capacity())
-                        .saturating_add(value.value.as_ref().map_or(0, Vec::capacity)))),
-            Self::Page(Page::Internal { children, .. }) => children.capacity()
+                .saturating_add(entries.iter().fold(0usize, |total, (key, value)| {
+                    total
+                        .saturating_add(key.capacity())
+                        .saturating_add(value.value.as_ref().map_or(0, Vec::capacity))
+                })),
+            Self::Page(Page::Internal { children, .. }) => children
+                .capacity()
                 .saturating_mul(std::mem::size_of::<Child>())
-                .saturating_add(children.iter().fold(0usize, |total, child|
-                    total.saturating_add(child.lower_bound.capacity()))),
-            Self::Directory(directory) => directory.mounts.capacity()
+                .saturating_add(children.iter().fold(0usize, |total, child| {
+                    total.saturating_add(child.lower_bound.capacity())
+                })),
+            Self::Directory(directory) => directory
+                .mounts
+                .capacity()
                 .saturating_mul(std::mem::size_of::<RangeMount>())
-                .saturating_add(directory.mounts.iter().fold(0usize, |total, mount|
-                    total.saturating_add(mount.start.capacity()).saturating_add(mount.end.capacity())))
-                .saturating_add(directory.materialized.as_ref().and_then(|position| position.key.as_ref())
-                    .map_or(0, Vec::capacity)),
+                .saturating_add(directory.mounts.iter().fold(0usize, |total, mount| {
+                    total
+                        .saturating_add(mount.start.capacity())
+                        .saturating_add(mount.end.capacity())
+                }))
+                .saturating_add(
+                    directory
+                        .materialized
+                        .as_ref()
+                        .and_then(|position| position.key.as_ref())
+                        .map_or(0, Vec::capacity),
+                ),
         })
     }
 }
@@ -590,28 +680,45 @@ struct DecodedPageCache {
 
 impl DecodedPageCache {
     fn new(capacity_bytes: usize) -> Self {
-        Self { entries: HashMap::new(), clock: VecDeque::new(),
-            resident_bytes: 0, capacity_bytes }
+        Self {
+            entries: HashMap::new(),
+            clock: VecDeque::new(),
+            resident_bytes: 0,
+            capacity_bytes,
+        }
     }
 
     fn get(&self, id: BlockId) -> Option<Arc<RootNode>> {
         let entry = self.entries.get(&id)?;
         // This bit is only a cache replacement hint, never a publication fence.
-        entry.referenced.store(true, std::sync::atomic::Ordering::Relaxed);
+        entry
+            .referenced
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         Some(Arc::clone(&entry.node))
     }
 
     fn insert(&mut self, id: BlockId, node: Arc<RootNode>, encoded_len: usize) {
-        let charge = encoded_len.saturating_mul(PAGE_CACHE_DECODED_EXPANSION)
+        let charge = encoded_len
+            .saturating_mul(PAGE_CACHE_DECODED_EXPANSION)
             .saturating_add(PAGE_CACHE_ENTRY_OVERHEAD_BYTES)
-            .max(node.owned_allocation_bytes().saturating_add(PAGE_CACHE_ENTRY_OVERHEAD_BYTES));
-        if charge > self.capacity_bytes || self.entries.contains_key(&id) { return; }
+            .max(
+                node.owned_allocation_bytes()
+                    .saturating_add(PAGE_CACHE_ENTRY_OVERHEAD_BYTES),
+            );
+        if charge > self.capacity_bytes || self.entries.contains_key(&id) {
+            return;
+        }
         // Evict before admitting the verified miss, so a recently referenced
         // old page cannot immediately evict the page we have just decoded.
         self.evict_to_budget(self.capacity_bytes - charge);
-        self.entries.insert(id, DecodedPageCacheEntry {
-            node, charge, referenced: std::sync::atomic::AtomicBool::new(false),
-        });
+        self.entries.insert(
+            id,
+            DecodedPageCacheEntry {
+                node,
+                charge,
+                referenced: std::sync::atomic::AtomicBool::new(false),
+            },
+        );
         self.clock.push_back(id);
         self.resident_bytes += charge;
     }
@@ -625,15 +732,24 @@ impl DecodedPageCache {
         // Each resident has exactly one clock entry. With exclusive ownership,
         // at most two visits per resident suffice, even if every bit was set.
         while self.resident_bytes > budget {
-            let Some(id) = self.clock.pop_front() else { break; };
-            let Some(entry) = self.entries.get(&id) else { continue; };
-            if entry.referenced.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            let Some(id) = self.clock.pop_front() else {
+                break;
+            };
+            let Some(entry) = self.entries.get(&id) else {
+                continue;
+            };
+            if entry
+                .referenced
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
                 self.clock.push_back(id);
             } else if let Some(entry) = self.entries.remove(&id) {
                 self.resident_bytes -= entry.charge;
             }
         }
-        if self.entries.is_empty() { self.clock = VecDeque::new(); }
+        if self.entries.is_empty() {
+            self.clock = VecDeque::new();
+        }
     }
 }
 
@@ -667,7 +783,10 @@ struct PointWitness {
 
 impl PointWitness {
     fn version_only(version: Option<u64>) -> Self {
-        Self { version, read: RetainedPointRead::NotRetained }
+        Self {
+            version,
+            read: RetainedPointRead::NotRetained,
+        }
     }
 
     fn discard_read(&mut self) -> usize {
@@ -714,8 +833,10 @@ impl EntityTransaction {
 
     /// No staged entity mutation: reads see exactly the pinned committed snapshot.
     pub(crate) fn reads_committed_snapshot(&self) -> bool {
-        self.writes.is_empty() && self.retired_ranges.is_empty()
-            && self.replacement_ranges.is_empty() && self.mounted_ranges.is_empty()
+        self.writes.is_empty()
+            && self.retired_ranges.is_empty()
+            && self.replacement_ranges.is_empty()
+            && self.mounted_ranges.is_empty()
     }
 
     /// The EntityOverlay delta must fit the 256 KiB family inline bound
@@ -723,11 +844,14 @@ impl EntityTransaction {
     /// encode_overlay_delta byte for byte; the reserve leaves 64 KiB for
     /// receipt (≤7 KiB inline), outbox and stream records.
     fn overlay_delta_fits_envelope(&self) -> bool {
-        self.overlay_delta_bytes() + OVERLAY_ENVELOPE_RESERVE_BYTES <= crate::transaction::MAX_INLINE_BYTES
+        self.overlay_delta_bytes() + OVERLAY_ENVELOPE_RESERVE_BYTES
+            <= crate::transaction::MAX_INLINE_BYTES
     }
 
     fn overlay_delta_bytes(&self) -> usize {
-        4 + self.writes.iter()
+        4 + self
+            .writes
+            .iter()
             .map(|(key, value)| overlay_write_bytes(key.len(), value.as_ref().map(Vec::len)))
             .sum::<usize>()
     }
@@ -747,11 +871,21 @@ impl EntityTransaction {
     fn discard_point_read(&mut self, key: &[u8]) {
         if let Some(witness) = self.point_witnesses.get_mut(key) {
             let released = witness.discard_read();
-            if released > 0 { self.snapshot_pin.release_transaction_bytes(released); }
+            if released > 0 {
+                self.snapshot_pin.release_transaction_bytes(released);
+            }
         }
     }
 }
 
+/// Tombstone compaction hint: key range start, end and observed tombstones.
+pub(crate) type TombstoneCompactionHint = (Vec<u8>, Vec<u8>, u32);
+/// One staged write: key, value (None deletes) and its commit version.
+type VersionedWrite = (Vec<u8>, Option<Vec<u8>>, u64);
+/// A key-ordered source of (key, value-or-tombstone) pairs merged by range scans.
+type StagedEntries<'a> = Box<dyn Iterator<Item = (&'a Vec<u8>, &'a Option<Vec<u8>>)> + 'a>;
+
+#[allow(clippy::large_enum_variant)]
 enum EntityPersona {
     Writer(Engine),
     Replica(ReplicaCore),
@@ -894,8 +1028,14 @@ impl ReachabilityNode {
             b"",
         )
         .expect("the pin catalog namespace has a lexical successor");
-        let below = self.upper_bound.as_deref().is_some_and(|upper| upper <= start.encoded());
-        let above = self.lower_bound.as_deref().is_some_and(|lower| lower >= end.encoded());
+        let below = self
+            .upper_bound
+            .as_deref()
+            .is_some_and(|upper| upper <= start.encoded());
+        let above = self
+            .lower_bound
+            .as_deref()
+            .is_some_and(|lower| lower >= end.encoded());
         !(below || above)
     }
 }
@@ -941,17 +1081,31 @@ pub(crate) struct SnapshotPin {
 
 impl SnapshotPin {
     fn repin(&mut self, snapshot: EntitySnapshot) -> io::Result<()> {
-        if !self.registered { return Err(invalid_input("cannot repin a replica lease")); }
-        let mut state = self.state.lock().map_err(|_| io::Error::other("snapshot pin registry is poisoned"))?;
+        if !self.registered {
+            return Err(invalid_input("cannot repin a replica lease"));
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("snapshot pin registry is poisoned"))?;
         if !state.snapshots.contains_key(&self.snapshot) {
             return Err(invalid_data("snapshot pin is missing"));
         }
-        if snapshot == self.snapshot { return Ok(()); }
-        let next_count = state.snapshots.get(&snapshot).copied().unwrap_or(0).checked_add(1)
+        if snapshot == self.snapshot {
+            return Ok(());
+        }
+        let next_count = state
+            .snapshots
+            .get(&snapshot)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
             .ok_or_else(|| invalid_data("snapshot root reference accounting overflow"))?;
         let count = state.snapshots.get_mut(&self.snapshot).unwrap();
         *count -= 1;
-        if *count == 0 { state.snapshots.remove(&self.snapshot); }
+        if *count == 0 {
+            state.snapshots.remove(&self.snapshot);
+        }
         state.snapshots.insert(snapshot, next_count);
         self.snapshot = snapshot;
         Ok(())
@@ -970,7 +1124,9 @@ impl SnapshotPin {
         }
     }
     pub(crate) fn reserve_transaction_bytes(&mut self, bytes: usize) -> io::Result<()> {
-        let next = self.retained_transaction_bytes.checked_add(bytes)
+        let next = self
+            .retained_transaction_bytes
+            .checked_add(bytes)
             .ok_or_else(|| invalid_data("entity transaction byte accounting overflow"))?;
         self.state.reserve_bytes(bytes)?;
         self.retained_transaction_bytes = next;
@@ -986,10 +1142,18 @@ impl SnapshotPin {
 
 impl Drop for SnapshotPin {
     fn drop(&mut self) {
-        let _release = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_SNAPSHOT_PIN_RELEASE);
-        if !self.state.release_bytes(self.retained_transaction_bytes) { return; }
-        if !self.registered { return; }
-        let Ok(mut state) = self.state.lock() else { return; };
+        let _release = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_SNAPSHOT_PIN_RELEASE,
+        );
+        if !self.state.release_bytes(self.retained_transaction_bytes) {
+            return;
+        }
+        if !self.registered {
+            return;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
         let remove_snapshot = match state.snapshots.get_mut(&self.snapshot) {
             Some(count) if *count > 1 => {
                 *count -= 1;
@@ -1075,8 +1239,7 @@ impl CompactionHints {
             .hints
             .keys()
             .filter(|(hint_start, hint_end)| {
-                hint_start.as_slice() <= end.as_slice()
-                    && start.as_slice() <= hint_end.as_slice()
+                hint_start.as_slice() <= end.as_slice() && start.as_slice() <= hint_end.as_slice()
             })
             .cloned()
             .collect();
@@ -1142,19 +1305,34 @@ pub(crate) fn invalid_data(message: impl Into<String>) -> io::Error {
 /// original commit versions and tombstone reclaim removes only absences. No
 /// page is read, and a leaf a merge rewrote without changing what the
 /// snapshot saw is no conflict.
-fn validate_pending_witnesses(transaction: &EntityTransaction, overlay: &EntityOverlayView,
-    head: EntitySnapshot) -> io::Result<()> {
+fn validate_pending_witnesses(
+    transaction: &EntityTransaction,
+    overlay: &EntityOverlayView,
+    head: EntitySnapshot,
+) -> io::Result<()> {
     let _pending = crate::fsync_stats::StageTimer::new(
-        crate::fsync_stats::STAGE_OVERLAY_VALIDATE_PENDING_ONLY);
+        crate::fsync_stats::STAGE_OVERLAY_VALIDATE_PENDING_ONLY,
+    );
     let since = transaction.snapshot.sequence;
     for (key, witnessed) in &transaction.point_witnesses {
-        if overlay.resolve_version(key, head.sequence).is_some_and(|version| Some(version) != witnessed.version) {
+        if overlay
+            .resolve_version(key, head.sequence)
+            .is_some_and(|version| Some(version) != witnessed.version)
+        {
             return Err(conflict("entity point witness changed"));
         }
     }
-    for key in transaction.writes.keys().filter(|key| !transaction.point_witnesses.contains_key(*key)) {
-        if overlay.resolve_version(key, head.sequence)
-            .is_some_and(|version| Some(version) != transaction.overlay_view.resolve_version(key, since)) {
+    for key in transaction
+        .writes
+        .keys()
+        .filter(|key| !transaction.point_witnesses.contains_key(*key))
+    {
+        if overlay
+            .resolve_version(key, head.sequence)
+            .is_some_and(|version| {
+                Some(version) != transaction.overlay_view.resolve_version(key, since)
+            })
+        {
             return Err(conflict("entity write witness changed"));
         }
     }
@@ -1171,9 +1349,11 @@ fn conflict(message: &str) -> io::Error {
     match message {
         "entity point witness changed" => work(Work::PointConflict, 1),
         "entity write witness changed" => work(Work::BlindWriteConflict, 1),
-        "entity overlay range witness changed" | "entity range witness changed" => work(Work::RangeConflict, 1),
+        "entity overlay range witness changed" | "entity range witness changed" => {
+            work(Work::RangeConflict, 1)
+        }
         "entity root-structure witness changed" => work(Work::RootConflict, 1),
-        _ => {},
+        _ => {}
     }
     io::Error::new(io::ErrorKind::WouldBlock, message)
 }
@@ -1357,19 +1537,30 @@ fn pin_snapshot(
     state: &Arc<SnapshotPinRegistry>,
     snapshot: EntitySnapshot,
 ) -> io::Result<SnapshotPin> {
-    let mut pins = state.lock()
+    let mut pins = state
+        .lock()
         .map_err(|_| io::Error::other("entity snapshot pin registry is poisoned"))?;
     // Root reachability is authoritative; counts observe ownership, not admission.
-    let active_handles = pins.active_handles.checked_add(1)
+    let active_handles = pins
+        .active_handles
+        .checked_add(1)
         .ok_or_else(|| invalid_data("snapshot handle accounting overflow"))?;
-    let references = pins.snapshots.get(&snapshot).copied().unwrap_or(0).checked_add(1)
+    let references = pins
+        .snapshots
+        .get(&snapshot)
+        .copied()
+        .unwrap_or(0)
+        .checked_add(1)
         .ok_or_else(|| invalid_data("snapshot root reference accounting overflow"))?;
     pins.snapshots.insert(snapshot, references);
     pins.active_handles = active_handles;
     drop(pins);
     Ok(SnapshotPin {
-        snapshot, state: Arc::clone(state), retained_transaction_bytes: 0,
-        registered: true, _registration: None,
+        snapshot,
+        state: Arc::clone(state),
+        retained_transaction_bytes: 0,
+        registered: true,
+        _registration: None,
     })
 }
 
@@ -1377,8 +1568,13 @@ fn point_witness_reservation_bytes(key: &[u8]) -> usize {
     key.len() + POINT_WITNESS_ACCOUNTING_OVERHEAD
 }
 
-fn range_witness_reservation_bytes(start: &[u8], end: &[u8], leaf_capacity: usize) -> io::Result<usize> {
-    leaf_capacity.checked_mul(std::mem::size_of::<BlockId>())
+fn range_witness_reservation_bytes(
+    start: &[u8],
+    end: &[u8],
+    leaf_capacity: usize,
+) -> io::Result<usize> {
+    leaf_capacity
+        .checked_mul(std::mem::size_of::<BlockId>())
         .and_then(|bytes| bytes.checked_add(start.len()))
         .and_then(|bytes| bytes.checked_add(end.len()))
         .and_then(|bytes| bytes.checked_add(RANGE_WITNESS_ACCOUNTING_OVERHEAD))
@@ -1499,7 +1695,14 @@ impl RootDirectory {
         self.validate()?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(ROOT_DIRECTORY_MAGIC);
-        bytes.extend_from_slice(&(if self.materialized.is_some() { 2_u32 } else { ROOT_DIRECTORY_VERSION }).to_le_bytes());
+        bytes.extend_from_slice(
+            &(if self.materialized.is_some() {
+                2_u32
+            } else {
+                ROOT_DIRECTORY_VERSION
+            })
+            .to_le_bytes(),
+        );
         bytes.push(u8::from(self.base_root.is_some()));
         bytes.push(0);
         push_u16(&mut bytes, self.mounts.len())?;
@@ -1516,7 +1719,9 @@ impl RootDirectory {
         if let Some(position) = &self.materialized {
             bytes.extend_from_slice(&position.sequence.to_le_bytes());
             push_u16(&mut bytes, position.key.as_ref().map_or(0, Vec::len))?;
-            if let Some(key) = &position.key { bytes.extend_from_slice(key); }
+            if let Some(key) = &position.key {
+                bytes.extend_from_slice(key);
+            }
         }
         Ok(bytes)
     }
@@ -1555,13 +1760,23 @@ impl RootDirectory {
         let materialized = if version == 2 {
             let sequence = u64::from_le_bytes(take(bytes, &mut offset, 8)?.try_into().unwrap());
             let key_len = read_u16(bytes, &mut offset)?;
-            let key = if key_len == 0 { None } else { Some(take(bytes, &mut offset, key_len)?.to_vec()) };
+            let key = if key_len == 0 {
+                None
+            } else {
+                Some(take(bytes, &mut offset, key_len)?.to_vec())
+            };
             Some(OverlayPosition { sequence, key })
-        } else { None };
+        } else {
+            None
+        };
         if offset != bytes.len() {
             return Err(invalid_data("entity root directory has trailing bytes"));
         }
-        let directory = Self { base_root, mounts, materialized };
+        let directory = Self {
+            base_root,
+            mounts,
+            materialized,
+        };
         directory.validate()?;
         Ok(directory)
     }
@@ -1583,8 +1798,12 @@ impl RootDirectory {
         {
             return Err(invalid_data("invalid entity root range mounts"));
         }
-        if self.materialized.as_ref().and_then(|position| position.key.as_ref())
-            .is_some_and(|key| key.is_empty() || key.len() > MAX_ENTITY_KEY_BYTES + 82) {
+        if self
+            .materialized
+            .as_ref()
+            .and_then(|position| position.key.as_ref())
+            .is_some_and(|key| key.is_empty() || key.len() > MAX_ENTITY_KEY_BYTES + 82)
+        {
             return Err(invalid_data("invalid materialization key"));
         }
         Ok(())
@@ -1696,7 +1915,9 @@ impl PinCatalogTally {
     /// The records found since `before` was taken.
     fn since(self, before: Self) -> Self {
         Self {
-            declared_count: self.declared_count.filter(|_| before.declared_count.is_none()),
+            declared_count: self
+                .declared_count
+                .filter(|_| before.declared_count.is_none()),
             pins: self.pins - before.pins,
         }
     }
@@ -1746,7 +1967,11 @@ impl EntityPageVisits {
     /// joins `tally`; otherwise whether this is the page's first walk. A walk
     /// without discovery never satisfies one that needs it: the page is
     /// walked again (read, not visited) to discover the pins it records.
-    fn admit(&mut self, node: &ReachabilityNode, tally: &mut PinCatalogTally) -> io::Result<Option<bool>> {
+    fn admit(
+        &mut self,
+        node: &ReachabilityNode,
+        tally: &mut PinCatalogTally,
+    ) -> io::Result<Option<bool>> {
         match self.pages.get(&node.block_id).copied() {
             None => Ok(Some(true)),
             Some(discovered) if discovered || !node.discover_persistent_roots => {
@@ -1797,8 +2022,11 @@ pub(crate) fn expand_entity_graph_node(
     mut reference: impl FnMut(EntityGraphReference) -> io::Result<()>,
 ) -> io::Result<()> {
     if encoded.starts_with(ROOT_DIRECTORY_MAGIC) {
-        if node.expected_level.is_some() || node.lower_bound.is_some() || node.upper_bound.is_some() {
-            return Err(invalid_data("entity root directory appears below a B+Tree page"));
+        if node.expected_level.is_some() || node.lower_bound.is_some() || node.upper_bound.is_some()
+        {
+            return Err(invalid_data(
+                "entity root directory appears below a B+Tree page",
+            ));
         }
         let directory = RootDirectory::decode(encoded)?;
         for mount in directory.mounts.iter().rev() {
@@ -1818,11 +2046,21 @@ pub(crate) fn expand_entity_graph_node(
     let page = Page::decode(encoded)?;
     let first_key = page.first_key_ref()?;
     let last_key = page.last_key()?;
-    if node.expected_level.is_some_and(|expected| expected != page.level())
-        || node.lower_bound.as_deref().is_some_and(|expected| first_key != expected)
-        || node.upper_bound.as_deref().is_some_and(|upper| last_key >= upper)
+    if node
+        .expected_level
+        .is_some_and(|expected| expected != page.level())
+        || node
+            .lower_bound
+            .as_deref()
+            .is_some_and(|expected| first_key != expected)
+        || node
+            .upper_bound
+            .as_deref()
+            .is_some_and(|upper| last_key >= upper)
     {
-        return Err(invalid_data("entity reachability level or key-range witness mismatch"));
+        return Err(invalid_data(
+            "entity reachability level or key-range witness mismatch",
+        ));
     }
     if let Page::Leaf(entries) = &page {
         for (key, entity) in entries {
@@ -1899,7 +2137,13 @@ where
     let Some(root) = root else {
         return Ok(EntityPageReachabilityMetrics::default());
     };
-    walk_entity_page_graph(reachability_root(root, true), None, read_block, visit_page, visit_value)
+    walk_entity_page_graph(
+        reachability_root(root, true),
+        None,
+        read_block,
+        visit_page,
+        visit_value,
+    )
 }
 
 /// What one [`visit_entity_page_graphs_once`] call walked.
@@ -2020,7 +2264,13 @@ where
             &node,
             &encoded,
             &mut tally,
-            |key, value| if first_walk { visit_value(key, value) } else { Ok(()) },
+            |key, value| {
+                if first_walk {
+                    visit_value(key, value)
+                } else {
+                    Ok(())
+                }
+            },
             |reference| {
                 match reference {
                     EntityGraphReference::Page(child) => pending.push(child),
@@ -2068,16 +2318,21 @@ impl<'a> Tree<'a> {
         self.load_version_node(id, &mut None)
     }
 
-    fn load_version_node(&self, id: BlockId,
+    fn load_version_node(
+        &self,
+        id: BlockId,
         cached: &mut Option<std::sync::RwLockReadGuard<'_, DecodedPageCache>>,
     ) -> io::Result<Arc<RootNode>> {
-        let _timer = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_LOAD_NODE);
+        let _timer =
+            crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_LOAD_NODE);
         if let Some(node) = cached.as_ref().and_then(|cache| cache.get(id)) {
             return Ok(node);
         }
         drop(cached.take());
         if let Some(cache) = self.page_cache {
-            let waiting = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ENTITY_PAGE_CACHE_READ_WAIT);
+            let waiting = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ENTITY_PAGE_CACHE_READ_WAIT,
+            );
             let guard = cache
                 .read()
                 .map_err(|_| io::Error::other("entity page cache lock was poisoned"))?;
@@ -2088,10 +2343,14 @@ impl<'a> Tree<'a> {
             }
         }
         let encoded = {
-            let _read = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ENTITY_PAGE_SOURCE_READ);
+            let _read = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ENTITY_PAGE_SOURCE_READ,
+            );
             self.backend.read_verified(id)?
         };
-        let decoding = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ENTITY_PAGE_DECODE);
+        let decoding = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ENTITY_PAGE_DECODE,
+        );
         let node = if encoded.starts_with(ROOT_DIRECTORY_MAGIC) {
             RootNode::Directory(RootDirectory::decode(&encoded)?)
         } else {
@@ -2100,7 +2359,9 @@ impl<'a> Tree<'a> {
         drop(decoding);
         let node = Arc::new(node);
         if let Some(cache) = self.page_cache {
-            let waiting = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ENTITY_PAGE_CACHE_WRITE_WAIT);
+            let waiting = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_ENTITY_PAGE_CACHE_WRITE_WAIT,
+            );
             let mut guard = cache
                 .write()
                 .map_err(|_| io::Error::other("entity page cache lock was poisoned"))?;
@@ -2223,7 +2484,11 @@ impl<'a> Tree<'a> {
     fn versions(&self, root: Option<BlockId>, keys: &[&[u8]]) -> io::Result<Vec<Option<u64>>> {
         debug_assert!(keys.windows(2).all(|pair| pair[0] < pair[1]));
         let mut versions = vec![None; keys.len()];
-        let targets: Vec<_> = keys.iter().enumerate().map(|(index, key)| (*key, index)).collect();
+        let targets: Vec<_> = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| (*key, index))
+            .collect();
         if let Some(root) = root.filter(|_| !targets.is_empty()) {
             // A warm batch borrows one cache read lock. The first miss releases
             // it before source I/O/cache insertion and disables borrowing for
@@ -2231,18 +2496,32 @@ impl<'a> Tree<'a> {
             // behind repeated read-lock acquisition.
             let mut cached = if let Some(cache) = self.page_cache {
                 let _waiting = crate::fsync_stats::StageTimer::diagnostic(
-                    crate::fsync_stats::STAGE_ENTITY_PAGE_CACHE_READ_WAIT);
-                Some(cache.read().map_err(|_| io::Error::other("entity page cache lock was poisoned"))?)
-            } else { None };
+                    crate::fsync_stats::STAGE_ENTITY_PAGE_CACHE_READ_WAIT,
+                );
+                Some(
+                    cache
+                        .read()
+                        .map_err(|_| io::Error::other("entity page cache lock was poisoned"))?,
+                )
+            } else {
+                None
+            };
             self.versions_root(root, &targets, &mut versions, 0, &mut cached)?;
         }
         Ok(versions)
     }
 
-    fn versions_root(&self, root: BlockId, targets: &[(&[u8], usize)],
-        versions: &mut [Option<u64>], directory_depth: usize,
-        cached: &mut Option<std::sync::RwLockReadGuard<'_, DecodedPageCache>>) -> io::Result<()> {
-        if targets.iter().all(|(_, index)| versions[*index].is_some()) { return Ok(()); }
+    fn versions_root(
+        &self,
+        root: BlockId,
+        targets: &[(&[u8], usize)],
+        versions: &mut [Option<u64>],
+        directory_depth: usize,
+        cached: &mut Option<std::sync::RwLockReadGuard<'_, DecodedPageCache>>,
+    ) -> io::Result<()> {
+        if targets.iter().all(|(_, index)| versions[*index].is_some()) {
+            return Ok(());
+        }
         if directory_depth > MAX_TREE_DEPTH {
             return Err(invalid_data("entity root directory exceeds maximum depth"));
         }
@@ -2255,23 +2534,38 @@ impl<'a> Tree<'a> {
                 for mount in &directory.mounts {
                     let first = targets.partition_point(|(key, _)| *key < mount.start.as_slice());
                     let last = targets.partition_point(|(key, _)| *key < mount.end.as_slice());
-                    self.versions_root(mount.root, &targets[first..last], versions, directory_depth + 1, cached)?;
+                    self.versions_root(
+                        mount.root,
+                        &targets[first..last],
+                        versions,
+                        directory_depth + 1,
+                        cached,
+                    )?;
                 }
                 Ok(())
             }
         }
     }
 
-    fn versions_page(&self, page: &Page, targets: &[(&[u8], usize)],
-        versions: &mut [Option<u64>], depth: usize,
-        cached: &mut Option<std::sync::RwLockReadGuard<'_, DecodedPageCache>>) -> io::Result<()> {
-        if depth > MAX_TREE_DEPTH { return Err(invalid_data("entity tree exceeds maximum depth")); }
+    fn versions_page(
+        &self,
+        page: &Page,
+        targets: &[(&[u8], usize)],
+        versions: &mut [Option<u64>],
+        depth: usize,
+        cached: &mut Option<std::sync::RwLockReadGuard<'_, DecodedPageCache>>,
+    ) -> io::Result<()> {
+        if depth > MAX_TREE_DEPTH {
+            return Err(invalid_data("entity tree exceeds maximum depth"));
+        }
         match page {
             Page::Leaf(entries) => {
                 for (key, index) in targets {
                     if versions[*index].is_none() {
-                        versions[*index] = entries.binary_search_by(|entry| entry.0.as_slice().cmp(key))
-                            .ok().map(|position| entries[position].1.version);
+                        versions[*index] = entries
+                            .binary_search_by(|entry| entry.0.as_slice().cmp(key))
+                            .ok()
+                            .map(|position| entries[position].1.version);
                     }
                 }
                 Ok(())
@@ -2279,16 +2573,25 @@ impl<'a> Tree<'a> {
             Page::Internal { children, .. } => {
                 let mut first = 0;
                 while first < targets.len() {
-                    let child = children.partition_point(|child| child.lower_bound.as_slice() <= targets[first].0)
+                    let child = children
+                        .partition_point(|child| child.lower_bound.as_slice() <= targets[first].0)
                         .saturating_sub(1);
                     let last = if let Some(next) = children.get(child + 1) {
-                        first + targets[first..].partition_point(|(key, _)| *key < next.lower_bound.as_slice())
-                    } else { targets.len() };
+                        first
+                            + targets[first..]
+                                .partition_point(|(key, _)| *key < next.lower_bound.as_slice())
+                    } else {
+                        targets.len()
+                    };
                     let group = &targets[first..last];
                     if group.iter().any(|(_, index)| versions[*index].is_none()) {
                         match &*self.load_version_node(children[child].block_id, cached)? {
-                            RootNode::Page(page) => self.versions_page(page, group, versions, depth + 1, cached)?,
-                            RootNode::Directory(_) => return Err(invalid_data("entity page magic mismatch")),
+                            RootNode::Page(page) => {
+                                self.versions_page(page, group, versions, depth + 1, cached)?
+                            }
+                            RootNode::Directory(_) => {
+                                return Err(invalid_data("entity page magic mismatch"))
+                            }
                         }
                     }
                     first = last;
@@ -2358,7 +2661,9 @@ impl<'a> Tree<'a> {
         pages: &mut Vec<Child>,
         written_block_ids: &mut Vec<BlockId>,
     ) -> io::Result<()> {
-        let Some((lower_bound, encoded)) = buffer.finish() else { return Ok(()); };
+        let Some((lower_bound, encoded)) = buffer.finish() else {
+            return Ok(());
+        };
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_STORE_PAGE);
         let block_id = self.backend.write_fresh_owned(encoded)?;
         written_block_ids.push(block_id);
@@ -2419,8 +2724,12 @@ impl<'a> Tree<'a> {
         version: u64,
         reclaim_below: TombstoneReclaim<'_>,
     ) -> bool {
-        value.is_none() && version < reclaim_below.below
-            && !reclaim_below.mounts.iter().any(|mount| mount.start.as_slice() <= key && key < mount.end.as_slice())
+        value.is_none()
+            && version < reclaim_below.below
+            && !reclaim_below
+                .mounts
+                .iter()
+                .any(|mount| mount.start.as_slice() <= key && key < mount.end.as_slice())
     }
 
     /// Merges a sorted write batch over an existing sorted leaf and frames the
@@ -2433,7 +2742,7 @@ impl<'a> Tree<'a> {
     fn append_merged_leaf_entries(
         &self,
         entries: &[(Vec<u8>, EntityValue)],
-        writes: &[(Vec<u8>, Option<Vec<u8>>, u64)],
+        writes: &[VersionedWrite],
         reclaim_below: TombstoneReclaim<'_>,
         buffer: &mut LeafFrame,
         pages: &mut Vec<Child>,
@@ -2535,12 +2844,16 @@ impl<'a> Tree<'a> {
         let mut expanded = 16;
         for child in children {
             let mut child_bytes = page_codec::internal_entry_bytes(
-                current.last().map_or(&[][..], |previous| previous.lower_bound.as_slice()),
-                &child.lower_bound);
+                current
+                    .last()
+                    .map_or(&[][..], |previous| previous.lower_bound.as_slice()),
+                &child.lower_bound,
+            );
             let expanded_child_bytes = 34 + child.lower_bound.len();
             if current.len() >= MIN_INTERNAL_SPLIT_CHILDREN
                 && (used + child_bytes > PAGE_PACK_TARGET_BYTES
-                    || expanded + expanded_child_bytes > crate::generated_tofudb_ir::MAX_ENTITY_PAGE_EXPANDED_BYTES)
+                    || expanded + expanded_child_bytes
+                        > crate::generated_tofudb_ir::MAX_ENTITY_PAGE_EXPANDED_BYTES)
             {
                 groups.push(current);
                 current = Vec::new();
@@ -2549,7 +2862,9 @@ impl<'a> Tree<'a> {
                 child_bytes = page_codec::internal_entry_bytes(&[], &child.lower_bound);
             }
             if used + child_bytes > PAGE_MAX_BYTES
-                || expanded + expanded_child_bytes > crate::generated_tofudb_ir::MAX_ENTITY_PAGE_EXPANDED_BYTES {
+                || expanded + expanded_child_bytes
+                    > crate::generated_tofudb_ir::MAX_ENTITY_PAGE_EXPANDED_BYTES
+            {
                 return Err(invalid_data("entity child cannot fit in one internal page"));
             }
             used += child_bytes;
@@ -2606,25 +2921,14 @@ impl<'a> Tree<'a> {
                 Page::Internal { level, .. } => *level,
             };
             (
-                self.apply_page(
-                    root_page,
-                    &writes,
-                    reclaim_below,
-                    0,
-                    &mut written_block_ids,
-                )?,
+                self.apply_page(root_page, &writes, reclaim_below, 0, &mut written_block_ids)?,
                 level,
             )
         } else {
             let entries: Vec<(Vec<u8>, EntityValue)> = writes
                 .into_iter()
                 .filter(|(key, value, version)| {
-                    !Self::reclaimable_tombstone(
-                        key,
-                        value.as_deref(),
-                        *version,
-                        reclaim_below,
-                    )
+                    !Self::reclaimable_tombstone(key, value.as_deref(), *version, reclaim_below)
                 })
                 .map(|(key, value, version)| (key, EntityValue { version, value }))
                 .collect();
@@ -2655,7 +2959,7 @@ impl<'a> Tree<'a> {
     fn apply_page(
         &self,
         page: &Page,
-        writes: &[(Vec<u8>, Option<Vec<u8>>, u64)],
+        writes: &[VersionedWrite],
         reclaim_below: TombstoneReclaim<'_>,
         depth: usize,
         written_block_ids: &mut Vec<BlockId>,
@@ -2695,10 +2999,16 @@ impl<'a> Tree<'a> {
                     // its own). An untouched child costs one comparison, not a
                     // search of every child per write.
                     write_index = match children.get(child_index + 1) {
-                        Some(next) if writes.get(group_start)
-                            .is_some_and(|write| write.0.as_slice() < next.lower_bound.as_slice()) =>
-                            group_start + writes[group_start..]
-                                .partition_point(|write| write.0.as_slice() < next.lower_bound.as_slice()),
+                        Some(next)
+                            if writes.get(group_start).is_some_and(|write| {
+                                write.0.as_slice() < next.lower_bound.as_slice()
+                            }) =>
+                        {
+                            group_start
+                                + writes[group_start..].partition_point(|write| {
+                                    write.0.as_slice() < next.lower_bound.as_slice()
+                                })
+                        }
                         Some(_) => group_start,
                         None => writes.len(),
                     };
@@ -2767,6 +3077,7 @@ impl<'a> Tree<'a> {
     /// `lower_bound` is the subtree's separator key as stored by its parent
     /// (the tree invariant "child.lower_bound == subtree's first key"), so
     /// unchanged subtrees echo it without a node load.
+    #[allow(clippy::too_many_arguments)]
     fn reclaim_subtree(
         &self,
         root: BlockId,
@@ -2961,7 +3272,11 @@ impl<'a> Tree<'a> {
                     return Ok((base_root.unwrap(), written_block_ids));
                 }
                 let capsule_root = self.store_directory(
-                    &RootDirectory { base_root, mounts, materialized: None },
+                    &RootDirectory {
+                        base_root,
+                        mounts,
+                        materialized: None,
+                    },
                     &mut written_block_ids,
                 )?;
                 Ok((capsule_root, written_block_ids))
@@ -3215,42 +3530,58 @@ impl<'a> Tree<'a> {
     /// treating such a rewrite as a conflict. Retained tombstones preserve ABA;
     /// mounted directories conservatively retain structural validation.
     fn range_versions_unchanged(
-        &self, witness: &RangeWitness, current_leaves: &[BlockId],
-        snapshot: EntitySnapshot, head: EntitySnapshot,
-        before: &EntityOverlayView, after: &EntityOverlayView,
+        &self,
+        witness: &RangeWitness,
+        current_leaves: &[BlockId],
+        snapshot: EntitySnapshot,
+        head: EntitySnapshot,
+        before: &EntityOverlayView,
+        after: &EntityOverlayView,
     ) -> io::Result<bool> {
         for id in current_leaves {
             match &*self.load_node(*id)? {
-                RootNode::Directory(directory) if directory.mounts.is_empty() => {},
+                RootNode::Directory(directory) if directory.mounts.is_empty() => {}
                 RootNode::Page(Page::Leaf(entries)) => {
                     // Include tombstones and the boundary leaf's whole range:
                     // inserts/updates/deletes after the snapshot still conflict.
-                    if entries.iter().any(|(key, value)| key.as_slice() >= witness.start.as_slice()
-                        && key.as_slice() < witness.end.as_slice() && value.version > snapshot.sequence) {
+                    if entries.iter().any(|(key, value)| {
+                        key.as_slice() >= witness.start.as_slice()
+                            && key.as_slice() < witness.end.as_slice()
+                            && value.version > snapshot.sequence
+                    }) {
                         return Ok(false);
                     }
-                },
+                }
                 _ => return Ok(false),
             }
         }
         for id in &witness.leaf_ids {
             match &*self.load_node(*id)? {
-                RootNode::Directory(directory) if directory.mounts.is_empty() => {},
+                RootNode::Directory(directory) if directory.mounts.is_empty() => {}
                 RootNode::Page(Page::Leaf(entries)) => {
                     // Retire/replace may physically remove an old row. Check
                     // its original logical version too, with at most one
                     // page's key/version vectors live at a time.
-                    let keys: Vec<_> = entries.iter().filter(|(key, _)|
-                        key.as_slice() >= witness.start.as_slice() && key.as_slice() < witness.end.as_slice())
-                        .map(|(key, value)| (key.as_slice(), value.version)).collect();
+                    let keys: Vec<_> = entries
+                        .iter()
+                        .filter(|(key, _)| {
+                            key.as_slice() >= witness.start.as_slice()
+                                && key.as_slice() < witness.end.as_slice()
+                        })
+                        .map(|(key, value)| (key.as_slice(), value.version))
+                        .collect();
                     let raw_keys: Vec<_> = keys.iter().map(|(key, _)| *key).collect();
                     let current = self.versions(head.root, &raw_keys)?;
                     for ((key, version), current) in keys.into_iter().zip(current) {
-                        let expected = before.resolve_version(key, snapshot.sequence).or(Some(version));
+                        let expected = before
+                            .resolve_version(key, snapshot.sequence)
+                            .or(Some(version));
                         let actual = after.resolve_version(key, head.sequence).or(current);
-                        if actual != expected { return Ok(false); }
+                        if actual != expected {
+                            return Ok(false);
+                        }
                     }
-                },
+                }
                 _ => return Ok(false),
             }
         }
@@ -3258,19 +3589,32 @@ impl<'a> Tree<'a> {
     }
 
     fn overlay_range_versions_unchanged(
-        &self, witness: &RangeWitness, snapshot: EntitySnapshot, head: EntitySnapshot,
-        before: &EntityOverlayView, after: &EntityOverlayView,
+        &self,
+        witness: &RangeWitness,
+        snapshot: EntitySnapshot,
+        head: EntitySnapshot,
+        before: &EntityOverlayView,
+        after: &EntityOverlayView,
     ) -> io::Result<bool> {
         // A structural range retirement can remove rows that existed only
         // in the snapshot overlay. They have no old tree leaf to inspect.
         let mut pending = before.range(&witness.start, &witness.end, snapshot.sequence, false);
         loop {
-            let keys: Vec<_> = pending.by_ref().take(256).map(|(key, _)| key.as_slice()).collect();
-            if keys.is_empty() { break; }
+            let keys: Vec<_> = pending
+                .by_ref()
+                .take(256)
+                .map(|(key, _)| key.as_slice())
+                .collect();
+            if keys.is_empty() {
+                break;
+            }
             let current = self.versions(head.root, &keys)?;
             for (key, current) in keys.into_iter().zip(current) {
                 if after.resolve_version(key, head.sequence).or(current)
-                    != before.resolve_version(key, snapshot.sequence) { return Ok(false); }
+                    != before.resolve_version(key, snapshot.sequence)
+                {
+                    return Ok(false);
+                }
             }
         }
         Ok(true)
@@ -3315,14 +3659,25 @@ impl<'a> Tree<'a> {
             RootNode::Page(_) => {
                 let mut rows = Vec::new();
                 if reverse {
-                    self.scan_page_reverse(root, start, end, limit, &mut rows, leaves, dead_leaves, 0)?;
+                    self.scan_page_reverse(
+                        root,
+                        start,
+                        end,
+                        limit,
+                        &mut rows,
+                        leaves,
+                        dead_leaves,
+                        0,
+                    )?;
                 } else {
                     self.scan_page(root, start, end, limit, &mut rows, leaves, dead_leaves, 0)?;
                 }
                 Ok(rows)
             }
             RootNode::Directory(directory) => {
-                leaves.try_reserve(1).map_err(crate::resource_exhaustion::reservation_error)?;
+                leaves
+                    .try_reserve(1)
+                    .map_err(crate::resource_exhaustion::reservation_error)?;
                 leaves.push(root);
                 let mut visible = BTreeMap::new();
                 if let Some(base_root) = directory.base_root {
@@ -3444,7 +3799,9 @@ impl<'a> Tree<'a> {
         }
         match &*self.load_node(id)? {
             RootNode::Page(Page::Leaf(entries)) => {
-                leaves.try_reserve(1).map_err(crate::resource_exhaustion::reservation_error)?;
+                leaves
+                    .try_reserve(1)
+                    .map_err(crate::resource_exhaustion::reservation_error)?;
                 leaves.push(id);
                 let mut tombstones_in_range = 0_u32;
                 let mut live_in_range = 0_u32;
@@ -3478,7 +3835,16 @@ impl<'a> Tree<'a> {
                     let overlaps = upper.is_none_or(|bound| bound > start)
                         && child.lower_bound.as_slice() < end;
                     if overlaps {
-                        self.scan_page(child.block_id, start, end, limit, rows, leaves, dead_leaves, depth + 1)?;
+                        self.scan_page(
+                            child.block_id,
+                            start,
+                            end,
+                            limit,
+                            rows,
+                            leaves,
+                            dead_leaves,
+                            depth + 1,
+                        )?;
                     }
                 }
             }
@@ -3523,7 +3889,9 @@ impl<'a> Tree<'a> {
         }
         match &*self.load_node(id)? {
             RootNode::Page(Page::Leaf(entries)) => {
-                leaves.try_reserve(1).map_err(crate::resource_exhaustion::reservation_error)?;
+                leaves
+                    .try_reserve(1)
+                    .map_err(crate::resource_exhaustion::reservation_error)?;
                 leaves.push(id);
                 let mut tombstones_in_range = 0_u32;
                 let mut live_in_range = 0_u32;
@@ -3574,7 +3942,8 @@ impl<'a> Tree<'a> {
 }
 
 fn is_complete_root_record(payload: &[u8]) -> bool {
-    payload.len() >= 12 && &payload[..8] == ROOT_MAGIC
+    payload.len() >= 12
+        && &payload[..8] == ROOT_MAGIC
         && u32::from_le_bytes(payload[8..12].try_into().unwrap()) == ROOT_VERSION
 }
 
@@ -3626,7 +3995,9 @@ impl EntityDatabase {
             snapshot_pins: Default::default(),
             compaction_hints: Default::default(),
             tombstone_reclaim_override: None,
-            page_cache: Arc::new(std::sync::RwLock::new(DecodedPageCache::new(DEFAULT_PAGE_CACHE_BYTES))),
+            page_cache: Arc::new(std::sync::RwLock::new(DecodedPageCache::new(
+                DEFAULT_PAGE_CACHE_BYTES,
+            ))),
             replica_pin: None,
             query_publisher: None,
             overlay: Arc::new(std::sync::RwLock::new(Default::default())),
@@ -3653,7 +4024,9 @@ impl EntityDatabase {
             snapshot_pins: Default::default(),
             compaction_hints: Default::default(),
             tombstone_reclaim_override: None,
-            page_cache: Arc::new(std::sync::RwLock::new(DecodedPageCache::new(DEFAULT_PAGE_CACHE_BYTES))),
+            page_cache: Arc::new(std::sync::RwLock::new(DecodedPageCache::new(
+                DEFAULT_PAGE_CACHE_BYTES,
+            ))),
             replica_pin: None,
             query_publisher: None,
             overlay: Arc::new(std::sync::RwLock::new(Default::default())),
@@ -3715,7 +4088,9 @@ impl EntityDatabase {
             snapshot_pins: Default::default(),
             compaction_hints: Default::default(),
             tombstone_reclaim_override: None,
-            page_cache: Arc::new(std::sync::RwLock::new(DecodedPageCache::new(DEFAULT_PAGE_CACHE_BYTES))),
+            page_cache: Arc::new(std::sync::RwLock::new(DecodedPageCache::new(
+                DEFAULT_PAGE_CACHE_BYTES,
+            ))),
             replica_pin: None,
             query_publisher: None,
             overlay: Arc::new(std::sync::RwLock::new(Default::default())),
@@ -3831,6 +4206,7 @@ impl EntityDatabase {
     }
 
     /// `true` when this database is a snapshot read replica.
+    #[cfg(test)]
     pub(crate) fn is_read_replica(&self) -> bool {
         matches!(self.persona, EntityPersona::Replica(_))
     }
@@ -3862,8 +4238,12 @@ impl EntityDatabase {
             page_cache: Arc::clone(&self.page_cache),
             replica_pin: Some(Arc::new(pin)),
             query_publisher: None,
-            overlay: Arc::new(std::sync::RwLock::new(self.overlay.read()
-                .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?.clone())),
+            overlay: Arc::new(std::sync::RwLock::new(
+                self.overlay
+                    .read()
+                    .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+                    .clone(),
+            )),
             overlay_trigger_bytes: std::sync::atomic::AtomicUsize::new(
                 self.overlay_trigger_bytes
                     .load(std::sync::atomic::Ordering::Acquire),
@@ -3892,7 +4272,9 @@ impl EntityDatabase {
     }
 
     pub(crate) fn preparation_memory_lease(&self) -> io::Result<SnapshotPin> {
-        self.replica_pin.as_ref().map(SnapshotPin::lease)
+        self.replica_pin
+            .as_ref()
+            .map(SnapshotPin::lease)
             .ok_or_else(|| invalid_input("preparation requires a pinned snapshot"))
     }
 
@@ -3933,7 +4315,9 @@ impl EntityDatabase {
             additional_scope_prefixes,
             snapshot,
             overlay_view: if writable {
-                self.overlay.read().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+                self.overlay
+                    .read()
+                    .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
                     .view(snapshot.sequence)
             } else {
                 EntityOverlayView::default()
@@ -3950,10 +4334,7 @@ impl EntityDatabase {
             // build; writer transactions register their own handle.
             snapshot_pin: match self.replica_pin.as_ref() {
                 Some(pin) if pin.snapshot == snapshot => pin.lease(),
-                _ => pin_snapshot(
-                    &self.snapshot_pins,
-                    snapshot,
-                )?,
+                _ => pin_snapshot(&self.snapshot_pins, snapshot)?,
             },
         })
     }
@@ -4055,8 +4436,12 @@ impl EntityDatabase {
             .iter()
             .filter(|block_id| !transaction.staged_reference_blocks.contains(block_id))
             .count();
-        if transaction.staged_reference_blocks.len().checked_add(additional_blocks)
-            .and_then(|count| u32::try_from(count).ok()).is_none()
+        if transaction
+            .staged_reference_blocks
+            .len()
+            .checked_add(additional_blocks)
+            .and_then(|count| u32::try_from(count).ok())
+            .is_none()
         {
             return Err(invalid_input(
                 "persistent snapshot block count exceeds its u32 representation",
@@ -4156,8 +4541,12 @@ impl EntityDatabase {
             .mounted_ranges
             .sort_by(|left, right| left.start.cmp(&right.start));
         if !transaction.staged_reference_blocks.contains(&capsule_root) {
-            if transaction.staged_reference_blocks.len().checked_add(1)
-                .and_then(|count| u32::try_from(count).ok()).is_none()
+            if transaction
+                .staged_reference_blocks
+                .len()
+                .checked_add(1)
+                .and_then(|count| u32::try_from(count).ok())
+                .is_none()
             {
                 return Err(invalid_input(
                     "persistent restore block count exceeds its u32 representation",
@@ -4292,10 +4681,9 @@ impl EntityDatabase {
                     .overlay
                     .read()
                     .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
-                overlay.view(visible.sequence).resolve_versioned(
-                    pin_key.encoded(),
-                    visible.sequence,
-                )
+                overlay
+                    .view(visible.sequence)
+                    .resolve_versioned(pin_key.encoded(), visible.sequence)
             } else {
                 None
             };
@@ -4315,9 +4703,7 @@ impl EntityDatabase {
             return Ok(None);
         };
         let snapshot = decode_persistent_root_pin(&encoded_snapshot)?;
-        if snapshot.sequence >= record.version
-            || snapshot.sequence > visible.sequence
-        {
+        if snapshot.sequence >= record.version || snapshot.sequence > visible.sequence {
             return Err(invalid_data("persistent entity root pin is not monotonic"));
         }
         Tree {
@@ -4375,7 +4761,8 @@ impl EntityDatabase {
         // Reuse returns above; partition actual point preparation into source
         // resolution and witness/value retention without changing their authority.
         let _prepare = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_ENTITY_POINT_PREPARE);
+            crate::fsync_stats::STAGE_ENTITY_POINT_PREPARE,
+        );
         let reservation_bytes = point_witness_reservation_bytes(key.encoded());
         if needs_witness {
             transaction.reserve_transaction_bytes(reservation_bytes)?;
@@ -4384,22 +4771,33 @@ impl EntityDatabase {
         // A first read after put/delete still witnesses the original version,
         // including a pending WAL delta. The staged value wins only afterward.
         let resolving = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_ENTITY_POINT_RESOLVE);
-        let resolved = transaction.overlay_view.resolve_versioned(
-            key.encoded(), transaction.snapshot.sequence);
-        crate::request_profile::work(if resolved.is_some() {
-            crate::request_profile::Work::EntityOverlayRead
-        } else { crate::request_profile::Work::EntityTreeRead }, 1);
+            crate::fsync_stats::STAGE_ENTITY_POINT_RESOLVE,
+        );
+        let resolved = transaction
+            .overlay_view
+            .resolve_versioned(key.encoded(), transaction.snapshot.sequence);
+        crate::request_profile::work(
+            if resolved.is_some() {
+                crate::request_profile::Work::EntityOverlayRead
+            } else {
+                crate::request_profile::Work::EntityTreeRead
+            },
+            1,
+        );
         let entity = match resolved {
             Some((version, value)) => Some(EntityValue { version, value }),
             None => match (Tree {
                 backend: self.backend(),
                 page_cache: Some(self.page_cache.as_ref()),
-            }).get(transaction.snapshot.root, key.encoded()) {
+            })
+            .get(transaction.snapshot.root, key.encoded())
+            {
                 Ok(entity) => entity,
                 Err(error) => {
                     if needs_witness {
-                        transaction.snapshot_pin.release_transaction_bytes(reservation_bytes);
+                        transaction
+                            .snapshot_pin
+                            .release_transaction_bytes(reservation_bytes);
                     }
                     return Err(error);
                 }
@@ -4407,41 +4805,69 @@ impl EntityDatabase {
         };
         drop(resolving);
         let _retaining = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_ENTITY_POINT_RETAIN);
-        let witness = transaction.point_witnesses.entry(key.0.clone())
-            .or_insert_with(|| PointWitness::version_only(entity.as_ref().map(|value| value.version)));
-        if let Some(staged) = staged { return Ok(staged); }
+            crate::fsync_stats::STAGE_ENTITY_POINT_RETAIN,
+        );
+        let witness = transaction
+            .point_witnesses
+            .entry(key.0.clone())
+            .or_insert_with(|| {
+                PointWitness::version_only(entity.as_ref().map(|value| value.version))
+            });
+        if let Some(staged) = staged {
+            return Ok(staged);
+        }
         let value = entity.and_then(|value| value.value);
         witness.read = match &value {
             None => RetainedPointRead::Missing,
-            Some(bytes) => match transaction.snapshot_pin.reserve_transaction_bytes(bytes.len()) {
+            Some(bytes) => match transaction
+                .snapshot_pin
+                .reserve_transaction_bytes(bytes.len())
+            {
                 Ok(()) => {
                     let retained = bytes.clone().into_boxed_slice();
                     crate::request_profile::work(
-                        crate::request_profile::Work::EntityPointRetainedBytes, bytes.len() as u64);
+                        crate::request_profile::Work::EntityPointRetainedBytes,
+                        bytes.len() as u64,
+                    );
                     RetainedPointRead::Value(retained)
-                },
+                }
                 Err(error) => return Err(error),
             },
         };
         Ok(value)
     }
 
-    pub fn scan(&self, transaction: &mut EntityTransaction, start: &EntityKey,
-        end: &EntityKey, limit: usize) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
+    pub fn scan(
+        &self,
+        transaction: &mut EntityTransaction,
+        start: &EntityKey,
+        end: &EntityKey,
+        limit: usize,
+    ) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
         self.scan_visible(transaction, start, end, limit, false)
     }
 
-    pub fn scan_reverse(&self, transaction: &mut EntityTransaction, start: &EntityKey,
-        end: &EntityKey, limit: usize) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
+    pub fn scan_reverse(
+        &self,
+        transaction: &mut EntityTransaction,
+        start: &EntityKey,
+        end: &EntityKey,
+        limit: usize,
+    ) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
         self.scan_visible(transaction, start, end, limit, true)
     }
 
     /// Merge ordered cursors without copying a matching overlay range. The
     /// tree window grows only when masks consume it; the final exact tree
     /// window remains the OCC witness, including range exhaustion.
-    fn scan_visible(&self, transaction: &mut EntityTransaction, start: &EntityKey,
-        end: &EntityKey, limit: usize, reverse: bool) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
+    fn scan_visible(
+        &self,
+        transaction: &mut EntityTransaction,
+        start: &EntityKey,
+        end: &EntityKey,
+        limit: usize,
+        reverse: bool,
+    ) -> io::Result<Vec<(EntityKey, Vec<u8>)>> {
         self.require_usable_authority()?;
         self.ensure_transaction_instance(transaction)?;
         ensure_scan_scope(transaction, start, end)?;
@@ -4451,7 +4877,10 @@ impl EntityDatabase {
         let previous_witness_count = transaction.range_witnesses.len();
         let mut reserved_bytes = 0_usize;
         let result = (|| {
-            let tree = Tree { backend: self.backend(), page_cache: Some(self.page_cache.as_ref()) };
+            let tree = Tree {
+                backend: self.backend(),
+                page_cache: Some(self.page_cache.as_ref()),
+            };
             let mut cursor_start = start.0.clone();
             let mut cursor_end = end.0.clone();
             let mut window_limit = limit;
@@ -4460,9 +4889,21 @@ impl EntityDatabase {
             loop {
                 let mut dead_leaves = 0;
                 let (rows, leaf_ids) = if reverse {
-                    tree.scan_reverse(transaction.snapshot.root, &cursor_start, &cursor_end, window_limit, &mut dead_leaves)?
+                    tree.scan_reverse(
+                        transaction.snapshot.root,
+                        &cursor_start,
+                        &cursor_end,
+                        window_limit,
+                        &mut dead_leaves,
+                    )?
                 } else {
-                    tree.scan(transaction.snapshot.root, &cursor_start, &cursor_end, window_limit, &mut dead_leaves)?
+                    tree.scan(
+                        transaction.snapshot.root,
+                        &cursor_start,
+                        &cursor_end,
+                        window_limit,
+                        &mut dead_leaves,
+                    )?
                 };
                 total_dead_leaves = total_dead_leaves.saturating_add(dead_leaves);
                 let exhausted = rows.len() < window_limit;
@@ -4470,62 +4911,121 @@ impl EntityDatabase {
                 let mut window_end = cursor_end.clone();
                 if !exhausted {
                     let cut = &rows.last().unwrap().0;
-                    if reverse { window_start = cut.clone(); }
-                    else { window_end = cut.clone(); window_end.push(0); }
+                    if reverse {
+                        window_start = cut.clone();
+                    } else {
+                        window_end = cut.clone();
+                        window_end.push(0);
+                    }
                 }
                 {
-                    let overlay = transaction.overlay_view.range(&window_start, &window_end, transaction.snapshot.sequence, reverse);
-                    let staged = transaction.writes.range(window_start.clone()..window_end.clone());
-                    let staged: Box<dyn Iterator<Item = (&Vec<u8>, &Option<Vec<u8>>)>> =
-                        if reverse { Box::new(staged.rev()) } else { Box::new(staged) };
-                    let mut sources: Vec<std::iter::Peekable<Box<dyn Iterator<Item = (&Vec<u8>, &Option<Vec<u8>>)>>>> = vec![
-                        Box::new(rows.iter().map(|(key, value)| (key, &value.value))) as Box<dyn Iterator<Item = _>>,
-                        Box::new(overlay), staged,
-                    ].into_iter().map(Iterator::peekable).collect();
+                    let overlay = transaction.overlay_view.range(
+                        &window_start,
+                        &window_end,
+                        transaction.snapshot.sequence,
+                        reverse,
+                    );
+                    let staged = transaction
+                        .writes
+                        .range(window_start.clone()..window_end.clone());
+                    let staged: StagedEntries<'_> = if reverse {
+                        Box::new(staged.rev())
+                    } else {
+                        Box::new(staged)
+                    };
+                    let mut sources: Vec<std::iter::Peekable<StagedEntries<'_>>> = vec![
+                        Box::new(rows.iter().map(|(key, value)| (key, &value.value)))
+                            as Box<dyn Iterator<Item = _>>,
+                        Box::new(overlay),
+                        staged,
+                    ]
+                    .into_iter()
+                    .map(Iterator::peekable)
+                    .collect();
                     while visible.len() < limit {
-                        let next_key = sources.iter_mut().filter_map(|source| source.peek().map(|(key, _)| *key))
-                            .min_by(|left, right| if reverse { right.cmp(left) } else { left.cmp(right) });
-                        let Some(key) = next_key else { break; };
+                        let next_key = sources
+                            .iter_mut()
+                            .filter_map(|source| source.peek().map(|(key, _)| *key))
+                            .min_by(|left, right| {
+                                if reverse {
+                                    right.cmp(left)
+                                } else {
+                                    left.cmp(right)
+                                }
+                            });
+                        let Some(key) = next_key else {
+                            break;
+                        };
                         let mut value = None;
                         // Later sources override earlier sources at an equal key.
                         for source in &mut sources {
-                            if source.peek().is_some_and(|(candidate, _)| *candidate == key) {
+                            if source
+                                .peek()
+                                .is_some_and(|(candidate, _)| *candidate == key)
+                            {
                                 value = source.next().unwrap().1.as_ref();
                             }
                         }
-                        if let Some(value) = value { visible.push((EntityKey(key.clone()), value.clone())); }
+                        if let Some(value) = value {
+                            visible.push((EntityKey(key.clone()), value.clone()));
+                        }
                     }
                 }
                 // Validation repeats this raw snapshot window before masking.
                 let witness = RangeWitness {
-                    start: cursor_start.clone(), end: cursor_end.clone(), leaf_ids,
-                    reverse, scan_limit: window_limit,
+                    start: cursor_start.clone(),
+                    end: cursor_end.clone(),
+                    leaf_ids,
+                    reverse,
+                    scan_limit: window_limit,
                 };
-                let bytes = range_witness_reservation_bytes(&witness.start, &witness.end, witness.leaf_ids.capacity())?;
-                let next_reserved = reserved_bytes.checked_add(bytes)
+                let bytes = range_witness_reservation_bytes(
+                    &witness.start,
+                    &witness.end,
+                    witness.leaf_ids.capacity(),
+                )?;
+                let next_reserved = reserved_bytes
+                    .checked_add(bytes)
                     .ok_or_else(|| invalid_data("range scan byte accounting overflow"))?;
                 transaction.reserve_transaction_bytes(bytes)?;
                 reserved_bytes = next_reserved;
-                transaction.range_witnesses.try_reserve(1).map_err(crate::resource_exhaustion::reservation_error)?;
+                transaction
+                    .range_witnesses
+                    .try_reserve(1)
+                    .map_err(crate::resource_exhaustion::reservation_error)?;
                 transaction.range_witnesses.push(witness);
-                let interval_consumed = if reverse { window_start <= cursor_start }
-                    else { window_end >= cursor_end };
+                let interval_consumed = if reverse {
+                    window_start <= cursor_start
+                } else {
+                    window_end >= cursor_end
+                };
                 if visible.len() == limit || exhausted || interval_consumed {
                     if total_dead_leaves >= COMPACTION_HINT_THRESHOLD_LEAVES {
-                        self.record_compaction_hint(start.encoded(), end.encoded(), total_dead_leaves);
+                        self.record_compaction_hint(
+                            start.encoded(),
+                            end.encoded(),
+                            total_dead_leaves,
+                        );
                     }
                     return Ok(visible);
                 }
                 // Move past consumed keys; do not re-read an expanding prefix.
-                if reverse { cursor_end = window_start; }
-                else { cursor_start = window_end; }
+                if reverse {
+                    cursor_end = window_start;
+                } else {
+                    cursor_start = window_end;
+                }
                 window_limit = MAX_ENTITY_RANGE_ROWS;
             }
         })();
         if result.is_err() {
             transaction.range_witnesses.truncate(previous_witness_count);
-            if previous_witness_count == 0 { transaction.range_witnesses = Vec::new(); }
-            transaction.snapshot_pin.release_transaction_bytes(reserved_bytes);
+            if previous_witness_count == 0 {
+                transaction.range_witnesses = Vec::new();
+            }
+            transaction
+                .snapshot_pin
+                .release_transaction_bytes(reserved_bytes);
         }
         result
     }
@@ -4779,9 +5279,9 @@ impl EntityDatabase {
             ));
         }
         transaction.reserve_transaction_bytes(retired_range_reservation_bytes(
-                start.encoded(),
-                end.encoded(),
-            ))?;
+            start.encoded(),
+            end.encoded(),
+        ))?;
         let insertion = transaction
             .retired_ranges
             .partition_point(|(existing_start, _)| existing_start.as_slice() < start.encoded());
@@ -4823,11 +5323,13 @@ impl EntityDatabase {
         let Some(root_record) = prepared.root_record() else {
             return Ok(self.writer_engine()?.state().durable_sequence);
         };
-        let result = self.writer_engine_mut()?.commit_references_with_authority_state(
-            root_record,
-            prepared.block_ids(),
-            prepared.authority_state_root(),
-        )?;
+        let result = self
+            .writer_engine_mut()?
+            .commit_references_with_authority_state(
+                root_record,
+                prepared.block_ids(),
+                prepared.authority_state_root(),
+            )?;
         self.apply_prepared_commit(prepared, result.sequence)?;
         Ok(result.sequence)
     }
@@ -4850,24 +5352,37 @@ impl EntityDatabase {
                 // physical drain merely because another transaction committed.
                 self.validate_overlay_transaction(&transaction)?;
                 {
-                    let _ta_prepare_merge = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_TA_PREPARE_MERGE);
+                    let _ta_prepare_merge = crate::fsync_stats::StageTimer::new(
+                        crate::fsync_stats::STAGE_TA_PREPARE_MERGE,
+                    );
                     self.merge_overlay_if_needed()?;
                 }
-                let _ta_prepare_fast = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_TA_PREPARE_FAST);
+                let _ta_prepare_fast =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_TA_PREPARE_FAST);
                 let sequence = self.writer_engine()?.next_sequence()?;
                 let mut written_block_ids = transaction.staged_reference_blocks.clone();
                 let mut next_root = self.root;
                 if !transaction.writes.is_empty() {
-                    let tree = Tree { backend: self.backend(), page_cache: Some(self.page_cache.as_ref()) };
+                    let tree = Tree {
+                        backend: self.backend(),
+                        page_cache: Some(self.page_cache.as_ref()),
+                    };
                     let mut directory = tree.split_root(self.root)?;
                     if directory.materialized.is_none() {
                         // Persist coverage before the first deferred mutation.
                         // WAL retirement must never make this root appear complete.
-                        let overlay = self.overlay.read()
+                        let overlay = self
+                            .overlay
+                            .read()
                             .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
                         directory.materialized = Some(if overlay.is_empty() {
-                            OverlayPosition { sequence: sequence - 1, key: None }
-                        } else { overlay.materialized_position() });
+                            OverlayPosition {
+                                sequence: sequence - 1,
+                                key: None,
+                            }
+                        } else {
+                            overlay.materialized_position()
+                        });
                         next_root = Some(tree.store_directory(&directory, &mut written_block_ids)?);
                     }
                 }
@@ -4949,7 +5464,10 @@ impl EntityDatabase {
     /// versions only advance while its snapshot stays pinned); success proves
     /// nothing and the writer still validates in full. Structural
     /// transactions validate on the tree path and rehearse nothing.
-    pub(crate) fn rehearse_overlay_validation(&self, transaction: &EntityTransaction) -> io::Result<()> {
+    pub(crate) fn rehearse_overlay_validation(
+        &self,
+        transaction: &EntityTransaction,
+    ) -> io::Result<()> {
         self.ensure_transaction_instance(transaction)?;
         if !transaction.retired_ranges.is_empty()
             || !transaction.mounted_ranges.is_empty()
@@ -4980,35 +5498,56 @@ impl EntityDatabase {
             page_cache: Some(self.page_cache.as_ref()),
         };
         let versions_at = |view: &EntityOverlayView, snapshot: EntitySnapshot, keys: &[&[u8]]| {
-            let mut versions: Vec<_> = keys.iter().map(|key| view.resolve_version(key, snapshot.sequence)).collect();
-            let missing: Vec<_> = keys.iter().enumerate().filter(|(index, _)| versions[*index].is_none())
-                .map(|(index, key)| (index, *key)).collect();
+            let mut versions: Vec<_> = keys
+                .iter()
+                .map(|key| view.resolve_version(key, snapshot.sequence))
+                .collect();
+            let missing: Vec<_> = keys
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| versions[*index].is_none())
+                .map(|(index, key)| (index, *key))
+                .collect();
             let tree_keys: Vec<_> = missing.iter().map(|(_, key)| *key).collect();
-            for ((index, _), version) in missing.into_iter().zip(tree.versions(snapshot.root, &tree_keys)?) {
+            for ((index, _), version) in missing
+                .into_iter()
+                .zip(tree.versions(snapshot.root, &tree_keys)?)
+            {
                 versions[index] = version;
             }
             Ok::<_, io::Error>(versions)
         };
-        let mut keys: Vec<_> = transaction.point_witnesses.keys().chain(transaction.writes.keys())
-            .map(Vec::as_slice).collect();
+        let mut keys: Vec<_> = transaction
+            .point_witnesses
+            .keys()
+            .chain(transaction.writes.keys())
+            .map(Vec::as_slice)
+            .collect();
         keys.sort_unstable();
         keys.dedup();
         let head_versions = {
             let _versions = crate::fsync_stats::StageTimer::new(
-                crate::fsync_stats::STAGE_OVERLAY_VALIDATE_HEAD_VERSIONS);
+                crate::fsync_stats::STAGE_OVERLAY_VALIDATE_HEAD_VERSIONS,
+            );
             versions_at(&overlay, head, &keys)?
         };
-        let head_version = |key: &[u8]| head_versions[keys.binary_search(&key).expect("validation key collected")];
+        let head_version =
+            |key: &[u8]| head_versions[keys.binary_search(&key).expect("validation key collected")];
         for (key, witnessed) in &transaction.point_witnesses {
             if head_version(key) != witnessed.version {
                 return Err(conflict("entity point witness changed"));
             }
         }
-        let blind_keys: Vec<_> = transaction.writes.keys()
-            .filter(|key| !transaction.point_witnesses.contains_key(*key)).map(Vec::as_slice).collect();
+        let blind_keys: Vec<_> = transaction
+            .writes
+            .keys()
+            .filter(|key| !transaction.point_witnesses.contains_key(*key))
+            .map(Vec::as_slice)
+            .collect();
         let snapshot_versions = {
             let _versions = crate::fsync_stats::StageTimer::new(
-                crate::fsync_stats::STAGE_OVERLAY_VALIDATE_ORIGINAL_BLIND_VERSIONS);
+                crate::fsync_stats::STAGE_OVERLAY_VALIDATE_ORIGINAL_BLIND_VERSIONS,
+            );
             versions_at(&transaction.overlay_view, transaction.snapshot, &blind_keys)?
         };
         for (key, version) in blind_keys.into_iter().zip(snapshot_versions) {
@@ -5017,7 +5556,8 @@ impl EntityDatabase {
             }
         }
         let range_validation = crate::fsync_stats::StageTimer::new(
-            crate::fsync_stats::STAGE_OVERLAY_VALIDATE_RANGE_WITNESSES);
+            crate::fsync_stats::STAGE_OVERLAY_VALIDATE_RANGE_WITNESSES,
+        );
         for witness in &transaction.range_witnesses {
             if overlay.changed_in_range_since(
                 &witness.start,
@@ -5044,16 +5584,31 @@ impl EntityDatabase {
                 )?
             };
             let unchanged = if current_leaves != witness.leaf_ids {
-                !self.tombstone_reclaim_override.unwrap_or_else(tombstone_reclaim_enabled)
-                    && tree.range_versions_unchanged(witness, &current_leaves,
-                        transaction.snapshot, head, &transaction.overlay_view, &overlay)?
+                !self
+                    .tombstone_reclaim_override
+                    .unwrap_or_else(tombstone_reclaim_enabled)
+                    && tree.range_versions_unchanged(
+                        witness,
+                        &current_leaves,
+                        transaction.snapshot,
+                        head,
+                        &transaction.overlay_view,
+                        &overlay,
+                    )?
             } else {
                 // Physical roots can return to empty after retiring a range;
                 // snapshot-overlay rows still require disappearance checks.
-                tree.overlay_range_versions_unchanged(witness, transaction.snapshot, head,
-                    &transaction.overlay_view, &overlay)?
+                tree.overlay_range_versions_unchanged(
+                    witness,
+                    transaction.snapshot,
+                    head,
+                    &transaction.overlay_view,
+                    &overlay,
+                )?
             };
-            if !unchanged { return Err(conflict("entity range witness changed")); }
+            if !unchanged {
+                return Err(conflict("entity range witness changed"));
+            }
         }
         drop(range_validation);
         Ok(())
@@ -5110,9 +5665,14 @@ impl EntityDatabase {
                 }
             }
             for key in transaction.writes.keys() {
-                let snapshot = match transaction.overlay_view.resolve_versioned(key, transaction.snapshot.sequence) {
+                let snapshot = match transaction
+                    .overlay_view
+                    .resolve_versioned(key, transaction.snapshot.sequence)
+                {
                     Some((version, _)) => Some(version),
-                    None => tree.get(transaction.snapshot.root, key)?.map(|value| value.version),
+                    None => tree
+                        .get(transaction.snapshot.root, key)?
+                        .map(|value| value.version),
                 };
                 let current = tree.get(self.root, key)?.map(|value| value.version);
                 if snapshot != current {
@@ -5121,9 +5681,21 @@ impl EntityDatabase {
             }
             for witness in &transaction.range_witnesses {
                 let (_, current_leaves) = if witness.reverse {
-                    tree.scan_reverse(self.root, &witness.start, &witness.end, witness.scan_limit, &mut 0)?
+                    tree.scan_reverse(
+                        self.root,
+                        &witness.start,
+                        &witness.end,
+                        witness.scan_limit,
+                        &mut 0,
+                    )?
                 } else {
-                    tree.scan(self.root, &witness.start, &witness.end, witness.scan_limit, &mut 0)?
+                    tree.scan(
+                        self.root,
+                        &witness.start,
+                        &witness.end,
+                        witness.scan_limit,
+                        &mut 0,
+                    )?
                 };
                 if current_leaves != witness.leaf_ids {
                     return Err(conflict("entity range witness changed"));
@@ -5166,8 +5738,8 @@ impl EntityDatabase {
             retirement_changed |= mounts_changed;
         }
         if !transaction.writes.is_empty() {
-            let reclaim_below = self
-                .effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
+            let reclaim_below =
+                self.effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
             let (written_root, write_blocks) = {
                 let _timer =
                     crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_APPLY_BATCH);
@@ -5183,7 +5755,10 @@ impl EntityDatabase {
                         .into_iter()
                         .map(|(key, value)| (key, value, sequence))
                         .collect(),
-                    TombstoneReclaim { below: reclaim_below, mounts: &directory.mounts },
+                    TombstoneReclaim {
+                        below: reclaim_below,
+                        mounts: &directory.mounts,
+                    },
                 )?
             };
             directory.base_root = written_root;
@@ -5253,8 +5828,13 @@ impl EntityDatabase {
         let publication = self.begin_query_publication();
         self.root = prepared.next_root;
         if prepared.root_record.is_some() {
-            self.overlay.write().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
-                .note_merged(OverlayPosition { sequence: committed_sequence, key: None });
+            self.overlay
+                .write()
+                .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+                .note_merged(OverlayPosition {
+                    sequence: committed_sequence,
+                    key: None,
+                });
         }
         if let Some(delta) = prepared.overlay_delta {
             let (mut delta_bytes, mut delta_entries) = (0_usize, 0_usize);
@@ -5359,7 +5939,7 @@ impl EntityDatabase {
     /// Hints are advisory and loss-free — the next slow scan re-issues them.
     pub(crate) fn take_tombstone_compaction_hint(
         &self,
-    ) -> io::Result<Option<(Vec<u8>, Vec<u8>, u32)>> {
+    ) -> io::Result<Option<TombstoneCompactionHint>> {
         let mut hints = self
             .compaction_hints
             .lock()
@@ -5369,7 +5949,10 @@ impl EntityDatabase {
 
     #[cfg(test)]
     fn tombstone_compaction_hint_count(&self) -> usize {
-        self.compaction_hints.lock().map(|hints| hints.len()).unwrap_or(0)
+        self.compaction_hints
+            .lock()
+            .map(|hints| hints.len())
+            .unwrap_or(0)
     }
 
     /// One bounded tombstone-compaction slice over `[start, end)`: repacks
@@ -5397,8 +5980,8 @@ impl EntityDatabase {
             backend: self.backend(),
             page_cache: Some(self.page_cache.as_ref()),
         };
-        let reclaim_below = self
-            .effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
+        let reclaim_below =
+            self.effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
         let mut budget = ReclaimBudget {
             leaves_left: max_leaves,
             reclaimed: 0,
@@ -5406,8 +5989,13 @@ impl EntityDatabase {
         };
         let mut written_block_ids = Vec::new();
         let mut directory = tree.split_root(Some(root))?;
-        let overlay = self.overlay.read().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
-        if !overlay.is_empty() { directory.materialized = Some(overlay.materialized_position()); }
+        let overlay = self
+            .overlay
+            .read()
+            .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
+        if !overlay.is_empty() {
+            directory.materialized = Some(overlay.materialized_position());
+        }
         drop(overlay);
         let Some(base_root) = directory.base_root else {
             return Ok(EntityCompactionProgress {
@@ -5421,7 +6009,10 @@ impl EntityDatabase {
             start,
             start,
             end,
-            TombstoneReclaim { below: reclaim_below, mounts: &directory.mounts },
+            TombstoneReclaim {
+                below: reclaim_below,
+                mounts: &directory.mounts,
+            },
             &mut budget,
             &mut written_block_ids,
         )?;
@@ -5454,7 +6045,9 @@ impl EntityDatabase {
         };
         let next_root = if directory.mounts.is_empty() && directory.materialized.is_none() {
             directory.base_root
-        } else { Some(tree.store_directory(&directory, &mut written_block_ids)?) };
+        } else {
+            Some(tree.store_directory(&directory, &mut written_block_ids)?)
+        };
         if let Some(root_id) = next_root {
             if !written_block_ids.contains(&root_id) {
                 written_block_ids.push(root_id);
@@ -5462,20 +6055,22 @@ impl EntityDatabase {
         }
         written_block_ids.sort_unstable();
         written_block_ids.dedup();
-        let _publish_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PUBLISH);
+        let _publish_timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PUBLISH);
         let root_record = encode_root(self.writer_engine()?.next_sequence()?, next_root);
         let committed = self
             .writer_engine_mut()?
-            .commit_references_with_authority_state(
-                &root_record,
-                &written_block_ids,
-                next_root,
-            )?;
+            .commit_references_with_authority_state(&root_record, &written_block_ids, next_root)?;
         let publication = self.begin_query_publication();
         self.root = next_root;
         if directory.materialized.is_none() {
-            self.overlay.write().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
-                .note_merged(OverlayPosition { sequence: committed.sequence, key: None });
+            self.overlay
+                .write()
+                .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+                .note_merged(OverlayPosition {
+                    sequence: committed.sequence,
+                    key: None,
+                });
         }
         publication.finish(self);
         Ok(EntityCompactionProgress {
@@ -5510,20 +6105,33 @@ impl EntityDatabase {
         if empty {
             return Ok(true);
         }
-        let directory = Tree { backend: self.backend(), page_cache: Some(self.page_cache.as_ref()) }
-            .split_root(self.root)?;
+        let directory = Tree {
+            backend: self.backend(),
+            page_cache: Some(self.page_cache.as_ref()),
+        }
+        .split_root(self.root)?;
         Ok(directory.materialized.is_some())
     }
 
     /// First transaction still needed to recover this root. Partial coverage
     /// retains the entire boundary transaction, including its uncovered keys.
     pub(crate) fn overlay_replay_first_sequence(&self) -> io::Result<u64> {
-        let overlay = self.overlay.read().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
+        let overlay = self
+            .overlay
+            .read()
+            .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
         if overlay.is_empty() {
-            return Ok(self.writer_engine()?.state().durable_sequence.saturating_add(1));
+            return Ok(self
+                .writer_engine()?
+                .state()
+                .durable_sequence
+                .saturating_add(1));
         }
         let position = overlay.materialized_position();
-        Ok(position.sequence.saturating_add(u64::from(position.key.is_none())).max(1))
+        Ok(position
+            .sequence
+            .saturating_add(u64::from(position.key.is_none()))
+            .max(1))
     }
 
     /// Apply every committed-but-unmerged delta to the tree as ONE batch
@@ -5555,14 +6163,10 @@ impl EntityDatabase {
     // and let slow mounts shrink all the way to one indivisible entry.
     const MERGE_CHUNK_ENTRIES_INITIAL: usize = 64;
     const MERGE_CHUNK_ENTRIES_MIN: usize = 1;
-    const MERGE_CHUNK_TIME_TARGET: std::time::Duration =
-        std::time::Duration::from_millis(25);
+    const MERGE_CHUNK_TIME_TARGET: std::time::Duration = std::time::Duration::from_millis(25);
 
     /// Pure AIMD step, kept separate for deterministic tests.
-    fn next_merge_chunk_entries(
-        current: usize,
-        elapsed: std::time::Duration,
-    ) -> usize {
+    fn next_merge_chunk_entries(current: usize, elapsed: std::time::Duration) -> usize {
         if elapsed > Self::MERGE_CHUNK_TIME_TARGET {
             (current / 2).max(Self::MERGE_CHUNK_ENTRIES_MIN)
         } else if elapsed < Self::MERGE_CHUNK_TIME_TARGET / 2 {
@@ -5595,29 +6199,68 @@ impl EntityDatabase {
     }
 
     pub(crate) fn prepare_overlay_merge(&self) -> io::Result<Option<OverlayMergePreparation>> {
-        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PREPARE_CAPTURE);
+        let _timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PREPARE_CAPTURE);
         let engine = self.writer_engine()?;
         engine.require_write_admission()?;
-        let overlay = self.overlay.read().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?.clone();
-        if overlay.entries() == 0 { return Ok(None); }
+        let overlay = self
+            .overlay
+            .read()
+            .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+            .clone();
+        if overlay.entries() == 0 {
+            return Ok(None);
+        }
         let pin = pin_snapshot(&self.snapshot_pins, self.current_snapshot())?;
-        let reclaim_below = self.effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
-        Ok(Some(OverlayMergePreparation { database_instance_id: self.database_instance_id,
-            root: self.root, overlay, source: ReplicaBlockIo { blocks: engine.block_store_shared(), restart_required: engine.restart_flag() },
-            page_cache: Arc::clone(&self.page_cache), pin: Arc::new(pin), reclaim_below,
-            limit: self.background_merge_chunk_entries_adaptive.load(std::sync::atomic::Ordering::Acquire) }))
+        let reclaim_below =
+            self.effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
+        Ok(Some(OverlayMergePreparation {
+            database_instance_id: self.database_instance_id,
+            root: self.root,
+            overlay,
+            source: ReplicaBlockIo {
+                blocks: engine.block_store_shared(),
+                restart_required: engine.restart_flag(),
+            },
+            page_cache: Arc::clone(&self.page_cache),
+            pin: Arc::new(pin),
+            reclaim_below,
+            limit: self
+                .background_merge_chunk_entries_adaptive
+                .load(std::sync::atomic::Ordering::Acquire),
+        }))
     }
 
-    pub(crate) fn finish_overlay_merge(&mut self, prepared: PreparedOverlayMerge) -> io::Result<bool> {
-        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PREPARE_PUBLISH);
+    pub(crate) fn finish_overlay_merge(
+        &mut self,
+        prepared: PreparedOverlayMerge,
+    ) -> io::Result<bool> {
+        let _timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_PREPARE_PUBLISH);
         let publication_started = std::time::Instant::now();
         self.writer_engine()?.require_write_admission()?;
-        if self.database_instance_id != prepared.capture.database_instance_id || self.root != prepared.capture.root {
-            crate::fsync_stats::note_stage_elapsed(crate::fsync_stats::STAGE_OVERLAY_PREPARE_STALE, 0);
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "prepared overlay root changed before publication"));
+        if self.database_instance_id != prepared.capture.database_instance_id
+            || self.root != prepared.capture.root
+        {
+            crate::fsync_stats::note_stage_elapsed(
+                crate::fsync_stats::STAGE_OVERLAY_PREPARE_STALE,
+                0,
+            );
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "prepared overlay root changed before publication",
+            ));
         }
-        let has_tail = self.overlay.read().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?.has_work_after(&prepared.boundary);
-        let next_root = if has_tail { prepared.root_with_tail } else { prepared.root_without_tail };
+        let has_tail = self
+            .overlay
+            .read()
+            .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+            .has_work_after(&prepared.boundary);
+        let next_root = if has_tail {
+            prepared.root_with_tail
+        } else {
+            prepared.root_without_tail
+        };
         // Root identity was checked before any private block enters shared
         // staging. Normal engine relink accounting and WAL confirmation own
         // publication; a stale prepare never pollutes shared payload storage.
@@ -5629,21 +6272,45 @@ impl EntityDatabase {
             }
         }
         let record = encode_root(self.writer_engine()?.next_sequence()?, next_root);
-        let committed = self.writer_engine_mut()?.commit_references_with_authority_state(&record, &prepared.written_ids, next_root)?;
+        let committed = self
+            .writer_engine_mut()?
+            .commit_references_with_authority_state(&record, &prepared.written_ids, next_root)?;
         let publication = self.begin_query_publication();
         self.root = next_root;
-        let mut overlay = self.overlay.write().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
-        overlay.note_merge_published(if has_tail { prepared.boundary } else { OverlayPosition { sequence: committed.sequence, key: None } });
-        self.overlay_trigger_bytes.store(overlay.bytes(), std::sync::atomic::Ordering::Release);
-        self.overlay_trigger_entries.store(overlay.entries(), std::sync::atomic::Ordering::Release);
-        crate::fsync_stats::note_overlay_merge(prepared.actual_entries, prepared.carried_bytes,
-            prepared.written_ids.len(), prepared.consumed_positions, prepared.superseded_positions);
+        let mut overlay = self
+            .overlay
+            .write()
+            .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
+        overlay.note_merge_published(if has_tail {
+            prepared.boundary
+        } else {
+            OverlayPosition {
+                sequence: committed.sequence,
+                key: None,
+            }
+        });
+        self.overlay_trigger_bytes
+            .store(overlay.bytes(), std::sync::atomic::Ordering::Release);
+        self.overlay_trigger_entries
+            .store(overlay.entries(), std::sync::atomic::Ordering::Release);
+        crate::fsync_stats::note_overlay_merge(
+            prepared.actual_entries,
+            prepared.carried_bytes,
+            prepared.written_ids.len(),
+            prepared.consumed_positions,
+            prepared.superseded_positions,
+        );
         // The 25-ms AIMD target bounds serialized publication. Cold encoding
         // and waiting to reacquire authority do not justify starving a fast
         // publisher with single-entry slices.
-        let next = Self::next_adaptive_merge_chunk_entries(prepared.limit, prepared.actual_entries,
-            prepared.carried_bytes, publication_started.elapsed());
-        self.background_merge_chunk_entries_adaptive.store(next, std::sync::atomic::Ordering::Release);
+        let next = Self::next_adaptive_merge_chunk_entries(
+            prepared.limit,
+            prepared.actual_entries,
+            prepared.carried_bytes,
+            publication_started.elapsed(),
+        );
+        self.background_merge_chunk_entries_adaptive
+            .store(next, std::sync::atomic::Ordering::Release);
         drop(overlay);
         publication.finish(self);
         Ok(true)
@@ -5655,53 +6322,97 @@ impl EntityDatabase {
 
     fn merge_overlay_chunk(&mut self) -> io::Result<bool> {
         let started = std::time::Instant::now();
-        let current = self.merge_chunk_entries_adaptive.load(std::sync::atomic::Ordering::Acquire);
+        let current = self
+            .merge_chunk_entries_adaptive
+            .load(std::sync::atomic::Ordering::Acquire);
         let outcome = self.merge_overlay_chunk_with_limit(current);
         let elapsed = started.elapsed();
         // Only a full slice proves capacity for growth. A nearly empty or
         // highly overwritten overlay is not evidence that a large future
         // slice fits. Slow errors still reduce the next admission size.
         let next = match &outcome {
-            Ok(Some((limit, actual, carried))) =>
-                Self::next_adaptive_merge_chunk_entries(*limit, *actual, *carried, elapsed),
-            Err(_) if elapsed > Self::MERGE_CHUNK_TIME_TARGET =>
-                Self::next_merge_chunk_entries(current, elapsed),
+            Ok(Some((limit, actual, carried))) => {
+                Self::next_adaptive_merge_chunk_entries(*limit, *actual, *carried, elapsed)
+            }
+            Err(_) if elapsed > Self::MERGE_CHUNK_TIME_TARGET => {
+                Self::next_merge_chunk_entries(current, elapsed)
+            }
             _ => current,
         };
-        self.merge_chunk_entries_adaptive.store(next, std::sync::atomic::Ordering::Release);
+        self.merge_chunk_entries_adaptive
+            .store(next, std::sync::atomic::Ordering::Release);
         outcome.map(|slice| slice.is_some())
     }
 
     /// Returns the entry limit that fit, the entries merged and their carried bytes.
-    fn merge_overlay_chunk_with_limit(&mut self, mut chunk_entries: usize) -> io::Result<Option<(usize, usize, usize)>> {
+    fn merge_overlay_chunk_with_limit(
+        &mut self,
+        mut chunk_entries: usize,
+    ) -> io::Result<Option<(usize, usize, usize)>> {
         self.writer_engine()?.require_write_admission()?;
         // Bound both page count and actual staged bytes. Crossing the
         // carried-WAL byte ceiling would otherwise fsync hundreds of loose
         // pages synchronously under authority, turning one merge into a
         // multi-second DolphinFS stall. A single indivisible entry retains
         // the existing spill path rather than making its data unmergeable.
-        let (actual_entries, boundary, directory, written_block_ids, next_root, carried_bytes, consumed_positions, superseded_positions) = loop {
-            let select_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_SELECT);
-            let chunk = self.overlay.read()
+        let (
+            actual_entries,
+            boundary,
+            directory,
+            written_block_ids,
+            next_root,
+            carried_bytes,
+            consumed_positions,
+            superseded_positions,
+        ) = loop {
+            let select_timer =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_SELECT);
+            let chunk = self
+                .overlay
+                .read()
                 .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
                 .merge_chunk(chunk_entries, Self::MERGE_CHUNK_ENTRIES);
             let Some(crate::entity_overlay::OverlayMergeChunk {
-                entries: batch, position: boundary, consumed_positions, superseded_positions,
-            }) = chunk else { return Ok(None); };
+                entries: batch,
+                position: boundary,
+                consumed_positions,
+                superseded_positions,
+            }) = chunk
+            else {
+                return Ok(None);
+            };
             drop(select_timer);
             let actual_entries = batch.len();
-            let tree = Tree { backend: self.backend(), page_cache: Some(self.page_cache.as_ref()) };
+            let tree = Tree {
+                backend: self.backend(),
+                page_cache: Some(self.page_cache.as_ref()),
+            };
             let mut directory = tree.split_root(self.root)?;
-            let reclaim_below = self.effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
+            let reclaim_below =
+                self.effective_tombstone_reclaim_below(self.oldest_live_pin_sequence()?);
             let (written_root, mut written_block_ids) = {
-                let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_APPLY_BATCH);
-                tree.apply_batch(directory.base_root, batch, TombstoneReclaim { below: reclaim_below, mounts: &directory.mounts })?
+                let _timer =
+                    crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_APPLY_BATCH);
+                tree.apply_batch(
+                    directory.base_root,
+                    batch,
+                    TombstoneReclaim {
+                        below: reclaim_below,
+                        mounts: &directory.mounts,
+                    },
+                )?
             };
             directory.base_root = written_root;
-            directory.materialized = if self.overlay.read()
-                .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?.has_work_after(&boundary) {
+            directory.materialized = if self
+                .overlay
+                .read()
+                .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+                .has_work_after(&boundary)
+            {
                 Some(boundary.clone())
-            } else { None };
+            } else {
+                None
+            };
             let next_root = if directory.mounts.is_empty() && directory.materialized.is_none() {
                 directory.base_root
             } else {
@@ -5712,11 +6423,13 @@ impl EntityDatabase {
             written_block_ids.sort_unstable();
             written_block_ids.dedup();
             let blocks = self.writer_engine()?.block_store_shared();
-            let carry_timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_CARRY_BUDGET);
+            let carry_timer =
+                crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_CARRY_BUDGET);
             let mut carried_bytes = 0_usize;
             for id in &written_block_ids {
                 if let Some(payload) = blocks.pending_payload(*id)? {
-                    carried_bytes = carried_bytes.checked_add(payload.len())
+                    carried_bytes = carried_bytes
+                        .checked_add(payload.len())
                         .ok_or_else(|| invalid_data("overlay carried-byte count overflow"))?;
                 }
             }
@@ -5724,25 +6437,53 @@ impl EntityDatabase {
             let fits_references = u32::try_from(written_block_ids.len()).is_ok();
             let fits_carried = carried_bytes <= crate::transaction::MAX_CARRIED_PAYLOAD_BYTES;
             if fits_references && (fits_carried || chunk_entries == 1) {
-                break (actual_entries, boundary, directory, written_block_ids, next_root, carried_bytes, consumed_positions, superseded_positions);
+                break (
+                    actual_entries,
+                    boundary,
+                    directory,
+                    written_block_ids,
+                    next_root,
+                    carried_bytes,
+                    consumed_positions,
+                    superseded_positions,
+                );
             }
             if chunk_entries == 1 {
-                return Err(invalid_data("single overlay merge entry exceeds the transaction block budget"));
+                return Err(invalid_data(
+                    "single overlay merge entry exceeds the transaction block budget",
+                ));
             }
             chunk_entries = (chunk_entries / 2).max(1);
         };
         let root_record = encode_root(self.writer_engine()?.next_sequence()?, next_root);
-        let committed = self.writer_engine_mut()?.commit_references_with_authority_state(
-            &root_record, &written_block_ids, next_root)?;
+        let committed = self
+            .writer_engine_mut()?
+            .commit_references_with_authority_state(&root_record, &written_block_ids, next_root)?;
         let publication = self.begin_query_publication();
         self.root = next_root;
-        let mut overlay = self.overlay.write()
+        let mut overlay = self
+            .overlay
+            .write()
             .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
-        overlay.note_merge_published(if directory.materialized.is_some() { boundary }
-            else { OverlayPosition { sequence: committed.sequence, key: None } });
-        self.overlay_trigger_bytes.store(overlay.bytes(), std::sync::atomic::Ordering::Release);
-        self.overlay_trigger_entries.store(overlay.entries(), std::sync::atomic::Ordering::Release);
-        crate::fsync_stats::note_overlay_merge(actual_entries, carried_bytes, written_block_ids.len(), consumed_positions, superseded_positions);
+        overlay.note_merge_published(if directory.materialized.is_some() {
+            boundary
+        } else {
+            OverlayPosition {
+                sequence: committed.sequence,
+                key: None,
+            }
+        });
+        self.overlay_trigger_bytes
+            .store(overlay.bytes(), std::sync::atomic::Ordering::Release);
+        self.overlay_trigger_entries
+            .store(overlay.entries(), std::sync::atomic::Ordering::Release);
+        crate::fsync_stats::note_overlay_merge(
+            actual_entries,
+            carried_bytes,
+            written_block_ids.len(),
+            consumed_positions,
+            superseded_positions,
+        );
         drop(overlay);
         publication.finish(self);
         Ok(Some((chunk_entries, actual_entries, carried_bytes)))
@@ -5753,7 +6494,10 @@ impl EntityDatabase {
     /// slice only multiplies fsyncs here. Keep the existing byte/reference
     /// bounds and leave the online adaptive slice unchanged.
     pub fn merge_overlay_fully(&mut self) -> io::Result<()> {
-        while self.merge_overlay_chunk_with_limit(Self::MERGE_CHUNK_ENTRIES)?.is_some() {}
+        while self
+            .merge_overlay_chunk_with_limit(Self::MERGE_CHUNK_ENTRIES)?
+            .is_some()
+        {}
         Ok(())
     }
 
@@ -5828,14 +6572,30 @@ impl EntityDatabase {
             // publishing a capsule must never omit its immutable overlay.
             let batch = transaction.overlay_view.materialization_batch();
             if !batch.is_empty() {
-                let tree = Tree { backend: self.backend(), page_cache: Some(&self.page_cache) };
+                let tree = Tree {
+                    backend: self.backend(),
+                    page_cache: Some(&self.page_cache),
+                };
                 let mut directory = tree.split_root(transaction.snapshot.root)?;
-                let (base, mut blocks) = tree.apply_batch(directory.base_root, batch, TombstoneReclaim { below: 0, mounts: &directory.mounts })?;
+                let (base, mut blocks) = tree.apply_batch(
+                    directory.base_root,
+                    batch,
+                    TombstoneReclaim {
+                        below: 0,
+                        mounts: &directory.mounts,
+                    },
+                )?;
                 directory.base_root = base;
                 directory.materialized = None;
-                let root = if directory.mounts.is_empty() { base }
-                    else { Some(tree.store_directory(&directory, &mut blocks)?) };
-                let snapshot = EntitySnapshot { root, sequence: transaction.snapshot.sequence };
+                let root = if directory.mounts.is_empty() {
+                    base
+                } else {
+                    Some(tree.store_directory(&directory, &mut blocks)?)
+                };
+                let snapshot = EntitySnapshot {
+                    root,
+                    sequence: transaction.snapshot.sequence,
+                };
                 transaction.snapshot_pin.repin(snapshot)?;
                 transaction.snapshot = snapshot;
                 transaction.staged_reference_blocks.extend(blocks);
@@ -5853,39 +6613,66 @@ impl EntityDatabase {
         let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_OVERLAY_REPLAY);
         let engine = self.writer_engine()?;
         let head = engine.state().durable_sequence;
-        let directory = Tree { backend: self.backend(), page_cache: Some(self.page_cache.as_ref()) }
-            .split_root(self.root)?;
+        let directory = Tree {
+            backend: self.backend(),
+            page_cache: Some(self.page_cache.as_ref()),
+        }
+        .split_root(self.root)?;
         if let Some(position) = directory.materialized {
-            if position.sequence > head { return Err(invalid_data("materialization position is beyond durable head")); }
+            if position.sequence > head {
+                return Err(invalid_data(
+                    "materialization position is beyond durable head",
+                ));
+            }
             let mut deltas = Vec::new();
-            if let Some(first) = position.sequence.checked_add(u64::from(position.key.is_none())) {
+            if let Some(first) = position
+                .sequence
+                .checked_add(u64::from(position.key.is_none()))
+            {
                 engine.visit_transaction_metadata_from(first.max(1), |transaction| {
                     let sequence = transaction.sequence;
-                    if let Some(records) = crate::transaction::decode_family_records(&transaction.envelope.inline_payload)? {
+                    if let Some(records) = crate::transaction::decode_family_records(
+                        &transaction.envelope.inline_payload,
+                    )? {
                         for record in records {
                             if record.kind == crate::transaction::FamilyRecordKind::EntityOverlay {
-                                let mut delta = crate::entity_overlay::decode_overlay_delta(record.payload)?;
+                                let mut delta =
+                                    crate::entity_overlay::decode_overlay_delta(record.payload)?;
                                 delta.retain(|key, _| !position.covers(sequence, key));
-                                if !delta.is_empty() { deltas.push((sequence, delta)); }
+                                if !delta.is_empty() {
+                                    deltas.push((sequence, delta));
+                                }
                             }
                         }
                     }
                     Ok(())
                 })?;
             }
-            let mut overlay = self.overlay.write().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
+            let mut overlay = self
+                .overlay
+                .write()
+                .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
             overlay.note_merged(position);
-            for (sequence, delta) in deltas { overlay.apply_delta(sequence, delta); }
-            self.overlay_trigger_bytes.store(overlay.bytes(), std::sync::atomic::Ordering::Release);
-            self.overlay_trigger_entries.store(overlay.entries(), std::sync::atomic::Ordering::Release);
+            for (sequence, delta) in deltas {
+                overlay.apply_delta(sequence, delta);
+            }
+            self.overlay_trigger_bytes
+                .store(overlay.bytes(), std::sync::atomic::Ordering::Release);
+            self.overlay_trigger_entries
+                .store(overlay.entries(), std::sync::atomic::Ordering::Release);
             return Ok(());
         }
         if head == 0 || head <= engine.state().checkpoint_sequence {
             // Legacy complete roots need no history I/O. Every newly deferred
             // mutation now publishes an explicit root coverage cursor above,
             // so indexed retirement cannot use this legacy shortcut.
-            self.overlay.write().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
-                .note_merged(OverlayPosition { sequence: head, key: None });
+            self.overlay
+                .write()
+                .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?
+                .note_merged(OverlayPosition {
+                    sequence: head,
+                    key: None,
+                });
             return Ok(());
         }
         // WAL retirement is a physical transition, not evidence that entity
@@ -5895,7 +6682,9 @@ impl EntityDatabase {
         for sequence in (1..=head).rev() {
             let Some(transaction) = engine.transaction_at(sequence)? else {
                 if !deltas.is_empty() {
-                    return Err(invalid_data("unmaterialized legacy overlay history is missing"));
+                    return Err(invalid_data(
+                        "unmaterialized legacy overlay history is missing",
+                    ));
                 }
                 // A complete legacy tree may have explicitly pruned history.
                 break;
@@ -5905,12 +6694,24 @@ impl EntityDatabase {
                 Some(root) if root == self.root => {}
                 Some(_) => break,
             }
-            if is_complete_root_record(&transaction.envelope.inline_payload) { break; }
-            if let Some(records) = crate::transaction::decode_family_records(&transaction.envelope.inline_payload)? {
-                if records.iter().any(|record| record.kind == crate::transaction::FamilyRecordKind::EntityRoot && is_complete_root_record(record.payload)) { break; }
+            if is_complete_root_record(&transaction.envelope.inline_payload) {
+                break;
+            }
+            if let Some(records) =
+                crate::transaction::decode_family_records(&transaction.envelope.inline_payload)?
+            {
+                if records.iter().any(|record| {
+                    record.kind == crate::transaction::FamilyRecordKind::EntityRoot
+                        && is_complete_root_record(record.payload)
+                }) {
+                    break;
+                }
                 for record in records {
                     if record.kind == crate::transaction::FamilyRecordKind::EntityOverlay {
-                        deltas.push((sequence, crate::entity_overlay::decode_overlay_delta(record.payload)?));
+                        deltas.push((
+                            sequence,
+                            crate::entity_overlay::decode_overlay_delta(record.payload)?,
+                        ));
                     }
                 }
             }
@@ -5920,8 +6721,13 @@ impl EntityDatabase {
             .overlay
             .write()
             .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
-        let covered = deltas.first().map_or(head, |(sequence, _)| sequence.saturating_sub(1));
-        overlay.note_merged(OverlayPosition { sequence: covered, key: None });
+        let covered = deltas
+            .first()
+            .map_or(head, |(sequence, _)| sequence.saturating_sub(1));
+        overlay.note_merged(OverlayPosition {
+            sequence: covered,
+            key: None,
+        });
         for (sequence, delta) in deltas {
             overlay.apply_delta(sequence, delta);
         }
@@ -5977,7 +6783,10 @@ impl EntityDatabase {
     /// Pending physical work and immutable bytes still owned by readers are
     /// separate counters. A partial block may retain its covered prefix.
     pub(crate) fn overlay_memory_bytes(&self) -> io::Result<(usize, usize)> {
-        let overlay = self.overlay.read().map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
+        let overlay = self
+            .overlay
+            .read()
+            .map_err(|_| io::Error::other("entity overlay lock is poisoned"))?;
         Ok((overlay.bytes(), overlay.resident_bytes()))
     }
 
@@ -6013,37 +6822,85 @@ mod tests {
             let mut database = EntityDatabase::initialize(directory.path()).unwrap();
             database.set_write_overlay_enabled(true);
             let mut transaction = database.begin(7, 11).unwrap();
-            database.put(&mut transaction, key(0), vec![9; 512]).unwrap();
+            database
+                .put(&mut transaction, key(0), vec![9; 512])
+                .unwrap();
             database.commit(transaction).unwrap();
             let preparation = database.prepare_overlay_merge().unwrap().unwrap();
-            let chunk = preparation.overlay.merge_chunk(preparation.limit, EntityDatabase::MERGE_CHUNK_ENTRIES).unwrap();
-            let batch_bytes = chunk.entries.iter().fold(0_usize, |bytes, (key, value, _)|
-                bytes + key.capacity() + value.as_ref().map_or(0, Vec::capacity) + 64);
+            let chunk = preparation
+                .overlay
+                .merge_chunk(preparation.limit, EntityDatabase::MERGE_CHUNK_ENTRIES)
+                .unwrap();
+            let batch_bytes = chunk
+                .entries
+                .iter()
+                .fold(0_usize, |bytes, (key, value, _)| {
+                    bytes + key.capacity() + value.as_ref().map_or(0, Vec::capacity) + 64
+                });
             let pressure_bytes = if just_below_retired_threshold {
                 LEGACY_AGGREGATE_TRANSACTION_BYTES - batch_bytes - 1
-            } else { LEGACY_AGGREGATE_TRANSACTION_BYTES };
+            } else {
+                LEGACY_AGGREGATE_TRANSACTION_BYTES
+            };
             // Record the retired threshold without allocating a huge
             // fixture. This lease represents concurrent foreground buffers.
             let mut pressure = preparation.pin.lease();
             pressure.reserve_transaction_bytes(pressure_bytes).unwrap();
             let prepared = preparation.encode().unwrap();
-            assert!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes > pressure_bytes);
+            assert!(
+                database
+                    .snapshot_pin_metrics()
+                    .unwrap()
+                    .retained_transaction_bytes
+                    > pressure_bytes
+            );
             assert!(database.finish_overlay_merge(prepared).unwrap());
-            assert_eq!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes, pressure_bytes);
+            assert_eq!(
+                database
+                    .snapshot_pin_metrics()
+                    .unwrap()
+                    .retained_transaction_bytes,
+                pressure_bytes
+            );
             assert_eq!(database.overlay.read().unwrap().entries(), 0);
             drop(pressure);
             assert_eq!(database.snapshot_pin_metrics().unwrap().active_handles, 0);
-            assert_eq!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes, 0);
+            assert_eq!(
+                database
+                    .snapshot_pin_metrics()
+                    .unwrap()
+                    .retained_transaction_bytes,
+                0
+            );
             let mut transaction = database.begin(7, 11).unwrap();
-            database.put(&mut transaction, key(1), vec![8; 512]).unwrap();
+            database
+                .put(&mut transaction, key(1), vec![8; 512])
+                .unwrap();
             database.commit(transaction).unwrap();
-            let prepared = database.prepare_overlay_merge().unwrap().unwrap().encode().unwrap();
+            let prepared = database
+                .prepare_overlay_merge()
+                .unwrap()
+                .unwrap()
+                .encode()
+                .unwrap();
             assert!(database.finish_overlay_merge(prepared).unwrap());
             assert_eq!(database.overlay.read().unwrap().entries(), 0);
-            assert_eq!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes, 0);
+            assert_eq!(
+                database
+                    .snapshot_pin_metrics()
+                    .unwrap()
+                    .retained_transaction_bytes,
+                0
+            );
             let mut read = database.begin(7, 11).unwrap();
-            assert_eq!(database.get(&mut read, &key(0)).unwrap(), Some(vec![9; 512]));
-            assert_eq!(database.get(&mut read, &key(1)).unwrap(), Some(vec![8; 512]));
+            assert_eq!(
+                database.get(&mut read, &key(0)).unwrap(),
+                Some(vec![9; 512])
+            );
+            assert_eq!(
+                database.get(&mut read, &key(1)).unwrap(),
+                Some(vec![8; 512])
+            );
         }
     }
 }

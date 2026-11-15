@@ -21,7 +21,6 @@ use crate::authority::AuthorityDatabase;
 use crate::backup::{self, BackupManifest};
 use crate::block::BlockId;
 use crate::control::ControlFile;
-use crate::engine::Engine;
 use crate::entity::visit_entity_page_graph_with_values;
 use crate::history::decode_segment;
 use crate::vfs::Vfs;
@@ -83,18 +82,26 @@ struct VerifyPhaseTimer<'a> {
 
 impl<'a> VerifyPhaseTimer<'a> {
     fn new(output: &'a mut Vec<VerifyPhaseTiming>, phase: &'static str, stage: usize) -> Self {
-        Self { output, phase, started: std::time::Instant::now(),
-            before: crate::history::decode_work(), _stage: crate::fsync_stats::StageTimer::new(stage) }
+        Self {
+            output,
+            phase,
+            started: std::time::Instant::now(),
+            before: crate::history::decode_work(),
+            _stage: crate::fsync_stats::StageTimer::new(stage),
+        }
     }
 }
 
 impl Drop for VerifyPhaseTimer<'_> {
     fn drop(&mut self) {
         let work = crate::history::decode_work().since(self.before);
-        self.output.push(VerifyPhaseTiming { phase: self.phase,
+        self.output.push(VerifyPhaseTiming {
+            phase: self.phase,
             elapsed_ns: self.started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
-            history_decode_attempts: work.attempts, history_decode_source_bytes: work.source_bytes,
-            history_decoded_transactions: work.transactions });
+            history_decode_attempts: work.attempts,
+            history_decode_source_bytes: work.source_bytes,
+            history_decoded_transactions: work.transactions,
+        });
     }
 }
 
@@ -129,7 +136,11 @@ pub struct SalvageReport {
 pub fn verify_authority(data_dir: &Path) -> io::Result<VerifyReport> {
     let (mut report, database) = verify_authority_inner(data_dir, false)?;
     if database.is_some() {
-        let _phase = VerifyPhaseTimer::new(&mut report.performance, "close", crate::fsync_stats::STAGE_VERIFY_CLOSE);
+        let _phase = VerifyPhaseTimer::new(
+            &mut report.performance,
+            "close",
+            crate::fsync_stats::STAGE_VERIFY_CLOSE,
+        );
         drop(database);
     }
     Ok(report)
@@ -161,7 +172,7 @@ fn verify_authority_timed(
         graph: GraphVerifySection::default(),
         performance: Vec::new(),
     };
-    let mut degrade = |report: &mut VerifyReport| {
+    let degrade = |report: &mut VerifyReport| {
         if report.verdict == "ok" {
             report.verdict = "degraded";
         }
@@ -169,7 +180,11 @@ fn verify_authority_timed(
 
     // Every phase reads through one read-only view of the source.
     let vfs: Arc<dyn Vfs> = Arc::new(shadow_vfs::ReadOnlyAuthorityVfs::new());
-    let phase = VerifyPhaseTimer::new(performance, "control", crate::fsync_stats::STAGE_VERIFY_CONTROL);
+    let phase = VerifyPhaseTimer::new(
+        performance,
+        "control",
+        crate::fsync_stats::STAGE_VERIFY_CONTROL,
+    );
     // CONTROL: the alternating slots select the newest valid state.
     let control_state = match ControlFile::open_with_vfs(data_dir, Arc::clone(&vfs))
         .and_then(|mut control| control.read_current())
@@ -193,7 +208,12 @@ fn verify_authority_timed(
         Arc::clone(&vfs),
     )
     .and_then(|mut log| {
-        crate::wal::scan_selected_generation_chain(data_dir, &control_state, &mut log, Arc::clone(&vfs))
+        crate::wal::scan_selected_generation_chain(
+            data_dir,
+            &control_state,
+            &mut log,
+            Arc::clone(&vfs),
+        )
     }) {
         Ok(selected) => {
             report.wal.valid_records = selected.recovery.records.len() as u64;
@@ -235,7 +255,11 @@ fn verify_authority_timed(
     let blocks = engine.block_store_shared();
 
     drop(phase);
-    let phase = VerifyPhaseTimer::new(performance, "payload", crate::fsync_stats::STAGE_VERIFY_PAYLOAD);
+    let phase = VerifyPhaseTimer::new(
+        performance,
+        "payload",
+        crate::fsync_stats::STAGE_VERIFY_PAYLOAD,
+    );
     // Payload catalog: every segment index verifies.
     for reference in engine.payload_segment_references() {
         report.payload.segments_total += 1;
@@ -257,19 +281,17 @@ fn verify_authority_timed(
     // referenced or not (orphans and temporaries included).
     let mut loose_verified = 0_u64;
     let mut corrupt_ids: Vec<String> = Vec::new();
-    let loose_result = blocks.visit_block_shards(
-        |_, block_ids| {
-            for block_id in block_ids {
-                match blocks.get(block_id) {
-                    Ok(_) => loose_verified += 1,
-                    Err(error) => {
-                        corrupt_ids.push(format!("{}: {error}", block_id.to_hex()));
-                    }
+    let loose_result = blocks.visit_block_shards(|_, block_ids| {
+        for block_id in block_ids {
+            match blocks.get(block_id) {
+                Ok(_) => loose_verified += 1,
+                Err(error) => {
+                    corrupt_ids.push(format!("{}: {error}", block_id.to_hex()));
                 }
             }
-            Ok(())
-        },
-    );
+        }
+        Ok(())
+    });
     if let Err(error) = loose_result {
         report.payload.fatal = Some(format!("loose block scan failed: {error}"));
     }
@@ -310,7 +332,11 @@ fn verify_authority_timed(
     report.graph.semantic_references_verified = references;
 
     drop(phase);
-    let phase = VerifyPhaseTimer::new(performance, "history", crate::fsync_stats::STAGE_VERIFY_HISTORY);
+    let phase = VerifyPhaseTimer::new(
+        performance,
+        "history",
+        crate::fsync_stats::STAGE_VERIFY_HISTORY,
+    );
     // History projection + retained WAL envelopes: every referenced block resolves.
     let snapshot = engine
         .capture_online_gc_mark_snapshot(Vec::new())
@@ -321,13 +347,11 @@ fn verify_authority_timed(
     {
         let blocks = &blocks;
         let missing = &mut missing;
-        let mut probe = |block_id: BlockId, counter: &mut u64| {
-            match blocks.get(block_id) {
-                Ok(_) => *counter += 1,
-                Err(error) => {
-                    missing.push(format!("{}: {error}", block_id.to_hex()));
-                    degraded = true;
-                }
+        let mut probe = |block_id: BlockId, counter: &mut u64| match blocks.get(block_id) {
+            Ok(_) => *counter += 1,
+            Err(error) => {
+                missing.push(format!("{}: {error}", block_id.to_hex()));
+                degraded = true;
             }
         };
         if let Some(manifest_id) = snapshot.history_manifest_block_id {
@@ -345,7 +369,9 @@ fn verify_authority_timed(
                 }
             }
         }
-        for id in &snapshot.history_payload_metadata_ids { probe(*id, &mut history_verified); }
+        for id in &snapshot.history_payload_metadata_ids {
+            probe(*id, &mut history_verified);
+        }
         for block_id in &snapshot.committed_block_ids {
             probe(*block_id, &mut wal_verified);
         }
@@ -354,9 +380,12 @@ fn verify_authority_timed(
         if let Some(index_id) = reference.payload_index_block_id {
             let checked = (|| -> io::Result<()> {
                 let source = blocks.get(reference.block_id)?;
-                let expected = crate::history_payload::SegmentIndex::build(&source, reference)?.encode()?;
+                let expected =
+                    crate::history_payload::SegmentIndex::build(&source, reference)?.encode()?;
                 if blocks.get(index_id)? != expected {
-                    return Err(invalid_data("history payload offset index disagrees with authenticated source"));
+                    return Err(invalid_data(
+                        "history payload offset index disagrees with authenticated source",
+                    ));
                 }
                 Ok(())
             })();
@@ -420,10 +449,8 @@ pub fn salvage_authority(data_dir: &Path, target_dir: &Path) -> io::Result<Salva
     let snapshot = engine.capture_online_gc_mark_snapshot(Vec::new())?;
     let blocks = engine.block_store_shared();
 
-    let (destination, snapshots_path) = backup::initialize_or_open_backup(
-        target_dir,
-        std::sync::Arc::new(crate::vfs::RealVfs),
-    )?;
+    let (destination, snapshots_path) =
+        backup::initialize_or_open_backup(target_dir, std::sync::Arc::new(crate::vfs::RealVfs))?;
     let _lease = backup::acquire_backup_lease(target_dir, &crate::vfs::RealVfs)?;
 
     // Copy with skip-on-error: every loss is explicit, never silent.
@@ -491,15 +518,18 @@ pub fn salvage_authority(data_dir: &Path, target_dir: &Path) -> io::Result<Salva
             }
         }
     }
-    for id in &snapshot.history_payload_metadata_ids { copied_probe(*id); }
+    for id in &snapshot.history_payload_metadata_ids {
+        copied_probe(*id);
+    }
     for block_id in &snapshot.committed_block_ids {
         copied_probe(*block_id);
     }
-    let mut lost = lost.into_inner();
+    let lost = lost.into_inner();
     let copy_failed = copy_failed.into_inner();
 
     let metrics = destination.write_metrics();
-    let manifest_bytes = backup::publish_manifest(&snapshots_path, &manifest, &crate::vfs::RealVfs)?;
+    let manifest_bytes =
+        backup::publish_manifest(&snapshots_path, &manifest, &crate::vfs::RealVfs)?;
     let mut report = SalvageReport {
         format: "tofu-db.salvage.v1",
         verdict: if copy_failed || !lost.is_empty() {

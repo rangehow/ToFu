@@ -38,13 +38,28 @@ fn seed_legacy(path: &Path) {
                 "task_id":task,"title":"","workspace_path":format!("/checkout/{id}"),
                 "managed":true,"state":"running","base_sha":"base","checkpoint_sha":"",
                 "candidate_sha":"","error":"","origin_raw":"{}","created_at":1.0,"updated_at":1.0});
-            let locator = json!({"id":id,"owner_user_id":owner,"project_root":"/repo","task_id":task});
-            database.entity_put(&mut tx,
-                EntityKey::new(7, u64::MAX, INTEGRATION_WORKSPACE_NAMESPACE, &raw).unwrap(),
-                serde_json::to_vec(&workspace).unwrap()).unwrap();
-            database.entity_put(&mut tx,
-                EntityKey::new(7, u64::MAX, INTEGRATION_ROW_LOCATOR_NAMESPACE, &id.to_be_bytes()).unwrap(),
-                serde_json::to_vec(&locator).unwrap()).unwrap();
+            let locator =
+                json!({"id":id,"owner_user_id":owner,"project_root":"/repo","task_id":task});
+            database
+                .entity_put(
+                    &mut tx,
+                    EntityKey::new(7, u64::MAX, INTEGRATION_WORKSPACE_NAMESPACE, &raw).unwrap(),
+                    serde_json::to_vec(&workspace).unwrap(),
+                )
+                .unwrap();
+            database
+                .entity_put(
+                    &mut tx,
+                    EntityKey::new(
+                        7,
+                        u64::MAX,
+                        INTEGRATION_ROW_LOCATOR_NAMESPACE,
+                        &id.to_be_bytes(),
+                    )
+                    .unwrap(),
+                    serde_json::to_vec(&locator).unwrap(),
+                )
+                .unwrap();
         }
         database.commit(tx).unwrap();
     }
@@ -54,21 +69,39 @@ fn seed_legacy(path: &Path) {
 fn offline_cli_reopens_resumes_and_reports_complete_only_after_all_owners() {
     let directory = tempfile::tempdir().unwrap();
     seed_legacy(directory.path());
-    let flags = ["--tenant-id", "7", "--owner-id", "11", "--maximum-rows", "128", "--execute"];
+    let flags = [
+        "--tenant-id",
+        "7",
+        "--owner-id",
+        "11",
+        "--maximum-rows",
+        "128",
+        "--execute",
+    ];
     let first = command(directory.path(), &flags);
-    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
     let receipt = String::from_utf8(first.stdout).unwrap();
     assert!(receipt.contains("format=tofu-db.integration-checkout-backfill.v1"));
     assert!(receipt.contains("processed_rows=128 after_id=128 complete=false committed=true"));
     assert!(receipt.contains("maximum_rows_per_transaction=128"));
     // Each executable invocation closes/reopens the exclusive authority lease.
     let second = command(directory.path(), &flags);
-    assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
-    assert!(String::from_utf8(second.stdout).unwrap()
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(String::from_utf8(second.stdout)
+        .unwrap()
         .contains("processed_rows=1 after_id=129 complete=true committed=true"));
     let repeated = command(directory.path(), &flags);
     assert!(repeated.status.success());
-    assert!(String::from_utf8(repeated.stdout).unwrap()
+    assert!(String::from_utf8(repeated.stdout)
+        .unwrap()
         .contains("processed_rows=0 after_id=129 complete=true committed=false"));
 }
 
@@ -82,10 +115,30 @@ fn offline_cli_requires_execute_positive_scope_and_at_most_128_rows_before_open(
         vec!["--tenant-id", "7", "--owner-id", "0", "--execute"],
         vec!["--tenant-id", "7", "--execute"],
         vec!["--owner-id", "11", "--execute"],
-        vec!["--tenant-id", "7", "--owner-id", "11", "--maximum-rows", "0", "--execute"],
-        vec!["--tenant-id", "7", "--owner-id", "11", "--maximum-rows", "129", "--execute"],
+        vec![
+            "--tenant-id",
+            "7",
+            "--owner-id",
+            "11",
+            "--maximum-rows",
+            "0",
+            "--execute",
+        ],
+        vec![
+            "--tenant-id",
+            "7",
+            "--owner-id",
+            "11",
+            "--maximum-rows",
+            "129",
+            "--execute",
+        ],
     ] {
-        assert_eq!(command(&missing, &flags).status.code(), Some(2), "{flags:?}");
+        assert_eq!(
+            command(&missing, &flags).status.code(),
+            Some(2),
+            "{flags:?}"
+        );
         assert!(!missing.exists());
     }
 }
@@ -98,7 +151,12 @@ fn offline_cli_refuses_an_authority_with_a_live_writer_lease() {
     assert!(!command(directory.path(), &flags).status.success());
     drop(database);
     let result = command(directory.path(), &flags);
-    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
-    assert!(String::from_utf8(result.stdout).unwrap()
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8(result.stdout)
+        .unwrap()
         .contains("processed_rows=0 after_id=0 complete=true committed=true"));
 }

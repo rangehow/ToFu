@@ -13,6 +13,7 @@ _AUDIT_SYNTHETIC_REPO_PATHS = {
     'static/js/ui/tool_rounds.js',
 }
 
+from tests.support.overlay import requires_yourprovider_overlay
 import json
 import unittest
 
@@ -121,6 +122,7 @@ class XuechengLinkTest(unittest.TestCase):
     def setUp(self):
         clear_cache()
 
+    @requires_yourprovider_overlay
     def test_link_synthesized_from_default_base(self):
         # A bare numeric contentId gets a clickable link even before any URL
         # was harvested — synthesized from the default internal KM base (the
@@ -341,6 +343,7 @@ class SettleUpgradeTest(unittest.TestCase):
     def setUp(self):
         clear_cache()
 
+    @requires_yourprovider_overlay
     def test_read_doc_settle_swaps_id_for_title_and_rekeys_link(self):
         cid = '2784112217'
         url = f'https://km.internal.example.com/collabpage/{cid}'

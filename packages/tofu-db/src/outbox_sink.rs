@@ -10,11 +10,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::engine::{Engine, CommittedTransaction};
-use sha2::{Digest, Sha256};
+use crate::engine::{CommittedTransaction, Engine};
 use crate::logical_outbox::{SealedLogicalOutboxRecord, MAX_ENCODED_LOGICAL_OUTBOX_BYTES};
 use crate::outbox_publisher::{DurableLogicalOutboxReceipt, LogicalOutboxSink};
 use crate::vfs::Vfs;
+use sha2::{Digest, Sha256};
 
 const MAGIC: &[u8; 8] = b"TDBSNK01";
 const VERSION: u32 = 1;
@@ -75,9 +75,7 @@ fn validate_configuration(
     owner_user_id: u64,
     _legacy_max_bytes: u64,
 ) -> io::Result<()> {
-    if tenant_id == 0
-        || owner_user_id == 0
-    {
+    if tenant_id == 0 || owner_user_id == 0 {
         return Err(invalid_input("invalid logical outbox sink configuration"));
     }
     Ok(())
@@ -168,36 +166,55 @@ impl SinkEntry {
     }
 }
 
-fn decode_transaction_entry(engine: &Engine, transaction: &CommittedTransaction) -> io::Result<SinkEntry> {
+fn decode_transaction_entry(
+    engine: &Engine,
+    transaction: &CommittedTransaction,
+) -> io::Result<SinkEntry> {
     let inline = &transaction.envelope.inline_payload;
     if inline.starts_with(MAGIC) {
         if !transaction.envelope.block_ids.is_empty() {
-            return Err(invalid_data("inline logical outbox entry unexpectedly references blocks"));
+            return Err(invalid_data(
+                "inline logical outbox entry unexpectedly references blocks",
+            ));
         }
         return SinkEntry::decode(inline);
     }
-    if inline.len() != BLOCK_ENTRY_DESCRIPTOR_BYTES || !inline.starts_with(BLOCK_ENTRY_MAGIC)
-        || transaction.envelope.block_ids.is_empty() {
-        return Err(invalid_data("invalid logical outbox block entry descriptor"));
+    if inline.len() != BLOCK_ENTRY_DESCRIPTOR_BYTES
+        || !inline.starts_with(BLOCK_ENTRY_MAGIC)
+        || transaction.envelope.block_ids.is_empty()
+    {
+        return Err(invalid_data(
+            "invalid logical outbox block entry descriptor",
+        ));
     }
     let expected = usize::try_from(u64::from_le_bytes(inline[8..16].try_into().unwrap()))
         .map_err(|_| invalid_data("logical outbox block entry length is unrepresentable"))?;
     if expected <= crate::transaction::MAX_INLINE_BYTES
-        || expected > HEADER_BYTES + MAX_ENCODED_LOGICAL_OUTBOX_BYTES {
+        || expected > HEADER_BYTES + MAX_ENCODED_LOGICAL_OUTBOX_BYTES
+    {
         return Err(invalid_data("logical outbox block entry length is invalid"));
     }
     let mut bytes = Vec::new();
     for id in &transaction.envelope.block_ids {
         let fragment = engine.read_block(*id)?;
-        if bytes.len().checked_add(fragment.len()).is_none_or(|length| length > expected) {
-            return Err(invalid_data("logical outbox fragments exceed declared length"));
+        if bytes
+            .len()
+            .checked_add(fragment.len())
+            .is_none_or(|length| length > expected)
+        {
+            return Err(invalid_data(
+                "logical outbox fragments exceed declared length",
+            ));
         }
-        bytes.try_reserve(fragment.len()).map_err(|error|
-            io::Error::other(format!("logical outbox record allocation failed: {error}")))?;
+        bytes.try_reserve(fragment.len()).map_err(|error| {
+            io::Error::other(format!("logical outbox record allocation failed: {error}"))
+        })?;
         bytes.extend_from_slice(&fragment);
     }
     if bytes.len() != expected || Sha256::digest(&bytes).as_slice() != &inline[16..48] {
-        return Err(invalid_data("logical outbox block entry length or digest differs"));
+        return Err(invalid_data(
+            "logical outbox block entry length or digest differs",
+        ));
     }
     SinkEntry::decode(&bytes)
 }
@@ -414,8 +431,12 @@ impl LogicalOutboxSink for EngineLogicalOutboxSink {
             descriptor.extend_from_slice(BLOCK_ENTRY_MAGIC);
             descriptor.extend_from_slice(&(entry.len() as u64).to_le_bytes());
             descriptor.extend_from_slice(&Sha256::digest(&entry));
-            let fragments = entry.chunks(crate::block::MAX_BLOCK_BYTES).collect::<Vec<_>>();
-            self.engine.commit_transaction(&descriptor, &fragments)?.sequence
+            let fragments = entry
+                .chunks(crate::block::MAX_BLOCK_BYTES)
+                .collect::<Vec<_>>();
+            self.engine
+                .commit_transaction(&descriptor, &fragments)?
+                .sequence
         };
         if committed_sequence != record.identity.sequence {
             return Err(invalid_data(

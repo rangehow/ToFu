@@ -65,9 +65,15 @@ fn visible_origin_keeps_sanitized_channel_and_forwarded_provenance() {
                     "title": "Team", "extra": 1},
         "forwardedFrom": {"conversationId": "router", "turnId": "t1", "bogus": 2}}});
     let origin = normalize_visible_origin(message.as_object().unwrap()).unwrap();
-    assert_eq!(origin["channel"], json!({"channel": "dx", "thread": "dx:gid:5",
-        "eventIds": ["dx:gid:5/1", "7"], "title": "Team"}));
-    assert_eq!(origin["forwardedFrom"], json!({"conversationId": "router", "turnId": "t1"}));
+    assert_eq!(
+        origin["channel"],
+        json!({"channel": "dx", "thread": "dx:gid:5",
+        "eventIds": ["dx:gid:5/1", "7"], "title": "Team"})
+    );
+    assert_eq!(
+        origin["forwardedFrom"],
+        json!({"conversationId": "router", "turnId": "t1"})
+    );
     let incomplete = json!({"role": "user", "content": "x", "origin": {
         "initiator": "human", "channel": {"channel": "dx"},
         "forwardedFrom": {"conversationId": "router", "turnId": ""}}});
@@ -85,11 +91,20 @@ fn completion_only_tool_phase_preserves_context_notes_on_exact_replay() {
         "modifiedFileList":[{"path":"answer.txt"}],"modifiedFiles":1});
     let message = message.as_object().unwrap();
     let (actor, _, first) = visible_shape(message, "flow_node", &Map::new(), false);
-    let first = crate::turn_projection_segments::stabilize_for_patch(&first, &actor, "completed").unwrap();
-    assert_eq!(first["segments"].as_array().unwrap().iter()
-        .filter(|block| block["type"] == "system_note").count(), 1);
+    let first =
+        crate::turn_projection_segments::stabilize_for_patch(&first, &actor, "completed").unwrap();
+    assert_eq!(
+        first["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|block| block["type"] == "system_note")
+            .count(),
+        1
+    );
     let (_, _, replay) = visible_shape(message, "flow_node", &first, true);
-    let replay = crate::turn_projection_segments::stabilize_for_patch(&replay, &actor, "completed").unwrap();
+    let replay =
+        crate::turn_projection_segments::stabilize_for_patch(&replay, &actor, "completed").unwrap();
     assert_eq!(replay, first);
     assert_eq!(first["fileChanges"]["files"], message["modifiedFileList"]);
 }
@@ -1048,18 +1063,27 @@ fn visible_tool_metadata_is_typed_and_retained_after_public_sync_and_replay() {
     let directory = tempfile::tempdir().unwrap();
     let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
     let flow = Flow::seed(&mut database);
-    let request = flow.sync(true, 1, json!([{
-        "role":"assistant", "content":"working", "toolRounds":[
-            {"toolCallId":"early", "toolName":"run_command", "roundNum":0,
-             "toolModelContent":"model evidence"},
-            {"toolCallId":"finished", "toolName":"read_files", "roundNum":7,
-             "toolContent":"display evidence", "status":"done"}
-        ]
-    }]), "typed-tool-metadata");
+    let request = flow.sync(
+        true,
+        1,
+        json!([{
+            "role":"assistant", "content":"working", "toolRounds":[
+                {"toolCallId":"early", "toolName":"run_command", "roundNum":0,
+                 "toolModelContent":"model evidence"},
+                {"toolCallId":"finished", "toolName":"read_files", "roundNum":7,
+                 "toolContent":"display evidence", "status":"done"}
+            ]
+        }]),
+        "typed-tool-metadata",
+    );
     execute(&mut database, &request).unwrap();
     let child = flow.turn(&mut database, 1);
-    let tools: Vec<_> = child["projection"]["segments"].as_array().unwrap().iter()
-        .filter(|segment| segment["type"] == "tool_use").collect();
+    let tools: Vec<_> = child["projection"]["segments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|segment| segment["type"] == "tool_use")
+        .collect();
     assert_eq!(tools.len(), 2);
     assert_eq!(tools[0]["roundNum"], 0);
     assert!(tools[0]["result"].get("status").is_none());
@@ -1100,29 +1124,41 @@ fn visible_goal_vu_machine_tokens_are_normalized_before_sealing() {
         });
         execute(
             &mut database,
-            &flow.sync(true, 1, json!([{
-                "role":"user", "_isVirtualUser":true, "content":raw_content,
-                "thinking":reasoning["text"], "toolRounds":[round],
-                "segments":[history, reasoning, tool, {
-                    "type":"text", "blockId":"text:terminal", "text":raw_content,
-                    "deliverable":true, "terminal":true
-                }]
-            }]), "vu-machine-live"),
-        ).unwrap();
-        execute(
-            &mut database,
-            &command("turn.event.record", 11, json!({
-                "attempt_id":flow.child_attempt(1), "flow_root_attempt_id":flow.attempt,
-                "task_id":"phase-task", "user_id":11, "terminal":false, "now":2_000,
-                "projection":{
-                    "content":raw_content, "thinking":reasoning["text"],
-                    "toolRounds":[round], "segments":[history, reasoning, tool, {
+            &flow.sync(
+                true,
+                1,
+                json!([{
+                    "role":"user", "_isVirtualUser":true, "content":raw_content,
+                    "thinking":reasoning["text"], "toolRounds":[round],
+                    "segments":[history, reasoning, tool, {
                         "type":"text", "blockId":"text:terminal", "text":raw_content,
                         "deliverable":true, "terminal":true
                     }]
-                }
-            }), Some("vu-machine-checkpoint")),
-        ).unwrap();
+                }]),
+                "vu-machine-live",
+            ),
+        )
+        .unwrap();
+        execute(
+            &mut database,
+            &command(
+                "turn.event.record",
+                11,
+                json!({
+                    "attempt_id":flow.child_attempt(1), "flow_root_attempt_id":flow.attempt,
+                    "task_id":"phase-task", "user_id":11, "terminal":false, "now":2_000,
+                    "projection":{
+                        "content":raw_content, "thinking":reasoning["text"],
+                        "toolRounds":[round], "segments":[history, reasoning, tool, {
+                            "type":"text", "blockId":"text:terminal", "text":raw_content,
+                            "deliverable":true, "terminal":true
+                        }]
+                    }
+                }),
+                Some("vu-machine-checkpoint"),
+            ),
+        )
+        .unwrap();
         let message = json!({
             "role":"user", "_isVirtualUser":true,
             "content":final_content, "finishReason":"stop"
@@ -1130,7 +1166,8 @@ fn visible_goal_vu_machine_tokens_are_normalized_before_sealing() {
         execute(
             &mut database,
             &flow.sync(false, 1, json!([message]), "vu-machine-settle"),
-        ).unwrap();
+        )
+        .unwrap();
         let child = flow.turn(&mut database, 1);
         assert_eq!(child["actor"], "virtual_user");
         assert_eq!(child["projection"]["content"], final_content);
@@ -1138,24 +1175,46 @@ fn visible_goal_vu_machine_tokens_are_normalized_before_sealing() {
         assert_eq!(child["projection"]["toolRounds"], json!([round]));
         let segments = child["projection"]["segments"].as_array().unwrap();
         for recorded in [&history, &reasoning, &tool] {
-            assert_eq!(segments.iter().find(|block| block["blockId"] == recorded["blockId"]), Some(recorded));
+            assert_eq!(
+                segments
+                    .iter()
+                    .find(|block| block["blockId"] == recorded["blockId"]),
+                Some(recorded)
+            );
         }
-        let terminals: Vec<_> = segments.iter().filter(|block| {
-            block["type"] == "text" && block["terminal"] == true
-        }).collect();
+        let terminals: Vec<_> = segments
+            .iter()
+            .filter(|block| block["type"] == "text" && block["terminal"] == true)
+            .collect();
         assert_eq!(terminals.len(), 1);
         assert_eq!(terminals[0]["text"], final_content);
-        assert!(segments.iter().filter(|block| block["type"] == "text").all(|block| {
-            !block["text"].as_str().unwrap().contains("[PROGRESS:")
-        }));
+        assert!(segments
+            .iter()
+            .filter(|block| block["type"] == "text")
+            .all(|block| { !block["text"].as_str().unwrap().contains("[PROGRESS:") }));
         if final_content == "Verified answer" {
-            assert_eq!(segments.iter().filter(|block| block["type"] == "text").count(), 2,
-                "no completion mirror, equal history retained: {segments:?}");
+            assert_eq!(
+                segments
+                    .iter()
+                    .filter(|block| block["type"] == "text")
+                    .count(),
+                2,
+                "no completion mirror, equal history retained: {segments:?}"
+            );
             assert_eq!(terminals[0]["blockId"], "text:terminal");
         } else {
-            assert_eq!(segments.iter().filter(|block| block["type"] == "text").count(), 3,
-                "changed answer must append without discarding history: {segments:?}");
-            let original = segments.iter().find(|block| block["blockId"] == "text:terminal").unwrap();
+            assert_eq!(
+                segments
+                    .iter()
+                    .filter(|block| block["type"] == "text")
+                    .count(),
+                3,
+                "changed answer must append without discarding history: {segments:?}"
+            );
+            let original = segments
+                .iter()
+                .find(|block| block["blockId"] == "text:terminal")
+                .unwrap();
             assert_eq!(original["text"], "Verified answer");
             assert_eq!(original["deliverable"], false);
             assert!(original.get("terminal").is_none());
@@ -1164,26 +1223,39 @@ fn visible_goal_vu_machine_tokens_are_normalized_before_sealing() {
         execute(
             &mut database,
             &flow.sync(false, 1, json!([message]), "vu-machine-replay"),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(flow.snapshot(&mut database), before);
     }
 }
 
-
 #[test]
 fn native_machine_token_sanitizer_preserves_python_semantics() {
     for (source, expected) in [
-        ("  unchanged outer spaces \n\n\n ", "  unchanged outer spaces \n\n\n "),
+        (
+            "  unchanged outer spaces \n\n\n ",
+            "  unchanged outer spaces \n\n\n ",
+        ),
         ("A [progress: resolved=2 remaining=3] B", "A  B"),
         ("[PROGRESS: resolved=٢ remaining=٣]", ""),
         ("[PROGRESS:\u{0085}resolved=1\u{001c}remaining=2]", ""),
         ("[verdıct: contİnue]", ""),
-        ("\u{001c} before [VU: TASK_DONE] after \u{001f}", "before  after"),
+        (
+            "\u{001c} before [VU: TASK_DONE] after \u{001f}",
+            "before  after",
+        ),
         ("\u{feff} [VU: TASK_DONE] \u{feff}", "\u{feff}  \u{feff}"),
         ("  [vu: task_done]  ", "  [vu: task_done]  "),
-        ("[PROGRESS: resolved=1remaining=2]", "[PROGRESS: resolved=1remaining=2]"),
+        (
+            "[PROGRESS: resolved=1remaining=2]",
+            "[PROGRESS: resolved=1remaining=2]",
+        ),
     ] {
-        assert_eq!(super::strip_agent_machine_tokens(source), expected, "{source:?}");
+        assert_eq!(
+            super::strip_agent_machine_tokens(source),
+            expected,
+            "{source:?}"
+        );
         assert_eq!(super::strip_agent_machine_tokens(expected), expected);
     }
 }
@@ -1191,11 +1263,18 @@ fn native_machine_token_sanitizer_preserves_python_semantics() {
 #[test]
 fn first_visible_phase_recovery_index_survives_crash_and_torn_admission() {
     fn seed(vfs: Arc<DeterministicVfs>) -> (AuthorityDatabase, Flow, Request) {
-        let mut database = AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone()).unwrap();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), vfs.clone())
+                .unwrap();
         let flow = Flow::seed(&mut database);
-        let request = flow.sync(true, 0, json!([{"role":"assistant", "content":"",
+        let request = flow.sync(
+            true,
+            0,
+            json!([{"role":"assistant", "content":"",
             "_flowLivePhase":true, "_flowIteration":1,
-            "orchestration":{"goalRunId":"goal-first-worker"}}]), "first-phase");
+            "orchestration":{"goalRunId":"goal-first-worker"}}]),
+            "first-phase",
+        );
         vfs.arm_fault(None).unwrap();
         (database, flow, request)
     }
@@ -1209,11 +1288,17 @@ fn first_visible_phase_recovery_index_survives_crash_and_torn_admission() {
     assert_eq!(expected["orchestration"]["goalRunId"], "goal-first-worker");
     let mut faults = vec![None]; // Also reopen the fully acknowledged write.
     for (index, operation) in trace.iter().enumerate() {
-        let occurrence = trace[..=index].iter().filter(|item| *item == operation).count();
-        faults.push(Some((operation.clone(), occurrence,
-            FaultAction::ErrorBefore(io::ErrorKind::Interrupted))));
+        let occurrence = trace[..=index]
+            .iter()
+            .filter(|item| *item == operation)
+            .count();
+        faults.push(Some((
+            *operation,
+            occurrence,
+            FaultAction::ErrorBefore(io::ErrorKind::Interrupted),
+        )));
         if operation == &Operation::Write {
-            faults.push(Some((operation.clone(), occurrence, FaultAction::ShortWrite(7))));
+            faults.push(Some((*operation, occurrence, FaultAction::ShortWrite(7))));
         }
     }
     assert!(faults.len() > 1);
@@ -1224,27 +1309,52 @@ fn first_visible_phase_recovery_index_survives_crash_and_torn_admission() {
         let (mut database, flow, request) = seed(vfs.clone());
         let before = flow.turn(&mut database, 0)["projection"].clone();
         if let Some((operation, occurrence, action)) = fault {
-            vfs.arm_operation_fault(operation, occurrence, action).unwrap();
+            vfs.arm_operation_fault(operation, occurrence, action)
+                .unwrap();
         } else {
             vfs.arm_fault(None).unwrap();
         }
         let _ = execute(&mut database, &request);
-        if armed { assert!(vfs.operation_fault_fired().unwrap(), "armed admission fault did not fire"); }
+        if armed {
+            assert!(
+                vfs.operation_fault_fired().unwrap(),
+                "armed admission fault did not fire"
+            );
+        }
         drop(database);
         vfs.crash().unwrap();
         vfs.arm_fault(None).unwrap();
-        let mut reopened = AuthorityDatabase::open_with_vfs(std::path::Path::new("/data"), vfs).unwrap();
-        reopened.configure_logical_outbox(&[72; 32], 4 * 1024 * 1024, 128 * 1024).unwrap();
+        let mut reopened =
+            AuthorityDatabase::open_with_vfs(std::path::Path::new("/data"), vfs).unwrap();
+        reopened
+            .configure_logical_outbox(&[72; 32], 4 * 1024 * 1024, 128 * 1024)
+            .unwrap();
         let current = flow.turn(&mut reopened, 0)["projection"].clone();
-        assert!(current == before || current == expected, "partially committed phase");
-        let recovery = command("turn.recover", 11, json!({"user_id":11}), Some("recover-first-phase"));
+        assert!(
+            current == before || current == expected,
+            "partially committed phase"
+        );
+        let recovery = command(
+            "turn.recover",
+            11,
+            json!({"user_id":11}),
+            Some("recover-first-phase"),
+        );
         assert_eq!(execute(&mut reopened, &recovery).unwrap()["recovered"], 1);
         let turn = flow.turn(&mut reopened, 0);
         assert_eq!(turn["status"], "interrupted");
         assert_eq!(turn["settlement"]["cause"], "server_restart");
-        assert_eq!(turn["projection"]["orchestration"], current["orchestration"]);
+        assert_eq!(
+            turn["projection"]["orchestration"],
+            current["orchestration"]
+        );
         assert_eq!(execute(&mut reopened, &recovery).unwrap()["recovered"], 0);
-        let again = command("turn.recover", 11, json!({"user_id":11}), Some("recover-empty"));
+        let again = command(
+            "turn.recover",
+            11,
+            json!({"user_id":11}),
+            Some("recover-empty"),
+        );
         assert_eq!(execute(&mut reopened, &again).unwrap()["recovered"], 0);
     }
 }

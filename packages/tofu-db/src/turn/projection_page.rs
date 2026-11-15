@@ -95,15 +95,28 @@ impl Planner {
         body.insert("start".to_owned(), Value::from(start));
         body.insert(
             if text { "text" } else { "items" }.to_owned(),
-            if text { Value::String(String::new()) } else { Value::Array(Vec::new()) },
+            if text {
+                Value::String(String::new())
+            } else {
+                Value::Array(Vec::new())
+            },
         );
         let mut slice = Map::new();
         slice.insert(name.to_owned(), Value::Object(body));
         Ok(encoded_bytes(&slice)? - 2 + usize::from(!self.slices.is_empty()))
     }
 
-    fn add_item(&mut self, member: usize, name: &str, index: usize, item_bytes: usize) -> io::Result<()> {
-        let open = self.slices.last().is_some_and(|slice| slice.member == member);
+    fn add_item(
+        &mut self,
+        member: usize,
+        name: &str,
+        index: usize,
+        item_bytes: usize,
+    ) -> io::Result<()> {
+        let open = self
+            .slices
+            .last()
+            .is_some_and(|slice| slice.member == member);
         let mut cost = if open {
             item_bytes + 1
         } else {
@@ -115,7 +128,11 @@ impl Planner {
         }
         match self.slices.last_mut() {
             Some(slice) if slice.member == member => slice.end = index + 1,
-            _ => self.slices.push(Slice { member, start: index, end: index + 1 }),
+            _ => self.slices.push(Slice {
+                member,
+                start: index,
+                end: index + 1,
+            }),
         }
         self.used = self.used.saturating_add(cost);
         self.units += 1;
@@ -218,11 +235,18 @@ fn plan_within(
     #[cfg(test)]
     PLANS.with(|plans| plans.set(plans.get() + 1));
     // Page numbers never exceed the unit count, so this bounds their digits.
-    let page_bound = members.iter().map(|(_, member)| member.length()).sum::<usize>() + 1;
+    let page_bound = members
+        .iter()
+        .map(|(_, member)| member.length())
+        .sum::<usize>()
+        + 1;
     let later = encoded_bytes(&envelope(revision, page_bound, page_bound))?;
     // Page 0 adds `,"turn":<head>` and `,"pagedMembers":<lengths>`.
-    let first = later + ",\"turn\":".len() + encoded_bytes(head)?
-        + ",\"pagedMembers\":".len() + encoded_bytes(lengths)?;
+    let first = later
+        + ",\"turn\":".len()
+        + encoded_bytes(head)?
+        + ",\"pagedMembers\":".len()
+        + encoded_bytes(lengths)?;
     let mut planner = Planner {
         limit,
         page_bytes: later,
@@ -245,7 +269,10 @@ fn plan_within(
 }
 
 fn text_slice(text: &str, start: usize, end: usize) -> &str {
-    let mut offsets = text.char_indices().map(|(offset, _)| offset).chain(std::iter::once(text.len()));
+    let mut offsets = text
+        .char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()));
     let first = offsets.nth(start).unwrap_or(text.len());
     let last = offsets.nth(end - start - 1).unwrap_or(text.len());
     &text[first..last]
@@ -326,13 +353,20 @@ pub(crate) fn fits_one_page(turn: &Value, encoded_bytes_of_turn: usize) -> io::R
     fits_one_page_within(turn, encoded_bytes_of_turn, MAX_PAYLOAD_BYTES)
 }
 
-fn fits_one_page_within(turn: &Value, encoded_bytes_of_turn: usize, limit: usize) -> io::Result<bool> {
+fn fits_one_page_within(
+    turn: &Value,
+    encoded_bytes_of_turn: usize,
+    limit: usize,
+) -> io::Result<bool> {
     let revision = turn
         .get("projectionRevision")
         .and_then(Value::as_u64)
         .ok_or_else(|| invalid_data("turn projection revision is malformed"))?;
     let empty = Map::new();
-    let projection = turn.get("projection").and_then(Value::as_object).unwrap_or(&empty);
+    let projection = turn
+        .get("projection")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
     // The members `split_head` moves, in member order, with their unit counts.
     let mut members: Vec<(&'static str, usize, bool)> = Vec::new();
     for name in SEQUENCE_MEMBERS {
@@ -373,7 +407,11 @@ fn fits_one_page_within(turn: &Value, encoded_bytes_of_turn: usize, limit: usize
             body.insert("start".to_owned(), Value::from(0));
             body.insert(
                 if text { "text" } else { "items" }.to_owned(),
-                if text { Value::String(String::new()) } else { Value::Array(Vec::new()) },
+                if text {
+                    Value::String(String::new())
+                } else {
+                    Value::Array(Vec::new())
+                },
             );
             let mut slice = Map::new();
             slice.insert(name.to_owned(), Value::Object(body));
@@ -442,20 +480,30 @@ mod tests {
             state ^= state << 17;
             state % bound
         };
-        let alphabet = ["a", "\"", "\\", "\n", "\u{01}", "é", "🚀", "\u{2028}", " ", "z"];
+        let alphabet = [
+            "a", "\"", "\\", "\n", "\u{01}", "é", "🚀", "\u{2028}", " ", "z",
+        ];
         for case in 0..400 {
             let text = |next: &mut dyn FnMut(u64) -> u64, units: u64| -> String {
-                (0..next(units)).map(|_| alphabet[next(alphabet.len() as u64) as usize]).collect()
+                (0..next(units))
+                    .map(|_| alphabet[next(alphabet.len() as u64) as usize])
+                    .collect()
             };
             let mut projection = Map::new();
             for name in SEQUENCE_MEMBERS {
                 match next(4) {
                     0 => {}
-                    1 => { projection.insert(name.to_owned(), json!([])); }
-                    2 => { projection.insert(name.to_owned(), Value::Null); }
+                    1 => {
+                        projection.insert(name.to_owned(), json!([]));
+                    }
+                    2 => {
+                        projection.insert(name.to_owned(), Value::Null);
+                    }
                     _ => {
                         let items: Vec<Value> = (0..1 + next(5))
-                            .map(|round| json!({"round": round, "toolContent": text(&mut next, 60)}))
+                            .map(
+                                |round| json!({"round": round, "toolContent": text(&mut next, 60)}),
+                            )
                             .collect();
                         projection.insert(name.to_owned(), Value::Array(items));
                     }
@@ -464,14 +512,19 @@ mod tests {
             for name in TEXT_MEMBERS {
                 match next(3) {
                     0 => {}
-                    1 => { projection.insert(name.to_owned(), json!("")); }
-                    _ => { projection.insert(name.to_owned(), Value::String(text(&mut next, 200))); }
+                    1 => {
+                        projection.insert(name.to_owned(), json!(""));
+                    }
+                    _ => {
+                        projection.insert(name.to_owned(), Value::String(text(&mut next, 200)));
+                    }
                 }
             }
             if next(2) == 0 {
                 projection.insert("status".to_owned(), json!("running"));
             }
-            let mut turn = json!({"turnId": format!("t{case}"), "projectionRevision": next(1 << 40)});
+            let mut turn =
+                json!({"turnId": format!("t{case}"), "projectionRevision": next(1 << 40)});
             if next(8) != 0 {
                 turn["projection"] = Value::Object(projection);
             }
@@ -483,17 +536,34 @@ mod tests {
                 .map(|(name, member)| ((*name).to_owned(), Value::from(member.length())))
                 .collect();
             let revision = turn["projectionRevision"].as_u64().unwrap();
-            let pages = |limit| plan_within(revision, &head, &lengths, &members, limit).unwrap().len();
+            let pages = |limit| {
+                plan_within(revision, &head, &lengths, &members, limit)
+                    .unwrap()
+                    .len()
+            };
             // The smallest payload that keeps every member on page 0.
             let (mut low, mut high) = (0, encoded + 4096);
             assert_eq!(pages(high), 1, "case {case}");
             while low < high {
                 let middle = (low + high) / 2;
-                if pages(middle) == 1 { high = middle; } else { low = middle + 1; }
+                if pages(middle) == 1 {
+                    high = middle;
+                } else {
+                    low = middle + 1;
+                }
             }
-            for limit in [low.saturating_sub(2), low.saturating_sub(1), low, low + 1, encoded + 4096] {
-                assert_eq!(fits_one_page_within(&turn, encoded, limit).unwrap(), pages(limit) == 1,
-                    "case {case} limit {limit} boundary {low}: {turn}");
+            for limit in [
+                low.saturating_sub(2),
+                low.saturating_sub(1),
+                low,
+                low + 1,
+                encoded + 4096,
+            ] {
+                assert_eq!(
+                    fits_one_page_within(&turn, encoded, limit).unwrap(),
+                    pages(limit) == 1,
+                    "case {case} limit {limit} boundary {low}: {turn}"
+                );
             }
         }
     }
@@ -528,7 +598,10 @@ mod tests {
             }
         }
         assert_eq!(covered["toolRounds"], 20);
-        assert_eq!(covered["content"], lengths["content"].as_u64().unwrap() as usize);
+        assert_eq!(
+            covered["content"],
+            lengths["content"].as_u64().unwrap() as usize
+        );
         assert_eq!(turn["projection"], json!({"status": "done"}));
     }
 }

@@ -135,7 +135,11 @@ fn a_turn_above_one_projection_page_travels_as_its_page_zero_head() {
     let mut db = AuthorityDatabase::initialize(directory.path()).unwrap();
     append(&mut db, 0);
     let round = json!({"toolName": "read", "toolContent": "x".repeat(1 << 20)});
-    append_projection(&mut db, 1, json!({"content": "paged", "toolRounds": vec![round; 9]}));
+    append_projection(
+        &mut db,
+        1,
+        json!({"content": "paged", "toolRounds": vec![round; 9]}),
+    );
     append(&mut db, 2);
     let read = context(&db, 2, false);
     let mut tx = db.begin(7, 11).unwrap();
@@ -148,7 +152,10 @@ fn a_turn_above_one_projection_page_travels_as_its_page_zero_head() {
         read["turns"],
         json!([turn(&db, 0), {"pagedTurn": first["turn"]}, turn(&db, 2)])
     );
-    assert_eq!((read["nextTurnId"].clone(), read["proofEligible"].clone()), (Value::Null, json!(true)));
+    assert_eq!(
+        (read["nextTurnId"].clone(), read["proofEligible"].clone()),
+        (Value::Null, json!(true))
+    );
     let small = turn(&db, 0);
     assert_eq!(
         super::super::projection_page::paged_head(small.clone()).unwrap(),
@@ -158,8 +165,11 @@ fn a_turn_above_one_projection_page_travels_as_its_page_zero_head() {
 #[test]
 fn a_paged_row_names_its_turn_as_the_cursor_and_keeps_the_media_fence() {
     let mut page = Page::new(CONVERSATION, "target", None, None, None);
-    page.turns.push(Row::paged(json!({"turnId": "paged",
-        "projection": {"attachments": [{"id": "media"}]}})).unwrap());
+    page.turns.push(
+        Row::paged(json!({"turnId": "paged",
+        "projection": {"attachments": [{"id": "media"}]}}))
+        .unwrap(),
+    );
     page.full = true;
     let response: Value = serde_json::from_slice(
         &page
@@ -178,28 +188,53 @@ fn a_paged_row_names_its_turn_as_the_cursor_and_keeps_the_media_fence() {
 fn a_context_read_encodes_each_single_page_turn_once() {
     let directory = tempfile::tempdir().unwrap();
     let mut db = AuthorityDatabase::initialize(directory.path()).unwrap();
-    let round = |index: usize| json!({"toolName": "read", "status": "done",
-        "toolContent": format!("r{index} 汉字 \"quoted\" \\ \n\t\u{1} ").repeat(4_000)});
+    let round = |index: usize| {
+        json!({"toolName": "read", "status": "done",
+        "toolContent": format!("r{index} 汉字 \"quoted\" \\ \n\t\u{1} ").repeat(4_000)})
+    };
     for index in 0..4 {
-        append_projection(&mut db, index, json!({"content": format!("answer {index}\n"),
+        append_projection(
+            &mut db,
+            index,
+            json!({"content": format!("answer {index}\n"),
             "toolRounds": (0..=index).map(round).collect::<Vec<_>>(),
-            "segments": [{"type": "text", "text": "s"}], "apiRounds": []}));
+            "segments": [{"type": "text", "text": "s"}], "apiRounds": []}),
+        );
     }
     for replay in [false, true] {
         let mut tx = db.begin(7, 11).unwrap();
         crate::response_json::NORMALIZATIONS.with(|count| count.set(0));
         super::super::projection_page::PLANS.with(|count| count.set(0));
-        let response = read(&db, &mut tx, CONVERSATION, "turn-3", replay, None).unwrap().unwrap();
+        let response = read(&db, &mut tx, CONVERSATION, "turn-3", replay, None)
+            .unwrap()
+            .unwrap();
         let normalizations = crate::response_json::NORMALIZATIONS.with(|count| count.get());
         let plans = super::super::projection_page::PLANS.with(|count| count.get());
-        assert_eq!((normalizations, plans), (0, 0), "replay {replay}: Turns were counted or planned again");
+        assert_eq!(
+            (normalizations, plans),
+            (0, 0),
+            "replay {replay}: Turns were counted or planned again"
+        );
         assert!(response.json_proven(), "replay {replay}");
         let bytes = response.into_bytes();
         let value: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(serde_json::to_vec(&value).unwrap(), bytes, "replay {replay}: not the encoder's output");
-        assert_eq!(value["turns"], json!([turn(&db, 0), turn(&db, 1), turn(&db, 2), turn(&db, 3)]));
-        assert_eq!((value["covered"].clone(), value["nextTurnId"].clone(), value["proofEligible"].clone()),
-            (json!(0), Value::Null, json!(true)));
+        assert_eq!(
+            serde_json::to_vec(&value).unwrap(),
+            bytes,
+            "replay {replay}: not the encoder's output"
+        );
+        assert_eq!(
+            value["turns"],
+            json!([turn(&db, 0), turn(&db, 1), turn(&db, 2), turn(&db, 3)])
+        );
+        assert_eq!(
+            (
+                value["covered"].clone(),
+                value["nextTurnId"].clone(),
+                value["proofEligible"].clone()
+            ),
+            (json!(0), Value::Null, json!(true))
+        );
     }
 }
 #[test]
@@ -569,11 +604,13 @@ fn writer_without_invalidation_cannot_reuse_an_earlier_epoch_certificate() {
 fn long_lane(history: usize) -> (tempfile::TempDir, AuthorityDatabase) {
     let directory = tempfile::tempdir().unwrap();
     let mut db = AuthorityDatabase::initialize(directory.path()).unwrap();
-    db.set_wal_durability(crate::wal::WalDurability::Normal).unwrap();
+    db.set_wal_durability(crate::wal::WalDurability::Normal)
+        .unwrap();
     for index in 0..history {
         append(&mut db, index);
     }
-    db.set_wal_durability(crate::wal::WalDurability::Strict).unwrap();
+    db.set_wal_durability(crate::wal::WalDurability::Strict)
+        .unwrap();
     (directory, db)
 }
 
@@ -582,13 +619,21 @@ fn lanes_beyond_ten_thousand_turns_keep_certified_and_cold_continuations() {
     // The removed ceiling refused every proof past 10,000 headers.
     const HISTORY: usize = 10_050;
     let (directory, mut db) = long_lane(HISTORY);
-    assert_eq!(save(&mut db, HISTORY - 1), HISTORY, "first certification walks the lane once");
+    assert_eq!(
+        save(&mut db, HISTORY - 1),
+        HISTORY,
+        "first certification walks the lane once"
+    );
     assert_eq!(certificate(&db).unwrap().count, (HISTORY - 1) as u64);
     append(&mut db, HISTORY);
     append(&mut db, HISTORY + 1);
     SCANNED_HEADERS.with(|n| n.set(0));
     let warm = context(&db, HISTORY + 1, true);
-    assert_eq!(SCANNED_HEADERS.with(|n| n.get()), 3, "certified reads walk terminal and suffix");
+    assert_eq!(
+        SCANNED_HEADERS.with(|n| n.get()),
+        3,
+        "certified reads walk terminal and suffix"
+    );
     assert_eq!(warm["covered"], HISTORY);
     assert_eq!(warm["continuationStatus"], "available");
     let cold = context(&db, HISTORY + 1, false);
@@ -598,28 +643,49 @@ fn lanes_beyond_ten_thousand_turns_keep_certified_and_cold_continuations() {
     let all = cold["turns"].as_array().unwrap();
     assert_eq!(all.len(), HISTORY + 2);
     assert_eq!(warm["turns"], Value::Array(all[HISTORY..].to_vec()));
-    assert_eq!(save(&mut db, HISTORY + 1), 3, "advancing past 10,000 resumes certified state");
+    assert_eq!(
+        save(&mut db, HISTORY + 1),
+        3,
+        "advancing past 10,000 resumes certified state"
+    );
     assert_eq!(certificate(&db).unwrap().count, (HISTORY + 1) as u64);
 
     drop(db);
     let mut db = AuthorityDatabase::open(directory.path()).unwrap();
     assert!(stored_certificate(&db).is_some());
-    assert!(certificate(&db).is_none(), "a new epoch never trusts the old certificate");
+    assert!(
+        certificate(&db).is_none(),
+        "a new epoch never trusts the old certificate"
+    );
     append(&mut db, HISTORY + 2);
     SCANNED_HEADERS.with(|n| n.set(0));
     let reopened = context(&db, HISTORY + 2, true);
-    assert_eq!(SCANNED_HEADERS.with(|n| n.get()), HISTORY + 3, "one streamed walk");
+    assert_eq!(
+        SCANNED_HEADERS.with(|n| n.get()),
+        HISTORY + 3,
+        "one streamed walk"
+    );
     assert_eq!(reopened["covered"], HISTORY + 2);
     assert_eq!(reopened["continuationStatus"], "available");
     assert_eq!(reopened["turns"].as_array().unwrap().len(), 1);
-    assert_eq!(reopened["historyProof"], context(&db, HISTORY + 2, false)["historyProof"]);
-    assert_eq!(save(&mut db, HISTORY + 2), HISTORY + 3, "an epoch's first save reauthenticates");
+    assert_eq!(
+        reopened["historyProof"],
+        context(&db, HISTORY + 2, false)["historyProof"]
+    );
+    assert_eq!(
+        save(&mut db, HISTORY + 2),
+        HISTORY + 3,
+        "an epoch's first save reauthenticates"
+    );
     append(&mut db, HISTORY + 3);
 
     let mut tx = db.begin(7, 11).unwrap();
     edit(&db, &mut tx, 3, json!({"content":"edited long ago"}));
     db.commit(tx).unwrap();
-    assert!(certificate(&db).is_none(), "an edit far below the anchor clears the certificate");
+    assert!(
+        certificate(&db).is_none(),
+        "an edit far below the anchor clears the certificate"
+    );
     SCANNED_HEADERS.with(|n| n.set(0));
     let changed = context(&db, HISTORY + 3, true);
     assert_eq!(SCANNED_HEADERS.with(|n| n.get()), 2 * (HISTORY + 4));
@@ -627,8 +693,14 @@ fn lanes_beyond_ten_thousand_turns_keep_certified_and_cold_continuations() {
     assert_eq!(changed["continuationStatus"], "history_changed");
     assert_eq!(changed["continuation"], Value::Null);
     assert_eq!(changed["turns"].as_array().unwrap().len(), HISTORY + 4);
-    assert_eq!(changed["turns"][3]["projection"]["content"], "edited long ago");
-    assert_eq!(changed["historyProof"], context(&db, HISTORY + 3, false)["historyProof"]);
+    assert_eq!(
+        changed["turns"][3]["projection"]["content"],
+        "edited long ago"
+    );
+    assert_eq!(
+        changed["historyProof"],
+        context(&db, HISTORY + 3, false)["historyProof"]
+    );
 }
 
 fn page_after(
@@ -638,8 +710,15 @@ fn page_after(
     after: &str,
 ) -> io::Result<Value> {
     let mut tx = db.begin(7, 11).unwrap();
-    read(db, &mut tx, CONVERSATION, &format!("turn-{index}"), replay, Some(after))
-        .map(|bytes| serde_json::from_slice(&bytes.unwrap().into_bytes()).unwrap())
+    read(
+        db,
+        &mut tx,
+        CONVERSATION,
+        &format!("turn-{index}"),
+        replay,
+        Some(after),
+    )
+    .map(|bytes| serde_json::from_slice(&bytes.unwrap().into_bytes()).unwrap())
 }
 
 fn turn_ids(page: &Value) -> Vec<String> {
@@ -658,7 +737,10 @@ fn names(range: std::ops::Range<usize>) -> Vec<String> {
 fn assert_outside(result: io::Result<Value>) {
     let error = result.unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    assert_eq!(error.to_string(), "context page cursor is outside the selected suffix");
+    assert_eq!(
+        error.to_string(),
+        "context page cursor is outside the selected suffix"
+    );
 }
 
 #[test]
@@ -672,11 +754,17 @@ fn cursors_select_after_themselves_on_certified_cold_and_stale_anchor_paths() {
         let page = page_after(&db, 9, replay, "turn-7").unwrap();
         assert_eq!(page["covered"], if replay { 6 } else { 0 });
         assert_eq!(turn_ids(&page), names(8..10));
-        assert_eq!(page["historyProof"], context(&db, 9, replay)["historyProof"]);
+        assert_eq!(
+            page["historyProof"],
+            context(&db, 9, replay)["historyProof"]
+        );
         assert_outside(page_after(&db, 9, replay, "turn-9"));
         assert_outside(page_after(&db, 9, replay, "unknown"));
     }
-    assert_eq!(turn_ids(&page_after(&db, 9, false, "turn-2").unwrap()), names(3..10));
+    assert_eq!(
+        turn_ids(&page_after(&db, 9, false, "turn-2").unwrap()),
+        names(3..10)
+    );
     assert_outside(page_after(&db, 9, true, "turn-5"));
     assert_outside(page_after(&db, 9, true, "turn-2"));
 

@@ -5,6 +5,7 @@ import json
 import pytest
 
 from lib.project_dispatch.contract import schema
+from lib.project_dispatch.delegation import WORKER_INPUT_SOURCE_HEAD
 from lib.tool_input_repair import ingest_tool_call
 from lib.tools.contracts import compile_execution_contract_documents
 from lib.tools.coordinator import COORDINATOR_TOOLS
@@ -53,10 +54,11 @@ def test_detailed_brief_reaches_worker_unchanged_and_replays_once(runtime, lengt
     row = r.c.repo.read(result['assignment_id'])
     assert row['request']['brief'] == brief
     assert row['request']['authorizationSource'] == r.c.request['authorizationSource']
-    assert inputs[0].endswith('Assigned objective:\n' + brief)
+    assert inputs[0].startswith(brief + WORKER_INPUT_SOURCE_HEAD)
+    assert r.c.turn['projection']['content'] not in inputs[0]
     assert r.call('delegate_project_work', **arguments) == result
     assert len(r.calls) == len(r.created) == 1
-    assert all(content.endswith('Assigned objective:\n' + brief) for content in inputs)
+    assert all(content.startswith(brief + WORKER_INPUT_SOURCE_HEAD) for content in inputs)
     replay_inputs = len(inputs)
     changed = {**arguments, 'brief': brief[:-1] + '!'}
     assert 'error' in r.call('delegate_project_work', **changed)

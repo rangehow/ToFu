@@ -14,7 +14,7 @@ use std::io;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Request {
+pub struct Request {
     user_id: u64,
     tenant_id: String,
     project_key: String,

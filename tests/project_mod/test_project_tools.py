@@ -637,6 +637,25 @@ class TestRmTrashWrap:
     def test_non_rm_untouched(self):
         assert _maybe_wrap_rm_with_trash('ls -la', '/work/ws') == 'ls -la'
 
+    def test_cache_tagged_directories_are_deleted_not_trashed(self, tmp_path):
+        import subprocess
+        (tmp_path / '.git').mkdir()
+        target = tmp_path / 'target'
+        (target / 'debug').mkdir(parents=True)
+        (target / 'CACHEDIR.TAG').write_text('Signature: 8a477f597d28d172789f06886806bc55\n')
+        (target / 'debug' / 'huge.rlib').write_bytes(b'x' * 1024)
+        (tmp_path / 'notes.md').write_text('work\n')
+        rm = chr(114) + chr(109)
+        command = _maybe_wrap_rm_with_trash(f'{rm} -rf target notes.md', str(tmp_path))
+
+        subprocess.run(['sh', '-c', command], cwd=tmp_path, check=True)
+
+        assert not target.exists() and not (tmp_path / 'notes.md').exists()
+        trashed = sorted(p.relative_to(tmp_path / '.tofu_trash').parts[1:]
+                         for p in (tmp_path / '.tofu_trash').rglob('*') if p.is_file()
+                         and p.name != '.gitignore')
+        assert trashed == [('notes.md',)]
+
     def test_rm_substring_not_wrapped(self):
         # 'confirm' contains 'rm' but is not an rm command.
         cmd = 'cat confirm.txt'

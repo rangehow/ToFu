@@ -42,7 +42,7 @@ impl Frontier {
         let state = self.state.encode();
         out.extend_from_slice(&(state.len() as u16).to_be_bytes());
         out.extend_from_slice(&state);
-        out.extend_from_slice(&Sha256::digest(&out).to_vec());
+        out.extend_from_slice(&Sha256::digest(&out));
         Ok(out)
     }
     pub(super) fn decode(key: &EntityKey, encoded: &[u8]) -> io::Result<Self> {
@@ -147,7 +147,12 @@ pub(crate) fn certify(
         Some(previous) => (
             previous.state,
             previous.count,
-            Some(lane_compaction_index_key(transaction, conversation, lane, previous.ordinal)?),
+            Some(lane_compaction_index_key(
+                transaction,
+                conversation,
+                lane,
+                previous.ordinal,
+            )?),
         ),
         None => (ShaState::default(), 0, None),
     };

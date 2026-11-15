@@ -11,11 +11,27 @@ from lib.log import get_logger
 logger = get_logger(__name__)
 
 
+def gateway_blocked_term_sanitize(provider_id: str = '') -> bool:
+    """Whether the request's gateway profile declares the blocked-term filter.
+
+    An explicit provider id decides by its declared id family. A body built
+    without one (the chat main loop) falls back to the legacy global
+    ``lib.LLM_BASE_URL`` host. No installed profile means no sanitization.
+    """
+    import lib as _lib
+    from lib.provider.gateway_profiles import gateway_trait
+    if provider_id:
+        return bool(gateway_trait('blocked_term_sanitize', provider_id=provider_id))
+    return bool(gateway_trait('blocked_term_sanitize',
+                              base_url=getattr(_lib, 'LLM_BASE_URL', '')))
+
+
 # ══════════════════════════════════════════════════════════
 #  Gateway keyword sanitization
 # ══════════════════════════════════════════════════════════
 #
-# The corporate gateway (your-llm-gateway.example.com) applies keyword-level content
+# A corporate gateway (declared by a gateway profile's blocked_term_sanitize
+# trait; FRIDAY in the YourProvider overlay) applies keyword-level content
 # filters that block entire requests when specific strings appear in the
 # prompt — even in benign contexts (e.g. news headlines, economic reports).
 # These are gateway-level blocks (HTTP 450) that cannot be bypassed.

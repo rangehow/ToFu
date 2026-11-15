@@ -6,6 +6,8 @@
 #[derive(Clone, Copy)]
 #[repr(usize)]
 pub(crate) enum Phase {
+    // The profile's initial phase: only the enabled observer names it.
+    #[cfg_attr(not(feature = "recovery-profile"), allow(dead_code))]
     Control,
     WalScan,
     BlockCatalog,

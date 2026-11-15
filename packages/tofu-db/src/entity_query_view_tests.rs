@@ -72,7 +72,7 @@ fn published_queries_keep_all_live_roots_without_count_quota_or_permanent_pin() 
         .collect();
     assert_eq!(
         writer.snapshot_pin_metrics().unwrap().active_handles,
-        512 as u32
+        512_u32
     );
     let extra = view.try_build().unwrap().unwrap();
     put(&mut writer, b"writer progresses with all readers retained");
@@ -219,7 +219,6 @@ fn published_query_aborted_logical_update_disables_optional_view() {
     assert_eq!(writer.snapshot_pin_metrics().unwrap().active_handles, 0);
 }
 
-
 #[test]
 fn published_query_replicas_isolate_private_overlay_retirement() {
     let mut writer = database();
@@ -232,10 +231,13 @@ fn published_query_replicas_isolate_private_overlay_retirement() {
     assert_eq!(get(&right), Some(b"committed".to_vec()));
     // Fault-inject retirement into one private replica. No materialized root
     // covers this value, so only that replica loses the overlay row.
-    left.overlay.write().unwrap().note_merged(crate::entity_overlay::OverlayPosition {
-        sequence: left.current_snapshot().sequence,
-        key: None,
-    });
+    left.overlay
+        .write()
+        .unwrap()
+        .note_merged(crate::entity_overlay::OverlayPosition {
+            sequence: left.current_snapshot().sequence,
+            key: None,
+        });
     assert_eq!(get(&left), None);
     assert_eq!(get(&right), Some(b"committed".to_vec()));
     assert_eq!(get(&writer), Some(b"committed".to_vec()));
@@ -247,10 +249,14 @@ fn published_query_replicas_isolate_private_overlay_retirement() {
     let shared_left = view.try_build().unwrap().unwrap();
     let mut shared_right = view.try_build().unwrap().unwrap();
     shared_right.overlay = Arc::clone(&shared_left.overlay);
-    shared_left.overlay.write().unwrap().note_merged(crate::entity_overlay::OverlayPosition {
-        sequence: shared_left.current_snapshot().sequence,
-        key: None,
-    });
+    shared_left
+        .overlay
+        .write()
+        .unwrap()
+        .note_merged(crate::entity_overlay::OverlayPosition {
+            sequence: shared_left.current_snapshot().sequence,
+            key: None,
+        });
     assert_eq!(get(&shared_right), None);
     assert_eq!(get(&writer), Some(b"committed".to_vec()));
 }

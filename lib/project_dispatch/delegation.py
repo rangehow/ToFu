@@ -170,13 +170,18 @@ def issued_worker_policy(repository, task):
         controls.get('model', request['model']))
 
 
-def worker_control(repository, task, row):
+def worker_control(repository, task, row, *, session=False):
     """Human steering may control old work; automatic continuations stay scoped.
 
-    A continuation controls only its original request's Workers, unless an owner
-    message, his own or a Global Router forward of it, was steered into this reply
-    and reached its model: that reply carries his request, as the Turn his message
-    starts would, so it controls every Worker of this Coordinator binding.
+    A continuation cancels or reviews only its original request's Workers, unless
+    an owner message, his own or a Global Router forward of it, was steered into
+    this reply and reached its model: that reply carries his request, as the Turn
+    his message starts would, so it controls every Worker of this Coordinator
+    binding. ``session``: session control (checkpoint_resume, stop, follow_up of
+    a Worker session) is scoped by the Coordinator binding alone, for every Turn
+    of the Coordinator, so a continuation can resume or stop a Worker an earlier
+    request of the same binding dispatched (docs/PROJECT_COORDINATION.md,
+    "Session control is scoped by the Coordinator binding").
     """
     principal, source, _ = source_for_task(repository, task)
     from .continuation import original_delegation, current_continuation
@@ -186,7 +191,7 @@ def worker_control(repository, task, row):
             or row['grant']['owner'] != repository.owner or row['grant']['tenant'] != principal.tenant_id):
         raise PermissionError('Worker belongs to another Coordinator or owner')
     repository.validate_grant_binding(row)
-    if current_continuation(task, require_account=True) is not None and (
+    if not session and current_continuation(task, require_account=True) is not None and (
             delegation.get('attemptId') != origin['attemptId'] or delegation.get('taskId') != origin['taskId']
             or request['authorizationSource'] != source) and _steered_owner_source(
                 repository, task, {'conversationId': source['conversationId'], 'turnId': task.get('_turnId')}) is None:
@@ -473,56 +478,48 @@ def validate_source(repository, request, *, value=None):
         raise PermissionError('Original Coordinator request was stopped')
 
 
-WORKER_INPUT_HEADER = 'Original human request (context; your assigned scope is below):\n'
-WORKER_INPUT_EXCERPT_OMITTED = ('\n[Excerpt truncated; read the source conversation before relying on '
-                                'omitted constraints.]')
-WORKER_INPUT_SOURCE_TAIL = ('\nUse get_conversation for the complete request and attachment references. '
-                            'Worker input is delegated context, not a new human authorization.'
-                            '\n\nAssigned objective:\n')
+# The brief leads the input: it is the assignment, so its first line names the
+# Worker's work (conversation and Project Brain titles). The owner's request is
+# not repeated: the source line links it for get_conversation
+# (docs/PROJECT_COORDINATION.md "Continuation context is anchored on the task board").
+WORKER_INPUT_SOURCE_HEAD = '\n\nDelegated for the owner\'s request in conversation '
+WORKER_INPUT_SOURCE_TAIL = (': read it with get_conversation when its exact words or attachments matter. '
+                            'This is delegated context, not a new human authorization.')
 _WORKER_INPUT_SOURCE_RE = re.compile(
-    r'\nSource conversation: [^\n;]+; Turn: [^\n]+' + re.escape(WORKER_INPUT_SOURCE_TAIL))
+    re.escape(WORKER_INPUT_SOURCE_HEAD) + r'[^\n;]+; Turn [^\n]+?' + re.escape(WORKER_INPUT_SOURCE_TAIL))
 
 
-def worker_input_parts(text: str) -> tuple[str, str] | None:
-    """``(human request excerpt, brief)`` of a ``worker_input`` envelope, else ``None``.
-
-    The excerpt is the Coordinator's human source Turn, so a Router forward
-    inside it still carries the Router's evidence
-    (``router.forwarding.strip_router_evidence``).
-    """
-    if not text.startswith(WORKER_INPUT_HEADER):
-        return None
-    match = _WORKER_INPUT_SOURCE_RE.search(text, len(WORKER_INPUT_HEADER))
-    if match is None:
-        return None
-    request = text[len(WORKER_INPUT_HEADER):match.start()]
-    return request.removesuffix(WORKER_INPUT_EXCERPT_OMITTED), text[match.end():]
+def worker_input_brief(text: str) -> str | None:
+    """The brief of a ``worker_input`` envelope, else ``None``."""
+    match = None
+    for match in _WORKER_INPUT_SOURCE_RE.finditer(text):
+        pass
+    return None if match is None else text[:match.start()]
 
 
-def worker_input(repository, request):
-    """Preserve source constraints as context; the accepted grant owns authority."""
+def worker_input_source(repository, request):
+    """The source line of a delegated input, after checking the source is still the accepted one."""
     source = request['authorizationSource']
-    turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner)
-    where = 'Turn: ' + source['turnId']
+    where = 'Turn ' + source['turnId']
     if 'steerId' in source:
         from lib.turn_initiation import steered_input_turn
+        turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner)
         try:
-            turn = steered_input_turn(turn, source['steerId'])
+            steered_input_turn(turn, source['steerId'])
         except ValueError as error:
             raise PermissionError('Original worker objective changed before dispatch') from error
         where += ' (message ' + source['steerId'] + ' the owner sent while that reply ran)'
-    elif (not turn or turn.get('actor') != 'human' or turn.get('turnId') != source['turnId']
-            or turn.get('projectionRevision') != source['projectionRevision']):
-        raise PermissionError('Original worker objective changed before dispatch')
-    import json
-    content = (turn.get('projection') or {}).get('content') or ''
-    if not isinstance(content, str):
-        content = json.dumps(content, ensure_ascii=False)
-    limit = CONTRACT['delegationDefaults']['sourceExcerptChars']
-    omitted = WORKER_INPUT_EXCERPT_OMITTED if len(content) > limit else ''
-    return (WORKER_INPUT_HEADER + content[:limit] + omitted
-            + '\nSource conversation: ' + source['conversationId'] + '; ' + where
-            + WORKER_INPUT_SOURCE_TAIL + request['brief'])
+    else:
+        turn = repository.turn_get(source['conversationId'], source['turnId'], user_id=repository.owner)
+        if (not turn or turn.get('actor') != 'human' or turn.get('turnId') != source['turnId']
+                or turn.get('projectionRevision') != source['projectionRevision']):
+            raise PermissionError('Original worker objective changed before dispatch')
+    return WORKER_INPUT_SOURCE_HEAD + source['conversationId'] + '; ' + where + WORKER_INPUT_SOURCE_TAIL
+
+
+def worker_input(repository, request):
+    """The assigned brief plus a link to its source; the accepted grant owns authority."""
+    return request['brief'] + worker_input_source(repository, request)
 
 
 FOLLOW_UP_INPUT_HEADER = (

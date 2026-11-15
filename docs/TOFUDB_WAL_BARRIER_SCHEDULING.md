@@ -29,6 +29,16 @@ With a one-second interval the old worker times out at 250 ms; the corrected
 worker covers the second witness and both exact records survive simulated crash.
 The test seam is an empty closure in production and retains real VFS calls.
 
+## Group commit
+
+Both tiers already group commits: commits wait outside the authority mutex,
+and the barrier worker (Strict: one vectored write plus one `fdatasync`) or
+the Normal writer (one vectored write) takes every frame queued so far as
+one batch. No batch size, linger timer or cap applies. The
+`wal::buffer_tests` group specifications pin it, and the measured
+commits-per-write ratio with its utilization explanation lives in
+[the performance charter](STORAGE_PERFORMANCE_CHARTER.md#tofudb-hot-paths-on-the-production-dolphinfs-client-2026-11-15).
+
 ## Performance anchors
 
 `wal_barrier_sync` measures each worker fsync; the `wal_barrier` component

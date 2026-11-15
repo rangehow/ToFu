@@ -137,8 +137,8 @@ python -m evaluations harbor diagnose /absolute/run/root --reference-profile glm
 ## 宿主存储
 
 默认根为 **checkout `.eval-runs/benchmarks`**，不再依赖宿主 HOME 或 XDG 默认值。
-若部署通过 `TOFU_REQUIRED_HOST_VOLUME` 声明了共享卷且 checkout 位于该卷，写入型评测
-路径必须留在该卷；可显式设置同卷的 `TOFU_EVAL_ROOT`。宿主 `/tmp`、`/var/tmp`、`/dev/shm` 及符号链接路径均拒绝。
+若 checkout 位于 `/mnt/<卷>` 共享网络卷，写入型评测路径必须留在该卷；
+可显式设置同卷的 `TOFU_EVAL_ROOT`。宿主 `/tmp`、`/var/tmp`、`/dev/shm` 及符号链接路径均拒绝。
 每个 run 的 `.runtime/` 保存专属 tmp、Python/uv/pip/HF/npm 缓存及 XDG 数据；
 只传入子进程，不修改 controller 的全局 `tempfile.tempdir` 或 HOME；Harbor 子进程使用
 私有 HOME（固定版 Harbor 的 cache 忽略 XDG，直接使用 `~/.cache/harbor`），不读取个人配置。
@@ -333,7 +333,7 @@ context 和可能含短期 proxy 凭据的元数据。正式 trial 只从不可�
 但不具备 Docker content store 的跨镜像 layer 去重；全量前必须按实际样本估算数百 GiB 空间。
 这是下一阶段的主要性能/容量优化点，不应拿官方 Docker 的 120 GiB 建议直接套用。
 
-## 用项目 Meituan/Friday provider 跑单题
+## 用项目 YourProvider/Friday provider 跑单题
 
 `TofuHostAgent` 在宿主进程读取项目已经配置的 provider/key，guest 只收到终端命令和输出，拿不到
 key。若 key 只通过 `LLM_API_KEYS` 环境变量提供，可以额外传
@@ -380,7 +380,7 @@ credential 放进 guest，不能满足配对实验的凭据边界。`codex-kimi`
 ```bash
 export TOFU_CODEX_01491_BINARY=/absolute/pinned/codex
 export TOFU_CODEX_01491_SHA256=<64-hex-sha256>
-export TOFU_KIMI_PROVIDER_FACE=meituan-chat
+export TOFU_KIMI_PROVIDER_FACE=yourprovider-chat
 export TOFU_KIMI_SLOT_ID=<non-secret-shared-slot-id>
 export KIMI_CHAT_BASE_URL=<kimi-chat-base-url>
 export KIMI_API_KEY=<host-only-key>
@@ -442,7 +442,7 @@ attempt 的 task start 计时，包含失败与重试间隔。它保存 raw JSON
 arm、prompt contract、tool schema、provider/slot、thinking 和 agent revision 完全一致。
 
 ```bash
-export TOFU_KIMI_PROVIDER_FACE=meituan-chat
+export TOFU_KIMI_PROVIDER_FACE=yourprovider-chat
 export TOFU_KIMI_SLOT_ID=<non-secret-shared-slot-id>
 export KIMI_CHAT_BASE_URL=<kimi-chat-base-url>
 export KIMI_API_KEY=<host-only-key>

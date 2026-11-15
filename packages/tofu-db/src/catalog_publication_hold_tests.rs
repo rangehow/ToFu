@@ -26,7 +26,10 @@ const HEAVY_BLOCK_BYTES: usize = 4_096;
 const SPILL_ROWS: u32 = 768;
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|value| value.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn full_payload(segment: usize, block: usize) -> Vec<u8> {
@@ -82,7 +85,11 @@ fn fabricate(directory: &Path, full_segments: usize) -> io::Result<()> {
     let mut database = AuthorityDatabase::initialize(directory)?;
     configure_like_the_daemon(&mut database, directory)?;
     let mut seed = database.begin(7, 11)?;
-    database.entity_put(&mut seed, crate::entity::EntityKey::new(7, 11, "semantic", b"seed")?, b"seed".to_vec())?;
+    database.entity_put(
+        &mut seed,
+        crate::entity::EntityKey::new(7, 11, "semantic", b"seed")?,
+        b"seed".to_vec(),
+    )?;
     database.commit(seed)?;
     let blocks = database.block_store_shared();
     let store = blocks.payload_segment_store()?;
@@ -90,7 +97,9 @@ fn fabricate(directory: &Path, full_segments: usize) -> io::Result<()> {
     let next = AtomicUsize::new(0);
     let references = Mutex::new(Vec::with_capacity(total));
     let started = Instant::now();
-    let workers = std::thread::available_parallelism().map_or(8, |count| count.get()).min(48);
+    let workers = std::thread::available_parallelism()
+        .map_or(8, |count| count.get())
+        .min(48);
     std::thread::scope(|scope| -> io::Result<()> {
         let handles: Vec<_> = (0..workers)
             .map(|_| {
@@ -113,21 +122,28 @@ fn fabricate(directory: &Path, full_segments: usize) -> io::Result<()> {
                                 .collect()
                         };
                         let segment = store.create(
-                            Uuid::from_u128(0xca7a_0000_0000_0000_0000_0000_0000_0000 | number as u128),
+                            Uuid::from_u128(
+                                0xca7a_0000_0000_0000_0000_0000_0000_0000 | number as u128,
+                            ),
                             payloads.keys().copied().collect(),
                             |id| Ok(payloads[&id].clone()),
                         )?;
-                        references.lock().unwrap().push(PayloadSegmentReference::new(
-                            segment.metadata(),
-                            segment.first_block_id(),
-                            segment.last_block_id(),
-                        )?);
+                        references
+                            .lock()
+                            .unwrap()
+                            .push(PayloadSegmentReference::new(
+                                segment.metadata(),
+                                segment.first_block_id(),
+                                segment.last_block_id(),
+                            )?);
                     }
                 })
             })
             .collect();
         for handle in handles {
-            handle.join().map_err(|_| io::Error::other("fabrication worker panicked"))??;
+            handle
+                .join()
+                .map_err(|_| io::Error::other("fabrication worker panicked"))??;
         }
         Ok(())
     })?;
@@ -137,9 +153,14 @@ fn fabricate(directory: &Path, full_segments: usize) -> io::Result<()> {
         catalog.extend(existing.segments);
     }
     let segments = catalog.len();
-    let catalog_blocks: u64 = catalog.iter().map(|reference| u64::from(reference.block_count)).sum();
+    let catalog_blocks: u64 = catalog
+        .iter()
+        .map(|reference| u64::from(reference.block_count))
+        .sum();
     let started = Instant::now();
-    database.engine_mut_for_test().publish_payload_manifest_for_test(PayloadManifest::new(catalog)?)?;
+    database
+        .engine_mut_for_test()
+        .publish_payload_manifest_for_test(PayloadManifest::new(catalog)?)?;
     let publish_ms = started.elapsed().as_millis();
     settle(&mut database)?;
     println!(
@@ -159,7 +180,12 @@ fn commit_spill(database: &mut AuthorityDatabase, commit: usize) -> io::Result<(
         value[4..12].copy_from_slice(&(commit as u64).to_be_bytes());
         database.entity_put(
             &mut transaction,
-            crate::entity::EntityKey::new(7, 11, "semantic", format!("spill-{commit:05}-{row:05}").as_bytes())?,
+            crate::entity::EntityKey::new(
+                7,
+                11,
+                "semantic",
+                format!("spill-{commit:05}-{row:05}").as_bytes(),
+            )?,
             value,
         )?;
     }
@@ -176,7 +202,10 @@ const MEASURED_STAGES: [(&str, usize); 6] = [
 ];
 
 fn stage_snapshot() -> Vec<u64> {
-    MEASURED_STAGES.iter().map(|(_, stage)| crate::fsync_stats::stage_nanos(*stage)).collect()
+    MEASURED_STAGES
+        .iter()
+        .map(|(_, stage)| crate::fsync_stats::stage_nanos(*stage))
+        .collect()
 }
 
 fn stage_delta_json(before: &[u64]) -> String {
@@ -184,7 +213,10 @@ fn stage_delta_json(before: &[u64]) -> String {
         .iter()
         .zip(before)
         .map(|((name, stage), before)| {
-            format!("\"{name}_ms\":{:.1}", (crate::fsync_stats::stage_nanos(*stage) - before) as f64 / 1e6)
+            format!(
+                "\"{name}_ms\":{:.1}",
+                (crate::fsync_stats::stage_nanos(*stage) - before) as f64 / 1e6
+            )
         })
         .collect::<Vec<_>>()
         .join(",")
@@ -197,11 +229,16 @@ fn filter_state(blocks: &BlockStore) -> (bool, bool) {
 
 /// The online GC driver's off-mutex work on its own thread, in the driver's
 /// order: the first catalog location table, then the packed filter.
-fn spawn_filter_build(blocks: Arc<BlockStore>) -> Option<std::thread::JoinHandle<(bool, Duration)>> {
+fn spawn_filter_build(
+    blocks: Arc<BlockStore>,
+) -> Option<std::thread::JoinHandle<(bool, Duration)>> {
     Some(std::thread::spawn(move || {
         let started = Instant::now();
         blocks.publish_first_catalog_locations(|| Ok(())).unwrap();
-        println!("{{\"step\":\"first_location_table\",\"elapsed_ms\":{}}}", started.elapsed().as_millis());
+        println!(
+            "{{\"step\":\"first_location_table\",\"elapsed_ms\":{}}}",
+            started.elapsed().as_millis()
+        );
         let installed = blocks.build_packed_filter(|| Ok(())).unwrap();
         (installed, started.elapsed())
     }))
@@ -219,11 +256,17 @@ fn spawn_filter_build(blocks: Arc<BlockStore>) -> Option<std::thread::JoinHandle
 #[test]
 #[ignore]
 fn catalog_publication_hold_measurement() {
-    let Some(root) = std::env::var_os("TOFU_DB_CATALOG_HOLD_BENCH_DIR") else { return; };
+    let Some(root) = std::env::var_os("TOFU_DB_CATALOG_HOLD_BENCH_DIR") else {
+        return;
+    };
     let directory = PathBuf::from(root).join("authority");
     if !directory.join("CONTROL").exists() {
         std::fs::create_dir_all(&directory).unwrap();
-        fabricate(&directory, env_usize("TOFU_DB_CATALOG_HOLD_BENCH_FULL_SEGMENTS", FULL_SEGMENTS)).unwrap();
+        fabricate(
+            &directory,
+            env_usize("TOFU_DB_CATALOG_HOLD_BENCH_FULL_SEGMENTS", FULL_SEGMENTS),
+        )
+        .unwrap();
     }
     let started = Instant::now();
     let mut database = AuthorityDatabase::open(&directory).unwrap();
@@ -250,7 +293,8 @@ fn catalog_publication_hold_measurement() {
     } else {
         None
     };
-    if builder.is_some() && std::env::var_os("TOFU_DB_CATALOG_HOLD_BENCH_WAIT_FOR_TABLE").is_some() {
+    if builder.is_some() && std::env::var_os("TOFU_DB_CATALOG_HOLD_BENCH_WAIT_FOR_TABLE").is_some()
+    {
         while blocks.published_catalog_locations_for_test().is_none() {
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -260,22 +304,24 @@ fn catalog_publication_hold_measurement() {
         .map_or(0, |elapsed| elapsed.as_secs() as usize % 100_000)
         * 64;
     let mut index = 0;
-    let mut measure = |database: &mut AuthorityDatabase, builder: &Option<std::thread::JoinHandle<(bool, Duration)>>| {
-        let during_build = builder.as_ref().is_some_and(|handle| !handle.is_finished());
-        let before = stage_snapshot();
-        let started = Instant::now();
-        commit_spill(database, commit_base + index).unwrap();
-        let elapsed = started.elapsed();
-        let (built, covered) = filter_state(&blocks);
-        println!(
+    let mut measure =
+        |database: &mut AuthorityDatabase,
+         builder: &Option<std::thread::JoinHandle<(bool, Duration)>>| {
+            let during_build = builder.as_ref().is_some_and(|handle| !handle.is_finished());
+            let before = stage_snapshot();
+            let started = Instant::now();
+            commit_spill(database, commit_base + index).unwrap();
+            let elapsed = started.elapsed();
+            let (built, covered) = filter_state(&blocks);
+            println!(
             "{{\"step\":\"commit\",\"index\":{index},\"commit_ms\":{:.1},\"started_during_build\":{during_build},\
              \"build_running_after\":{},\"filter_built\":{built},\"filter_covers\":{covered},{}}}",
             elapsed.as_secs_f64() * 1e3,
             builder.as_ref().is_some_and(|handle| !handle.is_finished()),
             stage_delta_json(&before)
         );
-        index += 1;
-    };
+            index += 1;
+        };
     for _ in 0..commits {
         measure(&mut database, &builder);
         std::thread::sleep(Duration::from_millis(10));

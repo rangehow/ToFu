@@ -2,7 +2,17 @@
 pub const FORMAT: &str = "tofu.project-dispatch-storage/v2";
 pub const HEADS: &str = "project.dispatch.heads.v2";
 pub const DOCUMENTS: &str = "project.dispatch.documents.v2";
-pub const COLLECTIONS: &[&str] = &["assignments", "batches", "settlements", "scope_changes", "source_cohorts", "requests", "accounts", "model_attempts", "indexes"];
+pub const COLLECTIONS: &[&str] = &[
+    "assignments",
+    "batches",
+    "settlements",
+    "scope_changes",
+    "source_cohorts",
+    "requests",
+    "accounts",
+    "model_attempts",
+    "indexes",
+];
 pub const PROJECT_PATH_CHARACTERS: usize = 4096;
 pub const IDENTITY_CHARACTERS: usize = 256;
 pub const PAGE_ROWS: usize = 64;

@@ -14,8 +14,7 @@ use sha2::{Digest, Sha256};
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    RECENT_PROJECT_COUNT_NAMESPACE,
-    RECENT_PROJECT_DOCUMENT_NAMESPACE,
+    RECENT_PROJECT_COUNT_NAMESPACE, RECENT_PROJECT_DOCUMENT_NAMESPACE,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -155,9 +154,11 @@ fn touch_one(
         write_count(
             database,
             transaction,
-            count
-                .checked_add(1)
-                .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("recent-project capacity is exhausted"))?,
+            count.checked_add(1).ok_or_else(|| {
+                crate::resource_exhaustion::accounting_overflow(
+                    "recent-project capacity is exhausted",
+                )
+            })?,
         )?;
     }
     let use_count = current_count
@@ -223,9 +224,12 @@ pub(crate) fn list(
         &start,
         &end,
         LOGICAL_NAMESPACE,
-        expected_count.checked_add(1).ok_or_else(|| invalid_data("recent-project count lookahead overflow"))?,
+        expected_count
+            .checked_add(1)
+            .ok_or_else(|| invalid_data("recent-project count lookahead overflow"))?,
         versioned_document::ListProjectionBounds {
-            blob_owner_user_id: transaction.owner_user_id(), maximum_bytes: usize::MAX,
+            blob_owner_user_id: transaction.owner_user_id(),
+            maximum_bytes: usize::MAX,
         },
     )?;
     let documents: Vec<Value> = serde_json::from_slice(&raw)

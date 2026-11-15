@@ -387,7 +387,7 @@
     fn snapshot_pins_have_no_count_quota_and_release_with_transaction_lifetimes() {
         let directory = tempfile::tempdir().unwrap();
         let database = EntityDatabase::initialize(directory.path()).unwrap();
-        let mut transactions = Vec::with_capacity((LEGACY_SNAPSHOT_HANDLE_LIMIT * 8));
+        let mut transactions = Vec::with_capacity(LEGACY_SNAPSHOT_HANDLE_LIMIT * 8);
         for _ in 0..(LEGACY_SNAPSHOT_HANDLE_LIMIT * 8) {
             transactions.push(database.begin(7, 11).unwrap());
         }

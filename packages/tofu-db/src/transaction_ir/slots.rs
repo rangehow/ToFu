@@ -12,7 +12,10 @@ pub(super) struct SparseSlotValues<T: Default> {
 
 impl<T: Default> SparseSlotValues<T> {
     pub(super) fn new() -> Self {
-        Self { values: BTreeMap::new(), missing: T::default() }
+        Self {
+            values: BTreeMap::new(),
+            missing: T::default(),
+        }
     }
     pub(super) fn get(&self, index: usize) -> Option<&T> {
         self.values.get(&index)
@@ -24,7 +27,9 @@ impl<T: Default> SparseSlotValues<T> {
         self.values.entry(index).or_default()
     }
     #[cfg(test)]
-    pub(super) fn len(&self) -> usize { self.values.len() }
+    pub(super) fn len(&self) -> usize {
+        self.values.len()
+    }
 }
 
 impl<T: Default> Index<usize> for SparseSlotValues<T> {
@@ -76,12 +81,17 @@ mod tests {
 
     #[test]
     fn stored_values_are_owned_and_released_with_the_table() {
-        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
         #[derive(Default)]
         struct Value(Option<Arc<AtomicUsize>>);
         impl Drop for Value {
             fn drop(&mut self) {
-                if let Some(counter) = &self.0 { counter.fetch_add(1, Ordering::SeqCst); }
+                if let Some(counter) = &self.0 {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                }
             }
         }
         let drops = Arc::new(AtomicUsize::new(0));

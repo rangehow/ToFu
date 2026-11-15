@@ -8,6 +8,8 @@ import threading
 
 import pytest
 
+from tests.support.dx_overlay import requires_dx
+
 from lib.server.server_shutdown import (
     _stop_storage_boundary_for_shutdown,
     _shutdown_loaded_module,
@@ -710,6 +712,7 @@ def test_a_late_background_owner_never_skips_the_drain_and_flushes(monkeypatch, 
         'event-maintenance', 'event-batcher', *(['storage'] if storage_closes else [])]
 
 
+@requires_dx
 def test_a_late_owner_is_recorded_with_its_storage_ownership(monkeypatch):
     """stop_registered_background_services names each owner left live, typed."""
     import sys
@@ -729,7 +732,7 @@ def test_a_late_owner_is_recorded_with_its_storage_ownership(monkeypatch):
             ('lib.knowledge.image_ocr_jobs', 'stop_attachment_image_ocr'),
             ('lib.oauth.codex_catalog', 'stop_codex_catalog_refresher'),
             ('lib.scheduler.manager', 'stop_scheduler_worker'),
-            ('lib.channels.dx.supervisor', 'stop_channel_bridges'),
+            ('tofu_yourprovider.dx.supervisor', 'stop_channel_bridges'),
             ('lib.channels.github.supervisor', 'stop_github_sessions'),
             ('lib.channels.bots.supervisor', 'stop_bot_sessions'),
             ('lib.database_panel.maintenance', 'stop_maintenance')):
@@ -766,6 +769,7 @@ class _HeldPoll:
         self.closed.set()
 
 
+@requires_dx
 def test_bot_sessions_are_asked_to_stop_when_the_drain_begins(monkeypatch):
     """Recorded 2026-11-12 15:51: the execution host drained for 58 s before its background
     services stopped. Only then was the 微信 session asked to stop, and its 2 s join met a run
@@ -785,14 +789,14 @@ def test_bot_sessions_are_asked_to_stop_when_the_drain_begins(monkeypatch):
             ('lib.knowledge.image_ocr_jobs', 'stop_attachment_image_ocr'),
             ('lib.oauth.codex_catalog', 'stop_codex_catalog_refresher'),
             ('lib.scheduler.manager', 'stop_scheduler_worker'),
-            ('lib.channels.dx.supervisor', 'stop_channel_bridges'),
+            ('tofu_yourprovider.dx.supervisor', 'stop_channel_bridges'),
             ('lib.channels.github.supervisor', 'stop_github_sessions'),
             ('lib.database_panel.maintenance', 'stop_maintenance')):
         monkeypatch.setattr(importlib.import_module(module_name), stop_name, lambda timeout: True)
     monkeypatch.setattr(bridge_relay, 'stop_bridge_owner', lambda timeout: True)
     monkeypatch.setitem(sys.modules, 'lib.app.plugin_registry',
                         SimpleNamespace(run_shutdown_hooks=lambda app: 0))
-    for module_name, registry in (('lib.channels.dx.supervisor', '_ADAPTERS'),
+    for module_name, registry in (('tofu_yourprovider.dx.supervisor', '_ADAPTERS'),
                                   ('lib.channels.github.supervisor', '_ADAPTERS'),
                                   ('lib.channels.bots.supervisor', '_SESSIONS')):
         module = importlib.import_module(module_name)

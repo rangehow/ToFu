@@ -1329,7 +1329,10 @@ adapters remain pending; the trusted mint API is not an approval decision engine
 | Operations | `serverctl.py`, lifecycle modules, health and maintenance | public service/storage ports |
 
 Dependencies point down this table. A lower layer never imports a route or
-browser owner. Cross-domain behavior is expressed as an explicit protocol or
+browser owner. Core never imports private company overlay code: overlays contribute
+data through `tofu_extensions` bundle discovery and code through entry points
+([`PUBLIC_CORE.md`](PUBLIC_CORE.md), enforced by
+`tests/meta/test_public_core_boundary.py`). Cross-domain behavior is expressed as an explicit protocol or
 committed event, not a call into another domain's private module.
 
 Process startup, shutdown and restart have no delivery-layer exceptions.

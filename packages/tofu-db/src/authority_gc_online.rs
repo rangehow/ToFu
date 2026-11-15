@@ -270,7 +270,9 @@ impl<'a> SingleFileHolds<'a> {
         operation: impl FnOnce(&mut AuthorityDatabase) -> io::Result<T>,
     ) -> io::Result<T> {
         let duty = self.previous_hold.saturating_sub(self.released.elapsed());
-        let backoff = self.retrying_since.map_or(Duration::ZERO, |since| since.elapsed());
+        let backoff = self
+            .retrying_since
+            .map_or(Duration::ZERO, |since| since.elapsed());
         self.pause(duty.max(backoff));
         #[cfg(test)]
         tests_short_holds::before_single_file_hold(self.previous_hold, self.released.elapsed());
@@ -299,7 +301,11 @@ impl<'a> SingleFileHolds<'a> {
         }
         // A hold that failed never shortens the pause, so a retried
         // `WouldBlock` never polls faster than the run's unlinks.
-        self.previous_hold = if result.is_ok() { held } else { self.previous_hold.max(held) };
+        self.previous_hold = if result.is_ok() {
+            held
+        } else {
+            self.previous_hold.max(held)
+        };
         result
     }
 
@@ -372,16 +378,24 @@ pub const ONLINE_GC_BOOT_GRACE: Duration = Duration::from_secs(30);
 pub trait OnlineGcDatabase: Send + 'static {
     fn gc_database(&self) -> io::Result<&AuthorityDatabase>;
     fn gc_database_mut(&mut self) -> io::Result<&mut AuthorityDatabase>;
-    fn gc_budget(&self, budget: AuthorityGarbageCollectionBudget) -> io::Result<AuthorityGarbageCollectionBudget> {
+    fn gc_budget(
+        &self,
+        budget: AuthorityGarbageCollectionBudget,
+    ) -> io::Result<AuthorityGarbageCollectionBudget> {
         Ok(budget)
     }
     fn install_gc_handle(&mut self, handle: OnlineGarbageCollectionHandle) -> io::Result<()>;
 }
 impl OnlineGcDatabase for AuthorityDatabase {
-    fn gc_database(&self) -> io::Result<&AuthorityDatabase> { Ok(self) }
-    fn gc_database_mut(&mut self) -> io::Result<&mut AuthorityDatabase> { Ok(self) }
+    fn gc_database(&self) -> io::Result<&AuthorityDatabase> {
+        Ok(self)
+    }
+    fn gc_database_mut(&mut self) -> io::Result<&mut AuthorityDatabase> {
+        Ok(self)
+    }
     fn install_gc_handle(&mut self, handle: OnlineGarbageCollectionHandle) -> io::Result<()> {
-        self.set_online_garbage_collection(handle); Ok(())
+        self.set_online_garbage_collection(handle);
+        Ok(())
     }
 }
 
@@ -577,11 +591,19 @@ impl OnlineGarbageCollector {
             changed
         };
         if changed {
-            crate::engine_log::warn("online_gc", &format!("epoch failed; the next epoch retries: {message}"));
+            crate::engine_log::warn(
+                "online_gc",
+                &format!("epoch failed; the next epoch retries: {message}"),
+            );
         }
     }
 
-    fn note_epoch_finished(&self, duration: Duration, epoch: &Epoch, segment_reclaim: &SegmentReclaim) {
+    fn note_epoch_finished(
+        &self,
+        duration: Duration,
+        epoch: &Epoch,
+        segment_reclaim: &SegmentReclaim,
+    ) {
         crate::engine_log::info("online_gc", &format!(
             "step=epoch_complete elapsed_ms={} reclaimed_bytes={} reclaimed_blocks={} orphan_segments_removed={} \
              segments_rewritten={} segments_retired={} consolidations={} compacted_blocks={} redundant_copies_removed={}",
@@ -603,7 +625,8 @@ impl OnlineGarbageCollector {
             metrics.marks_built += 1;
             metrics.epoch_in_progress = false;
             metrics.last_epoch_duration_ms = duration.as_millis() as u64;
-            metrics.last_epoch_reclaimed_bytes = epoch.reclaimed_bytes + segment_reclaim.removed_bytes;
+            metrics.last_epoch_reclaimed_bytes =
+                epoch.reclaimed_bytes + segment_reclaim.removed_bytes;
             metrics.total_reclaimed_bytes += epoch.reclaimed_bytes;
             metrics.total_reclaimed_blocks += epoch.reclaimed_blocks;
             metrics.total_temporary_files_removed += epoch.temporary_files_removed;
@@ -623,11 +646,14 @@ impl OnlineGarbageCollector {
         if let Ok(mut metrics) = self.metrics.write() {
             metrics.held = held;
         }
-        crate::engine_log::info("online_gc", &format!(
-            "epochs={} reason=scheduler-task system_key={}",
-            if held { "held" } else { "released" },
-            crate::generated_storage_v2::ONLINE_GC_SCHEDULER_SYSTEM_KEY,
-        ));
+        crate::engine_log::info(
+            "online_gc",
+            &format!(
+                "epochs={} reason=scheduler-task system_key={}",
+                if held { "held" } else { "released" },
+                crate::generated_storage_v2::ONLINE_GC_SCHEDULER_SYSTEM_KEY,
+            ),
+        );
     }
 
     fn note_deferred(&self) {
@@ -664,8 +690,7 @@ impl OnlineGarbageCollector {
                 if found_work {
                     self.idle_interval = self.min_epoch_interval;
                 } else {
-                    self.idle_interval =
-                        (self.idle_interval * 2).min(ONLINE_GC_MAX_IDLE_INTERVAL);
+                    self.idle_interval = (self.idle_interval * 2).min(ONLINE_GC_MAX_IDLE_INTERVAL);
                 }
                 self.next_epoch_not_before = ended + self.idle_interval;
             }
@@ -762,15 +787,19 @@ impl OnlineGarbageCollector {
         // deferral abandons the epoch here; any other lane failure is
         // recorded and the block marks still run.
         let blocks = Arc::clone(&epoch.capture.blocks);
-        let segment_reclaim =
-            match self.reclaim_superseded_segments(database, &blocks, orphan_observation_inputs, stop) {
-                Ok(reclaim) => reclaim,
-                Err(error) => {
-                    self.cleanup_epoch(&mut epoch);
-                    self.note_deferred();
-                    return Err(error);
-                }
-            };
+        let segment_reclaim = match self.reclaim_superseded_segments(
+            database,
+            &blocks,
+            orphan_observation_inputs,
+            stop,
+        ) {
+            Ok(reclaim) => reclaim,
+            Err(error) => {
+                self.cleanup_epoch(&mut epoch);
+                self.note_deferred();
+                return Err(error);
+            }
+        };
         self.note_segment_lane_outcome(segment_reclaim.failure.as_ref());
         // Phase 2: mark build, off-mutex.
         if let Err(error) = self.build_marks(&mut epoch, stop) {
@@ -782,7 +811,9 @@ impl OnlineGarbageCollector {
         if let Err(error) = self.scan(database, &mut epoch, stop) {
             // The next epoch still confirms from the older suspects, observed
             // before this scan's unlinks: none of those may confirm (S10).
-            self.previous.unlinked_loose.append(&mut epoch.unlinked_loose);
+            self.previous
+                .unlinked_loose
+                .append(&mut epoch.unlinked_loose);
             self.previous.unlinked_loose.sort_unstable();
             self.previous.unlinked_loose.dedup();
             self.cleanup_epoch(&mut epoch);
@@ -815,7 +846,8 @@ impl OnlineGarbageCollector {
         // Phase 5: rotate epoch memory and publish metrics.
         self.previous.temp_candidate = epoch.temp_candidate_next.take();
         self.previous.segment_dead = std::mem::take(&mut epoch.segment_dead_next);
-        let cursor = self.payload_window_cursor
+        let cursor = self
+            .payload_window_cursor
             .unwrap_or(epoch.capture.snapshot.generation as usize);
         self.payload_window_cursor = Some(if self.payload_window_second_epoch {
             cursor.wrapping_add(1)
@@ -888,30 +920,29 @@ impl OnlineGarbageCollector {
         // failed unlink keeps its park for the next sweep and is reported.
         let mut reclaim = SegmentReclaim {
             failure: blocks
-                .sweep_deferred_segment_retirements(crate::payload_segment::segment_retirement_delay())
+                .sweep_deferred_segment_retirements(
+                    crate::payload_segment::segment_retirement_delay(),
+                )
                 .err(),
             ..SegmentReclaim::default()
         };
         let Ok(store) = blocks.payload_segment_store() else {
             return Ok(reclaim);
         };
-        let observed = match store.observe_orphan_files(
-            &referenced_segment_ids,
-            skip_temporary,
-            || {
+        let observed =
+            match store.observe_orphan_files(&referenced_segment_ids, skip_temporary, || {
                 if stop.load(Ordering::Acquire) {
                     return Err(would_block("online GC epoch stopped"));
                 }
                 Ok(())
-            },
-        ) {
-            Ok(observed) => observed,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(error),
-            Err(error) => {
-                reclaim.failure = Some(error);
-                return Ok(reclaim);
-            }
-        };
+            }) {
+                Ok(observed) => observed,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Err(error),
+                Err(error) => {
+                    reclaim.failure = Some(error);
+                    return Ok(reclaim);
+                }
+            };
         reclaim.observed_orphans = observed.len();
         let mut outcome = Ok(());
         // One paced run of single-file holds: a contended authority is waited
@@ -928,7 +959,9 @@ impl OnlineGarbageCollector {
                     outcome = Err(would_block("online GC epoch stopped"));
                     break 'candidates;
                 }
-                match holds.attempt(database, |database| database.online_gc_remove_observed_orphan(candidate)) {
+                match holds.attempt(database, |database| {
+                    database.online_gc_remove_observed_orphan(candidate)
+                }) {
                     Ok(Some(bytes)) => {
                         reclaim.removed_orphans += 1;
                         reclaim.removed_bytes += bytes;
@@ -971,11 +1004,19 @@ impl OnlineGarbageCollector {
         let snapshot: &OnlineGcMarkSnapshot = &epoch.capture.snapshot;
         let blocks = Arc::clone(&epoch.capture.blocks);
         let gc_root = epoch.capture.data_dir.join("authority-gc");
-        ensure_directory(&gc_root, &epoch.capture.data_dir, epoch.capture.vfs.as_ref())?;
+        ensure_directory(
+            &gc_root,
+            &epoch.capture.data_dir,
+            epoch.capture.vfs.as_ref(),
+        )?;
         let work_directory = epoch.capture.data_dir.join(WORK_DIRECTORY);
         ensure_directory(&work_directory, &gc_root, epoch.capture.vfs.as_ref())?;
         let marks_directory = work_directory.join(MARKS_DIRECTORY);
-        ensure_directory(&marks_directory, &work_directory, epoch.capture.vfs.as_ref())?;
+        ensure_directory(
+            &marks_directory,
+            &work_directory,
+            epoch.capture.vfs.as_ref(),
+        )?;
         let marks_runs = marks_directory.join("gc-runs");
         ensure_directory(&marks_runs, &marks_directory, epoch.capture.vfs.as_ref())?;
         let mut live = SpillMarkSet::initialize(&marks_directory, Arc::clone(&epoch.capture.vfs))?;
@@ -1048,7 +1089,9 @@ impl OnlineGarbageCollector {
                     }
                 }
             }
-            for id in &snapshot.history_payload_metadata_ids { live_cell.borrow_mut().insert(*id)?; }
+            for id in &snapshot.history_payload_metadata_ids {
+                live_cell.borrow_mut().insert(*id)?;
+            }
             if let Some(selection) = selected_history_metadata {
                 // Resolve the same captured manifest after releasing authority.
                 // A moved current catalog never substitutes another root. Any
@@ -1087,13 +1130,20 @@ impl OnlineGarbageCollector {
         })();
         match mark_result {
             Ok(shape) => {
-                crate::engine_log::info("online_gc", &format!(
-                    "step=mark_built roots={} walked_pages={} skipped_pages={} \
+                crate::engine_log::info(
+                    "online_gc",
+                    &format!(
+                        "step=mark_built roots={} walked_pages={} skipped_pages={} \
                      references={} spill_runs={} spill_bytes={} elapsed_ms={}",
-                    shape.roots, shape.walked_pages, shape.skipped_pages,
-                    shape.references, shape.spill_runs, shape.spill_bytes,
-                    build_started.elapsed().as_millis(),
-                ));
+                        shape.roots,
+                        shape.walked_pages,
+                        shape.skipped_pages,
+                        shape.references,
+                        shape.spill_runs,
+                        shape.spill_bytes,
+                        build_started.elapsed().as_millis(),
+                    ),
+                );
                 epoch.marks = Some(live);
                 Ok(shape)
             }
@@ -1178,122 +1228,133 @@ impl OnlineGarbageCollector {
         let mut holds = SingleFileHolds::new(blocks, Duration::ZERO, stop);
         let mut copies_removed = BlockRemovalMetrics::default();
         let mut victims_removed = BlockRemovalMetrics::default();
-        let result = blocks.visit_block_shards(
-            |shard, block_ids| {
+        let result = blocks.visit_block_shards(|shard, block_ids| {
+            if stop.load(Ordering::Acquire) {
+                return Err(would_block("online GC epoch stopped"));
+            }
+            if block_ids.is_empty() {
+                return Ok(());
+            }
+            let live_for_shard = marks.live_for_shard(shard)?;
+            let previous_for_shard = match self.previous.suspects.as_ref() {
+                Some(previous) => previous.live_for_shard(shard)?,
+                None => Vec::new(),
+            };
+            // Live blocks of this shard whose loose file is a redundant
+            // copy, with the catalogued segment that holds each.
+            let mut redundant_copies = Vec::new();
+            let mut victims = Vec::new();
+            for block_id in block_ids {
                 if stop.load(Ordering::Acquire) {
                     return Err(would_block("online GC epoch stopped"));
                 }
-                if block_ids.is_empty() {
-                    return Ok(());
-                }
-                let live_for_shard = marks.live_for_shard(shard)?;
-                let previous_for_shard = match self.previous.suspects.as_ref() {
-                    Some(previous) => previous.live_for_shard(shard)?,
-                    None => Vec::new(),
-                };
-                // Live blocks of this shard whose loose file is a redundant
-                // copy, with the catalogued segment that holds each.
-                let mut redundant_copies = Vec::new();
-                let mut victims = Vec::new();
-                for block_id in block_ids {
-                    if stop.load(Ordering::Acquire) {
-                        return Err(would_block("online GC epoch stopped"));
+                if current_payload_manifest == Some(block_id)
+                    || live_for_shard.binary_search(&block_id).is_ok()
+                {
+                    // One exact membership probe per live block while
+                    // either of its uses is open: a block the catalog
+                    // already holds is a redundant copy; any other is a
+                    // compaction candidate once its size fits a segment,
+                    // and only compaction sizes a block.
+                    if !(copies_open || compaction_open) {
+                        continue;
                     }
-                    if current_payload_manifest == Some(block_id)
-                        || live_for_shard.binary_search(&block_id).is_ok()
-                    {
-                        // One exact membership probe per live block while
-                        // either of its uses is open: a block the catalog
-                        // already holds is a redundant copy; any other is a
-                        // compaction candidate once its size fits a segment,
-                        // and only compaction sizes a block.
-                        if !(copies_open || compaction_open) {
-                            continue;
+                    if let Some(segment_id) = blocks.catalogued_payload_segment(block_id)? {
+                        if copies_open {
+                            redundant_copies.push((block_id, segment_id));
                         }
-                        if let Some(segment_id) = blocks.catalogued_payload_segment(block_id)? {
-                            if copies_open {
-                                redundant_copies.push((block_id, segment_id));
-                            }
-                            continue;
-                        }
-                        if compaction_open {
-                            let block_bytes = blocks.block_file_bytes(block_id)?;
-                            if block_bytes <= compaction_byte_limit {
-                                // A block the open segment cannot take closes
-                                // it: pack that segment, then open the next.
-                                if epoch.compaction_ids.len() == MAX_SEGMENT_BLOCKS
-                                    || compaction_bytes + block_bytes > compaction_byte_limit
+                        continue;
+                    }
+                    if compaction_open {
+                        let block_bytes = blocks.block_file_bytes(block_id)?;
+                        if block_bytes <= compaction_byte_limit {
+                            // A block the open segment cannot take closes
+                            // it: pack that segment, then open the next.
+                            if epoch.compaction_ids.len() == MAX_SEGMENT_BLOCKS
+                                || compaction_bytes + block_bytes > compaction_byte_limit
+                            {
+                                // Any error but a stop ends compaction
+                                // only; the suspects still complete.
+                                compaction_open = match self
+                                    .pack_compaction_segment(database, epoch, blocks, stop)
                                 {
-                                    // Any error but a stop ends compaction
-                                    // only; the suspects still complete.
-                                    compaction_open = match self
-                                        .pack_compaction_segment(database, epoch, blocks, stop)
-                                    {
-                                        Err(error) if !stop.load(Ordering::Acquire) => {
-                                            epoch.scan_failure.get_or_insert(error);
-                                            false
-                                        }
-                                        packed => packed?,
-                                    };
-                                    compaction_bytes = 0;
-                                }
-                                if compaction_open {
-                                    epoch.compaction_ids.push(block_id);
-                                    compaction_bytes += block_bytes;
-                                }
+                                    Err(error) if !stop.load(Ordering::Acquire) => {
+                                        epoch.scan_failure.get_or_insert(error);
+                                        false
+                                    }
+                                    packed => packed?,
+                                };
+                                compaction_bytes = 0;
+                            }
+                            if compaction_open {
+                                epoch.compaction_ids.push(block_id);
+                                compaction_bytes += block_bytes;
                             }
                         }
-                        continue;
                     }
-                    suspects_next.insert(block_id)?;
-                    // A block unlinked after `previous` was observed can be
-                    // listed again only as a fresh write, which no relink
-                    // decision records; it confirms from this scan instead.
-                    if previous_for_shard.binary_search(&block_id).is_err()
-                        || self.previous.unlinked_loose.binary_search(&block_id).is_ok()
-                    {
-                        continue;
-                    }
-                    victims.push(block_id);
+                    continue;
                 }
-                // The shard's redundant copies and confirmed victims go before
-                // the next shard is listed, so their IDs never outgrow one
-                // shard and no count bounds what one epoch reclaims.
-                if !redundant_copies.is_empty() && copies_open {
-                    let before = holds.removed;
-                    let removed = self.remove_loose_copies(database, &mut holds, redundant_copies, stop);
-                    copies_removed.blocks_removed += holds.removed.blocks_removed - before.blocks_removed;
-                    copies_removed.bytes_removed += holds.removed.bytes_removed - before.bytes_removed;
-                    if let Err(error) = removed {
-                        if stop.load(Ordering::Acquire) {
-                            return Err(error);
-                        }
-                        // Any error but a stop ends copy removal only; the
-                        // suspects still complete.
-                        epoch.scan_failure.get_or_insert(error);
-                        copies_open = false;
-                    }
+                suspects_next.insert(block_id)?;
+                // A block unlinked after `previous` was observed can be
+                // listed again only as a fresh write, which no relink
+                // decision records; it confirms from this scan instead.
+                if previous_for_shard.binary_search(&block_id).is_err()
+                    || self
+                        .previous
+                        .unlinked_loose
+                        .binary_search(&block_id)
+                        .is_ok()
+                {
+                    continue;
                 }
-                if !victims.is_empty() && victims_open {
-                    epoch.confirmed_loose_planned = true;
-                    let before = holds.removed;
-                    let deleted = self.delete_victims(database, &mut holds, victims, &mut epoch.unlinked_loose, stop);
-                    victims_removed.blocks_removed += holds.removed.blocks_removed - before.blocks_removed;
-                    victims_removed.bytes_removed += holds.removed.bytes_removed - before.bytes_removed;
-                    if let Err(error) = deleted {
-                        if stop.load(Ordering::Acquire) {
-                            return Err(error);
-                        }
-                        // Any error but a stop ends victim deletion only; the
-                        // suspects still complete, and the victims it left
-                        // confirm again next epoch.
-                        epoch.scan_failure.get_or_insert(error);
-                        victims_open = false;
+                victims.push(block_id);
+            }
+            // The shard's redundant copies and confirmed victims go before
+            // the next shard is listed, so their IDs never outgrow one
+            // shard and no count bounds what one epoch reclaims.
+            if !redundant_copies.is_empty() && copies_open {
+                let before = holds.removed;
+                let removed =
+                    self.remove_loose_copies(database, &mut holds, redundant_copies, stop);
+                copies_removed.blocks_removed +=
+                    holds.removed.blocks_removed - before.blocks_removed;
+                copies_removed.bytes_removed += holds.removed.bytes_removed - before.bytes_removed;
+                if let Err(error) = removed {
+                    if stop.load(Ordering::Acquire) {
+                        return Err(error);
                     }
+                    // Any error but a stop ends copy removal only; the
+                    // suspects still complete.
+                    epoch.scan_failure.get_or_insert(error);
+                    copies_open = false;
                 }
-                Ok(())
-            },
-        );
+            }
+            if !victims.is_empty() && victims_open {
+                epoch.confirmed_loose_planned = true;
+                let before = holds.removed;
+                let deleted = self.delete_victims(
+                    database,
+                    &mut holds,
+                    victims,
+                    &mut epoch.unlinked_loose,
+                    stop,
+                );
+                victims_removed.blocks_removed +=
+                    holds.removed.blocks_removed - before.blocks_removed;
+                victims_removed.bytes_removed += holds.removed.bytes_removed - before.bytes_removed;
+                if let Err(error) = deleted {
+                    if stop.load(Ordering::Acquire) {
+                        return Err(error);
+                    }
+                    // Any error but a stop ends victim deletion only; the
+                    // suspects still complete, and the victims it left
+                    // confirm again next epoch.
+                    epoch.scan_failure.get_or_insert(error);
+                    victims_open = false;
+                }
+            }
+            Ok(())
+        });
         epoch.redundant_copies_removed = copies_removed.blocks_removed;
         epoch.reclaimed_blocks += victims_removed.blocks_removed;
         epoch.reclaimed_bytes += copies_removed.bytes_removed + victims_removed.bytes_removed;
@@ -1305,7 +1366,6 @@ impl OnlineGarbageCollector {
         }
         epoch.compaction_planned = !epoch.compaction_ids.is_empty();
         Ok(())
-
     }
 
     /// Catalog pressure mode engages at 75% of the 4,096-entry ceiling. At
@@ -1347,7 +1407,10 @@ impl OnlineGarbageCollector {
         // The replacement is one segment: its retained union must fit the
         // segment format (blocks and payload bytes), not only the budget. A
         // victim's file bytes bound its retained payload from above.
-        let byte_limit = self.budget.maximum_temporary_bytes.min(MAX_SEGMENT_PAYLOAD_BYTES);
+        let byte_limit = self
+            .budget
+            .maximum_temporary_bytes
+            .min(MAX_SEGMENT_PAYLOAD_BYTES);
         for (reference, retained_ids, _) in candidates {
             if victims.len() >= PRESSURE_CONSOLIDATION_VICTIMS {
                 break;
@@ -1359,7 +1422,9 @@ impl OnlineGarbageCollector {
                 retained_bytes.saturating_add(reference.file_bytes)
             };
             let next_blocks = retained_blocks + retained_ids.len();
-            if !retained_ids.is_empty() && (next_bytes > byte_limit || next_blocks > MAX_SEGMENT_BLOCKS) {
+            if !retained_ids.is_empty()
+                && (next_bytes > byte_limit || next_blocks > MAX_SEGMENT_BLOCKS)
+            {
                 continue;
             }
             victims.push(reference);
@@ -1371,7 +1436,9 @@ impl OnlineGarbageCollector {
             // Consolidation subsumes a rewrite that shares a victim; never
             // run both against the same segment in one epoch.
             if epoch.rewrite_victim.as_ref().is_some_and(|(reference, _)| {
-                victims.iter().any(|victim| victim.segment_id == reference.segment_id)
+                victims
+                    .iter()
+                    .any(|victim| victim.segment_id == reference.segment_id)
             }) {
                 epoch.rewrite_planned = false;
                 epoch.rewrite_victim = None;
@@ -1401,8 +1468,10 @@ impl OnlineGarbageCollector {
         let window_count = references
             .len()
             .div_ceil(MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED);
-        let window = self.payload_window_cursor
-            .unwrap_or(epoch.capture.snapshot.generation as usize) % window_count;
+        let window = self
+            .payload_window_cursor
+            .unwrap_or(epoch.capture.snapshot.generation as usize)
+            % window_count;
         let start = window * MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED;
         let selected = &references[start
             ..references
@@ -1452,7 +1521,8 @@ impl OnlineGarbageCollector {
                 .segment_dead
                 .get(&reference.segment_id)
                 .is_some_and(|previous_dead| *previous_dead == dead_ids);
-            if !dead_ids.is_empty() && epoch.segment_dead_next.len() < MAX_TRACKED_SEGMENT_DEAD_SETS {
+            if !dead_ids.is_empty() && epoch.segment_dead_next.len() < MAX_TRACKED_SEGMENT_DEAD_SETS
+            {
                 epoch
                     .segment_dead_next
                     .insert(reference.segment_id, dead_ids.clone());
@@ -1472,13 +1542,13 @@ impl OnlineGarbageCollector {
             if dead_ids.is_empty() {
                 continue;
             }
-            if confirmed && epoch.rewrite_victim.is_none() {
-                if retained_ids.is_empty()
-                    || reference.file_bytes <= self.budget.maximum_temporary_bytes
-                {
-                    epoch.rewrite_planned = true;
-                    epoch.rewrite_victim = Some((*reference, retained_ids.clone()));
-                }
+            if confirmed
+                && epoch.rewrite_victim.is_none()
+                && (retained_ids.is_empty()
+                    || reference.file_bytes <= self.budget.maximum_temporary_bytes)
+            {
+                epoch.rewrite_planned = true;
+                epoch.rewrite_victim = Some((*reference, retained_ids.clone()));
             }
         }
         self.plan_consolidation(epoch, manifest_segments_len);
@@ -1639,7 +1709,9 @@ impl OnlineGarbageCollector {
         let mut holds = SingleFileHolds::new(blocks, Duration::ZERO, stop);
         let publish = holds.attempt(database, |database| {
             if !self.compaction_has_catalog_slot(blocks)? {
-                return Err(would_block("online GC compaction catalog reached the pressure floor"));
+                return Err(would_block(
+                    "online GC compaction catalog reached the pressure floor",
+                ));
             }
             database.online_gc_finish_compaction(&compaction_ids, reference)
         });
@@ -1650,7 +1722,9 @@ impl OnlineGarbageCollector {
                 self.remove_loose_copies(
                     database,
                     &mut holds,
-                    compaction_ids.iter().map(|&copy| (copy, metrics.segment_id)),
+                    compaction_ids
+                        .iter()
+                        .map(|&copy| (copy, metrics.segment_id)),
                     stop,
                 )?;
                 epoch.reclaimed_bytes += holds.removed.bytes_removed;
@@ -1798,23 +1872,19 @@ impl OnlineGarbageCollector {
         blocks: &Arc<BlockStore>,
         plan: &ConsolidationPlan,
     ) -> io::Result<Option<(PayloadSegment, PayloadSegmentReference)>> {
-        let mut retained: Vec<BlockId> = plan
-            .retained_per_victim
-            .iter()
-            .flatten()
-            .copied()
-            .collect();
+        let mut retained: Vec<BlockId> =
+            plan.retained_per_victim.iter().flatten().copied().collect();
         if retained.is_empty() {
             return Ok(None);
         }
         retained.sort_unstable();
         retained.dedup();
         let segment_id = Uuid::new_v4();
-        let segment = blocks.payload_segment_store()?.create(
-            segment_id,
-            retained,
-            |block_id| blocks.get_traversal(block_id),
-        )?;
+        let segment = blocks
+            .payload_segment_store()?
+            .create(segment_id, retained, |block_id| {
+                blocks.get_traversal(block_id)
+            })?;
         let reference = PayloadSegmentReference::new(
             segment.metadata(),
             segment.first_block_id(),
@@ -1869,7 +1939,11 @@ impl OnlineGarbageCollector {
 /// the collector itself names are touched; anything else is left in place.
 pub(crate) fn wipe_work_directories(data_dir: &Path, vfs: &dyn Vfs) {
     let work = data_dir.join(WORK_DIRECTORY);
-    for leaf in [MARKS_DIRECTORY, SUSPECTS_DIRECTORIES[0], SUSPECTS_DIRECTORIES[1]] {
+    for leaf in [
+        MARKS_DIRECTORY,
+        SUSPECTS_DIRECTORIES[0],
+        SUSPECTS_DIRECTORIES[1],
+    ] {
         let runs = work.join(leaf).join("gc-runs");
         let Ok(entries) = vfs.read_directory(&runs) else {
             continue;
@@ -1989,7 +2063,10 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                 .map_err(|_| io::Error::other("authority mutex poisoned"))?;
             guard.install_gc_handle(handle.clone())?;
             // A search index still opening is resolved when an epoch is due.
-            guard.gc_database().ok().map(|database| Arc::downgrade(&database.block_store_shared()))
+            guard
+                .gc_database()
+                .ok()
+                .map(|database| Arc::downgrade(&database.block_store_shared()))
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::new(AtomicBool::new(false));
@@ -2002,7 +2079,9 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                 let database = Arc::clone(database);
                 let watch = watch.clone();
                 move || {
-                    crate::fsync_stats::set_current_component(crate::fsync_stats::COMPONENT_ONLINE_GC);
+                    crate::fsync_stats::set_current_component(
+                        crate::fsync_stats::COMPONENT_ONLINE_GC,
+                    );
                     let mut reported_held = false;
                     loop {
                         if stop.load(Ordering::Acquire) {
@@ -2034,7 +2113,9 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                             // mutex, even when this epoch's capture then defers
                             // under foreground contention. A failed or stopped
                             // build is retried next epoch.
-                            if let Some(blocks) = catalog_location_store(&mut catalog_blocks, &database) {
+                            if let Some(blocks) =
+                                catalog_location_store(&mut catalog_blocks, &database)
+                            {
                                 let running = || {
                                     if epoch_stop.load(Ordering::Acquire) {
                                         return Err(would_block("online GC driver stopped"));
@@ -2049,12 +2130,18 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
                             let outcome = collector.run_epoch(&database, epoch_stop);
                             if !stop.load(Ordering::Acquire)
                                 && epoch_stop.load(Ordering::Acquire)
-                                && !matches!(outcome, Ok(OnlineGarbageCollectionOutcome::EpochComplete))
+                                && !matches!(
+                                    outcome,
+                                    Ok(OnlineGarbageCollectionOutcome::EpochComplete)
+                                )
                             {
-                                crate::engine_log::info("online_gc", &format!(
-                                    "epoch=paused reason=scheduler-task system_key={}",
-                                    crate::generated_storage_v2::ONLINE_GC_SCHEDULER_SYSTEM_KEY,
-                                ));
+                                crate::engine_log::info(
+                                    "online_gc",
+                                    &format!(
+                                        "epoch=paused reason=scheduler-task system_key={}",
+                                        crate::generated_storage_v2::ONLINE_GC_SCHEDULER_SYSTEM_KEY,
+                                    ),
+                                );
                             }
                         }
                         std::thread::sleep(DRIVER_POLL_INTERVAL);
@@ -2069,10 +2156,7 @@ impl<D: OnlineGcDatabase> OnlineGarbageCollectionDriver<D> {
             stop,
             watch,
             thread: Mutex::new(Some(thread)),
-            observer: OnlineGarbageCollectionObserver {
-                handle,
-                stopped,
-            },
+            observer: OnlineGarbageCollectionObserver { handle, stopped },
             database: Arc::clone(database),
         })
     }
@@ -2132,20 +2216,20 @@ mod tests_fault;
 #[cfg(test)]
 mod tests_capture;
 #[cfg(test)]
-mod tests_mark_cost;
+mod tests_fallback_slot;
 #[cfg(test)]
 mod tests_listing;
 #[cfg(test)]
-mod tests_segment_reclaim;
-#[cfg(test)]
-mod tests_fallback_slot;
+mod tests_mark_cost;
 #[cfg(test)]
 mod tests_publication_window;
 #[cfg(test)]
 mod tests_rebirth;
 #[cfg(test)]
-mod tests_short_holds;
+mod tests_reclaim_throughput;
 #[cfg(test)]
 mod tests_redundant_copies;
 #[cfg(test)]
-mod tests_reclaim_throughput;
+mod tests_segment_reclaim;
+#[cfg(test)]
+mod tests_short_holds;

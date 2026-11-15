@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
@@ -62,7 +62,6 @@ pub struct MultiplexedEngineLogicalOutboxSink {
     config: MultiplexedEngineLogicalOutboxSinkConfig,
     owner_states: BTreeMap<LogicalOutboxOwnerScope, OwnerState>,
     total_logical_bytes: u64,
-    real_capacity_path: Option<PathBuf>,
 }
 
 fn invalid_input(message: &str) -> io::Error {
@@ -237,11 +236,7 @@ impl MultiplexedEngineLogicalOutboxSink {
     ) -> io::Result<Self> {
         let config = config.canonicalized()?;
         preflight_real_capacity(data_dir, config.max_logical_bytes)?;
-        Self::initialize_database(
-            AuthorityDatabase::initialize(data_dir)?,
-            config,
-            Some(data_dir.to_owned()),
-        )
+        Self::initialize_database(AuthorityDatabase::initialize(data_dir)?, config)
     }
 
     pub fn open(
@@ -252,11 +247,7 @@ impl MultiplexedEngineLogicalOutboxSink {
         if !data_dir.is_absolute() {
             return Err(invalid_input("multiplexed sink path must be absolute"));
         }
-        let sink = Self::open_database(
-            AuthorityDatabase::open(data_dir)?,
-            config,
-            Some(data_dir.to_owned()),
-        )?;
+        let sink = Self::open_database(AuthorityDatabase::open(data_dir)?, config)?;
         Ok(sink)
     }
 
@@ -268,7 +259,6 @@ impl MultiplexedEngineLogicalOutboxSink {
         Self::initialize_database(
             AuthorityDatabase::initialize_with_vfs(data_dir, vfs)?,
             config.canonicalized()?,
-            None,
         )
     }
 
@@ -280,14 +270,12 @@ impl MultiplexedEngineLogicalOutboxSink {
         Self::open_database(
             AuthorityDatabase::open_with_vfs(data_dir, vfs)?,
             config.canonicalized()?,
-            None,
         )
     }
 
     fn initialize_database(
         mut database: AuthorityDatabase,
         config: MultiplexedEngineLogicalOutboxSinkConfig,
-        real_capacity_path: Option<PathBuf>,
     ) -> io::Result<Self> {
         let mut transaction = database.begin(
             config.administrative_scope.tenant_id,
@@ -309,14 +297,12 @@ impl MultiplexedEngineLogicalOutboxSink {
             config,
             owner_states: BTreeMap::new(),
             total_logical_bytes: 0,
-            real_capacity_path,
         })
     }
 
     fn open_database(
         database: AuthorityDatabase,
         config: MultiplexedEngineLogicalOutboxSinkConfig,
-        real_capacity_path: Option<PathBuf>,
     ) -> io::Result<Self> {
         let mut transaction = database.begin(
             config.administrative_scope.tenant_id,
@@ -360,7 +346,6 @@ impl MultiplexedEngineLogicalOutboxSink {
             config,
             owner_states,
             total_logical_bytes,
-            real_capacity_path,
         })
     }
 

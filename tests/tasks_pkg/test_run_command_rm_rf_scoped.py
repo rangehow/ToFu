@@ -295,6 +295,8 @@ class TestTrashWrapSkipsOutsideWorkspace:
         direct-delete branch only exists when cwd is absolute."""
         from lib.project_mod.run_command import _maybe_wrap_rm_with_trash
         out = _maybe_wrap_rm_with_trash(f'{_RM} -rf build/', 'rel/base')
-        assert 'command rm' not in out and '.tofu_trash' in out
+        # Only the cache-tagged branch deletes directly here; the outside-
+        # workspace branch (it judges ``$_p``) needs an absolute cwd.
+        assert 'case "$_p"' not in out and '.tofu_trash' in out
         out_abs = _maybe_wrap_rm_with_trash(f'{_RM} -rf build/', '/abs/base')
-        assert 'command rm' in out_abs
+        assert 'case "$_p"' in out_abs

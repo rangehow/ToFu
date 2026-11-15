@@ -7,8 +7,7 @@ use crate::block::BlockId;
 use crate::engine::Engine;
 use crate::entity::{EntityDatabase, EntityKey, EntityTransaction};
 use crate::generated_tofudb_ir::{
-    MAX_STREAM_EVENT_BYTES,
-    MAX_STREAM_READ_BYTES, MAX_STREAM_READ_EVENTS,
+    MAX_STREAM_EVENT_BYTES, MAX_STREAM_READ_BYTES, MAX_STREAM_READ_EVENTS,
 };
 use crate::transaction::{decode_family_records, FamilyRecordKind};
 
@@ -27,15 +26,21 @@ pub(crate) fn append_composition_segment_overhead(domain: &str) -> (usize, usize
 
 pub(crate) fn append_composition_catalog_bytes(key: &StreamKey) -> io::Result<usize> {
     let metadata = encode_catalog_metadata(CatalogMetadata {
-        retained_from_sequence: 1, end_sequence: 1,
+        retained_from_sequence: 1,
+        end_sequence: 1,
     })?;
     let segment = encode_catalog_segment(&SegmentReference {
-        block_id: BlockId([0; 32]), event_count: 1,
-        minimum_created_at_ms: 1, maximum_created_at_ms: 1,
+        block_id: BlockId([0; 32]),
+        event_count: 1,
+        minimum_created_at_ms: 1,
+        maximum_created_at_ms: 1,
     });
     // The ordinary entity overlay encodes [u32 key_len|key|u32 value_len|value].
-    Ok(8 + catalog_metadata_key(key)?.encoded().len() + metadata.len()
-        + 8 + catalog_segment_key(key, 1)?.encoded().len() + segment.len())
+    Ok(8 + catalog_metadata_key(key)?.encoded().len()
+        + metadata.len()
+        + 8
+        + catalog_segment_key(key, 1)?.encoded().len()
+        + segment.len())
 }
 const MAX_DOMAIN_BYTES: usize = 63;
 const MAX_STREAM_ID_BYTES: usize = 512;
@@ -708,12 +713,15 @@ pub(crate) fn prepare_persisted_append(
         // encoded segment. Use the same owned fresh staging as COW pages:
         // never search old history or loose paths merely to dedup new bytes.
         let encoded = {
-            let _encode = crate::request_profile::Probe::new(crate::request_profile::STREAM_SEGMENT_ENCODE);
+            let _encode =
+                crate::request_profile::Probe::new(crate::request_profile::STREAM_SEGMENT_ENCODE);
             encode_segment(key, first_sequence, segment_events)?
         };
         let bytes = encoded.len();
         let block_id = {
-            let _publish = crate::request_profile::Probe::new(crate::request_profile::STREAM_SEGMENT_FRESH_PUBLISH);
+            let _publish = crate::request_profile::Probe::new(
+                crate::request_profile::STREAM_SEGMENT_FRESH_PUBLISH,
+            );
             engine.write_block_fresh_owned(encoded)?
         };
         crate::request_profile::work(crate::request_profile::Work::FreshStreamSegments, 1);
@@ -992,9 +1000,7 @@ impl StreamCommit {
                 i64::from_le_bytes(take(encoded, &mut offset, 8)?.try_into().unwrap());
             let maximum_created_at_ms =
                 i64::from_le_bytes(take(encoded, &mut offset, 8)?.try_into().unwrap());
-            if segment_events == 0
-                || minimum_created_at_ms > maximum_created_at_ms
-            {
+            if segment_events == 0 || minimum_created_at_ms > maximum_created_at_ms {
                 return Err(invalid_data("stream commit segment metadata is invalid"));
             }
             summed_events = summed_events
@@ -1438,7 +1444,10 @@ mod tests {
             let metrics = engine.block_write_metrics();
             // Stream segments spill through one payload segment; loose writes
             // never exceed one per stream segment (no per-event blocks).
-            assert!(metrics.blocks_written <= result.segment_count as u64, "{metrics:?}");
+            assert!(
+                metrics.blocks_written <= result.segment_count as u64,
+                "{metrics:?}"
+            );
             assert!(metrics.bytes_written < 6_000_000);
         }
         let engine = Engine::open(directory.path()).unwrap();
@@ -1488,19 +1497,22 @@ mod tests {
         let mut catalog = StreamCatalog::rebuild(&engine).unwrap();
         let key = StreamKey::new(1, 2, "turn", b"conversation-1").unwrap();
         let oversized: Vec<_> = (0..40).map(|index| event(index, 250_000)).collect();
-        catalog.append(&mut engine, 1, 2, &key, 1, &oversized).unwrap();
+        catalog
+            .append(&mut engine, 1, 2, &key, 1, &oversized)
+            .unwrap();
         let page = catalog.read(&engine, 1, 2, &key, 1, 1_000).unwrap();
         assert_eq!(page.events.len(), 33);
         assert_eq!(page.next_sequence, 34);
         assert!(!page.end_of_stream);
-        let tail = catalog.read(&engine, 1, 2, &key, page.next_sequence, 1_000).unwrap();
+        let tail = catalog
+            .read(&engine, 1, 2, &key, page.next_sequence, 1_000)
+            .unwrap();
         assert_eq!(tail.events.len(), 7);
         assert!(tail.end_of_stream);
         for (ordinal, row) in page.events.iter().chain(tail.events.iter()).enumerate() {
             assert_eq!(row.sequence, ordinal as u64 + 1);
             assert_eq!(row.event, oversized[ordinal]);
         }
-
     }
 
     #[test]

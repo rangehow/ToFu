@@ -25,8 +25,7 @@ use crate::generated_tofudb_ir::{
     CONVERSATION_TRASH_AGE_INDEX_NAMESPACE, CONVERSATION_TRASH_METADATA_NAMESPACE,
     CONVERSATION_TRASH_SETTINGS_OVERLAY_NAMESPACE, CONVERSATION_UPDATED_INDEX_NAMESPACE,
     MAX_ACTIVITY_CANDIDATE_BACKFILL_ROWS_PER_TRANSACTION,
-    MAX_ACTIVITY_CANDIDATE_BACKFILL_SOURCE_BYTES_PER_TRANSACTION,
-    MAX_TASK_RESULT_CACHE_FACT,
+    MAX_ACTIVITY_CANDIDATE_BACKFILL_SOURCE_BYTES_PER_TRANSACTION, MAX_TASK_RESULT_CACHE_FACT,
 };
 
 pub(crate) const TENANT_GLOBAL_OWNER_ID: u64 = u64::MAX;
@@ -527,7 +526,8 @@ fn activity_candidate_index_is_maintained(
     // proves maintenance. The building key is only consulted when the
     // complete marker is absent, preserving the full state machine's
     // malformed/overlap detection off the hot path.
-    if let Some(value) = database.entity_get(transaction, &activity_candidate_state_key(transaction)?)?
+    if let Some(value) =
+        database.entity_get(transaction, &activity_candidate_state_key(transaction)?)?
     {
         if value == ACTIVITY_CANDIDATE_STATE_MAGIC {
             return Ok(true);
@@ -720,17 +720,16 @@ fn load_header(
     // Single-parse hot path: the projection envelope the generic get used to
     // build (parse -> re-serialize -> parse -> clone) collapses into one parse
     // whose object map is moved out untouched.
-    let (value, physical_version) =
-        match crate::versioned_document::get_value_with_version(
-            database,
-            transaction,
-            &key,
-            "conversations",
-            conversation_id,
-        )? {
-            None => return Ok(None),
-            Some(parts) => parts,
-        };
+    let (value, physical_version) = match crate::versioned_document::get_value_with_version(
+        database,
+        transaction,
+        &key,
+        "conversations",
+        conversation_id,
+    )? {
+        None => return Ok(None),
+        Some(parts) => parts,
+    };
     let header = match serde_json::from_slice::<Value>(&value) {
         Ok(Value::Object(header)) => header,
         _ => return Err(invalid_data("conversation header is malformed")),
@@ -751,8 +750,7 @@ pub(crate) fn turn_usage(
     deadline_elapsed: &mut dyn FnMut() -> bool,
 ) -> io::Result<Option<Vec<u8>>> {
     let conversation_id = request.conversation_id.as_str();
-    let Some((header, _physical_version)) =
-        load_header(database, transaction, conversation_id)?
+    let Some((header, _physical_version)) = load_header(database, transaction, conversation_id)?
     else {
         return Ok(None);
     };
@@ -764,7 +762,9 @@ pub(crate) fn turn_usage(
         header.get("created_at").and_then(Value::as_u64),
         header.get("updated_at").and_then(Value::as_u64),
     ) else {
-        return Err(invalid_data("conversation header integer field is malformed"));
+        return Err(invalid_data(
+            "conversation header integer field is malformed",
+        ));
     };
     let settings = header
         .get("settings")
@@ -773,7 +773,11 @@ pub(crate) fn turn_usage(
         .ok_or_else(|| invalid_data("conversation header identity is malformed"))?;
     let attribution: Map<String, Value> = TURN_USAGE_SETTINGS_FIELDS
         .iter()
-        .filter_map(|field| settings.get(*field).map(|value| ((*field).to_owned(), value.clone())))
+        .filter_map(|field| {
+            settings
+                .get(*field)
+                .map(|value| ((*field).to_owned(), value.clone()))
+        })
         .collect();
     let window = (request.timestamp_gte, request.timestamp_lt);
     let characters = if title.is_empty() {
@@ -817,16 +821,14 @@ pub(crate) fn turn_usage(
                                 .or_else(|| value.as_u64().map(i128::from))
                         })
                         .filter(|time| *time != 0);
-                    if integer.is_some_and(|time| {
-                        !crate::turn::usage_projection::in_window(time, window)
-                    }) {
+                    if integer
+                        .is_some_and(|time| !crate::turn::usage_projection::in_window(time, window))
+                    {
                         return Ok(());
                     }
-                    if let Some(row) = crate::turn::usage_projection::usage_row(
-                        &message,
-                        index as u64,
-                        timestamp,
-                    ) {
+                    if let Some(row) =
+                        crate::turn::usage_projection::usage_row(&message, index as u64, timestamp)
+                    {
                         rows.push(row);
                     }
                     Ok(())
@@ -1055,7 +1057,12 @@ fn store_header(
     // Recency-directory maintenance rides the same transaction as the header
     // write (docs/TOFUDB_RECENCY_DIRECTORY.md): upsert with the exact sort
     // key the legacy sidebar comparator reads.
-    recency::note_upsert(database, transaction, conversation_id, recency_updated_at_ms)?;
+    recency::note_upsert(
+        database,
+        transaction,
+        conversation_id,
+        recency_updated_at_ms,
+    )?;
     Ok(stored_envelope)
 }
 
@@ -1090,7 +1097,12 @@ fn store_header_with_cas_read(
             updated_at_ms: committed_at_ms,
         },
     )?;
-    recency::note_upsert(database, transaction, conversation_id, recency_updated_at_ms)?;
+    recency::note_upsert(
+        database,
+        transaction,
+        conversation_id,
+        recency_updated_at_ms,
+    )?;
     Ok(stored_envelope)
 }
 
@@ -1201,8 +1213,15 @@ pub(crate) fn advance_for_turns(
     committed_at_ms: u64,
     added_main_turns: u64,
 ) -> io::Result<u64> {
-    advance_for_turn_changes(database, transaction, conversation_id, now_ms,
-        committed_at_ms, added_main_turns, 1)
+    advance_for_turn_changes(
+        database,
+        transaction,
+        conversation_id,
+        now_ms,
+        committed_at_ms,
+        added_main_turns,
+        1,
+    )
 }
 
 /// One explicitly atomic Turn frame preserves every logical revision while
@@ -1215,9 +1234,18 @@ pub(crate) fn advance_for_turn_event_frame(
     now_ms: u64,
     revisions: u64,
 ) -> io::Result<u64> {
-    if revisions == 0 { return Err(invalid_input("empty Turn execution frame")); }
-    advance_for_turn_changes(database, transaction, conversation_id, now_ms,
-        now_ms, 0, revisions)
+    if revisions == 0 {
+        return Err(invalid_input("empty Turn execution frame"));
+    }
+    advance_for_turn_changes(
+        database,
+        transaction,
+        conversation_id,
+        now_ms,
+        now_ms,
+        0,
+        revisions,
+    )
 }
 
 fn advance_for_turn_changes(
@@ -1532,15 +1560,20 @@ pub(crate) fn sync_header(
 // Creation count/activity maintenance is sequencer-owned unless a later
 // predicate reads it; those reads flush pending effects on the original view.
 fn read_count(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction, key: &EntityKey,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    key: &EntityKey,
 ) -> io::Result<u64> {
     database.flush_deferred_indexes(transaction)?;
     decode_count(database.entity_get(transaction, key)?)
 }
 
 pub(crate) fn apply_created_metadata(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-    conversation_id: &str, created_at_ms: u64, updated_at_ms: u64,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    conversation_id: &str,
+    created_at_ms: u64,
+    updated_at_ms: u64,
 ) -> io::Result<()> {
     let count_key = key(
         transaction.tenant_id(),
@@ -1566,8 +1599,13 @@ pub(crate) fn apply_created_metadata(
         )?;
     }
     database.entity_put(transaction, count_key, next_count.to_le_bytes().to_vec())?;
-    put_activity_candidate_if_maintained(database, transaction, conversation_id,
-        created_at_ms, updated_at_ms)
+    put_activity_candidate_if_maintained(
+        database,
+        transaction,
+        conversation_id,
+        created_at_ms,
+        updated_at_ms,
+    )
 }
 
 pub(crate) fn create(
@@ -1623,14 +1661,22 @@ pub(crate) fn create(
     )?;
     database.entity_put(transaction, claim_key, owner_user_id.to_be_bytes().to_vec())?;
     if database.is_preparing_transaction() {
-        database.defer_index_update(transaction, recency::DeferredMutation::Created {
-            conversation_id: request.conversation_id.clone(),
-            created_at_ms: request.created_at_ms,
-            updated_at_ms: request.updated_at_ms,
-        })?;
+        database.defer_index_update(
+            transaction,
+            recency::DeferredMutation::Created {
+                conversation_id: request.conversation_id.clone(),
+                created_at_ms: request.created_at_ms,
+                updated_at_ms: request.updated_at_ms,
+            },
+        )?;
     } else {
-        apply_created_metadata(database, transaction, &request.conversation_id,
-            request.created_at_ms, request.updated_at_ms)?;
+        apply_created_metadata(
+            database,
+            transaction,
+            &request.conversation_id,
+            request.created_at_ms,
+            request.updated_at_ms,
+        )?;
     }
     recency::note_upsert(
         database,
@@ -1820,7 +1866,9 @@ pub(crate) fn delete(
     crate::timer::delete_conversation(database, transaction, &request.conversation_id)?;
     crate::raw_archive::delete_conversation(database, transaction, &request.conversation_id)?;
     crate::turn::dispatchable_index::retire_conversation(
-        database, transaction, &request.conversation_id,
+        database,
+        transaction,
+        &request.conversation_id,
     )?;
     // Derived model continuations are discarded, never archived with trash.
     crate::model_continuation::delete_conversation(
@@ -1970,11 +2018,7 @@ pub(crate) fn restore(
     // Restore advances the execution epoch, which changes public_turn
     // output for older turns: archived at-append messages would diverge
     // from the exact read, so the archive falls back until rebuilt.
-    crate::transcript_archive::invalidate(
-        database,
-        transaction,
-        &request.conversation_id,
-    )?;
+    crate::transcript_archive::invalidate(database, transaction, &request.conversation_id)?;
     // The recency directory records the live count when the header funnel
     // maintains it, so the restored conversation must be counted first.
     let count_key = key(
@@ -2048,11 +2092,7 @@ pub(crate) fn purge(
     transaction: &mut AuthorityTransaction,
     request: &PurgeRequest,
 ) -> io::Result<Vec<u8>> {
-    crate::transcript_archive::invalidate(
-        database,
-        transaction,
-        &request.conversation_id,
-    )?;
+    crate::transcript_archive::invalidate(database, transaction, &request.conversation_id)?;
     let metadata_key = trash_metadata_key(transaction, &request.conversation_id)?;
     let active = load_header(database, transaction, &request.conversation_id)?.is_some();
     let (identities, deleted_at_ms) = if active {
@@ -2106,7 +2146,10 @@ pub(crate) fn purge(
     };
 
     crate::turn::event_retirement::reclaim_for_purge(
-        database, transaction, &request.conversation_id, &identities,
+        database,
+        transaction,
+        &request.conversation_id,
+        &identities,
     )?;
     crate::turn::release_conversation_identity_claims(
         database,
@@ -2378,10 +2421,8 @@ pub(crate) fn count(
         CONVERSATION_COUNT_NAMESPACE,
         COUNT_KEY,
     )?;
-    serde_json::to_vec(
-        &json!({"count": read_count(database, transaction, &count_key)?}),
-    )
-    .map_err(|_| invalid_data("conversation count cannot be encoded"))
+    serde_json::to_vec(&json!({"count": read_count(database, transaction, &count_key)?}))
+        .map_err(|_| invalid_data("conversation count cannot be encoded"))
 }
 
 pub(crate) fn backfill_activity_candidates(
@@ -2597,7 +2638,10 @@ pub(crate) fn activity_dates(
             let candidate = Reverse((updated_at_ms, conversation_id, created_at_ms));
             if candidates.len() < request.limit {
                 candidates.push(candidate);
-            } else if candidates.peek().is_some_and(|oldest| candidate.0 > oldest.0) {
+            } else if candidates
+                .peek()
+                .is_some_and(|oldest| candidate.0 > oldest.0)
+            {
                 candidates.pop();
                 candidates.push(candidate);
             }
@@ -2721,16 +2765,20 @@ pub(crate) fn get_anchored(
     }
     metadata.insert("search_text".to_owned(), Value::String(String::new()));
     let anchor_sequence = match anchor_turn_id {
-        Some(anchor) if include_messages && message_window != 0 => Some(
-            crate::turn::main_lane_sequence(
+        Some(anchor) if include_messages && message_window != 0 => {
+            Some(crate::turn::main_lane_sequence(
                 database,
                 transaction,
                 conversation_id,
                 anchor,
                 deadline_elapsed,
-            )?,
-        ),
-        Some(_) => return Err(invalid_input("conversation anchor requires a message window")),
+            )?)
+        }
+        Some(_) => {
+            return Err(invalid_input(
+                "conversation anchor requires a message window",
+            ))
+        }
         None => None,
     };
     let before_sequence = match anchor_sequence {
@@ -2970,7 +3018,10 @@ struct NewestRows<T> {
 
 impl<T> NewestRows<T> {
     fn new(capacity: usize) -> Self {
-        Self { capacity, rows: BTreeMap::new() }
+        Self {
+            capacity,
+            rows: BTreeMap::new(),
+        }
     }
 
     fn offer(&mut self, updated_at_ms: u64, conversation_id: String, row: T) {
@@ -3020,17 +3071,24 @@ fn catalog_row(conversation_id: String, header: Map<String, Value>) -> io::Resul
         .get("created_at")
         .and_then(Value::as_u64)
         .ok_or_else(|| invalid_data("conversation create timestamp is malformed"))?;
-    Ok(CatalogRow { conversation_id, created_at_ms, updated_at_ms, header })
+    Ok(CatalogRow {
+        conversation_id,
+        created_at_ms,
+        updated_at_ms,
+        header,
+    })
 }
 
 /// Visit one stable-keyed owner namespace in key order, one bounded page at a
 /// time. Returns the visited row count, or `Break` once the visitor stops.
+type CatalogVisit<'v> = dyn FnMut(&EntityKey, &[u8]) -> io::Result<ControlFlow<()>> + 'v;
+
 fn scan_stable_catalog(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     namespace: &str,
     deadline_elapsed: &mut dyn FnMut() -> bool,
-    visit: &mut dyn FnMut(&EntityKey, &[u8]) -> io::Result<ControlFlow<()>>,
+    visit: &mut CatalogVisit<'_>,
 ) -> io::Result<ControlFlow<(), u64>> {
     let tenant_id = transaction.tenant_id();
     let owner_user_id = transaction.owner_user_id();
@@ -3100,7 +3158,12 @@ fn scan_complete_candidates(
             Ok(ControlFlow::Continue(()))
         },
     )?;
-    let count_key = key(tenant_id, owner_user_id, CONVERSATION_COUNT_NAMESPACE, COUNT_KEY)?;
+    let count_key = key(
+        tenant_id,
+        owner_user_id,
+        CONVERSATION_COUNT_NAMESPACE,
+        COUNT_KEY,
+    )?;
     let owner_count = read_count(database, transaction, &count_key)?;
     Ok((scanned == ControlFlow::Continue(owner_count)).then_some(owner_count))
 }
@@ -3170,12 +3233,20 @@ fn candidate_catalog_page(
     for ((updated_at_ms, conversation_id), created_at_ms) in
         newest.newest_first().take(request.limit)
     {
-        let Some(row) =
-            hydrate_candidate(database, transaction, conversation_id, created_at_ms, updated_at_ms)?
+        let Some(row) = hydrate_candidate(
+            database,
+            transaction,
+            conversation_id,
+            created_at_ms,
+            updated_at_ms,
+        )?
         else {
             return Ok(None);
         };
-        items.push(project_header(row.header, request.settings_keys.as_deref())?);
+        items.push(project_header(
+            row.header,
+            request.settings_keys.as_deref(),
+        )?);
     }
     encode_catalog_page(items, owner_count, has_more).map(Some)
 }
@@ -3190,7 +3261,12 @@ fn document_catalog_page(
 ) -> io::Result<Vec<u8>> {
     let tenant_id = transaction.tenant_id();
     let owner_user_id = transaction.owner_user_id();
-    let count_key = key(tenant_id, owner_user_id, CONVERSATION_COUNT_NAMESPACE, COUNT_KEY)?;
+    let count_key = key(
+        tenant_id,
+        owner_user_id,
+        CONVERSATION_COUNT_NAMESPACE,
+        COUNT_KEY,
+    )?;
     let owner_count = read_count(database, transaction, &count_key)?;
     let mut total_count = 0_u64;
     let mut newest = NewestRows::new(request.limit.saturating_add(1));
@@ -3239,10 +3315,12 @@ fn document_catalog_page(
 fn encode_catalog_page(items: Vec<Value>, total_count: u64, has_more: bool) -> io::Result<Vec<u8>> {
     let response = serde_json::to_vec(&json!({
         "items": items, "total_count": total_count, "has_more": has_more,
-    })).map_err(|_| invalid_data("conversation catalog cannot be encoded"))?;
+    }))
+    .map_err(|_| invalid_data("conversation catalog cannot be encoded"))?;
     if response.len() > crate::generated_tofudb_ir::MAX_LEGACY_DOCUMENT_BYTES {
         return Err(crate::resource_exhaustion::domain_bound(
-            "conversation catalog response exceeds 8 MiB",));
+            "conversation catalog response exceeds 8 MiB",
+        ));
     }
     Ok(response)
 }
@@ -3264,13 +3342,15 @@ fn directory_catalog_page(
     let Some((live_count, entries)) = recency::covered_entries(database, transaction)? else {
         return Ok(None);
     };
-    let start = request.before_updated_at_ms.map_or(0, |before_updated_at_ms| {
-        entries.partition_point(|(updated_at_ms, conversation_id)| {
-            *updated_at_ms > before_updated_at_ms
-                || *updated_at_ms == before_updated_at_ms
-                    && conversation_id.as_slice() >= request.before_id.as_bytes()
-        })
-    });
+    let start = request
+        .before_updated_at_ms
+        .map_or(0, |before_updated_at_ms| {
+            entries.partition_point(|(updated_at_ms, conversation_id)| {
+                *updated_at_ms > before_updated_at_ms
+                    || *updated_at_ms == before_updated_at_ms
+                        && conversation_id.as_slice() >= request.before_id.as_bytes()
+            })
+        });
     let live_count_rows = usize::try_from(live_count)
         .map_err(|_| invalid_data("conversation count exceeds address space"))?;
     if start == entries.len() && entries.len() < live_count_rows {
@@ -3321,7 +3401,10 @@ fn list_identity_and_times_match(
     created_at_ms: u64,
     updated_at_ms: u64,
 ) -> bool {
-    request.ids.as_ref().is_none_or(|ids| ids.contains(conversation_id))
+    request
+        .ids
+        .as_ref()
+        .is_none_or(|ids| ids.contains(conversation_id))
         && request
             .updated_at_gte
             .is_none_or(|bound| i128::from(updated_at_ms) >= i128::from(bound))
@@ -3366,12 +3449,15 @@ fn newest_list(
     document_list(database, transaction, request, deadline_elapsed)
 }
 
+/// Conversation id and header document of each list candidate.
+type CandidateRows = Vec<(String, Map<String, Value>)>;
+
 fn candidate_list_rows(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
     request: &ListRequest,
     deadline_elapsed: &mut dyn FnMut() -> bool,
-) -> io::Result<Option<Vec<(String, Map<String, Value>)>>> {
+) -> io::Result<Option<CandidateRows>> {
     if request.project_path.is_some() || request.title_contains.is_some() {
         return Ok(None);
     }
@@ -3381,8 +3467,12 @@ fn candidate_list_rows(
         transaction,
         deadline_elapsed,
         &mut |conversation_id, created_at_ms, updated_at_ms| {
-            if list_identity_and_times_match(request, &conversation_id, created_at_ms, updated_at_ms)
-            {
+            if list_identity_and_times_match(
+                request,
+                &conversation_id,
+                created_at_ms,
+                updated_at_ms,
+            ) {
                 newest.offer(updated_at_ms, conversation_id, created_at_ms);
             }
         },
@@ -3392,8 +3482,13 @@ fn candidate_list_rows(
     }
     let mut rows = Vec::with_capacity(newest.len());
     for ((updated_at_ms, conversation_id), created_at_ms) in newest.newest_first() {
-        let Some(row) =
-            hydrate_candidate(database, transaction, conversation_id, created_at_ms, updated_at_ms)?
+        let Some(row) = hydrate_candidate(
+            database,
+            transaction,
+            conversation_id,
+            created_at_ms,
+            updated_at_ms,
+        )?
         else {
             return Ok(None);
         };
@@ -3412,7 +3507,10 @@ fn document_list(
 ) -> io::Result<Vec<u8>> {
     let tenant_id = transaction.tenant_id();
     let owner_user_id = transaction.owner_user_id();
-    let title_needle = request.title_contains.as_ref().map(|value| value.to_lowercase());
+    let title_needle = request
+        .title_contains
+        .as_ref()
+        .map(|value| value.to_lowercase());
     let mut newest = NewestRows::new(request.limit);
     // The visitor never breaks, so the visited count is the only result.
     let _visited = scan_stable_catalog(
@@ -3452,7 +3550,9 @@ fn encode_newest_list(
 ) -> io::Result<Vec<u8>> {
     let maximum_bytes = if request.include_messages {
         crate::generated_tofudb_ir::MAX_FROZEN_TRANSCRIPT_PAGE_BYTES
-    } else { crate::generated_tofudb_ir::MAX_LEGACY_DOCUMENT_BYTES };
+    } else {
+        crate::generated_tofudb_ir::MAX_LEGACY_DOCUMENT_BYTES
+    };
     let mut response = vec![b'['];
     for (id, header) in rows {
         let mut document = project_header(header, request.settings_keys.as_deref())?;
@@ -3477,12 +3577,18 @@ fn encode_newest_list(
         let bytes = serde_json::to_vec(&document)
             .map_err(|_| invalid_data("conversation list cannot be encoded"))?;
         let separator = usize::from(response.len() > 1);
-        if response.len().checked_add(separator + bytes.len() + 1)
-            .is_none_or(|length| length > maximum_bytes) {
+        if response
+            .len()
+            .checked_add(separator + bytes.len() + 1)
+            .is_none_or(|length| length > maximum_bytes)
+        {
             return Err(crate::resource_exhaustion::domain_bound(
-                "conversation list response exceeds its byte budget",));
+                "conversation list response exceeds its byte budget",
+            ));
         }
-        if separator != 0 { response.push(b','); }
+        if separator != 0 {
+            response.push(b',');
+        }
         response.extend_from_slice(&bytes);
     }
     response.push(b']');
@@ -3786,8 +3892,7 @@ mod tests {
         );
         // A spent budget surfaces as `deadline_elapsed` instead of a window
         // the caller cannot distinguish from a complete history.
-        let error = get(&database, &mut tx, "conv-get", true, 0, None, &mut || true)
-            .unwrap_err();
+        let error = get(&database, &mut tx, "conv-get", true, 0, None, &mut || true).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     }
 
@@ -3799,18 +3904,35 @@ mod tests {
         let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), vfs).unwrap();
         for (id, updated, project) in [("a", 10, "/one"), ("b", 20, "/two"), ("c", 20, "/one")] {
             let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-            create(&database, &mut tx, &CreateRequest {
-                conversation_id: id.to_owned(), title: format!("Fixture {id}"),
-                settings_json: serde_json::to_vec(&json!({"projectPath":project,"retained":true})).unwrap(),
-                created_at_ms: 1, updated_at_ms: updated, committed_at_ms: updated,
-            }).unwrap();
+            create(
+                &database,
+                &mut tx,
+                &CreateRequest {
+                    conversation_id: id.to_owned(),
+                    title: format!("Fixture {id}"),
+                    settings_json: serde_json::to_vec(
+                        &json!({"projectPath":project,"retained":true}),
+                    )
+                    .unwrap(),
+                    created_at_ms: 1,
+                    updated_at_ms: updated,
+                    committed_at_ms: updated,
+                },
+            )
+            .unwrap();
             database.commit(tx).unwrap();
         }
         let mut request = ListRequest {
-            project_path: None, title_contains: None, ids: None,
-            updated_at_gte: None, updated_at_gt: None, created_at_lt: None,
+            project_path: None,
+            title_contains: None,
+            ids: None,
+            updated_at_gte: None,
+            updated_at_gt: None,
+            created_at_lt: None,
             order: ListOrder::UpdatedDescending,
-            settings_keys: Some(vec!["retained".to_owned()]), include_messages: false, limit: 2,
+            settings_keys: Some(vec!["retained".to_owned()]),
+            include_messages: false,
+            limit: 2,
         };
         let read = |request: &ListRequest| {
             let mut tx = database.begin(7, 11).unwrap();
@@ -4095,31 +4217,61 @@ mod tests {
         // conversation produces. The activity key must stay physically stable.
         for timestamp in 1_000..2_100 {
             let mut write = database.begin(7, 11).unwrap();
-            update_metadata(&database, &mut write, &MetadataUpdateRequest {
-                conversation_id: "a".to_owned(), title: None,
-                updated_at_ms: Some(timestamp), committed_at_ms: timestamp,
-            }).unwrap();
+            update_metadata(
+                &database,
+                &mut write,
+                &MetadataUpdateRequest {
+                    conversation_id: "a".to_owned(),
+                    title: None,
+                    updated_at_ms: Some(timestamp),
+                    committed_at_ms: timestamp,
+                },
+            )
+            .unwrap();
             database.commit(write).unwrap();
         }
         drop(database);
         let database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut read = database.begin(7, 11).unwrap();
-        assert_eq!(activity_candidate_key(7, 11, 100, "a").unwrap(),
-                   activity_candidate_key(7, 11, 2_099, "a").unwrap());
-        let response = activity_dates(&database, &mut read, &ActivityDatesRequest {
-            updated_at_gte: 0, created_at_lt: None,
-            day_boundaries_ms: vec![0, 3_000], limit: 1,
-        }).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&response).unwrap()["candidate_count"], 1);
+        assert_eq!(
+            activity_candidate_key(7, 11, 100, "a").unwrap(),
+            activity_candidate_key(7, 11, 2_099, "a").unwrap()
+        );
+        let response = activity_dates(
+            &database,
+            &mut read,
+            &ActivityDatesRequest {
+                updated_at_gte: 0,
+                created_at_lt: None,
+                day_boundaries_ms: vec![0, 3_000],
+                limit: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&response).unwrap()["candidate_count"],
+            1
+        );
         // Selecting newest is independent of stable-key scan order, and old
         // creation-time filters still apply before LIMIT.
-        let response = activity_dates(&database, &mut read, &ActivityDatesRequest {
-            updated_at_gte: 2_000, created_at_lt: Some(150),
-            day_boundaries_ms: vec![0, 3_000], limit: 1,
-        }).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&response).unwrap()["candidate_count"], 1);
-        let (start, end) = EntityKey::prefix_range(7, 11,
-            CONVERSATION_ACTIVITY_CANDIDATE_INDEX_NAMESPACE, b"").unwrap();
+        let response = activity_dates(
+            &database,
+            &mut read,
+            &ActivityDatesRequest {
+                updated_at_gte: 2_000,
+                created_at_lt: Some(150),
+                day_boundaries_ms: vec![0, 3_000],
+                limit: 1,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&response).unwrap()["candidate_count"],
+            1
+        );
+        let (start, end) =
+            EntityKey::prefix_range(7, 11, CONVERSATION_ACTIVITY_CANDIDATE_INDEX_NAMESPACE, b"")
+                .unwrap();
         let rows = database.entity_scan(&mut read, &start, &end, 10).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|(_, bytes)| bytes.len() < 64));
@@ -4654,27 +4806,48 @@ mod relink_demand_tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         for first in (0..10001).step_by(64) {
-            let mut tx = database.begin_with_identity_claim_scopes(7,11).unwrap();
-            for ordinal in first..(first+64).min(10001) {
-                create(&database,&mut tx,&CreateRequest {
-                    conversation_id:format!("relink-{ordinal:05}"), title:String::new(),
-                    settings_json:serde_json::to_vec(&json!({"projectPath":"/old/project","keep":ordinal})).unwrap(),
-                    created_at_ms:1000,updated_at_ms:1000,committed_at_ms:1000,
-                }).unwrap();
+            let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+            for ordinal in first..(first + 64).min(10001) {
+                create(
+                    &database,
+                    &mut tx,
+                    &CreateRequest {
+                        conversation_id: format!("relink-{ordinal:05}"),
+                        title: String::new(),
+                        settings_json: serde_json::to_vec(
+                            &json!({"projectPath":"/old/project","keep":ordinal}),
+                        )
+                        .unwrap(),
+                        created_at_ms: 1000,
+                        updated_at_ms: 1000,
+                        committed_at_ms: 1000,
+                    },
+                )
+                .unwrap();
             }
             database.commit(tx).unwrap();
         }
-        let mut tx = database.begin_with_identity_claim_scopes(7,11).unwrap();
-        assert_eq!(relink_project_settings(&database,&mut tx,"/old/project","/new/project",2000).unwrap(),(10001,0));
+        let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
+        assert_eq!(
+            relink_project_settings(&database, &mut tx, "/old/project", "/new/project", 2000)
+                .unwrap(),
+            (10001, 0)
+        );
         database.commit(tx).unwrap();
         drop(database);
         let reopened = AuthorityDatabase::open(directory.path()).unwrap();
-        let mut tx = reopened.begin_with_identity_claim_scopes(7,11).unwrap();
-        for ordinal in [0,9999,10000] {
-            let (header,_) = load_header(&reopened,&mut tx,&format!("relink-{ordinal:05}")).unwrap().unwrap();
-            assert_eq!(header["settings"]["projectPath"],"/new/project");
-            assert_eq!(header["settings"]["keep"],ordinal);
+        let mut tx = reopened.begin_with_identity_claim_scopes(7, 11).unwrap();
+        for ordinal in [0, 9999, 10000] {
+            let (header, _) = load_header(&reopened, &mut tx, &format!("relink-{ordinal:05}"))
+                .unwrap()
+                .unwrap();
+            assert_eq!(header["settings"]["projectPath"], "/new/project");
+            assert_eq!(header["settings"]["keep"], ordinal);
         }
-        assert_eq!(relink_project_settings(&reopened,&mut tx,"/old/project","/new/project",2001).unwrap(),(0,0));
+        assert_eq!(
+            relink_project_settings(&reopened, &mut tx, "/old/project", "/new/project", 2001)
+                .unwrap(),
+            (0, 0)
+        );
     }
 }

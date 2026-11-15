@@ -43,7 +43,7 @@ def _description(gateway_id='alpha', endpoint=ENDPOINT, **extra):
 def catalog_dirs(tmp_path, monkeypatch):
     bundles = tmp_path / 'bundles'
     user = tmp_path / 'config'
-    monkeypatch.setattr(sg, '_BUNDLES_ROOT', bundles)
+    monkeypatch.setattr('tofu_extensions.IN_TREE_BUNDLES_DIR', bundles)
     monkeypatch.setattr(sg, 'config_path', lambda *parts: str(user.joinpath(*parts)))
     _write(bundles / 'acme' / 'search_gateways', 'alpha.json', _description())
     return bundles, user

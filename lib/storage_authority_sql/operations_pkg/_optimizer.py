@@ -9,6 +9,7 @@ from typing import Any
 from lib.log import get_logger
 from lib.storage.errors import StorageError
 from lib.storage_authority_sql.adapters.base import Session
+from lib.storage_authority_sql.adapters.search_support import simple_fold_column
 
 
 logger = get_logger(__name__)
@@ -272,9 +273,14 @@ def _log_aggregate_query(session: Session, payload: Mapping[str, Any]) -> Any:
         raise StorageError("database_protocol_error", "Invalid log aggregate sort")
     limit = _integer(payload, "limit", default=100, minimum=1, maximum=500)
     q = _optional_text(payload, "q", maximum=200, scope="log aggregate")
-    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    template, fold = simple_fold_column(session, "template")
+    escaped = fold(q).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     pattern = f"%{escaped}%"
-    where = "WHERE (? = ? OR level = ?) AND (? = ? OR template LIKE ? ESCAPE '\\') "
+    where = (
+        "WHERE (? = ? OR level = ?) AND (? = ? OR "
+        + template
+        + " LIKE ? ESCAPE '\\') "
+    )
     params = (level, "", level, q, "", pattern)
     rows = session.fetch_all(
         "SELECT fingerprint, level, logger, template, sample, count, "

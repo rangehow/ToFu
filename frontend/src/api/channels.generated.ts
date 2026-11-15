@@ -66,6 +66,10 @@ export type ChannelAccountView = {
   skillInstalled: boolean;
   routerConversationId: string | null;
   robot: DxRobotView | null;
+  robotSetupConsoles: Array<{
+  host: string;
+  url: string;
+}>;
   assistantNote: string;
 };
 

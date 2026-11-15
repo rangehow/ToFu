@@ -28,8 +28,15 @@ static COUNTERS: [AtomicU64; REASONS] = [const { AtomicU64::new(0) }; REASONS];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Reason {
-    ArchiveOwner = 0, ArchiveConversation, ArchiveRestoreBudget, DomainBound, CapacityQuota,
-    AccountingOverflow, ReservationFailure, OsMemoryFailure, Other,
+    ArchiveOwner = 0,
+    ArchiveConversation,
+    ArchiveRestoreBudget,
+    DomainBound,
+    CapacityQuota,
+    AccountingOverflow,
+    ReservationFailure,
+    OsMemoryFailure,
+    Other,
 }
 const _: () = assert!(Reason::Other as usize + 1 == REASONS);
 
@@ -124,8 +131,9 @@ fn classify(error: &io::Error) -> Reason {
 }
 
 fn increment(counters: &[AtomicU64; REASONS], reason: Reason) {
-    let _ = counters[reason as usize].fetch_update(Ordering::Relaxed, Ordering::Relaxed,
-        |value| Some(value.saturating_add(1)));
+    let _ = counters[reason as usize].try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        Some(value.saturating_add(1))
+    });
 }
 
 /// Proof that a retryable refusal passed `semantic_refusal`. Its private field
@@ -154,14 +162,17 @@ pub(crate) fn semantic_refusal(error: &io::Error) -> Option<SemanticExecutionErr
     let reason = classify(error);
     increment(&COUNTERS, reason);
     if NATIVE_RESOURCE_EXHAUSTION_REASON_RETRYABLE[reason as usize] {
-        return Some(SemanticExecutionError::ResourceExhausted(TransientRefusal(())));
+        return Some(SemanticExecutionError::ResourceExhausted(TransientRefusal(
+            (),
+        )));
     }
     let message = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<Refusal>())
-        .map_or(NATIVE_RESOURCE_EXHAUSTION_REASON_NAMES[reason as usize], |refusal| {
-            refusal.message
-        });
+        .map_or(
+            NATIVE_RESOURCE_EXHAUSTION_REASON_NAMES[reason as usize],
+            |refusal| refusal.message,
+        );
     Some(SemanticExecutionError::ResourceBound(BoundRefusal(message)))
 }
 
@@ -186,14 +197,18 @@ pub(crate) struct Snapshot {
     counters: [Count; REASONS],
 }
 fn snapshot(counters: &[AtomicU64; REASONS]) -> Snapshot {
-    Snapshot { contract: NATIVE_RESOURCE_EXHAUSTION_CONTRACT,
+    Snapshot {
+        contract: NATIVE_RESOURCE_EXHAUSTION_CONTRACT,
         fixed_counter_bytes: std::mem::size_of_val(counters),
         counters: std::array::from_fn(|index| Count {
             reason: NATIVE_RESOURCE_EXHAUSTION_REASON_NAMES[index],
             count: counters[index].load(Ordering::Relaxed),
-        }) }
+        }),
+    }
 }
-pub(crate) fn resource_exhaustion_snapshot() -> Snapshot { snapshot(&COUNTERS) }
+pub(crate) fn resource_exhaustion_snapshot() -> Snapshot {
+    snapshot(&COUNTERS)
+}
 
 #[cfg(test)]
 #[path = "resource_exhaustion_tests.rs"]

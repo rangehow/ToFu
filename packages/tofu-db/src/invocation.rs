@@ -57,7 +57,7 @@ fn identity_object(
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum Request {
+pub enum Request {
     RegisterChild {
         conversation_id: String,
         parent_task_id: String,
@@ -91,9 +91,15 @@ impl Request {
                 {
                     return Err(invalid_input("invalid invocation registration step"));
                 }
-                if let Some(claim) = worker_claim { claim.validate()?; }
-                Ok(conversation_id.len() + parent_task_id.len() + child_task_id.len()
-                    + worker_claim.as_ref().map_or(0, |claim| claim.worker_id.len()))
+                if let Some(claim) = worker_claim {
+                    claim.validate()?;
+                }
+                Ok(conversation_id.len()
+                    + parent_task_id.len()
+                    + child_task_id.len()
+                    + worker_claim
+                        .as_ref()
+                        .map_or(0, |claim| claim.worker_id.len()))
             }
             Self::ResolveChild { archive_scope } => {
                 if !valid_text(archive_scope, MAX_ARCHIVE_SCOPE) {
@@ -105,6 +111,7 @@ impl Request {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_child(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -122,8 +129,7 @@ fn register_child(
     if !crate::conversation_header::is_active(database, transaction, conversation_id)? {
         return Err(not_found("Conversation not found"));
     }
-    let parent =
-        crate::task_result::read_document_value(database, transaction, parent_task_id)?;
+    let parent = crate::task_result::read_document_value(database, transaction, parent_task_id)?;
     let parent_matches = parent.as_ref().is_some_and(|document| {
         document.get("user_id").and_then(Value::as_u64) == Some(owner_user_id)
             && document.get("conv_id").and_then(Value::as_str) == Some(conversation_id)
@@ -140,13 +146,26 @@ fn register_child(
     {
         return Err(not_found("Parent task not found"));
     }
-    let worker_root = crate::task_result::worker_root_for_task(database, transaction, parent_task_id)?;
+    let worker_root =
+        crate::task_result::worker_root_for_task(database, transaction, parent_task_id)?;
     if worker_root.is_some() || worker_claim.is_some() {
         let root = worker_root.as_deref().unwrap_or(parent_task_id);
-        crate::worker_job::require_conversation_publication_claim(database, transaction,
-            root.strip_prefix("conversation-attempt:").unwrap_or(""), root, worker_claim, false, false)?;
+        crate::worker_job::require_conversation_publication_claim(
+            database,
+            transaction,
+            root.strip_prefix("conversation-attempt:").unwrap_or(""),
+            root,
+            worker_claim,
+            false,
+            false,
+        )?;
     }
-    let identity = identity_object(owner_user_id, conversation_id, parent_task_id, child_task_id);
+    let identity = identity_object(
+        owner_user_id,
+        conversation_id,
+        parent_task_id,
+        child_task_id,
+    );
     // The child task ID itself is the immutable global identity, independent
     // of scope; replay of the same birth returns the persisted identity.
     match crate::task_result::read_document_value(database, transaction, child_task_id)? {
@@ -186,7 +205,11 @@ fn resolve_child(
     let owner_user_id = transaction.owner_user_id();
     let prefix = format!("invocation:{owner_user_id}:");
     let child = archive_scope.strip_prefix(&prefix).unwrap_or("");
-    let lookup_key = if child.is_empty() { archive_scope } else { child };
+    let lookup_key = if child.is_empty() {
+        archive_scope
+    } else {
+        child
+    };
     let document = crate::task_result::read_document_value(database, transaction, lookup_key)?;
     let identity = document
         .as_ref()
@@ -216,7 +239,11 @@ pub(crate) fn require_child(
     let owner_user_id = transaction.owner_user_id();
     let prefix = format!("invocation:{owner_user_id}:");
     let child = archive_scope.strip_prefix(&prefix).unwrap_or("");
-    let lookup_key = if child.is_empty() { archive_scope } else { child };
+    let lookup_key = if child.is_empty() {
+        archive_scope
+    } else {
+        child
+    };
     let document = crate::task_result::read_document_value(database, transaction, lookup_key)?;
     let identity = document
         .as_ref()

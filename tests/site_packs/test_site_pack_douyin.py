@@ -19,7 +19,7 @@ SEARCH_URL = 'https://www.douyin.com/search/%E6%B9%96%E6%99%AF%20%E6%B0%91%E5%AE
 @pytest.fixture(autouse=True)
 def _core_only(tmp_path, monkeypatch):
     reset_cache_for_tests()
-    monkeypatch.setattr('lib.site_packs._loader._BUNDLES_DIR', tmp_path / 'bundles')
+    monkeypatch.setattr('tofu_extensions.IN_TREE_BUNDLES_DIR', tmp_path / 'bundles')
     monkeypatch.setattr('lib.site_packs._loader.config_path', lambda *parts: str(tmp_path / 'user'))
     monkeypatch.setattr('lib.browser.access.is_read_allowed', lambda owner, url: str(owner) == '41')
     yield

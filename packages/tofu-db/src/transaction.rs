@@ -88,8 +88,16 @@ impl FamilyTransactionBuilder {
             if !self.block_ids.contains(&block_id) {
                 additional_block_ids.insert(block_id);
             }
-            if self.block_ids.len().checked_add(additional_block_ids.len()).and_then(|count| u32::try_from(count).ok()).is_none() {
-                return Err(invalid_input("transaction block count exceeds its u32 representation"));
+            if self
+                .block_ids
+                .len()
+                .checked_add(additional_block_ids.len())
+                .and_then(|count| u32::try_from(count).ok())
+                .is_none()
+            {
+                return Err(invalid_input(
+                    "transaction block count exceeds its u32 representation",
+                ));
             }
         }
         Ok(additional_block_ids)
@@ -114,7 +122,9 @@ impl FamilyTransactionBuilder {
             return Err(invalid_input("transaction family record is empty"));
         }
         if self.records.len() == usize::from(u16::MAX) {
-            return Err(invalid_input("transaction family count exceeds its u16 representation"));
+            return Err(invalid_input(
+                "transaction family count exceeds its u16 representation",
+            ));
         }
         if !kind.allows_multiple() && self.records.iter().any(|record| record.kind == kind) {
             return Err(invalid_input("transaction family record is duplicated"));
@@ -252,7 +262,9 @@ pub fn decode_family_records(bytes: &[u8]) -> io::Result<Option<Vec<FamilyRecord
     // Each record requires a header and a nonempty payload. Check the
     // encoded evidence before reserving space for the claimed count.
     if count > (bytes.len() - FAMILY_HEADER_BYTES) / (FAMILY_RECORD_HEADER_BYTES + 1) {
-        return Err(invalid_data("transaction family count exceeds encoded records"));
+        return Err(invalid_data(
+            "transaction family count exceeds encoded records",
+        ));
     }
     let mut records = Vec::with_capacity(count);
     let mut offset = FAMILY_HEADER_BYTES;
@@ -301,6 +313,9 @@ pub fn decode_family_records(bytes: &[u8]) -> io::Result<Option<Vec<FamilyRecord
     }
     Ok(Some(records))
 }
+
+/// Receives each carried payload: its block id, envelope offset and bytes.
+pub(crate) type CarriedVisitor<'v> = dyn FnMut(BlockId, usize, &[u8]) -> io::Result<()> + 'v;
 
 impl TransactionEnvelope {
     pub fn encode(&self) -> io::Result<Vec<u8>> {
@@ -351,7 +366,9 @@ impl TransactionEnvelope {
         authority_state_carried: Option<&[u8]>,
     ) -> io::Result<Vec<u8>> {
         if u32::try_from(self.block_ids.len()).is_err() {
-            return Err(invalid_input("transaction block count exceeds its u32 representation"));
+            return Err(invalid_input(
+                "transaction block count exceeds its u32 representation",
+            ));
         }
         if self.inline_payload.len() > MAX_INLINE_BYTES {
             return Err(invalid_input("transaction inline payload exceeds 256 KiB"));
@@ -440,9 +457,7 @@ impl TransactionEnvelope {
             2 => Some(Some(BlockId(bytes[21..53].try_into().unwrap()))),
             _ => return Err(invalid_data("invalid transaction authority state update")),
         };
-        if version != ENVELOPE_VERSION
-            || inline_len > MAX_INLINE_BYTES
-        {
+        if version != ENVELOPE_VERSION || inline_len > MAX_INLINE_BYTES {
             return Err(invalid_data(
                 "unsupported or unbounded transaction envelope",
             ));
@@ -492,15 +507,16 @@ impl TransactionEnvelope {
     /// or maintaining a second interpretation of the transaction format.
     pub(crate) fn visit_carried(
         bytes: &[u8],
-        visitor: &mut dyn FnMut(BlockId, usize, &[u8]) -> io::Result<()>,
+        visitor: &mut CarriedVisitor<'_>,
     ) -> io::Result<Self> {
         let (envelope, _, _) = Self::decode_carried_impl(bytes, false, Some(visitor))?;
         Ok(envelope)
     }
 
     fn decode_carried_impl(
-        bytes: &[u8], collect: bool,
-        mut visitor: Option<&mut dyn FnMut(BlockId, usize, &[u8]) -> io::Result<()>>,
+        bytes: &[u8],
+        collect: bool,
+        mut visitor: Option<&mut CarriedVisitor<'_>>,
     ) -> io::Result<DecodedCarriedEnvelope> {
         if bytes.len() < HEADER_BYTES || &bytes[..8] != MAGIC {
             return Err(invalid_data("transaction envelope magic mismatch"));
@@ -548,8 +564,9 @@ impl TransactionEnvelope {
         let mut carried_total = 0usize;
         let mut carried_any = false;
         let mut carried = Vec::with_capacity(block_count);
-        for slot in 0..block_count {
-            let length_bytes = bytes.get(offset..offset + 4)
+        for &block_id in &block_ids {
+            let length_bytes = bytes
+                .get(offset..offset + 4)
                 .ok_or_else(|| invalid_data("transaction carried slot is truncated"))?;
             let length = u32::from_le_bytes(length_bytes.try_into().unwrap());
             offset += 4;
@@ -571,7 +588,7 @@ impl TransactionEnvelope {
                 return Err(invalid_data("transaction envelope length mismatch"));
             }
             if let Some(visit) = visitor.as_deref_mut() {
-                visit(block_ids[slot], offset, &bytes[offset..end])?;
+                visit(block_id, offset, &bytes[offset..end])?;
             }
             if collect {
                 carried.push(Some(bytes[offset..end].to_vec()));
@@ -582,7 +599,8 @@ impl TransactionEnvelope {
             carried_any = true;
         }
         let authority_state_carried = {
-            let length_bytes = bytes.get(offset..offset + 4)
+            let length_bytes = bytes
+                .get(offset..offset + 4)
                 .ok_or_else(|| invalid_data("transaction authority carried slot is truncated"))?;
             let length = u32::from_le_bytes(length_bytes.try_into().unwrap());
             offset += 4;
@@ -605,8 +623,10 @@ impl TransactionEnvelope {
                 if end > bytes.len() {
                     return Err(invalid_data("transaction envelope length mismatch"));
                 }
-                if let Some(visit) = visitor.as_deref_mut() {
-                    let root = authority_state_update.flatten().ok_or_else(|| invalid_data("authority state carried without root"))?;
+                if let Some(visit) = visitor {
+                    let root = authority_state_update
+                        .flatten()
+                        .ok_or_else(|| invalid_data("authority state carried without root"))?;
                     visit(root, offset, &bytes[offset..end])?;
                 }
                 carried_any = true;
@@ -643,17 +663,27 @@ mod tests {
     #[test]
     fn block_reference_demand_exceeds_former_quota_and_reopens_every_payload() {
         let directory = tempfile::tempdir().unwrap();
-        let payloads = (0..2101_u64).map(|ordinal| ordinal.to_be_bytes().to_vec()).collect::<Vec<_>>();
+        let payloads = (0..2101_u64)
+            .map(|ordinal| ordinal.to_be_bytes().to_vec())
+            .collect::<Vec<_>>();
         let ids;
         {
             let mut engine = crate::engine::Engine::initialize(directory.path()).unwrap();
             let borrowed = payloads.iter().map(Vec::as_slice).collect::<Vec<_>>();
-            let committed = engine.commit_transaction(b"block-demand", &borrowed).unwrap();
+            let committed = engine
+                .commit_transaction(b"block-demand", &borrowed)
+                .unwrap();
             assert_eq!(committed.sequence, 1);
             assert_eq!(committed.block_ids.len(), 2101);
             ids = committed.block_ids;
             let mut builder = FamilyTransactionBuilder::default();
-            builder.add_record(FamilyRecordKind::EntityRoot, b"root".to_vec(), ids.iter().copied()).unwrap();
+            builder
+                .add_record(
+                    FamilyRecordKind::EntityRoot,
+                    b"root".to_vec(),
+                    ids.iter().copied(),
+                )
+                .unwrap();
             builder.add_block_references(ids.iter().copied()).unwrap();
             assert_eq!(builder.prepare().unwrap().block_ids.len(), 2101);
             let persisted = engine.transaction_at(1).unwrap().unwrap();
@@ -668,9 +698,15 @@ mod tests {
         for (id, payload) in ids.iter().zip(payloads.iter()) {
             assert_eq!(&engine.read_block(*id).unwrap(), payload);
         }
-        let ordinary = TransactionEnvelope { block_ids: ids,
-            inline_payload: b"ordinary".to_vec(), authority_state_update: None };
-        assert_eq!(TransactionEnvelope::decode(&ordinary.encode().unwrap()).unwrap(), ordinary);
+        let ordinary = TransactionEnvelope {
+            block_ids: ids,
+            inline_payload: b"ordinary".to_vec(),
+            authority_state_update: None,
+        };
+        assert_eq!(
+            TransactionEnvelope::decode(&ordinary.encode().unwrap()).unwrap(),
+            ordinary
+        );
     }
 
     #[test]
@@ -810,8 +846,13 @@ mod tests {
     fn family_records_follow_demand_beyond_former_count_quota() {
         let mut builder = FamilyTransactionBuilder::default();
         for ordinal in (0..1101_u64).rev() {
-            builder.add_record(FamilyRecordKind::StreamCommit,
-                ordinal.to_be_bytes().to_vec(), std::iter::empty()).unwrap();
+            builder
+                .add_record(
+                    FamilyRecordKind::StreamCommit,
+                    ordinal.to_be_bytes().to_vec(),
+                    std::iter::empty(),
+                )
+                .unwrap();
         }
         let envelope = builder.prepare().unwrap();
         let encoded = envelope.encode().unwrap();
@@ -824,7 +865,9 @@ mod tests {
         let engine = crate::engine::Engine::open(directory.path()).unwrap();
         let persisted = engine.transaction_at(1).unwrap().unwrap();
         assert_eq!(persisted.envelope.inline_payload, recovered.inline_payload);
-        let records = decode_family_records(&persisted.envelope.inline_payload).unwrap().unwrap();
+        let records = decode_family_records(&persisted.envelope.inline_payload)
+            .unwrap()
+            .unwrap();
         assert_eq!(records.len(), 1101);
         for (ordinal, record) in records.iter().enumerate() {
             assert_eq!(record.kind, FamilyRecordKind::StreamCommit);
@@ -833,10 +876,16 @@ mod tests {
         // A corrupt count cannot reserve memory unsupported by payload bytes.
         let mut corrupt = recovered.inline_payload.clone();
         corrupt[12..14].copy_from_slice(&u16::MAX.to_le_bytes());
-        assert_eq!(decode_family_records(&corrupt).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            decode_family_records(&corrupt).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
         // Representation overflow remains explicit before the narrowing cast.
         let excessive = vec![records[0]; usize::from(u16::MAX) + 1];
-        assert_eq!(encode_family_records(&excessive).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            encode_family_records(&excessive).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]
@@ -904,19 +953,33 @@ mod carried_offset_tests {
     use super::*;
     #[test]
     fn borrowed_carried_offsets_include_authority_and_reject_every_truncation() {
-        let first = b"first payload"; let authority = b"authority payload";
-        let envelope = TransactionEnvelope { block_ids: vec![BlockId::for_payload(first), BlockId([9; 32])],
-            inline_payload: b"inline".to_vec(), authority_state_update: Some(Some(BlockId::for_payload(authority))) };
-        let encoded = envelope.encode_with_carried(&[Some(first), None], Some(authority)).unwrap();
+        let first = b"first payload";
+        let authority = b"authority payload";
+        let envelope = TransactionEnvelope {
+            block_ids: vec![BlockId::for_payload(first), BlockId([9; 32])],
+            inline_payload: b"inline".to_vec(),
+            authority_state_update: Some(Some(BlockId::for_payload(authority))),
+        };
+        let encoded = envelope
+            .encode_with_carried(&[Some(first), None], Some(authority))
+            .unwrap();
         let mut visited = Vec::new();
-        assert_eq!(TransactionEnvelope::visit_carried(&encoded, &mut |id, offset, payload| {
-            assert_eq!(&encoded[offset..offset + payload.len()], payload);
-            assert_eq!(BlockId::for_payload(payload), id);
-            visited.push(payload.to_vec()); Ok(())
-        }).unwrap(), envelope);
+        assert_eq!(
+            TransactionEnvelope::visit_carried(&encoded, &mut |id, offset, payload| {
+                assert_eq!(&encoded[offset..offset + payload.len()], payload);
+                assert_eq!(BlockId::for_payload(payload), id);
+                visited.push(payload.to_vec());
+                Ok(())
+            })
+            .unwrap(),
+            envelope
+        );
         assert_eq!(visited, vec![first.to_vec(), authority.to_vec()]);
         for length in 0..encoded.len() {
-            assert!(TransactionEnvelope::visit_carried(&encoded[..length], &mut |_, _, _| Ok(())).is_err());
+            assert!(
+                TransactionEnvelope::visit_carried(&encoded[..length], &mut |_, _, _| Ok(()))
+                    .is_err()
+            );
         }
     }
 }

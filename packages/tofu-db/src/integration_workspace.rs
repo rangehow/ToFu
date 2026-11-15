@@ -24,10 +24,9 @@ use crate::generated_tofudb_ir::{
     INTEGRATION_READY_INDEX_NAMESPACE, INTEGRATION_ROW_LOCATOR_NAMESPACE,
     INTEGRATION_ROW_SEQUENCE_NAMESPACE, INTEGRATION_STALE_SECONDS,
     INTEGRATION_WORKSPACE_COUNT_NAMESPACE, INTEGRATION_WORKSPACE_NAMESPACE, MAX_ENTITY_RANGE_ROWS,
-    MAX_INTEGRATION_EVENTS_PER_PROJECT,
-    MAX_INTEGRATION_PROJECT_ROOT_CHARACTERS, MAX_INTEGRATION_RESPONSE_BYTES,
-    MAX_INTEGRATION_STATUS_EVENTS, MAX_INTEGRATION_STATUS_ROWS, MAX_INTEGRATION_TASK_ID_CHARACTERS,
-    MAX_INTEGRATION_WORKSPACE_DOCUMENT_BYTES,
+    MAX_INTEGRATION_EVENTS_PER_PROJECT, MAX_INTEGRATION_PROJECT_ROOT_CHARACTERS,
+    MAX_INTEGRATION_RESPONSE_BYTES, MAX_INTEGRATION_STATUS_EVENTS, MAX_INTEGRATION_STATUS_ROWS,
+    MAX_INTEGRATION_TASK_ID_CHARACTERS, MAX_INTEGRATION_WORKSPACE_DOCUMENT_BYTES,
 };
 
 const SEQUENCE_KEY: &[u8] = b"sequence";
@@ -53,7 +52,9 @@ fn encode<T: Serialize>(value: &T, name: &str) -> io::Result<Vec<u8>> {
     let bytes = serde_json::to_vec(value)
         .map_err(|_| invalid_data(&format!("{name} cannot be encoded")))?;
     if bytes.len() > MAX_INTEGRATION_WORKSPACE_DOCUMENT_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("integration document exceeds 16 KiB"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "integration document exceeds 16 KiB",
+        ));
     }
     Ok(bytes)
 }
@@ -64,7 +65,9 @@ fn bounded_response(value: &Value) -> io::Result<Option<Vec<u8>>> {
     let bytes = serde_json::to_vec(value)
         .map_err(|_| invalid_data("integration response cannot be encoded"))?;
     if bytes.len() > MAX_INTEGRATION_RESPONSE_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("integration response exceeds 8 MiB"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "integration response exceeds 8 MiB",
+        ));
     }
     Ok(Some(bytes))
 }
@@ -158,7 +161,11 @@ fn checkout_claim_key(tx: &AuthorityTransaction, path: &str) -> io::Result<Entit
     global_key(tx, INTEGRATION_NATURAL_CLAIM_NAMESPACE, &raw)
 }
 fn checkout_claims_ready_key(tx: &AuthorityTransaction) -> io::Result<EntityKey> {
-    global_key(tx, INTEGRATION_NATURAL_CLAIM_NAMESPACE, CHECKOUT_CLAIMS_READY)
+    global_key(
+        tx,
+        INTEGRATION_NATURAL_CLAIM_NAMESPACE,
+        CHECKOUT_CLAIMS_READY,
+    )
 }
 fn row_locator_key(tx: &AuthorityTransaction, row_id: u64) -> io::Result<EntityKey> {
     global_key(tx, INTEGRATION_ROW_LOCATOR_NAMESPACE, &row_id.to_be_bytes())
@@ -548,7 +555,11 @@ pub(crate) struct CheckoutBackfillBatch {
 }
 
 fn checkout_claims_cursor_key(tx: &AuthorityTransaction) -> io::Result<EntityKey> {
-    global_key(tx, INTEGRATION_NATURAL_CLAIM_NAMESPACE, CHECKOUT_CLAIMS_CURSOR)
+    global_key(
+        tx,
+        INTEGRATION_NATURAL_CLAIM_NAMESPACE,
+        CHECKOUT_CLAIMS_CURSOR,
+    )
 }
 
 fn backfill_checkout_row(
@@ -559,12 +570,21 @@ fn backfill_checkout_row(
 ) -> io::Result<u64> {
     let identity: Locator = decode(raw, "integration checkout backfill locator")?;
     let workspace = required_workspace(
-        database, tx, identity.owner_user_id, &identity.project_root, &identity.task_id,
+        database,
+        tx,
+        identity.owner_user_id,
+        &identity.project_root,
+        &identity.task_id,
     )?;
-    if identity.id == 0 || identity.id > i64::MAX as u64 || identity.owner_user_id == 0
-        || locator(&workspace) != identity || *key != row_locator_key(tx, identity.id)?
+    if identity.id == 0
+        || identity.id > i64::MAX as u64
+        || identity.owner_user_id == 0
+        || locator(&workspace) != identity
+        || *key != row_locator_key(tx, identity.id)?
     {
-        return Err(invalid_data("integration checkout backfill identity differs"));
+        return Err(invalid_data(
+            "integration checkout backfill identity differs",
+        ));
     }
     install_checkout_claim(database, tx, &workspace)?;
     Ok(identity.id)
@@ -580,25 +600,55 @@ pub(crate) fn backfill_checkout_claims(
     maximum_rows: usize,
 ) -> io::Result<CheckoutBackfillBatch> {
     if !(1..=MAX_LEGACY_CHECKOUT_BACKFILL).contains(&maximum_rows) {
-        return Err(invalid_input("checkout backfill maximum rows must be in 1..128"));
+        return Err(invalid_input(
+            "checkout backfill maximum rows must be in 1..128",
+        ));
     }
     let ready_key = checkout_claims_ready_key(tx)?;
     let cursor_key = checkout_claims_cursor_key(tx)?;
-    let mut after_id = read_u64(database, tx, &cursor_key, "integration checkout claims cursor")?;
+    let mut after_id = read_u64(
+        database,
+        tx,
+        &cursor_key,
+        "integration checkout claims cursor",
+    )?;
     if after_id > i64::MAX as u64 {
-        return Err(invalid_data("integration checkout claims cursor is invalid"));
+        return Err(invalid_data(
+            "integration checkout claims cursor is invalid",
+        ));
     }
-    match read_u64(database, tx, &ready_key, "integration checkout claims readiness")? {
-        1 => return Ok(CheckoutBackfillBatch {
-            processed_rows: 0, after_id, complete: true, changed: false,
-        }),
+    match read_u64(
+        database,
+        tx,
+        &ready_key,
+        "integration checkout claims readiness",
+    )? {
+        1 => {
+            return Ok(CheckoutBackfillBatch {
+                processed_rows: 0,
+                after_id,
+                complete: true,
+                changed: false,
+            })
+        }
         0 => {}
-        _ => return Err(invalid_data("integration checkout claims version is invalid")),
+        _ => {
+            return Err(invalid_data(
+                "integration checkout claims version is invalid",
+            ))
+        }
     }
     let (prefix, end) = EntityKey::prefix_range(
-        tx.tenant_id(), TENANT_GLOBAL_OWNER_ID, INTEGRATION_ROW_LOCATOR_NAMESPACE, b"",
+        tx.tenant_id(),
+        TENANT_GLOBAL_OWNER_ID,
+        INTEGRATION_ROW_LOCATOR_NAMESPACE,
+        b"",
     )?;
-    let start = if after_id == 0 { prefix } else { row_locator_key(tx, after_id + 1)? };
+    let start = if after_id == 0 {
+        prefix
+    } else {
+        row_locator_key(tx, after_id + 1)?
+    };
     let rows = database.entity_scan(tx, &start, &end, maximum_rows)?;
     let processed_rows = rows.len();
     for (key, raw) in rows {
@@ -609,7 +659,12 @@ pub(crate) fn backfill_checkout_claims(
     if complete {
         write_u64(database, tx, ready_key, 1)?;
     }
-    Ok(CheckoutBackfillBatch { processed_rows, after_id, complete, changed: true })
+    Ok(CheckoutBackfillBatch {
+        processed_rows,
+        after_id,
+        complete,
+        changed: true,
+    })
 }
 
 fn ensure_checkout_claims(
@@ -617,24 +672,43 @@ fn ensure_checkout_claims(
     tx: &mut AuthorityTransaction,
 ) -> io::Result<()> {
     let ready = checkout_claims_ready_key(tx)?;
-    match read_u64(database, tx, &ready, "integration checkout claims readiness")? {
+    match read_u64(
+        database,
+        tx,
+        &ready,
+        "integration checkout claims readiness",
+    )? {
         1 => return Ok(()),
         0 => {}
-        _ => return Err(invalid_data("integration checkout claims version is invalid")),
+        _ => {
+            return Err(invalid_data(
+                "integration checkout claims version is invalid",
+            ))
+        }
     }
-    if database.entity_get(tx, &checkout_claims_cursor_key(tx)?)?.is_some() {
-        return Err(crate::resource_exhaustion::domain_bound("integration checkout claims require bounded offline backfill"));
+    if database
+        .entity_get(tx, &checkout_claims_cursor_key(tx)?)?
+        .is_some()
+    {
+        return Err(crate::resource_exhaustion::domain_bound(
+            "integration checkout claims require bounded offline backfill",
+        ));
     }
     // Only a complete bounded legacy catalog proves absence of an old owner.
     // The range witness and readiness marker serialize bootstrap with writers.
     // Larger legacy authorities fail closed; never paginate an entire history
     // inside one transaction or certify a partial backfill as complete.
     let (start, end) = EntityKey::prefix_range(
-        tx.tenant_id(), TENANT_GLOBAL_OWNER_ID, INTEGRATION_ROW_LOCATOR_NAMESPACE, b"",
+        tx.tenant_id(),
+        TENANT_GLOBAL_OWNER_ID,
+        INTEGRATION_ROW_LOCATOR_NAMESPACE,
+        b"",
     )?;
     let rows = database.entity_scan(tx, &start, &end, MAX_LEGACY_CHECKOUT_BACKFILL + 1)?;
     if rows.len() > MAX_LEGACY_CHECKOUT_BACKFILL {
-        return Err(crate::resource_exhaustion::domain_bound("integration checkout claims require bounded offline backfill"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "integration checkout claims require bounded offline backfill",
+        ));
     }
     for (key, raw) in rows {
         backfill_checkout_row(database, tx, &key, &raw)?;
@@ -650,18 +724,22 @@ fn update_checkout_claim(
 ) -> io::Result<()> {
     ensure_checkout_claims(database, tx)?;
     install_checkout_claim(database, tx, workspace)?;
-    if let Some(old) = old.filter(|old| old.state != "discarded"
-        && (old.workspace_path != workspace.workspace_path || workspace.state == "discarded"))
-    {
+    if let Some(old) = old.filter(|old| {
+        old.state != "discarded"
+            && (old.workspace_path != workspace.workspace_path || workspace.state == "discarded")
+    }) {
         let key = checkout_claim_key(tx, &old.workspace_path)?;
-        let raw = database.entity_get(tx, &key)?
+        let raw = database
+            .entity_get(tx, &key)?
             .ok_or_else(|| invalid_data("integration checkout claim is missing"))?;
         let expected = CheckoutClaim {
             workspace_path: old.workspace_path.clone(),
             locator: locator(old),
         };
         if decode::<CheckoutClaim>(&raw, "integration checkout claim")? != expected {
-            return Err(conflict("integration checkout claim belongs to another work item"));
+            return Err(conflict(
+                "integration checkout claim belongs to another work item",
+            ));
         }
         database.entity_delete(tx, key)?;
     }
@@ -684,7 +762,8 @@ fn write_workspace(
         let key = active_count_key(tx)?;
         let count = read_u64(database, tx, &key, "integration active count")?;
         let next = if new_active {
-            count.checked_add(1)
+            count
+                .checked_add(1)
                 .ok_or_else(|| invalid_data("integration active count overflow"))?
         } else {
             count
@@ -712,8 +791,13 @@ fn origin_document(raw: &str) -> Value {
         .unwrap_or_else(|| json!({}))
 }
 fn delivery_denied(origin: &Value) -> bool {
-    matches!(origin.get("delivery").and_then(|d| d.get("taskOutcome")).and_then(Value::as_str),
-        Some("failed" | "cancelled" | "stopped"))
+    matches!(
+        origin
+            .get("delivery")
+            .and_then(|d| d.get("taskOutcome"))
+            .and_then(Value::as_str),
+        Some("failed" | "cancelled" | "stopped")
+    )
 }
 /// The receipt asks the delivery worker to act (`delivery.py` dispatch).
 /// Retained sources are acknowledged; only an explicit startup recovery asks
@@ -748,7 +832,10 @@ fn delivery_needs_action(workspace: &Workspace, retained: bool) -> bool {
     }
 }
 fn delivery_generation(receipt: &Value) -> &str {
-    receipt.get("executorTaskId").and_then(Value::as_str).unwrap_or("")
+    receipt
+        .get("executorTaskId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 /// A receipt records one executor generation (`executorTaskId`, the attempt
 /// whose outcome it is). Within a generation a terminal denial stays final. A
@@ -890,9 +977,7 @@ pub(crate) fn execute(
         "integration.workspace.peek_ready" => peek_ready(database, tx, request),
 
         "integration.workspace.delivery_page" => delivery_page(database, tx, request),
-        "integration.workspace.delivery_action_page" => {
-            delivery_action_page(database, tx, request)
-        }
+        "integration.workspace.delivery_action_page" => delivery_action_page(database, tx, request),
         "integration.workspace.get_integrating" => get_integrating(database, tx, request),
         "integration.workspace.quarantine" => cas_state(database, tx, request, "quarantined"),
         "integration.workspace.requeue" => cas_state(database, tx, request, "ready"),
@@ -952,9 +1037,10 @@ fn register(
     // atomically below, with constant-cost ownership checks after bootstrap.
     ensure_checkout_claims(database, tx)?;
     let existing = read_workspace(database, tx, owner, project_root, task_id)?;
-    if existing.as_ref().is_some_and(|workspace| {
-        delivery_denied(&origin_document(&workspace.origin_raw))
-    }) {
+    if existing
+        .as_ref()
+        .is_some_and(|workspace| delivery_denied(&origin_document(&workspace.origin_raw)))
+    {
         return Err(conflict("Task delivery has been revoked"));
     }
     if existing.as_ref().is_some_and(|workspace| {
@@ -986,7 +1072,8 @@ fn register(
     } else {
         let count_key = owner_count_key(tx, owner)?;
         let count = read_u64(database, tx, &count_key, "integration owner count")?;
-        let next_count = count.checked_add(1)
+        let next_count = count
+            .checked_add(1)
             .ok_or_else(|| invalid_data("integration owner count overflow"))?;
         let id = next_sequence(database, tx, INTEGRATION_ROW_SEQUENCE_NAMESPACE)?;
         write_u64(database, tx, count_key, next_count)?;
@@ -1056,7 +1143,9 @@ fn transition_public(
     let now = number(&request.payload, "now")?;
     let mut workspace = required_workspace(database, tx, owner, project_root, task_id)?;
     let old = workspace.clone();
-    if matches!(action, "submit" | "retry") && delivery_denied(&origin_document(&workspace.origin_raw)) {
+    if matches!(action, "submit" | "retry")
+        && delivery_denied(&origin_document(&workspace.origin_raw))
+    {
         return Err(conflict("revoked task cannot enter the integration queue"));
     }
     match action {
@@ -1222,7 +1311,10 @@ fn set_meta(
         .ok()
         .and_then(|value| value.as_object().cloned())
         .ok_or_else(|| invalid_input("invalid integration patch_json"))?;
-    if patch.get("delivery").is_some_and(|delivery| !delivery.is_object()) {
+    if patch
+        .get("delivery")
+        .is_some_and(|delivery| !delivery.is_object())
+    {
         return Err(invalid_input("delivery must be a JSON object"));
     }
     let mut workspace = required_workspace(database, tx, owner, project_root, task_id)?;
@@ -1252,13 +1344,19 @@ fn visit_queue<T>(
     database: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,
     namespace: &str,
-    mut visit: impl FnMut(&AuthorityDatabase, &mut AuthorityTransaction, Locator) -> io::Result<Option<T>>,
+    mut visit: impl FnMut(
+        &AuthorityDatabase,
+        &mut AuthorityTransaction,
+        Locator,
+    ) -> io::Result<Option<T>>,
 ) -> io::Result<Option<T>> {
     let (mut start, end) =
         EntityKey::prefix_range(tx.tenant_id(), TENANT_GLOBAL_OWNER_ID, namespace, b"")?;
     loop {
         let page = database.entity_scan(tx, &start, &end, MAX_ENTITY_RANGE_ROWS)?;
-        if page.is_empty() { return Ok(None); }
+        if page.is_empty() {
+            return Ok(None);
+        }
         let next = page.last().unwrap().0.clone().exact_range()?.1;
         for (_, raw) in page {
             if let Some(value) = visit(database, tx, decode(&raw, "integration queue locator")?)? {
@@ -1272,23 +1370,28 @@ fn claimable_ready(
     database: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,
 ) -> io::Result<Option<Workspace>> {
-    visit_queue(database, tx, INTEGRATION_READY_INDEX_NAMESPACE, |database, tx, locator| {
-        if database
-            .entity_get(tx, &project_claim_key(tx, &locator.project_root)?)?
-            .is_some()
-        {
-            return Ok(None);
-        }
-        let workspace = read_workspace_by_id(database, tx, locator.id)?
-            .ok_or_else(|| invalid_data("integration ready locator is missing"))?;
-        if workspace.state != "ready" {
-            return Err(invalid_data("integration ready index state mismatch"));
-        }
-        if delivery_denied(&origin_document(&workspace.origin_raw)) {
-            return Ok(None);
-        }
-        Ok(Some(workspace))
-    })
+    visit_queue(
+        database,
+        tx,
+        INTEGRATION_READY_INDEX_NAMESPACE,
+        |database, tx, locator| {
+            if database
+                .entity_get(tx, &project_claim_key(tx, &locator.project_root)?)?
+                .is_some()
+            {
+                return Ok(None);
+            }
+            let workspace = read_workspace_by_id(database, tx, locator.id)?
+                .ok_or_else(|| invalid_data("integration ready locator is missing"))?;
+            if workspace.state != "ready" {
+                return Err(invalid_data("integration ready index state mismatch"));
+            }
+            if delivery_denied(&origin_document(&workspace.origin_raw)) {
+                return Ok(None);
+            }
+            Ok(Some(workspace))
+        },
+    )
 }
 fn stale_integrating(
     database: &AuthorityDatabase,
@@ -1300,17 +1403,22 @@ fn stale_integrating(
         return Ok(Vec::new());
     }
     let mut stale = Vec::new();
-    visit_queue(database, tx, INTEGRATION_INTEGRATING_INDEX_NAMESPACE, |database, tx, locator| {
-        let workspace = read_workspace_by_id(database, tx, locator.id)?
-            .ok_or_else(|| invalid_data("integration active locator is missing"))?;
-        if workspace.state != "integrating" {
-            return Err(invalid_data("integration active index state mismatch"));
-        }
-        if workspace.updated_at < cutoff {
-            stale.push(workspace);
-        }
-        Ok(None::<()>)
-    })?;
+    visit_queue(
+        database,
+        tx,
+        INTEGRATION_INTEGRATING_INDEX_NAMESPACE,
+        |database, tx, locator| {
+            let workspace = read_workspace_by_id(database, tx, locator.id)?
+                .ok_or_else(|| invalid_data("integration active locator is missing"))?;
+            if workspace.state != "integrating" {
+                return Err(invalid_data("integration active index state mismatch"));
+            }
+            if workspace.updated_at < cutoff {
+                stale.push(workspace);
+            }
+            Ok(None::<()>)
+        },
+    )?;
     stale.sort_by(|left, right| {
         left.updated_at
             .total_cmp(&right.updated_at)
@@ -1330,7 +1438,8 @@ fn claim_next(
             "checkpointed"
         } else {
             "ready"
-        }.to_owned();
+        }
+        .to_owned();
         workspace.error = if workspace.state == "ready" {
             "Recovered an interrupted integration".to_owned()
         } else {
@@ -1358,8 +1467,10 @@ fn peek_ready(
     }
     if request.payload.get("now").is_some() {
         let now = number(&request.payload, "now")?;
-        if let Some(workspace) = stale_integrating(database, tx, now)?.into_iter()
-            .find(|workspace| !delivery_denied(&origin_document(&workspace.origin_raw))) {
+        if let Some(workspace) = stale_integrating(database, tx, now)?
+            .into_iter()
+            .find(|workspace| !delivery_denied(&origin_document(&workspace.origin_raw)))
+        {
             return bounded_response(&worker_workspace_projection(&workspace));
         }
     }
@@ -1370,11 +1481,24 @@ fn delivery_page(
     tx: &mut AuthorityTransaction,
     request: &Request,
 ) -> io::Result<Option<Vec<u8>>> {
-    let after_id = request.payload.get("after_id").and_then(Value::as_u64).unwrap_or(0);
-    let limit = request.payload.get("limit").and_then(Value::as_u64).unwrap_or(64).clamp(1, 128) as usize;
+    let after_id = request
+        .payload
+        .get("after_id")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let limit = request
+        .payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(64)
+        .clamp(1, 128) as usize;
     let start = row_locator_key(tx, after_id)?.exact_range()?.1;
     let (_, end) = EntityKey::prefix_range(
-        tx.tenant_id(), TENANT_GLOBAL_OWNER_ID, INTEGRATION_ROW_LOCATOR_NAMESPACE, b"")?;
+        tx.tenant_id(),
+        TENANT_GLOBAL_OWNER_ID,
+        INTEGRATION_ROW_LOCATOR_NAMESPACE,
+        b"",
+    )?;
     let rows = database.entity_scan(tx, &start, &end, limit + 1)?;
     let more = rows.len() > limit;
     let mut projected = Vec::new();
@@ -1386,7 +1510,9 @@ fn delivery_page(
         last_id = row.id;
         projected.push(workspace_projection(&row));
     }
-    bounded_response(&json!({"rows":projected,"hasMore":more,"nextAfterId":if more { last_id } else { 0 }}))
+    bounded_response(
+        &json!({"rows":projected,"hasMore":more,"nextAfterId":if more { last_id } else { 0 }}),
+    )
 }
 
 // Locator windows are physical read pages, never a total-scan limit; only an
@@ -1396,12 +1522,29 @@ fn delivery_action_page(
     tx: &mut AuthorityTransaction,
     request: &Request,
 ) -> io::Result<Option<Vec<u8>>> {
-    let after_id = request.payload.get("after_id").and_then(Value::as_u64).unwrap_or(0);
-    let limit = request.payload.get("limit").and_then(Value::as_u64).unwrap_or(64).clamp(1, 128) as usize;
-    let retained = request.payload.get("retained").and_then(Value::as_bool).unwrap_or(false);
+    let after_id = request
+        .payload
+        .get("after_id")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let limit = request
+        .payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(64)
+        .clamp(1, 128) as usize;
+    let retained = request
+        .payload
+        .get("retained")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut start = row_locator_key(tx, after_id)?.exact_range()?.1;
     let (_, end) = EntityKey::prefix_range(
-        tx.tenant_id(), TENANT_GLOBAL_OWNER_ID, INTEGRATION_ROW_LOCATOR_NAMESPACE, b"")?;
+        tx.tenant_id(),
+        TENANT_GLOBAL_OWNER_ID,
+        INTEGRATION_ROW_LOCATOR_NAMESPACE,
+        b"",
+    )?;
     let mut rows = Vec::new();
     'scan: loop {
         let page = database.entity_scan(tx, &start, &end, MAX_ENTITY_RANGE_ROWS)?;
@@ -1422,7 +1565,11 @@ fn delivery_action_page(
     }
     let more = rows.len() > limit;
     rows.truncate(limit);
-    let next_after_id = if more { rows.last().map_or(0, |row| row.id) } else { 0 };
+    let next_after_id = if more {
+        rows.last().map_or(0, |row| row.id)
+    } else {
+        0
+    };
     let projected: Vec<Value> = rows.iter().map(workspace_projection).collect();
     bounded_response(&json!({"rows":projected,"hasMore":more,"nextAfterId":next_after_id}))
 }
@@ -1435,8 +1582,10 @@ fn get_integrating(
     let row_id = integer(&request.payload, "row_id", 1)?;
     bounded_response(
         &read_workspace_by_id(database, tx, row_id)?
-            .filter(|workspace| workspace.state == "integrating"
-                && !delivery_denied(&origin_document(&workspace.origin_raw)))
+            .filter(|workspace| {
+                workspace.state == "integrating"
+                    && !delivery_denied(&origin_document(&workspace.origin_raw))
+            })
             .map(|workspace| worker_workspace_projection(&workspace))
             .unwrap_or(Value::Null),
     )
@@ -1457,7 +1606,8 @@ fn cas_state(
     let Some(mut workspace) = read_workspace_by_id(database, tx, row_id)? else {
         return bounded_response(&json!({"changed":false}));
     };
-    if workspace.state != "integrating" || delivery_denied(&origin_document(&workspace.origin_raw)) {
+    if workspace.state != "integrating" || delivery_denied(&origin_document(&workspace.origin_raw))
+    {
         return bounded_response(&json!({"changed":false}));
     }
     let old = workspace.clone();

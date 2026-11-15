@@ -7,8 +7,8 @@
 use super::*;
 mod frontier;
 mod sha_state;
-use sha_state::ShaState;
 pub(crate) use frontier::{before_header_write, certify as certify_frontier};
+use sha_state::ShaState;
 
 #[cfg(test)]
 thread_local! { static SCANNED_HEADERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
@@ -102,7 +102,8 @@ impl HeaderWalk {
             return Ok(None);
         }
         if self.page.as_slice().is_empty() {
-            let entries = database.entity_scan(transaction, &self.next, &self.end, INDEX_PAGE_ROWS)?;
+            let entries =
+                database.entity_scan(transaction, &self.next, &self.end, INDEX_PAGE_ROWS)?;
             let Some((last, _)) = entries.last() else {
                 return Err(invalid_data("Model context target order changed"));
             };
@@ -126,8 +127,13 @@ impl HeaderWalk {
 }
 
 fn turn_bound(error: serde_json::Error) -> io::Error {
-    if error.io_error_kind().is_some_and(crate::resource_exhaustion::is_refusal_kind) {
-        crate::resource_exhaustion::domain_bound("turn response exceeds its bounded streamed payload")
+    if error
+        .io_error_kind()
+        .is_some_and(crate::resource_exhaustion::is_refusal_kind)
+    {
+        crate::resource_exhaustion::domain_bound(
+            "turn response exceeds its bounded streamed payload",
+        )
     } else {
         invalid_data("context Turn is malformed")
     }
@@ -169,15 +175,24 @@ fn select(value: Value) -> io::Result<Selected> {
     )
     .map_err(turn_bound)?
     {
-        CanonicalEncoding::Encoded(encoded) => Ok(Selected { value, encoded: Some(encoded) }),
-        CanonicalEncoding::Larger(_) => Ok(Selected { value, encoded: None }),
+        CanonicalEncoding::Encoded(encoded) => Ok(Selected {
+            value,
+            encoded: Some(encoded),
+        }),
+        CanonicalEncoding::Larger => Ok(Selected {
+            value,
+            encoded: None,
+        }),
         CanonicalEncoding::NotCanonical => {
             let (value, _) = crate::response_json::normalize_value_with_size(
                 value,
                 crate::generated_tofudb_ir::MAX_TURN_RESPONSE_BYTES,
             )
             .map_err(turn_bound)?;
-            Ok(Selected { value, encoded: None })
+            Ok(Selected {
+                value,
+                encoded: None,
+            })
         }
     }
 }
@@ -204,14 +219,20 @@ impl Row {
     /// `encoded` is the row's single encoding; `turn` its Turn record (the head
     /// when paged).
     fn new(turn: &Value, encoded: crate::response_json::EncodedValue) -> Self {
-        let media_free = match turn.get("projection").and_then(|value| value.get("attachments")) {
+        let media_free = match turn
+            .get("projection")
+            .and_then(|value| value.get("attachments"))
+        {
             None | Some(Value::Null) => true,
             Some(Value::Array(refs)) => refs.is_empty(),
             _ => false,
         };
         Self {
             encoded,
-            turn_id: turn.get("turnId").and_then(Value::as_str).map(str::to_owned),
+            turn_id: turn
+                .get("turnId")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             media_free,
         }
     }
@@ -391,8 +412,9 @@ impl<'a> Page<'a> {
         // Rows were encoded once when selected; `turns` sorts last, so the
         // response is the encoder's own output without encoding them again.
         let rows = self.turns.into_iter().map(|row| row.encoded).collect();
-        let encoded = crate::response_json::EncodedResponse::from_object_with_items(result, "turns", rows)
-            .map_err(|_| invalid_data("turn response cannot be encoded"))?;
+        let encoded =
+            crate::response_json::EncodedResponse::from_object_with_items(result, "turns", rows)
+                .map_err(|_| invalid_data("turn response cannot be encoded"))?;
         if encoded.len() > crate::generated_tofudb_ir::MAX_TURN_RESPONSE_BYTES {
             return Err(crate::resource_exhaustion::domain_bound(
                 "turn response exceeds its bounded streamed payload",
@@ -549,7 +571,9 @@ fn read_uncertified(
             continuation_status = "history_changed";
             if proof_digest.as_deref() == Some(state.digest().as_str()) {
                 continuation_status = "terminal_changed";
-                let witness = terminal.as_ref().expect("an anchor has its terminal witness");
+                let witness = terminal
+                    .as_ref()
+                    .expect("an anchor has its terminal witness");
                 if header.value.get("turnId") == witness.get(0) {
                     let final_id = witness
                         .get(0)
@@ -608,7 +632,13 @@ fn read_uncertified(
         }
     };
     let continuation = if covered > 0 || legacy { cached } else { None };
-    page.respond(covered, index, state.digest(), continuation_status, continuation)
+    page.respond(
+        covered,
+        index,
+        state.digest(),
+        continuation_status,
+        continuation,
+    )
 }
 
 /// A certificate authenticates only headers before its terminal. We still
@@ -656,7 +686,13 @@ fn read_certified_suffix(
     let mut state = cert.state;
     state.update(&header_encoding(&first.value)?)?;
     let mut count = cert.count + 1;
-    let mut page = Page::new(conversation, target_id, target.take(), after, Some(checkpoint));
+    let mut page = Page::new(
+        conversation,
+        target_id,
+        target.take(),
+        after,
+        Some(checkpoint),
+    );
     while let Some(header) = walk.next(database, transaction, target_id)? {
         page.offer(database, transaction, &header)?;
         if !header.target {
@@ -664,8 +700,14 @@ fn read_certified_suffix(
             count += 1;
         }
     }
-    page.respond(cert.count + 1, count, state.digest(), "available", cached.take())
-        .map(Some)
+    page.respond(
+        cert.count + 1,
+        count,
+        state.digest(),
+        "available",
+        cached.take(),
+    )
+    .map(Some)
 }
 
 #[cfg(test)]

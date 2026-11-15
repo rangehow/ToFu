@@ -19,10 +19,9 @@ use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
     ARTIFACT_CONVERSATION_INDEX_NAMESPACE, ARTIFACT_DEDUPE_NAMESPACE, ARTIFACT_DOCUMENT_NAMESPACE,
     ARTIFACT_LIBRARY_INDEX_NAMESPACE, ARTIFACT_PARENT_INDEX_NAMESPACE,
-    ARTIFACT_PATH_HEAD_NAMESPACE, MAX_ENTITY_RANGE_ROWS,
-    MAX_TOOL_RESULT_ARTIFACT_BYTES, MAX_TOOL_RESULT_PRUNE_ROWS, MAX_TOOL_RESULT_RANGE_BYTES,
-    MAX_TOOL_RESULT_TTL_MILLISECONDS, TOOL_RESULT_ARTIFACT_NAMESPACE,
-    TOOL_RESULT_EXPIRY_INDEX_NAMESPACE,
+    ARTIFACT_PATH_HEAD_NAMESPACE, MAX_ENTITY_RANGE_ROWS, MAX_TOOL_RESULT_ARTIFACT_BYTES,
+    MAX_TOOL_RESULT_PRUNE_ROWS, MAX_TOOL_RESULT_RANGE_BYTES, MAX_TOOL_RESULT_TTL_MILLISECONDS,
+    TOOL_RESULT_ARTIFACT_NAMESPACE, TOOL_RESULT_EXPIRY_INDEX_NAMESPACE,
 };
 
 fn invalid_input(message: &str) -> io::Error {
@@ -172,7 +171,8 @@ fn materialize_blob(
         reference.into(),
     )?;
     let mut output = Vec::new();
-    output.try_reserve_exact(reference.logical_bytes as usize)
+    output
+        .try_reserve_exact(reference.logical_bytes as usize)
         .map_err(crate::resource_exhaustion::reservation_error)?;
     while let Some(chunk) = reader.next_chunk()? {
         if output.len().saturating_add(chunk.len()) > maximum {
@@ -445,7 +445,8 @@ pub(crate) fn create(
         }
     }
     let count = read_count(database, transaction, &request.conv_id)?;
-    let next_count = count.checked_add(1)
+    let next_count = count
+        .checked_add(1)
         .ok_or_else(|| invalid_data("artifact conversation count overflow"))?;
     let mut parent_id = request.parent_id;
     let mut version = 1;
@@ -596,11 +597,20 @@ fn scan_index(
         let exhausted = rows.len() < page_size;
         for (_, raw) in rows {
             let id = decode_identity(&raw, None)?;
-            documents.push(read_document(database, transaction, &id)?
-                .ok_or_else(|| invalid_data("artifact index target is missing"))?);
+            documents.push(
+                read_document(database, transaction, &id)?
+                    .ok_or_else(|| invalid_data("artifact index target is missing"))?,
+            );
         }
-        if exhausted { break; }
-        start = EntityKey::new(transaction.tenant_id(), transaction.owner_user_id(), namespace, &next_raw)?;
+        if exhausted {
+            break;
+        }
+        start = EntityKey::new(
+            transaction.tenant_id(),
+            transaction.owner_user_id(),
+            namespace,
+            &next_raw,
+        )?;
     }
     Ok(documents)
 }
@@ -958,17 +968,47 @@ pub(crate) fn tool_put(
 }
 
 pub(crate) fn tool_read(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-    artifact_ref: &str, now_ms: u64, offset: &Value, limit: usize, selector: &str,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    artifact_ref: &str,
+    now_ms: u64,
+    offset: &Value,
+    limit: usize,
+    selector: &str,
 ) -> io::Result<Option<Vec<u8>>> {
-    query::run(database, transaction, artifact_ref, now_ms, offset, limit, selector, None)
+    query::run(
+        database,
+        transaction,
+        artifact_ref,
+        now_ms,
+        offset,
+        limit,
+        selector,
+        None,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn tool_search(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-    artifact_ref: &str, query: &str, now_ms: u64, cursor: &Value, limit: usize, selector: &str,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    artifact_ref: &str,
+    query: &str,
+    now_ms: u64,
+    cursor: &Value,
+    limit: usize,
+    selector: &str,
 ) -> io::Result<Option<Vec<u8>>> {
-    query::run(database, transaction, artifact_ref, now_ms, cursor, limit, selector, Some(query))
+    query::run(
+        database,
+        transaction,
+        artifact_ref,
+        now_ms,
+        cursor,
+        limit,
+        selector,
+        Some(query),
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1081,17 +1121,32 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert_eq!(conversation_empty_hint(&database, &mut transaction, "conversation").unwrap(), Some(false));
+        assert_eq!(
+            conversation_empty_hint(&database, &mut transaction, "conversation").unwrap(),
+            Some(false)
+        );
         create(&database, &mut transaction, request("a", "report", 1)).unwrap();
-        assert_eq!(conversation_empty_hint(&database, &mut transaction, "conversation").unwrap(), None);
+        assert_eq!(
+            conversation_empty_hint(&database, &mut transaction, "conversation").unwrap(),
+            None
+        );
         database.commit(transaction).unwrap();
         let mut foreign = database.begin_with_identity_claim_scopes(7, 12).unwrap();
-        assert_eq!(conversation_empty_hint(&database, &mut foreign, "conversation").unwrap(), Some(false));
+        assert_eq!(
+            conversation_empty_hint(&database, &mut foreign, "conversation").unwrap(),
+            Some(false)
+        );
         drop(foreign);
         let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         delete(&database, &mut transaction, "a", 2).unwrap();
-        assert_eq!(conversation_empty_hint(&database, &mut transaction, "conversation").unwrap(), None);
-        assert_eq!(list(&database, &mut transaction, "conversation", false).unwrap(), b"[]");
+        assert_eq!(
+            conversation_empty_hint(&database, &mut transaction, "conversation").unwrap(),
+            None
+        );
+        assert_eq!(
+            list(&database, &mut transaction, "conversation", false).unwrap(),
+            b"[]"
+        );
         database.commit(transaction).unwrap();
     }
 
@@ -1101,18 +1156,30 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let mut transaction = database.begin(7, 11).unwrap();
         for index in 0..1005 {
-            create(&database, &mut transaction,
-                   request(&format!("v{index}"), &format!("version {index}"), index + 1)).unwrap();
+            create(
+                &database,
+                &mut transaction,
+                request(&format!("v{index}"), &format!("version {index}"), index + 1),
+            )
+            .unwrap();
         }
-        assert_eq!(read_count(&database, &mut transaction, "conversation").unwrap(), 1005);
+        assert_eq!(
+            read_count(&database, &mut transaction, "conversation").unwrap(),
+            1005
+        );
         database.commit(transaction).unwrap();
         drop(database);
         let database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut transaction = database.begin(7, 11).unwrap();
-        let all: Value = serde_json::from_slice(&list(&database, &mut transaction, "conversation", false).unwrap()).unwrap();
+        let all: Value = serde_json::from_slice(
+            &list(&database, &mut transaction, "conversation", false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(all.as_array().unwrap().len(), 1005);
         for anchor in ["v0", "v1004"] {
-            let chain: Value = serde_json::from_slice(&versions(&database, &mut transaction, anchor).unwrap()).unwrap();
+            let chain: Value =
+                serde_json::from_slice(&versions(&database, &mut transaction, anchor).unwrap())
+                    .unwrap();
             assert_eq!(chain.as_array().unwrap().len(), 1005);
             assert_eq!(chain[0]["id"], "v0");
             assert_eq!(chain[1004]["id"], "v1004");
@@ -1129,10 +1196,14 @@ mod tests {
         let mut transaction = database.begin(7, 11).unwrap();
         create(&database, &mut transaction, request("first", "one", 1)).unwrap();
         create(&database, &mut transaction, request("last", "two", 2)).unwrap();
-        let mut first = read_document(&database, &mut transaction, "first").unwrap().unwrap();
+        let mut first = read_document(&database, &mut transaction, "first")
+            .unwrap()
+            .unwrap();
         first.parent_id = "last".to_owned();
         put_document(&database, &mut transaction, &first).unwrap();
-        let chain: Value = serde_json::from_slice(&versions(&database, &mut transaction, "last").unwrap()).unwrap();
+        let chain: Value =
+            serde_json::from_slice(&versions(&database, &mut transaction, "last").unwrap())
+                .unwrap();
         assert_eq!(chain.as_array().unwrap().len(), 2);
     }
 
@@ -1140,18 +1211,28 @@ mod tests {
     fn complete_artifact_above_old_byte_quota_survives_commit_and_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        let content = format!("<html><!--{}--><p>late evidence</p></html>", "x".repeat(9 * 1024 * 1024));
+        let content = format!(
+            "<html><!--{}--><p>late evidence</p></html>",
+            "x".repeat(9 * 1024 * 1024)
+        );
         let mut transaction = database.begin(7, 11).unwrap();
         create(&database, &mut transaction, request("large", &content, 100)).unwrap();
         database.commit(transaction).unwrap();
         drop(database);
         let database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut transaction = database.begin(7, 11).unwrap();
-        let saved: Value = serde_json::from_slice(&get(&database, &mut transaction, "large", true).unwrap().unwrap()).unwrap();
+        let saved: Value = serde_json::from_slice(
+            &get(&database, &mut transaction, "large", true)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(saved["content"], content);
         assert_eq!(saved["size_bytes"], content.len() as u64);
         let mut foreign = database.begin(7, 12).unwrap();
-        assert!(get(&database, &mut foreign, "large", true).unwrap().is_none());
+        assert!(get(&database, &mut foreign, "large", true)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1224,9 +1305,11 @@ mod tests {
         assert_eq!(range["sizeBytes"], Value::Null);
         let mut foreign = database.begin(7, 12).unwrap();
         assert!(get(&database, &mut foreign, "v2", true).unwrap().is_none());
-        assert!(tool_read(&database, &mut foreign, &tool_ref, 1_500, &json!(0), 8, "")
-            .unwrap()
-            .is_none());
+        assert!(
+            tool_read(&database, &mut foreign, &tool_ref, 1_500, &json!(0), 8, "")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1395,9 +1478,10 @@ mod tests {
         vfs.arm_fault(None).unwrap();
         let mut database = AuthorityDatabase::open_with_vfs(Path::new("/data"), vfs).unwrap();
         let mut read = database.begin(7, 11).unwrap();
-        let document_present = tool_read(&database, &mut read, artifact_ref, 150, &json!(0), 64, "")
-            .unwrap()
-            .is_some();
+        let document_present =
+            tool_read(&database, &mut read, artifact_ref, 150, &json!(0), 64, "")
+                .unwrap()
+                .is_some();
         drop(read);
         let mut prune = database.begin(7, 11).unwrap();
         let progress = tool_prune(&database, &mut prune, 300, 1).unwrap();
@@ -1561,14 +1645,34 @@ mod tests {
         // The stored manifest keeps its own resultId (provenance intact); the
         // first writer's bytes win on a dedup hit.
         let mut read = database.begin(7, 11).unwrap();
-        let page = tool_read(&database, &mut read, &artifact_ref, 1_200, &json!(0), 65536, "")
-            .unwrap()
-            .expect("stored manifest must be readable");
+        let page = tool_read(
+            &database,
+            &mut read,
+            &artifact_ref,
+            1_200,
+            &json!(0),
+            65536,
+            "",
+        )
+        .unwrap()
+        .expect("stored manifest must be readable");
         let envelope: Value = serde_json::from_slice(&page).unwrap();
         assert_eq!(envelope["content"], "shared evidence body");
         assert_eq!(envelope["resultId"], "11111111-1111-4111-8111-111111111111");
-        let document = read_tool(&database, &mut read, parse_artifact_ref(&artifact_ref).unwrap()).unwrap().unwrap();
-        let stored = materialize_blob(&database, &read, document.content, MAX_TOOL_RESULT_ARTIFACT_BYTES).unwrap();
+        let document = read_tool(
+            &database,
+            &mut read,
+            parse_artifact_ref(&artifact_ref).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        let stored = materialize_blob(
+            &database,
+            &read,
+            document.content,
+            MAX_TOOL_RESULT_ARTIFACT_BYTES,
+        )
+        .unwrap();
         assert_eq!(stored, first.as_bytes());
     }
 }

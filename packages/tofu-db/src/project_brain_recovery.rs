@@ -233,7 +233,7 @@ fn publish(
         return Ok(false);
     }
     if let Some((project, header, summary)) = prepared.summary {
-        if source_header(&database, &mut transaction, &project)?.as_ref() != Some(&header) {
+        if source_header(database, &mut transaction, &project)?.as_ref() != Some(&header) {
             return Ok(false);
         }
         let summary_key = key(&transaction, &project)?;
@@ -244,7 +244,10 @@ fn publish(
     }
     if prepared.next_cursor == [1] {
         let legacy_cursor = legacy_cursor_key(&transaction)?;
-        if database.entity_get(&mut transaction, &legacy_cursor)?.is_some() {
+        if database
+            .entity_get(&mut transaction, &legacy_cursor)?
+            .is_some()
+        {
             database.maintenance_entity_delete(&mut transaction, legacy_cursor)?;
         }
     }
@@ -365,7 +368,13 @@ mod tests {
         seed.sync_directory(Path::new("/")).unwrap();
         let mut database =
             AuthorityDatabase::initialize_with_vfs(Path::new("/data"), seed.clone()).unwrap();
-        let projects = ["/legacy-0", "/legacy-1", "/legacy-2", "/summarized", "/active"];
+        let projects = [
+            "/legacy-0",
+            "/legacy-1",
+            "/legacy-2",
+            "/summarized",
+            "/active",
+        ];
         for project in &projects[..3] {
             write(&mut database, project, "completed", true);
         }
@@ -398,8 +407,11 @@ mod tests {
                 .iter()
                 .filter(|op| **op == Operation::Read)
                 .count();
-            eprintln!("project_recovery_walk cold={cold} projects=5 legacy_index_rows=1500 \
-                hydrations={hydrations} pages={pages} active_returns={} reads={reads}", active.len());
+            eprintln!(
+                "project_recovery_walk cold={cold} projects=5 legacy_index_rows=1500 \
+                hydrations={hydrations} pages={pages} active_returns={} reads={reads}",
+                active.len()
+            );
             (cold, hydrations, active)
         });
         for (cold, hydrations, active) in measurements {
@@ -485,11 +497,15 @@ mod tests {
         // The superseded index pass had already marked itself complete.
         let mut seed = database.begin(7, 11).unwrap();
         let legacy_cursor = legacy_cursor_key(&seed).unwrap();
-        database.entity_put(&mut seed, legacy_cursor.clone(), vec![1]).unwrap();
+        database
+            .entity_put(&mut seed, legacy_cursor.clone(), vec![1])
+            .unwrap();
         for timestamp in 0..1500_u64 {
             let project = projects[timestamp as usize % projects.len()];
             let row = updated_index_key(&seed, project, timestamp).unwrap();
-            database.entity_put(&mut seed, row, project.as_bytes().to_vec()).unwrap();
+            database
+                .entity_put(&mut seed, row, project.as_bytes().to_vec())
+                .unwrap();
         }
         database.commit(seed).unwrap();
         assert_eq!(walk(&database, true).0, 3);
@@ -501,12 +517,21 @@ mod tests {
         assert_eq!(projection_hydrations() - before, 2);
         let database = database.lock().unwrap();
         let (hydrations, _, active) = walk(&database, true);
-        assert_eq!(hydrations, 1, "only the active project still needs its projection");
+        assert_eq!(
+            hydrations, 1,
+            "only the active project still needs its projection"
+        );
         assert_eq!(active, ["/active"]);
         let mut read = database.begin(7, 11).unwrap();
         let cursor = cursor_key(&read).unwrap();
-        assert_eq!(database.entity_get(&mut read, &cursor).unwrap(), Some(vec![1]));
-        assert_eq!(database.entity_get(&mut read, &legacy_cursor).unwrap(), None);
+        assert_eq!(
+            database.entity_get(&mut read, &cursor).unwrap(),
+            Some(vec![1])
+        );
+        assert_eq!(
+            database.entity_get(&mut read, &legacy_cursor).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -620,7 +645,11 @@ mod tests {
                 );
                 // The completing pass retires the superseded cursor atomically.
                 let legacy = reopened.entity_get(&mut read, &legacy_cursor).unwrap();
-                assert_eq!(legacy.is_none(), cursor.is_some(), "fault {index} {action:?}");
+                assert_eq!(
+                    legacy.is_none(),
+                    cursor.is_some(),
+                    "fault {index} {action:?}"
+                );
             }
         }
     }

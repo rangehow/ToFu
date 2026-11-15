@@ -1,19 +1,18 @@
 """Channel application service: owner-facing views and commands.
 
 Responsibility: the one owner-scoped command/query surface shared by the HTTP
-routes and the model tools — account configuration (enable/disable and the
-login MIS; the supervisor confirms the identity with ``whoami`` afterwards, so
-no command waits for a 大象 login), command-chat selection or creation, thread
-listing and configuration, subscriptions, outbox listing and decisions.
+routes and the model tools — thread listing and configuration, subscriptions,
+outbox listing and decisions, and the 大象 account commands, which the
+installed dx channel adapter implements (``lib.channels.adapters``;
+``channel_unavailable`` without it).
 Handlers stay stateless; state lives in ``ChannelStore``.
 
-Entry points: ``account_view``, ``update_account`` (also the notification
-robot, ``lib.channels.dx.robot``), ``create_command_chat``,
+Entry points: ``account_view``, ``update_account``, ``create_command_chat``
+(delegated to the dx adapter),
 ``thread_page``, ``thread_view``, ``configure_thread``, ``subscribe``,
 ``unsubscribe``, ``outbox_page``, ``outbox_attachment`` (a draft's image
 thumbnails), ``decide_outbox``. Dependencies:
-``ChannelStore``, ``policy``, ``outbox``, ``delivery`` (router lookup) and the
-dx adapter's one-shot launcher commands.
+``ChannelStore``, ``policy``, ``outbox``, ``lib.channels.adapters``.
 """
 from __future__ import annotations
 
@@ -22,15 +21,11 @@ from typing import Any
 from lib.channels import outbox, policy
 from lib.channels.model import (
     CHANNELS, CONFIGURABLE_MODES, OWNER_NOTE_MAX_CHARS, REPLY_POLICIES, ChannelError, OutboxItem, ThreadKey,
-    session_owns_status,
 )
 from lib.channels.store import ChannelStore, now_ms
-from lib.log import get_logger
 
-logger = get_logger(__name__)
 
 CHANNEL = 'dx'
-COMMAND_CHAT_TITLE = 'Tofu Router'
 _UNSET = object()
 
 
@@ -38,34 +33,27 @@ def _store(owner: int, store: ChannelStore | None) -> ChannelStore:
     return store or ChannelStore(owner)
 
 
+def _dx():
+    from lib.channels.adapters import require_channel_adapter
+    return require_channel_adapter(CHANNEL)
+
+
 def account_view(owner: int, *, store: ChannelStore | None = None) -> dict[str, Any]:
-    """Contract ``ChannelAccountView``."""
-    from lib.channels.delivery import RouterUnavailable, global_router_binding
-    from lib.channels.dx.adapter import launch_spec
-    from lib.channels.dx.login import account_login_mis
-    from lib.channels.dx.robot import robot_view
-    store = _store(owner, store)
-    account = store.account(CHANNEL) or {}
-    status = dict(account.get('status') or {})
-    try:
-        router_id = global_router_binding(store.owner, create=False)['conversationId']
-    except RouterUnavailable:
-        router_id = None
-    return {
-        'channel': CHANNEL,
-        'enabled': bool(account.get('enabled')),
-        'loginMis': account_login_mis(account),
-        'identity': account.get('identity') or None,
-        'commandChat': account.get('commandChat') or None,
-        'commandChatCandidate': None if account.get('commandChat') else account.get('commandChatCandidate') or None,
-        'status': {'state': status.get('state') or 'disabled', 'detail': status.get('detail') or '',
-                   'updatedAtMs': int(status.get('updatedAtMs') or 0),
-                   'connectedAtMs': status.get('connectedAtMs')},
-        'skillInstalled': launch_spec(store.owner).installed,
-        'routerConversationId': router_id,
-        'robot': robot_view(account),
-        'assistantNote': str(account.get('assistantNote') or ''),
-    }
+    """Contract ``ChannelAccountView`` of the 大象 account (the installed dx adapter's)."""
+    return _dx().account_view(owner, store=store)
+
+
+def update_account(owner: int, update: dict[str, Any], *, store: ChannelStore | None = None,
+                   robot_probe=None) -> dict[str, Any]:
+    """Apply ``ChannelAccountUpdate`` to the 大象 account through the installed dx adapter."""
+    return _dx().update_account(owner, update, store=store, robot_probe=robot_probe)
+
+
+def create_command_chat(owner: int, *, store: ChannelStore | None = None,
+                        group_creator=None, robot_factory=None) -> dict[str, Any]:
+    """Create the 大象 ``Tofu Router`` command chat through the installed dx adapter (C6)."""
+    return _dx().create_command_chat(owner, store=store, group_creator=group_creator,
+                                     robot_factory=robot_factory)
 
 
 def _owner_note(value: Any) -> str:
@@ -75,175 +63,6 @@ def _owner_note(value: Any) -> str:
     if not isinstance(value, str) or len(value) > OWNER_NOTE_MAX_CHARS:
         raise ChannelError('invalid_note', f'A note is text of at most {OWNER_NOTE_MAX_CHARS} characters')
     return value.strip()
-
-
-def update_account(owner: int, update: dict[str, Any], *, store: ChannelStore | None = None,
-                   robot_probe=None) -> dict[str, Any]:
-    """Apply ``ChannelAccountUpdate`` and return at once.
-
-    The supervisor confirms the identity of the login MIS before a session
-    starts (``starting``/``authorizing``); a MIS other than the bound
-    identity's clears that identity and the command chat of the old account,
-    and ingress of the new one starts now. Either change clears the robot's
-    binding (C6). A robot secret is verified with a token request
-    (``robot_probe`` in tests) before it is stored.
-    """
-    from lib.channels.dx.login import normalize_mis
-    from lib.channels.dx.robot import retire_replaced_secret, robot_update
-    store = _store(owner, store)
-    unknown = set(update) - {'enabled', 'commandChat', 'mis', 'robot', 'assistantNote'}
-    if unknown:
-        raise ChannelError('invalid_update', f'Unknown fields: {sorted(unknown)}')
-    assistant_note = _owner_note(update['assistantNote']) if 'assistantNote' in update else _UNSET
-    mis = normalize_mis(update['mis']) if 'mis' in update else _UNSET
-    command_chat = _UNSET
-    if 'commandChat' in update:
-        value = update['commandChat']
-        if value is not None and ThreadKey.parse(value).channel != CHANNEL:
-            raise ChannelError('invalid_update', 'The command chat must be a 大象 thread')
-        command_chat = None if value is None else str(ThreadKey.parse(value))
-    enabled = update.get('enabled')
-    if enabled is not None and not isinstance(enabled, bool):
-        raise ChannelError('invalid_update', 'enabled must be a boolean')
-    robot = _UNSET
-    previous_robot = None
-    if 'robot' in update:
-        previous_robot = (store.account(CHANNEL) or {}).get('robot')
-        robot = robot_update(store.owner, update['robot'], previous_robot, probe=robot_probe)
-
-    def start(account):
-        # An owner command that starts a session is the owner's login request: the
-        # launcher may ask for one new 大象 approval after an unapproved one (C6).
-        account['status'] = {'state': 'starting', 'detail': '', 'updatedAtMs': now_ms(), 'connectedAtMs': None}
-        account['loginRequestedAtMs'] = now_ms()
-
-    def change(account):
-        switched = False
-        if mis is not _UNSET and mis != account.get('mis'):
-            account['mis'] = mis
-            if (account.get('identity') or {}).get('mis') != mis:
-                # Another 大象 account: the old identity and its command chat
-                # group do not carry over, and ingress starts afresh.
-                switched = True
-                account.update(identity=None, commandChat=None, commandChatCandidate=None,
-                               commandChatCreation=None, robotBinding=None,
-                               frontierAtMs=now_ms() if account.get('enabled') else None)
-        if enabled is True:
-            keep_status = session_owns_status(account) and not switched
-            account['enabled'] = True
-            if account.get('frontierAtMs') is None:
-                # Ingress starts at enable time; earlier history is not replayed.
-                account['frontierAtMs'] = now_ms()
-            if not keep_status:
-                start(account)
-        elif enabled is False:
-            account['enabled'] = False
-            account['status'] = {'state': 'disabled', 'detail': '', 'updatedAtMs': now_ms(),
-                                 'connectedAtMs': None}
-        elif switched and account.get('enabled'):
-            start(account)
-        if command_chat is not _UNSET:
-            if command_chat != account.get('commandChat'):
-                # Another chat: the robot posts there only once it is bound anew (C6).
-                account['robotBinding'] = None
-            account['commandChat'] = command_chat
-        if robot is not _UNSET:
-            account['robot'] = robot
-        if assistant_note is not _UNSET:
-            account['assistantNote'] = assistant_note
-        return account
-    store.update_account(CHANNEL, change)
-    if robot is not _UNSET:
-        retire_replaced_secret(previous_robot, robot)
-    if command_chat not in (_UNSET, None):
-        _ensure_thread(store, ThreadKey.parse(command_chat))
-    from lib.channels.dx.supervisor import notify_account_changed
-    notify_account_changed(store.owner)
-    return account_view(store.owner, store=store)
-
-
-def _ensure_thread(store: ChannelStore, thread: ThreadKey, title: str = '') -> None:
-    store.update_thread(thread, lambda value: value if value.get('title') or not title
-                        else {**value, 'title': title})
-
-
-def create_command_chat(owner: int, *, store: ChannelStore | None = None,
-                        group_creator=None, robot_factory=None) -> dict[str, Any]:
-    """Create the ``Tofu Router`` group on explicit owner request (C6).
-
-    With a notification robot the robot creates it with the owner as 群主,
-    so the robot is in the group from the start. A robot that creates nothing
-    leaves it to the owner's session, with the refusal recorded on the robot
-    and noticed in the new group; a creation of unknown outcome creates no
-    second group. Idempotent per account: an existing command chat is
-    returned unchanged; a creation claim stops a concurrent request from
-    creating a second group.
-    """
-    store = _store(owner, store)
-    account = store.account(CHANNEL) or {}
-    if account.get('commandChat'):
-        return account_view(store.owner, store=store)
-    identity = account.get('identity') or {}
-    if not account.get('enabled') or not identity.get('uid'):
-        raise ChannelError('account_unavailable', 'Enable the 大象 account before creating a command chat')
-    claimed = {'value': False}
-
-    def claim(value):
-        if value.get('commandChat') or (value.get('commandChatCreation') or {}).get('state') == 'creating':
-            return value
-        claimed['value'] = True
-        return {**value, 'commandChatCreation': {'state': 'creating', 'startedAtMs': now_ms()}}
-    store.update_account(CHANNEL, claim)
-    if not claimed['value']:
-        raise ChannelError('creation_in_progress', 'A Tofu Router group creation is already in progress')
-    if group_creator is None:
-        from lib.channels.dx.adapter import create_command_group as group_creator
-    from lib.channels.dx.login import account_login_mis
-    from lib.channels.dx.robot import record_robot_error, robot_notice
-    try:
-        gid, refusal = _robot_created_group(store, account, identity['uid'], robot_factory)
-        if gid is None:
-            gid = group_creator(store.owner, name=COMMAND_CHAT_TITLE, member_uid=identity['uid'],
-                                mis=account_login_mis(account))
-    except BaseException:
-        store.update_account(CHANNEL, lambda value: {**value, 'commandChatCreation': None})
-        raise
-    thread = ThreadKey(CHANNEL, 'gid', gid)
-    store.update_account(CHANNEL, lambda value: {**value, 'commandChat': str(thread),
-                                                 'commandChatCreation': {'state': 'created', 'gid': gid}})
-    _ensure_thread(store, thread, COMMAND_CHAT_TITLE)
-    if refusal is not None and record_robot_error(store, refusal):
-        robot_notice(store, thread, refusal)
-    return account_view(store.owner, store=store)
-
-
-def _robot_created_group(store: ChannelStore, account: dict[str, Any], owner_uid: str,
-                         robot_factory) -> tuple[str | None, ChannelError | None]:
-    """``(gid, None)`` when the account's robot created the group; ``(None, refusal)`` when it created nothing.
-
-    ``(None, None)`` without a robot. An unknown outcome may have created a
-    group, so it is recorded and refused instead of creating another.
-    """
-    from lib.channels.dx.robot import (
-        DxRobot, RobotDeferred, RobotOutcomeUnknown, RobotRefused, effective_robot, record_robot_error,
-        robot_secret,
-    )
-    config = effective_robot(account)
-    if config is None:
-        return None, None
-    robot = (robot_factory or DxRobot)(str(config['clientId']), robot_secret(config))
-    try:
-        gid = robot.create_group(COMMAND_CHAT_TITLE, owner_uid=owner_uid)
-    except (RobotRefused, RobotDeferred) as error:
-        logger.warning('[Channels] dx robot created no command chat: %s; the owner creates it', error.code)
-        return None, error
-    except RobotOutcomeUnknown as error:
-        record_robot_error(store, error)
-        raise ChannelError('group_create_unknown', f'The robot may have created a {COMMAND_CHAT_TITLE} group '
-                                                   f'({error}); check 大象 before creating another') from error
-    if config.get('error'):
-        record_robot_error(store, None)
-    return gid, None
 
 
 def thread_view(record: dict[str, Any], account: dict[str, Any] | None) -> dict[str, Any]:
@@ -413,6 +232,6 @@ def audit_page(owner: int, *, channel: str, before: str = '',
     return {'items': [item.view(titles[item.thread]) for item in items], 'nextBefore': following}
 
 
-__all__ = ['COMMAND_CHAT_TITLE', 'account_view', 'audit_page', 'configure_thread', 'create_command_chat',
+__all__ = ['account_view', 'audit_page', 'configure_thread', 'create_command_chat',
            'decide_outbox', 'outbox_attachment', 'outbox_item_view', 'outbox_page', 'subscribe',
            'thread_page', 'thread_view', 'unsubscribe', 'update_account']

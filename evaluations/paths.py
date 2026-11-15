@@ -1,7 +1,7 @@
 """Evaluation host storage policy, shared by current and future execution adapters.
 
-The checkout filesystem is the default; on a declared required host volume
-(``TOFU_REQUIRED_HOST_VOLUME``), every writable evaluation root must stay on it. Temporary storage is never host /tmp, /var/tmp or
+The checkout filesystem is the default; on a shared ``/mnt/<volume>`` network
+volume, every writable evaluation root must stay on that volume. Temporary storage is never host /tmp, /var/tmp or
 /dev/shm, even when inherited TMPDIR points there. Guest paths are not host paths.
 Explicit private artifact roots are owned by their existing artifact lifecycle.
 """
@@ -12,8 +12,8 @@ from pathlib import Path
 from rootless_vm.host_paths import (
     _local_scratch_base,
     _local_storage_opt_in,
+    _network_volume,
     child_storage_environment,
-    required_host_volume,
     validate_host_path,
 )
 
@@ -24,9 +24,8 @@ STORAGE_POLICY = "checkout-volume-private-v1"
 def validate_output_path(path: Path) -> Path:
     candidate = validate_host_path(path.expanduser().absolute())
     resolved = candidate.resolve()
-    volume = required_host_volume()
-    if not _local_storage_opt_in() and volume is not None and PROJECT_ROOT.is_relative_to(volume) \
-            and not resolved.is_relative_to(volume):
+    volume = _network_volume(PROJECT_ROOT)
+    if not _local_storage_opt_in() and volume is not None and not resolved.is_relative_to(volume):
         raise ValueError(f"this checkout requires evaluation host paths under {volume}")
     if resolved == Path(resolved.anchor) or resolved == Path.home().resolve():
         raise ValueError("evaluation root must be a dedicated directory, not root or HOME")

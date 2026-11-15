@@ -8,6 +8,10 @@ import inspect
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
+from tests.support.dx_overlay import requires_dx
+
 pytestmark = pytest.mark.unit
 
 
@@ -198,6 +202,7 @@ def test_plugin_blueprint_cannot_shadow_one_already_mounted(monkeypatch):
     assert app.blueprints['fresh_plugin'] is fresh
 
 
+@requires_dx
 def test_background_service_start_is_per_app_idempotent(monkeypatch):
     import threading
     from types import SimpleNamespace
@@ -209,7 +214,7 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     import routes
     import lib.app.plugin_registry as plugin_registry
     import runtime_guards
-    import lib.channels.dx.supervisor as channel_supervisor
+    import tofu_yourprovider.dx.supervisor as channel_supervisor
 
     calls = []
     monkeypatch.setattr(channel_supervisor, '_ADAPTERS', {})
@@ -250,9 +255,10 @@ def test_background_service_start_is_per_app_idempotent(monkeypatch):
     ]
 
 
+@requires_yourprovider_overlay
 def test_background_service_shutdown_is_paired_and_idempotent(monkeypatch):
     import lib.channels.bots.supervisor as bot_supervisor
-    import lib.channels.dx.supervisor as channel_supervisor
+    import tofu_yourprovider.dx.supervisor as channel_supervisor
     import lib.channels.github.supervisor as github_supervisor
     import lib.database_panel.maintenance as database_panel_maintenance
     import lib.knowledge.enrichment as knowledge_enrichment
@@ -309,9 +315,10 @@ def test_background_service_shutdown_is_paired_and_idempotent(monkeypatch):
     ]
 
 
+@requires_dx
 def test_background_service_shutdown_retains_latch_on_timeout(monkeypatch):
     import lib.channels.bots.supervisor as bot_supervisor
-    import lib.channels.dx.supervisor as channel_supervisor
+    import tofu_yourprovider.dx.supervisor as channel_supervisor
     import lib.channels.github.supervisor as github_supervisor
     import lib.database_panel.maintenance as database_panel_maintenance
     import lib.knowledge.enrichment as knowledge_enrichment
@@ -352,13 +359,14 @@ def test_background_service_shutdown_retains_latch_on_timeout(monkeypatch):
         background_services.BackgroundOwnersStillLive(late))
 
 
+@requires_dx
 def test_the_drain_asks_only_loaded_hosting_channel_owners_to_begin_stopping(monkeypatch):
     """Shutdown asks the channel owners to stop when its drain begins; their stop joins them
     later. Only a registered app whose role hosts them asks, and an owner never imported stays
     unloaded."""
     import sys
     import lib.channels.bots.supervisor as bot_supervisor
-    import lib.channels.dx.supervisor as channel_supervisor
+    import tofu_yourprovider.dx.supervisor as channel_supervisor
     import lib.channels.github.supervisor as github_supervisor
 
     asked = []

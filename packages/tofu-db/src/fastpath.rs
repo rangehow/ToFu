@@ -23,12 +23,12 @@ use crate::vfs::{
 
 const MARKER: &str = "FASTPATH";
 const PENDING_MARKER: &str = "FASTPATH_PENDING";
-pub use crate::generated_storage_v2::{
-    MAX_NATIVE_FASTPATH_SYNC_INTERVAL_MS, MIN_NATIVE_FASTPATH_SYNC_INTERVAL_MS,
-};
 use crate::generated_storage_v2::{
     MAX_NATIVE_FASTPATH_FSYNC_REGRESSION, MIN_NATIVE_FASTPATH_FSYNC_SPEEDUP,
     MIN_NATIVE_FASTPATH_METADATA_SPEEDUP, NATIVE_FASTPATH_MARKER_MAX_BYTES,
+};
+pub use crate::generated_storage_v2::{
+    MAX_NATIVE_FASTPATH_SYNC_INTERVAL_MS, MIN_NATIVE_FASTPATH_SYNC_INTERVAL_MS,
 };
 const MARKER_LIMIT: u64 = NATIVE_FASTPATH_MARKER_MAX_BYTES;
 const FORMAT: &str = "tofu.native-fastpath.v1";
@@ -45,19 +45,31 @@ pub struct AdmissionRefusal {
 
 impl std::fmt::Display for AdmissionRefusal {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "native fastpath admission refused ({}): {}", self.reason, self.detail)
+        write!(
+            formatter,
+            "native fastpath admission refused ({}): {}",
+            self.reason, self.detail
+        )
     }
 }
 
 impl std::error::Error for AdmissionRefusal {}
 
 fn refusal(kind: io::ErrorKind, reason: &'static str, detail: impl Into<String>) -> io::Error {
-    io::Error::new(kind, AdmissionRefusal { reason, detail: detail.into() })
+    io::Error::new(
+        kind,
+        AdmissionRefusal {
+            reason,
+            detail: detail.into(),
+        },
+    )
 }
 
 /// The typed pre-relocation refusal carried by `error`, if any.
 pub fn admission_refusal(error: &io::Error) -> Option<&AdmissionRefusal> {
-    error.get_ref().and_then(|inner| inner.downcast_ref::<AdmissionRefusal>())
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<AdmissionRefusal>())
 }
 
 /// Whether launch admission may fall back to the classic authority.
@@ -284,10 +296,18 @@ impl FastpathConfig {
         let mut source = Engine::open_with_key(&self.durable_authority, key.clone())?;
         if let Some(marker) = pending.as_ref() {
             self.validate_marker(marker).map_err(|error| {
-                refusal(io::ErrorKind::InvalidData, "pending-selection-differs", error.to_string())
+                refusal(
+                    io::ErrorKind::InvalidData,
+                    "pending-selection-differs",
+                    error.to_string(),
+                )
             })?;
             validate_seed(source.state(), marker).map_err(|error| {
-                refusal(io::ErrorKind::InvalidData, "stale-preparation", error.to_string())
+                refusal(
+                    io::ErrorKind::InvalidData,
+                    "stale-preparation",
+                    error.to_string(),
+                )
             })?;
         }
         let bytes = backup::bounded_directory_bytes(&self.durable_authority)
@@ -577,7 +597,11 @@ fn require_capacity(path: &Path, bytes: u64) -> io::Result<()> {
 /// relocation state exists; other walk errors stay fatal.
 fn corpus_walk_refusal(error: io::Error) -> io::Error {
     if error.kind() == io::ErrorKind::InvalidInput {
-        refusal(io::ErrorKind::InvalidInput, "authority-too-large", error.to_string())
+        refusal(
+            io::ErrorKind::InvalidInput,
+            "authority-too-large",
+            error.to_string(),
+        )
     } else {
         error
     }
@@ -629,11 +653,17 @@ impl CandidateProbe {
     /// authority) that does not trade it for a materially slower barrier.
     pub(crate) fn admits(&self) -> bool {
         let fsync_win = self.durable_fsync
-            >= self.local_fsync.saturating_mul(MIN_NATIVE_FASTPATH_FSYNC_SPEEDUP);
+            >= self
+                .local_fsync
+                .saturating_mul(MIN_NATIVE_FASTPATH_FSYNC_SPEEDUP);
         let metadata_win = self.durable_lookup
-            >= self.local_lookup.saturating_mul(MIN_NATIVE_FASTPATH_METADATA_SPEEDUP)
+            >= self
+                .local_lookup
+                .saturating_mul(MIN_NATIVE_FASTPATH_METADATA_SPEEDUP)
             && self.local_fsync
-                <= self.durable_fsync.saturating_mul(MAX_NATIVE_FASTPATH_FSYNC_REGRESSION);
+                <= self
+                    .durable_fsync
+                    .saturating_mul(MAX_NATIVE_FASTPATH_FSYNC_REGRESSION);
         fsync_win || metadata_win
     }
 
@@ -653,7 +683,10 @@ impl CandidateProbe {
 fn median_lookup(directory: &Path) -> io::Result<Duration> {
     let mut samples = Vec::with_capacity(24);
     for _ in 0..24 {
-        let probe = directory.join(format!(".native-fastpath-lookup-{}", Uuid::new_v4().simple()));
+        let probe = directory.join(format!(
+            ".native-fastpath-lookup-{}",
+            Uuid::new_v4().simple()
+        ));
         let start = Instant::now();
         match fs::symlink_metadata(&probe) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}

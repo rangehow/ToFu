@@ -31,7 +31,12 @@ fn common_prefix(previous: &[u8], key: &[u8]) -> usize {
         }
         offset += 8;
     }
-    offset + previous[offset..].iter().zip(&key[offset..]).take_while(|(left, right)| left == right).count()
+    offset
+        + previous[offset..]
+            .iter()
+            .zip(&key[offset..])
+            .take_while(|(left, right)| left == right)
+            .count()
 }
 
 pub(super) fn internal_entry_bytes(previous: &[u8], key: &[u8]) -> usize {

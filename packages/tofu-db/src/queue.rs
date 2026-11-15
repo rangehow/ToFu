@@ -14,9 +14,7 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MAX_ENTITY_RANGE_ROWS,
-    MAX_QUEUE_REAP_ITEMS,
-    QUEUE_AUTOPILOT_MARKER_NAMESPACE,
+    MAX_ENTITY_RANGE_ROWS, MAX_QUEUE_REAP_ITEMS, QUEUE_AUTOPILOT_MARKER_NAMESPACE,
     QUEUE_CONVERSATION_ORDER_INDEX_NAMESPACE, QUEUE_GLOBAL_AUTOPILOT_INDEX_NAMESPACE,
     QUEUE_GLOBAL_CONVERSATION_INDEX_NAMESPACE, QUEUE_GLOBAL_LEASE_INDEX_NAMESPACE,
     QUEUE_ITEM_CORE_NAMESPACE, QUEUE_ITEM_ID_CLAIM_NAMESPACE, QUEUE_ITEM_STATE_NAMESPACE,
@@ -239,7 +237,10 @@ fn read_core(
     .ok_or_else(|| invalid_data("queue core is missing"))?;
     let core = serde_json::from_slice::<Value>(&raw)
         .ok()
-        .and_then(|v| match v { Value::Object(object) => Some(object), _ => None })
+        .and_then(|v| match v {
+            Value::Object(object) => Some(object),
+            _ => None,
+        })
         .ok_or_else(|| invalid_data("queue core is malformed"))?;
     if core_owner(&core)? != identity.owner
         || text(&core, "id")? != identity.id
@@ -330,12 +331,19 @@ fn public_item_view(
             .and_then(|value| value.get("content"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-            .or_else(|| payload.get("_peerText").and_then(Value::as_str)
-                .filter(|value| !value.is_empty()))
+            .or_else(|| {
+                payload
+                    .get("_peerText")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+            })
             .or_else(|| payload.get("text").and_then(Value::as_str))
             .unwrap_or("")
     } else if peer {
-        payload.get("_peerText").and_then(Value::as_str).unwrap_or("")
+        payload
+            .get("_peerText")
+            .and_then(Value::as_str)
+            .unwrap_or("")
     } else {
         payload.get("text").and_then(Value::as_str).unwrap_or("")
     };
@@ -344,8 +352,12 @@ fn public_item_view(
             .and_then(|value| value.get("timestamp"))
             .and_then(Value::as_u64)
             .filter(|value| *value != 0)
-            .or_else(|| payload.get("timestamp").and_then(Value::as_u64)
-                .filter(|value| *value != 0))
+            .or_else(|| {
+                payload
+                    .get("timestamp")
+                    .and_then(Value::as_u64)
+                    .filter(|value| *value != 0)
+            })
             .unwrap_or(identity.created_at_ms)
     } else {
         identity.created_at_ms
@@ -428,12 +440,16 @@ fn public_item_view(
             }),
         );
 
-        if let Some(completion) = object.get_mut("backgroundCommand").and_then(Value::as_object_mut) {
+        if let Some(completion) = object
+            .get_mut("backgroundCommand")
+            .and_then(Value::as_object_mut)
+        {
             if let Some(metadata) = metadata {
                 for key in ["exitCode", "timedOut", "interrupted"] {
                     if let Some(value) = metadata.get(key) {
                         if (key == "exitCode" && value.is_i64())
-                            || (key != "exitCode" && value.is_boolean()) {
+                            || (key != "exitCode" && value.is_boolean())
+                        {
                             completion.insert(key.into(), value.clone());
                         }
                     }
@@ -486,7 +502,8 @@ fn is_legacy_completion(
         return Ok(false);
     }
     let core = read_core(database, tx, identity)?;
-    Ok(core.get("payload")
+    Ok(core
+        .get("payload")
         .and_then(Value::as_object)
         .and_then(|payload| payload.get("_backgroundCommand"))
         .and_then(Value::as_str)
@@ -507,7 +524,9 @@ fn scan_paged(
     while rows.len() < limit {
         let page_limit = (limit - rows.len()).min(MAX_ENTITY_RANGE_ROWS);
         let page = database.entity_scan(tx, &start, end, page_limit)?;
-        if page.is_empty() { break; }
+        if page.is_empty() {
+            break;
+        }
         let next = page
             .last()
             .map(|(key, _)| key.clone().exact_range())
@@ -682,9 +701,14 @@ pub(crate) fn enqueue_item(
     }
     let append = if request.kind == "real" {
         append_metadata::eligible(database, tx, &request.conversation_id)?
-    } else { None };
-    let mut items = if append.is_some() { Vec::new() }
-        else { rows(database, tx, &request.conversation_id)? };
+    } else {
+        None
+    };
+    let mut items = if append.is_some() {
+        Vec::new()
+    } else {
+        rows(database, tx, &request.conversation_id)?
+    };
     delete_summaries(database, tx, &items)?;
     if request.kind == "real" {
         let removed = items
@@ -714,7 +738,9 @@ pub(crate) fn enqueue_item(
             return Ok(value);
         }
     }
-    let position = append.as_ref().map(|metadata| metadata.item_count)
+    let position = append
+        .as_ref()
+        .map(|metadata| metadata.item_count)
         .or_else(|| u64::try_from(items.len()).ok())
         .and_then(|count| count.checked_add(1))
         .ok_or_else(|| invalid_data("queue position overflow"))?;
@@ -830,12 +856,16 @@ pub(crate) fn cancel_background_receipt(
         return Ok(false);
     };
     if identity.conversation_id != conversation_id
-        || !matches!(identity.kind.as_str(), "background_receipt" | "workflow_step")
+        || !matches!(
+            identity.kind.as_str(),
+            "background_receipt" | "workflow_step"
+        )
     {
         return Ok(false);
     }
     let core = read_core(database, tx, &identity)?;
-    let has_completion = core.get("payload")
+    let has_completion = core
+        .get("payload")
         .and_then(Value::as_object)
         .and_then(|payload| payload.get("_backgroundCommand"))
         .and_then(Value::as_str)
@@ -871,42 +901,65 @@ pub(crate) fn acknowledge_background_receipts(
     acknowledgement: &Value,
     projection: &Map<String, Value>,
 ) -> io::Result<Vec<String>> {
-    let ack = acknowledgement.as_object()
+    let ack = acknowledgement
+        .as_object()
         .ok_or_else(|| invalid_input("invalid background acknowledgement"))?;
-    let block_id = ack.get("block_id").and_then(Value::as_str)
+    let block_id = ack
+        .get("block_id")
+        .and_then(Value::as_str)
         .filter(|value| !value.is_empty() && value.chars().count() <= 256)
         .ok_or_else(|| invalid_input("invalid background receipt block"))?;
-    let deliveries = ack.get("deliveries").and_then(Value::as_array)
+    let deliveries = ack
+        .get("deliveries")
+        .and_then(Value::as_array)
         .ok_or_else(|| invalid_input("invalid background delivery batch"))?;
     let mut expected = BTreeMap::<String, String>::new();
     for delivery in deliveries {
-        let queue_id = delivery.get("queue_id").and_then(Value::as_str)
+        let queue_id = delivery
+            .get("queue_id")
+            .and_then(Value::as_str)
             .filter(|value| !value.is_empty() && value.chars().count() <= 256)
             .ok_or_else(|| invalid_input("invalid background queue identity"))?;
-        let command_id = delivery.get("command_id").and_then(Value::as_str)
+        let command_id = delivery
+            .get("command_id")
+            .and_then(Value::as_str)
             .filter(|value| !value.is_empty() && value.chars().count() <= 128)
             .ok_or_else(|| invalid_input("invalid background command identity"))?;
-        if expected.insert(queue_id.to_owned(), command_id.to_owned()).is_some() {
+        if expected
+            .insert(queue_id.to_owned(), command_id.to_owned())
+            .is_some()
+        {
             return Err(invalid_input("duplicate background delivery identity"));
         }
     }
-    let receipts = projection.get("_bgCommandInjects").and_then(Value::as_array)
+    let receipts = projection
+        .get("_bgCommandInjects")
+        .and_then(Value::as_array)
         .ok_or_else(|| invalid_input("background acknowledgement requires receipt"))?;
-    let mut matching = receipts.iter().filter(|value| {
-        value.get("blockId").and_then(Value::as_str) == Some(block_id)
-    });
-    let receipt = matching.next().ok_or_else(|| invalid_input("background receipt missing"))?;
+    let mut matching = receipts
+        .iter()
+        .filter(|value| value.get("blockId").and_then(Value::as_str) == Some(block_id));
+    let receipt = matching
+        .next()
+        .ok_or_else(|| invalid_input("background receipt missing"))?;
     if matching.next().is_some() {
         return Err(invalid_input("duplicate background receipt block"));
     }
-    let previews = receipt.get("previews").and_then(Value::as_array)
+    let previews = receipt
+        .get("previews")
+        .and_then(Value::as_array)
         .ok_or_else(|| invalid_input("invalid background receipt previews"))?;
     let mut observed = BTreeMap::<String, String>::new();
     for preview in previews {
         if let Some(queue_id) = preview.get("queueId").and_then(Value::as_str) {
-            let command_id = preview.get("commandId").and_then(Value::as_str)
+            let command_id = preview
+                .get("commandId")
+                .and_then(Value::as_str)
                 .ok_or_else(|| invalid_input("background preview lacks command identity"))?;
-            if observed.insert(queue_id.to_owned(), command_id.to_owned()).is_some() {
+            if observed
+                .insert(queue_id.to_owned(), command_id.to_owned())
+                .is_some()
+            {
                 return Err(invalid_input("duplicate background preview identity"));
             }
         }
@@ -924,7 +977,10 @@ pub(crate) fn acknowledge_background_receipts(
             continue;
         };
         if identity.conversation_id != conversation_id
-            || !matches!(identity.kind.as_str(), "background_receipt" | "workflow_step")
+            || !matches!(
+                identity.kind.as_str(),
+                "background_receipt" | "workflow_step"
+            )
         {
             return Err(conflict("background delivery intent differs from receipt"));
         }
@@ -936,10 +992,12 @@ pub(crate) fn acknowledge_background_receipts(
             return Err(conflict("background delivery intent is protected"));
         }
         let core = read_core(database, tx, &identity)?;
-        let message = core.get("payload").and_then(Value::as_object)
+        let message = core
+            .get("payload")
+            .and_then(Value::as_object)
             .ok_or_else(|| invalid_data("queue payload is malformed"))?;
-        if message.get("_backgroundCommand").and_then(Value::as_str)
-            != Some(command_id.as_str()) || python_truthy(message.get("_peerHuman"))
+        if message.get("_backgroundCommand").and_then(Value::as_str) != Some(command_id.as_str())
+            || python_truthy(message.get("_peerHuman"))
         {
             return Err(conflict("background command identity differs"));
         }
@@ -948,8 +1006,11 @@ pub(crate) fn acknowledge_background_receipts(
     if matched.is_empty() {
         return Ok(Vec::new());
     }
-    matched.sort_by(|left, right| left.position.cmp(&right.position)
-        .then_with(|| left.id.cmp(&right.id)));
+    matched.sort_by(|left, right| {
+        left.position
+            .cmp(&right.position)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     let removed_ids: Vec<String> = matched.iter().map(|item| item.id.clone()).collect();
     let selected: BTreeSet<&str> = matched.iter().map(|item| item.id.as_str()).collect();
     delete_summaries(database, tx, &items)?;
@@ -1101,7 +1162,9 @@ impl Request {
             } => valid_text(conversation_id, 256) && valid_text(queue_id, 256),
             Self::AutopilotClear { conversation_id }
             | Self::AutopilotGet { conversation_id }
-            | Self::List { conversation_id, .. }
+            | Self::List {
+                conversation_id, ..
+            }
             | Self::Clear { conversation_id }
             | Self::Depth { conversation_id } => valid_text(conversation_id, 256),
             Self::Enqueue {
@@ -1132,10 +1195,7 @@ impl Request {
                 conversation_id,
                 queue_ids,
                 ..
-            } => {
-                valid_text(conversation_id, 256)
-                    && queue_ids.iter().all(|id| valid_text(id, 256))
-            }
+            } => valid_text(conversation_id, 256) && queue_ids.iter().all(|id| valid_text(id, 256)),
             Self::Dequeue {
                 conversation_id,
                 lease_ms,
@@ -1171,11 +1231,15 @@ impl Request {
         struct ByteCounter(usize);
         impl io::Write for ByteCounter {
             fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                self.0 = self.0.checked_add(bytes.len())
+                self.0 = self
+                    .0
+                    .checked_add(bytes.len())
                     .ok_or_else(|| invalid_input("queue encoded length overflow"))?;
                 Ok(bytes.len())
             }
-            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
         }
         let mut counter = ByteCounter(0);
         serde_json::to_writer(&mut counter, self)
@@ -1269,25 +1333,50 @@ pub(crate) fn execute(
             )?;
             encode_response(&json!({"cleared":true}))
         }
-        Request::List { conversation_id, mode, page_size, max_bytes, cursor } => {
-            if !matches!(mode.as_str(), "full" | "preview" | "dispatchable" | "background_pending" | "background_page") {
+        Request::List {
+            conversation_id,
+            mode,
+            page_size,
+            max_bytes,
+            cursor,
+        } => {
+            if !matches!(
+                mode.as_str(),
+                "full" | "preview" | "dispatchable" | "background_pending" | "background_page"
+            ) {
                 return Err(invalid_input("invalid queue list mode"));
             }
             let mut items = rows(database, tx, conversation_id)?;
-            if mode == "background_page" { items.sort_by(|a, b| (a.priority, a.created_at_ms, &a.id).cmp(&(b.priority, b.created_at_ms, &b.id))); }
+            if mode == "background_page" {
+                items.sort_by(|a, b| {
+                    (a.priority, a.created_at_ms, &a.id).cmp(&(b.priority, b.created_at_ms, &b.id))
+                });
+            }
             let paged = mode == "background_page";
             let mut values = Vec::new();
             let mut bytes = 0_usize;
             let mut last = None;
             let mut more = false;
             for item in &items {
-                if paged && cursor.as_ref().is_some_and(|after| (item.priority, item.created_at_ms, &item.id) <= (after.0, after.1, &after.2)) { continue; }
-                let legacy_completion = if item.kind == "workflow_step"
-                    && mode != "full" && mode != "preview" {
-                    is_legacy_completion(database, tx, item)?
-                } else { false };
-                if mode == "dispatchable" && (item.kind == "autopilot"
-                    || item.kind == "background_receipt" || legacy_completion) {
+                if paged
+                    && cursor.as_ref().is_some_and(|after| {
+                        (item.priority, item.created_at_ms, &item.id)
+                            <= (after.0, after.1, &after.2)
+                    })
+                {
+                    continue;
+                }
+                let legacy_completion =
+                    if item.kind == "workflow_step" && mode != "full" && mode != "preview" {
+                        is_legacy_completion(database, tx, item)?
+                    } else {
+                        false
+                    };
+                if mode == "dispatchable"
+                    && (item.kind == "autopilot"
+                        || item.kind == "background_receipt"
+                        || legacy_completion)
+                {
                     continue;
                 }
                 if mode == "background_pending" || paged {
@@ -1301,10 +1390,19 @@ pub(crate) fn execute(
                 }
                 let value = public_item(database, tx, item, mode != "preview")?;
                 if paged {
-                    let row_bytes = encode(&value, "queue page item")?.len() + usize::from(!values.is_empty());
+                    let row_bytes =
+                        encode(&value, "queue page item")?.len() + usize::from(!values.is_empty());
                     let next_cursor = json!({"priority":item.priority,"createdAt":item.created_at_ms,"queueId":item.id});
-                    let overhead = encode(&json!({"items":[], "nextCursor":next_cursor}), "queue page cursor")?.len();
-                    if !values.is_empty() && (values.len() >= *page_size || bytes.saturating_add(row_bytes).saturating_add(overhead) > *max_bytes) {
+                    let overhead = encode(
+                        &json!({"items":[], "nextCursor":next_cursor}),
+                        "queue page cursor",
+                    )?
+                    .len();
+                    if !values.is_empty()
+                        && (values.len() >= *page_size
+                            || bytes.saturating_add(row_bytes).saturating_add(overhead)
+                                > *max_bytes)
+                    {
                         more = true;
                         break;
                     }
@@ -1313,8 +1411,13 @@ pub(crate) fn execute(
                 }
                 values.push(value);
             }
-            if paged { encode_response(&json!({"items":values,"nextCursor":if more { last } else { None }})) }
-            else { encode_response(&Value::Array(values)) }
+            if paged {
+                encode_response(
+                    &json!({"items":values,"nextCursor":if more { last } else { None }}),
+                )
+            } else {
+                encode_response(&Value::Array(values))
+            }
         }
         Request::Depth { conversation_id } => {
             let count = rows(database, tx, conversation_id)?
@@ -1547,13 +1650,7 @@ pub(crate) fn execute(
             now_ms,
         } => {
             let (start, end) = summary_range(tx, kind.as_deref())?;
-            let found = scan_paged(
-                database,
-                tx,
-                start,
-                &end,
-                usize::MAX,
-            )?;
+            let found = scan_paged(database, tx, start, &end, usize::MAX)?;
             let conversations = found
                 .into_iter()
                 .map(|(_, v)| decode::<Value>(&v, "queue conversation index"))
@@ -1572,7 +1669,9 @@ pub(crate) fn execute(
             let identities =
                 expired_leases(database, tx, *now_ms, *force, MAX_QUEUE_REAP_ITEMS + 1)?;
             if identities.len() > MAX_QUEUE_REAP_ITEMS {
-                return Err(crate::resource_exhaustion::domain_bound("queue reap exceeds its bound"));
+                return Err(crate::resource_exhaustion::domain_bound(
+                    "queue reap exceeds its bound",
+                ));
             }
             let mut conversations = BTreeMap::new();
             for identity in identities {
@@ -1670,8 +1769,11 @@ fn expired_leases(
 
 /// Offline queue import bypasses normal summary maintenance; invalidate the
 /// same-owner derived header in its restoring transaction before adding rows.
-pub(crate) fn invalidate_append_metadata(database: &AuthorityDatabase,
-    tx: &mut AuthorityTransaction, conversation_id: &str) -> io::Result<()> {
+pub(crate) fn invalidate_append_metadata(
+    database: &AuthorityDatabase,
+    tx: &mut AuthorityTransaction,
+    conversation_id: &str,
+) -> io::Result<()> {
     append_metadata::remove(database, tx, conversation_id)
 }
 
@@ -1711,42 +1813,84 @@ mod completion_outcome_tests {
     use crate::semantic::{admit_request, AuthenticatedScope};
     use crate::semantic_executor::execute_admitted_request;
 
-    fn execute(database: &mut AuthorityDatabase, operation: &str, payload: Value, command: Option<&str>) -> Value {
+    fn execute(
+        database: &mut AuthorityDatabase,
+        operation: &str,
+        payload: Value,
+        command: Option<&str>,
+    ) -> Value {
         let request = Request {
-            correlation_id: [3; 16], deadline_unix_ms: 10_000_000_000,
-            owner_id: 11, tenant_id: Some(7), command_id: command.map(str::to_owned),
-            schema_id: STORAGE_SCHEMA_VERSION, operation: operation.to_owned(),
+            correlation_id: [3; 16],
+            deadline_unix_ms: 10_000_000_000,
+            owner_id: 11,
+            tenant_id: Some(7),
+            command_id: command.map(str::to_owned),
+            schema_id: STORAGE_SCHEMA_VERSION,
+            operation: operation.to_owned(),
             payload: serde_json::to_vec(&payload).unwrap(),
         };
-        let admitted = admit_request(&request,
-            NegotiatedProtocol { protocol_version: PROTOCOL_VERSION, schema_id: STORAGE_SCHEMA_VERSION },
-            AuthenticatedScope { owner_id: 11, tenant_id: Some(7) }, 1_000).unwrap();
-        serde_json::from_slice(&execute_admitted_request(database, admitted, 1_000).unwrap()).unwrap()
+        let admitted = admit_request(
+            &request,
+            NegotiatedProtocol {
+                protocol_version: PROTOCOL_VERSION,
+                schema_id: STORAGE_SCHEMA_VERSION,
+            },
+            AuthenticatedScope {
+                owner_id: 11,
+                tenant_id: Some(7),
+            },
+            1_000,
+        )
+        .unwrap();
+        serde_json::from_slice(&execute_admitted_request(database, admitted, 1_000).unwrap())
+            .unwrap()
     }
 
     #[test]
     fn background_completion_outcome_matches_full_and_preview() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database, "conversation.create",
-            json!({"conv_id":"outcome-conv","user_id":11}), Some("outcome-create"));
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"outcome-conv","user_id":11}),
+            Some("outcome-create"),
+        );
         for (id, metadata) in [
-            ("known", json!({"exitCode":7,"timedOut":false,"interrupted":true})),
+            (
+                "known",
+                json!({"exitCode":7,"timedOut":false,"interrupted":true}),
+            ),
             ("legacy", json!({})),
-            ("invalid", json!({"exitCode":true,"timedOut":"false","interrupted":1})),
+            (
+                "invalid",
+                json!({"exitCode":true,"timedOut":"false","interrupted":1}),
+            ),
         ] {
-            execute(&mut database, "queue.enqueue",
+            execute(
+                &mut database,
+                "queue.enqueue",
                 json!({"conv_id":"outcome-conv","user_id":11,
                     "queue_id":id,"kind":"background_receipt","priority":80,
                     "message":{"text":"done","_backgroundCommand":id,
                         "_backgroundCommandCompletion":metadata},
-                    "config":{},"created_at_ms":2}), Some(&format!("outcome-enqueue-{id}")));
+                    "config":{},"created_at_ms":2}),
+                Some(&format!("outcome-enqueue-{id}")),
+            );
         }
-        let listed = execute(&mut database, "queue.list",
-            json!({"conv_id":"outcome-conv","user_id":11}), None);
+        let listed = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"outcome-conv","user_id":11}),
+            None,
+        );
         // The HTTP snapshot composes queue preview separately from Turn sync.
-        let preview = execute(&mut database, "queue.list",
-            json!({"conv_id":"outcome-conv","user_id":11,"mode":"preview"}), None);
+        let preview = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"outcome-conv","user_id":11,"mode":"preview"}),
+            None,
+        );
         for row in listed.as_array().unwrap() {
             let completion = &row["backgroundCommand"];
             assert_eq!(completion["status"], "completed");
@@ -1759,8 +1903,12 @@ mod completion_outcome_tests {
                     assert!(completion.get(field).is_none());
                 }
             }
-            let public = preview.as_array().unwrap().iter()
-                .find(|item| item["queueId"] == row["queueId"]).unwrap();
+            let public = preview
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["queueId"] == row["queueId"])
+                .unwrap();
             assert_eq!(public["backgroundCommand"], *completion);
         }
     }
@@ -1769,45 +1917,109 @@ mod completion_outcome_tests {
     fn admitted_queue_demand_beyond_former_quota_preserves_messages_dedupe_leases_and_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database, "conversation.create",
-            json!({"conv_id":"demand-conv","user_id":11}), Some("demand-create"));
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"demand-conv","user_id":11}),
+            Some("demand-create"),
+        );
         ORDER_ROWS_READ.with(|count| count.set(0));
         let started = std::time::Instant::now();
         for ordinal in 0..1100 {
-            execute(&mut database, "queue.enqueue", json!({
-                "conv_id":"demand-conv", "user_id":11, "queue_id":format!("demand-{ordinal:04}"),
-                "kind":"real", "priority":100, "message":{"text":format!("完整消息-{ordinal}")},
-                "config":{}, "created_at_ms":ordinal+1,
-            }), Some(&format!("enqueue-{ordinal}")));
+            execute(
+                &mut database,
+                "queue.enqueue",
+                json!({
+                    "conv_id":"demand-conv", "user_id":11, "queue_id":format!("demand-{ordinal:04}"),
+                    "kind":"real", "priority":100, "message":{"text":format!("完整消息-{ordinal}")},
+                    "config":{}, "created_at_ms":ordinal+1,
+                }),
+                Some(&format!("enqueue-{ordinal}")),
+            );
         }
         let enqueue_us = started.elapsed().as_micros();
-        ORDER_ROWS_READ.with(|count| assert_eq!(count.get(), 0, "ordinary append must not read earlier order rows"));
-        let listed = execute(&mut database, "queue.list", json!({"conv_id":"demand-conv","user_id":11}), None);
+        ORDER_ROWS_READ.with(|count| {
+            assert_eq!(
+                count.get(),
+                0,
+                "ordinary append must not read earlier order rows"
+            )
+        });
+        let listed = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"demand-conv","user_id":11}),
+            None,
+        );
         assert_eq!(listed.as_array().unwrap().len(), 1100);
         for (ordinal, item) in listed.as_array().unwrap().iter().enumerate() {
             assert_eq!(item["queueId"], format!("demand-{ordinal:04}"));
             assert_eq!(item["payload"]["text"], format!("完整消息-{ordinal}"));
         }
         let lease = json!({"conv_id":"demand-conv","user_id":11,"now_ms":2000,"lease_ms":10000});
-        assert_eq!(execute(&mut database, "queue.dequeue", lease.clone(), Some("lease-first"))["queueId"], "demand-0000");
-        assert_eq!(execute(&mut database, "queue.dequeue", lease.clone(), Some("lease-second"))["queueId"], "demand-0001");
-        execute(&mut database, "queue.lease.release", json!({"queue_id":"demand-0000","user_id":11}), Some("release-first"));
-        assert_eq!(execute(&mut database, "queue.dequeue", lease, Some("lease-again"))["queueId"], "demand-0000");
-        execute(&mut database, "queue.finalize", json!({"conv_id":"demand-conv","queue_id":"demand-0000","user_id":11}), Some("finalize-first"));
+        assert_eq!(
+            execute(
+                &mut database,
+                "queue.dequeue",
+                lease.clone(),
+                Some("lease-first")
+            )["queueId"],
+            "demand-0000"
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                "queue.dequeue",
+                lease.clone(),
+                Some("lease-second")
+            )["queueId"],
+            "demand-0001"
+        );
+        execute(
+            &mut database,
+            "queue.lease.release",
+            json!({"queue_id":"demand-0000","user_id":11}),
+            Some("release-first"),
+        );
+        assert_eq!(
+            execute(&mut database, "queue.dequeue", lease, Some("lease-again"))["queueId"],
+            "demand-0000"
+        );
+        execute(
+            &mut database,
+            "queue.finalize",
+            json!({"conv_id":"demand-conv","queue_id":"demand-0000","user_id":11}),
+            Some("finalize-first"),
+        );
         for ordinal in 1..=2 {
-            let result = execute(&mut database, "queue.enqueue", json!({
-                "conv_id":"demand-conv", "user_id":11, "queue_id":format!("continuation-{ordinal}"),
-                "kind":"goal_continuation", "priority":100, "message":{"text":"continue"},
-                "config":{}, "created_at_ms":2000,
-            }), Some(&format!("continuation-command-{ordinal}")));
+            let result = execute(
+                &mut database,
+                "queue.enqueue",
+                json!({
+                    "conv_id":"demand-conv", "user_id":11, "queue_id":format!("continuation-{ordinal}"),
+                    "kind":"goal_continuation", "priority":100, "message":{"text":"continue"},
+                    "config":{}, "created_at_ms":2000,
+                }),
+                Some(&format!("continuation-command-{ordinal}")),
+            );
             assert_eq!(result["queueId"], "continuation-1");
             assert_eq!(result["deduped"], ordinal == 2);
         }
-        execute(&mut database, "queue.enqueue", json!({"conv_id":"demand-conv","user_id":11,
-            "queue_id":"after", "kind":"real","priority":100,"message":{"text":"最后消息"},"config":{},"created_at_ms":3000}), Some("enqueue-after"));
+        execute(
+            &mut database,
+            "queue.enqueue",
+            json!({"conv_id":"demand-conv","user_id":11,
+            "queue_id":"after", "kind":"real","priority":100,"message":{"text":"最后消息"},"config":{},"created_at_ms":3000}),
+            Some("enqueue-after"),
+        );
         drop(database);
         let mut reopened = AuthorityDatabase::open(directory.path()).unwrap();
-        let listed = execute(&mut reopened, "queue.list", json!({"conv_id":"demand-conv","user_id":11}), None);
+        let listed = execute(
+            &mut reopened,
+            "queue.list",
+            json!({"conv_id":"demand-conv","user_id":11}),
+            None,
+        );
         let items = listed.as_array().unwrap();
         assert_eq!(items.len(), 1100);
         assert_eq!(items[0]["queueId"], "demand-0001");
@@ -1815,101 +2027,232 @@ mod completion_outcome_tests {
         assert_eq!(items.last().unwrap()["queueId"], "after");
         assert!(items.iter().all(|item| item["kind"] == "real"));
         let mut other = reopened.begin_with_identity_claim_scopes(7, 12).unwrap();
-        assert!(super::rows(&reopened, &mut other, "demand-conv").unwrap().is_empty());
-        assert!(super::item_by_id(&reopened, &mut other, "demand-0001").unwrap().is_none());
+        assert!(super::rows(&reopened, &mut other, "demand-conv")
+            .unwrap()
+            .is_empty());
+        assert!(super::item_by_id(&reopened, &mut other, "demand-0001")
+            .unwrap()
+            .is_none());
         eprintln!("queue_demand messages=1100 leased=true deduped=true superseded=true reopened=true enqueue_us={} elapsed_ms={}", enqueue_us, started.elapsed().as_millis());
     }
 
-
     #[test]
-    fn admitted_queue_catalogs_and_autopilot_markers_beyond_former_quota_survive_clear_and_reopen() {
+    fn admitted_queue_catalogs_and_autopilot_markers_beyond_former_quota_survive_clear_and_reopen()
+    {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         for ordinal in 0..1101 {
             let conv = format!("catalog-{ordinal:04}");
-            execute(&mut database, "conversation.create", json!({"conv_id":conv,"user_id":11}), Some(&format!("create-{ordinal}")));
-            execute(&mut database, "queue.enqueue", json!({"conv_id":conv,"user_id":11,
+            execute(
+                &mut database,
+                "conversation.create",
+                json!({"conv_id":conv,"user_id":11}),
+                Some(&format!("create-{ordinal}")),
+            );
+            execute(
+                &mut database,
+                "queue.enqueue",
+                json!({"conv_id":conv,"user_id":11,
                 "queue_id":format!("message-{ordinal}"),"kind":"real","priority":100,
-                "message":{"text":format!("保留消息-{ordinal}")},"config":{},"created_at_ms":ordinal+1}), Some(&format!("message-command-{ordinal}")));
-            execute(&mut database, "queue.autopilot.arm", json!({"conv_id":conv,"user_id":11,
-                "queue_id":format!("autopilot-{ordinal}"),"config":{},"created_at_ms":ordinal+1}), Some(&format!("arm-{ordinal}")));
+                "message":{"text":format!("保留消息-{ordinal}")},"config":{},"created_at_ms":ordinal+1}),
+                Some(&format!("message-command-{ordinal}")),
+            );
+            execute(
+                &mut database,
+                "queue.autopilot.arm",
+                json!({"conv_id":conv,"user_id":11,
+                "queue_id":format!("autopilot-{ordinal}"),"config":{},"created_at_ms":ordinal+1}),
+                Some(&format!("arm-{ordinal}")),
+            );
         }
         let markers = execute(&mut database, "queue.autopilot.list_all", json!({}), None);
         assert_eq!(markers.as_array().unwrap().len(), 1101);
-        let conversations = execute(&mut database, "queue.conversations.list_all", json!({}), None);
+        let conversations = execute(
+            &mut database,
+            "queue.conversations.list_all",
+            json!({}),
+            None,
+        );
         assert_eq!(conversations.as_array().unwrap().len(), 1101);
         for ordinal in 0..1101 {
             let conv = format!("catalog-{ordinal:04}");
-            assert!(markers.as_array().unwrap().iter().any(|item| item["convId"] == conv && item["userId"] == 11));
-            assert!(conversations.as_array().unwrap().iter().any(|item| item["convId"] == conv && item["userId"] == 11));
+            assert!(markers
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["convId"] == conv && item["userId"] == 11));
+            assert!(conversations
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["convId"] == conv && item["userId"] == 11));
         }
-        execute(&mut database, "queue.autopilot.clear", json!({"conv_id":"catalog-1100","user_id":11}), Some("clear-marker"));
-        execute(&mut database, "queue.clear", json!({"conv_id":"catalog-1100","user_id":11}), Some("clear-queue"));
+        execute(
+            &mut database,
+            "queue.autopilot.clear",
+            json!({"conv_id":"catalog-1100","user_id":11}),
+            Some("clear-marker"),
+        );
+        execute(
+            &mut database,
+            "queue.clear",
+            json!({"conv_id":"catalog-1100","user_id":11}),
+            Some("clear-queue"),
+        );
         drop(database);
         let mut reopened = AuthorityDatabase::open(directory.path()).unwrap();
         for operation in ["queue.autopilot.list_all", "queue.conversations.list_all"] {
             let result = execute(&mut reopened, operation, json!({}), None);
             assert_eq!(result.as_array().unwrap().len(), 1100);
-            assert!(result.as_array().unwrap().iter().all(|item| item["convId"] != "catalog-1100"));
+            assert!(result
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["convId"] != "catalog-1100"));
         }
     }
-
 
     #[test]
     fn append_metadata_bootstraps_legacy_queue_tracks_oldest_and_survives_rollback() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database, "conversation.create", json!({"conv_id":"metadata-conv","user_id":11}), Some("metadata-create"));
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"metadata-conv","user_id":11}),
+            Some("metadata-create"),
+        );
         for (id, time) in [("first", 100), ("second", 200)] {
-            execute(&mut database, "queue.enqueue", json!({"conv_id":"metadata-conv","user_id":11,
-                "queue_id":id,"kind":"real","priority":100,"message":{"text":id},"config":{},"created_at_ms":time}), Some(id));
+            execute(
+                &mut database,
+                "queue.enqueue",
+                json!({"conv_id":"metadata-conv","user_id":11,
+                "queue_id":id,"kind":"real","priority":100,"message":{"text":id},"config":{},"created_at_ms":time}),
+                Some(id),
+            );
         }
         let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         append_metadata::remove(&database, &mut tx, "metadata-conv").unwrap();
         database.commit(tx).unwrap();
         ORDER_ROWS_READ.with(|count| count.set(0));
-        execute(&mut database, "queue.enqueue", json!({"conv_id":"metadata-conv","user_id":11,
-            "queue_id":"backdated","kind":"real","priority":50,"message":{"text":"backdated"},"config":{},"created_at_ms":50}), Some("backdated"));
-        ORDER_ROWS_READ.with(|count| assert_eq!(count.get(), 2, "legacy bootstrap must read the complete existing index"));
+        execute(
+            &mut database,
+            "queue.enqueue",
+            json!({"conv_id":"metadata-conv","user_id":11,
+            "queue_id":"backdated","kind":"real","priority":50,"message":{"text":"backdated"},"config":{},"created_at_ms":50}),
+            Some("backdated"),
+        );
+        ORDER_ROWS_READ.with(|count| {
+            assert_eq!(
+                count.get(),
+                2,
+                "legacy bootstrap must read the complete existing index"
+            )
+        });
         let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        let header = append_metadata::eligible(&database, &mut tx, "metadata-conv").unwrap().unwrap();
+        let header = append_metadata::eligible(&database, &mut tx, "metadata-conv")
+            .unwrap()
+            .unwrap();
         assert_eq!(header.item_count, 3);
-        assert_eq!(summary_oldest(&rows(&database, &mut tx, "metadata-conv").unwrap())[&None], 50);
-        let item = EnqueueItemRequest { conversation_id: "metadata-conv".into(), queue_id: "rolled-back".into(),
-            kind: "real".into(), priority:100, message:serde_json::from_value(json!({"text":"rollback"})).unwrap(),
-            config:Map::new(), created_at_ms:1, input_turn_id:String::new(), output_turn_id:String::new(),
-            attempt_id:String::new(), dedupe_by_kind:true, include_documents:true };
+        assert_eq!(
+            summary_oldest(&rows(&database, &mut tx, "metadata-conv").unwrap())[&None],
+            50
+        );
+        let item = EnqueueItemRequest {
+            conversation_id: "metadata-conv".into(),
+            queue_id: "rolled-back".into(),
+            kind: "real".into(),
+            priority: 100,
+            message: serde_json::from_value(json!({"text":"rollback"})).unwrap(),
+            config: Map::new(),
+            created_at_ms: 1,
+            input_turn_id: String::new(),
+            output_turn_id: String::new(),
+            attempt_id: String::new(),
+            dedupe_by_kind: true,
+            include_documents: true,
+        };
         enqueue_item(&database, &mut tx, &item).unwrap();
         drop(tx); // staged message and metadata disappear together
         drop(database);
         let mut reopened = AuthorityDatabase::open(directory.path()).unwrap();
         let mut tx = reopened.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert_eq!(append_metadata::eligible(&reopened, &mut tx, "metadata-conv").unwrap().unwrap().item_count, 3);
-        assert!(item_by_id(&reopened, &mut tx, "rolled-back").unwrap().is_none());
+        assert_eq!(
+            append_metadata::eligible(&reopened, &mut tx, "metadata-conv")
+                .unwrap()
+                .unwrap()
+                .item_count,
+            3
+        );
+        assert!(item_by_id(&reopened, &mut tx, "rolled-back")
+            .unwrap()
+            .is_none());
         drop(tx);
         ORDER_ROWS_READ.with(|count| count.set(0));
-        execute(&mut reopened, "queue.enqueue", json!({"conv_id":"metadata-conv","user_id":11,
-            "queue_id":"new-earliest","kind":"real","priority":100,"message":{"text":"new"},"config":{},"created_at_ms":25}), Some("new-earliest"));
+        execute(
+            &mut reopened,
+            "queue.enqueue",
+            json!({"conv_id":"metadata-conv","user_id":11,
+            "queue_id":"new-earliest","kind":"real","priority":100,"message":{"text":"new"},"config":{},"created_at_ms":25}),
+            Some("new-earliest"),
+        );
         ORDER_ROWS_READ.with(|count| assert_eq!(count.get(), 0));
-        let summaries = execute(&mut reopened, "queue.conversations.list_all", json!({}), None);
-        assert_eq!(summaries.as_array().unwrap().len(), 1, "backdated fast append must replace the prior summary key");
-        execute(&mut reopened, "queue.clear", json!({"conv_id":"metadata-conv","user_id":11}), Some("metadata-clear"));
+        let summaries = execute(
+            &mut reopened,
+            "queue.conversations.list_all",
+            json!({}),
+            None,
+        );
+        assert_eq!(
+            summaries.as_array().unwrap().len(),
+            1,
+            "backdated fast append must replace the prior summary key"
+        );
+        execute(
+            &mut reopened,
+            "queue.clear",
+            json!({"conv_id":"metadata-conv","user_id":11}),
+            Some("metadata-clear"),
+        );
         let mut tx = reopened.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert!(append_metadata::eligible(&reopened, &mut tx, "metadata-conv").unwrap().is_none());
+        assert!(
+            append_metadata::eligible(&reopened, &mut tx, "metadata-conv")
+                .unwrap()
+                .is_none()
+        );
     }
-
 
     #[test]
     fn concurrent_append_metadata_cannot_publish_duplicate_position_or_stale_count() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database, "conversation.create", json!({"conv_id":"cas-conv","user_id":11}), Some("cas-create"));
-        execute(&mut database, "queue.enqueue", json!({"conv_id":"cas-conv","user_id":11,
-            "queue_id":"base","kind":"real","priority":100,"message":{"text":"base"},"config":{},"created_at_ms":10}), Some("cas-base"));
-        let request = |id: &str| EnqueueItemRequest { conversation_id:"cas-conv".into(), queue_id:id.into(),
-            kind:"real".into(), priority:100, message:serde_json::from_value(json!({"text":id})).unwrap(),
-            config:Map::new(), created_at_ms:20, input_turn_id:String::new(), output_turn_id:String::new(),
-            attempt_id:String::new(), dedupe_by_kind:true, include_documents:true };
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"cas-conv","user_id":11}),
+            Some("cas-create"),
+        );
+        execute(
+            &mut database,
+            "queue.enqueue",
+            json!({"conv_id":"cas-conv","user_id":11,
+            "queue_id":"base","kind":"real","priority":100,"message":{"text":"base"},"config":{},"created_at_ms":10}),
+            Some("cas-base"),
+        );
+        let request = |id: &str| EnqueueItemRequest {
+            conversation_id: "cas-conv".into(),
+            queue_id: id.into(),
+            kind: "real".into(),
+            priority: 100,
+            message: serde_json::from_value(json!({"text":id})).unwrap(),
+            config: Map::new(),
+            created_at_ms: 20,
+            input_turn_id: String::new(),
+            output_turn_id: String::new(),
+            attempt_id: String::new(),
+            dedupe_by_kind: true,
+            include_documents: true,
+        };
         let mut first = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         let mut second = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         enqueue_item(&database, &mut first, &request("first")).unwrap();
@@ -1917,147 +2260,312 @@ mod completion_outcome_tests {
         database.commit(first).unwrap();
         assert!(database.commit(second).is_err());
         let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert_eq!(append_metadata::eligible(&database, &mut tx, "cas-conv").unwrap().unwrap().item_count, 2);
+        assert_eq!(
+            append_metadata::eligible(&database, &mut tx, "cas-conv")
+                .unwrap()
+                .unwrap()
+                .item_count,
+            2
+        );
         assert!(item_by_id(&database, &mut tx, "second").unwrap().is_none());
-        assert_eq!(item_by_id(&database, &mut tx, "first").unwrap().unwrap()["position"], 2);
+        assert_eq!(
+            item_by_id(&database, &mut tx, "first").unwrap().unwrap()["position"],
+            2
+        );
         let mut foreign = database.begin_with_identity_claim_scopes(7, 12).unwrap();
-        assert!(append_metadata::eligible(&database, &mut foreign, "cas-conv").unwrap().is_none());
+        assert!(
+            append_metadata::eligible(&database, &mut foreign, "cas-conv")
+                .unwrap()
+                .is_none()
+        );
     }
-
 
     #[test]
     fn admitted_large_queue_core_preserves_escaped_message_config_and_blob_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database, "conversation.create", json!({"conv_id":"large-core","user_id":11}), Some("large-create"));
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"large-core","user_id":11}),
+            Some("large-create"),
+        );
         let text = "一\n".repeat(350_000);
         let setting = "\\\"".repeat(250_000);
         let message = json!({"text":text,"_msgId":"source-large"});
         let config = json!({"retainedSetting":setting});
-        let request = super::Request::Enqueue { conversation_id:"large-core".into(), queue_id:"large-intent".into(),
-            kind:"real".into(), priority:100, message:message.as_object().unwrap().clone(),
-            config:config.as_object().unwrap().clone(), created_at_ms:1 };
+        let request = super::Request::Enqueue {
+            conversation_id: "large-core".into(),
+            queue_id: "large-intent".into(),
+            kind: "real".into(),
+            priority: 100,
+            message: message.as_object().unwrap().clone(),
+            config: config.as_object().unwrap().clone(),
+            created_at_ms: 1,
+        };
         let measured = request.validate().unwrap();
         assert!(measured > 1024 * 1024);
         assert_eq!(measured, serde_json::to_vec(&request).unwrap().len());
         let started = std::time::Instant::now();
-        execute(&mut database, "queue.enqueue", json!({"conv_id":"large-core","user_id":11,
-            "queue_id":"large-intent","kind":"real","priority":100,"message":message,"config":config,"created_at_ms":1}), Some("large-enqueue"));
+        execute(
+            &mut database,
+            "queue.enqueue",
+            json!({"conv_id":"large-core","user_id":11,
+            "queue_id":"large-intent","kind":"real","priority":100,"message":message,"config":config,"created_at_ms":1}),
+            Some("large-enqueue"),
+        );
         drop(database);
         let mut reopened = AuthorityDatabase::open(directory.path()).unwrap();
-        let listed = execute(&mut reopened, "queue.list", json!({"conv_id":"large-core","user_id":11}), None);
+        let listed = execute(
+            &mut reopened,
+            "queue.list",
+            json!({"conv_id":"large-core","user_id":11}),
+            None,
+        );
         let item = &listed.as_array().unwrap()[0];
         assert_eq!(item["payload"], message);
         assert_eq!(item["config"], config);
         assert_eq!(item["sourceMessageId"], "source-large");
         let mut tx = reopened.begin_with_identity_claim_scopes(7, 11).unwrap();
-        let identity = read_identity(&reopened, &mut tx, "large-intent", 11).unwrap().unwrap();
+        let identity = read_identity(&reopened, &mut tx, "large-intent", 11)
+            .unwrap()
+            .unwrap();
         let key = core_key(&tx, &identity.id).unwrap();
-        let row = versioned_document::get_value_with_blob_owner_bounded(&reopened, &mut tx, &key,
-            CORE_LOGICAL_NAMESPACE, &identity.id, TENANT_GLOBAL_OWNER_ID, usize::MAX).unwrap().unwrap();
+        let row = versioned_document::get_value_with_blob_owner_bounded(
+            &reopened,
+            &mut tx,
+            &key,
+            CORE_LOGICAL_NAMESPACE,
+            &identity.id,
+            TENANT_GLOBAL_OWNER_ID,
+            usize::MAX,
+        )
+        .unwrap()
+        .unwrap();
         assert!(row.len() > 1024 * 1024);
         assert!(reopened.entity_get(&mut tx, &key).unwrap().unwrap().len() < row.len());
         let mut foreign = reopened.begin_with_identity_claim_scopes(7, 12).unwrap();
-        assert!(super::item_by_id(&reopened, &mut foreign, "large-intent").unwrap().is_none());
+        assert!(super::item_by_id(&reopened, &mut foreign, "large-intent")
+            .unwrap()
+            .is_none());
         drop(tx);
         drop(foreign);
         let snapshot = json!({"id":"restored-large","conv_id":"large-core", "payload":message,"config":config,
             "position":2,"kind":"real","priority":100,"created_at_ms":2,"leased_until_ms":Value::Null,
             "lease_task_id":"","input_turn_id":"","output_turn_id":"","attempt_id":""});
-        let restored = crate::queue_migration::execute(&mut reopened, 7, 11, "migration.queue.item.restore", snapshot.clone()).unwrap();
+        let restored = crate::queue_migration::execute(
+            &mut reopened,
+            7,
+            11,
+            "migration.queue.item.restore",
+            snapshot.clone(),
+        )
+        .unwrap();
         assert_eq!(restored["inserted"], true);
         let mut tx = reopened.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert!(append_metadata::eligible(&reopened, &mut tx, "large-core").unwrap().is_none());
+        assert!(append_metadata::eligible(&reopened, &mut tx, "large-core")
+            .unwrap()
+            .is_none());
         drop(tx);
         ORDER_ROWS_READ.with(|count| count.set(0));
-        let appended = execute(&mut reopened, "queue.enqueue", json!({"conv_id":"large-core","user_id":11,
-            "queue_id":"after-import","kind":"real","priority":100,"message":{"text":"after"},"config":{},"created_at_ms":3}), Some("after-import"));
+        let appended = execute(
+            &mut reopened,
+            "queue.enqueue",
+            json!({"conv_id":"large-core","user_id":11,
+            "queue_id":"after-import","kind":"real","priority":100,"message":{"text":"after"},"config":{},"created_at_ms":3}),
+            Some("after-import"),
+        );
         assert_eq!(appended["position"], 3);
         ORDER_ROWS_READ.with(|count| assert_eq!(count.get(), 2));
-        let got = crate::queue_migration::execute(&mut reopened, 7, 11, "migration.queue.item.get", json!({"id":"restored-large"})).unwrap();
+        let got = crate::queue_migration::execute(
+            &mut reopened,
+            7,
+            11,
+            "migration.queue.item.get",
+            json!({"id":"restored-large"}),
+        )
+        .unwrap();
         assert_eq!(got["payload"], message);
         assert_eq!(got["config"], config);
-        let replay = crate::queue_migration::execute(&mut reopened, 7, 11, "migration.queue.item.restore", snapshot).unwrap();
+        let replay = crate::queue_migration::execute(
+            &mut reopened,
+            7,
+            11,
+            "migration.queue.item.restore",
+            snapshot,
+        )
+        .unwrap();
         assert_eq!(replay["inserted"], false);
         eprintln!("large_queue_core measured_request_bytes={} retained_core_bytes={} reopened=true elapsed_ms={}", measured, row.len(), started.elapsed().as_millis());
     }
-
 
     #[test]
     fn admitted_large_injection_ack_keeps_protected_intent_and_exact_replay() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database, "conversation.create", json!({"conv_id":"large-ack","user_id":11}), Some("ack-create"));
-        let ids = (0..1025).map(|ordinal| format!("peer-{ordinal:04}")).collect::<Vec<_>>();
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"large-ack","user_id":11}),
+            Some("ack-create"),
+        );
+        let ids = (0..1025)
+            .map(|ordinal| format!("peer-{ordinal:04}"))
+            .collect::<Vec<_>>();
         for id in &ids {
-            execute(&mut database, "queue.enqueue", json!({"conv_id":"large-ack","user_id":11,
+            execute(
+                &mut database,
+                "queue.enqueue",
+                json!({"conv_id":"large-ack","user_id":11,
                 "queue_id":id,"kind":"peer_msg","priority":40,"message":{"text":id,"_peerMessage":true},
-                "config":{},"created_at_ms":1}), Some(&format!("enqueue-{id}")));
+                "config":{},"created_at_ms":1}),
+                Some(&format!("enqueue-{id}")),
+            );
         }
-        execute(&mut database, "queue.enqueue", json!({"conv_id":"large-ack","user_id":11,
-            "queue_id":"protected","kind":"real","priority":10,"message":{"text":"keep"},"config":{},"created_at_ms":2}), Some("enqueue-protected"));
+        execute(
+            &mut database,
+            "queue.enqueue",
+            json!({"conv_id":"large-ack","user_id":11,
+            "queue_id":"protected","kind":"real","priority":10,"message":{"text":"keep"},"config":{},"created_at_ms":2}),
+            Some("enqueue-protected"),
+        );
         let mut wanted = ids.clone();
         wanted.push("protected".into());
         let payload = json!({"conv_id":"large-ack","user_id":11,"queue_ids":wanted});
-        let acknowledged = execute(&mut database, "queue.injection.ack", payload.clone(), Some("large-ack-command"));
+        let acknowledged = execute(
+            &mut database,
+            "queue.injection.ack",
+            payload.clone(),
+            Some("large-ack-command"),
+        );
         assert_eq!(acknowledged["removed"], 1025);
         assert_eq!(acknowledged["removedQueueIds"], json!(ids));
-        assert_eq!(execute(&mut database, "queue.injection.ack", payload.clone(), Some("large-ack-command")), acknowledged);
+        assert_eq!(
+            execute(
+                &mut database,
+                "queue.injection.ack",
+                payload.clone(),
+                Some("large-ack-command")
+            ),
+            acknowledged
+        );
         drop(database);
         let mut reopened = AuthorityDatabase::open(directory.path()).unwrap();
-        assert_eq!(execute(&mut reopened, "queue.injection.ack", payload, Some("ack-after-reopen"))["removed"], 0);
-        let listed = execute(&mut reopened, "queue.list", json!({"conv_id":"large-ack","user_id":11}), None);
+        assert_eq!(
+            execute(
+                &mut reopened,
+                "queue.injection.ack",
+                payload,
+                Some("ack-after-reopen")
+            )["removed"],
+            0
+        );
+        let listed = execute(
+            &mut reopened,
+            "queue.list",
+            json!({"conv_id":"large-ack","user_id":11}),
+            None,
+        );
         assert_eq!(listed.as_array().unwrap().len(), 1);
         assert_eq!(listed[0]["queueId"], "protected");
     }
-
 
     #[test]
     fn background_pending_and_explicit_page_beyond_former_count_gate_remain_complete() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database, "conversation.create", json!({"conv_id":"pending-all","user_id":11}), Some("pending-create"));
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"pending-all","user_id":11}),
+            Some("pending-create"),
+        );
         for ordinal in 0..113 {
-            execute(&mut database,"queue.enqueue",json!({"conv_id":"pending-all","user_id":11,
+            execute(
+                &mut database,
+                "queue.enqueue",
+                json!({"conv_id":"pending-all","user_id":11,
                 "queue_id":format!("bg-{ordinal:03}"),"kind":"background_receipt","priority":80,
                 "message":{"text":"complete","_backgroundCommand":format!("cmd-{ordinal}")},
-                "config":{},"created_at_ms":ordinal+1}),Some(&format!("pending-{ordinal}")));
+                "config":{},"created_at_ms":ordinal+1}),
+                Some(&format!("pending-{ordinal}")),
+            );
         }
-        let pending = execute(&mut database,"queue.list",json!({"conv_id":"pending-all","user_id":11,"mode":"background_pending"}),None);
-        assert_eq!(pending.as_array().unwrap().len(),113);
-        let first = execute(&mut database,"queue.list",json!({"conv_id":"pending-all","user_id":11,"mode":"background_page","page_size":100}),None);
-        assert_eq!(first["items"].as_array().unwrap().len(),100);
-        let second = execute(&mut database,"queue.list",json!({"conv_id":"pending-all","user_id":11,"mode":"background_page","page_size":100,"cursor":first["nextCursor"]}),None);
-        assert_eq!(second["items"].as_array().unwrap().len(),13);
-        assert_eq!(second["nextCursor"],Value::Null);
-        assert_eq!(second["items"][12]["queueId"],"bg-112");
+        let pending = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"pending-all","user_id":11,"mode":"background_pending"}),
+            None,
+        );
+        assert_eq!(pending.as_array().unwrap().len(), 113);
+        let first = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"pending-all","user_id":11,"mode":"background_page","page_size":100}),
+            None,
+        );
+        assert_eq!(first["items"].as_array().unwrap().len(), 100);
+        let second = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"pending-all","user_id":11,"mode":"background_page","page_size":100,"cursor":first["nextCursor"]}),
+            None,
+        );
+        assert_eq!(second["items"].as_array().unwrap().len(), 13);
+        assert_eq!(second["nextCursor"], Value::Null);
+        assert_eq!(second["items"][12]["queueId"], "bg-112");
     }
-
 
     #[test]
     fn oversized_complete_receipt_pages_progress_and_full_result_exceeds_former_response_quota() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        execute(&mut database,"conversation.create",json!({"conv_id":"response-demand","user_id":11}),Some("response-create"));
+        execute(
+            &mut database,
+            "conversation.create",
+            json!({"conv_id":"response-demand","user_id":11}),
+            Some("response-create"),
+        );
         let text = "x".repeat(4 * 1024 * 1024 + 512 * 1024);
         for ordinal in 0..2 {
-            execute(&mut database,"queue.enqueue",json!({"conv_id":"response-demand","user_id":11,
+            execute(
+                &mut database,
+                "queue.enqueue",
+                json!({"conv_id":"response-demand","user_id":11,
                 "queue_id":format!("response-{ordinal}"),"kind":"background_receipt","priority":80,
                 "message":{"text":text,"_backgroundCommand":format!("cmd-{ordinal}")},
-                "config":{},"created_at_ms":ordinal+1}),Some(&format!("response-enqueue-{ordinal}")));
+                "config":{},"created_at_ms":ordinal+1}),
+                Some(&format!("response-enqueue-{ordinal}")),
+            );
         }
-        let first = execute(&mut database,"queue.list",json!({"conv_id":"response-demand","user_id":11,"mode":"background_page","max_bytes":1}),None);
-        assert_eq!(first["items"].as_array().unwrap().len(),1);
-        assert_eq!(first["items"][0]["payload"]["text"].as_str().unwrap(),text);
+        let first = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"response-demand","user_id":11,"mode":"background_page","max_bytes":1}),
+            None,
+        );
+        assert_eq!(first["items"].as_array().unwrap().len(), 1);
+        assert_eq!(first["items"][0]["payload"]["text"].as_str().unwrap(), text);
         assert!(!first["nextCursor"].is_null());
-        let second = execute(&mut database,"queue.list",json!({"conv_id":"response-demand","user_id":11,"mode":"background_page","max_bytes":1,"cursor":first["nextCursor"]}),None);
-        assert_eq!(second["items"].as_array().unwrap().len(),1);
-        assert_eq!(second["items"][0]["queueId"],"response-1");
-        assert_eq!(second["nextCursor"],Value::Null);
-        let complete = execute(&mut database,"queue.list",json!({"conv_id":"response-demand","user_id":11}),None);
-        assert_eq!(complete.as_array().unwrap().len(),2);
-        assert!(serde_json::to_vec(&complete).unwrap().len()>8*1024*1024);
-        for item in complete.as_array().unwrap() { assert_eq!(item["payload"]["text"].as_str().unwrap(),text); }
+        let second = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"response-demand","user_id":11,"mode":"background_page","max_bytes":1,"cursor":first["nextCursor"]}),
+            None,
+        );
+        assert_eq!(second["items"].as_array().unwrap().len(), 1);
+        assert_eq!(second["items"][0]["queueId"], "response-1");
+        assert_eq!(second["nextCursor"], Value::Null);
+        let complete = execute(
+            &mut database,
+            "queue.list",
+            json!({"conv_id":"response-demand","user_id":11}),
+            None,
+        );
+        assert_eq!(complete.as_array().unwrap().len(), 2);
+        assert!(serde_json::to_vec(&complete).unwrap().len() > 8 * 1024 * 1024);
+        for item in complete.as_array().unwrap() {
+            assert_eq!(item["payload"]["text"].as_str().unwrap(), text);
+        }
     }
-
 }

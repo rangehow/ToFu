@@ -12,16 +12,16 @@
 
 use serde_json::{json, Value};
 
-use crate::background_pack::BackgroundPackerObserver;
-use crate::authority_watch::AuthorityContentionObserver;
-use crate::fsync_stats;
-use crate::listener::LoopbackListenerObserver;
 use crate::authority_gc_online::OnlineGarbageCollectionObserver;
+use crate::authority_watch::AuthorityContentionObserver;
+use crate::background_pack::BackgroundPackerObserver;
+use crate::fsync_stats;
+use crate::generated_storage_v2::{STATUS_BAD_REQUEST, STATUS_UNAVAILABLE};
+use crate::listener::LoopbackListenerObserver;
 use crate::maintenance::MaintenanceObserver;
 use crate::online_backup::OnlineBackupObserver;
-use crate::generated_storage_v2::{STATUS_BAD_REQUEST, STATUS_UNAVAILABLE};
-use std::io;
 use crate::protocol::{Request, Response, PROTOCOL_VERSION};
+use std::io;
 
 pub const SYSTEM_HEALTH_OPERATION: &str = "system.health";
 pub const SYSTEM_METRICS_OPERATION: &str = "system.metrics";
@@ -95,15 +95,16 @@ pub(crate) fn respond(
 /// epoch, bounded by the request deadline. The scheduler's receipt contract
 /// (`ok` + nonempty `backup`/`manifest` + nonnegative integer `bytes`) is
 /// the success payload; every failure is a retryable storage error.
-fn backup_response(
-    request: &Request,
-    schema_id: u32,
-    observers: &ControlObservers,
-) -> Response {
+fn backup_response(request: &Request, schema_id: u32, observers: &ControlObservers) -> Response {
     let result = observers
         .online_backup
         .as_ref()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "online backup driver is not running"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "online backup driver is not running",
+            )
+        })
         .and_then(|observer| observer.run_and_wait(request.deadline_unix_ms));
     match result {
         Ok(report) => {
@@ -257,12 +258,17 @@ fn commit_stage_snapshot() -> Value {
         })
         .filter(|(_, calls, _, _)| *calls > 0)
         .map(|(stage, calls, total_nanos, index)| {
-            let components = fsync_stats::COMPONENT_NAMES.iter().enumerate()
+            let components = fsync_stats::COMPONENT_NAMES
+                .iter()
+                .enumerate()
                 .filter_map(|(component, name)| {
                     let calls = fsync_stats::component_stage_calls(component, index);
-                    (calls > 0).then(|| json!({"component": name, "calls": calls,
-                        "totalNanos": fsync_stats::component_stage_nanos(component, index)}))
-                }).collect::<Vec<_>>();
+                    (calls > 0).then(|| {
+                        json!({"component": name, "calls": calls,
+                        "totalNanos": fsync_stats::component_stage_nanos(component, index)})
+                    })
+                })
+                .collect::<Vec<_>>();
             json!({"stage": stage, "calls": calls, "totalNanos": total_nanos,
                    "components": components})
         })
@@ -281,16 +287,23 @@ fn metrics_payload(observers: &ControlObservers) -> Value {
         "requestProfile": crate::request_profile::snapshot(),
         "resourceExhaustionReasons": crate::resource_exhaustion::resource_exhaustion_snapshot(),
     });
-    if let Some(observer) = &observers.wal_write_buffer { payload[crate::generated_storage_v2::WAL_WRITE_BUFFER_METRICS_FIELD] = observer.write_buffer_metrics(); }
-    if let Some(observer) = &observers.blob_codec_pool { payload["blobCodecPool"] = observer.metrics(); }
-    if let Some(observer) = &observers.published_queries { payload["publishedReadView"] = observer.metrics(); }
+    if let Some(observer) = &observers.wal_write_buffer {
+        payload[crate::generated_storage_v2::WAL_WRITE_BUFFER_METRICS_FIELD] =
+            observer.write_buffer_metrics();
+    }
+    if let Some(observer) = &observers.blob_codec_pool {
+        payload["blobCodecPool"] = observer.metrics();
+    }
+    if let Some(observer) = &observers.published_queries {
+        payload["publishedReadView"] = observer.metrics();
+    }
     if let Some(observer) = &observers.decoded_chunk_cache {
-        payload["decodedBlobChunkCache"] = serde_json::to_value(observer.metrics())
-            .unwrap_or_else(|_| json!({"available":false}));
+        payload["decodedBlobChunkCache"] =
+            serde_json::to_value(observer.metrics()).unwrap_or_else(|_| json!({"available":false}));
     }
     if let Some(observer) = &observers.canonical_json_cache {
-        payload["canonicalJsonProofCache"] = serde_json::to_value(observer.metrics())
-            .unwrap_or_else(|_| json!({"available":false}));
+        payload["canonicalJsonProofCache"] =
+            serde_json::to_value(observer.metrics()).unwrap_or_else(|_| json!({"available":false}));
     }
     if let Some(durability) = observers.wal_durability {
         payload["walDurability"] = json!(durability);
@@ -391,13 +404,27 @@ mod tests {
         let payload: Value = serde_json::from_slice(&response.payload).unwrap();
         assert_eq!(payload["contract"], json!(SYSTEM_METRICS_CONTRACT));
         assert!(payload["durability"].is_object());
-        assert_eq!(payload["historyPromotion"]["contract"], json!("tofudb.history-promotion/v1"));
+        assert_eq!(
+            payload["historyPromotion"]["contract"],
+            json!("tofudb.history-promotion/v1")
+        );
         assert_eq!(payload["historyPromotion"]["fixedCounterBytes"], json!(32));
         assert!(payload["commitStages"].is_array());
-        assert_eq!(payload["resourceExhaustionReasons"]["contract"],
-            json!(crate::generated_storage_v2::NATIVE_RESOURCE_EXHAUSTION_CONTRACT));
-        assert_eq!(payload["resourceExhaustionReasons"]["fixedCounterBytes"], 72);
-        assert_eq!(payload["resourceExhaustionReasons"]["counters"].as_array().unwrap().len(), 9);
+        assert_eq!(
+            payload["resourceExhaustionReasons"]["contract"],
+            json!(crate::generated_storage_v2::NATIVE_RESOURCE_EXHAUSTION_CONTRACT)
+        );
+        assert_eq!(
+            payload["resourceExhaustionReasons"]["fixedCounterBytes"],
+            72
+        );
+        assert_eq!(
+            payload["resourceExhaustionReasons"]["counters"]
+                .as_array()
+                .unwrap()
+                .len(),
+            9
+        );
         assert!(payload.get("listener").is_none());
     }
 

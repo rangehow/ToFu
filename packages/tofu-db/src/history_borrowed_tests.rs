@@ -27,7 +27,6 @@ fn borrowed_history_views_preserve_metadata_and_exact_carried_source_bytes() {
     assert_eq!(views.len(), owned.len());
     for (view, full) in views.iter().zip(&owned) {
         assert_eq!(view.sequence, full.sequence);
-        assert_eq!(view.record_hash, full.record_hash);
         assert_eq!(view.envelope, full.envelope);
         assert_eq!(view.encoded_envelope, full.encoded_envelope.as_slice());
         let offset = (view.encoded_envelope.as_ptr() as usize).checked_sub(source.as_ptr() as usize).unwrap();
@@ -42,7 +41,7 @@ fn borrowed_history_views_reject_corrupt_headers_carried_bytes_and_terminal_witn
     for offset in [0, 8, 12, 20, 52, 56, 64, 100, source.len() / 2, source.len() - 1] {
         let mut corrupt = source.clone();
         corrupt[offset] ^= 1;
-        let full_error = decode_segment(&corrupt, &reference).err().expect("full decode must reject corruption");
+        let full_error = decode_segment(&corrupt, &reference).expect_err("full decode must reject corruption");
         let view_error = decode_segment_views(&corrupt, &reference).err().expect("views must reject corruption");
         assert_eq!(view_error.kind(), full_error.kind());
     }

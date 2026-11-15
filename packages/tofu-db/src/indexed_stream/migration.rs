@@ -38,7 +38,9 @@ fn unhex(value: &str, maximum: usize) -> io::Result<Vec<u8>> {
     }
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16)
                 .map_err(|_| invalid_input("invalid storage event hex"))
@@ -180,14 +182,14 @@ fn scan(
     if !suffix.is_empty() && !suffix.starts_with(&family) {
         return Err(invalid_input("storage event cursor scope differs"));
     }
-    let scoped = if suffix.is_empty() { family.clone() } else { suffix };
-    let start = EntityKey::new(
-        tx.tenant_id(),
-        tx.owner_user_id(),
-        INDEX_NAMESPACE,
-        &scoped,
-    )?;
-    let (_, end) = EntityKey::prefix_range(tx.tenant_id(), tx.owner_user_id(), INDEX_NAMESPACE, &family)?;
+    let scoped = if suffix.is_empty() {
+        family.clone()
+    } else {
+        suffix
+    };
+    let start = EntityKey::new(tx.tenant_id(), tx.owner_user_id(), INDEX_NAMESPACE, &scoped)?;
+    let (_, end) =
+        EntityKey::prefix_range(tx.tenant_id(), tx.owner_user_id(), INDEX_NAMESPACE, &family)?;
     let page = database.entity_scan(tx, &start, &end, MIGRATION_SESSION_MAX_PAGE_ROWS)?;
     let mut rows = Vec::with_capacity(page.len());
     for (key, raw) in &page {
@@ -203,7 +205,14 @@ fn scan(
             .ok_or_else(|| invalid_data("storage event catalog key is malformed"))?;
         let task_id = std::str::from_utf8(task_bytes)
             .map_err(|_| invalid_data("storage event catalog key is not UTF-8"))?;
-        if key != &index_key(tx.tenant_id(), tx.owner_user_id(), task_id, entry.application_sequence)? {
+        if key
+            != &index_key(
+                tx.tenant_id(),
+                tx.owner_user_id(),
+                task_id,
+                entry.application_sequence,
+            )?
+        {
             return Err(invalid_data("storage event catalog identity differs"));
         }
         rows.push(json!({
@@ -279,7 +288,9 @@ pub(crate) fn execute(
             let batch: Batch = serde_json::from_value(payload)
                 .map_err(|_| invalid_input("invalid storage event batch request"))?;
             if batch.rows.is_empty() || batch.rows.len() > MAX_BATCH_ROWS {
-                return Err(invalid_input("storage event batch exceeds its bounded range"));
+                return Err(invalid_input(
+                    "storage event batch exceeds its bounded range",
+                ));
             }
             let mut decoded = Vec::with_capacity(batch.rows.len());
             let mut total = 0_usize;

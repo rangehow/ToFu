@@ -18,14 +18,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
     MAX_TRANSCRIPT_ARCHIVE_DECODED_BYTES, MAX_TRANSCRIPT_ARCHIVE_MESSAGES,
     MAX_TRANSCRIPT_ARCHIVE_PAGES, TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE,
-    TRANSCRIPT_ARCHIVE_PAGE_NAMESPACE, TRANSCRIPT_ARCHIVE_TAIL_TARGET_BYTES,
+    TRANSCRIPT_ARCHIVE_PAGE_NAMESPACE,
 };
 
 /// Page/tail records are versioned documents; sealed pages seal at the
@@ -38,6 +38,7 @@ const TAIL_SUFFIX: &str = "\0tail";
 
 /// Read-path observability for tests and metrics.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct TranscriptArchiveStats {
     pub served: u64,
     pub fallback: u64,
@@ -50,6 +51,7 @@ static FALLBACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 static SEALED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static INVALIDATED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+#[cfg(test)]
 pub(crate) fn stats() -> TranscriptArchiveStats {
     use std::sync::atomic::Ordering::Relaxed;
     TranscriptArchiveStats {
@@ -86,10 +88,7 @@ fn manifest_key(
     )
 }
 
-fn tail_key(
-    transaction: &AuthorityTransaction,
-    conversation_id: &str,
-) -> io::Result<EntityKey> {
+fn tail_key(transaction: &AuthorityTransaction, conversation_id: &str) -> io::Result<EntityKey> {
     EntityKey::new(
         transaction.tenant_id(),
         transaction.owner_user_id(),
@@ -132,7 +131,8 @@ fn decode_manifest(raw: &[u8]) -> io::Result<Option<ArchiveManifest>> {
     // v1 pages may contain pre-transition content. Never certify those bytes
     // merely because their digest/count is valid; the live lane is authority.
     if value.get("format").and_then(Value::as_str)
-        == Some(crate::generated_tofudb_ir::TRANSCRIPT_ARCHIVE_RETIRED_FORMAT) {
+        == Some(crate::generated_tofudb_ir::TRANSCRIPT_ARCHIVE_RETIRED_FORMAT)
+    {
         return Ok(None);
     }
     if value.get("format").and_then(Value::as_str) != Some(FORMAT) {
@@ -173,7 +173,9 @@ fn decode_manifest(raw: &[u8]) -> io::Result<Option<ArchiveManifest>> {
             || sha256.len() != 64
             || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
-            return Err(invalid_data("transcript archive page directory is discontinuous"));
+            return Err(invalid_data(
+                "transcript archive page directory is discontinuous",
+            ));
         }
         covered += count;
         pages.push(ArchivePage {
@@ -240,7 +242,7 @@ fn vd_put(
     value_json: Vec<u8>,
     updated_at_ms: u64,
 ) -> io::Result<()> {
-    let value_len = value_json.len();
+    let _value_len = value_json.len();
     crate::versioned_document::put_with_blob_owner_bounded(
         database,
         transaction,
@@ -317,7 +319,8 @@ pub(crate) fn maybe_seal(
     pending: Vec<Value>,
     updated_at_ms: u64,
 ) -> io::Result<()> {
-    let mut manifest = load_manifest_for(database, transaction, conversation_id)?.unwrap_or_default();
+    let mut manifest =
+        load_manifest_for(database, transaction, conversation_id)?.unwrap_or_default();
     if manifest.sealed_messages > lane_message_count {
         // The lane shrank without an invalidation: fence by rebuilding.
         return invalidate(database, transaction, conversation_id);
@@ -393,9 +396,9 @@ pub(crate) fn invalidate(
 
 /// The archive's sealed coverage; reads combine these sealed pages with
 /// the caller's exact bounded lane read of the recent unsealed tail.
+#[cfg(test)]
 pub(crate) struct SealedCoverage {
     pub sealed_messages: u64,
-    pub pages: Vec<(u64, u64)>,
 }
 
 fn load_archive(
@@ -404,8 +407,7 @@ fn load_archive(
     conversation_id: &str,
     lane_message_count: u64,
 ) -> io::Result<Option<ArchiveManifest>> {
-    let Some(manifest) = load_manifest_for(database, transaction, conversation_id)?
-    else {
+    let Some(manifest) = load_manifest_for(database, transaction, conversation_id)? else {
         FALLBACK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Ok(None);
     };
@@ -418,6 +420,7 @@ fn load_archive(
 
 /// The archive's sealed coverage for a conversation, or `None` when no
 /// archive (or only a partial one worth ignoring) exists.
+#[cfg(test)]
 pub(crate) fn sealed_coverage(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -433,11 +436,6 @@ pub(crate) fn sealed_coverage(
     }
     Ok(Some(SealedCoverage {
         sealed_messages: manifest.sealed_messages,
-        pages: manifest
-            .pages
-            .iter()
-            .map(|page| (page.start, page.count))
-            .collect(),
     }))
 }
 
@@ -447,15 +445,22 @@ fn read_page(
     conversation_id: &str,
     page: &ArchivePage,
 ) -> io::Result<Vec<Value>> {
-    let stored = database.entity_get(
-        transaction, &page_key(transaction, conversation_id, page.start)?,
-    )?.ok_or_else(|| invalid_data("transcript archive page is missing"))?;
-    let (_, decoded, bytes) = crate::versioned_document::materialize_stored_document_value_and_bytes_bounded(
-        database, transaction.tenant_id(), transaction.owner_user_id(), &stored,
-        TRANSCRIPT_ARCHIVE_PAGE_NAMESPACE, MAX_TRANSCRIPT_ARCHIVE_PAGE_BYTES,
-    )?;
-    if bytes.len() as u64 != page.bytes
-        || blake3::hash(&bytes).to_hex().to_string() != page.sha256
+    let stored = database
+        .entity_get(
+            transaction,
+            &page_key(transaction, conversation_id, page.start)?,
+        )?
+        .ok_or_else(|| invalid_data("transcript archive page is missing"))?;
+    let (_, decoded, bytes) =
+        crate::versioned_document::materialize_stored_document_value_and_bytes_bounded(
+            database,
+            transaction.tenant_id(),
+            transaction.owner_user_id(),
+            &stored,
+            TRANSCRIPT_ARCHIVE_PAGE_NAMESPACE,
+            MAX_TRANSCRIPT_ARCHIVE_PAGE_BYTES,
+        )?;
+    if bytes.len() as u64 != page.bytes || blake3::hash(&bytes).to_hex().to_string() != page.sha256
     {
         return Err(invalid_data("transcript archive page digest differs"));
     }
@@ -467,12 +472,10 @@ fn read_page(
     let Value::Array(messages) = decoded else {
         return Err(invalid_data("transcript archive page is not valid JSON"));
     };
-    if messages.len() as u64 != page.count
-        || messages
-            .iter()
-            .any(|message| !message.is_object())
-    {
-        return Err(invalid_data("transcript archive page message shape is malformed"));
+    if messages.len() as u64 != page.count || messages.iter().any(|message| !message.is_object()) {
+        return Err(invalid_data(
+            "transcript archive page message shape is malformed",
+        ));
     }
     Ok(messages)
 }
@@ -502,6 +505,9 @@ pub(crate) fn read_sealed(
     Ok(Some(messages))
 }
 
+/// One archive window: (messages, total, start, end).
+type ArchiveWindow = (Vec<Value>, usize, usize, usize);
+
 /// Archive-backed bounded window: same fencing as `read_full`, with
 /// `legacy_messages`'s exact `[start, end)` semantics on the maintained
 /// total (window 0 means full; `before` clips from the left).
@@ -512,7 +518,7 @@ pub(crate) fn read_window(
     window: usize,
     before: Option<i64>,
     lane_message_count: u64,
-) -> io::Result<Option<(Vec<Value>, usize, usize, usize)>> {
+) -> io::Result<Option<ArchiveWindow>> {
     let Some(archive) = load_archive(database, transaction, conversation_id, lane_message_count)?
     else {
         return Ok(None);
@@ -523,7 +529,11 @@ pub(crate) fn read_window(
         .map(|value| (value as usize).min(total))
         .unwrap_or(total);
     let end = before.min(total);
-    let start = if window == 0 { 0 } else { end.saturating_sub(window) };
+    let start = if window == 0 {
+        0
+    } else {
+        end.saturating_sub(window)
+    };
     let mut messages = Vec::with_capacity(end - start);
     for page in &archive.pages {
         let page_end = (page.start + page.count) as usize;
@@ -676,7 +686,12 @@ fn run_archive_seal_worker(
                 guard.build_read_replica()?
             };
             let mut transaction = replica.begin(tenant_id, owner_id)?;
-            enumerate_conversations(&replica, &mut transaction, &mut cursor, SEAL_ROUND_CONVERSATIONS)
+            enumerate_conversations(
+                &replica,
+                &mut transaction,
+                &mut cursor,
+                SEAL_ROUND_CONVERSATIONS,
+            )
         })() {
             for conversation_id in conversations {
                 if stop.load(Ordering::Acquire) {

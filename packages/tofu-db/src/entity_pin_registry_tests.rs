@@ -18,19 +18,21 @@ fn fixture() -> (Arc<SnapshotPinRegistry>, Arc<SnapshotPin>) {
     (registry, root)
 }
 
+// Eight equal leases reserve the retired quota exactly.
+const _: () = assert!(LEGACY_AGGREGATE_TRANSACTION_BYTES.is_multiple_of(8));
+
 #[test]
 fn concurrent_leases_cross_retired_quota_and_release_exact_bytes() {
     let (registry, root) = fixture();
     let reserved = Arc::new(Barrier::new(9));
     let repay = Arc::new(Barrier::new(9));
     std::thread::scope(|scope| {
-        for index in 0..8 {
+        for _ in 0..8 {
             let mut lease = root.lease();
             let reserved = Arc::clone(&reserved);
             let repay = Arc::clone(&repay);
             scope.spawn(move || {
-                let bytes = LEGACY_AGGREGATE_TRANSACTION_BYTES / 8
-                    + usize::from(index < LEGACY_AGGREGATE_TRANSACTION_BYTES % 8);
+                let bytes = LEGACY_AGGREGATE_TRANSACTION_BYTES / 8;
                 lease.reserve_transaction_bytes(bytes).unwrap();
                 reserved.wait();
                 repay.wait();
@@ -44,7 +46,10 @@ fn concurrent_leases_cross_retired_quota_and_release_exact_bytes() {
         let mut extra = root.lease();
         extra.reserve_transaction_bytes(1).unwrap();
         assert_eq!(extra.retained_transaction_bytes, 1);
-        assert_eq!(registry.retained_bytes(), LEGACY_AGGREGATE_TRANSACTION_BYTES + 1);
+        assert_eq!(
+            registry.retained_bytes(),
+            LEGACY_AGGREGATE_TRANSACTION_BYTES + 1
+        );
         drop(extra);
         repay.wait();
     });
@@ -81,7 +86,10 @@ fn aggregate_byte_overflow_is_atomic_and_leases_repay_exactly() {
     let mut first = root.lease();
     first.reserve_transaction_bytes(usize::MAX - 1).unwrap();
     let mut second = root.lease();
-    assert_eq!(second.reserve_transaction_bytes(2).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        second.reserve_transaction_bytes(2).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
     assert_eq!(second.retained_transaction_bytes, 0);
     assert_eq!(registry.retained_bytes(), usize::MAX - 1);
     second.reserve_transaction_bytes(1).unwrap();
@@ -104,22 +112,44 @@ fn concurrent_root_owners_have_no_count_quota_and_release_exactly() {
             let entered = Arc::clone(&entered);
             let release = Arc::clone(&release);
             scope.spawn(move || {
-                let pin = pin_snapshot(&registry, EntitySnapshot { sequence, root: None }).unwrap();
+                let pin = pin_snapshot(
+                    &registry,
+                    EntitySnapshot {
+                        sequence,
+                        root: None,
+                    },
+                )
+                .unwrap();
                 entered.wait();
                 release.wait();
                 drop(pin);
             });
         }
         entered.wait();
-        let mut writer = pin_snapshot(&registry, EntitySnapshot { sequence: 97, root: None }).unwrap();
+        let mut writer = pin_snapshot(
+            &registry,
+            EntitySnapshot {
+                sequence: 97,
+                root: None,
+            },
+        )
+        .unwrap();
         {
             let state = registry.lock().unwrap();
             assert_eq!(state.active_handles, 98);
             assert_eq!(state.snapshots.len(), 98);
             assert!(state.snapshots.contains_key(&root.snapshot));
         }
-        writer.repin(EntitySnapshot { sequence: 98, root: None }).unwrap();
-        eprintln!("snapshot ownership: 96 simultaneous roots plus writer/root, {:?}", started.elapsed());
+        writer
+            .repin(EntitySnapshot {
+                sequence: 98,
+                root: None,
+            })
+            .unwrap();
+        eprintln!(
+            "snapshot ownership: 96 simultaneous roots plus writer/root, {:?}",
+            started.elapsed()
+        );
         drop(writer);
         release.wait();
     });
@@ -150,9 +180,15 @@ fn poisoned_registry_never_grants_new_root_or_byte_ownership() {
         panic!("injected root registry poison");
     });
     assert!(poisoned.is_err());
-    assert_eq!(pin_snapshot(&registry, root.snapshot).unwrap_err().kind(), io::ErrorKind::Other);
+    assert_eq!(
+        pin_snapshot(&registry, root.snapshot).unwrap_err().kind(),
+        io::ErrorKind::Other
+    );
     let mut lease = root.lease();
-    assert_eq!(lease.reserve_transaction_bytes(1).unwrap_err().kind(), io::ErrorKind::Other);
+    assert_eq!(
+        lease.reserve_transaction_bytes(1).unwrap_err().kind(),
+        io::ErrorKind::Other
+    );
     assert_eq!(registry.retained_bytes(), 0);
 }
 
@@ -163,14 +199,28 @@ fn root_and_handle_overflow_do_not_partially_register() {
         let mut state = registry.lock().unwrap();
         state.active_handles = usize::MAX;
     }
-    assert_eq!(pin_snapshot(&registry, EntitySnapshot { sequence: 1, root: None }).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        pin_snapshot(
+            &registry,
+            EntitySnapshot {
+                sequence: 1,
+                root: None
+            }
+        )
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::InvalidData
+    );
     {
         let mut state = registry.lock().unwrap();
         assert_eq!(state.snapshots.len(), 1);
         state.active_handles = 1;
         *state.snapshots.get_mut(&root.snapshot).unwrap() = usize::MAX;
     }
-    assert_eq!(pin_snapshot(&registry, root.snapshot).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        pin_snapshot(&registry, root.snapshot).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
     {
         let mut state = registry.lock().unwrap();
         assert_eq!(state.active_handles, 1);

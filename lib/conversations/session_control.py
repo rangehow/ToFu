@@ -146,6 +146,31 @@ def inspect_session(scope, arguments, *, model=''):
 def control_session(task, scope, arguments, *, acting_principal=None):
     """Resume the exact accepted execution, or stop its exact current Attempt.
 
+    Every action, accepted or refused, is recorded in the audit log
+    (``coordinator_session_control``).
+    """
+    from lib.log import audit_log
+    record = {'user_id': scope.get('user_id'), 'project_path': scope.get('project_path'),
+              'coordinator_conversation_id': scope.get('conversation_id'), 'coordinator_task_id': task.get('id'),
+              'coordinator_turn_id': task.get('_turnId'),
+              'principal_kind': (task.get('_principalContext') or {}).get('kind'),
+              'delegated': acting_principal is not None, 'action': arguments.get('action'),
+              'conversation_id': arguments.get('conversation_id'), 'turn_id': arguments.get('turn_id'),
+              'attempt_id': arguments.get('attempt_id')}
+    try:
+        result = _control_session(task, scope, arguments, acting_principal=acting_principal)
+    except Exception as error:
+        audit_log('coordinator_session_control', **record, outcome='refused',
+                  reason=f'{type(error).__name__}: {error}')
+        raise
+    audit_log('coordinator_session_control', **record, outcome='accepted',
+              command_id=result.get('command_id') if isinstance(result, Mapping) else None)
+    return result
+
+
+def _control_session(task, scope, arguments, *, acting_principal=None):
+    """``control_session`` without its audit record.
+
     ``acting_principal`` replaces the current request's source principal only
     for the owner's delegation (``lib.router.owner_delegation``): it stands in
     for the owner's message and never becomes the target's execution identity.
@@ -208,9 +233,12 @@ def control_session(task, scope, arguments, *, acting_principal=None):
 
     trusted = turn_dispatch(conversation_id, turn, config, user_id=owner)
     if trusted is not None:
-        # The human's current request may operate any owned session in scope.
-        # Automatic follow-through retains the original dispatch request fence.
-        if principal.kind != 'user':
+        if acting_principal is None:
+            # Any Turn of this Coordinator, human-steered or an automatic
+            # continuation, controls the sessions of the Workers its binding
+            # dispatched in any request; another Coordinator's stay refused.
+            worker_control(repository_for(trusted.binding), task, trusted.checked(), session=True)
+        elif principal.kind != 'user':
             worker_control(repository_for(trusted.binding), task, trusted.checked())
 
     if action == 'stop':
@@ -274,7 +302,7 @@ def _follow_up(task, scope, arguments, *, turn, config, command_id):
     repository = repository_for(trusted.binding)
     row = repository.read(trusted.binding['assignmentId'])
     # Coordinator context for its own Worker only, never another binding's or the Router's.
-    worker_control(repository, task, row)
+    worker_control(repository, task, row, session=True)
     if row['grant']['revoked']:
         raise FollowUpRefused('This Worker was cancelled; delegate new work instead of continuing it')
     service = ProjectDispatchService(repository)

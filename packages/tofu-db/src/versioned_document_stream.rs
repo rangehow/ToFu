@@ -14,6 +14,7 @@ pub(crate) struct Source<'a> {
     pub(crate) total_bytes: u64,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum SourceValue<'a> {
     Inline(Cursor<Vec<u8>>),
     Blob {

@@ -555,6 +555,28 @@ gates. `landing_verification record` continues to force committed-revision
 execution. Policy, cache lifetime and measurements:
 [`project_integration.md`](modules/project_integration.md#incremental-verification).
 
+### Lint gates
+
+Problem: ruff, rustfmt and Tofu-DB clippy ran only in CI lanes that ordinary
+landings never reach and by hand, so they drifted silently. On 2026-11-15 the
+shared branch held 288 unformatted tofu-db files, about 620 clippy
+`-D warnings` errors and 47 ruff findings; the history root
+(91b4c7e205, 2026-10-22) already carried 234 unformatted files and 488 clippy
+errors. Decision: `scripts/check_static_gates.py` lints the changed files and
+`scripts/test_select.py --run` applies it before its tests, so the configured
+integration gate (`TOFU_INTEGRATION_TEST_CMD`) and the linear-checkpoint gate
+refuse drift on every candidate. Ruff runs at the `uv.lock` pin (another
+release has other rules) through `python -m ruff`, a matching `ruff` on PATH or
+`uv tool run`. A changed source of a Rust package in `RUST_GATED_PACKAGES`
+(Tofu-DB) runs `cargo fmt --check` and `cargo clippy --all-targets -- -D
+warnings`, with Cargo and its `target-clippy` cache resolved from the shared
+checkout so private gate worktrees stay warm. A missing tool fails the gate.
+`make static-check BASE=<ref>` runs the same gates in a lane before
+`git_land.py`, which runs nothing by owner decision. Alternatives rejected:
+whole-repository lint at the gate blames unrelated candidates for another
+writer's drift; a pytest guard cannot scope Cargo work to changed packages;
+lint inside `git_land.py` contradicts its no-test decision.
+
 **Problem:** written policies and numerous tests do not prove the changed user
 journey works. Directory migrations can silently break test discovery; local
 and CI lists can diverge; results from a changing shared checkout do not certify
@@ -1131,7 +1153,7 @@ stands for "nothing answers").
   run `tests/support/production_api_guard_probe.py`, which refuses the
   production defaults below the guard itself and starts only children that name
   a target without connecting, so the specification stays safe when the guard is
-  broken. `bundles/meituan/tests/conftest.py` applies the same guard and, like
+  broken. `bundles/yourprovider/tests/conftest.py` applies the same guard and, like
   the main conftest, removes the inherited port variables after reading them,
   so no bundle test or child inherits production's port.
 
@@ -1487,7 +1509,7 @@ starts workers, so the controller, its workers and everything tests start
 (TofuDB, SQL Sidecar and PostgreSQL engines, Node, browsers, Git, cargo)
 inherit it. Direct pytest, the Make targets, `scripts/verify.py` and
 `landing_verification record`/`check` all load this conftest,
-so no launcher wraps it; `bundles/meituan/tests/conftest.py`, outside the
+so no launcher wraps it; `bundles/yourprovider/tests/conftest.py`, outside the
 testpaths, calls the same owner for `make test-bundles`. Package suites do not
 load that conftest; the sessions verification and the selector run for them
 load `tests/support/lower_priority_plugin.py`, which calls the same owner as

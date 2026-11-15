@@ -16,8 +16,11 @@ from types import SimpleNamespace
 import pytest
 
 from tests.project_mod.test_coordinator_continuation import (  # noqa: F401 (fixtures)
-    activate, base_runtime, context, ready, run, runtime)
+    activate, base_runtime, context, ready, run as run, runtime)
 from tests.tasks_pkg.test_coordinator_tool_surface import assemble, names
+
+from tests.support.gateway_profiles import (  # noqa: F401 (fixture)
+    CLAUDE_TOOL_NAME_BUDGET_BYTES, claude_tool_name_budget_gateway)
 
 pytestmark = pytest.mark.unit
 
@@ -110,12 +113,13 @@ def test_continuation_holds_its_request_catalog(role, run):
             f'extra {sorted(continuation[key] - request[key])}')
 
 
+@pytest.mark.usefixtures('claude_tool_name_budget_gateway')
 def test_continuation_wire_on_the_claude_name_budget_route_is_its_requests(role, run):
     """On the Sankuai Claude route the continuation sends its request Turn's wire: the
     role's direct core, then what fits the tool-name budget, the rest reached through
     search_tools/execute_tools (docs/LLM_COST_OPTIMIZATION.md section 6). Before
     2026-11-13 it went "whole" because its hand-listed core was all it held."""
-    from lib.llm.tool_wire import SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES, tool_name_bytes
+    from lib.llm.tool_wire import tool_name_bytes
     from lib.tasks_pkg.coordinator_policy import pin_coordinator_request_policy
     from tests.router.test_router_tool_name_budget import _wire
 
@@ -127,7 +131,7 @@ def test_continuation_wire_on_the_claude_name_budget_route_is_its_requests(role,
     activate(r)
     body, _ = _wire(r.task, assemble(r.task))
     assert names(body['tools']) == names(request_body['tools'])
-    assert tool_name_bytes(body['tools']) <= SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+    assert tool_name_bytes(body['tools']) <= CLAUDE_TOOL_NAME_BUDGET_BYTES
     assert set(r.task['_requiredDirectToolNames']) <= names(body['tools'])
 
 

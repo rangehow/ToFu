@@ -5,7 +5,7 @@ distribution into the interpreter environment, and nothing refreshes that copy
 when the checkout changes. Distributions that lazily import application modules
 then fail at first use. On 2026-11-12 ``compute_catalog(provider=hope)`` raised
 ``ModuleNotFoundError: No module named 'lib.runtime_paths'`` from a
-tofu-meituan-environments 0.1.0 copy installed on 2026-10-11, long after the
+tofu-yourprovider-environments 0.1.0 copy installed on 2026-10-11, long after the
 checkout had moved that module and fixed the provider.
 
 Installation stays the opt-in: only a distribution installed in this
@@ -35,7 +35,7 @@ import tomllib
 # each first-party distribution whose code imports application modules.
 CHECKOUT_DISTRIBUTIONS: Mapping[str, str] = {
     'tofu-environments': 'packages/tofu-environments',
-    'tofu-meituan-environments': 'bundles/meituan/environment-provider',
+    'tofu-yourprovider-environments': 'bundles/yourprovider/environment-provider',
 }
 
 
@@ -94,7 +94,9 @@ class _CheckoutDistributionFinder(importlib.metadata.DistributionFinder):
     def find_spec(fullname, path=None, target=None):
         return None
 
-    def find_distributions(self, context=importlib.metadata.DistributionFinder.Context()):
+    def find_distributions(self, context=None):
+        if context is None:
+            context = importlib.metadata.DistributionFinder.Context()
         searched = {os.path.abspath(entry or os.curdir) for entry in context.path}
         wanted = None if context.name is None else _canonical(context.name)
         for root, distribution in self._distributions.items():

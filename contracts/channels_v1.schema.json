@@ -27,16 +27,6 @@
     "dxRobotTextBytes": 6000,
     "dxRobotSendsPerSecond": 5
   },
-  "x-dxRobot": {
-    "description": "大象 open-platform robot facts used by lib/channels/dx/robot.py (docs/CHANNELS.md C6): the 企平 SSO token endpoint, the 大象 resource client ID as token audience and the client_secret_jwt assertion lifetime (应用认证接入指引 §3.2.1/§3.2.4, https://km.internal.example.com/collabpage/2709674507; 大象 clientId, https://km.internal.example.com/collabpage/2712835886); the 办公开放平台 API base and group send path (大象消息 §2.2, https://km.internal.example.com/collabpage/1357048485); the group creation path (大象群管理 §1 机器人创建群, https://km.internal.example.com/collabpage/1357068390). builtinCredentialFile is the repository-relative file holding the built-in robot application ({clientId, secret}) that only an Internal export writes; source checkouts and the Open edition have none. x-providerLimits: dxRobotTextBytes is the text message size (消息类型与消息体字段, https://km.internal.example.com/collabpage/2648372848; lengths are UTF-8 bytes), dxRobotSendsPerSecond the send API rate limit (1s5次 per application and path).",
-    "tokenEndpoint": "https://ssosv.internal.example.com/sson/auth/oidc/v1/token",
-    "audienceClientId": "xm-xai",
-    "assertionLifetimeS": 86400,
-    "apiBase": "https://xopen.internal.example.com",
-    "sendGroupPath": "/open-apis/dx-msg/sendGroupMsgByRobot",
-    "createGroupPath": "/open-apis/dx-group/createGroup",
-    "builtinCredentialFile": "lib/channels/dx/robot_builtin.json"
-  },
   "x-dxAttachments": {
     "description": "Outbound 大象 attachment facts used by lib/channels/attachments.py, lib/channels/renditions.py and the dx adapter (docs/CHANNELS.md C10). types maps each accepted file suffix to its message kind (image messages preview inline, file messages open in 大象's file preview) and MIME type. The suffixes and sizeBelowBytes are 大象's documented chat upload limits (服务端聊天文件上传接口（支持上传的文件小于30M）, https://km.internal.example.com/collabpage/684760118: images jpg|png|jpeg|bmp|gif|psd, files txt|csv|zip|doc|pdf|rar|xls|xlsx|docx|ppt|pptx, files smaller than 30M, read as 30 MiB); psd is left out because the engine's image uploader refuses it. renditionSources also get a PDF preview copy, and slideImageSources one image per page, when a converter is available (lib/channels/renditions.py: today Tofu's slide renderer, for a pptx exported from a Tofu deck). partMarker is the outbox marker (x-outboxMarkerField) of one attachment message of an item.",
     "types": {
@@ -108,41 +98,6 @@
     "mutationSpacingMs": 1000,
     "contentKinds": {"openingPost": 1, "issueComment": 2, "reviewComment": 3},
     "outboxMarker": "<!-- tofuOutbox:{item} -->"
-  },
-  "x-dx": {
-    "description": "大象 message facts used by lib/channels/dx (docs/CHANNELS.md C9). messageTypes maps the wire type number to the official enum name (消息类型与消息体字段, https://km.internal.example.com/collabpage/2648372848; numbers that page omits follow the Web SDK MESSAGE_TYPE enum in msg-codec dxSDK.src.js) and the label of its readable description. generalRichText is the general (17) subtype of rich text; generalLabels name its other subtypes (cards 11 and 12 from that page, calls, meetings and votes from the Web SDK GENERAL_TYPE enum). Audio messages are AMR only (voiceMimeType). fileUrlPrefixes are the Web SDK's own file hosts (http.common.ts DX_FILE_URL.online): the only URLs fetched, and the only ones that receive the connection's file headers.",
-    "messageTypes": {
-      "1": {"name": "text", "label": "text"},
-      "2": {"name": "audio", "label": "voice message"},
-      "3": {"name": "video", "label": "video"},
-      "4": {"name": "image", "label": "image"},
-      "5": {"name": "calendar", "label": "calendar event"},
-      "6": {"name": "link", "label": "link"},
-      "7": {"name": "multilink", "label": "links"},
-      "8": {"name": "file", "label": "file"},
-      "9": {"name": "gps", "label": "location"},
-      "10": {"name": "vcard", "label": "contact card"},
-      "11": {"name": "emotion", "label": "sticker"},
-      "12": {"name": "event", "label": "system message"},
-      "13": {"name": "custom", "label": "template message"},
-      "14": {"name": "notice", "label": "announcement"},
-      "15": {"name": "pcall", "label": "call record"},
-      "16": {"name": "redpacket", "label": "red packet"},
-      "17": {"name": "general", "label": "general message"},
-      "18": {"name": "gvcard", "label": "group card"},
-      "19": {"name": "newemotion", "label": "sticker"},
-      "20": {"name": "quote", "label": "quote reply"},
-      "21": {"name": "dynamic", "label": "dynamic card"},
-      "100": {"name": "tt", "label": "unsupported message"}
-    },
-    "generalRichText": 100,
-    "generalLabels": {"1": "call record", "2": "meeting record", "3": "group vote", "11": "card", "12": "card"},
-    "voiceMimeType": "audio/amr",
-    "fileUrlPrefixes": ["https://file.neixin.cn/", "https://api.xm.st.internal.example.com/pan/dl/"],
-    "bridgeNode": {
-      "description": "The one Node executable the 大象 launcher runs, for the bridge and its SSO step (docs/CHANNELS.md C6, lib/channels/dx/runtime.py). dx-tofu.sh starts the bridge with NODE_USE_ENV_PROXY=1 because this host reaches 大象 only through the egress HTTPS_PROXY, and the engine's HTTP client is fetch(): Node honours that variable for fetch() from 22.21.0 on the 22 line and from 24.0.0 (Node.js, Enterprise Network Configuration, https://nodejs.org/learn/http/enterprise-network-configuration); Node 20 ignores it. envProxySince lists the first such version of each release line: a version qualifies when it is at least the entry of its own major line, or of a major line newer than every entry. This floor implies the SSO step's own (engines.node >=20 of @mtfe/mtsso-auth-official) and dx-tofu.sh's Node >=22.",
-      "envProxySince": ["22.21.0", "24.0.0"]
-    }
   },
   "x-quotes": {
     "description": "Quote replies (docs/CHANNELS.md C13, docs/CHANNEL_PROTOCOL.md P16): the vocabulary of a quote as the core resolves it and shows it to the Global Router. lib/channels/quotes.py renders it: an owner command's Turn replyQuotes, a nonhuman batch's <channel-quote>. authors: who wrote the quoted message. The core decides this from bound identities, never the adapter or the quoted text. states: what the core could show. unreadable: why a quoted message could not be read. The reason code is shown with the quote.",
@@ -230,7 +185,7 @@
     "ChannelAccountView": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["channel", "enabled", "loginMis", "identity", "commandChat", "commandChatCandidate", "status", "skillInstalled", "routerConversationId", "robot", "assistantNote"],
+      "required": ["channel", "enabled", "loginMis", "identity", "commandChat", "commandChatCandidate", "status", "skillInstalled", "routerConversationId", "robot", "robotSetupConsoles", "assistantNote"],
       "properties": {
         "channel": {"$ref": "#/$defs/Channel"},
         "enabled": {"type": "boolean"},
@@ -245,6 +200,10 @@
         "routerConversationId": {"type": ["string", "null"]},
         "robot": {"anyOf": [{"$ref": "#/$defs/DxRobotView"}, {"type": "null"}],
                   "description": "The notification robot that posts the group command chat's outbox items; null when none is configured (the owner's account sends them)."},
+        "robotSetupConsoles": {"type": "array", "maxItems": 8,
+                               "items": {"type": "object", "additionalProperties": false, "required": ["host", "url"],
+                                         "properties": {"host": {"type": "string"}, "url": {"type": "string", "pattern": "^https://"}}},
+                               "description": "The platform consoles of the robot setup steps, in step order, as the installed channel adapter declares them; empty when it declares none."},
         "assistantNote": {"type": "string",
                           "description": "The owner's note for every reply Tofu drafts on their behalf (who they are, their voice); empty when none. Only the owner sets it, in Settings (C11)."}
       }

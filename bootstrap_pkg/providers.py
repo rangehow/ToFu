@@ -63,20 +63,15 @@ def _load_provider_templates() -> list:
     seen = {t['key']: i for i, t in enumerate(out)}
     # Same four tiers as lib/provider/provider_template_recipes.load_provider_templates:
     # package catalog ← deployment overrides ← release-tiered bundles
-    # (docs/SITE_PACKS.md §4; meituan.json lives under bundles/meituan/)
+    # (docs/SITE_PACKS.md §4; yourprovider.json lives under bundles/yourprovider/)
     # ← user-tier drop-ins, located by the stdlib data-root twin that also
     # stages the provider draft the full application later imports.
     template_dirs = [
         os.path.join(BASE_DIR, 'lib', 'model_info', 'data'),
         os.path.join(BASE_DIR, 'static', 'provider_templates'),
     ]
-    bundles_dir = os.path.join(BASE_DIR, 'bundles')
-    if os.path.isdir(bundles_dir):
-        template_dirs.extend(
-            os.path.join(bundles_dir, bundle, 'provider_templates')
-            for bundle in sorted(os.listdir(bundles_dir))
-            if os.path.isdir(os.path.join(
-                bundles_dir, bundle, 'provider_templates')))
+    from tofu_extensions import bundle_directories
+    template_dirs.extend(str(path) for path in bundle_directories('provider_templates'))
     template_dirs.append(os.path.join(
         _bootstrap_data_root(), 'config', 'provider_templates'))
     template_dirs = tuple(template_dirs)

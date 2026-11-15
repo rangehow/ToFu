@@ -204,11 +204,17 @@ impl EpochStatus {
     }
 
     fn set_phase(&self, phase: &'static str) {
-        *self.phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = phase;
+        *self
+            .phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = phase;
     }
 
     fn phase(&self) -> &'static str {
-        *self.phase.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        *self
+            .phase
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn report(&self) -> EpochProgressReport {
@@ -272,7 +278,10 @@ impl SharedState {
             metrics.last_error = Some(message.clone());
             metrics.last_failure_unix_ms = Some(now_unix_ms);
         }
-        self.finish(Err(format!("{message}; {}", self.newest_generation_summary())));
+        self.finish(Err(format!(
+            "{message}; {}",
+            self.newest_generation_summary()
+        )));
     }
 
     /// The owner disabled the backup's scheduler task while the epoch ran: it
@@ -301,11 +310,16 @@ impl SharedState {
     /// epochs, logging each change once.
     fn note_fallback_held(&self, held: bool, owner: AutomaticEpochOwner) {
         if self.fallback_held.swap(held, Ordering::AcqRel) != held {
-            crate::engine_log::info("online_backup", &format!(
-                "fallback={} reason=scheduler-task system_key={} tenant={} owner={}",
-                if held { "held" } else { "released" },
-                crate::generated_storage_v2::ONLINE_BACKUP_SCHEDULER_SYSTEM_KEY,
-                owner.tenant_id, owner.owner_user_id));
+            crate::engine_log::info(
+                "online_backup",
+                &format!(
+                    "fallback={} reason=scheduler-task system_key={} tenant={} owner={}",
+                    if held { "held" } else { "released" },
+                    crate::generated_storage_v2::ONLINE_BACKUP_SCHEDULER_SYSTEM_KEY,
+                    owner.tenant_id,
+                    owner.owner_user_id
+                ),
+            );
         }
     }
 
@@ -351,13 +365,20 @@ impl SharedState {
             format!(
                 "{label} durable_sequence={} age_s={} manifest={}",
                 generation.durable_sequence,
-                generation.age_ms.map_or("unknown".to_owned(), |age| (age / 1000).to_string()),
+                generation
+                    .age_ms
+                    .map_or("unknown".to_owned(), |age| (age / 1000).to_string()),
                 generation.manifest
             )
         };
-        match (&metrics.last_complete_generation, &metrics.legacy_newest_generation) {
+        match (
+            &metrics.last_complete_generation,
+            &metrics.legacy_newest_generation,
+        ) {
             (Some(generation), _) => describe("newest complete generation", generation),
-            (None, Some(generation)) => describe("newest complete generation (pre-closed-store)", generation),
+            (None, Some(generation)) => {
+                describe("newest complete generation (pre-closed-store)", generation)
+            }
             (None, None) => "no complete generation".to_owned(),
         }
     }
@@ -376,7 +397,9 @@ impl SharedState {
         .into_iter()
         .flatten()
         {
-            generation.age_ms = generation.published_unix_ms.map(|published| now.saturating_sub(published));
+            generation.age_ms = generation
+                .published_unix_ms
+                .map(|published| now.saturating_sub(published));
         }
         if metrics.epoch_in_progress {
             metrics.current_epoch = Some(self.epoch.report());
@@ -511,10 +534,14 @@ impl OnlineBackupDriver {
     }
 
     pub(crate) fn start_fastpath(
-        database: &Arc<Mutex<AuthorityDatabase>>, backup_dir: PathBuf,
-        key: Option<crate::at_rest::AtRestKey>, lease: Arc<crate::fastpath::FastpathLease>,
+        database: &Arc<Mutex<AuthorityDatabase>>,
+        backup_dir: PathBuf,
+        key: Option<crate::at_rest::AtRestKey>,
+        lease: Arc<crate::fastpath::FastpathLease>,
     ) -> io::Result<Self> {
-        database.lock().map_err(|_| io::Error::other("authority mutex poisoned"))?
+        database
+            .lock()
+            .map_err(|_| io::Error::other("authority mutex poisoned"))?
             .validate_online_backup_directory(&backup_dir)?;
         let context = EpochContext {
             store_dir: backup_dir.clone(),
@@ -563,8 +590,14 @@ impl OnlineBackupDriver {
         first_due_override: Option<Duration>,
     ) -> io::Result<Self> {
         let fastpath = context._fastpath_lease.is_some();
-        let initial_sequence = context._fastpath_lease.as_ref().map(|lease| lease.shadow_sequence);
-        let interval = context._fastpath_lease.as_ref().map(|lease| lease.interval)
+        let initial_sequence = context
+            ._fastpath_lease
+            .as_ref()
+            .map(|lease| lease.shadow_sequence);
+        let interval = context
+            ._fastpath_lease
+            .as_ref()
+            .map(|lease| lease.interval)
             .unwrap_or(ONLINE_BACKUP_MAX_INTERVAL);
         let mut initial = OnlineBackupMetrics {
             replicated_sequence: initial_sequence,
@@ -773,10 +806,7 @@ impl OnlineBackupDriver {
             stop,
             watch,
             thread: Mutex::new(Some(thread)),
-            observer: OnlineBackupObserver {
-                shared,
-                stopped,
-            },
+            observer: OnlineBackupObserver { shared, stopped },
         })
     }
 
@@ -844,7 +874,12 @@ fn newest_generation(store_dir: &Path, vfs: &dyn Vfs) -> Option<CompleteGenerati
     let manifest = backup::existing_manifests(&snapshots, vfs)
         .ok()?
         .into_iter()
-        .max_by_key(|manifest| (manifest.durable_sequence, manifest.source_control_generation))?;
+        .max_by_key(|manifest| {
+            (
+                manifest.durable_sequence,
+                manifest.source_control_generation,
+            )
+        })?;
     let path = snapshots.join(manifest.file_name());
     let published_unix_ms = std::fs::metadata(&path)
         .and_then(|metadata| metadata.modified())
@@ -863,7 +898,10 @@ fn read_recorded_epoch_outcome(store_dir: &Path, vfs: &dyn Vfs) -> Option<Record
     let mut file = vfs
         .open(
             &store_dir.join(LAST_EPOCH_FILE),
-            crate::vfs::OpenRequest { read: true, ..crate::vfs::OpenRequest::default() },
+            crate::vfs::OpenRequest {
+                read: true,
+                ..crate::vfs::OpenRequest::default()
+            },
         )
         .ok()?;
     serde_json::from_slice(&file.read_all(64 * 1024).ok()?).ok()
@@ -893,7 +931,11 @@ fn record_epoch_outcome(
         copied_blocks: progress.copied_blocks,
         present_subgraphs: progress.present_subgraphs,
     };
-    if context.destination_vfs.metadata(&context.store_dir).is_err() {
+    if context
+        .destination_vfs
+        .metadata(&context.store_dir)
+        .is_err()
+    {
         return;
     }
     if let Ok(encoded) = serde_json::to_vec(&recorded) {
@@ -913,7 +955,10 @@ fn run_epoch(
     status: &EpochStatus,
 ) -> io::Result<OnlineBackupEpochReport> {
     if stop.load(Ordering::Acquire) {
-        return Err(io::Error::new(io::ErrorKind::WouldBlock, "backup driver stopping"));
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "backup driver stopping",
+        ));
     }
     let started = Instant::now();
     status.set_phase("anchor");
@@ -921,7 +966,10 @@ fn run_epoch(
         .try_lock()
         .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "backup anchor hold contended"))?
         .capture_backup_anchor()?;
-    let registration = RegisteredAnchor { database, token: capture.anchor_token };
+    let registration = RegisteredAnchor {
+        database,
+        token: capture.anchor_token,
+    };
     let anchor_hold_ms = started.elapsed().as_millis() as u64;
     let result = run_epoch_off_mutex(&capture, context, stop, status);
     drop(registration);
@@ -974,16 +1022,20 @@ fn run_epoch_off_mutex(
     // A prior epoch may have committed its prune plan before losing the
     // process or I/O. Resume that exact plan through the existing lease owner
     // before copying; otherwise every future epoch fences on the same marker.
-    let resumed_prune = match backup::ensure_no_prune(
-        &context.store_dir, context.destination_vfs.as_ref()) {
-        Ok(()) => None,
-        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-            status.set_phase("prune");
-            Some(backup::prune_backup_with_share(&context.store_dir, context.retention,
-                Arc::clone(&context.destination_vfs), Some(&share))?)
-        }
-        Err(error) => return Err(error),
-    };
+    let resumed_prune =
+        match backup::ensure_no_prune(&context.store_dir, context.destination_vfs.as_ref()) {
+            Ok(()) => None,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                status.set_phase("prune");
+                Some(backup::prune_backup_with_share(
+                    &context.store_dir,
+                    context.retention,
+                    Arc::clone(&context.destination_vfs),
+                    Some(&share),
+                )?)
+            }
+            Err(error) => return Err(error),
+        };
     // The lease scopes only the copy+publish phase: prune acquires the same
     // path-locked BACKUP_LOCK internally and would conflict with our hold.
     let copy_started = Instant::now();
@@ -994,7 +1046,16 @@ fn run_epoch_off_mutex(
         // Read under the lease: the store's records decide what presence proves.
         let policy =
             backup::destination_policy(&context.store_dir, context.destination_vfs.as_ref())?;
-        run_copy_phase(capture, context, stop, &destination, &snapshots_path, &policy, status, &share)
+        run_copy_phase(
+            capture,
+            context,
+            stop,
+            &destination,
+            &snapshots_path,
+            &policy,
+            status,
+            &share,
+        )
     };
     let (metrics, copy, manifest_path) = copy_result?;
     let copy_ms = copy_started.elapsed().as_millis() as u64;
@@ -1017,10 +1078,16 @@ fn run_epoch_off_mutex(
         Err(error) => {
             crate::engine_log::error("online_backup", &format!(
                 "prune=failed elapsed_ms={prune_ms} error={error}; the generation stays published and the next epoch resumes the prune"));
-            let retained = backup::existing_manifests(&snapshots_path, context.destination_vfs.as_ref())
-                .map_or(0, |manifests| manifests.len() as u32);
-            (backup::BackupPruneMetrics { retained_generations: retained, ..Default::default() },
-                Some(error.to_string()))
+            let retained =
+                backup::existing_manifests(&snapshots_path, context.destination_vfs.as_ref())
+                    .map_or(0, |manifests| manifests.len() as u32);
+            (
+                backup::BackupPruneMetrics {
+                    retained_generations: retained,
+                    ..Default::default()
+                },
+                Some(error.to_string()),
+            )
         }
     };
     Ok(OnlineBackupEpochReport {
@@ -1046,13 +1113,18 @@ fn run_epoch_off_mutex(
         elapsed_ms: 0,
         retained_generations: prune.retained_generations,
         pruned_generations: prune.removed_generations
-            + resumed_prune.as_ref().map_or(0, |old| old.removed_generations),
+            + resumed_prune
+                .as_ref()
+                .map_or(0, |old| old.removed_generations),
         pruned_block_bytes: prune.removed_block_bytes
-            + resumed_prune.as_ref().map_or(0, |old| old.removed_block_bytes),
+            + resumed_prune
+                .as_ref()
+                .map_or(0, |old| old.removed_block_bytes),
         prune_error,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_copy_phase(
     capture: &BackupAnchorCapture,
     context: &EpochContext,
@@ -1075,17 +1147,23 @@ fn run_copy_phase(
             "backup directory belongs to another authority",
         ));
     }
-    if let Some(previous) = existing.iter().find(|candidate|
+    if let Some(previous) = existing.iter().find(|candidate| {
         candidate.durable_sequence == manifest.durable_sequence
-            && candidate.root_hash == manifest.root_hash) {
+            && candidate.root_hash == manifest.root_hash
+    }) {
         // A same-lineage committed sequence is already recoverable. A later
         // checkpoint, merge, or local restore/drain changes physical witnesses
         // (history segment bounds, roots) without a new commit; a second
         // manifest for the same commit would only displace a distinct
         // generation from retention.
-        return Ok((BackupMetrics { durable_sequence: previous.durable_sequence,
-            ..BackupMetrics::default() }, Default::default(),
-            snapshots_path.join(previous.file_name())));
+        return Ok((
+            BackupMetrics {
+                durable_sequence: previous.durable_sequence,
+                ..BackupMetrics::default()
+            },
+            Default::default(),
+            snapshots_path.join(previous.file_name()),
+        ));
     }
     if existing.len() == backup::MAX_BACKUP_GENERATIONS
         && !existing.iter().any(|candidate| candidate == &manifest)
@@ -1096,7 +1174,10 @@ fn run_copy_phase(
         ));
     }
     if stop.load(Ordering::Acquire) {
-        return Err(io::Error::new(io::ErrorKind::WouldBlock, "backup driver stopping"));
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "backup driver stopping",
+        ));
     }
     status.set_phase("copy");
     let before = destination.write_metrics();
@@ -1105,21 +1186,24 @@ fn run_copy_phase(
         destination,
         Some(&context.store_dir),
         policy,
-        &backup::GenerationCopyPlan { manifest: &manifest, built },
+        &backup::GenerationCopyPlan {
+            manifest: &manifest,
+            built,
+        },
         stop,
         Some(&status.progress),
         Some(share),
     )?;
     let after = destination.write_metrics();
     if stop.load(Ordering::Acquire) {
-        return Err(io::Error::new(io::ErrorKind::WouldBlock, "backup driver stopping"));
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "backup driver stopping",
+        ));
     }
     status.set_phase("publish");
-    let manifest_bytes = backup::publish_manifest(
-        snapshots_path,
-        &manifest,
-        context.destination_vfs.as_ref(),
-    )?;
+    let manifest_bytes =
+        backup::publish_manifest(snapshots_path, &manifest, context.destination_vfs.as_ref())?;
     let metrics: BackupMetrics = BackupMetrics {
         durable_sequence: manifest.durable_sequence,
         copied_blocks: after.blocks_written - before.blocks_written,

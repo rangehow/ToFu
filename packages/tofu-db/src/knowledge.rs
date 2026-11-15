@@ -79,8 +79,7 @@ use crate::generated_tofudb_ir::{
     MAX_KNOWLEDGE_SCOPE_CHARACTERS, MAX_KNOWLEDGE_SEARCH_POSTINGS_SCAN,
     MAX_KNOWLEDGE_SEARCH_TEXT_CHARACTERS, MAX_KNOWLEDGE_SEARCH_TOKENS,
     MAX_KNOWLEDGE_SECTION_CHARACTERS, MAX_KNOWLEDGE_STATUS_CHARACTERS,
-    MAX_KNOWLEDGE_STORED_NAME_CHARACTERS,
-    MAX_KNOWLEDGE_TERM_CHARACTERS, MAX_LEGACY_DOCUMENT_BYTES,
+    MAX_KNOWLEDGE_STORED_NAME_CHARACTERS, MAX_KNOWLEDGE_TERM_CHARACTERS, MAX_LEGACY_DOCUMENT_BYTES,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -388,7 +387,9 @@ fn scan_prefix(
         let full_page = page.len() == page_limit;
         rows.extend(page);
         if overflow {
-            return Err(crate::resource_exhaustion::domain_bound("knowledge scan exceeds its row bound"));
+            return Err(crate::resource_exhaustion::domain_bound(
+                "knowledge scan exceeds its row bound",
+            ));
         }
         if !full_page {
             return Ok(rows);
@@ -1195,9 +1196,11 @@ fn resync_owner_index(
     let mut count = 0_u64;
     for asset in scan_owner_assets(database, transaction)? {
         if scoped.contains(&asset.document_id) && in_queue_class(&asset.enrichment_status) {
-            count = count
-                .checked_add(1)
-                .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("knowledge owner asset count overflow"))?;
+            count = count.checked_add(1).ok_or_else(|| {
+                crate::resource_exhaustion::accounting_overflow(
+                    "knowledge owner asset count overflow",
+                )
+            })?;
         }
     }
     let key = owner_index_entity_key(transaction)?;
@@ -2056,9 +2059,13 @@ impl KnowledgeRequest {
                 }
                 asset_id.len()
             }
-            Self::EnrichmentOwners { limit, after_user_id } => {
+            Self::EnrichmentOwners {
+                limit,
+                after_user_id,
+            } => {
                 if !(1..=MAX_KNOWLEDGE_ENRICHMENT_OWNER_ROWS as u64).contains(limit)
-                    || *after_user_id > i64::MAX as u64 {
+                    || *after_user_id > i64::MAX as u64
+                {
                     return Err(invalid_input("invalid knowledge enrichment owner limit"));
                 }
                 16
@@ -2095,14 +2102,20 @@ impl KnowledgeRequest {
                     }
                     bytes = bytes
                         .checked_add(field.len() + value.len())
-                        .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("knowledge update byte overflow"))?;
+                        .ok_or_else(|| {
+                            crate::resource_exhaustion::accounting_overflow(
+                                "knowledge update byte overflow",
+                            )
+                        })?;
                 }
                 for optional in [chunk_content, chunk_search_text].into_iter().flatten() {
                     match optional {
                         Value::Null => {}
                         Value::String(text) => {
                             bytes = bytes.checked_add(text.len()).ok_or_else(|| {
-                                crate::resource_exhaustion::accounting_overflow("knowledge update byte overflow")
+                                crate::resource_exhaustion::accounting_overflow(
+                                    "knowledge update byte overflow",
+                                )
                             })?;
                         }
                         _ => {}
@@ -2144,9 +2157,11 @@ impl KnowledgeRequest {
                     if token.is_empty() || token.chars().count() > MAX_KNOWLEDGE_TERM_CHARACTERS {
                         return Err(invalid_input("invalid knowledge search token"));
                     }
-                    bytes = bytes
-                        .checked_add(token.len())
-                        .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("knowledge search byte overflow"))?;
+                    bytes = bytes.checked_add(token.len()).ok_or_else(|| {
+                        crate::resource_exhaustion::accounting_overflow(
+                            "knowledge search byte overflow",
+                        )
+                    })?;
                 }
                 bytes
             }
@@ -2703,8 +2718,8 @@ fn enrichment_owners(
     )?;
     let mut owners = Vec::new();
     loop {
-        let page_limit = crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS
-            .min(limit as usize - owners.len());
+        let page_limit =
+            crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS.min(limit as usize - owners.len());
         let rows = database.entity_scan(transaction, &cursor, &end, page_limit)?;
         if rows.is_empty() {
             break;
@@ -2714,7 +2729,9 @@ fn enrichment_owners(
         successor.push(0);
         for (_, value) in rows {
             if value.len() != 16 {
-                return Err(invalid_data("knowledge enrichment owner index is malformed"));
+                return Err(invalid_data(
+                    "knowledge enrichment owner index is malformed",
+                ));
             }
             if decode_owner_index(&value)? == 0 {
                 continue;
@@ -3154,7 +3171,11 @@ fn search_candidates(
         push_text(&mut prefix, token)?;
         let remaining = MAX_KNOWLEDGE_SEARCH_POSTINGS_SCAN
             .checked_sub(scanned)
-            .ok_or_else(|| crate::resource_exhaustion::domain_bound("knowledge search exceeds its posting scan bound"))?;
+            .ok_or_else(|| {
+                crate::resource_exhaustion::domain_bound(
+                    "knowledge search exceeds its posting scan bound",
+                )
+            })?;
         let rows = scan_prefix(
             database,
             transaction,
@@ -3360,9 +3381,10 @@ pub(crate) fn execute(
         KnowledgeRequest::EnrichmentActivity => {
             enrichment_activity(database, transaction).map(Some)
         }
-        KnowledgeRequest::EnrichmentOwners { limit, after_user_id } => {
-            enrichment_owners(database, transaction, *limit, *after_user_id).map(Some)
-        }
+        KnowledgeRequest::EnrichmentOwners {
+            limit,
+            after_user_id,
+        } => enrichment_owners(database, transaction, *limit, *after_user_id).map(Some),
         KnowledgeRequest::AssetClaim { now_unix_ms } => {
             asset_claim(database, transaction, *now_unix_ms)
         }
@@ -3982,11 +4004,16 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         for owner in 1..=520 {
-            knowledge_migration_execute(&mut database, 7, owner,
+            knowledge_migration_execute(
+                &mut database,
+                7,
+                owner,
                 "migration.knowledge.document.restore",
                 json!({"document": valid_document(), "settings": {
                     "enabled":true,"visual_enrichment":true,"updated_at":12.5
-                }})).unwrap();
+                }}),
+            )
+            .unwrap();
         }
         let mut cursor = 0;
         let mut owners = Vec::new();
@@ -3994,7 +4021,9 @@ mod tests {
             let mut transaction = database.begin_with_identity_claim_scopes(7, 1).unwrap();
             let bytes = enrichment_owners(&database, &mut transaction, 512, cursor).unwrap();
             let page: Vec<u64> = serde_json::from_slice(&bytes).unwrap();
-            if page.is_empty() { break; }
+            if page.is_empty() {
+                break;
+            }
             assert!(page.iter().all(|owner| *owner > cursor));
             cursor = *page.last().unwrap();
             owners.extend(page);
@@ -4002,9 +4031,22 @@ mod tests {
         assert_eq!(owners, (1..=520).collect::<Vec<u64>>());
         let mut foreign = database.begin_with_identity_claim_scopes(8, 1).unwrap();
         let bytes = enrichment_owners(&database, &mut foreign, 512, 0).unwrap();
-        assert_eq!(serde_json::from_slice::<Vec<u64>>(&bytes).unwrap(), Vec::<u64>::new());
-        assert!(KnowledgeRequest::EnrichmentOwners { limit: 513, after_user_id: 0 }.validate().is_err());
-        assert!(KnowledgeRequest::EnrichmentOwners { limit: 1, after_user_id: u64::MAX }.validate().is_err());
+        assert_eq!(
+            serde_json::from_slice::<Vec<u64>>(&bytes).unwrap(),
+            Vec::<u64>::new()
+        );
+        assert!(KnowledgeRequest::EnrichmentOwners {
+            limit: 513,
+            after_user_id: 0
+        }
+        .validate()
+        .is_err());
+        assert!(KnowledgeRequest::EnrichmentOwners {
+            limit: 1,
+            after_user_id: u64::MAX
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
@@ -4012,20 +4054,43 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let mut document = valid_document();
-        let search = (0..5501).map(|index| format!("wide{index}"))
-            .collect::<Vec<_>>().join(" ");
+        let search = (0..5501)
+            .map(|index| format!("wide{index}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         document["chunks"][0]["search_text"] = json!(search);
         let payload = json!({"document": document, "settings": Value::Null});
-        let result = knowledge_migration_execute(&mut database, 7, 11,
-            "migration.knowledge.document.restore", payload.clone()).unwrap();
+        let result = knowledge_migration_execute(
+            &mut database,
+            7,
+            11,
+            "migration.knowledge.document.restore",
+            payload.clone(),
+        )
+        .unwrap();
         assert_eq!(result["inserted"], true);
         drop(database);
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
-        let restored = knowledge_migration_execute(&mut database, 7, 11,
-            "migration.knowledge.document.get", json!({"document_id": "doc-1"})).unwrap();
-        assert_eq!(restored["document"]["chunks"][0]["search_text"], json!(search));
-        let replay = knowledge_migration_execute(&mut database, 7, 11,
-            "migration.knowledge.document.restore", payload).unwrap();
+        let restored = knowledge_migration_execute(
+            &mut database,
+            7,
+            11,
+            "migration.knowledge.document.get",
+            json!({"document_id": "doc-1"}),
+        )
+        .unwrap();
+        assert_eq!(
+            restored["document"]["chunks"][0]["search_text"],
+            json!(search)
+        );
+        let replay = knowledge_migration_execute(
+            &mut database,
+            7,
+            11,
+            "migration.knowledge.document.restore",
+            payload,
+        )
+        .unwrap();
         assert_eq!(replay["inserted"], false);
     }
 

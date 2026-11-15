@@ -31,7 +31,7 @@ repeats an alert. ``events.jsonl`` records transitions and deliveries, and
 ``probes.jsonl`` every tick (the current and the previous day).
 
 Delivery: the 大象 notification robot posts into the bound command group
-(``lib.channels.dx.robot``: client-credentials token, ``sendGroupMsgByRobot``)
+(the installed dx adapter's robot, ``tofu_yourprovider.dx.robot``: client-credentials token, ``sendGroupMsgByRobot``)
 with its secret read in place from the credential vault. It needs neither
 TofuDB nor the 大象 user session. It stays off until ``config.json`` enables
 it (docs/STORAGE_OPERATIONS.md, "Out-of-band outage alert"). With no enabled
@@ -53,7 +53,7 @@ Entry points: ``main`` (``start``, ``run``, ``once``, ``simulate``, ``status``, 
 ``test-message``, ``notify``), ``Watcher``, ``step``, ``heartbeat_step``,
 ``probe``, ``tail_signals``, ``notify_trip``, ``read_vault_entry``.
 Dependencies: the standard library. A robot send also uses ``cryptography``
-and ``lib.channels.dx.robot`` from the configured Tofu checkout.
+and the dx adapter's robot (``lib.channels.adapters``) from the configured Tofu checkout.
 """
 # TODO(enterprise): one owner's routing (one robot group per watcher state
 # directory); a multi-user host needs per-owner routing for these alerts.
@@ -701,8 +701,8 @@ class DxRobotSender:
     def _module(self):
         if str(self._tofu_root) not in sys.path:
             sys.path.insert(0, str(self._tofu_root))
-        from lib.channels.dx import robot
-        return robot
+        from lib.channels.adapters import require_channel_adapter
+        return require_channel_adapter('dx').robot
 
     def send(self, text: str) -> tuple[str, str]:
         try:

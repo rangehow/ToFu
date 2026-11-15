@@ -14,6 +14,7 @@ submission boundary is the second, independent check.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -81,10 +82,18 @@ def _real_commands(environment: dict[str, str], cwd: Optional[str]) -> dict[str,
 def _write_launcher(path: Path, body: str) -> None:
     if path.exists() and path.read_text(encoding='utf-8') == body:
         return
-    temporary = path.with_name(path.name + '.tmp')
-    temporary.write_text(body, encoding='utf-8')
-    temporary.chmod(0o700)
-    os.replace(temporary, path)
+    # Concurrent commands prepare the same directory; each writer needs its own
+    # temporary file, or one's rename consumes the other's (ENOENT).
+    descriptor, temporary = tempfile.mkstemp(prefix=f'.{path.name}.', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+            handle.write(body)
+        os.chmod(temporary, 0o700)
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temporary)
+        raise
 
 
 def prepare_shim_directory(environment: dict[str, str], *, owner_user_id: Optional[int],

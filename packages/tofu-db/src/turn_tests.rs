@@ -123,7 +123,7 @@
                 conversation_id: "conv-1\"\\\n\u{1f}",
                 occurred_at_ms,
                 payload: TurnUpsertPayload {
-                    attempts: attempt.iter().map(|value| *value).collect(),
+                    attempts: attempt.iter().copied().collect(),
                     conversation_revision: revision,
                     queue_item_upserts: Vec::new(),
                     removed_queue_ids: Vec::new(),
@@ -2917,8 +2917,7 @@
                 &BTreeMap::new(),
                 10,
             )
-            .err()
-            .expect("aggregate Turn delta must stay within its response budget")
+            .expect_err("aggregate Turn delta must stay within its response budget")
             .kind(),
             io::ErrorKind::OutOfMemory
         );
@@ -3049,7 +3048,7 @@
 
         let mut remove = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         delete(
-            &mut database,
+            &database,
             &mut remove,
             "cascade-conversation",
             &["cascade-turn".to_owned()],

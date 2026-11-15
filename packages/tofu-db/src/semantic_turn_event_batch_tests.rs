@@ -243,7 +243,8 @@ fn turn_event_record_batch_refuses_ineligible_or_unordered_entries_before_io() {
     };
     assert!(compile(turn_event_batch_entries("attempt-a", 5, 0)).is_ok());
     assert_eq!(compile(Vec::new()).unwrap_err().code(), "database_protocol_error");
-    let mutations: Vec<(&str, Box<dyn Fn(&mut Vec<Value>)>)> = vec![
+    type Mutation = (&'static str, Box<dyn Fn(&mut Vec<Value>)>);
+    let mutations: Vec<Mutation> = vec![
         ("terminal", Box::new(|entries| { entries[1]["terminal"] = json!(true); entries[1]["status"] = json!("completed"); })),
         ("interaction", Box::new(|entries| entries[1]["event_type"] = json!("interaction_request"))),
         ("background_ack", Box::new(|entries| entries[1]["background_command_ack"] = json!({"block_id": "b", "deliveries": []}))),
@@ -483,7 +484,8 @@ fn turn_event_batch_record_like_the_producer(database: &mut AuthorityDatabase, e
     -> (Vec<Value>, usize, usize)
 {
     let (mut results, mut refused, mut committed) = (Vec::new(), 0, 0);
-    let mut intervals = vec![0..entries.len()];
+    let mut intervals = Vec::new();
+    intervals.push(0..entries.len());
     while let Some(interval) = intervals.pop() {
         let part = &entries[interval.clone()];
         let batch = request("turn.event.record_batch", 11, json!({"user_id": 11, "entries": part}),

@@ -312,12 +312,18 @@ fn legacy_authority_upgrades_lazily_and_keeps_snapshots_after_power_loss() {
 #[test]
 fn word_wise_common_prefix_equals_the_byte_wise_definition() {
     fn byte_wise(previous: &[u8], key: &[u8]) -> usize {
-        previous.iter().zip(key).take_while(|(left, right)| left == right).count()
+        previous
+            .iter()
+            .zip(key)
+            .take_while(|(left, right)| left == right)
+            .count()
     }
     let base: Vec<u8> = (0..40_u8).map(|byte| byte.wrapping_mul(37)).collect();
     for left_len in 0..=base.len() {
         for right_len in [0, 1, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 40] {
-            if right_len > base.len() { continue; }
+            if right_len > base.len() {
+                continue;
+            }
             let left = &base[..left_len];
             let unchanged = &base[..right_len];
             assert_eq!(common_prefix(left, unchanged), byte_wise(left, unchanged));
@@ -325,8 +331,11 @@ fn word_wise_common_prefix_equals_the_byte_wise_definition() {
                 for flip in [0x01_u8, 0x80, 0xff] {
                     let mut right = unchanged.to_vec();
                     right[differing] ^= flip;
-                    assert_eq!(common_prefix(left, &right), byte_wise(left, &right),
-                        "left {left_len} right {right_len} differing at {differing}");
+                    assert_eq!(
+                        common_prefix(left, &right),
+                        byte_wise(left, &right),
+                        "left {left_len} right {right_len} differing at {differing}"
+                    );
                 }
             }
         }

@@ -5,11 +5,13 @@ from types import SimpleNamespace
 import jsonschema
 import pytest
 
+from tests.channels.conftest import requires_dx
+
 from lib.channels.model import CONTRACT
 from lib.identity import PrincipalContext
 from tests.channels.conftest import OWNER, OWNER_UID, ROUTER
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, requires_dx]  # the 大象 account route needs its adapter
 
 
 def _validate(value, name):
@@ -18,9 +20,9 @@ def _validate(value, name):
 
 @pytest.fixture
 def app(records, router, monkeypatch):
-    monkeypatch.setattr('lib.channels.dx.supervisor.notify_account_changed', lambda owner: None)
+    monkeypatch.setattr('tofu_yourprovider.dx.supervisor.notify_account_changed', lambda owner: None)
     created = []
-    monkeypatch.setattr('lib.channels.dx.adapter.create_command_group',
+    monkeypatch.setattr('tofu_yourprovider.dx.adapter.create_command_group',
                         lambda owner, *, name, member_uid, mis: created.append((name, member_uid, mis)) or '4242')
     from quart import Quart, g, request
     from lib.api_v4 import attach_v4_envelope, copy_blueprint_to_v4
@@ -116,7 +118,7 @@ def test_account_threads_and_outbox_round_trip(app, store):
 def test_the_notification_robot_is_saved_and_removed_through_the_account_route(app, store, vault, monkeypatch):
     """PUT admits every ChannelAccountUpdate field: the robot's secret is verified, kept in the vault only."""
     probed = []
-    monkeypatch.setattr('lib.channels.dx.robot.check_credentials',
+    monkeypatch.setattr('tofu_yourprovider.dx.robot.check_credentials',
                         lambda client_id, secret: probed.append((client_id, secret)))
     headers = {'X-Test-Owner': str(OWNER)}
     secret = 'fake-robot-secret-route-0001'  # synthetic, never a real credential

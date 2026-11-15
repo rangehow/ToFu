@@ -108,7 +108,9 @@ fn write_count(
     count: usize,
 ) -> io::Result<()> {
     if count > MAX_PAPER_NOTES_PER_OWNER {
-        return Err(crate::resource_exhaustion::capacity_quota("paper note owner capacity is exhausted"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "paper note owner capacity is exhausted",
+        ));
     }
     database.entity_put(
         transaction,
@@ -180,7 +182,9 @@ impl Request {
                     .map_err(|_| invalid_input("paper note anchor cannot be encoded"))?
                     .len();
                 if anchor_bytes > MAX_PAPER_NOTE_DOCUMENT_BYTES {
-                    return Err(crate::resource_exhaustion::domain_bound("paper note anchor exceeds its byte bound"));
+                    return Err(crate::resource_exhaustion::domain_bound(
+                        "paper note anchor exceeds its byte bound",
+                    ));
                 }
                 Ok(note_id.len() + paper_hash.len() + lang.len() + anchor_bytes)
             }
@@ -288,7 +292,9 @@ fn put_note(
     let raw = serde_json::to_vec(document)
         .map_err(|_| invalid_data("paper note document cannot be encoded"))?;
     if raw.len() > MAX_PAPER_NOTE_DOCUMENT_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("paper note document exceeds its byte bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "paper note document exceeds its byte bound",
+        ));
     }
     versioned_document::put_with_blob_owner_bounded(
         database,
@@ -320,9 +326,9 @@ fn note_create(
     write_count(
         database,
         transaction,
-        count
-            .checked_add(1)
-            .ok_or_else(|| crate::resource_exhaustion::capacity_quota("paper note owner capacity is exhausted"))?,
+        count.checked_add(1).ok_or_else(|| {
+            crate::resource_exhaustion::capacity_quota("paper note owner capacity is exhausted")
+        })?,
     )?;
     put_note(
         database,
@@ -453,7 +459,9 @@ fn note_list(
     let encoded = serde_json::to_vec(&rows)
         .map_err(|_| invalid_data("paper note response cannot be encoded"))?;
     if encoded.len() > MAX_PAPER_NOTE_RESPONSE_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("paper note response exceeds 64 MiB"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "paper note response exceeds 64 MiB",
+        ));
     }
     Ok(encoded)
 }
@@ -588,7 +596,9 @@ fn parse_note_restore(payload: Value) -> io::Result<NoteRestoreRequest> {
         .map_err(|_| invalid_input("paper note anchor cannot be encoded"))?
         .len();
     if anchor_bytes > MAX_PAPER_NOTE_DOCUMENT_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("paper note anchor exceeds its byte bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "paper note anchor exceeds its byte bound",
+        ));
     }
     Ok(request)
 }
@@ -656,9 +666,9 @@ fn note_restore(
     write_count(
         database,
         transaction,
-        count
-            .checked_add(1)
-            .ok_or_else(|| crate::resource_exhaustion::capacity_quota("paper note owner capacity is exhausted"))?,
+        count.checked_add(1).ok_or_else(|| {
+            crate::resource_exhaustion::capacity_quota("paper note owner capacity is exhausted")
+        })?,
     )?;
     put_note(
         database,

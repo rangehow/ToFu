@@ -221,9 +221,9 @@ fn sql_error(error: RusqliteError) -> SemanticExecutionError {
             rusqlite::ErrorCode::AuthorizationForStatementDenied => {
                 SemanticExecutionError::InvalidPayload
             }
-            rusqlite::ErrorCode::TooBig => {
-                crate::resource_exhaustion::semantic_bound("TofuSQL value exceeds its length ceiling")
-            }
+            rusqlite::ErrorCode::TooBig => crate::resource_exhaustion::semantic_bound(
+                "TofuSQL value exceeds its length ceiling",
+            ),
             _ => SemanticExecutionError::InvalidPayload,
         },
         RusqliteError::ModuleError(_) => SemanticExecutionError::InvalidPayload,

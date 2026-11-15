@@ -25,15 +25,11 @@ use serde_json::{json, Value};
 
 use crate::authority::AuthorityDatabase;
 use crate::authority_gc::AuthorityGarbageCollectionBudget;
-use crate::daemon::{
-    checkpoint_wal_windows_for_fast_reopen, PackAdoptionDriver, RotationDriver,
-};
+use crate::daemon::{checkpoint_wal_windows_for_fast_reopen, PackAdoptionDriver, RotationDriver};
 use crate::generated_storage_operations::STORAGE_SCHEMA_VERSION;
 use crate::maintenance::{MaintenanceScheduler, MaintenanceScope};
-use crate::protocol::{Hello, Request, Response, AUTH_TOKEN_BYTES, PROTOCOL_VERSION};
-use crate::server::{
-    RequestDispatch, StorageV2Authenticator, StorageV2Stores,
-};
+use crate::protocol::{Hello, Request, Response, PROTOCOL_VERSION};
+use crate::server::{RequestDispatch, StorageV2Authenticator, StorageV2Stores};
 use crate::turn_search_projection::TurnSearchProjection;
 
 #[path = "embed_command_phases.rs"]
@@ -91,7 +87,10 @@ impl io::Write for CappedPayloadWriter {
 }
 
 fn serialize_payload(payload: &Value, maximum_bytes: usize) -> io::Result<Vec<u8>> {
-    let mut writer = CappedPayloadWriter { bytes: Vec::new(), maximum_bytes };
+    let mut writer = CappedPayloadWriter {
+        bytes: Vec::new(),
+        maximum_bytes,
+    };
     serde_json::to_writer(&mut writer, payload).map_err(|error| {
         match error.io_error_kind() {
             // The cap writer's own rejection, with its stable message.
@@ -120,7 +119,8 @@ pub struct EmbeddedRuntime {
     adoption_driver: PackAdoptionDriver,
     rotation_driver: RotationDriver,
     online_gc_driver: Option<crate::authority_gc_online::OnlineGarbageCollectionDriver>,
-    search_gc_driver: Option<crate::authority_gc_online::OnlineGarbageCollectionDriver<TurnSearchProjection>>,
+    search_gc_driver:
+        Option<crate::authority_gc_online::OnlineGarbageCollectionDriver<TurnSearchProjection>>,
     online_backup_driver: Option<crate::online_backup::OnlineBackupDriver>,
     authority_watch: crate::authority_watch::AuthorityContentionWatch,
     /// Immutable launch data and live coordinator handles borrowed by each
@@ -157,9 +157,7 @@ impl EmbeddedRuntime {
         search_projection_dir: Option<&Path>,
         auth_secret: &mut [u8],
     ) -> io::Result<Self> {
-        let config = crate::daemon::DaemonConfig::new(
-            data_dir, owner_id, tenant_id, auth_secret,
-        )?;
+        let config = crate::daemon::DaemonConfig::new(data_dir, owner_id, tenant_id, auth_secret)?;
         let config = match search_projection_dir {
             Some(path) => config.with_search_projection_dir(path)?,
             None => config,
@@ -167,9 +165,7 @@ impl EmbeddedRuntime {
         Self::open_with_config(config)
     }
 
-    fn open_with_config(
-        mut config: crate::daemon::DaemonConfig,
-    ) -> io::Result<Self> {
+    fn open_with_config(mut config: crate::daemon::DaemonConfig) -> io::Result<Self> {
         #[cfg(test)]
         if config
             .data_dir
@@ -179,8 +175,7 @@ impl EmbeddedRuntime {
             panic!("embedded test fault: forced open panic");
         }
         let at_rest_key = config.at_rest_key.take();
-        let mut authority =
-            AuthorityDatabase::open_with_key(&config.data_dir, at_rest_key)?;
+        let mut authority = AuthorityDatabase::open_with_key(&config.data_dir, at_rest_key)?;
         // Probe-sized residency and write-path budgets, exactly like the
         // daemon's serve_supervised: the embedded path serves the same host.
         authority.configure_hot_data_caches(
@@ -203,7 +198,9 @@ impl EmbeddedRuntime {
             authority.wal_vfs()?,
             authority.wal_path()?,
             Duration::from_millis(1),
-            crate::wal::WalBarrierDriver::capacity_for_headroom(config.resource_budget.snapshot.memory_headroom_bytes),
+            crate::wal::WalBarrierDriver::capacity_for_headroom(
+                config.resource_budget.snapshot.memory_headroom_bytes,
+            ),
         )?;
         authority.attach_wal_barrier(&barrier)?;
         if let Some(tenant) = config.scope.tenant_id {
@@ -213,8 +210,7 @@ impl EmbeddedRuntime {
                 config.scope.owner_id,
             )?;
         }
-        authority
-            .configure_timer_live_capacity(config.resource_budget.timer_live_capacity)?;
+        authority.configure_timer_live_capacity(config.resource_budget.timer_live_capacity)?;
 
         let authority_uuid = authority.authority_uuid();
         let foreground_admissions = authority.foreground_admissions();
@@ -229,7 +225,11 @@ impl EmbeddedRuntime {
             .as_ref()
             .map(|path| {
                 let projection = TurnSearchProjection::open_or_defer(
-                    path, config.resource_budget.search_projection_maximum_bytes_per_owner, authority_uuid,
+                    path,
+                    config
+                        .resource_budget
+                        .search_projection_maximum_bytes_per_owner,
+                    authority_uuid,
                 )?;
                 Ok::<_, io::Error>(Arc::new(Mutex::new(projection)))
             })
@@ -278,24 +278,31 @@ impl EmbeddedRuntime {
         let online_gc_driver = if background_disabled {
             None
         } else {
-            Some(crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
-                &database,
-                AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
-                config.resource_budget.has_volume_pressure(),
-                crate::daemon::reclaim_watch(&database, &config.scope)?,
-            )?)
+            Some(
+                crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
+                    &database,
+                    AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
+                    config.resource_budget.has_volume_pressure(),
+                    crate::daemon::reclaim_watch(&database, &config.scope)?,
+                )?,
+            )
         };
         let search_gc_driver = if background_disabled {
             None
         } else {
-            search_projection.as_ref().map(|projection| {
-                crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
-                    projection,
-                    AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
-                    config.resource_budget.has_volume_pressure(),
-                    crate::daemon::reclaim_watch(&database, &config.scope)?,
-                )
-            }).transpose()?
+            search_projection
+                .as_ref()
+                .map(|projection| {
+                    crate::authority_gc_online::OnlineGarbageCollectionDriver::start_with_hold(
+                        projection,
+                        AuthorityGarbageCollectionBudget::from_resource_budget(
+                            config.resource_budget,
+                        ),
+                        config.resource_budget.has_volume_pressure(),
+                        crate::daemon::reclaim_watch(&database, &config.scope)?,
+                    )
+                })
+                .transpose()?
         };
         let online_backup_driver = if background_disabled {
             None
@@ -310,7 +317,10 @@ impl EmbeddedRuntime {
         // Same wedge detector as the serving daemon: an in-process
         // authority wedged by one holder is otherwise invisible to every
         // observer-handled health signal.
-        let authority_watch = crate::authority_watch::AuthorityContentionWatch::start(&database, foreground_admissions)?;
+        let authority_watch = crate::authority_watch::AuthorityContentionWatch::start(
+            &database,
+            foreground_admissions,
+        )?;
         let maintenance = config
             .scope
             .tenant_id
@@ -327,10 +337,10 @@ impl EmbeddedRuntime {
             .transpose()?;
         let control_observers = crate::control_ops::ControlObservers {
             canonical_json_cache,
-        wal_write_buffer: Some(barrier.clone()),
-        decoded_chunk_cache,
-        blob_codec_pool,
-        published_queries: Some(published_queries.observer()),
+            wal_write_buffer: Some(barrier.clone()),
+            decoded_chunk_cache,
+            blob_codec_pool,
+            published_queries: Some(published_queries.observer()),
             listener: None,
             maintenance: maintenance.as_ref().map(MaintenanceScheduler::observer),
             packer: background_packer
@@ -348,10 +358,16 @@ impl EmbeddedRuntime {
             wal_flush_interval_milliseconds: Some(config.wal_flush_interval.as_millis() as u64),
             resource_budget: Some(crate::daemon::resource_budget_json(
                 &config,
-                search_projection.as_ref().is_some_and(|index| index.try_lock().is_ok_and(|index| index.available())),
+                search_projection
+                    .as_ref()
+                    .is_some_and(|index| index.try_lock().is_ok_and(|index| index.available())),
             )),
         };
-        let worker_control = database.lock().map_err(|_| io_other("embedded authority poisoned"))?.worker_control.clone();
+        let worker_control = database
+            .lock()
+            .map_err(|_| io_other("embedded authority poisoned"))?
+            .worker_control
+            .clone();
         Ok(Self {
             database,
             search_projection,
@@ -372,7 +388,9 @@ impl EmbeddedRuntime {
                 worker_control: Some((worker_control, config.scope)),
                 authority_admission: Arc::default(),
                 published_queries: Some(published_queries),
-                authority_gc_budget: AuthorityGarbageCollectionBudget::from_resource_budget(config.resource_budget),
+                authority_gc_budget: AuthorityGarbageCollectionBudget::from_resource_budget(
+                    config.resource_budget,
+                ),
                 wal_barrier: Some(barrier),
                 control_observers: Some(control_observers),
                 rotation_barrier: Some(rotation_barrier),
@@ -385,11 +403,23 @@ impl EmbeddedRuntime {
         })
     }
 
-    pub(crate) fn commit_watch_owner(&self) -> io::Result<(Arc<crate::worker_control::WorkerControl>, crate::semantic::AuthenticatedScope)> {
-        if *self.closed.lock().map_err(|_| io_other("embedded close state poisoned"))? {
+    pub(crate) fn commit_watch_owner(
+        &self,
+    ) -> io::Result<(
+        Arc<crate::worker_control::WorkerControl>,
+        crate::semantic::AuthenticatedScope,
+    )> {
+        if *self
+            .closed
+            .lock()
+            .map_err(|_| io_other("embedded close state poisoned"))?
+        {
             return Err(io_other("embedded runtime is closed"));
         }
-        self.dispatch_bindings.worker_control.clone().ok_or_else(|| io_other("embedded commit control missing"))
+        self.dispatch_bindings
+            .worker_control
+            .clone()
+            .ok_or_else(|| io_other("embedded commit control missing"))
     }
 
     /// Execute one storage.v2 operation through the shared dispatch
@@ -401,82 +431,162 @@ impl EmbeddedRuntime {
     }
 
     pub(crate) fn execute_json_with_alive(
-        &self, request: &EmbeddedRequest<'_>, alive: &mut impl FnMut() -> bool,
+        &self,
+        request: &EmbeddedRequest<'_>,
+        alive: &mut impl FnMut() -> bool,
     ) -> io::Result<Value> {
-        self.execute_encoded_with_alive(request.operation.clone(), serialize_payload(
-            request.payload, payload_limit_for_operation(&request.operation))?,
-            request.command_id.clone(), request.deadline_unix_ms, alive)
+        self.execute_encoded_with_alive(
+            request.operation.clone(),
+            serialize_payload(
+                request.payload,
+                payload_limit_for_operation(&request.operation),
+            )?,
+            request.command_id.clone(),
+            request.deadline_unix_ms,
+            alive,
+        )
     }
 
     /// The FFI envelope already contains JSON bytes. Keep them encoded until
     /// the shared semantic compiler parses and canonicalizes the request.
     pub(crate) fn execute_encoded_with_alive(
-        &self, operation: String, payload: Vec<u8>, command_id: Option<String>,
-        deadline_unix_ms: u64, alive: &mut impl FnMut() -> bool,
+        &self,
+        operation: String,
+        payload: Vec<u8>,
+        command_id: Option<String>,
+        deadline_unix_ms: u64,
+        alive: &mut impl FnMut() -> bool,
     ) -> io::Result<Value> {
-        self.execute_encoded_response_with_alive(operation, payload, command_id, deadline_unix_ms, alive)
-            .map(|response| response_to_json(&response))
+        self.execute_encoded_response_with_alive(
+            operation,
+            payload,
+            command_id,
+            deadline_unix_ms,
+            alive,
+        )
+        .map(|response| response_to_json(&response))
     }
 
     /// Reuse an already executed, snapshot-certified query. Every lock is a
     /// try-lock, and the cache accepts only one-frame owned inputs/results.
     /// No engine/IR execution, I/O or caller pointer escapes this branch.
-    pub(crate) fn try_cached_json(&self, operation: &str, payload: &[u8],
-        command_id: Option<&str>, deadline_unix_ms: u64, transport_is_healthy: impl FnOnce() -> bool) -> Option<io::Result<Vec<u8>>> {
-        if command_id.is_some() || payload.len() > crate::protocol::MAX_PAYLOAD_BYTES { return None; }
+    pub(crate) fn try_cached_json(
+        &self,
+        operation: &str,
+        payload: &[u8],
+        command_id: Option<&str>,
+        deadline_unix_ms: u64,
+        transport_is_healthy: impl FnOnce() -> bool,
+    ) -> Option<io::Result<Vec<u8>>> {
+        if command_id.is_some() || payload.len() > crate::protocol::MAX_PAYLOAD_BYTES {
+            return None;
+        }
         let started = crate::request_profile::enabled().then(std::time::Instant::now);
         let view = self.dispatch_bindings.published_queries.as_ref()?;
         let cached = view.try_cached(crate::query_result_cache::Lookup {
-            owner_id: self.scope.owner_id, tenant_id: self.scope.tenant_id,
-            schema_id: STORAGE_SCHEMA_VERSION, operation, payload })?;
+            owner_id: self.scope.owner_id,
+            tenant_id: self.scope.tenant_id,
+            schema_id: STORAGE_SCHEMA_VERSION,
+            operation,
+            payload,
+        })?;
         // Empty/cold keys pay only the optional cache lookup. Health is still
         // mandatory before admission and before any cached bytes can escape.
-        if self.database.is_poisoned() || *self.closed.try_lock().ok()?
-            || self.dispatch_bindings.wal_barrier.is_none() || !transport_is_healthy() { return None; }
+        if self.database.is_poisoned()
+            || *self.closed.try_lock().ok()?
+            || self.dispatch_bindings.wal_barrier.is_none()
+            || !transport_is_healthy()
+        {
+            return None;
+        }
         // Correlation is not exposed by the C ABI JSON envelope. This local
         // nonzero ID still passes the identical protocol admission validator.
-        let request = Request { correlation_id: [1; 16], deadline_unix_ms,
-            owner_id: self.scope.owner_id, tenant_id: self.scope.tenant_id,
-            command_id: None, schema_id: STORAGE_SCHEMA_VERSION,
-            operation: operation.to_owned(), payload: payload.to_vec() };
+        let request = Request {
+            correlation_id: [1; 16],
+            deadline_unix_ms,
+            owner_id: self.scope.owner_id,
+            tenant_id: self.scope.tenant_id,
+            command_id: None,
+            schema_id: STORAGE_SCHEMA_VERSION,
+            operation: operation.to_owned(),
+            payload: payload.to_vec(),
+        };
         let admitted = self.session.admit(&request, now_unix_ms()).ok()?;
-        if admitted.operation.kind != crate::generated_storage_operations::StorageOperationKind::Query { return None; }
+        if admitted.operation.kind
+            != crate::generated_storage_operations::StorageOperationKind::Query
+        {
+            return None;
+        }
         crate::fsync_stats::note_foreground_request();
         let _queue = crate::request_profile::QueueContext::completed_inline();
-        let mut profile = started.and_then(|start| crate::request_profile::RequestGuard::start_at(operation, start));
-        let response = crate::server::response::DispatchedResponse::successful(&request, cached.into_response());
-        if let Some(profile) = profile.as_mut() { profile.finish("ok"); }
+        let mut profile = started
+            .and_then(|start| crate::request_profile::RequestGuard::start_at(operation, start));
+        let response = crate::server::response::DispatchedResponse::successful(
+            &request,
+            cached.into_response(),
+        );
+        if let Some(profile) = profile.as_mut() {
+            profile.finish("ok");
+        }
         drop(profile);
         Some(dispatched_response_to_encoded_json(&response))
     }
 
     pub(crate) fn execute_encoded_json_with_alive(
-        &self, operation: String, payload: Vec<u8>, command_id: Option<String>,
-        deadline_unix_ms: u64, alive: &mut impl FnMut() -> bool,
+        &self,
+        operation: String,
+        payload: Vec<u8>,
+        command_id: Option<String>,
+        deadline_unix_ms: u64,
+        alive: &mut impl FnMut() -> bool,
     ) -> io::Result<Vec<u8>> {
         let response = self.execute_encoded_response_with_alive(
-            operation, payload, command_id, deadline_unix_ms, alive)?;
+            operation,
+            payload,
+            command_id,
+            deadline_unix_ms,
+            alive,
+        )?;
         dispatched_response_to_encoded_json(&response)
     }
 
     fn execute_encoded_response_with_alive(
-        &self, operation: String, payload: Vec<u8>, command_id: Option<String>,
-        deadline_unix_ms: u64, alive: &mut impl FnMut() -> bool,
+        &self,
+        operation: String,
+        payload: Vec<u8>,
+        command_id: Option<String>,
+        deadline_unix_ms: u64,
+        alive: &mut impl FnMut() -> bool,
     ) -> io::Result<crate::server::response::DispatchedResponse> {
-        let wire_request=self.request_from_encoded(operation,payload,command_id,deadline_unix_ms)?;
-        self.execute_wire_response_with_alive(wire_request,alive,true)
+        let wire_request =
+            self.request_from_encoded(operation, payload, command_id, deadline_unix_ms)?;
+        self.execute_wire_response_with_alive(wire_request, alive, true)
     }
 
-    fn request_from_encoded(&self, operation:String, payload:Vec<u8>, command_id:Option<String>,
-        deadline_unix_ms:u64) -> io::Result<Request> {
+    fn request_from_encoded(
+        &self,
+        operation: String,
+        payload: Vec<u8>,
+        command_id: Option<String>,
+        deadline_unix_ms: u64,
+    ) -> io::Result<Request> {
         #[cfg(test)]
         test_fault::inject(&operation);
-        if *self.closed.lock().map_err(|_| io_other("embedded close state poisoned"))? {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "embedded runtime is closed"));
+        if *self
+            .closed
+            .lock()
+            .map_err(|_| io_other("embedded close state poisoned"))?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "embedded runtime is closed",
+            ));
         }
         if payload.len() > payload_limit_for_operation(&operation) {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput,
-                "embedded request payload exceeds the storage.v2 payload bound"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "embedded request payload exceeds the storage.v2 payload bound",
+            ));
         }
         let wire_request = Request {
             correlation_id: *uuid::Uuid::new_v4().as_bytes(),
@@ -495,19 +605,38 @@ impl EmbeddedRuntime {
     }
 
     fn execute_wire_response_with_alive(
-        &self, wire_request: Request, alive: &mut impl FnMut() -> bool, allow_parallel: bool,
+        &self,
+        wire_request: Request,
+        alive: &mut impl FnMut() -> bool,
+        allow_parallel: bool,
     ) -> io::Result<crate::server::response::DispatchedResponse> {
         let outcome = crate::server::profile_request_dispatch(&wire_request.operation, || {
             let stores = {
-                let _bindings = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_BINDINGS);
-                crate::request_profile::work(crate::request_profile::Work::EmbeddedBindingsReuse, 1);
-                StorageV2Stores::borrowed(&self.database, self.search_projection.as_deref(), &self.dispatch_bindings)
+                let _bindings = crate::fsync_stats::StageTimer::diagnostic(
+                    crate::fsync_stats::STAGE_EMBEDDED_BINDINGS,
+                );
+                crate::request_profile::work(
+                    crate::request_profile::Work::EmbeddedBindingsReuse,
+                    1,
+                );
+                StorageV2Stores::borrowed(
+                    &self.database,
+                    self.search_projection.as_deref(),
+                    &self.dispatch_bindings,
+                )
             };
             let mut now = now_unix_ms;
             let admitted_at = now();
-            crate::server::dispatch_one_request_inner_mode(&stores, &self.session, &wire_request,
+            crate::server::dispatch_one_request_inner_mode(
+                &stores,
+                &self.session,
+                &wire_request,
                 wire_request.payload.len() > MAX_EMBEDDED_PAYLOAD_BYTES,
-                admitted_at, &mut now, alive, allow_parallel)
+                admitted_at,
+                &mut now,
+                alive,
+                allow_parallel,
+            )
         })?;
         let response = match outcome {
             RequestDispatch::Responded(response) => response,
@@ -518,11 +647,22 @@ impl EmbeddedRuntime {
         Ok(response)
     }
 
-    pub(crate) fn execute_serialized_fallback(&self,request:Request,alive:&mut impl FnMut()->bool)->io::Result<Vec<u8>> {
-        if *self.closed.lock().map_err(|_|io_other("embedded close state poisoned"))? {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe,"embedded runtime is closed"));
+    pub(crate) fn execute_serialized_fallback(
+        &self,
+        request: Request,
+        alive: &mut impl FnMut() -> bool,
+    ) -> io::Result<Vec<u8>> {
+        if *self
+            .closed
+            .lock()
+            .map_err(|_| io_other("embedded close state poisoned"))?
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "embedded runtime is closed",
+            ));
         }
-        let response=self.execute_wire_response_with_alive(request,alive,false)?;
+        let response = self.execute_wire_response_with_alive(request, alive, false)?;
         dispatched_response_to_encoded_json(&response)
     }
 
@@ -552,7 +692,8 @@ impl EmbeddedRuntime {
     }
 
     fn stop(&self, retire_wal_windows: bool) -> io::Result<()> {
-        let _timer = crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_EMBEDDED_STOP_TOTAL);
+        let _timer =
+            crate::fsync_stats::StageTimer::new(crate::fsync_stats::STAGE_EMBEDDED_STOP_TOTAL);
         {
             let mut closed = self
                 .closed
@@ -563,70 +704,83 @@ impl EmbeddedRuntime {
             }
             *closed = true;
         }
-        if let Some((control, _)) = &self.dispatch_bindings.worker_control { control.close(); }
+        if let Some((control, _)) = &self.dispatch_bindings.worker_control {
+            control.close();
+        }
         // New checkpoint calls observe closed before effects; wait for entered
         // calls before retiring their WAL/maintenance drivers.
         #[cfg(feature = "native-runtime-checkpoints")]
-        let _checkpoint_calls = self.checkpoint_calls.write()
+        let _checkpoint_calls = self
+            .checkpoint_calls
+            .write()
             .map_err(|_| io_other("embedded checkpoint lifecycle poisoned"))?;
-        let maintenance_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_MAINTENANCE, || {
-            self
-                .maintenance
-                .as_ref()
-                .map(MaintenanceScheduler::stop_and_join)
-                .transpose()
-        });
-        let packer_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_PACKER, || {
-            self
-                .background_packer
-                .as_ref()
-                .map(crate::background_pack::BackgroundPacker::stop_and_join)
-                .transpose()
-        });
-        let online_gc_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_GC, || {
-            self
-                .online_gc_driver
-                .as_ref()
-                .map(crate::authority_gc_online::OnlineGarbageCollectionDriver::stop_and_join)
-                .transpose()
-        });
-        let search_gc_result = self.search_gc_driver.as_ref()
+        let maintenance_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_MAINTENANCE, || {
+                self.maintenance
+                    .as_ref()
+                    .map(MaintenanceScheduler::stop_and_join)
+                    .transpose()
+            });
+        let packer_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_PACKER, || {
+                self.background_packer
+                    .as_ref()
+                    .map(crate::background_pack::BackgroundPacker::stop_and_join)
+                    .transpose()
+            });
+        let online_gc_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_GC, || {
+                self.online_gc_driver
+                    .as_ref()
+                    .map(crate::authority_gc_online::OnlineGarbageCollectionDriver::stop_and_join)
+                    .transpose()
+            });
+        let search_gc_result = self
+            .search_gc_driver
+            .as_ref()
             .map(crate::authority_gc_online::OnlineGarbageCollectionDriver::stop_and_join)
             .transpose();
-        let online_backup_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_BACKUP, || {
-            self
-                .online_backup_driver
-                .as_ref()
-                .map(crate::online_backup::OnlineBackupDriver::stop_and_join)
-                .transpose()
-        });
-        let authority_watch_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_WATCH, || {
-            self.authority_watch.stop_and_join()
-        });
-        let archive_seal_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_ARCHIVE, || {
-            self
-                .archive_seal_driver
-                .as_ref()
-                .map(crate::transcript_archive::ArchiveSealDriver::stop_and_join)
-                .transpose()
-        });
-        let adoption_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_ADOPTION, || {
-            self.adoption_driver.stop_and_join()
-        });
-        let rotation_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_ROTATION, || self.rotation_driver.stop_and_join());
+        let online_backup_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_BACKUP, || {
+                self.online_backup_driver
+                    .as_ref()
+                    .map(crate::online_backup::OnlineBackupDriver::stop_and_join)
+                    .transpose()
+            });
+        let authority_watch_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_WATCH, || {
+                self.authority_watch.stop_and_join()
+            });
+        let archive_seal_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_ARCHIVE, || {
+                self.archive_seal_driver
+                    .as_ref()
+                    .map(crate::transcript_archive::ArchiveSealDriver::stop_and_join)
+                    .transpose()
+            });
+        let adoption_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_ADOPTION, || {
+                self.adoption_driver.stop_and_join()
+            });
+        let rotation_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_ROTATION, || {
+                self.rotation_driver.stop_and_join()
+            });
         if retire_wal_windows {
-            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_CHECKPOINT, || checkpoint_wal_windows_for_fast_reopen(
-                &self.database,
-                self.search_projection.as_ref(),
-            ));
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_CHECKPOINT, || {
+                checkpoint_wal_windows_for_fast_reopen(
+                    &self.database,
+                    self.search_projection.as_ref(),
+                )
+            });
         }
-        let barrier_result = embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_BARRIER, || {
-            self
-                .wal_barrier_driver
-                .as_ref()
-                .map(crate::wal::WalBarrierDriver::stop_and_join)
-                .transpose()
-        });
+        let barrier_result =
+            embedded_stop_phase(crate::fsync_stats::STAGE_EMBEDDED_STOP_BARRIER, || {
+                self.wal_barrier_driver
+                    .as_ref()
+                    .map(crate::wal::WalBarrierDriver::stop_and_join)
+                    .transpose()
+            });
         maintenance_result?;
         packer_result?;
         barrier_result?;
@@ -645,11 +799,16 @@ impl EmbeddedRuntime {
 /// Only fixed stage names and elapsed time are emitted, once per stopped phase.
 fn embedded_stop_phase<T>(stage: usize, operation: impl FnOnce() -> T) -> T {
     let timer = crate::fsync_stats::StageTimer::new(stage);
-    let diagnostic_start = std::env::var_os("TOFU_DB_FSYNC_STATS").map(|_| std::time::Instant::now());
+    let diagnostic_start =
+        std::env::var_os("TOFU_DB_FSYNC_STATS").map(|_| std::time::Instant::now());
     let result = operation();
     drop(timer);
     if let Some(started) = diagnostic_start {
-        eprintln!("embedded_stop_phase={} elapsed_ns={}", crate::fsync_stats::STAGE_NAMES[stage], started.elapsed().as_nanos());
+        eprintln!(
+            "embedded_stop_phase={} elapsed_ns={}",
+            crate::fsync_stats::STAGE_NAMES[stage],
+            started.elapsed().as_nanos()
+        );
     }
     result
 }
@@ -683,22 +842,31 @@ pub(crate) mod test_fault {
 
     pub(crate) fn inject(operation: &str) {
         if operation == PARALLEL_OPERATION {
-            static GATE: std::sync::OnceLock<(std::sync::Mutex<usize>, std::sync::Condvar)> = std::sync::OnceLock::new();
+            static GATE: std::sync::OnceLock<(std::sync::Mutex<usize>, std::sync::Condvar)> =
+                std::sync::OnceLock::new();
             let (count, ready) = GATE.get_or_init(Default::default);
             let mut count = count.lock().unwrap();
             *count += 1;
             ready.notify_all();
-            let (count, _) = ready.wait_timeout_while(count, std::time::Duration::from_secs(2), |n| *n < 2).unwrap();
+            let (count, _) = ready
+                .wait_timeout_while(count, std::time::Duration::from_secs(2), |n| *n < 2)
+                .unwrap();
             assert!(*count >= 2, "embedded execution is still serialized");
         }
         if operation == DEMAND_BURST_OPERATION {
-            static GATE: std::sync::OnceLock<(std::sync::Mutex<usize>, std::sync::Condvar)> = std::sync::OnceLock::new();
+            static GATE: std::sync::OnceLock<(std::sync::Mutex<usize>, std::sync::Condvar)> =
+                std::sync::OnceLock::new();
             let (count, ready) = GATE.get_or_init(Default::default);
             let mut count = count.lock().unwrap();
             *count += 1;
             ready.notify_all();
-            let (count, _) = ready.wait_timeout_while(count, std::time::Duration::from_secs(5), |n| *n < 64).unwrap();
-            assert!(*count >= 64, "embedded demand burst waited behind worker count admission");
+            let (count, _) = ready
+                .wait_timeout_while(count, std::time::Duration::from_secs(5), |n| *n < 64)
+                .unwrap();
+            assert!(
+                *count >= 64,
+                "embedded demand burst waited behind worker count admission"
+            );
         }
         if operation == PANIC_OPERATION {
             panic!("embedded test fault: forced panic");
@@ -727,32 +895,64 @@ fn response_to_json(response: &Response) -> Value {
 /// Validate with the same serde number/UTF-8/recursion rules as Value, without
 /// allocating a second payload tree. Float parsing preserves round-trip rules;
 /// wide integer tokens and integer negative zero need Value's normalization.
-struct PayloadShape { has_float_representation: bool }
+struct PayloadShape {
+    has_float_representation: bool,
+}
 impl<'de> serde::Deserialize<'de> for PayloadShape {
     fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
         struct ShapeVisitor;
         impl<'de> serde::de::Visitor<'de> for ShapeVisitor {
             type Value = PayloadShape;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str("a JSON value") }
-            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> { Ok(PayloadShape { has_float_representation: false }) }
-            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> { self.visit_unit() }
-            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> { self.visit_unit() }
-            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> { self.visit_unit() }
-            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> { Ok(PayloadShape { has_float_representation: true }) }
-            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> { self.visit_unit() }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut values: A) -> Result<Self::Value, A::Error> {
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON value")
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(PayloadShape {
+                    has_float_representation: false,
+                })
+            }
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                Ok(PayloadShape {
+                    has_float_representation: true,
+                })
+            }
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut values: A,
+            ) -> Result<Self::Value, A::Error> {
                 let mut has_float_representation = false;
                 while let Some(value) = values.next_element::<PayloadShape>()? {
                     has_float_representation |= value.has_float_representation;
                 }
-                Ok(PayloadShape { has_float_representation })
+                Ok(PayloadShape {
+                    has_float_representation,
+                })
             }
-            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut values: A) -> Result<Self::Value, A::Error> {
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut values: A,
+            ) -> Result<Self::Value, A::Error> {
                 let mut has_float_representation = false;
                 while values.next_key::<PayloadKey>()?.is_some() {
-                    has_float_representation |= values.next_value::<PayloadShape>()?.has_float_representation;
+                    has_float_representation |= values
+                        .next_value::<PayloadShape>()?
+                        .has_float_representation;
                 }
-                Ok(PayloadShape { has_float_representation })
+                Ok(PayloadShape {
+                    has_float_representation,
+                })
             }
         }
         decoder.deserialize_any(ShapeVisitor)
@@ -765,8 +965,12 @@ impl<'de> serde::Deserialize<'de> for PayloadKey {
         struct KeyVisitor;
         impl<'de> serde::de::Visitor<'de> for KeyVisitor {
             type Value = PayloadKey;
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { f.write_str("a JSON object key") }
-            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> { Ok(PayloadKey) }
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object key")
+            }
+            fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+                Ok(PayloadKey)
+            }
         }
         decoder.deserialize_str(KeyVisitor)
     }
@@ -785,21 +989,42 @@ fn payload_has_noncanonical_integer(payload: &[u8]) -> bool {
             b'"' => {
                 cursor += 1;
                 while cursor < payload.len() {
-                    let Some(offset) = memchr::memchr2(b'"', b'\\', &payload[cursor..]) else { return false; };
+                    let Some(offset) = memchr::memchr2(b'"', b'\\', &payload[cursor..]) else {
+                        return false;
+                    };
                     cursor += offset;
-                    if payload[cursor] == b'"' { cursor += 1; break; }
+                    if payload[cursor] == b'"' {
+                        cursor += 1;
+                        break;
+                    }
                     cursor += 2; // The validated escape and its following byte.
                 }
             }
             b'-' | b'0'..=b'9' => {
                 let start = cursor;
                 cursor += 1;
-                while cursor < payload.len() && matches!(payload[cursor], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-') { cursor += 1; }
+                while cursor < payload.len()
+                    && matches!(
+                        payload[cursor],
+                        b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-'
+                    )
+                {
+                    cursor += 1;
+                }
                 let token = &payload[start..cursor];
                 if !token.iter().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
-                    if token == b"-0" { return true; }
-                    let integer = std::str::from_utf8(token).expect("validated JSON number is ASCII");
-                    if if token[0] == b'-' { integer.parse::<i64>().is_err() } else { integer.parse::<u64>().is_err() } { return true; }
+                    if token == b"-0" {
+                        return true;
+                    }
+                    let integer =
+                        std::str::from_utf8(token).expect("validated JSON number is ASCII");
+                    if if token[0] == b'-' {
+                        integer.parse::<i64>().is_err()
+                    } else {
+                        integer.parse::<u64>().is_err()
+                    } {
+                        return true;
+                    }
                 }
             }
             _ => cursor += 1,
@@ -812,47 +1037,82 @@ pub(crate) fn dispatched_response_to_encoded_json(
     response: &crate::server::response::DispatchedResponse,
 ) -> io::Result<Vec<u8>> {
     if let Some(payload) = response.canonical_payload() {
-        let _encode = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_ENCODE);
-        let _proof = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_PAYLOAD_PROOF);
+        let _encode = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_ENCODE,
+        );
+        let _proof = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_PAYLOAD_PROOF,
+        );
         return encode_response_envelope(response, payload);
     }
     response_to_encoded_json(response)
 }
 
 fn response_to_encoded_json(response: &Response) -> io::Result<Vec<u8>> {
-    let _encode = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_ENCODE);
+    let _encode = crate::fsync_stats::StageTimer::diagnostic(
+        crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_ENCODE,
+    );
     let shape = (response.status == 0).then(|| {
-        let _validate = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_PAYLOAD_VALIDATE);
+        let _validate = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_PAYLOAD_VALIDATE,
+        );
         serde_json::from_slice::<PayloadShape>(&response.payload)
     });
-    if matches!(&shape, Some(Ok(PayloadShape { has_float_representation: true })))
-        && {
-            let _numeric = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_NUMERIC_COMPATIBILITY);
-            payload_has_noncanonical_integer(&response.payload)
-        } {
-        let _fallback = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_VALUE_FALLBACK);
+    if matches!(
+        &shape,
+        Some(Ok(PayloadShape {
+            has_float_representation: true
+        }))
+    ) && {
+        let _numeric = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_NUMERIC_COMPATIBILITY,
+        );
+        payload_has_noncanonical_integer(&response.payload)
+    } {
+        let _fallback = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_VALUE_FALLBACK,
+        );
         return serde_json::to_vec(&response_to_json(response)).map_err(io::Error::other);
     }
-    let payload = if matches!(&shape, Some(Ok(_))) { response.payload.as_slice() } else { b"null" };
+    let payload = if matches!(&shape, Some(Ok(_))) {
+        response.payload.as_slice()
+    } else {
+        b"null"
+    };
     encode_response_envelope(response, payload)
 }
 
 // Raw payload insertion has exactly two callers: immutable canonical evidence,
 // or the original complete PayloadShape/numeric compatibility validation.
 fn encode_response_envelope(response: &Response, payload: &[u8]) -> io::Result<Vec<u8>> {
-    let _envelope = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_ENVELOPE_BUILD);
+    let _envelope = crate::fsync_stats::StageTimer::diagnostic(
+        crate::fsync_stats::STAGE_EMBEDDED_ENVELOPE_BUILD,
+    );
     #[derive(serde::Serialize)]
-    struct Header<'a> { error_code: &'a Option<String>, error_message: &'a Option<String> }
+    struct Header<'a> {
+        error_code: &'a Option<String>,
+        error_message: &'a Option<String>,
+    }
     let mut encoded = Vec::with_capacity(payload.len().saturating_add(128));
-    serde_json::to_writer(&mut encoded, &Header { error_code: &response.error_code, error_message: &response.error_message })
-        .map_err(io::Error::other)?;
+    serde_json::to_writer(
+        &mut encoded,
+        &Header {
+            error_code: &response.error_code,
+            error_message: &response.error_message,
+        },
+    )
+    .map_err(io::Error::other)?;
     // The metadata is serialized by serde. Only fixed envelope punctuation and
     // a completely validated JSON value are appended as raw bytes.
     encoded.pop();
     encoded.extend_from_slice(b",\"payload\":");
     encoded.extend_from_slice(payload);
     encoded.extend_from_slice(b",\"retryable\":");
-    encoded.extend_from_slice(if response.retryable { b"true" } else { b"false" });
+    encoded.extend_from_slice(if response.retryable {
+        b"true"
+    } else {
+        b"false"
+    });
     encoded.extend_from_slice(b",\"status\":");
     serde_json::to_writer(&mut encoded, &response.status).map_err(io::Error::other)?;
     encoded.push(b'}');
@@ -866,15 +1126,23 @@ mod tests {
     #[test]
     fn encoded_response_preserves_value_envelopes_and_invalid_payload_policy() {
         let mut payloads = vec![
-            b"null".to_vec(), b"true".to_vec(), b"18446744073709551615".to_vec(),
-            b"18446744073709551616".to_vec(), b"1.000e-9".to_vec(), b"1e400".to_vec(),
-            b"-0".to_vec(), b"-0.0".to_vec(), b"-9223372036854775809".to_vec(),
+            b"null".to_vec(),
+            b"true".to_vec(),
+            b"18446744073709551615".to_vec(),
+            b"18446744073709551616".to_vec(),
+            b"1.000e-9".to_vec(),
+            b"1e400".to_vec(),
+            b"-0".to_vec(),
+            b"-0.0".to_vec(),
+            b"-9223372036854775809".to_vec(),
             br#"[18446744073709551615,1.25,"18446744073709551616\"-0"]"#.to_vec(),
             br#"[18446744073709551616,1.25]"#.to_vec(),
             br#"{"duplicate":1,"duplicate":2,"text":"\u4e2d\n\""}"#.to_vec(),
             br#"{"x":[false,null,{"decimal":1.5}]}"#.to_vec(),
             br#"{"key\u0000": "\ud800"}"#.to_vec(),
-            b"[1,]".to_vec(), b"true false".to_vec(), vec![b'"', 255, b'"'],
+            b"[1,]".to_vec(),
+            b"true false".to_vec(),
+            vec![b'"', 255, b'"'],
             serde_json::to_vec(&json!({"large": "x\n中".repeat(100_000)})).unwrap(),
         ];
         for depth in [1, 126, 127, 128, 129, 256] {
@@ -882,15 +1150,25 @@ mod tests {
         }
         for payload in payloads {
             for status in [0, 1] {
-                let response = Response { correlation_id: [0; 16], schema_id: STORAGE_SCHEMA_VERSION,
-                    payload: payload.clone(), status, error_code: Some("error-中".into()),
-                    error_message: Some("quoted \" / newline\n".into()), retryable: status != 0 };
+                let response = Response {
+                    correlation_id: [0; 16],
+                    schema_id: STORAGE_SCHEMA_VERSION,
+                    payload: payload.clone(),
+                    status,
+                    error_code: Some("error-中".into()),
+                    error_message: Some("quoted \" / newline\n".into()),
+                    retryable: status != 0,
+                };
                 let encoded = response_to_encoded_json(&response).unwrap();
                 #[derive(serde::Deserialize)]
                 #[serde(deny_unknown_fields)]
                 struct Envelope<'a> {
-                    status: u16, error_code: Option<String>, error_message: Option<String>,
-                    retryable: bool, #[serde(borrow)] payload: &'a serde_json::value::RawValue,
+                    status: u16,
+                    error_code: Option<String>,
+                    error_message: Option<String>,
+                    retryable: bool,
+                    #[serde(borrow)]
+                    payload: &'a serde_json::value::RawValue,
                 }
                 // Decode the envelope separately: its extra level must not
                 // reduce the payload's pre-existing serde recursion allowance.
@@ -900,7 +1178,12 @@ mod tests {
                 assert_eq!(envelope.error_message, response.error_message);
                 assert_eq!(envelope.retryable, response.retryable);
                 let decoded: Value = serde_json::from_str(envelope.payload.get()).unwrap();
-                assert_eq!(decoded, response_to_json(&response)["payload"], "status={status}, payload bytes={}", payload.len());
+                assert_eq!(
+                    decoded,
+                    response_to_json(&response)["payload"],
+                    "status={status}, payload bytes={}",
+                    payload.len()
+                );
             }
         }
     }
@@ -940,12 +1223,25 @@ mod tests {
     #[test]
     fn large_payload_serialization_is_independent_of_operation() {
         let payload = Value::String("x".repeat(MAX_EMBEDDED_PAYLOAD_BYTES));
-        for operation in ["swarm.agent.save", "turn.projection.update", "raw_archive.put", "record.put", "system.health", "plugin.row.put", "unknown"] {
-            let encoded = serialize_payload(&payload, payload_limit_for_operation(operation)).unwrap();
+        for operation in [
+            "swarm.agent.save",
+            "turn.projection.update",
+            "raw_archive.put",
+            "record.put",
+            "system.health",
+            "plugin.row.put",
+            "unknown",
+        ] {
+            let encoded =
+                serialize_payload(&payload, payload_limit_for_operation(operation)).unwrap();
             assert_eq!(encoded.len(), MAX_EMBEDDED_PAYLOAD_BYTES + 2);
         }
         let demand = Value::String("x".repeat(70 * 1024 * 1024));
-        let encoded = serialize_payload(&demand, payload_limit_for_operation("task_results.checkpoint")).unwrap();
+        let encoded = serialize_payload(
+            &demand,
+            payload_limit_for_operation("task_results.checkpoint"),
+        )
+        .unwrap();
         assert_eq!(encoded.len(), 70 * 1024 * 1024 + 2);
     }
 
@@ -1014,7 +1310,11 @@ mod tests {
                 deadline_unix_ms: system_now_plus(5_000),
             })
             .unwrap();
-        assert_eq!(replay["status"], json!(0), "receipt replay failed: {replay}");
+        assert_eq!(
+            replay["status"],
+            json!(0),
+            "receipt replay failed: {replay}"
+        );
         // Unknown operations classify identically to the daemon.
         let unknown = runtime
             .execute_json(&EmbeddedRequest {
@@ -1059,17 +1359,15 @@ mod tests {
         runtime.close().unwrap();
         drop(runtime);
         // Reopen replays ~nothing and keeps the data.
-        let mut authority = AuthorityDatabase::open(directory.path()).unwrap();
+        let authority = AuthorityDatabase::open(directory.path()).unwrap();
         let mut read = authority.begin(7, 11).unwrap();
-        assert!(
-            authority
-                .entity_get(
-                    &mut read,
-                    &crate::entity::EntityKey::new(7, 11, "seed", b"k").unwrap(),
-                )
-                .unwrap()
-                .is_some()
-        );
+        assert!(authority
+            .entity_get(
+                &mut read,
+                &crate::entity::EntityKey::new(7, 11, "seed", b"k").unwrap(),
+            )
+            .unwrap()
+            .is_some());
     }
 }
 

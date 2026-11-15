@@ -750,17 +750,21 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod demand_payload_tests {
     use super::*;
     #[test]
     fn payload_above_former_four_mib_quota_round_trips_and_authenticates() {
         let identity = LogicalOutboxIdentity {
-            sequence: 1, tenant_id: 7, owner_user_id: 11,
-            schema_version: 1, registry_version: 1,
-            operation: "model_routing.commit".into(), request_id: "large".into(),
-            request_digest: [5; 32], command_id: Some("large-command".into()),
+            sequence: 1,
+            tenant_id: 7,
+            owner_user_id: 11,
+            schema_version: 1,
+            registry_version: 1,
+            operation: "model_routing.commit".into(),
+            request_id: "large".into(),
+            request_digest: [5; 32],
+            command_id: Some("large-command".into()),
             committed_at_ms: 1,
         };
         let payload = vec![91; 9 * 1024 * 1024];

@@ -372,7 +372,6 @@ def route_to_project(task: dict, scope: dict, arguments: dict, *, dispatch=None)
         source = _owner_source(lambda: _current_steer_source(task, scope, steer_id))
         text = authored_text(source)
         forwarded = {'conversationId': router_id, 'turnId': source['turnId'], 'steerId': steer_id}
-        command_id = forward_command_id(router_id, {'turnId': source['turnId'], 'steerId': steer_id}, project)
     elif instruction_id is None:
         if 'source_turn_id' not in trigger:
             raise ValueError('source_turn_id or source_steer_id is required unless instruction_id is given')
@@ -384,7 +383,6 @@ def route_to_project(task: dict, scope: dict, arguments: dict, *, dispatch=None)
                                  f'request (Turn {source["turnId"]}); other text is not their request')
         text = authored_text(_router_turn(owner, router_id, source['turnId']))
         forwarded = {'conversationId': router_id, 'turnId': source['turnId']}
-        command_id = forward_command_id(router_id, {'turnId': source['turnId']}, project)
     else:
         if steer_id is not None:
             raise ValueError('source_steer_id forwards the owner\u2019s current message; a standing '

@@ -59,7 +59,7 @@ def test_user_layer_overrides_core_and_invalid_files_are_skipped(
     (user / 'broken.json').write_text('{not json', encoding='utf-8')
 
     monkeypatch.setattr('lib.site_packs._loader._CORE_DIR', core)
-    monkeypatch.setattr('lib.site_packs._loader._BUNDLES_DIR',
+    monkeypatch.setattr('tofu_extensions.IN_TREE_BUNDLES_DIR',
                         tmp_path / 'bundles')
     monkeypatch.setattr('lib.site_packs._loader.config_path',
                         lambda *parts: str(user))
@@ -73,7 +73,7 @@ def test_hot_reload_picks_up_edits_without_restart(tmp_path, monkeypatch):
     core = tmp_path / 'core'
     _write_pack(core, 'demo', version=1)
     monkeypatch.setattr('lib.site_packs._loader._CORE_DIR', core)
-    monkeypatch.setattr('lib.site_packs._loader._BUNDLES_DIR',
+    monkeypatch.setattr('tofu_extensions.IN_TREE_BUNDLES_DIR',
                         tmp_path / 'nope')
     monkeypatch.setattr('lib.site_packs._loader.config_path',
                         lambda *parts: str(tmp_path / 'user'))
@@ -96,7 +96,7 @@ def test_pack_auth_catalog_projection(tmp_path, monkeypatch):
         'fields': [{'name': 'sid', 'importance': 'required'}],
     })
     monkeypatch.setattr('lib.site_packs._loader._CORE_DIR', core)
-    monkeypatch.setattr('lib.site_packs._loader._BUNDLES_DIR',
+    monkeypatch.setattr('tofu_extensions.IN_TREE_BUNDLES_DIR',
                         tmp_path / 'nope')
     monkeypatch.setattr('lib.site_packs._loader.config_path',
                         lambda *parts: str(tmp_path / 'user'))

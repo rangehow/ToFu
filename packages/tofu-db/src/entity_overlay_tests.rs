@@ -24,11 +24,7 @@ fn entity_key(namespace: &str, key: &[u8]) -> EntityKey {
 fn put(database: &mut AuthorityDatabase, namespace: &str, key: &[u8], value: &[u8]) {
     let mut transaction = database.begin(TENANT, OWNER).unwrap();
     database
-        .entity_put(
-            &mut transaction,
-            entity_key(namespace, key),
-            value.to_vec(),
-        )
+        .entity_put(&mut transaction, entity_key(namespace, key), value.to_vec())
         .unwrap();
     database.commit(transaction).unwrap();
 }
@@ -50,8 +46,7 @@ fn get(database: &AuthorityDatabase, namespace: &str, key: &[u8]) -> Option<Vec<
 
 fn scan_all(database: &AuthorityDatabase, namespace: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut read = database.begin(TENANT, OWNER).unwrap();
-    let (start, end) =
-        EntityKey::prefix_range(TENANT, OWNER, namespace, b"").unwrap();
+    let (start, end) = EntityKey::prefix_range(TENANT, OWNER, namespace, b"").unwrap();
     database
         .entity_scan(&mut read, &start, &end, 1_000)
         .unwrap()
@@ -135,7 +130,11 @@ fn commits_leave_overlay_merging_to_a_live_drain_driver() {
     let mut transaction = database.begin(TENANT, OWNER).unwrap();
     for index in 0..4_000_u32 {
         database
-            .entity_put(&mut transaction, entity_key("record", format!("a{index}").as_bytes()), b"v".to_vec())
+            .entity_put(
+                &mut transaction,
+                entity_key("record", format!("a{index}").as_bytes()),
+                b"v".to_vec(),
+            )
             .unwrap();
     }
     database.commit(transaction).unwrap();
@@ -173,16 +172,33 @@ fn wal_pressure_asks_for_one_drain_pass_per_wal_window() {
     trigger.signal().set_driver_alive(true);
     database.set_overlay_wal_watermark_for_test(0);
     for index in 0..10_u32 {
-        put(&mut database, "record", format!("first-{index}").as_bytes(), b"v");
+        put(
+            &mut database,
+            "record",
+            format!("first-{index}").as_bytes(),
+            b"v",
+        );
     }
     assert!(trigger.needs_drain(), "the window's pass is owed");
     database.merge_entity_overlay_fully().unwrap();
     assert!(!trigger.needs_drain(), "the window's pass is done");
     for index in 0..3_u32 {
-        put(&mut database, "record", format!("later-{index}").as_bytes(), b"v");
+        put(
+            &mut database,
+            "record",
+            format!("later-{index}").as_bytes(),
+            b"v",
+        );
     }
-    assert_eq!(database.entity_overlay_entries_for_test(), 3, "commits never merge inline");
-    assert!(!trigger.needs_drain(), "deltas later in the same window wait for its next pass");
+    assert_eq!(
+        database.entity_overlay_entries_for_test(),
+        3,
+        "commits never merge inline"
+    );
+    assert!(
+        !trigger.needs_drain(),
+        "deltas later in the same window wait for its next pass"
+    );
     // The next WAL window owes its own pass, which covers them.
     database.engine_mut_for_test().checkpoint().unwrap();
     put(&mut database, "record", b"next-window", b"v");
@@ -248,7 +264,8 @@ fn overlay_commit_matches_synchronous_tree_state() {
     let vfs_b = Arc::new(DeterministicVfs::new(None));
     vfs_b.create_dir(Path::new("/data")).unwrap();
     let dyn_vfs: Arc<dyn Vfs> = vfs_b.clone();
-    let mut legacy_db = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
+    let mut legacy_db =
+        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
 
     let namespaces = ["turn.doc", "lane.index", "receipt", "outbox"];
     for round in 0..30_u8 {
@@ -423,18 +440,25 @@ fn overlay_budget_trigger_drains_eagerly_and_stays_exact() {
 
 #[test]
 fn overlay_knob_parsing_clamps_and_defaults() {
-    use crate::entity::{
-        parse_overlay_budget_bytes, parse_overlay_wal_watermark_bytes,
-    };
+    use crate::entity::{parse_overlay_budget_bytes, parse_overlay_wal_watermark_bytes};
     assert_eq!(parse_overlay_budget_bytes(None), 8 * 1024 * 1024);
-    assert_eq!(parse_overlay_budget_bytes(Some("junk".to_owned())), 8 * 1024 * 1024);
-    assert_eq!(parse_overlay_budget_bytes(Some("1".to_owned())), 1024 * 1024);
+    assert_eq!(
+        parse_overlay_budget_bytes(Some("junk".to_owned())),
+        8 * 1024 * 1024
+    );
+    assert_eq!(
+        parse_overlay_budget_bytes(Some("1".to_owned())),
+        1024 * 1024
+    );
     assert_eq!(
         parse_overlay_budget_bytes(Some((1024_u64 * 1024 * 1024 * 1024).to_string())),
         256 * 1024 * 1024
     );
     assert_eq!(parse_overlay_wal_watermark_bytes(None), 48 * 1024 * 1024);
-    assert_eq!(parse_overlay_wal_watermark_bytes(Some("1".to_owned())), 8 * 1024 * 1024);
+    assert_eq!(
+        parse_overlay_wal_watermark_bytes(Some("1".to_owned())),
+        8 * 1024 * 1024
+    );
     assert_eq!(
         parse_overlay_wal_watermark_bytes(Some(u64::MAX.to_string())),
         60 * 1024 * 1024,
@@ -472,7 +496,11 @@ fn overlay_occ_conflict_survives() {
         .entity_put(&mut stale, entity_key("records", b"k"), b"stale".to_vec())
         .unwrap();
     let error = database.commit(stale).unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "stale-snapshot write must conflict, got {error:?}");
+    assert_eq!(
+        error.kind(),
+        io::ErrorKind::WouldBlock,
+        "stale-snapshot write must conflict, got {error:?}"
+    );
     assert_eq!(get(&database, "records", b"k"), Some(b"moved".to_vec()));
 }
 
@@ -502,8 +530,7 @@ fn legacy_records_reference() -> Vec<(Vec<u8>, Vec<u8>)> {
     vfs.create_dir(Path::new("/data")).unwrap();
     vfs.sync_directory(Path::new("/")).unwrap();
     let dyn_vfs: Arc<dyn Vfs> = vfs.clone();
-    let mut database =
-        AuthorityDatabase::initialize_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
+    let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/data"), dyn_vfs).unwrap();
     for index in 0..6_u8 {
         put(&mut database, "records", &[b'k', index], &[index]);
     }
@@ -587,7 +614,10 @@ fn overlay_merge_fault_at_any_operation_recovers_exact_state() {
         })
         .map(|(index, _)| index as u64 + 1)
         .collect();
-    assert!(!write_numbers.is_empty(), "a merge must write at least one block");
+    assert!(
+        !write_numbers.is_empty(),
+        "a merge must write at least one block"
+    );
 
     // Campaign A: an I/O error at every operation of the merge.
     let mut campaigns: Vec<(u64, FaultAction)> = (1..=operation_count)
@@ -601,7 +631,11 @@ fn overlay_merge_fault_at_any_operation_recovers_exact_state() {
     );
     // Campaign C: a lost barrier at every sync of the merge (power ate the
     // flush), immediately followed by the crash.
-    campaigns.extend(sync_numbers.iter().map(|number| (*number, FaultAction::DropSync)));
+    campaigns.extend(
+        sync_numbers
+            .iter()
+            .map(|number| (*number, FaultAction::DropSync)),
+    );
 
     for (operation_number, action) in campaigns {
         let (vfs, mut database) = seed_overlay_authority();
@@ -628,7 +662,6 @@ fn overlay_merge_fault_at_any_operation_recovers_exact_state() {
         assert_eq!(recovered.entity_overlay_entries_for_test(), 0);
     }
 }
-
 
 #[test]
 fn overlay_merge_adapts_chunk_size_to_scattered_key_fanout() {
@@ -681,8 +714,13 @@ fn coalesced_merge_and_checkpoint_faults_preserve_latest_versions_and_unmerged_s
         for version in 1..=4_u8 {
             let mut transaction = database.begin(TENANT, OWNER).unwrap();
             for index in 0..64_u32 {
-                database.entity_put(&mut transaction,
-                    entity_key("coalesced", &index.to_be_bytes()), vec![version]).unwrap();
+                database
+                    .entity_put(
+                        &mut transaction,
+                        entity_key("coalesced", &index.to_be_bytes()),
+                        vec![version],
+                    )
+                    .unwrap();
             }
             database.commit(transaction).unwrap();
         }
@@ -691,8 +729,11 @@ fn coalesced_merge_and_checkpoint_faults_preserve_latest_versions_and_unmerged_s
     }
     fn merge_and_checkpoint(database: &mut AuthorityDatabase) -> io::Result<()> {
         assert!(database.merge_entity_overlay()?);
-        assert_eq!(database.entity_overlay_entries_for_test(), 1,
-            "one full distinct-key slice must coalesce repeated versions");
+        assert_eq!(
+            database.entity_overlay_entries_for_test(),
+            1,
+            "one full distinct-key slice must coalesce repeated versions"
+        );
         database.checkpoint_wal_window()?;
         Ok(())
     }
@@ -703,18 +744,30 @@ fn coalesced_merge_and_checkpoint_faults_preserve_latest_versions_and_unmerged_s
     assert!(trace.contains(&Operation::Write));
     for (index, operation) in trace.iter().enumerate() {
         let mut actions = vec![FaultAction::ErrorBefore(io::ErrorKind::Other)];
-        if *operation == Operation::Write { actions.push(FaultAction::ShortWrite(7)); }
+        if *operation == Operation::Write {
+            actions.push(FaultAction::ShortWrite(7));
+        }
         for action in actions {
             let (vfs, mut database) = prepared();
-            vfs.arm_fault(Some(FaultRule { operation_number: index as u64 + 1, action })).unwrap();
+            vfs.arm_fault(Some(FaultRule {
+                operation_number: index as u64 + 1,
+                action,
+            }))
+            .unwrap();
             let _ = merge_and_checkpoint(&mut database);
             // Capture power loss before Drop can publish a catch-up boundary.
             let crash = Arc::new(vfs.fork_durable().unwrap());
             let recovered = reopen(&crash);
             for key in 0..64_u32 {
-                assert_eq!(get(&recovered, "coalesced", &key.to_be_bytes()), Some(vec![4]));
+                assert_eq!(
+                    get(&recovered, "coalesced", &key.to_be_bytes()),
+                    Some(vec![4])
+                );
             }
-            assert_eq!(get(&recovered, "coalesced", &64_u32.to_be_bytes()), Some(b"suffix".to_vec()));
+            assert_eq!(
+                get(&recovered, "coalesced", &64_u32.to_be_bytes()),
+                Some(b"suffix".to_vec())
+            );
         }
     }
 }
@@ -726,31 +779,54 @@ fn superseded_only_prefix_survives_every_merge_checkpoint_fault_with_old_readers
         let (vfs, mut database) = overlay_authority();
         let mut first = database.begin(TENANT, OWNER).unwrap();
         for key in 0..KEYS {
-            database.entity_put(&mut first, entity_key("obsolete", &key.to_be_bytes()), b"old".to_vec()).unwrap();
+            database
+                .entity_put(
+                    &mut first,
+                    entity_key("obsolete", &key.to_be_bytes()),
+                    b"old".to_vec(),
+                )
+                .unwrap();
         }
         database.commit(first).unwrap();
         let pinned = database.build_read_replica().unwrap();
         let mut second = database.begin(TENANT, OWNER).unwrap();
         for key in 0..KEYS {
             let entity = entity_key("obsolete", &key.to_be_bytes());
-            if key % 3 == 0 { database.entity_delete(&mut second, entity).unwrap(); }
-            else { database.entity_put(&mut second, entity, b"new".to_vec()).unwrap(); }
+            if key % 3 == 0 {
+                database.entity_delete(&mut second, entity).unwrap();
+            } else {
+                database
+                    .entity_put(&mut second, entity, b"new".to_vec())
+                    .unwrap();
+            }
         }
         database.commit(second).unwrap();
         (vfs, database, pinned)
     }
     fn merge_checkpoint(database: &mut AuthorityDatabase) -> io::Result<()> {
         assert!(database.merge_entity_overlay()?);
-        assert_eq!(database.entity_overlay_entries_for_test(), 2 * KEYS as usize - 2_048);
+        assert_eq!(
+            database.entity_overlay_entries_for_test(),
+            2 * KEYS as usize - 2_048
+        );
         database.checkpoint_wal_window()?;
         Ok(())
     }
     fn verify(database: &AuthorityDatabase, pinned: Option<&AuthorityDatabase>) {
         for key in 0..KEYS {
-            assert_eq!(get(database, "obsolete", &key.to_be_bytes()),
-                if key % 3 == 0 { None } else { Some(b"new".to_vec()) });
+            assert_eq!(
+                get(database, "obsolete", &key.to_be_bytes()),
+                if key % 3 == 0 {
+                    None
+                } else {
+                    Some(b"new".to_vec())
+                }
+            );
             if let Some(pinned) = pinned {
-                assert_eq!(get(pinned, "obsolete", &key.to_be_bytes()), Some(b"old".to_vec()));
+                assert_eq!(
+                    get(pinned, "obsolete", &key.to_be_bytes()),
+                    Some(b"old".to_vec())
+                );
             }
         }
     }
@@ -769,10 +845,16 @@ fn superseded_only_prefix_survives_every_merge_checkpoint_fault_with_old_readers
     verify(&recovered, Some(&pinned));
     for (index, operation) in operations.iter().enumerate() {
         let mut actions = vec![FaultAction::ErrorBefore(io::ErrorKind::Other)];
-        if *operation == Operation::Write { actions.push(FaultAction::ShortWrite(7)); }
+        if *operation == Operation::Write {
+            actions.push(FaultAction::ShortWrite(7));
+        }
         for action in actions {
             let (vfs, mut database, pinned) = prepared();
-            vfs.arm_fault(Some(FaultRule { operation_number: index as u64 + 1, action })).unwrap();
+            vfs.arm_fault(Some(FaultRule {
+                operation_number: index as u64 + 1,
+                action,
+            }))
+            .unwrap();
             let _ = merge_checkpoint(&mut database);
             let recovered = reopen(&Arc::new(vfs.fork_durable().unwrap()));
             verify(&recovered, None);
@@ -785,7 +867,12 @@ fn superseded_only_prefix_survives_every_merge_checkpoint_fault_with_old_readers
 fn overlay_partial_merge_crash_replays_prepublication_tail_and_newer_mutations() {
     let (vfs, mut database) = overlay_authority();
     for index in 0..2_500_u32 {
-        put(&mut database, "partial", &index.to_be_bytes(), &index.to_be_bytes());
+        put(
+            &mut database,
+            "partial",
+            &index.to_be_bytes(),
+            &index.to_be_bytes(),
+        );
     }
     assert!(database.merge_entity_overlay().unwrap());
     assert!(database.entity_overlay_entries_for_test() > 0);
@@ -794,7 +881,9 @@ fn overlay_partial_merge_crash_replays_prepublication_tail_and_newer_mutations()
     // a key whose original delta precedes the partial root publication.
     put(&mut database, "partial", &0u32.to_be_bytes(), b"new");
     delete(&mut database, "partial", &2_499u32.to_be_bytes());
-    database.commit_engine_payload_for_test(b"interleaved-payload").unwrap();
+    database
+        .commit_engine_payload_for_test(b"interleaved-payload")
+        .unwrap();
     // Force the pending tail into checkpointed history: CONTROL now points
     // directly at the partial root, so recovery needs its persistent fence.
     database.checkpoint_wal_window().unwrap();
@@ -807,16 +896,25 @@ fn overlay_partial_merge_crash_replays_prepublication_tail_and_newer_mutations()
             2_499 => None,
             _ => Some(index.to_be_bytes().to_vec()),
         };
-        assert_eq!(get(&recovered, "partial", &index.to_be_bytes()), expected,
-            "partial merge lost key {index}");
+        assert_eq!(
+            get(&recovered, "partial", &index.to_be_bytes()),
+            expected,
+            "partial merge lost key {index}"
+        );
     }
     recovered.merge_entity_overlay_fully().unwrap();
     drop(recovered);
     vfs.crash().unwrap();
     let recovered = reopen(&vfs);
     assert_eq!(recovered.entity_overlay_entries_for_test(), 0);
-    assert_eq!(get(&recovered, "partial", &0u32.to_be_bytes()), Some(b"new".to_vec()));
-    assert_eq!(get(&recovered, "partial", &2_400u32.to_be_bytes()), Some(2_400u32.to_be_bytes().to_vec()));
+    assert_eq!(
+        get(&recovered, "partial", &0u32.to_be_bytes()),
+        Some(b"new".to_vec())
+    );
+    assert_eq!(
+        get(&recovered, "partial", &2_400u32.to_be_bytes()),
+        Some(2_400u32.to_be_bytes().to_vec())
+    );
     assert_eq!(get(&recovered, "partial", &2_499u32.to_be_bytes()), None);
 }
 
@@ -832,10 +930,19 @@ fn overlay_partial_checkpoint_rejects_corrupt_required_history() {
     let history = *database.history_blocks_for_test().last().unwrap();
     drop(database);
     let hex = history.to_hex();
-    let path = Path::new("/data").join("blocks").join(&hex[..2]).join(format!("{hex}.blk"));
-    let mut file = vfs.open(&path, crate::vfs::OpenRequest {
-        write: true, ..crate::vfs::OpenRequest::default()
-    }).unwrap();
+    let path = Path::new("/data")
+        .join("blocks")
+        .join(&hex[..2])
+        .join(format!("{hex}.blk"));
+    let mut file = vfs
+        .open(
+            &path,
+            crate::vfs::OpenRequest {
+                write: true,
+                ..crate::vfs::OpenRequest::default()
+            },
+        )
+        .unwrap();
     file.write_all_at(16, b"X").unwrap();
     file.sync_all().unwrap();
     drop(file);
@@ -846,13 +953,17 @@ fn overlay_partial_checkpoint_rejects_corrupt_required_history() {
     }
 }
 
-
 #[test]
 fn overlay_recovery_decodes_each_required_history_segment_once() {
     let (vfs, mut database) = overlay_authority();
     for round in 0..3_u32 {
         for index in 0..64_u32 {
-            put(&mut database, "linear-replay", &(round * 64 + index).to_be_bytes(), &index.to_be_bytes());
+            put(
+                &mut database,
+                "linear-replay",
+                &(round * 64 + index).to_be_bytes(),
+                &index.to_be_bytes(),
+            );
         }
         database.checkpoint_wal_window().unwrap();
     }
@@ -865,29 +976,52 @@ fn overlay_recovery_decodes_each_required_history_segment_once() {
     let started = std::time::Instant::now();
     let recovered = reopen(&vfs);
     let work = crate::history::decode_work().since(before);
-    println!("overlay_replay: elapsed_ns={} work={work:?}", started.elapsed().as_nanos());
+    println!(
+        "overlay_replay: elapsed_ns={} work={work:?}",
+        started.elapsed().as_nanos()
+    );
     for index in 0..192_u32 {
-        let expected = match index { 0 => Some(b"new".to_vec()), 191 => None,
-            _ => Some((index % 64).to_be_bytes().to_vec()) };
-        assert_eq!(get(&recovered, "linear-replay", &index.to_be_bytes()), expected);
+        let expected = match index {
+            0 => Some(b"new".to_vec()),
+            191 => None,
+            _ => Some((index % 64).to_be_bytes().to_vec()),
+        };
+        assert_eq!(
+            get(&recovered, "linear-replay", &index.to_be_bytes()),
+            expected
+        );
     }
-    assert_eq!(work.attempts, 3, "recovery must decode each required segment once, regardless of transaction count");
+    assert_eq!(
+        work.attempts, 3,
+        "recovery must decode each required segment once, regardless of transaction count"
+    );
     assert_eq!(work.transactions, 192);
 }
-
 
 fn private_merge_fixture() -> (Arc<DeterministicVfs>, AuthorityDatabase) {
     let (vfs, mut database) = overlay_authority();
     let mut transaction = database.begin(TENANT, OWNER).unwrap();
     for key in 0..20_u32 {
-        database.entity_put(&mut transaction, entity_key("private-merge", &key.to_be_bytes()), b"base".to_vec()).unwrap();
+        database
+            .entity_put(
+                &mut transaction,
+                entity_key("private-merge", &key.to_be_bytes()),
+                b"base".to_vec(),
+            )
+            .unwrap();
     }
     database.commit(transaction).unwrap();
     database.merge_entity_overlay_fully().unwrap();
     database.checkpoint_wal_window().unwrap();
     let mut transaction = database.begin(TENANT, OWNER).unwrap();
     for key in 0..20_u32 {
-        database.entity_put(&mut transaction, entity_key("private-merge", &key.to_be_bytes()), b"captured".to_vec()).unwrap();
+        database
+            .entity_put(
+                &mut transaction,
+                entity_key("private-merge", &key.to_be_bytes()),
+                b"captured".to_vec(),
+            )
+            .unwrap();
     }
     database.commit(transaction).unwrap();
     database.configure_hot_data_caches(0, 0).unwrap();
@@ -897,13 +1031,22 @@ fn private_merge_fixture() -> (Arc<DeterministicVfs>, AuthorityDatabase) {
 fn write_private_merge_suffix(database: &mut AuthorityDatabase) {
     put(database, "private-merge", &0_u32.to_be_bytes(), b"latest");
     delete(database, "private-merge", &1_u32.to_be_bytes());
-    put(database, "private-merge", &20_u32.to_be_bytes(), b"new suffix");
+    put(
+        database,
+        "private-merge",
+        &20_u32.to_be_bytes(),
+        b"new suffix",
+    );
 }
 
 fn assert_private_merge_latest(database: &AuthorityDatabase) {
     for key in 0..=20_u32 {
-        let expected = match key { 0 => Some(b"latest".to_vec()), 1 => None,
-            20 => Some(b"new suffix".to_vec()), _ => Some(b"captured".to_vec()) };
+        let expected = match key {
+            0 => Some(b"latest".to_vec()),
+            1 => None,
+            20 => Some(b"new suffix".to_vec()),
+            _ => Some(b"captured".to_vec()),
+        };
         assert_eq!(get(database, "private-merge", &key.to_be_bytes()), expected);
     }
 }
@@ -916,22 +1059,56 @@ fn private_overlay_merge_preserves_concurrent_suffix_and_old_reader_across_rotat
     vfs.arm_fault(None).unwrap();
     let encoded = capture.encode().unwrap();
     let trace = vfs.trace().unwrap();
-    assert!(trace.contains(&Operation::Read), "cold preparation must exercise the real page-source read path");
-    assert!(!trace.iter().any(|operation| matches!(operation, Operation::Write | Operation::SetLen | Operation::SyncData | Operation::SyncAll | Operation::SyncDirectory | Operation::Rename | Operation::RemoveFile | Operation::CreateDir)),
-        "private encoding must not publish or sync shared pages");
-    let retained_private_bytes = database.snapshot_pin_metrics().unwrap().retained_transaction_bytes;
+    assert!(
+        trace.contains(&Operation::Read),
+        "cold preparation must exercise the real page-source read path"
+    );
+    assert!(
+        !trace.iter().any(|operation| matches!(
+            operation,
+            Operation::Write
+                | Operation::SetLen
+                | Operation::SyncData
+                | Operation::SyncAll
+                | Operation::SyncDirectory
+                | Operation::Rename
+                | Operation::RemoveFile
+                | Operation::CreateDir
+        )),
+        "private encoding must not publish or sync shared pages"
+    );
+    let retained_private_bytes = database
+        .snapshot_pin_metrics()
+        .unwrap()
+        .retained_transaction_bytes;
     assert!(retained_private_bytes > 0);
-    let preparation_reads = trace.iter().filter(|operation| **operation == Operation::Read).count();
+    let preparation_reads = trace
+        .iter()
+        .filter(|operation| **operation == Operation::Read)
+        .count();
     write_private_merge_suffix(&mut database);
     database.checkpoint_wal_window().unwrap();
     vfs.arm_fault(None).unwrap();
     assert!(database.finish_entity_overlay_merge(encoded).unwrap());
-    assert!(!vfs.trace().unwrap().contains(&Operation::Read),
-        "publication must reuse prepared pages, not repeat the old-tree walk under authority");
+    assert!(
+        !vfs.trace().unwrap().contains(&Operation::Read),
+        "publication must reuse prepared pages, not repeat the old-tree walk under authority"
+    );
     println!("private_merge_work: preparation_reads={preparation_reads} publication_reads=0 retained_private_bytes={retained_private_bytes}");
     assert_private_merge_latest(&database);
-    for key in 0..20_u32 { assert_eq!(get(&old, "private-merge", &key.to_be_bytes()), Some(b"captured".to_vec())); }
-    assert_eq!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes, 0);
+    for key in 0..20_u32 {
+        assert_eq!(
+            get(&old, "private-merge", &key.to_be_bytes()),
+            Some(b"captured".to_vec())
+        );
+    }
+    assert_eq!(
+        database
+            .snapshot_pin_metrics()
+            .unwrap()
+            .retained_transaction_bytes,
+        0
+    );
     let crash = Arc::new(vfs.fork_durable().unwrap());
     let recovered = reopen(&crash);
     assert_private_merge_latest(&recovered);
@@ -940,20 +1117,43 @@ fn private_overlay_merge_preserves_concurrent_suffix_and_old_reader_across_rotat
 #[test]
 fn private_overlay_merge_rejects_changed_root_before_any_shared_publication() {
     let (vfs, mut database) = private_merge_fixture();
-    let encoded = database.prepare_entity_overlay_merge().unwrap().unwrap().encode().unwrap();
+    let encoded = database
+        .prepare_entity_overlay_merge()
+        .unwrap()
+        .unwrap()
+        .encode()
+        .unwrap();
     database.merge_entity_overlay_fully().unwrap();
     write_private_merge_suffix(&mut database);
     vfs.arm_fault(None).unwrap();
-    assert_eq!(database.finish_entity_overlay_merge(encoded).unwrap_err().kind(), io::ErrorKind::WouldBlock);
-    assert!(vfs.trace().unwrap().is_empty(), "stale publication must not stage or write any shared pages");
-    assert_eq!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes, 0);
+    assert_eq!(
+        database
+            .finish_entity_overlay_merge(encoded)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::WouldBlock
+    );
+    assert!(
+        vfs.trace().unwrap().is_empty(),
+        "stale publication must not stage or write any shared pages"
+    );
+    assert_eq!(
+        database
+            .snapshot_pin_metrics()
+            .unwrap()
+            .retained_transaction_bytes,
+        0
+    );
     assert_eq!(database.snapshot_pin_metrics().unwrap().active_handles, 0);
     assert_private_merge_latest(&database);
 }
 
 #[test]
 fn private_overlay_merge_fault_matrix_preserves_acknowledged_suffix_before_drop_catchup() {
-    fn run(database: &mut AuthorityDatabase, capture: crate::entity::OverlayMergePreparation) -> io::Result<()> {
+    fn run(
+        database: &mut AuthorityDatabase,
+        capture: crate::entity::OverlayMergePreparation,
+    ) -> io::Result<()> {
         let encoded = capture.encode()?;
         database.finish_entity_overlay_merge(encoded)?;
         database.checkpoint_wal_window()?;
@@ -969,20 +1169,38 @@ fn private_overlay_merge_fault_matrix_preserves_acknowledged_suffix_before_drop_
     assert!(trace.contains(&Operation::Write));
     for (index, operation) in trace.iter().enumerate() {
         let mut actions = vec![FaultAction::ErrorBefore(io::ErrorKind::Interrupted)];
-        if *operation == Operation::Write { actions.push(FaultAction::ShortWrite(7)); }
-        if matches!(operation, Operation::SyncData | Operation::SyncAll | Operation::SyncDirectory) { actions.push(FaultAction::DropSync); }
+        if *operation == Operation::Write {
+            actions.push(FaultAction::ShortWrite(7));
+        }
+        if matches!(
+            operation,
+            Operation::SyncData | Operation::SyncAll | Operation::SyncDirectory
+        ) {
+            actions.push(FaultAction::DropSync);
+        }
         for action in actions {
             let (vfs, mut database) = private_merge_fixture();
             let capture = database.prepare_entity_overlay_merge().unwrap().unwrap();
             write_private_merge_suffix(&mut database);
-            vfs.arm_fault(Some(FaultRule { operation_number: index as u64 + 1, action })).unwrap();
+            vfs.arm_fault(Some(FaultRule {
+                operation_number: index as u64 + 1,
+                action,
+            }))
+            .unwrap();
             let _ = run(&mut database, capture);
             // Fork durable bytes before Drop can merge or checkpoint again.
             let crash = Arc::new(vfs.fork_durable().unwrap());
             let recovered = reopen(&crash);
             assert_private_merge_latest(&recovered);
-            assert_eq!(database.snapshot_pin_metrics().unwrap().retained_transaction_bytes, 0,
-                "fault {action:?} at operation {} leaked preparation memory", index + 1);
+            assert_eq!(
+                database
+                    .snapshot_pin_metrics()
+                    .unwrap()
+                    .retained_transaction_bytes,
+                0,
+                "fault {action:?} at operation {} leaked preparation memory",
+                index + 1
+            );
         }
     }
 }
@@ -992,19 +1210,40 @@ fn private_overlay_merge_retains_partial_key_cursor_and_empty_tail_case() {
     let (vfs, mut database) = overlay_authority();
     let mut transaction = database.begin(TENANT, OWNER).unwrap();
     for key in 0..80_u32 {
-        database.entity_put(&mut transaction, entity_key("partial-private", &key.to_be_bytes()), vec![1]).unwrap();
+        database
+            .entity_put(
+                &mut transaction,
+                entity_key("partial-private", &key.to_be_bytes()),
+                vec![1],
+            )
+            .unwrap();
     }
     database.commit(transaction).unwrap();
-    let encoded = database.prepare_entity_overlay_merge().unwrap().unwrap().encode().unwrap();
+    let encoded = database
+        .prepare_entity_overlay_merge()
+        .unwrap()
+        .unwrap()
+        .encode()
+        .unwrap();
     assert!(database.finish_entity_overlay_merge(encoded).unwrap());
     assert_eq!(database.entity_overlay_entries_for_test(), 16);
     let crash = Arc::new(vfs.fork_durable().unwrap());
     let mut recovered = reopen(&crash);
     assert_eq!(recovered.entity_overlay_entries_for_test(), 16);
-    let encoded = recovered.prepare_entity_overlay_merge().unwrap().unwrap().encode().unwrap();
+    let encoded = recovered
+        .prepare_entity_overlay_merge()
+        .unwrap()
+        .unwrap()
+        .encode()
+        .unwrap();
     assert!(recovered.finish_entity_overlay_merge(encoded).unwrap());
     assert_eq!(recovered.entity_overlay_entries_for_test(), 0);
     let second = Arc::new(crash.fork_durable().unwrap());
     let recovered = reopen(&second);
-    for key in 0..80_u32 { assert_eq!(get(&recovered, "partial-private", &key.to_be_bytes()), Some(vec![1])); }
+    for key in 0..80_u32 {
+        assert_eq!(
+            get(&recovered, "partial-private", &key.to_be_bytes()),
+            Some(vec![1])
+        );
+    }
 }

@@ -114,34 +114,6 @@ fn valid_agent_restore(request: &AgentRestore) -> bool {
         && request.updated_at > 0
 }
 
-fn session_snapshot(request: &SessionRestore) -> Value {
-    json!({
-        "swarm_key": request.swarm_key,
-        "conv_id": request.conv_id,
-        "task_id": request.task_id,
-        "status": request.status,
-        "specs": request.specs,
-        "config": request.config,
-        "created_at": request.created_at,
-        "updated_at": request.updated_at,
-    })
-}
-
-fn agent_snapshot(request: &AgentRestore) -> Value {
-    json!({
-        "swarm_key": request.swarm_key,
-        "agent_id": request.agent_id,
-        "role": request.role,
-        "objective": request.objective,
-        "status": request.status,
-        "messages": request.messages,
-        "result": request.result,
-        "rounds_used": request.rounds_used,
-        "delivered": request.delivered,
-        "updated_at": request.updated_at,
-    })
-}
-
 fn read_claim_owner(
     database: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,
@@ -228,7 +200,9 @@ fn restore_session(
     let count_key = session_count_key(tx)?;
     let count = read_count(database, tx, &count_key)?;
     if count >= MAX_SWARM_SESSIONS_PER_OWNER as u64 {
-        return Err(crate::resource_exhaustion::capacity_quota("swarm session capacity reached"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "swarm session capacity reached",
+        ));
     }
     // The session is restored before its agents; resumable_agents starts at
     // the count of already-restored resumable agents for this session.
@@ -374,7 +348,9 @@ fn restore_agent(
     let count_key = agent_count_key(tx, &request.swarm_key)?;
     let count = read_count(database, tx, &count_key)?;
     if count >= MAX_SWARM_AGENTS_PER_SESSION as u64 {
-        return Err(crate::resource_exhaustion::capacity_quota("swarm agent capacity reached"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "swarm agent capacity reached",
+        ));
     }
     write_count(database, tx, count_key, count + 1)?;
     let state = AgentState {

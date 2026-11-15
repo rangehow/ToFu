@@ -15,18 +15,26 @@ static EMBEDDED_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod allocator_diagnostics;
 #[cfg(feature = "allocator-diagnostics")]
 #[global_allocator]
-static EMBEDDED_ALLOCATOR: allocator_diagnostics::AccountingMiMalloc = allocator_diagnostics::AccountingMiMalloc::new();
+static EMBEDDED_ALLOCATOR: allocator_diagnostics::AccountingMiMalloc =
+    allocator_diagnostics::AccountingMiMalloc::new();
 
 mod artifact;
 mod artifact_migration;
 pub mod at_rest;
-pub mod verify;
 pub mod authority;
 pub mod authority_gc;
 pub mod authority_gc_online;
 pub mod authority_watch;
 mod online_backup;
+pub mod verify;
 
+mod automation_approval;
+mod automation_definition;
+mod automation_events;
+mod automation_presentation;
+mod automation_project;
+mod automation_run;
+mod automation_skill_source;
 pub mod background_pack;
 pub mod backup;
 mod backup_copy;
@@ -35,46 +43,43 @@ mod billing;
 pub mod blob;
 mod blob_codec;
 pub mod block;
-mod payload_routing;
 mod browser_observation_migration;
 mod browser_site_observation;
+mod canonical_json_bytes;
 pub mod certification;
 pub mod certification_matrix;
 #[cfg(test)]
 mod cold_read_tests;
-#[cfg(test)]
-mod hot_cache_scaling_tests;
-#[cfg(test)]
-mod entity_overlay_tests;
-#[cfg(test)]
-mod write_amplification_tests;
 mod compaction_archive;
 pub mod control;
 pub mod control_ops;
 mod conversation_header;
 mod credential;
 pub mod daemon;
-pub mod embed;
-pub mod embed_ffi;
-mod embed_job_queue;
 mod daily_cost;
 mod daily_cost_migration;
 mod desktop_egress_migration;
+pub mod embed;
+pub mod embed_ffi;
+mod embed_job_queue;
 pub mod engine;
-pub mod fastpath;
 pub mod engine_log;
-mod recovery_profile;
-mod transcript_archive;
-pub(crate) mod entity_overlay;
 pub mod entity;
+pub(crate) mod entity_overlay;
+#[cfg(test)]
+mod entity_overlay_tests;
+pub mod fastpath;
 mod frozen_transcript;
 #[doc(hidden)]
 pub mod fsync_stats;
-mod request_profile;
 mod generated_conversation_search;
+mod generated_model_context_projection;
 mod generated_paper_build;
+mod generated_project_dispatch_storage;
+mod generated_request_inspector_projection;
 pub mod generated_storage_operations;
 mod generated_storage_v2;
+mod generated_system_note_vocabulary;
 mod generated_task_event_delivery;
 pub mod generated_tofudb_ir;
 pub mod generated_tofusql_catalog;
@@ -82,13 +87,14 @@ mod generated_unicode_casefold;
 mod generated_unicode_simple_fold;
 pub mod history;
 mod history_payload;
+#[cfg(test)]
+mod hot_cache_scaling_tests;
 mod indexed_stream;
-mod generated_request_inspector_projection;
-mod request_inspector_projection;
 mod integration_workspace;
 mod invocation;
 mod knowledge;
 mod knowledge_migration;
+mod legacy_receipt;
 pub mod listener;
 mod log_aggregate;
 mod log_aggregate_migration;
@@ -96,7 +102,6 @@ pub mod logical_outbox;
 pub mod maintenance;
 pub mod migration;
 pub mod migration_session;
-mod generated_model_context_projection;
 mod model_continuation;
 mod model_routing;
 mod model_routing_migration;
@@ -117,13 +122,14 @@ mod paper_document;
 mod paper_library;
 mod paper_migration;
 mod paper_podcast;
-pub mod payload_manifest;
 mod payload_hints;
+pub mod payload_manifest;
+mod payload_routing;
 pub mod payload_segment;
-pub mod prefetch;
 mod plugin;
 mod plugin_migration;
 mod plugin_rows;
+pub mod prefetch;
 mod project_brain;
 mod project_brain_migration;
 pub mod protocol;
@@ -135,23 +141,24 @@ mod rate_limit_migration;
 mod raw_archive;
 pub mod receipt;
 mod receipt_migration;
-mod legacy_receipt;
 mod recent_project;
+mod recovery_profile;
 pub mod release_signature;
+mod request_inspector_projection;
+mod request_profile;
 mod research;
 mod resource_exhaustion;
 pub mod resource_gate;
 pub mod resource_probe;
+mod response_json;
 mod rotation_barrier;
 mod scheduler;
 mod scheduler_migration;
 mod search_dirty;
 mod search_text;
+mod search_volume;
 pub mod semantic;
 pub mod semantic_executor;
-mod generated_project_dispatch_storage;
-mod response_json;
-mod canonical_json_bytes;
 pub mod sequencer;
 pub mod server;
 pub mod stream;
@@ -163,28 +170,22 @@ mod timer_migration;
 pub mod tofusql;
 pub mod transaction;
 pub mod transaction_ir;
+mod transcript_archive;
 mod turn;
 mod turn_projection_patch;
-mod generated_system_note_vocabulary;
 mod turn_projection_segments;
 pub mod turn_search_projection;
 mod turn_search_runtime;
-mod search_volume;
 pub mod turn_search_worker;
 mod versioned_document;
 pub mod vfs;
 pub mod wal;
 mod wal_retirement;
-mod automation_run;
-mod automation_presentation;
-mod automation_approval;
-mod automation_project;
-mod automation_skill_source;
-mod automation_definition;
-mod automation_events;
 mod worker_job;
-mod worker_lease_clock;
 mod worker_job_migration;
+mod worker_lease_clock;
+#[cfg(test)]
+mod write_amplification_tests;
 
 pub const FORMAT_VERSION: u32 = 1;
 
@@ -217,17 +218,21 @@ mod build_info_tests {
         let info = super::build_info();
         assert_eq!(info["format"], "tofu-db-build.v1");
         // The feature and marker names are a contract with deploy preflights.
-        assert_eq!(info["store_features"], serde_json::json!(["loose-overflow-v1"]), "{info}");
+        assert_eq!(
+            info["store_features"],
+            serde_json::json!(["loose-overflow-v1"]),
+            "{info}"
+        );
         assert_eq!(crate::block::OVERFLOW_DIRECTORY, "blocks-overflow");
     }
 }
 mod authority_admission;
 pub use generated_tofudb_ir::{ACTIVE_LOG_CHECKPOINT_BYTES, ACTIVE_LOG_ROTATE_BYTES};
 
-pub mod native_checkpoint_store;
 #[cfg(feature = "native-runtime-checkpoints")]
 mod checkpoint_runtime;
 mod daemon_checkpoint;
+pub mod native_checkpoint_store;
 mod worker_control;
 
 mod query_result_cache;

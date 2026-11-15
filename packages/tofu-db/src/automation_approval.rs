@@ -13,7 +13,7 @@ const MAX_SAFE: u64 = crate::generated_tofudb_ir::MAX_AUTOMATION_SAFE_INTEGER;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ApproveRequest {
+pub struct ApproveRequest {
     user_id: u64,
     tenant_id: String,
     run_key: String,

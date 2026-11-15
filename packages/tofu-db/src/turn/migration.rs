@@ -100,7 +100,6 @@ fn bounded_identity(value: &str, max_chars: usize) -> bool {
 }
 
 fn valid_restore(request: &RestoreRequest) -> bool {
-
     if request.model_context_display_offset > request.projection_revision {
         return false;
     }
@@ -140,24 +139,27 @@ fn with_context_display_offset(mut snapshot: Value, offset: u64) -> Value {
 }
 
 fn restore_snapshot(request: &RestoreRequest) -> Value {
-    with_context_display_offset(json!({
-        "turn_id": request.turn_id,
-        "conversation_id": request.conversation_id,
-        "presentation_id": request.presentation_id,
-        "lane_id": request.lane_id,
-        "parent_turn_id": parent_value(&request.parent_turn_id),
-        "ordinal": request.ordinal,
-        "actor": request.actor,
-        "kind": request.kind,
-        "run_id": request.run_id,
-        "status": request.status,
-        "current_attempt_id": request.current_attempt_id,
-        "projection": request.projection,
-        "projection_revision": request.projection_revision,
-        "settlement": request.settlement,
-        "created_at": request.created_at,
-        "updated_at": request.updated_at,
-    }), request.model_context_display_offset)
+    with_context_display_offset(
+        json!({
+            "turn_id": request.turn_id,
+            "conversation_id": request.conversation_id,
+            "presentation_id": request.presentation_id,
+            "lane_id": request.lane_id,
+            "parent_turn_id": parent_value(&request.parent_turn_id),
+            "ordinal": request.ordinal,
+            "actor": request.actor,
+            "kind": request.kind,
+            "run_id": request.run_id,
+            "status": request.status,
+            "current_attempt_id": request.current_attempt_id,
+            "projection": request.projection,
+            "projection_revision": request.projection_revision,
+            "settlement": request.settlement,
+            "created_at": request.created_at,
+            "updated_at": request.updated_at,
+        }),
+        request.model_context_display_offset,
+    )
 }
 
 fn required_text(document: &Map<String, Value>, field: &str) -> io::Result<String> {
@@ -205,26 +207,29 @@ fn restore_snapshot_from_document(document: &Map<String, Value>) -> io::Result<V
         .filter(|value| value.is_object())
         .cloned()
         .ok_or_else(|| invalid_data("restored turn settlement is malformed"))?;
-    let offset = unsigned_field(document, "projectionRevision")?
-        - super::model_context_revision(document)?;
-    Ok(with_context_display_offset(json!({
-        "turn_id": required_text(document, "turnId")?,
-        "conversation_id": required_text(document, "conversationId")?,
-        "presentation_id": emptyable_text(document, "presentationId")?,
-        "lane_id": required_text(document, "laneId")?,
-        "parent_turn_id": parent,
-        "ordinal": unsigned_field(document, "ordinal")?,
-        "actor": required_text(document, "actor")?,
-        "kind": required_text(document, "kind")?,
-        "run_id": emptyable_text(document, "runId")?,
-        "status": required_text(document, "status")?,
-        "current_attempt_id": current,
-        "projection": projection,
-        "projection_revision": unsigned_field(document, "projectionRevision")?,
-        "settlement": settlement,
-        "created_at": unsigned_field(document, "createdAt")?,
-        "updated_at": unsigned_field(document, "updatedAt")?,
-    }), offset))
+    let offset =
+        unsigned_field(document, "projectionRevision")? - super::model_context_revision(document)?;
+    Ok(with_context_display_offset(
+        json!({
+            "turn_id": required_text(document, "turnId")?,
+            "conversation_id": required_text(document, "conversationId")?,
+            "presentation_id": emptyable_text(document, "presentationId")?,
+            "lane_id": required_text(document, "laneId")?,
+            "parent_turn_id": parent,
+            "ordinal": unsigned_field(document, "ordinal")?,
+            "actor": required_text(document, "actor")?,
+            "kind": required_text(document, "kind")?,
+            "run_id": emptyable_text(document, "runId")?,
+            "status": required_text(document, "status")?,
+            "current_attempt_id": current,
+            "projection": projection,
+            "projection_revision": unsigned_field(document, "projectionRevision")?,
+            "settlement": settlement,
+            "created_at": unsigned_field(document, "createdAt")?,
+            "updated_at": unsigned_field(document, "updatedAt")?,
+        }),
+        offset,
+    ))
 }
 
 fn verify_restore_indexes(
@@ -677,19 +682,30 @@ pub(crate) fn scan_conversation(
 /// and directory queries: only the exclusive migration-session may materialize
 /// old documents, one at a time, to populate immutable actor metadata.
 fn upgrade_round_heads(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction, payload: Value,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    payload: Value,
 ) -> io::Result<Value> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct Request { cursor: Option<String>, limit: Option<usize> }
+    struct Request {
+        cursor: Option<String>,
+        limit: Option<usize>,
+    }
     let request: Request = serde_json::from_value(payload)
         .map_err(|_| invalid_input("invalid compact round head upgrade"))?;
     let limit = request.limit.unwrap_or(16);
-    if !(1..=32).contains(&limit) { return Err(invalid_input("compact head upgrade limit exceeds 32")); }
+    if !(1..=32).contains(&limit) {
+        return Err(invalid_input("compact head upgrade limit exceeds 32"));
+    }
     let suffix = cursor_start("round_heads", request.cursor.as_deref())?;
     let start = super::entity_key(transaction, TURN_DOCUMENT_NAMESPACE, &suffix)?;
-    let (_, end) = EntityKey::prefix_range(transaction.tenant_id(), transaction.owner_user_id(),
-        TURN_DOCUMENT_NAMESPACE, b"")?;
+    let (_, end) = EntityKey::prefix_range(
+        transaction.tenant_id(),
+        transaction.owner_user_id(),
+        TURN_DOCUMENT_NAMESPACE,
+        b"",
+    )?;
     let rows = database.entity_scan(transaction, &start, &end, limit)?;
     let mut repaired = 0;
     for (key, stored) in &rows {
@@ -710,9 +726,19 @@ fn upgrade_round_heads(
         }
     }
     let cursor = if rows.len() == limit {
-        Some(format!("round_heads:{}", rows.last().unwrap().0.key_bytes().iter()
-            .map(|b| format!("{b:02x}")).collect::<String>()))
-    } else { None };
+        Some(format!(
+            "round_heads:{}",
+            rows.last()
+                .unwrap()
+                .0
+                .key_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ))
+    } else {
+        None
+    };
     Ok(json!({"scanned": rows.len(), "repaired": repaired, "cursor": cursor}))
 }
 
@@ -727,7 +753,9 @@ pub(crate) fn execute(
     match operation {
         "migration.turn.round_heads.upgrade" => {
             let result = upgrade_round_heads(database, &mut transaction, payload)?;
-            if result["repaired"].as_u64().unwrap_or(0) > 0 { database.commit(transaction)?; }
+            if result["repaired"].as_u64().unwrap_or(0) > 0 {
+                database.commit(transaction)?;
+            }
             Ok(result)
         }
         operation if operation.starts_with("migration.turn.tombstone.") => {
@@ -763,7 +791,6 @@ mod tombstones;
 
 #[path = "snapshot_transfer.rs"]
 pub(crate) mod transfer;
-
 
 #[cfg(test)]
 mod context_revision_snapshot_tests {
@@ -802,7 +829,13 @@ mod context_revision_snapshot_tests {
             "createdAt": 1, "updatedAt": 2, "_modelContextDisplayOffset": 3});
         let mut expected = legacy_snapshot();
         expected["model_context_display_offset"] = json!(3);
-        assert_eq!(restore_snapshot_from_document(document.as_object().unwrap()).unwrap(), expected);
-        assert_eq!(super::super::model_context_revision(document.as_object().unwrap()).unwrap(), 6);
+        assert_eq!(
+            restore_snapshot_from_document(document.as_object().unwrap()).unwrap(),
+            expected
+        );
+        assert_eq!(
+            super::super::model_context_revision(document.as_object().unwrap()).unwrap(),
+            6
+        );
     }
 }

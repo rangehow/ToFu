@@ -1,4 +1,4 @@
-"""Root-lane prompt-cache reuse on your-llm-gateway.example.com's Anthropic face.
+"""Root-lane prompt-cache reuse on a declared gateway's Anthropic face (the budget test gateway).
 
 Root requests to ``kunlunbedrock.claude-opus-5.5-m17`` read 0 cached tokens on
 almost every round (2026-10-27/28: 3.4% read share) while sub-agents with an
@@ -23,7 +23,11 @@ from lib.llm._sse_core import prepare_request
 from tests.llm.test_tool_wire_name_budget import (
     CODE_FLOOR, OVER_BUDGET_NAMES, SANKUAI_ANTHROPIC, _joined_bytes, _tool)
 
-pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit]
+from tests.support.gateway_profiles import (  # noqa: F401 (fixture)
+    CLAUDE_TOOL_NAME_BUDGET_BYTES, claude_tool_name_budget_gateway)
+
+pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit,
+              pytest.mark.usefixtures('claude_tool_name_budget_gateway')]
 
 _SYSTEM = 'You are a careful engineering agent. ' * 120
 
@@ -66,11 +70,11 @@ def _bytes(value):
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
-def test_example_corp_root_wire_fits_the_name_budget_with_a_stable_prefix():
+def test_root_wire_fits_the_declared_name_budget_with_a_stable_prefix():
     first = _sealed(_canonical_round(['inspect the cache']), SANKUAI_ANTHROPIC)
     names = [tool['name'] for tool in first['tools']]
 
-    assert _joined_bytes(names) <= tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+    assert _joined_bytes(names) <= CLAUDE_TOOL_NAME_BUDGET_BYTES
     assert {'search_tools', 'execute_tools', 'poll', 'kill', *CODE_FLOOR} <= set(names)
     assert first['tools'][-1].get('cache_control')
     assert sum('cache_control' in tool for tool in first['tools']) == 1
@@ -96,14 +100,14 @@ def test_sent_tool_surface_reaches_usage_and_the_projection_event():
                        if item.get('kind') == 'wire_projection')
     assert projection['toolNameBytes'] == sent['name_bytes']
     assert (projection['toolNameBudgetBytes']
-            == tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES)
+            == CLAUDE_TOOL_NAME_BUDGET_BYTES)
 
     accumulator = SSEAccumulator(plan.body, plan.trace_id, plan.raw_dumper,
                                  plan.wire_translator, plan.t0)
     _, _, usage = accumulator.finalize()
     assert usage['_wire_tool_surface'] == {
         **sent,
-        'name_budget_bytes': tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES}
+        'name_budget_bytes': CLAUDE_TOOL_NAME_BUDGET_BYTES}
 
 
 def test_routes_without_a_name_budget_relay_only_the_sent_surface():

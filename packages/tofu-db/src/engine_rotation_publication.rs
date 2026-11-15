@@ -26,7 +26,8 @@ pub(crate) struct PreparedRotationPublication {
 impl Drop for PreparedRotationPublication {
     fn drop(&mut self) {
         if !self.completed {
-            self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
@@ -40,19 +41,25 @@ impl Engine {
         outcome: io::Result<RotationSegmentOutcome>,
     ) -> io::Result<RotationPublication> {
         if snapshot.sealed_log.is_none() || outcome.is_err() {
-            return self.finish_rotation_checkpoint(snapshot, outcome).map(RotationPublication::Complete);
+            return self
+                .finish_rotation_checkpoint(snapshot, outcome)
+                .map(RotationPublication::Complete);
         }
         if self.async_publication_in_flight {
             self.deferred_rotation = Some((snapshot, outcome?));
-            return Err(io::Error::new(io::ErrorKind::WouldBlock,
-                "background publication owns materialization; rotation deferred"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "background publication owns materialization; rotation deferred",
+            ));
         }
         let result = (|| {
             self.require_usable_authority()?;
             let sealed = snapshot.sealed_log.as_ref().unwrap();
             if self.state.sealed_log.as_ref() != Some(sealed) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData,
-                    "checkpoint lost its sealed WAL ownership"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "checkpoint lost its sealed WAL ownership",
+                ));
             }
             let mut outcome = outcome?;
             let mut segments = snapshot.history_manifest_segments;
@@ -68,13 +75,20 @@ impl Engine {
             let manifest_id = BlockId::for_payload(manifest_pages.last().unwrap());
             let mut generation = self.state.generation;
             let catchup = if self.control_dirty {
-                generation = generation.checked_add(1)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?;
-                Some(ControlState { generation, ..self.state.clone() })
-            } else { None };
+                generation = generation.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
+                })?;
+                Some(ControlState {
+                    generation,
+                    ..self.state.clone()
+                })
+            } else {
+                None
+            };
             let next = ControlState {
-                generation: generation.checked_add(1)
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow"))?,
+                generation: generation.checked_add(1).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "CONTROL overflow")
+                })?,
                 checkpoint_sequence: sealed.terminal_sequence,
                 checkpoint_hash: sealed.terminal_hash,
                 history_manifest_block_id: Some(manifest_id),
@@ -85,15 +99,24 @@ impl Engine {
             // This includes Strict's in-flight group-barrier acknowledgements.
             let wal_cover = self.wal.publication_cover(Arc::clone(&self.vfs))?;
             let prepared = PreparedRotationPublication {
-                manifest, manifest_pages, manifest_id, catchup, next, outcome,
-                blocks: Arc::clone(&self.blocks), control: Arc::clone(&self.control),
-                wal_cover, restart_required: Arc::clone(&self.restart_required), completed: false,
+                manifest,
+                manifest_pages,
+                manifest_id,
+                catchup,
+                next,
+                outcome,
+                blocks: Arc::clone(&self.blocks),
+                control: Arc::clone(&self.control),
+                wal_cover,
+                restart_required: Arc::clone(&self.restart_required),
+                completed: false,
             };
             self.async_publication_in_flight = true;
             Ok(RotationPublication::Prepared(Box::new(prepared)))
         })();
         if result.is_err() {
-            self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         result
     }
@@ -117,12 +140,17 @@ impl Engine {
             self.state.history_manifest_block_id = Some(prepared.manifest_id);
             self.state.sealed_log = None;
             self.control_dirty = advanced;
-            self.blocks.install_history_payload_catalog(&prepared.manifest, prepared.outcome.payload_routing.take())?;
-            self.blocks.release_history_carried_payloads(&prepared.outcome.indexed_payload_ids)?;
+            self.blocks.install_history_payload_catalog(
+                &prepared.manifest,
+                prepared.outcome.payload_routing.take(),
+            )?;
+            self.blocks
+                .release_history_carried_payloads(&prepared.outcome.indexed_payload_ids)?;
             self.blocks.restore_rotation_pending()?;
             self.history_manifest = Some(prepared.manifest.clone());
             self.close_rotation_gc_window();
-            self.wal_retirement.retire(prepared.next.active_log_generation - 1)?;
+            self.wal_retirement
+                .retire(prepared.next.active_log_generation - 1)?;
             self.blocks.wake_background_packer()?;
             self.blocks.finish_background_drain();
             self.rotation_read_batches.clear();
@@ -133,7 +161,8 @@ impl Engine {
             Ok(self.state.checkpoint_sequence)
         })();
         if result.is_err() {
-            self.restart_required.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.restart_required
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             self.rotation_read_batches.clear();
         }
         prepared.completed = true;
@@ -143,15 +172,27 @@ impl Engine {
 
 /// WAL cover, immutable manifest and checksummed CONTROL publication retain
 /// their ordering and lost-sync barriers; only their lock placement changes.
-pub(crate) fn publish_rotation_publication(prepared: &PreparedRotationPublication) -> io::Result<()> {
-    if let Some(cover) = &prepared.wal_cover { cover.sync()?; }
-    let mut control = prepared.control.lock()
+pub(crate) fn publish_rotation_publication(
+    prepared: &PreparedRotationPublication,
+) -> io::Result<()> {
+    if let Some(cover) = &prepared.wal_cover {
+        cover.sync()?;
+    }
+    let mut control = prepared
+        .control
+        .lock()
         .map_err(|_| io::Error::other("tofu-db CONTROL lock is poisoned"))?;
-    if let Some(catchup) = &prepared.catchup { control.publish(catchup)?; }
+    if let Some(catchup) = &prepared.catchup {
+        control.publish(catchup)?;
+    }
     {
-        let _timer = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_MANIFEST);
+        let _timer = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_ROTATION_INSTALL_MANIFEST,
+        );
         HistoryManifest::publish_pages(&prepared.manifest_pages, &prepared.blocks)?;
     }
-    let _timer = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL);
+    let _timer = crate::fsync_stats::StageTimer::diagnostic(
+        crate::fsync_stats::STAGE_ROTATION_INSTALL_CONTROL,
+    );
     control.publish(&prepared.next)
 }

@@ -3,18 +3,17 @@
 pub(crate) mod migration;
 
 use crate::generated_tofudb_ir::{
-    BILLING_LEDGER_KINDS, BILLING_NATIVE_ADMISSION_KIND,
+    BILLING_IDEMPOTENCY_NAMESPACE, BILLING_LEDGER_ID_CLAIM_NAMESPACE, BILLING_LEDGER_KINDS,
+    BILLING_LEDGER_NAMESPACE, BILLING_NATIVE_ADMISSION_KIND, BILLING_PAYMENT_COUNT_NAMESPACE,
+    BILLING_PAYMENT_CREATED_INDEX_NAMESPACE, BILLING_PAYMENT_DOCUMENT_NAMESPACE,
+    BILLING_PAYMENT_ID_CLAIM_NAMESPACE, BILLING_PAYMENT_PROVIDER_CLAIM_NAMESPACE,
+    BILLING_REDEEM_BATCH_CREATED_INDEX_NAMESPACE, BILLING_REDEEM_BATCH_DOCUMENT_NAMESPACE,
+    BILLING_REDEEM_BATCH_SHARDS, BILLING_REDEEM_CODE_LOCATOR_NAMESPACE,
+    BILLING_REDEEM_CODE_STATE_NAMESPACE, BILLING_REDEEM_COUNT_NAMESPACE,
+    BILLING_REDEEM_CREATED_INDEX_NAMESPACE, BILLING_REDEEM_LOCATOR_SHARDS,
     BILLING_REQUEST_ADMISSION_KIND, BILLING_REQUEST_INVOICE_KIND,
-    BILLING_IDEMPOTENCY_NAMESPACE, BILLING_LEDGER_ID_CLAIM_NAMESPACE, BILLING_LEDGER_NAMESPACE,
-    BILLING_PAYMENT_COUNT_NAMESPACE, BILLING_PAYMENT_CREATED_INDEX_NAMESPACE,
-    BILLING_PAYMENT_DOCUMENT_NAMESPACE, BILLING_PAYMENT_ID_CLAIM_NAMESPACE,
-    BILLING_PAYMENT_PROVIDER_CLAIM_NAMESPACE, BILLING_REDEEM_BATCH_CREATED_INDEX_NAMESPACE,
-    BILLING_REDEEM_BATCH_DOCUMENT_NAMESPACE, BILLING_REDEEM_BATCH_SHARDS,
-    BILLING_REDEEM_CODE_LOCATOR_NAMESPACE, BILLING_REDEEM_CODE_STATE_NAMESPACE,
-    BILLING_REDEEM_COUNT_NAMESPACE, BILLING_REDEEM_CREATED_INDEX_NAMESPACE,
-    BILLING_REDEEM_LOCATOR_SHARDS, BILLING_RESERVE_AGE_INDEX_NAMESPACE,
-    BILLING_RESERVE_STATE_NAMESPACE, BILLING_USER_AGGREGATE_NAMESPACE,
-    BILLING_USER_TIME_INDEX_NAMESPACE, BILLING_WALLET_NAMESPACE,
+    BILLING_RESERVE_AGE_INDEX_NAMESPACE, BILLING_RESERVE_STATE_NAMESPACE,
+    BILLING_USER_AGGREGATE_NAMESPACE, BILLING_USER_TIME_INDEX_NAMESPACE, BILLING_WALLET_NAMESPACE,
     MAX_BILLING_LEDGER_ENTRIES_PER_USER, MAX_BILLING_LIST_ROWS, MAX_BILLING_LIST_SCAN_ROWS,
     MAX_BILLING_NOTE_CHARACTERS, MAX_BILLING_PAYMENTS, MAX_BILLING_PAYMENT_DOCUMENT_BYTES,
     MAX_BILLING_REDEEM_BATCH_DOCUMENT_BYTES, MAX_BILLING_REDEEM_BATCH_SHARD_BYTES,
@@ -402,7 +401,12 @@ fn valid_entry(e: &LedgerEntry) -> bool {
         && text(&e.ref_type, 100, false)
         && text(&e.ref_id, 300, false)
         && text(&e.note, MAX_BILLING_NOTE_CHARACTERS, false)
-        && (![BILLING_NATIVE_ADMISSION_KIND, BILLING_REQUEST_ADMISSION_KIND, BILLING_REQUEST_INVOICE_KIND].contains(&e.kind.as_str())
+        && (![
+            BILLING_NATIVE_ADMISSION_KIND,
+            BILLING_REQUEST_ADMISSION_KIND,
+            BILLING_REQUEST_INVOICE_KIND,
+        ]
+        .contains(&e.kind.as_str())
             || (e.amount_micro == 0 && e.ref_type == "reserve" && !e.ref_id.is_empty()))
 }
 fn encode(v: &Value) -> io::Result<Vec<u8>> {
@@ -700,9 +704,7 @@ pub(crate) fn ledger_list(
         .checked_add(q.limit)
         .filter(|v| *v <= MAX_BILLING_LIST_SCAN_ROWS)
         .ok_or_else(|| {
-            crate::resource_exhaustion::domain_bound(
-                "billing list scan exceeds bound",
-            )
+            crate::resource_exhaustion::domain_bound("billing list scan exceeds bound")
         })?;
     if !text(&q.user_id, 200, true)
         || !(1..=MAX_BILLING_LIST_ROWS).contains(&q.limit)
@@ -786,29 +788,61 @@ pub(crate) fn wallet_get(
 }
 // Admission and release share the same authority transaction/ledger claims.
 // Terminal wallet_settle deliberately uses append directly with its exact debt.
-fn guard_native_reservation(db: &AuthorityDatabase, t: &mut AuthorityTransaction,
-    entry: &LedgerEntry, admission: bool) -> io::Result<()> {
+fn guard_native_reservation(
+    db: &AuthorityDatabase,
+    t: &mut AuthorityTransaction,
+    entry: &LedgerEntry,
+    admission: bool,
+) -> io::Result<()> {
     let lookup = |kind: &str| LedgerEntry {
-        kind: kind.into(), ref_type: if kind == "debit" { "task" } else { "reserve" }.into(),
+        kind: kind.into(),
+        ref_type: if kind == "debit" { "task" } else { "reserve" }.into(),
         ..entry.clone()
     };
-    if [BILLING_NATIVE_ADMISSION_KIND, BILLING_REQUEST_ADMISSION_KIND, BILLING_REQUEST_INVOICE_KIND].contains(&entry.kind.as_str()) {
-        if !admission || entry.amount_micro != 0 || entry.ref_type != "reserve" || entry.ref_id.is_empty() {
-            return Err(err(io::ErrorKind::InvalidInput, "native admission requires its wallet barrier"));
+    if [
+        BILLING_NATIVE_ADMISSION_KIND,
+        BILLING_REQUEST_ADMISSION_KIND,
+        BILLING_REQUEST_INVOICE_KIND,
+    ]
+    .contains(&entry.kind.as_str())
+    {
+        if !admission
+            || entry.amount_micro != 0
+            || entry.ref_type != "reserve"
+            || entry.ref_id.is_empty()
+        {
+            return Err(err(
+                io::ErrorKind::InvalidInput,
+                "native admission requires its wallet barrier",
+            ));
         }
         if existing(db, t, &lookup("reserve"))?.is_none_or(|row| row.amount_micro >= 0)
             || existing(db, t, &lookup("reserve_release"))?.is_some()
-            || existing(db, t, &lookup("debit"))?.is_some() {
-            return Err(err(io::ErrorKind::AlreadyExists, "native admission requires an unreleased reservation"));
+            || existing(db, t, &lookup("debit"))?.is_some()
+        {
+            return Err(err(
+                io::ErrorKind::AlreadyExists,
+                "native admission requires an unreleased reservation",
+            ));
         }
         if entry.kind == BILLING_REQUEST_INVOICE_KIND
-            && existing(db, t, &lookup(BILLING_REQUEST_ADMISSION_KIND))?.is_none() {
-            return Err(err(io::ErrorKind::AlreadyExists, "request invoice requires acknowledged admission"));
+            && existing(db, t, &lookup(BILLING_REQUEST_ADMISSION_KIND))?.is_none()
+        {
+            return Err(err(
+                io::ErrorKind::AlreadyExists,
+                "request invoice requires acknowledged admission",
+            ));
         }
-    } else if entry.kind == "reserve_release" && entry.ref_type == "reserve" && !entry.ref_id.is_empty()
+    } else if entry.kind == "reserve_release"
+        && entry.ref_type == "reserve"
+        && !entry.ref_id.is_empty()
         && (existing(db, t, &lookup(BILLING_NATIVE_ADMISSION_KIND))?.is_some()
-            || existing(db, t, &lookup(BILLING_REQUEST_ADMISSION_KIND))?.is_some()) {
-        return Err(err(io::ErrorKind::AlreadyExists, "native reservation requires exact terminal settlement"));
+            || existing(db, t, &lookup(BILLING_REQUEST_ADMISSION_KIND))?.is_some())
+    {
+        return Err(err(
+            io::ErrorKind::AlreadyExists,
+            "native reservation requires exact terminal settlement",
+        ));
     }
     Ok(())
 }
@@ -1216,7 +1250,12 @@ pub(crate) fn payment_bind(
     let legacy_session_id = match map.get("legacy_session_id") {
         None => "",
         Some(Value::String(value)) if text(value, 300, false) => value.as_str(),
-        _ => return Err(err(io::ErrorKind::InvalidInput, "invalid legacy Session identity")),
+        _ => {
+            return Err(err(
+                io::ErrorKind::InvalidInput,
+                "invalid legacy Session identity",
+            ))
+        }
     };
     let rejected = || encode(&json!({"accepted":false,"payment":null}));
     let Some(mut payment) = read_payment(db, t, payment_id)? else {
@@ -1233,16 +1272,23 @@ pub(crate) fn payment_bind(
     if !payment.provider_id.is_empty() {
         let original = read_payment_claim(db, t, &provider, &payment.provider_id)?;
         if original.as_ref().is_none_or(|value| value.id != payment.id) {
-            return Err(err(io::ErrorKind::InvalidData, "billing payment binding claim differs"));
+            return Err(err(
+                io::ErrorKind::InvalidData,
+                "billing payment binding claim differs",
+            ));
         }
         if payment.provider_id == provider_id {
             return encode(&json!({"accepted":true,"payment":payment_value(&payment)}));
         }
-        let legacy_checkout = provider == "stripe" && payment.status == "pending"
+        let legacy_checkout = provider == "stripe"
+            && payment.status == "pending"
             && payment.provider_id == legacy_session_id
-            && legacy_session_id.starts_with("cs_") && legacy_session_id.len() > 3
-            && provider_id.starts_with("pi_") && provider_id.len() > 3
-            && payment.raw.get("checkout_session").and_then(Value::as_str) == Some(legacy_session_id);
+            && legacy_session_id.starts_with("cs_")
+            && legacy_session_id.len() > 3
+            && provider_id.starts_with("pi_")
+            && provider_id.len() > 3
+            && payment.raw.get("checkout_session").and_then(Value::as_str)
+                == Some(legacy_session_id);
         if !legacy_checkout {
             return rejected();
         }
@@ -1252,7 +1298,10 @@ pub(crate) fn payment_bind(
         return rejected();
     }
     if !payment.provider_id.is_empty() {
-        db.entity_delete(t, payment_provider_claim_key(t, &provider, &payment.provider_id)?)?;
+        db.entity_delete(
+            t,
+            payment_provider_claim_key(t, &provider, &payment.provider_id)?,
+        )?;
     }
     payment.provider_id = provider_id.clone();
     write_payment(db, t, &payment, None, physical_updated_at_ms)?;
@@ -1354,9 +1403,7 @@ pub(crate) fn payment_list(
         .checked_add(request.limit)
         .filter(|value| *value <= MAX_BILLING_LIST_SCAN_ROWS)
         .ok_or_else(|| {
-            crate::resource_exhaustion::domain_bound(
-                "billing payment list scan exceeds bound",
-            )
+            crate::resource_exhaustion::domain_bound("billing payment list scan exceeds bound")
         })?;
     if !(1..=MAX_BILLING_LIST_ROWS).contains(&request.limit)
         || request.offset > 10_000_000
@@ -1754,9 +1801,7 @@ pub(crate) fn redeem_codes_mint(
         .checked_add(request.codes.len())
         .filter(|value| *value <= MAX_BILLING_REDEEM_CODES)
         .ok_or_else(|| {
-            crate::resource_exhaustion::capacity_quota(
-                "billing redeem-code quota reached",
-            )
+            crate::resource_exhaustion::capacity_quota("billing redeem-code quota reached")
         })?;
     let record_id = request.codes[0].clone();
     let batch = RedeemBatch {

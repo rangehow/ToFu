@@ -67,7 +67,7 @@ fn terminal(value: &Value) -> bool {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CancelRequest {
+pub struct CancelRequest {
     user_id: u64,
     tenant_id: String,
     run_key: String,
@@ -222,7 +222,7 @@ struct ProducerFence {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Request {
+pub struct Request {
     user_id: u64,
     tenant_id: String,
     run_key: String,
@@ -250,15 +250,19 @@ pub(crate) fn validate_record_bounds(run: &Value) -> io::Result<()> {
     while let Some((value, depth)) = pending.pop() {
         nodes += 1;
         if nodes > crate::generated_tofudb_ir::MAX_AUTOMATION_RECORD_NODES
-            || depth > crate::generated_tofudb_ir::MAX_AUTOMATION_RECORD_DEPTH {
+            || depth > crate::generated_tofudb_ir::MAX_AUTOMATION_RECORD_DEPTH
+        {
             return Err(invalid("automation JSON exceeds bounds"));
         }
         match value {
             Value::Array(values) => pending.extend(values.iter().map(|v| (v, depth + 1))),
             Value::Object(values) => pending.extend(values.values().map(|v| (v, depth + 1))),
             Value::Number(n)
-                if n.as_u64().is_some_and(|v| v > crate::generated_tofudb_ir::MAX_AUTOMATION_SAFE_INTEGER)
-                    || n.as_i64().is_some_and(|v| v < -(crate::generated_tofudb_ir::MAX_AUTOMATION_SAFE_INTEGER as i64)) =>
+                if n.as_u64().is_some_and(|v| {
+                    v > crate::generated_tofudb_ir::MAX_AUTOMATION_SAFE_INTEGER
+                }) || n.as_i64().is_some_and(|v| {
+                    v < -(crate::generated_tofudb_ir::MAX_AUTOMATION_SAFE_INTEGER as i64)
+                }) =>
             {
                 return Err(invalid("automation integer exceeds bound"))
             }
@@ -398,8 +402,10 @@ impl Request {
             {
                 return Err(invalid("invalid automation progress fields"));
             }
-        } else if run["steps"].as_object().is_some_and(|steps|
-            steps.values().any(|state| state.get("approval").is_some())) {
+        } else if run["steps"]
+            .as_object()
+            .is_some_and(|steps| steps.values().any(|state| state.get("approval").is_some()))
+        {
             return Err(invalid("initial automation state cannot carry approval"));
         } else if self.expected_version.is_some()
             || self.worker_id.is_some()
@@ -618,7 +624,14 @@ pub(crate) fn execute(
             return Err(invalid("automation immutable evidence changed"));
         }
         crate::automation_approval::validate_progress(&existing["value"], &req.run)?;
-        crate::automation_presentation::publish(db, tx, &req.prefix(), &existing["value"], &req.run, req.now_ms)?;
+        crate::automation_presentation::publish(
+            db,
+            tx,
+            &req.prefix(),
+            &existing["value"],
+            &req.run,
+            req.now_ms,
+        )?;
         if existing["value"]["cancelCommand"] != req.run["cancelCommand"]
             || (!existing["value"]["cancelCommand"].is_null()
                 && existing["value"]["cancelReason"] != req.run["cancelReason"])
@@ -699,8 +712,15 @@ pub(crate) fn execute(
     {
         return Err(conflict("automation definition changed before admission"));
     }
-    crate::automation_project::require_active(db,tx,&req.tenant_id,d["definition"]["projectId"].as_str())?;
-    if !d["definition"]["projectId"].is_null() && req.run["trigger"]["projectId"]!=d["definition"]["projectId"] {
+    crate::automation_project::require_active(
+        db,
+        tx,
+        &req.tenant_id,
+        d["definition"]["projectId"].as_str(),
+    )?;
+    if !d["definition"]["projectId"].is_null()
+        && req.run["trigger"]["projectId"] != d["definition"]["projectId"]
+    {
         return Err(invalid("automation trigger escaped its project binding"));
     }
     if req.run["snapshot"] != d["definition"]
@@ -744,22 +764,39 @@ pub(crate) fn execute(
         }
     } else if req.run["trigger"]["kind"] == "task.started"
         && (req.producer_fence.is_some()
-            || req.run["trigger"]["id"].as_str().is_some_and(|id| id.starts_with("task-start:"))) {
-        let fence = req.producer_fence.as_ref()
+            || req.run["trigger"]["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("task-start:")))
+    {
+        let fence = req
+            .producer_fence
+            .as_ref()
             .ok_or_else(|| conflict("canonical task-start producer is missing"))?;
         let job = worker_job::get(db, tx, &fence.job_id, req.user_id)?
             .ok_or_else(|| conflict("task-start producer is missing"))?;
-        let job: Value = serde_json::from_slice(&job).map_err(|_| integrity("malformed event job"))?;
+        let job: Value =
+            serde_json::from_slice(&job).map_err(|_| integrity("malformed event job"))?;
         let proof: Value = serde_json::from_slice(&worker_job::claim_state(
-            db, tx, &fence.job_id, &fence.worker_id, fence.token, req.now_ms,
-        )?).map_err(|_| integrity("malformed event producer claim"))?;
-        if job["taskKind"] != "automation-event" || job["tenantId"] != req.tenant_id
-            || job["payload"]["event"] != req.run["trigger"] || proof["ok"] != true
-            || proof["cancelSequence"].as_u64().unwrap_or(0) != 0 {
+            db,
+            tx,
+            &fence.job_id,
+            &fence.worker_id,
+            fence.token,
+            req.now_ms,
+        )?)
+        .map_err(|_| integrity("malformed event producer claim"))?;
+        if job["taskKind"] != "automation-event"
+            || job["tenantId"] != req.tenant_id
+            || job["payload"]["event"] != req.run["trigger"]
+            || proof["ok"] != true
+            || proof["cancelSequence"].as_u64().unwrap_or(0) != 0
+        {
             return Err(conflict("task-start producer claim is stale"));
         }
     } else if req.producer_fence.is_some() {
-        return Err(invalid("only schedule or canonical task-start admission carries a producer fence"));
+        return Err(invalid(
+            "only schedule or canonical task-start admission carries a producer fence",
+        ));
     }
     let saved = put(db, tx, RUNS, &req.run_key, &req.run, 0, req.now_ms)?;
     let payload = json!({"contract":"tofu.automation-job/v1","runId":req.run["id"],"principal":req.run["principal"]});

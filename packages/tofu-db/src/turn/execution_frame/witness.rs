@@ -74,7 +74,10 @@ pub(in crate::turn) fn normalization_for_patch(
     actor: &str,
     status: &str,
     verified: Option<&VerifiedStableSegments>,
-) -> io::Result<(Option<crate::turn_projection_segments::StableFields>, Option<VerifiedStableSegments>)> {
+) -> io::Result<(
+    Option<crate::turn_projection_segments::StableFields>,
+    Option<VerifiedStableSegments>,
+)> {
     if let Some(proof) = verified.filter(|proof| proof.matches(revision, actor, status)) {
         return Ok((None, Some(proof.clone())));
     }
@@ -82,11 +85,14 @@ pub(in crate::turn) fn normalization_for_patch(
     if !fields.unchanged_in(projection) {
         return Ok((Some(fields), None));
     }
-    Ok((None, Some(VerifiedStableSegments {
-        revision,
-        actor: actor.to_owned(),
-        status: status.to_owned(),
-    })))
+    Ok((
+        None,
+        Some(VerifiedStableSegments {
+            revision,
+            actor: actor.to_owned(),
+            status: status.to_owned(),
+        }),
+    ))
 }
 
 fn normalization_dependency(key: &str) -> bool {
@@ -221,8 +227,9 @@ impl ProjectionWitness {
     fn bounded(&self) -> io::Result<bool> {
         Ok(
             self.bytes <= crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES
-                && self.recovery_bytes.is_none_or(|bytes|
-                    bytes > 0 && bytes <= crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES)
+                && self.recovery_bytes.is_none_or(|bytes| {
+                    bytes > 0 && bytes <= crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES
+                })
                 && size(self)? <= MAX_TURN_PROJECTION_PATCH_BYTES
                 && self.fields.keys().next().is_none_or(|key| {
                     !matches!(
@@ -235,7 +242,10 @@ impl ProjectionWitness {
 
     pub(in crate::turn) fn decode(raw: &Value, revision: u64) -> io::Result<Option<Self>> {
         // Unknown evidence versions remain a reconstructible optimization miss.
-        if !matches!(raw.get("version").and_then(Value::as_u64), Some(1 | 2 | CURRENT_WITNESS_VERSION)) {
+        if !matches!(
+            raw.get("version").and_then(Value::as_u64),
+            Some(1 | 2 | CURRENT_WITNESS_VERSION)
+        ) {
             return Ok(None);
         }
         let witness: Self = serde_json::from_value(raw.clone())
@@ -455,11 +465,17 @@ pub(in crate::turn) fn append_from_witness(
     envelope.insert("settlement".into(), json!(request.settlement));
     envelope.insert("updatedAt".into(), json!(request.now_ms));
     let reserve = MAX_LEGACY_DOCUMENT_BYTES + MAX_TIMING_TRACE_PERSISTED_BYTES + 1024;
-    let materialized = witness.bytes.saturating_add(size(&envelope)?)
+    let materialized = witness
+        .bytes
+        .saturating_add(size(&envelope)?)
         .saturating_add(b",\"projection\":".len());
     let limit = crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES;
-    if materialized.saturating_add(witness.bytes).saturating_add(reserve) > limit
-        && witness.recovery_bytes.is_none() {
+    if materialized
+        .saturating_add(witness.bytes)
+        .saturating_add(reserve)
+        > limit
+        && witness.recovery_bytes.is_none()
+    {
         return Ok(None);
     }
     let reserve = reserve.max(witness.recovery_bytes.unwrap_or(0).saturating_add(1024));

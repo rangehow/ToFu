@@ -80,12 +80,18 @@ static OVERLAY_WAL_PRESSURE_PENDING_ENTRIES: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn note_projection_checkpoint_bytes(bytes: usize) {
     PROJECTION_CHECKPOINT_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
-    crate::request_profile::work(crate::request_profile::Work::ProjectionCheckpointBytes, bytes as u64);
+    crate::request_profile::work(
+        crate::request_profile::Work::ProjectionCheckpointBytes,
+        bytes as u64,
+    );
 }
 
 pub(crate) fn note_projection_patch_bytes(bytes: usize) {
     PROJECTION_PATCH_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
-    crate::request_profile::work(crate::request_profile::Work::ProjectionPatchBytes, bytes as u64);
+    crate::request_profile::work(
+        crate::request_profile::Work::ProjectionPatchBytes,
+        bytes as u64,
+    );
 }
 
 pub(crate) fn note_projection_patch_applied() {
@@ -97,12 +103,18 @@ pub(crate) fn note_history_decode_attempt(bytes: usize) {
     HISTORY_DECODE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
     HISTORY_DECODE_SOURCE_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
     crate::request_profile::work(crate::request_profile::Work::HistoryDecodeAttempts, 1);
-    crate::request_profile::work(crate::request_profile::Work::HistoryDecodeSourceBytes, bytes as u64);
+    crate::request_profile::work(
+        crate::request_profile::Work::HistoryDecodeSourceBytes,
+        bytes as u64,
+    );
 }
 
 pub(crate) fn note_history_decoded_transactions(count: usize) {
     HISTORY_DECODED_TRANSACTIONS.fetch_add(count as u64, Ordering::Relaxed);
-    crate::request_profile::work(crate::request_profile::Work::HistoryDecodedTransactions, count as u64);
+    crate::request_profile::work(
+        crate::request_profile::Work::HistoryDecodedTransactions,
+        count as u64,
+    );
 }
 
 /// Framed bytes accepted by inline WAL writes or the owned worker handoff,
@@ -115,7 +127,13 @@ pub(crate) fn note_wal_encoded_bytes(bytes: u64) {
 
 /// Newly staged page bytes referenced by a successfully published merge.
 /// Reused durable blocks contribute references but no newly staged bytes.
-pub(crate) fn note_overlay_merge(entries: usize, bytes: usize, blocks: usize, positions: usize, superseded: usize) {
+pub(crate) fn note_overlay_merge(
+    entries: usize,
+    bytes: usize,
+    blocks: usize,
+    positions: usize,
+    superseded: usize,
+) {
     crate::request_profile::work(crate::request_profile::Work::OverlayBytes, bytes as u64);
     OVERLAY_MERGE_COMMITS.fetch_add(1, Ordering::Relaxed);
     OVERLAY_MERGED_ENTRIES.fetch_add(entries as u64, Ordering::Relaxed);
@@ -633,7 +651,11 @@ pub const STAGE_NAMES: [&str; STAGE_COUNT] = [
 ];
 
 #[derive(Clone, Copy)]
-pub(crate) enum ParallelFallbackPhase { Snapshot, Preparation, Commit }
+pub(crate) enum ParallelFallbackPhase {
+    Snapshot,
+    Preparation,
+    Commit,
+}
 
 impl ParallelFallbackPhase {
     fn stage(self, error: &std::io::Error) -> usize {
@@ -669,9 +691,21 @@ fn parallel_fallback_distinguishes_phase_and_rotation_without_guessing_conflicts
     let busy = std::io::Error::new(std::io::ErrorKind::WouldBlock, "retryable admission");
     let rotation = crate::engine::rotation_backpressure();
     for (phase, ordinary_stage, rotation_stage) in [
-        (Snapshot, STAGE_PARALLEL_SNAPSHOT_BUSY, STAGE_PARALLEL_SNAPSHOT_ROTATION),
-        (Preparation, STAGE_PARALLEL_PREPARATION_BUSY, STAGE_PARALLEL_PREPARATION_ROTATION),
-        (Commit, STAGE_PARALLEL_COMMIT_BUSY, STAGE_PARALLEL_COMMIT_ROTATION),
+        (
+            Snapshot,
+            STAGE_PARALLEL_SNAPSHOT_BUSY,
+            STAGE_PARALLEL_SNAPSHOT_ROTATION,
+        ),
+        (
+            Preparation,
+            STAGE_PARALLEL_PREPARATION_BUSY,
+            STAGE_PARALLEL_PREPARATION_ROTATION,
+        ),
+        (
+            Commit,
+            STAGE_PARALLEL_COMMIT_BUSY,
+            STAGE_PARALLEL_COMMIT_ROTATION,
+        ),
     ] {
         assert_eq!(phase.stage(&busy), ordinary_stage);
         assert_eq!(phase.stage(&rotation), rotation_stage);
@@ -695,7 +729,11 @@ impl StageTimer {
     /// unprofiled cache reads while keeping their data algorithm shared.
     #[inline(always)]
     pub(crate) fn conditional<const MEASURE: bool>(stage: usize) -> Option<Self> {
-        if MEASURE { Some(Self::new(stage)) } else { None }
+        if MEASURE {
+            Some(Self::new(stage))
+        } else {
+            None
+        }
     }
 
     /// Fine-grained read probes share the existing launch-time profiling
@@ -756,7 +794,9 @@ pub fn component_stage_calls(component: usize, stage: usize) -> u64 {
 }
 
 pub fn note_stage_elapsed(stage: usize, nanos: u64) {
-    if nanos == 0 { crate::request_profile::event(stage); }
+    if nanos == 0 {
+        crate::request_profile::event(stage);
+    }
     STAGE_NANOS[stage].fetch_add(nanos, Ordering::Relaxed);
     STAGE_CALLS[stage].fetch_add(1, Ordering::Relaxed);
     let component = current_component();
@@ -775,7 +815,10 @@ pub fn component_stage_report() -> String {
         if total_nanos == 0 {
             continue;
         }
-        out.push_str(&format!(" [{name}]: total={:.1}ms\n", total_nanos as f64 / 1e6));
+        out.push_str(&format!(
+            " [{name}]: total={:.1}ms\n",
+            total_nanos as f64 / 1e6
+        ));
         let mut stages = (0..STAGE_COUNT)
             .map(|stage| {
                 (
@@ -892,7 +935,8 @@ pub fn counters() -> DurabilityCounters {
         overlay_materialized_bytes: OVERLAY_MATERIALIZED_BYTES.load(Ordering::Relaxed),
         overlay_materialized_blocks: OVERLAY_MATERIALIZED_BLOCKS.load(Ordering::Relaxed),
         overlay_wal_pressure_attempts: OVERLAY_WAL_PRESSURE_ATTEMPTS.load(Ordering::Relaxed),
-        overlay_wal_pressure_pending_entries: OVERLAY_WAL_PRESSURE_PENDING_ENTRIES.load(Ordering::Relaxed),
+        overlay_wal_pressure_pending_entries: OVERLAY_WAL_PRESSURE_PENDING_ENTRIES
+            .load(Ordering::Relaxed),
     }
 }
 
@@ -934,8 +978,7 @@ mod tests {
 /// requests: a read-heavy phase contends for the same mount, so background
 /// work defers to genuine idle gaps. Sampling is lock-free over the stage
 /// counters and valid within one sampling window.
-static FOREGROUND_REQUESTS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static FOREGROUND_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Records one foreground request entering the dispatch path (any lane).
 pub fn note_foreground_request() {
@@ -947,16 +990,25 @@ static FOREGROUND_WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
 /// Dispatch admission latency, separate from request and commit activity.
 pub(crate) struct ForegroundWait(std::time::Instant);
 impl ForegroundWait {
-    pub(crate) fn start() -> Self { Self(std::time::Instant::now()) }
+    pub(crate) fn start() -> Self {
+        Self(std::time::Instant::now())
+    }
 }
 impl Drop for ForegroundWait {
     fn drop(&mut self) {
-        FOREGROUND_WAIT_NANOS.fetch_add(self.0.elapsed().as_nanos().min(u64::MAX as u128) as u64, Ordering::Relaxed);
+        FOREGROUND_WAIT_NANOS.fetch_add(
+            self.0.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ForegroundCounters { requests: u64, commits: u64, wait_nanos: u64 }
+struct ForegroundCounters {
+    requests: u64,
+    commits: u64,
+    wait_nanos: u64,
+}
 fn foreground_counters() -> ForegroundCounters {
     ForegroundCounters {
         requests: FOREGROUND_REQUESTS.load(Ordering::Relaxed),
@@ -966,7 +1018,8 @@ fn foreground_counters() -> ForegroundCounters {
 }
 
 /// One foreground sample covers this window.
-pub(crate) const FOREGROUND_SAMPLE_WINDOW: std::time::Duration = std::time::Duration::from_millis(250);
+pub(crate) const FOREGROUND_SAMPLE_WINDOW: std::time::Duration =
+    std::time::Duration::from_millis(250);
 /// Foreground requests that waited for authority admission for this share
 /// of a window were queuing behind the writer.
 const FOREGROUND_ADMISSION_PRESSURE_SHARE: f64 = 0.05;
@@ -989,10 +1042,9 @@ impl ForegroundSampler {
             let wait = counters.wait_nanos.saturating_sub(self.counters.wait_nanos);
             self.admission_pressure =
                 wait as f64 >= elapsed.as_nanos() as f64 * FOREGROUND_ADMISSION_PRESSURE_SHARE;
-            self.write_pressure = commits as f64 / elapsed.as_secs_f64() >= 4.0
-                || self.admission_pressure;
-            self.hot = requests as f64 / elapsed.as_secs_f64() >= 4.0
-                || self.write_pressure;
+            self.write_pressure =
+                commits as f64 / elapsed.as_secs_f64() >= 4.0 || self.admission_pressure;
+            self.hot = requests as f64 / elapsed.as_secs_f64() >= 4.0 || self.write_pressure;
             self.sampled_at = now;
             self.counters = counters;
         }
@@ -1035,13 +1087,21 @@ fn defer_for_pressure(last: &mut ForegroundSampler, hot: bool) -> bool {
     if !hot || now.duration_since(last.last_progress) >= std::time::Duration::from_secs(2) {
         last.last_progress = now;
         false
-    } else { true }
+    } else {
+        true
+    }
 }
 
 pub fn foreground_hotness_sampler() -> ForegroundSampler {
     let now = std::time::Instant::now();
-    ForegroundSampler { sampled_at: now, counters: foreground_counters(), hot: false, write_pressure: false,
-        admission_pressure: false, last_progress: now }
+    ForegroundSampler {
+        sampled_at: now,
+        counters: foreground_counters(),
+        hot: false,
+        write_pressure: false,
+        admission_pressure: false,
+        last_progress: now,
+    }
 }
 
 #[cfg(test)]
@@ -1050,41 +1110,88 @@ mod foreground_sampler_tests {
     #[test]
     fn independent_deltas_and_hot_decision_survive_the_sample_window() {
         let now = std::time::Instant::now();
-        let initial = ForegroundCounters { requests: 10000, commits: 2, wait_nanos: 0 };
-        let mut sample = ForegroundSampler { sampled_at: now, counters: initial, hot: false, write_pressure: false,
-            admission_pressure: false, last_progress: now };
+        let initial = ForegroundCounters {
+            requests: 10000,
+            commits: 2,
+            wait_nanos: 0,
+        };
+        let mut sample = ForegroundSampler {
+            sampled_at: now,
+            counters: initial,
+            hot: false,
+            write_pressure: false,
+            admission_pressure: false,
+            last_progress: now,
+        };
         assert!(!sample.observe(now + std::time::Duration::from_millis(250), initial));
-        let writes = ForegroundCounters { commits: 4, ..initial };
+        let writes = ForegroundCounters {
+            commits: 4,
+            ..initial
+        };
         assert!(sample.observe(now + std::time::Duration::from_millis(500), writes));
         assert!(sample.write_pressure);
         assert!(sample.observe(now + std::time::Duration::from_millis(510), writes));
         assert!(!sample.observe(now + std::time::Duration::from_millis(750), writes));
-        let reads = ForegroundCounters { requests: 10002, ..writes };
+        let reads = ForegroundCounters {
+            requests: 10002,
+            ..writes
+        };
         assert!(sample.observe(now + std::time::Duration::from_millis(1000), reads));
-        assert!(!sample.write_pressure, "light polling must not starve its search index");
+        assert!(
+            !sample.write_pressure,
+            "light polling must not starve its search index"
+        );
     }
     #[test]
     fn foreground_wait_pressure_is_independent_of_request_rate() {
         let mut sample = foreground_hotness_sampler();
-        let counters = ForegroundCounters { wait_nanos: sample.counters.wait_nanos + 20_000_000, ..sample.counters };
-        assert!(sample.observe(sample.sampled_at + std::time::Duration::from_millis(250), counters));
-        assert!(sample.write_pressure, "contended reads must still yield to the foreground");
+        let counters = ForegroundCounters {
+            wait_nanos: sample.counters.wait_nanos + 20_000_000,
+            ..sample.counters
+        };
+        assert!(sample.observe(
+            sample.sampled_at + std::time::Duration::from_millis(250),
+            counters
+        ));
+        assert!(
+            sample.write_pressure,
+            "contended reads must still yield to the foreground"
+        );
     }
     #[test]
     fn admission_pressure_is_waiting_not_activity() {
         let now = std::time::Instant::now();
-        let initial = ForegroundCounters { requests: 0, commits: 0, wait_nanos: 0 };
-        let mut sample = ForegroundSampler { sampled_at: now, counters: initial, hot: false, write_pressure: false,
-            admission_pressure: false, last_progress: now };
-        let busy = ForegroundCounters { requests: 1_000, commits: 1_000, wait_nanos: 0 };
+        let initial = ForegroundCounters {
+            requests: 0,
+            commits: 0,
+            wait_nanos: 0,
+        };
+        let mut sample = ForegroundSampler {
+            sampled_at: now,
+            counters: initial,
+            hot: false,
+            write_pressure: false,
+            admission_pressure: false,
+            last_progress: now,
+        };
+        let busy = ForegroundCounters {
+            requests: 1_000,
+            commits: 1_000,
+            wait_nanos: 0,
+        };
         assert!(sample.observe(now + FOREGROUND_SAMPLE_WINDOW, busy));
-        assert!(sample.write_pressure && !sample.admission_pressure, "an admitted busy foreground is not queuing");
-        let queued = ForegroundCounters { wait_nanos: 20_000_000, ..busy };
+        assert!(
+            sample.write_pressure && !sample.admission_pressure,
+            "an admitted busy foreground is not queuing"
+        );
+        let queued = ForegroundCounters {
+            wait_nanos: 20_000_000,
+            ..busy
+        };
         sample.observe(now + 2 * FOREGROUND_SAMPLE_WINDOW, queued);
         assert!(sample.admission_pressure);
     }
 }
-
 
 // History promotion owns these preparation counters; they are attempts/work,
 // never proof that the later CONTROL publication completed.
@@ -1096,7 +1203,9 @@ static HISTORY_PROMOTION_LOOSE_BLOCKS: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn note_history_promotion_pack(bytes: u64, replacement: bool) {
     HISTORY_PROMOTION_PACKS.fetch_add(1, Ordering::Relaxed);
     HISTORY_PROMOTION_PACKED_BYTES.fetch_add(bytes, Ordering::Relaxed);
-    if replacement { HISTORY_PROMOTION_REPLACEMENTS.fetch_add(1, Ordering::Relaxed); }
+    if replacement {
+        HISTORY_PROMOTION_REPLACEMENTS.fetch_add(1, Ordering::Relaxed);
+    }
 }
 pub(crate) fn note_history_promotion_loose_block() {
     HISTORY_PROMOTION_LOOSE_BLOCKS.fetch_add(1, Ordering::Relaxed);

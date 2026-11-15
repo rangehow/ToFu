@@ -217,6 +217,79 @@ def test_a_continuation_without_an_owner_message_still_controls_only_its_request
     assert not r.c.repo.read(earlier['id'])['grant']['revoked']
 
 
+def _session_control(r, monkeypatch, earlier, action):
+    """control_conversation on ``earlier``'s Worker session, its commands and audit records captured."""
+    from types import SimpleNamespace
+    from lib import log, turn_lifecycle
+    from lib.conversation_sync import runtime as sync_runtime
+    from lib.project_dispatch.admission import TrustedDispatch
+    row = r.c.repo.read(earlier['id'])
+    execution = row['execution']
+    trusted = TrustedDispatch(r.c.repo.admission(row['id']))
+    r.attempts[execution['attemptId']].update(config=trusted.capture(
+        {}, 7, trusted.principal, row['request']['recipientId']))
+    if action == 'checkpoint_resume':
+        r.attempts[execution['attemptId']]['status'] = 'interrupted'
+        r.turns[execution['turnId']].update(status='interrupted')
+    r.turns[execution['turnId']].update(currentAttemptId=execution['attemptId'], projectionRevision=3)
+    monkeypatch.setattr(turn_lifecycle, 'get_turn', r.c.repo.turn_get)
+    monkeypatch.setattr(turn_lifecycle, 'get_attempt', r.c.repo.attempt_get)
+    commands, audited = [], []
+
+    class Commands:
+        def abort_attempt(self, attempt_id, owner):
+            commands.append(('stop', attempt_id))
+            return SimpleNamespace(value={'attemptId': attempt_id, 'aborted': True})
+
+        def create_attempt(self, conversation, turn, owner, body, **kwargs):
+            commands.append((body['operation'], turn))
+            return SimpleNamespace(value={'turn': r.turns[turn], 'attempt': r.attempts[execution['attemptId']]})
+    monkeypatch.setattr(sync_runtime, 'conversation_turn_commands', Commands())
+    monkeypatch.setattr(log, 'audit_log', lambda event, **fields: audited.append((event, fields)))
+    result = r.call('control_conversation', conversation_id=row['request']['recipientId'],
+                    turn_id=execution['turnId'], attempt_id=execution['attemptId'], action=action,
+                    expected_revision=3, idempotency_key='restart-recovery-' + action)
+    return result, commands, audited
+
+
+@pytest.mark.parametrize('action', ['checkpoint_resume', 'stop'])
+def test_a_continuation_controls_the_sessions_of_its_coordinators_earlier_request_workers(
+        run, monkeypatch, action):
+    """2026-11-15: after a restart, Workers of an earlier steered request sat idle because the
+    Coordinator's automatic continuation was refused 'Automatic continuation may control only
+    its original request workers'. Session control is scoped by the Coordinator binding: any
+    Turn of the Coordinator resumes or stops any of its own Workers, and every action is audited."""
+    r = run
+    earlier = _later_request_continuation(r, 'superseded')
+    result, commands, audited = _session_control(r, monkeypatch, earlier, action)
+    assert 'error' not in result, result
+    assert [operation for operation, _ in commands] == [action]
+    [(event, fields)] = audited
+    assert event == 'coordinator_session_control' and fields['outcome'] == 'accepted'
+    assert (fields['action'], fields['coordinator_conversation_id'], fields['principal_kind']) == (
+        action, 'coordinator', 'system')
+    # Cancelling the assignment (its grant) stays a request-scoped act of that request.
+    assert 'only its original request' in r.call('cancel_project_work', assignment_id=earlier['id'])['error']
+
+
+def test_session_control_of_another_coordinators_worker_stays_refused_and_is_audited(run, monkeypatch):
+    r = run
+    earlier = _later_request_continuation(r, 'superseded')
+    from lib.project_dispatch.admission import TrustedDispatch
+    checked = TrustedDispatch.checked
+
+    def other_coordinators(self):
+        row = checked(self)
+        return {**row, 'request': {**row['request'], 'coordinatorId': 'other-coordinator'}}
+    monkeypatch.setattr(TrustedDispatch, 'checked', other_coordinators)
+    result, commands, audited = _session_control(r, monkeypatch, earlier, 'stop')
+    assert 'another Coordinator' in result['error'], result
+    assert commands == []
+    [(event, fields)] = audited
+    assert event == 'coordinator_session_control' and fields['outcome'] == 'refused'
+    assert 'another Coordinator' in fields['reason']
+
+
 def test_project_worker_history_pages_do_not_drop_earlier_requests(run):
     r = run
     identities = set()

@@ -866,7 +866,7 @@ mod tests {
         }
         database.commit(transaction).unwrap();
         drop(database);
-        let mut database = AuthorityDatabase::open(directory.path()).unwrap();
+        let database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut transaction = database.begin(7, 11).unwrap();
         assert!(!secret_restore(&database, &mut transaction, secret_snapshot("ref-2104")).unwrap());
         let mut divergent = secret_snapshot("ref-2104");

@@ -11,9 +11,13 @@ pub(super) const NAMESPACE: &str = "search_generation_ids_v1";
 const COUNTER_KEY: &[u8] = b"next";
 
 fn decode_id(bytes: &[u8]) -> io::Result<u64> {
-    let array: [u8; 8] = bytes.try_into().map_err(|_| invalid_data("invalid search generation ID"))?;
+    let array: [u8; 8] = bytes
+        .try_into()
+        .map_err(|_| invalid_data("invalid search generation ID"))?;
     let value = u64::from_be_bytes(array);
-    if value == 0 { return Err(invalid_data("zero search generation ID")); }
+    if value == 0 {
+        return Err(invalid_data("zero search generation ID"));
+    }
     Ok(value)
 }
 
@@ -23,14 +27,24 @@ pub(super) fn lookup(
     digest: &[u8; 32],
 ) -> io::Result<Option<u64>> {
     let stored_key = key(transaction, NAMESPACE, digest)?;
-    database.entity_get(transaction, &stored_key)?.as_deref().map(decode_id).transpose()
+    database
+        .entity_get(transaction, &stored_key)?
+        .as_deref()
+        .map(decode_id)
+        .transpose()
 }
 
 #[cfg(test)]
-pub(super) fn retained_counter_bytes(database: &AuthorityDatabase, transaction: &mut AuthorityTransaction) -> io::Result<u64> {
+pub(super) fn retained_counter_bytes(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+) -> io::Result<u64> {
     let counter_key = key(transaction, NAMESPACE, COUNTER_KEY)?;
     match database.entity_get(transaction, &counter_key)? {
-        Some(bytes) => { decode_id(&bytes)?; Ok((counter_key.key_bytes().len() + bytes.len()) as u64) },
+        Some(bytes) => {
+            decode_id(&bytes)?;
+            Ok((counter_key.key_bytes().len() + bytes.len()) as u64)
+        }
         None => Ok(0),
     }
 }
@@ -57,10 +71,17 @@ pub(super) fn allocate(
         crate::resource_exhaustion::accounting_overflow("search generation ID space exhausted")
     })?;
     let stored_key = key(transaction, NAMESPACE, digest)?;
-    let added_bytes = (stored_key.key_bytes().len() + 8
-        + if counter.is_none() { counter_key.key_bytes().len() + 8 } else { 0 }) as u64;
+    let added_bytes = (stored_key.key_bytes().len()
+        + 8
+        + if counter.is_none() {
+            counter_key.key_bytes().len() + 8
+        } else {
+            0
+        }) as u64;
     if added_bytes > remaining_bytes {
-        return Err(crate::resource_exhaustion::capacity_quota("search generation dictionary exceeds owner budget"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "search generation dictionary exceeds owner budget",
+        ));
     }
     database.entity_put(transaction, stored_key, id.to_be_bytes().to_vec())?;
     database.entity_put(transaction, counter_key, id.to_be_bytes().to_vec())?;
@@ -76,7 +97,9 @@ pub(super) fn retire(
     digest: &[u8; 32],
 ) -> io::Result<u64> {
     let stored_key = key(transaction, NAMESPACE, digest)?;
-    let Some(bytes) = database.entity_get(transaction, &stored_key)? else { return Ok(0); };
+    let Some(bytes) = database.entity_get(transaction, &stored_key)? else {
+        return Ok(0);
+    };
     decode_id(&bytes)?;
     let removed_bytes = (stored_key.key_bytes().len() + bytes.len()) as u64;
     database.entity_delete(transaction, stored_key)?;
@@ -104,7 +127,10 @@ mod tests {
         let (second_id, second_charge) = allocate(&database, &mut tx, &second, 1024).unwrap();
         assert_ne!(first_id, second_id);
         assert!(first_charge > second_charge);
-        assert_eq!(allocate(&database, &mut tx, &first, 0).unwrap(), (first_id, 0));
+        assert_eq!(
+            allocate(&database, &mut tx, &first, 0).unwrap(),
+            (first_id, 0)
+        );
         database.commit(tx).unwrap();
         for (tenant, owner) in [(7, 12), (8, 11)] {
             let mut tx = database.begin(tenant, owner).unwrap();
@@ -116,7 +142,10 @@ mod tests {
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
         let mut tx = database.begin(7, 11).unwrap();
         assert_eq!(lookup(&database, &mut tx, &first).unwrap(), Some(first_id));
-        assert_eq!(lookup(&database, &mut tx, &second).unwrap(), Some(second_id));
+        assert_eq!(
+            lookup(&database, &mut tx, &second).unwrap(),
+            Some(second_id)
+        );
         assert_eq!(retire(&database, &mut tx, &first).unwrap(), second_charge);
         assert_eq!(retire(&database, &mut tx, &first).unwrap(), 0);
         database.commit(tx).unwrap();
@@ -136,9 +165,16 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let digest = [1; 32];
         let mut tx = database.begin(7, 11).unwrap();
-        assert_eq!(allocate(&database, &mut tx, &digest, 0).unwrap_err().kind(), io::ErrorKind::OutOfMemory);
+        assert_eq!(
+            allocate(&database, &mut tx, &digest, 0).unwrap_err().kind(),
+            io::ErrorKind::OutOfMemory
+        );
         assert_eq!(lookup(&database, &mut tx, &digest).unwrap(), None);
-        assert!(database.commit(tx).unwrap_err().to_string().contains("no durable semantic mutation"));
+        assert!(database
+            .commit(tx)
+            .unwrap_err()
+            .to_string()
+            .contains("no durable semantic mutation"));
         let mut tx = database.begin(7, 11).unwrap();
         assert_eq!(allocate(&database, &mut tx, &digest, 1024).unwrap().0, 1);
         drop(tx);
@@ -154,7 +190,12 @@ mod tests {
     fn corrupt_allocator_and_id_exhaustion_do_not_allocate() {
         let directory = tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        for bytes in [vec![], vec![0; 8], vec![1; 9], u64::MAX.to_be_bytes().to_vec()] {
+        for bytes in [
+            vec![],
+            vec![0; 8],
+            vec![1; 9],
+            u64::MAX.to_be_bytes().to_vec(),
+        ] {
             let mut tx = database.begin(7, 11).unwrap();
             let counter_key = key(&tx, NAMESPACE, COUNTER_KEY).unwrap();
             database.entity_put(&mut tx, counter_key, bytes).unwrap();
@@ -168,7 +209,8 @@ mod tests {
     fn prepared(vfs: Arc<DeterministicVfs>) -> AuthorityDatabase {
         vfs.create_dir(Path::new("/dictionary")).unwrap();
         vfs.sync_directory(Path::new("/")).unwrap();
-        let mut database = AuthorityDatabase::initialize_with_vfs(Path::new("/dictionary"), vfs).unwrap();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(Path::new("/dictionary"), vfs).unwrap();
         // The production search projection currently materializes its tree
         // without the authority write overlay. Exercise that publication path.
         database.set_write_overlay_enabled(false);
@@ -195,11 +237,16 @@ mod tests {
         assert_eq!(lookup(&database, &mut tx, &[1; 32]).unwrap(), Some(1));
         let second = lookup(&database, &mut tx, &[2; 32]).unwrap();
         assert!(matches!(second, None | Some(2)));
-        if acknowledged { assert_eq!(second, Some(2)); }
+        if acknowledged {
+            assert_eq!(second, Some(2));
+        }
         let build_key = key(&tx, "search_build_v1", b"dictionary-fault-build").unwrap();
         let build = database.entity_get(&mut tx, &build_key).unwrap();
-        assert_eq!(build.as_deref().map(decode_id).transpose().unwrap(), second,
-            "a dictionary assignment and its build must recover atomically");
+        assert_eq!(
+            build.as_deref().map(decode_id).transpose().unwrap(),
+            second,
+            "a dictionary assignment and its build must recover atomically"
+        );
         let next = allocate(&database, &mut tx, &[3; 32], 1024).unwrap().0;
         assert_eq!(next, if second.is_some() { 3 } else { 2 });
         database.commit(tx).unwrap();
@@ -217,11 +264,17 @@ mod tests {
         let mut injected = 0;
         for (index, operation) in trace.iter().enumerate() {
             let mut actions = vec![FaultAction::ErrorBefore(io::ErrorKind::Interrupted)];
-            if operation == &Operation::Write { actions.push(FaultAction::ShortWrite(3)); }
+            if operation == &Operation::Write {
+                actions.push(FaultAction::ShortWrite(3));
+            }
             for action in actions {
                 let vfs = Arc::new(DeterministicVfs::new(None));
                 let mut database = prepared(Arc::clone(&vfs));
-                vfs.arm_fault(Some(FaultRule { operation_number: index as u64 + 1, action })).unwrap();
+                vfs.arm_fault(Some(FaultRule {
+                    operation_number: index as u64 + 1,
+                    action,
+                }))
+                .unwrap();
                 let acknowledged = publish_build(&mut database).is_ok();
                 drop(database);
                 assert_recovery(vfs, acknowledged);

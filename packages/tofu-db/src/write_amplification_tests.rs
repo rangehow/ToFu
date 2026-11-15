@@ -106,11 +106,7 @@ fn run_budget(overlay: bool) -> io::Result<()> {
     } else {
         WAL_BYTES_PER_APPEND_CEILING
     };
-    let write_ops_ceiling = if overlay {
-        WRITE_OPS_PER_APPEND_CEILING
-    } else {
-        WRITE_OPS_PER_APPEND_CEILING
-    };
+    let write_ops_ceiling = WRITE_OPS_PER_APPEND_CEILING;
 
     // Seed the conversation outside the measured window so only steady-state
     // appends count.
@@ -119,10 +115,9 @@ fn run_budget(overlay: bool) -> io::Result<()> {
     database.commit(seed)?;
 
     let mut write_ops = 0_usize;
-    let mut wal_bytes_before = database.wal_len()?;
     for index in 1..=BUDGET_APPENDS {
         let ops_before = vfs.trace()?.len();
-        wal_bytes_before = database.wal_len()?;
+        let wal_bytes_before = database.wal_len()?;
         let mut transaction = database.begin_with_identity_claim_scopes(TENANT, OWNER)?;
         append_turn(&database, &mut transaction, index);
         database.commit(transaction)?;

@@ -145,7 +145,9 @@ fn write_count(
     maximum: usize,
 ) -> io::Result<()> {
     if count > maximum {
-        return Err(crate::resource_exhaustion::capacity_quota("paper artifact owner capacity is exhausted"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "paper artifact owner capacity is exhausted",
+        ));
     }
     db.entity_put(
         tx,
@@ -252,7 +254,9 @@ impl Request {
                     .map_err(|_| invalid_input("paper report metadata cannot be encoded"))?
                     .len();
                 if meta_bytes > MAX_PAPER_REPORT_META_BYTES {
-                    return Err(crate::resource_exhaustion::domain_bound("paper report metadata exceeds its bound"));
+                    return Err(crate::resource_exhaustion::domain_bound(
+                        "paper report metadata exceeds its bound",
+                    ));
                 }
                 Ok(value.paper_hash.len() + value.lang.len() + value.model.len() + meta_bytes)
             }
@@ -358,7 +362,9 @@ impl Request {
                     .map_err(|_| invalid_input("paper pass entry cannot be encoded"))?
                     .len();
                 if bytes > MAX_PAPER_REPORT_META_BYTES {
-                    return Err(crate::resource_exhaustion::domain_bound("paper pass entry exceeds its bound"));
+                    return Err(crate::resource_exhaustion::domain_bound(
+                        "paper pass entry exceeds its bound",
+                    ));
                 }
                 Ok(paper_hash.len() + lang.len() + name.len() + bytes)
             }
@@ -487,7 +493,9 @@ fn store<T: Serialize>(
     let raw = serde_json::to_vec(request.value)
         .map_err(|_| invalid_data("paper artifact document cannot be encoded"))?;
     if raw.len() > request.maximum {
-        return Err(crate::resource_exhaustion::domain_bound("paper artifact document exceeds its byte bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "paper artifact document exceeds its byte bound",
+        ));
     }
     versioned_document::put_with_blob_owner_bounded(
         db,
@@ -564,7 +572,9 @@ fn encode(value: &Value, maximum: usize) -> io::Result<Vec<u8>> {
     let raw = serde_json::to_vec(value)
         .map_err(|_| invalid_data("paper artifact response cannot be encoded"))?;
     if raw.len() > maximum {
-        return Err(crate::resource_exhaustion::domain_bound("paper artifact response exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "paper artifact response exceeds its bound",
+        ));
     }
     Ok(raw)
 }
@@ -582,7 +592,9 @@ fn report_upsert(
         MAX_PAPER_REPORT_ROWS_PER_OWNER,
     )?;
     if previous.is_none() && count == MAX_PAPER_REPORT_ROWS_PER_OWNER {
-        return Err(crate::resource_exhaustion::capacity_quota("paper report owner capacity is exhausted"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "paper report owner capacity is exhausted",
+        ));
     }
     if let Some((core, _)) = &previous {
         db.entity_delete(
@@ -832,7 +844,9 @@ fn translation_upsert(
         MAX_PAPER_TRANSLATION_ROWS_PER_OWNER,
     )?;
     if exists.is_none() && count == MAX_PAPER_TRANSLATION_ROWS_PER_OWNER {
-        return Err(crate::resource_exhaustion::capacity_quota("paper translation owner capacity is exhausted"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "paper translation owner capacity is exhausted",
+        ));
     }
     let document = Translation {
         paper_hash: value.paper_hash.clone(),
@@ -1094,7 +1108,9 @@ fn parse_report_restore(payload: Value) -> io::Result<ReportRestoreRequest> {
         .map_err(|_| invalid_input("paper report metadata cannot be encoded"))?
         .len();
     if meta_bytes > MAX_PAPER_REPORT_META_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("paper report metadata exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "paper report metadata exceeds its bound",
+        ));
     }
     Ok(request)
 }
@@ -1225,7 +1241,9 @@ fn report_restore(
         MAX_PAPER_REPORT_ROWS_PER_OWNER,
     )?;
     if count == MAX_PAPER_REPORT_ROWS_PER_OWNER {
-        return Err(crate::resource_exhaustion::capacity_quota("paper report owner capacity is exhausted"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "paper report owner capacity is exhausted",
+        ));
     }
     let logical = identity(&request.paper_hash, &request.lang)?;
     let core_updated = deterministic_updated_at_ms(&core)?;
@@ -1366,7 +1384,9 @@ fn translation_restore(
         MAX_PAPER_TRANSLATION_ROWS_PER_OWNER,
     )?;
     if count == MAX_PAPER_TRANSLATION_ROWS_PER_OWNER {
-        return Err(crate::resource_exhaustion::capacity_quota("paper translation owner capacity is exhausted"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "paper translation owner capacity is exhausted",
+        ));
     }
     store(
         db,

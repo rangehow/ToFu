@@ -28,13 +28,12 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MAX_SCHEDULER_POLL_DOCUMENT_BYTES,
-    MAX_SCHEDULER_TASK_DOCUMENT_BYTES, MAX_SCHEDULER_TASK_ID_CHARACTERS,
-    MIGRATION_SESSION_MAX_PAGE_ROWS, SCHEDULER_POLL_DOCUMENT_NAMESPACE,
-    SCHEDULER_POLL_SEQUENCE_NAMESPACE, SCHEDULER_POLL_TIME_INDEX_NAMESPACE,
-    SCHEDULER_TASK_COUNT_NAMESPACE, SCHEDULER_TASK_CREATED_INDEX_NAMESPACE,
-    SCHEDULER_TASK_DOCUMENT_NAMESPACE, SCHEDULER_TASK_ENABLED_CREATED_INDEX_NAMESPACE,
-    SCHEDULER_TASK_GLOBAL_CREATED_INDEX_NAMESPACE,
+    MAX_SCHEDULER_POLL_DOCUMENT_BYTES, MAX_SCHEDULER_TASK_DOCUMENT_BYTES,
+    MAX_SCHEDULER_TASK_ID_CHARACTERS, MIGRATION_SESSION_MAX_PAGE_ROWS,
+    SCHEDULER_POLL_DOCUMENT_NAMESPACE, SCHEDULER_POLL_SEQUENCE_NAMESPACE,
+    SCHEDULER_POLL_TIME_INDEX_NAMESPACE, SCHEDULER_TASK_COUNT_NAMESPACE,
+    SCHEDULER_TASK_CREATED_INDEX_NAMESPACE, SCHEDULER_TASK_DOCUMENT_NAMESPACE,
+    SCHEDULER_TASK_ENABLED_CREATED_INDEX_NAMESPACE, SCHEDULER_TASK_GLOBAL_CREATED_INDEX_NAMESPACE,
     SCHEDULER_TASK_GLOBAL_ENABLED_CREATED_INDEX_NAMESPACE, SCHEDULER_TASK_ID_CLAIM_NAMESPACE,
     SCHEDULER_TASK_SYSTEM_KEY_CLAIM_NAMESPACE,
 };
@@ -500,7 +499,10 @@ fn scan_tasks(
     };
     // Count self-proof is only sound for a complete single-page catalog;
     // multi-page completeness is checked by the importer's row accounting.
-    if request.cursor.is_none() && cursor.is_none() && rows.len() as u64 != read_count(database, tx)? {
+    if request.cursor.is_none()
+        && cursor.is_none()
+        && rows.len() as u64 != read_count(database, tx)?
+    {
         // On a full single-page pass the owner-scoped catalog must agree
         // with the restored task count exactly.
         return Err(invalid_data("scheduler task count and catalog differ"));
@@ -739,17 +741,46 @@ mod tests {
         let (_, mut database) = prepared();
         for index in 0..130 {
             let payload = document(&format!("many-{index:04}"), "", 1);
-            assert_eq!(execute(&mut database, 7, 11, "migration.scheduler.task.restore", payload).unwrap()["inserted"], true);
+            assert_eq!(
+                execute(
+                    &mut database,
+                    7,
+                    11,
+                    "migration.scheduler.task.restore",
+                    payload
+                )
+                .unwrap()["inserted"],
+                true
+            );
         }
         let repeated = document("many-0129", "", 1);
-        assert_eq!(execute(&mut database, 7, 11, "migration.scheduler.task.restore", repeated).unwrap()["inserted"], false);
+        assert_eq!(
+            execute(
+                &mut database,
+                7,
+                11,
+                "migration.scheduler.task.restore",
+                repeated
+            )
+            .unwrap()["inserted"],
+            false
+        );
         let mut cursor = Value::Null;
         let mut restored = Vec::new();
         loop {
-            let page = execute(&mut database, 7, 11, "migration.scheduler.task.scan", json!({"cursor": cursor})).unwrap();
+            let page = execute(
+                &mut database,
+                7,
+                11,
+                "migration.scheduler.task.scan",
+                json!({"cursor": cursor}),
+            )
+            .unwrap();
             restored.extend(page["rows"].as_array().unwrap().iter().cloned());
             cursor = page["cursor"].clone();
-            if cursor.is_null() { break; }
+            if cursor.is_null() {
+                break;
+            }
         }
         assert_eq!(restored.len(), 130);
         assert_eq!(restored[129]["id"], "many-0129");
@@ -796,7 +827,7 @@ mod tests {
         .unwrap();
         assert_eq!(get["document"]["system_key"], "sys.key");
         assert_eq!(get["document"]["enabled"], 1);
-        let mut divergent = document("s-1", "sys.key", 0);
+        let divergent = document("s-1", "sys.key", 0);
         assert!(execute(
             &mut database,
             7,

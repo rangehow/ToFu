@@ -27,9 +27,9 @@ export interface DxRobotPorts {
 
 type RobotFix = 'group' | 'permission' | 'app' | 'credentials' | 'secretMissing' | 'network';
 
-// The setup step a refusal code asks the owner to redo: lib/channels/dx/robot.py's
-// own codes, and robot_<code> for the open platform's 错误码
-// (https://km.internal.example.com/collabpage/719464490). Other codes show their detail only.
+// The setup step a refusal code asks the owner to redo: the dx adapter robot's
+// own codes (tofu_yourprovider/dx/robot.py), and robot_<code> for the open platform's
+// error codes. Other codes show their detail only.
 const ROBOT_FIXES: Readonly<Record<string, RobotFix>> = {
   robot_70003: 'group',
   robot_30002: 'permission',
@@ -44,9 +44,6 @@ const ROBOT_FIXES: Readonly<Record<string, RobotFix>> = {
   token_unavailable: 'network',
 };
 
-// The consoles of the owner setup steps (docs/CHANNELS.md C6, "Owner setup").
-const APP_CONSOLE = 'https://open.internal.example.com/developer/app/apply';
-const OFFICE_CONSOLE = 'https://xopen.internal.example.com/home';
 const GROUP_THREAD_PREFIX = 'dx:gid:';
 
 function fixText(code: string): string {
@@ -83,18 +80,17 @@ function refusal(error: DxRobotError): HTMLElement {
   return alert;
 }
 
-function setupSteps(open: boolean): HTMLElement {
+/** The setup steps; the installed adapter names the consoles of the first steps, in order
+ * (``robotSetupConsoles``, docs/CHANNELS.md C6 "Owner setup"). */
+function setupSteps(open: boolean, consoles: ChannelAccountView['robotSetupConsoles']): HTMLElement {
   const steps = element('details', 'channel-advanced dx-robot-setup');
   steps.open = open;
   steps.appendChild(element('summary', '', t('settings.dx.robot.steps')));
   const list = element('ol', 'dx-robot-steps');
-  const consoles: Array<[string, string] | null> = [
-    ['open.internal.example.com', APP_CONSOLE], ['xopen.internal.example.com', OFFICE_CONSOLE], null, null,
-  ];
   (['step1', 'step2', 'step3', 'step4'] as const).forEach((step, index) => {
     const item = element('li', '', t(`settings.dx.robot.${step}` as const));
     const target = consoles[index];
-    if (target) item.append(' ', externalLink(...target));
+    if (target) item.append(' ', externalLink(target.host, target.url));
     list.appendChild(item);
   });
   steps.append(list, hint(t('settings.dx.robot.stepsSource')));
@@ -213,6 +209,6 @@ export function renderRobotCard(account: ChannelAccountView, vaultEntries: strin
     vault.appendChild(entryRow);
     section.appendChild(vault);
   }
-  section.appendChild(setupSteps(!robot || Boolean(robot.error)));
+  section.appendChild(setupSteps(!robot || Boolean(robot.error), account.robotSetupConsoles ?? []));
   return section;
 }

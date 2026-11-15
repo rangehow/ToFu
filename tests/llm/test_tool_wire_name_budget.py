@@ -1,4 +1,4 @@
-"""Tool-name byte budget for Claude on the your-llm-gateway.example.com Anthropic face.
+"""Tool-name byte budget for Claude on a declared gateway's Anthropic face.
 
 Live A/B on 2026-10-28 (kunlunbedrock.claude-opus-5.5-m17, byte-identical
 bodies sent 10-15 s apart): the gateway keeps prompt-cache affinity only while
@@ -13,9 +13,12 @@ import pytest
 
 from lib.llm import tool_wire
 
-pytestmark = pytest.mark.unit
+from tests.support.gateway_profiles import (  # noqa: F401 (fixture)
+    CLAUDE_TOOL_NAME_BUDGET_BYTES, claude_tool_name_budget_gateway)
 
-SANKUAI_ANTHROPIC = 'https://api.openai.com/v1/anthropic'
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures('claude_tool_name_budget_gateway')]
+
+SANKUAI_ANTHROPIC = 'https://claude-gateway.example.test/v1/anthropic'
 
 # Joined-name bytes of probes that did / did not read their own write back
 # (35-tool probes; 10- and 20-tool probes bracket the same boundary).
@@ -73,24 +76,24 @@ def _joined_bytes(names):
     return sum(len(name.encode('utf-8')) + 1 for name in names)
 
 
-def test_budget_binds_only_claude_on_the_example_corp_anthropic_face():
+def test_budget_binds_only_claude_on_the_declared_anthropic_face():
     budget = tool_wire.provider_tool_name_budget_bytes
     claude = 'kunlunbedrock.claude-opus-5.5-m17'
     assert budget(api_protocol='anthropic', base_url=SANKUAI_ANTHROPIC,
-                  model=claude) == tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+                  model=claude) == CLAUDE_TOOL_NAME_BUDGET_BYTES
     assert budget(api_protocol='anthropic', model='claude-opus-5.5',
-                  base_url='https://api.openai.com/v1/anthropic/') > 0
+                  base_url='https://CLAUDE-GATEWAY.example.test/v1/anthropic/') > 0
     assert budget(api_protocol='anthropic', base_url=SANKUAI_ANTHROPIC,
                   model='kimi-k3.1-pro') == 0
     for protocol, url in (
-            ('openai', 'https://api.openai.com/v1'),
-            ('responses', 'https://api.openai.com/v1'),
+            ('openai', 'https://claude-gateway.example.test/v1/openai/native'),
+            ('responses', 'https://claude-gateway.example.test/v1/openai/native'),
             ('anthropic', 'https://api.anthropic.com/v1'),
-            ('anthropic', 'https://mcli.internal.example.com/anthropic'),
+            ('anthropic', 'https://other-gateway.example.test/anthropic'),
             ('anthropic', ''), ('anthropic', 'http://[::1')):
         assert budget(api_protocol=protocol, base_url=url, model=claude) == 0
     assert _joined_bytes(ROOT_WIRE_NAMES) >= MEASURED_FIRST_MISS_BYTES
-    assert (tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES + 32
+    assert (CLAUDE_TOOL_NAME_BUDGET_BYTES + 32
             <= MEASURED_LAST_HIT_BYTES)
 
 
@@ -157,14 +160,14 @@ def _root_body(**extra):
     return body
 
 
-def test_projection_fits_example_corp_anthropic_and_keeps_discovery_live():
+def test_projection_fits_the_declared_face_and_keeps_discovery_live():
     body = _root_body()
     projection = tool_wire.project_tool_wire(
         body, api_protocol='anthropic', base_url=SANKUAI_ANTHROPIC)
     names = _names(body['tools'])
     hidden = [name for name in OVER_BUDGET_NAMES if name not in names]
 
-    assert _joined_bytes(names) <= tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+    assert _joined_bytes(names) <= CLAUDE_TOOL_NAME_BUDGET_BYTES
     assert {'search_tools', 'execute_tools', 'poll', 'kill', *CODE_FLOOR} <= set(names)
     assert hidden and set(hidden) <= set(projection.budget_dropped_names)
     # Hidden tools keep their execution authority for search/execute_tools.
@@ -181,7 +184,7 @@ def test_projection_fits_example_corp_anthropic_and_keeps_discovery_live():
 
 
 @pytest.mark.parametrize('protocol,url,model', [
-    ('openai', 'https://api.openai.com/v1', 'claude-opus-5.5'),
+    ('openai', 'https://claude-gateway.example.test/v1/openai/native', 'claude-opus-5.5'),
     ('anthropic', 'https://api.anthropic.com/v1', 'claude-opus-5.5'),
     ('anthropic', SANKUAI_ANTHROPIC, 'kimi-k3.1-pro'),
 ])
@@ -208,7 +211,7 @@ def test_search_only_mcp_brings_the_measured_root_surface_under_budget():
         body, api_protocol='anthropic', base_url=SANKUAI_ANTHROPIC)
     names = _names(body['tools'])
     assert set(names) == {name for name in ROOT_WIRE_NAMES if not name.startswith('mcp__')}
-    assert _joined_bytes(names) <= tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+    assert _joined_bytes(names) <= CLAUDE_TOOL_NAME_BUDGET_BYTES
     assert not projection.budget_dropped_names
 
 
@@ -222,7 +225,7 @@ def test_all_eager_local_surface_keeps_a_discovery_path_to_fit(monkeypatch):
     names = _names(body['tools'])
     hidden = [name for name in OVER_BUDGET_NAMES if name not in names]
 
-    assert _joined_bytes(names) <= tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES
+    assert _joined_bytes(names) <= CLAUDE_TOOL_NAME_BUDGET_BYTES
     assert {'search_tools', 'execute_tools', 'poll', 'kill', *CODE_FLOOR} <= set(names)
     assert hidden and set(hidden) <= set(projection.budget_dropped_names)
     assert warnings == []
@@ -255,7 +258,7 @@ def test_explicit_tool_search_off_is_honored_and_reported(monkeypatch):
         'search_tools', 'execute_tools'}
     assert not projection.budget_dropped_names
     assert (projection.tool_name_budget_bytes
-            == tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES)
+            == CLAUDE_TOOL_NAME_BUDGET_BYTES)
     (warning,) = warnings
     assert warning.startswith('[task] [ToolWire] tool-name budget 448 bytes NOT met')
     assert 'backend=full' in warning
@@ -284,7 +287,7 @@ def test_never_hidden_names_leave_room_under_the_route_budget():
     # Growing this floor toward the budget would leave no room for optional
     # tools and push every root request back over the cache-affinity edge.
     assert (_joined_bytes(never_hidden)
-            <= tool_wire.SANKUAI_ANTHROPIC_TOOL_NAME_BUDGET_BYTES // 2)
+            <= CLAUDE_TOOL_NAME_BUDGET_BYTES // 2)
 
 
 def test_tool_name_bytes_counts_provider_visible_names():

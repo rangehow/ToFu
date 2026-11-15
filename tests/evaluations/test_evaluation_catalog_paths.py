@@ -86,19 +86,18 @@ def test_forbidden_host_output_rejected_before_creation(path):
         prepare_output_root(Path(path))
 
 
-def test_host_path_rejects_symlink_and_off_declared_volume(host_tmp_path, monkeypatch):
+def test_host_path_rejects_symlink_and_off_shared_volume(host_tmp_path, monkeypatch):
     target = host_tmp_path / "target"
     target.mkdir()
     (host_tmp_path / "link").symlink_to(target, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         validate_output_path(host_tmp_path / "link" / "new")
     from evaluations import paths
-    monkeypatch.setenv("TOFU_REQUIRED_HOST_VOLUME", "/mnt/sharedfs")
     monkeypatch.setattr(paths, "PROJECT_ROOT", Path("/mnt/sharedfs/checkout"))
     monkeypatch.setattr(paths, "validate_host_path", lambda path: path)
     with pytest.raises(ValueError, match="/mnt/sharedfs"):
         validate_output_path(Path("/opt/other-volume/new-eval"))
-    monkeypatch.delenv("TOFU_REQUIRED_HOST_VOLUME")
+    monkeypatch.setattr(paths, "PROJECT_ROOT", Path("/srv/checkout"))
     assert validate_output_path(Path("/opt/other-volume/new-eval")) == Path("/opt/other-volume/new-eval")
 
 
@@ -287,9 +286,8 @@ def test_low_level_state_cache_and_script_roots_share_storage_policy():
             check(Path("/tmp/not-created-by-test"))
 
 
-def test_all_host_scratch_stays_on_the_declared_volume_when_checkout_is_on_it(monkeypatch):
+def test_all_host_scratch_stays_on_the_shared_volume_when_checkout_is_on_it(monkeypatch):
     from rootless_vm import host_paths
-    monkeypatch.setenv("TOFU_REQUIRED_HOST_VOLUME", "/mnt/sharedfs")
     monkeypatch.setattr(host_paths, "__file__", "/mnt/sharedfs/checkout/rootless_vm/host_paths.py")
     with pytest.raises(ValueError, match="/mnt/sharedfs"):
         host_paths.private_temporary_root(owner_root=Path("/opt/off-volume"))

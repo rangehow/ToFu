@@ -17,8 +17,8 @@ use serde_json::{json, Value};
 use std::io;
 
 use super::{
-    encode_projection, invalid_data, invalid_input, json_record, materialize_record, read_record, read_record_bytes, write_record,
-    CONTINUATION_NAMESPACE, MAX_PROJECTION_BYTES,
+    encode_projection, invalid_data, invalid_input, json_record, materialize_record, read_record,
+    read_record_bytes, write_record, CONTINUATION_NAMESPACE, MAX_PROJECTION_BYTES,
 };
 use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::entity::EntityKey;
@@ -174,7 +174,10 @@ fn verify_record(
     // The lifecycle lane directory must point at the imported record or later
     // conversation/turn deletion would leak the derived continuation.
     if database
-        .entity_get(transaction, &lane_index_key_from_raw(transaction, &prepared.raw_key)?)?
+        .entity_get(
+            transaction,
+            &lane_index_key_from_raw(transaction, &prepared.raw_key)?,
+        )?
         .as_deref()
         != Some(b"".as_slice())
     {
@@ -237,7 +240,14 @@ fn restore(
         verify_record(database, transaction, &prepared)?;
         return Ok(false);
     }
-    write_record(database, transaction, key, prepared.frontier, &prepared.projection, prepared.updated_at_ms)?;
+    write_record(
+        database,
+        transaction,
+        key,
+        prepared.frontier,
+        &prepared.projection,
+        prepared.updated_at_ms,
+    )?;
     database.entity_put(
         transaction,
         lane_index_key_from_raw(transaction, &prepared.raw_key)?,

@@ -6,8 +6,12 @@ use std::{borrow::Cow, ops::Deref, sync::Mutex};
 
 #[derive(Clone)]
 pub(crate) struct StorageV2Bindings {
-    pub(crate) worker_control: Option<(std::sync::Arc<crate::worker_control::WorkerControl>, crate::semantic::AuthenticatedScope)>,
-    pub(crate) checkpoint_control: Option<std::sync::Arc<crate::daemon_checkpoint::DaemonCheckpointControl>>,
+    pub(crate) worker_control: Option<(
+        std::sync::Arc<crate::worker_control::WorkerControl>,
+        crate::semantic::AuthenticatedScope,
+    )>,
+    pub(crate) checkpoint_control:
+        Option<std::sync::Arc<crate::daemon_checkpoint::DaemonCheckpointControl>>,
     pub(crate) authority_admission: std::sync::Arc<crate::authority_admission::AuthorityAdmission>,
     pub(crate) published_queries: Option<crate::authority::PublishedQueryView>,
     pub(crate) authority_gc_budget: AuthorityGarbageCollectionBudget,
@@ -70,12 +74,19 @@ impl<'stores> StorageV2Stores<'stores> {
         }
     }
 
-    pub(crate) fn with_worker_control(mut self, control: std::sync::Arc<crate::worker_control::WorkerControl>, scope: crate::semantic::AuthenticatedScope) -> Self {
+    pub(crate) fn with_worker_control(
+        mut self,
+        control: std::sync::Arc<crate::worker_control::WorkerControl>,
+        scope: crate::semantic::AuthenticatedScope,
+    ) -> Self {
         self.bindings.to_mut().worker_control = Some((control, scope));
         self
     }
 
-    pub(crate) fn with_checkpoint_control(mut self, control: std::sync::Arc<crate::daemon_checkpoint::DaemonCheckpointControl>) -> Self {
+    pub(crate) fn with_checkpoint_control(
+        mut self,
+        control: std::sync::Arc<crate::daemon_checkpoint::DaemonCheckpointControl>,
+    ) -> Self {
         self.bindings.to_mut().checkpoint_control = Some(control);
         self
     }
@@ -137,7 +148,8 @@ mod tests {
     fn bindings() -> StorageV2Bindings {
         StorageV2Bindings {
             checkpoint_control: None,
-                worker_control: None,            authority_admission: Arc::default(),
+            worker_control: None,
+            authority_admission: Arc::default(),
             published_queries: None,
             authority_gc_budget: AuthorityGarbageCollectionBudget::conservative(),
             wal_barrier: None,

@@ -80,6 +80,7 @@ pub(crate) fn event(
         remaining,
     )
 }
+#[cfg(test)]
 pub(crate) fn logical_event(
     database: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,
@@ -99,6 +100,7 @@ pub(crate) fn logical_event(
         remaining,
     )
 }
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn context(
     database: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,
@@ -123,6 +125,7 @@ pub(crate) fn context(
         remaining,
     )
 }
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn context_with_claim(
     database: &AuthorityDatabase,
     tx: &mut AuthorityTransaction,

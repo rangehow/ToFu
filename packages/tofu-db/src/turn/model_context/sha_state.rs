@@ -42,11 +42,11 @@ impl ShaState {
                 self.tail.clear();
             }
         }
-        let mut chunks = input.chunks_exact(64);
-        for block in &mut chunks {
+        let (blocks, remainder) = input.as_chunks::<64>();
+        for block in blocks {
             compress256(&mut self.words, &[GenericArray::clone_from_slice(block)]);
         }
-        self.tail.extend_from_slice(chunks.remainder());
+        self.tail.extend_from_slice(remainder);
         Ok(())
     }
     pub(super) fn digest(&self) -> String {
@@ -56,7 +56,7 @@ impl ShaState {
         padding[self.tail.len()] = 0x80;
         let size = if self.tail.len() < 56 { 64 } else { 128 };
         padding[size - 8..size].copy_from_slice(&(self.bytes * 8).to_be_bytes());
-        for block in padding[..size].chunks_exact(64) {
+        for block in padding[..size].as_chunks::<64>().0 {
             compress256(&mut words, &[GenericArray::clone_from_slice(block)]);
         }
         words.iter().map(|word| format!("{word:08x}")).collect()
@@ -84,8 +84,8 @@ impl ShaState {
             return Err(bad());
         }
         let mut words = [0; 8];
-        for (slot, bytes) in words.iter_mut().zip(encoded[..32].chunks_exact(4)) {
-            *slot = u32::from_be_bytes(bytes.try_into().unwrap());
+        for (slot, bytes) in words.iter_mut().zip(encoded[..32].as_chunks::<4>().0) {
+            *slot = u32::from_be_bytes(*bytes);
         }
         if bytes < 64 && words != INITIAL {
             return Err(bad());

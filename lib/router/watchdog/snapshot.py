@@ -25,8 +25,10 @@ from lib.storage.errors import StorageError
 from .signals import FaultSignals, UNHEALTHY_CHANNEL_STATES, _bounded
 
 _HELD_DELIVERY = frozenset({'blocked', 'failed', 'preserved'})
-# The supervisor hosting each contract channel (channels_v1 Channel enum).
-CHANNEL_SUPERVISORS = {'dx': 'lib.channels.dx.supervisor', 'github': 'lib.channels.github.supervisor',
+# The supervisor hosting each built-in contract channel (channels_v1 Channel
+# enum); an overlay channel's comes from its installed adapter
+# (lib.channels.adapters), e.g. 大象.
+CHANNEL_SUPERVISORS = {'github': 'lib.channels.github.supervisor',
                        'wecom': 'lib.channels.wecom.supervisor', 'qq': 'lib.channels.qq.supervisor',
                        'wechat': 'lib.channels.wechat.supervisor'}
 _SETTLED_OK = frozenset({'completed', 'superseded', 'cancelled'})
@@ -108,7 +110,14 @@ def _channels(owner: int, client) -> tuple[list[dict], list[dict]]:
         if not account:
             continue
         status = account.get('status') or {}
-        supervisor = importlib.import_module(CHANNEL_SUPERVISORS[channel])
+        if channel in CHANNEL_SUPERVISORS:
+            supervisor = importlib.import_module(CHANNEL_SUPERVISORS[channel])
+        else:
+            from lib.channels.adapters import channel_adapter
+            adapter = channel_adapter(channel)
+            if adapter is None:
+                continue
+            supervisor = adapter.supervisor
         channels.append({'channel': channel, 'enabled': bool(account.get('enabled')),
                          'state': status.get('state') or 'disabled', 'detail': status.get('detail') or '',
                          'since_ms': status.get('updatedAtMs'), 'connected_at_ms': status.get('connectedAtMs'),

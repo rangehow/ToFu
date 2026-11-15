@@ -242,7 +242,10 @@ enum MaterializedDocumentValue<'a> {
 }
 impl MaterializedDocumentValue<'_> {
     fn bytes(&self) -> &[u8] {
-        match self { Self::Inline(bytes) => bytes, Self::Blob(blob) => blob.bytes() }
+        match self {
+            Self::Inline(bytes) => bytes,
+            Self::Blob(blob) => blob.bytes(),
+        }
     }
     fn into_bytes(self) -> Vec<u8> {
         match self {
@@ -361,7 +364,14 @@ pub(crate) fn materialize_stored_document_bounded(
     namespace: &str,
     maximum_bytes: usize,
 ) -> io::Result<(String, Vec<u8>)> {
-    let (key, value) = materialize_stored_bytes_bounded(database, tenant_id, owner_user_id, stored, namespace, maximum_bytes)?;
+    let (key, value) = materialize_stored_bytes_bounded(
+        database,
+        tenant_id,
+        owner_user_id,
+        stored,
+        namespace,
+        maximum_bytes,
+    )?;
     // Byte consumers need the same grammar/depth fence, not a discarded tree.
     crate::response_json::validate(&value)
         .map_err(|_| invalid_data("versioned document value is not JSON"))?;
@@ -384,7 +394,12 @@ pub(crate) fn materialize_stored_document_value_bounded(
         return Err(invalid_data("versioned document identity mismatch"));
     }
     let materialized = materialize_value_with_witness(
-        database, tenant_id, owner_user_id, &document.value, maximum_bytes)?;
+        database,
+        tenant_id,
+        owner_user_id,
+        &document.value,
+        maximum_bytes,
+    )?;
     let bytes = materialized.bytes();
     let decoded = serde_json::from_slice::<Value>(bytes)
         .map_err(|_| invalid_data("versioned document value is not JSON"))?;
@@ -402,7 +417,12 @@ pub(crate) fn materialize_stored_document_value_and_bytes_bounded(
     maximum_bytes: usize,
 ) -> io::Result<(String, Value, Vec<u8>)> {
     let (key, bytes) = materialize_stored_bytes_bounded(
-        database, tenant_id, owner_user_id, stored, namespace, maximum_bytes,
+        database,
+        tenant_id,
+        owner_user_id,
+        stored,
+        namespace,
+        maximum_bytes,
     )?;
     let decoded = serde_json::from_slice::<Value>(&bytes)
         .map_err(|_| invalid_data("versioned document value is not JSON"))?;
@@ -499,19 +519,31 @@ pub(crate) struct DocumentProjection {
 }
 impl DocumentProjection {
     pub(crate) fn json_proven(&self) -> bool {
-        self.maximum_container_depth.is_some_and(|depth|
-            depth <= crate::response_json::MAX_VALIDATED_CONTAINER_DEPTH)
+        self.maximum_container_depth
+            .is_some_and(|depth| depth <= crate::response_json::MAX_VALIDATED_CONTAINER_DEPTH)
     }
     pub(crate) fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
 }
+#[cfg(test)]
 fn project_document(
-    database: &AuthorityDatabase, tenant_id: u64, owner_user_id: u64,
-    document: &Document, include_key: bool, maximum_bytes: usize,
+    database: &AuthorityDatabase,
+    tenant_id: u64,
+    owner_user_id: u64,
+    document: &Document,
+    include_key: bool,
+    maximum_bytes: usize,
 ) -> io::Result<Vec<u8>> {
-    project_document_with_proof(database, tenant_id, owner_user_id, document, include_key, maximum_bytes)
-        .map(DocumentProjection::into_bytes)
+    project_document_with_proof(
+        database,
+        tenant_id,
+        owner_user_id,
+        document,
+        include_key,
+        maximum_bytes,
+    )
+    .map(DocumentProjection::into_bytes)
 }
 
 fn project_document_with_proof(
@@ -524,20 +556,32 @@ fn project_document_with_proof(
 ) -> io::Result<DocumentProjection> {
     let value = {
         let _materialize = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_DOCUMENT_VALUE_MATERIALIZE);
-        materialize_value_with_witness(database, tenant_id, owner_user_id, &document.value, maximum_bytes)?
+            crate::fsync_stats::STAGE_DOCUMENT_VALUE_MATERIALIZE,
+        );
+        materialize_value_with_witness(
+            database,
+            tenant_id,
+            owner_user_id,
+            &document.value,
+            maximum_bytes,
+        )?
     };
     let value = {
         let _canonical = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_DOCUMENT_JSON_CANONICAL);
+            crate::fsync_stats::STAGE_DOCUMENT_JSON_CANONICAL,
+        );
         match &value {
-            MaterializedDocumentValue::Inline(bytes) => crate::canonical_json_bytes::canonicalize_with_depth(bytes),
+            MaterializedDocumentValue::Inline(bytes) => {
+                crate::canonical_json_bytes::canonicalize_with_depth(bytes)
+            }
             MaterializedDocumentValue::Blob(blob) => database.canonicalize_verified_blob(blob),
-        }.map_err(|_| invalid_data("versioned document value is not JSON"))?
+        }
+        .map_err(|_| invalid_data("versioned document value is not JSON"))?
     };
     let response = {
         let _encode = crate::fsync_stats::StageTimer::diagnostic(
-            crate::fsync_stats::STAGE_DOCUMENT_PROJECT_ENCODE);
+            crate::fsync_stats::STAGE_DOCUMENT_PROJECT_ENCODE,
+        );
         encode_document_projection(document, include_key, value.bytes(), maximum_bytes)?
     };
     if response.len() > maximum_bytes {
@@ -545,17 +589,25 @@ fn project_document_with_proof(
             "versioned document response exceeds 8 MiB",
         ));
     }
-    Ok(DocumentProjection { bytes: response, maximum_container_depth: value.maximum_container_depth().map(|depth| depth + 1) })
+    Ok(DocumentProjection {
+        bytes: response,
+        maximum_container_depth: value.maximum_container_depth().map(|depth| depth + 1),
+    })
 }
-
 
 /// The body was strictly parsed and matched Value's canonical serialization.
 /// Preserve the previous sorted metadata keys and numeric/string serializer.
 fn encode_document_projection(
-    document: &Document, include_key: bool, value: &[u8], maximum_bytes: usize,
+    document: &Document,
+    include_key: bool,
+    value: &[u8],
+    maximum_bytes: usize,
 ) -> io::Result<Vec<u8>> {
-    let capacity = value.len().saturating_add(document.key.len().saturating_mul(6))
-        .saturating_add(96).min(maximum_bytes.saturating_add(1));
+    let capacity = value
+        .len()
+        .saturating_add(document.key.len().saturating_mul(6))
+        .saturating_add(96)
+        .min(maximum_bytes.saturating_add(1));
     let mut output = Vec::with_capacity(capacity);
     let response_error = |_| invalid_data("versioned document response failed");
     if include_key {
@@ -634,7 +686,14 @@ pub(crate) fn get_value_with_version(
     namespace: &str,
     logical_key: &str,
 ) -> io::Result<Option<(Vec<u8>, u64)>> {
-    get_value_with_version_bounded(database, transaction, key, namespace, logical_key, usize::MAX)
+    get_value_with_version_bounded(
+        database,
+        transaction,
+        key,
+        namespace,
+        logical_key,
+        usize::MAX,
+    )
 }
 
 pub(crate) fn get_value_with_version_bounded(
@@ -732,11 +791,21 @@ pub(crate) fn get(
 /// Same owner/identity/materialization bounds as get; preserves the immutable
 /// projection proof until the IR slot owns the bytes.
 pub(crate) fn get_with_response_proof(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-    key: &EntityKey, namespace: &str, logical_key: &str,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    key: &EntityKey,
+    namespace: &str,
+    logical_key: &str,
 ) -> io::Result<Option<DocumentProjection>> {
-    get_projection_with_blob_owner_bounded(database, transaction, key, namespace,
-        logical_key, transaction.owner_user_id(), usize::MAX)
+    get_projection_with_blob_owner_bounded(
+        database,
+        transaction,
+        key,
+        namespace,
+        logical_key,
+        transaction.owner_user_id(),
+        usize::MAX,
+    )
 }
 
 #[cfg(test)]
@@ -831,15 +900,9 @@ mod tests {
         )
         .unwrap();
         for source in [&database, &database.build_read_replica().unwrap()] {
-            let output = project_document_with_proof(
-                source,
-                TENANT,
-                OWNER,
-                &document,
-                false,
-                usize::MAX,
-            )
-            .unwrap();
+            let output =
+                project_document_with_proof(source, TENANT, OWNER, &document, false, usize::MAX)
+                    .unwrap();
             assert!(output.json_proven());
             assert_eq!(output.bytes, expected);
         }
@@ -854,17 +917,10 @@ mod tests {
         let before = observer.metrics();
         for (tenant, owner) in [(TENANT + 1, OWNER), (TENANT, OWNER + 1)] {
             assert_eq!(
-                project_document_with_proof(
-                    &database,
-                    tenant,
-                    owner,
-                    &document,
-                    false,
-                    usize::MAX
-                )
-                .err()
-                .unwrap()
-                .kind(),
+                project_document_with_proof(&database, tenant, owner, &document, false, usize::MAX)
+                    .err()
+                    .unwrap()
+                    .kind(),
                 io::ErrorKind::PermissionDenied
             );
         }
@@ -999,7 +1055,9 @@ mod tests {
             b"[true,null,1.25e3,-0,18446744073709551616]".to_vec(),
             br#"{"$serde_json::private::RawValue":"null"}"#.to_vec(),
             br#"{"$serde_json::private::RawValue":"not json"}"#.to_vec(),
-            b"[1,]".to_vec(), b"{}[]".to_vec(), b"1e309".to_vec(),
+            b"[1,]".to_vec(),
+            b"{}[]".to_vec(),
+            b"1e309".to_vec(),
             b"\"\xff\"".to_vec(),
         ];
         for depth in 125..=129 {
@@ -1007,30 +1065,69 @@ mod tests {
         }
         for bytes in cases {
             let expected = serde_json::from_slice::<Value>(&bytes);
-            let stored = Document { namespace: "conversations".into(), key: "source".into(),
-                version: 1, updated_at_ms: 1, value: DocumentValue::Inline(bytes.clone().into()),
-            }.encode().unwrap();
+            let stored = Document {
+                namespace: "conversations".into(),
+                key: "source".into(),
+                version: 1,
+                updated_at_ms: 1,
+                value: DocumentValue::Inline(bytes.clone().into()),
+            }
+            .encode()
+            .unwrap();
             let byte_read = materialize_stored_document_bounded(
-                &database, TENANT, OWNER, &stored, "conversations", bytes.len(),
+                &database,
+                TENANT,
+                OWNER,
+                &stored,
+                "conversations",
+                bytes.len(),
             );
             let decoded_read = materialize_stored_document_value_and_bytes_bounded(
-                &database, TENANT, OWNER, &stored, "conversations", bytes.len(),
+                &database,
+                TENANT,
+                OWNER,
+                &stored,
+                "conversations",
+                bytes.len(),
             );
             assert_eq!(byte_read.is_ok(), expected.is_ok());
             assert_eq!(decoded_read.is_ok(), expected.is_ok());
             if let Ok(value) = expected {
                 assert_eq!(byte_read.unwrap(), ("source".to_owned(), bytes.clone()));
-                assert_eq!(decoded_read.unwrap(), ("source".to_owned(), value, bytes.clone()));
+                assert_eq!(
+                    decoded_read.unwrap(),
+                    ("source".to_owned(), value, bytes.clone())
+                );
             } else {
                 assert_eq!(byte_read.unwrap_err().kind(), io::ErrorKind::InvalidData);
                 assert_eq!(decoded_read.unwrap_err().kind(), io::ErrorKind::InvalidData);
             }
-            assert_eq!(materialize_stored_document_bounded(
-                &database, TENANT, OWNER, &stored, "other", bytes.len(),
-            ).unwrap_err().to_string(), "versioned document identity mismatch");
-            assert_eq!(materialize_stored_document_value_and_bytes_bounded(
-                &database, TENANT, OWNER, &stored, "conversations", bytes.len() - 1,
-            ).unwrap_err().to_string(), "versioned document inline exceeds response bound");
+            assert_eq!(
+                materialize_stored_document_bounded(
+                    &database,
+                    TENANT,
+                    OWNER,
+                    &stored,
+                    "other",
+                    bytes.len(),
+                )
+                .unwrap_err()
+                .to_string(),
+                "versioned document identity mismatch"
+            );
+            assert_eq!(
+                materialize_stored_document_value_and_bytes_bounded(
+                    &database,
+                    TENANT,
+                    OWNER,
+                    &stored,
+                    "conversations",
+                    bytes.len() - 1,
+                )
+                .unwrap_err()
+                .to_string(),
+                "versioned document inline exceeds response bound"
+            );
         }
     }
 
@@ -1056,47 +1153,108 @@ mod tests {
         let mut bodies = vec![
             br#"{"duplicate":1,"duplicate":2,"text":"\ud83d\ude00"}"#.to_vec(),
             br#"{"$serde_json::private::Number":"12345678901234567890"}"#.to_vec(),
-            b"null".to_vec(), b"[1,true,null]".to_vec(),
+            b"null".to_vec(),
+            b"[1,true,null]".to_vec(),
             br#"{"bad":"\ud800"}"#.to_vec(),
-            b"\"\xff\"".to_vec(), b"1e9999".to_vec(), b"{} trailing".to_vec(),
+            b"\"\xff\"".to_vec(),
+            b"1e9999".to_vec(),
+            b"{} trailing".to_vec(),
         ];
         for depth in [126, 127, 128, 140] {
             bodies.push(format!("{}null{}", "[".repeat(depth), "]".repeat(depth)).into_bytes());
         }
         for body in bodies {
             let document = Document {
-                namespace: "conversations".into(), key: "decoded".into(),
-                version: 1, updated_at_ms: 1,
+                namespace: "conversations".into(),
+                key: "decoded".into(),
+                version: 1,
+                updated_at_ms: 1,
                 value: DocumentValue::Inline(body.into()),
             };
             let mut transaction = database.begin(TENANT, OWNER).unwrap();
-            database.entity_put(&mut transaction, key.clone(), document.encode().unwrap()).unwrap();
+            database
+                .entity_put(&mut transaction, key.clone(), document.encode().unwrap())
+                .unwrap();
             database.commit(transaction).unwrap();
             let mut transaction = database.begin(TENANT, OWNER).unwrap();
-            let original = get_value_with_blob_owner_bounded(&database, &mut transaction,
-                &key, "conversations", "decoded", OWNER, usize::MAX)
-                .map(|raw| raw.map(|raw| serde_json::from_slice::<Value>(&raw).unwrap()));
-            let decoded = get_decoded_value_with_blob_owner_bounded(&database, &mut transaction,
-                &key, "conversations", "decoded", OWNER, usize::MAX);
-            assert_eq!(original.map_err(|error| (error.kind(), error.to_string())),
-                decoded.map_err(|error| (error.kind(), error.to_string())));
-            assert!(get_decoded_value_with_blob_owner_bounded(&database, &mut transaction,
-                &key, "foreign", "decoded", OWNER, usize::MAX).is_err());
-            assert!(get_decoded_value_with_blob_owner_bounded(&database, &mut transaction,
-                &key, "conversations", "foreign", OWNER, usize::MAX).is_err());
+            let original = get_value_with_blob_owner_bounded(
+                &database,
+                &mut transaction,
+                &key,
+                "conversations",
+                "decoded",
+                OWNER,
+                usize::MAX,
+            )
+            .map(|raw| raw.map(|raw| serde_json::from_slice::<Value>(&raw).unwrap()));
+            let decoded = get_decoded_value_with_blob_owner_bounded(
+                &database,
+                &mut transaction,
+                &key,
+                "conversations",
+                "decoded",
+                OWNER,
+                usize::MAX,
+            );
+            assert_eq!(
+                original.map_err(|error| (error.kind(), error.to_string())),
+                decoded.map_err(|error| (error.kind(), error.to_string()))
+            );
+            assert!(get_decoded_value_with_blob_owner_bounded(
+                &database,
+                &mut transaction,
+                &key,
+                "foreign",
+                "decoded",
+                OWNER,
+                usize::MAX
+            )
+            .is_err());
+            assert!(get_decoded_value_with_blob_owner_bounded(
+                &database,
+                &mut transaction,
+                &key,
+                "conversations",
+                "foreign",
+                OWNER,
+                usize::MAX
+            )
+            .is_err());
         }
         let large = serde_json::to_vec(&json!({"text": "owned history".repeat(32768)})).unwrap();
         let mut transaction = database.begin(TENANT, OWNER).unwrap();
-        put(&database, &mut transaction,
-            put_request("decoded", large.clone(), Some(1))).unwrap();
+        put(
+            &database,
+            &mut transaction,
+            put_request("decoded", large.clone(), Some(1)),
+        )
+        .unwrap();
         database.commit(transaction).unwrap();
         let mut transaction = database.begin(TENANT, OWNER).unwrap();
-        assert_eq!(get_decoded_value_with_blob_owner_bounded(&database, &mut transaction,
-            &key, "conversations", "decoded", OWNER, large.len()).unwrap(),
-            Some(serde_json::from_slice::<Value>(&large).unwrap()));
+        assert_eq!(
+            get_decoded_value_with_blob_owner_bounded(
+                &database,
+                &mut transaction,
+                &key,
+                "conversations",
+                "decoded",
+                OWNER,
+                large.len()
+            )
+            .unwrap(),
+            Some(serde_json::from_slice::<Value>(&large).unwrap())
+        );
         for (owner, bound) in [(OWNER + 1, usize::MAX), (OWNER, large.len() - 1)] {
-            assert!(get_decoded_value_with_blob_owner_bounded(&database, &mut transaction,
-                &key, "conversations", "decoded", owner, bound).is_err());
+            assert!(get_decoded_value_with_blob_owner_bounded(
+                &database,
+                &mut transaction,
+                &key,
+                "conversations",
+                "decoded",
+                owner,
+                bound
+            )
+            .is_err());
         }
     }
 
@@ -1112,7 +1270,10 @@ mod tests {
                 version: 1,
                 updated_at_ms: 1,
                 value: DocumentValue::Inline(
-                    format!("{}null{}", "[".repeat(depth), "]".repeat(depth)).into_bytes().into()),
+                    format!("{}null{}", "[".repeat(depth), "]".repeat(depth))
+                        .into_bytes()
+                        .into(),
+                ),
             };
             database
                 .entity_put(&mut transaction, key.clone(), document.encode().unwrap())
@@ -1134,7 +1295,8 @@ mod tests {
             assert_eq!(output.json_proven(), old_valid, "body depth {depth}");
             assert_eq!(
                 output.bytes,
-                list_direction(&database, &mut transaction, &start, &end, "proof", 1, false).unwrap()
+                list_direction(&database, &mut transaction, &start, &end, "proof", 1, false)
+                    .unwrap()
             );
         }
         let mut database = authority();
@@ -1184,7 +1346,8 @@ mod tests {
         let database = authority();
         for depth in 0..=140 {
             for (open, close) in [("[", "]"), ("{\"a\":", "}")] {
-                let bytes = format!("{}null{}", open.repeat(depth), close.repeat(depth)).into_bytes();
+                let bytes =
+                    format!("{}null{}", open.repeat(depth), close.repeat(depth)).into_bytes();
                 let document = Document {
                     namespace: "proof".into(),
                     key: "key\n😀".into(),
@@ -1202,7 +1365,8 @@ mod tests {
                         8192,
                     ) {
                         Ok(projected) => {
-                            let old_valid = serde_json::from_slice::<Value>(&projected.bytes).is_ok();
+                            let old_valid =
+                                serde_json::from_slice::<Value>(&projected.bytes).is_ok();
                             assert_eq!(
                                 projected.json_proven(),
                                 old_valid,
@@ -1213,7 +1377,9 @@ mod tests {
                                 old_valid
                             );
                         }
-                        Err(_) => assert!(depth > crate::response_json::MAX_VALIDATED_CONTAINER_DEPTH),
+                        Err(_) => {
+                            assert!(depth > crate::response_json::MAX_VALIDATED_CONTAINER_DEPTH)
+                        }
                     }
                 }
             }
@@ -1238,7 +1404,8 @@ mod tests {
                 value: DocumentValue::Inline(bytes.to_vec().into()),
             };
             let output =
-                project_document_with_proof(&database, TENANT, OWNER, &document, false, 8192).unwrap();
+                project_document_with_proof(&database, TENANT, OWNER, &document, false, 8192)
+                    .unwrap();
             assert!(!output.json_proven());
             assert_eq!(
                 output.bytes,
@@ -1251,15 +1418,23 @@ mod tests {
     fn canonical_projection_preserves_exact_legacy_bytes_and_output_bounds() {
         let database = authority();
         let values: &[&[u8]] = &[
-            b"null", b"-0", b"1e0", b"18446744073709551616",
+            b"null",
+            b"-0",
+            b"1e0",
+            b"18446744073709551616",
             r#"{"a":[1,true,null,{"k":"你好😀"}],"b":"\n\\\""}"#.as_bytes(),
             br#"{"z":1,"a":2,"z":3}"#,
             br#"{"$serde_json::private::RawValue":"{\"z\":1,\"a\":2}"}"#,
         ];
         for bytes in values {
             for include_key in [false, true] {
-                let document = Document { namespace: "projection".to_owned().into(), key: "key\n\\\"😀".to_owned().into(),
-                    version: u64::MAX, updated_at_ms: u64::MAX, value: DocumentValue::Inline(bytes.to_vec().into()) };
+                let document = Document {
+                    namespace: "projection".to_owned().into(),
+                    key: "key\n\\\"😀".to_owned().into(),
+                    version: u64::MAX,
+                    updated_at_ms: u64::MAX,
+                    value: DocumentValue::Inline(bytes.to_vec().into()),
+                };
                 let value: Value = serde_json::from_slice(bytes).unwrap();
                 let previous = if include_key {
                     json!({"key":document.key,"value":value,"version":document.version,"updated_at_ms":document.updated_at_ms})
@@ -1267,11 +1442,30 @@ mod tests {
                     json!({"value":value,"version":document.version,"updated_at_ms":document.updated_at_ms})
                 };
                 let expected = serde_json::to_vec(&previous).unwrap();
-                let actual = project_document(&database,TENANT,OWNER,&document,include_key,expected.len()).unwrap();
-                assert_eq!(actual,expected);
-                let error=project_document(&database,TENANT,OWNER,&document,include_key,expected.len()-1).unwrap_err();
-                assert_eq!(error.kind(),io::ErrorKind::OutOfMemory);
-                assert_eq!(error.to_string(),"versioned document response exceeds 8 MiB");
+                let actual = project_document(
+                    &database,
+                    TENANT,
+                    OWNER,
+                    &document,
+                    include_key,
+                    expected.len(),
+                )
+                .unwrap();
+                assert_eq!(actual, expected);
+                let error = project_document(
+                    &database,
+                    TENANT,
+                    OWNER,
+                    &document,
+                    include_key,
+                    expected.len() - 1,
+                )
+                .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
+                assert_eq!(
+                    error.to_string(),
+                    "versioned document response exceeds 8 MiB"
+                );
             }
         }
     }
@@ -1279,28 +1473,53 @@ mod tests {
     #[test]
     fn canonical_projection_rejects_malformed_inline_and_preserves_blob_scope_fences() {
         let database = authority();
-        for bytes in [b"{".as_slice(),b"1e309",br#""\uD800""#,b"\"\xff\"",b"[1,]"] {
-            let document=Document { namespace:"projection".to_owned().into(),key:"k".to_owned().into(),version:1,
-                updated_at_ms:1,value:DocumentValue::Inline(bytes.to_vec().into()) };
-            let error=project_document(&database,TENANT,OWNER,&document,true,1024).unwrap_err();
-            assert_eq!(error.kind(),io::ErrorKind::InvalidData);
-            assert_eq!(error.to_string(),"versioned document value is not JSON");
+        for bytes in [
+            b"{".as_slice(),
+            b"1e309",
+            br#""\uD800""#,
+            b"\"\xff\"",
+            b"[1,]",
+        ] {
+            let document = Document {
+                namespace: "projection".to_owned().into(),
+                key: "k".to_owned().into(),
+                version: 1,
+                updated_at_ms: 1,
+                value: DocumentValue::Inline(bytes.to_vec().into()),
+            };
+            let error =
+                project_document(&database, TENANT, OWNER, &document, true, 1024).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(error.to_string(), "versioned document value is not JSON");
         }
-        let value=json!({"array":(0..4096).collect::<Vec<_>>()});
-        let mut transaction=database.begin(TENANT,OWNER).unwrap();
-        let envelope=put_with_blob_owner_bounded_returning_envelope(&database,&mut transaction,
-            put_request("large",serde_json::to_vec(&value).unwrap(),Some(0)),OWNER,
-            usize::MAX).unwrap().1;
-        let document=Document::decode(&envelope).unwrap();
-        assert!(matches!(document.value,DocumentValue::Blob(_)));
-        let mut oracle=document.clone();
-        let logical=materialize_value(&database,TENANT,OWNER,&document.value,usize::MAX).unwrap();
-        oracle.value=DocumentValue::Inline(logical.into());
-        assert_eq!(project_document(&database,TENANT,OWNER,&document,true,usize::MAX).unwrap(),
-            project_document(&database,TENANT,OWNER,&oracle,true,usize::MAX).unwrap());
-        for (tenant,owner) in [(TENANT+1,OWNER),(TENANT,OWNER+1)] {
-            assert_eq!(project_document(&database,tenant,owner,&document,true,usize::MAX).unwrap_err().kind(),
-                io::ErrorKind::PermissionDenied);
+        let value = json!({"array":(0..4096).collect::<Vec<_>>()});
+        let mut transaction = database.begin(TENANT, OWNER).unwrap();
+        let envelope = put_with_blob_owner_bounded_returning_envelope(
+            &database,
+            &mut transaction,
+            put_request("large", serde_json::to_vec(&value).unwrap(), Some(0)),
+            OWNER,
+            usize::MAX,
+        )
+        .unwrap()
+        .1;
+        let document = Document::decode(&envelope).unwrap();
+        assert!(matches!(document.value, DocumentValue::Blob(_)));
+        let mut oracle = document.clone();
+        let logical =
+            materialize_value(&database, TENANT, OWNER, &document.value, usize::MAX).unwrap();
+        oracle.value = DocumentValue::Inline(logical.into());
+        assert_eq!(
+            project_document(&database, TENANT, OWNER, &document, true, usize::MAX).unwrap(),
+            project_document(&database, TENANT, OWNER, &oracle, true, usize::MAX).unwrap()
+        );
+        for (tenant, owner) in [(TENANT + 1, OWNER), (TENANT, OWNER + 1)] {
+            assert_eq!(
+                project_document(&database, tenant, owner, &document, true, usize::MAX)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::PermissionDenied
+            );
         }
     }
 
@@ -1310,36 +1529,101 @@ mod tests {
             let mut database = authority();
             let value = json!({"unicode": "追加🧈", "padding": "x".repeat(padding), "nested": [null, true, 12.5]});
             let mut tx = database.begin(TENANT, OWNER).unwrap();
-            let (_, envelope) = put_with_blob_owner_bounded_returning_envelope(&database, &mut tx,
-                put_request("conv", serde_json::to_vec(&value).unwrap(), Some(0)), OWNER,
-                usize::MAX).unwrap();
+            let (_, envelope) = put_with_blob_owner_bounded_returning_envelope(
+                &database,
+                &mut tx,
+                put_request("conv", serde_json::to_vec(&value).unwrap(), Some(0)),
+                OWNER,
+                usize::MAX,
+            )
+            .unwrap();
             database.commit(tx).unwrap();
-            let (key, bytes) = materialize_stored_document_bounded(&database, TENANT, OWNER,
-                &envelope, "conversations", usize::MAX).unwrap();
+            let (key, bytes) = materialize_stored_document_bounded(
+                &database,
+                TENANT,
+                OWNER,
+                &envelope,
+                "conversations",
+                usize::MAX,
+            )
+            .unwrap();
             let (decoded_key, decoded, source_bytes) = materialize_stored_document_value_bounded(
-                &database, TENANT, OWNER, &envelope, "conversations", bytes.len()).unwrap();
+                &database,
+                TENANT,
+                OWNER,
+                &envelope,
+                "conversations",
+                bytes.len(),
+            )
+            .unwrap();
             assert_eq!(decoded_key, key);
             assert_eq!(decoded, value);
             assert_eq!(source_bytes, bytes.len());
-            assert!(materialize_stored_document_value_bounded(&database, TENANT, OWNER,
-                &envelope, "conversations", bytes.len() - 1).is_err());
-            assert!(materialize_stored_document_value_bounded(&database, TENANT, OWNER,
-                &envelope, "wrong-namespace", bytes.len()).is_err());
+            assert!(materialize_stored_document_value_bounded(
+                &database,
+                TENANT,
+                OWNER,
+                &envelope,
+                "conversations",
+                bytes.len() - 1
+            )
+            .is_err());
+            assert!(materialize_stored_document_value_bounded(
+                &database,
+                TENANT,
+                OWNER,
+                &envelope,
+                "wrong-namespace",
+                bytes.len()
+            )
+            .is_err());
             if padding > 0 {
                 for (tenant, owner) in [(TENANT + 1, OWNER), (TENANT, OWNER + 1)] {
-                    let previous = materialize_stored_document_bounded(&database, tenant, owner,
-                        &envelope, "conversations", bytes.len()).unwrap_err();
-                    let current = materialize_stored_document_value_bounded(&database, tenant, owner,
-                        &envelope, "conversations", bytes.len()).unwrap_err();
+                    let previous = materialize_stored_document_bounded(
+                        &database,
+                        tenant,
+                        owner,
+                        &envelope,
+                        "conversations",
+                        bytes.len(),
+                    )
+                    .unwrap_err();
+                    let current = materialize_stored_document_value_bounded(
+                        &database,
+                        tenant,
+                        owner,
+                        &envelope,
+                        "conversations",
+                        bytes.len(),
+                    )
+                    .unwrap_err();
                     assert_eq!(current.kind(), previous.kind());
                 }
             }
         }
         let database = authority();
-        let malformed = Document { namespace: "conversations".to_owned().into(), key: "bad".to_owned().into(),
-            version: 1, updated_at_ms: 1, value: DocumentValue::Inline(b"{".to_vec().into()) }.encode().unwrap();
-        assert_eq!(materialize_stored_document_value_bounded(&database, TENANT, OWNER,
-            &malformed, "conversations", 100).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let malformed = Document {
+            namespace: "conversations".to_owned().into(),
+            key: "bad".to_owned().into(),
+            version: 1,
+            updated_at_ms: 1,
+            value: DocumentValue::Inline(b"{".to_vec().into()),
+        }
+        .encode()
+        .unwrap();
+        assert_eq!(
+            materialize_stored_document_value_bounded(
+                &database,
+                TENANT,
+                OWNER,
+                &malformed,
+                "conversations",
+                100
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[test]
@@ -1391,7 +1675,7 @@ mod tests {
 
     #[test]
     fn known_version_put_conflicts_on_a_version_mismatch() {
-        let mut database = authority();
+        let database = authority();
         let mut tx = database
             .begin_with_identity_claim_scopes(TENANT, OWNER)
             .unwrap();
@@ -1429,13 +1713,22 @@ mod tests {
     #[test]
     fn document_demand_exceeds_former_default_quota_for_known_and_fresh_paths() {
         let directory = tempfile::tempdir().unwrap();
-        let bytes = serde_json::to_vec(&json!({"text":"x".repeat(9 * 1024 * 1024),"keep":7})).unwrap();
+        let bytes =
+            serde_json::to_vec(&json!({"text":"x".repeat(9 * 1024 * 1024),"keep":7})).unwrap();
         {
             let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
             let mut tx = database.begin(TENANT, OWNER).unwrap();
-            let known = put_known_version_returning_envelope(&database, &mut tx,
-                put_request("large-known", bytes.clone(), Some(0)), 0).unwrap();
-            assert!(matches!(Document::decode(&known).unwrap().value, DocumentValue::Blob(_)));
+            let known = put_known_version_returning_envelope(
+                &database,
+                &mut tx,
+                put_request("large-known", bytes.clone(), Some(0)),
+                0,
+            )
+            .unwrap();
+            assert!(matches!(
+                Document::decode(&known).unwrap().value,
+                DocumentValue::Blob(_)
+            ));
             let mut fresh = put_request("large-fresh", bytes.clone(), None);
             fresh.expected_version = None;
             put_fresh_prevalidated(&database, &mut tx, fresh).unwrap();
@@ -1445,8 +1738,16 @@ mod tests {
         let mut tx = database.begin(TENANT, OWNER).unwrap();
         for logical_key in ["large-known", "large-fresh"] {
             let key = document_key(logical_key);
-            let value = get_value_with_version_bounded(&database, &mut tx, &key,
-                "conversations", logical_key, bytes.len() + 100).unwrap().unwrap();
+            let value = get_value_with_version_bounded(
+                &database,
+                &mut tx,
+                &key,
+                "conversations",
+                logical_key,
+                bytes.len() + 100,
+            )
+            .unwrap()
+            .unwrap();
             assert_eq!(value.1, 1);
             assert_eq!(blake3::hash(&value.0), blake3::hash(&bytes));
         }
@@ -1454,7 +1755,7 @@ mod tests {
 
     #[test]
     fn known_version_put_rejects_invalid_mutation_metadata() {
-        let mut database = authority();
+        let database = authority();
         let mut tx = database
             .begin_with_identity_claim_scopes(TENANT, OWNER)
             .unwrap();
@@ -1469,7 +1770,7 @@ mod tests {
 
     #[test]
     fn get_value_with_version_enforces_identity() {
-        let mut database = authority();
+        let database = authority();
         let mut tx = database
             .begin_with_identity_claim_scopes(TENANT, OWNER)
             .unwrap();
@@ -1564,8 +1865,16 @@ pub(crate) fn get_with_blob_owner_bounded(
     blob_owner_user_id: u64,
     maximum_bytes: usize,
 ) -> io::Result<Option<Vec<u8>>> {
-    get_projection_with_blob_owner_bounded(database, transaction, key, namespace,
-        logical_key, blob_owner_user_id, maximum_bytes).map(|value| value.map(DocumentProjection::into_bytes))
+    get_projection_with_blob_owner_bounded(
+        database,
+        transaction,
+        key,
+        namespace,
+        logical_key,
+        blob_owner_user_id,
+        maximum_bytes,
+    )
+    .map(|value| value.map(DocumentProjection::into_bytes))
 }
 
 fn get_projection_with_blob_owner_bounded(
@@ -1635,11 +1944,19 @@ pub(crate) fn get_decoded_value_with_blob_owner_bounded(
     blob_owner_user_id: u64,
     maximum_bytes: usize,
 ) -> io::Result<Option<Value>> {
-    let Some(raw) = database.entity_get(transaction, key)? else { return Ok(None); };
+    let Some(raw) = database.entity_get(transaction, key)? else {
+        return Ok(None);
+    };
     stored_document_version(&raw, namespace, logical_key)?;
-    materialize_stored_document_value_bounded(database, transaction.tenant_id(),
-        blob_owner_user_id, &raw, namespace, maximum_bytes)
-        .map(|(_, value, _)| Some(value))
+    materialize_stored_document_value_bounded(
+        database,
+        transaction.tenant_id(),
+        blob_owner_user_id,
+        &raw,
+        namespace,
+        maximum_bytes,
+    )
+    .map(|(_, value, _)| Some(value))
 }
 
 pub(crate) fn put(
@@ -2056,9 +2373,19 @@ pub(crate) fn list_with_blob_owner_bounded(
     limit: usize,
     bounds: ListProjectionBounds,
 ) -> io::Result<Vec<u8>> {
-    list_direction_bounded(database, transaction, start, end, namespace, limit, bounds, false)
+    list_direction_bounded(
+        database,
+        transaction,
+        start,
+        end,
+        namespace,
+        limit,
+        bounds,
+        false,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn list_direction_bounded(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -2069,29 +2396,72 @@ fn list_direction_bounded(
     bounds: ListProjectionBounds,
     reverse: bool,
 ) -> io::Result<Vec<u8>> {
-    list_direction_bounded_with_proof(database, transaction, start, end, namespace, limit, bounds, reverse, true)
-        .map(DocumentProjection::into_bytes)
+    list_direction_bounded_with_proof(
+        database,
+        transaction,
+        start,
+        end,
+        namespace,
+        limit,
+        bounds,
+        reverse,
+        true,
+    )
+    .map(DocumentProjection::into_bytes)
 }
 
 pub(crate) fn list_direction_with_response_proof(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-    start: &EntityKey, end: &EntityKey, namespace: &str, limit: usize, reverse: bool,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    start: &EntityKey,
+    end: &EntityKey,
+    namespace: &str,
+    limit: usize,
+    reverse: bool,
 ) -> io::Result<DocumentProjection> {
-    list_direction_bounded_with_proof(database, transaction, start, end, namespace, limit,
-        ListProjectionBounds { blob_owner_user_id: transaction.owner_user_id(),
-            maximum_bytes: usize::MAX }, reverse, true)
+    list_direction_bounded_with_proof(
+        database,
+        transaction,
+        start,
+        end,
+        namespace,
+        limit,
+        ListProjectionBounds {
+            blob_owner_user_id: transaction.owner_user_id(),
+            maximum_bytes: usize::MAX,
+        },
+        reverse,
+        true,
+    )
 }
 
 /// Enumerate authority versions without fetching blob-backed values or decoding JSON.
 pub(crate) fn list_headers_direction_with_response_proof(
-    database: &AuthorityDatabase, transaction: &mut AuthorityTransaction,
-    start: &EntityKey, end: &EntityKey, namespace: &str, limit: usize, reverse: bool,
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+    start: &EntityKey,
+    end: &EntityKey,
+    namespace: &str,
+    limit: usize,
+    reverse: bool,
 ) -> io::Result<DocumentProjection> {
-    list_direction_bounded_with_proof(database, transaction, start, end, namespace, limit,
-        ListProjectionBounds { blob_owner_user_id: transaction.owner_user_id(),
-            maximum_bytes: usize::MAX }, reverse, false)
+    list_direction_bounded_with_proof(
+        database,
+        transaction,
+        start,
+        end,
+        namespace,
+        limit,
+        ListProjectionBounds {
+            blob_owner_user_id: transaction.owner_user_id(),
+            maximum_bytes: usize::MAX,
+        },
+        reverse,
+        false,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn list_direction_bounded_with_proof(
     database: &AuthorityDatabase,
     transaction: &mut AuthorityTransaction,
@@ -2113,7 +2483,9 @@ fn list_direction_bounded_with_proof(
         } else {
             database.entity_scan(transaction, &page_start, end, page_limit)?
         };
-        if page.is_empty() { break; }
+        if page.is_empty() {
+            break;
+        }
         let next = page
             .last()
             .map(|(key, _)| key.clone().exact_range())
@@ -2122,8 +2494,13 @@ fn list_direction_bounded_with_proof(
         if rows.len() == limit {
             break;
         }
-        let boundary = next.ok_or_else(|| invalid_data("versioned document pagination lost continuation"))?;
-        if reverse { page_end = boundary.0; } else { page_start = boundary.1; }
+        let boundary =
+            next.ok_or_else(|| invalid_data("versioned document pagination lost continuation"))?;
+        if reverse {
+            page_end = boundary.0;
+        } else {
+            page_start = boundary.1;
+        }
     }
     let mut output = Vec::from(b"[".as_slice());
     let mut maximum_container_depth = Some(1_usize);
@@ -2151,49 +2528,84 @@ fn list_direction_bounded_with_proof(
                 maximum_container_depth: Some(1),
             }
         };
-        maximum_container_depth = maximum_container_depth.zip(projected.maximum_container_depth)
-            .map(|(current,row)| current.max(row + 1));
-        let additional = projected.bytes.len().checked_add(usize::from(index > 0))
+        maximum_container_depth = maximum_container_depth
+            .zip(projected.maximum_container_depth)
+            .map(|(current, row)| current.max(row + 1));
+        let additional = projected
+            .bytes
+            .len()
+            .checked_add(usize::from(index > 0))
             .and_then(|length| length.checked_add(1))
             .ok_or_else(|| invalid_input("versioned document page length overflow"))?;
-        let next_length = output.len().checked_add(additional)
+        let next_length = output
+            .len()
+            .checked_add(additional)
             .ok_or_else(|| invalid_input("versioned document page length overflow"))?;
         if next_length > bounds.maximum_bytes {
             return Err(crate::resource_exhaustion::domain_bound(
                 "versioned document page exceeds requested projection bytes",
             ));
         }
-        output.try_reserve(additional)
-            .map_err(|_| crate::resource_exhaustion::reservation_failure("cannot allocate complete versioned document page"))?;
+        output.try_reserve(additional).map_err(|_| {
+            crate::resource_exhaustion::reservation_failure(
+                "cannot allocate complete versioned document page",
+            )
+        })?;
         if index > 0 {
             output.push(b',');
         }
         output.extend_from_slice(&projected.bytes);
     }
     output.push(b']');
-    Ok(DocumentProjection { bytes: output, maximum_container_depth })
+    Ok(DocumentProjection {
+        bytes: output,
+        maximum_container_depth,
+    })
 }
-
 
 #[cfg(test)]
 mod borrowed_document_decode_tests {
     use super::*;
     #[test]
     fn borrowed_document_preserves_source_bytes_and_rejects_every_truncated_envelope() {
-        let encoded = Document { namespace: "borrowed".into(), key: "escaped\n🧈".into(),
-            version: 7, updated_at_ms: 17,
-            value: DocumentValue::Inline(b"{\"text\":\"immutable\",\"items\":[1,null,true]}".to_vec().into()) }.encode().unwrap();
+        let encoded = Document {
+            namespace: "borrowed".into(),
+            key: "escaped\n🧈".into(),
+            version: 7,
+            updated_at_ms: 17,
+            value: DocumentValue::Inline(
+                b"{\"text\":\"immutable\",\"items\":[1,null,true]}"
+                    .to_vec()
+                    .into(),
+            ),
+        }
+        .encode()
+        .unwrap();
         let decoded = Document::decode(&encoded).unwrap();
         assert_eq!(decoded.encode().unwrap(), encoded);
         assert!(matches!(decoded.namespace, std::borrow::Cow::Borrowed(_)));
         assert!(matches!(decoded.key, std::borrow::Cow::Borrowed(_)));
-        let DocumentValue::Inline(std::borrow::Cow::Borrowed(bytes)) = decoded.value else { panic!("inline decoding copied its source"); };
+        let DocumentValue::Inline(std::borrow::Cow::Borrowed(bytes)) = decoded.value else {
+            panic!("inline decoding copied its source");
+        };
         let offset = bytes.as_ptr() as usize - encoded.as_ptr() as usize;
-        assert_eq!(&encoded[offset..offset+bytes.len()], bytes);
-        for length in 0..encoded.len() { assert!(Document::decode(&encoded[..length]).is_err(), "accepted truncated envelope at {length}"); }
-        let mut trailing=encoded.clone();trailing.push(0);assert!(Document::decode(&trailing).is_err());
-        for (offset,value) in [(8,2),(12,0),(20,0),(32,9),(33,1)] {
-            let mut invalid=encoded.clone();invalid[offset]=value;assert!(Document::decode(&invalid).is_err(),"accepted malformed header at {offset}");
+        assert_eq!(&encoded[offset..offset + bytes.len()], bytes);
+        for length in 0..encoded.len() {
+            assert!(
+                Document::decode(&encoded[..length]).is_err(),
+                "accepted truncated envelope at {length}"
+            );
+        }
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(Document::decode(&trailing).is_err());
+        for (offset, value) in [(8, 2), (12, 0), (20, 0), (32, 9), (33, 1)] {
+            let mut invalid = encoded.clone();
+            invalid[offset] = value;
+            assert!(
+                Document::decode(&invalid).is_err(),
+                "accepted malformed header at {offset}"
+            );
         }
     }
 }

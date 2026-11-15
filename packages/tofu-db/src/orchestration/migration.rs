@@ -405,7 +405,9 @@ fn restore_run(
     let core = run_core(&request, owner);
     let state = run_state(&request);
     if state.continuity_pending && !is_restart_interrupted_goal(&core, &state) {
-        return Err(migration_invalid("pending continuity requires a restart-interrupted Chat Goal"));
+        return Err(migration_invalid(
+            "pending continuity requires a restart-interrupted Chat Goal",
+        ));
     }
     if let Some((existing_core, existing_state)) =
         read_run(database, tx, &request.id, owner, &request.tenant_label)?
@@ -419,7 +421,9 @@ fn restore_run(
     let count_key = run_count_key(tx)?;
     let count = read_count(database, tx, count_key.clone())?;
     if count >= MAX_ORCHESTRATION_RUNS_PER_OWNER as u64 {
-        return Err(crate::resource_exhaustion::capacity_quota("orchestration run capacity reached"));
+        return Err(crate::resource_exhaustion::capacity_quota(
+            "orchestration run capacity reached",
+        ));
     }
     put_global_document(
         database,
@@ -505,8 +509,13 @@ fn verify_run_indexes(
         &core.id,
     )?;
     expect_index(database, tx, &goal_created, goal, &encoded)?;
-    expect_index(database, tx, &pending_continuity_key(tx, &index)?,
-        state.continuity_pending, &encoded)?;
+    expect_index(
+        database,
+        tx,
+        &pending_continuity_key(tx, &index)?,
+        state.continuity_pending,
+        &encoded,
+    )?;
     let active = !is_terminal(&state.status);
     let active_key = active_index_key(tx, &index)?;
     expect_index(database, tx, &active_key, active, &encoded)?;
@@ -596,7 +605,14 @@ fn restore_event(
     }
     if closes_continuity_election(&request.payload) {
         state.continuity_pending = false;
-        write_run_state(database, tx, &core, &state.status.clone(), &state, state.updated_at)?;
+        write_run_state(
+            database,
+            tx,
+            &core,
+            &state.status.clone(),
+            &state,
+            state.updated_at,
+        )?;
         database.entity_delete(tx, pending_continuity_key(tx, &run_index(&core))?)?;
     }
     let document = EventDocument {

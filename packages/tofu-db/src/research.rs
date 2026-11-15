@@ -16,9 +16,9 @@ use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
     MAX_RESEARCH_ARTIFACTS_PER_OWNER, MAX_RESEARCH_ARTIFACT_DOCUMENT_BYTES,
     MAX_RESEARCH_DIRECTION_ROWS, MAX_RESEARCH_DIRECTION_SCAN_ROWS, MAX_RESEARCH_RESPONSE_BYTES,
-    RESEARCH_ARTIFACT_COUNT_NAMESPACE,
-    RESEARCH_ARTIFACT_CREATED_INDEX_NAMESPACE, RESEARCH_ARTIFACT_DOCUMENT_NAMESPACE,
-    RESEARCH_ARTIFACT_STATE_NAMESPACE, RESEARCH_WORKSPACE_DOCUMENT_NAMESPACE,
+    RESEARCH_ARTIFACT_COUNT_NAMESPACE, RESEARCH_ARTIFACT_CREATED_INDEX_NAMESPACE,
+    RESEARCH_ARTIFACT_DOCUMENT_NAMESPACE, RESEARCH_ARTIFACT_STATE_NAMESPACE,
+    RESEARCH_WORKSPACE_DOCUMENT_NAMESPACE,
 };
 use crate::versioned_document::{self, PutRequest};
 
@@ -125,7 +125,9 @@ fn encode_response(value: &Value) -> io::Result<Vec<u8>> {
     let encoded = serde_json::to_vec(value)
         .map_err(|_| invalid_data("research response cannot be encoded"))?;
     if encoded.len() > MAX_RESEARCH_RESPONSE_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("research response exceeds 64 MiB"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "research response exceeds 64 MiB",
+        ));
     }
     Ok(encoded)
 }
@@ -230,7 +232,11 @@ impl ResearchRequest {
                     .and_then(|bytes| bytes.checked_add(request.model.len()))
                     .and_then(|bytes| bytes.checked_add(metadata_bytes))
                     .and_then(|bytes| bytes.checked_add(512))
-                    .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("research artifact byte count overflow"))?;
+                    .ok_or_else(|| {
+                        crate::resource_exhaustion::accounting_overflow(
+                            "research artifact byte count overflow",
+                        )
+                    })?;
                 if document_bytes > MAX_RESEARCH_ARTIFACT_DOCUMENT_BYTES {
                     return Err(crate::resource_exhaustion::domain_bound(
                         "research artifact exceeds its document byte bound",
@@ -284,21 +290,24 @@ impl ResearchRequest {
                 let proof_bytes = artifact_proof
                     .as_ref()
                     .map(|proof| {
-                        crate::paper_build_receipt::encode_bounded(
-                            proof,
-                            usize::MAX,
-                        )
-                        .map(|bytes| bytes.len())
+                        crate::paper_build_receipt::encode_bounded(proof, usize::MAX)
+                            .map(|bytes| bytes.len())
                     })
                     .transpose()?
                     .unwrap_or(0);
                 let bytes = serde_json::to_vec(workspace)
                     .map_err(|_| invalid_input("research workspace cannot be encoded"))?
                     .len();
-                paper_hash.len().checked_add(lang.len())
+                paper_hash
+                    .len()
+                    .checked_add(lang.len())
                     .and_then(|size| size.checked_add(bytes))
                     .and_then(|size| size.checked_add(proof_bytes))
-                    .ok_or_else(|| crate::resource_exhaustion::accounting_overflow("research workspace size is not addressable"))?
+                    .ok_or_else(|| {
+                        crate::resource_exhaustion::accounting_overflow(
+                            "research workspace size is not addressable",
+                        )
+                    })?
             }
         };
         Ok(literal_bytes)
@@ -584,7 +593,9 @@ fn artifacts_get(
             expected_document_bytes = expected_document_bytes
                 .checked_add(state.document_bytes)
                 .filter(|bytes| *bytes <= MAX_RESEARCH_RESPONSE_BYTES)
-                .ok_or_else(|| crate::resource_exhaustion::domain_bound("research response exceeds 64 MiB"))?;
+                .ok_or_else(|| {
+                    crate::resource_exhaustion::domain_bound("research response exceeds 64 MiB")
+                })?;
         } else {
             let document_key = artifact_key(
                 transaction,

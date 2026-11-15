@@ -389,7 +389,10 @@ mod tests {
             }
             database.commit(transaction).unwrap();
         }
-        assert_eq!(consume_page(&mut database, 7, 12).unwrap(), PageProgress::default());
+        assert_eq!(
+            consume_page(&mut database, 7, 12).unwrap(),
+            PageProgress::default()
+        );
         let first = consume_page(&mut database, 7, 11).unwrap();
         assert_eq!(first.checkpoint, read(&database, 11));
         assert_eq!(first.enqueued, SOURCE_PAGE_ROWS);
@@ -450,7 +453,13 @@ mod tests {
         assert_eq!(progress.source_bytes, 0);
         assert!(progress.complete);
         assert_eq!(progress.checkpoint, read(&database, 11));
-        assert_eq!(progress.checkpoint, Some(Checkpoint { complete: true, ..initial }));
+        assert_eq!(
+            progress.checkpoint,
+            Some(Checkpoint {
+                complete: true,
+                ..initial
+            })
+        );
         assert_eq!(consume_page(&mut database, 7, 11).unwrap(), progress);
     }
 
@@ -460,10 +469,15 @@ mod tests {
         let (mut database, _) = setup(vfs);
         let mut transaction = database.begin(7, 11).unwrap();
         let stored_key = key(&transaction).unwrap();
-        database.entity_put(&mut transaction, stored_key, vec![0; 17]).unwrap();
+        database
+            .entity_put(&mut transaction, stored_key, vec![0; 17])
+            .unwrap();
         database.commit(transaction).unwrap();
         let before = database.query_snapshot();
-        assert_eq!(consume_page(&mut database, 7, 11).unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            consume_page(&mut database, 7, 11).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
         assert_eq!(database.query_snapshot(), before);
         assert!(search_dirty::list(&database, 7, 11).unwrap().is_empty());
     }
@@ -471,16 +485,35 @@ mod tests {
     #[test]
     fn consume_page_commit_fault_returns_no_checkpoint_and_recovers_exact_work() {
         for (operation, action, expected_kind) in [
-            (Operation::Write, FaultAction::ErrorBefore(io::ErrorKind::Other), io::ErrorKind::Other),
-            (Operation::Write, FaultAction::ShortWrite(7), io::ErrorKind::WriteZero),
-            (Operation::SyncData, FaultAction::ErrorBefore(io::ErrorKind::Other), io::ErrorKind::Other),
+            (
+                Operation::Write,
+                FaultAction::ErrorBefore(io::ErrorKind::Other),
+                io::ErrorKind::Other,
+            ),
+            (
+                Operation::Write,
+                FaultAction::ShortWrite(7),
+                io::ErrorKind::WriteZero,
+            ),
+            (
+                Operation::SyncData,
+                FaultAction::ErrorBefore(io::ErrorKind::Other),
+                io::ErrorKind::Other,
+            ),
         ] {
             let vfs = Arc::new(DeterministicVfs::new(None));
             let (mut database, initial) = setup(vfs.clone());
             let mut transaction = database.begin(7, 11).unwrap();
-            let source_key = EntityKey::new(7, 11,
-                crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE, b"conversation").unwrap();
-            database.entity_put(&mut transaction, source_key, b"{}".to_vec()).unwrap();
+            let source_key = EntityKey::new(
+                7,
+                11,
+                crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE,
+                b"conversation",
+            )
+            .unwrap();
+            database
+                .entity_put(&mut transaction, source_key, b"{}".to_vec())
+                .unwrap();
             database.commit(transaction).unwrap();
             vfs.arm_operation_fault(operation, 1, action).unwrap();
             let error = consume_page(&mut database, 7, 11).unwrap_err();

@@ -113,7 +113,10 @@ fn optional_values_retain_reads_beyond_retired_quota_and_release_on_write_and_dr
             RetainedPointRead::Value(_)
         ));
     }
-    assert_eq!(tx.snapshot_pin.retained_transaction_bytes, witness_bytes + 512);
+    assert_eq!(
+        tx.snapshot_pin.retained_transaction_bytes,
+        witness_bytes + 512
+    );
     drop(holder);
     assert_eq!(db.get(&mut tx, &key(1)).unwrap(), Some(vec![19; 512]));
     assert_eq!(

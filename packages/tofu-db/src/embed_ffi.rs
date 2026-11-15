@@ -58,12 +58,12 @@ use zeroize::Zeroize;
 #[path = "embedded_checkpoint_control.rs"]
 pub(crate) mod checkpoint;
 
-#[path = "embed_reply.rs"]
-mod reply;
 #[path = "embed_continuation.rs"]
 mod continuation;
 #[path = "embed_envelope.rs"]
 mod envelope;
+#[path = "embed_reply.rs"]
+mod reply;
 use crate::embed::EmbeddedRuntime;
 use crate::embed_job_queue::{JobReceiver, JobSender};
 
@@ -79,11 +79,6 @@ const WATCHDOG_FLOOR: Duration = Duration::from_secs(120);
 /// near it; it exists so a pathological far-future deadline still leaves
 /// the wait bounded.
 const WATCHDOG_MAX_BUDGET: Duration = Duration::from_secs(3600);
-/// FFI request-envelope headroom above the payload cap: the JSON envelope
-/// carries the operation/command id/deadline fields and JSON punctuation
-/// around the payload text. Raw payload admission and the encoded dispatch
-/// both enforce the wire byte cap; the Value API uses capped serialization.
-
 fn watchdog_budget(deadline_unix_ms: u64) -> Duration {
     #[cfg(test)]
     {
@@ -120,12 +115,15 @@ struct RawJob {
     _memory: OwnedInputLease,
 }
 
-enum Job { Raw(RawJob), Resume(Arc<continuation::Continuation<phase_executor::PhaseJob>>) }
+enum Job {
+    Raw(RawJob),
+    Resume(Arc<continuation::Continuation<phase_executor::PhaseJob>>),
+}
 
-#[path = "embed_phase_executor.rs"]
-mod phase_executor;
 #[path = "embed_commit_watch.rs"]
 mod commit_watch;
+#[path = "embed_phase_executor.rs"]
+mod phase_executor;
 
 enum JobOutcome {
     Responded(io::Result<Vec<u8>>),
@@ -143,8 +141,13 @@ struct TimedJobOutcome {
 
 impl JobOutcome {
     fn timestamped(outcome: Self) -> Self {
-        if !crate::request_profile::enabled() { return outcome; }
-        let mut reply = Box::new(TimedJobOutcome { outcome, ready_at: None });
+        if !crate::request_profile::enabled() {
+            return outcome;
+        }
+        let mut reply = Box::new(TimedJobOutcome {
+            outcome,
+            ready_at: None,
+        });
         reply.ready_at = Some(std::time::Instant::now());
         Self::Profiled(reply)
     }
@@ -197,16 +200,26 @@ struct OwnedInputLease {
 }
 impl OwnedInputLease {
     fn claim(accounting: &Arc<InputMemoryAccounting>, bytes: usize) -> io::Result<Self> {
-        let previous = accounting.bytes.fetch_update(Ordering::AcqRel, Ordering::Acquire,
-            |current| current.checked_add(bytes))
+        let previous = accounting
+            .bytes
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_add(bytes)
+            })
             .map_err(|_| io::Error::other("embedded input byte accounting overflow"))?;
-        accounting.peak_bytes.fetch_max(previous + bytes, Ordering::Relaxed);
-        Ok(Self { bytes, accounting: Arc::clone(accounting) })
+        accounting
+            .peak_bytes
+            .fetch_max(previous + bytes, Ordering::Relaxed);
+        Ok(Self {
+            bytes,
+            accounting: Arc::clone(accounting),
+        })
     }
 }
 impl Drop for OwnedInputLease {
     fn drop(&mut self) {
-        self.accounting.bytes.fetch_sub(self.bytes, Ordering::AcqRel);
+        self.accounting
+            .bytes
+            .fetch_sub(self.bytes, Ordering::AcqRel);
     }
 }
 
@@ -224,7 +237,7 @@ fn spawn_demand_worker(handle: &EmbedHandle, job: Job) -> io::Result<std::thread
     let runtime = Arc::clone(&handle.runtime);
     let jobs = handle.worker_receiver.clone();
     let poisoned = Arc::clone(&handle.poisoned);
-    let registry=Arc::clone(&handle.phase_registry);
+    let registry = Arc::clone(&handle.phase_registry);
     std::thread::Builder::new()
         .name("tofu-db-embed-demand".to_owned())
         .stack_size(handle.runtime.resource_budget.connection_stack_bytes)
@@ -249,13 +262,16 @@ fn run_worker(
         let Ok(job) = job else {
             break;
         };
-        let job=match job {
-            Job::Raw(job)=>job,
-            Job::Resume(task)=>{phase_executor::run(&runtime,&poisoned,&jobs,task);continue;}
+        let job = match job {
+            Job::Raw(job) => job,
+            Job::Resume(task) => {
+                phase_executor::run(&runtime, &poisoned, &jobs, task);
+                continue;
+            }
         };
         if phase_executor::eligible(&job) {
-            registry.start(&runtime,&poisoned,&jobs,job);
-            let _=jobs.prepare_for_next_job();
+            registry.start(&runtime, &poisoned, &jobs, job);
+            let _ = jobs.prepare_for_next_job();
             continue;
         }
         let RawJob {
@@ -270,24 +286,35 @@ fn run_worker(
             _memory,
         } = job;
         if poisoned.load(Ordering::Acquire) {
-            let _ = respond.send(JobOutcome::timestamped(JobOutcome::Responded(Err(io::Error::other(
-                "embedded handle is poisoned",
-            )))));
+            let _ = respond.send(JobOutcome::timestamped(JobOutcome::Responded(Err(
+                io::Error::other("embedded handle is poisoned"),
+            ))));
             continue;
         }
         let queue_nanos = enqueued_at.map(|start| start.elapsed().as_nanos() as u64);
         if let Some(nanos) = queue_nanos {
-            crate::fsync_stats::note_stage_elapsed(crate::fsync_stats::STAGE_EMBEDDED_QUEUE_WAIT, nanos);
+            crate::fsync_stats::note_stage_elapsed(
+                crate::fsync_stats::STAGE_EMBEDDED_QUEUE_WAIT,
+                nanos,
+            );
         }
-        let _queue_profile = crate::request_profile::QueueContext::with_reply_reuse(queue_nanos, false);
-        let execute = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_WORKER_EXECUTE);
+        let _queue_profile =
+            crate::request_profile::QueueContext::with_reply_reuse(queue_nanos, false);
+        let execute = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_WORKER_EXECUTE,
+        );
         let outcome = match catch_unwind(AssertUnwindSafe(|| {
             #[cfg(feature = "native-runtime-checkpoints")]
             if let Some(registry) = checkpoint {
                 return registry.execute(runtime.clone(), &operation, &payload, deadline_unix_ms);
             }
-            runtime.execute_encoded_json_with_alive(operation, payload, command_id, deadline_unix_ms,
-                &mut || !poisoned.load(Ordering::Acquire))
+            runtime.execute_encoded_json_with_alive(
+                operation,
+                payload,
+                command_id,
+                deadline_unix_ms,
+                &mut || !poisoned.load(Ordering::Acquire),
+            )
         })) {
             Ok(result) => JobOutcome::Responded(result),
             Err(payload) => {
@@ -301,7 +328,9 @@ fn run_worker(
         // It leaves reservations, poison and completed reply ownership intact.
         let _ = jobs.prepare_for_next_job();
         // A late result only touches an owned channel, never the caller buffer.
-        let _deliver = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_DELIVER);
+        let _deliver = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_DELIVER,
+        );
         let _ = respond.send(JobOutcome::timestamped(outcome));
     }
 }
@@ -348,7 +377,9 @@ fn read_c_path(pointer: *const c_char) -> std::io::Result<String> {
     // SAFETY: the caller guarantees a live NUL-terminated string.
     let text = unsafe { CStr::from_ptr(pointer) }
         .to_str()
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string()))?;
+        .map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+        })?;
     if text.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -425,11 +456,15 @@ fn teardown(handle: *mut EmbedHandle, graceful: bool) {
 
 #[cfg(feature = "embedded-mimalloc")]
 fn collect_embed_allocator(force: bool) {
-    extern "C" { fn mi_collect(force: bool); }
+    extern "C" {
+        fn mi_collect(force: bool);
+    }
     // SAFETY: exact public signature of this library's linked mimalloc. Only
     // free pages are reclaimed; live objects and other allocator instances stay
     // owned. This changes no allocator option and performs no engine operation.
-    unsafe { mi_collect(force); }
+    unsafe {
+        mi_collect(force);
+    }
 }
 
 /// # Safety
@@ -450,7 +485,14 @@ pub unsafe extern "C" fn tofudb_embed_open(
     error_cap: usize,
 ) -> *mut EmbedHandle {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        open_inner(data_dir, owner_id, tenant_id, projection_dir, secret, secret_len)
+        open_inner(
+            data_dir,
+            owner_id,
+            tenant_id,
+            projection_dir,
+            secret,
+            secret_len,
+        )
     }));
     // The caller's secret buffer is zeroized on every path, panic included.
     if !secret.is_null() && secret_len > 0 {
@@ -461,14 +503,22 @@ pub unsafe extern "C" fn tofudb_embed_open(
         Ok(Ok(runtime)) => {
             let runtime = Arc::new(runtime);
             let budget = runtime.resource_budget;
-            let idle_reuse_target = budget.snapshot.logical_cpus.unwrap_or(1)
-                .saturating_mul(2).min(budget.maximum_connections).max(1);
+            let idle_reuse_target = budget
+                .snapshot
+                .logical_cpus
+                .unwrap_or(1)
+                .saturating_mul(2)
+                .min(budget.maximum_connections)
+                .max(1);
             let (sender, receiver) = crate::embed_job_queue::delivery::<Job>(idle_reuse_target);
             let poisoned = Arc::new(AtomicBool::new(false));
             Box::into_raw(Box::new(EmbedHandle {
                 #[cfg(feature = "native-runtime-checkpoints")]
                 checkpoints: std::sync::OnceLock::new(),
-                runtime, poisoned, jobs: Mutex::new(Some(sender)), worker_receiver: receiver,
+                runtime,
+                poisoned,
+                jobs: Mutex::new(Some(sender)),
+                worker_receiver: receiver,
                 input_memory: Arc::default(),
                 phase_registry: Arc::default(),
             }))
@@ -512,11 +562,14 @@ pub extern "C" fn tofudb_embed_allocator_kind() -> u32 {
 #[cfg(feature = "allocator-diagnostics")]
 #[no_mangle]
 pub extern "C" fn tofudb_embed_collect_allocator(force: u32) -> i32 {
-    if force > 1 { return -1; }
+    if force > 1 {
+        return -1;
+    }
     catch_unwind(AssertUnwindSafe(|| {
         collect_embed_allocator(force == 1);
         1
-    })).unwrap_or(0)
+    }))
+    .unwrap_or(0)
 }
 
 /// Optional aggregate live/peak requested Rust bytes for this linked library.
@@ -534,7 +587,9 @@ pub extern "C" fn tofudb_embed_allocator_peak_bytes() -> u64 {
 #[cfg(feature = "allocator-diagnostics")]
 #[no_mangle]
 pub extern "C" fn tofudb_embed_allocator_version() -> i32 {
-    extern "C" { fn mi_version() -> i32; }
+    extern "C" {
+        fn mi_version() -> i32;
+    }
     // SAFETY: read-only version of the same linked mimalloc C implementation.
     unsafe { mi_version() }
 }
@@ -546,7 +601,8 @@ pub extern "C" fn tofudb_embed_allocator_version() -> i32 {
 pub unsafe extern "C" fn tofudb_embed_source_sha256(out: *mut u8, out_cap: usize) -> isize {
     catch_unwind(AssertUnwindSafe(|| {
         write_c_buffer(out, out_cap, env!("TOFUDB_SOURCE_SHA256").as_bytes())
-    })).unwrap_or(-1)
+    }))
+    .unwrap_or(-1)
 }
 
 fn write_open_error(error: *mut u8, error_cap: usize, text: &str) {
@@ -680,7 +736,6 @@ pub unsafe extern "C" fn tofudb_embed_checkpoint_execute(
     }
 }
 
-
 unsafe fn execute_inner(
     handle: *mut EmbedHandle,
     request: *const u8,
@@ -692,8 +747,12 @@ unsafe fn execute_inner(
 }
 
 unsafe fn execute_mode(
-    handle: *mut EmbedHandle, request: *const u8, request_len: usize,
-    out: *mut u8, out_cap: usize, checkpoint_mode: bool,
+    handle: *mut EmbedHandle,
+    request: *const u8,
+    request_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    checkpoint_mode: bool,
 ) -> isize {
     if handle.is_null() || request.is_null() || request_len == 0 {
         return fail(out, out_cap, "invalid embedded execute arguments");
@@ -715,25 +774,38 @@ unsafe fn execute_mode(
             "embedded handle is poisoned by a contained panic or watchdog timeout",
         );
     }
-    let _decode = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_ENVELOPE_DECODE);
+    let _decode = crate::fsync_stats::StageTimer::diagnostic(
+        crate::fsync_stats::STAGE_EMBEDDED_ENVELOPE_DECODE,
+    );
     // Validate every field and collect only recognized borrowed raw values.
     // Decode their types after all duplicate keys have settled (last wins).
-    let parsed: envelope::RequestEnvelope<'_> =
-        match serde_json::from_slice(request_bytes) {
-            Ok(value) => value,
-            Err(error) => return fail(out, out_cap, &format!("invalid request JSON: {error}")),
-        };
-    let operation = parsed.operation.and_then(|value|
-        serde_json::from_str::<String>(value.get()).ok());
-    let deadline = parsed.deadline_unix_ms.and_then(|value|
-        serde_json::from_str::<u64>(value.get()).ok());
+    let parsed: envelope::RequestEnvelope<'_> = match serde_json::from_slice(request_bytes) {
+        Ok(value) => value,
+        Err(error) => return fail(out, out_cap, &format!("invalid request JSON: {error}")),
+    };
+    let operation = parsed
+        .operation
+        .and_then(|value| serde_json::from_str::<String>(value.get()).ok());
+    let deadline = parsed
+        .deadline_unix_ms
+        .and_then(|value| serde_json::from_str::<u64>(value.get()).ok());
     let (operation, deadline_unix_ms) = match (operation, deadline) {
         (Some(operation), Some(deadline)) => (operation, deadline),
-        _ => return fail(out, out_cap, "request requires operation and deadline_unix_ms"),
+        _ => {
+            return fail(
+                out,
+                out_cap,
+                "request requires operation and deadline_unix_ms",
+            )
+        }
     };
     let payload = parsed.payload.map_or("{}", |value| value.get());
     if payload.len() > crate::embed::payload_limit_for_operation(&operation) {
-        return fail(out, out_cap, "embedded request payload exceeds the storage.v2 payload bound");
+        return fail(
+            out,
+            out_cap,
+            "embedded request payload exceeds the storage.v2 payload bound",
+        );
     }
     let source_payload = payload.as_bytes();
     let mut payload = Vec::new();
@@ -741,36 +813,67 @@ unsafe fn execute_mode(
     #[cfg(test)]
     let allocation_bytes = if FAIL_NEXT_INPUT_ALLOCATION.with(|flag| flag.replace(false)) {
         usize::MAX // Exercise the actual fallible vector reservation path.
-    } else { allocation_bytes };
+    } else {
+        allocation_bytes
+    };
     if let Err(error) = payload.try_reserve_exact(allocation_bytes) {
-        return fail(out, out_cap, &format!("embedded request input allocation failed: {error}"));
+        return fail(
+            out,
+            out_cap,
+            &format!("embedded request input allocation failed: {error}"),
+        );
     }
     payload.extend_from_slice(source_payload);
     let memory = match OwnedInputLease::claim(&handle.input_memory, payload.capacity()) {
         Ok(memory) => memory,
         Err(error) => return fail(out, out_cap, &error.to_string()),
     };
-    let command_id = parsed.command_id.and_then(|value|
-        serde_json::from_str::<String>(value.get()).ok());
+    let command_id = parsed
+        .command_id
+        .and_then(|value| serde_json::from_str::<String>(value.get()).ok());
     drop(_decode);
     #[cfg(not(feature = "native-runtime-checkpoints"))]
-    if checkpoint_mode { return fail(out, out_cap, "native checkpoints are not enabled"); }
+    if checkpoint_mode {
+        return fail(out, out_cap, "native checkpoints are not enabled");
+    }
     #[cfg(feature = "native-runtime-checkpoints")]
     let checkpoint = if checkpoint_mode {
-        if command_id.is_some() { return fail(out, out_cap, "checkpoint commands do not accept command_id"); }
-        let registry = handle.checkpoints.get_or_init(|| Arc::new(checkpoint::Registry::default())).clone();
+        if command_id.is_some() {
+            return fail(out, out_cap, "checkpoint commands do not accept command_id");
+        }
+        let registry = handle
+            .checkpoints
+            .get_or_init(|| Arc::new(checkpoint::Registry::default()))
+            .clone();
         let needed = match registry.response_bound(&operation, &payload) {
             Ok(needed) => needed,
             Err(error) => return fail(out, out_cap, &error.to_string()),
         };
         if out.is_null() || out_cap < needed {
-            return fail(out, out_cap, "checkpoint response capacity is insufficient before effects");
+            return fail(
+                out,
+                out_cap,
+                "checkpoint response capacity is insufficient before effects",
+            );
         }
         Some(registry)
-    } else { None };
+    } else {
+        None
+    };
     if !checkpoint_mode && command_id.is_none() {
-        if let Some(result) = handle.runtime.try_cached_json(&operation, &payload, command_id.as_deref(), deadline_unix_ms,
-            || handle.jobs.try_lock().ok().is_some_and(|jobs| jobs.as_ref().is_some_and(JobSender::try_healthy))) {
+        if let Some(result) = handle.runtime.try_cached_json(
+            &operation,
+            &payload,
+            command_id.as_deref(),
+            deadline_unix_ms,
+            || {
+                handle
+                    .jobs
+                    .try_lock()
+                    .ok()
+                    .is_some_and(|jobs| jobs.as_ref().is_some_and(JobSender::try_healthy))
+            },
+        ) {
             return match result {
                 Ok(response) => write_c_buffer(out, out_cap, &response),
                 Err(error) => fail(out, out_cap, &error.to_string()),
@@ -790,8 +893,10 @@ unsafe fn execute_mode(
         respond,
         _memory: memory,
     });
-    let _submit = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_JOB_SUBMIT);
-    let handle_lock = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_HANDLE_LOCK);
+    let _submit =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_JOB_SUBMIT);
+    let handle_lock =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_HANDLE_LOCK);
     let submitted = match handle.jobs.lock() {
         Ok(jobs) => {
             drop(handle_lock);
@@ -813,22 +918,30 @@ unsafe fn execute_mode(
             if let Err(error) = spawn_demand_worker(handle, job) {
                 // The unstarted closure drops its exclusively owned job and
                 // memory lease. It has never been published to another worker.
-                return fail(out, out_cap, &format!("embedded execute worker could not start: {error}"));
+                return fail(
+                    out,
+                    out_cap,
+                    &format!("embedded execute worker could not start: {error}"),
+                );
             }
         }
-        Ok(None) => {},
+        Ok(None) => {}
         Err(_) => {
             poison(handle);
             return fail(out, out_cap, "embedded execute worker terminated");
         }
     }
     let outcome = {
-        let _wait = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_WAIT_RESPONSE);
+        let _wait = crate::fsync_stats::StageTimer::diagnostic(
+            crate::fsync_stats::STAGE_EMBEDDED_WAIT_RESPONSE,
+        );
         outcome_rx.recv_timeout(budget).map(JobOutcome::receive)
     };
     match outcome {
         Ok(Ok(Ok(response))) => {
-            let _copy = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_COPY);
+            let _copy = crate::fsync_stats::StageTimer::diagnostic(
+                crate::fsync_stats::STAGE_EMBEDDED_RESPONSE_COPY,
+            );
             write_c_buffer(out, out_cap, &response)
         }
         Ok(Ok(Err(error))) => fail(out, out_cap, &error.to_string()),

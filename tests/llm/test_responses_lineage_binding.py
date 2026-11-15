@@ -155,7 +155,7 @@ def test_resumed_worker_keeps_its_lineage_and_its_ciphertext():
     durable agent id, not the fresh task id, so invocation_affinity_id is
     unchanged and checked conversion keeps the ciphertext.
     """
-    from lib.tasks_pkg.invocation import InvocationPolicy, invocation_affinity_id
+    from lib.tasks_pkg.invocation import InvocationPolicy
 
     lineage = 'worker:agent-conv:agent-general-child-a'
     policy = InvocationPolicy.child('root-1')

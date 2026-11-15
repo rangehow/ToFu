@@ -49,9 +49,13 @@ static READS: AtomicU64 = AtomicU64::new(0);
 /// resident entries with their exact encoded projection bytes, and reads
 /// served from a resident projection.
 pub(crate) fn process_metrics() -> (u64, u64, u64, u64, u64) {
-    (HITS.load(Ordering::Relaxed), STALE.load(Ordering::Relaxed),
-        ENTRIES.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed),
-        READS.load(Ordering::Relaxed))
+    (
+        HITS.load(Ordering::Relaxed),
+        STALE.load(Ordering::Relaxed),
+        ENTRIES.load(Ordering::Relaxed),
+        BYTES.load(Ordering::Relaxed),
+        READS.load(Ordering::Relaxed),
+    )
 }
 
 /// The committed public projection of one live head, its exact serialized
@@ -74,7 +78,9 @@ pub(crate) struct ResidentProjections {
 
 impl ResidentProjections {
     fn entries(&self) -> std::sync::MutexGuard<'_, BTreeMap<EntityKey, Arc<ResidentProjection>>> {
-        self.entries.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn released(entry: &ResidentProjection) {
@@ -85,12 +91,19 @@ impl ResidentProjections {
     /// The entry for exactly this header, consumed. An entry for an older or
     /// unknown revision is stale and dropped; one newer than a lagging
     /// snapshot stays for the reader that will see it.
-    pub(crate) fn take(&self, key: &EntityKey, header: &Map<String, Value>) -> Option<ResidentProjection> {
+    pub(crate) fn take(
+        &self,
+        key: &EntityKey,
+        header: &Map<String, Value>,
+    ) -> Option<ResidentProjection> {
         let entry = {
             let mut entries = self.entries();
             let entry = entries.remove(key)?;
             if entry.header != *header {
-                if revision(&entry.header).zip(revision(header)).is_some_and(|(entry, read)| entry > read) {
+                if revision(&entry.header)
+                    .zip(revision(header))
+                    .is_some_and(|(entry, read)| entry > read)
+                {
                     entries.insert(key.clone(), entry);
                 } else {
                     Self::released(&entry);
@@ -206,8 +219,14 @@ mod tests {
 
     fn entry(revision: u64) -> ResidentProjection {
         ResidentProjection {
-            header: json!({"projectionRevision": revision}).as_object().unwrap().clone(),
-            projection: json!({"content": format!("r{revision}")}).as_object().unwrap().clone(),
+            header: json!({"projectionRevision": revision})
+                .as_object()
+                .unwrap()
+                .clone(),
+            projection: json!({"content": format!("r{revision}")})
+                .as_object()
+                .unwrap()
+                .clone(),
             projection_bytes: 16,
         }
     }
@@ -227,37 +246,93 @@ mod tests {
         assert!(resident.take(&key("a"), &entry(1).header).is_none());
 
         committed(&resident, "a", 2);
-        assert!(resident.take(&key("a"), &entry(1).header).is_none(), "a lagging snapshot");
-        assert_eq!(resident.resident_keys(), 1, "the newer entry stays for its reader");
-        assert!(resident.take(&key("a"), &entry(3).header).is_none(), "a newer committed header");
-        assert_eq!(resident.resident_keys(), 0, "an older entry is stale and dropped");
+        assert!(
+            resident.take(&key("a"), &entry(1).header).is_none(),
+            "a lagging snapshot"
+        );
+        assert_eq!(
+            resident.resident_keys(),
+            1,
+            "the newer entry stays for its reader"
+        );
+        assert!(
+            resident.take(&key("a"), &entry(3).header).is_none(),
+            "a newer committed header"
+        );
+        assert_eq!(
+            resident.resident_keys(),
+            0,
+            "an older entry is stale and dropped"
+        );
 
         committed(&resident, "a", 4);
-        assert_eq!(resident.take(&key("a"), &entry(4).header).unwrap().projection["content"], "r4");
-        assert!(resident.take(&key("a"), &entry(4).header).is_none(), "a take consumes the entry");
+        assert_eq!(
+            resident
+                .take(&key("a"), &entry(4).header)
+                .unwrap()
+                .projection["content"],
+            "r4"
+        );
+        assert!(
+            resident.take(&key("a"), &entry(4).header).is_none(),
+            "a take consumes the entry"
+        );
     }
 
     #[test]
     fn readers_peek_only_the_identical_header_and_leave_the_entry_for_the_next_event() {
         let resident = ResidentProjections::default();
         let content = |entry: &ResidentProjection| Some(entry.projection["content"].clone());
-        assert!(resident.peek(&key("a"), &entry(1).header, content).is_none());
+        assert!(resident
+            .peek(&key("a"), &entry(1).header, content)
+            .is_none());
         committed(&resident, "a", 2);
-        assert!(resident.peek(&key("a"), &entry(1).header, content).is_none(), "a lagging snapshot");
-        assert!(resident.peek(&key("a"), &entry(3).header, content).is_none(), "a newer snapshot");
-        assert!(resident.peek(&key("a"), &entry(2).header, |_| None::<()>).is_none(), "a declined read");
+        assert!(
+            resident
+                .peek(&key("a"), &entry(1).header, content)
+                .is_none(),
+            "a lagging snapshot"
+        );
+        assert!(
+            resident
+                .peek(&key("a"), &entry(3).header, content)
+                .is_none(),
+            "a newer snapshot"
+        );
+        assert!(
+            resident
+                .peek(&key("a"), &entry(2).header, |_| None::<()>)
+                .is_none(),
+            "a declined read"
+        );
         assert_eq!(resident.resident_keys(), 1, "a peek never drops an entry");
-        assert_eq!(resident.peek(&key("a"), &entry(2).header, content).unwrap(), "r2");
+        assert_eq!(
+            resident.peek(&key("a"), &entry(2).header, content).unwrap(),
+            "r2"
+        );
         // The next event takes its own copy while a reader still holds one.
         let shared = resident.entries().get(&key("a")).cloned().unwrap();
         let taken = resident.take(&key("a"), &entry(2).header).unwrap();
         assert_eq!(taken.projection, shared.projection);
         assert_eq!(resident.resident_keys(), 0);
-        assert!(resident.peek(&key("a"), &entry(2).header, content).is_none(), "a taken entry is gone");
+        assert!(
+            resident
+                .peek(&key("a"), &entry(2).header, content)
+                .is_none(),
+            "a taken entry is gone"
+        );
         drop(shared);
         committed(&resident, "a", 3);
-        assert!(resident.peek(&key("a"), &entry(3).header, content).is_some());
-        assert_eq!(resident.take(&key("a"), &entry(3).header).unwrap().projection["content"], "r3");
+        assert!(resident
+            .peek(&key("a"), &entry(3).header, content)
+            .is_some());
+        assert_eq!(
+            resident
+                .take(&key("a"), &entry(3).header)
+                .unwrap()
+                .projection["content"],
+            "r3"
+        );
     }
 
     #[test]

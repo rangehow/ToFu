@@ -56,7 +56,6 @@ _MAX_SOURCES = 32
 _MAX_KEY_BYTES = 8192  # the credentials vault's value bound
 _ID_RE = re.compile(r'^[a-z0-9][a-z0-9_.-]{0,63}$')
 _SOURCE_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$')
-_BUNDLES_ROOT = Path(__file__).resolve().parents[2] / 'bundles'
 
 
 def _valid_endpoint(value) -> str:
@@ -98,10 +97,8 @@ def _normalize_catalog_entry(raw) -> dict:
 
 
 def _catalog_directories() -> list[Path]:
-    directories = []
-    if _BUNDLES_ROOT.is_dir():
-        directories.extend(bundle / 'search_gateways' for bundle in sorted(_BUNDLES_ROOT.iterdir())
-                           if (bundle / 'search_gateways').is_dir())
+    from tofu_extensions import bundle_directories
+    directories = bundle_directories('search_gateways')
     directories.append(Path(config_path('search_gateways')))
     return directories
 

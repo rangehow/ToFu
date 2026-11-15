@@ -22,7 +22,11 @@ pub(crate) struct WalGateVfs {
 
 impl WalGateVfs {
     pub(crate) fn new(inner: Arc<dyn Vfs>) -> Self {
-        Self { inner, write_gate: Gate::default(), sync_gate: Gate::default() }
+        Self {
+            inner,
+            write_gate: Gate::default(),
+            sync_gate: Gate::default(),
+        }
     }
 
     /// The next physical write to a `.wal` file stalls until released.
@@ -47,7 +51,9 @@ fn pass(gate: &Gate) -> io::Result<()> {
     let armed = gate.lock().unwrap().take();
     if let Some((entered, release)) = armed {
         entered.send(()).map_err(io::Error::other)?;
-        release.recv_timeout(GATE_RELEASE_BOUND).map_err(io::Error::other)?;
+        release
+            .recv_timeout(GATE_RELEASE_BOUND)
+            .map_err(io::Error::other)?;
     }
     Ok(())
 }
@@ -74,7 +80,10 @@ impl Vfs for WalGateVfs {
             sync_gate: Arc::clone(&self.sync_gate),
         }))
     }
-    fn open_positioned_reader(&self, path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+    fn open_positioned_reader(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
         self.inner.open_positioned_reader(path)
     }
     fn create_dir(&self, path: &Path) -> io::Result<()> {
@@ -95,7 +104,11 @@ impl Vfs for WalGateVfs {
     fn read_directory_entries(&self, path: &Path) -> io::Result<Vec<DirectoryEntry>> {
         self.inner.read_directory_entries(path)
     }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
     fn match_directory_prefix_bounded(
@@ -105,7 +118,8 @@ impl Vfs for WalGateVfs {
         scanned: usize,
         matches: usize,
     ) -> io::Result<BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, scanned, matches)
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, scanned, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         self.inner.sync_directory(path)
@@ -132,7 +146,11 @@ impl VfsFile for GatedFile {
         pass(&self.write_gate)?;
         self.inner.write_all_at(offset, bytes)
     }
-    fn write_all_vectored_at(&mut self, offset: u64, buffers: &mut [IoSlice<'_>]) -> io::Result<()> {
+    fn write_all_vectored_at(
+        &mut self,
+        offset: u64,
+        buffers: &mut [IoSlice<'_>],
+    ) -> io::Result<()> {
         pass(&self.write_gate)?;
         self.inner.write_all_vectored_at(offset, buffers)
     }

@@ -29,11 +29,11 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MAX_QUEUE_CONVERSATION_ID_CHARACTERS, MAX_QUEUE_ID_CHARACTERS,
-    MIGRATION_SESSION_MAX_PAGE_ROWS, QUEUE_AUTOPILOT_MARKER_NAMESPACE,
-    QUEUE_CONVERSATION_ORDER_INDEX_NAMESPACE, QUEUE_GLOBAL_AUTOPILOT_INDEX_NAMESPACE,
-    QUEUE_GLOBAL_CONVERSATION_INDEX_NAMESPACE, QUEUE_GLOBAL_LEASE_INDEX_NAMESPACE,
-    QUEUE_ITEM_CORE_NAMESPACE, QUEUE_ITEM_ID_CLAIM_NAMESPACE, QUEUE_ITEM_STATE_NAMESPACE,
+    MAX_QUEUE_CONVERSATION_ID_CHARACTERS, MAX_QUEUE_ID_CHARACTERS, MIGRATION_SESSION_MAX_PAGE_ROWS,
+    QUEUE_AUTOPILOT_MARKER_NAMESPACE, QUEUE_CONVERSATION_ORDER_INDEX_NAMESPACE,
+    QUEUE_GLOBAL_AUTOPILOT_INDEX_NAMESPACE, QUEUE_GLOBAL_CONVERSATION_INDEX_NAMESPACE,
+    QUEUE_GLOBAL_LEASE_INDEX_NAMESPACE, QUEUE_ITEM_CORE_NAMESPACE, QUEUE_ITEM_ID_CLAIM_NAMESPACE,
+    QUEUE_ITEM_STATE_NAMESPACE,
 };
 use crate::versioned_document::{self, SnapshotDocument, SnapshotRestoreOutcome};
 
@@ -296,7 +296,10 @@ fn read_core(
     .map(|raw| {
         serde_json::from_slice::<Value>(&raw)
             .ok()
-            .and_then(|value| match value { Value::Object(object) => Some(object), _ => None })
+            .and_then(|value| match value {
+                Value::Object(object) => Some(object),
+                _ => None,
+            })
             .ok_or_else(|| invalid_data("queue core is malformed"))
     })
     .transpose()
@@ -428,7 +431,9 @@ fn restore_item(
             &end,
             crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS,
         )?;
-        if page.is_empty() { break; }
+        if page.is_empty() {
+            break;
+        }
         let next = page
             .last()
             .map(|(key, _)| key.clone().exact_range())
@@ -924,15 +929,33 @@ mod tests {
         let mut receipt = snapshot("receipt", "conv-1", 80, 1, 1_000);
         receipt["kind"] = json!("background_receipt");
         receipt["payload"] = json!({"text":"done","_backgroundCommand":"bg_1"});
-        execute(&mut database, 7, 11, "migration.queue.item.restore", receipt).unwrap();
+        execute(
+            &mut database,
+            7,
+            11,
+            "migration.queue.item.restore",
+            receipt,
+        )
+        .unwrap();
 
         let mut transaction = database.begin_with_identity_claim_scopes(7, 11).unwrap();
         let recovery_summary = summary_key(&transaction, None, 1_000, 11, "conv-1").unwrap();
-        assert!(database.entity_get(&mut transaction, &recovery_summary).unwrap().is_none());
+        assert!(database
+            .entity_get(&mut transaction, &recovery_summary)
+            .unwrap()
+            .is_none());
         let kind_summary = summary_key(
-            &transaction, Some("background_receipt"), 1_000, 11, "conv-1",
-        ).unwrap();
-        assert!(database.entity_get(&mut transaction, &kind_summary).unwrap().is_some());
+            &transaction,
+            Some("background_receipt"),
+            1_000,
+            11,
+            "conv-1",
+        )
+        .unwrap();
+        assert!(database
+            .entity_get(&mut transaction, &kind_summary)
+            .unwrap()
+            .is_some());
     }
 
     #[test]

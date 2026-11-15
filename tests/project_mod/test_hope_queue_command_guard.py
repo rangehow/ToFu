@@ -70,3 +70,26 @@ def test_command_environment_guards_hope_and_mlp(tmp_path, monkeypatch):
                               task={'_userId': 1})
     assert 'TOFU_QUEUE_POLICY_REFUSAL' not in output
     assert log.exists()
+
+
+def test_concurrent_launcher_writers_do_not_consume_each_others_temporary(tmp_path, monkeypatch):
+    """2026-11-15: two background commands in one round collided on hope.tmp -> hope (ENOENT).
+
+    The second writer runs between the first one's write and its rename, as a
+    concurrent command preparing the same shim directory does.
+    """
+    import lib.tools.hope_queue_policy_launcher as launcher
+    target, body = tmp_path / 'hope', '#!/bin/sh\nexec real "$@"\n'
+    real_replace, interleaved = os.replace, []
+
+    def replace(source, destination):
+        if not interleaved:
+            interleaved.append(source)
+            launcher._write_launcher(target, body)
+        real_replace(source, destination)
+    monkeypatch.setattr(launcher.os, 'replace', replace)
+    launcher._write_launcher(target, body)
+    assert interleaved
+    assert target.read_text(encoding='utf-8') == body
+    assert stat.S_IMODE(target.stat().st_mode) == 0o700
+    assert sorted(path.name for path in tmp_path.iterdir()) == ['hope']

@@ -3,7 +3,10 @@
 //! reservations use one atomic counter on that same database-owned registry;
 //! leases can repay bytes without entering GC's critical section.
 use super::{io, SnapshotPinState};
-use std::sync::{atomic::{AtomicUsize, Ordering}, LockResult, Mutex, MutexGuard};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    LockResult, Mutex, MutexGuard,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct SnapshotPinRegistry {
@@ -11,7 +14,9 @@ pub(crate) struct SnapshotPinRegistry {
     retained: AtomicUsize,
 }
 impl SnapshotPinRegistry {
-    pub(super) fn is_poisoned(&self) -> bool { self.topology.is_poisoned() }
+    pub(super) fn is_poisoned(&self) -> bool {
+        self.topology.is_poisoned()
+    }
     pub(super) fn lock(&self) -> LockResult<MutexGuard<'_, SnapshotPinState>> {
         let _wait =
             crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_PIN_REGISTRY_WAIT);
@@ -31,9 +36,8 @@ impl SnapshotPinRegistry {
         // No payload publication relies on this counter. CAS alone linearizes
         // exact observations; topology and payload visibility keep their own locks.
         self.retained
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
-                retained
-                    .checked_add(bytes)
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
+                retained.checked_add(bytes)
             })
             .map_err(|_| {
                 io::Error::new(
@@ -55,7 +59,7 @@ impl SnapshotPinRegistry {
         if bytes != 0 {
             let _ = self
                 .retained
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |retained| {
                     Some(retained.saturating_sub(bytes))
                 });
         }

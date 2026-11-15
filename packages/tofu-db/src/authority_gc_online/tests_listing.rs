@@ -62,7 +62,10 @@ impl Vfs for ListingVfs {
         }
         self.inner.open(path, request)
     }
-    fn open_positioned_reader(&self, path: &Path) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
+    fn open_positioned_reader(
+        &self,
+        path: &Path,
+    ) -> io::Result<Option<Arc<dyn VfsPositionedReader>>> {
         self.inner.open_positioned_reader(path)
     }
     fn create_dir(&self, path: &Path) -> io::Result<()> {
@@ -86,11 +89,19 @@ impl Vfs for ListingVfs {
     fn read_directory_entries(&self, path: &Path) -> io::Result<Vec<DirectoryEntry>> {
         let listed = self.inner.read_directory_entries(path)?;
         if is_loose_shard(path) {
-            self.log.lock().unwrap().shard_listing_entries.push(listed.len());
+            self.log
+                .lock()
+                .unwrap()
+                .shard_listing_entries
+                .push(listed.len());
         }
         Ok(listed)
     }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
     fn match_directory_prefix_bounded(
@@ -100,14 +111,19 @@ impl Vfs for ListingVfs {
         maximum: usize,
         matches: usize,
     ) -> io::Result<BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         self.inner.sync_directory(path)
     }
 }
 
-fn listing_authority() -> (Arc<DeterministicVfs>, Arc<ListingVfs>, Arc<Mutex<AuthorityDatabase>>) {
+fn listing_authority() -> (
+    Arc<DeterministicVfs>,
+    Arc<ListingVfs>,
+    Arc<Mutex<AuthorityDatabase>>,
+) {
     let inner = Arc::new(DeterministicVfs::new(None));
     inner.create_dir(Path::new("/data")).unwrap();
     inner.sync_directory(Path::new("/")).unwrap();
@@ -120,7 +136,11 @@ fn listing_authority() -> (Arc<DeterministicVfs>, Arc<ListingVfs>, Arc<Mutex<Aut
     (inner, vfs, Arc::new(Mutex::new(database)))
 }
 
-fn write_orphans(database: &Arc<Mutex<AuthorityDatabase>>, tag: &str, count: usize) -> Vec<BlockId> {
+fn write_orphans(
+    database: &Arc<Mutex<AuthorityDatabase>>,
+    tag: &str,
+    count: usize,
+) -> Vec<BlockId> {
     let database = database.lock().unwrap();
     (0..count)
         .map(|index| {
@@ -151,7 +171,10 @@ fn scan_reclaims_a_store_above_the_retired_listing_total_one_shard_at_a_time() {
     run_epoch(&mut collector, &database);
     let first = vfs.take();
     let listed: usize = first.shard_listing_entries.iter().sum();
-    assert!(listed > RETIRED_LISTING_TOTAL_AT_TEST_SCALE, "listed {listed} loose entries");
+    assert!(
+        listed > RETIRED_LISTING_TOTAL_AT_TEST_SCALE,
+        "listed {listed} loose entries"
+    );
     // Every listing holds one shard's entries, never the store's.
     assert_eq!(
         first.shard_listing_entries.iter().max(),
@@ -162,7 +185,10 @@ fn scan_reclaims_a_store_above_the_retired_listing_total_one_shard_at_a_time() {
     let database_guard = database.lock().unwrap();
     for orphan in &orphans {
         assert_eq!(
-            database_guard.read_block_for_test(*orphan).unwrap_err().kind(),
+            database_guard
+                .read_block_for_test(*orphan)
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::NotFound
         );
     }
@@ -190,7 +216,8 @@ fn scan_unlinks_every_confirmed_victim_and_sizes_only_compaction_candidates() {
     let fresh = write_orphans(&database, "listing-fresh-garbage", 5);
     // Live loose files (written, then referenced without a staged copy):
     // enough for a compaction plan that survives the 128-block floor.
-    let live_payloads: Vec<Vec<u8>> = (0..crate::authority_gc::MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS)
+    let live_payloads: Vec<Vec<u8>> = (0
+        ..crate::authority_gc::MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS)
         .map(|index| format!("listing-live-{index}").into_bytes())
         .collect();
     {
@@ -219,7 +246,12 @@ fn scan_unlinks_every_confirmed_victim_and_sizes_only_compaction_candidates() {
     let listed: usize = log.shard_listing_entries.iter().sum();
     let opens_of = |ids: &[BlockId]| -> u64 {
         ids.iter()
-            .map(|id| log.block_read_opens.get(&loose_path(*id)).copied().unwrap_or(0))
+            .map(|id| {
+                log.block_read_opens
+                    .get(&loose_path(*id))
+                    .copied()
+                    .unwrap_or(0)
+            })
             .sum()
     };
     // A staged payload is sized without I/O; every other candidate is one
@@ -250,15 +282,27 @@ fn scan_unlinks_every_confirmed_victim_and_sizes_only_compaction_candidates() {
         "(metadata calls, confirmed-garbage opens, fresh-garbage opens, \
          candidate size reads, all opens) for {listed} listed loose entries"
     );
-    assert!(size_reads < listed as u64, "{size_reads} size reads for {listed} listed entries");
+    assert!(
+        size_reads < listed as u64,
+        "{size_reads} size reads for {listed} listed entries"
+    );
     {
         let database_guard = database.lock().unwrap();
         for victim in &confirmed {
-            assert_eq!(database_guard.read_block_for_test(*victim).unwrap_err().kind(),
-                io::ErrorKind::NotFound, "a confirmed victim outlived the scan");
+            assert_eq!(
+                database_guard
+                    .read_block_for_test(*victim)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::NotFound,
+                "a confirmed victim outlived the scan"
+            );
         }
         for suspect in &fresh {
-            assert!(database_guard.read_block_for_test(*suspect).is_ok(), "a first-observed suspect was unlinked");
+            assert!(
+                database_guard.read_block_for_test(*suspect).is_ok(),
+                "a first-observed suspect was unlinked"
+            );
         }
     }
     collector.cleanup_epoch(&mut epoch);

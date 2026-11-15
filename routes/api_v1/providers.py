@@ -45,12 +45,9 @@ from lib.provider.provider_template_recipes import (
     compile_provider_template_bundle,
     load_provider_templates,
 )
-from lib.catpaw_local_import import (
-    CatpawLocalImportError,
-    cli_installed as catpaw_cli_installed,
-    detect_local_key as catpaw_detect_local_key,
-    kick_cli_login as catpaw_kick_cli_login,
-    read_local_key as catpaw_read_local_key,
+from lib.provider import local_credentials
+from lib.provider.local_credentials import (
+    LocalCredentialError as CatpawLocalImportError,
     secret_envelope as catpaw_secret_envelope,
 )
 from lib.request_parser import parse_body
@@ -796,6 +793,29 @@ def probe_provider_cells_status(provider_id: str):
 # POST seals it into the owner credential envelope server-side.
 
 _CATPAW_TEMPLATE_KEY = "catpaw"
+
+
+# The card's local source is whatever an installed bundle declares for this
+# template (lib/provider/local_credentials.py); a core with no such bundle
+# reports it unavailable. Tests patch these module-level names.
+def catpaw_detect_local_key():
+    return local_credentials.detect_local_key(
+        local_credentials.local_credential_source(_CATPAW_TEMPLATE_KEY))
+
+
+def catpaw_read_local_key():
+    return local_credentials.read_local_key(
+        local_credentials.local_credential_source(_CATPAW_TEMPLATE_KEY))
+
+
+def catpaw_cli_installed():
+    return local_credentials.cli_installed(
+        local_credentials.local_credential_source(_CATPAW_TEMPLATE_KEY))
+
+
+def catpaw_kick_cli_login():
+    return local_credentials.kick_cli_login(
+        local_credentials.local_credential_source(_CATPAW_TEMPLATE_KEY))
 
 
 def _catpaw_existing_access(document: dict[str, Any]) -> dict[str, Any] | None:

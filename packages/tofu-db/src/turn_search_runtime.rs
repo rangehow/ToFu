@@ -113,6 +113,7 @@ impl TurnSearchProjection {
             true,
         )
     }
+    #[cfg(test)]
     pub(crate) fn open_or_defer_with_vfs(
         directory: &Path,
         vfs: Arc<dyn Vfs>,
@@ -135,7 +136,10 @@ impl TurnSearchProjection {
         recover_real_filesystem: bool,
     ) -> io::Result<Self> {
         if maximum_logical_bytes_per_owner == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "search projection budget must be positive"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "search projection budget must be positive",
+            ));
         }
         // The existing maintenance owner opens the disposable index after
         // readiness. Constructing this handle must never touch its volume.
@@ -158,11 +162,22 @@ impl TurnSearchProjection {
             return Ok(());
         }
         if self.opening {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "search index is opening in background"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "search index is opening in background",
+            ));
         }
         let stop = self.stop.clone();
-        let should_stop = || stop.as_ref().is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire));
-        if should_stop() { return Err(io::Error::new(io::ErrorKind::Interrupted, "search open cancelled")); }
+        let should_stop = || {
+            stop.as_ref()
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        };
+        if should_stop() {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "search open cancelled",
+            ));
+        }
         let mut opened = match self.vfs.metadata(&self.directory) {
             Ok(_) if self.recover_real_filesystem => OpenTurnSearchProjection::open_until(
                 &self.directory,
@@ -221,30 +236,61 @@ impl TurnSearchProjection {
     /// opening claim owns the lease; errors release it for the existing retry.
     pub(crate) fn open_in_background(shared: &Arc<std::sync::Mutex<Self>>) -> io::Result<()> {
         let mut candidate = {
-            let mut index = shared.lock().map_err(|_| io::Error::other("search index mutex is poisoned"))?;
-            if index.opened.is_some() { return Ok(()); }
-            if index.opening { return Err(io::Error::new(io::ErrorKind::WouldBlock, "search index is already opening")); }
+            let mut index = shared
+                .lock()
+                .map_err(|_| io::Error::other("search index mutex is poisoned"))?;
+            if index.opened.is_some() {
+                return Ok(());
+            }
+            if index.opening {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "search index is already opening",
+                ));
+            }
             index.opening = true;
-            Self { opened: None, directory: index.directory.clone(), vfs: Arc::clone(&index.vfs),
+            Self {
+                opened: None,
+                directory: index.directory.clone(),
+                vfs: Arc::clone(&index.vfs),
                 maximum_logical_bytes_per_owner: index.maximum_logical_bytes_per_owner,
-                source: index.source, recover_real_filesystem: index.recover_real_filesystem,
-                gc: None, stop: index.stop.clone(), opening: false, search_invalidations: None }
+                source: index.source,
+                recover_real_filesystem: index.recover_real_filesystem,
+                gc: None,
+                stop: index.stop.clone(),
+                opening: false,
+                search_invalidations: None,
+            }
         };
         let result = crate::engine_log::lifecycle_step(
-            "background_timing", "search_projection_open", || candidate.ensure_open());
-        let mut index = shared.lock().map_err(|_| io::Error::other("search index mutex is poisoned"))?;
+            "background_timing",
+            "search_projection_open",
+            || candidate.ensure_open(),
+        );
+        let mut index = shared
+            .lock()
+            .map_err(|_| io::Error::other("search index mutex is poisoned"))?;
         index.opening = false;
         result?;
         if index.source != candidate.source {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "search source changed during open"));
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "search source changed during open",
+            ));
         }
-        if let Some(handle) = index.gc.clone() { candidate.install_gc_handle(handle)?; }
-        if let Some(stop) = index.stop.clone() { candidate.install_stop(stop); }
+        if let Some(handle) = index.gc.clone() {
+            candidate.install_gc_handle(handle)?;
+        }
+        if let Some(stop) = index.stop.clone() {
+            candidate.install_stop(stop);
+        }
         index.opened = candidate.opened.take();
         Ok(())
     }
     pub(crate) fn install_stop(&mut self, stop: Arc<std::sync::atomic::AtomicBool>) {
-        if let Some(opened) = &mut self.opened { opened.install_stop(Arc::clone(&stop)); }
+        if let Some(opened) = &mut self.opened {
+            opened.install_stop(Arc::clone(&stop));
+        }
         self.stop = Some(stop);
     }
     pub(crate) fn install_search_invalidations(
@@ -253,7 +299,9 @@ impl TurnSearchProjection {
     ) {
         self.search_invalidations = Some(invalidations);
     }
-    pub(crate) fn search_invalidations(&self) -> Option<Arc<crate::search_dirty::SearchInvalidations>> {
+    pub(crate) fn search_invalidations(
+        &self,
+    ) -> Option<Arc<crate::search_dirty::SearchInvalidations>> {
         self.search_invalidations.clone()
     }
     pub(crate) fn available(&self) -> bool {
@@ -262,7 +310,9 @@ impl TurnSearchProjection {
     /// The opened index's block store, whose published catalog location
     /// table the maintenance worker keeps current; `None` while opening.
     pub(crate) fn block_store_shared(&self) -> Option<Arc<crate::block::BlockStore>> {
-        self.opened.as_ref().map(|opened| opened.database.block_store_shared())
+        self.opened
+            .as_ref()
+            .map(|opened| opened.database.block_store_shared())
     }
     #[cfg(test)]
     pub(crate) fn database_mut_for_test(&mut self) -> &mut AuthorityDatabase {
@@ -306,6 +356,7 @@ impl TurnSearchProjection {
             .as_mut()
             .ok_or_else(|| io::Error::other("search index was not opened"))
     }
+    #[cfg(test)]
     pub(crate) fn require_source_admission(&mut self, source: uuid::Uuid) {
         self.source = Some(source);
         if let Some(opened) = self.opened.as_mut() {
@@ -561,24 +612,42 @@ mod tests {
     fn blocked_background_open_releases_query_mutex_and_observes_stop() {
         let vfs = Arc::new(crate::test_stop_vfs::StopVfs::new());
         vfs.create_dir(Path::new("/index")).unwrap();
-        drop(TurnSearchProjection::initialize_with_vfs(Path::new("/index"), vfs.clone(), 1 << 24).unwrap());
-        let mut index = TurnSearchProjection::open_or_defer_with_vfs(Path::new("/index"), vfs.clone(),
-            1 << 24, uuid::Uuid::new_v4()).unwrap();
+        drop(
+            TurnSearchProjection::initialize_with_vfs(Path::new("/index"), vfs.clone(), 1 << 24)
+                .unwrap(),
+        );
+        let mut index = TurnSearchProjection::open_or_defer_with_vfs(
+            Path::new("/index"),
+            vfs.clone(),
+            1 << 24,
+            uuid::Uuid::new_v4(),
+        )
+        .unwrap();
         index.install_stop(Arc::clone(&vfs.stop));
         let shared = Arc::new(Mutex::new(index));
         let (entered, release) = vfs.block_next_open();
         let opening = Arc::clone(&shared);
         let worker = std::thread::spawn(move || TurnSearchProjection::open_in_background(&opening));
-        entered.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
         {
-            let mut guard = shared.try_lock().expect("cold I/O held the search request mutex");
+            let mut guard = shared
+                .try_lock()
+                .expect("cold I/O held the search request mutex");
             assert!(!guard.available());
-            assert_eq!(guard.search(&request()).unwrap_err().kind(), io::ErrorKind::NotConnected);
+            assert_eq!(
+                guard.search(&request()).unwrap_err().kind(),
+                io::ErrorKind::NotConnected
+            );
             assert_eq!(guard.checkpoint_wal_window_for_shutdown().unwrap(), 0);
         }
         vfs.stop.store(true, std::sync::atomic::Ordering::Release);
         release.send(()).unwrap();
-        assert_eq!(worker.join().unwrap().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            worker.join().unwrap().unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
         assert!(!shared.lock().unwrap().opening);
         vfs.stop.store(false, std::sync::atomic::Ordering::Release);
         TurnSearchProjection::open_in_background(&shared).unwrap();
@@ -590,24 +659,37 @@ mod tests {
         use crate::test_stop_vfs::StopVfs;
         let vfs = Arc::new(StopVfs::new());
         vfs.create_dir(Path::new("/index")).unwrap();
-        let mut original = TurnSearchProjection::initialize_with_vfs(Path::new("/index"), vfs.clone(), 1 << 24).unwrap();
+        let mut original =
+            TurnSearchProjection::initialize_with_vfs(Path::new("/index"), vfs.clone(), 1 << 24)
+                .unwrap();
         publish(&mut original, "durable");
         drop(original);
         vfs.arm(2);
         let before = vfs.inner.trace().unwrap().len();
-        let mut index = TurnSearchProjection::open_or_defer_with_vfs(Path::new("/index"), vfs.clone(),
-            1 << 24, uuid::Uuid::new_v4()).unwrap();
+        let mut index = TurnSearchProjection::open_or_defer_with_vfs(
+            Path::new("/index"),
+            vfs.clone(),
+            1 << 24,
+            uuid::Uuid::new_v4(),
+        )
+        .unwrap();
         assert_eq!(vfs.inner.trace().unwrap().len(), before);
         assert!(!index.available());
-        assert!(matches!(crate::semantic_executor::map_storage_error(index.search(&request()).unwrap_err()),
-            crate::semantic_executor::SemanticExecutionError::StorageUnavailable));
+        assert!(matches!(
+            crate::semantic_executor::map_storage_error(index.search(&request()).unwrap_err()),
+            crate::semantic_executor::SemanticExecutionError::StorageUnavailable
+        ));
         index.install_stop(Arc::clone(&vfs.stop));
-        assert_eq!(index.ensure_open().unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert_eq!(
+            index.ensure_open().unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
         assert!(!index.available());
         assert_eq!(index.checkpoint_wal_window_for_shutdown().unwrap(), 0);
         drop(index);
         vfs.arm(usize::MAX);
-        let reopened = TurnSearchProjection::open_with_vfs(Path::new("/index"), vfs, 1 << 24).unwrap();
+        let reopened =
+            TurnSearchProjection::open_with_vfs(Path::new("/index"), vfs, 1 << 24).unwrap();
         assert_eq!(reopened.search(&request()).unwrap().len(), 1);
     }
     fn starved() -> FilesystemCapacity {

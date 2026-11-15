@@ -1979,6 +1979,69 @@ def test_poll_names_the_calls_a_restart_hold_leaves_for_the_coordinator(runtime)
     assert row['error'] == {'kind': 'internal', 'hint': hint, 'unknownEffects': [effect]}, row
 
 
+def _restart_interrupted(r, *, unknown):
+    held = r.c.repo.read(r.call('delegate_project_work', **{**r.args, 'idempotency_key': 'held-' + str(unknown)})
+                         ['assignment_id'])
+    settlement = {'cause': 'server_restart', 'resumeOptions': [{'operation': 'continue', 'anchor': {}}]}
+    if unknown:
+        settlement['error'] = {'kind': 'internal', 'code': 'worker_effect_outcome_unknown',
+                               'unknownEffects': [{'toolName': 'run_command', 'toolCallId': 'toolu_push',
+                                                   'operationId': 'b' * 32}]}
+    r.attempts[held['execution']['attemptId']].update(status='interrupted', settledAt=1)
+    r.turns[held['execution']['turnId']].update(status='interrupted', settlement=settlement, ordinal=1)
+    return held
+
+
+def test_a_restart_cut_call_of_unknown_effect_is_a_needs_decision_settlement_reported_once(runtime):
+    """2026-11-15: Workers a restart interrupted sat idle until the Coordinator resumed them by
+    hand. A call of unknown effect class is a needs_decision settlement, reported once; a
+    restart interruption recovery continues by itself is reported as resuming, nothing to do."""
+    r = runtime
+    r.c.repo.turn_lister = lambda conversation_id, **kwargs: {'turns': []}  # Nothing after either Turn.
+    decide = _restart_interrupted(r, unknown=True)
+    resuming = _restart_interrupted(r, unknown=False)
+    result = r.call('poll', ids=[decide['id'], resuming['id']], wait_s=2)
+    phases = {row['assignment_id']: row['phase'] for row in result['workers']}
+    assert phases == {decide['id']: 'needs_decision', resuming['id']: 'resuming'}, result
+    assert 'needs_decision' in result['instruction'] and 'checkpoint_resume' in result['instruction']
+    assert 'resuming from its checkpoint by itself' in result['instruction']
+    again = r.call('poll', ids=[decide['id'], resuming['id']], wait_s=0)
+    assert again['workers'] == [] and set(again['unchanged']) == {decide['id'], resuming['id']}, again
+
+
+def test_parallel_polls_of_one_batch_report_each_settlement_once(runtime, monkeypatch):
+    """Two polls in one tool batch share the attempt's reported-settlement record: both read the
+    same news, but exactly one of them reports it."""
+    r = runtime
+    worker = r.c.repo.read(r.call('delegate_project_work', **r.args)['assignment_id'])
+    r.attempts[worker['execution']['attemptId']]['status'] = 'completed'
+    rendezvous = threading.Barrier(2)
+
+    class Reported(dict):
+        def get(self, *args):
+            # Each lookup waits for the other poll's: without a lock both look up the
+            # settlement before either claims it. Under the lock the other poll cannot
+            # look up, so this wait ends at its timeout and the barrier stays broken.
+            try:
+                rendezvous.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+            return super().get(*args)
+    coordinator_workers._reports(r.task)['reported'] = Reported()
+    results = [None, None]
+
+    def poll(index):
+        results[index] = r.call('poll', ids=[worker['id']], wait_s=0)
+    threads = [threading.Thread(target=poll, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+    reported = [row['assignment_id'] for result in results for row in result['workers']]
+    assert reported == [worker['id']], results
+    assert any(result.get('unchanged') == [worker['id']] for result in results), results
+
+
 def _subscriptions(monkeypatch):
     """Observe real terminal subscriptions; a notification alone never settles a worker."""
     from lib.agent_core import admission

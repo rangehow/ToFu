@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 from lib.channels.model import ThreadKey
 from lib.channels.protocol.adapter import ProtocolAdapter
 from lib.channels.protocol.contract import adapter_descriptor
@@ -199,6 +201,7 @@ def test_text_beyond_the_identitys_max_text_bytes_is_one_intent_per_chunk(bot_ho
     assert store.outbox_item(item.id)[0].state == 'sent'
 
 
+@requires_yourprovider_overlay
 def test_a_markerless_identity_on_a_platform_with_history_gets_no_core_chunking(host, store):
     """P5: 大象's robot (markers false, history read) is reconciled by its exact posted texts on its own send
     path (C6 robotTexts), so the core cuts no marker-reconciled chunks for it; the owner's own identity

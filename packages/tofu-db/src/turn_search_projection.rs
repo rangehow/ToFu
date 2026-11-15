@@ -231,7 +231,7 @@ fn decode_gram_list(input: &[u8]) -> io::Result<GramList> {
         Some(1) if input.len() == 2 => Ok(GramList::Omni),
         Some(0) => Ok(GramList::Entries(posting_codec::decode(
             &input[2..],
-            crate::generated_tofudb_ir::MAX_ENTITY_INLINE_VALUE_BYTES as usize - 2,
+            crate::generated_tofudb_ir::MAX_ENTITY_INLINE_VALUE_BYTES - 2,
             GRAM_LIST_MAX_ENTRIES,
         )?)),
         _ => Err(invalid_data("search gram posting list is malformed")),
@@ -244,7 +244,7 @@ fn encode_gram_entries(entries: &[u64]) -> io::Result<Vec<u8>> {
     }
     let encoded = posting_codec::encode(
         entries,
-        crate::generated_tofudb_ir::MAX_ENTITY_INLINE_VALUE_BYTES as usize - 2,
+        crate::generated_tofudb_ir::MAX_ENTITY_INLINE_VALUE_BYTES - 2,
     )?;
     let mut output = Vec::with_capacity(2 + encoded.len());
     output.extend_from_slice(&[FORMAT_VERSION, 0]);
@@ -2943,10 +2943,7 @@ mod tests {
                 "{gram} posting missing after build"
             );
         }
-        assert!(matches!(
-            gram_list_for(&projection, 11, "zzq").unwrap(),
-            None
-        ));
+        assert!(gram_list_for(&projection, 11, "zzq").unwrap().is_none());
         // A replacement generation retracts the old postings and emits its
         // own in the same transaction.
         projection

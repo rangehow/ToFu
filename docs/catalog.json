@@ -520,6 +520,7 @@
     "docs/TOFUDB_PIPELINE_CRITICAL_PATH.md",
     "docs/TOFUDB_PUBLICATION_LATENCY.md",
     "docs/SITE_PACKS.md",
+    "docs/PUBLIC_CORE.md",
     "docs/RUN_CONTINUITY.md",
     "docs/RESOURCE_CONTROL.md",
     "docs/TOFUDB_JSON_MATERIALIZATION.md",

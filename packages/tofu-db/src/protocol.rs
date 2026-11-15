@@ -285,16 +285,8 @@ impl Message {
                 put_map(bytes, 6);
                 put_field_uint(bytes, FIELD_KIND, KIND_HELLO);
                 put_field_binary(bytes, FIELD_CORRELATION_ID, &message.correlation_id);
-                put_field_uint(
-                    bytes,
-                    FIELD_MINIMUM_VERSION,
-                    message.minimum_version as u64,
-                );
-                put_field_uint(
-                    bytes,
-                    FIELD_MAXIMUM_VERSION,
-                    message.maximum_version as u64,
-                );
+                put_field_uint(bytes, FIELD_MINIMUM_VERSION, message.minimum_version as u64);
+                put_field_uint(bytes, FIELD_MAXIMUM_VERSION, message.maximum_version as u64);
                 put_uint(bytes, FIELD_SCHEMA_IDS);
                 put_array(bytes, message.schema_ids.len());
                 for schema in &message.schema_ids {
@@ -441,7 +433,12 @@ pub struct FrameBufferPlan<G> {
 }
 
 impl<G> FrameBufferPlan<G> {
-    pub fn memory(guard: G) -> Self { Self { guard, spilled: false } }
+    pub fn memory(guard: G) -> Self {
+        Self {
+            guard,
+            spilled: false,
+        }
+    }
 }
 
 struct ScratchFrameFile {
@@ -450,12 +447,17 @@ struct ScratchFrameFile {
 }
 impl ScratchFrameFile {
     fn new(secret_class: bool) -> io::Result<Self> {
-        Ok(Self { file: tempfile::tempfile()?, secret_class })
+        Ok(Self {
+            file: tempfile::tempfile()?,
+            secret_class,
+        })
     }
 }
 impl Drop for ScratchFrameFile {
     fn drop(&mut self) {
-        if !self.secret_class { return; }
+        if !self.secret_class {
+            return;
+        }
         // Best effort even on incomplete reads/encodes or failed mapping.
         // This private scratch state never enters durable authority storage.
         use std::io::{Seek, SeekFrom};
@@ -465,7 +467,9 @@ impl Drop for ScratchFrameFile {
                 let mut remaining = metadata.len();
                 while remaining > 0 {
                     let count = remaining.min(zeros.len() as u64) as usize;
-                    if self.file.write_all(&zeros[..count]).is_err() { break; }
+                    if self.file.write_all(&zeros[..count]).is_err() {
+                        break;
+                    }
                     remaining -= count as u64;
                 }
                 let _ = self.file.flush();
@@ -476,10 +480,14 @@ impl Drop for ScratchFrameFile {
 
 enum FrameBodyBytes {
     Memory(Vec<u8>),
-    File { mapping: memmap2::MmapMut, _file: ScratchFrameFile },
+    File {
+        mapping: memmap2::MmapMut,
+        _file: ScratchFrameFile,
+    },
 }
 
 impl FrameBodyBytes {
+    #[cfg(test)]
     fn as_mut_slice(&mut self) -> &mut [u8] {
         match self {
             Self::Memory(bytes) => bytes,
@@ -495,7 +503,10 @@ struct FrameBody {
 
 impl FrameBody {
     fn new(bytes: Vec<u8>, secret_class: bool) -> Self {
-        Self { bytes: FrameBodyBytes::Memory(bytes), secret_class }
+        Self {
+            bytes: FrameBodyBytes::Memory(bytes),
+            secret_class,
+        }
     }
 
     fn from_file(file: ScratchFrameFile, secret_class: bool) -> io::Result<Self> {
@@ -503,7 +514,13 @@ impl FrameBody {
         // file. It has been fully written, is never cloned/exposed/truncated,
         // and outlives its mapping. Only this body can mutate mapped bytes.
         let mapping = unsafe { memmap2::MmapOptions::new().map_mut(&file.file)? };
-        Ok(Self { bytes: FrameBodyBytes::File { mapping, _file: file }, secret_class })
+        Ok(Self {
+            bytes: FrameBodyBytes::File {
+                mapping,
+                _file: file,
+            },
+            secret_class,
+        })
     }
     fn set_secret_class(&mut self, secret_class: bool) {
         self.secret_class = secret_class;
@@ -511,7 +528,6 @@ impl FrameBody {
             _file.secret_class = secret_class;
         }
     }
-
 }
 
 impl std::ops::Deref for FrameBody {
@@ -551,10 +567,19 @@ impl Drop for FileFrameSink<'_> {
     }
 }
 impl FrameBodySink for FileFrameSink<'_> {
-    fn push(&mut self, byte: u8) { self.extend_from_slice(&[byte]); }
+    fn push(&mut self, byte: u8) {
+        self.extend_from_slice(&[byte]);
+    }
     fn extend_from_slice(&mut self, bytes: &[u8]) {
         if self.error.is_none() {
-            if let Err(error) = self.writer.as_mut().expect("live frame sink").write_all(bytes) { self.error = Some(error); }
+            if let Err(error) = self
+                .writer
+                .as_mut()
+                .expect("live frame sink")
+                .write_all(bytes)
+            {
+                self.error = Some(error);
+            }
         }
     }
 }
@@ -568,7 +593,9 @@ pub fn write_frame_with_admission<G>(
     message: &Message,
     admit: impl FnOnce(usize) -> io::Result<G>,
 ) -> io::Result<usize> {
-    write_frame_with_buffer_plan(writer, message, |bytes| admit(bytes).map(FrameBufferPlan::memory))
+    write_frame_with_buffer_plan(writer, message, |bytes| {
+        admit(bytes).map(FrameBufferPlan::memory)
+    })
 }
 
 pub fn write_frame_with_buffer_plan<G>(
@@ -583,14 +610,22 @@ pub fn write_frame_with_buffer_plan<G>(
     let body = if plan.spilled {
         let mut file = ScratchFrameFile::new(message.body_is_secret_class())?;
         {
-            let mut sink = FileFrameSink { writer: Some(std::io::BufWriter::new(&mut file.file)), error: None };
+            let mut sink = FileFrameSink {
+                writer: Some(std::io::BufWriter::new(&mut file.file)),
+                error: None,
+            };
             message.encode_validated_into(&mut sink);
-            if let Some(error) = sink.error.take() { return Err(error); }
+            if let Some(error) = sink.error.take() {
+                return Err(error);
+            }
             sink.writer.as_mut().expect("live frame sink").flush()?;
         }
         FrameBody::from_file(file, message.body_is_secret_class())?
     } else {
-        FrameBody::new(message.encode_known_length(body_length), message.body_is_secret_class())
+        FrameBody::new(
+            message.encode_known_length(body_length),
+            message.body_is_secret_class(),
+        )
     };
     let length = u32::try_from(body.len()).map_err(|_| invalid_input("frame length overflow"))?;
     let prefix = length.to_be_bytes();
@@ -609,11 +644,17 @@ pub fn write_frame_with_buffer_plan<G>(
         for (index, part) in parts.iter().enumerate().skip(first) {
             buffers[index - first] = IoSlice::new(if index == first {
                 &part[offset..]
-            } else { part });
+            } else {
+                part
+            });
         }
         let mut written = match writer.write_vectored(&buffers[..parts.len() - first]) {
-            Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero,
-                                             "storage.v2 frame write made no progress")),
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "storage.v2 frame write made no progress",
+                ))
+            }
             Ok(written) if written <= total - sent => written,
             Ok(_) => return Err(invalid("storage.v2 frame write overran")),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -622,7 +663,10 @@ pub fn write_frame_with_buffer_plan<G>(
         sent += written;
         while written > 0 {
             let remaining = parts[first].len() - offset;
-            if written < remaining { offset += written; break; }
+            if written < remaining {
+                offset += written;
+                break;
+            }
             written -= remaining;
             first += 1;
             offset = 0;
@@ -693,6 +737,7 @@ pub(crate) enum FrameRead {
     IdleLapsed,
 }
 
+#[cfg(test)]
 pub(crate) fn read_frame_or_idle_with_admission<G>(
     reader: &mut impl Read,
     admit: impl FnOnce(usize) -> io::Result<G>,
@@ -738,7 +783,9 @@ fn read_frame_after_length_prefix<G>(
     prefix_read: usize,
     admit: impl FnOnce(usize) -> io::Result<FrameBufferPlan<G>>,
 ) -> io::Result<Message> {
-    let _frame = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_PROTOCOL_FRAME_AFTER_PREFIX);
+    let _frame = crate::fsync_stats::StageTimer::diagnostic(
+        crate::fsync_stats::STAGE_PROTOCOL_FRAME_AFTER_PREFIX,
+    );
     reader.read_exact(&mut length_bytes[prefix_read..])?;
     let length = u32::from_be_bytes(length_bytes) as usize;
     if length == 0 || length > MAX_FRAME_BODY_BYTES {
@@ -756,17 +803,28 @@ fn read_frame_after_length_prefix<G>(
     let (mut body, checksum_bytes) = if plan.spilled {
         let mut file = ScratchFrameFile::new(true)?;
         let copied = io::copy(&mut (&mut *reader).take(length as u64), &mut file.file)?;
-        if copied != length as u64 { return Err(invalid("truncated storage.v2 frame")); }
+        if copied != length as u64 {
+            return Err(invalid("truncated storage.v2 frame"));
+        }
         let mut checksum = [0; 4];
         reader.read_exact(&mut checksum)?;
         (FrameBody::from_file(file, true)?, checksum)
     } else {
         let total = length + 4;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(total).map_err(|_| crate::resource_exhaustion::reservation_failure("storage.v2 frame allocation failed"))?;
+        bytes.try_reserve_exact(total).map_err(|_| {
+            crate::resource_exhaustion::reservation_failure("storage.v2 frame allocation failed")
+        })?;
         let read = (&mut *reader).take(total as u64).read_to_end(&mut bytes)?;
-        if read < length { return Err(invalid("truncated storage.v2 frame")); }
-        if read < total { return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer")); }
+        if read < length {
+            return Err(invalid("truncated storage.v2 frame"));
+        }
+        if read < total {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "failed to fill whole buffer",
+            ));
+        }
         let checksum: [u8; 4] = bytes[length..].try_into().expect("exact frame trailer");
         bytes.truncate(length);
         (FrameBody::new(bytes, true), checksum)
@@ -774,7 +832,8 @@ fn read_frame_after_length_prefix<G>(
     if u32::from_be_bytes(checksum_bytes) != crc32c::crc32c(&body) {
         return Err(invalid("storage.v2 frame CRC32C mismatch"));
     }
-    let _decode = crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_PROTOCOL_FRAME_DECODE);
+    let _decode =
+        crate::fsync_stats::StageTimer::diagnostic(crate::fsync_stats::STAGE_PROTOCOL_FRAME_DECODE);
     let message = Message::decode_body(&body)?;
     drop(_decode);
     body.set_secret_class(message.body_is_secret_class());
@@ -787,14 +846,22 @@ trait FrameBodySink {
     fn extend_from_slice(&mut self, bytes: &[u8]);
 }
 impl FrameBodySink for Vec<u8> {
-    fn push(&mut self, byte: u8) { Vec::push(self, byte); }
-    fn extend_from_slice(&mut self, bytes: &[u8]) { Vec::extend_from_slice(self, bytes); }
+    fn push(&mut self, byte: u8) {
+        Vec::push(self, byte);
+    }
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        Vec::extend_from_slice(self, bytes);
+    }
 }
 #[derive(Default)]
 struct FrameBodyLength(usize);
 impl FrameBodySink for FrameBodyLength {
-    fn push(&mut self, _: u8) { self.0 = self.0.saturating_add(1); }
-    fn extend_from_slice(&mut self, bytes: &[u8]) { self.0 = self.0.saturating_add(bytes.len()); }
+    fn push(&mut self, _: u8) {
+        self.0 = self.0.saturating_add(1);
+    }
+    fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.0 = self.0.saturating_add(bytes.len());
+    }
 }
 
 fn put_map(bytes: &mut impl FrameBodySink, length: usize) {
@@ -1367,9 +1434,18 @@ mod tests {
         let held = budget.plan_frame(MAX_FRAME_BODY_BYTES).unwrap();
         let message = request();
         let mut frame = Vec::new();
-        write_frame_with_buffer_plan(&mut frame, &message, |bytes| budget.plan_frame(bytes)).unwrap();
-        assert_eq!(read_frame_or_eof_with_buffer_plan(&mut Cursor::new(frame), |bytes| budget.plan_frame(bytes)).unwrap(), Some(message));
-        assert_eq!(budget.metrics().unwrap().memory_buffer_bytes, MAX_FRAME_BODY_BYTES);
+        write_frame_with_buffer_plan(&mut frame, &message, |bytes| budget.plan_frame(bytes))
+            .unwrap();
+        assert_eq!(
+            read_frame_or_eof_with_buffer_plan(&mut Cursor::new(frame), |bytes| budget
+                .plan_frame(bytes))
+            .unwrap(),
+            Some(message)
+        );
+        assert_eq!(
+            budget.metrics().unwrap().memory_buffer_bytes,
+            MAX_FRAME_BODY_BYTES
+        );
         assert_eq!(budget.metrics().unwrap().file_buffer_bytes, 0);
         drop(held);
         assert_eq!(budget.metrics().unwrap().in_flight_bytes, 0);
@@ -1379,12 +1455,21 @@ mod tests {
     fn spilled_corruption_and_truncation_release_every_reservation() {
         let budget = crate::server::FrameAdmissionBudget::new(MAX_FRAME_BODY_BYTES).unwrap();
         let held = budget.plan_frame(MAX_FRAME_BODY_BYTES).unwrap();
-        let mut encoded = Vec::new(); write_frame(&mut encoded, &request()).unwrap();
-        let mut corrupted = encoded.clone(); *corrupted.last_mut().unwrap() ^= 1;
-        for frame in [corrupted, encoded[..encoded.len()-5].to_vec()] {
-            assert!(read_frame_or_eof_with_buffer_plan(&mut Cursor::new(frame), |bytes| budget.plan_frame(bytes)).is_err());
+        let mut encoded = Vec::new();
+        write_frame(&mut encoded, &request()).unwrap();
+        let mut corrupted = encoded.clone();
+        *corrupted.last_mut().unwrap() ^= 1;
+        for frame in [corrupted, encoded[..encoded.len() - 5].to_vec()] {
+            assert!(
+                read_frame_or_eof_with_buffer_plan(&mut Cursor::new(frame), |bytes| budget
+                    .plan_frame(bytes))
+                .is_err()
+            );
             assert_eq!(budget.metrics().unwrap().file_buffer_bytes, 0);
-            assert_eq!(budget.metrics().unwrap().in_flight_bytes, MAX_FRAME_BODY_BYTES);
+            assert_eq!(
+                budget.metrics().unwrap().in_flight_bytes,
+                MAX_FRAME_BODY_BYTES
+            );
         }
         drop(held);
         assert_eq!(budget.metrics().unwrap().in_flight_bytes, 0);
@@ -1392,14 +1477,25 @@ mod tests {
 
     #[test]
     fn spilled_secret_body_zeroizes_before_private_file_retirement() {
-        let mut file = tempfile::tempfile().unwrap(); file.write_all(&[0xAB; 64]).unwrap();
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&[0xAB; 64]).unwrap();
         let observer = file.try_clone().unwrap();
-        let body = FrameBody::from_file(ScratchFrameFile { file, secret_class: true }, true).unwrap();
-        assert_eq!(&body[..], &[0xAB;64]); drop(body);
+        let body = FrameBody::from_file(
+            ScratchFrameFile {
+                file,
+                secret_class: true,
+            },
+            true,
+        )
+        .unwrap();
+        assert_eq!(&body[..], &[0xAB; 64]);
+        drop(body);
         use std::io::{Seek, SeekFrom};
-        let mut observer = observer; observer.seek(SeekFrom::Start(0)).unwrap();
-        let mut bytes = Vec::new(); observer.read_to_end(&mut bytes).unwrap();
-        assert_eq!(bytes, vec![0;64]);
+        let mut observer = observer;
+        observer.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        observer.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, vec![0; 64]);
     }
 
     #[test]
@@ -1479,7 +1575,11 @@ mod tests {
     #[test]
     fn frame_body_zeroes_only_secret_class_buffers() {
         let mut secret = FrameBody::new(vec![7_u8; 64], true);
-        secret.bytes.as_mut_slice().iter_mut().for_each(|byte| *byte = 0xAB);
+        secret
+            .bytes
+            .as_mut_slice()
+            .iter_mut()
+            .for_each(|byte| *byte = 0xAB);
         drop(secret);
         let content = FrameBody::new(vec![7_u8; 64], false);
         let bytes = content.to_vec();
@@ -1554,12 +1654,19 @@ mod tests {
 
     #[test]
     fn query_blob_chunks_round_trip_without_command_id() {
-        let mut chunk = messages().into_iter().find_map(|message| match message {
-            Message::BlobChunk(chunk) => Some(chunk), _ => None,
-        }).unwrap();
+        let mut chunk = messages()
+            .into_iter()
+            .find_map(|message| match message {
+                Message::BlobChunk(chunk) => Some(chunk),
+                _ => None,
+            })
+            .unwrap();
         chunk.command_id = None;
         let message = Message::BlobChunk(chunk);
-        assert_eq!(Message::decode_body(&message.encode_body().unwrap()).unwrap(), message);
+        assert_eq!(
+            Message::decode_body(&message.encode_body().unwrap()).unwrap(),
+            message
+        );
     }
 
     struct ChunkedReader {
@@ -1615,12 +1722,20 @@ mod tests {
             if std::mem::take(&mut self.interrupt_once) {
                 return Err(io::ErrorKind::Interrupted.into());
             }
-            if self.failure_after.is_some_and(|limit| self.bytes.len() >= limit) {
+            if self
+                .failure_after
+                .is_some_and(|limit| self.bytes.len() >= limit)
+            {
                 return Err(io::ErrorKind::BrokenPipe.into());
             }
-            if self.overrun { return Ok(buffers.iter().map(|buffer| buffer.len()).sum::<usize>() + 1); }
+            if self.overrun {
+                return Ok(buffers.iter().map(|buffer| buffer.len()).sum::<usize>() + 1);
+            }
             let before = self.bytes.len();
-            let available = self.failure_after.unwrap_or(usize::MAX).saturating_sub(before);
+            let available = self
+                .failure_after
+                .unwrap_or(usize::MAX)
+                .saturating_sub(before);
             let mut remaining = self.maximum_chunk.min(available);
             for buffer in buffers {
                 let count = buffer.len().min(remaining);
@@ -1629,7 +1744,9 @@ mod tests {
             }
             Ok(self.bytes.len() - before)
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -1638,8 +1755,13 @@ mod tests {
             let mut expected = Vec::new();
             write_frame(&mut expected, &message).unwrap();
             for maximum_chunk in [1, 3, 4, 5, 7, 63, usize::MAX] {
-                let mut writer = PartialVectoredWriter { bytes: Vec::new(), maximum_chunk,
-                    interrupt_once: true, failure_after: None, overrun: false };
+                let mut writer = PartialVectoredWriter {
+                    bytes: Vec::new(),
+                    maximum_chunk,
+                    interrupt_once: true,
+                    failure_after: None,
+                    overrun: false,
+                };
                 assert_eq!(write_frame(&mut writer, &message).unwrap(), expected.len());
                 assert_eq!(writer.bytes, expected);
                 assert_eq!(read_frame(&mut Cursor::new(writer.bytes)).unwrap(), message);
@@ -1652,16 +1774,34 @@ mod tests {
         let mut expected = Vec::new();
         write_frame(&mut expected, &request()).unwrap();
         for boundary in [0, 1, 4, 5, expected.len() - 4, expected.len() - 1] {
-            let mut writer = PartialVectoredWriter { bytes: Vec::new(), maximum_chunk: 3,
-                interrupt_once: true, failure_after: Some(boundary), overrun: false };
-            assert_eq!(write_frame(&mut writer, &request()).unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+            let mut writer = PartialVectoredWriter {
+                bytes: Vec::new(),
+                maximum_chunk: 3,
+                interrupt_once: true,
+                failure_after: Some(boundary),
+                overrun: false,
+            };
+            assert_eq!(
+                write_frame(&mut writer, &request()).unwrap_err().kind(),
+                io::ErrorKind::BrokenPipe
+            );
             assert_eq!(writer.bytes, expected[..boundary]);
         }
-        for (maximum_chunk, overrun, kind) in [(0, false, io::ErrorKind::WriteZero),
-                                               (1, true, io::ErrorKind::InvalidData)] {
-            let mut writer = PartialVectoredWriter { bytes: Vec::new(), maximum_chunk,
-                interrupt_once: false, failure_after: None, overrun };
-            assert_eq!(write_frame(&mut writer, &request()).unwrap_err().kind(), kind);
+        for (maximum_chunk, overrun, kind) in [
+            (0, false, io::ErrorKind::WriteZero),
+            (1, true, io::ErrorKind::InvalidData),
+        ] {
+            let mut writer = PartialVectoredWriter {
+                bytes: Vec::new(),
+                maximum_chunk,
+                interrupt_once: false,
+                failure_after: None,
+                overrun,
+            };
+            assert_eq!(
+                write_frame(&mut writer, &request()).unwrap_err().kind(),
+                kind
+            );
             assert!(writer.bytes.is_empty());
         }
     }
@@ -1951,10 +2091,15 @@ mod tests {
         .is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
-    struct CountingReader { inner: Cursor<Vec<u8>>, reads: usize }
+    struct CountingReader {
+        inner: Cursor<Vec<u8>>,
+        reads: usize,
+    }
     impl Read for CountingReader {
         fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-            if !bytes.is_empty() { self.reads += 1; }
+            if !bytes.is_empty() {
+                self.reads += 1;
+            }
             self.inner.read(bytes)
         }
     }
@@ -1964,7 +2109,10 @@ mod tests {
         write_frame(&mut frame, &request()).unwrap();
         let frame_bytes = frame.len();
         frame.extend_from_within(..);
-        let mut reader = CountingReader { inner: Cursor::new(frame), reads: 0 };
+        let mut reader = CountingReader {
+            inner: Cursor::new(frame),
+            reads: 0,
+        };
         assert_eq!(read_frame(&mut reader).unwrap(), request());
         assert_eq!(reader.inner.position(), frame_bytes as u64);
         assert_eq!(reader.reads, 2);
@@ -1979,7 +2127,9 @@ mod tests {
             let error = read_frame(&mut Cursor::new(frame[..received].to_vec())).unwrap_err();
             let expected = if received < 4 || received >= 4 + body_length {
                 io::ErrorKind::UnexpectedEof
-            } else { io::ErrorKind::InvalidData };
+            } else {
+                io::ErrorKind::InvalidData
+            };
             assert_eq!(error.kind(), expected, "received {received}");
         }
     }
@@ -1987,50 +2137,73 @@ mod tests {
     fn rejected_frame_admission_does_not_read_body_or_trailer() {
         let mut frame = Vec::new();
         write_frame(&mut frame, &request()).unwrap();
-        let mut reader = CountingReader { inner: Cursor::new(frame), reads: 0 };
+        let mut reader = CountingReader {
+            inner: Cursor::new(frame),
+            reads: 0,
+        };
         let error = read_frame_with_admission(&mut reader, |_| -> io::Result<()> {
-            Err(io::Error::new(io::ErrorKind::WouldBlock, "test budget exhausted"))
-        }).unwrap_err();
+            Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "test budget exhausted",
+            ))
+        })
+        .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
         assert_eq!(reader.inner.position(), 4);
     }
     #[test]
     fn counted_encoding_matches_message_and_binary_length_boundaries() {
         for message in messages() {
-            assert_eq!(message.encoded_body_length().unwrap(), message.encode_body().unwrap().len());
+            assert_eq!(
+                message.encoded_body_length().unwrap(),
+                message.encode_body().unwrap().len()
+            );
             if let Message::Response(mut response) = message {
-                if response.status != 0 { continue; }
+                if response.status != 0 {
+                    continue;
+                }
                 for length in [0, 1, 31, 32, 255, 256, 65535, 65536] {
                     response.payload = vec![7; length];
                     let message = Message::Response(response.clone());
-                    assert_eq!(message.encoded_body_length().unwrap(), message.encode_body().unwrap().len());
+                    assert_eq!(
+                        message.encoded_body_length().unwrap(),
+                        message.encode_body().unwrap().len()
+                    );
                 }
             }
         }
     }
     #[test]
     fn small_blocked_writes_charge_real_bytes_with_the_same_aggregate_budget() {
-        use std::sync::{Condvar, Mutex};
         use crate::server::FrameAdmissionBudget;
+        use std::sync::{Condvar, Mutex};
         struct Release(Arc<(Mutex<bool>, Condvar)>);
         impl Drop for Release {
             fn drop(&mut self) {
-                *self.0.0.lock().unwrap_or_else(|e| e.into_inner()) = true;
-                self.0.1.notify_all();
+                *self.0 .0.lock().unwrap_or_else(|e| e.into_inner()) = true;
+                self.0 .1.notify_all();
             }
         }
-        struct BlockedWriter { arrived: std::sync::mpsc::Sender<bool>, gate: Arc<(Mutex<bool>, Condvar)>, entered: bool }
+        struct BlockedWriter {
+            arrived: std::sync::mpsc::Sender<bool>,
+            gate: Arc<(Mutex<bool>, Condvar)>,
+            entered: bool,
+        }
         impl Write for BlockedWriter {
             fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
                 if !self.entered {
                     self.entered = true;
                     self.arrived.send(true).unwrap();
                     let mut released = self.gate.0.lock().unwrap();
-                    while !*released { released = self.gate.1.wait(released).unwrap(); }
+                    while !*released {
+                        released = self.gate.1.wait(released).unwrap();
+                    }
                 }
                 Ok(bytes.len())
             }
-            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
         }
         let budget = FrameAdmissionBudget::new(16 * MAX_FRAME_BODY_BYTES).unwrap();
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
@@ -2039,23 +2212,47 @@ mod tests {
             let release = Release(Arc::clone(&gate));
             let mut handles = Vec::new();
             for _ in 0..32 {
-                let budget = budget.clone();let gate = Arc::clone(&gate);let arrived = arrived.clone();
+                let budget = budget.clone();
+                let gate = Arc::clone(&gate);
+                let arrived = arrived.clone();
                 handles.push(scope.spawn(move || {
-                    let mut writer = BlockedWriter { arrived: arrived.clone(), gate, entered: false };
-                    let result = write_frame_with_admission(&mut writer, &request(), |size| budget.admit(size));
-                    if result.is_err() { arrived.send(false).unwrap(); }
+                    let mut writer = BlockedWriter {
+                        arrived: arrived.clone(),
+                        gate,
+                        entered: false,
+                    };
+                    let result = write_frame_with_admission(&mut writer, &request(), |size| {
+                        budget.admit(size)
+                    });
+                    if result.is_err() {
+                        arrived.send(false).unwrap();
+                    }
                     result
                 }));
             }
-            let admitted = (0..32).map(|_| events.recv_timeout(std::time::Duration::from_secs(5)).unwrap()).filter(|x| *x).count();
-            let metrics = budget.metrics().unwrap();drop(release);
-            let outcomes = handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>();
+            let admitted = (0..32)
+                .map(|_| {
+                    events
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap()
+                })
+                .filter(|x| *x)
+                .count();
+            let metrics = budget.metrics().unwrap();
+            drop(release);
+            let outcomes = handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>();
 
-                assert_eq!(admitted, 32);assert_eq!(metrics.in_flight_bytes, 32 * request().encoded_body_length().unwrap());
-                assert!(outcomes.into_iter().all(|r| r.is_ok()));
-
+            assert_eq!(admitted, 32);
+            assert_eq!(
+                metrics.in_flight_bytes,
+                32 * request().encoded_body_length().unwrap()
+            );
+            assert!(outcomes.into_iter().all(|r| r.is_ok()));
         });
-        assert_eq!(budget.metrics().unwrap().in_flight_bytes, 0);assert_eq!(budget.metrics().unwrap().in_flight_frames, 0);
+        assert_eq!(budget.metrics().unwrap().in_flight_bytes, 0);
+        assert_eq!(budget.metrics().unwrap().in_flight_frames, 0);
     }
-
 }

@@ -71,10 +71,7 @@ impl Template {
             let _pin = crate::fsync_stats::StageTimer::diagnostic(
                 crate::fsync_stats::STAGE_PUBLISHED_READ_PIN,
             );
-            pin_snapshot(
-                &self.pins,
-                self.core.captured,
-            )?
+            pin_snapshot(&self.pins, self.core.captured)?
         };
         let _clone = crate::fsync_stats::StageTimer::diagnostic(
             crate::fsync_stats::STAGE_PUBLISHED_READ_CLONE,
@@ -141,12 +138,24 @@ impl PublishedEntityReads {
     /// Own cached bytes need no physical root pin. The same publication lock
     /// proves their generation; all health checks are nonblocking. A miss or
     /// uncertain state returns to ordinary pinned reads behind the watchdog.
-    pub(crate) fn with_healthy_current_snapshot<T>(&self, use_snapshot: impl FnOnce(EntitySnapshot) -> T) -> Option<T> {
-        if self.disabled.load(Ordering::Acquire) { return None; }
+    pub(crate) fn with_healthy_current_snapshot<T>(
+        &self,
+        use_snapshot: impl FnOnce(EntitySnapshot) -> T,
+    ) -> Option<T> {
+        if self.disabled.load(Ordering::Acquire) {
+            return None;
+        }
         let state = self.state.try_read().ok()?;
         let template = state.as_ref()?;
-        if template.core.blocks.check_live().is_err() || template.pins.is_poisoned()
-            || template.wal_barrier.as_ref().is_some_and(|barrier| !barrier.try_healthy()) { return None; }
+        if template.core.blocks.check_live().is_err()
+            || template.pins.is_poisoned()
+            || template
+                .wal_barrier
+                .as_ref()
+                .is_some_and(|barrier| !barrier.try_healthy())
+        {
+            return None;
+        }
         Some(use_snapshot(template.core.captured))
     }
 

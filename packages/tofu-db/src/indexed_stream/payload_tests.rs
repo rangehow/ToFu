@@ -51,26 +51,59 @@ fn event_time_spine_omits_blob_materialization_but_full_replay_still_verifies_it
     let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
     // Inject unavailable payload storage only in this private transaction.
     // Metadata reads must not fetch excluded content; full replay must fail.
-    db.entity_delete(&mut tx, payload_document_key(7, 11, &item.task_id, 19).unwrap()).unwrap();
+    db.entity_delete(
+        &mut tx,
+        payload_document_key(7, 11, &item.task_id, 19).unwrap(),
+    )
+    .unwrap();
     let selected = ListRequest {
-        task_id: item.task_id.clone(), after_sequence: None, limit: 10,
-        types: vec![], type_prefixes: vec![], payload_types: Some(vec![]),
+        task_id: item.task_id.clone(),
+        after_sequence: None,
+        limit: 10,
+        types: vec![],
+        type_prefixes: vec![],
+        payload_types: Some(vec![]),
         inspector_projection: false,
     };
     let spine: Value = serde_json::from_slice(&list(&db, &mut tx, &selected).unwrap()).unwrap();
-    assert_eq!(spine, json!([{"sequence": 19, "created_at_ms": 1234,
-                            "event": {"type": "messages_snapshot"}}]));
-    let end: Value = serde_json::from_slice(
-        &latest(&db, &mut tx, &item.task_id, true).unwrap().unwrap()).unwrap();
+    assert_eq!(
+        spine,
+        json!([{"sequence": 19, "created_at_ms": 1234,
+                            "event": {"type": "messages_snapshot"}}])
+    );
+    let end: Value =
+        serde_json::from_slice(&latest(&db, &mut tx, &item.task_id, true).unwrap().unwrap())
+            .unwrap();
     assert_eq!(end, spine[0]);
-    let full = ListRequest { payload_types: None, ..selected };
-    assert!(list(&db, &mut tx, &full).unwrap_err().to_string().contains("missing"));
-    let inspector = ListRequest { inspector_projection: true, ..full };
-    assert!(list(&db, &mut tx, &inspector).unwrap_err().to_string().contains("missing"));
-    assert!(latest(&db, &mut tx, &item.task_id, false).unwrap_err().to_string().contains("missing"));
+    let full = ListRequest {
+        payload_types: None,
+        ..selected
+    };
+    assert!(list(&db, &mut tx, &full)
+        .unwrap_err()
+        .to_string()
+        .contains("missing"));
+    let inspector = ListRequest {
+        inspector_projection: true,
+        ..full
+    };
+    assert!(list(&db, &mut tx, &inspector)
+        .unwrap_err()
+        .to_string()
+        .contains("missing"));
+    assert!(latest(&db, &mut tx, &item.task_id, false)
+        .unwrap_err()
+        .to_string()
+        .contains("missing"));
     drop(tx);
     // The injected failure never changes durable payload state.
-    assert_eq!(rows(&db, 11).unwrap()[0]["event"]["text"].as_str().unwrap().len(), 300 * 1024);
+    assert_eq!(
+        rows(&db, 11).unwrap()[0]["event"]["text"]
+            .as_str()
+            .unwrap()
+            .len(),
+        300 * 1024
+    );
 }
 #[test]
 fn large_event_payload_survives_gc_reopen_and_prune() {
@@ -87,7 +120,8 @@ fn large_event_payload_survives_gc_reopen_and_prune() {
     assert_eq!(rows(&db, 12).unwrap(), json!([]));
     let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
     let latest: Value =
-        serde_json::from_slice(&latest(&db, &mut tx, &item.task_id, false).unwrap().unwrap()).unwrap();
+        serde_json::from_slice(&latest(&db, &mut tx, &item.task_id, false).unwrap().unwrap())
+            .unwrap();
     assert_eq!(latest["event"], expected);
     let physical = db
         .stream_read_in_transaction(&mut tx, &stream_key(7, 11, &item.task_id).unwrap(), 1, 1)
@@ -184,8 +218,11 @@ fn large_event_payload_rejects_invalid_json_and_corrupt_identity() {
     let mut db = AuthorityDatabase::initialize(dir.path()).unwrap();
     let mut item = large_request();
     item.payload_json = b"[invalid".to_vec();
-    assert_eq!(write(&mut db,&item).unwrap_err().kind(),io::ErrorKind::InvalidData);
-    assert_eq!(rows(&db,11).unwrap(),json!([]));
+    assert_eq!(
+        write(&mut db, &item).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(rows(&db, 11).unwrap(), json!([]));
     let item = large_request();
     write(&mut db, &item).unwrap();
     let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
@@ -284,18 +321,27 @@ fn large_event_payload_prune_faults_keep_document_and_indexes_together() {
 fn inspector_summary_reads_all_roots_and_child_pages_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let mut db = AuthorityDatabase::initialize(dir.path()).unwrap();
-    let roots: Vec<String> = (0..129).map(|i| format!("inspector-demand-{i:04}")).collect();
-    let children: Vec<String> = (0..1101).map(|i| format!("{}#agent:{i:04}", roots[0])).collect();
+    let roots: Vec<String> = (0..129)
+        .map(|i| format!("inspector-demand-{i:04}"))
+        .collect();
+    let children: Vec<String> = (0..1101)
+        .map(|i| format!("{}#agent:{i:04}", roots[0]))
+        .collect();
     let mut identities = roots.clone();
     identities.extend(children.clone());
     identities.sort();
     for chunk in identities.chunks(256) {
         let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
-        let events: Vec<AppendRequest> = chunk.iter().map(|task_id| AppendRequest {
-            task_id: task_id.clone(), application_sequence: 0,
-            event_type: "messages_snapshot".to_owned(), created_at_ms: 1234,
-            payload_json: br#"{"type":"messages_snapshot","kind":"request"}"#.to_vec(),
-        }).collect();
+        let events: Vec<AppendRequest> = chunk
+            .iter()
+            .map(|task_id| AppendRequest {
+                task_id: task_id.clone(),
+                application_sequence: 0,
+                event_type: "messages_snapshot".to_owned(),
+                created_at_ms: 1234,
+                payload_json: br#"{"type":"messages_snapshot","kind":"request"}"#.to_vec(),
+            })
+            .collect();
         append_batch(&db, &mut tx, &events).unwrap();
         db.commit(tx).unwrap();
     }
@@ -304,7 +350,8 @@ fn inspector_summary_reads_all_roots_and_child_pages_after_reopen() {
     let mut requested = roots.clone();
     requested.extend([roots[0].clone(), children[0].clone()]);
     let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
-    let result: Value = serde_json::from_slice(&inspector_summary(&db, &mut tx, &requested).unwrap()).unwrap();
+    let result: Value =
+        serde_json::from_slice(&inspector_summary(&db, &mut tx, &requested).unwrap()).unwrap();
     let records = result["records"].as_array().unwrap();
     assert_eq!(records.len(), identities.len());
     for (record, identity) in records.iter().zip(&identities) {
@@ -314,7 +361,8 @@ fn inspector_summary_reads_all_roots_and_child_pages_after_reopen() {
         assert_eq!(record["first_event_at_ms"], 1234);
     }
     let mut foreign = db.begin_with_identity_claim_scopes(7, 12).unwrap();
-    let hidden: Value = serde_json::from_slice(&inspector_summary(&db, &mut foreign, &requested).unwrap()).unwrap();
+    let hidden: Value =
+        serde_json::from_slice(&inspector_summary(&db, &mut foreign, &requested).unwrap()).unwrap();
     assert_eq!(hidden["records"], json!([]));
 }
 
@@ -323,14 +371,21 @@ fn complete_type_catalog_merges_sparse_events_and_summarizes_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let mut db = AuthorityDatabase::initialize(dir.path()).unwrap();
     let task_id = "many-event-types";
-    let mut events: Vec<AppendRequest> = (0..2161).map(|i| AppendRequest {
-        task_id: task_id.to_owned(), application_sequence: i * 7 + 11,
-        event_type: format!("endpoint_{:04}", 2160 - i), created_at_ms: 1234,
-        payload_json: serde_json::to_vec(&json!({"type": format!("endpoint_{:04}", 2160 - i)})).unwrap(),
-    }).collect();
+    let mut events: Vec<AppendRequest> = (0..2161)
+        .map(|i| AppendRequest {
+            task_id: task_id.to_owned(),
+            application_sequence: i * 7 + 11,
+            event_type: format!("endpoint_{:04}", 2160 - i),
+            created_at_ms: 1234,
+            payload_json: serde_json::to_vec(&json!({"type": format!("endpoint_{:04}", 2160 - i)}))
+                .unwrap(),
+        })
+        .collect();
     events.push(AppendRequest {
-        task_id: task_id.to_owned(), application_sequence: 50000,
-        event_type: events[0].event_type.clone(), created_at_ms: 1234,
+        task_id: task_id.to_owned(),
+        application_sequence: 50000,
+        event_type: events[0].event_type.clone(),
+        created_at_ms: 1234,
         payload_json: events[0].payload_json.clone(),
     });
     for chunk in events.chunks(256) {
@@ -345,7 +400,9 @@ fn complete_type_catalog_merges_sparse_events_and_summarizes_after_reopen() {
     loop {
         let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
         let request = ListRequest {
-            task_id: task_id.to_owned(), after_sequence, limit: 197,
+            task_id: task_id.to_owned(),
+            after_sequence,
+            limit: 197,
             types: vec![events[0].event_type.clone()],
             type_prefixes: vec!["endpoint_".to_owned(), "endpoint_00".to_owned()],
             payload_types: Some(vec![]),
@@ -353,16 +410,29 @@ fn complete_type_catalog_merges_sparse_events_and_summarizes_after_reopen() {
         };
         let page: Value = serde_json::from_slice(&list(&db, &mut tx, &request).unwrap()).unwrap();
         let rows = page.as_array().unwrap();
-        if rows.is_empty() { break; }
+        if rows.is_empty() {
+            break;
+        }
         assert!(rows.len() <= 197);
         for row in rows {
-            seen.push((row["sequence"].as_u64().unwrap(), row["event"]["type"].as_str().unwrap().to_owned()));
+            seen.push((
+                row["sequence"].as_u64().unwrap(),
+                row["event"]["type"].as_str().unwrap().to_owned(),
+            ));
         }
         after_sequence = Some(seen.last().unwrap().0);
     }
-    assert_eq!(seen, events.iter().map(|event| (event.application_sequence, event.event_type.clone())).collect::<Vec<_>>());
+    assert_eq!(
+        seen,
+        events
+            .iter()
+            .map(|event| (event.application_sequence, event.event_type.clone()))
+            .collect::<Vec<_>>()
+    );
     let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
-    let summary: Value = serde_json::from_slice(&inspector_summary(&db, &mut tx, &[task_id.to_owned()]).unwrap()).unwrap();
+    let summary: Value =
+        serde_json::from_slice(&inspector_summary(&db, &mut tx, &[task_id.to_owned()]).unwrap())
+            .unwrap();
     assert_eq!(summary["records"][0]["event_count"], events.len());
     assert_eq!(summary["records"][0]["first_event_at_ms"], 1234);
 }

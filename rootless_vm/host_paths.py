@@ -16,28 +16,23 @@ from pathlib import Path
 
 
 _FORBIDDEN = (Path("/tmp"), Path("/var/tmp"), Path("/dev/shm"))
+# Linux shared/network volumes mount under /mnt/<volume> (the convention
+# lib.compat.is_network_mount also uses).
+_NETWORK_VOLUME_PARENT = Path("/mnt")
 
 
-def required_host_volume() -> Path | None:
-    """The shared volume a checkout on it must keep host storage on, or None.
-
-    ``TOFU_REQUIRED_HOST_VOLUME`` declares a deployment's shared checkout
-    volume (an absolute mount root). It has no default: a deployment without
-    such a volume declares nothing and gets no volume restriction.
-    """
-    value = os.environ.get("TOFU_REQUIRED_HOST_VOLUME", "").strip()
-    if not value:
-        return None
-    volume = Path(value)
-    if not volume.is_absolute() or ".." in volume.parts or volume == Path("/"):
-        raise ValueError("TOFU_REQUIRED_HOST_VOLUME must be an absolute mount root")
-    return volume
+def _network_volume(path: Path) -> Path | None:
+    """The ``/mnt/<volume>`` root holding ``path``, or None off that convention."""
+    parts = path.parts
+    if len(parts) >= 3 and Path(*parts[:2]) == _NETWORK_VOLUME_PARENT:
+        return _NETWORK_VOLUME_PARENT / parts[2]
+    return None
 
 
 def _local_storage_opt_in() -> bool:
     """Explicit operator opt-in for private HOME-directory state roots.
 
-    Some deployments (this host's DolphinFS FUSE, errno 38/ENOSYS) cannot
+    Some deployments (a FUSE network volume, errno 38/ENOSYS) cannot
     create pathname Unix sockets anywhere on the shared volume, which makes
     the pathname-IPC backend physically unusable there while the placement
     policy still requires it. Setting
@@ -69,8 +64,8 @@ def _local_scratch_base() -> Path:
 def validate_host_path(path: str | os.PathLike[str]) -> Path:
     """Return an absolute host path, rejecting shared temp and symlink components.
 
-    A checkout on the declared required volume (``required_host_volume``)
-    keeps host storage on that volume. Nonexistent tails
+    A checkout on a shared network volume keeps host storage on that same
+    volume. Nonexistent tails
     are allowed. Existing ancestors must be directories and
     not world-writable; group-shared checkout ancestors are allowed, but the
     actual scratch root must be private (checked by private_temporary_root).
@@ -86,9 +81,8 @@ def validate_host_path(path: str | os.PathLike[str]) -> Path:
     )):
         raise ValueError(f"shared host temporary path is forbidden: {candidate}")
     checkout = Path(__file__).absolute().parent.parent
-    volume = required_host_volume()
-    if not local_opt_in and volume is not None and checkout.is_relative_to(volume) \
-            and not candidate.is_relative_to(volume):
+    volume = _network_volume(checkout)
+    if not local_opt_in and volume is not None and not candidate.is_relative_to(volume):
         raise ValueError(f"this checkout requires host storage under {volume}")
     for component in reversed((candidate, *candidate.parents)):
         try:

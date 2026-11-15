@@ -14,7 +14,13 @@ pub(super) struct RequestEnvelope<'a> {
     pub deadline_unix_ms: Option<&'a RawValue>,
 }
 
-enum Field { Operation, Payload, CommandId, Deadline, Unknown }
+enum Field {
+    Operation,
+    Payload,
+    CommandId,
+    Deadline,
+    Unknown,
+}
 impl<'de> Deserialize<'de> for Field {
     fn deserialize<D: Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
         struct FieldVisitor;
@@ -57,7 +63,7 @@ impl<'de> Deserialize<'de> for RequestEnvelope<'de> {
                         Field::Payload => envelope.payload = Some(value),
                         Field::CommandId => envelope.command_id = Some(value),
                         Field::Deadline => envelope.deadline_unix_ms = Some(value),
-                        Field::Unknown => {},
+                        Field::Unknown => {}
                     }
                 }
                 Ok(envelope)
@@ -77,17 +83,25 @@ mod tests {
         let new = serde_json::from_slice::<RequestEnvelope<'_>>(input);
         match (old, new) {
             (Ok(old), Ok(new)) => {
-                for (key, actual) in [("operation", new.operation), ("payload", new.payload),
-                    ("command_id", new.command_id), ("deadline_unix_ms", new.deadline_unix_ms)] {
+                for (key, actual) in [
+                    ("operation", new.operation),
+                    ("payload", new.payload),
+                    ("command_id", new.command_id),
+                    ("deadline_unix_ms", new.deadline_unix_ms),
+                ] {
                     let expected = old.get(key).copied();
-                    assert_eq!(expected.map(RawValue::get), actual.map(RawValue::get), "{key}");
+                    assert_eq!(
+                        expected.map(RawValue::get),
+                        actual.map(RawValue::get),
+                        "{key}"
+                    );
                     if let Some(raw) = actual {
                         let start = raw.get().as_ptr() as usize;
                         assert!(start >= input.as_ptr() as usize);
                         assert!(start + raw.get().len() <= input.as_ptr() as usize + input.len());
                     }
                 }
-            },
+            }
             (Err(old), Err(new)) => assert_eq!(old.to_string(), new.to_string(), "{input:?}"),
             _ => panic!("envelope acceptance differs: {input:?}"),
         }
@@ -96,17 +110,26 @@ mod tests {
     #[test]
     fn raw_fields_preserve_duplicates_escapes_types_and_unknown_validation() {
         for input in [
-            r#"{}"#, r#"{"operation":"record.get","payload":{"k":1},"deadline_unix_ms":42}"#,
+            r#"{}"#,
+            r#"{"operation":"record.get","payload":{"k":1},"deadline_unix_ms":42}"#,
             r#"{"operation":false,"operation":"record.get","payload":null,"payload":[],"command_id":7,"command_id":"c","deadline_unix_ms":-1,"deadline_unix_ms":42}"#,
             r#"{"operation":"ok","operation":null,"deadline_unix_ms":42,"deadline_unix_ms":null}"#,
             r#"{"oper\u0061tion":"record.get","p\u0061yload":{"n":-0,"wide":18446744073709551616},"command\u005fid":"c","deadline\u005funix_ms":42}"#,
             r#"{"unknown":{"x":[1,true,null,"\\\""]},"operation":"x","unknown":3}"#,
             r#"{"operation":null,"payload":0,"command_id":{},"deadline_unix_ms":1.5}"#,
             r#"{"unknown":1e400,"payload":{"duplicate":1,"duplicate":2}}"#,
-            r#"{"unknown":"\uD800"}"#, r#"{"unknown":[1,]}"#, r#"{"operation":"x",}"#,
-            r#"{"unknown":{"x":1}"#, r#"[]"#, r#"null"#, r#"1"#, r#""x""#,
+            r#"{"unknown":"\uD800"}"#,
+            r#"{"unknown":[1,]}"#,
+            r#"{"operation":"x",}"#,
+            r#"{"unknown":{"x":1}"#,
+            r#"[]"#,
+            r#"null"#,
+            r#"1"#,
+            r#""x""#,
             r#"{"operation":"x"} trailing"#,
-        ] { parity(input.as_bytes()); }
+        ] {
+            parity(input.as_bytes());
+        }
         parity(b"{\"unknown\":\"\xff\"}");
         let nested = format!("{{\"unknown\":{}0{}}}", "[".repeat(256), "]".repeat(256));
         parity(nested.as_bytes());
@@ -117,7 +140,9 @@ mod tests {
         let seed = br#"{"operation":"record.get","payload":{"key":"x","user_id":11},"deadline_unix_ms":42,"command_id":"c"}"#;
         for position in 0..seed.len() {
             for replacement in [0, b'"', b'\\', b'[', b'}', 0xff] {
-                let mut input = seed.to_vec(); input[position] = replacement; parity(&input);
+                let mut input = seed.to_vec();
+                input[position] = replacement;
+                parity(&input);
             }
             parity(&seed[..position]);
         }

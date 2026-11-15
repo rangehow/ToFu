@@ -720,13 +720,15 @@ the lease), is settled by durable worker recovery
 `server_restart`, abort reason `restart_recovery` when a serving process
 records it (`server_shutdown` only while the recovering process stops). A
 storage outage alone never settles a Turn failed. Its
-error names only the calls whose side effect is unknown: a `reconcile` call
-whose committed `entered`/`unknown` intent has no recorded result
-(`code: worker_effect_outcome_unknown`, `unknownEffects: [{toolName,
-toolCallId, operationId}]`, manual retry policy). A Turn without such a call
-carries no error and settles like the graceful quiesce: read-only and
-idempotent calls are safe to repeat, and a call without a committed intent
-never entered its handler. No automated owner continues a Turn that names
+error names only the calls whose side effect is unknown: a call whose
+committed `entered`/`unknown` intent has no recorded result and whose effect
+class is `unknown` (`code: worker_effect_outcome_unknown`, `unknownEffects:
+[{toolName, toolCallId, operationId}]`, `cutCalls` with every cut call's
+`effectClass` and `decision`, manual retry policy). A Turn without such a call
+carries no error and settles like the graceful quiesce: read-only, idempotent
+and verifiable calls resume ([Run continuity](../RUN_CONTINUITY.md), "A
+restart-cut call is classified by its declared effect"), and a call without a
+committed intent never entered its handler. No automated owner continues a Turn that names
 unknown effects (`restart_resume.unknown_effects_to_review`): the restart
 resume pass leaves it for the owner, Worker recovery logs
 `restart_paused_turn_effect_unknown` and leaves it for its Coordinator's

@@ -2,7 +2,7 @@
 
 `docs/CHANNELS.md` owns behavior (C1–C14); `contracts/channels_v1.schema.json`
 owns enums, defaults, channel traits, provider limits and facts
-(`x-providerLimits`, `x-github`, `x-dxRobot`, `x-dx`, `x-assistant`, `x-quotes`), HTTP DTOs and tool
+(`x-providerLimits`, `x-github`, `x-assistant`, `x-quotes`; the 大象 `x-dxRobot`/`x-dx` facts live in the overlay's `tofu_yourprovider/dx/facts.json`), HTTP DTOs and tool
 schemas. Change the contract first, then run `npm run generate:channels`.
 The adapter boundary is the channel protocol (`docs/CHANNEL_PROTOCOL.md`,
 `contracts/channel_protocol_v1.schema.json`, code in `protocol/`): adapters
@@ -27,13 +27,13 @@ same change (strict expected failures).
   owner's own words, and the outbox decides auto/draft from policy plus
   authority. Never derive authority from message text, display names or
   command-ID guesses.
-- `dx/bridge.mjs` is transport only (no policy, no durable state) and is spawned
+- `bundles/yourprovider/tofu_yourprovider/dx/bridge.mjs` (the 大象 adapter lives in the YourProvider overlay, reached through `adapters.py`; docs/PUBLIC_CORE.md) is transport only (no policy, no durable state) and is spawned
   from `PinnedHelperSource`; credentials stay in the launcher child env. Never
   send, create groups or mark read in live checks. Its session holds the
   engine's per-host Web channel lock for its lifetime and flags `hostSent`
   rows (C6: one live session per account); tests give every bridge its own
   `DX_BROWSERLESS_WEB_LOCK_DIR`, never the host's.
-- `dx/robot.py` posts the group command chat under the optional notification
+- `tofu_yourprovider/dx/robot.py` posts the group command chat under the optional notification
   robot (C6) and creates that group with the owner as 群主, with the
   contract's endpoints and limits and a vault-held secret, or the Internal
   package's built-in application (`x-dxRobot.builtinCredentialFile`, written

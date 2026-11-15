@@ -17,12 +17,12 @@ use crate::authority::{AuthorityDatabase, AuthorityTransaction};
 use crate::conversation_header::TENANT_GLOBAL_OWNER_ID;
 use crate::entity::EntityKey;
 use crate::generated_tofudb_ir::{
-    MAX_SCHEDULER_SYSTEM_KEY_CHARACTERS,
-    MAX_SCHEDULER_TASK_DOCUMENT_BYTES, MAX_SCHEDULER_TASK_ID_CHARACTERS,
-    SCHEDULER_POLL_DOCUMENT_NAMESPACE, SCHEDULER_POLL_SEQUENCE_NAMESPACE,
-    SCHEDULER_POLL_TIME_INDEX_NAMESPACE, SCHEDULER_TASK_COUNT_NAMESPACE,
-    SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE, SCHEDULER_TASK_CREATED_INDEX_NAMESPACE, SCHEDULER_TASK_DOCUMENT_NAMESPACE,
-    SCHEDULER_TASK_ENABLED_CREATED_INDEX_NAMESPACE, SCHEDULER_TASK_GLOBAL_CREATED_INDEX_NAMESPACE,
+    MAX_SCHEDULER_SYSTEM_KEY_CHARACTERS, MAX_SCHEDULER_TASK_DOCUMENT_BYTES,
+    MAX_SCHEDULER_TASK_ID_CHARACTERS, SCHEDULER_POLL_DOCUMENT_NAMESPACE,
+    SCHEDULER_POLL_SEQUENCE_NAMESPACE, SCHEDULER_POLL_TIME_INDEX_NAMESPACE,
+    SCHEDULER_TASK_COUNT_NAMESPACE, SCHEDULER_TASK_CREATED_INDEX_NAMESPACE,
+    SCHEDULER_TASK_DOCUMENT_NAMESPACE, SCHEDULER_TASK_ENABLED_CREATED_INDEX_NAMESPACE,
+    SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE, SCHEDULER_TASK_GLOBAL_CREATED_INDEX_NAMESPACE,
     SCHEDULER_TASK_GLOBAL_ENABLED_CREATED_INDEX_NAMESPACE, SCHEDULER_TASK_ID_CLAIM_NAMESPACE,
     SCHEDULER_TASK_SYSTEM_KEY_CLAIM_NAMESPACE,
 };
@@ -248,12 +248,13 @@ fn write_count(
         transaction,
         count_key(transaction)?,
         u64::try_from(count)
-            .map_err(|_| crate::resource_exhaustion::accounting_overflow("scheduler task count overflow"))?
+            .map_err(|_| {
+                crate::resource_exhaustion::accounting_overflow("scheduler task count overflow")
+            })?
             .to_le_bytes()
             .to_vec(),
     )
 }
-
 
 /// Traverse bounded index windows in one snapshot, retaining every OCC witness.
 /// Zero limit denotes the complete internal feed; positive limits are projections.
@@ -269,16 +270,26 @@ fn scan_task_index(
         let page_limit = if limit == 0 {
             crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS
         } else {
-            limit.saturating_sub(output.len()).min(crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS)
+            limit
+                .saturating_sub(output.len())
+                .min(crate::generated_tofudb_ir::MAX_ENTITY_RANGE_ROWS)
         };
-        if page_limit == 0 { break; }
+        if page_limit == 0 {
+            break;
+        }
         let page = database.entity_scan(transaction, &start, end, page_limit)?;
         let complete = page.len() < page_limit;
-        if page.is_empty() { break; }
+        if page.is_empty() {
+            break;
+        }
         let successor = page.last().unwrap().0.clone().exact_range()?.1;
-        output.try_reserve(page.len()).map_err(|_| crate::resource_exhaustion::reservation_failure("scheduler index allocation failed"))?;
+        output.try_reserve(page.len()).map_err(|_| {
+            crate::resource_exhaustion::reservation_failure("scheduler index allocation failed")
+        })?;
         output.extend(page);
-        if complete || successor >= *end { break; }
+        if complete || successor >= *end {
+            break;
+        }
         start = successor;
     }
     Ok(output)
@@ -510,8 +521,15 @@ fn put_document(
         TENANT_GLOBAL_OWNER_ID,
         MAX_SCHEDULER_TASK_DOCUMENT_BYTES,
     )?;
-    if let Some(system_key) = document.get("system_key").and_then(Value::as_str).filter(|key| !key.is_empty()) {
-        transaction.note_system_task_state(system_key, document.get("enabled").and_then(Value::as_u64) != Some(1));
+    if let Some(system_key) = document
+        .get("system_key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+    {
+        transaction.note_system_task_state(
+            system_key,
+            document.get("enabled").and_then(Value::as_u64) != Some(1),
+        );
     }
     Ok(())
 }
@@ -533,32 +551,62 @@ fn execution_prefix(execution_id: &str) -> Vec<u8> {
     digest.finalize().to_vec()
 }
 
-fn execution_key(transaction: &AuthorityTransaction, document: &Map<String, Value>) -> io::Result<Option<EntityKey>> {
+fn execution_key(
+    transaction: &AuthorityTransaction,
+    document: &Map<String, Value>,
+) -> io::Result<Option<EntityKey>> {
     if document.get("task_type").and_then(Value::as_str) != Some("agent") {
         return Ok(None);
     }
-    let Some(execution_id) = document.get("last_execution_task_id").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
+    let Some(execution_id) = document
+        .get("last_execution_task_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
         return Ok(None);
     };
-    let task_id = document.get("id").and_then(Value::as_str).ok_or_else(|| invalid_data("scheduler execution task ID missing"))?;
+    let task_id = document
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid_data("scheduler execution task ID missing"))?;
     let mut raw = execution_prefix(execution_id);
     raw.extend_from_slice(task_id.as_bytes());
-    Ok(Some(owner_key(transaction, SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE, &raw)?))
+    Ok(Some(owner_key(
+        transaction,
+        SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE,
+        &raw,
+    )?))
 }
 
-fn ensure_execution_index(database: &AuthorityDatabase, transaction: &mut AuthorityTransaction) -> io::Result<()> {
-    let marker = owner_key(transaction, SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE, b"initialized-v1")?;
+fn ensure_execution_index(
+    database: &AuthorityDatabase,
+    transaction: &mut AuthorityTransaction,
+) -> io::Result<()> {
+    let marker = owner_key(
+        transaction,
+        SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE,
+        b"initialized-v1",
+    )?;
     if let Some(value) = database.entity_get(transaction, &marker)? {
-        if value != b"1" { return Err(invalid_data("scheduler execution index version differs")); }
+        if value != b"1" {
+            return Err(invalid_data("scheduler execution index version differs"));
+        }
         return Ok(());
     }
     let (start, end) = namespace_range(transaction, SCHEDULER_TASK_CREATED_INDEX_NAMESPACE)?;
     let rows = scan_task_index(database, transaction, start, &end, 0)?;
-    if rows.len() != read_count(database, transaction)? { return Err(invalid_data("scheduler execution backfill count differs")); }
+    if rows.len() != read_count(database, transaction)? {
+        return Err(invalid_data("scheduler execution backfill count differs"));
+    }
     for (_, raw) in rows {
-        let value: Value = serde_json::from_slice(&raw).map_err(|_| invalid_data("scheduler execution backfill index malformed"))?;
-        let task_id = value.get("id").and_then(Value::as_str).ok_or_else(|| invalid_data("scheduler execution backfill ID missing"))?;
-        let document = read_document(database, transaction, task_id)?.ok_or_else(|| invalid_data("scheduler execution backfill document missing"))?;
+        let value: Value = serde_json::from_slice(&raw)
+            .map_err(|_| invalid_data("scheduler execution backfill index malformed"))?;
+        let task_id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid_data("scheduler execution backfill ID missing"))?;
+        let document = read_document(database, transaction, task_id)?
+            .ok_or_else(|| invalid_data("scheduler execution backfill document missing"))?;
         if let Some(key) = execution_key(transaction, &document)? {
             database.entity_put(transaction, key, index_value(task_id)?)?;
         }
@@ -765,15 +813,19 @@ impl SystemTaskHolds {
         owner_user_id: u64,
         system_key: &'static str,
     ) -> Arc<SystemTaskWatch> {
-        let (held, unread) = match system_task_enabled(database, tenant_id, owner_user_id, system_key) {
-            Ok(enabled) => (enabled == Some(false), false),
-            Err(error) => {
-                crate::engine_log::error("system_task_hold", &format!(
+        let (held, unread) =
+            match system_task_enabled(database, tenant_id, owner_user_id, system_key) {
+                Ok(enabled) => (enabled == Some(false), false),
+                Err(error) => {
+                    crate::engine_log::error(
+                        "system_task_hold",
+                        &format!(
                     "system_key={system_key} tenant={tenant_id} owner={owner_user_id} held=true \
-                     reason=unreadable-scheduler-task error={error}; re-read at each due check"));
-                (true, true)
-            }
-        };
+                     reason=unreadable-scheduler-task error={error}; re-read at each due check"),
+                    );
+                    (true, true)
+                }
+            };
         let watch = Arc::new(SystemTaskWatch {
             tenant_id,
             owner_user_id,
@@ -784,18 +836,29 @@ impl SystemTaskHolds {
             interrupt: AtomicBool::new(false),
             driver: OnceLock::new(),
         });
-        let mut watches = self.watches.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut watches = self
+            .watches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         watches.retain(|watch| watch.strong_count() > 0);
         watches.push(Arc::downgrade(&watch));
         watch
     }
 
     /// Publishes the states one committed transaction of this owner wrote.
-    pub(crate) fn apply_committed(&self, tenant_id: u64, owner_user_id: u64, changes: SystemTaskChanges) {
+    pub(crate) fn apply_committed(
+        &self,
+        tenant_id: u64,
+        owner_user_id: u64,
+        changes: SystemTaskChanges,
+    ) {
         if changes.0.is_empty() {
             return;
         }
-        let watches = self.watches.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let watches = self
+            .watches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for watch in watches.iter().filter_map(Weak::upgrade) {
             if watch.tenant_id == tenant_id && watch.owner_user_id == owner_user_id {
                 if let Some(held) = changes.0.get(watch.system_key) {
@@ -838,14 +901,22 @@ impl SystemTaskWatch {
         if !self.unread.load(Ordering::SeqCst) {
             return;
         }
-        let Some(source) = self.source.upgrade() else { return };
+        let Some(source) = self.source.upgrade() else {
+            return;
+        };
         let Ok(guard) = source.try_lock() else { return };
-        if let Ok(enabled) = system_task_enabled(&guard, self.tenant_id, self.owner_user_id, self.system_key) {
+        if let Ok(enabled) =
+            system_task_enabled(&guard, self.tenant_id, self.owner_user_id, self.system_key)
+        {
             let held = enabled == Some(false);
             self.publish(held);
-            crate::engine_log::info("system_task_hold", &format!(
-                "system_key={} tenant={} owner={} held={held} reason=reread",
-                self.system_key, self.tenant_id, self.owner_user_id));
+            crate::engine_log::info(
+                "system_task_hold",
+                &format!(
+                    "system_key={} tenant={} owner={} held={held} reason=reread",
+                    self.system_key, self.tenant_id, self.owner_user_id
+                ),
+            );
         }
     }
 
@@ -894,7 +965,8 @@ fn create_task_state(
     updated_at_ms: u64,
 ) -> io::Result<()> {
     let count = read_count(database, transaction)?;
-    let next_count = count.checked_add(1)
+    let next_count = count
+        .checked_add(1)
         .ok_or_else(|| invalid_data("scheduler task count overflows"))?;
     let claim = claim_key(transaction, task_id)?;
     if database.entity_get(transaction, &claim)?.is_some() {
@@ -1026,7 +1098,9 @@ pub enum Request {
         updates: Map<String, Value>,
         updated_at_ms: u64,
     },
-    ExecutionLookup { execution_id: String },
+    ExecutionLookup {
+        execution_id: String,
+    },
     SettleExecution {
         execution_id: String,
         status: String,
@@ -1134,11 +1208,23 @@ impl Request {
                 Ok(task_id.len() + serde_json::to_vec(updates).map_or(0, |raw| raw.len()))
             }
             Self::ExecutionLookup { execution_id } => {
-                if !valid_task_id(execution_id) { return Err(invalid_input("invalid scheduler execution lookup")); }
+                if !valid_task_id(execution_id) {
+                    return Err(invalid_input("invalid scheduler execution lookup"));
+                }
                 Ok(execution_id.len())
             }
-            Self::SettleExecution { execution_id, status, now, updated_at_ms } => {
-                if !valid_task_id(execution_id) || !matches!(status.as_str(), "ok" | "error") || now.is_empty() || now.chars().count() > 64 || *updated_at_ms == 0 {
+            Self::SettleExecution {
+                execution_id,
+                status,
+                now,
+                updated_at_ms,
+            } => {
+                if !valid_task_id(execution_id)
+                    || !matches!(status.as_str(), "ok" | "error")
+                    || now.is_empty()
+                    || now.chars().count() > 64
+                    || *updated_at_ms == 0
+                {
                     return Err(invalid_input("invalid scheduler execution settlement"));
                 }
                 Ok(execution_id.len() + status.len() + now.len())
@@ -1382,7 +1468,11 @@ pub(crate) fn execute(
             if !enabled_only && rows.len() != read_count(database, transaction)? {
                 return Err(invalid_data("scheduler task count differs from its index"));
             }
-            let selected = if *limit == 0 { rows.len() } else { rows.len().min(*limit) };
+            let selected = if *limit == 0 {
+                rows.len()
+            } else {
+                rows.len().min(*limit)
+            };
             let mut documents = Vec::with_capacity(selected);
             for (_, raw) in rows.into_iter().take(selected) {
                 let task_id = serde_json::from_slice::<Value>(&raw)
@@ -1463,54 +1553,112 @@ pub(crate) fn execute(
             Ok(Some(br#"{"changed":true}"#.to_vec()))
         }
         Request::ExecutionLookup { execution_id } => {
-            let marker = owner_key(transaction, SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE, b"initialized-v1")?;
+            let marker = owner_key(
+                transaction,
+                SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE,
+                b"initialized-v1",
+            )?;
             let Some(version) = database.entity_get(transaction, &marker)? else {
                 // An empty owner is proven absent. A legacy nonempty owner must
                 // enter atomic settlement/backfill; queries never create indexes.
                 let empty = read_count(database, transaction)? == 0;
                 if empty {
-                    let (start, end) = namespace_range(transaction, SCHEDULER_TASK_CREATED_INDEX_NAMESPACE)?;
+                    let (start, end) =
+                        namespace_range(transaction, SCHEDULER_TASK_CREATED_INDEX_NAMESPACE)?;
                     if !scan_task_index(database, transaction, start, &end, 1)?.is_empty() {
-                        return Err(invalid_data("scheduler empty-owner count differs from index"));
+                        return Err(invalid_data(
+                            "scheduler empty-owner count differs from index",
+                        ));
                     }
                 }
                 return serde_json::to_vec(&json!({"indexed":empty,"matched":false}))
-                    .map(Some).map_err(|_| invalid_data("scheduler lookup cannot encode"));
+                    .map(Some)
+                    .map_err(|_| invalid_data("scheduler lookup cannot encode"));
             };
-            if version != b"1" { return Err(invalid_data("scheduler execution index version differs")); }
+            if version != b"1" {
+                return Err(invalid_data("scheduler execution index version differs"));
+            }
             let prefix = execution_prefix(execution_id);
-            let (start, end) = EntityKey::prefix_range(transaction.tenant_id(), transaction.owner_user_id(), SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE, &prefix)?;
+            let (start, end) = EntityKey::prefix_range(
+                transaction.tenant_id(),
+                transaction.owner_user_id(),
+                SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE,
+                &prefix,
+            )?;
             let rows = scan_task_index(database, transaction, start, &end, 1)?;
             for (key, raw) in &rows {
-                let value: Value = serde_json::from_slice(raw).map_err(|_| invalid_data("scheduler execution index malformed"))?;
-                let task_id = value.get("id").and_then(Value::as_str).ok_or_else(|| invalid_data("scheduler execution index ID missing"))?;
-                let document = read_document(database, transaction, task_id)?.ok_or_else(|| invalid_data("scheduler execution document missing"))?;
-                if document.get("task_type").and_then(Value::as_str) != Some("agent") || document.get("last_execution_task_id").and_then(Value::as_str) != Some(execution_id.as_str()) || execution_key(transaction, &document)? != Some(key.clone()) {
+                let value: Value = serde_json::from_slice(raw)
+                    .map_err(|_| invalid_data("scheduler execution index malformed"))?;
+                let task_id = value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid_data("scheduler execution index ID missing"))?;
+                let document = read_document(database, transaction, task_id)?
+                    .ok_or_else(|| invalid_data("scheduler execution document missing"))?;
+                if document.get("task_type").and_then(Value::as_str) != Some("agent")
+                    || document
+                        .get("last_execution_task_id")
+                        .and_then(Value::as_str)
+                        != Some(execution_id.as_str())
+                    || execution_key(transaction, &document)? != Some(key.clone())
+                {
                     return Err(invalid_data("scheduler execution index witness differs"));
                 }
             }
-            serde_json::to_vec(&json!({"indexed":true,"matched":!rows.is_empty()})).map(Some).map_err(|_| invalid_data("scheduler lookup cannot encode"))
+            serde_json::to_vec(&json!({"indexed":true,"matched":!rows.is_empty()}))
+                .map(Some)
+                .map_err(|_| invalid_data("scheduler lookup cannot encode"))
         }
-        Request::SettleExecution { execution_id, status, now, updated_at_ms } => {
+        Request::SettleExecution {
+            execution_id,
+            status,
+            now,
+            updated_at_ms,
+        } => {
             ensure_execution_index(database, transaction)?;
             let prefix = execution_prefix(execution_id);
-            let (start, end) = EntityKey::prefix_range(transaction.tenant_id(), transaction.owner_user_id(), SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE, &prefix)?;
+            let (start, end) = EntityKey::prefix_range(
+                transaction.tenant_id(),
+                transaction.owner_user_id(),
+                SCHEDULER_TASK_EXECUTION_INDEX_NAMESPACE,
+                &prefix,
+            )?;
             let rows = scan_task_index(database, transaction, start, &end, 0)?;
             let mut changed = 0usize;
             for (key, raw) in rows {
-                let value: Value = serde_json::from_slice(&raw).map_err(|_| invalid_data("scheduler execution index malformed"))?;
-                let task_id = value.get("id").and_then(Value::as_str).ok_or_else(|| invalid_data("scheduler execution index ID missing"))?;
-                let mut document = read_document(database, transaction, task_id)?.ok_or_else(|| invalid_data("scheduler execution document missing"))?;
-                if document.get("task_type").and_then(Value::as_str) != Some("agent") || document.get("last_execution_task_id").and_then(Value::as_str) != Some(execution_id.as_str()) || execution_key(transaction, &document)? != Some(key) {
+                let value: Value = serde_json::from_slice(&raw)
+                    .map_err(|_| invalid_data("scheduler execution index malformed"))?;
+                let task_id = value
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid_data("scheduler execution index ID missing"))?;
+                let mut document = read_document(database, transaction, task_id)?
+                    .ok_or_else(|| invalid_data("scheduler execution document missing"))?;
+                if document.get("task_type").and_then(Value::as_str) != Some("agent")
+                    || document
+                        .get("last_execution_task_id")
+                        .and_then(Value::as_str)
+                        != Some(execution_id.as_str())
+                    || execution_key(transaction, &document)? != Some(key)
+                {
                     return Err(invalid_data("scheduler execution index witness differs"));
                 }
                 document.insert("last_execution_status".into(), json!(status));
                 document.insert("updated_at".into(), json!(now));
                 validate_document(&document, transaction.owner_user_id(), task_id)?;
-                put_document(database, transaction, task_id, &document, *updated_at_ms, None)?;
+                put_document(
+                    database,
+                    transaction,
+                    task_id,
+                    &document,
+                    *updated_at_ms,
+                    None,
+                )?;
                 changed += 1;
             }
-            serde_json::to_vec(&json!({"changed":changed})).map(Some).map_err(|_| invalid_data("scheduler execution result cannot encode"))
+            serde_json::to_vec(&json!({"changed":changed}))
+                .map(Some)
+                .map_err(|_| invalid_data("scheduler execution result cannot encode"))
         }
         Request::RecordResult {
             task_id,

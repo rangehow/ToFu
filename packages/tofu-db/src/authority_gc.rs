@@ -23,8 +23,8 @@ pub use crate::generated_tofudb_ir::{
     MAX_AUTHORITY_GC_BLOCKS_PER_ROUND, MAX_AUTHORITY_GC_ORPHAN_PAYLOAD_SEGMENT_FILES_REMOVED,
     MAX_AUTHORITY_GC_PAYLOAD_SEGMENTS_SCANNED, MAX_AUTHORITY_GC_PAYLOAD_SEGMENT_FILES_SCANNED,
     MAX_AUTHORITY_GC_SESSION_CALLS, MAX_AUTHORITY_GC_TEMPORARY_BLOCK_FILES_REMOVED,
-    MAX_AUTHORITY_GC_TEMPORARY_BYTES,
-    MAX_AUTHORITY_GC_VICTIM_BYTES, MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS,
+    MAX_AUTHORITY_GC_TEMPORARY_BYTES, MAX_AUTHORITY_GC_VICTIM_BYTES,
+    MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS,
 };
 use crate::payload_manifest::MAX_PAYLOAD_SEGMENTS;
 use crate::payload_segment::{MAX_SEGMENT_BLOCKS, MAX_SEGMENT_PAYLOAD_BYTES};
@@ -394,55 +394,53 @@ fn collect_authority_garbage(
         .maximum_temporary_bytes
         .min(MAX_SEGMENT_PAYLOAD_BYTES);
     let mut more_payload_compaction_candidates = false;
-    let scan_result = engine.block_store().visit_block_shards(
-        |shard, block_ids| {
-            if block_ids.is_empty() {
-                return Ok(());
-            }
-            let live_for_shard = live.live_for_shard(shard)?;
-            for block_id in block_ids {
-                scanned_blocks = scanned_blocks
-                    .checked_add(1)
-                    .ok_or_else(|| invalid_data("authority GC scanned-block count overflow"))?;
-                if current_payload_manifest == Some(block_id)
-                    || live_for_shard.binary_search(&block_id).is_ok()
+    let scan_result = engine.block_store().visit_block_shards(|shard, block_ids| {
+        if block_ids.is_empty() {
+            return Ok(());
+        }
+        let live_for_shard = live.live_for_shard(shard)?;
+        for block_id in block_ids {
+            scanned_blocks = scanned_blocks
+                .checked_add(1)
+                .ok_or_else(|| invalid_data("authority GC scanned-block count overflow"))?;
+            if current_payload_manifest == Some(block_id)
+                || live_for_shard.binary_search(&block_id).is_ok()
+            {
+                live_loose_blocks_by_shard[shard as usize] =
+                    live_loose_blocks_by_shard[shard as usize].saturating_add(1);
+                if catalog_has_capacity
+                    && !engine
+                        .block_store()
+                        .has_catalogued_payload_block(block_id)?
                 {
-                    live_loose_blocks_by_shard[shard as usize] =
-                        live_loose_blocks_by_shard[shard as usize].saturating_add(1);
-                    if catalog_has_capacity
-                        && !engine
-                            .block_store()
-                            .has_catalogued_payload_block(block_id)?
-                    {
-                        let block_bytes = engine.block_store().block_file_bytes(block_id)?;
-                        let fits = payload_compaction_ids.len() < MAX_SEGMENT_BLOCKS
-                            && payload_compaction_bytes
-                                .checked_add(block_bytes)
-                                .is_some_and(|bytes| bytes <= payload_compaction_byte_limit);
-                        if fits {
-                            payload_compaction_ids.push(block_id);
-                            payload_compaction_bytes += block_bytes;
-                        } else {
-                            more_payload_compaction_candidates = true;
-                        }
+                    let block_bytes = engine.block_store().block_file_bytes(block_id)?;
+                    let fits = payload_compaction_ids.len() < MAX_SEGMENT_BLOCKS
+                        && payload_compaction_bytes
+                            .checked_add(block_bytes)
+                            .is_some_and(|bytes| bytes <= payload_compaction_byte_limit);
+                    if fits {
+                        payload_compaction_ids.push(block_id);
+                        payload_compaction_bytes += block_bytes;
+                    } else {
+                        more_payload_compaction_candidates = true;
                     }
-                    continue;
                 }
-                let block_bytes = engine.block_store().block_file_bytes(block_id)?;
-                let fits = candidates.len() < budget.maximum_blocks_per_round
-                    && candidate_bytes
-                        .checked_add(block_bytes)
-                        .is_some_and(|bytes| bytes <= budget.maximum_victim_bytes);
-                if fits {
-                    candidates.push(block_id);
-                    candidate_bytes += block_bytes;
-                } else {
-                    more_candidates = true;
-                }
+                continue;
             }
-            Ok(())
-        },
-    );
+            let block_bytes = engine.block_store().block_file_bytes(block_id)?;
+            let fits = candidates.len() < budget.maximum_blocks_per_round
+                && candidate_bytes
+                    .checked_add(block_bytes)
+                    .is_some_and(|bytes| bytes <= budget.maximum_victim_bytes);
+            if fits {
+                candidates.push(block_id);
+                candidate_bytes += block_bytes;
+            } else {
+                more_candidates = true;
+            }
+        }
+        Ok(())
+    });
     scan_result?;
     let payload_compaction_ready =
         payload_compaction_ids.len() >= MIN_AUTHORITY_GC_PAYLOAD_COMPACTION_BLOCKS;
@@ -745,7 +743,9 @@ mod tests {
         authority_with_orphan_overlay(true)
     }
 
-    fn authority_with_orphan_overlay(overlay: bool) -> (Arc<DeterministicVfs>, AuthorityDatabase, BlockId, EntityKey) {
+    fn authority_with_orphan_overlay(
+        overlay: bool,
+    ) -> (Arc<DeterministicVfs>, AuthorityDatabase, BlockId, EntityKey) {
         let vfs = Arc::new(DeterministicVfs::new(None));
         vfs.create_dir(Path::new("/data")).unwrap();
         vfs.sync_directory(Path::new("/")).unwrap();
@@ -1119,12 +1119,19 @@ mod tests {
         let dead = database
             .write_orphan_block_for_test(&vec![13; 3 * 1024 * 1024])
             .unwrap();
-        let packed = database.engine_mut_for_test().compact_payload_blocks(&[live, dead]).unwrap();
+        let packed = database
+            .engine_mut_for_test()
+            .compact_payload_blocks(&[live, dead])
+            .unwrap();
         database.checkpoint_for_test().unwrap();
         // Checkpoint may publish unrelated entity pages in another catalog
         // position. The temporary budget belongs to this exact victim segment.
-        let reference = *database.engine_mut_for_test().payload_segment_references().iter()
-            .find(|reference| reference.segment_id == packed.segment_id).unwrap();
+        let reference = *database
+            .engine_mut_for_test()
+            .payload_segment_references()
+            .iter()
+            .find(|reference| reference.segment_id == packed.segment_id)
+            .unwrap();
         let budget = AuthorityGarbageCollectionBudget {
             maximum_temporary_bytes: reference.file_bytes,
             ..test_budget()
@@ -1184,13 +1191,18 @@ mod tests {
             .block_store_shared()
             .sweep_deferred_segment_retirements(std::time::Duration::ZERO)
             .unwrap();
-        assert!(baseline_vfs
-            .trace()
-            .unwrap()
-            .iter()
-            .filter(|op| **op == Operation::RemoveFile)
-            .count()
-            > trace.iter().filter(|op| **op == Operation::RemoveFile).count());
+        assert!(
+            baseline_vfs
+                .trace()
+                .unwrap()
+                .iter()
+                .filter(|op| **op == Operation::RemoveFile)
+                .count()
+                > trace
+                    .iter()
+                    .filter(|op| **op == Operation::RemoveFile)
+                    .count()
+        );
         for (index, operation) in trace.iter().enumerate() {
             let mut actions = vec![FaultAction::ErrorBefore(io::ErrorKind::Interrupted)];
             match operation {
@@ -1492,13 +1504,15 @@ mod tests {
             .block_store_shared()
             .sweep_deferred_segment_retirements(std::time::Duration::ZERO)
             .unwrap();
-        assert!(baseline_vfs
-            .trace()
-            .unwrap()
-            .iter()
-            .filter(|op| **op == Operation::RemoveFile)
-            .count()
-            > immediate_removals);
+        assert!(
+            baseline_vfs
+                .trace()
+                .unwrap()
+                .iter()
+                .filter(|op| **op == Operation::RemoveFile)
+                .count()
+                > immediate_removals
+        );
         let mut cases = Vec::new();
         for (index, operation) in trace.iter().enumerate() {
             cases.push((
@@ -1786,13 +1800,15 @@ mod tests {
             .block_store_shared()
             .sweep_deferred_segment_retirements(std::time::Duration::ZERO)
             .unwrap();
-        assert!(baseline_vfs
-            .trace()
-            .unwrap()
-            .iter()
-            .filter(|op| **op == Operation::RemoveFile)
-            .count()
-            > immediate_removals);
+        assert!(
+            baseline_vfs
+                .trace()
+                .unwrap()
+                .iter()
+                .filter(|op| **op == Operation::RemoveFile)
+                .count()
+                > immediate_removals
+        );
 
         let mut cases = Vec::new();
         for (index, operation) in trace.iter().enumerate() {

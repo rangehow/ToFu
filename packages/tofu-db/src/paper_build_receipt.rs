@@ -329,8 +329,10 @@ pub(crate) fn validate(receipt: &Value) -> io::Result<usize> {
         }
         let size =
             unsigned(&artifact["size_bytes"]).ok_or_else(|| invalid("invalid artifact size"))?;
-        let size = usize::try_from(size).map_err(|_| invalid("artifact size exceeds platform extent"))?;
-        payload_bytes = payload_bytes.checked_add(size)
+        let size =
+            usize::try_from(size).map_err(|_| invalid("artifact size exceeds platform extent"))?;
+        payload_bytes = payload_bytes
+            .checked_add(size)
             .ok_or_else(|| invalid("artifact total exceeds platform extent"))?;
     }
     if receipt["status"] != "success"
@@ -341,10 +343,9 @@ pub(crate) fn validate(receipt: &Value) -> io::Result<usize> {
             .iter()
             .any(|d| d["severity"] == "error")
     {
-        return Err(invalid(
-            "retained receipt must describe a successful build",
-        ));
+        return Err(invalid("retained receipt must describe a successful build"));
     }
-    receipt_bytes.checked_add(payload_bytes)
+    receipt_bytes
+        .checked_add(payload_bytes)
         .ok_or_else(|| invalid("retained bytes exceed platform extent"))
 }

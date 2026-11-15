@@ -23,8 +23,11 @@ import uuid
 import pytest
 
 from tests.channels.conftest import OWNER_UID
-from tests.channels.test_dx_attachments import Bridge
+from tests.support.dx_overlay import dx_test_module
 from tests.storage.test_native_project_dispatch import _git, native_dispatch_authority as native_dispatch_authority
+
+# The 大象 adapter and its test fakes live in the YourProvider overlay; without it this journey skips.
+Bridge = dx_test_module('test_dx_attachments').Bridge
 
 pytest_plugins = ('tests.support.semantic_authorities',)
 pytestmark = [pytest.mark.api,
@@ -61,7 +64,7 @@ def test_a_router_continuation_sends_restarts_and_forwards_for_the_owner(
     from lib import turn_lifecycle as turns
     from lib.agent_core.execution_budget import model_budget_admission
     from lib.channels import outbox, tools as channel_tools
-    from lib.channels.dx.adapter import DxAdapter
+    from tofu_yourprovider.dx.adapter import DxAdapter
     from lib.channels.model import ChannelError
     from lib.channels.store import ChannelStore
     from lib.conversation_sync.command_service import ConversationTurnCommandService

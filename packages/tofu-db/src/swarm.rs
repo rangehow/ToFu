@@ -54,7 +54,9 @@ fn decode<T: for<'de> Deserialize<'de>>(raw: &[u8], name: &str) -> io::Result<T>
 fn bounded_response(value: &Value) -> io::Result<Option<Vec<u8>>> {
     let encoded = encode(value, "swarm response")?;
     if encoded.len() > MAX_SWARM_RESPONSE_BYTES {
-        return Err(crate::resource_exhaustion::domain_bound("swarm response exceeds its aggregate bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "swarm response exceeds its aggregate bound",
+        ));
     }
     Ok(Some(encoded))
 }
@@ -460,7 +462,11 @@ fn decode_agent_id(key: &EntityKey, swarm_key: &str) -> io::Result<String> {
 fn project_agent(core: &AgentCore, state: &AgentState) -> Value {
     let mut result = core.result.clone();
     if let (Some(marker), Some(fields)) = (&state.checkpoint, result.as_object_mut()) {
-        fields.extend(marker.iter().map(|(name, value)| (name.clone(), value.clone())));
+        fields.extend(
+            marker
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone())),
+        );
     }
     json!({
         "agent_id":core.agent_id,
@@ -498,7 +504,9 @@ fn load_agents(
     let (start, end) = agent_range(tx, SWARM_AGENT_STATE_NAMESPACE, swarm_key)?;
     let states = scan_paged(database, tx, start, &end, MAX_SWARM_AGENTS_PER_SESSION + 1)?;
     if states.len() > MAX_SWARM_AGENTS_PER_SESSION {
-        return Err(crate::resource_exhaustion::domain_bound("swarm agent count exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "swarm agent count exceeds its bound",
+        ));
     }
     let mut agents = Vec::with_capacity(states.len());
     for (key, raw) in states {
@@ -592,7 +600,9 @@ fn session_save(
         let count_key = session_count_key(tx)?;
         let count = read_count(database, tx, &count_key)?;
         if count >= MAX_SWARM_SESSIONS_PER_OWNER as u64 {
-            return Err(crate::resource_exhaustion::capacity_quota("swarm session capacity reached"));
+            return Err(crate::resource_exhaustion::capacity_quota(
+                "swarm session capacity reached",
+            ));
         }
         write_count(database, tx, count_key, count + 1)?;
         SessionState {
@@ -640,7 +650,9 @@ fn read_existing_resumable_agent_count(
     let (start, end) = agent_range(tx, SWARM_AGENT_STATE_NAMESPACE, swarm_key)?;
     let rows = scan_paged(database, tx, start, &end, MAX_SWARM_AGENTS_PER_SESSION + 1)?;
     if rows.len() > MAX_SWARM_AGENTS_PER_SESSION {
-        return Err(crate::resource_exhaustion::domain_bound("swarm agent count exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "swarm agent count exceeds its bound",
+        ));
     }
     let mut count = 0_u64;
     for (_, raw) in rows {
@@ -782,7 +794,9 @@ fn load_agent_state_rows(
     let (start, end) = agent_range(tx, SWARM_AGENT_STATE_NAMESPACE, swarm_key)?;
     let rows = scan_paged(database, tx, start, &end, MAX_SWARM_AGENTS_PER_SESSION + 1)?;
     if rows.len() > MAX_SWARM_AGENTS_PER_SESSION {
-        return Err(crate::resource_exhaustion::domain_bound("swarm agent count exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "swarm agent count exceeds its bound",
+        ));
     }
     rows.into_iter()
         .map(|(key, _)| Ok((decode_agent_id(&key, swarm_key)?, key)))
@@ -831,7 +845,9 @@ fn agent_save(
         let count_key = agent_count_key(tx, swarm_key)?;
         let count = read_count(database, tx, &count_key)?;
         if count >= MAX_SWARM_AGENTS_PER_SESSION as u64 {
-            return Err(crate::resource_exhaustion::capacity_quota("swarm agent capacity reached"));
+            return Err(crate::resource_exhaustion::capacity_quota(
+                "swarm agent capacity reached",
+            ));
         }
         write_count(database, tx, count_key, count + 1)?;
     }
@@ -1053,7 +1069,10 @@ fn mark_delivered(
     if require_session {
         let task_id = required_text(p, "task_id", 4096)?;
         let session = read_session_document(database, tx, swarm_key)?;
-        if session.as_ref().is_none_or(|document| document.task_id != task_id) {
+        if session
+            .as_ref()
+            .is_none_or(|document| document.task_id != task_id)
+        {
             return bounded_response(&json!({"acknowledged":false, "changed":0}));
         }
     }
@@ -1228,7 +1247,9 @@ fn resumable_list(
     let (start, end) = resumable_range(tx)?;
     let rows = scan_paged(database, tx, start, &end, MAX_SWARM_SESSIONS_PER_OWNER + 1)?;
     if rows.len() > MAX_SWARM_SESSIONS_PER_OWNER {
-        return Err(crate::resource_exhaustion::domain_bound("swarm resumable session count exceeds its bound"));
+        return Err(crate::resource_exhaustion::domain_bound(
+            "swarm resumable session count exceeds its bound",
+        ));
     }
     let mut sessions = Vec::with_capacity(rows.len());
     for (index_key, raw) in rows {
@@ -1265,60 +1286,121 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let current_task = "n".repeat(600);
         for task in ["old", current_task.as_str()] {
-            commit_request(&mut database, 11, &request("swarm.session.save", json!({
-                "swarm_key":"fenced", "task_id":task, "specs":[],
-                "config":{"user_id":11}, "now_ms":100
-            }), 100)).unwrap();
+            commit_request(
+                &mut database,
+                11,
+                &request(
+                    "swarm.session.save",
+                    json!({
+                        "swarm_key":"fenced", "task_id":task, "specs":[],
+                        "config":{"user_id":11}, "now_ms":100
+                    }),
+                    100,
+                ),
+            )
+            .unwrap();
         }
-        commit_request(&mut database, 11, &request("swarm.agent.save", json!({
-            "swarm_key":"fenced", "agent_id":"worker", "status":"completed",
-            "messages":[], "result":{"final_answer":"new evidence"},
-            "delivered":false, "now_ms":200
-        }), 200)).unwrap();
-        let acknowledge = |task| request("swarm.agents.acknowledge_results", json!({
-            "swarm_key":"fenced", "task_id":task, "agent_ids":["worker", "worker"]
-        }), 300);
+        commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.agent.save",
+                json!({
+                    "swarm_key":"fenced", "agent_id":"worker", "status":"completed",
+                    "messages":[], "result":{"final_answer":"new evidence"},
+                    "delivered":false, "now_ms":200
+                }),
+                200,
+            ),
+        )
+        .unwrap();
+        let acknowledge = |task| {
+            request(
+                "swarm.agents.acknowledge_results",
+                json!({
+                    "swarm_key":"fenced", "task_id":task, "agent_ids":["worker", "worker"]
+                }),
+                300,
+            )
+        };
         drop(database);
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
-        assert_eq!(commit_request(&mut database, 11, &acknowledge("old")).unwrap(),
-                   json!({"acknowledged":false, "changed":0}));
-        assert_eq!(commit_request(&mut database, 12, &acknowledge(current_task.as_str())).unwrap(),
-                   json!({"acknowledged":false, "changed":0}));
+        assert_eq!(
+            commit_request(&mut database, 11, &acknowledge("old")).unwrap(),
+            json!({"acknowledged":false, "changed":0})
+        );
+        assert_eq!(
+            commit_request(&mut database, 12, &acknowledge(current_task.as_str())).unwrap(),
+            json!({"acknowledged":false, "changed":0})
+        );
         let get = request("swarm.session.get", json!({"swarm_key":"fenced"}), 400);
-        assert_eq!(commit_request(&mut database, 11, &get).unwrap()["agents"][0]["delivered"], false);
+        assert_eq!(
+            commit_request(&mut database, 11, &get).unwrap()["agents"][0]["delivered"],
+            false
+        );
         for _ in 0..2 {
-            assert_eq!(commit_request(&mut database, 11, &acknowledge(current_task.as_str())).unwrap(),
-                       json!({"acknowledged":true, "changed":1}));
+            assert_eq!(
+                commit_request(&mut database, 11, &acknowledge(current_task.as_str())).unwrap(),
+                json!({"acknowledged":true, "changed":1})
+            );
         }
-        assert_eq!(commit_request(&mut database, 11, &get).unwrap()["agents"][0]["delivered"], true);
+        assert_eq!(
+            commit_request(&mut database, 11, &get).unwrap()["agents"][0]["delivered"],
+            true
+        );
     }
 
     #[test]
     fn large_agent_checkpoint_survives_delivery_and_reopen() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        commit_request(&mut database, 11, &request("swarm.session.save", json!({
-            "swarm_key":"large", "specs":[], "config":{"user_id":11}, "now_ms":100
-        }), 100)).unwrap();
+        commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.session.save",
+                json!({
+                    "swarm_key":"large", "specs":[], "config":{"user_id":11}, "now_ms":100
+                }),
+                100,
+            ),
+        )
+        .unwrap();
         let content = "x".repeat(9 * 1024 * 1024);
-        let checkpoint = request("swarm.agent.save", json!({
-            "swarm_key":"large", "agent_id":"worker", "status":"completed",
-            "messages":[{"role":"tool", "content":content}],
-            "result":{"final_answer":"done"}, "delivered":false, "now_ms":200
-        }), 200);
+        let checkpoint = request(
+            "swarm.agent.save",
+            json!({
+                "swarm_key":"large", "agent_id":"worker", "status":"completed",
+                "messages":[{"role":"tool", "content":content}],
+                "result":{"final_answer":"done"}, "delivered":false, "now_ms":200
+            }),
+            200,
+        );
         assert!(checkpoint.validate().unwrap() > crate::protocol::MAX_PAYLOAD_BYTES);
         commit_request(&mut database, 11, &checkpoint).unwrap();
         drop(database);
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
-        let recovery = commit_request(&mut database, 11, &request("swarm.session.get",
-            json!({"swarm_key":"large"}), 300)).unwrap();
+        let recovery = commit_request(
+            &mut database,
+            11,
+            &request("swarm.session.get", json!({"swarm_key":"large"}), 300),
+        )
+        .unwrap();
         assert_eq!(recovery["agents"][0]["messages"][0]["content"], content);
-        let delivery = request("swarm.agents.mark_delivered", json!({
-            "swarm_key":"large", "agent_ids":["worker"], "now_ms":400
-        }), 400);
+        let delivery = request(
+            "swarm.agents.mark_delivered",
+            json!({
+                "swarm_key":"large", "agent_ids":["worker"], "now_ms":400
+            }),
+            400,
+        );
         commit_request(&mut database, 11, &delivery).unwrap();
-        let recovered = commit_request(&mut database, 11, &request("swarm.session.get",
-            json!({"swarm_key":"large"}), 500)).unwrap();
+        let recovered = commit_request(
+            &mut database,
+            11,
+            &request("swarm.session.get", json!({"swarm_key":"large"}), 500),
+        )
+        .unwrap();
         assert_eq!(recovered["agents"][0]["messages"][0]["content"], content);
         assert_eq!(recovered["agents"][0]["delivered"], true);
     }
@@ -1327,92 +1409,189 @@ mod tests {
     fn agent_state_get_reads_no_checkpoint_body() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        let state = |swarm_key: &str, agent_id: &str| request("swarm.agent.state.get", json!({
-            "swarm_key":swarm_key, "agent_id":agent_id
-        }), 300);
+        let state = |swarm_key: &str, agent_id: &str| {
+            request(
+                "swarm.agent.state.get",
+                json!({
+                    "swarm_key":swarm_key, "agent_id":agent_id
+                }),
+                300,
+            )
+        };
         assert!(!state("target", "worker").mutates_state());
-        assert_eq!(commit_request(&mut database, 11, &state("target", "worker")).unwrap(), Value::Null);
-        commit_request(&mut database, 11, &request("swarm.session.save", json!({
-            "swarm_key":"target", "conv_id":"conv", "task_id":"launch",
-            "specs":[{"id":"worker", "objective":"o".repeat(4096)}],
-            "config":{"user_id":11}, "now_ms":100
-        }), 100)).unwrap();
+        assert_eq!(
+            commit_request(&mut database, 11, &state("target", "worker")).unwrap(),
+            Value::Null
+        );
+        commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.session.save",
+                json!({
+                    "swarm_key":"target", "conv_id":"conv", "task_id":"launch",
+                    "specs":[{"id":"worker", "objective":"o".repeat(4096)}],
+                    "config":{"user_id":11}, "now_ms":100
+                }),
+                100,
+            ),
+        )
+        .unwrap();
         save_running_checkpoint(&mut database, "target", "worker", 2 * 1024 * 1024);
         let found = commit_request(&mut database, 11, &state("target", "worker")).unwrap();
-        assert_eq!(found, json!({
-            "swarm_key":"target", "conv_id":"conv", "task_id":"launch", "status":"running",
-            "created_at":100, "updated_at":100,
-            "agent":{"agent_id":"worker", "status":"running", "rounds_used":0,
-                     "delivered":false, "updated_at":200}
-        }));
+        assert_eq!(
+            found,
+            json!({
+                "swarm_key":"target", "conv_id":"conv", "task_id":"launch", "status":"running",
+                "created_at":100, "updated_at":100,
+                "agent":{"agent_id":"worker", "status":"running", "rounds_used":0,
+                         "delivered":false, "updated_at":200}
+            })
+        );
         let absent = commit_request(&mut database, 11, &state("target", "other")).unwrap();
         assert_eq!(absent["agent"], Value::Null);
-        assert_eq!(commit_request(&mut database, 12, &state("target", "worker")).unwrap(), Value::Null);
+        assert_eq!(
+            commit_request(&mut database, 12, &state("target", "worker")).unwrap(),
+            Value::Null
+        );
     }
 
     #[test]
     fn checkpoint_marker_overlays_compact_state_until_the_next_full_save() {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
-        commit_request(&mut database, 11, &request("swarm.session.save", json!({
-            "swarm_key":"marked", "task_id":"launch", "specs":[],
-            "config":{"user_id":11}, "now_ms":100
-        }), 100)).unwrap();
-        let mark = |result: Value, now: u64| request("swarm.agent.checkpoint.mark", json!({
-            "swarm_key":"marked", "agent_id":"worker", "rounds_used":3,
-            "result":result, "now_ms":now
-        }), now);
+        commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.session.save",
+                json!({
+                    "swarm_key":"marked", "task_id":"launch", "specs":[],
+                    "config":{"user_id":11}, "now_ms":100
+                }),
+                100,
+            ),
+        )
+        .unwrap();
+        let mark = |result: Value, now: u64| {
+            request(
+                "swarm.agent.checkpoint.mark",
+                json!({
+                    "swarm_key":"marked", "agent_id":"worker", "rounds_used":3,
+                    "result":result, "now_ms":now
+                }),
+                now,
+            )
+        };
         let in_flight = json!({"checkpoint_phase":"model_in_flight",
                                "actuals_complete":false, "total_tokens":140});
-        assert_eq!(commit_request(&mut database, 11, &mark(in_flight.clone(), 150)).unwrap(),
-                   json!({"marked":false}));
-        let state = request("swarm.agent.state.get",
-                            json!({"swarm_key":"marked", "agent_id":"worker"}), 151);
-        assert_eq!(commit_request(&mut database, 11, &state).unwrap()["agent"], Value::Null);
+        assert_eq!(
+            commit_request(&mut database, 11, &mark(in_flight.clone(), 150)).unwrap(),
+            json!({"marked":false})
+        );
+        let state = request(
+            "swarm.agent.state.get",
+            json!({"swarm_key":"marked", "agent_id":"worker"}),
+            151,
+        );
+        assert_eq!(
+            commit_request(&mut database, 11, &state).unwrap()["agent"],
+            Value::Null
+        );
 
         let messages = json!([{"role":"tool", "content":"x".repeat(1 << 20)}]);
         let settled = json!({"checkpoint_phase":"ready", "actuals_complete":true,
                              "total_tokens":100, "tool_log":[{"tool":"read_files"}]});
-        let save = |now: u64| request("swarm.agent.save", json!({
-            "swarm_key":"marked", "agent_id":"worker", "status":"running",
-            "messages":messages, "result":settled, "rounds_used":2, "now_ms":now
-        }), now);
+        let save = |now: u64| {
+            request(
+                "swarm.agent.save",
+                json!({
+                    "swarm_key":"marked", "agent_id":"worker", "status":"running",
+                    "messages":messages, "result":settled, "rounds_used":2, "now_ms":now
+                }),
+                now,
+            )
+        };
         commit_request(&mut database, 11, &save(200)).unwrap();
-        assert_eq!(commit_request(&mut database, 11, &mark(in_flight, 300)).unwrap(),
-                   json!({"marked":true}));
-        assert_eq!(commit_request(&mut database, 11, &mark(json!({"cost_usd":0.25}), 310)).unwrap(),
-                   json!({"marked":true}));
-        commit_request(&mut database, 11, &request("swarm.agents.mark_delivered", json!({
-            "swarm_key":"marked", "agent_ids":["worker"]
-        }), 320)).unwrap();
+        assert_eq!(
+            commit_request(&mut database, 11, &mark(in_flight, 300)).unwrap(),
+            json!({"marked":true})
+        );
+        assert_eq!(
+            commit_request(&mut database, 11, &mark(json!({"cost_usd":0.25}), 310)).unwrap(),
+            json!({"marked":true})
+        );
+        commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.agents.mark_delivered",
+                json!({
+                    "swarm_key":"marked", "agent_ids":["worker"]
+                }),
+                320,
+            ),
+        )
+        .unwrap();
         drop(database);
 
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
         let get = request("swarm.session.get", json!({"swarm_key":"marked"}), 400);
         let agent = commit_request(&mut database, 11, &get).unwrap()["agents"][0].clone();
-        assert_eq!(agent["result"], json!({
-            "checkpoint_phase":"model_in_flight", "actuals_complete":false,
-            "total_tokens":140, "cost_usd":0.25, "tool_log":[{"tool":"read_files"}]
-        }));
-        assert_eq!((agent["rounds_used"].clone(), agent["updated_at"].clone(),
-                    agent["delivered"].clone()), (json!(3), json!(310), json!(true)));
+        assert_eq!(
+            agent["result"],
+            json!({
+                "checkpoint_phase":"model_in_flight", "actuals_complete":false,
+                "total_tokens":140, "cost_usd":0.25, "tool_log":[{"tool":"read_files"}]
+            })
+        );
+        assert_eq!(
+            (
+                agent["rounds_used"].clone(),
+                agent["updated_at"].clone(),
+                agent["delivered"].clone()
+            ),
+            (json!(3), json!(310), json!(true))
+        );
         assert_eq!(agent["messages"], messages);
-        assert_eq!(agent_page(&database, 11, json!({"swarm_key":"marked"}))["agents"][0], agent);
+        assert_eq!(
+            agent_page(&database, 11, json!({"swarm_key":"marked"}))["agents"][0],
+            agent
+        );
         let compact = commit_request(&mut database, 11, &state).unwrap()["agent"].clone();
-        assert_eq!((compact["rounds_used"].clone(), compact["updated_at"].clone()),
-                   (json!(3), json!(310)));
+        assert_eq!(
+            (
+                compact["rounds_used"].clone(),
+                compact["updated_at"].clone()
+            ),
+            (json!(3), json!(310))
+        );
 
         commit_request(&mut database, 11, &save(500)).unwrap();
         let agent = commit_request(&mut database, 11, &get).unwrap()["agents"][0].clone();
-        assert_eq!((agent["result"].clone(), agent["rounds_used"].clone()), (settled, json!(2)));
+        assert_eq!(
+            (agent["result"].clone(), agent["rounds_used"].clone()),
+            (settled, json!(2))
+        );
 
-        for invalid in [json!({}), json!({"messages":[]}), json!({"total_tokens":[1]}),
-                        json!({"checkpoint_phase":"p".repeat(65)}), json!("ready")] {
-            assert_eq!(commit_request(&mut database, 11, &mark(invalid, 600)).unwrap_err().kind(),
-                       io::ErrorKind::InvalidInput);
+        for invalid in [
+            json!({}),
+            json!({"messages":[]}),
+            json!({"total_tokens":[1]}),
+            json!({"checkpoint_phase":"p".repeat(65)}),
+            json!("ready"),
+        ] {
+            assert_eq!(
+                commit_request(&mut database, 11, &mark(invalid, 600))
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
         }
-        assert_eq!(commit_request(&mut database, 12, &mark(json!({"rounds_used":4}), 700)).unwrap(),
-                   json!({"marked":false}));
+        assert_eq!(
+            commit_request(&mut database, 12, &mark(json!({"rounds_used":4}), 700)).unwrap(),
+            json!({"marked":false})
+        );
     }
 
     #[test]
@@ -1420,15 +1599,30 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         for swarm_key in ["appended", "saved"] {
-            commit_request(&mut database, 11, &request("swarm.session.save", json!({
-                "swarm_key":swarm_key, "task_id":"launch", "specs":[],
-                "config":{"user_id":11}, "now_ms":100
-            }), 100)).unwrap();
+            commit_request(
+                &mut database,
+                11,
+                &request(
+                    "swarm.session.save",
+                    json!({
+                        "swarm_key":swarm_key, "task_id":"launch", "specs":[],
+                        "config":{"user_id":11}, "now_ms":100
+                    }),
+                    100,
+                ),
+            )
+            .unwrap();
         }
-        let message = |index: usize| json!({"role":"tool", "content":format!("{index}:")
-                                                 + &"x".repeat(1 << 16)});
-        let save = |swarm_key: &str, messages: Value, result: Value, checkpoint_id: &str,
-                    status: &str, now: u64| {
+        let message = |index: usize| {
+            json!({"role":"tool", "content":format!("{index}:")
+                                                 + &"x".repeat(1 << 16)})
+        };
+        let save = |swarm_key: &str,
+                    messages: Value,
+                    result: Value,
+                    checkpoint_id: &str,
+                    status: &str,
+                    now: u64| {
             let mut payload = json!({
                 "swarm_key":swarm_key, "agent_id":"worker", "role":"coder",
                 "objective":"verify", "status":status, "messages":messages,
@@ -1439,74 +1633,251 @@ mod tests {
             }
             request("swarm.agent.save", payload, now)
         };
-        let append = |base: &str, count: usize, messages: Value, result: Value, id: &str,
-                      status: &str, now: u64| request("swarm.agent.append", json!({
-            "swarm_key":"appended", "agent_id":"worker", "base_checkpoint_id":base,
-            "base_message_count":count, "checkpoint_id":id, "messages":messages,
-            "result":result, "status":status, "rounds_used":now / 100, "now_ms":now
-        }), now);
-        assert_eq!(commit_request(&mut database, 11,
-            &append("c0", 0, json!([]), json!({}), "c1", "running", 150)).unwrap(),
-            json!({"appended":false}));
-        assert_eq!(commit_request(&mut database, 11, &save("appended", json!([message(0)]),
-            json!({"step":0}), "c0", "running", 200)).unwrap(),
-            json!({"saved":true, "checkpoint_id":"c0"}));
-        assert_eq!(commit_request(&mut database, 11, &request("swarm.agent.checkpoint.mark", json!({
-            "swarm_key":"appended", "agent_id":"worker", "rounds_used":2,
-            "result":{"checkpoint_phase":"model_in_flight"}, "now_ms":250
-        }), 250)).unwrap(), json!({"marked":true}));
-        commit_request(&mut database, 11, &request("swarm.agents.mark_delivered", json!({
-            "swarm_key":"appended", "agent_ids":["worker"]
-        }), 260)).unwrap();
-        assert_eq!(commit_request(&mut database, 11, &append("c0", 1,
-            json!([message(1), message(2)]), json!({"step":1}), "c1", "running", 300)).unwrap(),
-            json!({"appended":true}));
+        let append = |base: &str,
+                      count: usize,
+                      messages: Value,
+                      result: Value,
+                      id: &str,
+                      status: &str,
+                      now: u64| {
+            request(
+                "swarm.agent.append",
+                json!({
+                    "swarm_key":"appended", "agent_id":"worker", "base_checkpoint_id":base,
+                    "base_message_count":count, "checkpoint_id":id, "messages":messages,
+                    "result":result, "status":status, "rounds_used":now / 100, "now_ms":now
+                }),
+                now,
+            )
+        };
+        assert_eq!(
+            commit_request(
+                &mut database,
+                11,
+                &append("c0", 0, json!([]), json!({}), "c1", "running", 150)
+            )
+            .unwrap(),
+            json!({"appended":false})
+        );
+        assert_eq!(
+            commit_request(
+                &mut database,
+                11,
+                &save(
+                    "appended",
+                    json!([message(0)]),
+                    json!({"step":0}),
+                    "c0",
+                    "running",
+                    200
+                )
+            )
+            .unwrap(),
+            json!({"saved":true, "checkpoint_id":"c0"})
+        );
+        assert_eq!(
+            commit_request(
+                &mut database,
+                11,
+                &request(
+                    "swarm.agent.checkpoint.mark",
+                    json!({
+                        "swarm_key":"appended", "agent_id":"worker", "rounds_used":2,
+                        "result":{"checkpoint_phase":"model_in_flight"}, "now_ms":250
+                    }),
+                    250
+                )
+            )
+            .unwrap(),
+            json!({"marked":true})
+        );
+        commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.agents.mark_delivered",
+                json!({
+                    "swarm_key":"appended", "agent_ids":["worker"]
+                }),
+                260,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            commit_request(
+                &mut database,
+                11,
+                &append(
+                    "c0",
+                    1,
+                    json!([message(1), message(2)]),
+                    json!({"step":1}),
+                    "c1",
+                    "running",
+                    300
+                )
+            )
+            .unwrap(),
+            json!({"appended":true})
+        );
         // A stale base, a wrong count, a foreign owner or a replaced core refuse unchanged.
         for (base, count) in [("c0", 3), ("c1", 2), ("c1", 4)] {
-            assert_eq!(commit_request(&mut database, 11, &append(base, count,
-                json!([message(9)]), json!({"step":9}), "c9", "failed", 350)).unwrap(),
-                json!({"appended":false}));
+            assert_eq!(
+                commit_request(
+                    &mut database,
+                    11,
+                    &append(
+                        base,
+                        count,
+                        json!([message(9)]),
+                        json!({"step":9}),
+                        "c9",
+                        "failed",
+                        350
+                    )
+                )
+                .unwrap(),
+                json!({"appended":false})
+            );
         }
-        assert_eq!(commit_request(&mut database, 12, &append("c1", 3,
-            json!([message(9)]), json!({}), "c9", "failed", 360)).unwrap(),
-            json!({"appended":false}));
-        assert_eq!(commit_request(&mut database, 11, &append("c1", 3, json!([message(3)]),
-            json!({"step":3, "final_answer":"done"}), "c2", "completed", 400)).unwrap(),
-            json!({"appended":true}));
+        assert_eq!(
+            commit_request(
+                &mut database,
+                12,
+                &append("c1", 3, json!([message(9)]), json!({}), "c9", "failed", 360)
+            )
+            .unwrap(),
+            json!({"appended":false})
+        );
+        assert_eq!(
+            commit_request(
+                &mut database,
+                11,
+                &append(
+                    "c1",
+                    3,
+                    json!([message(3)]),
+                    json!({"step":3, "final_answer":"done"}),
+                    "c2",
+                    "completed",
+                    400
+                )
+            )
+            .unwrap(),
+            json!({"appended":true})
+        );
         drop(database);
 
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
         let messages = json!([message(0), message(1), message(2), message(3)]);
-        commit_request(&mut database, 11, &save("saved", messages.clone(),
-            json!({"step":3, "final_answer":"done"}), "", "completed", 400)).unwrap();
-        commit_request(&mut database, 11, &request("swarm.agents.mark_delivered", json!({
-            "swarm_key":"saved", "agent_ids":["worker"]
-        }), 410)).unwrap();
-        let read = |database: &mut AuthorityDatabase, swarm_key: &str| commit_request(
-            database, 11, &request("swarm.session.get", json!({"swarm_key":swarm_key}), 500))
-            .unwrap()["agents"][0].clone();
+        commit_request(
+            &mut database,
+            11,
+            &save(
+                "saved",
+                messages.clone(),
+                json!({"step":3, "final_answer":"done"}),
+                "",
+                "completed",
+                400,
+            ),
+        )
+        .unwrap();
+        commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.agents.mark_delivered",
+                json!({
+                    "swarm_key":"saved", "agent_ids":["worker"]
+                }),
+                410,
+            ),
+        )
+        .unwrap();
+        let read = |database: &mut AuthorityDatabase, swarm_key: &str| {
+            commit_request(
+                database,
+                11,
+                &request("swarm.session.get", json!({"swarm_key":swarm_key}), 500),
+            )
+            .unwrap()["agents"][0]
+                .clone()
+        };
         let appended = read(&mut database, "appended");
         assert_eq!(appended, read(&mut database, "saved"));
         assert_eq!(appended["messages"], messages);
-        assert_eq!((appended["status"].clone(), appended["delivered"].clone(),
-                    appended["rounds_used"].clone()), (json!("completed"), json!(true), json!(4)));
-        assert_eq!(agent_page(&database, 11, json!({"swarm_key":"appended"}))["agents"][0],
-                   appended);
-        assert_eq!(commit_request(&mut database, 11,
-            &request("swarm.resumable.list", json!({}), 510)).unwrap(), json!([]));
+        assert_eq!(
+            (
+                appended["status"].clone(),
+                appended["delivered"].clone(),
+                appended["rounds_used"].clone()
+            ),
+            (json!("completed"), json!(true), json!(4))
+        );
+        assert_eq!(
+            agent_page(&database, 11, json!({"swarm_key":"appended"}))["agents"][0],
+            appended
+        );
+        assert_eq!(
+            commit_request(
+                &mut database,
+                11,
+                &request("swarm.resumable.list", json!({}), 510)
+            )
+            .unwrap(),
+            json!([])
+        );
 
         // A writer without a checkpoint id replaces the base; appends then refuse.
-        commit_request(&mut database, 11, &save("appended", json!([message(0)]), json!({}), "",
-            "running", 600)).unwrap();
-        assert_eq!(commit_request(&mut database, 11, &append("c2", 4, json!([message(4)]),
-            json!({}), "c3", "running", 700)).unwrap(), json!({"appended":false}));
-        for invalid in [json!({"base_checkpoint_id":""}), json!({"checkpoint_id":null}),
-                        json!({"base_message_count":-1}), json!({"messages":{}}),
-                        json!({"result":[]}), json!({"rounds_used":MAX_SWARM_ROUNDS_USED + 1})] {
+        commit_request(
+            &mut database,
+            11,
+            &save(
+                "appended",
+                json!([message(0)]),
+                json!({}),
+                "",
+                "running",
+                600,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            commit_request(
+                &mut database,
+                11,
+                &append(
+                    "c2",
+                    4,
+                    json!([message(4)]),
+                    json!({}),
+                    "c3",
+                    "running",
+                    700
+                )
+            )
+            .unwrap(),
+            json!({"appended":false})
+        );
+        for invalid in [
+            json!({"base_checkpoint_id":""}),
+            json!({"checkpoint_id":null}),
+            json!({"base_message_count":-1}),
+            json!({"messages":{}}),
+            json!({"result":[]}),
+            json!({"rounds_used":MAX_SWARM_ROUNDS_USED + 1}),
+        ] {
             let mut malformed = append("c2", 1, json!([]), json!({}), "c3", "running", 800);
-            malformed.payload.extend(invalid.as_object().unwrap().clone());
-            assert_eq!(commit_request(&mut database, 11, &malformed).unwrap_err().kind(),
-                       io::ErrorKind::InvalidInput);
+            malformed
+                .payload
+                .extend(invalid.as_object().unwrap().clone());
+            assert_eq!(
+                commit_request(&mut database, 11, &malformed)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
         }
     }
 
@@ -1516,18 +1887,31 @@ mod tests {
         agent_id: &str,
         content_bytes: usize,
     ) {
-        commit_request(database, 11, &request("swarm.agent.save", json!({
-            "swarm_key":swarm_key, "agent_id":agent_id, "status":"running",
-            "messages":[{"role":"tool", "content":"x".repeat(content_bytes)}],
-            "result":{}, "now_ms":200
-        }), 200)).unwrap();
+        commit_request(
+            database,
+            11,
+            &request(
+                "swarm.agent.save",
+                json!({
+                    "swarm_key":swarm_key, "agent_id":agent_id, "status":"running",
+                    "messages":[{"role":"tool", "content":"x".repeat(content_bytes)}],
+                    "result":{}, "now_ms":200
+                }),
+                200,
+            ),
+        )
+        .unwrap();
     }
 
     fn agent_page(database: &AuthorityDatabase, owner: u64, payload: Value) -> Value {
         let mut transaction = database.begin_with_identity_claim_scopes(7, owner).unwrap();
-        let raw = execute(database, &mut transaction, &request("swarm.agents.page", payload, 400))
-            .unwrap()
-            .unwrap();
+        let raw = execute(
+            database,
+            &mut transaction,
+            &request("swarm.agents.page", payload, 400),
+        )
+        .unwrap()
+        .unwrap();
         assert!(raw.len() <= MAX_SWARM_RESPONSE_BYTES);
         decode(&raw, "swarm agent page").unwrap()
     }
@@ -1537,10 +1921,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         for (now, swarm_key) in [(100, "older"), (101, "newer")] {
-            commit_request(&mut database, 11, &request("swarm.session.save", json!({
-                "swarm_key":swarm_key, "specs":[{"id":"a"}], "config":{"user_id":11},
-                "now_ms":now
-            }), now)).unwrap();
+            commit_request(
+                &mut database,
+                11,
+                &request(
+                    "swarm.session.save",
+                    json!({
+                        "swarm_key":swarm_key, "specs":[{"id":"a"}], "config":{"user_id":11},
+                        "now_ms":now
+                    }),
+                    now,
+                ),
+            )
+            .unwrap();
         }
         // Retained history (four checkpoints) exceeds one response, and so
         // does the newer session alone (three checkpoints).
@@ -1550,47 +1943,89 @@ mod tests {
             save_running_checkpoint(&mut database, "newer", agent_id, content_bytes);
         }
 
-        let list = commit_request(&mut database, 11,
-            &request("swarm.resumable.list", json!({}), 300)).unwrap();
-        assert_eq!(list, json!([
-            {"swarm_key":"newer", "updated_at":101},
-            {"swarm_key":"older", "updated_at":100},
-        ]));
+        let list = commit_request(
+            &mut database,
+            11,
+            &request("swarm.resumable.list", json!({}), 300),
+        )
+        .unwrap();
+        assert_eq!(
+            list,
+            json!([
+                {"swarm_key":"newer", "updated_at":101},
+                {"swarm_key":"older", "updated_at":100},
+            ])
+        );
 
         // The complete session read keeps refusing incomplete recovery state,
         // as a deterministic bound that a retry cannot satisfy.
-        let refusal = commit_request(&mut database, 11, &request("swarm.session.get",
-            json!({"swarm_key":"newer"}), 301)).unwrap_err();
+        let refusal = commit_request(
+            &mut database,
+            11,
+            &request("swarm.session.get", json!({"swarm_key":"newer"}), 301),
+        )
+        .unwrap_err();
         assert_eq!(refusal.kind(), io::ErrorKind::OutOfMemory);
         let wire = crate::semantic_executor::map_storage_error(refusal);
         assert_eq!(wire.code(), "database_resource_exhausted");
         assert!(!wire.retryable());
 
-        let header = commit_request(&mut database, 11, &request("swarm.session.get",
-            json!({"swarm_key":"newer", "include_agents":false}), 302)).unwrap();
+        let header = commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.session.get",
+                json!({"swarm_key":"newer", "include_agents":false}),
+                302,
+            ),
+        )
+        .unwrap();
         assert_eq!(header["swarm_key"], "newer");
         assert_eq!(header["specs"], json!([{"id":"a"}]));
         assert_eq!(header["updated_at"], 101);
         assert!(header.get("agents").is_none());
-        assert!(commit_request(&mut database, 11, &request("swarm.session.get",
-            json!({"swarm_key":"newer", "include_agents":"no"}), 303)).is_err());
+        assert!(commit_request(
+            &mut database,
+            11,
+            &request(
+                "swarm.session.get",
+                json!({"swarm_key":"newer", "include_agents":"no"}),
+                303
+            )
+        )
+        .is_err());
 
         let mut pages = Vec::new();
         let mut payload = json!({"swarm_key":"newer"});
         loop {
             let page = agent_page(&database, 11, payload.clone());
-            let ids = page["agents"].as_array().unwrap().iter().map(|agent| {
-                assert_eq!(agent["status"], "running");
-                assert_eq!(agent["messages"][0]["content"].as_str().unwrap().len(), content_bytes);
-                agent["agent_id"].as_str().unwrap().to_owned()
-            }).collect::<Vec<_>>();
+            let ids = page["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|agent| {
+                    assert_eq!(agent["status"], "running");
+                    assert_eq!(
+                        agent["messages"][0]["content"].as_str().unwrap().len(),
+                        content_bytes
+                    );
+                    agent["agent_id"].as_str().unwrap().to_owned()
+                })
+                .collect::<Vec<_>>();
             pages.push(ids);
-            let Some(next) = page["next_after_agent_id"].as_str() else { break };
+            let Some(next) = page["next_after_agent_id"].as_str() else {
+                break;
+            };
             payload["after_agent_id"] = json!(next);
         }
         assert_eq!(pages, [vec!["a", "b"], vec!["c"]]);
-        assert_eq!(agent_page(&database, 11, json!({"swarm_key":"older"}))["agents"]
-            .as_array().unwrap().len(), 1);
+        assert_eq!(
+            agent_page(&database, 11, json!({"swarm_key":"older"}))["agents"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         let foreign = agent_page(&database, 12, json!({"swarm_key":"newer"}));
         assert_eq!(foreign, json!({"agents":[], "next_after_agent_id":null}));
     }

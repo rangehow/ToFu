@@ -10,7 +10,8 @@ same model.
 Provider-scoped rows come from :func:`lib.model_registration.register_model`
 (a provider model's ``pricing`` field, same shape as a ``MODEL_PRICING``
 value) and from a provider's documented billing rule over the creator's base
-price (FRIDAY's Claude cache multipliers, installed at import below). Cost
+price (a gateway profile's declared Claude cache multipliers, installed at
+import below; lib.provider.gateway_profiles). Cost
 paths use :func:`lookup_pricing` (model_id, provider_id) which prefers the
 provider-scoped entry over the global table, falling back to
 ``MODEL_PRICING`` when the provider is unknown or has no override.
@@ -34,8 +35,6 @@ from lib.log import get_logger
 from lib.pricing._peak import peak_multiplier
 from lib.pricing._revision import RevisionedTable
 from lib.pricing._tables import (
-    FRIDAY_CLAUDE_CACHE_MULTIPLIERS,
-    FRIDAY_PROVIDER_IDS,
     MODEL_PRICING,
     QWEN_PRICING_CNY,
     pricing_for_model,
@@ -53,26 +52,46 @@ PROVIDER_PRICING = RevisionedTable()
 _provider_pricing_lock = threading.Lock()
 
 
-def _friday_claude_rows():
-    """Every Claude row with FRIDAY's cache multipliers; base prices unchanged."""
+def _gateway_claude_rows(multipliers):
+    """Every Claude row with a gateway's cache multipliers; base prices unchanged."""
     from lib.model_info._family import is_claude
 
-    tier_multipliers = {key: FRIDAY_CLAUDE_CACHE_MULTIPLIERS[key]
-                        for key in ('cacheWriteMul', 'cacheReadMul')}
+    tier_multipliers = {key: multipliers[key]
+                        for key in ('cacheWriteMul', 'cacheReadMul') if key in multipliers}
     rows = {}
     for model_id, row in MODEL_PRICING.items():
         if not is_claude(model_id):
             continue
-        friday = {**row, **FRIDAY_CLAUDE_CACHE_MULTIPLIERS}
+        gateway_row = {**row, **multipliers}
         if row.get('contextTiers'):
-            friday['contextTiers'] = [{**tier, **tier_multipliers}
-                                      for tier in row['contextTiers']]
-        rows[model_id] = friday
+            gateway_row['contextTiers'] = [{**tier, **tier_multipliers}
+                                           for tier in row['contextTiers']]
+        rows[model_id] = gateway_row
     return rows
 
 
-PROVIDER_PRICING.update({provider_id: _friday_claude_rows()
-                         for provider_id in FRIDAY_PROVIDER_IDS})
+def _install_gateway_claude_cache_pricing():
+    """Install declared gateway Claude cache billing per exact provider id.
+
+    A gateway profile's ``claude_cache_multipliers`` trait (for example
+    FRIDAY's, bundles/yourprovider/gateway_profiles/friday.json) names how that
+    gateway bills Claude prompt-cache tokens. Its exact ``provider_ids`` get
+    the adjusted rows; every other provider, such as a direct Anthropic key,
+    keeps the creator's official row. A core with no profile installs none.
+    """
+    from lib.provider.gateway_profiles import gateway_profiles
+
+    for profile in gateway_profiles():
+        multipliers = profile['traits'].get('claude_cache_multipliers')
+        if not multipliers:
+            continue
+        PROVIDER_PRICING.update({provider_id: _gateway_claude_rows(dict(multipliers))
+                                 for provider_id in profile['provider_ids']
+                                 if not provider_id.endswith('*')
+                                 and provider_id not in PROVIDER_PRICING})
+
+
+_install_gateway_claude_cache_pricing()
 
 
 def declared_pricing(info):

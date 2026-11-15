@@ -276,8 +276,12 @@ fn drain_overlay_in_background(
             Ok(false) => break,
             // Rotation backpressure owns the WAL lane briefly; the next
             // poll retries. Anything else is a real merge failure.
-            Err(error) if error.kind() == io::ErrorKind::ResourceBusy
-                || error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error)
+                if error.kind() == io::ErrorKind::ResourceBusy
+                    || error.kind() == io::ErrorKind::WouldBlock =>
+            {
+                break
+            }
             Err(error) => {
                 crate::engine_log::warn(
                     "overlay_background_drain",
@@ -294,13 +298,19 @@ fn drain_overlay_in_background(
 /// page traversal/encoding runs between them with only an immutable pin.
 fn merge_overlay_outside_authority(database: &Arc<Mutex<AuthorityDatabase>>) -> io::Result<bool> {
     let prepared = {
-        let guard = database.lock().map_err(|_| io::Error::other("maintenance authority mutex is poisoned"))?;
+        let guard = database
+            .lock()
+            .map_err(|_| io::Error::other("maintenance authority mutex is poisoned"))?;
         let _hold = crate::authority_watch::AuthorityHoldTimer::start("overlay.capture");
         guard.prepare_entity_overlay_merge()?
     };
-    let Some(prepared) = prepared else { return Ok(false); };
+    let Some(prepared) = prepared else {
+        return Ok(false);
+    };
     let encoded = prepared.encode()?;
-    let mut guard = database.lock().map_err(|_| io::Error::other("maintenance authority mutex is poisoned"))?;
+    let mut guard = database
+        .lock()
+        .map_err(|_| io::Error::other("maintenance authority mutex is poisoned"))?;
     let _hold = crate::authority_watch::AuthorityHoldTimer::start("overlay.publish");
     guard.finish_entity_overlay_merge(encoded)
 }
@@ -375,7 +385,8 @@ impl SchedulerState {
         if self.search_wakes == 0 {
             self.round_deadline
         } else {
-            self.round_deadline.min(self.round_completed_at + base_interval)
+            self.round_deadline
+                .min(self.round_completed_at + base_interval)
         }
     }
 
@@ -517,14 +528,18 @@ impl MaintenanceScheduler {
             // the scope index. The worker attaches it to the authority.
             let scheduler = Arc::downgrade(&shared);
             let invalidations = Arc::new(crate::search_dirty::SearchInvalidations::new(
-                shared.scopes.iter().map(|scope| (scope.tenant_id, scope.owner_user_id)),
+                shared
+                    .scopes
+                    .iter()
+                    .map(|scope| (scope.tenant_id, scope.owner_user_id)),
                 move |index| wake_search_scope(&scheduler, index),
             ));
             // Install only cancellation and coverage metadata, retaining poison
             // as the worker's retryable index failure. Optional search health
             // must not prevent source maintenance or service startup.
-            let mut projection =
-                projection.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut projection = projection
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             projection.install_stop(Arc::clone(&shared.stop));
             projection.install_search_invalidations(invalidations);
         }
@@ -535,7 +550,11 @@ impl MaintenanceScheduler {
             .name("tofu-db-overlay-drain".to_owned())
             .stack_size(config.worker_stack_bytes)
             .spawn(move || {
-                run_overlay_drain(&drain_database, drain_search_projection.as_ref(), &drain_shared)
+                run_overlay_drain(
+                    &drain_database,
+                    drain_search_projection.as_ref(),
+                    &drain_shared,
+                )
             })?;
         let worker_shared = Arc::clone(&shared);
         let worker = match thread::Builder::new()
@@ -573,7 +592,10 @@ impl MaintenanceScheduler {
                 .map_err(|_| io::Error::other("maintenance scheduler worker is poisoned"))?,
         );
         // Join every thread before reporting, so none outlives the call.
-        let panicked = workers.into_iter().fold(false, |panicked, worker| worker.join().is_err() || panicked);
+        let mut panicked = false;
+        for worker in workers {
+            panicked |= worker.join().is_err();
+        }
         if panicked {
             return Err(io::Error::other("maintenance scheduler worker panicked"));
         }
@@ -596,8 +618,14 @@ impl Drop for MaintenanceScheduler {
 /// Asks both threads to stop and wakes them; false when the state lock was
 /// poisoned (the stop flag and the wake are still delivered).
 fn request_stop(shared: &Shared) -> bool {
-    shared.stop.store(true, std::sync::atomic::Ordering::Release);
-    let stopping = shared.state.lock().map(|mut state| state.stopping = true).is_ok();
+    shared
+        .stop
+        .store(true, std::sync::atomic::Ordering::Release);
+    let stopping = shared
+        .state
+        .lock()
+        .map(|mut state| state.stopping = true)
+        .is_ok();
     shared.wake.notify_all();
     stopping
 }
@@ -646,7 +674,11 @@ impl SearchRetryState {
 }
 
 fn maximum_search_failure_backoff(states: &[SearchRetryState]) -> u64 {
-    states.iter().map(|state| duration_milliseconds(state.delay)).max().unwrap_or(0)
+    states
+        .iter()
+        .map(|state| duration_milliseconds(state.delay))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Block stores whose published catalog location table the overlay poll has
@@ -684,12 +716,20 @@ impl CatalogLocationStores {
         }
         if let Some(projection) = search_projection {
             if self.search.strong_count() == 0 {
-                if let Some(blocks) = projection.try_lock().ok().and_then(|guard| guard.block_store_shared()) {
+                if let Some(blocks) = projection
+                    .try_lock()
+                    .ok()
+                    .and_then(|guard| guard.block_store_shared())
+                {
                     self.search = Arc::downgrade(&blocks);
                 }
             }
         }
-        if self.derivation.as_ref().is_some_and(|derivation| !derivation.is_finished()) {
+        if self
+            .derivation
+            .as_ref()
+            .is_some_and(|derivation| !derivation.is_finished())
+        {
             return;
         }
         self.join_derivation();
@@ -706,7 +746,9 @@ impl CatalogLocationStores {
         self.derivation = std::thread::Builder::new()
             .name("tofu-db-locations".to_owned())
             .spawn(move || {
-                crate::fsync_stats::set_current_component(crate::fsync_stats::COMPONENT_MAINTENANCE);
+                crate::fsync_stats::set_current_component(
+                    crate::fsync_stats::COMPONENT_MAINTENANCE,
+                );
                 for blocks in due {
                     let _ = blocks.advance_catalog_locations();
                 }
@@ -813,9 +855,8 @@ fn run_overlay_drain(
                 |metrics| {
                     metrics.overlay_background_wakes =
                         metrics.overlay_background_wakes.saturating_add(1);
-                    metrics.overlay_background_chunks = metrics
-                        .overlay_background_chunks
-                        .saturating_add(chunks);
+                    metrics.overlay_background_chunks =
+                        metrics.overlay_background_chunks.saturating_add(chunks);
                 },
                 Backoff::Keep,
             );
@@ -827,7 +868,9 @@ fn run_overlay_drain(
         // waits for the authority like the background drain, and the
         // next one starts no sooner than this one took (50% duty).
         if Instant::now() >= next_history_slice
-            && shared.history_backlog.swap(false, std::sync::atomic::Ordering::AcqRel)
+            && shared
+                .history_backlog
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
         {
             let started = Instant::now();
             let outcome = match database.lock() {
@@ -843,20 +886,28 @@ fn run_overlay_drain(
                 ))),
             };
             let backlog = match &outcome {
-                Some(RoundOutcome::HistoryCompacted { retained_segments, .. }) => {
-                    *retained_segments as usize > shared.config.history_retained_segments
-                }
+                Some(RoundOutcome::HistoryCompacted {
+                    retained_segments, ..
+                }) => *retained_segments as usize > shared.config.history_retained_segments,
                 // Another publication owned the lane; retry after the pause.
                 Some(RoundOutcome::Conflict) => true,
                 _ => false,
             };
             if backlog {
-                shared.history_backlog.store(true, std::sync::atomic::Ordering::Release);
+                shared
+                    .history_backlog
+                    .store(true, std::sync::atomic::Ordering::Release);
             }
             match outcome {
-                Some(RoundOutcome::HistoryCompacted { retired_segments, retained_segments }) => {
-                    record_history_compaction(shared, retired_segments, retained_segments, Backoff::Keep)
-                }
+                Some(RoundOutcome::HistoryCompacted {
+                    retired_segments,
+                    retained_segments,
+                }) => record_history_compaction(
+                    shared,
+                    retired_segments,
+                    retained_segments,
+                    Backoff::Keep,
+                ),
                 Some(RoundOutcome::Conflict) => update_metrics(
                     shared,
                     |metrics| {
@@ -905,7 +956,10 @@ fn run_worker(
                     state.metrics.rounds = state.metrics.rounds.saturating_add(1);
                     break (index, shared.scopes[index]);
                 }
-                state = match shared.wake.wait_timeout(state, round_due.saturating_duration_since(now)) {
+                state = match shared
+                    .wake
+                    .wait_timeout(state, round_due.saturating_duration_since(now))
+                {
                     Ok((state, _)) => state,
                     Err(_) => return,
                 };
@@ -914,16 +968,27 @@ fn run_worker(
         let mut search_did_work = false;
         if let Some(search_projection) = search_projection {
             if !search_retries[scope_index].ready(Instant::now()) {
-                update_metrics(shared, |metrics| {
-                    metrics.search_retry_deferrals = metrics.search_retry_deferrals.saturating_add(1);
-                }, Backoff::Keep);
+                update_metrics(
+                    shared,
+                    |metrics| {
+                        metrics.search_retry_deferrals =
+                            metrics.search_retry_deferrals.saturating_add(1);
+                    },
+                    Backoff::Keep,
+                );
             } else {
                 match crate::turn_search_worker::process_turn_search_batch_with_admission_and_stop(
                     database,
                     search_projection,
                     scope,
                     || shared.config.search_admission.defer(&mut search_pressure),
-                    || shared.state.lock().map(|state| state.stopping).unwrap_or(true),
+                    || {
+                        shared
+                            .state
+                            .lock()
+                            .map(|state| state.stopping)
+                            .unwrap_or(true)
+                    },
                 ) {
                     Ok(search) => {
                         search_retries[scope_index].recovered();
@@ -932,7 +997,8 @@ fn run_worker(
                         update_metrics(
                             shared,
                             |metrics| {
-                                metrics.search_maximum_failure_backoff_milliseconds = maximum_backoff;
+                                metrics.search_maximum_failure_backoff_milliseconds =
+                                    maximum_backoff;
                                 metrics.search_dirty_conversations = metrics
                                     .search_dirty_conversations
                                     .saturating_add(search.dirty_conversations);
@@ -969,7 +1035,8 @@ fn run_worker(
                     }
                     Err(_) if shared.stop.load(std::sync::atomic::Ordering::Acquire) => return,
                     Err(error) => {
-                        let delay = search_retries[scope_index].failed(Instant::now(), shared.config.idle_interval);
+                        let delay = search_retries[scope_index]
+                            .failed(Instant::now(), shared.config.idle_interval);
                         let failures = search_retries[scope_index].consecutive_failures;
                         if failures.is_power_of_two() {
                             crate::engine_log::warn("search_retry", &format!(
@@ -977,29 +1044,56 @@ fn run_worker(
                                 error.kind(), failures, duration_milliseconds(delay)));
                         }
                         let maximum_backoff = maximum_search_failure_backoff(&search_retries);
-                        update_metrics(shared, |metrics| {
-                            metrics.search_failed_rounds = metrics.search_failed_rounds.saturating_add(1);
-                            metrics.search_maximum_failure_backoff_milliseconds = maximum_backoff;
-                        }, Backoff::Keep);
+                        update_metrics(
+                            shared,
+                            |metrics| {
+                                metrics.search_failed_rounds =
+                                    metrics.search_failed_rounds.saturating_add(1);
+                                metrics.search_maximum_failure_backoff_milliseconds =
+                                    maximum_backoff;
+                            },
+                            Backoff::Keep,
+                        );
                     }
                 }
             }
         }
-        if shared.state.lock().map(|state| state.stopping).unwrap_or(true) { return; }
-        let recovery_did_work = match crate::project_brain::recovery::backfill(database, scope,
-            &|| shared.stop.load(std::sync::atomic::Ordering::Acquire)) {
-            Ok(committed) => {
-                if committed { update_metrics(shared, |metrics| {
-                    metrics.committed_transactions = metrics.committed_transactions.saturating_add(1);
-                }, Backoff::Keep); }
-                committed
-            }
-            Err(error) => {
-                crate::engine_log::warn("project_recovery_backfill", &format!("summary backfill deferred: {error}"));
-                false
-            }
-        };
-        if shared.stop.load(std::sync::atomic::Ordering::Acquire) { return; }
+        if shared
+            .state
+            .lock()
+            .map(|state| state.stopping)
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let recovery_did_work =
+            match crate::project_brain::recovery::backfill(database, scope, &|| {
+                shared.stop.load(std::sync::atomic::Ordering::Acquire)
+            }) {
+                Ok(committed) => {
+                    if committed {
+                        update_metrics(
+                            shared,
+                            |metrics| {
+                                metrics.committed_transactions =
+                                    metrics.committed_transactions.saturating_add(1);
+                            },
+                            Backoff::Keep,
+                        );
+                    }
+                    committed
+                }
+                Err(error) => {
+                    crate::engine_log::warn(
+                        "project_recovery_backfill",
+                        &format!("summary backfill deferred: {error}"),
+                    );
+                    false
+                }
+            };
+        if shared.stop.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
         let outcome = run_round(
             database,
             scope,
@@ -1007,7 +1101,9 @@ fn run_worker(
             wait_for_authority,
         );
         wait_for_authority = matches!(outcome, RoundOutcome::ForegroundBusy);
-        shared.history_backlog.store(true, std::sync::atomic::Ordering::Release);
+        shared
+            .history_backlog
+            .store(true, std::sync::atomic::Ordering::Release);
         match outcome {
             RoundOutcome::ForegroundBusy => update_metrics(
                 shared,
@@ -1018,7 +1114,10 @@ fn run_worker(
             ),
             RoundOutcome::OverlayMerged => update_metrics(
                 shared,
-                |metrics| { metrics.overlay_background_chunks = metrics.overlay_background_chunks.saturating_add(1); },
+                |metrics| {
+                    metrics.overlay_background_chunks =
+                        metrics.overlay_background_chunks.saturating_add(1);
+                },
                 Backoff::Reset,
             ),
             RoundOutcome::NoWork => update_metrics(
@@ -1077,9 +1176,8 @@ fn run_worker(
                         .attempt_event_prune_attempts
                         .saturating_add(attempt_event_prune_attempts as u64);
                     if attempt_event_prune_has_more {
-                        metrics.attempt_event_prune_backlog_rounds = metrics
-                            .attempt_event_prune_backlog_rounds
-                            .saturating_add(1);
+                        metrics.attempt_event_prune_backlog_rounds =
+                            metrics.attempt_event_prune_backlog_rounds.saturating_add(1);
                     }
                 },
                 Backoff::Reset,
@@ -1089,8 +1187,9 @@ fn run_worker(
                 |metrics| {
                     metrics.tombstone_compaction_rounds =
                         metrics.tombstone_compaction_rounds.saturating_add(1);
-                    metrics.tombstone_pages_rewritten =
-                        metrics.tombstone_pages_rewritten.saturating_add(pages as u64);
+                    metrics.tombstone_pages_rewritten = metrics
+                        .tombstone_pages_rewritten
+                        .saturating_add(pages as u64);
                     metrics.tombstone_entries_reclaimed = metrics
                         .tombstone_entries_reclaimed
                         .saturating_add(entries as u64);
@@ -1102,7 +1201,12 @@ fn run_worker(
             RoundOutcome::HistoryCompacted {
                 retired_segments,
                 retained_segments,
-            } => record_history_compaction(shared, retired_segments, retained_segments, Backoff::Reset),
+            } => record_history_compaction(
+                shared,
+                retired_segments,
+                retained_segments,
+                Backoff::Reset,
+            ),
             RoundOutcome::PayloadPackPublished => update_metrics(
                 shared,
                 |metrics| {
@@ -1174,9 +1278,7 @@ fn run_tombstone_compaction(
     if !database.entity_tombstone_reclaim_is_enabled() {
         return Ok(None);
     }
-    let Some((start, end, dead_leaves)) =
-        database.take_entity_tombstone_compaction_hint()?
-    else {
+    let Some((start, end, dead_leaves)) = database.take_entity_tombstone_compaction_hint()? else {
         return Ok(None);
     };
     // Hints are entity-key encoded; a scope only vacuums its own owner.
@@ -1214,11 +1316,7 @@ fn run_tombstone_compaction(
     if remaining {
         // Partial sweep: hand the remaining window back so a later round
         // resumes instead of restarting.
-        database.record_entity_tombstone_compaction_hint(
-            &window.0,
-            &window.1,
-            dead_leaves,
-        )?;
+        database.record_entity_tombstone_compaction_hint(&window.0, &window.1, dead_leaves)?;
     }
     Ok(Some((pages, entries)))
 }
@@ -1233,7 +1331,10 @@ fn retire_history_slice<'a>(
     history_retained_segments: usize,
 ) -> Result<
     RoundOutcome,
-    (MutexGuard<'a, AuthorityDatabase>, crate::authority_watch::AuthorityHoldTimer<'static>),
+    (
+        MutexGuard<'a, AuthorityDatabase>,
+        crate::authority_watch::AuthorityHoldTimer<'static>,
+    ),
 > {
     match database.try_prepare_history_compaction(history_retained_segments) {
         Ok(Some(prepared)) => {
@@ -1244,14 +1345,22 @@ fn retire_history_slice<'a>(
             // traffic remains hot. Only metadata publication needs this hold.
             let mut database = match database_arc.lock() {
                 Ok(database) => database,
-                Err(_) => return Ok(RoundOutcome::Terminal(io::Error::other("maintenance authority mutex is poisoned"))),
+                Err(_) => {
+                    return Ok(RoundOutcome::Terminal(io::Error::other(
+                        "maintenance authority mutex is poisoned",
+                    )))
+                }
             };
             let _hold = crate::authority_watch::AuthorityHoldTimer::probe("history.install");
-            Ok(match database.finish_history_compaction(prepared, outcome) {
-                Ok(metrics) => RoundOutcome::HistoryCompacted { retired_segments: metrics.retired_segments,
-                    retained_segments: metrics.retained_segments },
-                Err(error) => round_engine_error(error),
-            })
+            Ok(
+                match database.finish_history_compaction(prepared, outcome) {
+                    Ok(metrics) => RoundOutcome::HistoryCompacted {
+                        retired_segments: metrics.retired_segments,
+                        retained_segments: metrics.retained_segments,
+                    },
+                    Err(error) => round_engine_error(error),
+                },
+            )
         }
         Ok(None) => Err((database, round_hold)),
         Err(error) => Ok(round_engine_error(error)),
@@ -1278,24 +1387,33 @@ fn run_round(
         }
     };
     let Some(database) = acquired else {
-        return RoundOutcome::Terminal(io::Error::other(
-            "maintenance authority mutex is poisoned",
-        ));
+        return RoundOutcome::Terminal(io::Error::other("maintenance authority mutex is poisoned"));
     };
     let round_hold = crate::authority_watch::AuthorityHoldTimer::probe("maintenance.round");
-    let (mut database, round_hold) =
-        match retire_history_slice(database_arc, database, round_hold, history_retained_segments) {
-            Ok(outcome) => return outcome,
-            Err(held) => held,
-        };
+    let (mut database, round_hold) = match retire_history_slice(
+        database_arc,
+        database,
+        round_hold,
+        history_retained_segments,
+    ) {
+        Ok(outcome) => return outcome,
+        Err(held) => held,
+    };
     match database.prepare_entity_overlay_merge() {
         Ok(Some(prepared)) => {
             drop(round_hold);
             drop(database);
-            let encoded = match prepared.encode() { Ok(encoded) => encoded, Err(error) => return round_engine_error(error) };
+            let encoded = match prepared.encode() {
+                Ok(encoded) => encoded,
+                Err(error) => return round_engine_error(error),
+            };
             let mut guard = match database_arc.lock() {
                 Ok(guard) => guard,
-                Err(_) => return RoundOutcome::Terminal(io::Error::other("maintenance authority mutex is poisoned")),
+                Err(_) => {
+                    return RoundOutcome::Terminal(io::Error::other(
+                        "maintenance authority mutex is poisoned",
+                    ))
+                }
             };
             let _hold = crate::authority_watch::AuthorityHoldTimer::start("overlay.publish");
             return match guard.finish_entity_overlay_merge(encoded) {
@@ -1334,7 +1452,11 @@ fn run_round(
     let mut database = match database_arc.try_lock() {
         Ok(database) => database,
         Err(TryLockError::WouldBlock) => return RoundOutcome::ForegroundBusy,
-        Err(TryLockError::Poisoned(_)) => return RoundOutcome::Terminal(io::Error::other("maintenance authority mutex is poisoned")),
+        Err(TryLockError::Poisoned(_)) => {
+            return RoundOutcome::Terminal(io::Error::other(
+                "maintenance authority mutex is poisoned",
+            ))
+        }
     };
     let round_hold = crate::authority_watch::AuthorityHoldTimer::probe("maintenance.round");
     let preparation = match database.try_prepare_pack_adoption() {
@@ -1381,7 +1503,12 @@ fn run_round(
     }
 }
 
-fn record_history_compaction(shared: &Shared, retired_segments: u32, retained_segments: u32, backoff: Backoff) {
+fn record_history_compaction(
+    shared: &Shared,
+    retired_segments: u32,
+    retained_segments: u32,
+    backoff: Backoff,
+) {
     update_metrics(
         shared,
         |metrics| {
@@ -1493,9 +1620,15 @@ mod tests {
                 retries[0].failed(now, interval);
                 attempts += 1;
             }
-            assert!(retries[1].ready(now), "one failing scope cannot delay another");
+            assert!(
+                retries[1].ready(now),
+                "one failing scope cannot delay another"
+            );
         }
-        assert!(attempts <= 9, "persistent failure must not retry every maintenance round");
+        assert!(
+            attempts <= 9,
+            "persistent failure must not retry every maintenance round"
+        );
         assert_eq!(attempts, 8);
         let previous_delay = retries[0].delay;
         retries[0].recovered();
@@ -1503,9 +1636,12 @@ mod tests {
         assert_eq!(maximum_search_failure_backoff(&retries), 0);
         assert_eq!(retries[0].failed(start, interval), interval);
         assert!(previous_delay > interval);
-        eprintln!("search_retry_state_bytes={} maximum_scopes={} maximum_state_bytes={}",
-            std::mem::size_of::<SearchRetryState>(), MAX_MAINTENANCE_SCOPES,
-            std::mem::size_of::<SearchRetryState>() * MAX_MAINTENANCE_SCOPES);
+        eprintln!(
+            "search_retry_state_bytes={} maximum_scopes={} maximum_state_bytes={}",
+            std::mem::size_of::<SearchRetryState>(),
+            MAX_MAINTENANCE_SCOPES,
+            std::mem::size_of::<SearchRetryState>() * MAX_MAINTENANCE_SCOPES
+        );
     }
 
     #[test]
@@ -1530,39 +1666,54 @@ mod tests {
         {
             let guard = database.lock().unwrap();
             let mut transaction = guard.begin(7, 11).unwrap();
-            crate::search_dirty::mark(&guard, &mut transaction,
+            crate::search_dirty::mark(
+                &guard,
+                &mut transaction,
                 crate::generated_tofudb_ir::CONVERSATION_SEARCH_DIRTY_NAMESPACE,
-                "already-deleted").unwrap();
+                "already-deleted",
+            )
+            .unwrap();
             drop(guard);
             database.lock().unwrap().commit(transaction).unwrap();
         }
-        let projection = Arc::new(Mutex::new(TurnSearchProjection::initialize(
-            projection_directory.path(), 1024 * 1024).unwrap()));
+        let projection = Arc::new(Mutex::new(
+            TurnSearchProjection::initialize(projection_directory.path(), 1024 * 1024).unwrap(),
+        ));
         let poisoned = Arc::clone(&projection);
         assert!(thread::spawn(move || {
             let _guard = poisoned.lock().unwrap();
             panic!("injected derived-index failure");
-        }).join().is_err());
+        })
+        .join()
+        .is_err());
         let scheduler = MaintenanceScheduler::start_with_search(
-            Arc::clone(&database), Some(Arc::clone(&projection)),
+            Arc::clone(&database),
+            Some(Arc::clone(&projection)),
             vec![MaintenanceScope::new(7, 11).unwrap()],
             MaintenanceSchedulerConfig::for_test(Duration::from_millis(10), 1),
-        ).unwrap();
+        )
+        .unwrap();
         let metrics = wait_for(&scheduler.observer(), |metrics| {
-            metrics.search_failed_rounds >= 2 && metrics.search_retry_deferrals > 0
+            metrics.search_failed_rounds >= 2
+                && metrics.search_retry_deferrals > 0
                 && metrics.completed_mounts == 1
         });
         assert!(metrics.search_maximum_failure_backoff_milliseconds >= 20);
         scheduler.observer().require_healthy().unwrap();
         projection.clear_poison();
-        let metrics = wait_for(&scheduler.observer(), |metrics| metrics.search_removed_conversations == 1);
+        let metrics = wait_for(&scheduler.observer(), |metrics| {
+            metrics.search_removed_conversations == 1
+        });
         assert_eq!(metrics.search_acknowledged_tokens, 1);
         assert_eq!(metrics.search_maximum_failure_backoff_milliseconds, 0);
         scheduler.stop_and_join().unwrap();
         drop(database);
         let reopened = AuthorityDatabase::open(directory.path()).unwrap();
         let mut transaction = reopened.begin(7, 11).unwrap();
-        assert_eq!(reopened.entity_get(&mut transaction, &key(3)).unwrap(), Some(vec![3; 64]));
+        assert_eq!(
+            reopened.entity_get(&mut transaction, &key(3)).unwrap(),
+            Some(vec![3; 64])
+        );
     }
 
     #[test]
@@ -1655,7 +1806,9 @@ mod tests {
         .unwrap();
         store.verify_payload_segment(&reference).unwrap();
         store.note_packed(&reserved).unwrap();
-        store.complete_background_pack(segment_id, reference).unwrap();
+        store
+            .complete_background_pack(segment_id, reference)
+            .unwrap();
     }
 
     /// 2026-11-13 02:06: a DolphinFS fsync stalled past the barrier deadline
@@ -1690,7 +1843,11 @@ mod tests {
             let mut guard = database.lock().unwrap();
             let engine = guard.engine_mut_for_test();
             engine.require_usable_authority().unwrap();
-            assert_eq!(engine.state().generation, generation, "nothing was published");
+            assert_eq!(
+                engine.state().generation,
+                generation,
+                "nothing was published"
+            );
             assert_eq!(engine.payload_segment_count(), 0);
         }
         // Once the sync completes, a later round adopts again.
@@ -1702,7 +1859,14 @@ mod tests {
             run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 64, false),
             RoundOutcome::PayloadPackPublished
         ));
-        assert_eq!(database.lock().unwrap().engine_mut_for_test().payload_segment_count(), 1);
+        assert_eq!(
+            database
+                .lock()
+                .unwrap()
+                .engine_mut_for_test()
+                .payload_segment_count(),
+            1
+        );
     }
 
     /// Publishes a one-segment catalog in `database`, lets a whole-store pass
@@ -1717,23 +1881,41 @@ mod tests {
         let blocks = database.block_store_shared();
         let store = blocks.payload_segment_store().unwrap();
         let segment = |number: u128, payloads: &[Vec<u8>]| {
-            let payloads: std::collections::BTreeMap<BlockId, Vec<u8>> =
-                payloads.iter().map(|payload| (BlockId::for_payload(payload), payload.clone())).collect();
+            let payloads: std::collections::BTreeMap<BlockId, Vec<u8>> = payloads
+                .iter()
+                .map(|payload| (BlockId::for_payload(payload), payload.clone()))
+                .collect();
             let created = store
-                .create(uuid::Uuid::from_u128(number), payloads.keys().copied().collect(), |id| {
-                    Ok(payloads[&id].clone())
-                })
+                .create(
+                    uuid::Uuid::from_u128(number),
+                    payloads.keys().copied().collect(),
+                    |id| Ok(payloads[&id].clone()),
+                )
                 .unwrap();
-            PayloadSegmentReference::new(created.metadata(), created.first_block_id(), created.last_block_id())
-                .unwrap()
+            PayloadSegmentReference::new(
+                created.metadata(),
+                created.first_block_id(),
+                created.last_block_id(),
+            )
+            .unwrap()
         };
-        let first = segment(seed, &[format!("first-a-{seed}").into_bytes(), format!("first-b-{seed}").into_bytes()]);
-        database.engine_mut_for_test()
-            .publish_payload_manifest_for_test(PayloadManifest::new(vec![first]).unwrap()).unwrap();
+        let first = segment(
+            seed,
+            &[
+                format!("first-a-{seed}").into_bytes(),
+                format!("first-b-{seed}").into_bytes(),
+            ],
+        );
+        database
+            .engine_mut_for_test()
+            .publish_payload_manifest_for_test(PayloadManifest::new(vec![first]).unwrap())
+            .unwrap();
         drop(blocks.traversal_reader(|| Ok(())).unwrap());
         let second = segment(seed + 1, &[format!("second-{seed}").into_bytes()]);
-        database.engine_mut_for_test()
-            .publish_payload_manifest_for_test(PayloadManifest::new(vec![first, second]).unwrap()).unwrap();
+        database
+            .engine_mut_for_test()
+            .publish_payload_manifest_for_test(PayloadManifest::new(vec![first, second]).unwrap())
+            .unwrap();
         assert_ne!(
             blocks.published_catalog_locations_for_test().unwrap().0,
             blocks.installed_catalog_publication_for_test(),
@@ -1752,7 +1934,8 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let authority_blocks = stale_catalog_location_table(&mut database, 1);
         let projection_directory = tempfile::tempdir().unwrap();
-        let mut projection = TurnSearchProjection::initialize(projection_directory.path(), 1024 * 1024).unwrap();
+        let mut projection =
+            TurnSearchProjection::initialize(projection_directory.path(), 1024 * 1024).unwrap();
         let search_blocks = stale_catalog_location_table(projection.database_mut_for_test(), 3);
         let database = Arc::new(Mutex::new(database));
         let projection = Arc::new(Mutex::new(projection));
@@ -1768,7 +1951,10 @@ mod tests {
             while blocks.published_catalog_locations_for_test().unwrap().0
                 != blocks.installed_catalog_publication_for_test()
             {
-                assert!(std::time::Instant::now() < deadline, "the worker never derived the installed catalog's table");
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the worker never derived the installed catalog's table"
+                );
                 thread::sleep(Duration::from_millis(5));
             }
         }
@@ -1777,7 +1963,12 @@ mod tests {
             let (_, table) = blocks.published_catalog_locations_for_test().unwrap();
             assert_eq!((table.located_blocks(), table.unindexed_segments()), (3, 0));
             let second = format!("second-{seed}").into_bytes();
-            assert_eq!(blocks.get(crate::block::BlockId::for_payload(&second)).unwrap(), second);
+            assert_eq!(
+                blocks
+                    .get(crate::block::BlockId::for_payload(&second))
+                    .unwrap(),
+                second
+            );
         }
     }
 
@@ -1806,7 +1997,10 @@ mod tests {
         // Only private reservation exhaustion is rewritten by its owner;
         // an unrelated real allocation failure must retain terminal policy.
         assert!(matches!(
-            round_engine_error(io::Error::new(io::ErrorKind::OutOfMemory, "physical read allocation failed")),
+            round_engine_error(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "physical read allocation failed"
+            )),
             RoundOutcome::Terminal(_)
         ));
     }
@@ -1817,12 +2011,21 @@ mod tests {
         // so the health gate recycled the daemon, every exit fed the storage
         // restart breaker, and no restart could free space.
         for kind in [io::ErrorKind::StorageFull, io::ErrorKind::QuotaExceeded] {
-            assert!(matches!(round_engine_error(io::Error::new(kind, "volume full")), RoundOutcome::Conflict),
-                "{kind:?}");
+            assert!(
+                matches!(
+                    round_engine_error(io::Error::new(kind, "volume full")),
+                    RoundOutcome::Conflict
+                ),
+                "{kind:?}"
+            );
             // A latched authority keeps the full volume's kind, yet only the
             // recycle reopens it.
-            let latched = crate::engine::reopen_required(kind, "WAL background barrier failed".to_owned());
-            assert!(matches!(round_engine_error(latched), RoundOutcome::Terminal(_)), "{kind:?}");
+            let latched =
+                crate::engine::reopen_required(kind, "WAL background barrier failed".to_owned());
+            assert!(
+                matches!(round_engine_error(latched), RoundOutcome::Terminal(_)),
+                "{kind:?}"
+            );
         }
     }
 
@@ -1895,7 +2098,10 @@ mod tests {
             RoundOutcome::TombstoneCompacted { pages, entries } => (pages, entries),
             _ => panic!("expected TombstoneCompacted"),
         };
-        assert!(pages > 0 && entries >= 40, "pages={pages} entries={entries}");
+        assert!(
+            pages > 0 && entries >= 40,
+            "pages={pages} entries={entries}"
+        );
         let database = database.lock().unwrap();
         let mut probe = database.begin(7, 11).unwrap();
         for index in 0..40_u16 {
@@ -2045,24 +2251,34 @@ mod tests {
         {
             let mut db = database.lock().unwrap();
             let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
-            crate::conversation_header::delete(&mut db, &mut tx,
+            crate::conversation_header::delete(
+                &mut db,
+                &mut tx,
                 &crate::conversation_header::DeleteRequest {
-                    conversation_id: "maintenance-conversation".into(), deleted_at_ms: 2_000_000_000_000,
-                }).unwrap();
+                    conversation_id: "maintenance-conversation".into(),
+                    deleted_at_ms: 2_000_000_000_000,
+                },
+            )
+            .unwrap();
             db.commit(tx).unwrap();
             let mut tx = db.begin(7, 11).unwrap();
             assert_eq!(db.entity_scan(&mut tx, &first, &end, 1).unwrap().len(), 1);
         }
         match run_round(&database, MaintenanceScope::new(7, 11).unwrap(), 64, false) {
-            RoundOutcome::Committed { attempt_events_pruned: 0, .. } => {}
+            RoundOutcome::Committed {
+                attempt_events_pruned: 0,
+                ..
+            } => {}
             RoundOutcome::Terminal(error) => panic!("metadata retirement failed: {error}"),
             _ => panic!("metadata-only retirement must count as committed work"),
         }
         drop(database);
         let db = AuthorityDatabase::open(directory.path()).unwrap();
         let mut tx = db.begin(7, 11).unwrap();
-        assert!(db.entity_scan(&mut tx, &first, &end, 1).unwrap().is_empty(),
-            "maintenance discarded metadata-only retirement progress");
+        assert!(
+            db.entity_scan(&mut tx, &first, &end, 1).unwrap().is_empty(),
+            "maintenance discarded metadata-only retirement progress"
+        );
     }
 
     fn authority_with_mount() -> (tempfile::TempDir, Arc<Mutex<AuthorityDatabase>>) {
@@ -2196,7 +2412,11 @@ mod tests {
                 !predicate(&state.metrics)
             })
             .unwrap();
-        assert!(!waited.timed_out(), "maintenance round never started: {:?}", state.metrics);
+        assert!(
+            !waited.timed_out(),
+            "maintenance round never started: {:?}",
+            state.metrics
+        );
         state
     }
 
@@ -2238,11 +2458,19 @@ mod tests {
         state.search_wakes = 1 << 2;
         assert_eq!(state.round_due(base), completed + base);
         state.round_deadline = completed + base / 2;
-        assert_eq!(state.round_due(base), completed + base / 2, "a wake never delays a due round");
+        assert_eq!(
+            state.round_due(base),
+            completed + base / 2,
+            "a wake never delays a due round"
+        );
         assert_eq!(state.take_round_scope(3), 2);
         assert_eq!((state.search_wakes, state.next_scope), (0, 0));
         assert_eq!(state.round_due(base), completed + base / 2);
-        assert_eq!(state.take_round_scope(3), 0, "without wakes the round robin resumes");
+        assert_eq!(
+            state.take_round_scope(3),
+            0,
+            "without wakes the round robin resumes"
+        );
         assert_eq!(state.next_scope, 1);
     }
 
@@ -2254,12 +2482,15 @@ mod tests {
             AuthorityDatabase::initialize(authority_directory.path()).unwrap(),
         ));
         let projection = Arc::new(Mutex::new(
-            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024).unwrap(),
+            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024)
+                .unwrap(),
         ));
         let (scheduler, idle) = backed_off_search_scheduler(&database, &projection);
         create_searchable_conversation(&database, "wakeneedle");
-        let woken = wait_for_round(&scheduler, |metrics| metrics.search_acknowledged_tokens == 1)
-            .metrics;
+        let woken = wait_for_round(&scheduler, |metrics| {
+            metrics.search_acknowledged_tokens == 1
+        })
+        .metrics;
         assert!(woken.rounds > idle.rounds);
         assert_eq!(woken.search_rebuilt_conversations, 1);
         assert_eq!(woken.search_failed_rounds, 0);
@@ -2274,7 +2505,8 @@ mod tests {
             AuthorityDatabase::initialize(authority_directory.path()).unwrap(),
         ));
         let projection = Arc::new(Mutex::new(
-            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024).unwrap(),
+            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024)
+                .unwrap(),
         ));
         let (scheduler, _) = backed_off_search_scheduler(&database, &projection);
         {
@@ -2287,11 +2519,15 @@ mod tests {
                 "an acknowledged invalidation was reported ready before consumption"
             );
         }
-        let woken = wait_for_round(&scheduler, |metrics| metrics.search_acknowledged_tokens == 1)
-            .metrics;
+        let woken = wait_for_round(&scheduler, |metrics| {
+            metrics.search_acknowledged_tokens == 1
+        })
+        .metrics;
         // Rounds are sequential: once the second later round starts, the round
         // after the ACK has observed the empty dirty queue and published READY.
-        drop(wait_for_round(&scheduler, |metrics| metrics.rounds >= woken.rounds + 2));
+        drop(wait_for_round(&scheduler, |metrics| {
+            metrics.rounds >= woken.rounds + 2
+        }));
         scheduler.stop_and_join().unwrap();
         let index = projection.lock().unwrap();
         assert!(!index.owner_indexing(7, 11).unwrap());
@@ -2304,7 +2540,10 @@ mod tests {
                 snippet_radius: 10,
             })
             .unwrap();
-        assert_eq!(hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(), ["woken"]);
+        assert_eq!(
+            hits.iter().map(|hit| hit.id.as_str()).collect::<Vec<_>>(),
+            ["woken"]
+        );
     }
 
     #[test]
@@ -2471,7 +2710,9 @@ mod tests {
         // Two segments per slice, so retiring five takes three slices.
         database
             .engine_mut_for_test()
-            .set_checkpoint_materialize_batch_bytes(2 * crate::history::HISTORY_SEGMENT_MAX_BYTES as u64)
+            .set_checkpoint_materialize_batch_bytes(
+                2 * crate::history::HISTORY_SEGMENT_MAX_BYTES as u64,
+            )
             .unwrap();
         for index in 0..6_u16 {
             let mut transaction = database.begin(7, 11).unwrap();
@@ -2511,7 +2752,9 @@ mod tests {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         database
             .engine_mut_for_test()
-            .set_checkpoint_materialize_batch_bytes(2 * crate::history::HISTORY_SEGMENT_MAX_BYTES as u64)
+            .set_checkpoint_materialize_batch_bytes(
+                2 * crate::history::HISTORY_SEGMENT_MAX_BYTES as u64,
+            )
             .unwrap();
         for index in 0..6_u16 {
             let mut transaction = database.begin(7, 11).unwrap();
@@ -2529,7 +2772,8 @@ mod tests {
         )
         .unwrap();
         // No scope round runs during this specification.
-        scheduler.shared.state.lock().unwrap().round_deadline = Instant::now() + Duration::from_secs(600);
+        scheduler.shared.state.lock().unwrap().round_deadline =
+            Instant::now() + Duration::from_secs(600);
         let metrics = wait_for(&scheduler.observer(), |metrics| {
             metrics.retired_history_segments == 5
         });
@@ -2560,7 +2804,10 @@ mod tests {
         );
         assert_eq!(observed.history_retained_segments(), 64);
         for production in [lean, observed] {
-            assert_eq!(production.search_admission, SearchAdmission::ForegroundPressure);
+            assert_eq!(
+                production.search_admission,
+                SearchAdmission::ForegroundPressure
+            );
         }
         let scopes = (1..=MAX_MAINTENANCE_SCOPES + 1)
             .map(|owner| MaintenanceScope::new(7, owner as u64).unwrap())
@@ -2677,10 +2924,7 @@ mod tests {
     }
 
     fn overlay_entries(database: &Arc<Mutex<AuthorityDatabase>>) -> usize {
-        database
-            .lock()
-            .unwrap()
-            .entity_overlay_entries_for_test()
+        database.lock().unwrap().entity_overlay_entries_for_test()
     }
 
     /// Blocks one cold source open so the test observes the real maintenance
@@ -2693,8 +2937,13 @@ mod tests {
     impl BlockingMergeProbe {
         fn pause_read(&self) -> io::Result<()> {
             if self.armed.swap(false, std::sync::atomic::Ordering::AcqRel) {
-                self.entered.send(()).map_err(|_| io::Error::other("merge probe receiver closed"))?;
-                self.release.lock().unwrap().recv_timeout(Duration::from_secs(10))
+                self.entered
+                    .send(())
+                    .map_err(|_| io::Error::other("merge probe receiver closed"))?;
+                self.release
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(10))
                     .map_err(|_| io::Error::other("merge probe release missing"))?;
             }
             Ok(())
@@ -2709,28 +2958,84 @@ mod tests {
         probe: Arc<BlockingMergeProbe>,
     }
     impl crate::vfs::VfsFile for BlockingMergeReadFile {
-        fn len(&self) -> io::Result<u64> { self.inner.len() }
-        fn read_all(&mut self, maximum: usize) -> io::Result<Vec<u8>> { self.probe.pause_read()?; self.inner.read_all(maximum) }
-        fn read_exact_at(&mut self, offset: u64, bytes: &mut [u8]) -> io::Result<()> { self.probe.pause_read()?; self.inner.read_exact_at(offset, bytes) }
-        fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> { self.inner.write_all_at(offset, bytes) }
-        fn set_len(&mut self, length: u64) -> io::Result<()> { self.inner.set_len(length) }
-        fn sync_data(&mut self) -> io::Result<()> { self.inner.sync_data() }
-        fn sync_all(&mut self) -> io::Result<()> { self.inner.sync_all() }
-        fn try_lock_exclusive(&mut self) -> io::Result<()> { self.inner.try_lock_exclusive() }
+        fn len(&self) -> io::Result<u64> {
+            self.inner.len()
+        }
+        fn read_all(&mut self, maximum: usize) -> io::Result<Vec<u8>> {
+            self.probe.pause_read()?;
+            self.inner.read_all(maximum)
+        }
+        fn read_exact_at(&mut self, offset: u64, bytes: &mut [u8]) -> io::Result<()> {
+            self.probe.pause_read()?;
+            self.inner.read_exact_at(offset, bytes)
+        }
+        fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> io::Result<()> {
+            self.inner.write_all_at(offset, bytes)
+        }
+        fn set_len(&mut self, length: u64) -> io::Result<()> {
+            self.inner.set_len(length)
+        }
+        fn sync_data(&mut self) -> io::Result<()> {
+            self.inner.sync_data()
+        }
+        fn sync_all(&mut self) -> io::Result<()> {
+            self.inner.sync_all()
+        }
+        fn try_lock_exclusive(&mut self) -> io::Result<()> {
+            self.inner.try_lock_exclusive()
+        }
     }
 
     impl crate::vfs::Vfs for BlockingMergeReadVfs {
-        fn open(&self, path: &std::path::Path, request: crate::vfs::OpenRequest) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
-            Ok(Box::new(BlockingMergeReadFile { inner: self.inner.open(path, request)?, probe: Arc::clone(&self.probe) }))
+        fn open(
+            &self,
+            path: &std::path::Path,
+            request: crate::vfs::OpenRequest,
+        ) -> io::Result<Box<dyn crate::vfs::VfsFile>> {
+            Ok(Box::new(BlockingMergeReadFile {
+                inner: self.inner.open(path, request)?,
+                probe: Arc::clone(&self.probe),
+            }))
         }
-        fn create_dir(&self, path: &std::path::Path) -> io::Result<()> { self.inner.create_dir(path) }
-        fn rename(&self, source: &std::path::Path, destination: &std::path::Path) -> io::Result<()> { self.inner.rename(source, destination) }
-        fn remove_file(&self, path: &std::path::Path) -> io::Result<()> { self.inner.remove_file(path) }
-        fn metadata(&self, path: &std::path::Path) -> io::Result<crate::vfs::FileKind> { self.inner.metadata(path) }
-        fn read_directory(&self, path: &std::path::Path) -> io::Result<Vec<std::path::PathBuf>> { self.inner.read_directory(path) }
-        fn read_directory_bounded(&self, path: &std::path::Path, maximum: usize) -> io::Result<crate::vfs::BoundedDirectoryEntries> { self.inner.read_directory_bounded(path, maximum) }
-        fn match_directory_prefix_bounded(&self, path: &std::path::Path, prefix: &str, scanned: usize, matched: usize) -> io::Result<crate::vfs::BoundedDirectoryMatches> { self.inner.match_directory_prefix_bounded(path, prefix, scanned, matched) }
-        fn sync_directory(&self, path: &std::path::Path) -> io::Result<()> { self.inner.sync_directory(path) }
+        fn create_dir(&self, path: &std::path::Path) -> io::Result<()> {
+            self.inner.create_dir(path)
+        }
+        fn rename(
+            &self,
+            source: &std::path::Path,
+            destination: &std::path::Path,
+        ) -> io::Result<()> {
+            self.inner.rename(source, destination)
+        }
+        fn remove_file(&self, path: &std::path::Path) -> io::Result<()> {
+            self.inner.remove_file(path)
+        }
+        fn metadata(&self, path: &std::path::Path) -> io::Result<crate::vfs::FileKind> {
+            self.inner.metadata(path)
+        }
+        fn read_directory(&self, path: &std::path::Path) -> io::Result<Vec<std::path::PathBuf>> {
+            self.inner.read_directory(path)
+        }
+        fn read_directory_bounded(
+            &self,
+            path: &std::path::Path,
+            maximum: usize,
+        ) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
+            self.inner.read_directory_bounded(path, maximum)
+        }
+        fn match_directory_prefix_bounded(
+            &self,
+            path: &std::path::Path,
+            prefix: &str,
+            scanned: usize,
+            matched: usize,
+        ) -> io::Result<crate::vfs::BoundedDirectoryMatches> {
+            self.inner
+                .match_directory_prefix_bounded(path, prefix, scanned, matched)
+        }
+        fn sync_directory(&self, path: &std::path::Path) -> io::Result<()> {
+            self.inner.sync_directory(path)
+        }
     }
 
     #[test]
@@ -2738,34 +3043,64 @@ mod tests {
         use crate::vfs::Vfs;
         let (entered_sender, entered_receiver) = std::sync::mpsc::channel();
         let (release_sender, release_receiver) = std::sync::mpsc::channel();
-        let vfs = Arc::new(BlockingMergeReadVfs { inner: Arc::new(crate::vfs::DeterministicVfs::new(None)),
-            probe: Arc::new(BlockingMergeProbe { armed: std::sync::atomic::AtomicBool::new(false), entered: entered_sender, release: Mutex::new(release_receiver) }) });
+        let vfs = Arc::new(BlockingMergeReadVfs {
+            inner: Arc::new(crate::vfs::DeterministicVfs::new(None)),
+            probe: Arc::new(BlockingMergeProbe {
+                armed: std::sync::atomic::AtomicBool::new(false),
+                entered: entered_sender,
+                release: Mutex::new(release_receiver),
+            }),
+        });
         vfs.create_dir(std::path::Path::new("/data")).unwrap();
         vfs.sync_directory(std::path::Path::new("/")).unwrap();
         let source: Arc<dyn Vfs> = vfs.clone();
-        let mut database = AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), source).unwrap();
+        let mut database =
+            AuthorityDatabase::initialize_with_vfs(std::path::Path::new("/data"), source).unwrap();
         database.set_write_overlay_for_test(true);
-        for index in 0..20 { put_overlay_record(&mut database, index); }
+        for index in 0..20 {
+            put_overlay_record(&mut database, index);
+        }
         database.merge_entity_overlay_fully().unwrap();
         database.checkpoint_wal_window().unwrap();
         put_overlay_record(&mut database, 100);
         database.configure_hot_data_caches(0, 0).unwrap();
         let database = Arc::new(Mutex::new(database));
-        vfs.probe.armed.store(true, std::sync::atomic::Ordering::Release);
+        vfs.probe
+            .armed
+            .store(true, std::sync::atomic::Ordering::Release);
         let worker_database = Arc::clone(&database);
         let worker = std::thread::spawn(move || merge_overlay_outside_authority(&worker_database));
-        entered_receiver.recv_timeout(Duration::from_secs(5)).expect("merge must reach the cold physical source read");
+        entered_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("merge must reach the cold physical source read");
         {
-            let mut foreground = database.try_lock().expect("cold merge read must not hold authority");
+            let mut foreground = database
+                .try_lock()
+                .expect("cold merge read must not hold authority");
             put_overlay_record(&mut foreground, 101);
-            assert_eq!(get_overlay_record(&foreground, 101), Some(101_u32.to_be_bytes().to_vec()));
+            assert_eq!(
+                get_overlay_record(&foreground, 101),
+                Some(101_u32.to_be_bytes().to_vec())
+            );
         }
         release_sender.send(()).unwrap();
         assert!(worker.join().unwrap().unwrap());
         let guard = database.lock().unwrap();
-        assert_eq!(get_overlay_record(&guard, 100), Some(100_u32.to_be_bytes().to_vec()));
-        assert_eq!(get_overlay_record(&guard, 101), Some(101_u32.to_be_bytes().to_vec()));
-        assert_eq!(guard.snapshot_pin_metrics().unwrap().retained_transaction_bytes, 0);
+        assert_eq!(
+            get_overlay_record(&guard, 100),
+            Some(100_u32.to_be_bytes().to_vec())
+        );
+        assert_eq!(
+            get_overlay_record(&guard, 101),
+            Some(101_u32.to_be_bytes().to_vec())
+        );
+        assert_eq!(
+            guard
+                .snapshot_pin_metrics()
+                .unwrap()
+                .retained_transaction_bytes,
+            0
+        );
     }
 
     #[test]
@@ -2785,9 +3120,12 @@ mod tests {
         assert!(trigger.needs_drain());
         // Cold slices start small, then measured cost determines growth.
         // Every wake remains bounded and every nonempty wake makes progress.
-        let mut remaining = 5_000;
-        for _ in 0..remaining {
-            if trigger.below_soft_thresholds() { break; }
+        let wake_limit = 5_000;
+        let mut remaining = wake_limit;
+        for _ in 0..wake_limit {
+            if trigger.below_soft_thresholds() {
+                break;
+            }
             let chunks = drain_overlay_in_background(&database, &trigger);
             assert!((1..=u64::from(OVERLAY_BACKGROUND_MAX_CHUNKS_PER_WAKE)).contains(&chunks));
             let next = overlay_entries(&database);
@@ -2825,8 +3163,11 @@ mod tests {
         assert_eq!(drain_overlay_in_background(&database, &trigger), 4);
         let mut remaining = overlay_entries(&database);
         assert!((3_807..11_999).contains(&remaining));
-        for _ in 0..remaining {
-            if trigger.below_soft_thresholds() { break; }
+        let wake_limit = remaining;
+        for _ in 0..wake_limit {
+            if trigger.below_soft_thresholds() {
+                break;
+            }
             let chunks = drain_overlay_in_background(&database, &trigger);
             assert!((1..=u64::from(OVERLAY_BACKGROUND_MAX_CHUNKS_PER_WAKE)).contains(&chunks));
             let next = overlay_entries(&database);
@@ -2879,7 +3220,8 @@ mod tests {
         database.set_write_overlay_for_test(true);
         let database = Arc::new(Mutex::new(database));
         let projection = Arc::new(Mutex::new(
-            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024).unwrap(),
+            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024)
+                .unwrap(),
         ));
         let (scheduler, idle) = backed_off_search_scheduler(&database, &projection);
         let observer = scheduler.observer();
@@ -2896,13 +3238,19 @@ mod tests {
         let trigger = database.lock().unwrap().entity_overlay_soft_trigger();
         assert!(trigger.needs_drain());
         let drained = wait_for(&observer, |_| trigger.below_soft_thresholds());
-        assert_eq!(drained.rounds, blocked.rounds, "the scope round was still in progress");
+        assert_eq!(
+            drained.rounds, blocked.rounds,
+            "the scope round was still in progress"
+        );
         assert!(drained.overlay_background_chunks > blocked.overlay_background_chunks);
         drop(index);
         scheduler.stop_and_join().unwrap();
         let guard = database.lock().unwrap();
         for record in [0_u32, 4_999] {
-            assert_eq!(get_overlay_record(&guard, record), Some(record.to_be_bytes().to_vec()));
+            assert_eq!(
+                get_overlay_record(&guard, record),
+                Some(record.to_be_bytes().to_vec())
+            );
         }
     }
 
@@ -2919,7 +3267,8 @@ mod tests {
         database.set_write_overlay_for_test(true);
         let database = Arc::new(Mutex::new(database));
         let projection = Arc::new(Mutex::new(
-            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024).unwrap(),
+            TurnSearchProjection::initialize(projection_directory.path(), 16 * 1024 * 1024)
+                .unwrap(),
         ));
         let (scheduler, idle) = backed_off_search_scheduler(&database, &projection);
         let observer = scheduler.observer();
@@ -2936,18 +3285,31 @@ mod tests {
             guard.set_overlay_wal_watermark_for_test(0);
             let pending = guard.entity_overlay_entries_for_test();
             put_overlay_record(&mut guard, 100);
-            assert_eq!(guard.entity_overlay_entries_for_test(), pending + 1, "the commit merged inline");
+            assert_eq!(
+                guard.entity_overlay_entries_for_test(),
+                pending + 1,
+                "the commit merged inline"
+            );
         }
         assert!(trigger.signal().wal_pressure_reported());
         let drained = wait_for(&observer, |_| !trigger.needs_drain());
-        assert_eq!(drained.rounds, blocked.rounds, "the scope round was still in progress");
+        assert_eq!(
+            drained.rounds, blocked.rounds,
+            "the scope round was still in progress"
+        );
         drop(index);
         scheduler.stop_and_join().unwrap();
-        assert!(!trigger.signal().driver_alive(), "a stopped driver hands merging back to commits");
+        assert!(
+            !trigger.signal().driver_alive(),
+            "a stopped driver hands merging back to commits"
+        );
         let guard = database.lock().unwrap();
         assert_eq!(guard.entity_overlay_entries_for_test(), 0);
         for record in [0_u32, 100] {
-            assert_eq!(get_overlay_record(&guard, record), Some(record.to_be_bytes().to_vec()));
+            assert_eq!(
+                get_overlay_record(&guard, record),
+                Some(record.to_be_bytes().to_vec())
+            );
         }
     }
 
@@ -2968,7 +3330,8 @@ mod tests {
         )
         .unwrap();
         // No scope round runs during this specification; only the driver drains.
-        scheduler.shared.state.lock().unwrap().round_deadline = Instant::now() + Duration::from_secs(600);
+        scheduler.shared.state.lock().unwrap().round_deadline =
+            Instant::now() + Duration::from_secs(600);
         let observer = scheduler.observer();
         let trigger = database.lock().unwrap().entity_overlay_soft_trigger();
         wait_for(&observer, |_| trigger.signal().driver_alive());
@@ -2980,7 +3343,9 @@ mod tests {
             guard.set_overlay_wal_watermark_for_test(0);
             put_overlay_record(&mut guard, 100);
         }
-        wait_for(&observer, |_| database.lock().unwrap().entity_overlay_entries_for_test() == 0);
+        wait_for(&observer, |_| {
+            database.lock().unwrap().entity_overlay_entries_for_test() == 0
+        });
         {
             let mut guard = database.lock().unwrap();
             for record in 101..111_u32 {
@@ -2988,7 +3353,9 @@ mod tests {
             }
         }
         let polled = observer.metrics().unwrap().overlay_background_wakes;
-        let later = wait_for(&observer, |metrics| metrics.overlay_background_wakes >= polled + 8);
+        let later = wait_for(&observer, |metrics| {
+            metrics.overlay_background_wakes >= polled + 8
+        });
         assert_eq!(
             database.lock().unwrap().entity_overlay_entries_for_test(),
             10,
@@ -2999,12 +3366,17 @@ mod tests {
             guard.engine_mut_for_test().checkpoint().unwrap();
             put_overlay_record(&mut guard, 111);
         }
-        let drained = wait_for(&observer, |_| database.lock().unwrap().entity_overlay_entries_for_test() == 0);
+        let drained = wait_for(&observer, |_| {
+            database.lock().unwrap().entity_overlay_entries_for_test() == 0
+        });
         assert_eq!(drained.rounds, 0, "{drained:?}");
         scheduler.stop_and_join().unwrap();
         let guard = database.lock().unwrap();
         for record in [0_u32, 100, 110, 111] {
-            assert_eq!(get_overlay_record(&guard, record), Some(record.to_be_bytes().to_vec()));
+            assert_eq!(
+                get_overlay_record(&guard, record),
+                Some(record.to_be_bytes().to_vec())
+            );
         }
     }
 

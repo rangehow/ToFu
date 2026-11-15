@@ -26,20 +26,38 @@ fn payloads(label: &str, count: usize) -> BTreeMap<BlockId, Vec<u8>> {
 }
 
 /// One unpublished segment holding exactly `payloads`.
-fn segment_of(store: &BlockStore, number: u128, payloads: &BTreeMap<BlockId, Vec<u8>>) -> PayloadSegmentReference {
+fn segment_of(
+    store: &BlockStore,
+    number: u128,
+    payloads: &BTreeMap<BlockId, Vec<u8>>,
+) -> PayloadSegmentReference {
     let segment = store
         .payload_segment_store()
         .unwrap()
-        .create(Uuid::from_u128(0xf117_e500_0000_0000_0000_0000_0000_0000 | number), payloads.keys().copied().collect(), |id| {
-            Ok(payloads[&id].clone())
-        })
+        .create(
+            Uuid::from_u128(0xf117_e500_0000_0000_0000_0000_0000_0000 | number),
+            payloads.keys().copied().collect(),
+            |id| Ok(payloads[&id].clone()),
+        )
         .unwrap();
-    PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id()).unwrap()
+    PayloadSegmentReference::new(
+        segment.metadata(),
+        segment.first_block_id(),
+        segment.last_block_id(),
+    )
+    .unwrap()
 }
 
 /// A catalog of `segments` segments, reopened the way a clean engine open
 /// reopens it: the catalog is installed and the packed filter is not built.
-fn reopened_catalog(segments: usize) -> (DeterministicVfs, BlockStore, PayloadManifest, BTreeMap<BlockId, Vec<u8>>) {
+fn reopened_catalog(
+    segments: usize,
+) -> (
+    DeterministicVfs,
+    BlockStore,
+    PayloadManifest,
+    BTreeMap<BlockId, Vec<u8>>,
+) {
     let vfs = DeterministicVfs::new(None);
     let writer = simulated_store(&vfs);
     let mut references = Vec::new();
@@ -58,8 +76,13 @@ fn reopened_catalog(segments: usize) -> (DeterministicVfs, BlockStore, PayloadMa
 fn reopen(vfs: &DeterministicVfs, manifest: &PayloadManifest) -> BlockStore {
     let store = BlockStore::open_with_vfs(Path::new(DATA), Arc::new(vfs.clone())).unwrap();
     store.set_cache_capacity_bytes(0).unwrap();
-    store.install_recovery_payload_manifest(manifest.clone()).unwrap();
-    assert!(!store.packed_filter.read().unwrap().built, "fixture: a clean open builds no filter");
+    store
+        .install_recovery_payload_manifest(manifest.clone())
+        .unwrap();
+    assert!(
+        !store.packed_filter.read().unwrap().built,
+        "fixture: a clean open builds no filter"
+    );
     store
 }
 
@@ -68,13 +91,22 @@ fn reopen(vfs: &DeterministicVfs, manifest: &PayloadManifest) -> BlockStore {
 /// the installed catalog.
 fn assert_exact(store: &BlockStore, catalogued: &BTreeMap<BlockId, Vec<u8>>) {
     for (id, payload) in catalogued {
-        assert!(store.packed_filter_may_contain(*id).unwrap(), "a catalogued block failed the packed filter");
+        assert!(
+            store.packed_filter_may_contain(*id).unwrap(),
+            "a catalogued block failed the packed filter"
+        );
         assert_eq!(&store.get(*id).unwrap(), payload);
     }
     let missing = BlockId::for_payload(b"never written by anyone");
     let covered = store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap());
-    assert_eq!(store.packed_filter_excludes(missing).unwrap().is_some(), covered);
-    assert_eq!(store.get(missing).unwrap_err().kind(), io::ErrorKind::NotFound);
+    assert_eq!(
+        store.packed_filter_excludes(missing).unwrap().is_some(),
+        covered
+    );
+    assert_eq!(
+        store.get(missing).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
 }
 
 /// Live 2026-11-09: the first catalog publication after a clean restart was a
@@ -90,9 +122,18 @@ fn an_install_reads_no_index_its_publication_did_not_add_while_the_filter_is_unb
     let mut segments = manifest.segments.clone();
     segments.push(reference);
     read_path_counters::take_index_work();
-    store.install_payload_manifest(PayloadManifest::new(segments).unwrap()).unwrap();
-    assert_eq!(read_path_counters::take_index_work().0, 0, "the install read catalogued indexes");
-    assert!(!store.packed_filter.read().unwrap().built, "no install builds the filter of a catalog it did not add");
+    store
+        .install_payload_manifest(PayloadManifest::new(segments).unwrap())
+        .unwrap();
+    assert_eq!(
+        read_path_counters::take_index_work().0,
+        0,
+        "the install read catalogued indexes"
+    );
+    assert!(
+        !store.packed_filter.read().unwrap().built,
+        "no install builds the filter of a catalog it did not add"
+    );
     catalogued.extend(added);
     assert_exact(&store, &catalogued);
     assert!(store.build_packed_filter(|| Ok(())).unwrap());
@@ -109,10 +150,19 @@ fn the_first_install_of_an_empty_store_builds_the_filter_from_what_it_adds() {
     let added = payloads("first publication", 4);
     let reference = segment_of(&store, 1, &added);
     read_path_counters::take_index_work();
-    store.install_payload_manifest(PayloadManifest::new(vec![reference]).unwrap()).unwrap();
-    assert_eq!(read_path_counters::take_index_work().0, 1, "only the added segment's index is read");
+    store
+        .install_payload_manifest(PayloadManifest::new(vec![reference]).unwrap())
+        .unwrap();
+    assert_eq!(
+        read_path_counters::take_index_work().0,
+        1,
+        "only the added segment's index is read"
+    );
     assert!(store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap()));
-    assert!(!store.build_packed_filter(|| Ok(())).unwrap(), "nothing is left for the builder");
+    assert!(
+        !store.build_packed_filter(|| Ok(())).unwrap(),
+        "nothing is left for the builder"
+    );
     assert_exact(&store, &added);
 }
 
@@ -137,16 +187,27 @@ fn publications_landing_during_the_build_are_covered_and_never_hidden() {
                     segments.push(reference);
                     store.install_payload_manifest(PayloadManifest::new(segments)?)?;
                     for (id, payload) in &added {
-                        assert!(store.packed_filter_may_contain(*id)?, "an uncovered publication hid a block");
+                        assert!(
+                            store.packed_filter_may_contain(*id)?,
+                            "an uncovered publication hid a block"
+                        );
                         assert_eq!(&store.get(*id)?, payload);
                     }
-                    assert_eq!(store.packed_filter_excludes(BlockId::for_payload(b"never written by anyone"))?, None);
+                    assert_eq!(
+                        store.packed_filter_excludes(BlockId::for_payload(
+                            b"never written by anyone"
+                        ))?,
+                        None
+                    );
                 }
                 Ok(())
             })
             .unwrap();
         assert!(built, "landing {landing}");
-        assert!(calls >= landing, "the publication must land inside the build");
+        assert!(
+            calls >= landing,
+            "the publication must land inside the build"
+        );
         catalogued.extend(added);
         assert!(
             store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap()),
@@ -166,8 +227,9 @@ fn publications_racing_the_build_see_no_false_negative_and_end_covered() {
     const PUBLICATIONS: usize = 24;
     for round in 0..4 {
         let (_vfs, store, manifest, mut catalogued) = reopened_catalog(SEGMENTS);
-        let added: Vec<BTreeMap<BlockId, Vec<u8>>> =
-            (0..PUBLICATIONS).map(|number| payloads(&format!("raced-{round}-{number}"), 3)).collect();
+        let added: Vec<BTreeMap<BlockId, Vec<u8>>> = (0..PUBLICATIONS)
+            .map(|number| payloads(&format!("raced-{round}-{number}"), 3))
+            .collect();
         std::thread::scope(|scope| {
             let builder = scope.spawn(|| {
                 store.build_packed_filter(|| {
@@ -180,9 +242,14 @@ fn publications_racing_the_build_see_no_false_negative_and_end_covered() {
                 let reference = segment_of(&store, 300 + number as u128, contents);
                 store.verify_payload_segment(&reference).unwrap();
                 segments.push(reference);
-                store.install_payload_manifest(PayloadManifest::new(segments.clone()).unwrap()).unwrap();
+                store
+                    .install_payload_manifest(PayloadManifest::new(segments.clone()).unwrap())
+                    .unwrap();
                 for id in added[..=number].iter().flat_map(|contents| contents.keys()) {
-                    assert!(store.packed_filter_may_contain(*id).unwrap(), "a published block failed the filter");
+                    assert!(
+                        store.packed_filter_may_contain(*id).unwrap(),
+                        "a published block failed the filter"
+                    );
                 }
             }
             builder.join().unwrap().unwrap();
@@ -213,18 +280,28 @@ fn a_build_landing_inside_an_install_leaves_its_publication_covered() {
             let mut filler = 0_u64;
             while !store.packed_filter.read().unwrap().saturated() {
                 filler += 1;
-                store.note_packed(&[BlockId::for_payload(&filler.to_le_bytes())]).unwrap();
+                store
+                    .note_packed(&[BlockId::for_payload(&filler.to_le_bytes())])
+                    .unwrap();
             }
         }
-        let added = payloads(&format!("published around the build, saturated={saturated}"), 3);
+        let added = payloads(
+            &format!("published around the build, saturated={saturated}"),
+            3,
+        );
         let reference = segment_of(&store, 400, &added);
         store.verify_payload_segment(&reference).unwrap();
         store.before_next_install_swap_for_test(|store| {
-            assert!(store.build_packed_filter(|| Ok(())).unwrap(), "the build lands inside the install");
+            assert!(
+                store.build_packed_filter(|| Ok(())).unwrap(),
+                "the build lands inside the install"
+            );
         });
         let mut segments = manifest.segments.clone();
         segments.push(reference);
-        store.install_payload_manifest(PayloadManifest::new(segments).unwrap()).unwrap();
+        store
+            .install_payload_manifest(PayloadManifest::new(segments).unwrap())
+            .unwrap();
         catalogued.extend(added);
         assert!(
             store.filter_covers_installed_catalog(&store.packed_filter.read().unwrap()),
@@ -247,28 +324,56 @@ fn a_publication_moves_only_the_routes_of_the_segments_it_changes() {
     // A budget that routes every segment of the catalog.
     store.set_segment_index_cache_bytes(64 << 20).unwrap();
     let mut catalog: Vec<PayloadSegmentReference> = (0..SEGMENTS)
-        .map(|number| segment_of(&store, number as u128, &payloads(&format!("routed-{number}"), 256)))
+        .map(|number| {
+            segment_of(
+                &store,
+                number as u128,
+                &payloads(&format!("routed-{number}"), 256),
+            )
+        })
         .collect();
-    store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
+    store
+        .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+        .unwrap();
     let prefixes_of = |reference: &PayloadSegmentReference| {
-        let segment = store.payload_segment_store().unwrap().open_segment(reference.segment_id).unwrap();
-        segment.block_ids().map(|id| [id.0[0], id.0[1]]).collect::<BTreeSet<_>>().len() as u64
+        let segment = store
+            .payload_segment_store()
+            .unwrap()
+            .open_segment(reference.segment_id)
+            .unwrap();
+        segment
+            .block_ids()
+            .map(|id| [id.0[0], id.0[1]])
+            .collect::<BTreeSet<_>>()
+            .len() as u64
     };
     let replacement = segment_of(&store, 100, &payloads("replacement", 256));
     store.verify_payload_segment(&replacement).unwrap();
     let expected = prefixes_of(&catalog[0]) + prefixes_of(&replacement);
     catalog[0] = replacement;
     crate::payload_routing::route_counters::take_prefix_route_writes();
-    store.install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap()).unwrap();
+    store
+        .install_payload_manifest(PayloadManifest::new(catalog.clone()).unwrap())
+        .unwrap();
     assert_eq!(
         crate::payload_routing::route_counters::take_prefix_route_writes(),
         expected,
         "a one-segment publication rewrote the routes of segments it kept"
     );
     for reference in &catalog {
-        let segment = store.payload_segment_store().unwrap().open_segment(reference.segment_id).unwrap();
+        let segment = store
+            .payload_segment_store()
+            .unwrap()
+            .open_segment(reference.segment_id)
+            .unwrap();
         for id in segment.block_ids() {
-            assert!(store.payload_segment_candidates(id).unwrap().contains(reference), "a block lost its route");
+            assert!(
+                store
+                    .payload_segment_candidates(id)
+                    .unwrap()
+                    .contains(reference),
+                "a block lost its route"
+            );
         }
     }
 }
@@ -285,10 +390,17 @@ fn a_stopped_failing_or_crashed_build_never_installs_unverified_coverage() {
         let mut calls = 0;
         let stopped = store.build_packed_filter(|| {
             calls += 1;
-            if calls == stop_at { Err(io::Error::new(io::ErrorKind::WouldBlock, "stopped")) } else { Ok(()) }
+            if calls == stop_at {
+                Err(io::Error::new(io::ErrorKind::WouldBlock, "stopped"))
+            } else {
+                Ok(())
+            }
         });
         assert_eq!(stopped.unwrap_err().kind(), io::ErrorKind::WouldBlock);
-        assert!(!store.packed_filter.read().unwrap().built, "a stopped build installed a filter");
+        assert!(
+            !store.packed_filter.read().unwrap().built,
+            "a stopped build installed a filter"
+        );
         assert_exact(&store, &catalogued);
     }
     let operations = {
@@ -297,7 +409,10 @@ fn a_stopped_failing_or_crashed_build_never_installs_unverified_coverage() {
         assert!(store.build_packed_filter(|| Ok(())).unwrap());
         vfs.trace().unwrap()
     };
-    assert!(operations.iter().any(|operation| *operation == Operation::Read), "the build must read indexes");
+    assert!(
+        operations.contains(&Operation::Read),
+        "the build must read indexes"
+    );
     for operation_number in 1..=operations.len() as u64 {
         let (vfs, store, manifest, catalogued) = reopened_catalog(SEGMENTS);
         vfs.arm_fault(Some(FaultRule {

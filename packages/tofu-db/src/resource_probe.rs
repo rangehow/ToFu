@@ -9,12 +9,12 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::thread;
 
-use crate::generated_storage_v2::{MAX_CONNECTION_REUSE_TARGET, DEFAULT_FRAME_MEMORY_BYTES, FRAME_MEMORY_HEADROOM_DIVISOR};
+use crate::generated_storage_v2::{FRAME_MEMORY_HEADROOM_DIVISOR, MAX_CONNECTION_REUSE_TARGET};
 use crate::generated_tofudb_ir::SEARCH_PROJECTION_VOLUME_FREE_PERCENT;
-pub use crate::generated_tofudb_ir::{MAX_SEARCH_PROJECTION_BYTES, MIN_SEARCH_PROJECTION_BYTES};
 use crate::generated_tofudb_ir::{
     MAX_CHECKPOINT_MATERIALIZE_BATCH_BYTES, PAYLOAD_SEGMENT_CACHE_BYTES,
 };
+pub use crate::generated_tofudb_ir::{MAX_SEARCH_PROJECTION_BYTES, MIN_SEARCH_PROJECTION_BYTES};
 
 const MIB: u64 = 1024 * 1024;
 const MAX_SYSTEM_FILE_BYTES: u64 = 16 * 1024;
@@ -91,10 +91,12 @@ impl DaemonResourceBudget {
         if self.used_lean_fallback {
             return self.maximum_frame_bytes;
         }
-        usize::try_from(self.snapshot.memory_headroom_bytes.unwrap_or(0)
-            / crate::generated_storage_v2::EMBEDDED_REQUEST_MEMORY_HEADROOM_DIVISOR)
-            .unwrap_or(usize::MAX)
-            .max(self.maximum_frame_bytes)
+        usize::try_from(
+            self.snapshot.memory_headroom_bytes.unwrap_or(0)
+                / crate::generated_storage_v2::EMBEDDED_REQUEST_MEMORY_HEADROOM_DIVISOR,
+        )
+        .unwrap_or(usize::MAX)
+        .max(self.maximum_frame_bytes)
     }
 
     pub fn from_snapshot(snapshot: LaunchResourceSnapshot) -> Self {
@@ -109,7 +111,11 @@ impl DaemonResourceBudget {
         snapshot: LaunchResourceSnapshot,
         volume_class: Option<VolumeClass>,
     ) -> Self {
-        Self::derive(snapshot, volume_class, &ResourceOverrides::from_launch_environment())
+        Self::derive(
+            snapshot,
+            volume_class,
+            &ResourceOverrides::from_launch_environment(),
+        )
     }
 
     /// The snapshot, volume class and explicit overrides fully determine the
@@ -138,8 +144,9 @@ impl DaemonResourceBudget {
             .saturating_mul(16)
             .min(memory_connections)
             .clamp(1, MAX_CONNECTION_REUSE_TARGET);
-        let maximum_frame_bytes = usize::try_from(memory_headroom_bytes / FRAME_MEMORY_HEADROOM_DIVISOR as u64)
-            .unwrap_or(usize::MAX);
+        let maximum_frame_bytes =
+            usize::try_from(memory_headroom_bytes / FRAME_MEMORY_HEADROOM_DIVISOR as u64)
+                .unwrap_or(usize::MAX);
         Self {
             maximum_connections,
             maximum_frame_bytes,
@@ -258,7 +265,6 @@ fn cache_capacity_bytes(
         .map(|mib| mib.saturating_mul(MIB as usize).min(ceiling))
         .unwrap_or(probed)
 }
-
 
 /// Overlay merge byte budget: headroom/128 between the measured 8 MiB floor
 /// and the consumer's 256 MiB structural clamp; the explicit byte-unit
@@ -393,7 +399,7 @@ const MAX_MOUNTS_BYTES: u64 = 64 * 1024;
 fn platform_volume_class(path: &Path) -> VolumeClass {
     let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut bytes = Vec::new();
-    let Ok(mut file) = File::open("/proc/mounts") else {
+    let Ok(file) = File::open("/proc/mounts") else {
         return VolumeClass::Unknown;
     };
     if file
@@ -529,7 +535,12 @@ fn host_memory_observation() -> Option<(u64, u64)> {
     let mut count = HOST_VM_INFO64_COUNT;
     // SAFETY: `stats` is a valid out-buffer of the declared count.
     let result = unsafe {
-        host_statistics64(mach_host_self(), HOST_VM_INFO64, stats.as_mut_ptr(), &mut count)
+        host_statistics64(
+            mach_host_self(),
+            HOST_VM_INFO64,
+            stats.as_mut_ptr(),
+            &mut count,
+        )
     };
     if result != 0 {
         return Some((capacity, 0));
@@ -554,7 +565,11 @@ fn sysctl_scalar(name: &str) -> Option<u64> {
     if !output.status.success() || output.stdout.len() as u64 > MAX_SYSTEM_FILE_BYTES {
         return None;
     }
-    std::str::from_utf8(&output.stdout).ok()?.trim().parse().ok()
+    std::str::from_utf8(&output.stdout)
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Windows host memory via `GlobalMemoryStatusEx`. The struct is
@@ -766,6 +781,7 @@ fn read_bounded(path: &Path) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::generated_storage_v2::DEFAULT_FRAME_MEMORY_BYTES;
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -835,17 +851,24 @@ nas/share /data/nested nfs4 rw,relatime 0 0
 
     #[test]
     fn frame_memory_threshold_and_embedded_parser_budget_scale_with_headroom() {
-        let budget = |headroom| DaemonResourceBudget::from_snapshot(LaunchResourceSnapshot {
-            logical_cpus: Some(64), memory_capacity_bytes: Some(256 * 1024 * MIB),
-            memory_headroom_bytes: Some(headroom), volume_free_bytes: Some(1024 * MIB),
-        });
+        let budget = |headroom| {
+            DaemonResourceBudget::from_snapshot(LaunchResourceSnapshot {
+                logical_cpus: Some(64),
+                memory_capacity_bytes: Some(256 * 1024 * MIB),
+                memory_headroom_bytes: Some(headroom),
+                volume_free_bytes: Some(1024 * MIB),
+            })
+        };
         let small = budget(1024 * MIB);
         let large = budget(128 * 1024 * MIB);
         assert_eq!(small.embedded_request_memory_bytes(), 32 * MIB as usize);
         assert_eq!(large.embedded_request_memory_bytes(), 4096 * MIB as usize);
         assert_eq!(large.maximum_frame_bytes, 4096 * MIB as usize);
         let lean = DaemonResourceBudget::from_snapshot(LaunchResourceSnapshot::default());
-        assert_eq!(lean.embedded_request_memory_bytes(), lean.maximum_frame_bytes);
+        assert_eq!(
+            lean.embedded_request_memory_bytes(),
+            lean.maximum_frame_bytes
+        );
         assert_eq!(budget(1).embedded_request_memory_bytes(), 0);
         assert!(budget(u64::MAX).embedded_request_memory_bytes() >= DEFAULT_FRAME_MEMORY_BYTES);
     }
@@ -879,7 +902,10 @@ nas/share /data/nested nfs4 rw,relatime 0 0
             volume_free_bytes: Some(u64::MAX),
         });
         assert_eq!(huge.maximum_connections, MAX_CONNECTION_REUSE_TARGET);
-        assert_eq!(huge.maximum_frame_bytes, usize::try_from(u64::MAX / FRAME_MEMORY_HEADROOM_DIVISOR as u64).unwrap_or(usize::MAX));
+        assert_eq!(
+            huge.maximum_frame_bytes,
+            usize::try_from(u64::MAX / FRAME_MEMORY_HEADROOM_DIVISOR as u64).unwrap_or(usize::MAX)
+        );
         assert_eq!(
             huge.search_projection_maximum_bytes_per_owner,
             MAX_SEARCH_PROJECTION_BYTES
@@ -896,7 +922,10 @@ nas/share /data/nested nfs4 rw,relatime 0 0
 
     /// Probe specifications pin the explicit-override input empty, so an
     /// operator's launch environment cannot change their expectations.
-    fn probed(snapshot: LaunchResourceSnapshot, volume_class: Option<VolumeClass>) -> DaemonResourceBudget {
+    fn probed(
+        snapshot: LaunchResourceSnapshot,
+        volume_class: Option<VolumeClass>,
+    ) -> DaemonResourceBudget {
         DaemonResourceBudget::derive(snapshot, volume_class, &ResourceOverrides::default())
     }
 
@@ -909,40 +938,55 @@ nas/share /data/nested nfs4 rw,relatime 0 0
         assert_eq!(lean.entity_page_cache_bytes, 16 * MIB as usize);
 
         // A pressured host still floors at the legacy defaults, never below.
-        let pressured = probed(LaunchResourceSnapshot {
-            logical_cpus: Some(8),
-            memory_capacity_bytes: Some(1024 * MIB),
-            memory_headroom_bytes: Some(1),
-            volume_free_bytes: Some(MIN_WRITABLE_VOLUME_FREE_BYTES),
-        }, None);
+        let pressured = probed(
+            LaunchResourceSnapshot {
+                logical_cpus: Some(8),
+                memory_capacity_bytes: Some(1024 * MIB),
+                memory_headroom_bytes: Some(1),
+                volume_free_bytes: Some(MIN_WRITABLE_VOLUME_FREE_BYTES),
+            },
+            None,
+        );
         assert_eq!(pressured.block_cache_bytes, 32 * MIB as usize);
         assert_eq!(pressured.entity_page_cache_bytes, 16 * MIB as usize);
 
         // 8 GiB headroom: /16 = 512 MiB payloads, /32 = 256 MiB pages.
-        let moderate = probed(LaunchResourceSnapshot {
-            logical_cpus: Some(16),
-            memory_capacity_bytes: Some(64 * 1024 * MIB),
-            memory_headroom_bytes: Some(8 * 1024 * MIB),
-            volume_free_bytes: Some(1024 * 1024 * MIB),
-        }, None);
+        let moderate = probed(
+            LaunchResourceSnapshot {
+                logical_cpus: Some(16),
+                memory_capacity_bytes: Some(64 * 1024 * MIB),
+                memory_headroom_bytes: Some(8 * 1024 * MIB),
+                volume_free_bytes: Some(1024 * 1024 * MIB),
+            },
+            None,
+        );
         assert_eq!(moderate.block_cache_bytes, 512 * MIB as usize);
         assert_eq!(moderate.entity_page_cache_bytes, 256 * MIB as usize);
 
         // Larger hosts keep scaling instead of plateauing at 2/1 GiB.
-        let roomy = probed(LaunchResourceSnapshot {
-            logical_cpus: Some(64),
-            memory_capacity_bytes: Some(256 * 1024 * MIB),
-            memory_headroom_bytes: Some(64 * 1024 * MIB),
-            volume_free_bytes: Some(1024 * 1024 * MIB),
-        }, None);
+        let roomy = probed(
+            LaunchResourceSnapshot {
+                logical_cpus: Some(64),
+                memory_capacity_bytes: Some(256 * 1024 * MIB),
+                memory_headroom_bytes: Some(64 * 1024 * MIB),
+                volume_free_bytes: Some(1024 * 1024 * MIB),
+            },
+            None,
+        );
         assert_eq!(roomy.block_cache_bytes, 4096 * MIB as usize);
         assert_eq!(roomy.entity_page_cache_bytes, 2048 * MIB as usize);
-        let larger = probed(LaunchResourceSnapshot {
-            memory_headroom_bytes: Some(128 * 1024 * MIB),
-            ..roomy.snapshot.clone()
-        }, None);
+        let larger = probed(
+            LaunchResourceSnapshot {
+                memory_headroom_bytes: Some(128 * 1024 * MIB),
+                ..roomy.snapshot
+            },
+            None,
+        );
         assert_eq!(larger.block_cache_bytes, roomy.block_cache_bytes * 2);
-        assert_eq!(larger.entity_page_cache_bytes, roomy.entity_page_cache_bytes * 2);
+        assert_eq!(
+            larger.entity_page_cache_bytes,
+            roomy.entity_page_cache_bytes * 2
+        );
     }
 
     #[test]
@@ -1005,7 +1049,7 @@ nas/share /data/nested nfs4 rw,relatime 0 0
             crate::ACTIVE_LOG_ROTATE_BYTES * 4 / 5,
             "watermark derivation must equal the historical 48 MiB default"
         );
-        assert!(
+        const _: () = assert!(
             crate::entity::OVERLAY_WAL_WATERMARK_BYTES_MAX
                 <= crate::ACTIVE_LOG_CHECKPOINT_BYTES - 4 * MIB
         );
@@ -1027,17 +1071,22 @@ nas/share /data/nested nfs4 rw,relatime 0 0
             memory_headroom_bytes: Some(8 * 1024 * MIB),
             volume_free_bytes: Some(1024 * 1024 * MIB),
         };
-        let network = DaemonResourceBudget::derive(snapshot, Some(VolumeClass::Network), &overrides);
+        let network =
+            DaemonResourceBudget::derive(snapshot, Some(VolumeClass::Network), &overrides);
         assert_eq!(network.block_cache_bytes, 64 * MIB as usize);
         assert_eq!(network.entity_page_cache_bytes, 32 * MIB as usize);
-        assert_eq!(network.overlay_budget_bytes, crate::entity::OVERLAY_BUDGET_BYTES_MIN);
+        assert_eq!(
+            network.overlay_budget_bytes,
+            crate::entity::OVERLAY_BUDGET_BYTES_MIN
+        );
         assert_eq!(
             network.overlay_wal_watermark_bytes,
             crate::entity::OVERLAY_WAL_WATERMARK_BYTES_MIN
         );
         assert_eq!(network.checkpoint_materialize_batch_bytes, 32 * MIB);
         assert_eq!(network.payload_segment_cache_bytes, 0);
-        let lean = DaemonResourceBudget::derive(LaunchResourceSnapshot::default(), None, &overrides);
+        let lean =
+            DaemonResourceBudget::derive(LaunchResourceSnapshot::default(), None, &overrides);
         assert_eq!(
             lean.overlay_wal_watermark_bytes,
             crate::entity::OVERLAY_WAL_WATERMARK_BYTES_MIN

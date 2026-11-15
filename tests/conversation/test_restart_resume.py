@@ -17,6 +17,8 @@ import uuid
 
 import pytest
 
+from tests.support.dx_overlay import requires_dx
+
 from tests.turn_lifecycle.test_task_event_delivery import storage as storage
 from lib import boot_identity
 from lib.conversation_sync.command_service import ConversationTurnCommandService
@@ -494,6 +496,7 @@ def _failed_notice(chats, conversation, *, initiator='peer', steers=None,
     return task
 
 
+@requires_dx
 def test_the_terminal_observer_recovers_a_failed_notice_through_real_turn_storage(chats):
     """The owner-facing path end to end on real storage: the terminal observer
     verifies the failed nonhuman notice, issues the ordinary resume command,
@@ -501,7 +504,7 @@ def test_the_terminal_observer_recovers_a_failed_notice_through_real_turn_storag
     Nothing is marked reviewed; the failed Turn keeps its error and evidence.
     """
     from lib.channels import autoreply
-    from lib.channels.dx import supervisor
+    from tofu_yourprovider.dx import supervisor
     c = chats
     owner = OWNER
     read = {'toolName': 'get_conversation', 'status': 'done', 'toolCallId': 'call-read',

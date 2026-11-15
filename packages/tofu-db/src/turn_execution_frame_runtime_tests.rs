@@ -14,20 +14,26 @@ fn terminal_record_reuses_the_already_verified_turn_instead_of_reloading_history
     terminal.terminal = true;
     terminal.status = "completed".into();
     terminal.settlement = json!({"outcome":"completed","cause":"finished","resumeOptions":[]})
-        .as_object().unwrap().clone();
+        .as_object()
+        .unwrap()
+        .clone();
     // Measure the same transaction's reuse alone, from the durable head.
     database.resident_projections().forget_all();
     let before = crate::fsync_stats::counters().projection_checkpoint_bytes;
     let mut read = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-    load_event_record_state(&database, &mut read, &terminal, true).unwrap().unwrap();
+    load_event_record_state(&database, &mut read, &terminal, true)
+        .unwrap()
+        .unwrap();
     let one_read = crate::fsync_stats::counters().projection_checkpoint_bytes - before;
     assert!(one_read > 0);
     drop(read);
     let before = crate::fsync_stats::counters().projection_checkpoint_bytes;
     commit_step(&mut database, &terminal, true).unwrap();
     let terminal_reads = crate::fsync_stats::counters().projection_checkpoint_bytes - before;
-    assert_eq!(terminal_reads, one_read,
-        "updating the Attempt lane must reuse the same transaction's verified Turn");
+    assert_eq!(
+        terminal_reads, one_read,
+        "updating the Attempt lane must reuse the same transaction's verified Turn"
+    );
     let expected = state(&database);
     assert_eq!(expected["turn"]["status"], "completed");
     drop(database);
@@ -39,7 +45,6 @@ fn canonical_projection() -> Value {
         "toolRounds":[],"segments":[{"type":"text","blockId":"text:terminal",
             "text":"before","deliverable":true,"terminal":true}]})
 }
-
 
 fn head(database: &AuthorityDatabase) -> ProjectionHeadDescriptor {
     let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
@@ -79,10 +84,14 @@ fn execution_frame_large_history_reuses_recovery_proof_for_small_events() {
     warm.projection_patch.as_mut().unwrap()["targetRevision"] = json!(revision + 2);
     let mut tx = runtime.begin_with_identity_claim_scopes(7, 11).unwrap();
     let (_, loaded) = load_event_record_state(&runtime, &mut tx, &warm, false)
-        .unwrap().unwrap();
-    assert!(execution_frame::append_from_witness(
-        &runtime, &mut tx, &loaded, &warm, CONVERSATION, TURN).unwrap().is_some(),
-        "an unchanged large history must not be decoded for an empty patch");
+        .unwrap()
+        .unwrap();
+    assert!(
+        execution_frame::append_from_witness(&runtime, &mut tx, &loaded, &warm, CONVERSATION, TURN)
+            .unwrap()
+            .is_some(),
+        "an unchanged large history must not be decoded for an empty patch"
+    );
     drop(tx);
     let mut runtime_ms = Vec::new();
     let mut control_ms = Vec::new();
@@ -96,7 +105,10 @@ fn execution_frame_large_history_reuses_recovery_proof_for_small_events() {
         control_ms.push(started.elapsed().as_secs_f64() * 1000.0);
         assert_eq!(actual, expected);
     }
-    println!("large_history_event_ms={}", json!({"runtime": runtime_ms, "materialized": control_ms}));
+    println!(
+        "large_history_event_ms={}",
+        json!({"runtime": runtime_ms, "materialized": control_ms})
+    );
     // A recovery input change invalidates the size proof even if the
     // structural normalizer would otherwise permit the patch.
     let mut changed = producer_shaped_step(revision + 4, 4, "hot");
@@ -104,12 +116,23 @@ fn execution_frame_large_history_reuses_recovery_proof_for_small_events() {
         json!([{"op":"set","path":["thinking"],"value":"new reasoning"}]);
     let mut tx = runtime.begin_with_identity_claim_scopes(7, 11).unwrap();
     let (_, loaded) = load_event_record_state(&runtime, &mut tx, &changed, false)
-        .unwrap().unwrap();
+        .unwrap()
+        .unwrap();
     assert!(execution_frame::append_from_witness(
-        &runtime, &mut tx, &loaded, &changed, CONVERSATION, TURN).unwrap().is_none());
+        &runtime,
+        &mut tx,
+        &loaded,
+        &changed,
+        CONVERSATION,
+        TURN
+    )
+    .unwrap()
+    .is_none());
     drop(tx);
-    assert_eq!(commit_step(&mut runtime, &changed, true).unwrap(),
-               commit_step(&mut control, &changed, false).unwrap());
+    assert_eq!(
+        commit_step(&mut runtime, &changed, true).unwrap(),
+        commit_step(&mut control, &changed, false).unwrap()
+    );
     // Read the complete large Turn once per arm. Hydrating every historical
     // event would duplicate this same 40 MiB prefix for each row; the nearby
     // small-history parity tests already compare all those replay surfaces.
@@ -557,26 +580,47 @@ fn execution_frame_runtime_byte_rollover_and_repair_fallback_match_original() {
 #[test]
 fn execution_frame_runtime_legacy_restart_size_keeps_historical_turns_readable() {
     let projection = canonical_projection();
-    let mut encoded = serde_json::to_value(ProjectionWitness::mint(
-        projection.as_object().unwrap(), 7, "assistant", "running").unwrap().unwrap()).unwrap();
+    let mut encoded = serde_json::to_value(
+        ProjectionWitness::mint(projection.as_object().unwrap(), 7, "assistant", "running")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     // Golden lengths from the two published recovery envelopes. The old
     // native writer used evidence=user_abort; the current owner correctly
     // uses system_recovery. A future format edit must update compatibility.
-    assert_eq!(serde_json::to_vec(&restart_settlement(projection.as_object().unwrap())).unwrap().len(), 411);
+    assert_eq!(
+        serde_json::to_vec(&restart_settlement(projection.as_object().unwrap()))
+            .unwrap()
+            .len(),
+        411
+    );
     encoded["version"] = json!(2);
     encoded["recoveryBytes"] = json!(406);
-    ProjectionWitness::decode(&encoded, 7).unwrap().unwrap()
-        .verify(projection.as_object().unwrap(), "assistant", "running").unwrap();
+    ProjectionWitness::decode(&encoded, 7)
+        .unwrap()
+        .unwrap()
+        .verify(projection.as_object().unwrap(), "assistant", "running")
+        .unwrap();
     encoded["recoveryBytes"] = json!(411);
-    ProjectionWitness::decode(&encoded, 7).unwrap().unwrap()
-        .verify(projection.as_object().unwrap(), "assistant", "running").unwrap();
+    ProjectionWitness::decode(&encoded, 7)
+        .unwrap()
+        .unwrap()
+        .verify(projection.as_object().unwrap(), "assistant", "running")
+        .unwrap();
     encoded["recoveryBytes"] = json!(407);
-    assert!(ProjectionWitness::decode(&encoded, 7).unwrap().unwrap()
-        .verify(projection.as_object().unwrap(), "assistant", "running").is_err());
+    assert!(ProjectionWitness::decode(&encoded, 7)
+        .unwrap()
+        .unwrap()
+        .verify(projection.as_object().unwrap(), "assistant", "running")
+        .is_err());
     encoded["version"] = json!(3);
     encoded["recoveryBytes"] = json!(406);
-    assert!(ProjectionWitness::decode(&encoded, 7).unwrap().unwrap()
-        .verify(projection.as_object().unwrap(), "assistant", "running").is_err());
+    assert!(ProjectionWitness::decode(&encoded, 7)
+        .unwrap()
+        .unwrap()
+        .verify(projection.as_object().unwrap(), "assistant", "running")
+        .is_err());
 }
 
 #[test]
@@ -585,50 +629,97 @@ fn execution_frame_runtime_legacy_restart_size_reopens_and_upgrades_before_reuse
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         let revision = seed_projection(&mut database, canonical_projection(), true);
-        commit_step(&mut database, &producer_shaped_step(revision, 0, "hot"), true).unwrap();
+        commit_step(
+            &mut database,
+            &producer_shaped_step(revision, 0, "hot"),
+            true,
+        )
+        .unwrap();
         let expected = state(&database);
         let next = producer_shaped_step(revision + 1, 1, "hot");
         let control_directory = tempfile::tempdir().unwrap();
         let mut control = AuthorityDatabase::initialize(control_directory.path()).unwrap();
-        assert_eq!(seed_projection(&mut control, canonical_projection(), true), revision);
-        commit_step(&mut control, &producer_shaped_step(revision, 0, "hot"), true).unwrap();
+        assert_eq!(
+            seed_projection(&mut control, canonical_projection(), true),
+            revision
+        );
+        commit_step(
+            &mut control,
+            &producer_shaped_step(revision, 0, "hot"),
+            true,
+        )
+        .unwrap();
         commit_step(&mut control, &next, true).unwrap();
         let expected_upgraded = state(&control);
 
         // Recreate the compact head published by each historical v2 writer,
         // through the same versioned-document and lane-index owners.
         let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        let (_, loaded) = load_event_record_state(&database, &mut tx, &next, false).unwrap().unwrap();
+        let (_, loaded) = load_event_record_state(&database, &mut tx, &next, false)
+            .unwrap()
+            .unwrap();
         let mut document = loaded.document;
         document["_projectionHead"]["frameWitness"]["version"] = json!(2);
         document["_projectionHead"]["frameWitness"]["recoveryBytes"] = json!(recovery_bytes);
-        metadata_summary::put_document(&database, &mut tx,
+        metadata_summary::put_document(
+            &database,
+            &mut tx,
             crate::versioned_document::PutRequest {
-                key: loaded.key.clone(), namespace: DOCUMENT_IDENTITY.into(),
+                key: loaded.key.clone(),
+                namespace: DOCUMENT_IDENTITY.into(),
                 logical_key: turn_logical_key(CONVERSATION, TURN),
                 value_json: serde_json::to_vec(&document).unwrap(),
-                expected_version: Some(loaded.physical_version), updated_at_ms: 2000,
-            }, crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES).unwrap();
+                expected_version: Some(loaded.physical_version),
+                updated_at_ms: 2000,
+            },
+            crate::generated_tofudb_ir::MAX_TURN_SNAPSHOT_BYTES,
+        )
+        .unwrap();
         let stored = database.entity_get(&mut tx, &loaded.key).unwrap().unwrap();
-        store_changed_lane_turn(&database, &mut tx, CONVERSATION, "main",
-            document["ordinal"].as_u64().unwrap(), stored).unwrap();
+        store_changed_lane_turn(
+            &database,
+            &mut tx,
+            CONVERSATION,
+            "main",
+            document["ordinal"].as_u64().unwrap(),
+            stored,
+        )
+        .unwrap();
         database.commit(tx).unwrap();
         drop(database);
 
         let mut database = AuthorityDatabase::open(directory.path()).unwrap();
-        assert!(state(&database) == expected, "historical evidence changed public Turn state");
+        assert!(
+            state(&database) == expected,
+            "historical evidence changed public Turn state"
+        );
         let mut tx = database.begin_with_identity_claim_scopes(7, 11).unwrap();
-        let (_, loaded) = load_event_record_state(&database, &mut tx, &next, false).unwrap().unwrap();
-        assert!(execution_frame::append_from_witness(&database, &mut tx, &loaded,
-            &next, CONVERSATION, TURN).unwrap().is_none(),
-            "ambiguous v2 size evidence must materialize before fast admission");
+        let (_, loaded) = load_event_record_state(&database, &mut tx, &next, false)
+            .unwrap()
+            .unwrap();
+        assert!(
+            execution_frame::append_from_witness(
+                &database,
+                &mut tx,
+                &loaded,
+                &next,
+                CONVERSATION,
+                TURN
+            )
+            .unwrap()
+            .is_none(),
+            "ambiguous v2 size evidence must materialize before fast admission"
+        );
         drop(tx);
         commit_step(&mut database, &next, true).unwrap();
         let current = serde_json::to_value(head(&database).frame_witness.unwrap()).unwrap();
         assert_eq!(current["version"], 3);
         assert_eq!(current["recoveryBytes"], 411);
         let upgraded = state(&database);
-        assert!(upgraded == expected_upgraded, "legacy upgrade differs from current-writer state");
+        assert!(
+            upgraded == expected_upgraded,
+            "legacy upgrade differs from current-writer state"
+        );
         drop(database);
         assert!(state(&AuthorityDatabase::open(directory.path()).unwrap()) == upgraded);
     }
@@ -643,18 +734,27 @@ fn execution_frame_runtime_witness_depth_corruption_and_legacy_version_fallback(
             .unwrap();
     let encoded = serde_json::to_value(&witness).unwrap();
     assert_eq!(encoded["version"], 3);
-    assert_eq!(encoded["recoveryBytes"], serde_json::to_vec(
-        &restart_settlement(projection.as_object().unwrap())).unwrap().len());
+    assert_eq!(
+        encoded["recoveryBytes"],
+        serde_json::to_vec(&restart_settlement(projection.as_object().unwrap()))
+            .unwrap()
+            .len()
+    );
     let mut legacy = encoded.clone();
     legacy["version"] = json!(1);
     legacy.as_object_mut().unwrap().remove("recoveryBytes");
-    println!("recovery_witness_added_bytes={}", serde_json::to_vec(&encoded).unwrap().len()
-        - serde_json::to_vec(&legacy).unwrap().len());
+    println!(
+        "recovery_witness_added_bytes={}",
+        serde_json::to_vec(&encoded).unwrap().len() - serde_json::to_vec(&legacy).unwrap().len()
+    );
     assert!(ProjectionWitness::decode(&legacy, 7).unwrap().is_some());
     let mut corrupt_recovery = encoded.clone();
     corrupt_recovery["recoveryBytes"] = json!(1);
-    assert!(ProjectionWitness::decode(&corrupt_recovery, 7).unwrap().unwrap()
-        .verify(projection.as_object().unwrap(), "assistant", "running").is_err());
+    assert!(ProjectionWitness::decode(&corrupt_recovery, 7)
+        .unwrap()
+        .unwrap()
+        .verify(projection.as_object().unwrap(), "assistant", "running")
+        .is_err());
     corrupt_recovery["recoveryBytes"] = json!(0);
     assert!(ProjectionWitness::decode(&corrupt_recovery, 7).is_err());
     assert!(ProjectionWitness::decode(&encoded, 8).is_err());
@@ -677,11 +777,9 @@ fn execution_frame_runtime_witness_depth_corruption_and_legacy_version_fallback(
     }
     let mut map = Map::new();
     map.insert("phase".into(), deep);
-    assert!(
-        ProjectionWitness::mint(&map, 1, "assistant", "running")
-            .unwrap()
-            .is_none()
-    );
+    assert!(ProjectionWitness::mint(&map, 1, "assistant", "running")
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -696,18 +794,14 @@ fn execution_frame_runtime_local_proof_preserves_mint_bytes_and_dependency_repai
         .unwrap();
     let verified = witness.verify(&projection, "assistant", "running").unwrap();
     assert!(verified.is_some());
-    assert!(
-        witness
-            .verify(&projection, "user", "running")
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        witness
-            .verify(&projection, "assistant", "completed")
-            .unwrap()
-            .is_none()
-    );
+    assert!(witness
+        .verify(&projection, "user", "running")
+        .unwrap()
+        .is_none());
+    assert!(witness
+        .verify(&projection, "assistant", "completed")
+        .unwrap()
+        .is_none());
 
     let operations = [
         json!([]),
@@ -792,7 +886,7 @@ fn producer_shaped_step(revision: u64, index: usize, case: &str) -> EventRecordR
     command.projection_segments_stable = true;
     command.projection_patch.as_mut().unwrap()["operations"] = match case {
         "cold" | "hot" => {
-            if index % 2 == 0 {
+            if index.is_multiple_of(2) {
                 json!([])
             } else {
                 json!([{"op":"set","path":["fallbackModel"],"value":format!("model-{index}")}])
@@ -973,12 +1067,18 @@ fn execution_frame_runtime_alternating_work_counts() {
 #[cfg(target_os = "linux")]
 #[ignore = "release/profile-off fresh process timing leg; requires coordinated quiet window"]
 fn execution_frame_runtime_timing_leg() {
-    assert!(!cfg!(debug_assertions));
+    if cfg!(debug_assertions) {
+        panic!("use the release test binary");
+    }
     for variable in ["TOFU_DB_REQUEST_PROFILE_EVERY", "TOFU_DB_RECOVERY_PROFILE"] {
         assert_eq!(std::env::var(variable).as_deref(), Ok("0"));
     }
-    assert!(!cfg!(feature = "recovery-profile"));
-    assert!(!cfg!(feature = "allocator-diagnostics"));
+    if cfg!(feature = "recovery-profile") {
+        panic!("use a build without recovery profiling");
+    }
+    if cfg!(feature = "allocator-diagnostics") {
+        panic!("use a build without allocator diagnostics");
+    }
     assert!(!crate::request_profile::enabled());
     let count: usize = std::env::var("TOFU_FRAME_EVENTS").unwrap().parse().unwrap();
     assert!([1, 8, 64].contains(&count));

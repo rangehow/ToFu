@@ -95,15 +95,9 @@ fn storage_event_insert_or_match_is_idempotent_on_exact_bytes() {
     }
     // Same (task, sequence) with different bytes must conflict, never overwrite.
     let mut divergent = restore_payload("task-b", 2);
-    divergent["payload_json_hex"] = json!(hex(b"{\"type\":\"log\",\"payload\":{\"line\":\"other\"}}"));
-    let error = execute(
-        &mut db,
-        7,
-        11,
-        "migration.storage.event.restore",
-        divergent,
-    )
-    .unwrap_err();
+    divergent["payload_json_hex"] =
+        json!(hex(b"{\"type\":\"log\",\"payload\":{\"line\":\"other\"}}"));
+    let error = execute(&mut db, 7, 11, "migration.storage.event.restore", divergent).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
 }
 
@@ -165,7 +159,10 @@ fn storage_event_scan_pages_with_cursor() {
         json!({"tenant_id":7,"owner_user_id":11}),
     )
     .unwrap();
-    assert_eq!(first["rows"].as_array().unwrap().len(), MIGRATION_SESSION_MAX_PAGE_ROWS);
+    assert_eq!(
+        first["rows"].as_array().unwrap().len(),
+        MIGRATION_SESSION_MAX_PAGE_ROWS
+    );
     let cursor = first["cursor"].as_str().unwrap().to_owned();
     assert!(cursor.starts_with("storage-events:"));
     let second = execute(
@@ -188,38 +185,18 @@ fn storage_event_rejects_invalid_oversized_and_unknown_fields() {
     // deny_unknown_fields.
     let mut extra = restore_payload("task-d", 1);
     extra["unexpected"] = json!(true);
-    let error = execute(
-        &mut db,
-        7,
-        11,
-        "migration.storage.event.restore",
-        extra,
-    )
-    .unwrap_err();
+    let error = execute(&mut db, 7, 11, "migration.storage.event.restore", extra).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     // Malformed hex is refused.
     let mut bad_hex = restore_payload("task-d", 1);
     bad_hex["payload_json_hex"] = json!("zz");
-    let error = execute(
-        &mut db,
-        7,
-        11,
-        "migration.storage.event.restore",
-        bad_hex,
-    )
-    .unwrap_err();
+    let error = execute(&mut db, 7, 11, "migration.storage.event.restore", bad_hex).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     // Oversized event is refused by the byte budget.
     let mut big = restore_payload("task-d", 9);
-    big["payload_json_hex"] = json!("22".repeat(crate::generated_tofudb_ir::MAX_MIGRATION_DOCUMENT_BYTES + 1));
-    let error = execute(
-        &mut db,
-        7,
-        11,
-        "migration.storage.event.restore",
-        big,
-    )
-    .unwrap_err();
+    big["payload_json_hex"] =
+        json!("22".repeat(crate::generated_tofudb_ir::MAX_MIGRATION_DOCUMENT_BYTES + 1));
+    let error = execute(&mut db, 7, 11, "migration.storage.event.restore", big).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
 }
 
@@ -227,19 +204,45 @@ fn storage_event_rejects_invalid_oversized_and_unknown_fields() {
 fn storage_event_large_payload_export_preserves_exact_bytes_and_clock() {
     let vfs = Arc::new(DeterministicVfs::new(None));
     let mut db = database(Path::new("/large-event-export"), vfs);
-    let raw = format!("{{ \"type\": \"messages_snapshot\", \"text\": \"{}\" }}", "x".repeat(300 * 1024));
+    let raw = format!(
+        "{{ \"type\": \"messages_snapshot\", \"text\": \"{}\" }}",
+        "x".repeat(300 * 1024)
+    );
     let mut input = restore_payload("large", 7);
     input["payload_json_hex"] = json!(hex(raw.as_bytes()));
     input["event_type"] = json!("messages_snapshot");
     input["created_at_ms"] = json!(123);
-    execute(&mut db, 7, 11, "migration.storage.event.restore", input.clone()).unwrap();
-    let got = execute(&mut db, 7, 11, "migration.storage.event.get",
-        json!({"tenant_id":7,"owner_user_id":11,"task_id":"large","sequence":7})).unwrap();
+    execute(
+        &mut db,
+        7,
+        11,
+        "migration.storage.event.restore",
+        input.clone(),
+    )
+    .unwrap();
+    let got = execute(
+        &mut db,
+        7,
+        11,
+        "migration.storage.event.get",
+        json!({"tenant_id":7,"owner_user_id":11,"task_id":"large","sequence":7}),
+    )
+    .unwrap();
     assert_eq!(got["payload_json_hex"], input["payload_json_hex"]);
     let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
-    assert_eq!(read(&db, &mut tx, "large", 7).unwrap().unwrap().0.created_at_ms, 123);
+    assert_eq!(
+        read(&db, &mut tx, "large", 7)
+            .unwrap()
+            .unwrap()
+            .0
+            .created_at_ms,
+        123
+    );
     drop(tx);
-    assert_eq!(execute(&mut db, 7, 11, "migration.storage.event.restore", input).unwrap()["inserted"], false);
+    assert_eq!(
+        execute(&mut db, 7, 11, "migration.storage.event.restore", input).unwrap()["inserted"],
+        false
+    );
 }
 
 #[test]

@@ -35,7 +35,10 @@ fn staged_batch(store: &BlockStore, count: usize) -> Vec<(BlockId, Vec<u8>)> {
             (id, payload)
         })
         .collect();
-    let shards: HashSet<_> = staged.iter().map(|(id, _)| store.shard_directory(*id)).collect();
+    let shards: HashSet<_> = staged
+        .iter()
+        .map(|(id, _)| store.shard_directory(*id))
+        .collect();
     assert!(shards.len() > 1, "the batch must span several shards");
     staged
 }
@@ -46,7 +49,10 @@ fn ids(staged: &[(BlockId, Vec<u8>)]) -> BTreeSet<BlockId> {
 
 fn assert_staged(store: &BlockStore, staged: &[(BlockId, Vec<u8>)]) {
     for (id, payload) in staged {
-        assert_eq!(store.pending_payload(*id).unwrap().unwrap().as_slice(), payload.as_slice());
+        assert_eq!(
+            store.pending_payload(*id).unwrap().unwrap().as_slice(),
+            payload.as_slice()
+        );
     }
 }
 
@@ -89,7 +95,10 @@ fn operation_counts(count: usize) -> Vec<(Operation, usize)> {
 }
 
 fn occurrences(counts: &[(Operation, usize)], operation: Operation) -> usize {
-    counts.iter().find(|(kind, _)| *kind == operation).map_or(0, |(_, count)| *count)
+    counts
+        .iter()
+        .find(|(kind, _)| *kind == operation)
+        .map_or(0, |(_, count)| *count)
 }
 
 #[test]
@@ -114,10 +123,22 @@ fn every_failed_operation_keeps_the_batch_staged_until_a_retry_publishes_it() {
         for occurrence in 1..=occurrences {
             let (vfs, store) = concurrent_store();
             let staged = staged_batch(&store, count);
-            vfs.arm_operation_fault(operation, occurrence, FaultAction::ErrorBefore(io::ErrorKind::Other)).unwrap();
+            vfs.arm_operation_fault(
+                operation,
+                occurrence,
+                FaultAction::ErrorBefore(io::ErrorKind::Other),
+            )
+            .unwrap();
             let error = store.flush_pending_subset(&ids(&staged)).unwrap_err();
-            assert!(vfs.operation_fault_fired().unwrap(), "{operation:?} #{occurrence}");
-            assert_eq!(error.kind(), io::ErrorKind::Other, "{operation:?} #{occurrence}");
+            assert!(
+                vfs.operation_fault_fired().unwrap(),
+                "{operation:?} #{occurrence}"
+            );
+            assert_eq!(
+                error.kind(),
+                io::ErrorKind::Other,
+                "{operation:?} #{occurrence}"
+            );
             assert_staged(&store, &staged);
             vfs.arm_fault(None).unwrap();
             store.flush_pending_subset(&ids(&staged)).unwrap();
@@ -138,8 +159,15 @@ fn torn_writes_and_lost_syncs_never_publish_or_lose_a_block() {
     for occurrence in 1..=occurrences(&counts, Operation::Write) {
         let (vfs, store) = concurrent_store();
         let staged = staged_batch(&store, count);
-        vfs.arm_operation_fault(Operation::Write, occurrence, FaultAction::ShortWrite(3)).unwrap();
-        assert_eq!(store.flush_pending_subset(&ids(&staged)).unwrap_err().kind(), io::ErrorKind::WriteZero);
+        vfs.arm_operation_fault(Operation::Write, occurrence, FaultAction::ShortWrite(3))
+            .unwrap();
+        assert_eq!(
+            store
+                .flush_pending_subset(&ids(&staged))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WriteZero
+        );
         assert!(vfs.operation_fault_fired().unwrap());
         assert_staged(&store, &staged);
         vfs.arm_fault(None).unwrap();
@@ -152,9 +180,13 @@ fn torn_writes_and_lost_syncs_never_publish_or_lose_a_block() {
         for occurrence in 1..=occurrences(&counts, operation) {
             let (vfs, store) = concurrent_store();
             let staged = staged_batch(&store, count);
-            vfs.arm_operation_fault(operation, occurrence, FaultAction::DropSync).unwrap();
+            vfs.arm_operation_fault(operation, occurrence, FaultAction::DropSync)
+                .unwrap();
             store.flush_pending_subset(&ids(&staged)).unwrap();
-            assert!(vfs.operation_fault_fired().unwrap(), "{operation:?} #{occurrence}");
+            assert!(
+                vfs.operation_fault_fired().unwrap(),
+                "{operation:?} #{occurrence}"
+            );
             drop(store);
             assert_durable_after_power_loss(&vfs, &staged);
         }
@@ -170,8 +202,19 @@ fn a_shard_whose_root_barrier_failed_is_published_by_the_next_writer() {
     let store = simulated_store(&vfs);
     let payload = b"written into a shard whose creator lost its barrier".to_vec();
     let (id, _) = store.put_deferred_fresh(&payload).unwrap();
-    vfs.arm_operation_fault(Operation::SyncDirectory, 1, FaultAction::ErrorBefore(io::ErrorKind::Other)).unwrap();
-    assert_eq!(store.flush_pending_subset(&BTreeSet::from([id])).unwrap_err().kind(), io::ErrorKind::Other);
+    vfs.arm_operation_fault(
+        Operation::SyncDirectory,
+        1,
+        FaultAction::ErrorBefore(io::ErrorKind::Other),
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .flush_pending_subset(&BTreeSet::from([id]))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::Other
+    );
     assert!(vfs.operation_fault_fired().unwrap());
     vfs.arm_fault(None).unwrap();
     store.flush_pending_subset(&BTreeSet::from([id])).unwrap();
@@ -193,12 +236,14 @@ impl Vfs for RendezvousVfs {
         true
     }
     fn open(&self, path: &Path, request: OpenRequest) -> io::Result<Box<dyn VfsFile>> {
-        let temporary = path.file_name().is_some_and(|name| name.to_string_lossy().starts_with(".new-"));
+        let temporary = path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".new-"));
         if temporary {
-            self.creates
-                .lock()
-                .unwrap()
-                .push((std::thread::current().id(), crate::fsync_stats::current_component()));
+            self.creates.lock().unwrap().push((
+                std::thread::current().id(),
+                crate::fsync_stats::current_component(),
+            ));
             let mut arrived = self.arrived.lock().unwrap();
             *arrived += 1;
             if *arrived == 1 {
@@ -229,13 +274,22 @@ impl Vfs for RendezvousVfs {
     fn read_directory(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
         self.inner.read_directory(path)
     }
-    fn read_directory_bounded(&self, path: &Path, maximum: usize) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        maximum: usize,
+    ) -> io::Result<crate::vfs::BoundedDirectoryEntries> {
         self.inner.read_directory_bounded(path, maximum)
     }
     fn match_directory_prefix_bounded(
-        &self, path: &Path, prefix: &str, maximum: usize, matches: usize,
+        &self,
+        path: &Path,
+        prefix: &str,
+        maximum: usize,
+        matches: usize,
     ) -> io::Result<crate::vfs::BoundedDirectoryMatches> {
-        self.inner.match_directory_prefix_bounded(path, prefix, maximum, matches)
+        self.inner
+            .match_directory_prefix_bounded(path, prefix, maximum, matches)
     }
     fn sync_directory(&self, path: &Path) -> io::Result<()> {
         self.inner.sync_directory(path)
@@ -261,7 +315,14 @@ fn shard_workers_run_concurrently_under_the_callers_stage_component() {
     flushed.unwrap();
     let creates = vfs.creates.lock().unwrap();
     assert_eq!(creates.len(), staged.len());
-    assert!(creates.iter().map(|(thread, _)| thread).collect::<HashSet<_>>().len() > 1);
+    assert!(
+        creates
+            .iter()
+            .map(|(thread, _)| thread)
+            .collect::<HashSet<_>>()
+            .len()
+            > 1
+    );
     assert!(creates
         .iter()
         .all(|(_, component)| *component == crate::fsync_stats::COMPONENT_MAINTENANCE));

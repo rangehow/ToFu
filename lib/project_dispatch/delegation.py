@@ -170,13 +170,18 @@ def issued_worker_policy(repository, task):
         controls.get('model', request['model']))
 
 
-def worker_control(repository, task, row):
+def worker_control(repository, task, row, *, session=False):
     """Human steering may control old work; automatic continuations stay scoped.
 
-    A continuation controls only its original request's Workers, unless an owner
-    message, his own or a Global Router forward of it, was steered into this reply
-    and reached its model: that reply carries his request, as the Turn his message
-    starts would, so it controls every Worker of this Coordinator binding.
+    A continuation cancels or reviews only its original request's Workers, unless
+    an owner message, his own or a Global Router forward of it, was steered into
+    this reply and reached its model: that reply carries his request, as the Turn
+    his message starts would, so it controls every Worker of this Coordinator
+    binding. ``session``: session control (checkpoint_resume, stop, follow_up of
+    a Worker session) is scoped by the Coordinator binding alone, for every Turn
+    of the Coordinator, so a continuation can resume or stop a Worker an earlier
+    request of the same binding dispatched (docs/PROJECT_COORDINATION.md,
+    "Session control is scoped by the Coordinator binding").
     """
     principal, source, _ = source_for_task(repository, task)
     from .continuation import original_delegation, current_continuation
@@ -186,7 +191,7 @@ def worker_control(repository, task, row):
             or row['grant']['owner'] != repository.owner or row['grant']['tenant'] != principal.tenant_id):
         raise PermissionError('Worker belongs to another Coordinator or owner')
     repository.validate_grant_binding(row)
-    if current_continuation(task, require_account=True) is not None and (
+    if not session and current_continuation(task, require_account=True) is not None and (
             delegation.get('attemptId') != origin['attemptId'] or delegation.get('taskId') != origin['taskId']
             or request['authorizationSource'] != source) and _steered_owner_source(
                 repository, task, {'conversationId': source['conversationId'], 'turnId': task.get('_turnId')}) is None:

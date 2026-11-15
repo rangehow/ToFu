@@ -20,7 +20,7 @@ from lib.project_mod.managed_repository import (
     ContentPolicy, ManagedRepositoryUnavailable, link_shared_paths, prepare_managed_repository,
 )
 from tests.support.descriptor_ceiling import (  # noqa: F401 - fixture
-    SELECT_CEILING, descriptors_past_select_ceiling, next_descriptor)
+    SELECT_CEILING, descriptors_past_select_ceiling as descriptors_past_select_ceiling, next_descriptor)
 
 pytestmark = pytest.mark.unit
 

@@ -8,8 +8,6 @@ context-window clamp (``_clamp``).
 
 import copy
 
-import lib as _lib
-
 from lib.llm_sanitize import (
     _drop_empty_assistant_messages,
     _fix_empty_user_messages,
@@ -19,6 +17,7 @@ from lib.llm_sanitize import (
     _sanitize_messages,
     _strip_empty_text_blocks,
     _strip_non_api_fields,
+    gateway_blocked_term_sanitize,
 )
 from lib.log import get_logger
 from lib.model_info import _clamp_route_max_tokens, is_claude, model_supports_vision
@@ -104,14 +103,13 @@ def build_body(model, messages, *, max_tokens=128000, temperature=1.0,
             if _source_msg.get(_sidecar):
                 _clean_msg[_sidecar] = copy.deepcopy(_source_msg[_sidecar])
 
-    _pid = provider_id.lower() if provider_id else ''
-    # Keyed on the GATEWAY, not one provider id's exact spelling: every
-    # example-corp* provider (example-corp, example_corp_anthropic, …) terminates at
-    # your-llm-gateway.example.com, whose keyword filter is surface-agnostic — the
-    # 2026-07-28 Claude → Anthropic-native migration proved exact-equality
-    # silently strips the ZWSP sanitizer from the new surface (HTTP 450
-    # re-exposure on blocked-term conversations).
-    if _pid.startswith('example-corp') or (not _pid and 'example-corp' in _lib.LLM_BASE_URL):
+    # Keyed on the GATEWAY, not one provider id's exact spelling: a gateway
+    # profile declares every provider id family and host whose keyword filter
+    # is surface-agnostic — the 2026-07-28 Claude → Anthropic-native
+    # migration proved exact-equality silently strips the ZWSP sanitizer from
+    # the new surface (HTTP 450 re-exposure on blocked-term conversations).
+    # tasks_pkg.wire_messages previews this exact gate.
+    if gateway_blocked_term_sanitize(provider_id):
         _sanitize_messages(clean_messages)
     lineage.observe('gateway_sanitize', clean_messages)
 

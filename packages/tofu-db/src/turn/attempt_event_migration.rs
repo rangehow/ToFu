@@ -98,10 +98,8 @@ impl ParentValidationMemo {
         if self.validated.len() >= Self::CAPACITY {
             self.validated.clear();
         }
-        self.validated.insert(
-            Self::key(conversation_id, attempt_id),
-            turn_id.to_owned(),
-        );
+        self.validated
+            .insert(Self::key(conversation_id, attempt_id), turn_id.to_owned());
     }
 }
 
@@ -326,7 +324,11 @@ pub(crate) fn execute(
                 .map_err(|_| invalid_input("invalid event batch snapshot"))?;
             if batch.rows.is_empty()
                 || batch.rows.len() > MAX_BATCH_ROWS
-                || batch.rows.iter().map(|row| row.event_json.len()).sum::<usize>()
+                || batch
+                    .rows
+                    .iter()
+                    .map(|row| row.event_json.len())
+                    .sum::<usize>()
                     > MAX_BATCH_EVENT_BYTES
             {
                 return Err(invalid_input("event batch exceeds its bounded range"));
@@ -365,7 +367,13 @@ pub(crate) fn execute(
             }
             let request: Chunk = serde_json::from_value(payload)
                 .map_err(|_| invalid_input("invalid event chunk read"))?;
-            let Some(mut row) = read(database, &mut tx, &request.attempt_id, request.sequence, memo)?
+            let Some(mut row) = read(
+                database,
+                &mut tx,
+                &request.attempt_id,
+                request.sequence,
+                memo,
+            )?
             else {
                 return Ok(Value::Null);
             };
@@ -425,7 +433,15 @@ mod tests {
             let mut row = json!({"attempt_id":"a","sequence":sequence,"conversation_id":"conv","turn_id":"turn",
                 "projection_revision":1,"type":"progress","event_json":serde_json::to_string_pretty(&event).unwrap(),"created_at":10+sequence});
             if sequence == 5 {
-                execute(&mut db, 7, 11, "migration.attempt.event.restore", row, &mut memo).unwrap();
+                execute(
+                    &mut db,
+                    7,
+                    11,
+                    "migration.attempt.event.restore",
+                    row,
+                    &mut memo,
+                )
+                .unwrap();
             } else {
                 let text = row["event_json"].as_str().unwrap().to_owned();
                 row["event_json"] = json!("");
@@ -568,7 +584,15 @@ mod tests {
             json!(expected)
         );
         let mut foreign = db.begin_with_identity_claim_scopes(7, 12).unwrap();
-        assert!(read(&db, &mut foreign, "a", 5, &mut ParentValidationMemo::default()).unwrap().is_none());
+        assert!(read(
+            &db,
+            &mut foreign,
+            "a",
+            5,
+            &mut ParentValidationMemo::default()
+        )
+        .unwrap()
+        .is_none());
         let key = attempt_event_head_key(&tx, "a").unwrap();
         db.entity_put(&mut tx, key, 99_u64.to_le_bytes().to_vec())
             .unwrap();
@@ -645,7 +669,9 @@ impl UploadState {
                 }
                 let mut bytes = Vec::new();
                 bytes.try_reserve_exact(begin.event_bytes).map_err(|_| {
-                    crate::resource_exhaustion::reservation_failure("event upload allocation failed")
+                    crate::resource_exhaustion::reservation_failure(
+                        "event upload allocation failed",
+                    )
                 })?;
                 self.pending = Some(PendingUpload {
                     row: begin.snapshot,
@@ -661,7 +687,7 @@ impl UploadState {
                 let max_chunk =
                     crate::generated_tofudb_ir::MIGRATION_SESSION_MAX_SOURCE_CHUNK_BYTES;
                 if append.hex.is_empty()
-                    || append.hex.len() % 2 != 0
+                    || !append.hex.len().is_multiple_of(2)
                     || append.hex.len() > max_chunk * 2
                 {
                     return Err(invalid_input("event chunk exceeds its byte budget"));
@@ -674,7 +700,9 @@ impl UploadState {
                 let chunk: Vec<u8> = append
                     .hex
                     .as_bytes()
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|p| {
                         Ok(
                             decode(p[0]).ok_or_else(|| invalid_input("invalid event chunk hex"))?
@@ -755,7 +783,10 @@ mod batch_tests {
         vfs.sync_directory(Path::new("/")).unwrap();
         let mut db = AuthorityDatabase::initialize_with_vfs(root, vfs).unwrap();
         super::super::attempt_migration::execute(
-            &mut db, 7, 11, "migration.attempt.restore",
+            &mut db,
+            7,
+            11,
+            "migration.attempt.restore",
             json!({"attempt_id":"a","conversation_id":"conv","turn_id":"turn",
                 "command_id":"command","task_id":"task","operation":"generate","dispatch_mode":"",
                 "queue_id":"","queue_state":"","status":"completed","base_projection_revision":1,
@@ -765,19 +796,47 @@ mod batch_tests {
         .unwrap();
         let mut memo = ParentValidationMemo::default();
         let rows = json!({"rows":[attempt_row("a",1),attempt_row("a",2),attempt_row("a",3)]});
-        let inserted = execute(&mut db, 7, 11, "migration.attempt.event.restore_batch",
-                               rows.clone(), &mut memo).unwrap();
+        let inserted = execute(
+            &mut db,
+            7,
+            11,
+            "migration.attempt.event.restore_batch",
+            rows.clone(),
+            &mut memo,
+        )
+        .unwrap();
         assert_eq!(inserted["inserted"], json!([true, true, true]));
-        let replay = execute(&mut db, 7, 11, "migration.attempt.event.restore_batch",
-                             rows, &mut memo).unwrap();
+        let replay = execute(
+            &mut db,
+            7,
+            11,
+            "migration.attempt.event.restore_batch",
+            rows,
+            &mut memo,
+        )
+        .unwrap();
         assert_eq!(replay["inserted"], json!([false, false, false]));
         // A bad-parent row aborts the whole batch: nothing from it is readable.
         let mut tx = db.begin_with_identity_claim_scopes(7, 11).unwrap();
-        assert!(execute(&mut db, 7, 11, "migration.attempt.event.restore_batch",
-                        json!({"rows":[attempt_row("ghost",1)]}), &mut memo).is_err());
+        assert!(execute(
+            &mut db,
+            7,
+            11,
+            "migration.attempt.event.restore_batch",
+            json!({"rows":[attempt_row("ghost",1)]}),
+            &mut memo
+        )
+        .is_err());
         assert!(read(&db, &mut tx, "a", 1, &mut memo).unwrap().is_some());
         assert!(read(&db, &mut tx, "ghost", 1, &mut memo).unwrap().is_none());
-        assert!(execute(&mut db, 7, 11, "migration.attempt.event.restore_batch",
-                        json!({"rows":[]}), &mut memo).is_err());
+        assert!(execute(
+            &mut db,
+            7,
+            11,
+            "migration.attempt.event.restore_batch",
+            json!({"rows":[]}),
+            &mut memo
+        )
+        .is_err());
     }
 }

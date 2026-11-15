@@ -88,7 +88,9 @@ impl Default for LoopbackListenerConfig {
 
 impl LoopbackListenerConfig {
     fn validate(self) -> io::Result<Self> {
-        if self.initial_connection_reservations == 0 || self.initial_connection_reservations > MAX_CONNECTION_REUSE_TARGET {
+        if self.initial_connection_reservations == 0
+            || self.initial_connection_reservations > MAX_CONNECTION_REUSE_TARGET
+        {
             return Err(invalid_input("invalid storage.v2 connection capacity"));
         }
         if self.io_timeout.is_zero()
@@ -97,8 +99,7 @@ impl LoopbackListenerConfig {
             return Err(invalid_input("invalid storage.v2 socket I/O timeout"));
         }
         if self.idle_timeout < self.io_timeout
-            || self.idle_timeout
-                > Duration::from_millis(MAX_SESSION_IDLE_TIMEOUT_MILLISECONDS)
+            || self.idle_timeout > Duration::from_millis(MAX_SESSION_IDLE_TIMEOUT_MILLISECONDS)
         {
             return Err(invalid_input("invalid storage.v2 session idle timeout"));
         }
@@ -174,7 +175,9 @@ impl LoopbackServer {
                         .and_then(|value| parse_ephemeral_port_range(&value))
                 }
                 #[cfg(not(target_os = "linux"))]
-                { None }
+                {
+                    None
+                }
             },
             || uuid::Uuid::new_v4().as_u128() as u32,
         )?;
@@ -233,7 +236,8 @@ impl LoopbackServer {
         )
     }
 
-    pub fn run_with_search_and_gc_budget(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_with_search_and_gc_budget(
         self,
         database: Arc<Mutex<AuthorityDatabase>>,
         search_projection: Option<Arc<Mutex<TurnSearchProjection>>>,
@@ -245,9 +249,21 @@ impl LoopbackServer {
         rotation_barrier: std::sync::Arc<crate::rotation_barrier::RotationBarrier>,
         parent_lease_alive: impl FnMut() -> io::Result<bool>,
     ) -> io::Result<LoopbackListenerMetrics> {
-        self.run_with_published_queries(database, search_projection, authenticator, frame_budget, authority_gc_budget, wal_barrier, control_observers, rotation_barrier, None, parent_lease_alive)
+        self.run_with_published_queries(
+            database,
+            search_projection,
+            authenticator,
+            frame_budget,
+            authority_gc_budget,
+            wal_barrier,
+            control_observers,
+            rotation_barrier,
+            None,
+            parent_lease_alive,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn run_with_published_queries(
         self,
         database: Arc<Mutex<AuthorityDatabase>>,
@@ -264,10 +280,18 @@ impl LoopbackServer {
         let mut workers = Vec::with_capacity(self.config.initial_connection_reservations);
         let mut terminal_error = None;
         let stopping = Arc::new(AtomicBool::new(false));
-        let authority_admission = Arc::new(crate::authority_admission::AuthorityAdmission::default());
-        let worker_control = database.lock().map_err(|_| io::Error::other("authority poisoned"))?.worker_control.clone();
+        let authority_admission =
+            Arc::new(crate::authority_admission::AuthorityAdmission::default());
+        let worker_control = database
+            .lock()
+            .map_err(|_| io::Error::other("authority poisoned"))?
+            .worker_control
+            .clone();
         let checkpoint_control = crate::daemon_checkpoint::DaemonCheckpointControl::new(
-            database.clone(), authenticator.scope(), stopping.clone());
+            database.clone(),
+            authenticator.scope(),
+            stopping.clone(),
+        );
         loop {
             match parent_lease_alive() {
                 Ok(true) => {}
@@ -283,7 +307,9 @@ impl LoopbackServer {
             }
             // Release reconstructible burst registry storage once every
             // owned connection has finished; active workers are never evicted.
-            if workers.is_empty() && workers.capacity() > self.config.initial_connection_reservations {
+            if workers.is_empty()
+                && workers.capacity() > self.config.initial_connection_reservations
+            {
                 workers.shrink_to(self.config.initial_connection_reservations);
             }
             match accept_connection(|| self.listener.accept()) {
@@ -344,7 +370,10 @@ impl LoopbackServer {
                                     .with_checkpoint_control(checkpoint_control)
                                     .with_worker_control(worker_control, authenticator.scope())
                                     .with_rotation_barrier(rotation_barrier);
-                                    let stores = match published_queries { Some(view) => stores.with_published_queries(view), None => stores };
+                                    let stores = match published_queries {
+                                        Some(view) => stores.with_published_queries(view),
+                                        None => stores,
+                                    };
                                     match &wal_barrier {
                                         Some(barrier) => stores.with_wal_barrier(barrier.clone()),
                                         None => stores,
@@ -458,9 +487,17 @@ fn accept_connection<T>(accept: impl FnOnce() -> io::Result<T>) -> io::Result<Op
         // An interrupted accept or a peer that reset/aborted before accept
         // says nothing about authority health. Return to the outer loop so
         // parent liveness and existing workers still make progress.
-        Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock
-            | io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::ConnectionReset) => Ok(None),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock
+                    | io::ErrorKind::Interrupted
+                    | io::ErrorKind::ConnectionAborted
+                    | io::ErrorKind::ConnectionReset
+            ) =>
+        {
+            Ok(None)
+        }
         Err(error) => Err(error),
     }
 }
@@ -483,7 +520,8 @@ fn reap_finished_workers(workers: &mut Vec<ConnectionWorker>) -> io::Result<()> 
     while index < workers.len() {
         if workers[index].worker.is_finished() {
             let worker = workers.swap_remove(index);
-            worker.worker
+            worker
+                .worker
                 .join()
                 .map_err(|_| io::Error::other("storage.v2 connection worker panicked"))?;
         } else {
@@ -798,10 +836,16 @@ mod tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
-        for kind in [io::ErrorKind::Interrupted, io::ErrorKind::ConnectionAborted,
-                     io::ErrorKind::ConnectionReset] {
+        for kind in [
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::ConnectionReset,
+        ] {
             let outcome = accept_connection::<(TcpStream, SocketAddr)>(|| Err(kind.into()));
-            assert!(matches!(outcome, Ok(None)), "one peer/interrupt ended the listener: {outcome:?}");
+            assert!(
+                matches!(outcome, Ok(None)),
+                "one peer/interrupt ended the listener: {outcome:?}"
+            );
             let client = TcpStream::connect(address).unwrap();
             let (accepted, _) = accept_connection(|| listener.accept()).unwrap().unwrap();
             assert_eq!(accepted.peer_addr().unwrap(), client.local_addr().unwrap());
@@ -810,8 +854,13 @@ mod tests {
 
     #[test]
     fn fatal_accept_failure_is_preserved_without_spinning() {
-        let error = accept_connection::<()>(|| Err(io::Error::new(
-            io::ErrorKind::PermissionDenied, "listener unavailable"))).unwrap_err();
+        let error = accept_connection::<()>(|| {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "listener unavailable",
+            ))
+        })
+        .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
         assert_eq!(error.to_string(), "listener unavailable");
     }
@@ -862,23 +911,16 @@ mod tests {
             )
             .unwrap(),
         );
-        let server = LoopbackServer::bind(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            config,
-        )
-        .unwrap();
+        let server =
+            LoopbackServer::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0), config)
+                .unwrap();
         let address = server.local_addr().unwrap();
         let parent_alive = Arc::new(AtomicBool::new(true));
         let parent_lease = ParentLease::new(TestParentLease {
             alive: Arc::clone(&parent_alive),
         });
         let worker = thread::spawn(move || {
-            server.run_with_parent_lease(
-                database,
-                authenticator,
-                frame_budget,
-                parent_lease,
-            )
+            server.run_with_parent_lease(database, authenticator, frame_budget, parent_lease)
         });
         (address, parent_alive, worker)
     }
@@ -905,8 +947,11 @@ mod tests {
     #[test]
     fn accept_readiness_wakes_before_lease_poll_deadline() {
         let listener = LoopbackServer::bind(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0), config(),
-        ).unwrap().listener;
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            config(),
+        )
+        .unwrap()
+        .listener;
         listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let connector = thread::spawn(move || {
@@ -924,8 +969,11 @@ mod tests {
     #[test]
     fn idle_accept_readiness_returns_for_parent_lease_check() {
         let listener = LoopbackServer::bind(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0), config(),
-        ).unwrap().listener;
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            config(),
+        )
+        .unwrap()
+        .listener;
         let started = std::time::Instant::now();
         wait_for_connection(&listener, Duration::from_millis(20)).unwrap();
         assert!(started.elapsed() >= Duration::from_millis(15));
@@ -940,8 +988,8 @@ mod tests {
         settings.initial_connection_reservations = 1;
         settings.io_timeout = Duration::from_secs(5);
         settings.idle_timeout = Duration::from_secs(60);
-        let (address, parent_alive, worker) = start_server_with_frame_budget(
-            settings, &directory, budget.clone());
+        let (address, parent_alive, worker) =
+            start_server_with_frame_budget(settings, &directory, budget.clone());
         let mut clients = Vec::new();
         let count = 128;
         let started = std::time::Instant::now();
@@ -956,7 +1004,7 @@ mod tests {
                 let client = clients.last_mut().unwrap();
                 write_frame(client, &hello())?;
                 match read_frame(client)? {
-                    Message::Response(ack) if ack.status == 0 => {},
+                    Message::Response(ack) if ack.status == 0 => {}
                     _ => return Err(io::Error::other("missing Hello acknowledgement")),
                 }
             }
@@ -971,7 +1019,9 @@ mod tests {
                     break;
                 }
                 if std::time::Instant::now() >= deadline {
-                    return Err(io::Error::other(format!("partial frame reservations did not enter: {metrics:?}")));
+                    return Err(io::Error::other(format!(
+                        "partial frame reservations did not enter: {metrics:?}"
+                    )));
                 }
                 thread::sleep(Duration::from_millis(1));
             }
@@ -981,18 +1031,18 @@ mod tests {
             let observer = clients.last_mut().unwrap();
             write_frame(observer, &hello())?;
             match read_frame(observer)? {
-                Message::Response(ack) if ack.status == 0 => {},
+                Message::Response(ack) if ack.status == 0 => {}
                 _ => return Err(io::Error::other("observer Hello refused")),
             }
             write_frame(observer, &egress_request())?;
             match read_frame(observer)? {
-                Message::Response(response) if response.status == 0 => {},
+                Message::Response(response) if response.status == 0 => {}
                 _ => return Err(io::Error::other("unrelated query refused")),
             }
             for client in clients.iter_mut().take(count) {
                 client.write_all(&frame[5..])?;
                 match read_frame(client)? {
-                    Message::Response(response) if response.status == 0 => {},
+                    Message::Response(response) if response.status == 0 => {}
                     _ => return Err(io::Error::other("held request failed")),
                 }
             }
@@ -1011,7 +1061,12 @@ mod tests {
         assert_eq!(metrics.active_connections, 0);
         assert_eq!(budget.metrics().unwrap().in_flight_frames, 0);
         assert_eq!(budget.metrics().unwrap().in_flight_bytes, 0);
-        eprintln!("native-frame-burst held_frames={} held_bytes={} settled_ms={:.2}", held.in_flight_frames, held.in_flight_bytes, started.elapsed().as_secs_f64()*1000.0);
+        eprintln!(
+            "native-frame-burst held_frames={} held_bytes={} settled_ms={:.2}",
+            held.in_flight_frames,
+            held.in_flight_bytes,
+            started.elapsed().as_secs_f64() * 1000.0
+        );
     }
 
     #[test]
@@ -1020,9 +1075,13 @@ mod tests {
         let mut settings = config();
         settings.initial_connection_reservations = 1;
         settings.idle_timeout = Duration::from_secs(60);
-        let budget = FrameAdmissionBudget::new(crate::generated_storage_v2::MAX_FRAME_BODY_BYTES).unwrap();
-        let held = budget.plan_frame(crate::generated_storage_v2::MAX_FRAME_BODY_BYTES).unwrap();
-        let (address, parent_alive, worker) = start_server_with_frame_budget(settings, &directory, budget.clone());
+        let budget =
+            FrameAdmissionBudget::new(crate::generated_storage_v2::MAX_FRAME_BODY_BYTES).unwrap();
+        let held = budget
+            .plan_frame(crate::generated_storage_v2::MAX_FRAME_BODY_BYTES)
+            .unwrap();
+        let (address, parent_alive, worker) =
+            start_server_with_frame_budget(settings, &directory, budget.clone());
         let mut clients = Vec::new();
         let started = std::time::Instant::now();
         let outcome = (|| -> io::Result<()> {
@@ -1150,7 +1209,10 @@ mod tests {
         let stopped = stopped_rx.recv_timeout(Duration::from_secs(2));
         drop(client); // Always unblock cleanup, including a regression failure.
         let metrics = worker.join().unwrap().unwrap();
-        assert!(stopped.is_ok(), "parent EOF waited for the peer's I/O timeout");
+        assert!(
+            stopped.is_ok(),
+            "parent EOF waited for the peer's I/O timeout"
+        );
         assert_eq!(metrics.accepted_connections, 1);
         assert_eq!(metrics.completed_connections, 1);
         assert_eq!(metrics.failed_connections, 0);

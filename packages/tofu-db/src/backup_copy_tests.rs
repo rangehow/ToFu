@@ -52,7 +52,12 @@ impl TestGraph {
         if payload[0] == b'L' {
             return Vec::new();
         }
-        payload[1..].chunks_exact(32).map(|raw| BlockId(raw.try_into().unwrap())).collect()
+        payload[1..]
+            .as_chunks::<32>()
+            .0
+            .iter()
+            .map(|raw| BlockId(*raw))
+            .collect()
     }
 
     fn reachable(&self, root: BlockId) -> HashSet<BlockId> {
@@ -132,13 +137,21 @@ fn copy(
 ) -> io::Result<GraphCopyOutcome> {
     let stop = AtomicBool::new(false);
     copy_graph(
-        &GraphCopy { graph, destination: store, present, record_untyped: None, stop: &stop, progress: None, share: None },
+        &GraphCopy {
+            graph,
+            destination: store,
+            present,
+            record_untyped: None,
+            stop: &stop,
+            progress: None,
+            share: None,
+        },
         vec![root],
     )
 }
 
 fn assert_closed(graph: &TestGraph, store: &BlockStore) {
-    for (&id, _) in &graph.blocks {
+    for &id in graph.blocks.keys() {
         if !store.retain_held_block(id).unwrap() {
             continue;
         }
@@ -173,15 +186,29 @@ fn every_crash_point_leaves_a_closed_store_and_a_rerun_completes_it() {
         }))
         .unwrap();
         let untyped = closed();
-        let _ = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, root);
+        let _ = copy(
+            &graph,
+            &store,
+            PresentBlocks::Closed { untyped: &untyped },
+            root,
+        );
         drop(store);
         vfs.crash().unwrap();
         vfs.arm_fault(None).unwrap();
         let reopened = BlockStore::open_with_vfs(Path::new("/backup"), vfs.clone()).unwrap();
         assert_closed(&graph, &reopened);
-        copy(&graph, &reopened, PresentBlocks::Closed { untyped: &untyped }, root).unwrap();
+        copy(
+            &graph,
+            &reopened,
+            PresentBlocks::Closed { untyped: &untyped },
+            root,
+        )
+        .unwrap();
         for id in graph.reachable(root) {
-            assert!(reopened.retain_held_block(id).unwrap(), "operation {operation_number}");
+            assert!(
+                reopened.retain_held_block(id).unwrap(),
+                "operation {operation_number}"
+            );
         }
     }
 }
@@ -209,7 +236,13 @@ fn lost_syncs_never_leave_a_block_without_its_references() {
         }))
         .unwrap();
         let untyped = closed();
-        copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, root).unwrap();
+        copy(
+            &graph,
+            &store,
+            PresentBlocks::Closed { untyped: &untyped },
+            root,
+        )
+        .unwrap();
         drop(store);
         vfs.crash().unwrap();
         vfs.arm_fault(None).unwrap();
@@ -224,12 +257,31 @@ fn a_closed_store_skips_present_subgraphs_so_work_follows_new_blocks() {
     let first = graph.tree("first", 4, 4, 8);
     let (_vfs, store) = destination();
     let untyped = closed();
-    let full = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, first).unwrap();
-    assert_eq!(full.metrics.copied_blocks as usize, graph.reachable(first).len());
+    let full = copy(
+        &graph,
+        &store,
+        PresentBlocks::Closed { untyped: &untyped },
+        first,
+    )
+    .unwrap();
+    assert_eq!(
+        full.metrics.copied_blocks as usize,
+        graph.reachable(first).len()
+    );
 
     graph.reads.store(0, Ordering::Relaxed);
-    let unchanged = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, first).unwrap();
-    assert_eq!(graph.reads.load(Ordering::Relaxed), 0, "an unchanged root reads nothing");
+    let unchanged = copy(
+        &graph,
+        &store,
+        PresentBlocks::Closed { untyped: &untyped },
+        first,
+    )
+    .unwrap();
+    assert_eq!(
+        graph.reads.load(Ordering::Relaxed),
+        0,
+        "an unchanged root reads nothing"
+    );
     assert_eq!(unchanged.metrics.visited_blocks, 1);
     assert_eq!(unchanged.metrics.copied_blocks, 0);
 
@@ -247,8 +299,17 @@ fn a_closed_store_skips_present_subgraphs_so_work_follows_new_blocks() {
     subtrees[0] = subtree;
     let second = graph.node(&subtrees);
     graph.reads.store(0, Ordering::Relaxed);
-    let incremental = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, second).unwrap();
-    assert_eq!(incremental.metrics.copied_blocks, 4, "root, subtree, interior and the new leaf");
+    let incremental = copy(
+        &graph,
+        &store,
+        PresentBlocks::Closed { untyped: &untyped },
+        second,
+    )
+    .unwrap();
+    assert_eq!(
+        incremental.metrics.copied_blocks, 4,
+        "root, subtree, interior and the new leaf"
+    );
     assert_eq!(graph.reads.load(Ordering::Relaxed), 4);
     assert!(
         incremental.metrics.visited_blocks < graph.reachable(second).len() as u64 / 4,
@@ -282,19 +343,38 @@ fn a_present_untyped_copy_is_walked_and_its_missing_references_copied() {
     // An earlier copy published `page` by identity alone (a history
     // transaction reference), without its reference.
     store.ensure_copy_shard(page).unwrap();
-    store.publish_copied_block_unbarriered(page, &graph.blocks[&page]).unwrap();
+    store
+        .publish_copied_block_unbarriered(page, &graph.blocks[&page])
+        .unwrap();
     store.sync_copy_shard(page).unwrap();
 
     let trusted = closed();
-    copy(&graph, &store, PresentBlocks::Closed { untyped: &trusted }, root).unwrap();
-    assert!(!store.retain_held_block(child).unwrap(), "trusting the untyped copy skips its reference");
+    copy(
+        &graph,
+        &store,
+        PresentBlocks::Closed { untyped: &trusted },
+        root,
+    )
+    .unwrap();
+    assert!(
+        !store.retain_held_block(child).unwrap(),
+        "trusting the untyped copy skips its reference"
+    );
 
     let (_vfs, store) = destination();
     store.ensure_copy_shard(page).unwrap();
-    store.publish_copied_block_unbarriered(page, &graph.blocks[&page]).unwrap();
+    store
+        .publish_copied_block_unbarriered(page, &graph.blocks[&page])
+        .unwrap();
     store.sync_copy_shard(page).unwrap();
     let recorded = HashSet::from([page]);
-    let outcome = copy(&graph, &store, PresentBlocks::Closed { untyped: &recorded }, root).unwrap();
+    let outcome = copy(
+        &graph,
+        &store,
+        PresentBlocks::Closed { untyped: &recorded },
+        root,
+    )
+    .unwrap();
     assert!(store.retain_held_block(child).unwrap());
     assert_eq!(outcome.closed_untyped, vec![page]);
     assert_closed(&graph, &store);
@@ -311,7 +391,10 @@ fn untyped_copies_are_recorded_before_they_are_published() {
     let recorded = Mutex::new(Vec::new());
     let record = |ids: &[BlockId]| -> io::Result<()> {
         for id in ids {
-            assert!(!store.retain_held_block(*id).unwrap(), "recorded after publication");
+            assert!(
+                !store.retain_held_block(*id).unwrap(),
+                "recorded after publication"
+            );
         }
         recorded.lock().unwrap().extend_from_slice(ids);
         Ok(())
@@ -350,9 +433,15 @@ fn a_stop_ends_the_copy_and_keeps_every_finished_subgraph_closed() {
     }
     impl CopyGraph for StoppingGraph<'_> {
         type Node = BlockId;
-        fn block_id(&self, node: &BlockId) -> BlockId { *node }
-        fn is_leaf(&self, node: &BlockId) -> bool { self.inner.is_leaf(node) }
-        fn is_untyped(&self, node: &BlockId) -> bool { self.inner.is_untyped(node) }
+        fn block_id(&self, node: &BlockId) -> BlockId {
+            *node
+        }
+        fn is_leaf(&self, node: &BlockId) -> bool {
+            self.inner.is_leaf(node)
+        }
+        fn is_untyped(&self, node: &BlockId) -> bool {
+            self.inner.is_untyped(node)
+        }
         fn read(&self, node: &BlockId) -> io::Result<Vec<u8>> {
             if self.inner.reads.load(Ordering::Relaxed) + 1 >= self.reads_before_stop {
                 self.stop.store(true, Ordering::Release);
@@ -363,7 +452,11 @@ fn a_stop_ends_the_copy_and_keeps_every_finished_subgraph_closed() {
             self.inner.references(node, payload)
         }
     }
-    let stopping = StoppingGraph { inner: &graph, stop: &stop, reads_before_stop: 20 };
+    let stopping = StoppingGraph {
+        inner: &graph,
+        stop: &stop,
+        reads_before_stop: 20,
+    };
     let error = copy_graph(
         &GraphCopy {
             graph: &stopping,
@@ -394,7 +487,13 @@ fn the_shard_parallel_schedule_copies_a_shared_graph_completely() {
     vfs.allow_concurrent_file_publication().unwrap();
     assert!(store.supports_concurrent_file_publication());
     let untyped = closed();
-    let outcome = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, both).unwrap();
+    let outcome = copy(
+        &graph,
+        &store,
+        PresentBlocks::Closed { untyped: &untyped },
+        both,
+    )
+    .unwrap();
     let reachable = graph.reachable(both);
     assert_eq!(outcome.metrics.copied_blocks as usize, reachable.len());
     for id in reachable {
@@ -417,8 +516,13 @@ fn a_failed_read_in_the_parallel_schedule_ends_the_copy_with_its_error() {
         let (vfs, store) = destination();
         vfs.allow_concurrent_file_publication().unwrap();
         let untyped = closed();
-        let result = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, root)
-            .map(|_| ());
+        let result = copy(
+            &graph,
+            &store,
+            PresentBlocks::Closed { untyped: &untyped },
+            root,
+        )
+        .map(|_| ());
         let _ = sender.send(result.map_err(|error| error.kind()));
     });
     let result = receiver
@@ -435,15 +539,31 @@ struct VariantGraph {
 
 impl CopyGraph for VariantGraph {
     type Node = (BlockId, u8);
-    fn block_id(&self, node: &(BlockId, u8)) -> BlockId { node.0 }
-    fn variant(&self, node: &(BlockId, u8)) -> u8 { node.1 }
-    fn presence_proves_subgraph(&self, node: &(BlockId, u8)) -> bool { node.1 == 0 }
-    fn is_leaf(&self, node: &(BlockId, u8)) -> bool { self.inner.is_leaf(&node.0) }
-    fn is_untyped(&self, _node: &(BlockId, u8)) -> bool { false }
-    fn read(&self, node: &(BlockId, u8)) -> io::Result<Vec<u8>> { self.inner.read(&node.0) }
+    fn block_id(&self, node: &(BlockId, u8)) -> BlockId {
+        node.0
+    }
+    fn variant(&self, node: &(BlockId, u8)) -> u8 {
+        node.1
+    }
+    fn presence_proves_subgraph(&self, node: &(BlockId, u8)) -> bool {
+        node.1 == 0
+    }
+    fn is_leaf(&self, node: &(BlockId, u8)) -> bool {
+        self.inner.is_leaf(&node.0)
+    }
+    fn is_untyped(&self, _node: &(BlockId, u8)) -> bool {
+        false
+    }
+    fn read(&self, node: &(BlockId, u8)) -> io::Result<Vec<u8>> {
+        self.inner.read(&node.0)
+    }
     fn references(&self, node: &(BlockId, u8), payload: &[u8]) -> io::Result<Vec<(BlockId, u8)>> {
-        let mut references: Vec<_> =
-            self.inner.references(&node.0, payload)?.into_iter().map(|id| (id, 0)).collect();
+        let mut references: Vec<_> = self
+            .inner
+            .references(&node.0, payload)?
+            .into_iter()
+            .map(|id| (id, 0))
+            .collect();
         if node.1 == 1 {
             references.extend(self.extra.get(&node.0).map(|id| (*id, 0)));
         }
@@ -461,7 +581,10 @@ fn a_visit_whose_references_depend_on_its_variant_is_never_satisfied_by_another(
     let pinned = inner.node(&[pinned_leaf]);
     let catalog_leaf = inner.leaf("catalog-content");
     let catalog = inner.node(&[catalog_leaf]);
-    let graph = VariantGraph { inner, extra: HashMap::from([(catalog, pinned)]) };
+    let graph = VariantGraph {
+        inner,
+        extra: HashMap::from([(catalog, pinned)]),
+    };
     let untyped = closed();
     let stop = AtomicBool::new(false);
     let run = |store: &BlockStore, roots: Vec<(BlockId, u8)>| {
@@ -485,9 +608,15 @@ fn a_visit_whose_references_depend_on_its_variant_is_never_satisfied_by_another(
     assert!(store.retain_held_block(catalog).unwrap());
     assert!(!store.retain_held_block(pinned).unwrap());
     let outcome = run(&store, vec![(catalog, 1)]);
-    assert!(store.retain_held_block(pinned).unwrap(), "the discovery visit trusted presence");
+    assert!(
+        store.retain_held_block(pinned).unwrap(),
+        "the discovery visit trusted presence"
+    );
     assert!(store.retain_held_block(pinned_leaf).unwrap());
-    assert_eq!(outcome.metrics.source_reads, 3, "the page, the pinned root and its leaf");
+    assert_eq!(
+        outcome.metrics.source_reads, 3,
+        "the page, the pinned root and its leaf"
+    );
     // In one copy: both walks reach the page.
     let (_vfs, store) = destination();
     run(&store, vec![(catalog, 0), (catalog, 1)]);
@@ -504,10 +633,17 @@ fn the_parallel_mark_reaches_exactly_the_graph_a_copy_reads() {
     let stop = AtomicBool::new(false);
     for parallel in [false, true] {
         let marked = Mutex::new(HashSet::new());
-        let visited = visit_graph(&graph, vec![both], parallel, &stop, None, &|ids: &[BlockId]| {
-            marked.lock().unwrap().extend(ids.iter().copied());
-            Ok(())
-        })
+        let visited = visit_graph(
+            &graph,
+            vec![both],
+            parallel,
+            &stop,
+            None,
+            &|ids: &[BlockId]| {
+                marked.lock().unwrap().extend(ids.iter().copied());
+                Ok(())
+            },
+        )
         .unwrap();
         let marked = marked.into_inner().unwrap();
         assert_eq!(marked, graph.reachable(both), "parallel={parallel}");
@@ -521,7 +657,14 @@ fn the_parallel_mark_reaches_exactly_the_graph_a_copy_reads() {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let stop = AtomicBool::new(false);
-        let result = visit_graph(&broken, vec![root], true, &stop, None, &|_: &[BlockId]| Ok(()));
+        let result = visit_graph(
+            &broken,
+            vec![root],
+            true,
+            &stop,
+            None,
+            &|_: &[BlockId]| Ok(()),
+        );
         let _ = sender.send(result.map(|_| ()).map_err(|error| error.kind()));
     });
     let result = receiver
@@ -534,7 +677,11 @@ fn the_parallel_mark_reaches_exactly_the_graph_a_copy_reads() {
 /// yet read: a lower bound on how many nodes the copy held open at once.
 fn peak_open_children(graph: &TestGraph, grandchild_of: &HashMap<BlockId, BlockId>) -> usize {
     let log = graph.read_log.lock().unwrap();
-    let position: HashMap<BlockId, usize> = log.iter().enumerate().map(|(index, id)| (*id, index)).collect();
+    let position: HashMap<BlockId, usize> = log
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (*id, index))
+        .collect();
     let mut events = Vec::new();
     for (child, grandchild) in grandchild_of {
         events.push((position[child], 1_i64));
@@ -560,7 +707,10 @@ fn open_nodes_stay_bounded_by_the_workers_however_wide_the_graph() {
     let mut children = Vec::new();
     let mut grandchild_of = HashMap::new();
     for index in 0..1_000 {
-        let leaves = [graph.leaf(&format!("wide-{index}-a")), graph.leaf(&format!("wide-{index}-b"))];
+        let leaves = [
+            graph.leaf(&format!("wide-{index}-a")),
+            graph.leaf(&format!("wide-{index}-b")),
+        ];
         let grandchild = graph.node(&leaves);
         let child = graph.node(&[grandchild]);
         grandchild_of.insert(child, grandchild);
@@ -575,15 +725,31 @@ fn open_nodes_stay_bounded_by_the_workers_however_wide_the_graph() {
             vfs.allow_concurrent_file_publication().unwrap();
         }
         let untyped = closed();
-        let outcome = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, root).unwrap();
+        let outcome = copy(
+            &graph,
+            &store,
+            PresentBlocks::Closed { untyped: &untyped },
+            root,
+        )
+        .unwrap();
         for id in graph.reachable(root) {
             assert!(store.retain_held_block(id).unwrap(), "parallel={parallel}");
         }
         let peak = peak_open_children(&graph, &grandchild_of);
-        assert!(peak <= SHARDS + depth, "parallel={parallel}: {peak} children were open at once");
-        assert!(outcome.metrics.peak_open_nodes as usize <= SHARDS + depth, "{:?}", outcome.metrics);
+        assert!(
+            peak <= SHARDS + depth,
+            "parallel={parallel}: {peak} children were open at once"
+        );
+        assert!(
+            outcome.metrics.peak_open_nodes as usize <= SHARDS + depth,
+            "{:?}",
+            outcome.metrics
+        );
         if !parallel {
-            assert!(peak <= depth, "one worker descends before it widens: {peak} open");
+            assert!(
+                peak <= depth,
+                "one worker descends before it widens: {peak} open"
+            );
         }
     }
 }
@@ -618,8 +784,17 @@ fn a_child_shared_across_depths_never_deadlocks_the_slots() {
                 vfs.allow_concurrent_file_publication().unwrap();
             }
             let untyped = closed();
-            let result = copy(&graph, &store, PresentBlocks::Closed { untyped: &untyped }, root).map(|_| ());
-            let complete = graph.reachable(root).into_iter().all(|id| store.retain_held_block(id).unwrap());
+            let result = copy(
+                &graph,
+                &store,
+                PresentBlocks::Closed { untyped: &untyped },
+                root,
+            )
+            .map(|_| ());
+            let complete = graph
+                .reachable(root)
+                .into_iter()
+                .all(|id| store.retain_held_block(id).unwrap());
             let _ = sender.send((result.map_err(|error| error.kind()), complete));
         });
         let (result, complete) = receiver
@@ -658,15 +833,25 @@ struct OverlapGraph<'a> {
 
 impl<'a> OverlapGraph<'a> {
     fn new(inner: &'a TestGraph) -> Self {
-        Self { inner, open: AtomicU64::new(0), peak: AtomicU64::new(0) }
+        Self {
+            inner,
+            open: AtomicU64::new(0),
+            peak: AtomicU64::new(0),
+        }
     }
 }
 
 impl CopyGraph for OverlapGraph<'_> {
     type Node = BlockId;
-    fn block_id(&self, node: &BlockId) -> BlockId { *node }
-    fn is_leaf(&self, node: &BlockId) -> bool { self.inner.is_leaf(node) }
-    fn is_untyped(&self, node: &BlockId) -> bool { self.inner.is_untyped(node) }
+    fn block_id(&self, node: &BlockId) -> BlockId {
+        *node
+    }
+    fn is_leaf(&self, node: &BlockId) -> bool {
+        self.inner.is_leaf(node)
+    }
+    fn is_untyped(&self, node: &BlockId) -> bool {
+        self.inner.is_untyped(node)
+    }
     fn read(&self, node: &BlockId) -> io::Result<Vec<u8>> {
         let open = self.open.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(open, Ordering::SeqCst);
@@ -698,7 +883,11 @@ fn the_foreground_share_halves_under_admission_pressure_and_grows_one_per_calm_w
     }
     assert_eq!(state.admitted, SHARDS, "never more operations than workers");
     drop(state);
-    assert_eq!(ForegroundShare::new().admitted(), 1, "an epoch starts with one operation");
+    assert_eq!(
+        ForegroundShare::new().admitted(),
+        1,
+        "an epoch starts with one operation"
+    );
 }
 
 #[test]
@@ -706,7 +895,9 @@ fn foreground_requests_queuing_for_the_writer_shrink_a_running_share() {
     let share = ForegroundShare::starting_at(SHARDS, true);
     {
         let _queued = crate::fsync_stats::ForegroundWait::start();
-        std::thread::sleep(crate::fsync_stats::FOREGROUND_SAMPLE_WINDOW + std::time::Duration::from_millis(50));
+        std::thread::sleep(
+            crate::fsync_stats::FOREGROUND_SAMPLE_WINDOW + std::time::Duration::from_millis(50),
+        );
     }
     let stop = AtomicBool::new(false);
     drop(share.enter(&stop, "backup copy stopping").unwrap());
@@ -736,7 +927,10 @@ fn a_shared_copy_never_overlaps_more_reads_than_admitted_and_still_completes() {
             vec![root],
         )
         .unwrap();
-        assert_eq!(outcome.metrics.copied_blocks as usize, graph.reachable(root).len());
+        assert_eq!(
+            outcome.metrics.copied_blocks as usize,
+            graph.reachable(root).len()
+        );
         assert_closed(&graph, &store);
         overlap.peak.load(Ordering::SeqCst)
     };
@@ -753,10 +947,17 @@ fn a_shared_mark_never_overlaps_more_reads_than_admitted() {
     let share = ForegroundShare::starting_at(1, false);
     let stop = AtomicBool::new(false);
     let marked = Mutex::new(HashSet::new());
-    visit_graph(&overlap, vec![root], true, &stop, Some(&share), &|ids: &[BlockId]| {
-        marked.lock().unwrap().extend(ids.iter().copied());
-        Ok(())
-    })
+    visit_graph(
+        &overlap,
+        vec![root],
+        true,
+        &stop,
+        Some(&share),
+        &|ids: &[BlockId]| {
+            marked.lock().unwrap().extend(ids.iter().copied());
+            Ok(())
+        },
+    )
     .unwrap();
     assert_eq!(marked.into_inner().unwrap(), graph.reachable(root));
     assert_eq!(overlap.peak.load(Ordering::SeqCst), 1);

@@ -84,10 +84,14 @@ impl PayloadHints {
     }
 
     pub(crate) fn candidate(
-        &self, id: BlockId, manifest: &PayloadManifest,
+        &self,
+        id: BlockId,
+        manifest: &PayloadManifest,
     ) -> Option<PayloadSegmentReference> {
         let segment_id = self.entries.get(&id)?;
-        manifest.segments.iter()
+        manifest
+            .segments
+            .iter()
             .find(|reference| reference.segment_id == *segment_id && reference.may_contain(id))
             .copied()
     }
@@ -95,9 +99,13 @@ impl PayloadHints {
     pub(crate) fn load(root: &Path, vfs: &dyn Vfs, budget: usize) -> Self {
         let mut hints = Self::new(budget);
         let read = || -> io::Result<Vec<u8>> {
-            let mut file = vfs.open(&root.join(CACHE_FILE), OpenRequest {
-                read: true, ..OpenRequest::default()
-            })?;
+            let mut file = vfs.open(
+                &root.join(CACHE_FILE),
+                OpenRequest {
+                    read: true,
+                    ..OpenRequest::default()
+                },
+            )?;
             file.read_all(MAX_FILE_BYTES)
         };
         // Cache I/O or format failures cannot fail an authority open.
@@ -112,23 +120,29 @@ impl PayloadHints {
             return;
         }
         let count = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-        if count > MAX_ENTRIES || bytes.len() != HEADER_BYTES + count * ENTRY_BYTES + CHECKSUM_BYTES {
+        if count > MAX_ENTRIES || bytes.len() != HEADER_BYTES + count * ENTRY_BYTES + CHECKSUM_BYTES
+        {
             return;
         }
         let end = bytes.len() - CHECKSUM_BYTES;
         if blake3::hash(&bytes[..end]).as_bytes() != &bytes[end..] {
             return;
         }
-        for entry in bytes[HEADER_BYTES..end].chunks_exact(ENTRY_BYTES) {
-            self.remember(BlockId(entry[..32].try_into().unwrap()),
-                Uuid::from_bytes(entry[32..].try_into().unwrap()));
+        for entry in bytes[HEADER_BYTES..end].as_chunks::<ENTRY_BYTES>().0 {
+            self.remember(
+                BlockId(entry[..32].try_into().unwrap()),
+                Uuid::from_bytes(entry[32..].try_into().unwrap()),
+            );
         }
         self.dirty = false;
     }
 
     pub(crate) fn save(&mut self, root: &Path, vfs: &dyn Vfs) -> io::Result<()> {
-        if !self.dirty { return Ok(()); }
-        let mut bytes = Vec::with_capacity(HEADER_BYTES + self.entries.len() * ENTRY_BYTES + CHECKSUM_BYTES);
+        if !self.dirty {
+            return Ok(());
+        }
+        let mut bytes =
+            Vec::with_capacity(HEADER_BYTES + self.entries.len() * ENTRY_BYTES + CHECKSUM_BYTES);
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
         // Preserve admission order so reopens do not evict by hash ordering.
@@ -140,14 +154,19 @@ impl PayloadHints {
         let temporary = root.join(TEMP_FILE);
         // The engine's exclusive lease owns this one bounded scratch slot.
         match vfs.remove_file(&temporary) {
-            Ok(()) => {},
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
         let result = (|| {
-            let mut file = vfs.open(&temporary, OpenRequest {
-                write: true, create_new: true, ..OpenRequest::default()
-            })?;
+            let mut file = vfs.open(
+                &temporary,
+                OpenRequest {
+                    write: true,
+                    create_new: true,
+                    ..OpenRequest::default()
+                },
+            )?;
             file.write_all_at(0, &bytes)?;
             drop(file);
             // Reconstructible hints require no durability barrier. A power
@@ -173,7 +192,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut hints = PayloadHints::new(16 * 192 * 2);
         let segment = Uuid::new_v4();
-        for n in 0..3 { hints.remember(BlockId([n; 32]), segment); }
+        for n in 0..3 {
+            hints.remember(BlockId([n; 32]), segment);
+        }
         assert_eq!(hints.entries.len(), 2);
         assert!(!hints.entries.contains_key(&BlockId([0; 32])));
         hints.save(root.path(), &RealVfs).unwrap();
@@ -184,7 +205,9 @@ mod tests {
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[HEADER_BYTES] ^= 1;
         std::fs::write(&path, bytes).unwrap();
-        assert!(PayloadHints::load(root.path(), &RealVfs, usize::MAX).entries.is_empty());
+        assert!(PayloadHints::load(root.path(), &RealVfs, usize::MAX)
+            .entries
+            .is_empty());
     }
 
     #[test]
@@ -192,7 +215,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let segment = Uuid::new_v4();
         let mut hints = PayloadHints::new(16 * 192 * 4);
-        for n in 0..4 { hints.remember(BlockId([n; 32]), segment); }
+        for n in 0..4 {
+            hints.remember(BlockId([n; 32]), segment);
+        }
         hints.save(root.path(), &RealVfs).unwrap();
         let mut lean = PayloadHints::load(root.path(), &RealVfs, 16 * 192);
         lean.remember(BlockId([4; 32]), segment);

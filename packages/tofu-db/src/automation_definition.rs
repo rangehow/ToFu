@@ -23,7 +23,7 @@ static CATALOG: LazyLock<Value> = LazyLock::new(|| {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Request {
+pub struct Request {
     user_id: u64,
     tenant_id: String,
     definition_key: String,
@@ -200,10 +200,7 @@ impl Request {
                 ) && matches!(
                     definition["trigger"]["scope"].as_str(),
                     Some("all" | "human" | "automation")
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             _ => return Err(invalid("invalid prepared trigger")),
         }
         let steps = definition["steps"]
@@ -354,8 +351,13 @@ pub(crate) fn execute(
             "definition does not exist",
         ));
     }
-    if req.mode=="publish" {
-        crate::automation_project::require_active(db,tx,&req.tenant_id,req.record["definition"]["projectId"].as_str())?;
+    if req.mode == "publish" {
+        crate::automation_project::require_active(
+            db,
+            tx,
+            &req.tenant_id,
+            req.record["definition"]["projectId"].as_str(),
+        )?;
     }
     let mut last_clock_failure = current
         .as_ref()

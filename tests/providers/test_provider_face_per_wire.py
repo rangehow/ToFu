@@ -42,6 +42,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 import pytest
 
+from tests.support.overlay import requires_yourprovider_overlay
+
 pytestmark = [pytest.mark.auth_mode('open'), pytest.mark.unit]
 
 CHAT_URL = 'https://gw.example.com/v1/openai/native'
@@ -109,6 +111,7 @@ def test_an_undeclared_request_face_is_refused_not_defaulted():
     assert 'kunlunn' in (r.error or '')
 
 
+@requires_yourprovider_overlay
 def test_the_shipped_recipe_governs_every_alias_it_lists():
     """Measured 400 该模型在 provider 下无可用账号 — pin it in the data too.
 
@@ -148,6 +151,7 @@ def test_the_shipped_recipe_governs_every_alias_it_lists():
     assert public_conn['extra_headers'] == {}, public_conn['extra_headers']
 
 
+@requires_yourprovider_overlay
 def test_the_shipped_recipe_keeps_the_claude_alias_on_the_anthropic_face():
     """Measured 200 on /v1/anthropic and 400 on /v1/responses.
 

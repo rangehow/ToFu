@@ -43,7 +43,7 @@ fn seal_to(
     let pending = pending_messages(conversation, sealed_so_far, lane_count - sealed_so_far);
     let mut transaction = database.begin(1, 7).unwrap();
     maybe_seal(
-        &database,
+        database,
         &mut transaction,
         conversation,
         lane_count,
@@ -89,7 +89,10 @@ fn single_message_seals_into_one_page() {
     database.commit(transaction).unwrap();
     {
         let before = stats().sealed_pages;
-        assert!(before >= 1, "a single pending message must seal into a page");
+        assert!(
+            before >= 1,
+            "a single pending message must seal into a page"
+        );
     }
     let mut transaction = database.begin(1, 7).unwrap();
     let messages = read_sealed(&database, &mut transaction, "conv-b", 1)
@@ -119,25 +122,23 @@ fn shrunk_lane_invalidates_instead_of_serving_stale_pages() {
     database.commit(transaction).unwrap();
     assert!(stats().invalidations > invalidations_before);
     let mut transaction = database.begin(1, 7).unwrap();
-    assert!(
-        read_sealed(&database, &mut transaction, "conv-c", 80)
-            .unwrap()
-            .is_none()
-    );
+    assert!(read_sealed(&database, &mut transaction, "conv-c", 80)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
 fn tampered_page_digest_fails_closed() {
     let mut database = authority();
     seal_to(&mut database, "conv-d", 65, 0);
-    let page_key_for_test = {
-        let mut key_transaction = database.begin(1, 7).unwrap();
+    let _page_key_for_test = {
+        let key_transaction = database.begin(1, 7).unwrap();
         page_key(&key_transaction, "conv-d", 0).unwrap()
     };
     // Corrupt the manifest's digest for the sealed page (the manifest
     // itself stays valid JSON; the page content is untouched).
     let manifest_key_for_test = {
-        let mut key_transaction = database.begin(1, 7).unwrap();
+        let key_transaction = database.begin(1, 7).unwrap();
         manifest_key(&key_transaction, "conv-d").unwrap()
     };
     let mut transaction = database.begin(1, 7).unwrap();
@@ -172,31 +173,62 @@ fn tampered_page_digest_fails_closed() {
 #[test]
 fn page_decode_preserves_source_array_shape_and_noncanonical_bytes() {
     for (bytes, accepted) in [
-        (br#" {"$serde_json::private::RawValue":"[{}]"} "#.as_slice(), false),
-        (br#" [ { "content": "message", "role": "user" } ] "#.as_slice(), true),
+        (
+            br#" {"$serde_json::private::RawValue":"[{}]"} "#.as_slice(),
+            false,
+        ),
+        (
+            br#" [ { "content": "message", "role": "user" } ] "#.as_slice(),
+            true,
+        ),
     ] {
         let mut database = authority();
         seal_to(&mut database, "source-shape", 1, 0);
         let mut write = database.begin(1, 7).unwrap();
-        let mut manifest = load_manifest_for(&database, &mut write, "source-shape").unwrap().unwrap();
+        let mut manifest = load_manifest_for(&database, &mut write, "source-shape")
+            .unwrap()
+            .unwrap();
         manifest.pages[0].bytes = bytes.len() as u64;
         manifest.pages[0].sha256 = blake3::hash(bytes).to_hex().to_string();
         manifest.decoded_bytes = bytes.len() as u64;
         for (key, namespace, value) in [
-            (page_key(&write, "source-shape", 0).unwrap(), TRANSCRIPT_ARCHIVE_PAGE_NAMESPACE, bytes.to_vec()),
-            (manifest_key(&write, "source-shape").unwrap(), TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE, encode_manifest(&manifest)),
+            (
+                page_key(&write, "source-shape", 0).unwrap(),
+                TRANSCRIPT_ARCHIVE_PAGE_NAMESPACE,
+                bytes.to_vec(),
+            ),
+            (
+                manifest_key(&write, "source-shape").unwrap(),
+                TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE,
+                encode_manifest(&manifest),
+            ),
         ] {
             let logical_key = String::from_utf8(key.key_bytes().to_vec()).unwrap();
-            vd_put(&database, &mut write, key, namespace, logical_key, value, 1_700_000_002).unwrap();
+            vd_put(
+                &database,
+                &mut write,
+                key,
+                namespace,
+                logical_key,
+                value,
+                1_700_000_002,
+            )
+            .unwrap();
         }
         database.commit(write).unwrap();
         let mut read = database.begin(1, 7).unwrap();
         let result = read_sealed(&database, &mut read, "source-shape", 1);
         assert_eq!(result.is_ok(), accepted);
         if accepted {
-            assert_eq!(result.unwrap().unwrap(), vec![json!({"content":"message", "role":"user"})]);
+            assert_eq!(
+                result.unwrap().unwrap(),
+                vec![json!({"content":"message", "role":"user"})]
+            );
         } else {
-            assert_eq!(result.unwrap_err().to_string(), "transcript archive page is not valid JSON");
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                "transcript archive page is not valid JSON"
+            );
         }
     }
 }
@@ -206,16 +238,10 @@ fn windowed_sealed_read_uses_exact_window_semantics() {
     let mut database = authority();
     seal_to(&mut database, "conv-e", 80, 0);
     let mut transaction = database.begin(1, 7).unwrap();
-    let (messages, total, start, end) = read_window(
-        &database,
-        &mut transaction,
-        "conv-e",
-        5,
-        Some(30),
-        80,
-    )
-    .unwrap()
-    .expect("sealed archive must serve the window");
+    let (messages, total, start, end) =
+        read_window(&database, &mut transaction, "conv-e", 5, Some(30), 80)
+            .unwrap()
+            .expect("sealed archive must serve the window");
     assert_eq!((total, start, end), (80, 25, 30));
     assert_eq!(messages.len(), 5);
     assert_eq!(messages[0]["content"], json!("message 25"));
@@ -228,11 +254,15 @@ fn zero_window_reads_all_sealed_messages_and_respects_before() {
     seal_to(&mut database, "full-window", 80, 0);
     for (before, expected_end) in [(None, 80), (Some(30), 30), (Some(0), 0), (Some(-1), 80)] {
         let mut read = database.begin(1, 7).unwrap();
-        let (messages, total, start, end) = read_window(
-            &database, &mut read, "full-window", 0, before, 80,
-        ).unwrap().expect("full sentinel must use sealed messages");
+        let (messages, total, start, end) =
+            read_window(&database, &mut read, "full-window", 0, before, 80)
+                .unwrap()
+                .expect("full sentinel must use sealed messages");
         assert_eq!((total, start, end), (80, 0, expected_end));
-        assert_eq!(messages, pending_messages("full-window", 0, expected_end as u64));
+        assert_eq!(
+            messages,
+            pending_messages("full-window", 0, expected_end as u64)
+        );
     }
 }
 
@@ -251,10 +281,8 @@ fn lane_range_crosses_index_page_boundary_without_truncating() {
                 conversation_id: "seal-live".to_owned(),
                 actor: "human".to_owned(),
                 status: "completed".to_owned(),
-                projection_json: format!(
-                    r#"{{"content":"live sealed message {index}"}}"#
-                )
-                .into_bytes(),
+                projection_json: format!(r#"{{"content":"live sealed message {index}"}}"#)
+                    .into_bytes(),
                 projection_timestamp: None,
                 settlement_json: b"{}".to_vec(),
                 lane_id: "main".to_owned(),
@@ -277,9 +305,9 @@ fn lane_range_crosses_index_page_boundary_without_truncating() {
     }
     database.commit(transaction).unwrap();
     let mut read = database.begin(1, 7).unwrap();
-    let messages = crate::turn::materialize_lane_range(
-        &database, &mut read, "seal-live", 998, 1_005, 0,
-    ).unwrap();
+    let messages =
+        crate::turn::materialize_lane_range(&database, &mut read, "seal-live", 998, 1_005, 0)
+            .unwrap();
     assert_eq!(messages.len(), 7);
     assert_eq!(messages[0]["content"], json!("live sealed message 998"));
     assert_eq!(messages[6]["content"], json!("live sealed message 1004"));
@@ -300,10 +328,8 @@ fn full_history_combines_sealed_prefix_and_live_tail_exactly() {
                 conversation_id: "seal-live".to_owned(),
                 actor: "human".to_owned(),
                 status: "completed".to_owned(),
-                projection_json: format!(
-                    r#"{{"content":"live sealed message {index}"}}"#
-                )
-                .into_bytes(),
+                projection_json: format!(r#"{{"content":"live sealed message {index}"}}"#)
+                    .into_bytes(),
                 projection_timestamp: None,
                 settlement_json: b"{}".to_vec(),
                 lane_id: "main".to_owned(),
@@ -327,32 +353,83 @@ fn full_history_combines_sealed_prefix_and_live_tail_exactly() {
         if index == 9 {
             let mut read = database.begin(1, 7).unwrap();
             let (pending, _, _, _) = crate::turn::legacy_messages(
-                &database, &mut read, "seal-live", 0, None, &mut || false,
-            ).unwrap();
+                &database,
+                &mut read,
+                "seal-live",
+                0,
+                None,
+                &mut || false,
+            )
+            .unwrap();
             let mut seal = database.begin(1, 7).unwrap();
-            maybe_seal(&database, &mut seal, "seal-live", 10, pending, committed_at_ms + index).unwrap();
+            maybe_seal(
+                &database,
+                &mut seal,
+                "seal-live",
+                10,
+                pending,
+                committed_at_ms + index,
+            )
+            .unwrap();
             database.commit(seal).unwrap();
         }
     }
     let mut read = database.begin(1, 7).unwrap();
-    assert_eq!(sealed_coverage(&database, &mut read, "seal-live", 20).unwrap().unwrap().sealed_messages, 10);
-    let cases = [(0, None), (0, Some(8)), (0, Some(15)), (0, Some(0)), (5, Some(15))];
+    assert_eq!(
+        sealed_coverage(&database, &mut read, "seal-live", 20)
+            .unwrap()
+            .unwrap()
+            .sealed_messages,
+        10
+    );
+    let cases = [
+        (0, None),
+        (0, Some(8)),
+        (0, Some(15)),
+        (0, Some(0)),
+        (5, Some(15)),
+    ];
     let mut expired = database.begin(1, 7).unwrap();
-    assert_eq!(crate::turn::legacy_messages(
-        &database, &mut expired, "seal-live", 0, None, &mut || true,
-    ).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
-    let archived: Vec<_> = cases.iter().map(|(window, before)| {
-        let mut read = database.begin(1, 7).unwrap();
-        crate::turn::legacy_messages(&database, &mut read, "seal-live", *window, *before, &mut || false).unwrap()
-    }).collect();
+    assert_eq!(
+        crate::turn::legacy_messages(&database, &mut expired, "seal-live", 0, None, &mut || true,)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::TimedOut
+    );
+    let archived: Vec<_> = cases
+        .iter()
+        .map(|(window, before)| {
+            let mut read = database.begin(1, 7).unwrap();
+            crate::turn::legacy_messages(
+                &database,
+                &mut read,
+                "seal-live",
+                *window,
+                *before,
+                &mut || false,
+            )
+            .unwrap()
+        })
+        .collect();
     assert_eq!(archived[0].0.len(), 20);
-    assert_eq!(archived[0].0[19]["content"], json!("live sealed message 19"));
+    assert_eq!(
+        archived[0].0[19]["content"],
+        json!("live sealed message 19")
+    );
     let mut mutation = database.begin(1, 7).unwrap();
     invalidate(&database, &mut mutation, "seal-live").unwrap();
     database.commit(mutation).unwrap();
     for ((window, before), expected) in cases.iter().zip(archived) {
         let mut read = database.begin(1, 7).unwrap();
-        let fallback = crate::turn::legacy_messages(&database, &mut read, "seal-live", *window, *before, &mut || false).unwrap();
+        let fallback = crate::turn::legacy_messages(
+            &database,
+            &mut read,
+            "seal-live",
+            *window,
+            *before,
+            &mut || false,
+        )
+        .unwrap();
         assert_eq!(expected, fallback, "window={window} before={before:?}");
     }
 }
@@ -372,10 +449,8 @@ fn seal_one_conversation_seals_and_read_sealed_serves_from_a_live_authority() {
                 conversation_id: "seal-live".to_owned(),
                 actor: "human".to_owned(),
                 status: "completed".to_owned(),
-                projection_json: format!(
-                    r#"{{"content":"live sealed message {index}"}}"#
-                )
-                .into_bytes(),
+                projection_json: format!(r#"{{"content":"live sealed message {index}"}}"#)
+                    .into_bytes(),
                 projection_timestamp: None,
                 settlement_json: b"{}".to_vec(),
                 lane_id: "main".to_owned(),
@@ -404,12 +479,12 @@ fn seal_one_conversation_seals_and_read_sealed_serves_from_a_live_authority() {
     let coverage = {
         let guard = database.lock().unwrap();
         let mut transaction = guard.begin(1, 7).unwrap();
-        sealed_coverage(&*guard, &mut transaction, "seal-live", 20).unwrap()
+        sealed_coverage(&guard, &mut transaction, "seal-live", 20).unwrap()
     };
     assert_eq!(coverage.unwrap().sealed_messages, 20);
     let guard = database.lock().unwrap();
     let mut transaction = guard.begin(1, 7).unwrap();
-    let messages = read_sealed(&*guard, &mut transaction, "seal-live", 20)
+    let messages = read_sealed(&guard, &mut transaction, "seal-live", 20)
         .unwrap()
         .expect("sealed archive must serve");
     assert_eq!(messages.len(), 20);
@@ -417,9 +492,9 @@ fn seal_one_conversation_seals_and_read_sealed_serves_from_a_live_authority() {
     assert_eq!(messages[19]["_turnId"], json!("seal-live-turn-019"));
     for (before, expected_end) in [(None, 20), (Some(8), 8), (Some(0), 0)] {
         let mut read = guard.begin(1, 7).unwrap();
-        let (full, total, start, end) = crate::turn::legacy_messages(
-            &guard, &mut read, "seal-live", 0, before, &mut || false,
-        ).unwrap();
+        let (full, total, start, end) =
+            crate::turn::legacy_messages(&guard, &mut read, "seal-live", 0, before, &mut || false)
+                .unwrap();
         assert_eq!((total, start, end), (20, 0, expected_end));
         assert_eq!(full, messages[..expected_end]);
     }
@@ -434,8 +509,13 @@ fn enumerate_conversations_walks_the_catalog_with_a_cursor() {
         database
             .entity_put(
                 &mut transaction,
-                EntityKey::new(1, 7, crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE, name.as_bytes())
-                    .unwrap(),
+                EntityKey::new(
+                    1,
+                    7,
+                    crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE,
+                    name.as_bytes(),
+                )
+                .unwrap(),
                 b"{}".to_vec(),
             )
             .unwrap();
@@ -443,9 +523,13 @@ fn enumerate_conversations_walks_the_catalog_with_a_cursor() {
     }
     let mut after = Vec::new();
     let mut transaction = database.begin(1, 7).unwrap();
-    let conversations = enumerate_conversations(&database, &mut transaction, &mut after, 8).unwrap();
+    let conversations =
+        enumerate_conversations(&database, &mut transaction, &mut after, 8).unwrap();
     eprintln!("enumerated: {conversations:?} after={after:?}");
-    assert!(conversations.contains(&"conv-1".to_owned()), "{conversations:?}");
+    assert!(
+        conversations.contains(&"conv-1".to_owned()),
+        "{conversations:?}"
+    );
 }
 
 #[test]
@@ -463,10 +547,8 @@ fn archive_seal_driver_seals_live_conversations_in_the_background() {
                 conversation_id: "driver-live".to_owned(),
                 actor: "human".to_owned(),
                 status: "completed".to_owned(),
-                projection_json: format!(
-                    r#"{{"content":"driver sealed message {index}"}}"#
-                )
-                .into_bytes(),
+                projection_json: format!(r#"{{"content":"driver sealed message {index}"}}"#)
+                    .into_bytes(),
                 projection_timestamp: None,
                 settlement_json: b"{}".to_vec(),
                 lane_id: "main".to_owned(),
@@ -497,7 +579,7 @@ fn archive_seal_driver_seals_live_conversations_in_the_background() {
             let guard = database.lock().unwrap();
             let mut transaction = guard.begin(1, 7).unwrap();
             if let Some(coverage) =
-                sealed_coverage(&*guard, &mut transaction, "driver-live", 10).unwrap()
+                sealed_coverage(&guard, &mut transaction, "driver-live", 10).unwrap()
             {
                 sealed = coverage.sealed_messages;
                 if sealed == 10 {
@@ -557,7 +639,7 @@ fn driver_seals_under_the_daemons_scope_shape() {
             let guard = database.lock().unwrap();
             let mut transaction = guard.begin(7, 11).unwrap();
             if let Some(coverage) =
-                sealed_coverage(&*guard, &mut transaction, "daemon-shape", 10).unwrap()
+                sealed_coverage(&guard, &mut transaction, "daemon-shape", 10).unwrap()
             {
                 sealed = coverage.sealed_messages;
                 if sealed == 10 {
@@ -571,7 +653,7 @@ fn driver_seals_under_the_daemons_scope_shape() {
     assert_eq!(sealed, 10, "driver must seal under the daemon scope shape");
     let guard = database.lock().unwrap();
     let mut transaction = guard.begin(7, 11).unwrap();
-    let messages = read_sealed(&*guard, &mut transaction, "daemon-shape", 10)
+    let messages = read_sealed(&guard, &mut transaction, "daemon-shape", 10)
         .unwrap()
         .expect("archive must serve after daemon-shape sealing");
     assert_eq!(messages.len(), 10);
@@ -679,30 +761,76 @@ fn prepared_archive_keeps_private_bytes_and_allows_unrelated_foreground_commit()
 fn retired_archive_format_falls_back_and_rebuilds_from_authoritative_turns() {
     let (_, mut database) = prepared_archive_seed();
     let replica = database.build_preparation_replica().unwrap();
-    let prepared = prepare_one_conversation(&replica, 1, 7, "prepared-archive").unwrap().unwrap();
+    let prepared = prepare_one_conversation(&replica, 1, 7, "prepared-archive")
+        .unwrap()
+        .unwrap();
     database.commit(prepared.transaction).unwrap();
     let mut transaction = database.begin(1, 7).unwrap();
     let key = manifest_key(&transaction, "prepared-archive").unwrap();
-    let bytes = vd_read(&database, &mut transaction, &key, TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE).unwrap().unwrap();
+    let bytes = vd_read(
+        &database,
+        &mut transaction,
+        &key,
+        TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE,
+    )
+    .unwrap()
+    .unwrap();
     let mut old: Value = serde_json::from_slice(&bytes).unwrap();
     old["format"] = json!(crate::generated_tofudb_ir::TRANSCRIPT_ARCHIVE_RETIRED_FORMAT);
-    vd_put(&database, &mut transaction, key.clone(), TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE,
-        String::from_utf8(key.key_bytes().to_vec()).unwrap(), serde_json::to_vec(&old).unwrap(), 1_700_000_010).unwrap();
+    vd_put(
+        &database,
+        &mut transaction,
+        key.clone(),
+        TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE,
+        String::from_utf8(key.key_bytes().to_vec()).unwrap(),
+        serde_json::to_vec(&old).unwrap(),
+        1_700_000_010,
+    )
+    .unwrap();
     database.commit(transaction).unwrap();
     let mut read = database.begin(1, 7).unwrap();
-    assert!(read_sealed(&database, &mut read, "prepared-archive", 2).unwrap().is_none());
-    let (exact, count, _, _) = crate::turn::legacy_messages(&database, &mut read,
-        "prepared-archive", 0, None, &mut || false).unwrap();
+    assert!(read_sealed(&database, &mut read, "prepared-archive", 2)
+        .unwrap()
+        .is_none());
+    let (exact, count, _, _) = crate::turn::legacy_messages(
+        &database,
+        &mut read,
+        "prepared-archive",
+        0,
+        None,
+        &mut || false,
+    )
+    .unwrap();
     assert_eq!(count, 2);
-    assert!(exact[1]["content"].as_str().unwrap().starts_with("1-message"));
+    assert!(exact[1]["content"]
+        .as_str()
+        .unwrap()
+        .starts_with("1-message"));
     drop(read);
     let replica = database.build_preparation_replica().unwrap();
-    let prepared = prepare_one_conversation(&replica, 1, 7, "prepared-archive").unwrap().unwrap();
+    let prepared = prepare_one_conversation(&replica, 1, 7, "prepared-archive")
+        .unwrap()
+        .unwrap();
     database.commit(prepared.transaction).unwrap();
     let mut read = database.begin(1, 7).unwrap();
-    assert_eq!(read_sealed(&database, &mut read, "prepared-archive", 2).unwrap().unwrap(), exact);
-    let encoded = vd_read(&database, &mut read, &key, TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE).unwrap().unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&encoded).unwrap()["format"], FORMAT);
+    assert_eq!(
+        read_sealed(&database, &mut read, "prepared-archive", 2)
+            .unwrap()
+            .unwrap(),
+        exact
+    );
+    let encoded = vd_read(
+        &database,
+        &mut read,
+        &key,
+        TRANSCRIPT_ARCHIVE_MANIFEST_NAMESPACE,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encoded).unwrap()["format"],
+        FORMAT
+    );
 }
 
 #[test]
@@ -822,25 +950,50 @@ fn enumeration_visits_every_conversation_once_across_lookahead_pages() {
         let expected: Vec<String> = (0..count).map(|index| format!("conv-{index:03}")).collect();
         let mut write = database.begin_with_identity_claim_scopes(1, 7).unwrap();
         for name in &expected {
-            database.entity_put(&mut write, EntityKey::new(1, 7,
-                crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE,
-                name.as_bytes()).unwrap(), b"{}".to_vec()).unwrap();
+            database
+                .entity_put(
+                    &mut write,
+                    EntityKey::new(
+                        1,
+                        7,
+                        crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE,
+                        name.as_bytes(),
+                    )
+                    .unwrap(),
+                    b"{}".to_vec(),
+                )
+                .unwrap();
         }
-        if count != 0 { database.commit(write).unwrap(); }
+        if count != 0 {
+            database.commit(write).unwrap();
+        }
         let mut other = database.begin_with_identity_claim_scopes(1, 8).unwrap();
-        database.entity_put(&mut other, EntityKey::new(1, 8,
-            crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE,
-            b"other-owner").unwrap(), b"{}".to_vec()).unwrap();
+        database
+            .entity_put(
+                &mut other,
+                EntityKey::new(
+                    1,
+                    8,
+                    crate::generated_tofudb_ir::CONVERSATION_DOCUMENT_NAMESPACE,
+                    b"other-owner",
+                )
+                .unwrap(),
+                b"{}".to_vec(),
+            )
+            .unwrap();
         database.commit(other).unwrap();
         for maximum in [1, 8] {
             let mut cursor = Vec::new();
             let mut actual = Vec::new();
             for _ in 0..=count {
                 let mut read = database.begin(1, 7).unwrap();
-                let page = enumerate_conversations(&database, &mut read, &mut cursor, maximum).unwrap();
+                let page =
+                    enumerate_conversations(&database, &mut read, &mut cursor, maximum).unwrap();
                 assert!(page.len() <= maximum);
                 actual.extend(page);
-                if cursor.is_empty() { break; }
+                if cursor.is_empty() {
+                    break;
+                }
             }
             assert!(cursor.is_empty(), "scan did not complete");
             assert_eq!(actual, expected, "count={count}, maximum={maximum}");
@@ -853,12 +1006,23 @@ fn archive_worker_attributes_background_activity_without_changing_its_caller() {
     let database = std::sync::Arc::new(std::sync::Mutex::new(authority()));
     let caller_component = crate::fsync_stats::current_component_for_test();
     let worker_component = std::thread::spawn(move || {
-        assert_eq!(crate::fsync_stats::current_component_for_test(),
-                   crate::fsync_stats::COMPONENT_FOREGROUND);
-        run_archive_seal_worker(database, 1, 1,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)));
+        assert_eq!(
+            crate::fsync_stats::current_component_for_test(),
+            crate::fsync_stats::COMPONENT_FOREGROUND
+        );
+        run_archive_seal_worker(
+            database,
+            1,
+            1,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        );
         crate::fsync_stats::current_component_for_test()
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
     assert_eq!(worker_component, crate::fsync_stats::COMPONENT_MAINTENANCE);
-    assert_eq!(crate::fsync_stats::current_component_for_test(), caller_component);
+    assert_eq!(
+        crate::fsync_stats::current_component_for_test(),
+        caller_component
+    );
 }

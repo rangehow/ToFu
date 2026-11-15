@@ -112,7 +112,9 @@ fn arguments() -> Arguments {
     }
     while let Some(flag) = args.next() {
         match flag.as_str() {
-            "--fastpath-dir" => { path_flag!(fastpath_dir); }
+            "--fastpath-dir" => {
+                path_flag!(fastpath_dir);
+            }
             "--fastpath-admission" if fastpath_admission.is_none() => {
                 fastpath_admission = Some(match args.next().unwrap_or_else(|| usage()).as_str() {
                     "required" => tofu_db::fastpath::FastpathAdmission::Required,
@@ -121,8 +123,17 @@ fn arguments() -> Arguments {
                 });
             }
             "--fastpath-sync-interval-ms" if fastpath_interval_ms.is_none() => {
-                let value: u64 = args.next().unwrap_or_else(|| usage()).parse().unwrap_or_else(|_| usage());
-                if !(tofu_db::fastpath::MIN_NATIVE_FASTPATH_SYNC_INTERVAL_MS..=tofu_db::fastpath::MAX_NATIVE_FASTPATH_SYNC_INTERVAL_MS).contains(&value) { usage(); }
+                let value: u64 = args
+                    .next()
+                    .unwrap_or_else(|| usage())
+                    .parse()
+                    .unwrap_or_else(|_| usage());
+                if !(tofu_db::fastpath::MIN_NATIVE_FASTPATH_SYNC_INTERVAL_MS
+                    ..=tofu_db::fastpath::MAX_NATIVE_FASTPATH_SYNC_INTERVAL_MS)
+                    .contains(&value)
+                {
+                    usage();
+                }
                 fastpath_interval_ms = Some(value);
             }
             "--data-dir" if data_dir.is_none() => {
@@ -176,9 +187,7 @@ fn arguments() -> Arguments {
                     .unwrap_or_else(|| usage())
                     .parse()
                     .unwrap_or_else(|_| usage());
-                if !(1..=tofu_db::wal::MAX_WAL_FLUSH_INTERVAL.as_millis() as u64)
-                    .contains(&value)
-                {
+                if !(1..=tofu_db::wal::MAX_WAL_FLUSH_INTERVAL.as_millis() as u64).contains(&value) {
                     usage();
                 }
                 wal_flush_interval_ms = Some(value);
@@ -241,8 +250,12 @@ fn arguments() -> Arguments {
         }
         _ => data_dir.unwrap_or_else(|| usage()),
     };
-    if command != "serve" && (fastpath_dir.is_some() || fastpath_interval_ms.is_some()) { usage(); }
-    if (fastpath_interval_ms.is_some() || fastpath_admission.is_some()) && fastpath_dir.is_none() { usage(); }
+    if command != "serve" && (fastpath_dir.is_some() || fastpath_interval_ms.is_some()) {
+        usage();
+    }
+    if (fastpath_interval_ms.is_some() || fastpath_admission.is_some()) && fastpath_dir.is_none() {
+        usage();
+    }
     match command.as_str() {
         "init"
         | "inspect"
@@ -306,7 +319,8 @@ fn arguments() -> Arguments {
                 && owner_id.is_some_and(|id| id > 0)
                 && tenant_id.is_some_and(|id| id > 0)
                 && search_projection_dir.is_none()
-                && maximum_rows.is_none_or(|rows| (1..=MAX_LEGACY_CHECKOUT_BACKFILL).contains(&rows))
+                && maximum_rows
+                    .is_none_or(|rows| (1..=MAX_LEGACY_CHECKOUT_BACKFILL).contains(&rows))
                 && execute => {}
         "sql"
             if backup_dir.is_none()
@@ -488,8 +502,15 @@ fn run() -> io::Result<()> {
         }
         "fastpath-export" => {
             let key = tofu_db::at_rest::key_from_launch_environment()?;
-            let manifest = tofu_db::fastpath::export(&arguments.data_dir, arguments.backup_dir.as_ref().unwrap(), key)?;
-            println!("authority_uuid={} durable_sequence={} export_verified=true source_retained=true", manifest.authority_uuid, manifest.durable_sequence);
+            let manifest = tofu_db::fastpath::export(
+                &arguments.data_dir,
+                arguments.backup_dir.as_ref().unwrap(),
+                key,
+            )?;
+            println!(
+                "authority_uuid={} durable_sequence={} export_verified=true source_retained=true",
+                manifest.authority_uuid, manifest.durable_sequence
+            );
             return Ok(());
         }
         "serve" => {
@@ -536,8 +557,13 @@ fn run() -> io::Result<()> {
                 .with_explicit_wal_durability(arguments.durability.is_some());
             config = config.with_backup_dir(arguments.backup_dir.clone());
             if let Some(base) = arguments.fastpath_dir.as_ref() {
-                if arguments.durability.as_deref() == Some("normal") || arguments.wal_flush_interval_ms.is_some() {
-                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "native fastpath requires strict local durability"));
+                if arguments.durability.as_deref() == Some("normal")
+                    || arguments.wal_flush_interval_ms.is_some()
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "native fastpath requires strict local durability",
+                    ));
                 }
                 config = config
                     .with_fastpath(base, arguments.fastpath_interval_ms)?
@@ -710,7 +736,10 @@ fn run() -> io::Result<()> {
                 report.graph.wal_blocks_verified,
                 report.graph.missing_block_ids.len(),
             );
-            println!("performance={}", serde_json::to_string(&report.performance)?);
+            println!(
+                "performance={}",
+                serde_json::to_string(&report.performance)?
+            );
             for lost in &report.graph.missing_block_ids {
                 println!("missing_block={lost}");
             }
@@ -721,7 +750,10 @@ fn run() -> io::Result<()> {
                 println!("fatal={fatal}");
             }
             return if report.verdict == "fatal" {
-                Err(io::Error::new(io::ErrorKind::InvalidData, "authority verification is fatal"))
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "authority verification is fatal",
+                ))
             } else {
                 Ok(())
             };
@@ -837,7 +869,9 @@ fn run() -> io::Result<()> {
             let progress = database.backfill_integration_checkout_claims(
                 arguments.tenant_id.unwrap(),
                 arguments.owner_id.unwrap(),
-                arguments.maximum_rows.unwrap_or(MAX_LEGACY_CHECKOUT_BACKFILL),
+                arguments
+                    .maximum_rows
+                    .unwrap_or(MAX_LEGACY_CHECKOUT_BACKFILL),
             )?;
             println!(
                 "format=tofu-db.integration-checkout-backfill.v1 processed_rows={} after_id={} complete={} committed={} durable_sequence={} maximum_rows_per_transaction={}",

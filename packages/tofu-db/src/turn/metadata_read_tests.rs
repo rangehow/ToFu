@@ -921,11 +921,14 @@ mod read_cost {
     impl Fixture {
         fn read(&self, include_projection: Option<bool>) -> (Vec<u8>, u64) {
             let mut database =
-                AuthorityDatabase::open_with_vfs(Path::new("/data"), Arc::clone(&self.vfs)).unwrap();
-            self.counter.take();
-            let response =
-                execute_bytes(&mut database, &query(11, include_projection.map(Value::from)))
+                AuthorityDatabase::open_with_vfs(Path::new("/data"), Arc::clone(&self.vfs))
                     .unwrap();
+            self.counter.take();
+            let response = execute_bytes(
+                &mut database,
+                &query(11, include_projection.map(Value::from)),
+            )
+            .unwrap();
             (response, self.counter.take())
         }
     }
@@ -977,18 +980,27 @@ mod read_cost {
         let mut transaction = database.begin(7, 11).unwrap();
         let summary_key =
             metadata_summary::key(&turn_key(&transaction, "metadata", "turn").unwrap()).unwrap();
-        let summary_bytes =
-            database.entity_get(&mut transaction, &summary_key).unwrap().unwrap().len();
+        let summary_bytes = database
+            .entity_get(&mut transaction, &summary_key)
+            .unwrap()
+            .unwrap()
+            .len();
         if summarized {
             drop(transaction);
         } else {
             // A row written before summaries existed: the whole-document path.
-            database.entity_delete(&mut transaction, summary_key).unwrap();
+            database
+                .entity_delete(&mut transaction, summary_key)
+                .unwrap();
             database.commit(transaction).unwrap();
         }
         database.checkpoint_for_test().unwrap();
         drop(database);
-        Fixture { counter, vfs, summary_bytes }
+        Fixture {
+            counter,
+            vfs,
+            summary_bytes,
+        }
     }
 
     #[test]
@@ -1004,12 +1016,21 @@ mod read_cost {
             let full: Value = serde_json::from_slice(&full).unwrap();
             let metadata: Value = serde_json::from_slice(&metadata).unwrap();
             assert_eq!(metadata, without_projection(full));
-            assert_eq!(serde_json::from_slice::<Value>(&legacy_metadata).unwrap(), metadata);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&legacy_metadata).unwrap(),
+                metadata
+            );
             // The projection text carries 6 bits per byte, so any read of its
             // blob is at least three quarters of its logical size.
             let blob_floor = (projection_bytes * 3 / 4) as u64;
-            assert!(full_read >= blob_floor, "{megabytes} MiB full read {full_read}");
-            assert!(legacy_read >= blob_floor, "{megabytes} MiB legacy read {legacy_read}");
+            assert!(
+                full_read >= blob_floor,
+                "{megabytes} MiB full read {full_read}"
+            );
+            assert!(
+                legacy_read >= blob_floor,
+                "{megabytes} MiB legacy read {legacy_read}"
+            );
             assert!(metadata_read + blob_floor <= legacy_read);
             eprintln!(
                 "metadata-read-cost projection={megabytes}MiB summarized={metadata_read} \
@@ -1120,9 +1141,12 @@ mod summary {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         seed(&mut database);
         let mut transaction = database.begin(7, 11).unwrap();
-        assert!(crate::versioned_document::stored_blob_reference(&stored(&database, &mut transaction))
-            .unwrap()
-            .is_none());
+        assert!(crate::versioned_document::stored_blob_reference(&stored(
+            &database,
+            &mut transaction
+        ))
+        .unwrap()
+        .is_none());
         assert!(summary_row(&database, &mut transaction).is_none());
         drop(transaction);
 
@@ -1130,9 +1154,12 @@ mod summary {
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         seed_large(&mut database);
         let mut transaction = database.begin(7, 11).unwrap();
-        assert!(crate::versioned_document::stored_blob_reference(&stored(&database, &mut transaction))
-            .unwrap()
-            .is_some());
+        assert!(crate::versioned_document::stored_blob_reference(&stored(
+            &database,
+            &mut transaction
+        ))
+        .unwrap()
+        .is_some());
         assert!(bound(&database, &mut transaction));
         drop(transaction);
         let full = execute(&mut database, &query(11, None)).unwrap();
@@ -1165,7 +1192,9 @@ mod summary {
         rebound.extend_from_slice(&Sha256::digest(&dangling));
         rebound.extend_from_slice(&summary[40..]);
         let key = turn_key(&transaction, "metadata", "turn").unwrap();
-        database.entity_put(&mut transaction, key, dangling).unwrap();
+        database
+            .entity_put(&mut transaction, key, dangling)
+            .unwrap();
         let key = summary_key(&transaction);
         database.entity_put(&mut transaction, key, rebound).unwrap();
         assert_eq!(metadata(&database, &mut transaction), Ok(expected.clone()));
@@ -1190,17 +1219,25 @@ mod summary {
         // envelope; it must never answer for the current one.
         let mut changed = original.clone();
         changed.insert("status".to_owned(), json!("failed"));
-        changed.insert("settlement".to_owned(), json!({"outcome": "failed", "cause": "x"}));
+        changed.insert(
+            "settlement".to_owned(),
+            json!({"outcome": "failed", "cause": "x"}),
+        );
         let mut transaction = database.begin(7, 11).unwrap();
         let previous = summary_row(&database, &mut transaction).unwrap();
         replace_in_private_transaction(&database, &mut transaction, &changed, "metadata\u{1f}turn");
-        assert_eq!(summary_row(&database, &mut transaction), Some(previous.clone()));
+        assert_eq!(
+            summary_row(&database, &mut transaction),
+            Some(previous.clone())
+        );
         assert!(!bound(&database, &mut transaction));
-        let current: Value = serde_json::from_slice(&metadata(&database, &mut transaction).unwrap())
-            .unwrap();
+        let current: Value =
+            serde_json::from_slice(&metadata(&database, &mut transaction).unwrap()).unwrap();
         assert_eq!(current["status"], "failed");
         let full: Value = serde_json::from_slice(
-            &get(&database, &mut transaction, "metadata", "turn").unwrap().unwrap(),
+            &get(&database, &mut transaction, "metadata", "turn")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(current, without_projection(full));
@@ -1244,7 +1281,10 @@ mod summary {
         for field in ["presentationId", "currentAttemptId", "_executionEpoch"] {
             legacy.remove(field);
         }
-        legacy.insert("_unknownPrivateLocator".to_owned(), json!({"blob": "private"}));
+        legacy.insert(
+            "_unknownPrivateLocator".to_owned(),
+            json!({"blob": "private"}),
+        );
         legacy.insert("projectionRevision".to_owned(), json!(7));
         legacy.insert("_modelContextDisplayOffset".to_owned(), json!(2));
         let documents = [
@@ -1258,7 +1298,9 @@ mod summary {
             )),
             serde_json::to_vec(&legacy).unwrap(),
             // Value interprets this marker only as the first key of an object.
-            with_suffix(r#","settlement":{"$serde_json::private::RawValue":"{\"outcome\":\"completed\"}"}"#),
+            with_suffix(
+                r#","settlement":{"$serde_json::private::RawValue":"{\"outcome\":\"completed\"}"}"#,
+            ),
             with_suffix(r#","settlement":{"$serde_json::private::RawValue":"[1]"}"#),
             with_suffix(r#","ordinal":-1"#),
             with_suffix(r#","conversationId":"elsewhere""#),
@@ -1300,24 +1342,37 @@ mod summary {
         document.insert("status".to_owned(), json!("failed"));
         let mut transaction = database.begin(7, 11).unwrap();
         let previous = summary_row(&database, &mut transaction);
-        put_bytes(&database, &mut transaction, serde_json::to_vec(&document).unwrap()).unwrap();
+        put_bytes(
+            &database,
+            &mut transaction,
+            serde_json::to_vec(&document).unwrap(),
+        )
+        .unwrap();
         assert_eq!(summary_row(&database, &mut transaction), previous);
         assert!(!bound(&database, &mut transaction));
         let current: Value =
             serde_json::from_slice(&metadata(&database, &mut transaction).unwrap()).unwrap();
         let full: Value = serde_json::from_slice(
-            &get(&database, &mut transaction, "metadata", "turn").unwrap().unwrap(),
+            &get(&database, &mut transaction, "metadata", "turn")
+                .unwrap()
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(current, without_projection(full));
-        assert_eq!(current["settlement"]["error"].as_str().unwrap().len(), 9 * 1024);
+        assert_eq!(
+            current["settlement"]["error"].as_str().unwrap().len(),
+            9 * 1024
+        );
     }
 
     fn owner_summary_rows(database: &AuthorityDatabase, owner: u64) -> usize {
         let mut transaction = database.begin(7, owner).unwrap();
         let (start, end) =
             EntityKey::prefix_range(7, owner, TURN_METADATA_SUMMARY_NAMESPACE, b"").unwrap();
-        database.entity_scan(&mut transaction, &start, &end, 16).unwrap().len()
+        database
+            .entity_scan(&mut transaction, &start, &end, 16)
+            .unwrap()
+            .len()
     }
 
     #[test]
@@ -1327,21 +1382,52 @@ mod summary {
         seed_large(&mut database);
         assert_eq!(owner_summary_rows(&database, 11), 1);
         assert_eq!(owner_summary_rows(&database, 12), 0);
-        assert_eq!(execute(&mut database, &query(12, Some(json!(false)))).unwrap(), Value::Null);
-        execute(&mut database, &request("turn.delete", 11, json!({
-            "conversation_id": "metadata", "turn_ids": ["turn"], "user_id": 11
-        }), Some("metadata-turn-delete"))).unwrap();
+        assert_eq!(
+            execute(&mut database, &query(12, Some(json!(false)))).unwrap(),
+            Value::Null
+        );
+        execute(
+            &mut database,
+            &request(
+                "turn.delete",
+                11,
+                json!({
+                    "conversation_id": "metadata", "turn_ids": ["turn"], "user_id": 11
+                }),
+                Some("metadata-turn-delete"),
+            ),
+        )
+        .unwrap();
         assert_eq!(owner_summary_rows(&database, 11), 0);
-        assert_eq!(execute(&mut database, &query(11, Some(json!(false)))).unwrap(), Value::Null);
+        assert_eq!(
+            execute(&mut database, &query(11, Some(json!(false)))).unwrap(),
+            Value::Null
+        );
 
         let directory = tempfile::tempdir().unwrap();
         let mut database = AuthorityDatabase::initialize(directory.path()).unwrap();
         seed_large(&mut database);
-        execute(&mut database, &request("conversation.delete", 11,
-            json!({"conv_id": "metadata", "user_id": 11}), Some("metadata-delete"))).unwrap();
+        execute(
+            &mut database,
+            &request(
+                "conversation.delete",
+                11,
+                json!({"conv_id": "metadata", "user_id": 11}),
+                Some("metadata-delete"),
+            ),
+        )
+        .unwrap();
         assert_eq!(owner_summary_rows(&database, 11), 0);
-        execute(&mut database, &request("conversation.restore", 11,
-            json!({"conv_id": "metadata", "user_id": 11}), Some("metadata-restore"))).unwrap();
+        execute(
+            &mut database,
+            &request(
+                "conversation.restore",
+                11,
+                json!({"conv_id": "metadata", "user_id": 11}),
+                Some("metadata-restore"),
+            ),
+        )
+        .unwrap();
         assert_eq!(owner_summary_rows(&database, 11), 1);
         let mut transaction = database.begin(7, 11).unwrap();
         assert!(bound(&database, &mut transaction));
@@ -1352,8 +1438,16 @@ mod summary {
             restored,
             without_projection(execute(&mut database, &query(11, None)).unwrap())
         );
-        execute(&mut database, &request("conversation.purge", 11,
-            json!({"conv_id": "metadata", "user_id": 11}), Some("metadata-purge"))).unwrap();
+        execute(
+            &mut database,
+            &request(
+                "conversation.purge",
+                11,
+                json!({"conv_id": "metadata", "user_id": 11}),
+                Some("metadata-purge"),
+            ),
+        )
+        .unwrap();
         assert_eq!(owner_summary_rows(&database, 11), 0);
         drop(database);
         let database = AuthorityDatabase::open(directory.path()).unwrap();

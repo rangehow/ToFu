@@ -13,8 +13,9 @@ use super::tests::{backlog_budget, loose_backlog, metrics};
 use super::tests_fallback_slot::{destroy_newest_slot, durable_slots};
 use super::tests_segment_reclaim::UnfinishableMarkVfs;
 use super::tests_short_holds::{
-    backlog_still_loose, before_every_hold_attempt, count_holds, epoch, loose_path, observed_authority,
-    shard_directory, unlinked_paths, unlinks_per_hold, CountedHolds, Observed, ObservedVfs,
+    backlog_still_loose, before_every_hold_attempt, count_holds, epoch, loose_path,
+    observed_authority, shard_directory, unlinked_paths, unlinks_per_hold, CountedHolds, Observed,
+    ObservedVfs,
 };
 use super::*;
 use crate::payload_manifest::PayloadSegmentReference;
@@ -27,13 +28,23 @@ type Backlog = Vec<(BlockId, Vec<u8>)>;
 /// (built and verified off the mutex, published through
 /// `online_gc_finish_compaction`) and stops there, like a crash before the
 /// copy removal: every loose copy stays beside the catalogued segment.
-fn publish_keeping_loose_copies(database: &mut AuthorityDatabase, ids: &[BlockId]) -> io::Result<()> {
+fn publish_keeping_loose_copies(
+    database: &mut AuthorityDatabase,
+    ids: &[BlockId],
+) -> io::Result<()> {
     let blocks = database.block_store_shared();
-    let segment = blocks.payload_segment_store()?.create(Uuid::new_v4(), ids.to_vec(), |id| blocks.get(id))?;
-    let reference =
-        PayloadSegmentReference::new(segment.metadata(), segment.first_block_id(), segment.last_block_id())?;
+    let segment = blocks
+        .payload_segment_store()?
+        .create(Uuid::new_v4(), ids.to_vec(), |id| blocks.get(id))?;
+    let reference = PayloadSegmentReference::new(
+        segment.metadata(),
+        segment.first_block_id(),
+        segment.last_block_id(),
+    )?;
     blocks.verify_payload_segment(&reference)?;
-    database.online_gc_finish_compaction(ids, reference).map(|_| ())
+    database
+        .online_gc_finish_compaction(ids, reference)
+        .map(|_| ())
 }
 
 fn sorted_ids(backlog: &Backlog) -> Vec<BlockId> {
@@ -43,7 +54,10 @@ fn sorted_ids(backlog: &Backlog) -> Vec<BlockId> {
 }
 
 fn copy_paths(backlog: &Backlog) -> BTreeSet<PathBuf> {
-    backlog.iter().map(|(block_id, _)| loose_path(*block_id)).collect()
+    backlog
+        .iter()
+        .map(|(block_id, _)| loose_path(*block_id))
+        .collect()
 }
 
 /// Crash image of a store whose live loose backlog, `segments` segments deep
@@ -88,7 +102,10 @@ fn recover_backlog(vfs: &DeterministicVfs, lose_newest_slot: bool, backlog: &Bac
 fn assert_backlog_reads(database: &Arc<Mutex<CountedHolds>>, backlog: &Backlog) {
     let guard = database.lock().unwrap();
     for (block_id, payload) in backlog {
-        assert_eq!(&guard.authority.read_block_for_test(*block_id).unwrap(), payload);
+        assert_eq!(
+            &guard.authority.read_block_for_test(*block_id).unwrap(),
+            payload
+        );
     }
 }
 
@@ -117,27 +134,41 @@ fn redundant_copies(database: &Arc<Mutex<CountedHolds>>) -> Vec<BlockId> {
 fn the_next_scan_removes_every_crash_leftover_copy_one_unlink_per_hold() {
     let (image, backlog) = crash_leftover(2);
     let (vfs, database) = reopen_observed(image);
-    assert_eq!(backlog_still_loose(&database, &backlog), backlog.len(), "fixture: every copy survived the crash");
+    assert_eq!(
+        backlog_still_loose(&database, &backlog),
+        backlog.len(),
+        "fixture: every copy survived the crash"
+    );
     let mut collector = OnlineGarbageCollector::new(backlog_budget());
     // A third segment would reach the pressure floor; two stay below it.
     collector.set_catalog_pressure_floor_for_test(3);
     let waits: Rc<RefCell<Vec<(Duration, Duration)>>> = Rc::default();
     let reset = {
         let waits = Rc::clone(&waits);
-        before_every_hold_attempt(move |previous_hold, off_mutex| waits.borrow_mut().push((previous_hold, off_mutex)))
+        before_every_hold_attempt(move |previous_hold, off_mutex| {
+            waits.borrow_mut().push((previous_hold, off_mutex))
+        })
     };
     vfs.observer.take();
     epoch(&mut collector, &database);
     drop(reset);
     let events = vfs.observer.take();
     let waits = waits.borrow();
-    assert_eq!(waits.len(), backlog.len(), "one attempt per copy: nothing contended the authority");
+    assert_eq!(
+        waits.len(),
+        backlog.len(),
+        "one attempt per copy: nothing contended the authority"
+    );
     assert!(
         waits[1..].iter().all(|(previous_hold, off_mutex)| !previous_hold.is_zero() && off_mutex >= previous_hold),
         "every copy hold after the first waits off the mutex at least as long as the hold before it"
     );
 
-    assert_eq!(unlinked_paths(&events), copy_paths(&backlog), "the scan unlinks exactly the redundant copies");
+    assert_eq!(
+        unlinked_paths(&events),
+        copy_paths(&backlog),
+        "the scan unlinks exactly the redundant copies"
+    );
     let (per_hold, off_mutex) = unlinks_per_hold(&events);
     eprintln!(
         "crash leftover: {} copies loose before the scan, {} unlinked in {} holds, {} CONTROL writes",
@@ -152,12 +183,17 @@ fn the_next_scan_removes_every_crash_leftover_copy_one_unlink_per_hold() {
         "(holds that unlinked, most unlinks in one hold, unlinks off the mutex)"
     );
     assert!(
-        !events.iter().any(|event| matches!(event, Observed::ControlWrite { .. })),
+        !events
+            .iter()
+            .any(|event| matches!(event, Observed::ControlWrite { .. })),
         "both slots already name the catalog"
     );
     let collected = metrics(&collector);
     assert_eq!(
-        (collected.total_redundant_copies_removed, collected.total_compacted_blocks),
+        (
+            collected.total_redundant_copies_removed,
+            collected.total_compacted_blocks
+        ),
         (backlog.len() as u64, 0)
     );
     assert_eq!(backlog_still_loose(&database, &backlog), 0);
@@ -188,7 +224,10 @@ fn a_redundant_copy_goes_only_after_both_control_slots_name_its_catalog() {
         seed.control_writes.store(0, Ordering::SeqCst);
         seed.fail_control_writes_from.store(2, Ordering::SeqCst);
         let error = publish_keeping_loose_copies(&mut guard, &ids[ids.len() / 2..]).unwrap_err();
-        assert!(error.to_string().contains("injected CONTROL write failure"), "{error}");
+        assert!(
+            error.to_string().contains("injected CONTROL write failure"),
+            "{error}"
+        );
         backlog
     };
     let image = seed.inner.fork_durable().unwrap();
@@ -213,9 +252,16 @@ fn a_redundant_copy_goes_only_after_both_control_slots_name_its_catalog() {
         .iter()
         .position(|event| matches!(event, Observed::Unlink { .. }))
         .expect("the copies go");
-    let Observed::Unlink { hold: first_hold, .. } = events[first_unlink].clone() else { unreachable!() };
-    let control_writes: Vec<&Observed> =
-        events.iter().filter(|event| matches!(event, Observed::ControlWrite { .. })).collect();
+    let Observed::Unlink {
+        hold: first_hold, ..
+    } = events[first_unlink].clone()
+    else {
+        unreachable!()
+    };
+    let control_writes: Vec<&Observed> = events
+        .iter()
+        .filter(|event| matches!(event, Observed::ControlWrite { .. }))
+        .collect();
     assert_eq!(
         control_writes,
         vec![&Observed::ControlWrite { hold: first_hold }],
@@ -232,8 +278,17 @@ fn a_redundant_copy_goes_only_after_both_control_slots_name_its_catalog() {
         unlinked_paths(&events).len(),
         control_writes.len()
     );
-    let installed = database.lock().unwrap().authority.writer_engine().unwrap().state().payload_manifest_block_id;
-    assert!(durable_slots(&vfs.inner).iter().all(|state| state.payload_manifest_block_id == installed));
+    let installed = database
+        .lock()
+        .unwrap()
+        .authority
+        .writer_engine()
+        .unwrap()
+        .state()
+        .payload_manifest_block_id;
+    assert!(durable_slots(&vfs.inner)
+        .iter()
+        .all(|state| state.payload_manifest_block_id == installed));
     for lose_newest_slot in [false, true] {
         assert_eq!(recover_backlog(&vfs.inner, lose_newest_slot, &backlog), 2);
     }
@@ -249,7 +304,11 @@ fn a_redundant_copy_goes_only_after_both_control_slots_name_its_catalog() {
 fn a_copy_recreated_during_the_run_keeps_its_value_and_goes_in_the_next_scan() {
     let (image, backlog) = crash_leftover(2);
     let (vfs, database) = reopen_observed(image);
-    let (recreated, payload) = backlog.iter().min_by_key(|(block_id, _)| *block_id).cloned().unwrap();
+    let (recreated, payload) = backlog
+        .iter()
+        .min_by_key(|(block_id, _)| *block_id)
+        .cloned()
+        .unwrap();
     let foreground: Arc<Mutex<Option<Result<(), String>>>> = Arc::default();
     {
         let database = Arc::downgrade(&database);
@@ -259,11 +318,17 @@ fn a_copy_recreated_during_the_run_keeps_its_value_and_goes_in_the_next_scan() {
             Box::new(move || {
                 let database = database.upgrade().unwrap();
                 let outcome = std::thread::spawn(move || -> Result<(), String> {
-                    let mut guard =
-                        database.try_lock().map_err(|_| "the authority mutex is held".to_owned())?;
+                    let mut guard = database
+                        .try_lock()
+                        .map_err(|_| "the authority mutex is held".to_owned())?;
                     let authority = &mut guard.authority;
-                    authority.write_orphan_block_for_test(&payload).map_err(|error| error.to_string())?;
-                    authority.commit_block_payloads_for_test(&[payload]).map(|_| ()).map_err(|error| error.to_string())
+                    authority
+                        .write_orphan_block_for_test(&payload)
+                        .map_err(|error| error.to_string())?;
+                    authority
+                        .commit_block_payloads_for_test(&[payload])
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
                 })
                 .join()
                 .unwrap();
@@ -275,15 +340,30 @@ fn a_copy_recreated_during_the_run_keeps_its_value_and_goes_in_the_next_scan() {
     vfs.observer.take();
     epoch(&mut collector, &database);
     let first = vfs.observer.take();
-    let outcome = foreground.lock().unwrap().take().expect("the run reached the recreated copy's shard barrier");
-    assert_eq!(outcome, Ok(()), "the foreground recreates the copy and commits between two holds");
+    let outcome = foreground
+        .lock()
+        .unwrap()
+        .take()
+        .expect("the run reached the recreated copy's shard barrier");
+    assert_eq!(
+        outcome,
+        Ok(()),
+        "the foreground recreates the copy and commits between two holds"
+    );
     assert_eq!(unlinked_paths(&first), copy_paths(&backlog));
-    assert_eq!(backlog_still_loose(&database, &backlog), 1, "only the recreated copy is loose");
+    assert_eq!(
+        backlog_still_loose(&database, &backlog),
+        1,
+        "only the recreated copy is loose"
+    );
     assert_backlog_reads(&database, &backlog);
 
     epoch(&mut collector, &database);
     let second = vfs.observer.take();
-    let removed: BTreeSet<PathBuf> = unlinked_paths(&second).intersection(&copy_paths(&backlog)).cloned().collect();
+    let removed: BTreeSet<PathBuf> = unlinked_paths(&second)
+        .intersection(&copy_paths(&backlog))
+        .cloned()
+        .collect();
     assert_eq!(removed, BTreeSet::from([loose_path(recreated)]));
     assert_eq!(unlinks_per_hold(&second).0.values().copied().max(), Some(1));
     eprintln!(
@@ -292,7 +372,10 @@ fn a_copy_recreated_during_the_run_keeps_its_value_and_goes_in_the_next_scan() {
         1,
         removed.len()
     );
-    assert_eq!(metrics(&collector).total_redundant_copies_removed, backlog.len() as u64 + 1);
+    assert_eq!(
+        metrics(&collector).total_redundant_copies_removed,
+        backlog.len() as u64 + 1
+    );
     assert_eq!(backlog_still_loose(&database, &backlog), 0);
     assert_backlog_reads(&database, &backlog);
     for lose_newest_slot in [false, true] {
@@ -314,21 +397,54 @@ fn copies_a_stopped_compaction_run_left_go_in_the_next_epoch() {
     *vfs.observer.stop_after_unlinks.lock().unwrap() = Some((3, Arc::clone(&stop)));
     vfs.observer.take();
     let error = collector.run_epoch(&database, &stop).unwrap_err();
-    assert!(error.to_string().contains("online GC epoch stopped"), "{error}");
-    assert_eq!(unlinked_paths(&vfs.observer.take()).len(), 3, "the stop ends the copy run after its third unlink");
-    assert_eq!(database.lock().unwrap().authority.payload_segment_count_for_test(), 1);
-    let packed = database.lock().unwrap().authority.block_store_shared().installed_payload_manifest().unwrap()
-        .expect("the first segment was published").segments[0].block_count as usize;
+    assert!(
+        error.to_string().contains("online GC epoch stopped"),
+        "{error}"
+    );
+    assert_eq!(
+        unlinked_paths(&vfs.observer.take()).len(),
+        3,
+        "the stop ends the copy run after its third unlink"
+    );
+    assert_eq!(
+        database
+            .lock()
+            .unwrap()
+            .authority
+            .payload_segment_count_for_test(),
+        1
+    );
+    let packed = database
+        .lock()
+        .unwrap()
+        .authority
+        .block_store_shared()
+        .installed_payload_manifest()
+        .unwrap()
+        .expect("the first segment was published")
+        .segments[0]
+        .block_count as usize;
     let left = redundant_copies(&database);
-    assert_eq!(left.len(), packed - 3, "the stopped run left the rest of its segment's copies");
+    assert_eq!(
+        left.len(),
+        packed - 3,
+        "the stopped run left the rest of its segment's copies"
+    );
 
     stop.store(false, Ordering::Release);
     epoch(&mut collector, &database);
     let next = vfs.observer.take();
     let unlinked = unlinked_paths(&next);
-    assert!(left.iter().all(|block_id| unlinked.contains(&loose_path(*block_id))), "every leftover copy goes");
+    assert!(
+        left.iter()
+            .all(|block_id| unlinked.contains(&loose_path(*block_id))),
+        "every leftover copy goes"
+    );
     assert_eq!(unlinks_per_hold(&next).0.values().copied().max(), Some(1));
-    assert_eq!(metrics(&collector).total_redundant_copies_removed, left.len() as u64);
+    assert_eq!(
+        metrics(&collector).total_redundant_copies_removed,
+        left.len() as u64
+    );
     assert!(redundant_copies(&database).is_empty());
     let (next_holds, _) = unlinks_per_hold(&next);
     eprintln!(

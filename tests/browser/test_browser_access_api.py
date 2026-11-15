@@ -61,9 +61,11 @@ def test_access_and_adapter_endpoints_are_authenticated_and_user_scoped(
         adapters = await client.get('/api/v1/browser/adapters', headers=headers)
         assert adapters.status_code == 200
         payload = await adapters.get_json()
-        assert payload['count'] >= 2
+        # Bundle packs (e.g. a private overlay's) join the core packs when present.
+        from lib.site_packs import load_packs
         assert {row['id'] for row in payload['adapters']} >= {
-            'xiaohongshu', 'modelplaza'}
+            'xiaohongshu', 'douyin', *load_packs()}
+        assert payload['count'] == len(payload['adapters'])
         assert all(row['health']['status'] == 'offline'
                    for row in payload['adapters'])
 

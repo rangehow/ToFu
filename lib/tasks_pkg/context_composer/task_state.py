@@ -110,9 +110,9 @@ def derive_task_state_snapshot(messages: list[dict[str, Any]],
                                ) -> TaskStateSnapshotV1:
     """Derive state without treating unverified assistant text as completion."""
     task = task if isinstance(task, dict) else {}
-    from lib.tasks_pkg.message_semantics import is_human_message
+    from lib.tasks_pkg.message_semantics import is_request_message
     user_texts = [_text(message.get("content")) for message in messages
-                  if is_human_message(message)]
+                  if is_request_message(message)]
     goal = next((value for value in user_texts if value), "")[:4000]
     constraints = [value for value in user_texts if _CONSTRAINT.search(value)]
     constraints.extend(task.get("_hardConstraints") or ())

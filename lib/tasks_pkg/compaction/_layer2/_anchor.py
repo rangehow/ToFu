@@ -26,7 +26,7 @@ from lib.tasks_pkg.compaction._constants import (
 )
 from lib.tasks_pkg.compaction._tokens import _estimate_msg_tokens
 from lib.tasks_pkg.compaction._history import (
-    collect_history_entries, history_entries, is_human_message, user_text,
+    collect_history_entries, history_entries, is_request_message, user_text,
 )
 
 logger = get_logger(__name__)
@@ -60,7 +60,7 @@ def _objective_anchor_index(messages: list) -> int | None:
         if any(entry['kind'] == 'opening_request'
                for entry in history_entries(m)):
             return i
-        if not is_human_message(m):
+        if not is_request_message(m):
             continue
         content = m.get('content')
         if isinstance(content, str):
@@ -100,7 +100,7 @@ def _extract_current_query(messages: list) -> str:
     current query steers the lossy summary away from the human request.
     """
     for msg in reversed(messages):
-        if is_human_message(msg):
+        if is_request_message(msg):
             return user_text(msg)
     return ''
 
@@ -182,7 +182,7 @@ def _find_turn_boundary(
     # them. Without this skip a trailing meta reminder would split the
     # in-flight turn at the boundary and the real current turn would lose its
     # "always preserved whole" invariant.
-    user_idx = [i for i, m in enumerate(messages) if is_human_message(m)]
+    user_idx = [i for i, m in enumerate(messages) if is_request_message(m)]
     if not user_idx:
         return len(messages)
 
@@ -385,7 +385,7 @@ def _plan_cross_turn_tail(messages, *, budget_tokens, max_turns):
         indices.update(i for i in range(previous_end, start)
                        if (messages[i].get('role') == 'assistant'
                            or (messages[i].get('_isInboxInject')
-                               and not is_human_message(messages[i])))
+                               and not is_request_message(messages[i])))
                        and not messages[i].get('_contextComposer')
                        and not messages[i].get('_isMeta')
                        and not history_entries(messages[i])
@@ -394,11 +394,11 @@ def _plan_cross_turn_tail(messages, *, budget_tokens, max_turns):
         previous_end = end
     round_indices = set().union(*execution_indices.values()) if spans else set()
     live_starts = [i for i, message in enumerate(messages)
-                   if is_human_message(message)]
+                   if is_request_message(message)]
     if not live_starts:
         return len(messages), [], []
     starts = [i for i, message in enumerate(messages)
-              if is_human_message(message) or history_entries(message)]
+              if is_request_message(message) or history_entries(message)]
     costs = [_estimate_msg_tokens(message) for message in messages]
     shells = [cost if i not in round_indices else 0 for i, cost in enumerate(costs)]
     candidates, protected, synthetic = [], [], []

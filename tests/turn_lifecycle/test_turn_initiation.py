@@ -81,11 +81,14 @@ def test_resolve_does_not_infer_identity_from_feature_flags(feature_flag):
 
 def test_persisted_origin_names_the_initiator_of_a_durable_turn():
     # Persistence folds the transient ``_initiator`` into ``origin.initiator``
-    # and drops it, so a timer or channel input is stored as actor=human.
+    # and drops it, so a timer or channel input is stored as actor=human. Its
+    # reloaded message still names the initiator.
     turn = {'actor': 'human', 'projection': {
         'content': 'x', 'origin': {'blockId': 'origin', 'initiator': 'channel'}}}
-    assert resolve_initiator(turn['projection']) == INITIATOR_HUMAN
+    assert resolve_initiator(turn['projection']) == 'channel'
     assert resolve_turn_initiator(turn) == 'channel'
+    assert resolve_initiator({'content': 'x', 'origin': {'initiator': 'bogus'}}) == INITIATOR_UNKNOWN
+    assert resolve_initiator({'content': 'x', 'origin': None}) == INITIATOR_HUMAN
 
 
 def test_turn_initiator_falls_back_to_legacy_marker_and_fails_closed():

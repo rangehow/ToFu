@@ -12,7 +12,7 @@ from lib.tasks_pkg.compaction._constants import _WIRE_IMAGE_KEEP_TAIL
 from lib.tasks_pkg.compaction._tokens import _human_size
 
 from lib.tasks_pkg.compaction._history import replace_history_blocks
-from lib.tasks_pkg.compaction._history import history_entries, is_human_message
+from lib.tasks_pkg.compaction._history import history_entries, is_request_message
 from lib.tasks_pkg.compaction._handoff import is_compaction_handoff
 
 logger = get_logger(__name__)
@@ -103,7 +103,7 @@ def _truncate_largest_message(messages: list, *, ceiling_chars: int) -> tuple[in
     worst_len = ceiling_chars
     for i, msg in enumerate(messages):
         if (msg.get('role') in ('system', 'developer') or id(msg) in summary_results
-                or is_compaction_handoff(msg) or is_human_message(msg)
+                or is_compaction_handoff(msg) or is_request_message(msg)
                 or history_entries(msg) or msg.get('_contextComposer')):
             continue
         content = msg.get('content')

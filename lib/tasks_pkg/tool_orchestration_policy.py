@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from lib.tasks_pkg.message_semantics import is_human_message
+from lib.tasks_pkg.message_semantics import is_request_message
 
 from lib.log import get_logger
 
@@ -66,7 +66,7 @@ def multi_agent_task_shape(text: str) -> bool:
 
 def _is_synthetic_user_carrier(message: Any) -> bool:
     return (isinstance(message, dict) and message.get('role') == 'user'
-            and not is_human_message(message))
+            and not is_request_message(message))
 
 
 def latest_user_text(messages: Any) -> str:

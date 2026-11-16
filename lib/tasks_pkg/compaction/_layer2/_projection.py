@@ -12,7 +12,7 @@ from typing import Callable
 from lib.log import get_logger
 from lib.tasks_pkg.compaction._constants import _SUMMARY_TRIGGER_RATIO
 from lib.tasks_pkg.compaction._history import (
-    coalesce_history_carriers, is_human_message, make_history_carrier,
+    coalesce_history_carriers, is_request_message, make_history_carrier,
 )
 
 # Preserve the entrypoint diagnostic stream across phase extraction.
@@ -25,9 +25,9 @@ def _retained_projection(old_messages, recent_messages, anchor_msg, retained_ent
     wrapper = make_history_carrier(retained_entries)
     if wrapper:
         result.append(wrapper)
-    current = next((m for m in reversed(recent_messages) if is_human_message(m)), None)
+    current = next((m for m in reversed(recent_messages) if is_request_message(m)), None)
     for message in recent_messages:
-        if is_human_message(message) and message is not current:
+        if is_request_message(message) and message is not current:
             kind = 'opening_request' if message is anchor_msg else 'earlier_request'
             result.append(make_history_carrier([
                 {'kind': kind, 'content': message.get('content', '')}]))

@@ -133,13 +133,13 @@ def _transform_messages(
 
     # Manual compaction keeps original user Turns for audit fidelity. Render
     # their historical identity here instead of rewriting durable user content.
-    from lib.tasks_pkg.compaction._history import is_human_message, make_history_carrier
+    from lib.tasks_pkg.compaction._history import is_request_message, make_history_carrier
     history_end = max((index for index, message in enumerate(src)
                        if message.get('_isCompactionSummary')), default=-1)
     latest_human = next((message for message in reversed(src)
-                         if is_human_message(message)), None)
+                         if is_request_message(message)), None)
     opening_human = next((message for message in src
-                          if is_human_message(message)), None)
+                          if is_request_message(message)), None)
 
     for source_index, msg in enumerate(src):
         # 2. Skip Flow display-only messages
@@ -196,7 +196,7 @@ def _transform_messages(
             if attachment_projection_budget:
                 built_user['_attachmentTextChars'] = max(0, before_attachment_chars
                     - attachment_projection_budget.text_chars_remaining)
-            if (source_index < history_end and is_human_message(msg)
+            if (source_index < history_end and is_request_message(msg)
                     and msg is not latest_human):
                 attachment_chars = built_user.get('_attachmentTextChars', 0)
                 built_user = make_history_carrier([{

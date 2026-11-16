@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Any
 
-from lib.turn_initiation import resolve_initiator
+from lib.turn_initiation import INITIATOR_HUMAN, resolve_initiator
 
 
 SOURCE_FIELDS = (
@@ -18,8 +18,16 @@ SOURCE_FIELDS = (
 )
 
 
-def is_human_message(message: Any) -> bool:
-    """Human requests/operator steering, excluding historical/context carriers."""
+def is_request_message(message: Any) -> bool:
+    """The request a model context answers, excluding historical/context carriers.
+
+    That is human input, operator steering, and a durable Turn's own input
+    (``_turnId``) whoever initiated it: a Worker's brief, a relayed notice or a
+    timer prompt is the request its Turn answers. Context retention, history
+    carriers and memory selection anchor on it. Whether it is the owner's own
+    words is ``is_human_message``; authority reads the stored Turn
+    (``lib.turn_initiation.require_human_turn``).
+    """
     if not isinstance(message, Mapping) or message.get('role') != 'user':
         return False
     if any(message.get(key) for key in (
@@ -29,16 +37,31 @@ def is_human_message(message: Any) -> bool:
         return True
     if message.get('_isInboxInject'):
         return False
-    actor = message.get('_sourceActor', 'human')
-    initiator = resolve_initiator(message)
-    return actor in ('human', 'operator') and initiator in ('human', 'operator')
+    if message.get('_sourceActor', 'human') not in ('human', 'operator'):
+        return False
+    return bool(message.get('_turnId')) or resolve_initiator(message) in ('human', 'operator')
+
+
+def is_human_message(message: Any) -> bool:
+    """Human requests/operator steering, excluding program-initiated input and carriers."""
+    return is_request_message(message) and (
+        bool(message.get('_containsHumanSteer')) or resolve_initiator(message) in ('human', 'operator'))
 
 
 def preserve_source(source: Mapping, target: dict) -> dict:
-    """Copy only declared source identity, never arbitrary private fields."""
+    """Copy only declared source identity, never arbitrary private fields.
+
+    A stored Turn keeps its initiator only as ``origin.initiator`` (the
+    transient ``_initiator`` stamp is folded into it), and ``origin`` itself is
+    not model context, so the initiator is carried over as ``_initiator``.
+    """
     for key in SOURCE_FIELDS:
         if key in source:
             target[key] = source[key]
+    if '_initiator' not in target:
+        initiator = resolve_initiator(source)
+        if initiator != INITIATOR_HUMAN:
+            target['_initiator'] = initiator
     return target
 
 

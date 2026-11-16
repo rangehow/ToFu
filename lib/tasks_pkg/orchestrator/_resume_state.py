@@ -491,9 +491,9 @@ def resume_view_holds_turn_block(
     """
     if not task.get('_resumeViewRestored'):
         return False
-    from lib.tasks_pkg.message_semantics import is_human_message
+    from lib.tasks_pkg.message_semantics import is_request_message
     start = next((index for index in range(len(messages) - 1, -1, -1)
-                  if is_human_message(messages[index])), None)
+                  if is_request_message(messages[index])), None)
     if start is None:
         return False
     return any(isinstance(row, Mapping) and row.get('id') == block_id

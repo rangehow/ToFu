@@ -23,7 +23,7 @@ from lib.tasks_pkg.compaction._constants import (
     summary_input_char_cap,
 )
 from lib.tasks_pkg.compaction._history import (
-    history_entries, is_human_message, user_text,
+    history_entries, is_request_message, user_text,
 )
 from lib.tasks_pkg.compaction._tokens import (
     _get_context_limit,
@@ -446,7 +446,7 @@ def _format_messages_for_summary(messages: list,
         if not isinstance(content, str):
             content = ''
         rendered_role = ('context' if msg.get('_isMeta')
-                         or (role == 'user' and not is_human_message(msg)) else role)
+                         or (role == 'user' and not is_request_message(msg)) else role)
         text = content if rendered_role == 'user' else content.strip()
 
         if role == 'assistant':

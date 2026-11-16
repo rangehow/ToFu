@@ -81,12 +81,23 @@ def stamp_initiator(message: dict[str, Any], initiator: str) -> dict[str, Any]:
 
 
 def resolve_initiator(message: dict[str, Any]) -> str:
-    """Return the canonical initiator; malformed explicit values fail closed."""
+    """Return the canonical initiator; malformed explicit values fail closed.
+
+    A live message carries the ``_initiator`` stamp; a message derived from a
+    stored Turn carries the same fact only as ``origin.initiator`` (persistence
+    folds the stamp into it and drops it), so both are read.
+    """
     if not isinstance(message, Mapping):
         return INITIATOR_HUMAN
     initiator = message.get("_initiator")
     if initiator is None:
-        return INITIATOR_HUMAN
+        if 'origin' not in message or message['origin'] is None:
+            return INITIATOR_HUMAN
+        origin = message['origin']
+        initiator = origin.get('initiator') if isinstance(origin, Mapping) else None
+        return initiator if isinstance(initiator, str) and initiator in VALID_INITIATORS else INITIATOR_UNKNOWN
+    if initiator == INITIATOR_UNKNOWN:
+        return INITIATOR_UNKNOWN
     if not isinstance(initiator, str) or initiator not in VALID_INITIATORS:
         logger.warning("[Initiator] invalid persisted value type=%s", type(initiator).__name__)
         return INITIATOR_UNKNOWN
@@ -236,13 +247,15 @@ def require_human_turn(turn: Mapping[str, Any], *, user_id: int | None = None) -
     if not isinstance(turn, Mapping) or turn.get("actor") != "human":
         raise ValueError("Authorization source is not a human Turn")
     projection = turn.get('projection')
-    if not isinstance(projection, Mapping) or resolve_initiator(projection) != 'human':
+    if not isinstance(projection, Mapping):
         raise ValueError('Authorization projection is not genuine human input')
     origin = projection.get('origin')
     if origin is not None and (not isinstance(origin, Mapping) or origin.get('initiator') != 'human'
             or any(origin.get(k) for k in ('sourceConversationId', 'brain', 'autopilotRunId',
                                           'boardTaskId', 'scheduledTaskId'))):
         raise ValueError('Synthetic authorization origin denied')
+    if resolve_initiator(projection) != 'human':
+        raise ValueError('Authorization projection is not genuine human input')
     if (resolve_initiator(turn) != 'human'
             or any(projection.get(k) or turn.get(k) for k in SYNTHETIC_INPUT_MARKERS)
             or projection.get('role', 'user') != 'user'

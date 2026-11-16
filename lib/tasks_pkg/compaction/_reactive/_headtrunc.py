@@ -23,7 +23,7 @@ import json
 
 from lib.log import audit_log, get_logger
 from lib.tasks_pkg.compaction._constants import _COMPACT_TOOL_NAME
-from lib.tasks_pkg.compaction._history import history_entries, is_human_message
+from lib.tasks_pkg.compaction._history import history_entries, is_request_message
 from lib.tasks_pkg.compaction._layer2._anchor import (
     _apiform_tool_rounds, _objective_anchor_index,
 )
@@ -147,7 +147,7 @@ def _head_truncate_once(messages: list, task: dict | None = None,
     # task. Never truncate the latest human steering while protecting history.
     anchor = _objective_anchor_index(messages)
     current = next((i for i in range(len(messages) - 1, -1, -1)
-                    if is_human_message(messages[i])), None)
+                    if is_request_message(messages[i])), None)
     protected = {id(message) for i, message in enumerate(messages)
                  if (i in (anchor, current) or history_entries(message)
                      or message.get('role') in ('system', 'developer'))}

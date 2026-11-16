@@ -1,14 +1,21 @@
 //! Immutable query roots published by the entity writer. Readers register their
-//! own MVCC pin while holding the view read lock; publication replaces the root
-//! under its write lock before the writer releases authority. No permanent pin,
-//! historical-root cache, payload copy, I/O, or worker belongs to this mirror.
+//! own MVCC pin while holding the view read lock. Visibility follows WAL
+//! acknowledgement: with a WAL barrier, a publication is staged with the WAL
+//! boundary it covers and becomes readable only once the barrier acknowledges
+//! that boundary for its tier (docs/TOFUDB_WAL_BARRIER_SCHEDULING.md,
+//! "Visibility follows acknowledgement"). Staged roots, and the readable root
+//! while any is staged, hold a snapshot pin taken under the writer, so no
+//! reclamation can outrun them. No payload copy, I/O, or worker belongs here.
 use super::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{RwLock, TryLockError};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::RwLock;
 
 struct Template {
     core: ReplicaCore,
     wal_barrier: Option<crate::wal::WalBarrier>,
+    /// The WAL boundary this root covers; readable once acknowledged.
+    acknowledgement: Option<crate::wal::WalWitness>,
     database_instance_id: Uuid,
     pins: Arc<SnapshotPinRegistry>,
     page_cache: Arc<RwLock<DecodedPageCache>>,
@@ -26,7 +33,13 @@ impl Template {
     fn capture(database: &EntityDatabase) -> io::Result<Self> {
         let engine = database.writer_engine()?;
         engine.require_usable_authority()?;
+        let wal_barrier = engine.wal_barrier();
+        let acknowledgement = wal_barrier
+            .as_ref()
+            .map(|barrier| barrier.witness(engine.wal_len()))
+            .transpose()?;
         Ok(Self {
+            acknowledgement,
             core: ReplicaCore {
                 blocks: ReplicaBlockIo {
                     blocks: engine.block_store_shared(),
@@ -35,7 +48,7 @@ impl Template {
                 captured: database.current_snapshot(),
                 authority_uuid: engine.state().authority_uuid,
             },
-            wal_barrier: engine.wal_barrier(),
+            wal_barrier,
             database_instance_id: database.database_instance_id,
             pins: Arc::clone(&database.snapshot_pins),
             page_cache: Arc::clone(&database.page_cache),
@@ -55,6 +68,12 @@ impl Template {
                 .merge_chunk_entries_adaptive
                 .load(Ordering::Acquire),
         })
+    }
+    fn acknowledged(&self) -> bool {
+        match (&self.wal_barrier, &self.acknowledgement) {
+            (Some(barrier), Some(witness)) => barrier.acknowledges(witness),
+            _ => true,
+        }
     }
     fn check_live(&self) -> io::Result<()> {
         self.core.blocks.check_live()?;
@@ -114,8 +133,20 @@ impl Template {
     }
 }
 
+/// Publications awaiting WAL acknowledgement, oldest first. A root here is not
+/// yet readable, so each holds its own pin; `readable_pin` holds the readable
+/// root while anything is staged, because the writer has moved past it.
+#[derive(Default)]
+struct Staged {
+    pending: VecDeque<(Template, SnapshotPin)>,
+    readable: Option<EntitySnapshot>,
+    readable_pin: Option<SnapshotPin>,
+}
+
 pub(crate) struct PublishedEntityReads {
     state: RwLock<Option<Template>>,
+    staged: Mutex<Staged>,
+    staged_len: AtomicUsize,
     disabled: AtomicBool,
     publications: AtomicU64,
     successful_reads: AtomicU64,
@@ -124,8 +155,16 @@ pub(crate) struct PublishedEntityReads {
 }
 impl PublishedEntityReads {
     fn create(database: &EntityDatabase) -> io::Result<Arc<Self>> {
+        // Bytes present when the barrier attached are already written.
+        let template = Template::capture(database)?;
+        let staged = Staged {
+            readable: Some(template.core.captured),
+            ..Default::default()
+        };
         Ok(Arc::new(Self {
-            state: RwLock::new(Some(Template::capture(database)?)),
+            state: RwLock::new(Some(template)),
+            staged: Mutex::new(staged),
+            staged_len: AtomicUsize::new(0),
             disabled: AtomicBool::new(false),
             publications: AtomicU64::new(1),
             successful_reads: AtomicU64::new(0),
@@ -142,7 +181,7 @@ impl PublishedEntityReads {
         &self,
         use_snapshot: impl FnOnce(EntitySnapshot) -> T,
     ) -> Option<T> {
-        if self.disabled.load(Ordering::Acquire) {
+        if self.disabled.load(Ordering::Acquire) || !self.promote_acknowledged(false) {
             return None;
         }
         let state = self.state.try_read().ok()?;
@@ -169,10 +208,12 @@ impl PublishedEntityReads {
         let lookup = crate::fsync_stats::StageTimer::diagnostic(
             crate::fsync_stats::STAGE_PUBLISHED_READ_LOOKUP,
         );
-        let state = match self.state.try_read() {
-            Ok(state) => state,
-            Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => return None,
-        };
+        if !self.promote_acknowledged(true) {
+            return None;
+        }
+        // Promotion holds the write lock only to swap one root, so readers wait
+        // for it rather than falling back to the authority.
+        let state = self.state.read().ok()?;
         let template = state.as_ref()?;
         drop(lookup);
         // Keep this guard through pin registration and descriptor copying.
@@ -185,12 +226,86 @@ impl PublishedEntityReads {
         }
         Some(result)
     }
+    /// The newest publication, acknowledged or not, for a command that only
+    /// rehearses its reads before it queues for the writer: a rehearsal never
+    /// answers anyone, and validating against an older root than the
+    /// command's own snapshot would only refuse it spuriously.
+    pub(crate) fn try_build_latest(&self) -> Option<io::Result<EntityDatabase>> {
+        if self.disabled.load(Ordering::Acquire) {
+            return None;
+        }
+        {
+            let staged = self.staged.lock().ok()?;
+            if let Some((template, _)) = staged.pending.back() {
+                return Some(template.build());
+            }
+        }
+        self.try_build()
+    }
+
+    /// Makes the newest acknowledged staged publication readable and releases
+    /// the ones it supersedes. False when a nonblocking attempt could not
+    /// tell, so the caller must not answer from the readable root.
+    fn promote_acknowledged(&self, blocking: bool) -> bool {
+        if self.staged_len.load(Ordering::Acquire) == 0 {
+            return true;
+        }
+        let staged = if blocking {
+            self.staged.lock().ok()
+        } else {
+            self.staged.try_lock().ok()
+        };
+        let Some(mut staged) = staged else {
+            return false;
+        };
+        let mut newest = None;
+        let mut superseded = Vec::new();
+        while staged
+            .pending
+            .front()
+            .is_some_and(|(template, _)| template.acknowledged())
+        {
+            let front = staged.pending.pop_front().expect("acknowledged front");
+            superseded.extend(newest.replace(front));
+        }
+        let Some((template, pin)) = newest else {
+            return true;
+        };
+        let snapshot = template.core.captured;
+        let replaced = match self.state.write() {
+            Ok(mut state) => state.replace(template),
+            Err(_) => {
+                drop(staged);
+                self.disable();
+                return false;
+            }
+        };
+        staged.readable = Some(snapshot);
+        // Readers of the replaced root registered their own pins under the
+        // read lock the swap waited for, so its pin may go now.
+        let released = if staged.pending.is_empty() {
+            [staged.readable_pin.take(), Some(pin)]
+        } else {
+            [staged.readable_pin.replace(pin), None]
+        };
+        self.staged_len
+            .store(staged.pending.len(), Ordering::Release);
+        drop(staged);
+        drop((replaced, released, superseded));
+        self.publications.fetch_add(1, Ordering::Relaxed);
+        crate::request_profile::work(crate::request_profile::Work::PublishedReadPublication, 1);
+        true
+    }
+
     fn disable(&self) {
         self.disabled.store(true, Ordering::Release);
         *self
             .state
             .write()
             .unwrap_or_else(|error| error.into_inner()) = None;
+        let released = std::mem::take(&mut *self.staged.lock().unwrap_or_else(|e| e.into_inner()));
+        self.staged_len.store(0, Ordering::Release);
+        drop(released);
     }
     fn publish(&self, database: &EntityDatabase) {
         if self.disabled.load(Ordering::Acquire) {
@@ -212,10 +327,41 @@ impl PublishedEntityReads {
         if let Some(notify) = self.before_replace.lock().unwrap().as_ref() {
             let _ = notify.send(());
         }
+        let Ok(mut staged) = self.staged.lock() else {
+            self.disable();
+            return;
+        };
+        if !staged.pending.is_empty() || !template.acknowledged() {
+            // Pins are taken here, under the writer, before any reclamation
+            // can see the writer's newer root.
+            let pinned = (|| {
+                let pin = pin_snapshot(&template.pins, template.core.captured)?;
+                if staged.pending.is_empty() {
+                    if let Some(readable) = staged.readable {
+                        staged.readable_pin = Some(pin_snapshot(&template.pins, readable)?);
+                    }
+                }
+                Ok::<_, io::Error>(pin)
+            })();
+            match pinned {
+                Ok(pin) => {
+                    staged.pending.push_back((template, pin));
+                    self.staged_len
+                        .store(staged.pending.len(), Ordering::Release);
+                }
+                Err(_) => {
+                    drop(staged);
+                    self.disable();
+                }
+            }
+            return;
+        }
+        staged.readable = Some(template.core.captured);
         match self.state.write() {
             Ok(mut state) => {
                 let old = state.replace(template);
                 drop(state);
+                drop(staged);
                 drop(old);
                 self.publications.fetch_add(1, Ordering::Relaxed);
                 crate::request_profile::work(
@@ -233,7 +379,8 @@ impl PublishedEntityReads {
         let available = !self.disabled.load(Ordering::Acquire) && !self.state.is_poisoned();
         serde_json::json!({ "available": available, "retainedViews": if available { 1 } else { 0 },
             "publications": self.publications.load(Ordering::Relaxed),
-            "successfulReads": self.successful_reads.load(Ordering::Relaxed), "ownedPinHandles": 0 })
+            "successfulReads": self.successful_reads.load(Ordering::Relaxed), "ownedPinHandles": 0,
+            "unacknowledgedViews": self.staged_len.load(Ordering::Relaxed) })
     }
     pub(crate) fn metadata_bytes(&self) -> usize {
         std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>()

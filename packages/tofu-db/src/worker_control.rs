@@ -188,6 +188,10 @@ struct ConversationHint {
 pub(crate) struct WorkerControl {
     workers: CommitWatch<String>,
     conversations: CommitWatch<ConversationHint>,
+    /// Hints publish at commit, before the WAL acknowledges it; an answer
+    /// waits for that acknowledgement, so no watcher learns of a change a
+    /// crash can still erase.
+    acknowledgement: std::sync::OnceLock<crate::wal::WalBarrier>,
 }
 
 impl WorkerControl {
@@ -205,7 +209,12 @@ impl WorkerControl {
                 "conversations",
                 "change",
             ),
+            acknowledgement: std::sync::OnceLock::new(),
         })
+    }
+
+    pub(crate) fn attach_wal_barrier(&self, barrier: &crate::wal::WalBarrier) {
+        let _ = self.acknowledgement.set(barrier.clone());
     }
 
     pub(crate) fn publish(&self, queue: bool, cancelled: &BTreeSet<String>) {
@@ -294,7 +303,7 @@ impl WorkerControl {
             let watch = serde_json::from_value(payload)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             let timeout = Duration::from_millis(request.deadline_unix_ms - now);
-            match request.operation.as_str() {
+            let answer = match request.operation.as_str() {
                 WATCH_OPERATION => self.workers.watch_cancelled(watch, timeout, cancellation),
                 CONVERSATION_WATCH_OPERATION => {
                     self.conversations
@@ -304,7 +313,13 @@ impl WorkerControl {
                     io::ErrorKind::InvalidInput,
                     "unknown commit watch",
                 )),
+            }?;
+            if let Some(barrier) = self.acknowledgement.get() {
+                barrier.wait_requested_acknowledged(
+                    std::time::Instant::now() + crate::wal::MAX_BARRIER_WAIT,
+                )?;
             }
+            Ok(answer)
         })();
         let (status, payload, error_code, error_message, retryable) = match result {
             Ok(value) => (0, value, None, None, false),
@@ -351,6 +366,57 @@ impl WorkerControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A watch reports a change only once the WAL acknowledges it: a hint
+    /// published by a commit whose frame is still queued would let a watcher
+    /// act on state a crash can erase.
+    #[test]
+    fn a_watch_answers_only_after_the_wal_acknowledges_the_change_it_reports() {
+        use crate::vfs::{DeterministicVfs, Vfs};
+        use std::path::Path;
+        let vfs = Arc::new(DeterministicVfs::new(None));
+        vfs.create_dir(Path::new("/data")).unwrap();
+        let mut log =
+            crate::wal::ActiveLog::initialize_with_vfs(Path::new("/data"), vfs.clone()).unwrap();
+        log.set_durability(crate::wal::WalDurability::Normal);
+        let barrier = crate::wal::WalBarrierShared::buffered_for_test(65536);
+        log.attach_barrier(&barrier);
+        let control = WorkerControl::new();
+        control.attach_wal_barrier(&barrier);
+        let cursor = control.conversations.state.lock().unwrap().cursor.clone();
+        log.append(1, [0; 32], b"queued commit").unwrap();
+        control.publish_conversations(11, [String::from("c")].iter());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let request = Request {
+            correlation_id: [0; 16],
+            deadline_unix_ms: now + 60_000,
+            owner_id: 11,
+            tenant_id: None,
+            command_id: None,
+            schema_id: 1,
+            operation: CONVERSATION_WATCH_OPERATION.to_owned(),
+            payload: serde_json::to_vec(&json!({ "cursor": cursor })).unwrap(),
+        };
+        let scope = AuthenticatedScope {
+            owner_id: 11,
+            tenant_id: None,
+        };
+        let waiting = control.clone();
+        let answer = std::thread::spawn(move || waiting.respond(&request, 1, now, scope));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !answer.is_finished(),
+            "a watch reported a change whose WAL frame is unacknowledged"
+        );
+        barrier.write_for_test(vfs.as_ref()).unwrap();
+        let response = answer.join().unwrap();
+        assert_eq!(response.status, 0, "{:?}", response.error_message);
+        let value: serde_json::Value = serde_json::from_slice(&response.payload).unwrap();
+        assert_eq!(value["cursor"]["change"], 1);
+    }
     #[test]
     fn cancel_wakes_only_its_wait_without_publication() {
         let control = WorkerControl::new();

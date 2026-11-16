@@ -25,6 +25,7 @@ import re
 from lib.log import get_logger
 from lib.slides.pptd import (Deck, Page, cell_content, chart_font_family, resolve_color,
                              resolve_media, table_style, text_style)
+from lib.slides.richtext import RICH_MARKUP_RE
 
 logger = get_logger(__name__)
 
@@ -115,7 +116,7 @@ def _resolve_inline_tokens(text: str, theme: dict) -> str:
 def _rich_html(raw: str, theme: dict) -> str:
     """PPTD rich text → inner HTML. Plain lines become <p>; markup passes."""
     raw = _resolve_inline_tokens(raw or '', theme)
-    if re.search(r'</?(?:p|span|strong|em|u|s|sup|sub|a|ul|ol|li)\b', raw):
+    if RICH_MARKUP_RE.search(raw):
         return raw
     lines = [ln for ln in raw.split('\n')]
     return ''.join(f'<p>{_html.escape(ln)}</p>' for ln in lines if ln.strip()) \
@@ -482,7 +483,11 @@ def _icon_div(el: dict, deck: Deck, theme: dict) -> str:
 def _cell_style(cell: dict, row: int, col: int, rows: int, cols: int,
                 tstyle: dict, theme: dict) -> dict:
     """The table style priority chain (spec §1.2)."""
-    out = {'color': '#000000', 'fontSize': 14, 'fontFamily': 'MiSans',
+    # Unstyled cells take the theme's body ink: black on a dark theme is
+    # unreadable, and both renderers resolve cell styles here.
+    ink = ((theme or {}).get('colors') or {}).get('ink')
+    out = {'color': '$ink' if ink else '#000000', 'fontSize': 14,
+           'fontFamily': 'MiSans',
            'bold': False, 'align': ['center', 'middle']}
     base = tstyle.get('cellStyle') or {}
     out.update({k: v for k, v in base.items() if v is not None})

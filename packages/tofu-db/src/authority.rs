@@ -815,7 +815,25 @@ impl AuthorityDatabase {
     ) -> io::Result<()> {
         self.entities
             .writer_engine_mut()?
-            .attach_wal_barrier(barrier)
+            .attach_wal_barrier(barrier)?;
+        self.worker_control.attach_wal_barrier(barrier);
+        Ok(())
+    }
+
+    /// The WAL boundary a reader of the current state observes and the
+    /// barrier that acknowledges it. None when every commit is acknowledged
+    /// before it returns (no barrier attached).
+    pub(crate) fn wal_acknowledgement_witness(
+        &self,
+    ) -> io::Result<Option<(crate::wal::WalBarrier, crate::wal::WalWitness)>> {
+        let engine = self.entities.writer_engine()?;
+        engine
+            .wal_barrier()
+            .map(|barrier| {
+                let witness = barrier.witness(engine.wal_len())?;
+                Ok((barrier, witness))
+            })
+            .transpose()
     }
 
     /// Capture under the authority mutex, wait outside it before publishing a

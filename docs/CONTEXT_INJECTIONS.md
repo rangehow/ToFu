@@ -449,6 +449,39 @@ neither is inferred from ad-hoc flags by the reader.
   details) — so an autonomous turn never masquerades as the human and the
   label is never shown twice. Do not add a parallel actor enum or a
   flag the reader must pattern-match on; extend ``VALID_INITIATORS`` instead.
+
+  **The initiator survives a reload (2026-11-17).**
+  - *Problem.* Persistence folds the transient ``_initiator`` stamp into
+    ``origin.initiator`` and drops it (``normalize_projection_document``), and
+    the stored input actor of every program-written input is `human`. The
+    model-context rebuild (``turn_lifecycle.build_api_messages`` →
+    ``_transform_messages``) copied only ``_initiator`` (``preserve_source``),
+    and ``resolve_initiator`` read only ``_initiator``. So every relayed
+    report, scheduled wake, restart notice, timer or channel input looked like
+    the owner's own message to message readers: the refusal hint, the
+    automation task-start origin and the Goal objective fallback. Dispatch
+    authority was not affected: ``validate_human_source`` →
+    ``require_human_turn`` reads the stored Turn, whose ``origin.initiator``
+    it already refused.
+  - *Decision.* ``resolve_initiator`` reads ``origin.initiator`` when no
+    ``_initiator`` stamp is present (a malformed origin fails closed as
+    `unknown`), and ``preserve_source`` carries a nonhuman initiator onto the
+    rebuilt message as ``_initiator`` (stripped from the wire like every
+    private field). Two predicates in ``lib/tasks_pkg/message_semantics.py``
+    now say different things: ``is_human_message`` is the owner's own words;
+    ``is_request_message`` is the request a context answers, which includes a
+    durable Turn's own input (``_turnId``) whoever initiated it. Context
+    retention, history carriers, task-state goal, URL prefetch and memory
+    selection anchor on ``is_request_message``, so a Worker's brief and a
+    lead's notice stay the request of their Turn exactly as before.
+  - *Alternatives.* Keeping ``_initiator`` in the stored projection beside
+    ``origin``: rejected, two disagreeing copies of identity. Flipping every
+    ``is_human_message`` reader to the true initiator: rejected, compaction
+    would stop treating a Worker's brief as its request. Inferring from the
+    notice header text: rejected, readers never classify text.
+  - *Specs.* ``tests/turn_lifecycle/test_initiator_survives_reload.py`` (real
+    storage, reload, ``require_human_turn``/``validate_human_source``,
+    refusal, automation and Goal readers), ``tests/tasks_pkg/test_message_semantics.py``.
 * **What was injected mid-turn** — the registry ``injectionId`` /
   ``_contextInjectionId`` on the carrier, projected display-only as a
   `system_note` (the invariant above). This is the "what reached the model

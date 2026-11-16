@@ -2,7 +2,7 @@
 import pytest
 
 from lib.tasks_pkg.message_semantics import count_messages, is_human_message
-from lib.tasks_pkg.compaction._history import is_human_message as retention_human
+from lib.tasks_pkg.compaction._history import is_request_message as retention_human
 from lib.tasks_pkg.conv_message_builder._transform import _transform_messages
 from lib.tasks_pkg.context_composer.task_state import derive_task_state_snapshot
 from lib.tasks_pkg.tool_orchestration_policy import genuine_user_message_count, latest_user_text
@@ -105,3 +105,16 @@ def test_rebuild_preserves_source_without_mutating_input_or_leaking_private_fiel
     assert [row['_turnId'] for row in rebuilt] == ['one', 'one', 'two']
     assert '_secret' not in rebuilt[0]
     assert all(not any(key.startswith('_') for key in row) for row in apply_wire_sanitize(rebuilt))
+
+
+@pytest.mark.parametrize('metadata', [
+    {'_initiator': 'peer'}, {'origin': {'blockId': 'origin', 'initiator': 'proactive'}},
+])
+def test_program_written_turn_input_is_the_request_but_not_human(metadata):
+    from lib.tasks_pkg.message_semantics import is_request_message
+    source = {'role': 'user', 'content': '[Scheduled wake: nonhuman notice]', '_turnId': 'wake', **metadata}
+    for messages in ([source], _transform_messages([source], {})):
+        assert is_request_message(messages[0]) and retention_human(messages[0])
+        assert not is_human_message(messages[0])
+        assert latest_user_text(messages) and derive_task_state_snapshot(messages).goal
+    assert _transform_messages([source], {})[0]['_initiator'] in ('peer', 'proactive')

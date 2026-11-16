@@ -6,6 +6,10 @@ so one stalled volume write held every lease renewal and claim behind it
 (2026-11-07: renewals missed and 12 durable workers were fenced). The bound is
 the worker lease contract (contracts/durable_worker_runtime_v1.json): a renewal
 sent at the heartbeat interval must commit before the lease it extends expires.
+Committing here means taking effect for every later command (claims included);
+readers see it only once the WAL acknowledges it
+(test_wal_unacknowledged_visibility.py), so the stall is observed through the
+WAL write buffer's queued frames.
 
 Native only: SQLite and PostgreSQL commit through one log flush per commit, so
 a stalled log device stalls every writer there by design.
@@ -34,7 +38,7 @@ def _renewal_deadline_seconds() -> float:
 
 
 @pytest.fixture
-def stalled_native_authority(tmp_path, monkeypatch):
+def stalled_native_engine(tmp_path, monkeypatch):
     from scripts.tofudb_perf_compare import TofuDbEngine, _OWNER_ID
     from serverctl_pkg.native_engine import verify_current
     from tests.support.native_engine_prerequisite import inherited_engine_refusal_skips
@@ -63,10 +67,18 @@ def stalled_native_authority(tmp_path, monkeypatch):
                           expected_sha256=expected_sha256)
     engine.start()
     try:
-        yield engine._client, _OWNER_ID, trigger
+        yield engine, trigger
     finally:
         trigger.unlink(missing_ok=True)
         engine.stop()
+
+
+@pytest.fixture
+def stalled_native_authority(stalled_native_engine):
+    from scripts.tofudb_perf_compare import _OWNER_ID
+
+    engine, trigger = stalled_native_engine
+    return engine._client, _OWNER_ID, trigger
 
 
 def _until(deadline: float, observe):
@@ -107,16 +119,19 @@ def test_stalled_wal_write_never_blocks_renewals_claims_or_reads(stalled_native_
         'worker_id': 'claimer', 'task_kinds': ['queued'], 'now_ms': now_ms(), 'lease_ms': 60_000,
         'retain_claim': True}))
     job = lambda task_id: client.query('worker_job.get', {'task_id': task_id, 'user_id': owner})
+    queued = lambda: client.metrics()['walWriteBuffer']['queuedFrames']
     trigger.touch()
     try:
         deadline = time.monotonic() + _renewal_deadline_seconds()
         bulk.start()
         entered = trigger.with_name(trigger.name + '.entered')
         assert _until(deadline, entered.exists), 'the bulk write must reach the stalled volume'
+        queued_before = queued()
         renewal.start()
         claim.start()
-        renewed = _until(deadline, lambda: job('held')['replayCursor'] == 7)
-        claimed = _until(deadline, lambda: job('queued')['claimOwner'] == 'claimer')
+        # Both commits queue a frame behind the stalled write.
+        committed = _until(deadline, lambda: queued() >= queued_before + 2)
+        invisible = job('held')['replayCursor'] != 7 and job('queued')['claimOwner'] != 'claimer'
         read = client.query('record.get', {'namespace': 'liveness', 'key': 'read'})
         ready = client.health(deadline=5.0).get('ready')
         still_stalled = trigger.exists() and bulk.is_alive()
@@ -124,11 +139,13 @@ def test_stalled_wal_write_never_blocks_renewals_claims_or_reads(stalled_native_
         trigger.unlink(missing_ok=True)
     for thread in (bulk, renewal, claim):
         thread.join(timeout=60)
-    assert renewed, 'a lease renewal must commit while another WAL write is stalled'
-    assert claimed, 'a claim must commit while another WAL write is stalled'
+    assert committed, 'a lease renewal and a claim must commit while another WAL write is stalled'
+    assert invisible, 'readers see neither commit before its WAL acknowledgement'
     assert read['value'] == {'answer': 42}
     assert ready is True, 'a stalled WAL write is not an authority wedge'
     assert still_stalled, 'the stalled command answers only after its own write'
     assert results['renewal']['ok'] is True
     assert results['claim']['taskId'] == 'queued'
     assert results['bulk']['version'] == 1
+    assert job('held')['replayCursor'] == 7
+    assert job('queued')['claimOwner'] == 'claimer'

@@ -65,6 +65,59 @@ judged once and the cached verdict is reused in the "after" run. The "before"
 Tofu decks were built over the day from the then-current tree, not one pinned
 revision. "Numbers not in source" counts axis ticks and labels as numbers.
 
+## Results after layout repair to a fixed point (re-judged in one pass)
+
+The layout stage now repairs its own overflows (re-layout, measured copy
+tightening; [`modules/production.md`](modules/production.md), "Layout repair
+to a fixed point"); the gate is unchanged. Four fresh Tofu runs over the six
+documents at successive revisions:
+
+| run | passed `layout_qa` (unchanged gate) | delivered, visual QA skipped (as in the runs above) | delivered, production visual QA enforced |
+|---|---|---|---|
+| fit | 4/4 reaching it (2 refused earlier by the author gate) | — | 3/6 |
+| fit2 | 6/6 | 6/6 | 4/6 |
+| fit3 | 4/6 (both residuals fixed afterwards) | — | 2/6 |
+| fit4 (final) | 5/6 | 5/6 (exported, package QA ok) | 2/6 |
+
+The Tofu arm previously never ran visual QA (the benchmark process has no
+dispatcher slot); it now runs production visual QA through the same bridge
+(`run_tofu.py`). Its refusals vary run to run and are mostly not layout
+(chart scales across two charts, a one-character title orphan, title
+qualifiers, a page count read from the source); it also cannot parse 5–10
+of its own replies per deck, because the 1500-token output budget is spent
+on gpt-5.5 reasoning (`reasoning_tokens == max_tokens`, empty content), so
+pages go unreviewed and visual-repair re-checks fail. That budget is the next
+delivery loss to remove (owner `lib/design_sys/visual_qa.py`).
+
+Blind judge, seed `slides-bench-v2`: every arm's decks re-judged in this one
+pass, shuffled and anonymised; Tofu-prev is the previous run's refused
+"after" decks. Means over all six documents (Tofu: delivered and refused
+decks alike, as above):
+
+| | Tofu fit4 | Tofu-prev | PPTAgent | SlideDeck AI |
+|---|---|---|---|---|
+| specificity | 8.83 | 8.83 | 7.50 | 7.33 |
+| faithfulness | 8.83 | 8.67 | 7.67 | 7.50 |
+| takeaways | 8.50 | 8.67 | 6.00 | 6.50 |
+| coverage | 7.67 | 7.67 | 6.83 | 6.17 |
+| no_filler | 8.83 | 8.67 | 6.50 | 5.50 |
+| narrative | 8.17 | 8.33 | 7.00 | 6.83 |
+| visual_design | 8.00 | 8.00 | 3.00 | 4.00 |
+| layout_readability | 7.00 | 6.83 | 3.50 | 2.83 |
+| content mean | 8.47 | 8.47 | 6.92 | 6.64 |
+| visual mean | 7.50 | 7.42 | 3.25 | 3.42 |
+| specific statements / slide | 10.06 | 11.33 | 3.99 | 4.68 |
+| unsupported / slide | 0.17 | 0.28 | 0.21 | 0.44 |
+| filler / slide | 0.07 | 0.17 | 0.03 | 0.70 |
+| assertion-title share | 0.93 | 0.97 | 0.17 | 0.67 |
+| numbers not in source / deck | 9.5 | 10.8 | 0.17 | 1.5 |
+
+Limits: one deck per cell, one judge pass, n=6 per arm; differences of
+0.2 are within one judge point on one deck. Tightened copy costs some
+density (specific statements per slide 11.3 → 10.1) but not judged
+specificity or coverage. One private document in fit4 kept one finding on a
+component-expanded element, which the re-layout does not edit.
+
 ## Where Tofu lost, by stage
 
 1. **Delivery (export gate), decisive.** All six Tofu decks were refused at
@@ -74,9 +127,9 @@ revision. "Numbers not in source" counts axis ticks and labels as numbers.
    authored line height): invisible and unfixable by moving boxes. The
    height-growth repair then split the PowerPoint reserve when centring a
    box. Fixed (findings left at the gate: 7–60 per deck before, 1–5 after); the
-   remaining ones are real overflows that the
-   LLM repair does not resolve in two attempts. That repair loop is the next
-   loss to remove.
+   remaining ones were real overflows that the
+   LLM repair did not resolve; the layout stage now repairs them itself
+   (results above).
 2. **Source reading.** Supplied material was one raw blob next to topic web
    research; pages drifted to generic headings and derived numbers. Now
    verbatim `[M#]` evidence units, cited per page.

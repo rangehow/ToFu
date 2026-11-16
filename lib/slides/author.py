@@ -161,6 +161,52 @@ def _legibility_findings(deck, elements: list) -> list[str]:
             '放大字号并删减文字，或把次要内容移到讲稿，不要靠缩小字号塞内容。']
 
 
+def _raise_to_legibility_floor(deck, yaml_text: str) -> str:
+    """Lift text set below the legibility floor up to it; zero-LLM.
+
+    Authors shrink type to cram an overfull page. Raising it to the floor
+    turns that hidden density into a measured overflow, which layout QA then
+    fixes by re-layout or by tightening the copy. Text already at or above
+    the floor, and pages that do not parse, are returned unchanged.
+    """
+    import yaml
+    try:
+        data = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return yaml_text
+    if not isinstance(data, dict) or not isinstance(data.get('elements'), list):
+        return yaml_text
+    floor = _MIN_LEGIBLE_TEXT_PX * deck.width / 1280
+    styles = (deck.theme or {}).get('textStyles') or {}
+
+    def lift(match):
+        return f'font-size:{floor:g}px' if float(match.group(1)) < floor \
+            else match.group(0)
+
+    changed = False
+    for element in data['elements']:
+        if not isinstance(element, dict) or element.get('elementType') != 'text':
+            continue
+        content = element.get('content')
+        if not isinstance(content, dict):
+            continue
+        style = styles.get(str(content.get('style') or '').lstrip('$')) or {}
+        size = content.get('fontSize', style.get('fontSize'))
+        if isinstance(size, (int, float)) and not isinstance(size, bool) \
+                and size < floor:
+            content['fontSize'] = floor
+            changed = True
+        text = content.get('text')
+        if isinstance(text, str):
+            lifted = _INLINE_SIZE_RE.sub(lift, text)
+            if lifted != text:
+                content['text'] = lifted
+                changed = True
+    if not changed:
+        return yaml_text
+    return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+
+
 def _visible_text_values(data) -> list[str]:
     """Collect reader-visible strings without inspecting layout numbers."""
     values: list[str] = []
@@ -276,6 +322,45 @@ def _brief_fidelity_findings(brief: dict, text: str, *, page_index: int,
         + '。禁止为了“看起来像图表”而编造归一化分数；没有精确数据时，'
           '改用定性对比、流程图或结构图。'
     ]
+
+
+def _title_texts(data) -> list[str]:
+    return [str(element['content'].get('text') or '')
+            for element in (data.get('elements') or [])
+            if isinstance(element, dict)
+            and isinstance(element.get('content'), dict)
+            and (element.get('elementId') == 'title'
+                 or element['content'].get('style') == '$title')]
+
+
+def _claim_number_findings(seed_yaml: str, text: str) -> list[str]:
+    """A repair may cut copy but never the numbers of the page's claim.
+
+    The title states the page's claim with its decisive number; every
+    number in the seed's title must remain visible on the repaired page.
+    """
+    import yaml
+    from lib.slides.material import evidence_numbers
+    try:
+        seed = yaml.safe_load(seed_yaml)
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(seed, dict) or not isinstance(data, dict):
+        return []
+    claim = evidence_numbers([_TAG_RE.sub(' ', t) for t in _title_texts(seed)])
+    try:
+        from lib.slides.components import expand_page_components
+        elements = expand_page_components(data)
+    except ValueError:
+        return []
+    kept = evidence_numbers([_TAG_RE.sub(' ', value) for value in
+                             _visible_text_values({'elements': elements})])
+    lost = sorted(str(number) for number in claim - kept)
+    if not lost:
+        return []
+    return ['修复删掉了页标题判断中的数字: ' + ', '.join(lost)
+            + '。页标题的判断和数字必须原样保留，只删减次要文案。']
 
 
 def _extract_yaml(content: str) -> str:
@@ -482,15 +567,17 @@ def _author_prompt(deck, brief: dict, page_index: int, total: int, *,
         deck, brief, page_index, total, context.theme_block,
         context.bible_excerpt, context.cheatsheet, image_urls or [], lang)
     if extra_findings:
-        prompt += ('\n\n## 视觉评审发现的问题(本轮必须修复)\n'
+        prompt += ('\n\n## 质检发现的问题(本轮必须修复)\n'
                    + '\n'.join(f'- {f}' for f in extra_findings[:8]))
     if seed_yaml:
         prompt += (
             '\n\n## 当前页面源码(在此基础上做最小修复)\n'
             f'```yaml\n{seed_yaml}\n```\n'
-            '保留当前构图、文案、素材和无关元素；只调整问题元素的 bounds、'
-            '字号、行高或文案换行。allowOverlap 只允许用于确实有意叠放的装饰'
-            '字符，不得用来掩盖正文碰撞或溢出。输出完整页面 YAML。')
+            '保留当前构图、素材和无关元素。先在空白处移动或放大问题元素的 '
+            'bounds；放不下时删减问题元素的文案到上面给出的长度：删次要的'
+            '修饰、重复和例子，保留判断句和其中的数字（页标题的数字必须原样'
+            '保留），不要缩小字号到可读下限以下。allowOverlap 只允许用于确实'
+            '有意叠放的装饰字符，不得用来掩盖正文碰撞或溢出。输出完整页面 YAML。')
     return theme, prompt
 
 
@@ -524,9 +611,17 @@ def author_page(deck, brief: dict, page_index: int, total: int, *,
                 max_429_attempts: int | None = None,
                 owner_user_id: int | None = None,
                 provider_pin_id: str = '',
-                prompt_context: AuthorPromptContext | None = None) -> dict:
+                prompt_context: AuthorPromptContext | None = None,
+                layout_findings=None) -> dict:
     """Author one page. Returns ``{'ok', 'yaml', 'mode', 'rounds',
-    'findings'}`` where mode is authored/fallback/unchanged/aborted."""
+    'findings'}`` where mode is authored/fallback/unchanged/aborted.
+
+    ``layout_findings(yaml_text) -> list[str]`` measures a candidate that
+    passed validation; what it reports is the next round's feedback, so a
+    repair iterates on its measured result. A valid candidate that still has
+    layout findings after the last round is returned as ``authored`` with
+    those findings: the caller compares measurements and decides.
+    """
     theme, prompt = _author_prompt(
         deck, brief, page_index, total, theme=theme,
         image_urls=image_urls, lang=lang, extra_findings=extra_findings,
@@ -534,6 +629,7 @@ def author_page(deck, brief: dict, page_index: int, total: int, *,
 
     messages = [{'role': 'user', 'content': prompt}]
     findings: list = []
+    measured = None
     for rnd in range(1, max_rounds + 1):
         if abort_check is not None and abort_check():
             return {'ok': False, 'yaml': seed_yaml or '', 'mode': 'aborted',
@@ -556,12 +652,20 @@ def author_page(deck, brief: dict, page_index: int, total: int, *,
         if abort_check is not None and abort_check():
             return {'ok': False, 'yaml': seed_yaml or '', 'mode': 'aborted',
                     'rounds': rnd, 'findings': ['aborted']}
-        yaml_text = _extract_yaml(content or '')
+        yaml_text = _raise_to_legibility_floor(
+            deck, _extract_yaml(content or ''))
         findings = _validate_page_text(deck, f'pages/{page_index + 1:02d}.page',
                                        yaml_text)
+        if (usage or {}).get('finish_reason') == 'length':
+            # A cut-off reply can still parse (``text: <p><``) and would
+            # ship a page that silently lost its last elements.
+            findings = ['输出在页面写完之前被截断。精简元素和文案，'
+                        '输出一份完整的页面 YAML。']
         if not findings:
             findings.extend(_brief_fidelity_findings(
                 brief, yaml_text, page_index=page_index, total=total))
+        if not findings and seed_yaml:
+            findings.extend(_claim_number_findings(seed_yaml, yaml_text))
         required_assets = [str(path) for path in
                            (brief.get('resolved_assets') or []) if path]
         missing_assets = [path for path in required_assets
@@ -571,6 +675,10 @@ def author_page(deck, brief: dict, page_index: int, total: int, *,
                 '页面没有引用已经生成的本页主视觉: '
                 + ', '.join(missing_assets)
                 + '。必须用 image 元素实际放入页面,不能生成后丢弃。')
+        if not findings and layout_findings is not None:
+            findings = list(layout_findings(yaml_text))
+            if findings:
+                measured = {'yaml': yaml_text, 'findings': findings}
         if not findings:
             logger.info('[Slides] page %d authored in %d round(s)',
                         page_index + 1, rnd)
@@ -585,6 +693,9 @@ def author_page(deck, brief: dict, page_index: int, total: int, *,
                 '校验发现以下问题,请修复后重新输出完整页面 YAML(只输出 '
                 'YAML):\n' + '\n'.join(f'- {f}' for f in findings[:10]))},
         ]
+    if measured is not None:
+        return {'ok': True, 'yaml': measured['yaml'], 'mode': 'authored',
+                'rounds': max_rounds, 'findings': measured['findings']}
     logger.warning('[Slides] page %d degraded to fallback after %d rounds',
                    page_index + 1, max_rounds)
     if seed_yaml:

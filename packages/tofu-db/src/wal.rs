@@ -536,10 +536,44 @@ impl WalBarrierShared {
         witness: &WalWitness,
         deadline: std::time::Instant,
     ) -> io::Result<()> {
-        self.wait_covered(witness, deadline, |state| match state.acknowledgement {
+        self.wait_covered(witness, deadline, Self::acknowledged_len)
+    }
+
+    /// Whether the tier's acknowledgement point already covers `witness`,
+    /// the predicate `wait_acknowledged` waits for. A latched failure never
+    /// acknowledges; a successor generation proves the old one durable.
+    pub(crate) fn acknowledges(&self, witness: &WalWitness) -> bool {
+        self.state.lock().is_ok_and(|state| {
+            state.error.is_none()
+                && (state.path != witness.path || Self::acknowledged_len(&state) >= witness.len)
+        })
+    }
+
+    fn acknowledged_len(state: &WalBarrierState) -> u64 {
+        match state.acknowledgement {
             WalDurability::Strict => state.synced_len,
             WalDurability::Normal => state.written_len,
-        })
+        }
+    }
+
+    /// Parks until every byte requested so far is acknowledged: for an answer
+    /// derived from state whose exact WAL boundary it did not capture (a
+    /// commit-watch cursor), everything requested covers that state.
+    pub(crate) fn wait_requested_acknowledged(
+        &self,
+        deadline: std::time::Instant,
+    ) -> io::Result<()> {
+        let witness = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("WAL barrier state poisoned"))?;
+            WalWitness {
+                path: state.path.clone(),
+                len: state.requested_len,
+            }
+        };
+        self.wait_acknowledged(&witness, deadline)
     }
 
     fn wait_covered(

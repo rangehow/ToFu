@@ -148,7 +148,11 @@ Turn retirement; verify selected-store crash/Continue/query parity and recovery 
   gaps, real close/drain and source reads. Contract: `contracts/storage_v2.json`.
   Both durability tiers queue frames; responses wait in
   `WalBarrier::wait_acknowledged` (Strict: synced, Normal: written by the
-  `tofu-db-wal-writer` thread), durable dependents in `wait_witness`. No
+  `tofu-db-wal-writer` thread), durable dependents in `wait_witness`, and
+  readers see a commit only after that same acknowledgement
+  (`entity_query_view.rs` stages publications; verify
+  `a_reader_never_sees_a_commit_a_crash_before_its_acknowledgement_erases`,
+  `docs/TOFUDB_WAL_BARRIER_SCHEDULING.md#visibility-follows-acknowledgement`). No
   authority holder may perform a physical WAL write: the byte budget only
   enables copying, a frame past it still queues, and only a disabled buffer
   (encryption, stateful wrappers, zero budget) or a failed allocation writes

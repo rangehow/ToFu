@@ -53,6 +53,10 @@ def chat(messages, *, model: str | None = None, max_tokens: int = 4096,
             content = (choice.get('message') or {}).get('content') or ''
             usage = dict(payload.get('usage') or {})
             usage['model'] = payload.get('model')
+            # Production dispatch reports it (lib/llm/chat.py); the author
+            # refuses cut-off pages on it.
+            if choice.get('finish_reason'):
+                usage['finish_reason'] = choice['finish_reason']
             return content, usage
         time.sleep(5 * (attempt + 1))
     raise RuntimeError(f'model endpoint failed: {last}')

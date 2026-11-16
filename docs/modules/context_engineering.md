@@ -218,6 +218,7 @@ it rejects uncertain, one-off, synthetic, assistant, or tool content, and every 
 - **Alternatives.**
   - A score floor, a larger or role-specific top-k, or embeddings: rejected. They are tuned knobs (AGENTS.md principle 5), and the design record already rejected them.
   - Turning prefetch off for leads: rejected. Decision 8 kept it on measured evidence.
+  - Selecting continuations and wakes by their substance (board task titles and progress, unanswered questions, Worker states, a scheduled task's name and note, due promise titles): measured and rejected (2026-11-17). On the same held-out split, blind-labelled, lead Turns gained 5 relevant and 7 irrelevant injections against the rule above (Global Router 1/11 → 4/17, Project Routers 4/6 → 6/12); reading only promise-dated board tasks did no better on dev. It adds noise, so continuations and wakes keep selecting as described in 3.
   - Similarity-based automatic dedup or "latest wins": rejected. That is a threshold, and Decision 2 says supersession is never decided by similarity. The writer decides from the ordinary search result.
   - A per-repeat lesson file: rejected. It grows the corpus with duplicates, the very smell the report found. The count lives on the lesson.
   - Promotion when a Worker merely asserts a lesson: rejected. An agent report is not verification. Acceptance of the whole result by a reviewer is the existing evidence boundary.

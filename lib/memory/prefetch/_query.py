@@ -26,8 +26,8 @@ _IMAGE_HELPER_RE = re.compile(
 
 
 def _is_authored_turn(msg: dict) -> bool:
-    from lib.tasks_pkg.message_semantics import is_human_message
-    return (is_human_message(msg)
+    from lib.tasks_pkg.message_semantics import is_request_message
+    return (is_request_message(msg)
             and msg.get('carrier') not in ('tail_context', 'system_context'))
 
 

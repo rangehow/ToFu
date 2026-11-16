@@ -7,7 +7,7 @@ Turns and pre-compaction archives remain the original-content authority.
 """
 from copy import deepcopy
 
-from lib.tasks_pkg.message_semantics import is_human_message
+from lib.tasks_pkg.message_semantics import is_request_message
 
 from lib.tasks_pkg.compaction._constants import (
     _USER_VERBATIM_BUDGET_TOKENS,
@@ -168,7 +168,7 @@ def collect_history_entries(
         prior = history_entries(message)
         if prior:
             candidates.extend(prior)
-        elif is_human_message(message):
+        elif is_request_message(message):
             content = message.get('content', '')
             if not isinstance(content, (str, list)) or not content:
                 continue

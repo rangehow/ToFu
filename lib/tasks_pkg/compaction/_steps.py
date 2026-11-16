@@ -205,8 +205,8 @@ class MessageEditor:
     def turns(self) -> list[_Turn]:
         """All turns in the current message list (system prefix excluded)."""
         msgs = self._ctx.messages
-        from lib.tasks_pkg.compaction._history import is_human_message
-        user_idxs = [i for i, m in enumerate(msgs) if is_human_message(m)]
+        from lib.tasks_pkg.compaction._history import is_request_message
+        user_idxs = [i for i, m in enumerate(msgs) if is_request_message(m)]
         turns: list[_Turn] = []
         for k, start in enumerate(user_idxs):
             end = user_idxs[k + 1] if k + 1 < len(user_idxs) else len(msgs)

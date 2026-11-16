@@ -83,11 +83,11 @@ def fake_summary(monkeypatch):
 
 def _objective_present_verbatim(messages):
     """True iff the exact objective survives as a live user or opening_request."""
-    from lib.tasks_pkg.compaction._history import history_entries, is_human_message
+    from lib.tasks_pkg.compaction._history import history_entries, is_request_message
     for m in messages:
         if not isinstance(m, dict) or m.get('role') != 'user':
             continue
-        if is_human_message(m) and m.get('content') == OBJECTIVE:
+        if is_request_message(m) and m.get('content') == OBJECTIVE:
             return True
         for entry in history_entries(m):
             if (entry.get('kind') == 'opening_request'
@@ -97,12 +97,12 @@ def _objective_present_verbatim(messages):
 
 
 def _objective_verbatim_count(messages):
-    from lib.tasks_pkg.compaction._history import history_entries, is_human_message
+    from lib.tasks_pkg.compaction._history import history_entries, is_request_message
     count = 0
     for m in messages:
         if not isinstance(m, dict) or m.get('role') != 'user':
             continue
-        if is_human_message(m) and m.get('content') == OBJECTIVE:
+        if is_request_message(m) and m.get('content') == OBJECTIVE:
             count += 1
         for entry in history_entries(m):
             if (entry.get('kind') == 'opening_request'

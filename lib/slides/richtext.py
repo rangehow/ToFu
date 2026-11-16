@@ -211,14 +211,20 @@ class _Parser(HTMLParser):
         self._close_para()
 
 
+#: Text containing any of these tags is rich text; anything else is plain
+#: lines. The HTML preview uses this same test, so both renderings agree on
+#: whether ``a<br/>b`` is a line break or literal characters.
+RICH_MARKUP_RE = re.compile(
+    r'</?(?:p|span|strong|em|u|s|sup|sub|a|ul|ol|li|br|b|i)\b')
+
+
 def parse_rich_text(text: str, theme: dict) -> list:
     """Rich text string → [Paragraph]. Plain text (no tags) → one <p> per
     line; an empty input yields []."""
     raw = (text or '').strip()
     if not raw:
         return []
-    if not re.search(r'</?(?:p|span|strong|em|u|s|sup|sub|a|ul|ol|li|br|b|i)\b',
-                     raw):
+    if not RICH_MARKUP_RE.search(raw):
         return [Paragraph(runs=[Run(text=ln.strip())])
                 for ln in raw.split('\n') if ln.strip()]
     parser = _Parser(theme)

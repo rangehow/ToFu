@@ -82,7 +82,7 @@ from lib.tasks_pkg.compaction._layer2 import (
     _objective_anchor_index,
     _split_cold_rounds,
 )
-from lib.tasks_pkg.compaction._history import collect_history_entries, is_human_message
+from lib.tasks_pkg.compaction._history import collect_history_entries, is_request_message
 from lib.tasks_pkg.compaction._tokens import (
     _estimate_total_tokens,
     _get_context_limit,
@@ -208,7 +208,7 @@ def _raw_turn_boundary(
         caller short-circuits (nothing to compact).
     """
     config = config or {}
-    user_idx = [i for i, m in enumerate(raw_messages) if is_human_message(m)]
+    user_idx = [i for i, m in enumerate(raw_messages) if is_request_message(m)]
     if not user_idx:
         return len(raw_messages)
 
@@ -254,7 +254,7 @@ def _select_global_hot_rounds(raw_messages, *, config, budget_tokens):
     incomplete_start = None
     for index, message in enumerate(raw_messages):
         copied = dict(message)
-        if is_human_message(message):
+        if is_request_message(message):
             user_start = index
         if message.get('role') == 'assistant':
             retained = []
@@ -423,7 +423,7 @@ def plan_manual_compaction(
     retained_contents = [entry['content'] for entry in collect_history_entries(old_raw)]
     retained_users = []
     for message in reversed(old_raw):
-        if is_human_message(message) and message.get('content') in retained_contents:
+        if is_request_message(message) and message.get('content') in retained_contents:
             retained_users.append(message)
             retained_contents.remove(message.get('content'))
     retained_users.reverse()
@@ -764,7 +764,7 @@ def compact_conversation_now(
     folded_prefix_fp = _msgs_fingerprint(raw_messages[:watermark])
 
     human_steering_fp = _msgs_fingerprint([
-        message for message in raw_messages if is_human_message(message)])
+        message for message in raw_messages if is_request_message(message)])
     objective_applied = False
     msgs_before = len(raw_messages)
 
@@ -1081,7 +1081,7 @@ def compact_conversation_now(
     # Compare the human read set used by the accepted CAS, not a mutable alias
     # of the original snapshot. The pin remains advisory, never authorization.
     if _msgs_fingerprint([message for message in cur_messages
-                          if is_human_message(message)]) == human_steering_fp:
+                          if is_request_message(message)]) == human_steering_fp:
         try:
             from lib.goal_runs.run_pins import update_objective_from_receipt as _update_objective_from_receipt
             objective = _extract_summary_objective(summary_text)

@@ -96,11 +96,11 @@ def _prefetch_user_urls(
     list[tuple[str, str]]
         List of ``(url, fetched_content)`` pairs for successfully fetched URLs.
     """
-    from lib.tasks_pkg.compaction._history import is_human_message
+    from lib.tasks_pkg.compaction._history import is_request_message
 
     last_text = ''
     for msg in reversed(messages):
-        if not is_human_message(msg):
+        if not is_request_message(msg):
             continue
         c = msg.get('content', '')
         if isinstance(c, list):

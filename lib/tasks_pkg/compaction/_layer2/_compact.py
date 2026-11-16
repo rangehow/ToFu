@@ -68,7 +68,7 @@ from lib.tasks_pkg.compaction._handoff import (
 )
 from lib.tasks_pkg.compaction._coverage import summary_coverage
 from lib.tasks_pkg.compaction._history import (
-    history_entries, is_human_message,
+    history_entries, is_request_message,
     coalesce_history_carriers, make_history_carrier,
 )
 from lib.tasks_pkg.compaction._layer2._prompt import _extract_summary_objective
@@ -739,7 +739,7 @@ def execute_compact_tool(messages: list, task: dict | None = None, **kwargs) -> 
     if isinstance(policy, str):
         return policy
 
-    preserved_turns = sum(is_human_message(m) for m in sources.recent_messages)
+    preserved_turns = sum(is_request_message(m) for m in sources.recent_messages)
 
     logger.info('%s [Compact] Summarizing %d messages (%d old + %d cold intra-turn '
                 'rounds), preserving %d recent (%d turns), query=%.100s',

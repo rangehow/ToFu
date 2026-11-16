@@ -14,7 +14,10 @@ disable overflow checks and it cannot hide collisions elsewhere on the page.
 
 from __future__ import annotations
 
+import html
+import math
 import os
+import re
 import tempfile
 
 from lib.log import get_logger
@@ -23,7 +26,8 @@ from lib.slides.render_html import render_page_html
 
 logger = get_logger(__name__)
 
-__all__ = ['inspect_deck_layout', 'findings_text', 'vertical_growth_repairs']
+__all__ = ['inspect_deck_layout', 'findings_text', 'relayout_repairs',
+           'apply_relayout']
 
 _MEASURE_JS = r"""
 () => {
@@ -142,6 +146,21 @@ def _line_boxes(record: dict) -> list:
     return out
 
 
+def _measured(record: dict) -> dict:
+    """Page-space geometry a repair needs to fit or move this text exactly.
+
+    ``lines`` is the union of line boxes, ``contentBottom`` the lowest font
+    content edge and ``reserve`` the PowerPoint metric reserve; a box fits
+    when it spans ``lines.top`` .. ``contentBottom + reserve``.
+    """
+    lines = _union(record.get('rects') or [])
+    content = _union(record.get('content_rects') or []) or lines
+    return {'outer': {k: record['outer'][k]
+                      for k in ('left', 'top', 'right', 'bottom')},
+            'lines': lines, 'contentBottom': content['bottom'],
+            'reserve': round(_pptx_safety(record), 1)}
+
+
 def _page_findings(records: list, page_index: int, *, tolerance: float,
                    occluders: list | None = None) -> list:
     findings = []
@@ -173,6 +192,7 @@ def _page_findings(records: list, page_index: int, *, tolerance: float,
                 'elements': [record['id']],
                 'overflow': overflow,
                 'required': round(_pptx_safety(record), 1),
+                'measured': {record['id']: _measured(record)},
                 'message': (f'page {page_index + 1}: text "{record["id"]}" '
                             f'overflows its bounds ({overflow})'),
             })
@@ -188,6 +208,7 @@ def _page_findings(records: list, page_index: int, *, tolerance: float,
                     'elements': [record['id']],
                     'clearance': round(clearance, 1),
                     'required': round(needed, 1),
+                    'measured': {record['id']: _measured(record)},
                     'message': (
                         f'page {page_index + 1}: multiline text '
                         f'"{record["id"]}" has only {clearance:.1f}px bottom '
@@ -220,6 +241,8 @@ def _page_findings(records: list, page_index: int, *, tolerance: float,
                 'page': page_index + 1,
                 'elements': [first['id'], second['id']],
                 'overlap': overlap,
+                'measured': {first['id']: _measured(first),
+                             second['id']: _measured(second)},
                 'message': (f'page {page_index + 1}: text "{first["id"]}" '
                             f'collides with "{second["id"]}" ({overlap})'),
             })
@@ -342,78 +365,196 @@ def inspect_deck_layout(deck: Deck, *, timeout_ms: int = 20000,
             'findings': all_findings}
 
 
-def _vertical_deficit(finding: dict, vertical: str = 'top') -> float:
-    """Extra box height that removes a vertical overflow/clearance finding.
+def _text_elements(page_data: dict) -> dict:
+    """Top-level text elements by id (component-expanded ones are absent)."""
+    return {element.get('elementId'): element
+            for element in page_data.get('elements') or []
+            if isinstance(element, dict)
+            and element.get('elementType') == 'text'
+            and isinstance(element.get('content'), dict)
+            and isinstance(element.get('bounds'), list)
+            and len(element['bounds']) == 4}
 
-    A middle-anchored box grows on both sides, so it needs the PowerPoint
-    reserve twice to keep that reserve below its last line.
-    """
-    reserve_shares = 2 if vertical == 'middle' else 1
+
+def _valign(element: dict) -> str:
+    align = element['content'].get('align')
+    return align[1] if isinstance(align, list) and len(align) > 1 else 'top'
+
+
+def _is_vertical(finding: dict) -> bool:
     if finding.get('type') == 'pptx_text_overflow_risk':
-        return reserve_shares * (float(finding['required'])
-                                 - float(finding['clearance']))
-    overflow = finding.get('overflow') or {}
-    if set(overflow) - {'top', 'bottom'}:
-        return 0.0
-    return (float(overflow.get('top') or 0) + float(overflow.get('bottom') or 0)
-            + reserve_shares * float(finding.get('required') or 0))
+        return True
+    return (finding.get('type') == 'text_overflow'
+            and not set(finding.get('overflow') or {}) - {'top', 'bottom'})
 
 
-def vertical_growth_repairs(page_data: dict, findings: list, *,
-                            page_height: int) -> dict:
-    """Grow text boxes that only lack height; zero-LLM geometric repair.
+def _fitted_box(element: dict, measured: dict) -> tuple:
+    """Smallest change to ``element``'s box that holds its text in place.
 
-    A box whose glyphs fit horizontally but spill a few pixels vertically
-    (or lack PowerPoint's CJK metric reserve) needs a taller box, not a
-    rewritten page. Each such top-level text element grows by exactly the
-    measured deficit around its vertical anchor and stays inside the page.
-    Returns ``{elementId: [x, y, w, h]}`` for the caller to apply and
-    re-measure; horizontal overflow, collisions and component-expanded
-    elements are left to the author repair.
+    The text needs ``lines.top`` .. ``contentBottom + reserve``. A top
+    anchor keeps its top and extends down; a middle anchor extends both
+    sides around its centre; a bottom anchor glues the text to the box's
+    lower edge, so no height adds clearance below it: the box re-anchors at
+    the top of the text's current first line, leaving the text where it is.
+    Returns ``((y, height), valign)``.
     """
-    anchors = {}
-    for element in page_data.get('elements') or []:
-        if isinstance(element, dict) and isinstance(element.get('content'), dict):
-            align = element['content'].get('align')
-            anchors[element.get('elementId')] = (
-                align[1] if isinstance(align, list) and len(align) > 1 else 'top')
-    deficits: dict = {}
+    _x, y, _w, height = (float(v) for v in element['bounds'])
+    need_top = float(measured['lines']['top'])
+    need_bottom = float(measured['contentBottom']) + float(measured['reserve'])
+    valign = _valign(element)
+    if valign == 'middle':
+        centre = y + height / 2
+        half = max(height / 2, centre - need_top, need_bottom - centre)
+        top, bottom = centre - half, centre + half
+    elif valign == 'bottom':
+        top, bottom, valign = need_top, need_bottom, 'top'
+    else:
+        top, bottom = min(y, need_top), max(y + height, need_bottom)
+    top, bottom = math.floor(top), math.ceil(bottom)
+    return (top, bottom - top), valign
+
+
+def relayout_repairs(page_data: dict, findings: list, *, page_height: int,
+                     move: str = 'lower') -> dict:
+    """Zero-LLM re-layout of one page's measured text findings.
+
+    - A vertical overflow or missing PowerPoint reserve gets the exact box
+      its measured text needs (``_fitted_box``).
+    - Two colliding stacked texts are separated by moving one box clear of
+      the other's last line plus its reserve: the ``lower`` one down or the
+      ``upper`` one up, per ``move``; the caller measures both variants.
+
+    Horizontal overflow (an unbreakable run wider than its box) has no
+    geometric answer that keeps the composition, so it goes to the author.
+    Returns ``{elementId: {'bounds': [x, y, w, h], 'valign': str}}``; a
+    change that would leave the page is not proposed.
+    """
+    texts = _text_elements(page_data)
+    boxes = {eid: [float(v) for v in element['bounds']]
+             for eid, element in texts.items()}
+    valigns = {eid: _valign(element) for eid, element in texts.items()}
+    changed: set = set()
     for finding in findings:
-        if finding.get('type') not in ('text_overflow',
-                                       'pptx_text_overflow_risk'):
+        if not _is_vertical(finding):
             continue
         element_id = finding['elements'][0]
-        deficit = _vertical_deficit(finding, anchors.get(element_id, 'top'))
-        if deficit > 0:
-            deficits[element_id] = max(deficits.get(element_id, 0.0), deficit)
-    repairs = {}
-    for element in page_data.get('elements') or []:
-        if not isinstance(element, dict) or element.get('elementType') != 'text':
+        measured = (finding.get('measured') or {}).get(element_id)
+        if element_id not in texts or not measured:
             continue
-        element_id = element.get('elementId')
-        bounds = element.get('bounds')
-        if element_id not in deficits or not (
-                isinstance(bounds, list) and len(bounds) == 4):
+        (y, height), valign = _fitted_box(texts[element_id], measured)
+        if y < 0 or y + height > page_height:
             continue
-        x, y, width, height = (float(value) for value in bounds)
-        grow = float(int(deficits[element_id]) + 1)
-        content = element.get('content') if isinstance(
-            element.get('content'), dict) else {}
-        align = content.get('align') if isinstance(
-            content.get('align'), list) else []
-        vertical = align[1] if len(align) > 1 else 'top'
-        if vertical == 'middle':
-            y -= grow / 2
-        elif vertical == 'bottom':
-            y -= grow
-        height += grow
-        y = max(0.0, min(y, page_height - height))
-        if height > page_height:
+        boxes[element_id][1], boxes[element_id][3] = y, height
+        valigns[element_id] = valign
+        changed.add(element_id)
+    for finding in findings:
+        if finding.get('type') != 'text_collision':
             continue
-        repairs[element_id] = [x, round(y, 1), width, round(height, 1)]
-    return repairs
+        measured = finding.get('measured') or {}
+        first, second = finding['elements']
+        if first not in measured or second not in measured:
+            continue
+        upper, lower = sorted(
+            (first, second), key=lambda eid: measured[eid]['lines']['top'])
+        shift = math.ceil(measured[upper]['lines']['bottom']
+                          + measured[upper]['reserve']
+                          - measured[lower]['lines']['top'])
+        target = lower if move == 'lower' else upper
+        if target not in texts or shift <= 0:
+            continue
+        y = boxes[target][1] + (shift if target == lower else -shift)
+        if y < 0 or y + boxes[target][3] > page_height:
+            continue
+        boxes[target][1] = y
+        changed.add(target)
+    return {eid: {'bounds': [round(v, 1) for v in boxes[eid]],
+                  'valign': valigns[eid]} for eid in sorted(changed)}
 
 
-def findings_text(findings: list) -> str:
-    """Compact layout findings for an author repair prompt."""
-    return '\n'.join(str(f.get('message') or f) for f in findings)
+def apply_relayout(page_data: dict, repairs: dict) -> None:
+    """Write ``relayout_repairs`` output into the page's elements."""
+    for element_id, element in _text_elements(page_data).items():
+        repair = repairs.get(element_id)
+        if not repair:
+            continue
+        element['bounds'] = repair['bounds']
+        if _valign(element) != repair['valign']:
+            align = element['content'].get('align')
+            horizontal = (align[0] if isinstance(align, list) and align
+                          else 'left')
+            element['content']['align'] = [horizontal, repair['valign']]
+
+
+_TAG_RE = re.compile(r'<[^>]+>')
+
+
+def _visible_chars(element: dict | None) -> int:
+    if not element:
+        return 0
+    text = html.unescape(_TAG_RE.sub('', str(element['content'].get('text') or '')))
+    return len(''.join(text.split()))
+
+
+def findings_text(findings: list, page_data: dict | None = None) -> str:
+    """Layout findings as measured, actionable instructions for the author.
+
+    Each line states what is wrong in pixels and the two legal fixes: move
+    or resize into empty space, or cut that element's copy to the length
+    the measurement says fits (shrinking type below the legibility floor is
+    rejected elsewhere, so it is never offered).
+    """
+    texts = _text_elements(page_data or {})
+    lines = []
+    for finding in findings:
+        message = str(finding.get('message') or finding)
+        measured = finding.get('measured') or {}
+        kind = finding.get('type')
+        if _is_vertical(finding) and measured:
+            element_id = finding['elements'][0]
+            m = measured[element_id]
+            available = m['outer']['bottom'] - m['outer']['top']
+            needed = (m['contentBottom'] + m['reserve']) - m['lines']['top']
+            chars = _visible_chars(texts.get(element_id))
+            cut = ''
+            if chars and needed > available:
+                cut = (f', or cut this text to about '
+                       f'{int(chars * available / needed)} characters '
+                       f'(now {chars})')
+            lines.append(
+                f'{message}. The box is {available:.0f}px tall and the text '
+                f'needs {needed:.0f}px including the PowerPoint reserve: make '
+                f'the box {needed:.0f}px tall only if that space is empty'
+                f'{cut}; keep its claim and numbers.')
+        elif kind == 'text_overflow' and measured:
+            element_id = finding['elements'][0]
+            m = measured[element_id]
+            box = m['outer']['right'] - m['outer']['left']
+            run = m['lines']['right'] - m['lines']['left']
+            lines.append(
+                f'{message}. Its widest line, a run that cannot wrap (a path, '
+                f'identifier, long word or no-wrap label), is {run:.0f}px; '
+                f'the box is {box:.0f}px wide: widen the box to at least '
+                f'{run:.0f}px only into empty space, otherwise replace that '
+                'run with a shorter wording; keep its claim and numbers.')
+        elif kind == 'text_collision' and measured:
+            upper, lower = sorted(
+                finding['elements'], key=lambda e: measured[e]['lines']['top'])
+            above, below = measured[upper], measured[lower]
+            available = below['lines']['top'] - above['reserve'] \
+                - above['lines']['top']
+            needed = above['contentBottom'] - above['lines']['top']
+            chars = _visible_chars(texts.get(upper))
+            cut = ''
+            if chars and 0 < available < needed:
+                cut = (f', or cut "{upper}" to about '
+                       f'{int(chars * available / needed)} characters '
+                       f'(now {chars}) so it ends above "{lower}"')
+            lines.append(
+                f'{message}. "{upper}" text ends at y='
+                f'{above["lines"]["bottom"]:.0f} but "{lower}" text '
+                f'starts at y={below["lines"]["top"]:.0f}: move one box '
+                f'clear into empty space{cut}; keep their claims and '
+                'numbers.')
+        else:
+            lines.append(message)
+    return '\n'.join(lines)

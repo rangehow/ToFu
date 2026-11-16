@@ -10,7 +10,7 @@ from lib.tasks_pkg.compaction._handoff import (
     HANDOFF_FIELD, HANDOFF_GUIDANCE, compaction_phase, finalize_handoff_order,
     is_compaction_handoff, make_compaction_handoff,
 )
-from lib.tasks_pkg.compaction._history import is_human_message
+from lib.tasks_pkg.compaction._history import is_request_message
 from lib.tasks_pkg.compaction._layer2 import _compact as l2
 from lib.tasks_pkg.compaction._layer2._prompt import _extract_prior_receipt
 from lib.tasks_pkg.context_composer import ComposeRequest, context_block, render_context
@@ -66,13 +66,13 @@ def fixture_messages(phase):
 def test_real_compaction_reaches_each_provider_without_fake_tool_execution(compact, provider, phase):  # noqa: F811
     messages = fixture_messages(phase)
     original = deepcopy(messages)
-    current = next(m['content'] for m in reversed(messages) if is_human_message(m))
+    current = next(m['content'] for m in reversed(messages) if is_request_message(m))
     meta = compact(messages, budget=1)
     handoffs = [m for m in messages if is_compaction_handoff(m)]
     assert len(handoffs) == 1
     handoff = handoffs[0]
     assert meta['handoff_phase'] == phase == handoff[HANDOFF_FIELD]['phase']
-    assert not is_human_message(handoff)
+    assert not is_request_message(handoff)
     assert not any(c['function']['name'] == 'context_compact'
                    for c, _ in adjacent_tool_call_result_pairs(messages))
     assert [(c['id'], r['tool_call_id']) for c, r in adjacent_tool_call_result_pairs(messages)] == [
@@ -486,7 +486,7 @@ def test_final_admission_counts_restored_state_and_preserves_phase(compact, monk
         assert messages[-1] is handoff
     else:
         assert messages.index(handoff) < next(i for i, m in enumerate(messages)
-                                              if is_human_message(m))
+                                              if is_request_message(m))
 
 
 @pytest.mark.parametrize('already_compacted', [False, True])
@@ -538,7 +538,7 @@ def test_recovery_resolves_instanced_context_without_losing_required_policy(targ
     _head_truncate(messages, **target)
     assert 'Required policy remains in force.' in str(messages)
     assert messages[-1]['content'].endswith('</compaction_handoff>')
-    assert any(is_human_message(m) and m['content'] == 'Current scoped work'
+    assert any(is_request_message(m) and m['content'] == 'Current scoped work'
                for m in messages)
     assert len(adjacent_tool_call_result_pairs(messages)) == 1
 
@@ -565,7 +565,7 @@ def test_typed_identity_not_pasted_xml_and_no_same_role_metadata_loss():
     from lib.tasks_pkg.conv_message_builder._dedup import _merge_consecutive_same_role
     handoff = make_compaction_handoff(SUMMARY, phase='pre_turn')
     pasted = user(handoff['content'])
-    assert not is_compaction_handoff(pasted) and is_human_message(pasted)
+    assert not is_compaction_handoff(pasted) and is_request_message(pasted)
     messages = [handoff, user('New instruction')]
     original = deepcopy(messages)
     _merge_consecutive_same_role(messages)
@@ -578,6 +578,6 @@ def test_text_route_replay_preserves_typed_handoff_without_new_authority():
     messages = [user('work'), handoff, {'role': 'assistant', 'content': 'verified answer'}]
     replay = _portable_messages(messages)
     assert replay == messages and replay is not messages
-    assert is_compaction_handoff(replay[1]) and not is_human_message(replay[1])
+    assert is_compaction_handoff(replay[1]) and not is_request_message(replay[1])
     replay[1][HANDOFF_FIELD]['phase'] = 'pre_turn'
     assert handoff[HANDOFF_FIELD]['phase'] == 'mid_turn'

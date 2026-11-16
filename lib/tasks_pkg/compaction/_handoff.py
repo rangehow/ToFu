@@ -141,10 +141,10 @@ def compaction_phase(messages: list[dict]) -> str:
     Execution after that human means mid-turn. Pure runtime attachments cannot
     start a turn. A surviving mid-turn handoff retains that meaning on a repeat.
     """
-    from lib.tasks_pkg.compaction._history import is_human_message
+    from lib.tasks_pkg.compaction._history import is_request_message
 
     latest = next((i for i in range(len(messages) - 1, -1, -1)
-                   if is_human_message(messages[i])), -1)
+                   if is_request_message(messages[i])), -1)
     legacy = legacy_compaction_message_positions(messages)
     for index in range(latest + 1, len(messages)):
         message = messages[index]
@@ -177,13 +177,13 @@ def has_open_tool_batch(messages: list[dict]) -> bool:
 
 def insert_compaction_handoff(messages: list[dict], handoff: dict) -> None:
     """Install at the accepted boundary, outside every real execution batch."""
-    from lib.tasks_pkg.compaction._history import is_human_message
+    from lib.tasks_pkg.compaction._history import is_request_message
 
     if handoff[HANDOFF_FIELD]['phase'] == 'mid_turn':
         messages.append(handoff)
     else:
         index = next((i for i in range(len(messages) - 1, -1, -1)
-                      if is_human_message(messages[i])), len(messages))
+                      if is_request_message(messages[i])), len(messages))
         messages.insert(index, handoff)
 
 

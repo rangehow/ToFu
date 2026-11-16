@@ -412,6 +412,58 @@ describe('technical details', () => {
     expect(details.textContent).toContain(String(args(round).assignment_id));
     expect(details.textContent).toContain('结果版本');
   });
+
+  function card(cards: ReturnType<typeof presentation>, round: Round): HTMLElement {
+    const host = document.createElement('div');
+    host.innerHTML = cards.renderCardHtml(round, chrome)
+      || cards.renderGenericCardHtml(round, { ...chrome, titleHtml: round.toolName });
+    expect(host.querySelector('[data-tool-card]')).not.toBeNull();
+    return host;
+  }
+
+  it.each(allRounds.map((round) => [round.toolName, round] as const))(
+    '%s shows no technical details when debug mode is off', (_name, round) => {
+      const host = card(presentation('zh', {}, { debugEnabled: () => false }), round);
+      expect(host.querySelector('.ptool-coord-debug, .ptool-coord-raw')).toBeNull();
+      expect(host.textContent).not.toContain('技术详情');
+      expect(host.textContent).not.toContain('原始结果');
+    });
+
+  it('the poll card shows them only in debug mode', () => {
+    let debug = false;
+    const cards = presentation('zh', {}, { debugEnabled: () => debug });
+    expect(card(cards, first('poll')).textContent).not.toContain('技术详情');
+    debug = true;
+    expect(card(cards, first('poll')).querySelector('.ptool-coord-debug > summary')!.textContent).toBe('技术详情');
+  });
+});
+
+describe('card chrome', () => {
+  it('parts the title from its subject with a separator the reader does not hear', () => {
+    const header = render(first('poll')).querySelector('summary .ptool-coord-header')!;
+    expect([...header.children].map((node) => node.className))
+      .toEqual(['ptool-coord-title', 'ptool-coord-sep', 'ptool-coord-summary']);
+    expect(header.querySelector('.ptool-coord-sep')!.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('opens every fold inside every card from the same chevron toggle', () => {
+    let folds = 0;
+    for (const round of allRounds) {
+      const cards = presentation('zh');
+      const host = document.createElement('div');
+      host.innerHTML = cards.renderCardHtml(round, chrome)
+        || cards.renderGenericCardHtml(round, { ...chrome, titleHtml: round.toolName });
+      for (const fold of host.querySelectorAll('[data-tool-card] details')) {
+        const summary = fold.querySelector(':scope > summary')!;
+        expect(summary.classList.contains('ptool-coord-toggle')).toBe(true);
+        expect(summary.firstElementChild!.tagName.toLowerCase()).toBe('svg');
+        expect(summary.firstElementChild!.getAttribute('aria-hidden')).toBe('true');
+        expect(summary.textContent!.trim()).not.toBe('');
+        folds += 1;
+      }
+    }
+    expect(folds).toBeGreaterThan(allRounds.length);
+  });
 });
 
 describe('poll', () => {

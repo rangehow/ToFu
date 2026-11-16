@@ -118,6 +118,17 @@
   white-space: nowrap;
 }
 .conversation-surface [data-action-summary] > .ptool-line-preview { font-family: var(--font-ui); }
+/* A registered tool card's intent is structured (title, subject, outcome
+ * pills; 09-tool-cards.css): it stays one flex line whose subject alone
+ * truncates, never the clamp's single text run that butts its parts
+ * together. */
+.conversation-surface [data-action-summary] > .ptool-coord-header {
+  display: flex;
+  flex: 1 1 auto;
+  max-width: none;
+  white-space: nowrap;
+  word-break: normal;
+}
 /* A free-standing swarm sheet keeps its own inner inset (inside an open tool
  * panel it takes the card's call columns, 23-reading-tool-panel.css). Its
  * title already names the operation, with no repeated tool-name line. Its

@@ -66,6 +66,20 @@ def test_reported_tool_cards_survive_reload(browser, live_server, tmp_path, widt
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
 
+    # The first load runs with Debug Mode off, the reload with it on.
+    debug_mode = {'on': False}
+
+    def _set_debug_mode(route):
+        response = route.fetch()
+        body = response.json()
+        payload = body.get('data', body)
+        flags = payload['feature_flags'] if 'feature_flags' in payload else payload
+        flags['debug_mode'] = debug_mode['on']
+        route.fulfill(response=response, json=body)
+
+    page.route('**/api/v*/server-config**', _set_debug_mode)
+    page.route('**/api/v4/features**', _set_debug_mode)
+
     def append(command, actor, projection, create=False):
         body = {'commandId': cid + command, 'actor': actor, 'kind': 'text', 'projection': projection}
         if create:
@@ -110,15 +124,21 @@ def test_reported_tool_cards_survive_reload(browser, live_server, tmp_path, widt
             raw_card.locator('.ptc-result > summary').click()
             expect(raw_card.locator('.ptc-result pre')).to_contain_text('"inputs"')
             assert raw_head.evaluate('node=>node.scrollWidth<=node.clientWidth+1')
-            parent_card = chat.locator('.ptc-card').filter(has_text='No source tools called again')
+            parent_card = chat.locator('.ptc-card').filter(has_not_text='not recorded / unavailable')
             expect(parent_card).to_have_count(1)
             head = parent_card.locator(':scope > summary')
             expect(head).to_contain_text('Script: look up prior results')
             expect(head).to_contain_text('Completed')
             head.click()
-            parent_card.locator('.ptc-technical > summary').click()
-            expect(parent_card.locator('.ptc-measurements')).to_contain_text('No source tools called again')
-            expect(parent_card.locator('.ptc-measurements')).to_contain_text('0 successful tool calls · 0 attempts')
+            if iteration == 0:
+                # Debug mode is off: execution counters are technical details.
+                expect(parent_card.locator('.ptc-result')).to_have_count(1)
+                expect(parent_card.locator('.ptc-technical, .ptc-measurements')).to_have_count(0)
+                expect(parent_card).not_to_contain_text('Technical details')
+            else:
+                parent_card.locator('.ptc-technical > summary').click()
+                expect(parent_card.locator('.ptc-measurements')).to_contain_text('No source tools called again')
+                expect(parent_card.locator('.ptc-measurements')).to_contain_text('0 successful tool calls · 0 attempts')
 
             expect(head).to_contain_text('Retained inputs: 0 returned / 0 total')
             expect(head).to_contain_text('inputs')
@@ -151,6 +171,7 @@ def test_reported_tool_cards_survive_reload(browser, live_server, tmp_path, widt
             assert head.evaluate('node=>node.scrollWidth<=node.clientWidth+1')
             page.screenshot(path=str(tmp_path / f'reported-tool-cards-{width}-{iteration}.png'), full_page=True)
             if iteration == 0:
+                debug_mode['on'] = True
                 page.reload(wait_until='domcontentloaded')
                 _dismiss_onboarding_modals(page)
         assert not errors, errors

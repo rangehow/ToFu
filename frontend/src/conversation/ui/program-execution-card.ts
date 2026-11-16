@@ -40,7 +40,7 @@ const REASONS: Readonly<Record<string, readonly [string, string]>> = {
 
 /** `batched`: the card is a member of its model round's multi-program batch. */
 export function programExecutionCardHtml(
-  round: unknown, text: ProgramCardText = plainText, batched = false,
+  round: unknown, text: ProgramCardText = plainText, batched = false, debug = false,
 ): string {
   const row = normalizeProgramPresentation(round);
   const gateway = row._programGatewayPresentation === true;
@@ -144,12 +144,12 @@ export function programExecutionCardHtml(
     + '<div class="ptc-body">'
     + (reason ? `<p class="ptc-observation">${escapeCodeText(reason)}</p>` : '')
     + resultBlock + codeBlock
-    + (row.programStats && typeof row.programStats === 'object' ? `<details data-rich-key="technical" class="ptc-detail ptc-technical"><summary>${escapeCodeText(text('ptc.technical', 'Technical details'))}</summary><div class="ptc-measurements">${metrics.map(metric => `<span>${escapeCodeText(metric)}</span>`).join('')}</div><details data-rich-key="counters" class="ptc-detail"><summary>${escapeCodeText(text('ptc.counters', 'Raw execution counters'))}</summary><pre>${escapeCodeText(boundedProgramDisplay(row.programStats))}</pre></details></details>` : '')
+    + (debug && row.programStats && typeof row.programStats === 'object' ? `<details data-rich-key="technical" class="ptc-detail ptc-technical"><summary>${escapeCodeText(text('ptc.technical', 'Technical details'))}</summary><div class="ptc-measurements">${metrics.map(metric => `<span>${escapeCodeText(metric)}</span>`).join('')}</div><details data-rich-key="counters" class="ptc-detail"><summary>${escapeCodeText(text('ptc.counters', 'Raw execution counters'))}</summary><pre>${escapeCodeText(boundedProgramDisplay(row.programStats))}</pre></details></details>` : '')
     + '</div></details>';
 }
 
 export function renderProgramExecutionCard(
-  node: HTMLElement, round: unknown, text?: ProgramCardText,
+  node: HTMLElement, round: unknown, text?: ProgramCardText, debug = false,
 ): void {
-  reconcileRichCardHtml(node, programExecutionCardHtml(round, text));
+  reconcileRichCardHtml(node, programExecutionCardHtml(round, text, false, debug));
 }

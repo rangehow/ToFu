@@ -4,6 +4,7 @@
  * label arrives already translated; this module authors no copy.
  */
 import { escapeHtmlText as escape } from '../../../html-safety';
+import { TOOL_ROUND_CHEVRON_RIGHT_SVG } from '../../presentation/tool-round-icons';
 
 import type { ToolChip, ToolDebugField } from './contracts';
 
@@ -40,10 +41,15 @@ export function sectionHtml(heading: string, innerHtml: string): string {
     : '';
 }
 
+/** Every disclosure inside a card opens from the tool rows' chevron, which turns down when open. */
+function toggleHtml(label: string): string {
+  return `<summary class="ptool-coord-toggle">${TOOL_ROUND_CHEVRON_RIGHT_SVG}<span>${escape(label)}</span></summary>`;
+}
+
 /** A labeled disclosure around already-escaped markup. */
 export function disclosureHtml(label: string, innerHtml: string, open = false): string {
   return innerHtml
-    ? `<details class="ptool-coord-more"${open ? ' open' : ''}><summary>${escape(label)}</summary>${innerHtml}</details>`
+    ? `<details class="ptool-coord-more"${open ? ' open' : ''}>${toggleHtml(label)}${innerHtml}</details>`
     : '';
 }
 
@@ -61,7 +67,7 @@ export function translatedTextHtml(
   pending: boolean,
 ): string {
   return shownHtml
-    + (originalHtml ? `<details class="ptool-coord-original"><summary>${escape(labels.original)}</summary>${originalHtml}</details>` : '')
+    + (originalHtml ? `<details class="ptool-coord-original">${toggleHtml(labels.original)}${originalHtml}</details>` : '')
     + (pending ? `<span class="ptool-coord-translating">${escape(labels.translating)}</span>` : '');
 }
 
@@ -97,9 +103,9 @@ export function debugHtml(label: string, fields: readonly ToolDebugField[], rawL
     .map(([name, value]) => `<div class="ptool-coord-debug-row"><span>${escape(name)}</span><code>${escape(value)}</code></div>`)
     .join('');
   const rawHtml = raw.trim()
-    ? `<details class="ptool-coord-raw"><summary>${escape(rawLabel)}</summary><pre>${escape(raw)}</pre></details>`
+    ? `<details class="ptool-coord-raw">${toggleHtml(rawLabel)}<pre>${escape(raw)}</pre></details>`
     : '';
   return rows || rawHtml
-    ? `<details class="ptool-coord-debug"><summary>${escape(label)}</summary>${rows}${rawHtml}</details>`
+    ? `<details class="ptool-coord-debug">${toggleHtml(label)}${rows}${rawHtml}</details>`
     : '';
 }

@@ -238,7 +238,13 @@ def test_list_project_leads_names_the_other_leads_and_the_owner_resources(world)
     }
     assert page['next_cursor'] is None
     registry = os.path.join(router_home_location(world.owner), 'RESOURCES.md')
-    assert page['resources'] == {'path': registry, 'available': False}
+    # The home was seeded at creation; a missing registry still reports
+    # available=false rather than a path that does not exist (R13 Seed).
+    assert page['resources']['path'] == registry
+    assert page['resources']['available'] is True
+    assert page['resources']['bytes'] == os.path.getsize(registry)
+    os.unlink(registry)
+    assert listed(alpha)['resources'] == {'path': registry, 'available': False}
 
     text = '# Owner resources\n\n| Resource | Detail |\n| H800 queue | 64 GPUs |\n'
     with open(registry, 'w', encoding='utf-8') as stream:

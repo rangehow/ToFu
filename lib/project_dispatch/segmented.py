@@ -75,6 +75,20 @@ class SegmentedDispatch:
     def query(self, operation, **payload):
         return self.repo.client().query('project.dispatch.' + operation, {**self.scope, **payload})
 
+    def get_many(self, documents):
+        """``query('get')`` of each ``(field, identity)`` document, read in one exchange.
+
+        Each answer is the stored row (or None), or the StorageError its read raised.
+        """
+        from lib.storage.port import query_many
+        documents = list(dict.fromkeys(documents))
+        if not documents:
+            return {}
+        answers = query_many(self.repo.client(), [
+            ('project.dispatch.get', {**self.scope, 'collection': FIELDS[field], 'id': key(ident)})
+            for field, ident in documents])
+        return dict(zip(documents, answers))
+
     def head(self):
         row = self.query('get', collection='head', id='root')
         if row is None:
@@ -141,13 +155,17 @@ class SegmentedDispatch:
             return deepcopy(value), version
         state = head['value']['state']
         documents = {}
+        prefetched = {}
         value = {'binding': deepcopy(self.repo.binding), **{field: [] for field in FIELDS}}
 
         def fetch(field, ident):
             document_key = (field, ident)
             if document_key in documents:
                 return documents[document_key]
-            row = self.query('get', collection=FIELDS[field], id=key(ident))
+            row = (prefetched.pop(document_key) if document_key in prefetched
+                   else self.query('get', collection=FIELDS[field], id=key(ident)))
+            if isinstance(row, StorageError):
+                raise row
             if row is not None:
                 envelope = row.get('value') or {}
                 record = envelope.get('record')
@@ -189,6 +207,8 @@ class SegmentedDispatch:
             selected = deepcopy(selected)
             if selected.get('latest_budget') and state.get('latestBudgetId'):
                 selected['requestBudgets'].append(state['latestBudgetId'])
+            prefetched.update(self.get_many(
+                [(field, ident) for field in FIELDS for ident in selected.get(field, [])]))
             for field in FIELDS:
                 for ident in selected.get(field, []):
                     fetch(field, ident)

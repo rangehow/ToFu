@@ -3366,6 +3366,41 @@ former per-row reload, one dispatch record read per build) and
 `test_project_dispatch_history.py::test_page_dependency_rows_add_no_snapshot_reads`
 (SQLite, PostgreSQL and native: a build's dispatch RPCs equal its page load's).
 
+Problem: each 32-row page still made about 115 storage round trips (an assignment
+document, a Turn, an attempt and a delivery workspace per row), and in a busy
+process every round trip waits several times to be scheduled. The old repo's
+COORD-PAGE-READS probe measured page p50 11-18 s and p95 142-155 s on the N=1000
+synthetic Coordinator load, with the page thread's CPU 0.2% of its wall time.
+Decision: a build reads each kind of evidence for all its rows in one exchange
+(`lib.storage.port.query_many`, see
+[STORAGE.md](STORAGE.md#commands-queries-and-idempotency)): the selected
+documents (`SegmentedDispatch.get_many`, used by every point selection), then
+the bound Turns (metadata where a remembered preview may still hold, the
+server-cut content preview otherwise), the attempts, the previews whose Turn
+metadata changed, and the delivery workspaces (`service._HistoryEvidence`).
+Each read is the same live read as before and is consumed where the row read it,
+so failures surface on the same row; each distinct project path resolves once
+per build. A page of 32 rows now costs the round trips of a page of one: 7, plus
+one when Turns changed. Injected single-read ports keep the row-by-row path.
+Alternatives rejected: an exact cache of settled rows' views (Turn, attempt and
+workspace evidence can change after settlement, so exactness needs a live
+witness per row, which is the same reads; the slowest pages are in busy phases
+with live rows; and the no-cross-request-cache decision above stands), a
+projection maintained at settlement (every Turn, attempt and delivery writer in
+other owners would have to maintain it), and per-domain multi-get operations
+(four catalog operations on both authorities and a native engine rebuild and
+redeployment for the same round trips). Guards:
+`test_project_dispatch_history.py::test_page_round_trips_do_not_grow_with_its_rows`
+(115 round trips before) and `::test_page_content_equals_the_row_by_row_reads`
+(SQLite and native). Re-measured here with `benchmarks/project_assignment_page_reads.py
+--rows 32 --builds 3` on an exported pre-change tree and this one (same engine
+built from this checkout, `TOFU_TEST_TOFUDB_BIN`): SQLite 115 → 7 round trips
+per 32-row build (116 → 8 when one Turn changed), native 115 → 7 (116 → 8),
+with identical RPC counts and oracle-equal pages on both. What remains is per
+read, not per round trip: the old repo's VM runs put the residual per-read cost
+at ~155 ms while 300 Workers are born and ~60 ms once 1000 run, the wait of a
+host process whose threads saturate the interpreter lock.
+
 Problem: when a client disconnects, Quart cancels only the coroutine awaiting the
 view. The former sync view's worker thread kept building the whole page (every
 Turn, attempt, delivery and dependency read) for nobody, while polling clients
@@ -3373,9 +3408,10 @@ frequently gave up on slow builds; the retained application logs hold hundreds o
 SLOW/HEAVY warnings for this GET. Decision: GET assignments is an async view that
 runs the unchanged build on a worker thread, sets an event when its coroutine is
 cancelled and joins the worker before re-raising the cancellation.
-`ProjectDispatchService.history_page` checks that predicate before the page load
-and between rows and raises `HistoryBuildCancelled`; the row whose reads are in
-flight finishes and no later row is read. A cancelled build sends no response and
+`ProjectDispatchService.history_page` checks that predicate before the page load,
+before each evidence exchange and between rows and raises `HistoryBuildCancelled`;
+the exchange or row whose reads are in flight finishes and nothing later is read.
+A cancelled build sends no response and
 keeps the previous previews slot. Exact command/assignment lookups are single reads
 and do not check it. Alternatives rejected: a build deadline (a tuning knob that also
 cuts slow legitimate builds), abandoning the thread as before (its reads continue),

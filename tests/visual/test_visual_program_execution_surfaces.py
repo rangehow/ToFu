@@ -78,8 +78,8 @@ def test_shared_card_preserves_evidence_and_reader_choices(
     assert json.loads(result.locator('pre').inner_text()) == {'rows': ['<img src=x onerror=alert(1)>']}
     assert 'local_javascript' not in card.inner_text()
     assert card.evaluate('node=>node.open') is True
-    assert card.locator('.ptc-technical').evaluate('node=>node.open') is False
-    assert not card.locator('.ptc-measurements').is_visible()
+    # Debug Mode is off: execution counters are technical details.
+    assert card.locator('.ptc-technical,.ptc-measurements').count() == 0
     assert ('Saved results read 3 times' if surface == 'default' else
             messages['ptc.measurement.reused'].replace('{n}', '3')) in card.inner_text()
     assert page.evaluate('''()=>{
@@ -160,7 +160,7 @@ def test_gateway_lookup_has_one_standard_header(frontend_visual_page, width, tmp
       const text=(key,values)=>key.replace(/\\{(\\w+)\\}/g,(_,name)=>values?.[name]??'');
       const ports={text,icon:()=>'',markdown:value=>value,cleanTranslation:value=>value,
         renderLine:round=>'<p class="gateway-row">'+round.query+'</p>',renderSwarm:()=>null,
-        renderProgram:round=>programExecutionCardHtml(round),debugEnabled:()=>false,
+        renderProgram:round=>programExecutionCardHtml(round,undefined,false,true),debugEnabled:()=>false,
         taskIdForRound:()=>'',debugLog:()=>{}};
       document.body.innerHTML='<main id="unified"></main>';
       document.getElementById('unified').innerHTML=createToolGroupPresentation(ports)
@@ -244,11 +244,11 @@ def test_saved_result_reads_have_plain_chinese_headers(frontend_visual_page, wid
         programCode:'return tools.keep(value);',
         programStats:{tool_calls:1,successful_tool_calls:1},
         programResult:{kind:'program_value',ref:'input_'+'a'.repeat(32),
-          bytes:22144,sourceCoverage:'unknown'}},text);
+          bytes:22144,sourceCoverage:'unknown'}},text,true);
       window.renderSavedRead=()=>renderProgramExecutionCard(node,{programStatus:'completed',
         programCode:'return tools.result({ref:reference});',
         programStats:{tool_calls:0,successful_tool_calls:0,result_reads:1},
-        programResult:{keys:['0','1']}},text);
+        programResult:{keys:['0','1']}},text,true);
     }""", messages)
     card = page.locator('.ptc-card')
     header = card.locator('.ptc-head')

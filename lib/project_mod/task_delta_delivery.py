@@ -241,7 +241,7 @@ def _canonical_path_entries(root, head, paths):
 def _tree_entries(root, rev, paths):
     from lib import integration_control as ic
     listed = ic._git(root, ['--literal-pathspecs', 'ls-tree', '-r', '-z', '--full-tree', rev,
-                            '--', *paths], check=True).stdout
+                            '--', *paths], check=True, stall_seconds=GIT_STALL_SECONDS).stdout
     entries = {}
     for entry in listed.split('\0'):
         if '\t' in entry:
@@ -286,7 +286,8 @@ def _pending_task_paths(root, source, baseline, checkpoint):
     """
     from lib import integration_control as ic
     paths = [path for path in ic._git(root, ['diff', '--no-renames', '--name-only', '-z',
-                                             baseline, checkpoint], check=True).stdout.split('\0') if path]
+                                             baseline, checkpoint], check=True,
+                                      stall_seconds=GIT_STALL_SECONDS).stdout.split('\0') if path]
     if not paths:
         return [], []
     before, current, wanted = (_tree_entries(root, rev, paths) for rev in (baseline, source, checkpoint))
@@ -296,13 +297,39 @@ def _pending_task_paths(root, source, baseline, checkpoint):
     return pending, conflicts
 
 
+def _stageless_conflict_detail(root, pending, baseline, source, checkpoint):
+    from lib import integration_control as ic
+
+    before, current, wanted = (_tree_entries(root, rev, pending)
+                               for rev in (baseline, source, checkpoint))
+    binary = {record.rsplit('\t', 1)[1] for record in ic._git(root, [
+        '--literal-pathspecs', 'diff', '--no-renames', '--numstat', '-z', baseline, checkpoint,
+        '--', *pending], check=True, stall_seconds=GIT_STALL_SECONDS).stdout.split('\0')
+        if record.startswith('-\t-\t')}
+    detail = {}
+    for path in pending:
+        if path in before and path in wanted and path not in current:
+            detail[path] = f"{'binary ' if path in binary else ''}modify/delete: {path}"
+        elif path in binary and path in current and current[path] != before.get(path):
+            detail[path] = f'binary patch conflict: {path}'
+    if not detail:
+        detail = {path: f'unclassified patch failure: {path}' for path in pending}
+    return '; '.join(detail.values()), sorted(detail)
+
+
 def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseline, checkpoint,
                            message=''):
-    """Resolve against captured workspace bytes without touching its index."""
+    """Resolve against captured workspace bytes without touching its index.
+
+    Every read and private-index step here scales with the delta and the
+    volume, so it runs under the stall window with no total deadline; only the
+    object write in :func:`_commit` keeps its fixed deadline.
+    """
     from lib import integration_control as ic
 
     environment = {'GIT_INDEX_FILE': str(index_path)}
-    ic._git(root, ['read-tree', source], env=environment, check=True)
+    ic._git(root, ['read-tree', source], env=environment, check=True,
+            stall_seconds=GIT_STALL_SECONDS)
     baseline = _delta_base(root, baseline, checkpoint, source)
     pending, created_conflicts = _pending_task_paths(root, source, baseline, checkpoint)
     if created_conflicts:
@@ -311,14 +338,23 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
     if pending:
         Path(patch_path).write_bytes(ic._git(root, [
             '--literal-pathspecs', 'diff', '--no-renames', '--binary', '--full-index', '--no-ext-diff',
-            '--no-textconv', baseline, checkpoint, '--', *pending], check=True, binary=True).stdout)
+            '--no-textconv', baseline, checkpoint, '--', *pending], check=True, binary=True,
+            stall_seconds=GIT_STALL_SECONDS).stdout)
         applied = ic._git(root, ['apply', '--cached', '--3way', '--whitespace=nowarn',
-                                 str(patch_path)], env=environment)
+                                 str(patch_path)], env=environment,
+                          stall_seconds=GIT_STALL_SECONDS)
     else:
-        applied = ic._git(root, ['write-tree'], env=environment)
+        applied = ic._git(root, ['write-tree'], env=environment, stall_seconds=GIT_STALL_SECONDS)
     if applied.returncode:
-        conflicts = ic._git(root, ['ls-files', '-u', '-z'], env=environment, check=True).stdout
+        conflicts = ic._git(root, ['ls-files', '-u', '-z'], env=environment, check=True,
+                            stall_seconds=GIT_STALL_SECONDS).stdout
         paths = conflicted_paths(conflicts)
+        if pending and not paths:
+            # modify/delete and binary patch failures leave no unmerged stages;
+            # name every pending path from the immutable trees instead of
+            # returning raw stderr with no paths.
+            detail, paths = _stageless_conflict_detail(root, pending, baseline, source, checkpoint)
+            return '', detail, paths
         from lib.project_mod.generated_integration import (
             GeneratedOutputError, conflict_output_family, resolve_generated_conflicts)
         try:
@@ -343,7 +379,8 @@ def _merge_workspace_delta(root, source, patch_path, task_id, index_path, baseli
                             + (f'; {regenerable} generated outputs rebuild from the merged '
                                'sources once these resolve' if regenerable and sources else '')), paths
             return '', applied.stderr or applied.stdout or f'Git merge failed with exit {applied.returncode}', paths
-    tree = ic._git(root, ['write-tree'], env=environment, check=True).stdout.strip()
+    tree = ic._git(root, ['write-tree'], env=environment, check=True,
+                   stall_seconds=GIT_STALL_SECONDS).stdout.strip()
     return _commit(root, tree, source, message or f'Tofu workspace delivery: {task_id}'), '', []
 
 
@@ -362,7 +399,8 @@ def _delivered_without_publication(root, row, receipt, head, changed, checkpoint
     from lib import integration_control as ic
 
     def reaches(revision):
-        return ic._git(root, ['merge-base', '--is-ancestor', revision, head]).returncode == 0
+        return ic._git(root, ['merge-base', '--is-ancestor', revision, head],
+                       stall_seconds=GIT_STALL_SECONDS).returncode == 0
 
     if not changed or (head and reaches(checkpoint)):
         return dict(state='delivered', phase='no_changes', reason='',
@@ -467,7 +505,8 @@ def _borrowed_paths(root, row, paths):
     if not paths or not head or not snapshot or head == snapshot:
         return []
     listed = ic._git(root, ['--literal-pathspecs', 'diff', '--no-renames', '--name-only', '-z',
-                            head, snapshot, '--', *paths], check=True).stdout
+                            head, snapshot, '--', *paths], check=True,
+                     stall_seconds=GIT_STALL_SECONDS).stdout
     borrowed = set(listed.split('\0'))
     return [path for path in paths if path in borrowed]
 
@@ -510,7 +549,8 @@ def _commit_reviewed_delta(row, root, baseline, checkpoint, changed, claims, adm
                 and retry.get('condition') == 'conflict_inputs_changed'
                 and retry.get('fingerprint') == fingerprint):
             return unchanged_hold(receipt)
-    file_mode = ic._git(root, ['config', '--bool', 'core.fileMode']).stdout.strip() != 'false'
+    file_mode = ic._git(root, ['config', '--bool', 'core.fileMode'],
+                        stall_seconds=GIT_STALL_SECONDS).stdout.strip() != 'false'
     message = _delivery_commit_message(root, row, baseline, checkpoint, head)
 
     def hold(reason, paths):
@@ -599,7 +639,8 @@ def deliver_task_delta(row, receipt, save_receipt):
         baseline, checkpoint = repair['baselineSha'], repair['checkpointSha']
     # A rename's source is a changed path too: the delivery deletes it.
     changed = [path for path in ic._git(root, ['diff', '--no-renames', '--name-only', '-z',
-                                             baseline, checkpoint], check=True).stdout.split('\0')
+                                             baseline, checkpoint], check=True,
+                                        stall_seconds=GIT_STALL_SECONDS).stdout.split('\0')
                if path]
     # A checkpoint that merged the branch may also revert a later canonical
     # change; the three-way base (_delta_base) publishes that path too.
@@ -608,7 +649,8 @@ def deliver_task_delta(row, receipt, save_receipt):
     if delta_base != baseline:
         known = set(changed)
         changed += [path for path in ic._git(root, ['diff', '--no-renames', '--name-only', '-z',
-                                                   delta_base, checkpoint], check=True).stdout.split('\0')
+                                                   delta_base, checkpoint], check=True,
+                                              stall_seconds=GIT_STALL_SECONDS).stdout.split('\0')
                     if path and path not in known]
     # Checkout-wide admission made unrelated editors wait for both full-tree
     # captures. Only these paths can be published. The lease owner widens
@@ -681,7 +723,7 @@ def deliver_task_delta(row, receipt, save_receipt):
 
     def same_paths(left, right):
         return ic._git(root, ['--literal-pathspecs', 'diff', '--quiet', left, right,
-                             '--', *changed]).returncode == 0
+                             '--', *changed], stall_seconds=GIT_STALL_SECONDS).returncode == 0
 
     def fingerprint_of(source_entries):
         return input_fingerprint(baseline=baseline, checkpoint=checkpoint, branch='',
@@ -710,7 +752,7 @@ def deliver_task_delta(row, receipt, save_receipt):
                     previous_target and current.get('checkpointSha') == row['checkpoint_sha']
                     and current.get('deltaCheckpointSha') == checkpoint
                     and ic._git(root, ['--literal-pathspecs', 'ls-tree', '-z', previous_target,
-                                       '--', *changed], check=True).stdout == entries):
+                                       '--', *changed], check=True, stall_seconds=GIT_STALL_SECONDS).stdout == entries):
                 return False
         except Exception as error:
             # The whole capture below decides instead and reports its own failure.
@@ -755,7 +797,7 @@ def deliver_task_delta(row, receipt, save_receipt):
                 # History/index movement cannot block delivery of unchanged files.
                 fingerprint = fingerprint_of(ic._git(
                     root, ['--literal-pathspecs', 'ls-tree', '-z', source, '--', *changed],
-                    check=True).stdout)
+                    check=True, stall_seconds=GIT_STALL_SECONDS).stdout)
                 previous_retry = receipt.get('retry') or {}
                 if (receipt.get('state') in {'blocked', 'failed'}
                         and previous_retry.get('condition') == 'conflict_inputs_changed'
@@ -779,7 +821,7 @@ def deliver_task_delta(row, receipt, save_receipt):
                 def resolved_patch(source, target):
                     resolved = ic._git(root, ['diff', '--binary', '--full-index', '--no-ext-diff',
                                              '--no-textconv', source, target],
-                                       check=True, binary=True).stdout
+                                       check=True, binary=True, stall_seconds=GIT_STALL_SECONDS).stdout
                     patch_path.write_bytes(resolved)
                     return resolved
 
@@ -806,7 +848,7 @@ def deliver_task_delta(row, receipt, save_receipt):
                                                     current_head, task_id)
                         fingerprint = fingerprint_of(ic._git(
                             root, ['--literal-pathspecs', 'ls-tree', '-z', source, '--', *changed],
-                            check=True).stdout)
+                            check=True, stall_seconds=GIT_STALL_SECONDS).stdout)
                         target, conflict, paths = _merge_workspace_delta(
                             root, source, patch_path, task_id, index_path, baseline, checkpoint)
                         if conflict:

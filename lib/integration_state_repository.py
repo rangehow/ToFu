@@ -96,6 +96,31 @@ def find_workspace(
     return dict(result) if result is not None else None
 
 
+def find_workspaces(keys: list[tuple[str, str]], *, user_id: int) -> list[Any]:
+    """``find_workspace`` of each ``(project_root, task_id)``, read in one exchange.
+
+    Element ``i`` is what ``find_workspace(*keys[i], user_id=user_id)`` returns,
+    or the exception it raises.
+    """
+    from lib.storage.port import query_many
+    operation = 'integration.workspace.get'
+    answers = query_many(get_storage_client(), [
+        (operation, {'user_id': int(user_id), 'project_root': project_root, 'task_id': task_id})
+        for project_root, task_id in keys],
+        deadline=storage_write_deadline(operation, kind='query', floor_seconds=_DEADLINE_FLOOR_SECONDS))
+    results: list[Any] = []
+    for answer in answers:
+        if isinstance(answer, StorageError) and answer.code == 'database_conflict':
+            error = IntegrationStateError(answer.message)
+            error.__cause__ = answer
+            results.append(error)
+        elif isinstance(answer, StorageError) or answer is None:
+            results.append(answer)
+        else:
+            results.append(dict(answer))
+    return results
+
+
 def get_workspace(
     project_root: str, task_id: str, *, user_id: int,
 ) -> dict[str, Any]:

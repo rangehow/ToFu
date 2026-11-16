@@ -248,7 +248,14 @@ function renderProgramBlockContent(
   node.dataset.rendererMode = 'fallback';
   setManagedRichHtml(node, programExecutionCardHtml(
     block.round, (key, fallback, values) => textFor(ports, key, fallback, values),
+    false, Boolean(ports.debugEnabled?.()),
   ));
+}
+
+/** Program cards show technical details only in debug mode, so a toggle repaints them like tool cards. */
+function subscribeProgramCard(node: HTMLElement, repaint: () => void, ports: ClassicConversationRendererPorts): void {
+  const unsubscribeCard = ports.subscribeToolCards?.(repaint);
+  if (unsubscribeCard) toolBodies.set(node, { materialized: false, unsubscribeCard });
 }
 
 export function renderInjectionBlock(
@@ -332,7 +339,9 @@ export function renderProgramBlock(
   turn: ConversationTurnViewModel,
   ports: ClassicConversationRendererPorts,
 ): void {
+  disposeToolBody(node);
   renderProgramBlockContent(node, block, turn, ports);
+  subscribeProgramCard(node, () => renderProgramBlock(node, block, turn, ports), ports);
   decorateToolSummary(node, block);
   renderToolEffectNotice(node, block.effectNotice === undefined
     ? toolEffectNotice(block.round?.executionEffect, turn.status, block.round?.status) : block.effectNotice,

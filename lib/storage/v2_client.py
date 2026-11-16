@@ -25,7 +25,7 @@ import random
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from lib.log import get_logger, log_event, log_fields
@@ -86,6 +86,9 @@ _BUSY_COMMAND_MAX_DELAY_S = 0.250
 # finer WAL-rotation schedule above.
 _AVAILABILITY_BACKOFF_BASE_S = 0.5
 _AVAILABILITY_BACKOFF_CAP_S = 8.0
+
+# A pipelined read whose answer is still to be decided (``query_many``).
+_UNANSWERED = object()
 
 # tofu-db's semantic executor emits storage.v1 error codes directly, except
 # for these v2-specific classifications, which map onto the stable taxonomy.
@@ -585,6 +588,17 @@ class StorageV2Client:
     def _request_once(self, operation, body, *, timeout, command_id, deadline_unix_ms,
                       cancellation=None):
         """One pooled transport attempt; replay policy belongs to the caller."""
+        def decode(response):
+            if response.status != 0:
+                raise self._to_storage_error(response, operation)
+            return response.json()
+        return self._exchange_once(
+            lambda session: session.request(
+                operation, body, command_id=command_id, deadline_unix_ms=deadline_unix_ms),
+            decode, operation, timeout=timeout, cancellation=cancellation)
+
+    def _exchange_once(self, transfer, decode, operation, *, timeout, cancellation=None):
+        """One pooled-session exchange: ``transfer`` owns the wire, ``decode`` its answer."""
         stop_at = time.monotonic() + timeout
         session = None
         broken = False
@@ -607,12 +621,9 @@ class StorageV2Client:
             binding = cancellation.bind(session.interrupt) if cancellation is not None else nullcontext()
             with binding:
                 broken = True
-                response = session.request(
-                    operation, body, command_id=command_id, deadline_unix_ms=deadline_unix_ms)
+                answer = transfer(session)
             broken = False
-            if response.status != 0:
-                raise self._to_storage_error(response, operation)
-            return response.json()
+            return decode(answer)
         except StorageError:
             raise
         except StorageV2Error as exc:
@@ -735,6 +746,65 @@ class StorageV2Client:
         return application_result(
             operation, self._call('query', operation, payload, deadline=deadline)
         )
+
+    def query_many(
+        self,
+        requests: Sequence[tuple[str, Mapping[str, Any] | None]],
+        deadline: float | None = None,
+    ) -> list[Any]:
+        """Reads answered by one pipelined exchange on one pooled session.
+
+        Element ``i`` is what ``query(*requests[i])`` returns, or the
+        ``StorageError`` it raises. The authority answers each read on its own,
+        exactly as a lone ``query``. A read answered with a classified transient
+        failure, or left unanswered because the exchange failed, is read again
+        through ``query`` and its whole replay policy.
+        """
+        requests = [(validate_operation(operation), payload) for operation, payload in requests]
+        outcomes: list[Any] = [_UNANSWERED] * len(requests)
+        if len(requests) > 1:
+            timeout = self._timeout if deadline is None else max(0.001, float(deadline))
+            started_at = time.monotonic()
+            bodies = [(operation, request_payload(operation, payload, owner_id=self._owner_id))
+                      for operation, payload in requests]
+            deadline_unix_ms = int((time.time() + timeout) * 1000)
+            try:
+                responses = self._exchange_once(
+                    lambda session: session.request_many(bodies, deadline_unix_ms=deadline_unix_ms),
+                    lambda answers: answers, requests[0][0], timeout=timeout)
+            except StorageError:
+                responses = []
+            for index, response in enumerate(responses):
+                if response is None:
+                    continue  # needs a streamed upload: read alone below
+                operation = requests[index][0]
+                try:
+                    if response.status != 0:
+                        raise self._to_storage_error(response, operation)
+                    outcomes[index] = application_result(operation, response.json())
+                except StorageError as error:
+                    if (error.retryable or error.code == 'database_timeout') and error.code in _RETRYABLE_CODES:
+                        continue
+                    _record_rpc('query', operation, started_at, 'error')
+                    outcomes[index] = error
+                    continue
+                except (ValueError, TypeError) as exc:
+                    _record_rpc('query', operation, started_at, 'error')
+                    outcomes[index] = StorageError(
+                        'database_protocol_error',
+                        f'storage.v2 codec failure: {type(exc).__name__}: {exc}')
+                    continue
+                elapsed = time.monotonic() - started_at
+                _record_rpc('query', operation, started_at, 'success')
+                observe_storage_service('query', operation, elapsed)
+                _warn_slow_rpc('query', operation, elapsed, 1, None)
+        for index, outcome in enumerate(outcomes):
+            if outcome is _UNANSWERED:
+                try:
+                    outcomes[index] = self.query(*requests[index], deadline=deadline)
+                except StorageError as error:
+                    outcomes[index] = error
+        return outcomes
 
     def command(
         self,

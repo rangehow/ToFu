@@ -1074,7 +1074,8 @@
   --error-bg:color-mix(in srgb, var(--error-text) 8%, transparent);
   --error-border:color-mix(in srgb, var(--error-text) 30%, transparent);
   --success-text:var(--text-secondary);
-  --success-bg:transparent;
+  /* Success ink stays quiet; its pill keeps a visible fill like the other themes. */
+  --success-bg:color-mix(in srgb, var(--success-text) 12%, transparent);
   --success-border:var(--border);
   --warning-text:#e2c18b;
   --warning-bg:color-mix(in srgb, var(--warning-text) 8%, transparent);
@@ -11825,26 +11826,47 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 /* Registered tool cards (frontend/src/conversation/ui/tool-cards/): localized
    title + one-line summary in the header, structured body, technical details
    last. Checklist rows reuse 09-tool-progress.css item styles. */
+/* Collapsed line: the short localized title holds its place, the subject
+   alone truncates (its full text is the header's title tooltip), and outcome
+   pills stay whole. A hairline, not a dot, parts title
+   and subject: summaries already use " · " between their own facts. */
 .ptool-coord-header {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-2);
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
-.ptool-coord-title { font-weight: var(--weight-medium); color: var(--text-primary); }
-.ptool-coord-sep { color: var(--text-tertiary); }
+.ptool-coord-title {
+  flex: 0 0 auto;
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+}
+.ptool-coord-sep {
+  flex: 0 0 auto;
+  align-self: center;
+  width: var(--control-edge-inset);
+  height: var(--space-3);
+  overflow: hidden;
+  background: var(--border);
+  font-size: 0;
+}
 .ptool-coord-summary {
+  flex: 0 1000 auto;
   min-width: 0;
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--tool-row-meta-ink);
+  font-weight: var(--weight-regular);
 }
 .ptool-coord-chip {
-  display: inline-flex;
-  align-items: center;
+  flex: 0 0 auto;
+  display: inline-block;
   padding: 0 var(--space-2);
   border-radius: var(--radius-pill);
-  border: 1px solid var(--border-light);
+  border: var(--control-edge-inset) solid var(--border-light);
   font-size: var(--conversation-font-size-caption);
   line-height: 1.6;
   white-space: nowrap;
@@ -11901,19 +11923,40 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 .ptool-coord-worker > .ptool-coord-more { flex-basis: 100%; }
 .ptool-coord-worker-title { font-weight: var(--weight-medium); overflow-wrap: anywhere; }
 .ptool-coord-quotes li { padding-left: var(--space-2); border-left: 2px solid var(--border); color: var(--text-secondary); }
-.ptool-coord-more > summary, .ptool-coord-debug > summary, .ptool-coord-raw > summary {
+/* One disclosure control for every fold inside a card: the tool rows'
+   chevron, pointing right when closed and turning down when open. Folded
+   content hangs on the label's text edge, not under the chevron. */
+.ptool-coord-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+  list-style: none;
   cursor: pointer;
   color: var(--text-secondary);
+  font-size: var(--conversation-font-size-meta);
+  line-height: var(--leading-title);
+  transition: color var(--motion-fast) var(--ease-standard);
 }
-.ptool-coord-prose { min-width: 0; overflow-wrap: anywhere; }
-.ptool-coord-more > .ptool-coord-prose { padding: var(--space-1) 0 0 var(--space-3); }
-/* A translated text's authored original, one click away. */
-.ptool-coord-original > summary {
-  cursor: pointer;
+.ptool-coord-toggle::-webkit-details-marker { display: none; }
+.ptool-coord-toggle::marker { content: ''; }
+.ptool-coord-toggle:hover { color: var(--text-primary); }
+.ptool-coord-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--space-1); }
+.ptool-coord-toggle > svg {
+  flex: 0 0 auto;
+  width: var(--space-4);
+  height: var(--space-4);
   color: var(--text-tertiary);
-  font-size: var(--conversation-font-size-caption);
+  transition: transform var(--motion-fast) var(--ease-standard);
 }
-.ptool-coord-more > .ptool-coord-original { padding-left: var(--space-3); }
+details[open] > .ptool-coord-toggle > svg { transform: rotate(90deg); }
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug, .ptool-coord-raw) > :not(summary) {
+  margin-inline-start: calc(var(--space-4) + var(--space-1));
+}
+:is(.ptool-coord-more, .ptool-coord-original, .ptool-coord-debug)[open] > summary { margin-bottom: var(--space-1); }
+.ptool-coord-prose { min-width: 0; overflow-wrap: anywhere; }
+/* A translated text's authored original, one click away. */
+.ptool-coord-original > .ptool-coord-toggle { color: var(--text-tertiary); font-size: var(--conversation-font-size-caption); }
 .ptool-coord-original > .ptool-coord-prose { color: var(--text-secondary); }
 .ptool-coord-translating { color: var(--text-tertiary); font-size: var(--conversation-font-size-caption); }
 .ptool-coord-open {
@@ -11932,10 +11975,10 @@ html[data-tofu-planned-interruption="true"] .net-latency-badge{visibility:hidden
 .ptool-coord-open:hover { background: var(--bg-hover); }
 .ptool-coord-open svg { width: var(--space-4); height: var(--space-4); }
 .ptool-coord-debug { color: var(--text-tertiary); }
-.ptool-coord-debug-row { display: flex; gap: var(--space-2); min-width: 0; padding-left: var(--space-3); }
+.ptool-coord-debug-row { display: flex; gap: var(--space-2); min-width: 0; }
 .ptool-coord-debug-row code { overflow-wrap: anywhere; font-family: var(--font-mono); }
 .ptool-coord-raw pre {
-  margin: var(--space-1) 0 0;
+  margin-block: var(--space-1) 0;
   max-height: 24em;
   overflow: auto;
   white-space: pre-wrap;
@@ -28182,6 +28225,17 @@ html:not([data-theme="light"]):not([data-theme="tofu"]) .topbar{
   white-space: nowrap;
 }
 .conversation-surface [data-action-summary] > .ptool-line-preview { font-family: var(--font-ui); }
+/* A registered tool card's intent is structured (title, subject, outcome
+ * pills; 09-tool-cards.css): it stays one flex line whose subject alone
+ * truncates, never the clamp's single text run that butts its parts
+ * together. */
+.conversation-surface [data-action-summary] > .ptool-coord-header {
+  display: flex;
+  flex: 1 1 auto;
+  max-width: none;
+  white-space: nowrap;
+  word-break: normal;
+}
 /* A free-standing swarm sheet keeps its own inner inset (inside an open tool
  * panel it takes the card's call columns, 23-reading-tool-panel.css). Its
  * title already names the operation, with no repeated tool-name line. Its

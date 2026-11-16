@@ -58,12 +58,14 @@ evidence; the result is a component payload observation, never paid-task savings
 
 `project_assignment_page_reads.py` builds Project assignment history pages over a
 disposable SQL Sidecar (or native TofuDB with `--backend tofudb` and `TOFUDB_BIN`),
-counting storage RPCs by operation, returned bytes and encoded page bytes per
-build, and checks each page against an oracle rebuilt from complete Turn reads.
+counting storage RPCs by operation, round trips (a pipelined `query_many` is one),
+returned bytes and encoded page bytes per build, and checks each page against an
+oracle rebuilt from complete Turn reads.
 `--dependencies` pins every file row to the preceding accepted consult row, so each
 build also evaluates prerequisite evidence. Run each pinned tree in a fresh process
 with `--repository`; counts are the result, clocks are host observations. Reuse
-rules are specified in `tests/project_mod/test_project_dispatch_history_projection.py`.
+rules are specified in `tests/project_mod/test_project_dispatch_history_projection.py`;
+`tests/meta/test_project_assignment_page_reads_measure.py` keeps the script runnable.
 
 `catalog_origin_reads.py` admits `--admissions` delegated assignments through the
 real repository on the same disposable authorities, then reads sidebar catalog

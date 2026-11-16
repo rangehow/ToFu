@@ -6,8 +6,10 @@ multi-MB projections; every other row uses a file profile, so its delivery
 receipt is read too. With --dependencies every file row also pins the preceding
 consult row as an accepted prerequisite, so each build evaluates prerequisite
 evidence. Each page build counts every storage RPC by operation name (a Turn read
-is split into body and metadata reads), the encoded JSON bytes it returned, and
-the compact JSON bytes of the page the route encodes. Every page must equal an
+is split into body and metadata reads), its round trips (a lone query is one; a
+tree that pipelines independent reads through ``query_many`` counts one per
+exchange), the encoded JSON bytes it returned, and the compact JSON bytes of
+the page the route encodes. Every page must equal an
 oracle rebuilt independently from complete Turn reads. Run each pinned tree in a
 fresh process with --repository.
 """
@@ -20,6 +22,7 @@ from pathlib import Path
 import statistics
 import sys
 import tempfile
+import threading
 import time
 
 
@@ -49,6 +52,8 @@ def main():
     from lib.project_dispatch.service import ProjectDispatchService
     from tests.project_mod.test_project_dispatch_repository import context
 
+    import pytest
+    fixture_patches = pytest.MonkeyPatch()
     with tempfile.TemporaryDirectory(prefix='assignment-page-') as directory:
         supervisor = StorageSupervisor(project_root=Path(directory), backend=args.backend, startup_timeout=60)
         runtime = StorageRuntime(supervisor, auto_restart=False)
@@ -56,8 +61,7 @@ def main():
         runtime.start()
         try:
             owner = 1
-            from _pytest.monkeypatch import MonkeyPatch
-            fixture_patches = MonkeyPatch()
+            # The dispatch fixture patches what it needs through pytest's monkeypatch.
             c = context.__wrapped__(fixture_patches)
             for row in c.conversations.rows.values():
                 row['user_id'] = owner
@@ -133,17 +137,40 @@ def main():
             expected = oracle()
             client = supervisor.client
             real_query = client.query
-            calls = []
+            # A tree whose client pipelines independent reads: one round trip, many reads.
+            real_many = getattr(client, 'query_many', None)
+            calls, exchanges, inside = [], [], threading.local()
+
+            def read_name(operation, payload):
+                if operation == 'turn.get':
+                    return operation + ('[metadata]' if payload.get('include_projection') is False else '[body]')
+                return operation
 
             def counted(operation, payload, *rest, **options):
+                if getattr(inside, 'active', False):
+                    return real_query(operation, payload, *rest, **options)
                 result = real_query(operation, payload, *rest, **options)
-                name = operation
-                if operation == 'turn.get':
-                    name += '[metadata]' if payload.get('include_projection') is False else '[body]'
-                calls.append((name, result))
+                exchanges.append(1)
+                calls.append((read_name(operation, payload), result))
                 return result
 
-            client.query = counted
+            def counted_many(requests, *rest, **options):
+                inside.active = True
+                try:
+                    results = real_many(requests, *rest, **options)
+                finally:
+                    inside.active = False
+                exchanges.append(len(requests))
+                calls.extend((read_name(operation, payload), result)
+                             for (operation, payload), result in zip(requests, results))
+                return results
+
+            def count(enabled):
+                client.query = counted if enabled else real_query
+                if real_many is not None:
+                    client.query_many = counted_many if enabled else real_many
+
+            count(True)
             # Compose the service like routes/api_v1/project_brain.py does in this tree.
             composition = {}
             try:
@@ -157,7 +184,7 @@ def main():
                 if build == args.builds:
                     # One Worker Turn changes between builds; its new revision
                     # must be displayed exactly while the others stay unchanged.
-                    client.query = real_query
+                    count(False)
                     changed = repo.history_page()['rows'][0]['execution']['turnId']
                     current = turns.get_turn('recipient', changed, user_id=owner)
                     projections[changed] = 'Revised report. ' + current['projection']['content']
@@ -165,8 +192,9 @@ def main():
                         projection={**current['projection'], 'content': projections[changed]},
                         expected_projection_revision=current['projectionRevision'], user_id=owner)
                     expected = oracle()
-                    client.query = counted
+                    count(True)
                 calls.clear()
+                exchanges.clear()
                 started = time.perf_counter()
                 page = service.history_page(principal=principal)
                 elapsed = (time.perf_counter() - started) * 1000
@@ -181,12 +209,13 @@ def main():
                                                            separators=(',', ':')).encode())
                 builds.append({'build': build if build < args.builds else 'one-turn-changed',
                                'ms': round(elapsed, 1), 'rpcs': sum(operations.values()),
+                               'round_trips': len(exchanges),
                                'response_bytes': sum(response_bytes.values()),
                                'page_bytes': len(json.dumps(page, ensure_ascii=False,
                                                             separators=(',', ':')).encode()),
                                'operations': dict(sorted(operations.items())),
                                'operation_bytes': dict(sorted(response_bytes.items()))})
-            client.query = real_query
+            count(False)
             print(json.dumps({'backend': args.backend, 'rows': args.rows,
                               'projection_bytes': len(json.dumps(projection, separators=(',', ':'))),
                               'warm_median_ms': round(statistics.median(item['ms'] for item in builds[1:-1]), 1),
@@ -194,6 +223,7 @@ def main():
         finally:
             runtime.stop()
             install_runtime_for_test(None)
+            fixture_patches.undo()
 
 
 if __name__ == '__main__':

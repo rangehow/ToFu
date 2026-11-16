@@ -1,0 +1,29 @@
+{
+  "schema": "tofu.slides-bench.corpus/v1",
+  "data_root_env": "SLIDES_BENCH_DATA",
+  "data_root_default": "<shared checkout>/data/ppt-bench",
+  "note": "Sources live under the gitignored data root and are never committed. Private documents (the owner's interview materials) are listed only in the private manifest under the data root, so their titles and paths never reach git; use them only for deck optimization and send them to no service except model APIs routed through Tofu. Public documents are arXiv papers re-downloadable from their URL.",
+  "documents": [
+    {
+      "id": "pub-swebench",
+      "private": false,
+      "lang": "en",
+      "pages": 10,
+      "title": "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?",
+      "path": "public/2310.06770.txt",
+      "url": "https://arxiv.org/pdf/2310.06770",
+      "sha256": "6f73f5c097ba65235f03afaf72f3f14417f7526e59f3084edc8ee2c0b29bb27d"
+    },
+    {
+      "id": "pub-lostmiddle",
+      "private": false,
+      "lang": "en",
+      "pages": 10,
+      "title": "Lost in the Middle: How Language Models Use Long Contexts",
+      "path": "public/2307.03172.txt",
+      "url": "https://arxiv.org/pdf/2307.03172",
+      "sha256": "76e07ee23de72447e194db3ba825bf83c057edad71a986002fd00ed46b0d8a83"
+    }
+  ],
+  "private_manifest": "corpus.private.json"
+}

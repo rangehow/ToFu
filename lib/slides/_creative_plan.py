@@ -196,8 +196,6 @@ def page_packet(brief: dict, page_index: int, total: int, *,
         f'- why this page exists: {brief.get("narrative_why") or ""}\n'
         f'- layout archetype: {brief.get("layout_archetype") or "split-editorial"}\n'
         f'- visual modality: {brief.get("visual_modality") or "annotated-evidence"}\n'
-        f'- recurring visual anchor: {brief.get("visual_anchor") or ""}\n'
-        f'- handoff to next page: {brief.get("handoff") or "(resolution)"}\n'
         f'- density: {brief.get("density") or "balanced"}\n'
         f'- previous page message: {continuity.get("previous_message") or "(opening)"}\n'
         f'- next page message: {continuity.get("next_message") or "(ending)"}\n'
@@ -210,5 +208,9 @@ def page_packet(brief: dict, page_index: int, total: int, *,
         '- Prefer semantic process/timeline components for sequences. If a '
         'chevron is necessary, declare adjustments: [25000]; every arrow '
         'endpoint must terminate on the named target, never float nearby.\n'
+        '- Continuity comes from the shared theme, alignment axis and title '
+        'position, not from ornaments: no decorative swooshes, curves or '
+        'arrows that cross the page, and no abstract shapes that stand for '
+        'data the page does not have.\n'
         '- This page must advance the neighbouring messages; do not restate '
         'the narration or duplicate the previous layout.\n')

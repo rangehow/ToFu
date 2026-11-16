@@ -64,7 +64,7 @@ components:
     fontSize: 40               # overrides the style
     color: "$ink"
     lineHeight: 1.2
-    letterSpacing: 2
+    letterSpacing: 0           # tracking only for short Latin labels; never on CJK
     text: |                    # rich text: <p> <strong> <em> <u> <span style="color:$accent;font-size:20px"> <ul><li>
       <p><strong>完整短语,永不截断</strong></p>
       <p><span style="color:$muted">Supporting line</span></p>

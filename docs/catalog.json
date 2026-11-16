@@ -606,7 +606,8 @@
     "docs/NATIVE_REPOSITORY_DISCOVERY.md",
     "docs/MEDIA_SOURCE_ADMISSION.md",
     "docs/DSH_GO_ANDROID_ANALYSIS.md",
-    "docs/SLIDE_MOTION.md"
+    "docs/SLIDE_MOTION.md",
+    "docs/SLIDES_BENCHMARK.md"
   ],
   "operator_guides": [
     "android/README.md",

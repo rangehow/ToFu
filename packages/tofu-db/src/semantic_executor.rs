@@ -8212,12 +8212,21 @@ fn compile_compaction_archive(
                 }
             };
             let created_at_ms = number("created_at_ms", now_unix_ms)?;
+            // Refuse an oversized snapshot at admission, before the receipt
+            // and outbox digests hash it again and before rehearsal and the
+            // writer execute it: the document bound alone decides the outcome.
+            let messages_json = canonical_json(messages)?;
+            if messages_json.len()
+                > crate::generated_tofudb_ir::MAX_COMPACTION_ARCHIVE_DOCUMENT_BYTES
+            {
+                return Err(SemanticExecutionError::InvalidPayload);
+            }
             (
                 vec![TransactionIrStep::CompactionArchiveCreate {
                     archive_id,
                     conversation_id,
                     archive_scope,
-                    messages_json: canonical_json(messages)?,
+                    messages_json,
                     summary: optional_text("summary", 200_000)?,
                     receipt_json: canonical_json(&receipt)?,
                     trigger,

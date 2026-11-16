@@ -184,3 +184,25 @@ def test_export_without_node_fails_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(_export_core.shutil, 'which', lambda name: None)
     with pytest.raises(_export_core.ExportIntegrityError, match='Node'):
         _export_core._build_exported_frontend(dest)
+
+
+def test_toolchain_materialization_drops_a_link_to_its_own_ancestor(tmp_path):
+    """A shared node_modules holding ``node_modules -> node_modules`` must not recurse."""
+    from export_pkg import _export_core
+
+    shared = tmp_path / 'shared' / 'node_modules'
+    (shared / 'pkg').mkdir(parents=True)
+    (shared / 'pkg' / 'index.js').write_text('export default 1;\n')
+    (shared / 'node_modules').symlink_to(shared)
+    tree = tmp_path / 'export' / 'node_modules'
+    tree.mkdir(parents=True)
+    for entry in ('pkg', 'node_modules'):
+        (tree / entry).symlink_to(shared / entry)
+
+    _export_core._materialize_escaping_links(tree)
+
+    assert (tree / 'pkg' / 'index.js').read_text() == 'export default 1;\n'
+    assert not (tree / 'pkg').is_symlink()
+    copied = tree / 'node_modules'
+    assert (copied / 'pkg' / 'index.js').is_file()
+    assert not (copied / 'node_modules').exists()

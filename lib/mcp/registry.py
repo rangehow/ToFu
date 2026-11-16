@@ -57,6 +57,12 @@ class EnvSpec(TypedDict, total=False):
                         # under the link. Use when the console path is
                         # non-obvious (e.g. Amap: create app → add key → pick
                         # "Web service"). Omit when the link is self-evident.
+    browser_cookie: dict  # optional {name, url, url_env?}: the browser cookie
+                          # this value copies. When the server's credential
+                          # probe proves the stored copy expired, the bridge
+                          # reads that one cookie (for the server's url_env
+                          # value, else url) from the owner's connected Tofu
+                          # extension and saves it (lib/mcp/browser_credentials.py).
 
 
 class CatalogEntry(TypedDict, total=False):
@@ -1020,6 +1026,12 @@ CATALOG: list[CatalogEntry] = [
                 'hint': 's%3A... — from DevTools → Application → Cookies → overleaf.com → overleaf_session2',
                 'required': True,
                 'secret': True,
+                # overleaf_mcp.config reads OVERLEAF_BASE_URL with this default.
+                'browser_cookie': {
+                    'name': 'overleaf_session2',
+                    'url': 'https://www.overleaf.com',
+                    'url_env': 'OVERLEAF_BASE_URL',
+                },
             },
             {
                 'key': 'OVERLEAF_GIT_TOKEN',

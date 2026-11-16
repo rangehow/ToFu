@@ -547,7 +547,7 @@
   .topbar{height:calc(48px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 10px 0;gap:var(--space-2);overflow:hidden!important;flex-wrap:nowrap}
   .topbar-title{font-size:var(--font-size-lg);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   /* Hide ALL badges and action buttons — not enough room on 360px screens */
-  .project-badge,.code-exec-badge,.scheduler-badge,.timer-trigger,#debugToggle,.topbar .action-btn{display:none!important}
+  .project-badge,.scheduler-badge,.timer-trigger,#debugToggle,.topbar .action-btn{display:none!important}
   /* Model badge: keep it, right-aligned, compact */
   .model-badge{font-size:10px;padding:3px var(--space-2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;margin-left:auto}
   /* Coarse phones no longer inherit the (now pointer:fine) ≤1080 label hide, so

@@ -575,6 +575,53 @@ def test_joined_process_bound_invocation_releases_unconfirmed_settlement():
     assert len(released) == 1
 
 
+def test_released_unknown_settlement_is_not_reoffered_before_one_lease():
+    # A host move left entered Attempts whose foreign owner can never be
+    # proved dead; releasing them as available now made the same service
+    # reclaim each one hundreds of times a minute and delay fresh Attempts.
+    from lib.durable_worker import WorkerDomainSettlementUnknown
+    from lib.storage.worker_process import worker_process_id
+    worker = worker_process_id(uuid.uuid4().hex, legacy_prefix='test')
+    released = []
+    class Store(_FakeStore):
+        def defer(self, claim, *, now_ms, outcome, observed_cancel_sequence):
+            released.append((now_ms, outcome))
+            return {'ok': True}
+    def unprovable(context, payload):
+        raise WorkerDomainSettlementUnknown('foreign owner exit is unproved')
+    store = Store({**_job_document(), 'claimOwner': worker})
+    registration = WorkerKindRegistration(task_kind='conversation-attempt',
+        handler=unprovable, failure_handler=lambda context, payload, error: unprovable(context, payload),
+        safety=_READY_SAFETY)
+    runner = SynchronousWorkerRunner(worker_id=worker, store=store, lease_ms=45_000,
+        now_ms=lambda: 1_000_000, registrations=[registration])
+    assert runner.run_once().state == 'settlement_unconfirmed'
+    assert [(now, outcome.available_at_ms) for now, outcome in released] == [
+        (1_000_000, 1_045_000)]
+
+
+def test_unknown_domain_settlement_does_not_pause_other_claims():
+    from concurrent.futures import Future
+    from lib.durable_worker import WorkerRunResult
+    from lib.durable_worker.runtime_policy import runtime_policy
+    from lib.durable_worker.service import DurableWorkerService, _ClaimObservation
+    policy = runtime_policy()
+    service = DurableWorkerService(
+        principal=PrincipalContext.system(subject_id='test-control', scopes={policy['controlScope']}),
+        client_factory=lambda: None, registrations=[_registration(lambda *args: None)],
+        max_workers=1, now_ms=lambda: 0, policy=policy)
+
+    def reap(state):
+        future = Future()
+        future.set_result(WorkerRunResult(state=state, task_id='runner-job'))
+        return service._finished({future: _ClaimObservation(claimed=True)}, 100.0)
+
+    # The released job carries its own not-before time; only authority-level
+    # outcomes still pause every claim.
+    assert reap('settlement_unconfirmed') == (100.0, True)
+    assert reap('lease_lost') == (100.0 + policy['failureBackoffMilliseconds'] / 1000, True)
+
+
 def test_lost_claim_ack_retries_same_receipt_without_hiding_owned_job():
     from lib.durable_worker.service import _ObservedJobStore, _ClaimObservation
     calls = []

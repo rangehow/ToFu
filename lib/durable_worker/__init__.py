@@ -857,12 +857,17 @@ class SynchronousWorkerRunner:
             # handler and heartbeat have joined, explicitly surrender uncertain
             # claims so recovery does not wait for that service to exit. This
             # releases transport ownership, never authorizes effect replay.
+            # The job is re-offered after one lease, when an absent holder's
+            # claim would have expired: an immediate offer returns it to this
+            # same service, whose unchanged evidence refuses it again in a
+            # loop that delays every other claim.
             if (parse_worker_process(claim.worker_id) is not None
                     and (result is None or result.state in {
                         'protocol_error', 'lease_lost', 'settlement_unconfirmed',
                         'terminal_unconfirmed', 'suspension_unconfirmed'})):
                 released = self._suspend(claim, WorkerJobSuspension(
-                    available_at_ms=self._now_ms(), replay_cursor=claim.replay_cursor))
+                    available_at_ms=self._now_ms() + self.lease_ms,
+                    replay_cursor=claim.replay_cursor))
                 if released.state == 'suspension_unconfirmed':
                     logger.error('[DurableWorker] joined claim release unconfirmed job=%s', claim.task_id)
 
